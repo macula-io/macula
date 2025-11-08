@@ -71,9 +71,17 @@ See [Documentation Status](architecture/DOCUMENTATION_STATUS.md) for full invent
 
 **Completion**:
 - ✅ Architecture design complete
-- ✅ Project structure initialized
+- ✅ Project structure initialized (12 core libraries)
 - ✅ Documentation comprehensive (34% complete, 6/21 docs)
+- ✅ Build system configured (rebar3 + QUIC + mDNS)
+- ✅ All dependencies compiling successfully
 - 🚧 Core libraries implementation in progress
+
+**Dependencies**:
+- QUIC transport: quicer (wraps Microsoft MsQuic)
+- mDNS discovery: shortishly/mdns (via _checkouts, see MDNS_SETUP.md)
+- Process registry: gproc
+- Environment config: shortishly/envy (via _checkouts)
 
 ---
 
