@@ -69,14 +69,25 @@ connect(Host, Port, Opts, Timeout) ->
     quicer:connect(Host, Port, QuicerOpts, Timeout).
 
 %% @doc Accept an incoming connection on a listener.
+%% After accepting, the connection needs handshake to complete.
 -spec accept(pid(), timeout()) -> {ok, pid()} | {error, term()}.
 accept(ListenerPid, Timeout) ->
-    quicer:accept(ListenerPid, [], Timeout).
+    case quicer:accept(ListenerPid, [], Timeout) of
+        {ok, Conn} ->
+            %% Complete TLS handshake
+            case quicer:handshake(Conn) of
+                {ok, Conn} -> {ok, Conn};
+                Error -> Error
+            end;
+        Error ->
+            Error
+    end.
 
 %% @doc Accept an incoming stream on a connection.
 -spec accept_stream(pid(), timeout()) -> {ok, pid()} | {error, term()}.
-accept_stream(ConnPid, Timeout) ->
-    quicer:accept_stream(ConnPid, Timeout).
+accept_stream(ConnPid, _Timeout) ->
+    %% accept_stream/2 doesn't take timeout, it returns immediately
+    quicer:accept_stream(ConnPid, []).
 
 %% @doc Open a new bidirectional stream on a connection.
 -spec open_stream(pid()) -> {ok, pid()} | {error, term()}.
@@ -86,7 +97,10 @@ open_stream(ConnPid) ->
 %% @doc Send data on a stream.
 -spec send(pid(), binary()) -> ok | {error, term()}.
 send(StreamPid, Data) ->
-    quicer:send(StreamPid, Data).
+    case quicer:send(StreamPid, Data) of
+        {ok, _BytesSent} -> ok;
+        Error -> Error
+    end.
 
 %% @doc Receive data from a stream (blocking).
 -spec recv(pid(), timeout()) -> {ok, binary()} | {error, term()}.

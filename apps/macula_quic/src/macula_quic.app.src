@@ -1,10 +1,11 @@
 {application, macula_quic, [
-    {description, "An OTP library"},
+    {description, "QUIC transport layer for Macula mesh"},
     {vsn, "0.1.0"},
     {registered, []},
     {applications, [
         kernel,
-        stdlib
+        stdlib,
+        quicer
     ]},
     {env, []},
     {modules, []},
