@@ -1,3 +1,118 @@
+%%%-------------------------------------------------------------------
+%%% @doc
+%%% Main API module for Macula QUIC transport.
+%%% Provides a simplified wrapper around the quicer library.
+%%% @end
+%%%-------------------------------------------------------------------
 -module(macula_quic).
 
--export([]).
+-export([
+    listen/2,
+    connect/4,
+    accept/2,
+    accept_stream/2,
+    open_stream/1,
+    send/2,
+    recv/2,
+    close/1
+]).
+
+%%%===================================================================
+%%% API Functions
+%%%===================================================================
+
+%% @doc Start a QUIC listener on the specified port.
+%% Options:
+%%   {cert, CertFile} - Path to PEM certificate file
+%%   {key, KeyFile} - Path to PEM private key file
+%%   {alpn, [Protocol]} - List of ALPN protocols (e.g., ["macula"])
+%%   {peer_unidi_stream_count, N} - Max unidirectional streams
+%% @end
+-spec listen(inet:port_number(), list()) -> {ok, pid()} | {error, term()}.
+listen(Port, Opts) ->
+    %% Extract certificate files
+    CertFile = proplists:get_value(cert, Opts),
+    KeyFile = proplists:get_value(key, Opts),
+    AlpnProtocols = proplists:get_value(alpn, Opts, ["macula"]),
+    PeerUnidiStreamCount = proplists:get_value(peer_unidi_stream_count, Opts, 3),
+
+    %% Build quicer options
+    QuicerOpts = [
+        {certfile, CertFile},
+        {keyfile, KeyFile},
+        {alpn, AlpnProtocols},
+        {peer_unidi_stream_count, PeerUnidiStreamCount}
+    ],
+
+    %% Start listener
+    quicer:listen(Port, QuicerOpts).
+
+%% @doc Connect to a QUIC server.
+%% Options:
+%%   {alpn, [Protocol]} - List of ALPN protocols
+%%   {verify, none | verify_peer} - Certificate verification mode
+%% @end
+-spec connect(string() | inet:ip_address(), inet:port_number(), list(), timeout()) ->
+    {ok, pid()} | {error, term()}.
+connect(Host, Port, Opts, Timeout) ->
+    %% Extract options
+    AlpnProtocols = proplists:get_value(alpn, Opts, ["macula"]),
+    Verify = proplists:get_value(verify, Opts, none),
+
+    %% Build quicer options
+    QuicerOpts = [
+        {alpn, AlpnProtocols},
+        {verify, Verify}
+    ],
+
+    %% Connect
+    quicer:connect(Host, Port, QuicerOpts, Timeout).
+
+%% @doc Accept an incoming connection on a listener.
+-spec accept(pid(), timeout()) -> {ok, pid()} | {error, term()}.
+accept(ListenerPid, Timeout) ->
+    quicer:accept(ListenerPid, [], Timeout).
+
+%% @doc Accept an incoming stream on a connection.
+-spec accept_stream(pid(), timeout()) -> {ok, pid()} | {error, term()}.
+accept_stream(ConnPid, Timeout) ->
+    quicer:accept_stream(ConnPid, Timeout).
+
+%% @doc Open a new bidirectional stream on a connection.
+-spec open_stream(pid()) -> {ok, pid()} | {error, term()}.
+open_stream(ConnPid) ->
+    quicer:start_stream(ConnPid, []).
+
+%% @doc Send data on a stream.
+-spec send(pid(), binary()) -> ok | {error, term()}.
+send(StreamPid, Data) ->
+    quicer:send(StreamPid, Data).
+
+%% @doc Receive data from a stream (blocking).
+-spec recv(pid(), timeout()) -> {ok, binary()} | {error, term()}.
+recv(StreamPid, Timeout) ->
+    %% quicer sends data as messages, so we need to receive from mailbox
+    receive
+        {quic, Data, StreamPid, _Props} ->
+            {ok, Data}
+    after Timeout ->
+        {error, timeout}
+    end.
+
+%% @doc Close a listener, connection, or stream.
+-spec close(pid()) -> ok.
+close(Pid) ->
+    %% quicer uses different close functions based on resource type
+    %% For simplicity, we try to close as stream first, then connection
+    try
+        quicer:close_stream(Pid)
+    catch
+        _:_ ->
+            try
+                quicer:close_connection(Pid)
+            catch
+                _:_ ->
+                    quicer:close_listener(Pid)
+            end
+    end,
+    ok.
