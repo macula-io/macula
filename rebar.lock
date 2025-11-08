@@ -1,0 +1,12 @@
+{"1.2.0",
+[{<<"quicer">>,
+  {git,"https://github.com/emqx/quic.git",
+       {ref,"e17f11fb2521cbd83226f9cf6eea90bb2f102f90"}},
+  0},
+ {<<"snabbkaffe">>,{pkg,<<"snabbkaffe">>,<<"1.0.10">>},1}]}.
+[
+{pkg_hash,[
+ {<<"snabbkaffe">>, <<"9BE2F54F61FC6862391B666B2B5B76C3FA53598E2989A17CEF1B48CF347A8A63">>}]},
+{pkg_hash_ext,[
+ {<<"snabbkaffe">>, <<"70A98DF36AE756908D55B5770891D443D63C903833E3E87D544036E13D4FAC26">>}]}
+].
