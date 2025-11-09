@@ -1,0 +1,20 @@
+{application, macula_sdk,
+ [{description, "Macula HTTP/3 Mesh SDK - Client library for building distributed applications"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {macula_sdk_app, []}},
+  {applications,
+   [kernel,
+    stdlib,
+    crypto,
+    public_key,
+    ssl,
+    macula_quic,
+    macula_protocol
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {licenses, ["Apache-2.0"]},
+  {links, [{"GitHub", "https://github.com/macula-io/macula"}]}
+ ]}.

@@ -22,7 +22,10 @@
     pong_msg/0,
     publish_msg/0,
     subscribe_msg/0,
-    unsubscribe_msg/0
+    unsubscribe_msg/0,
+    call_msg/0,
+    reply_msg/0,
+    cast_msg/0
 ]).
 
 %%%===================================================================
@@ -74,7 +77,10 @@
     {pong, pong_msg()} |
     {publish, publish_msg()} |
     {subscribe, subscribe_msg()} |
-    {unsubscribe, unsubscribe_msg()}.
+    {unsubscribe, unsubscribe_msg()} |
+    {call, call_msg()} |
+    {reply, reply_msg()} |
+    {cast, cast_msg()}.
 
 %% Control Messages
 
@@ -116,6 +122,29 @@
 
 -type unsubscribe_msg() :: #{
     topics := [binary()]           % Topics to unsubscribe from
+}.
+
+%% RPC Messages
+
+-type call_msg() :: #{
+    procedure := binary(),         % Procedure name (e.g., "my.app.get_user")
+    args := binary(),              % JSON-encoded arguments
+    call_id := binary(),           % 16-byte unique call ID
+    timeout => integer()           % Optional timeout in milliseconds
+}.
+
+-type reply_msg() :: #{
+    call_id := binary(),           % Matching call_id from call_msg
+    result => binary(),            % JSON-encoded result (on success)
+    error => #{                    % Error details (on failure)
+        code := binary(),          % Error code
+        message := binary()        % Error message
+    }
+}.
+
+-type cast_msg() :: #{
+    procedure := binary(),         % Procedure name
+    args := binary()               % JSON-encoded arguments (no reply expected)
 }.
 
 %%%===================================================================

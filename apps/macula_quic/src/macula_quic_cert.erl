@@ -8,6 +8,7 @@
 -module(macula_quic_cert).
 
 -export([
+    generate_self_signed/0,
     generate_self_signed/1,
     generate_self_signed/2,
     validate_files/2
@@ -16,6 +17,21 @@
 %%%===================================================================
 %%% API Functions
 %%%===================================================================
+
+%% @doc Generate a self-signed certificate and key in a temporary directory.
+%% Returns {ok, CertFile, KeyFile} with paths to generated files.
+%% The files are created in /tmp/macula_certs_<pid> for test isolation.
+%% @end
+-spec generate_self_signed() -> {ok, file:filename(), file:filename()} | {error, term()}.
+generate_self_signed() ->
+    %% Create a unique temp directory for this process
+    Dir = lists:flatten(io_lib:format("/tmp/macula_certs_~p", [erlang:pid_to_list(self())])),
+    case generate_self_signed(Dir) of
+        {ok, {CertFile, KeyFile}} ->
+            {ok, CertFile, KeyFile};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %% @doc Generate a self-signed certificate and key in the given directory.
 %% Returns {ok, {CertFile, KeyFile}} with paths to generated files.

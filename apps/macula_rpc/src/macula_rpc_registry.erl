@@ -13,6 +13,7 @@
     new/1,
     register/4,
     unregister/3,
+    find/2,
     find_handlers/2,
     list_uris/1,
     list_registrations/1,
@@ -84,6 +85,14 @@ unregister(#{registrations := Regs} = Registry, Uri, Handler) ->
         Regs
     ),
     Registry#{registrations => NewRegs}.
+
+%% @doc Find all registrations for a URI.
+-spec find(registry(), binary()) -> [registration()].
+find(#{registrations := Regs}, Uri) ->
+    lists:filter(
+        fun(Reg) -> maps:get(uri, Reg) =:= Uri end,
+        Regs
+    ).
 
 %% @doc Find all handlers for a URI.
 -spec find_handlers(registry(), binary()) -> {ok, [registration()]} | not_found.
