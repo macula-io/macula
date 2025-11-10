@@ -1,14 +1,32 @@
 {application, macula, [
-    {description, "An OTP application"},
-    {vsn, "0.1.0"},
+    {description, "Macula HTTP/3 Mesh Platform - Complete distributed application framework"},
+    {vsn, "0.4.0"},
     {registered, []},
     {mod, {macula_app, []}},
     {applications, [
         kernel,
-        stdlib
+        stdlib,
+        crypto,
+        public_key,
+        ssl,
+        quicer,
+        msgpack,
+        gproc,
+        macula_core,
+        macula_quic,
+        macula_protocol,
+        macula_membership,
+        macula_routing,
+        macula_topology,
+        macula_discovery,
+        macula_pubsub,
+        macula_rpc,
+        macula_security,
+        macula_gateway,
+        macula_client
     ]},
     {env, []},
     {modules, []},
     {licenses, ["Apache-2.0"]},
-    {links, []}
+    {links, [{"GitHub", "https://github.com/macula-io/macula"}]}
  ]}.
