@@ -1,0 +1,6 @@
+_build/
+.git/
+.github/
+*.log
+erl_crash.dump
+.rebar3/

@@ -1,12 +1,12 @@
-FROM erlang:26-alpine AS builder
+FROM erlang:26 AS builder
 
 # Install build dependencies
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     git \
-    build-base \
-    openssl-dev \
+    build-essential \
+    libssl-dev \
     cmake \
-    linux-headers
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
@@ -16,19 +16,19 @@ COPY . .
 # Get dependencies and build release
 RUN rebar3 as prod release
 
-# Runtime stage
-FROM alpine:3.19
+# Runtime stage - use same base to ensure glibc compatibility
+FROM erlang:26-slim
 
 # Install runtime dependencies
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     openssl \
-    ncurses-libs \
-    libstdc++ \
-    libgcc
+    libncurses6 \
+    libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create user
-RUN addgroup -g 1000 macula && \
-    adduser -u 1000 -G macula -s /bin/sh -D macula
+RUN groupadd -g 1000 macula && \
+    useradd -u 1000 -g macula -s /bin/sh -m macula
 
 WORKDIR /opt/macula
 
