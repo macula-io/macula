@@ -1,0 +1,8 @@
+{"1.2.0",
+[{<<"macula_membership">>,{pkg,<<"macula_membership">>,<<"0.2.0">>},0}]}.
+[
+{pkg_hash,[
+ {<<"macula_membership">>, <<"BA37A85167A7B5F3D52CB0A3903CCACBF42E22EEAA1567D378B7D8307A6DE88E">>}]},
+{pkg_hash_ext,[
+ {<<"macula_membership">>, <<"C6D03C46B060378D12B6AE31A88EDEDA3CBB8D812A065C9C9FA851607A83F582">>}]}
+].

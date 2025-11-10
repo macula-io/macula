@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula_routing v0.3.0">
+
+
+    <title>macula_routing_nodeid — macula_routing v0.3.0</title>
+
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-808AE4FF.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+macula_routing
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.3.0
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula_routing</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_routing_nodeid</span> 
+      <small class="app-vsn" translate="no">(macula_routing v0.3.0)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.3.0/apps/macula_routing/src/macula_routing_nodeid.erl#L7" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+    <section id="moduledoc">
+<p>Node ID utilities for Kademlia DHT. 256-bit node identifiers with XOR distance metric.</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:node_id/0" data-no-tooltip="" translate="no">node_id/0</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>32 bytes (256 bits)</p></div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#bucket_index/2" data-no-tooltip="" translate="no">bucket_index(LocalNodeId, TargetNodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Calculate bucket index for a node relative to local node. Returns leading zero count of XOR distance (0..255). Special case: distance 0 (same node) returns 256.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#closer_to/3" data-no-tooltip="" translate="no">closer_to(Target, NodeA, NodeB)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if NodeA is closer to Target than NodeB.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#compare/3" data-no-tooltip="" translate="no">compare(Target, NodeA, NodeB)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Compare distances of NodeA and NodeB to Target. Returns: less (A closer), equal (same distance), greater (B closer).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#distance/2" data-no-tooltip="" translate="no">distance(NodeId1, NodeId2)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Calculate XOR distance between two node IDs.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#from_binary/1" data-no-tooltip="" translate="no">from_binary(Binary)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Create node ID from binary (validates size).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#from_hex/1" data-no-tooltip="" translate="no">from_hex(HexString)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Parse node ID from hex string.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#generate/0" data-no-tooltip="" translate="no">generate()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Generate a random 256-bit node ID.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#leading_zeros/1" data-no-tooltip="" translate="no">leading_zeros(Binary)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Count leading zero bits in binary.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#to_hex/1" data-no-tooltip="" translate="no">to_hex(NodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Convert node ID to hex string.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:node_id/0">
+
+  <div class="detail-header">
+    <a href="#t:node_id/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">node_id/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.0/apps/macula_routing/src/macula_routing_nodeid.erl#L23" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> node_id() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+<p>32 bytes (256 bits)</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="bucket_index/2">
+
+  <div class="detail-header">
+    <a href="#bucket_index/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">bucket_index(LocalNodeId, TargetNodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.0/apps/macula_routing/src/macula_routing_nodeid.erl#L96" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> bucket_index(<a href="#t:node_id/0">node_id</a>(), <a href="#t:node_id/0">node_id</a>()) -> 0..256.</pre>
+
+      </div>
+
+<p>Calculate bucket index for a node relative to local node. Returns leading zero count of XOR distance (0..255). Special case: distance 0 (same node) returns 256.</p>
+  </section>
+</section>
+<section class="detail" id="closer_to/3">
+
+  <div class="detail-header">
+    <a href="#closer_to/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">closer_to(Target, NodeA, NodeB)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.0/apps/macula_routing/src/macula_routing_nodeid.erl#L75" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> closer_to(<a href="#t:node_id/0">node_id</a>(), <a href="#t:node_id/0">node_id</a>(), <a href="#t:node_id/0">node_id</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+
+      </div>
+
+<p>Check if NodeA is closer to Target than NodeB.</p>
+  </section>
+</section>
+<section class="detail" id="compare/3">
+
+  <div class="detail-header">
+    <a href="#compare/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">compare(Target, NodeA, NodeB)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.0/apps/macula_routing/src/macula_routing_nodeid.erl#L83" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> compare(<a href="#t:node_id/0">node_id</a>(), <a href="#t:node_id/0">node_id</a>(), <a href="#t:node_id/0">node_id</a>()) -> less | equal | greater.</pre>
+
+      </div>
+
+<p>Compare distances of NodeA and NodeB to Target. Returns: less (A closer), equal (same distance), greater (B closer).</p>
+  </section>
+</section>
+<section class="detail" id="distance/2">
+
+  <div class="detail-header">
+    <a href="#distance/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">distance(NodeId1, NodeId2)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.0/apps/macula_routing/src/macula_routing_nodeid.erl#L44" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> distance(<a href="#t:node_id/0">node_id</a>(), <a href="#t:node_id/0">node_id</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+<p>Calculate XOR distance between two node IDs.</p>
+  </section>
+</section>
+<section class="detail" id="from_binary/1">
+
+  <div class="detail-header">
+    <a href="#from_binary/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">from_binary(Binary)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.0/apps/macula_routing/src/macula_routing_nodeid.erl#L37" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> from_binary(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="#t:node_id/0">node_id</a>()} | {error, invalid_size}.</pre>
+
+      </div>
+
+<p>Create node ID from binary (validates size).</p>
+  </section>
+</section>
+<section class="detail" id="from_hex/1">
+
+  <div class="detail-header">
+    <a href="#from_hex/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">from_hex(HexString)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.0/apps/macula_routing/src/macula_routing_nodeid.erl#L110" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> from_hex(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>()) -> {ok, <a href="#t:node_id/0">node_id</a>()} | {error, invalid_hex | invalid_length}.</pre>
+
+      </div>
+
+<p>Parse node ID from hex string.</p>
+  </section>
+</section>
+<section class="detail" id="generate/0">
+
+  <div class="detail-header">
+    <a href="#generate/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">generate()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.0/apps/macula_routing/src/macula_routing_nodeid.erl#L32" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> generate() -> <a href="#t:node_id/0">node_id</a>().</pre>
+
+      </div>
+
+<p>Generate a random 256-bit node ID.</p>
+  </section>
+</section>
+<section class="detail" id="leading_zeros/1">
+
+  <div class="detail-header">
+    <a href="#leading_zeros/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">leading_zeros(Binary)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.0/apps/macula_routing/src/macula_routing_nodeid.erl#L49" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> leading_zeros(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> 0..256.</pre>
+
+      </div>
+
+<p>Count leading zero bits in binary.</p>
+  </section>
+</section>
+<section class="detail" id="to_hex/1">
+
+  <div class="detail-header">
+    <a href="#to_hex/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">to_hex(NodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.0/apps/macula_routing/src/macula_routing_nodeid.erl#L105" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> to_hex(<a href="#t:node_id/0">node_id</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>().</pre>
+
+      </div>
+
+<p>Convert node ID to hex string.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula_routing/0.3.0" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula_routing/0.3.0">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula_routing.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

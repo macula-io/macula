@@ -1,0 +1,11 @@
+{"1.2.0",
+[{<<"macula_protocol">>,{pkg,<<"macula_protocol">>,<<"0.2.0">>},0},
+ {<<"msgpack">>,{pkg,<<"msgpack">>,<<"0.8.1">>},1}]}.
+[
+{pkg_hash,[
+ {<<"macula_protocol">>, <<"5630F599B430315A1B6A4AB00FA3A62126D10C12B752EB0210836699A3D6A710">>},
+ {<<"msgpack">>, <<"DEB35C13291EAFE56AD9870374C2EAA92323DC5503D50432EBCAF47052E6D343">>}]},
+{pkg_hash_ext,[
+ {<<"macula_protocol">>, <<"8384311C4E7CDEF10A9A2C5D9EF8E6ABA28C50630DD26387FB0057BF60283568">>},
+ {<<"msgpack">>, <<"04D9A75BC6F4BED8627EE1E7AA9DF37601F510FDC786A84FE932BB21D765565F">>}]}
+].

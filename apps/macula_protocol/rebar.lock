@@ -1,0 +1,8 @@
+{"1.2.0",
+[{<<"msgpack">>,{pkg,<<"msgpack">>,<<"0.8.1">>},0}]}.
+[
+{pkg_hash,[
+ {<<"msgpack">>, <<"DEB35C13291EAFE56AD9870374C2EAA92323DC5503D50432EBCAF47052E6D343">>}]},
+{pkg_hash_ext,[
+ {<<"msgpack">>, <<"04D9A75BC6F4BED8627EE1E7AA9DF37601F510FDC786A84FE932BB21D765565F">>}]}
+].

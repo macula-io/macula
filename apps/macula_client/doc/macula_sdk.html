@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula_sdk v0.3.1">
+
+
+    <title>macula_sdk — macula_sdk v0.3.1</title>
+
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-C14114A5.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+macula_sdk
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.3.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula_sdk</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_sdk</span> 
+      <small class="app-vsn" translate="no">(macula_sdk v0.3.1)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L16" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+    <section id="moduledoc">
+<p>Macula SDK - Main API module for HTTP/3 mesh client operations.</p><p>This module provides the primary interface for applications to connect to Macula mesh networks and perform pub/sub and RPC operations over HTTP/3 (QUIC) transport.</p><h3 id="module-quick-start" class="section-heading"><a href="#module-quick-start" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Quick_Start">Quick Start</a></span></h3><p>Connect to a mesh, publish events, subscribe to topics, and make RPC calls. See individual function documentation for detailed examples with code.</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:args/0" data-no-tooltip="" translate="no">args/0</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Arguments for RPC calls.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:client/0" data-no-tooltip="" translate="no">client/0</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Reference to a connected Macula mesh client.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:event_data/0" data-no-tooltip="" translate="no">event_data/0</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Event payload data. Typically a map that will be JSON-encoded.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:options/0" data-no-tooltip="" translate="no">options/0</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Connection or operation options.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:procedure/0" data-no-tooltip="" translate="no">procedure/0</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>RPC procedure name. Example: <code>&quot;my.app.get_user&quot;</code>.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:subscription_ref/0" data-no-tooltip="" translate="no">subscription_ref/0</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Reference to an active subscription for unsubscribe operations.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:topic/0" data-no-tooltip="" translate="no">topic/0</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Topic name for pub/sub operations. Topics should describe event types, not entity IDs. Example: <code>&quot;my.app.user.registered&quot;</code> (good), not <code>&quot;my.app.user.123.registered&quot;</code> (bad - ID belongs in payload).</p></div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#call/3" data-no-tooltip="" translate="no">call(Client, Procedure, Args)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Make a synchronous RPC call.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#call/4" data-no-tooltip="" translate="no">call(Client, Procedure, Args, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Make an RPC call with options.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#connect/2" data-no-tooltip="" translate="no">connect(Url, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Connect to a Macula mesh network.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#disconnect/1" data-no-tooltip="" translate="no">disconnect(Client)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Disconnect from the Macula mesh.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#publish/3" data-no-tooltip="" translate="no">publish(Client, Topic, Data)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Publish an event to a topic.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#publish/4" data-no-tooltip="" translate="no">publish(Client, Topic, Data, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Publish an event with options.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#subscribe/3" data-no-tooltip="" translate="no">subscribe(Client, Topic, Callback)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Subscribe to a topic.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#unsubscribe/2" data-no-tooltip="" translate="no">unsubscribe(Client, SubRef)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Unsubscribe from a topic.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:args/0">
+
+  <div class="detail-header">
+    <a href="#t:args/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">args/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L59" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> args() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+<p>Arguments for RPC calls.</p>
+  </section>
+</section>
+<section class="detail" id="t:client/0">
+
+  <div class="detail-header">
+    <a href="#t:client/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">client/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L45" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> client() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>().</pre>
+
+      </div>
+
+<p>Reference to a connected Macula mesh client.</p>
+  </section>
+</section>
+<section class="detail" id="t:event_data/0">
+
+  <div class="detail-header">
+    <a href="#t:event_data/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">event_data/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L53" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> event_data() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+<p>Event payload data. Typically a map that will be JSON-encoded.</p>
+  </section>
+</section>
+<section class="detail" id="t:options/0">
+
+  <div class="detail-header">
+    <a href="#t:options/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">options/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L62" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> options() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>().</pre>
+
+      </div>
+
+<p>Connection or operation options.</p>
+  </section>
+</section>
+<section class="detail" id="t:procedure/0">
+
+  <div class="detail-header">
+    <a href="#t:procedure/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">procedure/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L56" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> procedure() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+<p>RPC procedure name. Example: <code>&quot;my.app.get_user&quot;</code>.</p>
+  </section>
+</section>
+<section class="detail" id="t:subscription_ref/0">
+
+  <div class="detail-header">
+    <a href="#t:subscription_ref/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">subscription_ref/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L65" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> subscription_ref() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>().</pre>
+
+      </div>
+
+<p>Reference to an active subscription for unsubscribe operations.</p>
+  </section>
+</section>
+<section class="detail" id="t:topic/0">
+
+  <div class="detail-header">
+    <a href="#t:topic/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">topic/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L48" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> topic() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+<p>Topic name for pub/sub operations. Topics should describe event types, not entity IDs. Example: <code>&quot;my.app.user.registered&quot;</code> (good), not <code>&quot;my.app.user.123.registered&quot;</code> (bad - ID belongs in payload).</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="call/3">
+
+  <div class="detail-header">
+    <a href="#call/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">call(Client, Procedure, Args)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L210" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> call(Client :: <a href="#t:client/0">client</a>(), Procedure :: <a href="#t:procedure/0">procedure</a>(), Args :: <a href="#t:args/0">args</a>()) ->
+              {ok, Result :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Make a synchronous RPC call.</p><p>Calls a remote procedure and waits for the result.</p><h3 id="call/3-examples" class="section-heading"><a href="#call/3-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Simple RPC call</span><span class="w">
+  </span><span class="p" data-group-id="7199105103-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">User</span><span class="p" data-group-id="7199105103-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_sdk</span><span class="p">:</span><span class="nf">call</span><span class="p" data-group-id="7199105103-2">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="7199105103-3">&lt;&lt;</span><span class="s">&quot;my.app.get_user&quot;</span><span class="p" data-group-id="7199105103-3">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="7199105103-4">#{</span><span class="w">
+      </span><span class="ss">user_id</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="7199105103-5">&lt;&lt;</span><span class="s">&quot;user-123&quot;</span><span class="p" data-group-id="7199105103-5">&gt;&gt;</span><span class="w">
+  </span><span class="p" data-group-id="7199105103-4">}</span><span class="p" data-group-id="7199105103-2">)</span><span class="p">.</span><span class="w">
+ 
+  </span><span class="c1">%% With timeout</span><span class="w">
+  </span><span class="p" data-group-id="7199105103-6">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Result</span><span class="p" data-group-id="7199105103-6">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_sdk</span><span class="p">:</span><span class="nf">call</span><span class="p" data-group-id="7199105103-7">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="7199105103-8">&lt;&lt;</span><span class="s">&quot;my.app.process&quot;</span><span class="p" data-group-id="7199105103-8">&gt;&gt;</span><span class="p">,</span><span class="w">
+      </span><span class="p" data-group-id="7199105103-9">#{</span><span class="ss">data</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="7199105103-10">&lt;&lt;</span><span class="s">&quot;large&quot;</span><span class="p" data-group-id="7199105103-10">&gt;&gt;</span><span class="p" data-group-id="7199105103-9">}</span><span class="p">,</span><span class="w">
+      </span><span class="p" data-group-id="7199105103-11">#{</span><span class="ss">timeout</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">30000</span><span class="p" data-group-id="7199105103-11">}</span><span class="p" data-group-id="7199105103-7">)</span><span class="p">.</span></code></pre>
+  </section>
+</section>
+<section class="detail" id="call/4">
+
+  <div class="detail-header">
+    <a href="#call/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">call(Client, Procedure, Args, Opts)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L217" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> call(Client :: <a href="#t:client/0">client</a>(), Procedure :: <a href="#t:procedure/0">procedure</a>(), Args :: <a href="#t:args/0">args</a>(), Opts :: <a href="#t:options/0">options</a>()) ->
+              {ok, Result :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Make an RPC call with options.</p>
+  </section>
+</section>
+<section class="detail" id="connect/2">
+
+  <div class="detail-header">
+    <a href="#connect/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">connect(Url, Opts)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L101" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> connect(Url :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), Opts :: <a href="#t:options/0">options</a>()) -> {ok, <a href="#t:client/0">client</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Connect to a Macula mesh network.</p><p>Creates a new HTTP/3 (QUIC) connection to the specified mesh endpoint.</p><h3 id="connect/2-options" class="section-heading"><a href="#connect/2-options" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Options">Options</a></span></h3><ul><li><code>realm</code> - Required. Binary realm identifier (e.g., <code>&lt;&lt;&quot;my.app.realm&quot;&gt;&gt;</code>)</li><li><code>auth</code> - Optional. Authentication map with <code>api_key</code> or other auth methods</li><li><code>timeout</code> - Optional. Connection timeout in milliseconds (default: 5000)</li><li><code>node_id</code> - Optional. 32-byte node ID (generated if not provided)</li></ul><h3 id="connect/2-examples" class="section-heading"><a href="#connect/2-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Basic connection</span><span class="w">
+  </span><span class="p" data-group-id="3676533463-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Client</span><span class="p" data-group-id="3676533463-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_sdk</span><span class="p">:</span><span class="nf">connect</span><span class="p" data-group-id="3676533463-2">(</span><span class="p" data-group-id="3676533463-3">&lt;&lt;</span><span class="s">&quot;https://mesh.local:443&quot;</span><span class="p" data-group-id="3676533463-3">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="3676533463-4">#{</span><span class="w">
+      </span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="3676533463-5">&lt;&lt;</span><span class="s">&quot;my.realm&quot;</span><span class="p" data-group-id="3676533463-5">&gt;&gt;</span><span class="w">
+  </span><span class="p" data-group-id="3676533463-4">}</span><span class="p" data-group-id="3676533463-2">)</span><span class="p">.</span><span class="w">
+ 
+  </span><span class="c1">%% With API key authentication</span><span class="w">
+  </span><span class="p" data-group-id="3676533463-6">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Client</span><span class="p" data-group-id="3676533463-6">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_sdk</span><span class="p">:</span><span class="nf">connect</span><span class="p" data-group-id="3676533463-7">(</span><span class="p" data-group-id="3676533463-8">&lt;&lt;</span><span class="s">&quot;https://mesh.local:443&quot;</span><span class="p" data-group-id="3676533463-8">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="3676533463-9">#{</span><span class="w">
+      </span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="3676533463-10">&lt;&lt;</span><span class="s">&quot;my.realm&quot;</span><span class="p" data-group-id="3676533463-10">&gt;&gt;</span><span class="p">,</span><span class="w">
+      </span><span class="ss">auth</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="3676533463-11">#{</span><span class="ss">api_key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="3676533463-12">&lt;&lt;</span><span class="s">&quot;secret-key&quot;</span><span class="p" data-group-id="3676533463-12">&gt;&gt;</span><span class="p" data-group-id="3676533463-11">}</span><span class="w">
+  </span><span class="p" data-group-id="3676533463-9">}</span><span class="p" data-group-id="3676533463-7">)</span><span class="p">.</span></code></pre>
+  </section>
+</section>
+<section class="detail" id="disconnect/1">
+
+  <div class="detail-header">
+    <a href="#disconnect/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">disconnect(Client)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L110" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> disconnect(Client :: <a href="#t:client/0">client</a>()) -> ok | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Disconnect from the Macula mesh.</p><p>Cleanly closes the HTTP/3 connection and cleans up all subscriptions.</p>
+  </section>
+</section>
+<section class="detail" id="publish/3">
+
+  <div class="detail-header">
+    <a href="#publish/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">publish(Client, Topic, Data)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L145" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> publish(Client :: <a href="#t:client/0">client</a>(), Topic :: <a href="#t:topic/0">topic</a>(), Data :: <a href="#t:event_data/0">event_data</a>()) ->
+                 ok | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Publish an event to a topic.</p><p>Publishes data to the specified topic. All subscribers to this topic will receive the event.</p><h3 id="publish/3-topic-design" class="section-heading"><a href="#publish/3-topic-design" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Topic_Design">Topic Design</a></span></h3><p>Topics should describe EVENT TYPES, not entity instances:</p><ul><li>Good: <code>&lt;&lt;&quot;my.app.user.registered&quot;&gt;&gt;</code> (event type)</li><li>Bad: <code>&lt;&lt;&quot;my.app.user.123.registered&quot;&gt;&gt;</code> (entity ID in topic)</li></ul><p>Entity IDs belong in the event payload, not the topic name.</p><h3 id="publish/3-examples" class="section-heading"><a href="#publish/3-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Publish with default options</span><span class="w">
+  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_sdk</span><span class="p">:</span><span class="nf">publish</span><span class="p" data-group-id="5650328532-1">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="5650328532-2">&lt;&lt;</span><span class="s">&quot;my.app.events&quot;</span><span class="p" data-group-id="5650328532-2">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="5650328532-3">#{</span><span class="w">
+      </span><span class="ss">type</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="5650328532-4">&lt;&lt;</span><span class="s">&quot;user.registered&quot;</span><span class="p" data-group-id="5650328532-4">&gt;&gt;</span><span class="p">,</span><span class="w">
+      </span><span class="ss">user_id</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="5650328532-5">&lt;&lt;</span><span class="s">&quot;user-123&quot;</span><span class="p" data-group-id="5650328532-5">&gt;&gt;</span><span class="p">,</span><span class="w">
+      </span><span class="ss">email</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="5650328532-6">&lt;&lt;</span><span class="s">&quot;user@example.com&quot;</span><span class="p" data-group-id="5650328532-6">&gt;&gt;</span><span class="w">
+  </span><span class="p" data-group-id="5650328532-3">}</span><span class="p" data-group-id="5650328532-1">)</span><span class="p">.</span><span class="w">
+ 
+  </span><span class="c1">%% Publish with options</span><span class="w">
+  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_sdk</span><span class="p">:</span><span class="nf">publish</span><span class="p" data-group-id="5650328532-7">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="5650328532-8">&lt;&lt;</span><span class="s">&quot;my.app.events&quot;</span><span class="p" data-group-id="5650328532-8">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="5650328532-9">#{</span><span class="w">
+      </span><span class="ss">data</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="5650328532-10">&lt;&lt;</span><span class="s">&quot;important&quot;</span><span class="p" data-group-id="5650328532-10">&gt;&gt;</span><span class="w">
+  </span><span class="p" data-group-id="5650328532-9">}</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="5650328532-11">#{</span><span class="ss">acknowledge</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ss">true</span><span class="p" data-group-id="5650328532-11">}</span><span class="p" data-group-id="5650328532-7">)</span><span class="p">.</span></code></pre>
+  </section>
+</section>
+<section class="detail" id="publish/4">
+
+  <div class="detail-header">
+    <a href="#publish/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">publish(Client, Topic, Data, Opts)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L152" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> publish(Client :: <a href="#t:client/0">client</a>(), Topic :: <a href="#t:topic/0">topic</a>(), Data :: <a href="#t:event_data/0">event_data</a>(), Opts :: <a href="#t:options/0">options</a>()) ->
+                 ok | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Publish an event with options.</p>
+  </section>
+</section>
+<section class="detail" id="subscribe/3">
+
+  <div class="detail-header">
+    <a href="#subscribe/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">subscribe(Client, Topic, Callback)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L180" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> subscribe(Client :: <a href="#t:client/0">client</a>(), Topic :: <a href="#t:topic/0">topic</a>(), Callback :: fun((<a href="#t:event_data/0">event_data</a>()) -> ok)) ->
+                   {ok, <a href="#t:subscription_ref/0">subscription_ref</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Subscribe to a topic.</p><p>Subscribes to events on the specified topic. The callback function will be invoked for each event received.</p><h3 id="subscribe/3-callback-function" class="section-heading"><a href="#subscribe/3-callback-function" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Callback_Function">Callback Function</a></span></h3><p>The callback receives the event data and should return <code>ok</code>.</p><h3 id="subscribe/3-examples" class="section-heading"><a href="#subscribe/3-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Simple subscription</span><span class="w">
+  </span><span class="p" data-group-id="5591514131-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">SubRef</span><span class="p" data-group-id="5591514131-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_sdk</span><span class="p">:</span><span class="nf">subscribe</span><span class="p" data-group-id="5591514131-2">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="5591514131-3">&lt;&lt;</span><span class="s">&quot;my.app.events&quot;</span><span class="p" data-group-id="5591514131-3">&gt;&gt;</span><span class="p">,</span><span class="w">
+      </span><span class="nf">fun</span><span class="p" data-group-id="5591514131-4">(</span><span class="n">EventData</span><span class="p" data-group-id="5591514131-4">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+          </span><span class="nc">io</span><span class="p">:</span><span class="nf">format</span><span class="p" data-group-id="5591514131-5">(</span><span class="s">&quot;Event: </span><span class="si">~p</span><span class="si">~n</span><span class="s">&quot;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="5591514131-6">[</span><span class="n">EventData</span><span class="p" data-group-id="5591514131-6">]</span><span class="p" data-group-id="5591514131-5">)</span><span class="p">,</span><span class="w">
+          </span><span class="ss">ok</span><span class="w">
+      </span><span class="k">end</span><span class="p" data-group-id="5591514131-2">)</span><span class="p">.</span><span class="w">
+ 
+  </span><span class="c1">%% Unsubscribe later</span><span class="w">
+  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_sdk</span><span class="p">:</span><span class="nf">unsubscribe</span><span class="p" data-group-id="5591514131-7">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="n">SubRef</span><span class="p" data-group-id="5591514131-7">)</span><span class="p">.</span></code></pre>
+  </section>
+</section>
+<section class="detail" id="unsubscribe/2">
+
+  <div class="detail-header">
+    <a href="#unsubscribe/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">unsubscribe(Client, SubRef)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.3.1/apps/macula_sdk/src/macula_sdk.erl#L188" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> unsubscribe(Client :: <a href="#t:client/0">client</a>(), SubRef :: <a href="#t:subscription_ref/0">subscription_ref</a>()) -> ok | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Unsubscribe from a topic.</p><p>Removes the subscription identified by the subscription reference.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula_sdk/0.3.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula_sdk/0.3.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula_sdk.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>
