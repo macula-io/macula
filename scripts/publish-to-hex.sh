@@ -91,8 +91,9 @@ else
 fi
 
 # Run tests
-log_warn "Running tests..."
+log_warn "Running tests (this may take a minute)..."
 rebar3 eunit > /tmp/macula-test-output.log 2>&1
+echo ""
 
 # Extract test results (rebar3 may return non-zero even for passing tests with expected crashes)
 TEST_COUNT=$(grep -oP '\d+(?= tests)' /tmp/macula-test-output.log | head -1 || echo "0")
@@ -118,7 +119,7 @@ fi
 log_info "$TEST_COUNT tests passed ($CANCEL_COUNT cancelled - expected)"
 
 # Build hex package
-log_warn "Building hex package..."
+log_warn "Building hex package (this may take a minute)..."
 if ! rebar3 hex build --app macula > /tmp/macula-hex-build.log 2>&1; then
     log_error "Hex build failed!"
     echo ""
