@@ -67,16 +67,23 @@ log_info "Git working tree is clean"
 
 # Check we're authenticated with hex
 log_warn "Checking hex.pm authentication..."
-if ! rebar3 hex user whoami > /dev/null 2>&1; then
-    log_error "Not authenticated with hex.pm"
-    echo ""
-    echo "Run: rebar3 hex user auth"
-    echo "Or set HEX_API_KEY environment variable"
-    exit 1
-fi
 
-HEXPM_USER=$(rebar3 hex user whoami 2>/dev/null | grep -oP '(?<=Username: ).*' || echo "unknown")
-log_info "Authenticated as: $HEXPM_USER"
+# Check if HEX_API_KEY is set
+if [ -n "${HEX_API_KEY:-}" ]; then
+    log_info "Authenticated via HEX_API_KEY environment variable"
+    HEXPM_USER="API Key"
+else
+    # Check interactive authentication
+    if ! rebar3 hex user whoami > /dev/null 2>&1; then
+        log_error "Not authenticated with hex.pm"
+        echo ""
+        echo "Run: rebar3 hex user auth"
+        echo "Or set HEX_API_KEY environment variable"
+        exit 1
+    fi
+    HEXPM_USER=$(rebar3 hex user whoami 2>/dev/null | grep -oP '(?<=Username: ).*' || echo "authenticated user")
+    log_info "Authenticated as: $HEXPM_USER"
+fi
 
 # Run tests
 log_warn "Running tests..."
