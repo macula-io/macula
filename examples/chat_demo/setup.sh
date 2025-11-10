@@ -44,7 +44,9 @@ fi
 # 4. Compile the demo
 echo
 echo "Step 4: Compiling Macula..."
-cd "$(dirname "$0")/.."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_ROOT"
 if rebar3 compile > /dev/null 2>&1; then
     echo "✓ Macula compiled successfully"
 else
@@ -53,14 +55,16 @@ else
     exit 1
 fi
 
-# 5. Create run scripts
+# 5. Create run scripts in chat_demo directory
 echo
 echo "Step 5: Creating client run scripts..."
 
-cat > examples/run-alice.sh <<'EOF'
+cat > "$SCRIPT_DIR/run-alice.sh" <<'EOF'
 #!/usr/bin/env bash
-cd "$(dirname "$0")/.."
-echo "Starting Alice's chat client..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_ROOT"
+echo "Starting Alice's interactive shell..."
 echo "Connecting to gateway at https://localhost:9443"
 echo
 erl -pa _build/default/lib/*/ebin \
@@ -73,10 +77,12 @@ erl -pa _build/default/lib/*/ebin \
     -noshell
 EOF
 
-cat > examples/run-bob.sh <<'EOF'
+cat > "$SCRIPT_DIR/run-bob.sh" <<'EOF'
 #!/usr/bin/env bash
-cd "$(dirname "$0")/.."
-echo "Starting Bob's chat client..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_ROOT"
+echo "Starting Bob's interactive shell..."
 echo "Connecting to gateway at https://localhost:9443"
 echo
 erl -pa _build/default/lib/*/ebin \
@@ -89,11 +95,12 @@ erl -pa _build/default/lib/*/ebin \
     -noshell
 EOF
 
-chmod +x examples/run-alice.sh examples/run-bob.sh
+chmod +x "$SCRIPT_DIR/run-alice.sh" "$SCRIPT_DIR/run-bob.sh" "$SCRIPT_DIR/chat_demo.erl"
 
 echo "✓ Client scripts created:"
-echo "  - examples/run-alice.sh"
-echo "  - examples/run-bob.sh"
+echo "  - $SCRIPT_DIR/run-alice.sh"
+echo "  - $SCRIPT_DIR/run-bob.sh"
+echo "  - $SCRIPT_DIR/chat_demo.erl"
 
 # 6. Print instructions
 echo
@@ -101,16 +108,19 @@ echo "=== Setup Complete! ==="
 echo
 echo "To run the demo:"
 echo
-echo "Terminal 1 (Alice):"
-echo "  cd examples && ./run-alice.sh"
+echo "OPTION 1: Automated Chat (Easiest)"
+echo "  Terminal 1: cd examples/chat_demo && ./chat_demo.erl alice"
+echo "  Terminal 2: cd examples/chat_demo && ./chat_demo.erl bob"
+echo "  Then type messages in either terminal!"
 echo
-echo "Terminal 2 (Bob):"
-echo "  cd examples && ./run-bob.sh"
+echo "OPTION 2: Interactive Shell (Advanced)"
+echo "  Terminal 1: cd examples/chat_demo && ./run-alice.sh"
+echo "  Terminal 2: cd examples/chat_demo && ./run-bob.sh"
 echo
-echo "In each terminal, you can run:"
-echo "  1> {ok, C} = macula_connection:start_link(<<\"https://localhost:9443\">>, #{realm => <<\"com.example.chat\">>})."
-echo "  2> macula_connection:subscribe(C, <<\"chat.messages\">>, fun(Msg) -> io:format(\"Message: ~p~n\", [Msg]) end)."
-echo "  3> macula_connection:publish(C, <<\"chat.messages\">>, #{msg => <<\"Hello!\">>})."
+echo "  In each terminal, run:"
+echo "    1> {ok, C} = macula_connection:start_link(<<\"https://localhost:9443\">>, #{realm => <<\"com.example.chat\">>})."
+echo "    2> macula_connection:subscribe(C, <<\"chat.messages\">>, fun(Msg) -> io:format(\"Message: ~p~n\", [Msg]) end)."
+echo "    3> macula_connection:publish(C, <<\"chat.messages\">>, #{msg => <<\"Hello!\">>})."
 echo
 echo "Gateway logs:"
 echo "  kubectl --context kind-macula-hub logs -n macula-system -l app=macula-gateway -f"

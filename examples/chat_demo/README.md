@@ -91,8 +91,8 @@ The easiest way to run the demo is using the automated chat script:
 
 ```bash
 # 1. Setup (one time)
-cd /home/rl/work/github.com/macula-io/macula/examples
-./demo-setup.sh
+cd /home/rl/work/github.com/macula-io/macula/examples/chat_demo
+./setup.sh
 
 # 2. Terminal 1 - Start Alice's chat
 ./chat_demo.erl alice
@@ -119,8 +119,8 @@ For more control and experimentation, use the interactive shell:
 
 ```bash
 # 1. Setup (one time)
-cd /home/rl/work/github.com/macula-io/macula/examples
-./demo-setup.sh
+cd /home/rl/work/github.com/macula-io/macula/examples/chat_demo
+./setup.sh
 
 # 2. Terminal 1 - Start Alice
 ./run-alice.sh
