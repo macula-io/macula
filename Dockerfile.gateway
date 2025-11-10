@@ -1,0 +1,50 @@
+FROM erlang:26-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    git \
+    build-base \
+    openssl-dev \
+    cmake \
+    linux-headers
+
+WORKDIR /build
+
+# Copy everything needed for build (quicer needs all deps to build native code)
+COPY . .
+
+# Get dependencies and build release
+RUN rebar3 as prod release
+
+# Runtime stage
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    openssl \
+    ncurses-libs \
+    libstdc++ \
+    libgcc
+
+# Create user
+RUN addgroup -g 1000 macula && \
+    adduser -u 1000 -G macula -s /bin/sh -D macula
+
+WORKDIR /opt/macula
+
+# Copy release from builder
+COPY --from=builder /build/_build/prod/rel/macula ./
+RUN chown -R macula:macula /opt/macula
+
+USER macula
+
+# Expose gateway port
+EXPOSE 9443
+
+# Set environment variables
+ENV GATEWAY_PORT=9443
+ENV GATEWAY_REALM=be.cortexiq.energy
+ENV RELEASE_COOKIE=macula-gateway-cookie
+
+# Start the release with gateway focus
+CMD ["/opt/macula/bin/macula", "foreground"]
