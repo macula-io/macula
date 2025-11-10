@@ -7,7 +7,7 @@
 %%% and subscription management.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_sdk_client).
+-module(macula_client_client).
 
 -behaviour(gen_server).
 
@@ -517,9 +517,9 @@ ensure_binary(A) when is_atom(A) -> atom_to_binary(A).
 %% @doc Encode map/list to JSON binary.
 -spec encode_json(map() | list()) -> binary().
 encode_json(Data) ->
-    jiffy:encode(Data).
+    json:encode(Data).
 
 %% @doc Decode JSON binary to map/list.
 -spec decode_json(binary()) -> map() | list().
 decode_json(Binary) ->
-    jiffy:decode(Binary, [return_maps]).
+    json:decode(Binary).

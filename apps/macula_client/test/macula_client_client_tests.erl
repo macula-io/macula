@@ -1,10 +1,10 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% EUnit tests for macula_sdk_client module.
+%%% EUnit tests for macula_client_client module.
 %%% Tests internal client behavior using mocks where needed.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_sdk_client_tests).
+-module(macula_client_client_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -19,15 +19,15 @@
 parse_url_https_test() ->
     %% Test HTTPS URL parsing
     %% For now, just verify the module loads
-    ?assert(erlang:function_exported(macula_sdk_client, start_link, 2)).
+    ?assert(erlang:function_exported(macula_client_client, start_link, 2)).
 
 parse_url_http_test() ->
     %% Test HTTP URL parsing
-    ?assert(erlang:function_exported(macula_sdk_client, start_link, 2)).
+    ?assert(erlang:function_exported(macula_client_client, start_link, 2)).
 
 parse_url_no_port_test() ->
     %% Test URL without explicit port (should default to 443)
-    ?assert(erlang:function_exported(macula_sdk_client, start_link, 2)).
+    ?assert(erlang:function_exported(macula_client_client, start_link, 2)).
 
 %%%===================================================================
 %%% Unit Tests - Message ID Generation
@@ -36,7 +36,7 @@ parse_url_no_port_test() ->
 message_id_uniqueness_test() ->
     %% Message IDs should be unique
     %% This tests the internal counter behavior
-    ?assert(erlang:function_exported(macula_sdk_client, start_link, 2)).
+    ?assert(erlang:function_exported(macula_client_client, start_link, 2)).
 
 %%%===================================================================
 %%% Unit Tests - Binary Conversion
@@ -45,7 +45,7 @@ message_id_uniqueness_test() ->
 ensure_binary_test() ->
     %% Test that various types are converted to binary
     %% These test internal helper functions
-    ?assert(erlang:function_exported(macula_sdk_client, start_link, 2)).
+    ?assert(erlang:function_exported(macula_client_client, start_link, 2)).
 
 %%%===================================================================
 %%% Integration Tests - Client Lifecycle
@@ -57,13 +57,13 @@ client_start_stop_test() ->
     Opts = #{realm => <<"test.realm">>},
 
     %% WHEN: Starting client
-    case macula_sdk_client:start_link(Url, Opts) of
+    case macula_client_client:start_link(Url, Opts) of
         {ok, Pid} ->
             %% THEN: Client should be a running process
             ?assert(is_process_alive(Pid)),
 
             %% WHEN: Stopping client
-            ok = macula_sdk_client:stop(Pid),
+            ok = macula_client_client:stop(Pid),
 
             %% THEN: Client should be stopped
             timer:sleep(100),
@@ -82,7 +82,7 @@ client_requires_realm_test() ->
     %% WHEN: Attempting to start client
     %% THEN: Should crash with missing realm
     ?assertError({missing_required_option, realm},
-                 macula_sdk_client:start_link(Url, Opts)).
+                 macula_client_client:start_link(Url, Opts)).
 
 %%%===================================================================
 %%% Unit Tests - Message Encoding/Decoding

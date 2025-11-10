@@ -20,7 +20,7 @@
 
 %% @doc Generate a self-signed certificate and key in a temporary directory.
 %% Returns {ok, CertFile, KeyFile} with paths to generated files.
-%% The files are created in /tmp/macula_certs_<pid> for test isolation.
+%% The files are created in /tmp/macula_certs_PID for test isolation.
 %% @end
 -spec generate_self_signed() -> {ok, file:filename(), file:filename()} | {error, term()}.
 generate_self_signed() ->

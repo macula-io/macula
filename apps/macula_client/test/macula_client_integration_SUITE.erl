@@ -1,10 +1,10 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% Integration tests for macula_sdk.
+%%% Integration tests for macula_client.
 %%% Tests actual connections to a test server.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_sdk_integration_SUITE).
+-module(macula_client_integration_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -37,7 +37,7 @@ all() ->
 
 init_per_suite(Config) ->
     %% Start applications
-    {ok, _} = application:ensure_all_started(macula_sdk),
+    {ok, _} = application:ensure_all_started(macula_client),
     Config.
 
 end_per_suite(_Config) ->
@@ -45,17 +45,17 @@ end_per_suite(_Config) ->
 
 init_per_testcase(_TestCase, Config) ->
     %% Start test server
-    {ok, Server} = macula_sdk_test_server:start_link(#{
+    {ok, Server} = macula_client_test_server:start_link(#{
         port => 0,  % Random port
         realm => <<"test.realm">>
     }),
-    Port = macula_sdk_test_server:get_port(Server),
+    Port = macula_client_test_server:get_port(Server),
 
     [{server, Server}, {port, Port} | Config].
 
 end_per_testcase(_TestCase, Config) ->
     Server = ?config(server, Config),
-    macula_sdk_test_server:stop(Server),
+    macula_client_test_server:stop(Server),
     ok.
 
 %%%===================================================================
@@ -70,7 +70,7 @@ test_connection_lifecycle(Config) ->
     Opts = #{realm => <<"test.realm">>},
 
     %% WHEN: Connecting to the server
-    Result = macula_sdk:connect(Url, Opts),
+    Result = macula_client:connect(Url, Opts),
 
     %% THEN: Connection should succeed
     case Result of
@@ -79,7 +79,7 @@ test_connection_lifecycle(Config) ->
             true = is_process_alive(Client),
 
             %% WHEN: Disconnecting
-            ok = macula_sdk:disconnect(Client),
+            ok = macula_client:disconnect(Client),
 
             %% THEN: Client should stop
             timer:sleep(100),
@@ -100,20 +100,20 @@ test_publish_event(Config) ->
     Url = iolist_to_binary(io_lib:format("https://localhost:~p", [Port])),
     Opts = #{realm => <<"test.realm">>},
 
-    case macula_sdk:connect(Url, Opts) of
+    case macula_client:connect(Url, Opts) of
         {ok, Client} ->
             %% WHEN: Publishing an event
             Event = #{
                 type => <<"test.event">>,
                 data => <<"test data">>
             },
-            Result = macula_sdk:publish(Client, <<"test.topic">>, Event),
+            Result = macula_client:publish(Client, <<"test.topic">>, Event),
 
             %% THEN: Publish should succeed
             ok = Result,
 
             %% Cleanup
-            macula_sdk:disconnect(Client),
+            macula_client:disconnect(Client),
             ok;
         {error, _Reason} ->
             {skip, "Could not connect to test server"}
@@ -126,11 +126,11 @@ test_rpc_call(Config) ->
     Url = iolist_to_binary(io_lib:format("https://localhost:~p", [Port])),
     Opts = #{realm => <<"test.realm">>},
 
-    case macula_sdk:connect(Url, Opts) of
+    case macula_client:connect(Url, Opts) of
         {ok, Client} ->
             %% WHEN: Making an RPC call
             Args = #{user_id => <<"123">>},
-            Result = macula_sdk:call(Client, <<"test.procedure">>, Args),
+            Result = macula_client:call(Client, <<"test.procedure">>, Args),
 
             %% THEN: Call should return result
             case Result of
@@ -145,7 +145,7 @@ test_rpc_call(Config) ->
             end,
 
             %% Cleanup
-            macula_sdk:disconnect(Client),
+            macula_client:disconnect(Client),
             ok;
         {error, _Reason} ->
             {skip, "Could not connect to test server"}

@@ -39,7 +39,7 @@ rebar3 eunit
 rebar3 shell
 ```
 
-See [Quick Start Guide](architecture/macula_http3_mesh_quick_start.md) for detailed instructions.
+See [Quick Start Guide](quick-start) for detailed instructions.
 
 ---
 
@@ -47,21 +47,21 @@ See [Quick Start Guide](architecture/macula_http3_mesh_quick_start.md) for detai
 
 Macula is organized as an Erlang umbrella application with 12 core libraries.
 
-See [Project Structure](architecture/MACULA_PROJECT_STRUCTURE.md) for complete details.
+See [Project Structure](project-structure) for complete details.
 
 ---
 
 ## Documentation
 
-📚 **Start Here**: [Documentation Root](architecture/macula_http3_mesh_root.md)
+📚 **Start Here**: [Documentation Root](architecture)
 
 ### Essential Reading
 
-- [Quick Start Guide](architecture/macula_http3_mesh_quick_start.md) - Get running in 15 minutes
-- [Hello World Tutorial](architecture/macula_http3_mesh_hello_world.md) - Build a distributed chat app
-- [Technical Roadmap](architecture/macula_http3_mesh_roadmap.md) - 20-week implementation plan
+- [Quick Start Guide](quick-start) - Get running in 15 minutes
+- [Hello World Tutorial](hello-world) - Build a distributed chat app
+- [Technical Roadmap](roadmap) - 20-week implementation plan
 
-See [Documentation Status](architecture/DOCUMENTATION_STATUS.md) for full inventory.
+See [Documentation Status](documentation-status) for full inventory.
 
 ---
 
@@ -87,7 +87,7 @@ See [Documentation Status](architecture/DOCUMENTATION_STATUS.md) for full invent
 
 ## Contributing
 
-We welcome contributions! See [Contributing Guide](architecture/macula_http3_mesh_contributing.md).
+We welcome contributions! See [Contributing Guide](contributing).
 
 ---
 

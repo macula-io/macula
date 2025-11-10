@@ -5,7 +5,7 @@
 %%% Manages the SDK application lifecycle and supervision tree.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_sdk_app).
+-module(macula_client_app).
 
 -behaviour(application).
 
@@ -18,7 +18,7 @@
 
 %% @private
 start(_StartType, _StartArgs) ->
-    macula_sdk_sup:start_link().
+    macula_client_sup:start_link().
 
 %% @private
 stop(_State) ->

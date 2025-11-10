@@ -8,37 +8,12 @@
 %%%
 %%% == Quick Start ==
 %%%
-%%% ```
-%%% %% Connect to a Macula mesh
-%%% {ok, Client} = macula_sdk:connect(<<"https://mesh.example.com:443">>, #{
-%%%     realm => <<"my.app.realm">>,
-%%%     auth => #{api_key => <<"your-api-key">>}
-%%% }).
-%%%
-%%% %% Publish an event
-%%% ok = macula_sdk:publish(Client, <<"my.app.events">>, #{
-%%%     type => <<"user.registered">>,
-%%%     user_id => <<"user-123">>
-%%% }).
-%%%
-%%% %% Subscribe to events
-%%% {ok, SubRef} = macula_sdk:subscribe(Client, <<"my.app.events">>,
-%%%     fun(Event) ->
-%%%         io:format("Received event: ~p~n", [Event])
-%%%     end).
-%%%
-%%% %% Make an RPC call
-%%% {ok, Result} = macula_sdk:call(Client, <<"my.app.get_user">>, #{
-%%%     user_id => <<"user-123">>
-%%% }).
-%%%
-%%% %% Disconnect
-%%% ok = macula_sdk:disconnect(Client).
-%%% '''
+%%% Connect to a mesh, publish events, subscribe to topics, and make RPC calls.
+%%% See individual function documentation for detailed examples with code.
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_sdk).
+-module(macula_client).
 
 %% API exports
 -export([
@@ -72,14 +47,14 @@
 
 -type topic() :: binary().
 %% Topic name for pub/sub operations. Topics should describe event types,
-%% not entity IDs. Example: <<"my.app.user.registered">> (good),
-%% not <<"my.app.user.123.registered">> (bad - ID belongs in payload).
+%% not entity IDs. Example: `"my.app.user.registered"' (good),
+%% not `"my.app.user.123.registered"' (bad - ID belongs in payload).
 
 -type event_data() :: map() | binary().
 %% Event payload data. Typically a map that will be JSON-encoded.
 
 -type procedure() :: binary().
-%% RPC procedure name. Example: <<"my.app.get_user">>.
+%% RPC procedure name. Example: `"my.app.get_user"'.
 
 -type args() :: map() | list() | binary().
 %% Arguments for RPC calls.
@@ -101,7 +76,7 @@
 %% == Options ==
 %%
 %% <ul>
-%% <li>`realm' - Required. Binary realm identifier (e.g., <<"my.app.realm">>)</li>
+%% <li>`realm' - Required. Binary realm identifier (e.g., `<<"my.app.realm">>')</li>
 %% <li>`auth' - Optional. Authentication map with `api_key' or other auth methods</li>
 %% <li>`timeout' - Optional. Connection timeout in milliseconds (default: 5000)</li>
 %% <li>`node_id' - Optional. 32-byte node ID (generated if not provided)</li>
@@ -111,12 +86,12 @@
 %%
 %% ```
 %% %% Basic connection
-%% {ok, Client} = macula_sdk:connect(<<"https://mesh.local:443">>, #{
+%% {ok, Client} = macula_client:connect(<<"https://mesh.local:443">>, #{
 %%     realm => <<"my.realm">>
 %% }).
 %%
 %% %% With API key authentication
-%% {ok, Client} = macula_sdk:connect(<<"https://mesh.local:443">>, #{
+%% {ok, Client} = macula_client:connect(<<"https://mesh.local:443">>, #{
 %%     realm => <<"my.realm">>,
 %%     auth => #{api_key => <<"secret-key">>}
 %% }).
@@ -124,7 +99,7 @@
 -spec connect(Url :: binary(), Opts :: options()) ->
     {ok, client()} | {error, Reason :: term()}.
 connect(Url, Opts) when is_binary(Url), is_map(Opts) ->
-    macula_sdk_client:start_link(Url, Opts);
+    macula_client_client:start_link(Url, Opts);
 connect(Url, Opts) when is_list(Url), is_map(Opts) ->
     connect(list_to_binary(Url), Opts).
 
@@ -133,7 +108,7 @@ connect(Url, Opts) when is_list(Url), is_map(Opts) ->
 %% Cleanly closes the HTTP/3 connection and cleans up all subscriptions.
 -spec disconnect(Client :: client()) -> ok | {error, Reason :: term()}.
 disconnect(Client) when is_pid(Client) ->
-    macula_sdk_client:stop(Client).
+    macula_client_client:stop(Client).
 
 %% @doc Publish an event to a topic.
 %%
@@ -144,8 +119,8 @@ disconnect(Client) when is_pid(Client) ->
 %%
 %% Topics should describe EVENT TYPES, not entity instances:
 %% <ul>
-%% <li>✅ Good: <<"my.app.user.registered">> (event type)</li>
-%% <li>❌ Bad: <<"my.app.user.123.registered">> (entity ID in topic)</li>
+%% <li>Good: `<<"my.app.user.registered">>' (event type)</li>
+%% <li>Bad: `<<"my.app.user.123.registered">>' (entity ID in topic)</li>
 %% </ul>
 %%
 %% Entity IDs belong in the event payload, not the topic name.
@@ -154,28 +129,28 @@ disconnect(Client) when is_pid(Client) ->
 %%
 %% ```
 %% %% Publish with default options
-%% ok = macula_sdk:publish(Client, <<"my.app.events">>, #{
+%% ok = macula_client:publish(Client, <<"my.app.events">>, #{
 %%     type => <<"user.registered">>,
 %%     user_id => <<"user-123">>,
 %%     email => <<"user@example.com">>
 %% }).
 %%
 %% %% Publish with options
-%% ok = macula_sdk:publish(Client, <<"my.app.events">>, #{
+%% ok = macula_client:publish(Client, <<"my.app.events">>, #{
 %%     data => <<"important">>
 %% }, #{acknowledge => true}).
 %% '''
 -spec publish(Client :: client(), Topic :: topic(), Data :: event_data()) ->
     ok | {error, Reason :: term()}.
 publish(Client, Topic, Data) when is_pid(Client), is_binary(Topic) ->
-    macula_sdk_client:publish(Client, Topic, Data).
+    macula_client_client:publish(Client, Topic, Data).
 
 %% @doc Publish an event with options.
 -spec publish(Client :: client(), Topic :: topic(), Data :: event_data(),
               Opts :: options()) ->
     ok | {error, Reason :: term()}.
 publish(Client, Topic, Data, Opts) when is_pid(Client), is_binary(Topic), is_map(Opts) ->
-    macula_sdk_client:publish(Client, Topic, Data, Opts).
+    macula_client_client:publish(Client, Topic, Data, Opts).
 
 %% @doc Subscribe to a topic.
 %%
@@ -190,20 +165,20 @@ publish(Client, Topic, Data, Opts) when is_pid(Client), is_binary(Topic), is_map
 %%
 %% ```
 %% %% Simple subscription
-%% {ok, SubRef} = macula_sdk:subscribe(Client, <<"my.app.events">>,
+%% {ok, SubRef} = macula_client:subscribe(Client, <<"my.app.events">>,
 %%     fun(EventData) ->
 %%         io:format("Event: ~p~n", [EventData]),
 %%         ok
 %%     end).
 %%
 %% %% Unsubscribe later
-%% ok = macula_sdk:unsubscribe(Client, SubRef).
+%% ok = macula_client:unsubscribe(Client, SubRef).
 %% '''
 -spec subscribe(Client :: client(), Topic :: topic(),
                 Callback :: fun((event_data()) -> ok)) ->
     {ok, subscription_ref()} | {error, Reason :: term()}.
 subscribe(Client, Topic, Callback) when is_pid(Client), is_binary(Topic), is_function(Callback, 1) ->
-    macula_sdk_client:subscribe(Client, Topic, Callback).
+    macula_client_client:subscribe(Client, Topic, Callback).
 
 %% @doc Unsubscribe from a topic.
 %%
@@ -211,7 +186,7 @@ subscribe(Client, Topic, Callback) when is_pid(Client), is_binary(Topic), is_fun
 -spec unsubscribe(Client :: client(), SubRef :: subscription_ref()) ->
     ok | {error, Reason :: term()}.
 unsubscribe(Client, SubRef) when is_pid(Client), is_reference(SubRef) ->
-    macula_sdk_client:unsubscribe(Client, SubRef).
+    macula_client_client:unsubscribe(Client, SubRef).
 
 %% @doc Make a synchronous RPC call.
 %%
@@ -221,26 +196,26 @@ unsubscribe(Client, SubRef) when is_pid(Client), is_reference(SubRef) ->
 %%
 %% ```
 %% %% Simple RPC call
-%% {ok, User} = macula_sdk:call(Client, <<"my.app.get_user">>, #{
+%% {ok, User} = macula_client:call(Client, <<"my.app.get_user">>, #{
 %%     user_id => <<"user-123">>
 %% }).
 %%
 %% %% With timeout
-%% {ok, Result} = macula_sdk:call(Client, <<"my.app.process">>,
+%% {ok, Result} = macula_client:call(Client, <<"my.app.process">>,
 %%     #{data => <<"large">>},
 %%     #{timeout => 30000}).
 %% '''
 -spec call(Client :: client(), Procedure :: procedure(), Args :: args()) ->
     {ok, Result :: term()} | {error, Reason :: term()}.
 call(Client, Procedure, Args) when is_pid(Client), is_binary(Procedure) ->
-    macula_sdk_client:call(Client, Procedure, Args).
+    macula_client_client:call(Client, Procedure, Args).
 
 %% @doc Make an RPC call with options.
 -spec call(Client :: client(), Procedure :: procedure(), Args :: args(),
            Opts :: options()) ->
     {ok, Result :: term()} | {error, Reason :: term()}.
 call(Client, Procedure, Args, Opts) when is_pid(Client), is_binary(Procedure), is_map(Opts) ->
-    macula_sdk_client:call(Client, Procedure, Args, Opts).
+    macula_client_client:call(Client, Procedure, Args, Opts).
 
 %%%===================================================================
 %%% Internal functions

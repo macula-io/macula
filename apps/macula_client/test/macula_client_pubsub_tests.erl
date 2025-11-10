@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% EUnit tests for Pub/Sub operations in macula_sdk.
+%%% EUnit tests for Pub/Sub operations in macula_client.
 %%% Tests publish, subscribe, and unsubscribe functionality.
 %%% Following TDD principles - tests written before implementation fixes.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_sdk_pubsub_tests).
+-module(macula_client_pubsub_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -36,7 +36,7 @@ pubsub_test_() ->
      ]}.
 
 setup() ->
-    application:ensure_all_started(macula_sdk),
+    application:ensure_all_started(macula_client),
     ok.
 
 cleanup(_) ->
@@ -60,7 +60,7 @@ test_publish_map() ->
     %% THEN: API should accept map data type
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_sdk:publish(Client, Topic, Data)),
+    Result = (catch macula_client:publish(Client, Topic, Data)),
 
     %% Should fail with noproc (process not a gen_server) not badarg
     ?assertMatch({'EXIT', {noproc, _}}, Result).
@@ -74,7 +74,7 @@ test_publish_binary() ->
     %% THEN: API should accept binary data type
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_sdk:publish(Client, Topic, Data)),
+    Result = (catch macula_client:publish(Client, Topic, Data)),
 
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
@@ -87,7 +87,7 @@ test_publish_list() ->
     %% THEN: API should accept list data type
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_sdk:publish(Client, Topic, Data)),
+    Result = (catch macula_client:publish(Client, Topic, Data)),
 
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
@@ -97,7 +97,7 @@ test_publish_disconnected() ->
     timer:sleep(10), %% Ensure dead
 
     %% WHEN: Attempting to publish
-    Result = (catch macula_sdk:publish(Client, <<"test.topic">>, #{})),
+    Result = (catch macula_client:publish(Client, <<"test.topic">>, #{})),
 
     %% THEN: Should fail (process is dead)
     ?assertMatch({'EXIT', _}, Result).
@@ -112,7 +112,7 @@ test_publish_qos() ->
     %% THEN: API should accept qos option
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_sdk:publish(Client, Topic, Data, Opts)),
+    Result = (catch macula_client:publish(Client, Topic, Data, Opts)),
 
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
@@ -126,7 +126,7 @@ test_publish_retain() ->
     %% THEN: API should accept retain option
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_sdk:publish(Client, Topic, Data, Opts)),
+    Result = (catch macula_client:publish(Client, Topic, Data, Opts)),
 
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
@@ -145,7 +145,7 @@ test_subscribe_callback() ->
     %% THEN: API should accept 1-arity function
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_sdk:subscribe(Client, <<"test.topic">>, Callback)),
+    Result = (catch macula_client:subscribe(Client, <<"test.topic">>, Callback)),
 
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
@@ -158,7 +158,7 @@ test_subscribe_returns_ref() ->
     %% (We can't test actual success without a server, but we verify API)
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_sdk:subscribe(Client, <<"test.topic">>, Callback)),
+    Result = (catch macula_client:subscribe(Client, <<"test.topic">>, Callback)),
 
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
@@ -169,7 +169,7 @@ test_subscribe_disconnected() ->
     Callback = fun(_Event) -> ok end,
 
     %% WHEN: Attempting to subscribe
-    Result = (catch macula_sdk:subscribe(Client, <<"test.topic">>, Callback)),
+    Result = (catch macula_client:subscribe(Client, <<"test.topic">>, Callback)),
 
     %% THEN: Should fail
     ?assertMatch({'EXIT', _}, Result).
@@ -186,7 +186,7 @@ test_unsubscribe_valid() ->
     %% THEN: API should accept reference type
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_sdk:unsubscribe(Client, SubRef)),
+    Result = (catch macula_client:unsubscribe(Client, SubRef)),
 
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
@@ -197,7 +197,7 @@ test_unsubscribe_invalid() ->
     %% WHEN: Attempting to unsubscribe
     %% THEN: Should fail with function_clause
     Client = self(),
-    Result = (catch macula_sdk:unsubscribe(Client, InvalidRef)),
+    Result = (catch macula_client:unsubscribe(Client, InvalidRef)),
 
     ?assertMatch({'EXIT', {function_clause, _}}, Result).
 
@@ -214,8 +214,8 @@ test_multiple_subscriptions() ->
     %% THEN: Each subscription should get its own reference
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result1 = (catch macula_sdk:subscribe(Client, <<"test.topic">>, Callback1)),
-    Result2 = (catch macula_sdk:subscribe(Client, <<"test.topic">>, Callback2)),
+    Result1 = (catch macula_client:subscribe(Client, <<"test.topic">>, Callback1)),
+    Result2 = (catch macula_client:subscribe(Client, <<"test.topic">>, Callback2)),
 
     %% Both should fail the same way (noproc)
     ?assertMatch({'EXIT', {noproc, _}}, Result1),
@@ -260,7 +260,7 @@ test_topic_design() ->
     timer:sleep(10), %% Ensure dead
 
     lists:foreach(fun(Topic) ->
-        Result = (catch macula_sdk:publish(Client, Topic, #{})),
+        Result = (catch macula_client:publish(Client, Topic, #{})),
         ?assertMatch({'EXIT', {noproc, _}}, Result)
     end, GoodTopics ++ BadTopics).
 
@@ -293,8 +293,8 @@ test_json_encoding() ->
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
     ?assertMatch({'EXIT', {noproc, _}},
-                 (catch macula_sdk:publish(Client, <<"test">>, Data1))),
+                 (catch macula_client:publish(Client, <<"test">>, Data1))),
     ?assertMatch({'EXIT', {noproc, _}},
-                 (catch macula_sdk:publish(Client, <<"test">>, Data2))),
+                 (catch macula_client:publish(Client, <<"test">>, Data2))),
     ?assertMatch({'EXIT', {noproc, _}},
-                 (catch macula_sdk:publish(Client, <<"test">>, Data3))).
+                 (catch macula_client:publish(Client, <<"test">>, Data3))).

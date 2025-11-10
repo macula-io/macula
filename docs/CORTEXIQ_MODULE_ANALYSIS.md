@@ -15,31 +15,31 @@
 
 ### 1. MaculaSdk (WAMP Infrastructure) ⚠️ CRITICAL
 
-**Location**: `system/macula_sdk/`
+**Location**: `system/macula_client/`
 
 **Current State**: Implements WAMP client over WebSocket
 
 | File | LOC | Description | Migration |
 |------|-----|-------------|-----------|
-| `lib/macula_sdk/wamp/client.ex` | 450 | Core WAMP client GenServer | Replace with Macula Mesh client |
-| `lib/macula_sdk/wamp/connection.ex` | 380 | WebSocket connection management | Replace with HTTP/3/QUIC |
-| `lib/macula_sdk/wamp/protocol.ex` | 320 | WAMP protocol encoding/decoding | Replace with Macula protocol |
-| `lib/macula_sdk/wamp/pool.ex` | 250 | Connection pooling | Adapt for Macula sessions |
-| `lib/macula_sdk/wamp/subscriber.ex` | 100 | Generic subscriber behavior | Minimal changes |
+| `lib/macula_client/wamp/client.ex` | 450 | Core WAMP client GenServer | Replace with Macula Mesh client |
+| `lib/macula_client/wamp/connection.ex` | 380 | WebSocket connection management | Replace with HTTP/3/QUIC |
+| `lib/macula_client/wamp/protocol.ex` | 320 | WAMP protocol encoding/decoding | Replace with Macula protocol |
+| `lib/macula_client/wamp/pool.ex` | 250 | Connection pooling | Adapt for Macula sessions |
+| `lib/macula_client/wamp/subscriber.ex` | 100 | Generic subscriber behavior | Minimal changes |
 
 **Total**: 5 files, ~1,500 LOC
 
 **Dependencies**: WebSocket, Jason, Poolboy
 
 **Migration Strategy**:
-1. Create new `lib/macula_sdk/mesh/` directory
+1. Create new `lib/macula_client/mesh/` directory
 2. Implement Macula client wrapping Erlang modules
 3. Keep same API surface (Wampex-compatible)
 4. Use feature flag to switch between WAMP and Macula
 
 **Code Changes**:
 
-**Before** (`macula_sdk/wamp/client.ex`):
+**Before** (`macula_client/wamp/client.ex`):
 ```elixir
 defmodule MaculaSdk.Wamp.Client do
   use GenServer
@@ -62,7 +62,7 @@ defmodule MaculaSdk.Wamp.Client do
 end
 ```
 
-**After** (`macula_sdk/mesh/client.ex`):
+**After** (`macula_client/mesh/client.ex`):
 ```elixir
 defmodule MaculaSdk.Mesh.Client do
   use GenServer

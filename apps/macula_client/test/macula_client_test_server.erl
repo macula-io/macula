@@ -1,10 +1,10 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% Test server for macula_sdk integration tests.
+%%% Test server for macula_client integration tests.
 %%% Provides a minimal QUIC server that responds to SDK requests.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_sdk_test_server).
+-module(macula_client_test_server).
 
 -behaviour(gen_server).
 
@@ -190,7 +190,7 @@ handle_stream(Stream, Conn, Realm) ->
                     CallId = maps:get(call_id, CallMsg),
                     ReplyMsg = #{
                         call_id => CallId,
-                        result => jiffy:encode(#{status => <<"ok">>})
+                        result => json:encode(#{status => <<"ok">>})
                     },
                     case macula_protocol_encoder:encode(reply, ReplyMsg) of
                         {ok, ReplyData} ->

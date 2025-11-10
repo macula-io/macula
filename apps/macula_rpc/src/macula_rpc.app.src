@@ -1,6 +1,6 @@
 {application, macula_rpc, [
     {description, "An OTP library"},
-    {vsn, "0.1.0"},
+    {vsn, "0.3.4"},
     {registered, []},
     {applications, [
         kernel,

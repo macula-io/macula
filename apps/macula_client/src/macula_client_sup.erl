@@ -5,7 +5,7 @@
 %%% Supervises client connection pools and subscription managers.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_sdk_sup).
+-module(macula_client_sup).
 
 -behaviour(supervisor).
 

@@ -1,4 +1,4 @@
-FROM erlang:26 AS builder
+FROM erlang:27 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -17,7 +17,7 @@ COPY . .
 RUN rebar3 as prod release
 
 # Runtime stage - use same base to ensure glibc compatibility
-FROM erlang:26-slim
+FROM erlang:27-slim
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -34,17 +34,33 @@ WORKDIR /opt/macula
 
 # Copy release from builder
 COPY --from=builder /build/_build/prod/rel/macula ./
-RUN chown -R macula:macula /opt/macula
+
+# Generate self-signed TLS certificates for development/testing
+# Production deployments should mount real certificates via TLS_CERT_FILE/TLS_KEY_FILE env vars
+RUN mkdir -p /opt/macula/certs && \
+    openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout /opt/macula/certs/key.pem \
+    -out /opt/macula/certs/cert.pem \
+    -days 365 -subj '/CN=macula.local' && \
+    echo "Generated self-signed TLS certificate for development" && \
+    ls -la /opt/macula/certs/
+
+# Copy entrypoint script
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh && \
+    chown -R macula:macula /opt/macula
 
 USER macula
 
-# Expose gateway port
-EXPOSE 9443
+# Expose gateway ports
+EXPOSE 9443 8080
 
 # Set environment variables
 ENV GATEWAY_PORT=9443
 ENV GATEWAY_REALM=be.cortexiq.energy
+ENV HEALTH_PORT=8080
 ENV RELEASE_COOKIE=macula-gateway-cookie
+ENV NODE_NAME=macula@127.0.0.1
 
-# Start the release with gateway focus
-CMD ["/opt/macula/bin/macula", "foreground"]
+# Use entrypoint script for better startup control
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -99,9 +99,45 @@ init(Opts) ->
     Port = proplists:get_value(port, Opts, ?DEFAULT_PORT),
     Realm = proplists:get_value(realm, Opts, ?DEFAULT_REALM),
 
-    %% Generate self-signed cert for testing
-    {ok, CertFile, KeyFile} = macula_quic_cert:generate_self_signed(),
+    %% Get TLS certificates
+    %% Priority: 1. Environment variables (production)
+    %%           2. Pre-generated certs (development)
+    {CertFile, KeyFile} = get_tls_certificates(),
 
+    io:format("Using TLS certificates:~n"),
+    io:format("  Cert: ~s~n", [CertFile]),
+    io:format("  Key:  ~s~n", [KeyFile]),
+
+    %% Validate certificate files exist
+    case macula_quic_cert:validate_files(CertFile, KeyFile) of
+        ok ->
+            start_quic_listener(Port, Realm, CertFile, KeyFile);
+        {error, Reason} ->
+            io:format("Certificate validation failed: ~p~n", [Reason]),
+            {stop, {cert_validation_failed, Reason}}
+    end.
+
+%% @private
+%% @doc Get TLS certificate paths from environment or use pre-generated ones.
+get_tls_certificates() ->
+    case {os:getenv("TLS_CERT_FILE"), os:getenv("TLS_KEY_FILE")} of
+        {false, false} ->
+            %% No env vars, use pre-generated certs
+            io:format("Using pre-generated TLS certificates~n"),
+            {"/opt/macula/certs/cert.pem", "/opt/macula/certs/key.pem"};
+        {CertEnv, KeyEnv} when CertEnv =/= false andalso KeyEnv =/= false ->
+            %% Use mounted certificates (production)
+            io:format("Using mounted TLS certificates from environment~n"),
+            {CertEnv, KeyEnv};
+        _ ->
+            %% Partial configuration, log warning and use defaults
+            io:format("WARNING: Partial TLS environment config, using pre-generated certs~n"),
+            {"/opt/macula/certs/cert.pem", "/opt/macula/certs/key.pem"}
+    end.
+
+%% @private
+%% @doc Start the QUIC listener with given certificates.
+start_quic_listener(Port, Realm, CertFile, KeyFile) ->
     %% Start QUIC listener
     ListenOpts = [
         {cert, CertFile},
@@ -113,6 +149,20 @@ init(Opts) ->
     case macula_quic:listen(Port, ListenOpts) of
         {ok, Listener} ->
             io:format("Macula Gateway listening on port ~p (realm: ~s)~n", [Port, Realm]),
+
+            %% Mark health server as ready
+            try
+                macula_gateway_health:set_ready(true)
+            catch
+                _:_ -> ok  % Health server might not be running in embedded mode
+            end,
+
+            %% Register diagnostics procedures
+            try
+                macula_gateway_diagnostics:register_procedures(self())
+            catch
+                _:_ -> ok  % Diagnostics service might not be running in embedded mode
+            end,
 
             %% Start accepting connections
             self() ! accept,
@@ -129,12 +179,15 @@ init(Opts) ->
             {ok, State};
 
         {error, Reason} ->
+            io:format("QUIC listen failed: ~p~n", [Reason]),
             {stop, {listen_failed, Reason}};
 
         {error, Type, Details} ->
+            io:format("QUIC listen failed: ~p ~p~n", [Type, Details]),
             {stop, {listen_failed, {Type, Details}}};
 
         Other ->
+            io:format("QUIC listen unexpected result: ~p~n", [Other]),
             {stop, {listen_failed, Other}}
     end.
 
