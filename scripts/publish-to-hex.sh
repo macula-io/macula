@@ -12,15 +12,7 @@ echo "Publishing macula to hex.pm..."
 echo ""
 
 # Version check
-MACULA_VERSION=$(grep -oP '(?<={vsn, ")[^"]+' apps/macula/src/macula.app.src)
-CLIENT_VERSION=$(grep -oP '(?<={vsn, ")[^"]+' apps/macula_client/src/macula_client.app.src)
-
-if [ "$MACULA_VERSION" != "$CLIENT_VERSION" ]; then
-    echo "ERROR: Version mismatch!"
-    echo "  macula:        $MACULA_VERSION"
-    echo "  macula_client: $CLIENT_VERSION"
-    exit 1
-fi
+MACULA_VERSION=$(grep -oP '(?<={vsn, ")[^"]+' src/macula.app.src)
 
 echo "Version: $MACULA_VERSION"
 echo ""
@@ -32,11 +24,11 @@ echo ""
 
 # Build package
 echo "Building hex package..."
-rebar3 hex build --app macula
+rebar3 hex build
 echo ""
 
 # Publish
 echo "Publishing..."
-rebar3 hex publish --app macula --yes
+rebar3 hex publish --yes
 echo ""
 echo "Done! Published macula $MACULA_VERSION"
