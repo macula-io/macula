@@ -8,6 +8,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Source secrets if available
+if [ -f "$HOME/.config/zshrc/01-secrets" ]; then
+    source "$HOME/.config/zshrc/01-secrets"
+fi
+
 # Color output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
