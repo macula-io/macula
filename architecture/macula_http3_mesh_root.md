@@ -640,7 +640,7 @@ Based on the comprehensive nature of this project, here are **additional topics*
 **Real-world deployments (when available)**
 
 **Contents**:
-- CortexIQ energy trading platform
+- Example Platform energy trading platform
 - Industrial IoT deployment
 - Multi-tenant SaaS platform
 - Gaming backend

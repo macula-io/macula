@@ -66,8 +66,8 @@ A **realm** is a logical isolation boundary within the mesh network. Nodes in th
 {reverse-dns}.{domain}.{subdomain}
 
 Examples:
-be.cortexiq.energy         # CortexIQ energy trading platform
-be.cortexiq.analytics      # CortexIQ analytics realm
+com.example.energy         # Example Platform energy trading platform
+com.example.analytics      # Example Platform analytics realm
 com.acme.iot.factory-42    # Acme Corp factory 42
 com.acme.iot.cloud         # Acme Corp cloud analytics
 org.example.public         # Public/shared realm
@@ -146,7 +146,7 @@ Each node has an identity that includes realm membership:
 #{
     node_id => <<"a3f5b2e1...">>,
     node_name => 'edge1@192.168.1.100',
-    realm => <<"be.cortexiq.energy">>,
+    realm => <<"com.example.energy">>,
     tenant_id => <<"customer-456">>,
     roles => [edge_node],
     capabilities => #{pubsub => true, rpc => true}
@@ -156,13 +156,13 @@ Each node has an identity that includes realm membership:
 #{
     node_id => <<"d8c9a4f2...">>,
     node_name => 'gateway1@10.20.30.40',
-    realm => <<"be.cortexiq.energy">>,      % Primary realm
+    realm => <<"com.example.energy">>,      % Primary realm
     roles => [gateway, realm_admin],
     capabilities => #{pubsub => true, rpc => true, gateway => true},
     supported_realms => [
-        <<"be.cortexiq.energy">>,
-        <<"be.cortexiq.analytics">>,
-        <<"be.cortexiq.market">>
+        <<"com.example.energy">>,
+        <<"com.example.analytics">>,
+        <<"com.example.market">>
     ]
 }
 ```
@@ -175,9 +175,9 @@ Topics are hierarchical with realm prefix enforced by the protocol:
 {realm}.{domain}.{subdomain}.{event_type}
 
 Examples:
-be.cortexiq.energy.home.measured
-be.cortexiq.energy.provider.contract_offered
-be.cortexiq.analytics.aggregated.daily_totals
+com.example.energy.home.measured
+com.example.energy.provider.contract_offered
+com.example.analytics.aggregated.daily_totals
 com.acme.iot.sensor.temperature
 com.acme.iot.actuator.valve_state
 ```
@@ -207,14 +207,14 @@ validate_topic(Topic, NodeIdentity) ->
 {realm}.{tenant_prefix}.{domain}.{event}
 
 Example:
-be.cortexiq.energy.customer-456.home.measured
-be.cortexiq.energy.customer-789.home.measured
+com.example.energy.customer-456.home.measured
+com.example.energy.customer-789.home.measured
 ```
 
 Tenant prefix enforced by gateway or broker:
 ```erlang
 validate_tenant_topic(Topic, TenantId) ->
-    ExpectedPrefix = <<"be.cortexiq.energy.", TenantId/binary>>,
+    ExpectedPrefix = <<"com.example.energy.", TenantId/binary>>,
     case binary:match(Topic, ExpectedPrefix) of
         {0, _} -> ok;  % Topic starts with expected prefix
         _ -> {error, tenant_violation}
@@ -358,18 +358,18 @@ Realm A Nodes              Gateway Node             Realm B Nodes
 ```erlang
 %% Allow energy realm to publish aggregated data to analytics realm
 #{
-    {<<"be.cortexiq.energy">>, <<"be.cortexiq.analytics">>} => #{
+    {<<"com.example.energy">>, <<"com.example.analytics">>} => #{
         %% What topics are allowed
         allowed_topics => [
-            <<"be.cortexiq.energy.aggregated.*">>,   % Aggregated data only
-            <<"be.cortexiq.energy.public.*">>,       % Public APIs
-            <<"be.cortexiq.energy.market.prices">>   % Market data
+            <<"com.example.energy.aggregated.*">>,   % Aggregated data only
+            <<"com.example.energy.public.*">>,       % Public APIs
+            <<"com.example.energy.market.prices">>   % Market data
         ],
 
         %% Forbidden topics (sensitive data)
         denied_topics => [
-            <<"be.cortexiq.energy.home.*.measured">>, % Individual homes
-            <<"be.cortexiq.energy.internal.*">>       % Internal events
+            <<"com.example.energy.home.*.measured">>, % Individual homes
+            <<"com.example.energy.internal.*">>       % Internal events
         ],
 
         %% Message types
@@ -459,13 +459,13 @@ anonymize_payload(Payload, Fields) ->
 ```erlang
 %% Example: Translate energy realm topics to analytics realm topics
 -define(TRANSLATION_RULES, #{
-    {<<"be.cortexiq.energy">>, <<"be.cortexiq.analytics">>} => [
+    {<<"com.example.energy">>, <<"com.example.analytics">>} => [
         %% Source pattern → Destination pattern
-        {<<"be.cortexiq.energy.aggregated.{metric}">>,
-         <<"be.cortexiq.analytics.energy.{metric}">>},
+        {<<"com.example.energy.aggregated.{metric}">>,
+         <<"com.example.analytics.energy.{metric}">>},
 
-        {<<"be.cortexiq.energy.market.prices">>,
-         <<"be.cortexiq.analytics.market.energy_prices">>}
+        {<<"com.example.energy.market.prices">>,
+         <<"com.example.analytics.market.energy_prices">>}
     ]
 }).
 
@@ -499,14 +499,14 @@ Realms discover each other via DNS SRV records and establish peer-to-peer federa
 
 ```
 ; DNS SRV records for realm gateways
-_macula-federation._udp.cortexiq.be.  IN SRV 10 5 4433 gateway1.cortexiq.be.
-_macula-federation._udp.cortexiq.be.  IN SRV 10 5 4433 gateway2.cortexiq.be.
+_macula-federation._udp.example.be.  IN SRV 10 5 4433 gateway1.example.be.
+_macula-federation._udp.example.be.  IN SRV 10 5 4433 gateway2.example.be.
 _macula-federation._udp.acme.com.     IN SRV 10 5 4433 gateway1.acme.com.
 
 ; TXT records for realm metadata
-cortexiq.be. IN TXT "macula-realm=be.cortexiq.energy"
-cortexiq.be. IN TXT "macula-public-topics=be.cortexiq.energy.market.*"
-cortexiq.be. IN TXT "macula-version=1.0"
+example.be. IN TXT "macula-realm=com.example.energy"
+example.be. IN TXT "macula-public-topics=com.example.energy.market.*"
+example.be. IN TXT "macula-version=1.0"
 ```
 
 **Federation Handshake**:
@@ -607,7 +607,7 @@ Most deployments use strict isolation with no cross-realm communication.
 ```erlang
 %% Node config
 #{
-    realm => <<"be.cortexiq.energy">>,
+    realm => <<"com.example.energy">>,
     isolation_mode => strict,  % No cross-realm communication
     allow_gateways => false    % Don't connect to gateway nodes
 }
@@ -1015,7 +1015,7 @@ discover_via_dns(Realm) ->
         realm_to_dns(Realm)
     ]),
 
-    %% Example: _macula._udp.cortexiq.be
+    %% Example: _macula._udp.example.be
     case inet_res:lookup(DnsName, in, srv) of
         [] ->
             {error, no_nodes_found};
@@ -1034,7 +1034,7 @@ discover_via_dns(Realm) ->
             {ok, Nodes}
     end.
 
-realm_to_dns(<<"be.cortexiq.energy">>) -> <<"cortexiq.be">>;
+realm_to_dns(<<"com.example.energy">>) -> <<"example.be">>;
 realm_to_dns(<<"com.acme.iot">>) -> <<"acme.com">>;
 realm_to_dns(Realm) ->
     %% Generic: reverse the realm parts
@@ -1328,7 +1328,7 @@ extract_realm_from_cert(Cert) ->
     end.
 
 parse_macula_uri(URI) ->
-    %% Parse: macula://be.cortexiq.energy/node123
+    %% Parse: macula://com.example.energy/node123
     case string:split(URI, "://", leading) of
         ["macula", Rest] ->
             case string:split(Rest, "/", leading) of
@@ -1373,20 +1373,20 @@ is_any_realm_compatible(PeerRealms, State) ->
 -define(ACL_RULES, [
     %% Allow all nodes in energy realm to publish home measurements
     #acl_rule{
-        realm = <<"be.cortexiq.energy">>,
+        realm = <<"com.example.energy">>,
         tenant_id = '_',
         resource = topic,
-        pattern = <<"be.cortexiq.energy.home.*.measured">>,
+        pattern = <<"com.example.energy.home.*.measured">>,
         action = publish,
         allow = true
     },
 
     %% Only analytics realm can subscribe to individual home data
     #acl_rule{
-        realm = <<"be.cortexiq.analytics">>,
+        realm = <<"com.example.analytics">>,
         tenant_id = '_',
         resource = topic,
-        pattern = <<"be.cortexiq.energy.home.*.measured">>,
+        pattern = <<"com.example.energy.home.*.measured">>,
         action = subscribe,
         allow = true
     },
@@ -1533,50 +1533,50 @@ Analytics Realm Nodes:
 
 **Architecture**:
 ```
-Home Realm:     be.cortexiq.energy.homes
-Provider Realm: be.cortexiq.energy.providers
-Market Realm:   be.cortexiq.energy.market (public)
+Home Realm:     com.example.energy.homes
+Provider Realm: com.example.energy.providers
+Market Realm:   com.example.energy.market (public)
 ```
 
 **Data Flow**:
 ```
 Homes (private realm):
-  - Publish internally: be.cortexiq.energy.homes.home.{id}.measured
+  - Publish internally: com.example.energy.homes.home.{id}.measured
   - Aggregate locally
-  - Publish to market: be.cortexiq.energy.market.demand.total
+  - Publish to market: com.example.energy.market.demand.total
 
 Providers (private realm):
-  - Publish internally: be.cortexiq.energy.providers.provider.{id}.price
-  - Publish to market: be.cortexiq.energy.market.supply.offers
+  - Publish internally: com.example.energy.providers.provider.{id}.price
+  - Publish to market: com.example.energy.market.supply.offers
 
 Market (public realm):
-  - Subscribe to: be.cortexiq.energy.market.demand.*
-  - Subscribe to: be.cortexiq.energy.market.supply.*
-  - Publish: be.cortexiq.energy.market.clearing_price
+  - Subscribe to: com.example.energy.market.demand.*
+  - Subscribe to: com.example.energy.market.supply.*
+  - Publish: com.example.energy.market.clearing_price
 ```
 
 **Gateway Configuration**:
 ```erlang
 %% Gateway between homes realm and market realm
 #{
-    {<<"be.cortexiq.energy.homes">>, <<"be.cortexiq.energy.market">>} => #{
+    {<<"com.example.energy.homes">>, <<"com.example.energy.market">>} => #{
         %% Only allow aggregated data
         allowed_topics => [
-            <<"be.cortexiq.energy.homes.aggregated.*">>,
-            <<"be.cortexiq.energy.homes.demand.total">>
+            <<"com.example.energy.homes.aggregated.*">>,
+            <<"com.example.energy.homes.demand.total">>
         ],
         denied_topics => [
-            <<"be.cortexiq.energy.homes.home.*">>  % No individual homes
+            <<"com.example.energy.homes.home.*">>  % No individual homes
         ],
         allowed_operations => [publish],
         require_aggregation => true  % Must be aggregate, not raw
     },
 
     %% Market can publish clearing prices back to homes
-    {<<"be.cortexiq.energy.market">>, <<"be.cortexiq.energy.homes">>} => #{
+    {<<"com.example.energy.market">>, <<"com.example.energy.homes">>} => #{
         allowed_topics => [
-            <<"be.cortexiq.energy.market.clearing_price">>,
-            <<"be.cortexiq.energy.market.announcements">>
+            <<"com.example.energy.market.clearing_price">>,
+            <<"com.example.energy.market.announcements">>
         ],
         allowed_operations => [publish],
         rate_limit => #{max_msg_per_sec => 100}
@@ -2003,17 +2003,17 @@ prometheus_gauge:set(macula_nodes_alive, [Realm], AliveCount).
 gateway:
   node_id: gateway1
   realms:
-    - be.cortexiq.energy
-    - be.cortexiq.analytics
+    - com.example.energy
+    - com.example.analytics
 
   policies:
-    - from_realm: be.cortexiq.energy
-      to_realm: be.cortexiq.analytics
+    - from_realm: com.example.energy
+      to_realm: com.example.analytics
       allowed_topics:
-        - be.cortexiq.energy.aggregated.*
-        - be.cortexiq.energy.public.*
+        - com.example.energy.aggregated.*
+        - com.example.energy.public.*
       denied_topics:
-        - be.cortexiq.energy.home.*.measured
+        - com.example.energy.home.*.measured
       allowed_operations:
         - publish
         - call

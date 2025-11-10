@@ -8,7 +8,7 @@ set -e
 
 # Default values
 GATEWAY_PORT="${GATEWAY_PORT:-9443}"
-GATEWAY_REALM="${GATEWAY_REALM:-be.cortexiq.energy}"
+GATEWAY_REALM="${GATEWAY_REALM:-com.example.realm}"
 RELEASE_COOKIE="${RELEASE_COOKIE:-macula-gateway-cookie}"
 NODE_NAME="${NODE_NAME:-macula@127.0.0.1}"
 

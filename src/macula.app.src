@@ -1,0 +1,20 @@
+{application, macula, [
+    {description, "Macula HTTP/3 Mesh Platform - Complete distributed application framework"},
+    {vsn, "0.4.4"},
+    {registered, []},
+    {mod, {macula_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        crypto,
+        public_key,
+        ssl,
+        quicer,
+        msgpack,
+        gproc
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [{"GitHub", "https://github.com/macula-io/macula"}]}
+ ]}.

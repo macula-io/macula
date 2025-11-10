@@ -2767,7 +2767,7 @@ Complexity: **O(log N)** lookups, **O(ALPHA * log N)** messages
   - Subscribe/Publish semantics match
   - Call/Register semantics match
 
-**Deliverable:** CortexIQ PoC runs on Macula Mesh
+**Deliverable:** Example Platform PoC runs on Macula Mesh
 
 ---
 
