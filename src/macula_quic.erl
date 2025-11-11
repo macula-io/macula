@@ -41,7 +41,9 @@ listen(Port, Opts) ->
         {certfile, CertFile},
         {keyfile, KeyFile},
         {alpn, AlpnProtocols},
-        {peer_unidi_stream_count, PeerUnidiStreamCount}
+        {peer_unidi_stream_count, PeerUnidiStreamCount},
+        {conn_callback, macula_quic_conn_callback},
+        {gateway_pid, whereis(macula_gateway)}
     ],
 
     %% Start listener

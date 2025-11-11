@@ -1,0 +1,114 @@
+# Multi-node Macula RPC testing environment
+# Tests multi-endpoint RPC, provider selection, and failover
+
+services:
+  # Registry node - all nodes connect here for DHT
+  macula-registry:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: macula:test
+    container_name: macula-registry
+    hostname: registry.macula.test
+    working_dir: /macula
+    environment:
+      - NODE_TYPE=registry
+      - NODE_NAME=registry
+      - NODE_HOST=registry.macula.test
+      - ERLANG_COOKIE=macula_test
+    ports:
+      - "19443:9443"
+      - "18080:8080"
+    networks:
+      macula_test:
+        ipv4_address: 172.21.0.2
+
+  # Provider Node 1
+  macula-provider1:
+    image: macula:test
+    container_name: macula-provider1
+    hostname: provider1.macula.test
+    working_dir: /macula
+    depends_on:
+      - macula-registry
+    environment:
+      - NODE_TYPE=provider
+      - NODE_NAME=provider1
+      - NODE_HOST=provider1.macula.test
+      - ERLANG_COOKIE=macula_test
+      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+      - PROVIDER_MULTIPLIER=2
+    ports:
+      - "9001:9001"
+    networks:
+      macula_test:
+        ipv4_address: 172.21.0.3
+
+  # Provider Node 2
+  macula-provider2:
+    image: macula:test
+    container_name: macula-provider2
+    hostname: provider2.macula.test
+    working_dir: /macula
+    depends_on:
+      - macula-registry
+    environment:
+      - NODE_TYPE=provider
+      - NODE_NAME=provider2
+      - NODE_HOST=provider2.macula.test
+      - ERLANG_COOKIE=macula_test
+      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+      - PROVIDER_MULTIPLIER=3
+    ports:
+      - "9002:9002"
+    networks:
+      macula_test:
+        ipv4_address: 172.21.0.4
+
+  # Provider Node 3
+  macula-provider3:
+    image: macula:test
+    container_name: macula-provider3
+    hostname: provider3.macula.test
+    working_dir: /macula
+    depends_on:
+      - macula-registry
+    environment:
+      - NODE_TYPE=provider
+      - NODE_NAME=provider3
+      - NODE_HOST=provider3.macula.test
+      - ERLANG_COOKIE=macula_test
+      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+      - PROVIDER_MULTIPLIER=4
+    ports:
+      - "9003:9003"
+    networks:
+      macula_test:
+        ipv4_address: 172.21.0.5
+
+  # Client - Tests multi-endpoint RPC
+  macula-client:
+    image: macula:test
+    container_name: macula-client
+    hostname: client.macula.test
+    working_dir: /macula
+    depends_on:
+      - macula-provider1
+      - macula-provider2
+      - macula-provider3
+    environment:
+      - NODE_TYPE=client
+      - NODE_NAME=client
+      - NODE_HOST=client.macula.test
+      - ERLANG_COOKIE=macula_test
+      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+    networks:
+      macula_test:
+        ipv4_address: 172.21.0.10
+
+networks:
+  macula_test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
