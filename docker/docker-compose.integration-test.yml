@@ -1,0 +1,38 @@
+# Integration test environment for EUnit tests
+# Minimal single-node setup for testing macula_connection
+#
+# Usage from tests:
+#   docker compose -f docker/docker-compose.integration-test.yml up -d
+#   rebar3 eunit --module=macula_connection_integration_tests
+#   docker compose -f docker/docker-compose.integration-test.yml down
+
+services:
+  # Single registry/gateway node for integration testing
+  macula-test-gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: macula:integration-test
+    container_name: macula-integration-test
+    hostname: localhost
+    working_dir: /macula
+    environment:
+      - NODE_TYPE=registry
+      - NODE_NAME=integration_test
+      - NODE_HOST=localhost
+      - ERLANG_COOKIE=macula_integration_test
+    ports:
+      - "19443:9443/udp"  # QUIC server (UDP protocol!) - accessible from host
+      - "18080:8080"  # Health check endpoint (TCP)
+    networks:
+      - macula_integration_test
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+networks:
+  macula_integration_test:
+    driver: bridge

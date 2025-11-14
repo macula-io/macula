@@ -33,10 +33,11 @@
 %% - No leading or trailing dots
 -spec validate(topic()) -> ok | {error, invalid_topic}.
 validate(Topic) ->
-    case macula_names:validate(Topic, #{allow_wildcards => true}) of
-        ok -> ok;
-        {error, invalid_name} -> {error, invalid_topic}
-    end.
+    map_validation_error(macula_names:validate(Topic, #{allow_wildcards => true})).
+
+%% @doc Map validation error to topic-specific error.
+map_validation_error(ok) -> ok;
+map_validation_error({error, invalid_name}) -> {error, invalid_topic}.
 
 %% @doc Check if topic matches pattern.
 %% Patterns can contain:
@@ -95,15 +96,12 @@ match_multi_level(_TopicSegs, []) ->
     true;
 match_multi_level([], PatternSegs) ->
     %% Topic exhausted, check if pattern can match zero segments
-    case PatternSegs of
-        [] -> true;
-        _ -> false
-    end;
+    is_empty_pattern(PatternSegs);
 match_multi_level([_TSeg | TRest] = TopicSegs, PatternSegs) ->
-    %% Try matching pattern at current position
-    case match_segments(TopicSegs, PatternSegs) of
-        true -> true;
-        false ->
-            %% Try next position (consume one topic segment)
-            match_multi_level(TRest, PatternSegs)
-    end.
+    %% Try matching pattern at current position, or try next position
+    match_segments(TopicSegs, PatternSegs) orelse
+        match_multi_level(TRest, PatternSegs).
+
+%% @doc Check if pattern is empty.
+is_empty_pattern([]) -> true;
+is_empty_pattern(_) -> false.

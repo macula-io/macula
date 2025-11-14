@@ -24,7 +24,10 @@
     subscribe/3,
     unsubscribe/2,
     call/3,
-    call/4
+    call/4,
+    advertise/3,
+    advertise/4,
+    unadvertise/2
 ]).
 
 %% Type exports
@@ -216,6 +219,69 @@ call(Client, Procedure, Args) when is_pid(Client), is_binary(Procedure) ->
     {ok, Result :: term()} | {error, Reason :: term()}.
 call(Client, Procedure, Args, Opts) when is_pid(Client), is_binary(Procedure), is_map(Opts) ->
     macula_connection:call(Client, Procedure, Args, Opts).
+
+%% @doc Advertise a service that this client provides.
+%%
+%% Registers a handler function for the specified procedure and advertises
+%% it to the DHT so other clients can discover and call it.
+%%
+%% The handler function receives a map of arguments and must return
+%% `{ok, Result}' or `{error, Reason}'.
+%%
+%% == Options ==
+%%
+%% <ul>
+%% <li>`ttl' - Advertisement TTL in seconds (default: 300)</li>
+%% <li>`metadata' - Custom metadata map (default: #{})</li>
+%% </ul>
+%%
+%% == Examples ==
+%%
+%% ```
+%% %% Define a handler function
+%% Handler = fun(#{user_id := UserId}) ->
+%%     {ok, #{user_id => UserId, name => <<"Alice">>}}
+%% end.
+%%
+%% %% Advertise the service
+%% {ok, Ref} = macula_client:advertise(
+%%     Client,
+%%     <<"my.app.get_user">>,
+%%     Handler
+%% ).
+%%
+%% %% Other clients can now call:
+%% %% {ok, User} = macula_client:call(OtherClient, <<"my.app.get_user">>,
+%% %%     #{user_id => <<"user-123">>}).
+%% '''
+-spec advertise(Client :: client(), Procedure :: procedure(),
+                Handler :: macula_service_registry:handler_fn()) ->
+    {ok, reference()} | {error, Reason :: term()}.
+advertise(Client, Procedure, Handler) when is_pid(Client), is_binary(Procedure), is_function(Handler) ->
+    advertise(Client, Procedure, Handler, #{}).
+
+%% @doc Advertise a service with options.
+-spec advertise(Client :: client(), Procedure :: procedure(),
+                Handler :: macula_service_registry:handler_fn(),
+                Opts :: options()) ->
+    {ok, reference()} | {error, Reason :: term()}.
+advertise(Client, Procedure, Handler, Opts) when is_pid(Client), is_binary(Procedure),
+                                                   is_function(Handler), is_map(Opts) ->
+    macula_connection:advertise(Client, Procedure, Handler, Opts).
+
+%% @doc Stop advertising a service.
+%%
+%% Removes the local handler and stops advertising to the DHT.
+%%
+%% == Examples ==
+%%
+%% ```
+%% ok = macula_client:unadvertise(Client, <<"my.app.get_user">>).
+%% '''
+-spec unadvertise(Client :: client(), Procedure :: procedure()) ->
+    ok | {error, Reason :: term()}.
+unadvertise(Client, Procedure) when is_pid(Client), is_binary(Procedure) ->
+    macula_connection:unadvertise(Client, Procedure).
 
 %%%===================================================================
 %%% Internal functions

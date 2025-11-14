@@ -15,6 +15,18 @@ Two clients chatting through firewalls without a central server in the data path
 
 See [`chat_demo/README.md`](./chat_demo/README.md) for setup and usage instructions.
 
+### iot_sensors_demo/
+**IoT sensor network with real-time dashboard**
+
+Multiple IoT sensors (behind NAT/firewalls) publishing environmental data to a central dashboard. Shows:
+- Many-to-one pub/sub pattern
+- Sensors behind home routers working seamlessly
+- Real-time time-series data streaming
+- Topic-based routing
+- Smart home / industrial IoT patterns
+
+See [`iot_sensors_demo/README.md`](./iot_sensors_demo/README.md) for setup and usage instructions.
+
 ## Other Demos
 
 For technical integration demos and mesh platform testing, see the **`/demo/`** directory at the project root.

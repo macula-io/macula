@@ -33,6 +33,7 @@
 %%%===================================================================
 
 %% @doc Deliver message to all matching local subscribers.
+%% Crashes if subscriber callback fails - indicates dead subscriber process.
 -spec deliver_local(message(), macula_pubsub_registry:registry()) -> [delivery_result()].
 deliver_local(Message, Registry) ->
     Topic = maps:get(topic, Message),
@@ -40,16 +41,12 @@ deliver_local(Message, Registry) ->
     %% Find matching subscriptions
     Subscriptions = macula_pubsub_registry:match(Registry, Topic),
 
-    %% Deliver to each callback
+    %% Deliver to each callback (let it crash on dead subscribers)
     lists:map(
         fun(Sub) ->
             Callback = maps:get(callback, Sub),
-            try
-                Callback ! Message,
-                {ok, maps:get(subscriber_id, Sub)}
-            catch
-                error:Reason -> {error, Reason}
-            end
+            Callback ! Message,
+            {ok, maps:get(subscriber_id, Sub)}
         end,
         Subscriptions
     ).

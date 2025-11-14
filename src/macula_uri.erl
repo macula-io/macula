@@ -48,12 +48,11 @@ parse(Uri) when is_binary(Uri) ->
             Rest = binary:part(Uri, SchemeSize, byte_size(Uri) - SchemeSize),
             case binary:split(Rest, <<"/">>) of
                 [Realm, NodeIdHex] when Realm =/= <<>>, NodeIdHex =/= <<>> ->
-                    %% Convert hex node ID to binary
-                    case macula_id:from_hex(NodeIdHex) of
-                        {ok, NodeId} ->
-                            {ok, Realm, NodeId};
-                        {error, _} ->
-                            {error, invalid_uri}
+                    %% Convert hex node ID to binary (catch invalid hex from external URI)
+                    try macula_id:from_hex(NodeIdHex) of
+                        NodeId -> {ok, Realm, NodeId}
+                    catch
+                        _:_ -> {error, invalid_uri}
                     end;
                 _ ->
                     {error, invalid_uri}

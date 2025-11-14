@@ -13,6 +13,7 @@
     accept_stream/2,
     open_stream/1,
     send/2,
+    async_send/2,
     recv/2,
     close/1
 ]).
@@ -27,6 +28,7 @@
 %%   {key, KeyFile} - Path to PEM private key file
 %%   {alpn, [Protocol]} - List of ALPN protocols (e.g., ["macula"])
 %%   {peer_unidi_stream_count, N} - Max unidirectional streams
+%%   {peer_bidi_stream_count, N} - Max bidirectional streams
 %% @end
 -spec listen(inet:port_number(), list()) -> {ok, pid()} | {error, term()}.
 listen(Port, Opts) ->
@@ -35,19 +37,21 @@ listen(Port, Opts) ->
     KeyFile = proplists:get_value(key, Opts),
     AlpnProtocols = proplists:get_value(alpn, Opts, ["macula"]),
     PeerUnidiStreamCount = proplists:get_value(peer_unidi_stream_count, Opts, 3),
+    PeerBidiStreamCount = proplists:get_value(peer_bidi_stream_count, Opts, 100),
 
-    %% Build quicer options
-    QuicerOpts = [
+    %% Build quicer listener options
+    ListenerOpts = [
         {certfile, CertFile},
         {keyfile, KeyFile},
         {alpn, AlpnProtocols},
         {peer_unidi_stream_count, PeerUnidiStreamCount},
-        {conn_callback, macula_quic_conn_callback},
-        {gateway_pid, whereis(macula_gateway)}
+        {peer_bidi_stream_count, PeerBidiStreamCount}
     ],
 
-    %% Start listener
-    quicer:listen(Port, QuicerOpts).
+    %% Start QUIC listener
+    %% The calling process becomes the owner and will receive connection messages
+    io:format("[QUIC] Starting listener on port ~p~n", [Port]),
+    quicer:listen(Port, ListenerOpts).
 
 %% @doc Connect to a QUIC server.
 %% Options:
@@ -96,10 +100,19 @@ accept_stream(ConnPid, _Timeout) ->
 open_stream(ConnPid) ->
     quicer:start_stream(ConnPid, []).
 
-%% @doc Send data on a stream.
+%% @doc Send data on a stream (blocking).
 -spec send(pid(), binary()) -> ok | {error, term()}.
 send(StreamPid, Data) ->
     case quicer:send(StreamPid, Data) of
+        {ok, _BytesSent} -> ok;
+        Error -> Error
+    end.
+
+%% @doc Send data on a stream asynchronously (non-blocking).
+%% This returns immediately without waiting for QUIC flow control.
+-spec async_send(pid(), binary()) -> ok | {error, term()}.
+async_send(StreamPid, Data) ->
+    case quicer:async_send(StreamPid, Data) of
         {ok, _BytesSent} -> ok;
         Error -> Error
     end.

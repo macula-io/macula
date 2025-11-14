@@ -25,7 +25,8 @@
     unsubscribe_msg/0,
     call_msg/0,
     reply_msg/0,
-    cast_msg/0
+    cast_msg/0,
+    rpc_route_msg/0
 ]).
 
 %%%===================================================================
@@ -47,6 +48,7 @@
 -define(MSG_CALL,           16#20).
 -define(MSG_REPLY,          16#21).
 -define(MSG_CAST,           16#22).
+-define(MSG_RPC_ROUTE,      16#23).
 
 %% SWIM membership messages
 -define(MSG_SWIM_PING,      16#30).
@@ -58,6 +60,7 @@
 -define(MSG_FIND_NODE_REPLY,16#41).
 -define(MSG_STORE,          16#42).
 -define(MSG_FIND_VALUE,     16#43).
+-define(MSG_FIND_VALUE_REPLY,16#44).
 
 %%%===================================================================
 %%% Type Definitions
@@ -66,9 +69,9 @@
 -type message_type() ::
     connect | disconnect | ping | pong |
     publish | subscribe | unsubscribe |
-    call | reply | cast |
+    call | reply | cast | rpc_route |
     swim_ping | swim_ack | swim_ping_req |
-    find_node | find_node_reply | store | find_value.
+    find_node | find_node_reply | store | find_value | find_value_reply.
 
 -type message() ::
     {connect, connect_msg()} |
@@ -80,7 +83,8 @@
     {unsubscribe, unsubscribe_msg()} |
     {call, call_msg()} |
     {reply, reply_msg()} |
-    {cast, cast_msg()}.
+    {cast, cast_msg()} |
+    {rpc_route, rpc_route_msg()}.
 
 %% Control Messages
 
@@ -88,7 +92,8 @@
     version := binary(),           % Protocol version "1.0"
     node_id := binary(),           % 32-byte node ID
     realm_id := binary(),          % 32-byte realm ID
-    capabilities := [atom()]       % List of supported features
+    capabilities := [atom()],      % List of supported features
+    endpoint => binary()           % Optional: "https://host:port" for peer connections
 }.
 
 -type disconnect_msg() :: #{
@@ -147,6 +152,17 @@
     args := binary()               % JSON-encoded arguments (no reply expected)
 }.
 
+%% RPC Routing Message (for multi-hop DHT routing)
+
+-type rpc_route_msg() :: #{
+    destination_node_id := binary(),  % 32-byte destination node ID
+    source_node_id := binary(),       % 32-byte source node ID
+    hop_count := non_neg_integer(),   % Current hop count (for debugging/metrics)
+    max_hops := pos_integer(),        % Max hops allowed (TTL protection, default: 10)
+    payload_type := call | reply,     % Type of wrapped message
+    payload := call_msg() | reply_msg()  % The actual RPC message
+}.
+
 %%%===================================================================
 %%% API Functions
 %%%===================================================================
@@ -163,13 +179,15 @@ message_type_id(unsubscribe) -> ?MSG_UNSUBSCRIBE;
 message_type_id(call) -> ?MSG_CALL;
 message_type_id(reply) -> ?MSG_REPLY;
 message_type_id(cast) -> ?MSG_CAST;
+message_type_id(rpc_route) -> ?MSG_RPC_ROUTE;
 message_type_id(swim_ping) -> ?MSG_SWIM_PING;
 message_type_id(swim_ack) -> ?MSG_SWIM_ACK;
 message_type_id(swim_ping_req) -> ?MSG_SWIM_PING_REQ;
 message_type_id(find_node) -> ?MSG_FIND_NODE;
 message_type_id(find_node_reply) -> ?MSG_FIND_NODE_REPLY;
 message_type_id(store) -> ?MSG_STORE;
-message_type_id(find_value) -> ?MSG_FIND_VALUE.
+message_type_id(find_value) -> ?MSG_FIND_VALUE;
+message_type_id(find_value_reply) -> ?MSG_FIND_VALUE_REPLY.
 
 %% @doc Get message type name from numeric ID.
 -spec message_type_name(byte()) -> {ok, message_type()} | {error, unknown_type}.
@@ -183,6 +201,7 @@ message_type_name(?MSG_UNSUBSCRIBE) -> {ok, unsubscribe};
 message_type_name(?MSG_CALL) -> {ok, call};
 message_type_name(?MSG_REPLY) -> {ok, reply};
 message_type_name(?MSG_CAST) -> {ok, cast};
+message_type_name(?MSG_RPC_ROUTE) -> {ok, rpc_route};
 message_type_name(?MSG_SWIM_PING) -> {ok, swim_ping};
 message_type_name(?MSG_SWIM_ACK) -> {ok, swim_ack};
 message_type_name(?MSG_SWIM_PING_REQ) -> {ok, swim_ping_req};
@@ -190,4 +209,5 @@ message_type_name(?MSG_FIND_NODE) -> {ok, find_node};
 message_type_name(?MSG_FIND_NODE_REPLY) -> {ok, find_node_reply};
 message_type_name(?MSG_STORE) -> {ok, store};
 message_type_name(?MSG_FIND_VALUE) -> {ok, find_value};
+message_type_name(?MSG_FIND_VALUE_REPLY) -> {ok, find_value_reply};
 message_type_name(_) -> {error, unknown_type}.

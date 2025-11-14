@@ -477,5 +477,80 @@ See `apps/macula_core/test/` for reference implementation:
 
 ---
 
-**Last Updated**: 2025-01-08
+---
+
+## Current Coverage Status (2025-11-12)
+
+### Baseline Metrics
+
+**Total Coverage**: 1% (CRITICAL - Target: 60%+ before refactoring)
+
+| Module | Coverage | Status |
+|--------|----------|--------|
+| macula_quic | 20% | ✓ Some tests |
+| macula_connection | 5% | ⚠️ God module - needs comprehensive tests |
+| macula_service_registry | 2% | ⚠️ Minimal |
+| **All other modules** | 0% | ❌ Untested |
+
+**Total Modules**: 50
+**Tested Modules**: 6 (12%)
+**Untested Modules**: 44 (88%)
+
+### Quick Start for Coverage Reporting
+
+```bash
+# Run tests with coverage
+rebar3 eunit --cover
+
+# Generate detailed coverage report
+rebar3 cover --verbose
+
+# Use the coverage helper script
+./scripts/run_coverage.sh
+
+# View HTML reports
+firefox _build/test/cover/index.html
+```
+
+### Coverage Configuration
+
+Coverage settings are configured in `rebar.config`:
+```erlang
+{cover_enabled, true}.
+{cover_opts, [verbose]}.
+{cover_print_enabled, true}.
+{cover_export_enabled, true}.
+```
+
+Reports are generated at:
+- Summary: `_build/test/cover/index.html`
+- Per-module: `_build/test/cover/aggregate/[module_name].html`
+- Raw data: `_build/test/cover/eunit.coverdata`
+
+### Priority Testing Roadmap
+
+See `CODE_REVIEW_REPORT.md` for comprehensive testing strategy.
+
+**Phase 1: Core Infrastructure (Weeks 1-2)**
+- macula_gateway.erl (795 LOC)
+- macula_routing_dht.erl (306 LOC)
+- macula_routing_server.erl (334 LOC)
+- macula_rpc_server.erl (339 LOC)
+- macula_pubsub_server.erl
+
+**Phase 2: Protocol & Transport (Weeks 3-4)**
+- macula_protocol_encoder.erl
+- macula_protocol_decoder.erl
+- macula_quic.erl
+- macula_routing_table.erl
+- macula_routing_bucket.erl
+
+**Phase 3: God Module (After 60% coverage)**
+- macula_connection.erl (1,869 LOC - requires comprehensive tests before refactoring)
+
+**CRITICAL**: Must reach 60%+ test coverage before ANY refactoring begins.
+
+---
+
+**Last Updated**: 2025-11-12
 **Status**: Living document - update as testing patterns evolve

@@ -103,28 +103,28 @@ encode_node_info(NodeInfo) ->
 
 %% @doc Decode FIND_NODE request.
 -spec decode_find_node(message()) -> {ok, binary()} | {error, invalid_message}.
-decode_find_node(#{type := find_node, target := Target}) ->
+decode_find_node(#{<<"type">> := <<"find_node">>, <<"target">> := Target}) ->
     {ok, Target};
 decode_find_node(_) ->
     {error, invalid_message}.
 
 %% @doc Decode FIND_NODE reply.
 -spec decode_find_node_reply(message()) -> {ok, [macula_routing_bucket:node_info()]} | {error, invalid_message}.
-decode_find_node_reply(#{type := find_node_reply, nodes := Nodes}) ->
+decode_find_node_reply(#{<<"type">> := <<"find_node_reply">>, <<"nodes">> := Nodes}) ->
     {ok, Nodes};
 decode_find_node_reply(_) ->
     {error, invalid_message}.
 
 %% @doc Decode STORE request.
 -spec decode_store(message()) -> {ok, binary(), term()} | {error, invalid_message}.
-decode_store(#{type := store, key := Key, value := Value}) ->
+decode_store(#{<<"type">> := <<"store">>, <<"key">> := Key, <<"value">> := Value}) ->
     {ok, Key, Value};
 decode_store(_) ->
     {error, invalid_message}.
 
 %% @doc Decode FIND_VALUE request.
 -spec decode_find_value(message()) -> {ok, binary()} | {error, invalid_message}.
-decode_find_value(#{type := find_value, key := Key}) ->
+decode_find_value(#{<<"type">> := <<"find_value">>, <<"key">> := Key}) ->
     {ok, Key};
 decode_find_value(_) ->
     {error, invalid_message}.
@@ -133,16 +133,16 @@ decode_find_value(_) ->
 -spec decode_find_value_reply(message()) ->
     {ok, {value, term()} | {nodes, [macula_routing_bucket:node_info()]}} |
     {error, invalid_message}.
-decode_find_value_reply(#{type := find_value_reply, result := value, value := Value}) ->
+decode_find_value_reply(#{<<"type">> := <<"find_value_reply">>, <<"result">> := <<"value">>, <<"value">> := Value}) ->
     {ok, {value, Value}};
-decode_find_value_reply(#{type := find_value_reply, result := nodes, nodes := Nodes}) ->
+decode_find_value_reply(#{<<"type">> := <<"find_value_reply">>, <<"result">> := <<"nodes">>, <<"nodes">> := Nodes}) ->
     {ok, {nodes, Nodes}};
 decode_find_value_reply(_) ->
     {error, invalid_message}.
 
 %% @doc Decode node info.
 -spec decode_node_info(map()) -> {ok, macula_routing_bucket:node_info()} | {error, invalid_node_info}.
-decode_node_info(#{node_id := NodeId, address := Address}) ->
+decode_node_info(#{<<"node_id">> := NodeId, <<"address">> := Address}) ->
     {ok, #{
         node_id => NodeId,
         address => Address
@@ -156,15 +156,15 @@ decode_node_info(_) ->
 
 %% @doc Check if message is FIND_NODE.
 -spec is_find_node(message()) -> boolean().
-is_find_node(#{type := find_node}) -> true;
+is_find_node(#{<<"type">> := <<"find_node">>}) -> true;
 is_find_node(_) -> false.
 
 %% @doc Check if message is STORE.
 -spec is_store(message()) -> boolean().
-is_store(#{type := store}) -> true;
+is_store(#{<<"type">> := <<"store">>}) -> true;
 is_store(_) -> false.
 
 %% @doc Check if message is FIND_VALUE.
 -spec is_find_value(message()) -> boolean().
-is_find_value(#{type := find_value}) -> true;
+is_find_value(#{<<"type">> := <<"find_value">>}) -> true;
 is_find_value(_) -> false.

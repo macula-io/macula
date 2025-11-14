@@ -62,12 +62,12 @@ decode_with_type(TypeId, PayloadLen, Payload) ->
     end.
 
 %% @doc Decode MessagePack payload.
+%% Returns {error, Reason} for invalid msgpack data.
 -spec decode_payload(atom(), binary()) -> {ok, {atom(), map()}} | {error, term()}.
 decode_payload(Type, PayloadBytes) ->
-    try
-        {ok, Msg} = msgpack:unpack(PayloadBytes, [{map_format, map}]),
-        {ok, {Type, Msg}}
-    catch
-        error:Reason ->
+    case msgpack:unpack(PayloadBytes, [{map_format, map}]) of
+        {ok, Msg} ->
+            {ok, {Type, Msg}};
+        {error, Reason} ->
             {error, {msgpack_decode_error, Reason}}
     end.

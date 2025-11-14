@@ -10,6 +10,7 @@
 -export([
     generate/0,
     from_binary/1,
+    normalize/1,
     distance/2,
     leading_zeros/1,
     closer_to/3,
@@ -39,10 +40,19 @@ from_binary(Binary) when byte_size(Binary) =:= 32 ->
 from_binary(_) ->
     {error, invalid_size}.
 
+%% @doc Normalize any binary to a 32-byte node ID.
+%% If already 32 bytes, returns as-is. Otherwise, hashes with SHA-256.
+-spec normalize(binary()) -> node_id().
+normalize(Binary) when byte_size(Binary) =:= 32 ->
+    Binary;
+normalize(Binary) when is_binary(Binary) ->
+    crypto:hash(sha256, Binary).
+
 %% @doc Calculate XOR distance between two node IDs.
--spec distance(node_id(), node_id()) -> binary().
+%% Normalizes inputs to 32 bytes if needed.
+-spec distance(binary(), binary()) -> binary().
 distance(NodeId1, NodeId2) ->
-    crypto:exor(NodeId1, NodeId2).
+    crypto:exor(normalize(NodeId1), normalize(NodeId2)).
 
 %% @doc Count leading zero bits in binary.
 -spec leading_zeros(binary()) -> 0..256.
@@ -71,7 +81,8 @@ leading_zeros_byte(1) -> 7;                      % 00000001
 leading_zeros_byte(0) -> 8.                      % 00000000
 
 %% @doc Check if NodeA is closer to Target than NodeB.
--spec closer_to(node_id(), node_id(), node_id()) -> boolean().
+%% Normalizes inputs to 32 bytes if needed.
+-spec closer_to(binary(), binary(), binary()) -> boolean().
 closer_to(Target, NodeA, NodeB) ->
     DistA = distance(Target, NodeA),
     DistB = distance(Target, NodeB),
@@ -79,7 +90,8 @@ closer_to(Target, NodeA, NodeB) ->
 
 %% @doc Compare distances of NodeA and NodeB to Target.
 %% Returns: less (A closer), equal (same distance), greater (B closer).
--spec compare(node_id(), node_id(), node_id()) -> less | equal | greater.
+%% Normalizes inputs to 32 bytes if needed.
+-spec compare(binary(), binary(), binary()) -> less | equal | greater.
 compare(Target, NodeA, NodeB) ->
     DistA = distance(Target, NodeA),
     DistB = distance(Target, NodeB),
@@ -92,7 +104,8 @@ compare(Target, NodeA, NodeB) ->
 %% @doc Calculate bucket index for a node relative to local node.
 %% Returns leading zero count of XOR distance (0..255).
 %% Special case: distance 0 (same node) returns 256.
--spec bucket_index(node_id(), node_id()) -> 0..256.
+%% Normalizes inputs to 32 bytes if needed.
+-spec bucket_index(binary(), binary()) -> 0..256.
 bucket_index(LocalNodeId, TargetNodeId) ->
     Distance = distance(LocalNodeId, TargetNodeId),
     case Distance of
@@ -106,28 +119,8 @@ to_hex(NodeId) ->
     binary:bin_to_list(binary:encode_hex(NodeId, lowercase)).
 
 %% @doc Parse node ID from hex string.
--spec from_hex(string()) -> {ok, node_id()} | {error, invalid_hex | invalid_length}.
-from_hex(HexString) ->
-    case length(HexString) of
-        64 ->
-            try
-                Binary = binary:decode_hex(list_to_binary(HexString)),
-                {ok, Binary}
-            catch
-                error:_ ->
-                    {error, invalid_hex}
-            end;
-        _ ->
-            %% Check if it's invalid hex (contains non-hex chars) vs just wrong length
-            case lists:all(fun is_hex_char/1, HexString) of
-                true -> {error, invalid_length};
-                false -> {error, invalid_hex}
-            end
-    end.
-
-%% @doc Check if character is valid hex.
--spec is_hex_char(char()) -> boolean().
-is_hex_char(C) when C >= $0 andalso C =< $9 -> true;
-is_hex_char(C) when C >= $a andalso C =< $f -> true;
-is_hex_char(C) when C >= $A andalso C =< $F -> true;
-is_hex_char(_) -> false.
+%% Crashes on invalid hex or wrong length - exposes bugs in validation logic.
+-spec from_hex(string()) -> node_id().
+from_hex(HexString) when length(HexString) =:= 64 ->
+    %% Decode hex (let it crash on invalid characters)
+    binary:decode_hex(list_to_binary(HexString)).

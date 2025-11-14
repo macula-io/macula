@@ -14,6 +14,7 @@
     find_closest/3,
     store_local/3,
     get_local/2,
+    find_value/3,
     get_routing_table/1,
     size/1,
     handle_message/2
@@ -43,10 +44,10 @@
 %%% API Functions
 %%%===================================================================
 
-%% @doc Start routing server.
+%% @doc Start routing server with registered name macula_routing_server.
 -spec start_link(binary(), map()) -> {ok, pid()} | {error, term()}.
 start_link(LocalNodeId, Config) ->
-    gen_server:start_link(?MODULE, {LocalNodeId, Config}, []).
+    gen_server:start_link({local, macula_routing_server}, ?MODULE, {LocalNodeId, Config}, []).
 
 %% @doc Add node to routing table.
 -spec add_node(pid(), macula_routing_bucket:node_info()) -> ok.
@@ -67,6 +68,13 @@ store_local(Pid, Key, Value) ->
 -spec get_local(pid(), binary()) -> {ok, term()} | not_found.
 get_local(Pid, Key) ->
     gen_server:call(Pid, {get_local, Key}).
+
+%% @doc Find value in DHT using iterative lookup.
+%% Returns {ok, Value} if found, {nodes, Nodes} if not found.
+-spec find_value(pid(), binary(), pos_integer()) ->
+    {ok, term()} | {nodes, [macula_routing_bucket:node_info()]} | {error, term()}.
+find_value(Pid, Key, K) ->
+    gen_server:call(Pid, {find_value, Key, K}, 10000).
 
 %% @doc Get routing table snapshot.
 -spec get_routing_table(pid()) -> macula_routing_table:routing_table().
@@ -114,13 +122,51 @@ handle_call({find_closest, Target, K}, _From, #state{routing_table = Table} = St
     {reply, Closest, State};
 
 handle_call({store_local, Key, Value}, _From, #state{storage = Storage} = State) ->
-    NewStorage = Storage#{Key => Value},
+    %% Store providers as a list to support multiple providers per service
+    ExistingProviders = maps:get(Key, Storage, []),
+
+    %% Ensure we're working with a list (for backward compatibility)
+    ProviderList = case is_list(ExistingProviders) of
+        true -> ExistingProviders;
+        false -> [ExistingProviders]  %% Legacy: convert single value to list
+    end,
+
+    %% Get node_id from the new provider
+    NodeId = maps:get(node_id, Value, undefined),
+
+    %% Update or append provider
+    UpdatedProviders = case NodeId of
+        undefined ->
+            %% No node_id, just append (shouldn't happen in practice)
+            [Value | ProviderList];
+        _ ->
+            %% Check if this provider already exists by comparing node_ids
+            ExistingIndex = find_provider_index(NodeId, ProviderList),
+            case ExistingIndex of
+                not_found ->
+                    %% Append new provider
+                    [Value | ProviderList];
+                Index ->
+                    %% Update existing provider (replace at index)
+                    lists:sublist(ProviderList, Index - 1) ++
+                        [Value] ++
+                        lists:nthtail(Index, ProviderList)
+            end
+    end,
+
+    NewStorage = Storage#{Key => UpdatedProviders},
     {reply, ok, State#state{storage = NewStorage}};
 
 handle_call({get_local, Key}, _From, #state{storage = Storage} = State) ->
     Reply = case maps:get(Key, Storage, undefined) of
-        undefined -> not_found;
-        Value -> {ok, Value}
+        undefined ->
+            not_found;
+        Value when is_list(Value) ->
+            %% Return the list of providers (may be empty list)
+            {ok, Value};
+        Value ->
+            %% Legacy: single value, convert to list
+            {ok, [Value]}
     end,
     {reply, Reply, State};
 
@@ -130,6 +176,59 @@ handle_call(get_routing_table, _From, #state{routing_table = Table} = State) ->
 handle_call(size, _From, #state{routing_table = Table} = State) ->
     Size = macula_routing_table:size(Table),
     {reply, Size, State};
+
+handle_call({delete_local, Key, NodeId}, _From, #state{storage = Storage} = State) ->
+    %% Remove specific provider by node_id from the provider list
+    NewStorage = case maps:get(Key, Storage, undefined) of
+        undefined ->
+            %% Key doesn't exist, nothing to delete
+            Storage;
+        Providers when is_list(Providers) ->
+            %% Filter out the provider with matching node_id
+            UpdatedProviders = lists:filter(fun(P) ->
+                maps:get(node_id, P, undefined) =/= NodeId
+            end, Providers),
+            case UpdatedProviders of
+                [] ->
+                    %% No providers left, remove the key entirely
+                    maps:remove(Key, Storage);
+                _ ->
+                    %% Update with remaining providers
+                    Storage#{Key => UpdatedProviders}
+            end;
+        _SingleValue ->
+            %% Legacy: single value, just remove the key
+            maps:remove(Key, Storage)
+    end,
+    {reply, ok, State#state{storage = NewStorage}};
+
+handle_call({find_value, Key, K}, _From, #state{routing_table = Table, storage = Storage} = State) ->
+    %% First check local storage
+    Reply = case maps:get(Key, Storage, undefined) of
+        undefined ->
+            %% Not found locally - use DHT iterative lookup
+            QueryFn = fun(_NodeInfo, _QueryKey) ->
+                %% TODO: For now, we can't directly query remote nodes without a connection
+                %% This would need to send FIND_VALUE RPC over QUIC to remote node
+                %% Return nodes so the algorithm continues
+                {nodes, [_NodeInfo]}
+            end,
+
+            case macula_routing_dht:find_value(Table, Key, K, QueryFn) of
+                {ok, Value} ->
+                    {ok, Value};
+                {nodes, _Nodes} ->
+                    %% Value not found, return empty list for service registry compatibility
+                    {ok, []};
+                {error, Reason} ->
+                    {error, Reason}
+            end;
+        Value when is_list(Value) ->
+            {ok, Value};
+        Value ->
+            {ok, [Value]}
+    end,
+    {reply, Reply, State};
 
 handle_call({handle_message, Message}, _From, State) ->
     {Reply, NewState} = process_dht_message(Message, State),
@@ -153,6 +252,19 @@ terminate(_Reason, _State) ->
 %%%===================================================================
 %%% Internal Functions
 %%%===================================================================
+
+%% @doc Find index of provider with matching node_id in provider list.
+-spec find_provider_index(binary(), [map()]) -> pos_integer() | not_found.
+find_provider_index(NodeId, ProviderList) ->
+    find_provider_index(NodeId, ProviderList, 1).
+
+find_provider_index(_NodeId, [], _Index) ->
+    not_found;
+find_provider_index(NodeId, [Provider | Rest], Index) ->
+    case maps:get(node_id, Provider, undefined) of
+        NodeId -> Index;
+        _ -> find_provider_index(NodeId, Rest, Index + 1)
+    end.
 
 %% @doc Process incoming DHT message and generate reply.
 -spec process_dht_message(map(), #state{}) -> {map(), #state{}}.

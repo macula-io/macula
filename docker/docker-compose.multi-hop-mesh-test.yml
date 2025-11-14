@@ -1,0 +1,137 @@
+# Multi-hop DHT Mesh RPC Testing Environment
+# Tests true peer-to-peer multi-hop routing through Kademlia DHT
+#
+# Topology:
+#   Registry ←→ NodeA ←→ NodeB ←→ Provider
+#                ↑
+#              Client
+#
+# Flow: Client → NodeA → NodeB → Provider (2-3 hops)
+#
+# Each node only knows about its immediate neighbors initially.
+# DHT routing naturally discovers the path through the mesh.
+
+services:
+  # Registry node - DHT coordinator
+  macula-registry:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: macula:test
+    container_name: macula-registry
+    hostname: registry.macula.test
+    working_dir: /macula
+    environment:
+      - NODE_TYPE=registry
+      - NODE_NAME=registry
+      - NODE_HOST=registry.macula.test
+      - ERLANG_COOKIE=macula_test
+    ports:
+      - "19443:9443"
+      - "18080:8080"
+    networks:
+      macula_mesh:
+        ipv4_address: 172.22.0.2
+
+  # NodeA - First intermediate hop (peer node)
+  # Connects to Registry to join DHT, doesn't advertise services
+  macula-nodea:
+    image: macula:test
+    container_name: macula-nodea
+    hostname: nodea.macula.test
+    working_dir: /macula
+    depends_on:
+      - macula-registry
+    environment:
+      - NODE_TYPE=provider
+      - NODE_NAME=nodea
+      - NODE_HOST=nodea.macula.test
+      - ERLANG_COOKIE=macula_test
+      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+      - PROVIDER_MULTIPLIER=1
+    ports:
+      - "29443:9443"
+      - "28080:8080"
+    networks:
+      macula_mesh:
+        ipv4_address: 172.22.0.3
+
+  # NodeB - Second intermediate hop (peer node)
+  # Connects to Registry to join DHT, doesn't advertise services
+  macula-nodeb:
+    image: macula:test
+    container_name: macula-nodeb
+    hostname: nodeb.macula.test
+    working_dir: /macula
+    depends_on:
+      - macula-registry
+      - macula-nodea
+    environment:
+      - NODE_TYPE=provider
+      - NODE_NAME=nodeb
+      - NODE_HOST=nodeb.macula.test
+      - ERLANG_COOKIE=macula_test
+      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+      - PROVIDER_MULTIPLIER=1
+    ports:
+      - "39443:9443"
+      - "38080:8080"
+    networks:
+      macula_mesh:
+        ipv4_address: 172.22.0.4
+
+  # Provider - Service provider at end of chain
+  # Connects to: Registry (for DHT), NodeB (mesh peer)
+  # Advertises test.calculator service
+  macula-provider:
+    image: macula:test
+    container_name: macula-provider
+    hostname: provider.macula.test
+    working_dir: /macula
+    depends_on:
+      - macula-registry
+      - macula-nodeb
+    environment:
+      - NODE_TYPE=provider
+      - NODE_NAME=provider
+      - NODE_HOST=provider.macula.test
+      - ERLANG_COOKIE=macula_test
+      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+      - MESH_PEER=https://nodeb.macula.test:9443
+      - PROVIDER_MULTIPLIER=2
+    ports:
+      - "49443:9443"
+      - "48080:8080"
+    networks:
+      macula_mesh:
+        ipv4_address: 172.22.0.5
+
+  # Client - RPC caller
+  # Connects ONLY to NodeA (not directly to provider)
+  # Must route through: Client → NodeA → NodeB → Provider
+  macula-client:
+    image: macula:test
+    container_name: macula-client
+    hostname: client.macula.test
+    working_dir: /macula
+    depends_on:
+      - macula-nodea
+      - macula-provider
+    environment:
+      - NODE_NAME=client
+      - NODE_HOST=client.macula.test
+      - ERLANG_COOKIE=macula_test
+      - REGISTRY_URL=https://registry.macula.test:9443
+      - REALM_ID=com.example.realm
+    entrypoint: []
+    command: ["/macula/docker/test_rpc_multi_hop_client.erl"]
+    networks:
+      macula_mesh:
+        ipv4_address: 172.22.0.10
+
+networks:
+  macula_mesh:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24

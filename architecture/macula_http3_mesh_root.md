@@ -95,9 +95,27 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
+#### 4. [Module Dependencies and Architecture](macula_http3_mesh_module_dependencies.md) ⭐
+**How the pieces fit together: From QUIC to your application**
+
+**Contents**:
+- **Layered architecture diagram** - Visual representation of all components
+- **Module responsibilities** - What each component does and why
+- **Message flow examples** - Follow an RPC call and pub/sub message through the stack
+- **The philosophy** - Gateway as "dumb transport" vs RPC/PubSub as "smart orchestration"
+- **Current implementation status** - What works, what's in progress, what's planned
+
+**Who should read this**: All developers working on Macula, architects understanding the system
+
+**Key insight**: Macula separates transport concerns (gateway) from business logic (RPC/PubSub servers), similar to how nginx handles HTTP routing while your application handles business logic. This separation enables independent evolution, testing, and scaling of each layer.
+
+**Why this matters**: Understanding the layered architecture prevents confusion about where functionality belongs. For example, topic pattern matching belongs in `macula_pubsub_server` (business logic), not `macula_gateway` (transport).
+
+---
+
 ### Quick Start Guides
 
-#### 4. [Quick Start Guide](macula_http3_mesh_quick_start.md) 🚀 ⚠️ **TODO**
+#### 5. [Quick Start Guide](macula_http3_mesh_quick_start.md) 🚀 ⚠️ **TODO**
 **Get a 3-node mesh running in 15 minutes**
 
 **Planned contents**:
@@ -115,7 +133,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
-#### 5. [Hello World Tutorial](macula_http3_mesh_hello_world.md) 📚 ⚠️ **TODO**
+#### 6. [Hello World Tutorial](macula_http3_mesh_hello_world.md) 📚 ⚠️ **TODO**
 **Build your first Macula application**
 
 **Planned contents**:
@@ -133,7 +151,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ### API and Protocol Specifications
 
-#### 6. [Wire Protocol Specification](macula_http3_mesh_protocol_spec.md) 📋 ⚠️ **TODO**
+#### 7. [Wire Protocol Specification](macula_http3_mesh_protocol_spec.md) 📋 ⚠️ **TODO**
 **Complete wire protocol documentation**
 
 **Planned contents**:
@@ -150,7 +168,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
-#### 7. [API Reference](macula_http3_mesh_api_reference.md) 📖 ⚠️ **TODO**
+#### 8. [API Reference](macula_http3_mesh_api_reference.md) 📖 ⚠️ **TODO**
 **Complete Erlang/Elixir API documentation**
 
 **Planned contents**:
@@ -170,7 +188,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ### Advanced Topics
 
-#### 8. [NAT Traversal Deep Dive](macula_http3_mesh_nat_traversal.md) 🌐 ⚠️ **TODO**
+#### 9. [NAT Traversal Deep Dive](macula_http3_mesh_nat_traversal.md) 🌐 ⚠️ **TODO**
 **How Macula works behind NATs and firewalls**
 
 **Planned contents**:
@@ -187,7 +205,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
-#### 9. [Security Model](macula_http3_mesh_security.md) 🔒 ⚠️ **TODO**
+#### 10. [Security Model](macula_http3_mesh_security.md) 🔒 ⚠️ **TODO**
 **Comprehensive security architecture**
 
 **Planned contents**:
@@ -207,7 +225,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
-#### 10. [Performance Tuning Guide](macula_http3_mesh_performance.md) ⚡ ⚠️ **TODO**
+#### 11. [Performance Tuning Guide](macula_http3_mesh_performance.md) ⚡ ⚠️ **TODO**
 **Optimize for throughput and latency**
 
 **Planned contents**:
@@ -226,7 +244,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
-#### 11. [Observability Guide](macula_http3_mesh_observability.md) 📊 ⚠️ **TODO**
+#### 12. [Observability Guide](macula_http3_mesh_observability.md) 📊 ⚠️ **TODO**
 **Monitor, trace, and debug Macula networks**
 
 **Planned contents**:
@@ -244,7 +262,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
-#### 12. [Deployment Patterns](macula_http3_mesh_deployment_patterns.md) 🚀 ⚠️ **TODO**
+#### 13. [Deployment Patterns](macula_http3_mesh_deployment_patterns.md) 🚀 ⚠️ **TODO**
 **Production deployment architectures**
 
 **Planned contents**:
@@ -264,7 +282,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
-#### 13. [Gateway Operations Manual](macula_http3_mesh_gateway_ops.md) 🌉 ⚠️ **TODO**
+#### 14. [Gateway Operations Manual](macula_http3_mesh_gateway_ops.md) 🌉 ⚠️ **TODO**
 **Deploy and operate gateway nodes**
 
 **Planned contents**:
@@ -286,7 +304,26 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ### Comparisons and Design Decisions
 
-#### 14. [Comparison with WAMP/Bondy](macula_http3_mesh_vs_wamp.md) 🔄 ⚠️ **TODO**
+#### 15. [Macula vs Distributed Erlang](macula_http3_mesh_vs_distributed_erlang.md) ⭐
+**Does Macula augment or replace Distributed Erlang?**
+
+**Answer**: Macula **replaces** Distributed Erlang for internet-scale, multi-tenant scenarios.
+
+**Contents**:
+- **The key differences** - Security, network assumptions, multi-tenancy, scalability
+- **Architectural comparison** - Cookie-based mesh vs TLS-based selective connectivity
+- **When to use each** - Tightly-coupled clusters (disterl) vs loosely-coupled services (Macula)
+- **Code comparison** - Side-by-side examples showing explicit vs implicit communication
+- **Hybrid approach** - Can you use both? (Yes, with gateways between data centers)
+- **Migration path** - Moving from disterl to Macula incrementally
+
+**Who should read this**: Teams familiar with Distributed Erlang, architects deciding between approaches
+
+**Key takeaway**: Distributed Erlang excels at <50 node, single-datacenter, fully-trusted clusters. Macula excels at 100s-1000s of nodes across the internet with realm isolation and NAT traversal. They solve different problems.
+
+---
+
+#### 16. [Comparison with WAMP/Bondy](macula_http3_mesh_vs_wamp.md) 🔄 ⚠️ **TODO**
 **Why build Macula when WAMP exists?**
 
 **Planned contents**:
@@ -304,7 +341,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
-#### 15. [Comparison with libp2p](macula_http3_mesh_vs_libp2p.md) 🔄 ⚠️ **TODO**
+#### 17. [Comparison with libp2p](macula_http3_mesh_vs_libp2p.md) 🔄 ⚠️ **TODO**
 **Macula vs libp2p (IPFS networking stack)**
 
 **Planned contents**:
@@ -322,7 +359,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
-#### 16. [Design Decision Log](macula_http3_mesh_decisions.md) 📝 ⚠️ **TODO**
+#### 18. [Design Decision Log](macula_http3_mesh_decisions.md) 📝 ⚠️ **TODO**
 **Why we made the choices we did**
 
 **Planned contents**:
@@ -343,7 +380,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ### Reference Materials
 
-#### 17. [Glossary](macula_http3_mesh_glossary.md) 📖 ⚠️ **TODO**
+#### 19. [Glossary](macula_http3_mesh_glossary.md) 📖 ⚠️ **TODO**
 **Terms and definitions**
 
 **Planned contents**:
@@ -361,7 +398,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
-#### 18. [FAQ](macula_http3_mesh_faq.md) ❓ ⚠️ **TODO**
+#### 20. [FAQ](macula_http3_mesh_faq.md) ❓ ⚠️ **TODO**
 **Frequently asked questions**
 
 **Planned contents**:
@@ -380,7 +417,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ---
 
-#### 19. [Troubleshooting Guide](macula_http3_mesh_troubleshooting.md) 🔧 ⚠️ **TODO**
+#### 21. [Troubleshooting Guide](macula_http3_mesh_troubleshooting.md) 🔧 ⚠️ **TODO**
 **Common issues and solutions**
 
 **Planned contents**:
@@ -403,7 +440,7 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 
 ### Contributing and Community
 
-#### 20. [Contributing Guide](macula_http3_mesh_contributing.md) 🤝 ⚠️ **TODO**
+#### 22. [Contributing Guide](macula_http3_mesh_contributing.md) 🤝 ⚠️ **TODO**
 **How to contribute to Macula**
 
 **Planned contents**:
@@ -428,6 +465,8 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 | Technical Roadmap | ✅ Complete | P0 | Week 0 |
 | C4 Diagrams | ✅ Complete | P0 | Week 0 |
 | Isolation Mechanisms | ✅ Complete | P0 | Week 0 |
+| Module Dependencies | ✅ Complete | P0 | Week 0 |
+| Macula vs Distributed Erlang | ✅ Complete | P1 | Week 0 |
 | Quick Start Guide | ⚠️ TODO | P1 | Week 4 |
 | Hello World Tutorial | ⚠️ TODO | P1 | Week 4 |
 | Wire Protocol Spec | ⚠️ TODO | P1 | Week 8 |
@@ -469,21 +508,24 @@ Build a unique, standards-based distributed networking layer for Erlang/Elixir a
 ### For Architects (System Design)
 1. [Technical Roadmap](macula_http3_mesh_roadmap.md) - Complete read
 2. [C4 Diagrams](macula_http3_mesh_c4_diagrams.md) - All levels
-3. [Isolation Mechanisms](macula_http3_mesh_isolation_mechanisms.md) - Complete read
-4. [NAT Traversal Deep Dive](macula_http3_mesh_nat_traversal.md) ⚠️ TODO
-5. [Security Model](macula_http3_mesh_security.md) ⚠️ TODO
-6. [Design Decision Log](macula_http3_mesh_decisions.md) ⚠️ TODO
+3. [Module Dependencies](macula_http3_mesh_module_dependencies.md) - Understand the layers
+4. [Isolation Mechanisms](macula_http3_mesh_isolation_mechanisms.md) - Complete read
+5. [Macula vs Distributed Erlang](macula_http3_mesh_vs_distributed_erlang.md) - Architectural trade-offs
+6. [NAT Traversal Deep Dive](macula_http3_mesh_nat_traversal.md) ⚠️ TODO
+7. [Security Model](macula_http3_mesh_security.md) ⚠️ TODO
+8. [Design Decision Log](macula_http3_mesh_decisions.md) ⚠️ TODO
 
-**Time**: ~4 hours
+**Time**: ~5 hours
 
 ---
 
 ### For Implementers (Engineers)
-1. [Technical Roadmap](macula_http3_mesh_roadmap.md) - Focus on code examples
-2. [Wire Protocol Spec](macula_http3_mesh_protocol_spec.md) ⚠️ TODO
-3. [API Reference](macula_http3_mesh_api_reference.md) ⚠️ TODO
-4. [Quick Start Guide](macula_http3_mesh_quick_start.md) ⚠️ TODO
-5. [Hello World Tutorial](macula_http3_mesh_hello_world.md) ⚠️ TODO
+1. [Module Dependencies](macula_http3_mesh_module_dependencies.md) - Understand where code belongs
+2. [Technical Roadmap](macula_http3_mesh_roadmap.md) - Focus on code examples
+3. [Wire Protocol Spec](macula_http3_mesh_protocol_spec.md) ⚠️ TODO
+4. [API Reference](macula_http3_mesh_api_reference.md) ⚠️ TODO
+5. [Quick Start Guide](macula_http3_mesh_quick_start.md) ⚠️ TODO
+6. [Hello World Tutorial](macula_http3_mesh_hello_world.md) ⚠️ TODO
 
 **Time**: ~3 hours + hands-on
 

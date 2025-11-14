@@ -1,0 +1,32 @@
+graph LR
+    subgraph Before [Before Memory Leak Fixes]
+        B1[Unbounded<br/>connection pool] -.grows.-> B2[OOM crash<br/>after 30-60 min]
+        B3[Unbounded<br/>client connections] -.grows.-> B2
+        B4[No service<br/>cleanup] -.grows.-> B2
+        B5[Stream map<br/>leaks] -.grows.-> B2
+        B6[Dead caller<br/>entries] -.grows.-> B2
+    end
+
+    subgraph After [After Memory Leak Fixes]
+        A1[Bounded pool<br/>max 1,000] --> A2[Stable memory]
+        A3[Client limits<br/>max 10,000] --> A2
+        A4[Service TTL<br/>300s + cleanup] --> A2
+        A5[Stream cleanup<br/>on disconnect] --> A2
+        A6[Caller monitoring<br/>immediate cleanup] --> A2
+    end
+
+    Before -.fixes.-> After
+
+    style B1 fill:#ffcccc
+    style B2 fill:#ff6666
+    style B3 fill:#ffcccc
+    style B4 fill:#ffcccc
+    style B5 fill:#ffcccc
+    style B6 fill:#ffcccc
+
+    style A1 fill:#ccffcc
+    style A2 fill:#66ff66
+    style A3 fill:#ccffcc
+    style A4 fill:#ccffcc
+    style A5 fill:#ccffcc
+    style A6 fill:#ccffcc

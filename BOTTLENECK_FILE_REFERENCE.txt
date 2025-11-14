@@ -1,0 +1,175 @@
+     STDIN
+   1 ================================================================================
+   2 MACULA SCALING ANALYSIS - CRITICAL BOTTLENECK FILE REFERENCE
+   3 ================================================================================
+   4 
+   5 TIER 1: MUST FIX BEFORE PRODUCTION (1-2 weeks)
+   6 ================================================================================
+   7 
+   8 1. CACHE LOOKUP BOTTLENECK - O(N) list operations
+   9    File: /home/rl/work/github.com/macula-io/macula/src/macula_cache.erl
+  10    Lines: 60-82, 88-99
+  11    Problem: List scan for every cache operation (10-100μs per lookup)
+  12    Fix: Replace with ETS table (O(log N) = 1-2μs)
+  13    Impact: 10-50x cache throughput improvement
+  14    Effort: 3 days
+  15    
+  16    Related files:
+  17    - src/macula_rpc_cache.erl (uses macula_cache)
+  18    - src/macula_pubsub_cache.erl (uses macula_cache)
+  19 
+  20 2. UNBOUNDED CONNECTION POOL - Memory leak
+  21    File: /home/rl/work/github.com/macula-io/macula/src/macula_connection_pool.erl
+  22    Lines: 33-57
+  23    Problem: No idle connection cleanup, accumulates 50MB per 1000 nodes
+  24    Fix: Add LRU reaper with 5-minute timeout
+  25    Impact: Prevent OOM crashes after 30-60 minutes
+  26    Effort: 2 days
+  27    
+  28    Related files:
+  29    - src/macula_gateway_mesh.erl (manages mesh connections)
+  30 
+  31 3. UNBOUNDED CLIENT MAP - Memory leak
+  32    File: /home/rl/work/github.com/macula-io/macula/src/macula_gateway_client_manager.erl
+  33    Lines: 110-127
+  34    Problem: No max client limit, accepts unlimited connections
+  35    Fix: Add config: max_clients=10000 with rejection logic
+  36    Impact: Prevent resource exhaustion from rogue clients
+  37    Effort: 1 day
+  38 
+  39 4. UNBOUNDED SERVICE REGISTRY - Memory leak
+  40    File: /home/rl/work/github.com/macula-io/macula/src/macula_routing_server.erl
+  41    Lines: 104-110 (init), 124-158 (store_local)
+  42    Problem: Service entries stored indefinitely, no TTL
+  43    Fix: Add TTL tracking with reaper service
+  44    Impact: Prevent DHT storage memory leak
+  45    Effort: 2 days
+  46 
+  47 ================================================================================
+  48 TIER 2: HIGH PRIORITY ARCHITECTURE (2-3 weeks)
+  49 ================================================================================
+  50 
+  51 5. SINGLE PUB/SUB PROCESS - Serial message delivery
+  52    File: /home/rl/work/github.com/macula-io/macula/src/macula_pubsub_server.erl
+  53    Lines: 177-193
+  54    Problem: O(N) serial delivery to N subscribers, saturates at 20 msgs/sec
+  55    Fix: Create 8-16 shard processes, use async worker pool
+  56    Impact: 8-16x parallelization + async delivery
+  57    Effort: 1 week
+  58    
+  59    Related files:
+  60    - src/macula_pubsub_delivery.erl (37-52) - serial delivery
+  61    - src/macula_pubsub_delivery.erl (112-125) - per-pattern queries
+  62 
+  63 6. O(N) SUBSCRIPTION MATCHING - Pattern matching bottleneck
+  64    File: /home/rl/work/github.com/macula-io/macula/src/macula_pubsub_registry.erl
+  65    Lines: 93-101
+  66    Problem: lists:filter scans all subscriptions per publish, O(N)
+  67    Fix: Replace with pattern trie for O(log N) matching
+  68    Impact: Pattern matching from O(N) to O(log N)
+  69    Effort: 1 week
+  70    
+  71    Related files:
+  72    - src/macula_pubsub_topic.erl (topic/pattern matching logic)
+  73 
+  74 7. SINGLE SERVICE REGISTRY - Centralized lookup bottleneck
+  75    File: /home/rl/work/github.com/macula-io/macula/src/macula_service_registry.erl
+  76    Lines: 1-500 (entire module is single registry)
+  77    Problem: All service lookups serialized through single gen_server
+  78    Fix: Create supervisor with 8-16 sharded registry processes
+  79    Impact: 8-16x parallelization of service lookups
+  80    Effort: 1 week
+  81    
+  82    Related files:
+  83    - (new) macula_service_registry_sup.erl (supervisor)
+  84    - (new) macula_service_registry_shard.erl (shard implementation)
+  85 
+  86 ================================================================================
+  87 TIER 3: ADVANCED OPTIMIZATION (3-4 weeks)
+  88 ================================================================================
+  89 
+  90 8. SINGLE RPC SERVER - Blocking network I/O
+  91    File: /home/rl/work/github.com/macula-io/macula/src/macula_rpc_server.erl
+  92    Lines: 128-148
+  93    Problem: Synchronous gen_server:call blocks on network timeout
+  94    Fix: Async execution with worker pool for remote calls
+  95    Impact: Reduce RPC latency tail, improve throughput
+  96    Effort: 1 week
+  97 
+  98 9. ROUND-ROBIN ROUTING - O(N) provider selection
+  99    File: /home/rl/work/github.com/macula-io/macula/src/macula_rpc_router.erl
+ 100    Lines: 74-88
+ 101    Problem: lists:nth(N, List) is O(N) operation
+ 102    Fix: Use tuple/array for O(1) access
+ 103    Impact: Eliminate provider selection bottleneck
+ 104    Effort: 2 days
+ 105 
+ 106 10. NO MESSAGE BATCHING - Inefficient serialization
+ 107     File: /home/rl/work/github.com/macula-io/macula/src/macula_pubsub_delivery.erl
+ 108     Lines: 112-125
+ 109     Problem: Per-pattern DHT queries, then per-subscriber sends
+ 110     Fix: Batch delivery, cache subscriber lists
+ 111     Impact: Reduce network round-trips
+ 112     Effort: 1 week
+ 113 
+ 114 ================================================================================
+ 115 TIER 4: OBSERVABILITY & MONITORING (1-2 weeks)
+ 116 ================================================================================
+ 117 
+ 118 11. NO METRICS - Invisible performance degradation
+ 119     Need to create: macula_metrics.erl
+ 120     Add to:
+ 121     - src/macula_gateway.erl (track msg/sec)
+ 122     - src/macula_pubsub_server.erl (track pub/sec)
+ 123     - src/macula_rpc_server.erl (track RPC/sec)
+ 124     - src/macula_cache.erl (track hit/miss rates)
+ 125     Impact: Visibility into bottlenecks
+ 126     Effort: 1 week
+ 127 
+ 128 12. NO QUEUE DEPTH MONITORING - Invisible queue overflow
+ 129     File: src/macula_gateway_health.erl
+ 130     Need: process_info queue depth checks
+ 131     Add: Alert if queue > 1000 messages
+ 132     Impact: Early warning system
+ 133     Effort: 3 days
+ 134 
+ 135 ================================================================================
+ 136 SUMMARY DEPENDENCY CHAIN
+ 137 ================================================================================
+ 138 
+ 139 Must do first (Tier 1):
+ 140   1. Fix cache.erl (3 days)
+ 141   2. Fix connection_pool.erl (2 days)
+ 142   3. Fix client_manager.erl (1 day)
+ 143   4. Fix routing_server.erl (2 days)
+ 144   → Prevents memory leaks, enables 2-3K msgs/sec
+ 145 
+ 146 Then (Tier 2):
+ 147   5. Create pubsub sharding (1 week)
+ 148   6. Create pattern trie (1 week)
+ 149   7. Create registry sharding (1 week)
+ 150   → Enables 5-8K msgs/sec
+ 151 
+ 152 Then (Tier 3):
+ 153   8-10. Async RPC, provider optimization, message batching (2-3 weeks)
+ 154   → Enables 10K msgs/sec target
+ 155 
+ 156 Finally (Tier 4):
+ 157   11-12. Metrics and monitoring (1-2 weeks)
+ 158   → Operational visibility
+ 159 
+ 160 Total effort: 8-10 weeks for 10x throughput improvement
+ 161 
+ 162 ================================================================================
+ 163 CURRENT THROUGHPUT BOTTLENECKS (BY COMPONENT)
+ 164 ================================================================================
+ 165 
+ 166 Gateway:           ~1,000 msgs/sec (single gen_server)
+ 167 Pub/Sub:           ~20 publishes/sec (serial delivery to 1000 subscribers)
+ 168 RPC:               ~100 calls/sec (sync network I/O)
+ 169 Cache:             ~100,000 ops/sec (10μs per O(N) scan)
+ 170 Service Registry:  ~1,000 queries/sec (single process)
+ 171 
+ 172 Target:            ~10,000 msgs/sec for production deployment
+ 173 
+ 174 ================================================================================
