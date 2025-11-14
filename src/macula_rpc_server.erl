@@ -223,10 +223,7 @@ execute_call_no_cache(Uri, Args, Timeout, LocalNodeId, Registry, Cache, RouterSt
 
     %% Find remote providers
     DhtLookupFun = maps:get(dht_lookup_fun, Config, fun default_dht_lookup/1),
-    RemoteProviders = case DhtLookupFun(Uri) of
-        {ok, Providers} -> Providers;
-        {error, _} -> []
-    end,
+    RemoteProviders = unwrap_providers(DhtLookupFun(Uri)),
 
     %% Route call
     Strategy = maps:get(routing_strategy, Config, local_first),
@@ -313,19 +310,23 @@ maybe_cache_result(Uri, Args, {ok, Result}, Registration, Cache, Config) ->
     CacheEnabled = maps:get(cache_enabled, Config, false),
     Metadata = maps:get(metadata, Registration),
     CacheTTL = maps:get(cache_ttl, Metadata, 0),
-
-    case CacheEnabled andalso CacheTTL > 0 of
-        true ->
-            %% Cache result with TTL
-            macula_rpc_cache:put(Cache, Uri, Args, Result, CacheTTL);
-        false ->
-            %% Don't cache
-            Cache
-    end;
+    cache_if_enabled(CacheEnabled andalso CacheTTL > 0, Cache, Uri, Args, Result, CacheTTL);
 
 maybe_cache_result(_Uri, _Args, {error, _Reason}, _Registration, Cache, _Config) ->
     %% Don't cache errors
     Cache.
+
+%% @doc Cache result if caching is enabled.
+cache_if_enabled(true, Cache, Uri, Args, Result, CacheTTL) ->
+    %% Cache result with TTL
+    macula_rpc_cache:put(Cache, Uri, Args, Result, CacheTTL);
+cache_if_enabled(false, Cache, _Uri, _Args, _Result, _CacheTTL) ->
+    %% Don't cache
+    Cache.
+
+%% @doc Unwrap provider list from ok/error result.
+unwrap_providers({ok, Providers}) -> Providers;
+unwrap_providers({error, _}) -> [].
 
 %% @doc Default DHT lookup (returns empty list - for testing).
 -spec default_dht_lookup(binary()) -> {ok, [macula_rpc_discovery:provider_info()]}.

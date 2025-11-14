@@ -72,13 +72,35 @@ validate_message(pong, Msg) ->
     #{timestamp := _, server_time := _} = Msg,
     ok;
 validate_message(publish, Msg) ->
-    #{topic := _, payload := _, qos := _, retain := _, message_id := _} = Msg,
+    %% Accept both atom and binary keys (from MessagePack decoding)
+    case {maps:is_key(topic, Msg), maps:is_key(<<"topic">>, Msg)} of
+        {true, _} -> #{topic := _, payload := _, qos := _, retain := _, message_id := _} = Msg;
+        {_, true} -> #{<<"topic">> := _, <<"payload">> := _, <<"qos">> := _, <<"retain">> := _, <<"message_id">> := _} = Msg
+    end,
     ok;
 validate_message(subscribe, Msg) ->
-    #{topics := _, qos := _} = Msg,
+    %% Accept both atom and binary keys
+    case {maps:is_key(topics, Msg), maps:is_key(<<"topics">>, Msg)} of
+        {true, _} -> #{topics := _, qos := _} = Msg;
+        {_, true} -> #{<<"topics">> := _, <<"qos">> := _} = Msg
+    end,
     ok;
 validate_message(unsubscribe, Msg) ->
-    #{topics := _} = Msg,
+    %% Accept both atom and binary keys
+    case {maps:is_key(topics, Msg), maps:is_key(<<"topics">>, Msg)} of
+        {true, _} -> #{topics := _} = Msg;
+        {_, true} -> #{<<"topics">> := _} = Msg
+    end,
+    ok;
+validate_message(rpc_route, Msg) ->
+    %% Accept both atom and binary keys
+    case {maps:is_key(destination_node_id, Msg), maps:is_key(<<"destination_node_id">>, Msg)} of
+        {true, _} -> #{destination_node_id := _, source_node_id := _, hop_count := _,
+                       max_hops := _, payload_type := _, payload := _} = Msg;
+        {_, true} -> #{<<"destination_node_id">> := _, <<"source_node_id">> := _,
+                       <<"hop_count">> := _, <<"max_hops">> := _,
+                       <<"payload_type">> := _, <<"payload">> := _} = Msg
+    end,
     ok;
 validate_message(_Type, _Msg) ->
     %% For message types not yet validated, allow anything

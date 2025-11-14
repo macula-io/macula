@@ -32,16 +32,38 @@ init([]) ->
         period => 5
     },
 
-    %% Conditionally start gateway based on configuration
-    ChildSpecs = maybe_start_gateway(),
+    %% Core infrastructure (always started)
+    CoreSpecs = get_core_child_specs(),
+
+    %% Gateway services (conditionally started)
+    GatewaySpecs = maybe_start_gateway(),
+
+    ChildSpecs = CoreSpecs ++ GatewaySpecs,
 
     {ok, {SupFlags, ChildSpecs}}.
 
 %% internal functions
 
 %% @private
-%% @doc Conditionally start the gateway based on configuration.
-%% Set {start_gateway, false} in config to disable auto-start (for embedded use).
+%% @doc Get core infrastructure child specs (always started, even in embedded mode).
+%% The routing server is essential for DHT operations in any mode.
+get_core_child_specs() ->
+    io:format("Starting Macula core infrastructure (routing server)~n"),
+    [
+        %% DHT routing server (essential for all DHT operations)
+        #{
+            id => macula_routing_server,
+            start => {macula_routing_server, start_link, [get_node_id(), get_routing_config()]},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [macula_routing_server]
+        }
+    ].
+
+%% @private
+%% @doc Conditionally start gateway services based on configuration.
+%% Set {start_gateway, false} in config to disable gateway (for client-only mode).
 maybe_start_gateway() ->
     case application:get_env(macula, start_gateway, true) of
         true ->
@@ -54,7 +76,7 @@ maybe_start_gateway() ->
             io:format("Starting health check server on port ~p~n", [HealthPort]),
 
             [
-                %% Health check server (must start first)
+                %% Health check server
                 #{
                     id => macula_gateway_health,
                     start => {macula_gateway_health, start_link, [[{health_port, HealthPort}]]},
@@ -83,7 +105,7 @@ maybe_start_gateway() ->
                 }
             ];
         false ->
-            io:format("Gateway auto-start disabled (embedded mode)~n"),
+            io:format("Gateway auto-start disabled (client-only mode)~n"),
             []
     end.
 
@@ -116,3 +138,28 @@ get_health_port() ->
         PortStr ->
             list_to_integer(PortStr)
     end.
+
+%% @private
+%% @doc Get node ID for DHT routing (32-byte identifier).
+get_node_id() ->
+    %% Try environment variable first, then config, finally generate one
+    case os:getenv("NODE_ID") of
+        false ->
+            case application:get_env(macula, node_id) of
+                {ok, NodeId} when is_binary(NodeId), byte_size(NodeId) == 32 ->
+                    NodeId;
+                _ ->
+                    %% Generate a random 32-byte node ID
+                    crypto:strong_rand_bytes(32)
+            end;
+        NodeIdStr ->
+            list_to_binary(NodeIdStr)
+    end.
+
+%% @private
+%% @doc Get DHT routing configuration.
+get_routing_config() ->
+    #{
+        k => application:get_env(macula, dht_k, 20),        %% Kademlia K parameter
+        alpha => application:get_env(macula, dht_alpha, 3)  %% Concurrent queries
+    }.

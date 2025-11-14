@@ -1,0 +1,134 @@
+networks:
+  macula_test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+
+services:
+  registry:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: macula:test
+    container_name: macula-registry
+    hostname: registry.macula.test
+    networks:
+      macula_test:
+        ipv4_address: 172.21.0.2
+    environment:
+      - NODE_TYPE=registry
+      - NODE_NAME=registry
+      - NODE_HOST=registry.macula.test
+      - COOKIE=macula_test
+      - GATEWAY_PORT=9443
+      - REALM_ID=com.example.realm
+    extra_hosts:
+      - "registry.macula.test:172.21.0.2"
+      - "publisher.macula.test:172.21.0.3"
+      - "subscriber1.macula.test:172.21.0.4"
+      - "subscriber2.macula.test:172.21.0.5"
+      - "subscriber3.macula.test:172.21.0.6"
+
+  publisher:
+    image: macula:test
+    container_name: macula-publisher
+    hostname: publisher.macula.test
+    networks:
+      macula_test:
+        ipv4_address: 172.21.0.3
+    environment:
+      - NODE_TYPE=publisher_wildcard
+      - NODE_NAME=publisher
+      - NODE_HOST=publisher.macula.test
+      - COOKIE=macula_test
+      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+      - REGISTRY_URL=https://registry.macula.test:9443
+      - GATEWAY_PORT=9443
+      - REALM_ID=com.example.realm
+    extra_hosts:
+      - "registry.macula.test:172.21.0.2"
+      - "publisher.macula.test:172.21.0.3"
+      - "subscriber1.macula.test:172.21.0.4"
+      - "subscriber2.macula.test:172.21.0.5"
+      - "subscriber3.macula.test:172.21.0.6"
+    depends_on:
+      - registry
+
+  subscriber1:
+    image: macula:test
+    container_name: macula-subscriber1
+    hostname: subscriber1.macula.test
+    networks:
+      macula_test:
+        ipv4_address: 172.21.0.4
+    environment:
+      - NODE_TYPE=subscriber_exact
+      - NODE_NAME=subscriber1
+      - NODE_HOST=subscriber1.macula.test
+      - COOKIE=macula_test
+      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+      - REGISTRY_URL=https://registry.macula.test:9443
+      - GATEWAY_PORT=9443
+      - REALM_ID=com.example.realm
+      - SUBSCRIBE_TOPIC=sensor.temp.room1
+    extra_hosts:
+      - "registry.macula.test:172.21.0.2"
+      - "publisher.macula.test:172.21.0.3"
+      - "subscriber1.macula.test:172.21.0.4"
+      - "subscriber2.macula.test:172.21.0.5"
+      - "subscriber3.macula.test:172.21.0.6"
+    depends_on:
+      - registry
+
+  subscriber2:
+    image: macula:test
+    container_name: macula-subscriber2
+    hostname: subscriber2.macula.test
+    networks:
+      macula_test:
+        ipv4_address: 172.21.0.5
+    environment:
+      - NODE_TYPE=subscriber_single_wildcard
+      - NODE_NAME=subscriber2
+      - NODE_HOST=subscriber2.macula.test
+      - COOKIE=macula_test
+      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+      - REGISTRY_URL=https://registry.macula.test:9443
+      - GATEWAY_PORT=9443
+      - REALM_ID=com.example.realm
+      - SUBSCRIBE_TOPIC=sensor.*.room1
+    extra_hosts:
+      - "registry.macula.test:172.21.0.2"
+      - "publisher.macula.test:172.21.0.3"
+      - "subscriber1.macula.test:172.21.0.4"
+      - "subscriber2.macula.test:172.21.0.5"
+      - "subscriber3.macula.test:172.21.0.6"
+    depends_on:
+      - registry
+
+  subscriber3:
+    image: macula:test
+    container_name: macula-subscriber3
+    hostname: subscriber3.macula.test
+    networks:
+      macula_test:
+        ipv4_address: 172.21.0.6
+    environment:
+      - NODE_TYPE=subscriber_multi_wildcard
+      - NODE_NAME=subscriber3
+      - NODE_HOST=subscriber3.macula.test
+      - COOKIE=macula_test
+      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+      - REGISTRY_URL=https://registry.macula.test:9443
+      - GATEWAY_PORT=9443
+      - REALM_ID=com.example.realm
+      - SUBSCRIBE_TOPIC=sensor.**
+    extra_hosts:
+      - "registry.macula.test:172.21.0.2"
+      - "publisher.macula.test:172.21.0.3"
+      - "subscriber1.macula.test:172.21.0.4"
+      - "subscriber2.macula.test:172.21.0.5"
+      - "subscriber3.macula.test:172.21.0.6"
+    depends_on:
+      - registry

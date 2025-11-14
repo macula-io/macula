@@ -1,6 +1,10 @@
+# Note: We build from source in the Docker image
 _build/
 .git/
 .github/
 *.log
 erl_crash.dump
 .rebar3/
+docker/docker-compose*.yml
+docker/test*.sh
+docker/scripts/

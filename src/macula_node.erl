@@ -103,18 +103,15 @@ to_binary(Node) ->
     term_to_binary(Node).
 
 %% @doc Decode node from binary.
--spec from_binary(binary()) -> {ok, macula_node()} | {error, term()}.
+%% Crashes on invalid binary or structure - exposes bugs in encoding/decoding logic.
+-spec from_binary(binary()) -> macula_node().
 from_binary(Binary) when is_binary(Binary) ->
-    try
-        Node = binary_to_term(Binary, [safe]),
-        case validate_node(Node) of
-            ok -> {ok, Node};
-            {error, Reason} -> {error, Reason}
-        end
-    catch
-        _:Error ->
-            {error, {decode_failed, Error}}
-    end.
+    %% Decode and validate structure via pattern match (let it crash on invalid data)
+    #{node_id := NodeId, realm := Realm} = Node = binary_to_term(Binary, [safe]),
+    %% Validate node_id size
+    32 = byte_size(NodeId),  % Crashes if wrong size
+    true = is_binary(Realm),  % Crashes if not binary
+    Node.
 
 %% @doc Check if two nodes are equal (by ID).
 -spec equals(macula_node(), macula_node()) -> boolean().
@@ -127,10 +124,4 @@ equals(_Node1, _Node2) ->
 %%% Internal Functions
 %%%===================================================================
 
-%% @doc Validate node structure.
--spec validate_node(term()) -> ok | {error, term()}.
-validate_node(#{node_id := NodeId, realm := Realm})
-    when is_binary(NodeId), is_binary(Realm), byte_size(NodeId) =:= 32 ->
-    ok;
-validate_node(_) ->
-    {error, invalid_node}.
+%% Validation now done inline via pattern matching in from_binary/1

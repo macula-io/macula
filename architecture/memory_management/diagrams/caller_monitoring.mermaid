@@ -1,0 +1,27 @@
+sequenceDiagram
+    participant Caller as Caller Process
+    participant RPC as RPC Handler
+    participant Provider as Service Provider
+
+    Caller->>RPC: call(Service, Args)
+    activate Caller
+    activate RPC
+
+    RPC->>RPC: MonitorRef = monitor(Caller)
+    RPC->>RPC: Store {CallId, {From, Timer, MonitorRef}}
+    RPC->>Provider: Send RPC request
+
+    Note over Caller,RPC: Caller crashes
+    Caller->>X: exit(kill)
+    deactivate Caller
+
+    RPC->>RPC: Receive {'DOWN', MonitorRef}
+    RPC->>RPC: Remove from pending_calls
+    RPC->>RPC: Remove from caller_monitors
+    RPC->>RPC: Cancel timer
+    deactivate RPC
+
+    Note over RPC: Cleanup happens immediately<br/>(not after 5-second timeout)
+
+    Provider-->>RPC: Response (arrives too late)
+    RPC->>RPC: No pending call found<br/>Response discarded

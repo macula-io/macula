@@ -1,15 +1,32 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% Macula Gateway - HTTP/3 Message Router
+%%% Macula Gateway - HTTP/3 Message Router & Orchestrator
 %%%
-%%% Main API module for the Macula Gateway.
+%%% Main API module and coordinator for the Macula Gateway.
 %%% The gateway can be embedded in applications or run standalone.
 %%%
-%%% Architecture:
-%%% - QUIC Listener: Accepts HTTP/3 connections from SDK clients
-%%% - Router: Routes pub/sub messages between clients
-%%% - RPC: Handles remote procedure calls
-%%% - Realm Manager: Manages multiple realms
+%%% Architecture (Modular Design - Refactored Jan 2025):
+%%% ========================================================
+%%%
+%%% Gateway (this module):
+%%%   - QUIC Listener Management
+%%%   - Message Decoding & Routing
+%%%   - Supervisor Coordination
+%%%   - API Facade
+%%%
+%%% Child Modules (managed via macula_gateway_sup):
+%%%   - macula_gateway_client_manager: Client lifecycle management
+%%%   - macula_gateway_pubsub: Pub/Sub message routing with wildcards
+%%%   - macula_gateway_rpc: RPC handler registration & invocation
+%%%   - macula_gateway_mesh: Mesh connection pooling
+%%%
+%%% Stateless Delegation Modules:
+%%%   - macula_gateway_dht: DHT query forwarding to routing server
+%%%   - macula_gateway_rpc_router: Multi-hop RPC routing via DHT
+%%%
+%%% Single Responsibility Principle:
+%%%   Each module has one clear purpose and delegates to specialized
+%%%   child modules. Gateway acts as orchestrator, not implementer.
 %%%
 %%% Usage (Embedded):
 %%% ```
@@ -17,24 +34,35 @@
 %%%     {port, 9443},
 %%%     {realm, <<"com.example.realm">>}
 %%% ]).
+%%%
+%%% %% Register RPC handler
+%%% macula_gateway:register_handler(<<"add">>, fun(#{a := A, b := B}) ->
+%%%     #{result => A + B}
+%%% end).
 %%% '''
 %%%
 %%% Usage (Standalone):
 %%% ```
 %%% application:start(macula_gateway).
 %%% '''
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_gateway).
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+-include("macula_config.hrl").
+
 %% API
 -export([
     start_link/0,
     start_link/1,
     stop/1,
-    get_stats/1
+    get_stats/1,
+    register_handler/2,
+    unregister_handler/1
 ]).
 
 %% gen_server callbacks
@@ -49,20 +77,15 @@
 -record(state, {
     port :: inet:port_number(),
     realm :: binary(),
+    node_id :: binary(),                          % 32-byte local node ID
     listener :: pid() | undefined,
-    clients :: #{pid() => client_info()},
-    subscriptions :: #{binary() => [pid()]},  % topic => [client_pids]
-    registrations :: #{binary() => pid()}     % procedure => client_pid
+    supervisor :: pid() | undefined,              % Supervisor PID
+    client_manager :: pid() | undefined,          % Client manager child PID
+    pubsub :: pid() | undefined,                  % Pub/Sub child PID
+    rpc :: pid() | undefined,                     % RPC child PID
+    mesh :: pid() | undefined,                    % Mesh connection manager child PID
+    client_streams :: #{binary() => pid()}        % node_id => stream for bidirectional communication
 }).
-
--type client_info() :: #{
-    realm := binary(),
-    node_id := binary(),
-    capabilities := [atom()]
-}.
-
--define(DEFAULT_PORT, 9443).
--define(DEFAULT_REALM, <<"macula.default">>).
 
 %%%===================================================================
 %%% API Functions
@@ -79,7 +102,7 @@ start_link() ->
 %%   {realm, Realm} - Default realm (default: "macula.default")
 -spec start_link(proplists:proplist()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) ->
-    gen_server:start_link(?MODULE, Opts, []).
+    gen_server:start_link({local, macula_gateway}, ?MODULE, Opts, []).
 
 %% @doc Stop the gateway.
 -spec stop(pid()) -> ok.
@@ -90,6 +113,26 @@ stop(Gateway) ->
 -spec get_stats(pid()) -> map().
 get_stats(Gateway) ->
     gen_server:call(Gateway, get_stats).
+
+%% @doc Register a handler for a procedure.
+-spec register_handler(binary(), fun()) -> ok | {error, term()}.
+register_handler(Procedure, Handler) ->
+    case whereis(macula_gateway) of
+        undefined ->
+            {error, no_gateway};
+        Pid ->
+            gen_server:call(Pid, {register_handler, Procedure, Handler})
+    end.
+
+%% @doc Unregister a handler for a procedure.
+-spec unregister_handler(binary()) -> ok.
+unregister_handler(Procedure) ->
+    case whereis(macula_gateway) of
+        undefined ->
+            ok;
+        Pid ->
+            gen_server:call(Pid, {unregister_handler, Procedure})
+    end.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -136,9 +179,26 @@ get_tls_certificates() ->
     end.
 
 %% @private
+%% @doc Get node ID from NODE_NAME environment variable or generate from realm/port.
+%% Uses idiomatic Erlang pattern matching on function heads.
+-spec get_node_id(binary(), inet:port_number()) -> binary().
+get_node_id(Realm, Port) ->
+    case os:getenv("NODE_NAME") of
+        false ->
+            %% No NODE_NAME set, generate hash for backward compatibility
+            io:format("[Gateway] No NODE_NAME env var, generating node ID from realm/port~n"),
+            crypto:hash(sha256, term_to_binary({Realm, Port}));
+        NodeName when is_list(NodeName) ->
+            %% Use NODE_NAME from environment (converted to binary)
+            NodeNameBin = list_to_binary(NodeName),
+            io:format("[Gateway] Using NODE_NAME from environment: ~s~n", [NodeName]),
+            NodeNameBin
+    end.
+
+%% @private
 %% @doc Start the QUIC listener with given certificates.
 start_quic_listener(Port, Realm, CertFile, KeyFile) ->
-    %% Start QUIC listener
+    %% Start QUIC listener using simple quicer API
     ListenOpts = [
         {cert, CertFile},
         {key, KeyFile},
@@ -151,33 +211,86 @@ start_quic_listener(Port, Realm, CertFile, KeyFile) ->
         {ok, Listener} ->
             io:format("Macula Gateway listening on port ~p (realm: ~s)~n", [Port, Realm]),
 
-            %% Mark health server as ready
-            try
-                macula_gateway_health:set_ready(true)
-            catch
-                _:_ -> ok  % Health server might not be running in embedded mode
+            %% Mark health server as ready (if running)
+            notify_health_server_ready(),
+
+            %% Register diagnostics procedures (if running)
+            register_diagnostics_procedures(self()),
+
+            %% Start async accept to receive connection events
+            case quicer:async_accept(Listener, #{}) of
+                {ok, Listener} ->
+                    io:format("[Gateway] Async accept registered, ready for connections~n"),
+                    ok;
+                {error, AcceptErr} ->
+                    io:format("[Gateway] WARNING: async_accept failed: ~p~n", [AcceptErr]),
+                    ok  % Continue anyway, maybe we can still work
             end,
 
-            %% Register diagnostics procedures
-            try
-                macula_gateway_diagnostics:register_procedures(self())
-            catch
-                _:_ -> ok  % Diagnostics service might not be running in embedded mode
+            %% Start routing server for DHT operations
+            %% Use NODE_NAME from environment if available, otherwise generate hash
+            LocalNodeId = get_node_id(Realm, Port),
+            io:format("[Gateway] Using node ID: ~p (binary: ~p)~n",
+                     [binary:encode_hex(LocalNodeId), LocalNodeId]),
+            RoutingConfig = #{
+                k => 20,      % Kademlia k-bucket size
+                alpha => 3    % Kademlia concurrency parameter
+            },
+            case macula_routing_server:start_link(LocalNodeId, RoutingConfig) of
+                {ok, _RoutingPid} ->
+                    io:format("[Gateway] DHT routing server started with node ID: ~p~n",
+                             [binary:encode_hex(LocalNodeId)]),
+                    ok;
+                {error, {already_started, _}} ->
+                    io:format("[Gateway] DHT routing server already running~n"),
+                    ok;
+                {error, RoutingErr} ->
+                    io:format("[Gateway] WARNING: Failed to start routing server: ~p~n", [RoutingErr]),
+                    ok  % Continue without routing server
             end,
 
-            %% Start accepting connections
-            self() ! accept,
-
-            State = #state{
-                port = Port,
-                realm = Realm,
-                listener = Listener,
-                clients = #{},
-                subscriptions = #{},
-                registrations = #{}
+            %% Start supervisor with configuration
+            Config = #{
+                port => Port,
+                realm => Realm,
+                node_id => LocalNodeId
             },
 
-            {ok, State};
+            case macula_gateway_sup:start_link(Config) of
+                {ok, SupPid} ->
+                    io:format("[Gateway] Supervisor started: ~p~n", [SupPid]),
+
+                    %% Get child PIDs from supervisor
+                    {ok, ClientMgrPid} = macula_gateway_sup:get_client_manager(SupPid),
+                    {ok, PubSubPid} = macula_gateway_sup:get_pubsub(SupPid),
+                    {ok, RpcPid} = macula_gateway_sup:get_rpc(SupPid),
+                    {ok, MeshPid} = macula_gateway_sup:get_mesh(SupPid),
+
+                    io:format("[Gateway] Child modules started:~n"),
+                    io:format("[Gateway]   - Client Manager: ~p~n", [ClientMgrPid]),
+                    io:format("[Gateway]   - Pub/Sub: ~p~n", [PubSubPid]),
+                    io:format("[Gateway]   - RPC: ~p~n", [RpcPid]),
+                    io:format("[Gateway]   - Mesh: ~p~n", [MeshPid]),
+
+                    State = #state{
+                        port = Port,
+                        realm = Realm,
+                        node_id = LocalNodeId,
+                        listener = Listener,
+                        supervisor = SupPid,
+                        client_manager = ClientMgrPid,
+                        pubsub = PubSubPid,
+                        rpc = RpcPid,
+                        mesh = MeshPid,
+                        client_streams = #{}
+                    },
+
+                    {ok, State};
+
+                {error, SupErr} ->
+                    io:format("[Gateway] Failed to start supervisor: ~p~n", [SupErr]),
+                    {stop, {supervisor_failed, SupErr}}
+            end;
 
         {error, Reason} ->
             io:format("QUIC listen failed: ~p~n", [Reason]),
@@ -193,59 +306,64 @@ start_quic_listener(Port, Realm, CertFile, KeyFile) ->
     end.
 
 handle_call(get_stats, _From, State) ->
+    ClientMgr = State#state.client_manager,
+    Rpc = State#state.rpc,
+
+    %% Query child modules for their stats
+    {ok, AllClients} = macula_gateway_client_manager:get_all_clients(ClientMgr),
+    {ok, AllHandlers} = macula_gateway_rpc:list_handlers(Rpc),
+
     Stats = #{
         port => State#state.port,
         realm => State#state.realm,
-        clients => maps:size(State#state.clients),
-        subscriptions => maps:size(State#state.subscriptions),
-        registrations => maps:size(State#state.registrations)
+        clients => length(AllClients),
+        registrations => length(AllHandlers)
     },
     {reply, Stats, State};
+
+handle_call({register_handler, Procedure, Handler}, _From, State) ->
+    io:format("[Gateway] Registering handler for procedure: ~s (delegating to rpc)~n", [Procedure]),
+    Rpc = State#state.rpc,
+    ok = macula_gateway_rpc:register_handler(Rpc, Procedure, Handler),
+    {reply, ok, State};
+
+handle_call({unregister_handler, Procedure}, _From, State) ->
+    io:format("[Gateway] Unregistering handler for procedure: ~s (delegating to rpc)~n", [Procedure]),
+    Rpc = State#state.rpc,
+    ok = macula_gateway_rpc:unregister_handler(Rpc, Procedure),
+    {reply, ok, State};
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
+%% @doc Handle rpc_route message forwarded from connection
+handle_cast({process_rpc_route, RpcRouteMsg}, State) ->
+    io:format("[Gateway] Processing rpc_route message from connection~n"),
+    %% Extract the CALL payload from rpc_route envelope
+    #{<<"payload">> := CallMsg} = RpcRouteMsg,
+    %% Call handle_rpc_call_routed with Stream=undefined, CallMsg, RpcRouteMsg, State
+    handle_rpc_call_routed(undefined, CallMsg, RpcRouteMsg, State);
+
 handle_cast(_Request, State) ->
     {noreply, State}.
 
-handle_info(accept, #state{listener = Listener} = State) ->
-    AcceptResult = macula_quic:accept(Listener, 5000),
-    handle_accept_result(AcceptResult, State);
-
-%% Handle new stream from peer - PRIMARY handler for direct stream acceptance
-handle_info({quic, new_stream, Stream, Props}, State) ->
+%% Handle new stream created by peer (quicer message)
+handle_info({quic, new_stream, Stream, StreamProps}, State) ->
     io:format("[Gateway] ========================================~n"),
     io:format("[Gateway] NEW STREAM RECEIVED!~n"),
     io:format("[Gateway] Stream: ~p~n", [Stream]),
-    io:format("[Gateway] Props: ~p~n", [Props]),
+    io:format("[Gateway] StreamProps: ~p~n", [StreamProps]),
     io:format("[Gateway] ========================================~n"),
 
-    %% Extract Conn from Props if available
-    Conn = maps:get(conn, Props, undefined),
-
-    %% Enable active mode for stream
+    %% Set stream to active mode to receive data automatically
     case quicer:setopt(Stream, active, true) of
         ok ->
-            io:format("[Gateway] Enabled active mode for stream~n");
-        {error, SetOptErr} ->
-            io:format("[Gateway] WARNING: Failed to set active mode: ~p~n", [SetOptErr])
-    end,
-
-    %% Re-register for next stream on this connection if we have Conn ref
-    case Conn of
-        undefined ->
-            io:format("[Gateway] WARNING: No conn reference in Props, cannot re-register~n");
-        _ ->
-            StreamOpts = #{active => true},
-            case quicer:async_accept_stream(Conn, StreamOpts) of
-                {ok, Conn} ->
-                    io:format("[Gateway] Re-registered for next stream on connection~n");
-                {error, RegErr} ->
-                    io:format("[Gateway] WARNING: Failed to re-register for streams: ~p~n", [RegErr])
-            end
-    end,
-
-    {noreply, State};
+            io:format("[Gateway] Stream set to active mode~n"),
+            {noreply, State};
+        {error, Reason} ->
+            io:format("[Gateway] Failed to set stream active: ~p~n", [Reason]),
+            {noreply, State}
+    end;
 
 %% Handle data from QUIC stream (active mode)
 handle_info({quic, Data, Stream, _Flags}, State) when is_binary(Data) ->
@@ -254,84 +372,42 @@ handle_info({quic, Data, Stream, _Flags}, State) when is_binary(Data) ->
     DecodeResult = macula_protocol_decoder:decode(Data),
     handle_decoded_message(DecodeResult, Stream, State);
 
-%% Client registered
+%% Client connected - delegate to client_manager
 handle_info({client_connected, ClientPid, ClientInfo}, State) ->
-    io:format("Client connected: ~p~n", [ClientInfo]),
-
-    %% Monitor client
-    erlang:monitor(process, ClientPid),
-
-    Clients = maps:put(ClientPid, ClientInfo, State#state.clients),
-    {noreply, State#state{clients = Clients}};
-
-%% Client disconnected
-handle_info({'DOWN', _Ref, process, ClientPid, _Reason}, State) ->
-    io:format("Client disconnected: ~p~n", [ClientPid]),
-
-    %% Remove client from all subscriptions
-    Subscriptions = maps:map(fun(_Topic, Subscribers) ->
-        lists:delete(ClientPid, Subscribers)
-    end, State#state.subscriptions),
-
-    %% Remove client registrations
-    Registrations = maps:filter(fun(_Proc, Pid) ->
-        Pid =/= ClientPid
-    end, State#state.registrations),
-
-    %% Remove client
-    Clients = maps:remove(ClientPid, State#state.clients),
-
-    {noreply, State#state{
-        clients = Clients,
-        subscriptions = Subscriptions,
-        registrations = Registrations
-    }};
-
-%% Publish message (from client)
-handle_info({publish, FromPid, Topic, Payload}, State) ->
-    %% Get all subscribers to this topic
-    Subscribers = maps:get(Topic, State#state.subscriptions, []),
-
-    %% Send to all subscribers (except sender)
-    [SubPid ! {event, Topic, Payload} || SubPid <- Subscribers, SubPid =/= FromPid],
-
+    io:format("[Gateway] Client connected: ~p (delegating to client_manager)~n", [ClientInfo]),
+    ClientMgr = State#state.client_manager,
+    ok = macula_gateway_client_manager:client_connected(ClientMgr, ClientPid, ClientInfo),
     {noreply, State};
 
-%% Subscribe request
-handle_info({subscribe, ClientPid, Topic}, State) ->
-    %% Add client to topic subscribers
-    Subscribers = maps:get(Topic, State#state.subscriptions, []),
-    NewSubscribers = [ClientPid | Subscribers],
-    Subscriptions = maps:put(Topic, NewSubscribers, State#state.subscriptions),
+%% Client disconnected - delegate cleanup to all child modules
+handle_info({'DOWN', _Ref, process, ClientPid, _Reason}, State) ->
+    io:format("[Gateway] Client disconnected: ~p (delegating cleanup)~n", [ClientPid]),
 
-    %% Acknowledge subscription
-    ClientPid ! {subscribed, Topic},
+    ClientMgr = State#state.client_manager,
+    PubSub = State#state.pubsub,
+    Rpc = State#state.rpc,
 
-    {noreply, State#state{subscriptions = Subscriptions}};
+    %% Client manager handles client removal
+    macula_gateway_client_manager:client_disconnected(ClientMgr, ClientPid),
 
-%% Unsubscribe request
-handle_info({unsubscribe, ClientPid, Topic}, State) ->
-    %% Remove client from topic subscribers
-    Subscribers = maps:get(Topic, State#state.subscriptions, []),
-    NewSubscribers = lists:delete(ClientPid, Subscribers),
-    Subscriptions = maps:put(Topic, NewSubscribers, State#state.subscriptions),
-
-    %% Acknowledge unsubscription
-    ClientPid ! {unsubscribed, Topic},
-
-    {noreply, State#state{subscriptions = Subscriptions}};
-
-%% RPC Call request
-handle_info({call, FromPid, CallId, Procedure, Args}, State) ->
-    %% Find registered handler for procedure
-    case maps:get(Procedure, State#state.registrations, undefined) of
-        undefined ->
-            %% No handler registered
-            FromPid ! {call_error, CallId, <<"wamp.error.no_such_procedure">>};
-        HandlerPid ->
-            %% Forward to handler
-            HandlerPid ! {invoke, FromPid, CallId, Procedure, Args}
+    %% Clean up subscriptions in pubsub
+    case macula_gateway_pubsub:get_stream_topics(PubSub, ClientPid) of
+        {ok, Topics} ->
+            lists:foreach(fun(Topic) ->
+                macula_gateway_pubsub:unsubscribe(PubSub, ClientPid, Topic)
+            end, Topics);
+        not_found ->
+            ok
     end,
+
+    %% Clean up RPC registrations
+    {ok, Handlers} = macula_gateway_rpc:list_handlers(Rpc),
+    lists:foreach(fun
+        ({Proc, HandlerPid}) when HandlerPid =:= ClientPid ->
+            macula_gateway_rpc:unregister_handler(Rpc, Proc);
+        (_) ->
+            ok
+    end, Handlers),
 
     {noreply, State};
 
@@ -342,8 +418,52 @@ handle_info({quic, peer_needs_streams, _Conn, _StreamType}, State) ->
     {noreply, State};
 
 %% QUIC event: new_conn (connection established)
-handle_info({quic, new_conn, Conn}, State) ->
-    io:format("[Gateway] QUIC event: new_conn ~p~n", [Conn]),
+handle_info({quic, new_conn, Conn, ConnInfo}, State) ->
+    io:format("[Gateway] ========================================~n"),
+    io:format("[Gateway] NEW CONNECTION RECEIVED!~n"),
+    io:format("[Gateway] Connection: ~p~n", [Conn]),
+    io:format("[Gateway] Connection Info: ~p~n", [ConnInfo]),
+    io:format("[Gateway] ========================================~n"),
+
+    %% Complete TLS handshake to accept the connection
+    case quicer:handshake(Conn) of
+        ok ->
+            io:format("[Gateway] Connection handshake completed successfully~n"),
+            %% Start accepting streams on this connection
+            case quicer:async_accept_stream(Conn, #{}) of
+                {ok, Conn} ->
+                    io:format("[Gateway] Ready to accept streams on connection~n"),
+                    ok;
+                {error, StreamAcceptErr} ->
+                    io:format("[Gateway] WARNING: async_accept_stream failed: ~p~n", [StreamAcceptErr]),
+                    ok
+            end;
+        {ok, _} ->
+            io:format("[Gateway] Connection handshake completed successfully~n"),
+            %% Start accepting streams on this connection
+            case quicer:async_accept_stream(Conn, #{}) of
+                {ok, Conn} ->
+                    io:format("[Gateway] Ready to accept streams on connection~n"),
+                    ok;
+                {error, StreamAcceptErr} ->
+                    io:format("[Gateway] WARNING: async_accept_stream failed: ~p~n", [StreamAcceptErr]),
+                    ok
+            end;
+        {error, Reason} ->
+            io:format("[Gateway] Handshake failed: ~p~n", [Reason]),
+            ok
+    end,
+
+    %% Register for next connection
+    case quicer:async_accept(State#state.listener, #{}) of
+        {ok, _} ->
+            io:format("[Gateway] Ready for next connection~n"),
+            ok;
+        {error, AcceptErr} ->
+            io:format("[Gateway] WARNING: async_accept failed: ~p~n", [AcceptErr]),
+            ok
+    end,
+
     {noreply, State};
 
 %% QUIC event: shutdown (connection shutting down)
@@ -357,45 +477,30 @@ handle_info({quic, transport_shutdown, Conn, Reason}, State) ->
     {noreply, State};
 
 %% DHT query (find_node, find_value, store)
-handle_info({dht_query, FromPid, _QueryType, QueryData}, State) ->
-    %% Decode the query message and handle via routing server
-    case macula_protocol_decoder:decode(QueryData) of
-        {ok, {MessageType, Message}} ->
-            %% Forward to DHT routing server
-            Reply = macula_routing_server:handle_message(macula_routing_server, Message),
-
-            %% Encode reply based on message type
-            ReplyData = case MessageType of
-                find_node ->
-                    macula_protocol_encoder:encode(find_node_reply, Reply);
-                find_value ->
-                    macula_protocol_encoder:encode(find_value_reply, Reply);
-                store ->
-                    macula_protocol_encoder:encode(store, Reply);
-                _ ->
-                    macula_protocol_encoder:encode(reply, #{error => <<"Unknown DHT message type">>})
-            end,
-
-            %% Send reply back to client
-            FromPid ! {dht_reply, ReplyData};
-
-        {error, Reason} ->
-            io:format("DHT query decode error: ~p~n", [Reason]),
-            FromPid ! {dht_reply, macula_protocol_encoder:encode(reply, #{error => <<"Invalid query">>})}
-    end,
-
+handle_info({dht_query, FromPid, QueryType, QueryData}, State) ->
+    %% Delegate to DHT module
+    _Result = macula_gateway_dht:handle_query(FromPid, QueryType, QueryData),
     {noreply, State};
 
 handle_info(Info, State) ->
     io:format("[Gateway] WARNING: Unhandled handle_info message: ~p~n", [Info]),
     {noreply, State}.
 
-terminate(_Reason, #state{listener = Listener}) ->
+terminate(_Reason, #state{listener = Listener, supervisor = SupPid}) ->
     %% Close listener
     case Listener of
         undefined -> ok;
         _ -> macula_quic:close(Listener)
     end,
+
+    %% Stop supervisor (will stop all children: client_manager, pubsub, rpc)
+    case SupPid of
+        undefined -> ok;
+        _ ->
+            erlang:unlink(SupPid),
+            exit(SupPid, shutdown)
+    end,
+
     ok.
 
 %%%===================================================================
@@ -403,99 +508,191 @@ terminate(_Reason, #state{listener = Listener}) ->
 %%%===================================================================
 
 %% @doc Handle CONNECT message from client.
-handle_connect(Stream, ConnectMsg, State) ->
-    RealmId = maps:get(realm_id, ConnectMsg),
-    case RealmId =:= State#state.realm of
-        true ->
-            ClientInfo = #{
-                realm => RealmId,
-                node_id => maps:get(node_id, ConnectMsg),
-                capabilities => maps:get(capabilities, ConnectMsg, [])
-            },
-            io:format("[Gateway] Client connected: ~p~n", [ClientInfo]),
-            {noreply, State};
-        false ->
-            io:format("[Gateway] Realm mismatch: ~p != ~p~n", [RealmId, State#state.realm]),
-            macula_quic:close(Stream),
-            {noreply, State}
-    end.
+handle_connect(Stream, ConnectMsg, #state{realm = Realm} = State) ->
+    RealmId = maps:get(<<"realm_id">>, ConnectMsg),
+    handle_connect_realm(RealmId =:= Realm, Stream, ConnectMsg, State).
+
+%% @doc Process CONNECT with valid realm (pattern matching on boolean).
+handle_connect_realm(true, Stream, ConnectMsg, State) ->
+    RealmId = maps:get(<<"realm_id">>, ConnectMsg),
+    NodeId = maps:get(<<"node_id">>, ConnectMsg),
+    %% Extract and parse endpoint from CONNECT message for peer-to-peer connections
+    Endpoint = maps:get(<<"endpoint">>, ConnectMsg, undefined),
+    Address = parse_endpoint(Endpoint),
+
+    ClientInfo = #{
+        realm => RealmId,
+        node_id => NodeId,
+        capabilities => maps:get(<<"capabilities">>, ConnectMsg, []),
+        endpoint => Endpoint,
+        address => Address
+    },
+    io:format("[Gateway] Client connected: ~p~n", [ClientInfo]),
+
+    %% HTTP/3 streams are bidirectional - we can send messages back on the same stream
+    %% Store the client's incoming stream for sending replies (enables client-only mode)
+    %% Also store endpoint address for creating mesh connections when needed
+    ClientStreams = State#state.client_streams,
+    NewClientStreams = ClientStreams#{NodeId => Stream},
+    io:format("[Gateway] Stored client stream for node ~p (bidirectional communication)~n",
+             [binary:encode_hex(NodeId)]),
+
+    %% Connection management now handled by macula_gateway_mesh module
+    NewState = State#state{client_streams = NewClientStreams},
+
+    %% Add peer to DHT routing table with real address
+    NodeInfo = #{
+        node_id => NodeId,
+        address => Address  % Use real parsed address instead of placeholder
+    },
+    case whereis(macula_routing_server) of
+        undefined ->
+            io:format("[Gateway] WARNING: Routing server not running, cannot add peer~n");
+        RoutingServerPid ->
+            io:format("[Gateway] Adding peer to routing table: ~p~n", [NodeId]),
+            macula_routing_server:add_node(RoutingServerPid, NodeInfo),
+            io:format("[Gateway] Peer added to routing table~n")
+    end,
+
+    %% Send PONG acknowledgment back to keep stream alive for bidirectional communication
+    PongMsg = #{
+        timestamp => erlang:system_time(millisecond),
+        server_time => erlang:system_time(millisecond)
+    },
+    PongBinary = macula_protocol_encoder:encode(pong, PongMsg),
+    case macula_quic:send(Stream, PongBinary) of
+        ok ->
+            io:format("[Gateway] Sent PONG acknowledgment to client ~p~n",
+                     [binary:encode_hex(NodeId)]);
+        {error, PongErr} ->
+            io:format("[Gateway] WARNING: Failed to send PONG: ~p~n", [PongErr])
+    end,
+
+    {noreply, NewState};
+handle_connect_realm(false, Stream, ConnectMsg, State) ->
+    RealmId = maps:get(<<"realm_id">>, ConnectMsg),
+    io:format("[Gateway] Realm mismatch: ~p != ~p~n", [RealmId, State#state.realm]),
+    macula_quic:close(Stream),
+    {noreply, State}.
 
 %% @doc Handle DHT STORE message.
-handle_dht_store(_Stream, StoreMsg, State) ->
-    io:format("[Gateway] Processing STORE message: ~p~n", [StoreMsg]),
-    %% Forward to routing server
-    try
-        Reply = macula_routing_server:handle_message(macula_routing_server, StoreMsg),
-        io:format("[Gateway] STORE processed, reply: ~p~n", [Reply]),
-        %% STORE doesn't require a response to be sent back
-        {noreply, State}
-    catch
-        _:Error ->
-            io:format("[Gateway] STORE processing error: ~p~n", [Error]),
-            {noreply, State}
-    end.
+handle_dht_store(Stream, StoreMsg, State) ->
+    %% Delegate to DHT module
+    _Result = macula_gateway_dht:handle_store(Stream, StoreMsg),
+    {noreply, State}.
 
 %% @doc Handle DHT FIND_VALUE message.
 handle_dht_find_value(Stream, FindValueMsg, State) ->
-    io:format("[Gateway] Processing FIND_VALUE message: ~p~n", [FindValueMsg]),
-    %% Forward to routing server
-    try
-        Reply = macula_routing_server:handle_message(macula_routing_server, FindValueMsg),
-        io:format("[Gateway] FIND_VALUE processed, reply: ~p~n", [Reply]),
-        %% Send reply back over stream
-        ReplyBinary = macula_protocol_encoder:encode(find_value_reply, Reply),
-        macula_quic:send(Stream, ReplyBinary),
-        {noreply, State}
-    catch
-        _:Error ->
-            io:format("[Gateway] FIND_VALUE processing error: ~p~n", [Error]),
-            {noreply, State}
-    end.
+    %% Delegate to DHT module
+    _Result = macula_gateway_dht:handle_find_value(Stream, FindValueMsg),
+    {noreply, State}.
 
 %% @doc Handle DHT FIND_NODE message.
 handle_dht_find_node(Stream, FindNodeMsg, State) ->
-    io:format("[Gateway] Processing FIND_NODE message: ~p~n", [FindNodeMsg]),
-    %% Forward to routing server
-    try
-        Reply = macula_routing_server:handle_message(macula_routing_server, FindNodeMsg),
-        io:format("[Gateway] FIND_NODE processed, reply: ~p~n", [Reply]),
-        %% Send reply back over stream
-        ReplyBinary = macula_protocol_encoder:encode(find_node_reply, Reply),
-        macula_quic:send(Stream, ReplyBinary),
-        {noreply, State}
-    catch
-        _:Error ->
-            io:format("[Gateway] FIND_NODE processing error: ~p~n", [Error]),
-            {noreply, State}
+    %% Delegate to DHT module
+    _Result = macula_gateway_dht:handle_find_node(Stream, FindNodeMsg),
+    {noreply, State}.
+
+%% @doc Handle RPC call message received via DHT routing.
+%% Processes the call locally and sends REPLY back via DHT routing.
+handle_rpc_call_routed(_Stream, CallMsg, RpcRouteMsg, State) ->
+    %% Delegate to RPC router module
+    _Result = macula_gateway_rpc_router:handle_routed_call(
+        CallMsg, RpcRouteMsg, State#state.node_id, State#state.rpc, State#state.mesh
+    ),
+    {noreply, State}.
+
+%% @doc Handle routed REPLY message delivered locally.
+%% Forward the REPLY to the local connection process.
+handle_rpc_reply_routed(ReplyMsg, RpcRouteMsg, State) ->
+    %% Delegate to RPC router module
+    _Result = macula_gateway_rpc_router:handle_routed_reply(
+        ReplyMsg, RpcRouteMsg, State#state.node_id, State#state.client_streams
+    ),
+    {noreply, State}.
+
+%% @doc Handle RPC call message (legacy direct handling).
+handle_rpc_call(Stream, CallMsg, State) ->
+    io:format("[Gateway] Processing RPC CALL message: ~p~n", [CallMsg]),
+
+    %% Extract call data (CallMsg has binary keys from msgpack)
+    Procedure = maps:get(<<"procedure">>, CallMsg),
+    CallId = maps:get(<<"call_id">>, CallMsg),
+    ArgsJson = maps:get(<<"args">>, CallMsg),
+
+    io:format("[Gateway] Procedure: ~s, CallId: ~p~n", [Procedure, CallId]),
+
+    %% Look up handler (delegate to rpc module)
+    Rpc = State#state.rpc,
+    case macula_gateway_rpc:get_handler(Rpc, Procedure) of
+        not_found ->
+            %% No handler registered
+            io:format("[Gateway] No handler found for procedure: ~s~n", [Procedure]),
+            ErrorReply = #{
+                call_id => CallId,
+                error => #{
+                    code => <<"no_such_procedure">>,
+                    message => <<"No handler registered for ", Procedure/binary>>
+                }
+            },
+            ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+            macula_quic:send(Stream, ReplyBinary),
+            {noreply, State};
+
+        {ok, Handler} ->
+            %% Decode args from JSON
+            try
+                Args = json:decode(ArgsJson),
+                io:format("[Gateway] Decoded args: ~p~n", [Args]),
+
+                %% Invoke handler
+                io:format("[Gateway] Invoking handler~n"),
+                Result = Handler(Args),
+                io:format("[Gateway] Handler result: ~p~n", [Result]),
+
+                %% Unwrap result tuple if needed
+                ResultMap = unwrap_result_to_map(Result),
+
+                %% Send reply (don't close stream - let connection idle timeout handle cleanup)
+                Reply = #{
+                    call_id => CallId,
+                    result => encode_json(ResultMap)
+                },
+                SuccessReplyBinary = macula_protocol_encoder:encode(reply, Reply),
+                SendResult = macula_quic:send(Stream, SuccessReplyBinary),
+                io:format("[Gateway] Sent reply (result: ~p, stream: ~p, size: ~p bytes)~n",
+                         [SendResult, Stream, byte_size(SuccessReplyBinary)]),
+                {noreply, State}
+            catch
+                Class:Reason:Stacktrace ->
+                    io:format("[Gateway] Handler error: ~p:~p~n~p~n", [Class, Reason, Stacktrace]),
+                    ErrorReply = #{
+                        call_id => CallId,
+                        error => #{
+                            code => <<"handler_error">>,
+                            message => iolist_to_binary(io_lib:format("~p:~p", [Class, Reason]))
+                        }
+                    },
+                    ErrorReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+                    macula_quic:send(Stream, ErrorReplyBinary),
+                    {noreply, State}
+            end
     end.
 
+%% @doc Encode map/list to JSON binary.
+-spec encode_json(map() | list()) -> binary().
+encode_json(Data) ->
+    macula_utils:encode_json(Data).
+
+%%%===================================================================
+%%% Mesh Connection Management
+%%%===================================================================
+
+%% @doc Get or create a QUIC connection to a peer node for message forwarding.
+%% Opens a NEW stream for each message (QUIC best practice).
 %% @doc Handle successful connection acceptance.
 %% Register for incoming streams with active mode enabled.
-handle_accept_result({ok, Conn}, State) ->
-    io:format("[Gateway] Accepted connection: ~p~n", [Conn]),
-
-    %% Register for incoming streams (connection owner receives events)
-    StreamOpts = #{active => true},
-    case quicer:async_accept_stream(Conn, StreamOpts) of
-        {ok, Conn} ->
-            io:format("[Gateway] Registered for incoming streams (active mode)~n");
-        {error, Reason} ->
-            io:format("[Gateway] WARNING: Failed to register for streams: ~p~n", [Reason])
-    end,
-
-    %% Continue accepting more connections
-    self() ! accept,
-    {noreply, State};
-
-%% @doc Handle accept timeout - continue accepting.
-handle_accept_result({error, timeout}, State) ->
-    self() ! accept,
-    {noreply, State};
-
-%% @doc Handle accept error - stop gateway.
-handle_accept_result({error, Reason}, State) ->
-    io:format("Accept error: ~p~n", [Reason]),
-    {stop, {accept_error, Reason}, State}.
+%% @doc Manual accept functions removed - quicer_server handles connections automatically
 
 %% @doc Handle decoded CONNECT message.
 handle_decoded_message({ok, {connect, ConnectMsg}}, Stream, State) ->
@@ -520,6 +717,63 @@ handle_decoded_message({ok, {find_node, FindNodeMsg}}, Stream, State) ->
     io:format("[Gateway] FIND_NODE message: ~p~n", [FindNodeMsg]),
     handle_dht_find_node(Stream, FindNodeMsg, State);
 
+%% @doc Handle RPC route message (multi-hop DHT routing).
+handle_decoded_message({ok, {rpc_route, RpcRouteMsg}}, Stream, State) ->
+    io:format("[Gateway] *** RECEIVED RPC_ROUTE MESSAGE ***~n"),
+    io:format("[Gateway] RPC route message: ~p~n", [RpcRouteMsg]),
+
+    LocalNodeId = State#state.node_id,
+    RoutingServerPid = whereis(macula_routing_server),
+
+    case macula_rpc_routing:route_or_deliver(LocalNodeId, RpcRouteMsg, RoutingServerPid) of
+        {deliver, <<"call">>, CallMsg} ->
+            %% Unwrap and process CALL locally (MessagePack returns binary, not atom)
+            io:format("[Gateway] RPC route: delivering CALL locally~n"),
+            handle_rpc_call_routed(Stream, CallMsg, RpcRouteMsg, State);
+
+        {deliver, <<"reply">>, ReplyMsg} ->
+            %% Routed REPLY delivered - forward to connection for matching with pending call
+            io:format("[Gateway] Routed REPLY delivered locally, forwarding to connection~n"),
+            handle_rpc_reply_routed(ReplyMsg, RpcRouteMsg, State);
+
+        {forward, NextHopNodeInfo, UpdatedRpcRouteMsg} ->
+            %% Forward to next hop through mesh (delegate to RPC router)
+            io:format("[Gateway] RPC route: forwarding to next hop~n"),
+            _Result = macula_gateway_rpc_router:forward_rpc_route(
+                NextHopNodeInfo, UpdatedRpcRouteMsg, State#state.mesh
+            ),
+            {noreply, State};
+
+        {error, Reason} ->
+            %% Routing error (max hops, no route, etc.)
+            io:format("[Gateway] RPC route error: ~p~n", [Reason]),
+            {noreply, State}
+    end;
+
+%% @doc Handle RPC call message (legacy direct call - will be deprecated).
+handle_decoded_message({ok, {call, CallMsg}}, Stream, State) ->
+    io:format("[Gateway] *** RECEIVED RPC CALL (DIRECT) ***~n"),
+    io:format("[Gateway] Call message: ~p~n", [CallMsg]),
+    handle_rpc_call(Stream, CallMsg, State);
+
+%% @doc Handle SUBSCRIBE message.
+handle_decoded_message({ok, {subscribe, SubMsg}}, Stream, State) ->
+    io:format("[Gateway] *** RECEIVED SUBSCRIBE MESSAGE ***~n"),
+    io:format("[Gateway] Subscribe message: ~p~n", [SubMsg]),
+    handle_subscribe(Stream, SubMsg, State);
+
+%% @doc Handle UNSUBSCRIBE message.
+handle_decoded_message({ok, {unsubscribe, UnsubMsg}}, Stream, State) ->
+    io:format("[Gateway] *** RECEIVED UNSUBSCRIBE MESSAGE ***~n"),
+    io:format("[Gateway] Unsubscribe message: ~p~n", [UnsubMsg]),
+    handle_unsubscribe(Stream, UnsubMsg, State);
+
+%% @doc Handle PUBLISH message.
+handle_decoded_message({ok, {publish, PubMsg}}, Stream, State) ->
+    io:format("[Gateway] *** RECEIVED PUBLISH MESSAGE ***~n"),
+    io:format("[Gateway] Publish message: ~p~n", [PubMsg]),
+    handle_publish(Stream, PubMsg, State);
+
 %% @doc Handle other decoded message types.
 handle_decoded_message({ok, {Type, Other}}, _Stream, State) ->
     io:format("[Gateway] Received message type ~p: ~p~n", [Type, Other]),
@@ -529,4 +783,120 @@ handle_decoded_message({ok, {Type, Other}}, _Stream, State) ->
 handle_decoded_message({error, DecodeErr}, _Stream, State) ->
     io:format("[Gateway] !!! DECODE ERROR: ~p !!!~n", [DecodeErr]),
     {noreply, State}.
+
+%%%===================================================================
+%%% Pub/Sub Handlers
+%%%===================================================================
+
+%% @doc Handle subscription to topics - delegate to pubsub module.
+handle_subscribe(Stream, SubMsg, State) ->
+    Topics = maps:get(<<"topics">>, SubMsg, []),
+    io:format("[Gateway] Stream ~p subscribing to topics: ~p (delegating to pubsub)~n", [Stream, Topics]),
+
+    PubSub = State#state.pubsub,
+
+    %% Subscribe to each topic via pubsub module
+    lists:foreach(fun(Topic) ->
+        macula_gateway_pubsub:subscribe(PubSub, Stream, Topic)
+    end, Topics),
+
+    {noreply, State}.
+
+%% @doc Handle unsubscribe from topics - delegate to pubsub module.
+handle_unsubscribe(Stream, UnsubMsg, State) ->
+    Topics = maps:get(<<"topics">>, UnsubMsg, []),
+    io:format("[Gateway] Stream ~p unsubscribing from topics: ~p (delegating to pubsub)~n", [Stream, Topics]),
+
+    PubSub = State#state.pubsub,
+
+    %% Unsubscribe from each topic via pubsub module
+    lists:foreach(fun(Topic) ->
+        macula_gateway_pubsub:unsubscribe(PubSub, Stream, Topic)
+    end, Topics),
+
+    {noreply, State}.
+
+%% @doc Handle publish message - distribute to all topic subscribers via pubsub module.
+handle_publish(_PublisherStream, PubMsg, State) ->
+    Topic = maps:get(<<"topic">>, PubMsg),
+    io:format("[Gateway] Publishing message to topic: ~s (delegating to pubsub)~n", [Topic]),
+
+    PubSub = State#state.pubsub,
+
+    %% Get matching subscribers from pubsub module
+    {ok, Subscribers} = macula_gateway_pubsub:get_subscribers(PubSub, Topic),
+
+    io:format("[Gateway] Found ~p subscribers for topic ~s~n", [length(Subscribers), Topic]),
+
+    %% Encode and send to each subscriber
+    PubBinary = macula_protocol_encoder:encode(publish, PubMsg),
+    lists:foreach(
+        fun(SubscriberStream) ->
+            case macula_quic:send(SubscriberStream, PubBinary) of
+                ok ->
+                    io:format("[Gateway] Successfully sent to stream ~p~n", [SubscriberStream]);
+                {error, Reason} ->
+                    io:format("[Gateway] Failed to send to stream ~p: ~p~n",
+                              [SubscriberStream, Reason])
+            end
+        end,
+        Subscribers
+    ),
+
+    io:format("[Gateway] Finished distributing message to ~p subscribers~n", [length(Subscribers)]),
+
+    {noreply, State}.
+
+%%%===================================================================
+%%% Internal Helper Functions
+%%%===================================================================
+
+%% @private
+%% @doc Notify health server that gateway is ready (if health server is running).
+notify_health_server_ready() ->
+    check_and_notify_health(whereis(macula_gateway_health)).
+
+check_and_notify_health(undefined) ->
+    ok;  % Health server not running (embedded mode)
+check_and_notify_health(_Pid) ->
+    macula_gateway_health:set_ready(true).
+
+%% @private
+%% @doc Register diagnostics procedures (if diagnostics service is running).
+register_diagnostics_procedures(GatewayPid) ->
+    check_and_register_diagnostics(whereis(macula_gateway_diagnostics), GatewayPid).
+
+check_and_register_diagnostics(undefined, _GatewayPid) ->
+    ok;  % Diagnostics service not running (embedded mode)
+check_and_register_diagnostics(_Pid, GatewayPid) ->
+    macula_gateway_diagnostics:register_procedures(GatewayPid).
+
+%% @doc Parse endpoint URL to address tuple.
+%% Converts "https://host:port" to {{IP_tuple}, Port}
+%% Crashes on parsing errors - indicates invalid endpoint configuration.
+-spec parse_endpoint(undefined | binary()) -> {{byte(), byte(), byte(), byte()}, inet:port_number()}.
+parse_endpoint(undefined) ->
+    {{0,0,0,0}, 0};
+parse_endpoint(Endpoint) when is_binary(Endpoint) ->
+    %% Parse URL using uri_string (let it crash on invalid URLs)
+    case uri_string:parse(Endpoint) of
+        #{host := Host, port := Port} when is_integer(Port) ->
+            %% Resolve hostname to IP address (let it crash on resolution errors)
+            HostStr = binary_to_list(Host),
+            {ok, IPTuple} = inet:getaddr(HostStr, inet),
+            {IPTuple, Port};
+        #{host := Host} ->
+            %% No port specified, use default 9443
+            HostStr = binary_to_list(Host),
+            {ok, IPTuple} = inet:getaddr(HostStr, inet),
+            {IPTuple, 9443};
+        _ ->
+            io:format("[Gateway] Invalid endpoint URL format: ~s~n", [Endpoint]),
+            error({invalid_endpoint_format, Endpoint})
+    end.
+
+%% @doc Unwrap result to map format.
+unwrap_result_to_map({ok, Map}) when is_map(Map) -> Map;
+unwrap_result_to_map(Map) when is_map(Map) -> Map;
+unwrap_result_to_map(Other) -> #{value => Other}.
 

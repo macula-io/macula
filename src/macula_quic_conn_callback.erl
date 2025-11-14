@@ -6,7 +6,7 @@
 %%%-------------------------------------------------------------------
 -module(macula_quic_conn_callback).
 
--behavior(quicer_connection).
+-behaviour(quicer_connection).
 
 %% Callback init
 -export([init/1]).
@@ -41,24 +41,20 @@ init(ConnOpts) when is_list(ConnOpts) ->
     init(maps:from_list(ConnOpts)).
 
 %% @doc Handle new connection
-%% Spawns dedicated stream acceptor process for this connection
+%% With quicer_server, streams are delivered automatically via new_stream/3
 new_conn(Conn, #{version := Vsn}, #{gateway_pid := GatewayPid} = State) ->
     io:format("[ConnCallback] New connection: ~p (QUIC v~p)~n", [Conn, Vsn]),
+    io:format("[ConnCallback] Gateway PID: ~p~n", [GatewayPid]),
 
-    %% Spawn stream acceptor process
-    case macula_quic_stream_acceptor:start_link(GatewayPid, Conn) of
-        {ok, AcceptorPid} ->
-            io:format("[ConnCallback] Stream acceptor started: ~p~n", [AcceptorPid]),
-            %% Complete handshake
-            ok = quicer:async_handshake(Conn),
-            {ok, State#{
-                conn => Conn,
-                stream_acceptor => AcceptorPid
-            }};
-        {error, Reason} = Error ->
-            io:format("[ConnCallback] Failed to start stream acceptor: ~p~n", [Reason]),
-            Error
-    end;
+    %% quicer_server will automatically deliver streams via new_stream/3 callback
+    %% No need to spawn stream acceptor - quicer_server handles it
+    io:format("[ConnCallback] Using quicer_server automatic stream delivery~n"),
+
+    %% Store connection and gateway_pid in state
+    {ok, State#{
+        conn => Conn,
+        gateway_pid => GatewayPid
+    }};
 new_conn(Conn, ConnProps, State) ->
     %% Fallback if gateway_pid not provided
     io:format("[ConnCallback] New connection without gateway_pid: ~p~n", [Conn]),
@@ -110,18 +106,25 @@ resumed(_Conn, _Data, State) ->
 nst_received(_Conn, _Data, State) ->
     {stop, no_nst_for_server, State}.
 
-%% @doc Handle new stream when there's no stream acceptor waiting (orphan stream)
-%% This shouldn't happen if stream acceptor is working correctly
-new_stream(Stream, #{is_orphan := true} = Props, #{gateway_pid := GatewayPid} = State) ->
-    io:format("[ConnCallback] WARNING: Orphan stream received: ~p~n", [Stream]),
-    io:format("[ConnCallback] Stream props: ~p~n", [Props]),
+%% @doc Handle new stream
+%% With quicer_server, ALL streams are delivered here (not just orphans)
+%% Forward them to the gateway for processing
+new_stream(Stream, Props, #{gateway_pid := GatewayPid} = State) ->
+    io:format("[ConnCallback] ========================================~n"),
+    io:format("[ConnCallback] NEW STREAM RECEIVED!~n"),
+    io:format("[ConnCallback] Stream: ~p~n", [Stream]),
+    io:format("[ConnCallback] Props: ~p~n", [Props]),
+    io:format("[ConnCallback] ========================================~n"),
 
-    %% Forward directly to gateway as fallback
+    %% Forward stream to gateway
+    io:format("[ConnCallback] Forwarding stream to gateway: ~p~n", [GatewayPid]),
     GatewayPid ! {quic_stream, Stream, Props},
 
     {ok, State};
 new_stream(Stream, Props, State) ->
-    io:format("[ConnCallback] Unexpected new_stream call: ~p, Props: ~p~n", [Stream, Props]),
+    %% Fallback if no gateway_pid in state
+    io:format("[ConnCallback] WARNING: Stream received but no gateway_pid in state~n"),
+    io:format("[ConnCallback] Stream: ~p, Props: ~p~n", [Stream, Props]),
     {ok, State}.
 
 %% @doc Handle other messages

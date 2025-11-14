@@ -182,16 +182,10 @@ handle_cast({publish, Message}, State) ->
     } = State,
 
     %% Create discovery function (use cache if available)
-    DiscoveryFn = case DiscoveryFun of
-        undefined -> fun(_Pattern) -> {ok, []} end;
-        Fun -> Fun
-    end,
+    DiscoveryFn = get_discovery_fn(DiscoveryFun),
 
     %% Create send function (default: no-op)
-    SendFn = case SendFun of
-        undefined -> fun(_Msg, _Addr) -> ok end;
-        Fn -> Fn
-    end,
+    SendFn = get_send_fn(SendFun),
 
     %% Publish to local and remote
     _Results = macula_pubsub_delivery:publish(Message, Registry, DiscoveryFn, SendFn),
@@ -219,3 +213,11 @@ terminate(_Reason, _State) ->
     [macula_pubsub_registry:subscription()].
 get_all_subscriptions(#{subscriptions := Subs}) ->
     Subs.
+
+%% @doc Get discovery function or default.
+get_discovery_fn(undefined) -> fun(_Pattern) -> {ok, []} end;
+get_discovery_fn(Fun) -> Fun.
+
+%% @doc Get send function or default.
+get_send_fn(undefined) -> fun(_Msg, _Addr) -> ok end;
+get_send_fn(Fn) -> Fn.

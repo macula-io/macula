@@ -59,15 +59,16 @@ add_member(#{members := Members} = List, Member) ->
 -spec update_member(member_list(), macula_membership_member:member()) -> member_list().
 update_member(#{members := Members} = List, NewMember) ->
     NodeId = macula_membership_member:node_id(NewMember),
-    case maps:get(NodeId, Members, undefined) of
-        undefined ->
-            %% Not present, add it
-            List#{members => Members#{NodeId => NewMember}};
-        OldMember ->
-            %% Merge with existing
-            Merged = macula_membership_member:merge(NewMember, OldMember),
-            List#{members => Members#{NodeId => Merged}}
-    end.
+    update_or_add_member(maps:get(NodeId, Members, undefined), List, Members, NodeId, NewMember).
+
+%% @doc Add new member or merge with existing.
+update_or_add_member(undefined, List, Members, NodeId, NewMember) ->
+    %% Not present, add it
+    List#{members => Members#{NodeId => NewMember}};
+update_or_add_member(OldMember, List, Members, NodeId, NewMember) ->
+    %% Merge with existing
+    Merged = macula_membership_member:merge(NewMember, OldMember),
+    List#{members => Members#{NodeId => Merged}}.
 
 %% @doc Remove a member from the list.
 -spec remove_member(member_list(), binary()) -> member_list().
@@ -77,10 +78,11 @@ remove_member(#{members := Members} = List, NodeId) ->
 %% @doc Get a member by node ID.
 -spec get_member(member_list(), binary()) -> {ok, macula_membership_member:member()} | not_found.
 get_member(#{members := Members}, NodeId) ->
-    case maps:get(NodeId, Members, undefined) of
-        undefined -> not_found;
-        Member -> {ok, Member}
-    end.
+    get_member_result(maps:get(NodeId, Members, undefined)).
+
+%% @doc Convert maps:get result to API result.
+get_member_result(undefined) -> not_found;
+get_member_result(Member) -> {ok, Member}.
 
 %% @doc Get all alive members.
 -spec get_alive_members(member_list()) -> [macula_membership_member:member()].

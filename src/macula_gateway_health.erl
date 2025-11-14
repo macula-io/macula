@@ -17,6 +17,8 @@
 
 -behaviour(gen_server).
 
+-include("macula_config.hrl").
+
 %% API
 -export([
     start_link/1,
@@ -40,8 +42,6 @@
     ready :: boolean(),
     started_at :: integer()
 }).
-
--define(DEFAULT_HEALTH_PORT, 8080).
 
 %%%===================================================================
 %%% API Functions
@@ -177,16 +177,18 @@ handle_request(Socket) ->
 %% @private
 parse_http_request(Data) ->
     %% Extract path from HTTP request line like "GET /path HTTP/1.1\r\n..."
-    case binary:split(Data, <<" ">>, [global]) of
-        [<<"GET">>, Path | _Rest] ->
-            %% Remove query string if present
-            case binary:split(Path, <<"?">>) of
-                [PathOnly | _] -> PathOnly;
-                _ -> Path
-            end;
-        _ ->
-            <<"/">>
-    end.
+    extract_path(binary:split(Data, <<" ">>, [global])).
+
+%% @doc Extract path from HTTP request parts.
+extract_path([<<"GET">>, Path | _Rest]) ->
+    %% Remove query string if present
+    strip_query_string(binary:split(Path, <<"?">>));
+extract_path(_) ->
+    <<"/">>.
+
+%% @doc Strip query string from path.
+strip_query_string([PathOnly | _]) -> PathOnly;
+strip_query_string(_) -> <<"/">>.
 
 %% @private
 health_response() ->

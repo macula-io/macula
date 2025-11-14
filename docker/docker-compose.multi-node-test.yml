@@ -39,7 +39,8 @@ services:
       - REGISTRY_ENDPOINT=https://registry.macula.test:9443
       - PROVIDER_MULTIPLIER=2
     ports:
-      - "9001:9001"
+      - "29443:9443"  # QUIC server for peer-to-peer
+      - "28080:8080"  # Health check
     networks:
       macula_test:
         ipv4_address: 172.21.0.3
@@ -60,7 +61,8 @@ services:
       - REGISTRY_ENDPOINT=https://registry.macula.test:9443
       - PROVIDER_MULTIPLIER=3
     ports:
-      - "9002:9002"
+      - "39443:9443"  # QUIC server for peer-to-peer
+      - "38080:8080"  # Health check
     networks:
       macula_test:
         ipv4_address: 172.21.0.4
@@ -81,7 +83,8 @@ services:
       - REGISTRY_ENDPOINT=https://registry.macula.test:9443
       - PROVIDER_MULTIPLIER=4
     ports:
-      - "9003:9003"
+      - "49443:9443"  # QUIC server for peer-to-peer
+      - "48080:8080"  # Health check
     networks:
       macula_test:
         ipv4_address: 172.21.0.5
@@ -97,11 +100,13 @@ services:
       - macula-provider2
       - macula-provider3
     environment:
-      - NODE_TYPE=client
       - NODE_NAME=client
       - NODE_HOST=client.macula.test
       - ERLANG_COOKIE=macula_test
-      - REGISTRY_ENDPOINT=https://registry.macula.test:9443
+      - REGISTRY_URL=https://registry.macula.test:9443
+      - REALM_ID=com.example.realm
+    entrypoint: []
+    command: ["/macula/docker/test_rpc_client.erl"]
     networks:
       macula_test:
         ipv4_address: 172.21.0.10
