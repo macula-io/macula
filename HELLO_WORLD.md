@@ -44,7 +44,7 @@ end
 Macula.PubSub.subscribe("chat.room.general", self())
 Macula.PubSub.publish("chat.room.general", %{
   username: "Alice",
-  message: "Hello distributed world!"
+  message: "Hello, Macula!"
 })
 ```
 
