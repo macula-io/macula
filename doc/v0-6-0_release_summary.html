@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.6.0">
+
+
+    <title>v0.6.0 Release Summary — macula v0.6.0</title>
+
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-4BE190E4.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.6.0
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-extra" id="main" data-type="extras">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>Macula v0.6.0 Release Summary</h1>
+
+
+      <a href="https://github.com/macula-io/macula/blob/0.6.0/docs/V0.6.0_RELEASE_SUMMARY.md#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+<p><strong>Release Date:</strong> 2025-11-15
+<strong>Status:</strong> ✅ Ready for Hex publication</p><hr class="thin"/><h2 id="what-s-in-v0-6-0" class="section-heading"><a href="#what-s-in-v0-6-0" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">What's in v0.6.0</span></h2><h3 id="breaking-changes" class="section-heading"><a href="#breaking-changes" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Breaking Changes</span></h3><ul><li><strong>Environment Variable Rename:</strong> <code class="inline">GATEWAY_REALM</code> → <code class="inline">MACULA_REALM</code><ul><li>Consistent naming across all <code class="inline">MACULA_*</code> environment variables</li><li>Applies to both gateway mode and edge peer mode</li></ul></li></ul><h3 id="documentation-improvements" class="section-heading"><a href="#documentation-improvements" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Documentation Improvements</span></h3><ul><li><strong>New:</strong> Comprehensive Kademlia DHT Architecture documentation<ul><li>Location: <code class="inline">docs/KADEMLIA_DHT_ARCHITECTURE.md</code></li><li>380 lines covering XOR metrics, k-buckets, DHT operations, and Macula-specific adaptations</li></ul></li></ul><h3 id="migration-path" class="section-heading"><a href="#migration-path" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Migration Path</span></h3><p>Simple find-and-replace for environment variables:</p><p><strong>Before (v0.5.0):</strong></p><pre><code class="makeup bash" translate="no"><span class="">export GATEWAY_REALM=my-app
+</span></code></pre><p><strong>After (v0.6.0):</strong></p><pre><code class="makeup bash" translate="no"><span class="">export MACULA_REALM=my-app
+</span></code></pre><p><strong>Elixir/Phoenix runtime.exs:</strong></p><pre><code class="makeup elixir" translate="no"><span class="c1"># Before</span><span class="w">
+</span><span class="nc">System</span><span class="o">.</span><span class="n">put_env</span><span class="p" data-group-id="5787651167-1">(</span><span class="s">&quot;GATEWAY_REALM&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">realm</span><span class="p" data-group-id="5787651167-1">)</span><span class="w">
+
+</span><span class="c1"># After</span><span class="w">
+</span><span class="nc">System</span><span class="o">.</span><span class="n">put_env</span><span class="p" data-group-id="5787651167-2">(</span><span class="s">&quot;MACULA_REALM&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">realm</span><span class="p" data-group-id="5787651167-2">)</span></code></pre><hr class="thin"/><h2 id="pre-release-checklist" class="section-heading"><a href="#pre-release-checklist" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Pre-Release Checklist</span></h2><h3 id="completed" class="section-heading"><a href="#completed" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">✅ Completed</span></h3><ul><li>[x] Version bumped to 0.6.0 in <code class="inline">src/macula.app.src</code></li><li>[x] Version bumped to 0.6.0 in <code class="inline">rebar.config</code></li><li>[x] CHANGELOG.md updated with breaking changes and migration guide</li><li>[x] All MACULA_REALM references consistent throughout codebase</li><li>[x] Documentation generated (ex_doc)</li><li>[x] All tests passing (81 tests, 0 failures)</li><li>[x] Compilation clean (no warnings)</li><li>[x] Kademlia DHT documentation added</li></ul><h3 id="next-steps-for-user" class="section-heading"><a href="#next-steps-for-user" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">📋 Next Steps (For User)</span></h3><ol><li>Run publication script: <code class="inline">./scripts/publish-to-hex.sh</code></li><li>Verify on hex.pm</li><li>Update macula-arcade to use v0.6.0</li><li>Test Snake game with new version</li></ol><hr class="thin"/><h2 id="files-changed-in-v0-6-0" class="section-heading"><a href="#files-changed-in-v0-6-0" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Files Changed in v0.6.0</span></h2><h3 id="version-files" class="section-heading"><a href="#version-files" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Version Files</span></h3><ul><li><code class="inline">src/macula.app.src</code> (line 3: version bump)</li><li><code class="inline">rebar.config</code> (line 68: version bump)</li></ul><h3 id="environment-variable-updates" class="section-heading"><a href="#environment-variable-updates" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Environment Variable Updates</span></h3><ul><li><code class="inline">src/macula_sup.erl</code> (line 125: GATEWAY_REALM → MACULA_REALM)</li><li><code class="inline">entrypoint.sh</code> (lines 11, 17, 27: GATEWAY_REALM → MACULA_REALM)</li><li><code class="inline">Dockerfile.gateway</code> (line 60: ENV variable)</li><li><code class="inline">config/sys.config</code> (line 10: comment update)</li></ul><h3 id="documentation" class="section-heading"><a href="#documentation" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Documentation</span></h3><ul><li><code class="inline">docs/QUIC_TLS_GATEWAY_SETUP.md</code> (added MACULA_REALM examples)</li><li><code class="inline">docs/KADEMLIA_DHT_ARCHITECTURE.md</code> (NEW - 380 lines)</li><li><code class="inline">docs/NOMENCLATURE_PROPOSAL_CONNECTION_TO_PEER.md</code> (NEW - for v0.7.0)</li><li><code class="inline">docs/PEER_VS_CONNECTION_ANALYSIS.md</code> (NEW - for v0.7.0)</li><li><code class="inline">docs/PEER_CONNECTION_SEPARATION_PLAN.md</code> (NEW - for v0.7.0)</li><li><code class="inline">CHANGELOG.md</code> (v0.6.0 entry added)</li></ul><p><strong>Total:</strong> 11 files modified, 4 files created</p><hr class="thin"/><h2 id="test-results" class="section-heading"><a href="#test-results" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Test Results</span></h2><pre><code class="makeup erlang" translate="no"><span class="n">Compilation</span><span class="p">:</span><span class="w"> </span><span class="err">✅</span><span class="w"> </span><span class="n">Clean</span><span class="w"> </span><span class="p" data-group-id="9330712727-1">(</span><span class="ss">no</span><span class="w"> </span><span class="ss">warnings</span><span class="p" data-group-id="9330712727-1">)</span><span class="w">
+</span><span class="n">Tests</span><span class="p">:</span><span class="w"> </span><span class="err">✅</span><span class="w"> </span><span class="mi">81</span><span class="w"> </span><span class="ss">tests</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="ss">failures</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="w"> </span><span class="ss">cancelled</span><span class="w">
+</span><span class="n">Documentation</span><span class="p">:</span><span class="w"> </span><span class="err">✅</span><span class="w"> </span><span class="n">Generated</span><span class="w"> </span><span class="ss">successfully</span></code></pre><p>The 6 cancelled tests are integration tests requiring external infrastructure (expected behavior).</p><hr class="thin"/><h2 id="what-s-coming-in-v0-7-0" class="section-heading"><a href="#what-s-coming-in-v0-7-0" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">What's Coming in v0.7.0</span></h2><h3 id="planned-peer-connection-separation-4-5-weeks" class="section-heading"><a href="#planned-peer-connection-separation-4-5-weeks" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Planned: Peer-Connection Separation (4.5 weeks)</span></h3><p>Major architectural improvement to separate concerns:</p><p><strong><code class="inline">macula_peer</code> (High-Level Mesh API):</strong></p><ul><li>Pub/sub operations</li><li>RPC calls</li><li>Service discovery</li><li>DHT participation</li><li>Peer identity management</li></ul><p><strong><code class="inline">macula_connection</code> (Low-Level QUIC Transport):</strong></p><ul><li>QUIC connection lifecycle</li><li>Stream management</li><li>Message encoding/decoding</li><li>Reconnection logic</li></ul><p><strong>Benefits:</strong></p><ul><li>Single Responsibility Principle</li><li>Better testability</li><li>Future-proof for alternative transports</li><li>Clearer API separation</li></ul><p><strong>Timeline:</strong> 4-5 weeks TDD implementation
+<strong>Documentation:</strong> See <code class="inline">docs/PEER_CONNECTION_SEPARATION_PLAN.md</code></p><hr class="thin"/><h2 id="package-metadata" class="section-heading"><a href="#package-metadata" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Package Metadata</span></h2><p><strong>Name:</strong> macula
+<strong>Version:</strong> 0.6.0
+<strong>License:</strong> Apache-2.0
+<strong>Description:</strong> Macula HTTP/3 Mesh Platform - Complete distributed application framework</p><p><strong>Dependencies:</strong></p><ul><li>quicer: 0.2.15</li><li>msgpack: 0.8.1</li><li>gproc: 0.9.1</li></ul><p><strong>Links:</strong></p><ul><li>GitHub: <a href="https://github.com/macula-io/macula">https://github.com/macula-io/macula</a></li><li>Hex: <a href="https://hex.pm/packages/macula">https://hex.pm/packages/macula</a> (after publication)</li></ul><hr class="thin"/><h2 id="publication-commands" class="section-heading"><a href="#publication-commands" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Publication Commands</span></h2><pre><code class="makeup bash" translate="no"><span class=""># Run the publish script (handles everything)
+</span><span class="">./scripts/publish-to-hex.sh
+</span><span class="">
+</span><span class=""># Or manual steps:
+</span><span class="">rebar3 hex build
+</span><span class="">rebar3 hex publish
+</span></code></pre><hr class="thin"/><h2 id="post-publication-verification" class="section-heading"><a href="#post-publication-verification" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Post-Publication Verification</span></h2><p>After publishing, verify:</p><ol><li><strong>Hex.pm:</strong> Check version appears at <a href="https://hex.pm/packages/macula">https://hex.pm/packages/macula</a></li><li><strong>Documentation:</strong> Verify docs rendered correctly on hex.pm</li><li><strong>Download Test:</strong> Try installing in a test project</li><li><strong>macula-arcade:</strong> Update dependency to v0.6.0 and test</li></ol><hr class="thin"/><p><strong>Status:</strong> ✅ READY FOR PUBLICATION</p><p>Run <code class="inline">./scripts/publish-to-hex.sh</code> when ready!</p>
+
+</div>
+
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
+
+      <a href="peer_connection_separation_plan.html" class="bottom-actions-button" rel="prev">
+        <span class="subheader">
+          ← Previous Page
+        </span>
+        <span class="title">
+Peer-Connection Refactoring
+        </span>
+      </a>
+
+  </div>
+  <div class="bottom-actions-item">
+
+      <a href="macula_project_structure.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+Project Structure
+        </span>
+      </a>
+
+  </div>
+</div>
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.6.0" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.6.0">Hex Preview</a>
+
+              (<a href="https://preview.hex.pm/preview/macula/0.6.0/show/docs/V0.6.0_RELEASE_SUMMARY.md">current file</a>)
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

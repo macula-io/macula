@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.4.4">
+    <meta name="project" content="macula v0.6.0">
 
 
-    <title>macula_quic — macula v0.4.4</title>
+    <title>macula_quic — macula v0.6.0</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-BEE4145D.js"></script>
+    <script defer src="dist/sidebar_items-4BE190E4.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -37,7 +37,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.4.4
+          v0.6.0
         </div>
       </div>
     </div>
@@ -76,11 +76,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_quic</span> 
-      <small class="app-vsn" translate="no">(macula v0.4.4)</small>
+      <small class="app-vsn" translate="no">(macula v0.6.0)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_quic.erl#L7" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_quic.erl#L7" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -128,6 +128,16 @@ macula
 
     <div class="summary-row">
       <div class="summary-signature">
+        <a href="#async_send/2" data-no-tooltip="" translate="no">async_send(StreamPid, Data)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Send data on a stream asynchronously (non-blocking). This returns immediately without waiting for QUIC flow control.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
         <a href="#close/1" data-no-tooltip="" translate="no">close(Pid)</a>
 
       </div>
@@ -152,7 +162,7 @@ macula
 
       </div>
 
-        <div class="summary-synopsis"><p>Start a QUIC listener on the specified port. Options: {cert, CertFile} - Path to PEM certificate file {key, KeyFile} - Path to PEM private key file {alpn, [Protocol]} - List of ALPN protocols (e.g., [&quot;macula&quot;]) {peer_unidi_stream_count, N} - Max unidirectional streams</p></div>
+        <div class="summary-synopsis"><p>Start a QUIC listener on the specified port. Options: {cert, CertFile} - Path to PEM certificate file {key, KeyFile} - Path to PEM private key file {alpn, [Protocol]} - List of ALPN protocols (e.g., [&quot;macula&quot;]) {peer_unidi_stream_count, N} - Max unidirectional streams {peer_bidi_stream_count, N} - Max bidirectional streams</p></div>
 
     </div>
 
@@ -182,7 +192,7 @@ macula
 
       </div>
 
-        <div class="summary-synopsis"><p>Send data on a stream.</p></div>
+        <div class="summary-synopsis"><p>Send data on a stream (blocking).</p></div>
 
     </div>
 
@@ -209,7 +219,7 @@ macula
       <h1 class="signature" translate="no">accept(ListenerPid, Timeout)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_quic.erl#L74" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_quic.erl#L80" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -237,7 +247,7 @@ macula
       <h1 class="signature" translate="no">accept_stream(ConnPid, Timeout)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_quic.erl#L88" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_quic.erl#L94" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -255,6 +265,34 @@ macula
 <p>Accept an incoming stream on a connection.</p>
   </section>
 </section>
+<section class="detail" id="async_send/2">
+
+  <div class="detail-header">
+    <a href="#async_send/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">async_send(StreamPid, Data)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_quic.erl#L114" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> async_send(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Send data on a stream asynchronously (non-blocking). This returns immediately without waiting for QUIC flow control.</p>
+  </section>
+</section>
 <section class="detail" id="close/1">
 
   <div class="detail-header">
@@ -265,7 +303,7 @@ macula
       <h1 class="signature" translate="no">close(Pid)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_quic.erl#L118" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_quic.erl#L133" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -293,7 +331,7 @@ macula
       <h1 class="signature" translate="no">connect(Host, Port, Opts, Timeout)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_quic.erl#L57" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_quic.erl#L63" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -322,7 +360,7 @@ macula
       <h1 class="signature" translate="no">listen(Port, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_quic.erl#L32" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_quic.erl#L34" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -337,7 +375,7 @@ macula
 
       </div>
 
-<p>Start a QUIC listener on the specified port. Options: {cert, CertFile} - Path to PEM certificate file {key, KeyFile} - Path to PEM private key file {alpn, [Protocol]} - List of ALPN protocols (e.g., [&quot;macula&quot;]) {peer_unidi_stream_count, N} - Max unidirectional streams</p>
+<p>Start a QUIC listener on the specified port. Options: {cert, CertFile} - Path to PEM certificate file {key, KeyFile} - Path to PEM private key file {alpn, [Protocol]} - List of ALPN protocols (e.g., [&quot;macula&quot;]) {peer_unidi_stream_count, N} - Max unidirectional streams {peer_bidi_stream_count, N} - Max bidirectional streams</p>
   </section>
 </section>
 <section class="detail" id="open_stream/1">
@@ -350,7 +388,7 @@ macula
       <h1 class="signature" translate="no">open_stream(ConnPid)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_quic.erl#L94" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_quic.erl#L100" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -378,7 +416,7 @@ macula
       <h1 class="signature" translate="no">recv(StreamPid, Timeout)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_quic.erl#L107" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_quic.erl#L122" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -406,7 +444,7 @@ macula
       <h1 class="signature" translate="no">send(StreamPid, Data)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_quic.erl#L99" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_quic.erl#L105" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -421,7 +459,7 @@ macula
 
       </div>
 
-<p>Send data on a stream.</p>
+<p>Send data on a stream (blocking).</p>
   </section>
 </section>
 
@@ -432,9 +470,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.4.4" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.6.0" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.4.4">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.6.0">Hex Preview</a>
 
           </span>
 

@@ -122,7 +122,7 @@ get_gateway_port() ->
 %% @private
 %% @doc Get gateway realm from environment variable or config.
 get_gateway_realm() ->
-    case os:getenv("GATEWAY_REALM") of
+    case os:getenv("MACULA_REALM") of
         false ->
             application:get_env(macula, gateway_realm, <<"com.example.realm">>);
         RealmStr ->

@@ -62,7 +62,7 @@
 
 %% Types
 -type service_id() :: binary().
-%% Service identifier (procedure URI). Example: <<"energy.home.get">>.
+%% Service identifier (procedure URI). Example: &lt;&lt;"energy.home.get"&gt;&gt;.
 
 -type node_id() :: binary().
 %% 32-byte node identifier.
@@ -398,7 +398,7 @@ clear_subscriber_cache(Registry) ->
 %%     endpoint => <<"https://localhost:9443">>,
 %%     metadata => #{version => <<"1.0">>}
 %% },
-%% ok = publish_to_dht(DhtPid, <<"energy.home.get">>, ProviderInfo, 300, 20).
+%% ok = publish_to_dht(DhtPid, &lt;&lt;"energy.home.get"&gt;&gt;, ProviderInfo, 300, 20).
 %% '''
 -spec publish_to_dht(pid() | atom(), service_id(), provider_info(), pos_integer(), pos_integer()) ->
     ok | {error, term()}.
@@ -445,7 +445,7 @@ publish_to_dht(DhtPid, ServiceId, ProviderInfo, TTL, _K) ->
 %%
 %% Example:
 %% ```
-%% {ok, Providers} = query_dht_for_service(DhtPid, <<"energy.home.get">>, 20),
+%% {ok, Providers} = query_dht_for_service(DhtPid, &lt;&lt;"energy.home.get"&gt;&gt;, 20),
 %% %% Returns: [{ok, [#{node_id => ..., endpoint => ..., metadata => ...}]}]
 %% '''
 -spec query_dht_for_service(pid() | atom(), service_id(), pos_integer()) ->

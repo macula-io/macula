@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.4.4">
+    <meta name="project" content="macula v0.6.0">
 
 
-    <title>macula_id — macula v0.4.4</title>
+    <title>macula_id — macula v0.6.0</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-BEE4145D.js"></script>
+    <script defer src="dist/sidebar_items-4BE190E4.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -37,7 +37,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.4.4
+          v0.6.0
         </div>
       </div>
     </div>
@@ -76,11 +76,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_id</span> 
-      <small class="app-vsn" translate="no">(macula v0.4.4)</small>
+      <small class="app-vsn" translate="no">(macula v0.6.0)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_id.erl#L7" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_id.erl#L7" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -112,7 +112,7 @@ macula
 
       </div>
 
-        <div class="summary-synopsis"><p>Convert hex string to binary.</p></div>
+        <div class="summary-synopsis"><p>Convert hex string to binary. Crashes on invalid hex - exposes bugs in validation logic.</p></div>
 
     </div>
 
@@ -122,7 +122,7 @@ macula
 
       </div>
 
-        <div class="summary-synopsis"><p>Convert UUID string to 16-byte binary ID.</p></div>
+        <div class="summary-synopsis"><p>Convert UUID string to 16-byte binary ID. Crashes on invalid UUID format - exposes bugs in validation logic.</p></div>
 
     </div>
 
@@ -209,7 +209,7 @@ macula
       <h1 class="signature" translate="no">from_hex(Hex)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_id.erl#L86" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_id.erl#L82" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -220,11 +220,11 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> from_hex(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()} | {error, invalid_hex}.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> from_hex(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
 
       </div>
 
-<p>Convert hex string to binary.</p>
+<p>Convert hex string to binary. Crashes on invalid hex - exposes bugs in validation logic.</p>
   </section>
 </section>
 <section class="detail" id="from_uuid/1">
@@ -237,7 +237,7 @@ macula
       <h1 class="signature" translate="no">from_uuid(Uuid)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_id.erl#L58" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_id.erl#L59" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -248,11 +248,11 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> from_uuid(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()} | {error, invalid_uuid}.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> from_uuid(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
 
       </div>
 
-<p>Convert UUID string to 16-byte binary ID.</p>
+<p>Convert UUID string to 16-byte binary ID. Crashes on invalid UUID format - exposes bugs in validation logic.</p>
   </section>
 </section>
 <section class="detail" id="hash_id/1">
@@ -265,7 +265,7 @@ macula
       <h1 class="signature" translate="no">hash_id(Data)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_id.erl#L42" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_id.erl#L42" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -293,7 +293,7 @@ macula
       <h1 class="signature" translate="no">message_id()</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_id.erl#L32" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_id.erl#L32" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -321,7 +321,7 @@ macula
       <h1 class="signature" translate="no">node_id()</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_id.erl#L27" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_id.erl#L27" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -349,7 +349,7 @@ macula
       <h1 class="signature" translate="no">session_id()</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_id.erl#L37" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_id.erl#L37" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -377,7 +377,7 @@ macula
       <h1 class="signature" translate="no">to_hex(Binary)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_id.erl#L81" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_id.erl#L76" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -405,7 +405,7 @@ macula
       <h1 class="signature" translate="no">to_uuid(_)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_id.erl#L49" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_id.erl#L49" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -431,9 +431,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.4.4" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.6.0" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.4.4">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.6.0">Hex Preview</a>
 
           </span>
 

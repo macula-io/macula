@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.4.4">
+    <meta name="project" content="macula v0.6.0">
 
 
-    <title>macula_connection — macula v0.4.4</title>
+    <title>macula_connection — macula v0.6.0</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-BEE4145D.js"></script>
+    <script defer src="dist/sidebar_items-4BE190E4.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -37,7 +37,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.4.4
+          v0.6.0
         </div>
       </div>
     </div>
@@ -76,11 +76,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_connection</span> 
-      <small class="app-vsn" translate="no">(macula v0.4.4)</small>
+      <small class="app-vsn" translate="no">(macula v0.6.0)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_connection.erl#L10" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_connection.erl#L18" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -89,7 +89,7 @@ macula
 
 
     <section id="moduledoc">
-<p>Macula SDK connection manager.</p><p>Manages individual HTTP/3 (QUIC) connections to Macula mesh nodes. Handles connection lifecycle, authentication, message sending/receiving, and subscription management.</p>
+<p>Macula SDK connection facade.</p><p>This module acts as a facade/coordinator for the connection subsystem. It starts a supervision tree and delegates all operations to specialized child processes: - macula_connection_manager: QUIC connection lifecycle - macula_pubsub_handler: Pub/sub operations - macula_rpc_handler: RPC operations - macula_advertisement_manager: DHT service advertisements</p><p>The facade pattern provides a simple API while the actual work is distributed across focused, single-responsibility GenServers under OTP supervision.</p>
     </section>
 
 </div>
@@ -105,6 +105,16 @@ macula
   <h2>
     <a href="#functions">Functions</a>
   </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#advertise/4" data-no-tooltip="" translate="no">advertise(Client, Procedure, Handler, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Advertise a service handler for a procedure.</p></div>
+
+    </div>
 
     <div class="summary-row">
       <div class="summary-signature">
@@ -178,6 +188,16 @@ macula
 
     <div class="summary-row">
       <div class="summary-signature">
+        <a href="#unadvertise/2" data-no-tooltip="" translate="no">unadvertise(Client, Procedure)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Stop advertising a service.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
         <a href="#unsubscribe/2" data-no-tooltip="" translate="no">unsubscribe(Client, SubRef)</a>
 
       </div>
@@ -199,6 +219,35 @@ macula
       <span class="text">Functions</span>
     </h1>
     <div class="functions-list">
+<section class="detail" id="advertise/4">
+
+  <div class="detail-header">
+    <a href="#advertise/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">advertise(Client, Procedure, Handler, Opts)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_connection.erl#L117" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> advertise(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), fun((<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) ->
+                   ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Advertise a service handler for a procedure.</p><p>This makes the local handler available to other mesh nodes via DHT. The handler will be periodically re-advertised based on TTL.</p>
+  </section>
+</section>
 <section class="detail" id="call/3">
 
   <div class="detail-header">
@@ -209,7 +258,7 @@ macula
       <h1 class="signature" translate="no">call(Client, Procedure, Args)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_connection.erl#L105" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_connection.erl#L101" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -237,7 +286,7 @@ macula
       <h1 class="signature" translate="no">call(Client, Procedure, Args, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_connection.erl#L111" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_connection.erl#L107" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -265,7 +314,7 @@ macula
       <h1 class="signature" translate="no">publish(Client, Topic, Data)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_connection.erl#L84" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_connection.erl#L80" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -293,7 +342,7 @@ macula
       <h1 class="signature" translate="no">publish(Client, Topic, Data, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_connection.erl#L89" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_connection.erl#L85" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -321,7 +370,7 @@ macula
       <h1 class="signature" translate="no">start_link(Url, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_connection.erl#L74" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_connection.erl#L70" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -349,7 +398,7 @@ macula
       <h1 class="signature" translate="no">stop(Client)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_connection.erl#L79" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_connection.erl#L75" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -377,7 +426,7 @@ macula
       <h1 class="signature" translate="no">subscribe(Client, Topic, Callback)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_connection.erl#L95" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_connection.erl#L91" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -395,6 +444,34 @@ macula
 <p>Subscribe to a topic through this client.</p>
   </section>
 </section>
+<section class="detail" id="unadvertise/2">
+
+  <div class="detail-header">
+    <a href="#unadvertise/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">unadvertise(Client, Procedure)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_connection.erl#L124" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> unadvertise(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Stop advertising a service.</p><p>Removes the local handler and stops advertising to the DHT.</p>
+  </section>
+</section>
 <section class="detail" id="unsubscribe/2">
 
   <div class="detail-header">
@@ -405,7 +482,7 @@ macula
       <h1 class="signature" translate="no">unsubscribe(Client, SubRef)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.4.4/src/macula_connection.erl#L100" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.0/src/macula_connection.erl#L96" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -431,9 +508,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.4.4" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.6.0" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.4.4">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.6.0">Hex Preview</a>
 
           </span>
 

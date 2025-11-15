@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% Macula Gateway - HTTP/3 Message Router & Orchestrator
+%%% Macula Gateway - HTTP/3 Message Router &amp; Orchestrator
 %%%
 %%% Main API module and coordinator for the Macula Gateway.
 %%% The gateway can be embedded in applications or run standalone.
@@ -10,14 +10,14 @@
 %%%
 %%% Gateway (this module):
 %%%   - QUIC Listener Management
-%%%   - Message Decoding & Routing
+%%%   - Message Decoding &amp; Routing
 %%%   - Supervisor Coordination
 %%%   - API Facade
 %%%
 %%% Child Modules (managed via macula_gateway_sup):
 %%%   - macula_gateway_client_manager: Client lifecycle management
 %%%   - macula_gateway_pubsub: Pub/Sub message routing with wildcards
-%%%   - macula_gateway_rpc: RPC handler registration & invocation
+%%%   - macula_gateway_rpc: RPC handler registration &amp; invocation
 %%%   - macula_gateway_mesh: Mesh connection pooling
 %%%
 %%% Stateless Delegation Modules:
@@ -32,11 +32,11 @@
 %%% ```
 %%% {ok, Pid} = macula_gateway:start_link([
 %%%     {port, 9443},
-%%%     {realm, <<"com.example.realm">>}
+%%%     {realm, &lt;&lt;"com.example.realm"&gt;&gt;}
 %%% ]).
 %%%
 %%% %% Register RPC handler
-%%% macula_gateway:register_handler(<<"add">>, fun(#{a := A, b := B}) ->
+%%% macula_gateway:register_handler(&lt;&lt;"add"&gt;&gt;, fun(#{a := A, b := B}) ->
 %%%     #{result => A + B}
 %%% end).
 %%% '''
@@ -688,36 +688,37 @@ encode_json(Data) ->
 %%% Mesh Connection Management
 %%%===================================================================
 
-%% @doc Get or create a QUIC connection to a peer node for message forwarding.
+%% Get or create a QUIC connection to a peer node for message forwarding.
 %% Opens a NEW stream for each message (QUIC best practice).
-%% @doc Handle successful connection acceptance.
+%% Handle successful connection acceptance.
 %% Register for incoming streams with active mode enabled.
-%% @doc Manual accept functions removed - quicer_server handles connections automatically
+%% Manual accept functions removed - quicer_server handles connections automatically
 
-%% @doc Handle decoded CONNECT message.
+%% @doc Handle decoded protocol messages.
+%% Dispatches to appropriate handlers based on message type.
 handle_decoded_message({ok, {connect, ConnectMsg}}, Stream, State) ->
     io:format("[Gateway] Decoded CONNECT message~n"),
     handle_connect(Stream, ConnectMsg, State);
 
-%% @doc Handle decoded STORE message.
+%% Handle decoded STORE message.
 handle_decoded_message({ok, {store, StoreMsg}}, Stream, State) ->
     io:format("[Gateway] *** RECEIVED STORE MESSAGE ***~n"),
     io:format("[Gateway] STORE message: ~p~n", [StoreMsg]),
     handle_dht_store(Stream, StoreMsg, State);
 
-%% @doc Handle decoded FIND_VALUE message.
+%% Handle decoded FIND_VALUE message.
 handle_decoded_message({ok, {find_value, FindValueMsg}}, Stream, State) ->
     io:format("[Gateway] *** RECEIVED FIND_VALUE MESSAGE ***~n"),
     io:format("[Gateway] FIND_VALUE message: ~p~n", [FindValueMsg]),
     handle_dht_find_value(Stream, FindValueMsg, State);
 
-%% @doc Handle decoded FIND_NODE message.
+%% Handle decoded FIND_NODE message.
 handle_decoded_message({ok, {find_node, FindNodeMsg}}, Stream, State) ->
     io:format("[Gateway] *** RECEIVED FIND_NODE MESSAGE ***~n"),
     io:format("[Gateway] FIND_NODE message: ~p~n", [FindNodeMsg]),
     handle_dht_find_node(Stream, FindNodeMsg, State);
 
-%% @doc Handle RPC route message (multi-hop DHT routing).
+%% Handle RPC route message (multi-hop DHT routing).
 handle_decoded_message({ok, {rpc_route, RpcRouteMsg}}, Stream, State) ->
     io:format("[Gateway] *** RECEIVED RPC_ROUTE MESSAGE ***~n"),
     io:format("[Gateway] RPC route message: ~p~n", [RpcRouteMsg]),
@@ -750,36 +751,36 @@ handle_decoded_message({ok, {rpc_route, RpcRouteMsg}}, Stream, State) ->
             {noreply, State}
     end;
 
-%% @doc Handle RPC call message (legacy direct call - will be deprecated).
+%% Handle RPC call message (legacy direct call - will be deprecated).
 handle_decoded_message({ok, {call, CallMsg}}, Stream, State) ->
     io:format("[Gateway] *** RECEIVED RPC CALL (DIRECT) ***~n"),
     io:format("[Gateway] Call message: ~p~n", [CallMsg]),
     handle_rpc_call(Stream, CallMsg, State);
 
-%% @doc Handle SUBSCRIBE message.
+%% Handle SUBSCRIBE message.
 handle_decoded_message({ok, {subscribe, SubMsg}}, Stream, State) ->
     io:format("[Gateway] *** RECEIVED SUBSCRIBE MESSAGE ***~n"),
     io:format("[Gateway] Subscribe message: ~p~n", [SubMsg]),
     handle_subscribe(Stream, SubMsg, State);
 
-%% @doc Handle UNSUBSCRIBE message.
+%% Handle UNSUBSCRIBE message.
 handle_decoded_message({ok, {unsubscribe, UnsubMsg}}, Stream, State) ->
     io:format("[Gateway] *** RECEIVED UNSUBSCRIBE MESSAGE ***~n"),
     io:format("[Gateway] Unsubscribe message: ~p~n", [UnsubMsg]),
     handle_unsubscribe(Stream, UnsubMsg, State);
 
-%% @doc Handle PUBLISH message.
+%% Handle PUBLISH message.
 handle_decoded_message({ok, {publish, PubMsg}}, Stream, State) ->
     io:format("[Gateway] *** RECEIVED PUBLISH MESSAGE ***~n"),
     io:format("[Gateway] Publish message: ~p~n", [PubMsg]),
     handle_publish(Stream, PubMsg, State);
 
-%% @doc Handle other decoded message types.
+%% Handle other decoded message types.
 handle_decoded_message({ok, {Type, Other}}, _Stream, State) ->
     io:format("[Gateway] Received message type ~p: ~p~n", [Type, Other]),
     {noreply, State};
 
-%% @doc Handle decode error.
+%% Handle decode error.
 handle_decoded_message({error, DecodeErr}, _Stream, State) ->
     io:format("[Gateway] !!! DECODE ERROR: ~p !!!~n", [DecodeErr]),
     {noreply, State}.

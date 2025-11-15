@@ -8,13 +8,13 @@ set -e
 
 # Default values
 GATEWAY_PORT="${GATEWAY_PORT:-9443}"
-GATEWAY_REALM="${GATEWAY_REALM:-com.example.realm}"
+MACULA_REALM="${MACULA_REALM:-com.example.realm}"
 RELEASE_COOKIE="${RELEASE_COOKIE:-macula-gateway-cookie}"
 NODE_NAME="${NODE_NAME:-macula@127.0.0.1}"
 
 # Export environment variables for the release
 export GATEWAY_PORT
-export GATEWAY_REALM
+export MACULA_REALM
 export RELEASE_COOKIE
 export RELEASE_NODE="${NODE_NAME}"
 
@@ -24,7 +24,7 @@ echo "Starting Macula Gateway"
 echo "=================================================="
 echo "Node Name:    ${NODE_NAME}"
 echo "Gateway Port: ${GATEWAY_PORT}"
-echo "Realm:        ${GATEWAY_REALM}"
+echo "Realm:        ${MACULA_REALM}"
 echo "Release Path: /opt/macula"
 echo "=================================================="
 

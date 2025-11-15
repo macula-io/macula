@@ -79,7 +79,7 @@
 %% == Options ==
 %%
 %% <ul>
-%% <li>`realm' - Required. Binary realm identifier (e.g., `<<"my.app.realm">>')</li>
+%% <li>`realm' - Required. Binary realm identifier (e.g., `&lt;&lt;"my.app.realm"&gt;&gt;')</li>
 %% <li>`auth' - Optional. Authentication map with `api_key' or other auth methods</li>
 %% <li>`timeout' - Optional. Connection timeout in milliseconds (default: 5000)</li>
 %% <li>`node_id' - Optional. 32-byte node ID (generated if not provided)</li>
@@ -89,14 +89,14 @@
 %%
 %% ```
 %% %% Basic connection
-%% {ok, Client} = macula_client:connect(<<"https://mesh.local:443">>, #{
-%%     realm => <<"my.realm">>
+%% {ok, Client} = macula_client:connect(&lt;&lt;"https://mesh.local:443"&gt;&gt;, #{
+%%     realm => &lt;&lt;"my.realm"&gt;&gt;
 %% }).
 %%
 %% %% With API key authentication
-%% {ok, Client} = macula_client:connect(<<"https://mesh.local:443">>, #{
-%%     realm => <<"my.realm">>,
-%%     auth => #{api_key => <<"secret-key">>}
+%% {ok, Client} = macula_client:connect(&lt;&lt;"https://mesh.local:443"&gt;&gt;, #{
+%%     realm => &lt;&lt;"my.realm"&gt;&gt;,
+%%     auth => #{api_key => &lt;&lt;"secret-key"&gt;&gt;}
 %% }).
 %% '''
 -spec connect(Url :: binary(), Opts :: options()) ->
@@ -122,8 +122,8 @@ disconnect(Client) when is_pid(Client) ->
 %%
 %% Topics should describe EVENT TYPES, not entity instances:
 %% <ul>
-%% <li>Good: `<<"my.app.user.registered">>' (event type)</li>
-%% <li>Bad: `<<"my.app.user.123.registered">>' (entity ID in topic)</li>
+%% <li>Good: `&lt;&lt;"my.app.user.registered"&gt;&gt;' (event type)</li>
+%% <li>Bad: `&lt;&lt;"my.app.user.123.registered"&gt;&gt;' (entity ID in topic)</li>
 %% </ul>
 %%
 %% Entity IDs belong in the event payload, not the topic name.
@@ -132,15 +132,15 @@ disconnect(Client) when is_pid(Client) ->
 %%
 %% ```
 %% %% Publish with default options
-%% ok = macula_client:publish(Client, <<"my.app.events">>, #{
-%%     type => <<"user.registered">>,
-%%     user_id => <<"user-123">>,
-%%     email => <<"user@example.com">>
+%% ok = macula_client:publish(Client, &lt;&lt;"my.app.events"&gt;&gt;, #{
+%%     type => &lt;&lt;"user.registered"&gt;&gt;,
+%%     user_id => &lt;&lt;"user-123"&gt;&gt;,
+%%     email => &lt;&lt;"user@example.com"&gt;&gt;
 %% }).
 %%
 %% %% Publish with options
-%% ok = macula_client:publish(Client, <<"my.app.events">>, #{
-%%     data => <<"important">>
+%% ok = macula_client:publish(Client, &lt;&lt;"my.app.events"&gt;&gt;, #{
+%%     data => &lt;&lt;"important"&gt;&gt;
 %% }, #{acknowledge => true}).
 %% '''
 -spec publish(Client :: client(), Topic :: topic(), Data :: event_data()) ->
@@ -168,7 +168,7 @@ publish(Client, Topic, Data, Opts) when is_pid(Client), is_binary(Topic), is_map
 %%
 %% ```
 %% %% Simple subscription
-%% {ok, SubRef} = macula_client:subscribe(Client, <<"my.app.events">>,
+%% {ok, SubRef} = macula_client:subscribe(Client, &lt;&lt;"my.app.events"&gt;&gt;,
 %%     fun(EventData) ->
 %%         io:format("Event: ~p~n", [EventData]),
 %%         ok
@@ -199,13 +199,13 @@ unsubscribe(Client, SubRef) when is_pid(Client), is_reference(SubRef) ->
 %%
 %% ```
 %% %% Simple RPC call
-%% {ok, User} = macula_client:call(Client, <<"my.app.get_user">>, #{
-%%     user_id => <<"user-123">>
+%% {ok, User} = macula_client:call(Client, &lt;&lt;"my.app.get_user"&gt;&gt;, #{
+%%     user_id => &lt;&lt;"user-123"&gt;&gt;
 %% }).
 %%
 %% %% With timeout
-%% {ok, Result} = macula_client:call(Client, <<"my.app.process">>,
-%%     #{data => <<"large">>},
+%% {ok, Result} = macula_client:call(Client, &lt;&lt;"my.app.process"&gt;&gt;,
+%%     #{data => &lt;&lt;"large"&gt;&gt;},
 %%     #{timeout => 30000}).
 %% '''
 -spec call(Client :: client(), Procedure :: procedure(), Args :: args()) ->
@@ -240,19 +240,19 @@ call(Client, Procedure, Args, Opts) when is_pid(Client), is_binary(Procedure), i
 %% ```
 %% %% Define a handler function
 %% Handler = fun(#{user_id := UserId}) ->
-%%     {ok, #{user_id => UserId, name => <<"Alice">>}}
+%%     {ok, #{user_id => UserId, name => &lt;&lt;"Alice"&gt;&gt;}}
 %% end.
 %%
 %% %% Advertise the service
 %% {ok, Ref} = macula_client:advertise(
 %%     Client,
-%%     <<"my.app.get_user">>,
+%%     &lt;&lt;"my.app.get_user"&gt;&gt;,
 %%     Handler
 %% ).
 %%
 %% %% Other clients can now call:
-%% %% {ok, User} = macula_client:call(OtherClient, <<"my.app.get_user">>,
-%% %%     #{user_id => <<"user-123">>}).
+%% %% {ok, User} = macula_client:call(OtherClient, &lt;&lt;"my.app.get_user"&gt;&gt;,
+%% %%     #{user_id => &lt;&lt;"user-123"&gt;&gt;}).
 %% '''
 -spec advertise(Client :: client(), Procedure :: procedure(),
                 Handler :: macula_service_registry:handler_fn()) ->
@@ -276,7 +276,7 @@ advertise(Client, Procedure, Handler, Opts) when is_pid(Client), is_binary(Proce
 %% == Examples ==
 %%
 %% ```
-%% ok = macula_client:unadvertise(Client, <<"my.app.get_user">>).
+%% ok = macula_client:unadvertise(Client, &lt;&lt;"my.app.get_user"&gt;&gt;).
 %% '''
 -spec unadvertise(Client :: client(), Procedure :: procedure()) ->
     ok | {error, Reason :: term()}.
