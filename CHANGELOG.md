@@ -5,6 +5,153 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - TBD (Q2 2025)
+
+### Planned - True Mesh Architecture
+- **BREAKING**: Opportunistic NAT hole punching for direct peer-to-peer connections
+  - 80% direct P2P connections (cone NAT, no firewall)
+  - 20% gateway relay fallback (symmetric NAT, strict firewalls)
+  - True mesh topology (no single point of failure)
+  - New modules: `macula_nat_discovery`, `macula_hole_punch`, `macula_connection_upgrade`
+  - Backward compatible with v0.7.x gateway relay architecture
+
+**This will transform Macula from hub-and-spoke (star topology) to true decentralized mesh.**
+
+See `architecture/NAT_TRAVERSAL_ROADMAP.md` for complete design.
+
+---
+
+## [0.7.4] - 2025-11-15
+
+### Fixed
+- **CRITICAL**: Configurable keep-alive mechanism to prevent QUIC connection timeouts
+  - PING/PONG message support in `macula_connection`
+  - Default keep-alive interval: 30 seconds (configurable)
+  - Keep-alive enabled by default (can be disabled via options)
+  - Automatic PONG response to incoming PING messages
+  - Configuration via `macula_connection:default_config/0`
+  - Prevents 2-minute connection timeout that broke distributed matchmaking
+  - Added 6 tests for keep-alive functionality (all passing)
+
+**This is a critical fix for production deployments where QUIC connections timeout after ~2 minutes of inactivity, breaking pub/sub and matchmaking.**
+
+### Configuration
+
+Enable/disable keep-alive:
+```erlang
+%% Enable with custom interval (milliseconds)
+Opts = #{
+    keepalive_enabled => true,
+    keepalive_interval => 30000  %% 30 seconds
+}.
+
+%% Disable keep-alive
+Opts = #{
+    keepalive_enabled => false
+}.
+
+%% Use defaults (enabled, 30 second interval)
+DefaultConfig = macula_connection:default_config().
+```
+
+### Architecture Note
+
+**v0.7.4 maintains hub-and-spoke (star) topology**:
+- Edge peers connect to gateway (not each other)
+- Gateway routes all messages (relay architecture)
+- Gateway is single point of failure (by design for now)
+- DHT routing table exists but routing happens at gateway
+- True peer-to-peer mesh deferred to v0.8.0 (NAT traversal required)
+
+## [0.7.3] - 2025-11-15
+
+### Fixed
+- **CRITICAL**: Fixed DHT routing table address serialization crash in `macula_gateway_dht`
+  - Bug: Gateway stored parsed address **tuples** `{{127,0,0,1}, 9443}` in DHT instead of binary strings
+  - Impact: When FIND_VALUE replies tried to serialize node addresses, msgpack returned error `{:error, {:badarg, {{127,0,0,1}, 9443}}}`
+  - Root cause: `macula_gateway.erl:522` used `Address` (tuple from `parse_endpoint/1`) instead of `Endpoint` (binary string)
+  - Error chain: DHT stored tuples → encode_node_info extracted tuples → msgpack:pack failed → byte_size crashed
+  - Symptoms: Gateway crashed with "ArgumentError: 1st argument not a bitstring" when peers queried DHT
+  - Fix: Store original `Endpoint` binary string in DHT routing table instead of parsed tuple
+  - Added test: `dht_address_serialization_test` documents bug and validates fix
+
+**This is a critical fix for distributed matchmaking and service discovery. Without it, DHT queries crash the gateway.**
+
+## [0.7.2] - 2025-11-15
+
+### Fixed
+- **CRITICAL**: Fixed gateway crash in `parse_endpoint/1` when DNS resolution fails
+  - Bug: `inet:getaddr/2` error tuple was not handled, causing ArgumentError when passed to `byte_size/1`
+  - Impact: Gateway crashed repeatedly, closing all client connections and preventing pub/sub communication
+  - Symptoms: "Failed to publish to topic: :closed", "Failed to send STORE for subscription: :closed"
+  - Fix: Added proper error handling with localhost fallback when DNS resolution fails
+  - Now returns `{{127,0,0,1}, Port}` fallback instead of crashing
+
+**This is a critical fix for production deployments where endpoint DNS resolution may fail.**
+
+## [0.7.1] - 2025-11-15
+
+### Fixed
+- **CRITICAL**: Fixed ArithmeticError in `macula_pubsub_handler` message ID handling
+  - Bug: Was assigning binary MsgId to counter instead of integer NewCounter
+  - Impact: Caused pub/sub to crash on second publish attempt with "bad argument in arithmetic expression"
+  - Fix: Corrected destructuring in line 300 to use `{_MsgId, NewCounter}` instead of `{MsgIdCounter, _}`
+  - Now properly increments integer counter instead of trying to do arithmetic on binary
+
+**This is a critical fix for anyone using pub/sub functionality in v0.7.0.**
+
+## [0.7.0] - 2025-11-15
+
+### Changed
+- **BREAKING**: Major nomenclature refactoring for clarity and industry alignment
+  - Renamed `macula_connection` → `macula_peer` (mesh participant facade - high-level API)
+  - Renamed `macula_connection_manager` → `macula_connection` (QUIC transport layer - low-level)
+  - Follows industry standards used by libp2p, IPFS, and BitTorrent
+  - Clear separation: `macula_peer` = mesh participant, `macula_connection` = transport
+
+### Added
+- Comprehensive transport layer test coverage (36 tests total)
+  - 11 new tests for message decoding, buffering, URL parsing, and realm normalization
+  - All tests passing with zero regressions
+- Complete v0.7.0 documentation in CLAUDE.md
+  - Migration guide with specific API examples
+  - Architecture rationale and benefits
+  - Status tracking for implementation phases
+
+### Migration Guide (0.6.x → 0.7.0)
+
+**API Changes:**
+
+All high-level mesh operations now use `macula_peer` instead of `macula_connection`:
+
+```erlang
+%% Before (0.6.x)
+{ok, Client} = macula_connection:start_link(Url, Opts).
+ok = macula_connection:publish(Client, Topic, Data).
+{ok, SubRef} = macula_connection:subscribe(Client, Topic, Callback).
+{ok, Result} = macula_connection:call(Client, Procedure, Args).
+
+%% After (0.7.0)
+{ok, Client} = macula_peer:start_link(Url, Opts).
+ok = macula_peer:publish(Client, Topic, Data).
+{ok, SubRef} = macula_peer:subscribe(Client, Topic, Callback).
+{ok, Result} = macula_peer:call(Client, Procedure, Args).
+```
+
+**Why This Change?**
+
+The original naming was confusing:
+- ❌ `macula_connection` served both facade AND transport roles
+- ❌ Mixed high-level mesh operations with low-level QUIC handling
+- ❌ Not aligned with P2P industry standards
+
+After v0.7.0:
+- ✅ `macula_peer` = mesh participant (clear high-level API for pub/sub, RPC, DHT)
+- ✅ `macula_connection` = QUIC transport (clear low-level transport layer)
+- ✅ Follows libp2p/IPFS/BitTorrent naming conventions
+
+**Note:** The `macula_client` wrapper module has been updated to use `macula_peer` internally, so if you're using `macula_client`, no changes are required.
+
 ## [0.6.7] - 2025-11-15
 
 ### Fixed
@@ -148,5 +295,7 @@ System.put_env("MACULA_REALM", realm)
 
 ---
 
+[0.7.0]: https://github.com/macula-io/macula/compare/v0.6.7...v0.7.0
+[0.6.7]: https://github.com/macula-io/macula/compare/v0.6.6...v0.6.7
 [0.6.0]: https://github.com/macula-io/macula/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/macula-io/macula/releases/tag/v0.5.0

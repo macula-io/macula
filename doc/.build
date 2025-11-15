@@ -20,8 +20,8 @@ dist/lato-latin-700-normal-2XVSBPG4.woff2
 dist/lato-latin-ext-400-normal-N27NCBWW.woff2
 dist/lato-latin-ext-700-normal-Q2L5DVMW.woff2
 dist/remixicon-QPNJX265.woff2
-dist/search_data-010FCF4B.js
-dist/sidebar_items-A716BB8A.js
+dist/search_data-54BB1243.js
+dist/sidebar_items-04AAC83B.js
 documentation_status.html
 executive_summary.html
 hello_world.html
@@ -33,7 +33,6 @@ macula_app.html
 macula_cache.html
 macula_client.html
 macula_connection.html
-macula_connection_manager.html
 macula_connection_pool.html
 macula_connection_sup.html
 macula_core_types.html
@@ -61,6 +60,7 @@ macula_membership_list.html
 macula_membership_member.html
 macula_names.html
 macula_node.html
+macula_peer.html
 macula_project_structure.html
 macula_protocol_decoder.html
 macula_protocol_encoder.html

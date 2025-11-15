@@ -9,7 +9,7 @@
 %%%   while maintaining consistency when connection_manager restarts.
 %%%
 %%% Children (in dependency order):
-%%% - macula_connection_manager: QUIC connection lifecycle (foundational)
+%%% - macula_connection: QUIC connection lifecycle (foundational)
 %%% - macula_pubsub_handler: Pub/sub operations (depends on connection_manager)
 %%% - macula_rpc_handler: RPC operations (depends on connection_manager)
 %%% - macula_advertisement_manager: DHT advertisements (depends on connection_manager)
@@ -75,11 +75,11 @@ init({Url, Opts}) ->
         %% 1. Connection Manager (must start first)
         #{
             id => connection_manager,
-            start => {macula_connection_manager, start_link, [Url, Opts]},
+            start => {macula_connection, start_link, [Url, Opts]},
             restart => permanent,
             shutdown => 5000,
             type => worker,
-            modules => [macula_connection_manager]
+            modules => [macula_connection]
         },
 
         %% 2. PubSub Handler

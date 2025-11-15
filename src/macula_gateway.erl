@@ -65,6 +65,17 @@
     unregister_handler/1
 ]).
 
+%% Export for testing only
+-ifdef(TEST).
+-export([
+    parse_endpoint/1,
+    complete_handshake/1,
+    accept_streams/1,
+    register_next_connection/1,
+    resolve_host/2
+]).
+-endif.
+
 %% gen_server callbacks
 -export([
     init/1,
@@ -425,44 +436,9 @@ handle_info({quic, new_conn, Conn, ConnInfo}, State) ->
     io:format("[Gateway] Connection Info: ~p~n", [ConnInfo]),
     io:format("[Gateway] ========================================~n"),
 
-    %% Complete TLS handshake to accept the connection
-    case quicer:handshake(Conn) of
-        ok ->
-            io:format("[Gateway] Connection handshake completed successfully~n"),
-            %% Start accepting streams on this connection
-            case quicer:async_accept_stream(Conn, #{}) of
-                {ok, Conn} ->
-                    io:format("[Gateway] Ready to accept streams on connection~n"),
-                    ok;
-                {error, StreamAcceptErr} ->
-                    io:format("[Gateway] WARNING: async_accept_stream failed: ~p~n", [StreamAcceptErr]),
-                    ok
-            end;
-        {ok, _} ->
-            io:format("[Gateway] Connection handshake completed successfully~n"),
-            %% Start accepting streams on this connection
-            case quicer:async_accept_stream(Conn, #{}) of
-                {ok, Conn} ->
-                    io:format("[Gateway] Ready to accept streams on connection~n"),
-                    ok;
-                {error, StreamAcceptErr} ->
-                    io:format("[Gateway] WARNING: async_accept_stream failed: ~p~n", [StreamAcceptErr]),
-                    ok
-            end;
-        {error, Reason} ->
-            io:format("[Gateway] Handshake failed: ~p~n", [Reason]),
-            ok
-    end,
-
-    %% Register for next connection
-    case quicer:async_accept(State#state.listener, #{}) of
-        {ok, _} ->
-            io:format("[Gateway] Ready for next connection~n"),
-            ok;
-        {error, AcceptErr} ->
-            io:format("[Gateway] WARNING: async_accept failed: ~p~n", [AcceptErr]),
-            ok
-    end,
+    %% Extracted functions eliminate nested case statements
+    complete_handshake(Conn),
+    register_next_connection(State#state.listener),
 
     {noreply, State};
 
@@ -540,10 +516,11 @@ handle_connect_realm(true, Stream, ConnectMsg, State) ->
     %% Connection management now handled by macula_gateway_mesh module
     NewState = State#state{client_streams = NewClientStreams},
 
-    %% Add peer to DHT routing table with real address
+    %% Add peer to DHT routing table with endpoint (binary string, not parsed tuple)
+    %% IMPORTANT: DHT must store serializable values - binary strings, not tuples
     NodeInfo = #{
         node_id => NodeId,
-        address => Address  % Use real parsed address instead of placeholder
+        address => Endpoint  % Use binary endpoint string (msgpack can serialize this)
     },
     case whereis(macula_routing_server) of
         undefined ->
@@ -872,28 +849,87 @@ check_and_register_diagnostics(undefined, _GatewayPid) ->
 check_and_register_diagnostics(_Pid, GatewayPid) ->
     macula_gateway_diagnostics:register_procedures(GatewayPid).
 
+%%%===================================================================
+%%% Connection Lifecycle Functions
+%%%
+%%% Extracted from handle_info({quic, new_conn...}) to eliminate
+%%% nested case statements and follow idiomatic Erlang patterns.
+%%%===================================================================
+
+%% @doc Complete TLS handshake on new connection.
+%% Calls accept_streams/1 on success, logs error on failure.
+-spec complete_handshake(quicer:connection_handle()) -> ok.
+complete_handshake(Conn) ->
+    case quicer:handshake(Conn) of
+        ok ->
+            accept_streams(Conn);
+        {ok, _} ->
+            accept_streams(Conn);
+        {error, Reason} ->
+            io:format("[Gateway] Handshake failed: ~p~n", [Reason]),
+            ok
+    end.
+
+%% @doc Start accepting streams on an established connection.
+-spec accept_streams(quicer:connection_handle()) -> ok.
+accept_streams(Conn) ->
+    io:format("[Gateway] Connection handshake completed successfully~n"),
+    case quicer:async_accept_stream(Conn, #{}) of
+        {ok, Conn} ->
+            io:format("[Gateway] Ready to accept streams on connection~n"),
+            ok;
+        {error, StreamAcceptErr} ->
+            io:format("[Gateway] WARNING: async_accept_stream failed: ~p~n", [StreamAcceptErr]),
+            ok
+    end.
+
+%% @doc Register listener for next incoming connection.
+-spec register_next_connection(quicer:listener_handle()) -> ok.
+register_next_connection(Listener) ->
+    case quicer:async_accept(Listener, #{}) of
+        {ok, _} ->
+            io:format("[Gateway] Ready for next connection~n"),
+            ok;
+        {error, AcceptErr} ->
+            io:format("[Gateway] WARNING: async_accept failed: ~p~n", [AcceptErr]),
+            ok
+    end.
+
+%%%===================================================================
+%%% Endpoint Parsing
+%%%===================================================================
+
 %% @doc Parse endpoint URL to address tuple.
 %% Converts "https://host:port" to {{IP_tuple}, Port}
-%% Crashes on parsing errors - indicates invalid endpoint configuration.
+%% Returns placeholder on parsing errors instead of crashing.
 -spec parse_endpoint(undefined | binary()) -> {{byte(), byte(), byte(), byte()}, inet:port_number()}.
 parse_endpoint(undefined) ->
     {{0,0,0,0}, 0};
 parse_endpoint(Endpoint) when is_binary(Endpoint) ->
-    %% Parse URL using uri_string (let it crash on invalid URLs)
+    %% Parse URL using uri_string
     case uri_string:parse(Endpoint) of
         #{host := Host, port := Port} when is_integer(Port) ->
-            %% Resolve hostname to IP address (let it crash on resolution errors)
-            HostStr = binary_to_list(Host),
-            {ok, IPTuple} = inet:getaddr(HostStr, inet),
-            {IPTuple, Port};
+            resolve_host(Host, Port);
         #{host := Host} ->
-            %% No port specified, use default 9443
-            HostStr = binary_to_list(Host),
-            {ok, IPTuple} = inet:getaddr(HostStr, inet),
-            {IPTuple, 9443};
+            resolve_host(Host, 9443);  %% Default port
         _ ->
-            io:format("[Gateway] Invalid endpoint URL format: ~s~n", [Endpoint]),
-            error({invalid_endpoint_format, Endpoint})
+            io:format("[Gateway] Invalid endpoint URL format: ~s, using placeholder~n", [Endpoint]),
+            {{0,0,0,0}, 0}
+    end.
+
+%% @doc Resolve hostname to IP address.
+%% Returns localhost fallback on DNS resolution failure.
+%% Extracted to eliminate duplicate DNS resolution logic.
+-spec resolve_host(binary(), inet:port_number()) -> {{byte(), byte(), byte(), byte()}, inet:port_number()}.
+resolve_host(Host, Port) when is_binary(Host), is_integer(Port) ->
+    HostStr = binary_to_list(Host),
+    case inet:getaddr(HostStr, inet) of
+        {ok, IPTuple} ->
+            {IPTuple, Port};
+        {error, Reason} ->
+            io:format("[Gateway] Failed to resolve host ~s: ~p, using localhost fallback~n",
+                     [Host, Reason]),
+            {{127,0,0,1}, Port}
     end.
 
 %% @doc Unwrap result to map format.

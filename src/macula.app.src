@@ -1,6 +1,6 @@
 {application, macula, [
     {description, "Macula HTTP/3 Mesh Platform - Complete distributed application framework"},
-    {vsn, "0.6.7"},
+    {vsn, "0.7.4"},
     {registered, []},
     {mod, {macula_app, []}},
     {applications, [

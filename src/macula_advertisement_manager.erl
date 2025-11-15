@@ -319,7 +319,7 @@ send_store_to_dht(ConnMgrPid, ServiceKey, ServiceValue, Procedure, State) when i
     io:format("[~s]   Encoded STORE message: ~p~n", [State#state.node_id, StoreMsg]),
 
     %% Send over QUIC to connected node (best effort - connection may not be established yet)
-    case macula_connection_manager:send_message(ConnMgrPid, store, StoreMsg) of
+    case macula_connection:send_message(ConnMgrPid, store, StoreMsg) of
         ok ->
             io:format("[~s] STORE sent successfully for ~s~n",
                      [State#state.node_id, Procedure]),
@@ -341,7 +341,7 @@ send_unregister_to_gateway(undefined, _UnregisterMsg, Procedure, State) ->
     ok;
 send_unregister_to_gateway(ConnMgrPid, UnregisterMsg, Procedure, _State) when is_pid(ConnMgrPid) ->
     %% Send UNREGISTER message (let it crash on send failures)
-    case macula_connection_manager:send_message(ConnMgrPid, unregister, UnregisterMsg) of
+    case macula_connection:send_message(ConnMgrPid, unregister, UnregisterMsg) of
         ok ->
             ?LOG_INFO("Unregistered service ~s from gateway", [Procedure]);
         {error, Reason} ->

@@ -102,7 +102,7 @@
 -spec connect(Url :: binary(), Opts :: options()) ->
     {ok, client()} | {error, Reason :: term()}.
 connect(Url, Opts) when is_binary(Url), is_map(Opts) ->
-    macula_connection:start_link(Url, Opts);
+    macula_peer:start_link(Url, Opts);
 connect(Url, Opts) when is_list(Url), is_map(Opts) ->
     connect(list_to_binary(Url), Opts).
 
@@ -111,7 +111,7 @@ connect(Url, Opts) when is_list(Url), is_map(Opts) ->
 %% Cleanly closes the HTTP/3 connection and cleans up all subscriptions.
 -spec disconnect(Client :: client()) -> ok | {error, Reason :: term()}.
 disconnect(Client) when is_pid(Client) ->
-    macula_connection:stop(Client).
+    macula_peer:stop(Client).
 
 %% @doc Publish an event to a topic.
 %%
@@ -146,14 +146,14 @@ disconnect(Client) when is_pid(Client) ->
 -spec publish(Client :: client(), Topic :: topic(), Data :: event_data()) ->
     ok | {error, Reason :: term()}.
 publish(Client, Topic, Data) when is_pid(Client), is_binary(Topic) ->
-    macula_connection:publish(Client, Topic, Data).
+    macula_peer:publish(Client, Topic, Data).
 
 %% @doc Publish an event with options.
 -spec publish(Client :: client(), Topic :: topic(), Data :: event_data(),
               Opts :: options()) ->
     ok | {error, Reason :: term()}.
 publish(Client, Topic, Data, Opts) when is_pid(Client), is_binary(Topic), is_map(Opts) ->
-    macula_connection:publish(Client, Topic, Data, Opts).
+    macula_peer:publish(Client, Topic, Data, Opts).
 
 %% @doc Subscribe to a topic.
 %%
@@ -181,7 +181,7 @@ publish(Client, Topic, Data, Opts) when is_pid(Client), is_binary(Topic), is_map
                 Callback :: fun((event_data()) -> ok)) ->
     {ok, subscription_ref()} | {error, Reason :: term()}.
 subscribe(Client, Topic, Callback) when is_pid(Client), is_binary(Topic), is_function(Callback, 1) ->
-    macula_connection:subscribe(Client, Topic, Callback).
+    macula_peer:subscribe(Client, Topic, Callback).
 
 %% @doc Unsubscribe from a topic.
 %%
@@ -189,7 +189,7 @@ subscribe(Client, Topic, Callback) when is_pid(Client), is_binary(Topic), is_fun
 -spec unsubscribe(Client :: client(), SubRef :: subscription_ref()) ->
     ok | {error, Reason :: term()}.
 unsubscribe(Client, SubRef) when is_pid(Client), is_reference(SubRef) ->
-    macula_connection:unsubscribe(Client, SubRef).
+    macula_peer:unsubscribe(Client, SubRef).
 
 %% @doc Make a synchronous RPC call.
 %%
@@ -211,14 +211,14 @@ unsubscribe(Client, SubRef) when is_pid(Client), is_reference(SubRef) ->
 -spec call(Client :: client(), Procedure :: procedure(), Args :: args()) ->
     {ok, Result :: term()} | {error, Reason :: term()}.
 call(Client, Procedure, Args) when is_pid(Client), is_binary(Procedure) ->
-    macula_connection:call(Client, Procedure, Args).
+    macula_peer:call(Client, Procedure, Args).
 
 %% @doc Make an RPC call with options.
 -spec call(Client :: client(), Procedure :: procedure(), Args :: args(),
            Opts :: options()) ->
     {ok, Result :: term()} | {error, Reason :: term()}.
 call(Client, Procedure, Args, Opts) when is_pid(Client), is_binary(Procedure), is_map(Opts) ->
-    macula_connection:call(Client, Procedure, Args, Opts).
+    macula_peer:call(Client, Procedure, Args, Opts).
 
 %% @doc Advertise a service that this client provides.
 %%
@@ -267,7 +267,7 @@ advertise(Client, Procedure, Handler) when is_pid(Client), is_binary(Procedure),
     {ok, reference()} | {error, Reason :: term()}.
 advertise(Client, Procedure, Handler, Opts) when is_pid(Client), is_binary(Procedure),
                                                    is_function(Handler), is_map(Opts) ->
-    macula_connection:advertise(Client, Procedure, Handler, Opts).
+    macula_peer:advertise(Client, Procedure, Handler, Opts).
 
 %% @doc Stop advertising a service.
 %%
@@ -281,7 +281,7 @@ advertise(Client, Procedure, Handler, Opts) when is_pid(Client), is_binary(Proce
 -spec unadvertise(Client :: client(), Procedure :: procedure()) ->
     ok | {error, Reason :: term()}.
 unadvertise(Client, Procedure) when is_pid(Client), is_binary(Procedure) ->
-    macula_connection:unadvertise(Client, Procedure).
+    macula_peer:unadvertise(Client, Procedure).
 
 %%%===================================================================
 %%% Internal functions

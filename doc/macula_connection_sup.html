@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.6.6">
+    <meta name="project" content="macula v0.7.4">
 
 
-    <title>macula_connection_sup — macula v0.6.6</title>
+    <title>macula_connection_sup — macula v0.7.4</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-A716BB8A.js"></script>
+    <script defer src="dist/sidebar_items-04AAC83B.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.6.6
+          v0.7.4
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_connection_sup</span> 
-      <small class="app-vsn" translate="no">(macula v0.6.6)</small>
+      <small class="app-vsn" translate="no">(macula v0.7.4)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.6.6/src/macula_connection_sup.erl#L25" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.7.4/src/macula_connection_sup.erl#L25" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -93,7 +93,7 @@ macula
 
 
     <section id="moduledoc">
-<p>Supervisor for the connection subsystem.</p><p>Supervision Strategy: - rest_for_one: If child N crashes, restart N and all children after N - Rationale: connection_manager is foundational; handlers depend on it but are independent of each other. This provides fault isolation while maintaining consistency when connection_manager restarts.</p><p>Children (in dependency order): - macula_connection_manager: QUIC connection lifecycle (foundational) - macula_pubsub_handler: Pub/sub operations (depends on connection_manager) - macula_rpc_handler: RPC operations (depends on connection_manager) - macula_advertisement_manager: DHT advertisements (depends on connection_manager)</p><p>Fault Isolation: - advertisement_manager crash → only advertisement restarts - rpc_handler crash → rpc + advertisement restart - pubsub_handler crash → pubsub + rpc + advertisement restart - connection_manager crash → all restart (unavoidable - foundational)</p>
+<p>Supervisor for the connection subsystem.</p><p>Supervision Strategy: - rest_for_one: If child N crashes, restart N and all children after N - Rationale: connection_manager is foundational; handlers depend on it but are independent of each other. This provides fault isolation while maintaining consistency when connection_manager restarts.</p><p>Children (in dependency order): - macula_connection: QUIC connection lifecycle (foundational) - macula_pubsub_handler: Pub/sub operations (depends on connection_manager) - macula_rpc_handler: RPC operations (depends on connection_manager) - macula_advertisement_manager: DHT advertisements (depends on connection_manager)</p><p>Fault Isolation: - advertisement_manager crash → only advertisement restarts - rpc_handler crash → rpc + advertisement restart - pubsub_handler crash → pubsub + rpc + advertisement restart - connection_manager crash → all restart (unavoidable - foundational)</p>
     </section>
 
 </div>
@@ -163,7 +163,7 @@ macula
       <h1 class="signature" translate="no">init(_)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.6.6/src/macula_connection_sup.erl#L60" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.4/src/macula_connection_sup.erl#L60" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -191,7 +191,7 @@ macula
       <h1 class="signature" translate="no">start_link(Url, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.6.6/src/macula_connection_sup.erl#L45" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.4/src/macula_connection_sup.erl#L45" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -219,7 +219,7 @@ macula
       <h1 class="signature" translate="no">stop(Sup)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.6.6/src/macula_connection_sup.erl#L50" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.4/src/macula_connection_sup.erl#L50" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -245,9 +245,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.6.6" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.7.4" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.6.6">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.7.4">Hex Preview</a>
 
           </span>
 

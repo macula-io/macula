@@ -1,253 +1,476 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% Macula SDK connection facade.
+%%% Macula Connection - QUIC Transport Layer (v0.7.0+).
 %%%
-%%% This module acts as a facade/coordinator for the connection subsystem.
-%%% It starts a supervision tree and delegates all operations to specialized
-%%% child processes:
-%%%   - macula_connection_manager: QUIC connection lifecycle
-%%%   - macula_pubsub_handler: Pub/sub operations
-%%%   - macula_rpc_handler: RPC operations
-%%%   - macula_advertisement_manager: DHT service advertisements
+%%% This module manages the low-level QUIC connection lifecycle and
+%%% message transport for mesh participants.
 %%%
-%%% The facade pattern provides a simple API while the actual work is
-%%% distributed across focused, single-responsibility GenServers under
-%%% OTP supervision.
+%%% Responsibilities:
+%%% - Establish and maintain QUIC connection
+%%% - Send messages via QUIC stream
+%%% - Receive and route incoming messages to handlers
+%%% - Handle connection errors and reconnection
+%%% - Message encoding/decoding and buffering
+%%%
+%%% Renamed from macula_connection in v0.7.0 for clarity:
+%%% - macula_connection = QUIC transport (this module - low-level)
+%%% - macula_peer = mesh participant (high-level API)
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_connection).
 
 -behaviour(gen_server).
 
-%% API
--export([
-    start_link/2,
-    stop/1,
-    publish/3,
-    publish/4,
-    subscribe/3,
-    unsubscribe/2,
-    call/3,
-    call/4,
-    advertise/4,
-    unadvertise/2
-]).
-
-%% gen_server callbacks
--export([
-    init/1,
-    handle_call/3,
-    handle_cast/2,
-    handle_info/2,
-    terminate/2,
-    code_change/3
-]).
-
 -include_lib("kernel/include/logger.hrl").
 -include("macula_config.hrl").
 
+%% API
+-export([start_link/2, send_message/3, get_status/1, default_config/0]).
+
+%% API for testing
+-export([decode_messages/2]).
+
+%% Internal exports
+-export([start_keepalive_timer/1]).
+
+%% gen_server callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+
+-define(SERVER, ?MODULE).
+-define(CONNECT_RETRY_DELAY, 5000).
+
 -record(state, {
     url :: binary(),
-    realm :: binary(),
+    opts :: map(),
     node_id :: binary(),
-
-    %% Supervision tree child PIDs
-    supervisor_pid :: pid(),
-    connection_manager_pid :: pid(),
-    pubsub_handler_pid :: pid(),
-    rpc_handler_pid :: pid(),
-    advertisement_manager_pid :: pid()
+    realm :: binary(),
+    connection :: pid() | undefined,
+    stream :: pid() | undefined,
+    status = connecting :: connecting | connected | disconnected | error,
+    recv_buffer = <<>> :: binary(),
+    keepalive_timer :: reference() | undefined
 }).
-
--define(CONNECT_RETRY_DELAY, 1000).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
-%% @doc Start a client connection to a Macula mesh.
 -spec start_link(binary(), map()) -> {ok, pid()} | {error, term()}.
 start_link(Url, Opts) ->
     gen_server:start_link(?MODULE, {Url, Opts}, []).
 
-%% @doc Stop the client connection.
--spec stop(pid()) -> ok.
-stop(Client) ->
-    gen_server:stop(Client).
+-spec default_config() -> map().
+default_config() ->
+    #{
+        keepalive_enabled => true,
+        keepalive_interval => 30000  %% 30 seconds
+    }.
 
-%% @doc Publish an event through this client (no options).
--spec publish(pid(), binary(), map() | binary()) -> ok | {error, term()}.
-publish(Client, Topic, Data) ->
-    publish(Client, Topic, Data, #{}).
+-spec send_message(pid(), atom(), map()) -> ok | {error, term()}.
+send_message(Pid, Type, Msg) ->
+    gen_server:call(Pid, {send_message, Type, Msg}, 5000).
 
-%% @doc Publish an event through this client with options.
--spec publish(pid(), binary(), map() | binary(), map()) -> ok | {error, term()}.
-publish(Client, Topic, Data, Opts) ->
-    gen_server:call(Client, {publish, Topic, Data, Opts}, ?DEFAULT_TIMEOUT).
-
-%% @doc Subscribe to a topic through this client.
--spec subscribe(pid(), binary(), fun((map()) -> ok)) ->
-    {ok, reference()} | {error, term()}.
-subscribe(Client, Topic, Callback) ->
-    gen_server:call(Client, {subscribe, Topic, Callback}, ?DEFAULT_TIMEOUT).
-
-%% @doc Unsubscribe from a topic.
--spec unsubscribe(pid(), reference()) -> ok | {error, term()}.
-unsubscribe(Client, SubRef) ->
-    gen_server:call(Client, {unsubscribe, SubRef}, ?DEFAULT_TIMEOUT).
-
-%% @doc Make an RPC call through this client (default timeout).
--spec call(pid(), binary(), map() | list()) -> {ok, term()} | {error, term()}.
-call(Client, Procedure, Args) ->
-    call(Client, Procedure, Args, #{}).
-
-%% @doc Make an RPC call through this client with options.
--spec call(pid(), binary(), map() | list(), map()) ->
-    {ok, term()} | {error, term()}.
-call(Client, Procedure, Args, Opts) ->
-    Timeout = maps:get(timeout, Opts, ?CALL_TIMEOUT),
-    gen_server:call(Client, {call, Procedure, Args, Opts}, Timeout + 1000).
-
-%% @doc Advertise a service handler for a procedure.
-%%
-%% This makes the local handler available to other mesh nodes via DHT.
-%% The handler will be periodically re-advertised based on TTL.
--spec advertise(pid(), binary(), fun((map()) -> {ok, term()} | {error, term()}), map()) ->
-    ok | {error, term()}.
-advertise(Client, Procedure, Handler, Opts) ->
-    gen_server:call(Client, {advertise, Procedure, Handler, Opts}, ?DEFAULT_TIMEOUT).
-
-%% @doc Stop advertising a service.
-%%
-%% Removes the local handler and stops advertising to the DHT.
--spec unadvertise(pid(), binary()) -> ok | {error, term()}.
-unadvertise(Client, Procedure) ->
-    gen_server:call(Client, {unadvertise, Procedure}, ?DEFAULT_TIMEOUT).
+-spec get_status(pid()) -> connecting | connected | disconnected | error.
+get_status(Pid) ->
+    gen_server:call(Pid, get_status, 5000).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
-%% @private
 init({Url, Opts}) ->
+    ?LOG_INFO("Connection manager starting for ~s", [Url]),
+
     %% Parse URL to extract host and port
-    {Host, Port} = macula_utils:parse_url(Url),
+    {Host, Port} = parse_url(Url),
 
     %% Get realm (required)
     Realm = get_realm_from_opts(Opts),
 
     %% Generate or get node ID
-    NodeId = maps:get(node_id, Opts, macula_utils:generate_node_id()),
-
-    ?LOG_INFO("[Connection Facade] Starting supervision tree for ~s", [Url]),
-
-    %% Prepare opts for handlers (includes node_id, realm, url)
-    HandlerOpts = Opts#{
-        node_id => NodeId,
-        realm => Realm,
-        url => Url,
-        host => Host,
-        port => Port
-    },
-
-    %% Start supervision tree
-    {ok, SupPid} = macula_connection_sup:start_link(Url, HandlerOpts),
-
-    %% Look up child PIDs from supervisor
-    Children = supervisor:which_children(SupPid),
-    ConnMgrPid = find_child_pid(Children, connection_manager),
-    PubSubPid = find_child_pid(Children, pubsub_handler),
-    RpcPid = find_child_pid(Children, rpc_handler),
-    AdvMgrPid = find_child_pid(Children, advertisement_manager),
-
-    ?LOG_INFO("[Connection Facade] Supervision tree started - ConnMgr: ~p, PubSub: ~p, RPC: ~p, AdvMgr: ~p",
-              [ConnMgrPid, PubSubPid, RpcPid, AdvMgrPid]),
-
-    %% Send connection_manager_pid to children that need it
-    gen_server:cast(PubSubPid, {set_connection_manager_pid, ConnMgrPid}),
-    gen_server:cast(RpcPid, {set_connection_manager_pid, ConnMgrPid}),
-    gen_server:cast(AdvMgrPid, {set_connection_manager_pid, ConnMgrPid}),
+    NodeId = maps:get(node_id, Opts, generate_node_id()),
 
     State = #state{
         url = Url,
-        realm = Realm,
+        opts = Opts#{host => Host, port => Port},
         node_id = NodeId,
-        supervisor_pid = SupPid,
-        connection_manager_pid = ConnMgrPid,
-        pubsub_handler_pid = PubSubPid,
-        rpc_handler_pid = RpcPid,
-        advertisement_manager_pid = AdvMgrPid
+        realm = Realm,
+        connection = undefined,
+        stream = undefined,
+        status = connecting,
+        recv_buffer = <<>>,
+        keepalive_timer = undefined
     },
+
+    %% Initiate connection asynchronously
+    self() ! connect,
 
     {ok, State}.
 
-%% @private
-%% Delegate to pubsub_handler
-handle_call({publish, Topic, Data, Opts}, _From, State) ->
-    Result = macula_pubsub_handler:publish(State#state.pubsub_handler_pid, Topic, Data, Opts),
-    {reply, Result, State};
+handle_call({send_message, Type, Msg}, _From, #state{status = connected, stream = Stream} = State) ->
+    case send_message_raw(Type, Msg, Stream) of
+        ok ->
+            {reply, ok, State};
+        {error, Reason} ->
+            {reply, {error, Reason}, State}
+    end;
 
-%% Delegate to pubsub_handler
-handle_call({subscribe, Topic, Callback}, _From, State) ->
-    Result = macula_pubsub_handler:subscribe(State#state.pubsub_handler_pid, Topic, Callback),
-    {reply, Result, State};
+handle_call({send_message, _Type, _Msg}, _From, State) ->
+    {reply, {error, not_connected}, State};
 
-%% Delegate to pubsub_handler
-handle_call({unsubscribe, SubRef}, _From, State) ->
-    Result = macula_pubsub_handler:unsubscribe(State#state.pubsub_handler_pid, SubRef),
-    {reply, Result, State};
-
-%% Delegate to rpc_handler
-handle_call({call, Procedure, Args, Opts}, _From, State) ->
-    Result = macula_rpc_handler:call(State#state.rpc_handler_pid, Procedure, Args, Opts),
-    {reply, Result, State};
-
-%% Delegate to advertisement_manager
-handle_call({advertise, Procedure, Handler, Opts}, _From, State) ->
-    Result = macula_advertisement_manager:advertise_service(State#state.advertisement_manager_pid, Procedure, Handler, Opts),
-    {reply, Result, State};
-
-%% Delegate to advertisement_manager
-handle_call({unadvertise, Procedure}, _From, State) ->
-    Result = macula_advertisement_manager:unadvertise_service(State#state.advertisement_manager_pid, Procedure),
-    {reply, Result, State};
+handle_call(get_status, _From, State) ->
+    {reply, State#state.status, State};
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
-%% @private
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-%% @private
+handle_info(connect, State) ->
+    case do_connect(State) of
+        {ok, State2} ->
+            {noreply, State2};
+        {error, Reason} ->
+            ?LOG_ERROR("Connection failed: ~p, retrying in ~p ms",
+                      [Reason, ?CONNECT_RETRY_DELAY]),
+            erlang:send_after(?CONNECT_RETRY_DELAY, self(), connect),
+            {noreply, State#state{status = error}}
+    end;
+
+handle_info({quic, Data, Stream, _Props}, State) when is_binary(Data) ->
+    %% Received data from QUIC stream
+    MainStream = State#state.stream,
+    handle_stream_data(Stream =:= MainStream, Data, Stream, State);
+
+%% Handle QUIC control messages (non-binary Data)
+handle_info({quic, ControlMsg, _Stream, _Props}, State) when is_atom(ControlMsg) ->
+    %% QUIC control message (send_shutdown_complete, etc.) - ignore
+    ?LOG_DEBUG("Ignoring QUIC control message: ~p", [ControlMsg]),
+    {noreply, State};
+
+%% Handle keep-alive tick - send PING message
+handle_info(keepalive_tick, #state{status = connected, stream = Stream} = State) ->
+    %% Send PING message
+    PingMsg = #{timestamp => erlang:system_time(millisecond)},
+    case send_message_raw(ping, PingMsg, Stream) of
+        ok ->
+            ?LOG_DEBUG("Keep-alive PING sent"),
+            %% Restart timer for next keep-alive
+            StateWithTimer = start_keepalive_timer(State),
+            {noreply, StateWithTimer};
+        {error, Reason} ->
+            ?LOG_WARNING("Failed to send keep-alive PING: ~p", [Reason]),
+            %% Connection might be dead - let it retry
+            {noreply, State}
+    end;
+
+%% Ignore keep-alive tick if not connected
+handle_info(keepalive_tick, State) ->
+    {noreply, State};
+
 handle_info(_Info, State) ->
+    %% Ignore unexpected messages
+    ?LOG_DEBUG("Unhandled handle_info message: ~p", [_Info]),
     {noreply, State}.
 
-%% @private
-terminate(_Reason, #state{supervisor_pid = SupPid}) ->
-    ?LOG_INFO("[Connection Facade] Terminating, stopping supervision tree"),
-    %% Stop the supervisor (will stop all children)
-    case SupPid of
-        Pid when is_pid(Pid) ->
-            macula_connection_sup:stop(Pid);
-        _ ->
-            ok
-    end,
+terminate(_Reason, #state{stream = Stream, connection = Conn}) ->
+    ?LOG_INFO("Connection manager terminating"),
+    %% Clean up QUIC resources
+    catch macula_quic:close(Stream),
+    catch macula_quic:close(Conn),
     ok.
-
-%% @private
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
 
-%% @doc Extract and normalize realm from options (pattern matching on type).
+%% @doc Dispatch stream data based on validity (pattern matching on boolean).
+handle_stream_data(true, Data, _Stream, State) ->
+    handle_received_data(Data, State);
+handle_stream_data(false, _Data, Stream, State) ->
+    ?LOG_WARNING("Received data from unknown stream: ~p", [Stream]),
+    {noreply, State}.
+
+%% @doc Establish QUIC connection and perform handshake.
+-spec do_connect(#state{}) -> {ok, #state{}} | {error, term()}.
+do_connect(State) ->
+    #{host := Host, port := Port} = State#state.opts,
+    QuicOpts = build_quic_opts(),
+
+    case attempt_quic_connection(Host, Port, QuicOpts) of
+        {ok, Conn, Stream} ->
+            complete_connection_setup(Conn, Stream, Host, Port, State);
+        {error, _Reason} = Error ->
+            Error
+    end.
+
+%% @doc Build QUIC connection options
+-spec build_quic_opts() -> list().
+build_quic_opts() ->
+    [
+        {alpn, ["macula"]},
+        {verify, none}  %% TODO: Add proper TLS verification
+    ].
+
+%% @doc Attempt QUIC connection and stream setup
+-spec attempt_quic_connection(string(), integer(), list()) ->
+    {ok, pid(), pid()} | {error, term()}.
+attempt_quic_connection(Host, Port, QuicOpts) ->
+    case safe_quic_connect(Host, Port, QuicOpts) of
+        {ok, Conn} ->
+            setup_bidirectional_stream(Conn);
+        {error, _Reason} = Error ->
+            Error;
+        {error, _Type, _Details} = Error ->
+            {error, {connection_failed, Error}};
+        Other ->
+            {error, {connection_failed, Other}}
+    end.
+
+%% @doc Safe QUIC connect with error handling.
+%% NIF boundary - quicer can throw exceptions, convert to tagged tuples.
+-spec safe_quic_connect(string(), integer(), list()) ->
+    {ok, pid()} | {error, term()}.
+safe_quic_connect(Host, Port, QuicOpts) ->
+    try
+        macula_quic:connect(Host, Port, QuicOpts, ?DEFAULT_TIMEOUT)
+    catch
+        _:Error ->
+            {error, {connection_failed, Error}}
+    end.
+
+%% @doc Open and configure bidirectional stream
+-spec setup_bidirectional_stream(pid()) ->
+    {ok, pid(), pid()} | {error, term()}.
+setup_bidirectional_stream(Conn) ->
+    case macula_quic:open_stream(Conn) of
+        {ok, Stream} ->
+            configure_stream_active_mode(Conn, Stream);
+        {error, Reason} ->
+            macula_quic:close(Conn),
+            {error, {stream_open_failed, Reason}}
+    end.
+
+%% @doc Set stream to active mode for receiving messages
+-spec configure_stream_active_mode(pid(), pid()) ->
+    {ok, pid(), pid()} | {error, term()}.
+configure_stream_active_mode(Conn, Stream) ->
+    case quicer:setopt(Stream, active, true) of
+        ok ->
+            ?LOG_DEBUG("Stream set to active mode"),
+            {ok, Conn, Stream};
+        {error, SetOptErr} ->
+            ?LOG_WARNING("Failed to set stream active: ~p", [SetOptErr]),
+            macula_quic:close(Stream),
+            macula_quic:close(Conn),
+            {error, {stream_setopt_failed, SetOptErr}}
+    end.
+
+%% @doc Complete connection setup with handshake and DHT registration
+-spec complete_connection_setup(pid(), pid(), string(), integer(), #state{}) ->
+    {ok, #state{}} | {error, term()}.
+complete_connection_setup(Conn, Stream, Host, Port, State) ->
+    ConnectMsg = build_connect_message(State),
+
+    case send_message_raw(connect, ConnectMsg, Stream) of
+        ok ->
+            ?LOG_INFO("Connected to Macula mesh: ~s:~p", [Host, Port]),
+            register_server_in_dht(State),
+
+            %% Start keep-alive timer if enabled
+            ConnectedState = State#state{
+                connection = Conn,
+                stream = Stream,
+                status = connected
+            },
+            StateWithKeepalive = start_keepalive_timer(ConnectedState),
+
+            {ok, StateWithKeepalive};
+        {error, Reason} ->
+            macula_quic:close(Stream),
+            macula_quic:close(Conn),
+            {error, {handshake_failed, Reason}}
+    end.
+
+%% @doc Build CONNECT protocol message
+-spec build_connect_message(#state{}) -> map().
+build_connect_message(State) ->
+    LocalEndpoint = get_advertise_endpoint(),
+    #{
+        version => <<"1.0">>,
+        node_id => State#state.node_id,
+        realm_id => State#state.realm,
+        capabilities => [pubsub, rpc],
+        endpoint => LocalEndpoint
+    }.
+
+%% @doc Get endpoint to advertise for peer-to-peer connections
+-spec get_advertise_endpoint() -> binary().
+get_advertise_endpoint() ->
+    case application:get_env(macula, advertise_endpoint) of
+        {ok, Endpoint} when is_binary(Endpoint) ->
+            Endpoint;
+        _ ->
+            construct_default_endpoint()
+    end.
+
+%% @doc Construct default endpoint from NODE_HOST environment variable
+-spec construct_default_endpoint() -> binary().
+construct_default_endpoint() ->
+    NodeHost = list_to_binary(os:getenv("NODE_HOST", "localhost")),
+    <<"https://", NodeHost/binary, ":9443">>.
+
+%% @doc Register connected server in DHT routing table (best effort).
+%% If DHT is not running, logs warning but continues.
+%% Unexpected errors (bad URL, crypto failure) will crash - this is intentional.
+-spec register_server_in_dht(#state{}) -> ok.
+register_server_in_dht(State) ->
+    ServerAddress = parse_server_endpoint(State#state.url),
+    ServerNodeInfo = #{
+        node_id => crypto:strong_rand_bytes(32),
+        address => ServerAddress
+    },
+
+    case macula_routing_server:add_node(macula_routing_server, ServerNodeInfo) of
+        ok ->
+            ?LOG_DEBUG("Added server node to DHT routing table with address: ~p", [ServerAddress]),
+            ok;
+        {error, Reason} ->
+            ?LOG_WARNING("DHT registration failed (expected if DHT not running): ~p", [Reason]),
+            ok
+    end.
+
+%% @doc Send a protocol message through a stream (raw).
+%% Crashes if message is invalid - this indicates a bug in the caller.
+-spec send_message_raw(atom(), map(), pid()) -> ok | {error, term()}.
+send_message_raw(Type, Msg, Stream) ->
+    io:format("[send_message_raw] Type=~p, Msg=~p~n", [Type, Msg]),
+    Binary = macula_protocol_encoder:encode(Type, Msg),
+    macula_quic:async_send(Stream, Binary).
+
+%% @doc Handle received data from the stream.
+-spec handle_received_data(binary(), #state{}) -> {noreply, #state{}}.
+handle_received_data(Data, State) ->
+    %% Append to receive buffer
+    Buffer = <<(State#state.recv_buffer)/binary, Data/binary>>,
+
+    %% Try to decode messages
+    {Messages, RemainingBuffer} = decode_messages(Buffer, []),
+
+    %% Process each message
+    State2 = lists:foldl(fun process_message/2, State, Messages),
+
+    {noreply, State2#state{recv_buffer = RemainingBuffer}}.
+
+%% @doc Decode all complete messages from buffer.
+-spec decode_messages(binary(), list()) -> {list(), binary()}.
+decode_messages(Buffer, Acc) when byte_size(Buffer) < 8 ->
+    %% Not enough for header
+    {lists:reverse(Acc), Buffer};
+decode_messages(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
+                  PayloadLen:32/big-unsigned, Rest/binary>> = Buffer, Acc) ->
+    case byte_size(Rest) of
+        ActualLen when ActualLen >= PayloadLen ->
+            %% We have a complete message
+            case macula_protocol_decoder:decode(Buffer) of
+                {ok, {Type, Msg}} ->
+                    %% Skip this message and continue
+                    <<_:8/binary, _Payload:PayloadLen/binary, Remaining/binary>> = Buffer,
+                    decode_messages(Remaining, [{Type, Msg} | Acc]);
+                {error, _Reason} ->
+                    %% Decode error, skip this message
+                    <<_:8/binary, _Payload:PayloadLen/binary, Remaining/binary>> = Buffer,
+                    decode_messages(Remaining, Acc)
+            end;
+        _ ->
+            %% Incomplete message, wait for more data
+            {lists:reverse(Acc), Buffer}
+    end.
+
+%% @doc Process a received message - route to appropriate handler.
+-spec process_message({atom(), map()}, #state{}) -> #state{}.
+
+%% Route PUBLISH messages to pub/sub handler
+process_message({publish, Msg}, State) ->
+    ?LOG_INFO("Connection manager routing message type: ~p", [publish]),
+    macula_pubsub_handler:handle_incoming_publish(Msg),
+    ?LOG_DEBUG("Routed PUBLISH to pubsub_handler"),
+    State;
+
+%% Route REPLY messages to RPC handler
+process_message({reply, Msg}, State) ->
+    ?LOG_INFO("Connection manager routing message type: ~p", [reply]),
+    macula_rpc_handler:handle_incoming_reply(Msg),
+    ?LOG_DEBUG("Routed REPLY to rpc_handler"),
+    State;
+
+%% Handle CONNECTED acknowledgment
+process_message({connected, Msg}, State) ->
+    ?LOG_INFO("Received CONNECTED acknowledgment from server: ~p", [Msg]),
+    State;
+
+%% Handle PING message - respond with PONG
+process_message({ping, Msg}, #state{stream = Stream} = State) ->
+    ?LOG_DEBUG("Received PING, responding with PONG"),
+    PongMsg = #{timestamp => maps:get(timestamp, Msg, 0)},
+    _ = send_message_raw(pong, PongMsg, Stream),
+    State;
+
+%% Handle PONG message - keep-alive acknowledgment
+process_message({pong, _Msg}, State) ->
+    ?LOG_DEBUG("Received PONG - connection alive"),
+    State;
+
+%% Handle unknown message types
+process_message({Type, _Msg}, State) ->
+    ?LOG_INFO("Connection manager routing message type: ~p", [Type]),
+    ?LOG_WARNING("Unknown message type: ~p", [Type]),
+    State.
+
+%% @doc Parse URL to extract host and port.
+-spec parse_url(binary()) -> {string(), integer()}.
+parse_url(Url) when is_binary(Url) ->
+    parse_url(binary_to_list(Url));
+parse_url("https://" ++ Rest) ->
+    parse_host_port(Rest, 443);
+parse_url("http://" ++ Rest) ->
+    parse_host_port(Rest, 80);
+parse_url(Url) ->
+    error({invalid_url, Url}).
+
+%% @doc Parse host and port from URL remainder, using default port if not specified.
+-spec parse_host_port(string(), integer()) -> {string(), integer()}.
+parse_host_port(HostPort, DefaultPort) ->
+    case string:split(HostPort, ":") of
+        [Host, PortStr] -> {Host, list_to_integer(PortStr)};
+        [Host] -> {Host, DefaultPort}
+    end.
+
+%% @doc Parse server endpoint to extract address for DHT.
+-spec parse_server_endpoint(binary()) -> binary().
+parse_server_endpoint(Url) ->
+    %% Extract host from URL for DHT address
+    case parse_url(Url) of
+        {Host, Port} ->
+            list_to_binary(Host ++ ":" ++ integer_to_list(Port));
+        _ ->
+            Url
+    end.
+
+%% @doc Generate a random node ID.
+-spec generate_node_id() -> binary().
+generate_node_id() ->
+    macula_utils:generate_node_id().
+
+%% @doc Get realm from options and normalize.
 -spec get_realm_from_opts(map()) -> binary().
 get_realm_from_opts(Opts) ->
     normalize_realm(maps:get(realm, Opts, undefined)).
 
+%% @doc Normalize realm to binary.
+-spec normalize_realm(undefined | binary() | list() | atom()) -> binary().
 normalize_realm(undefined) ->
     error({missing_required_option, realm});
 normalize_realm(Realm) when is_binary(Realm) ->
@@ -257,14 +480,25 @@ normalize_realm(Realm) when is_list(Realm) ->
 normalize_realm(Realm) when is_atom(Realm) ->
     atom_to_binary(Realm).
 
-%% @doc Find child PID from supervisor children list.
--spec find_child_pid(list(), atom()) -> pid().
-find_child_pid(Children, ChildId) ->
-    extract_child_pid(lists:keyfind(ChildId, 1, Children), ChildId).
+%% @doc Start keep-alive timer if enabled in options.
+-spec start_keepalive_timer(#state{}) -> #state{}.
+start_keepalive_timer(#state{opts = Opts, keepalive_timer = OldTimer} = State) ->
+    %% Cancel existing timer if present
+    case OldTimer of
+        undefined -> ok;
+        _ -> erlang:cancel_timer(OldTimer)
+    end,
 
-extract_child_pid({_, Pid, _Type, _Modules}, _ChildId) when is_pid(Pid) ->
-    Pid;
-extract_child_pid({_, undefined, _Type, _Modules}, ChildId) ->
-    error({child_not_started, ChildId});
-extract_child_pid(false, ChildId) ->
-    error({child_not_found, ChildId}).
+    %% Check if keep-alive is enabled
+    Enabled = maps:get(keepalive_enabled, Opts, true),
+    start_keepalive_timer(Enabled, State).
+
+%% Keep-alive disabled
+start_keepalive_timer(false, State) ->
+    State#state{keepalive_timer = undefined};
+
+%% Keep-alive enabled - start timer
+start_keepalive_timer(true, #state{opts = Opts} = State) ->
+    Interval = maps:get(keepalive_interval, Opts, 30000),
+    TimerRef = erlang:send_after(Interval, self(), keepalive_tick),
+    State#state{keepalive_timer = TimerRef}.

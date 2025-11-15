@@ -66,7 +66,7 @@ advertise_subscription(Topic, SubRef, NodeId, Url, ConnMgrPid) ->
     ?LOG_INFO("[~s] Advertising subscription to topic ~s in DHT", [NodeId, Topic]),
     try
         StoreMsg = macula_routing_protocol:encode_store(TopicKey, SubscriberValue),
-        case macula_connection_manager:send_message(ConnMgrPid, store, StoreMsg) of
+        case macula_connection:send_message(ConnMgrPid, store, StoreMsg) of
             ok ->
                 ?LOG_DEBUG("[~s] Successfully stored subscription for ~s in DHT", [NodeId, Topic]);
             {error, SendError} ->
@@ -197,7 +197,7 @@ query_dht_async(Topic, _Payload, _Qos, MsgId, ConnMgrPid) ->
     spawn(fun() ->
         try
             FindValueMsg = macula_routing_protocol:encode_find_value(TopicKey),
-            case macula_connection_manager:send_message(ConnMgrPid, find_value, FindValueMsg) of
+            case macula_connection:send_message(ConnMgrPid, find_value, FindValueMsg) of
                 ok ->
                     ?LOG_DEBUG("Sent FIND_VALUE for topic ~s", [Topic]);
                 {error, SendError} ->
