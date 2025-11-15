@@ -11,6 +11,8 @@ assets/macula-logo-color.svg
 assets/macula-logo-dark.svg
 assets/macula-logo-white.svg
 changelog.html
+comparisons.html
+development.html
 dist/html-DPJLHKSM.js
 dist/html-erlang-DQDXQC7W.css
 dist/lato-latin-400-normal-W7754I4D.woff2
@@ -18,9 +20,10 @@ dist/lato-latin-700-normal-2XVSBPG4.woff2
 dist/lato-latin-ext-400-normal-N27NCBWW.woff2
 dist/lato-latin-ext-700-normal-Q2L5DVMW.woff2
 dist/remixicon-QPNJX265.woff2
-dist/search_data-F9F558B9.js
-dist/sidebar_items-F3D96C3D.js
+dist/search_data-0B4593F4.js
+dist/sidebar_items-9D9914C2.js
 documentation_status.html
+executive_summary.html
 hello_world.html
 index.html
 kademlia_dht_architecture.html
@@ -104,4 +107,5 @@ readme-1.html
 readme-2.html
 readme-3.html
 search.html
+use_cases.html
 v0-6-0_release_summary.html

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2025-11-15
+
+### Changed
+- **Documentation restructuring** - Split README.md into focused landing page with table of contents
+  - Created `docs/EXECUTIVE_SUMMARY.md` - Why Macula and the case for decentralization
+  - Created `docs/COMPARISONS.md` - How Macula compares to libp2p, Distributed Erlang, Akka, etc.
+  - Created `docs/USE_CASES.md` - Real-world applications across business, IoT, and AI domains
+  - Created `docs/DEVELOPMENT.md` - Complete development guide and coding standards
+  - README.md now serves as concise landing page (119 lines vs 372 lines)
+  - All detailed content accessible via clear table of contents
+  - Removed Mermaid diagram from README.md (ex_doc doesn't support Mermaid - works on GitHub)
+
+### Fixed
+- ex_doc landing page uses HELLO_WORLD.md (tutorial-first approach, no multi-page split)
+- Documentation properly links to all new guide documents
+- Better first impression for Hex.pm users (logo, quick navigation)
+
 ## [0.6.3] - 2025-11-15
 
 ### Fixed
