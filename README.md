@@ -12,6 +12,67 @@
 
 ---
 
+## Architecture Overview
+
+```mermaid
+graph TB
+    subgraph "Macula HTTP/3 Mesh Network"
+        subgraph "Gateway Node (Registry)"
+            GW[Gateway<br/>• Service Registry<br/>• DHT Routing<br/>• Kademlia]
+        end
+
+        subgraph "Edge Nodes"
+            E1[Edge Node 1<br/>• Pub/Sub<br/>• RPC Client<br/>• Service Provider]
+            E2[Edge Node 2<br/>• Pub/Sub<br/>• RPC Client<br/>• Service Provider]
+            E3[Edge Node 3<br/>• Pub/Sub<br/>• RPC Client<br/>• Service Provider]
+        end
+
+        subgraph "IoT Devices"
+            IOT1[IoT Device 1]
+            IOT2[IoT Device 2]
+        end
+    end
+
+    DEV[Application Developer<br/>Erlang/Elixir Apps]
+
+    INTERNET[Internet<br/>HTTP/3 over QUIC<br/>NAT/Firewall Friendly]
+
+    DEV -->|Builds on| GW
+    DEV -->|Deploys to| E1
+    DEV -->|Deploys to| E2
+    DEV -->|Deploys to| E3
+
+    E1 <-->|HTTP/3| INTERNET
+    E2 <-->|HTTP/3| INTERNET
+    E3 <-->|HTTP/3| INTERNET
+    GW <-->|HTTP/3| INTERNET
+    IOT1 <-->|HTTP/3| INTERNET
+    IOT2 <-->|HTTP/3| INTERNET
+
+    E1 -.->|DHT Lookup| GW
+    E2 -.->|DHT Lookup| GW
+    E3 -.->|DHT Lookup| GW
+    IOT1 -.->|DHT Lookup| GW
+    IOT2 -.->|DHT Lookup| GW
+
+    E1 <-.->|Pub/Sub & RPC| E2
+    E2 <-.->|Pub/Sub & RPC| E3
+    E3 <-.->|Pub/Sub & RPC| E1
+    E1 <-.->|Pub/Sub & RPC| IOT1
+    E2 <-.->|Pub/Sub & RPC| IOT2
+
+    style GW fill:#4a90e2,stroke:#2e5c8a,color:#fff
+    style E1 fill:#50c878,stroke:#2d7a4a,color:#fff
+    style E2 fill:#50c878,stroke:#2d7a4a,color:#fff
+    style E3 fill:#50c878,stroke:#2d7a4a,color:#fff
+    style IOT1 fill:#9b59b6,stroke:#6c3483,color:#fff
+    style IOT2 fill:#9b59b6,stroke:#6c3483,color:#fff
+    style DEV fill:#f39c12,stroke:#b8730a,color:#fff
+    style INTERNET fill:#ecf0f1,stroke:#95a5a6,color:#333
+```
+
+---
+
 ## Executive Summary
 
 Macula is infrastructure for building **decentralized applications and services** that operate autonomously at the edge, without dependency on centralized cloud infrastructure. It enables organizations to build systems where business logic, data, and intelligence live close to where they're needed—whether that's in factories, homes, vehicles, or partner networks.
