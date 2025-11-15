@@ -177,10 +177,10 @@ Microservices at the edge with automatic discovery.
 
 ## Getting Started
 
-Ready to build? See our **[Hello World Tutorial](hello-world-tutorial.html)** to build your first decentralized application in 30 minutes.
+Ready to build? See our **[Hello World Tutorial](hello_world.html)** to build your first decentralized application in 30 minutes.
 
 For technical architecture details, see the **[Technical Documentation](macula_http3_mesh_root.html)**.
 
 ---
 
-**[← Back to README](readme.html)** | **[Comparisons →](comparisons.html)**
+**[← Back to README](hello_world.html)** | **[Comparisons →](comparisons.html)**

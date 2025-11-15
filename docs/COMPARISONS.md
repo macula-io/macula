@@ -68,4 +68,4 @@ If you're building **decentralized Erlang/Elixir applications** that need to wor
 
 ---
 
-**[← Back to README](readme.html)** | **[Use Cases →](use-cases.html)**
+**[← Back to README](hello_world.html)** | **[Use Cases →](use_cases.html)**

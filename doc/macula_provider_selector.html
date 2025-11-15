@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.6.5">
+    <meta name="project" content="macula v0.6.6">
 
 
-    <title>macula_provider_selector — macula v0.6.5</title>
+    <title>macula_provider_selector — macula v0.6.6</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-8AB3F2E8.js"></script>
+    <script defer src="dist/sidebar_items-A716BB8A.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.6.5
+          v0.6.6
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_provider_selector</span> 
-      <small class="app-vsn" translate="no">(macula v0.6.5)</small>
+      <small class="app-vsn" translate="no">(macula v0.6.6)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.6.5/src/macula_provider_selector.erl#L15" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.6.6/src/macula_provider_selector.erl#L15" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -187,7 +187,7 @@ macula
       <h1 class="signature" translate="no">provider_info/0</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.6.5/src/macula_provider_selector.erl#L36" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.6/src/macula_provider_selector.erl#L36" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -220,7 +220,7 @@ macula
       <h1 class="signature" translate="no">selection_state/0</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.6.5/src/macula_provider_selector.erl#L45" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.6/src/macula_provider_selector.erl#L45" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -248,7 +248,7 @@ macula
       <h1 class="signature" translate="no">strategy/0</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.6.5/src/macula_provider_selector.erl#L33" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.6/src/macula_provider_selector.erl#L33" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -288,7 +288,7 @@ macula
       <h1 class="signature" translate="no">select_provider(Providers, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.6.5/src/macula_provider_selector.erl#L60" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.6/src/macula_provider_selector.erl#L60" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -317,7 +317,7 @@ macula
       <h1 class="signature" translate="no">select_provider(Providers, Strategy, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.6.5/src/macula_provider_selector.erl#L84" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.6.6/src/macula_provider_selector.erl#L84" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -334,13 +334,13 @@ macula
       </div>
 
 <p>Select a provider from a list using a specific strategy.</p><p>Strategies: - first: Always select the first provider (simple, no state) - random: Randomly select a provider - round_robin: Distribute calls evenly using a counter</p><p>Examples:</p><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Random selection</span><span class="w">
-  </span><span class="n">State</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">new_state</span><span class="p" data-group-id="0570361920-1">(</span><span class="ss">random</span><span class="p" data-group-id="0570361920-1">)</span><span class="p">,</span><span class="w">
-  </span><span class="p" data-group-id="0570361920-2">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Provider</span><span class="p">,</span><span class="w"> </span><span class="n">State2</span><span class="p" data-group-id="0570361920-2">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">select_provider</span><span class="p" data-group-id="0570361920-3">(</span><span class="n">Providers</span><span class="p">,</span><span class="w"> </span><span class="ss">random</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="0570361920-3">)</span><span class="p">.</span><span class="w">
+  </span><span class="n">State</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">new_state</span><span class="p" data-group-id="5271763550-1">(</span><span class="ss">random</span><span class="p" data-group-id="5271763550-1">)</span><span class="p">,</span><span class="w">
+  </span><span class="p" data-group-id="5271763550-2">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Provider</span><span class="p">,</span><span class="w"> </span><span class="n">State2</span><span class="p" data-group-id="5271763550-2">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">select_provider</span><span class="p" data-group-id="5271763550-3">(</span><span class="n">Providers</span><span class="p">,</span><span class="w"> </span><span class="ss">random</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="5271763550-3">)</span><span class="p">.</span><span class="w">
  
   </span><span class="c1">%% Round-robin selection</span><span class="w">
-  </span><span class="n">State</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">new_state</span><span class="p" data-group-id="0570361920-4">(</span><span class="ss">round_robin</span><span class="p" data-group-id="0570361920-4">)</span><span class="p">,</span><span class="w">
-  </span><span class="p" data-group-id="0570361920-5">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">P1</span><span class="p">,</span><span class="w"> </span><span class="n">State2</span><span class="p" data-group-id="0570361920-5">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">select_provider</span><span class="p" data-group-id="0570361920-6">(</span><span class="n">Providers</span><span class="p">,</span><span class="w"> </span><span class="ss">round_robin</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="0570361920-6">)</span><span class="p">,</span><span class="w">
-  </span><span class="p" data-group-id="0570361920-7">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">P2</span><span class="p">,</span><span class="w"> </span><span class="n">State3</span><span class="p" data-group-id="0570361920-7">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">select_provider</span><span class="p" data-group-id="0570361920-8">(</span><span class="n">Providers</span><span class="p">,</span><span class="w"> </span><span class="ss">round_robin</span><span class="p">,</span><span class="w"> </span><span class="n">State2</span><span class="p" data-group-id="0570361920-8">)</span><span class="p">,</span><span class="w">
+  </span><span class="n">State</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">new_state</span><span class="p" data-group-id="5271763550-4">(</span><span class="ss">round_robin</span><span class="p" data-group-id="5271763550-4">)</span><span class="p">,</span><span class="w">
+  </span><span class="p" data-group-id="5271763550-5">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">P1</span><span class="p">,</span><span class="w"> </span><span class="n">State2</span><span class="p" data-group-id="5271763550-5">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">select_provider</span><span class="p" data-group-id="5271763550-6">(</span><span class="n">Providers</span><span class="p">,</span><span class="w"> </span><span class="ss">round_robin</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="5271763550-6">)</span><span class="p">,</span><span class="w">
+  </span><span class="p" data-group-id="5271763550-7">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">P2</span><span class="p">,</span><span class="w"> </span><span class="n">State3</span><span class="p" data-group-id="5271763550-7">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">select_provider</span><span class="p" data-group-id="5271763550-8">(</span><span class="n">Providers</span><span class="p">,</span><span class="w"> </span><span class="ss">round_robin</span><span class="p">,</span><span class="w"> </span><span class="n">State2</span><span class="p" data-group-id="5271763550-8">)</span><span class="p">,</span><span class="w">
   </span><span class="c1">%% P1 and P2 will be different providers (if multiple available)</span></code></pre>
   </section>
 </section>
@@ -352,9 +352,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.6.5" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.6.6" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.6.5">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.6.6">Hex Preview</a>
 
           </span>
 
