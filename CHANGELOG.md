@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2025-11-15
+
+### Added
+- Professional documentation structure for Hex publication
+  - Architecture diagram in README.md (Mermaid format) showing mesh topology
+  - Organized documentation: moved 50+ files from root to docs/archive/, docs/development/, docs/planning/
+  - Created docs/README.md navigation index
+  - Logo and assets configuration for ex_doc
+  - Comprehensive Hex package file list (artwork/, docs/, architecture/)
+
+### Fixed
+- README.md badge rendering (moved badges outside `<div>` tag for proper GitHub display)
+- ex_doc assets configuration (deprecated warning resolved)
+- Hex package configuration to include all necessary assets and documentation
+- Documentation organization for professional first impression
+
 ## [0.6.0] - 2025-11-15
 
 ### Changed
