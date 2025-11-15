@@ -32,7 +32,7 @@ The tutorial includes:
 # mix.exs
 def deps do
   [
-    {:macula, git: "https://github.com/macula-io/macula.git", branch: "main"}
+    {:macula, "~> 0.6"}
   ]
 end
 ```

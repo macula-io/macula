@@ -87,7 +87,7 @@ defmodule MaculaChat.MixProject do
 
   defp deps do
     [
-      {:macula, git: "https://github.com/macula-io/macula.git", branch: "main"}
+      {:macula, "~> 0.6"}
     ]
   end
 end
@@ -101,7 +101,7 @@ Edit `rebar.config`:
 {erl_opts, [debug_info]}.
 
 {deps, [
-    {macula, {git, "https://github.com/macula-io/macula.git", {branch, "main"}}}
+    {macula, "0.6.6"}
 ]}.
 
 {shell, [

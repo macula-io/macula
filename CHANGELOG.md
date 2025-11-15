@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.7] - 2025-11-15
+
+### Fixed
+- **CRITICAL:** Fixed all installation examples to use Hex package references instead of git dependencies
+  - README.md: Changed from git-based to `{:macula, "~> 0.6"}` (Elixir) and `{macula, "0.6.7"}` (Erlang)
+  - HELLO_WORLD.md: Updated to use proper Hex package format
+  - architecture/macula_http3_mesh_hello_world.md: Fixed tutorial installation examples
+  - architecture/macula_http3_mesh_rpc_guide.md: Fixed migration guide examples
+  - All code examples now show proper Hex.pm installation for published package
+
 ## [0.6.6] - 2025-11-15
 
 ### Fixed

@@ -59,7 +59,7 @@ Macula is infrastructure for building **decentralized applications and services*
 ```elixir
 def deps do
   [
-    {:macula, git: "https://github.com/macula-io/macula.git", branch: "main"}
+    {:macula, "~> 0.6"}
   ]
 end
 ```
@@ -68,7 +68,7 @@ end
 
 ```erlang
 {deps, [
-    {macula, {git, "https://github.com/macula-io/macula.git", {branch, "main"}}}
+    {macula, "0.6.6"}
 ]}.
 ```
 

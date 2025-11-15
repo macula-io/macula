@@ -939,7 +939,7 @@ end
 
 %% After (Macula)
 {deps, [
-    {macula, {git, "https://github.com/macula-io/macula.git", {branch, "main"}}}
+    {macula, "0.6.6"}
 ]}.
 ```
 
