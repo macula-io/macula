@@ -44,4 +44,4 @@ Macula isn't anti-cloud—it's about **choice**. Use the cloud where it makes se
 
 ---
 
-**[← Back to README](../README.md)** | **[Quick Start →](../architecture/macula_http3_mesh_quick_start.md)**
+**[← Back to README](readme.html)** | **[Quick Start →](macula_http3_mesh_quick_start.html)**
