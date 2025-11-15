@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - README.md badge rendering (moved badges outside `<div>` tag for proper GitHub display)
 - ex_doc assets configuration (deprecated warning resolved)
+- ex_doc landing page configuration (changed `{main, "readme"}` to `{main, "api-reference"}` to fix "readme.html not found" error)
 - Hex package configuration to include all necessary assets and documentation
 - Documentation organization for professional first impression
 
