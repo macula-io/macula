@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="artwork/macula-logo-color.svg" alt="Macula Logo" width="500"/>
+  <img src="artwork/macula-alt-logo.svg" alt="Macula Logo" width="500"/>
 
   <h1>Macula HTTP/3 Mesh</h1>
   <p><em>A distributed platform for decentralized applications</em></p>
