@@ -1,10 +1,10 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% EUnit tests for macula_gateway_sup module (ROOT SUPERVISOR).
+%%% EUnit tests for macula_gateway_system module (ROOT SUPERVISOR).
 %%% Tests root supervisor functionality - supervises quic_server, gateway, workers_sup.
 %%%
 %%% After Phase 2 QUIC Refactoring:
-%%% - macula_gateway_sup is the ROOT supervisor
+%%% - macula_gateway_system is the ROOT supervisor
 %%% - It supervises: quic_server, gateway, workers_sup (as siblings)
 %%% - Worker accessor functions moved to macula_gateway_workers_sup
 %%%
@@ -19,7 +19,7 @@
 %%% - Verify gateway crash restarts workers_sup only
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_gateway_sup_tests).
+-module(macula_gateway_system_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -28,7 +28,7 @@
 %%%===================================================================
 
 setup() ->
-    {ok, Pid} = macula_gateway_sup:start_link(#{}),
+    {ok, Pid} = macula_gateway_system:start_link(#{}),
     Pid.
 
 cleanup(Pid) ->
@@ -46,14 +46,14 @@ cleanup(Pid) ->
 %%%===================================================================
 
 module_exports_test() ->
-    Exports = macula_gateway_sup:module_info(exports),
+    Exports = macula_gateway_system:module_info(exports),
 
     %% Root supervisor only has start_link and init (no worker accessors)
     ?assert(lists:member({start_link, 1}, Exports)),
     ?assert(lists:member({init, 1}, Exports)).
 
 supervisor_callbacks_test() ->
-    Exports = macula_gateway_sup:module_info(exports),
+    Exports = macula_gateway_system:module_info(exports),
     ?assert(lists:member({init, 1}, Exports)).
 
 %%%===================================================================
@@ -61,7 +61,7 @@ supervisor_callbacks_test() ->
 %%%===================================================================
 
 start_link_test() ->
-    {ok, Pid} = macula_gateway_sup:start_link(#{}),
+    {ok, Pid} = macula_gateway_system:start_link(#{}),
     ?assert(erlang:is_process_alive(Pid)),
     erlang:unlink(Pid),
     exit(Pid, shutdown),
@@ -69,7 +69,7 @@ start_link_test() ->
 
 start_link_with_config_test() ->
     Config = #{realm => <<"test.realm">>, port => 5555},
-    {ok, Pid} = macula_gateway_sup:start_link(Config),
+    {ok, Pid} = macula_gateway_system:start_link(Config),
     ?assert(erlang:is_process_alive(Pid)),
     erlang:unlink(Pid),
     exit(Pid, shutdown),
@@ -100,7 +100,7 @@ get_client_manager_test_() ->
      fun setup/0,
      fun cleanup/1,
      fun(SupPid) ->
-        {ok, ClientMgrPid} = macula_gateway_sup:get_client_manager(SupPid),
+        {ok, ClientMgrPid} = macula_gateway_system:get_client_manager(SupPid),
         [
             ?_assert(is_pid(ClientMgrPid)),
             ?_assert(erlang:is_process_alive(ClientMgrPid))
@@ -112,7 +112,7 @@ get_pubsub_test_() ->
      fun setup/0,
      fun cleanup/1,
      fun(SupPid) ->
-        {ok, PubSubPid} = macula_gateway_sup:get_pubsub(SupPid),
+        {ok, PubSubPid} = macula_gateway_system:get_pubsub(SupPid),
         [
             ?_assert(is_pid(PubSubPid)),
             ?_assert(erlang:is_process_alive(PubSubPid))
@@ -124,7 +124,7 @@ get_rpc_test_() ->
      fun setup/0,
      fun cleanup/1,
      fun(SupPid) ->
-        {ok, RpcPid} = macula_gateway_sup:get_rpc(SupPid),
+        {ok, RpcPid} = macula_gateway_system:get_rpc(SupPid),
         [
             ?_assert(is_pid(RpcPid)),
             ?_assert(erlang:is_process_alive(RpcPid))
@@ -143,9 +143,9 @@ rest_for_one_client_manager_crash_test_() ->
      fun(SupPid) ->
         %% Get original child PIDs
         {ok, OrigClientMgr} = macula_gateway_sup:get_client_manager(SupPid),
-        {ok, OrigPubSub} = macula_gateway_sup:get_pubsub(SupPid),
-        {ok, OrigRpc} = macula_gateway_sup:get_rpc(SupPid),
-        {ok, OrigMesh} = macula_gateway_sup:get_mesh(SupPid),
+        {ok, OrigPubSub} = macula_gateway_system:get_pubsub(SupPid),
+        {ok, OrigRpc} = macula_gateway_system:get_rpc(SupPid),
+        {ok, OrigMesh} = macula_gateway_system:get_mesh(SupPid),
 
         %% Kill client_manager (first child)
         exit(OrigClientMgr, kill),
@@ -153,9 +153,9 @@ rest_for_one_client_manager_crash_test_() ->
 
         %% All children should be restarted (rest_for_one: N and all after N)
         {ok, NewClientMgr} = macula_gateway_sup:get_client_manager(SupPid),
-        {ok, NewPubSub} = macula_gateway_sup:get_pubsub(SupPid),
-        {ok, NewRpc} = macula_gateway_sup:get_rpc(SupPid),
-        {ok, NewMesh} = macula_gateway_sup:get_mesh(SupPid),
+        {ok, NewPubSub} = macula_gateway_system:get_pubsub(SupPid),
+        {ok, NewRpc} = macula_gateway_system:get_rpc(SupPid),
+        {ok, NewMesh} = macula_gateway_system:get_mesh(SupPid),
 
         [
             ?_assertNot(OrigClientMgr =:= NewClientMgr),
@@ -177,9 +177,9 @@ rest_for_one_pubsub_crash_test_() ->
      fun(SupPid) ->
         %% Get original child PIDs
         {ok, OrigClientMgr} = macula_gateway_sup:get_client_manager(SupPid),
-        {ok, OrigPubSub} = macula_gateway_sup:get_pubsub(SupPid),
-        {ok, OrigRpc} = macula_gateway_sup:get_rpc(SupPid),
-        {ok, OrigMesh} = macula_gateway_sup:get_mesh(SupPid),
+        {ok, OrigPubSub} = macula_gateway_system:get_pubsub(SupPid),
+        {ok, OrigRpc} = macula_gateway_system:get_rpc(SupPid),
+        {ok, OrigMesh} = macula_gateway_system:get_mesh(SupPid),
 
         %% Kill pubsub (second child)
         exit(OrigPubSub, kill),
@@ -188,9 +188,9 @@ rest_for_one_pubsub_crash_test_() ->
         %% client_manager should NOT restart (before pubsub)
         %% pubsub, rpc, mesh should restart (N and after N)
         {ok, NewClientMgr} = macula_gateway_sup:get_client_manager(SupPid),
-        {ok, NewPubSub} = macula_gateway_sup:get_pubsub(SupPid),
-        {ok, NewRpc} = macula_gateway_sup:get_rpc(SupPid),
-        {ok, NewMesh} = macula_gateway_sup:get_mesh(SupPid),
+        {ok, NewPubSub} = macula_gateway_system:get_pubsub(SupPid),
+        {ok, NewRpc} = macula_gateway_system:get_rpc(SupPid),
+        {ok, NewMesh} = macula_gateway_system:get_mesh(SupPid),
 
         [
             ?_assertEqual(OrigClientMgr, NewClientMgr),  % Should be same PID
@@ -212,9 +212,9 @@ rest_for_one_rpc_crash_test_() ->
      fun(SupPid) ->
         %% Get original child PIDs
         {ok, OrigClientMgr} = macula_gateway_sup:get_client_manager(SupPid),
-        {ok, OrigPubSub} = macula_gateway_sup:get_pubsub(SupPid),
-        {ok, OrigRpc} = macula_gateway_sup:get_rpc(SupPid),
-        {ok, OrigMesh} = macula_gateway_sup:get_mesh(SupPid),
+        {ok, OrigPubSub} = macula_gateway_system:get_pubsub(SupPid),
+        {ok, OrigRpc} = macula_gateway_system:get_rpc(SupPid),
+        {ok, OrigMesh} = macula_gateway_system:get_mesh(SupPid),
 
         %% Kill rpc (third child)
         exit(OrigRpc, kill),
@@ -223,9 +223,9 @@ rest_for_one_rpc_crash_test_() ->
         %% client_manager, pubsub should NOT restart (before rpc)
         %% rpc, mesh should restart (N and after N)
         {ok, NewClientMgr} = macula_gateway_sup:get_client_manager(SupPid),
-        {ok, NewPubSub} = macula_gateway_sup:get_pubsub(SupPid),
-        {ok, NewRpc} = macula_gateway_sup:get_rpc(SupPid),
-        {ok, NewMesh} = macula_gateway_sup:get_mesh(SupPid),
+        {ok, NewPubSub} = macula_gateway_system:get_pubsub(SupPid),
+        {ok, NewRpc} = macula_gateway_system:get_rpc(SupPid),
+        {ok, NewMesh} = macula_gateway_system:get_mesh(SupPid),
 
         [
             ?_assertEqual(OrigClientMgr, NewClientMgr),  % Should be same PID
@@ -247,9 +247,9 @@ rest_for_one_mesh_crash_test_() ->
      fun(SupPid) ->
         %% Get original child PIDs
         {ok, OrigClientMgr} = macula_gateway_sup:get_client_manager(SupPid),
-        {ok, OrigPubSub} = macula_gateway_sup:get_pubsub(SupPid),
-        {ok, OrigRpc} = macula_gateway_sup:get_rpc(SupPid),
-        {ok, OrigMesh} = macula_gateway_sup:get_mesh(SupPid),
+        {ok, OrigPubSub} = macula_gateway_system:get_pubsub(SupPid),
+        {ok, OrigRpc} = macula_gateway_system:get_rpc(SupPid),
+        {ok, OrigMesh} = macula_gateway_system:get_mesh(SupPid),
 
         %% Kill mesh (fourth/last child)
         exit(OrigMesh, kill),
@@ -258,9 +258,9 @@ rest_for_one_mesh_crash_test_() ->
         %% client_manager, pubsub, rpc should NOT restart (before mesh)
         %% mesh should restart (N and after N, but N is last)
         {ok, NewClientMgr} = macula_gateway_sup:get_client_manager(SupPid),
-        {ok, NewPubSub} = macula_gateway_sup:get_pubsub(SupPid),
-        {ok, NewRpc} = macula_gateway_sup:get_rpc(SupPid),
-        {ok, NewMesh} = macula_gateway_sup:get_mesh(SupPid),
+        {ok, NewPubSub} = macula_gateway_system:get_pubsub(SupPid),
+        {ok, NewRpc} = macula_gateway_system:get_rpc(SupPid),
+        {ok, NewMesh} = macula_gateway_system:get_mesh(SupPid),
 
         [
             ?_assertEqual(OrigClientMgr, NewClientMgr),  % Should be same PID
@@ -280,8 +280,8 @@ children_stay_alive_after_supervisor_start_test_() ->
      fun cleanup/1,
      fun(SupPid) ->
         {ok, ClientMgr} = macula_gateway_sup:get_client_manager(SupPid),
-        {ok, PubSub} = macula_gateway_sup:get_pubsub(SupPid),
-        {ok, Rpc} = macula_gateway_sup:get_rpc(SupPid),
+        {ok, PubSub} = macula_gateway_system:get_pubsub(SupPid),
+        {ok, Rpc} = macula_gateway_system:get_rpc(SupPid),
 
         timer:sleep(100),
 
@@ -303,8 +303,8 @@ children_are_functional_test_() ->
      fun(SupPid) ->
         %% Get children
         {ok, ClientMgr} = macula_gateway_sup:get_client_manager(SupPid),
-        {ok, PubSub} = macula_gateway_sup:get_pubsub(SupPid),
-        {ok, Rpc} = macula_gateway_sup:get_rpc(SupPid),
+        {ok, PubSub} = macula_gateway_system:get_pubsub(SupPid),
+        {ok, Rpc} = macula_gateway_system:get_rpc(SupPid),
 
         %% Test client manager functionality
         Client = spawn(fun() -> timer:sleep(1000) end),

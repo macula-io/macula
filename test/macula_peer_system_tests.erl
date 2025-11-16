@@ -1,8 +1,8 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% EUnit tests for macula_connection_sup module.
+%%% EUnit tests for macula_peer_system module.
 %%%
-%%% Tests the supervision tree for connection subsystem:
+%%% Tests the supervision tree for peer subsystem:
 %%% - Supervisor lifecycle (start/stop)
 %%% - Child process creation
 %%% - Supervision strategy (rest_for_one)
@@ -12,10 +12,10 @@
 %%% Supervision Tests:
 %%% - Verify rest_for_one behavior: killing child N restarts N and all after N
 %%% - Verify fault isolation: handler crashes don't restart connection_manager
-%%% - Verify dependency consistency: connection_manager crash restarts all
+%%% - Verify dependency consistency: connection crash restarts all
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_connection_sup_tests).
+-module(macula_peer_system_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -30,10 +30,10 @@ supervisor_can_be_stopped_test() ->
     Url = <<"http://localhost:4001">>,
     Opts = #{realm => <<"test.realm">>},
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
     ?assert(is_process_alive(SupPid)),
 
-    ok = macula_connection_sup:stop(SupPid),
+    ok = macula_peer_system:stop(SupPid),
     timer:sleep(100), % Allow shutdown to complete
 
     ?assertNot(is_process_alive(SupPid)).
@@ -45,7 +45,7 @@ supervisor_starts_successfully_test() ->
         node_id => <<"test_node_123">>
     },
 
-    Result = macula_connection_sup:start_link(Url, Opts),
+    Result = macula_peer_system:start_link(Url, Opts),
 
     ?assertMatch({ok, _Pid}, Result),
 
@@ -53,7 +53,7 @@ supervisor_starts_successfully_test() ->
         {ok, SupPid} ->
             ?assert(is_pid(SupPid)),
             ?assert(is_process_alive(SupPid)),
-            macula_connection_sup:stop(SupPid),
+            macula_peer_system:stop(SupPid),
             timer:sleep(100), % Allow cleanup
             ?assertNot(is_process_alive(SupPid));
         _ ->
@@ -68,7 +68,7 @@ supervisor_creates_all_children_test() ->
     Url = <<"http://localhost:4002">>,
     Opts = #{realm => <<"test.realm">>},
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
 
     %% Get list of children
     Children = supervisor:which_children(SupPid),
@@ -85,7 +85,7 @@ supervisor_creates_all_children_test() ->
     ?assert(lists:member(rpc_handler, ChildIds)),
     ?assert(lists:member(advertisement_manager, ChildIds)),
 
-    macula_connection_sup:stop(SupPid),
+    macula_peer_system:stop(SupPid),
     timer:sleep(100).
 
 supervisor_children_have_correct_order_test() ->
@@ -94,7 +94,7 @@ supervisor_children_have_correct_order_test() ->
     Url = <<"http://localhost:4003">>,
     Opts = #{realm => <<"test.realm">>},
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
 
     Children = supervisor:which_children(SupPid),
     ChildIds = [Id || {Id, _Pid, _Type, _Modules} <- Children],
@@ -102,7 +102,7 @@ supervisor_children_have_correct_order_test() ->
     %% connection_manager should be first (started first)
     ?assertEqual(connection_manager, lists:nth(1, ChildIds)),
 
-    macula_connection_sup:stop(SupPid),
+    macula_peer_system:stop(SupPid),
     timer:sleep(100).
 
 supervisor_children_are_workers_test() ->
@@ -111,7 +111,7 @@ supervisor_children_are_workers_test() ->
     Url = <<"http://localhost:4004">>,
     Opts = #{realm => <<"test.realm">>},
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
 
     Children = supervisor:which_children(SupPid),
 
@@ -120,7 +120,7 @@ supervisor_children_are_workers_test() ->
         ?assertEqual(worker, Type)
     end, Children),
 
-    macula_connection_sup:stop(SupPid),
+    macula_peer_system:stop(SupPid),
     timer:sleep(100).
 
 supervisor_children_are_running_test() ->
@@ -129,7 +129,7 @@ supervisor_children_are_running_test() ->
     Url = <<"http://localhost:4005">>,
     Opts = #{realm => <<"test.realm">>},
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
 
     Children = supervisor:which_children(SupPid),
 
@@ -146,7 +146,7 @@ supervisor_children_are_running_test() ->
         end
     end, Children),
 
-    macula_connection_sup:stop(SupPid),
+    macula_peer_system:stop(SupPid),
     timer:sleep(100).
 
 %%%===================================================================
@@ -159,7 +159,7 @@ supervisor_count_children_test() ->
     Url = <<"http://localhost:4006">>,
     Opts = #{realm => <<"test.realm">>},
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
 
     %% Get child counts
     Counts = supervisor:count_children(SupPid),
@@ -170,7 +170,7 @@ supervisor_count_children_test() ->
     ?assertEqual(0, proplists:get_value(supervisors, Counts)),
     ?assertEqual(4, proplists:get_value(workers, Counts)),
 
-    macula_connection_sup:stop(SupPid),
+    macula_peer_system:stop(SupPid),
     timer:sleep(100).
 
 supervisor_provides_access_to_children_test() ->
@@ -179,7 +179,7 @@ supervisor_provides_access_to_children_test() ->
     Url = <<"http://localhost:4007">>,
     Opts = #{realm => <<"test.realm">>},
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
 
     Children = supervisor:which_children(SupPid),
 
@@ -203,7 +203,7 @@ supervisor_provides_access_to_children_test() ->
     ?assertMatch({advertisement_manager, Pid, worker, [macula_advertisement_manager]}
                  when is_pid(Pid), AdvMgr),
 
-    macula_connection_sup:stop(SupPid),
+    macula_peer_system:stop(SupPid),
     timer:sleep(100).
 
 %%%===================================================================
@@ -218,13 +218,13 @@ supervisor_handles_invalid_url_test() ->
     Opts = #{realm => <<"test.realm">>},
 
     %% Supervisor should still start (children fail during init)
-    Result = macula_connection_sup:start_link(Url, Opts),
+    Result = macula_peer_system:start_link(Url, Opts),
 
     %% Will likely fail to start due to connection_manager init failure
     case Result of
         {ok, SupPid} ->
             %% If it started, stop it
-            macula_connection_sup:stop(SupPid),
+            macula_peer_system:stop(SupPid),
             timer:sleep(100);
         {error, _Reason} ->
             %% Expected - connection_manager failed to start
@@ -238,18 +238,18 @@ supervisor_restarts_with_different_urls_test() ->
     Url1 = <<"http://localhost:5001">>,
     Opts1 = #{realm => <<"test.realm1">>},
 
-    {ok, SupPid1} = macula_connection_sup:start_link(Url1, Opts1),
-    macula_connection_sup:stop(SupPid1),
+    {ok, SupPid1} = macula_peer_system:start_link(Url1, Opts1),
+    macula_peer_system:stop(SupPid1),
     timer:sleep(100),
 
     %% Start second supervisor with different URL
     Url2 = <<"http://localhost:5002">>,
     Opts2 = #{realm => <<"test.realm2">>},
 
-    {ok, SupPid2} = macula_connection_sup:start_link(Url2, Opts2),
+    {ok, SupPid2} = macula_peer_system:start_link(Url2, Opts2),
     ?assert(is_process_alive(SupPid2)),
 
-    macula_connection_sup:stop(SupPid2),
+    macula_peer_system:stop(SupPid2),
     timer:sleep(100).
 
 %%%===================================================================
@@ -266,7 +266,7 @@ supervisor_passes_options_to_children_test() ->
         node_id => CustomNodeId
     },
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
 
     %% Supervisor should have started
     ?assert(is_process_alive(SupPid)),
@@ -278,7 +278,7 @@ supervisor_passes_options_to_children_test() ->
     %% Should have 4 running children
     ?assertEqual(4, length(RunningChildren)),
 
-    macula_connection_sup:stop(SupPid),
+    macula_peer_system:stop(SupPid),
     timer:sleep(100).
 
 %%%===================================================================
@@ -298,7 +298,7 @@ rest_for_one_connection_manager_crash_test() ->
     Url = <<"http://localhost:6001">>,
     Opts = #{realm => <<"test.realm">>},
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
 
     %% Get original child PIDs
     OrigConnMgr = get_child_pid(SupPid, connection_manager),
@@ -331,7 +331,7 @@ rest_for_one_connection_manager_crash_test() ->
     ?assertNot(OrigRpc =:= NewRpc),
     ?assertNot(OrigAdvMgr =:= NewAdvMgr),
 
-    macula_connection_sup:stop(SupPid),
+    macula_peer_system:stop(SupPid),
     timer:sleep(100).
 
 %% @doc Test rest_for_one: killing pubsub_handler restarts pubsub, rpc, advmgr (not connection_manager)
@@ -339,7 +339,7 @@ rest_for_one_pubsub_handler_crash_test() ->
     Url = <<"http://localhost:6002">>,
     Opts = #{realm => <<"test.realm">>},
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
 
     %% Get original child PIDs
     OrigConnMgr = get_child_pid(SupPid, connection_manager),
@@ -368,7 +368,7 @@ rest_for_one_pubsub_handler_crash_test() ->
     ?assert(is_process_alive(NewRpc)),
     ?assert(is_process_alive(NewAdvMgr)),
 
-    macula_connection_sup:stop(SupPid),
+    macula_peer_system:stop(SupPid),
     timer:sleep(100).
 
 %% @doc Test rest_for_one: killing rpc_handler restarts rpc, advmgr (not connection_manager, pubsub)
@@ -376,7 +376,7 @@ rest_for_one_rpc_handler_crash_test() ->
     Url = <<"http://localhost:6003">>,
     Opts = #{realm => <<"test.realm">>},
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
 
     %% Get original child PIDs
     OrigConnMgr = get_child_pid(SupPid, connection_manager),
@@ -405,7 +405,7 @@ rest_for_one_rpc_handler_crash_test() ->
     ?assert(is_process_alive(NewRpc)),
     ?assert(is_process_alive(NewAdvMgr)),
 
-    macula_connection_sup:stop(SupPid),
+    macula_peer_system:stop(SupPid),
     timer:sleep(100).
 
 %% @doc Test rest_for_one: killing advertisement_manager restarts only advmgr (not others)
@@ -413,7 +413,7 @@ rest_for_one_advertisement_manager_crash_test() ->
     Url = <<"http://localhost:6004">>,
     Opts = #{realm => <<"test.realm">>},
 
-    {ok, SupPid} = macula_connection_sup:start_link(Url, Opts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, Opts),
 
     %% Get original child PIDs
     OrigConnMgr = get_child_pid(SupPid, connection_manager),
@@ -442,5 +442,5 @@ rest_for_one_advertisement_manager_crash_test() ->
     ?assert(is_process_alive(NewRpc)),
     ?assert(is_process_alive(NewAdvMgr)),
 
-    macula_connection_sup:stop(SupPid),
+    macula_peer_system:stop(SupPid),
     timer:sleep(100).

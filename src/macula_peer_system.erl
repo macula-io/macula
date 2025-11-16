@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% Supervisor for the connection subsystem.
+%%% Peer System Supervisor - supervises the peer subsystem.
 %%%
 %%% Supervision Strategy:
 %%% - rest_for_one: If child N crashes, restart N and all children after N
@@ -8,21 +8,32 @@
 %%%   but are independent of each other. This provides fault isolation
 %%%   while maintaining consistency when connection_manager restarts.
 %%%
+%%% Architecture:
+%%% <pre>
+%%% macula_peer_system (this module)
+%%% ├── macula_connection - QUIC connection lifecycle (transport layer)
+%%% ├── macula_pubsub_handler - Pub/sub operations
+%%% ├── macula_rpc_handler - RPC operations
+%%% └── macula_advertisement_manager - DHT service advertisements
+%%% </pre>
+%%%
 %%% Children (in dependency order):
 %%% - macula_connection: QUIC connection lifecycle (foundational)
-%%% - macula_pubsub_handler: Pub/sub operations (depends on connection_manager)
-%%% - macula_rpc_handler: RPC operations (depends on connection_manager)
-%%% - macula_advertisement_manager: DHT advertisements (depends on connection_manager)
+%%% - macula_pubsub_handler: Pub/sub operations (depends on connection)
+%%% - macula_rpc_handler: RPC operations (depends on connection)
+%%% - macula_advertisement_manager: DHT advertisements (depends on connection)
 %%%
 %%% Fault Isolation:
 %%% - advertisement_manager crash → only advertisement restarts
 %%% - rpc_handler crash → rpc + advertisement restart
 %%% - pubsub_handler crash → pubsub + rpc + advertisement restart
-%%% - connection_manager crash → all restart (unavoidable - foundational)
+%%% - connection crash → all restart (unavoidable - foundational)
 %%%
+%%% Renamed from macula_connection_sup (v0.7.10) to align with macula_peer
+%%% nomenclature and macula_gateway_system naming convention.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_connection_sup).
+-module(macula_peer_system).
 
 -behaviour(supervisor).
 
@@ -40,12 +51,12 @@
 %%% API
 %%%===================================================================
 
-%% @doc Start the connection supervisor with given URL and options.
+%% @doc Start the peer system supervisor with given URL and options.
 -spec start_link(binary(), map()) -> {ok, pid()} | {error, term()}.
 start_link(Url, Opts) ->
     supervisor:start_link(?MODULE, {Url, Opts}).
 
-%% @doc Stop the connection supervisor and all children.
+%% @doc Stop the peer system supervisor and all children.
 -spec stop(pid()) -> ok.
 stop(Sup) when is_pid(Sup) ->
     exit(Sup, shutdown),
@@ -58,7 +69,7 @@ stop(Sup) when is_pid(Sup) ->
 %% @doc Initialize the supervisor with child specifications.
 -spec init({binary(), map()}) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init({Url, Opts}) ->
-    ?LOG_INFO("Starting connection supervisor for ~s", [Url]),
+    ?LOG_INFO("Starting peer system supervisor for ~s", [Url]),
 
     %% Supervision strategy: rest_for_one
     %% If child N crashes, restart N and all children after N

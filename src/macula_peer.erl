@@ -151,7 +151,7 @@ init({Url, Opts}) ->
     },
 
     %% Start supervision tree
-    {ok, SupPid} = macula_connection_sup:start_link(Url, HandlerOpts),
+    {ok, SupPid} = macula_peer_system:start_link(Url, HandlerOpts),
 
     %% Look up child PIDs from supervisor
     Children = supervisor:which_children(SupPid),
@@ -229,7 +229,7 @@ terminate(_Reason, #state{supervisor_pid = SupPid}) ->
     %% Stop the supervisor (will stop all children)
     case SupPid of
         Pid when is_pid(Pid) ->
-            macula_connection_sup:stop(Pid);
+            macula_peer_system:stop(Pid);
         _ ->
             ok
     end,
