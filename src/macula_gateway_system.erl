@@ -16,7 +16,7 @@
 %%%
 %%% Architecture:
 %%% <pre>
-%%% macula_gateway_sup (this module)
+%%% macula_gateway_system (this module)
 %%% ├── macula_gateway_quic_server  - QUIC transport layer
 %%% ├── macula_gateway              - Message routing coordinator
 %%% └── macula_gateway_workers_sup  - Business logic workers
@@ -35,7 +35,7 @@
 %%% Created during Phase 2 QUIC refactoring to enable proper OTP supervision.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_gateway_sup).
+-module(macula_gateway_system).
 
 -behaviour(supervisor).
 

@@ -145,7 +145,7 @@ init(Opts) ->
     io:format("[Gateway] Initializing gateway (supervised mode)~n"),
     io:format("[Gateway] Port: ~p, Realm: ~s~n", [Port, Realm]),
 
-    %% Gateway is now supervised by macula_gateway_sup (root supervisor)
+    %% Gateway is now supervised by macula_gateway_system (root supervisor)
     %% We need to find our sibling processes and wire ourselves together
 
     %% Step 1: Get parent supervisor
@@ -158,7 +158,7 @@ init(Opts) ->
     end.
 
 %% @private
-%% @doc Find the parent supervisor (macula_gateway_sup).
+%% @doc Find the parent supervisor (macula_gateway_system).
 %% Uses process dictionary and supervisor hierarchy traversal.
 -spec find_parent_supervisor() -> {ok, pid()} | {error, term()}.
 find_parent_supervisor() ->

@@ -94,14 +94,14 @@ maybe_start_gateway() ->
                     type => worker,
                     modules => [macula_gateway_diagnostics]
                 },
-                %% Main gateway
+                %% Gateway system supervisor (manages gateway, QUIC server, workers)
                 #{
-                    id => macula_gateway,
-                    start => {macula_gateway, start_link, [[{port, Port}, {realm, Realm}]]},
+                    id => macula_gateway_system,
+                    start => {macula_gateway_system, start_link, [[{port, Port}, {realm, Realm}]]},
                     restart => permanent,
-                    shutdown => 5000,
-                    type => worker,
-                    modules => [macula_gateway]
+                    shutdown => infinity,
+                    type => supervisor,
+                    modules => [macula_gateway_system]
                 }
             ];
         false ->
