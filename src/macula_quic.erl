@@ -46,8 +46,7 @@ listen(Port, Opts) ->
         {alpn, AlpnProtocols},
         {peer_unidi_stream_count, PeerUnidiStreamCount},
         {peer_bidi_stream_count, PeerBidiStreamCount},
-        {idle_timeout_ms, 0},  % Disable QUIC idle timeout (application handles keep-alive)
-        {verify, none}  % Accept self-signed certificates (TODO: implement proper PKI/RPK)
+        {idle_timeout_ms, 0}  % Disable QUIC idle timeout (application handles keep-alive)
     ],
 
     %% Start QUIC listener
