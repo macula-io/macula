@@ -159,15 +159,39 @@ init(Opts) ->
 
 %% @private
 %% @doc Find the parent supervisor (macula_gateway_system).
-%% Uses process dictionary and supervisor hierarchy traversal.
+%% Uses process dictionary and fallback to supervisor tree traversal.
 -spec find_parent_supervisor() -> {ok, pid()} | {error, term()}.
 find_parent_supervisor() ->
+    %% Try $ancestors first (standard OTP approach)
     case get('$ancestors') of
         [ParentSup | _] when is_pid(ParentSup) ->
             {ok, ParentSup};
         _ ->
-            {error, no_parent_found}
+            %% Fallback: find by traversing from macula_root
+            find_gateway_system_via_root()
     end.
+
+%% @private
+%% @doc Fallback method to find macula_gateway_system by traversing from macula_root.
+-spec find_gateway_system_via_root() -> {ok, pid()} | {error, term()}.
+find_gateway_system_via_root() ->
+    case whereis(macula_root) of
+        undefined ->
+            {error, no_macula_root};
+        RootPid ->
+            Children = supervisor:which_children(RootPid),
+            find_gateway_system_in_children(Children)
+    end.
+
+%% @private
+%% @doc Find macula_gateway_system in supervisor children list.
+-spec find_gateway_system_in_children(list()) -> {ok, pid()} | {error, term()}.
+find_gateway_system_in_children([{macula_gateway_system, Pid, supervisor, _} | _Rest]) when is_pid(Pid) ->
+    {ok, Pid};
+find_gateway_system_in_children([_Child | Rest]) ->
+    find_gateway_system_in_children(Rest);
+find_gateway_system_in_children([]) ->
+    {error, gateway_system_not_found}.
 
 %% @private
 %% @doc Initialize gateway with supervisor context.
