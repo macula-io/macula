@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Flow: Gateway now queries DHT for `node_id` (not endpoint), wraps PUBLISH in `pubsub_route`, sends via mesh connection manager
   - Result: Messages now actually route via multi-hop Kademlia DHT to remote subscribers
 - Fixed test failures in `macula_connection_tests` - replaced invalid `connected` message type with `subscribe`
+- Fixed edoc warning in `macula_gateway_sup.erl` - replaced markdown code fence with HTML pre tags for proper documentation generation
 
 ### Improved
 - **Fault Tolerance**: Automatic recovery from gateway/QUIC/worker crashes
