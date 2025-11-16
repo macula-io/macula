@@ -145,7 +145,7 @@ handle_call({subscribe, Topic, Callback}, _From, State) ->
         qos => 0
     },
 
-    case macula_connection_manager:send_message(State#state.connection_manager_pid, subscribe, SubscribeMsg) of
+    case macula_connection:send_message(State#state.connection_manager_pid, subscribe, SubscribeMsg) of
         ok ->
             %% Store subscription locally (delegate to subscription module)
             {ok, UpdatedSubscriptions, SubRef} = macula_pubsub_subscription:add_subscription(
@@ -179,7 +179,7 @@ handle_call({unsubscribe, SubRef}, _From, State) ->
                 topics => [Topic]
             },
 
-            case macula_connection_manager:send_message(State#state.connection_manager_pid, unsubscribe, UnsubscribeMsg) of
+            case macula_connection:send_message(State#state.connection_manager_pid, unsubscribe, UnsubscribeMsg) of
                 ok ->
                     %% Cancel DHT advertisement (delegate to DHT module)
                     UpdatedAdvertised = macula_pubsub_dht:cancel_advertisement(
@@ -208,7 +208,7 @@ handle_call({publish, Topic, Data, Opts}, _From, State) ->
             {reply, {error, not_connected}, State};
         ConnMgrPid ->
             %% Check connection status
-            case macula_connection_manager:get_status(ConnMgrPid) of
+            case macula_connection:get_status(ConnMgrPid) of
                 connected ->
                     %% Build publish message
                     Qos = maps:get(qos, Opts, 0),
@@ -252,7 +252,7 @@ handle_cast({set_connection_manager_pid, Pid}, State) ->
 
 handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, State) ->
     %% Send the publish message to the server via connection manager
-    case macula_connection_manager:send_message(State#state.connection_manager_pid, publish, PublishMsg) of
+    case macula_connection:send_message(State#state.connection_manager_pid, publish, PublishMsg) of
         ok ->
             ?LOG_DEBUG("[~s] Published message to topic ~s (qos=~p, msg_id=~s)",
                       [State#state.node_id, BinaryTopic, Qos, MsgId]);
@@ -297,11 +297,11 @@ handle_cast({discover_subscribers, Topic, Payload, Qos, _Opts}, State) ->
                 State#state.pending_subscriber_queries,
                 PendingQueries
             ),
-            {MsgIdCounter, _} = macula_utils:next_message_id(State#state.msg_id_counter),
+            {_MsgId, NewCounter} = macula_utils:next_message_id(State#state.msg_id_counter),
             State2 = State#state{
                 pending_subscriber_queries = UpdatedPendingQueries,
                 service_registry = UpdatedRegistry,
-                msg_id_counter = MsgIdCounter
+                msg_id_counter = NewCounter
             },
             ?LOG_DEBUG("[~s] DHT query sent for topic ~s (MsgId: ~s)",
                       [State#state.node_id, Topic, MsgId]),
@@ -378,7 +378,7 @@ handle_info({puback_timeout, MsgId}, State) ->
     case macula_pubsub_qos:handle_timeout(MsgId, State#state.connection_manager_pid, State#state.pending_pubacks) of
         {retry, UpdatedPending, PublishMsg} ->
             %% Send retry message
-            case macula_connection_manager:send_message(State#state.connection_manager_pid, publish, PublishMsg) of
+            case macula_connection:send_message(State#state.connection_manager_pid, publish, PublishMsg) of
                 ok ->
                     {noreply, State#state{pending_pubacks = UpdatedPending}};
                 {error, SendError} ->

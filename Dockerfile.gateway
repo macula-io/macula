@@ -57,7 +57,7 @@ EXPOSE 9443 8080
 
 # Set environment variables
 ENV GATEWAY_PORT=9443
-ENV GATEWAY_REALM=be.cortexiq.energy
+ENV MACULA_REALM=be.cortexiq.energy
 ENV HEALTH_PORT=8080
 ENV RELEASE_COOKIE=macula-gateway-cookie
 ENV NODE_NAME=macula@127.0.0.1

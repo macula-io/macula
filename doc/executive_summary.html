@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.7.10">
+
+
+    <title>Executive Summary — macula v0.7.10</title>
+
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-D67BC5A8.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="hello_world.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="hello_world.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.7.10
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-extra" id="main" data-type="extras">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>Executive Summary</h1>
+
+
+      <a href="https://github.com/macula-io/macula/blob/0.7.10/docs/EXECUTIVE_SUMMARY.md#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+<p>Macula is infrastructure for building <strong>decentralized applications and services</strong> that operate autonomously at the edge, without dependency on centralized cloud infrastructure. It enables organizations to build systems where business logic, data, and intelligence live close to where they're needed—whether that's in factories, homes, vehicles, or partner networks.</p><h2 id="key-use-cases" class="section-heading"><a href="#key-use-cases" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Key Use Cases</span></h2><ul><li><strong>Business Applications</strong>: Partner networks, supply chains, and collaborative platforms where organizations need to share capabilities without centralizing control</li><li><strong>IoT &amp; Edge Computing</strong>: Smart homes, industrial automation, and distributed sensor networks that continue operating even when disconnected from the cloud</li><li><strong>Adaptive &amp; Collaborative AI</strong>: Systems powered by <strong>TWEANN</strong> (Topology and Weight Evolving Artificial Neural Networks) and other evolutionary algorithms that learn and adapt locally, then share insights across the mesh</li></ul><p>Unlike traditional architectures where applications call centralized APIs, Macula enables <strong>peer-to-peer mesh networks</strong> where nodes discover each other, share services, and collaborate directly. Data stays where it's created, intelligence adapts locally, and the network self-organizes without central coordination.</p><p>Built on <strong>HTTP/3 (QUIC)</strong> transport, Macula works through NAT and firewalls, making it practical for real-world deployments across diverse network environments.</p><hr class="thin"/><h2 id="why-macula-the-case-for-decentralization" class="section-heading"><a href="#why-macula-the-case-for-decentralization" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Why Macula? The Case for Decentralization</span></h2><h3 id="the-centralized-cloud-problem" class="section-heading"><a href="#the-centralized-cloud-problem" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">The Centralized Cloud Problem</span></h3><p>Today's applications typically rely on centralized cloud platforms controlled by Big Tech companies (AWS, Azure, Google Cloud). While this model offers convenience, it creates fundamental issues:</p><ul><li><strong>Vendor Lock-in</strong>: Your business becomes dependent on proprietary APIs, pricing, and policies you don't control</li><li><strong>Data Sovereignty</strong>: Sensitive data must leave your premises and live in someone else's infrastructure</li><li><strong>Single Points of Failure</strong>: When the cloud goes down, your entire operation stops</li><li><strong>Latency &amp; Bandwidth</strong>: Every interaction requires round-trips to distant datacenters, wasting time and bandwidth</li><li><strong>Privacy &amp; Compliance</strong>: Regulations like GDPR become harder to satisfy when data flows through third-party infrastructure</li><li><strong>Cost</strong>: Bandwidth, storage, and compute costs scale unpredictably as your system grows</li></ul><h3 id="the-macula-alternative" class="section-heading"><a href="#the-macula-alternative" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">The Macula Alternative</span></h3><p>Macula offers a <strong>different approach</strong> that complements or replaces centralized cloud:</p><ul><li><strong>True Ownership</strong>: Run on your own hardware (edge devices, on-premise servers, or hybrid setups) with no dependency on proprietary platforms</li><li><strong>Local-First Architecture</strong>: Data and intelligence stay where they're created, shared only when needed</li><li><strong>Autonomous Operation</strong>: Systems continue working during network outages or when disconnected from the cloud</li><li><strong>Natural Scalability</strong>: Peer-to-peer mesh architecture scales organically as you add nodes, without central bottlenecks</li><li><strong>Standards-Based</strong>: Built on HTTP/3, not proprietary protocols, ensuring long-term viability and interoperability</li><li><strong>Cost Control</strong>: Predictable infrastructure costs using commodity hardware and open-source software</li></ul><p>Macula isn't anti-cloud—it's about <strong>choice</strong>. Use the cloud where it makes sense, but don't let it be your only option. Build applications that work in hybrid environments, can migrate between deployment models, and give you control over your technology destiny.</p><p><strong>For organizations that value autonomy, data sovereignty, and resilience, Macula provides the infrastructure to build truly decentralized systems.</strong></p><hr class="thin"/><p><strong><a href="hello_world.html">← Back to README</a></strong> | <strong><a href="macula_http3_mesh_quick_start.html">Quick Start →</a></strong></p>
+
+</div>
+
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
+
+      <a href="license.html" class="bottom-actions-button" rel="prev">
+        <span class="subheader">
+          ← Previous Page
+        </span>
+        <span class="title">
+License
+        </span>
+      </a>
+
+  </div>
+  <div class="bottom-actions-item">
+
+      <a href="comparisons.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+Comparisons
+        </span>
+      </a>
+
+  </div>
+</div>
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.7.10" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.7.10">Hex Preview</a>
+
+              (<a href="https://preview.hex.pm/preview/macula/0.7.10/show/docs/EXECUTIVE_SUMMARY.md">current file</a>)
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

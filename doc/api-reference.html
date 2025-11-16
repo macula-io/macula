@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.4.4">
+    <meta name="project" content="macula v0.7.10">
 
 
-    <title>API Reference — macula v0.4.4</title>
+    <title>API Reference — macula v0.7.10</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-BEE4145D.js"></script>
+    <script defer src="dist/sidebar_items-D67BC5A8.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -32,12 +32,16 @@
   <div class="sidebar-header">
     <div class="sidebar-projectInfo">
 
+        <a href="hello_world.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
       <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
+        <a href="hello_world.html" class="sidebar-projectName" translate="no">
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.4.4
+          v0.7.10
         </div>
       </div>
     </div>
@@ -74,7 +78,7 @@ macula
 
 <div id="top-content">
   <div class="heading-with-actions top-heading">
-    <h1>API Reference <small class="app-vsn">macula v#0.4.4</small></h1>
+    <h1>API Reference <small class="app-vsn">macula v#0.7.10</small></h1>
 
       <a href="https://github.com/macula-io/macula" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
@@ -86,6 +90,15 @@ macula
     <section class="details-list">
       <h2 id="modules" class="section-heading">Modules</h2>
       <div class="summary">
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_advertisement_manager.html" translate="no">macula_advertisement_manager</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Advertisement manager GenServer - manages DHT service advertisements.</p></div>
+
+</div>
 <div class="summary-row">
   <div class="summary-signature">
     <a href="macula_app.html" translate="no">macula_app</a>
@@ -119,7 +132,25 @@ macula
 
   </div>
 
-    <div class="summary-synopsis"><p>Macula SDK connection manager.</p></div>
+    <div class="summary-synopsis"><p>Macula Connection - QUIC Transport Layer (v0.7.0+).</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_connection_pool.html" translate="no">macula_connection_pool</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Connection pool manager for endpoint connections.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_connection_sup.html" translate="no">macula_connection_sup</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Supervisor for the connection subsystem.</p></div>
 
 </div>
 <div class="summary-row">
@@ -129,6 +160,15 @@ macula
   </div>
 
     <div class="summary-synopsis"><p>Core type definitions and encoding/decoding for Macula. Provides fundamental types like node IDs, realm IDs, and addresses.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_dht_rpc.html" translate="no">macula_dht_rpc</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>DHT RPC client for querying remote nodes. Provides callback functions for macula_routing_dht algorithms.</p></div>
 
 </div>
 <div class="summary-row">
@@ -146,7 +186,25 @@ macula
 
   </div>
 
-    <div class="summary-synopsis"><p>Macula Gateway - HTTP/3 Message Router</p></div>
+    <div class="summary-synopsis"><p>Macula Gateway - HTTP/3 Message Router &amp; Orchestrator</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_gateway_clients.html" translate="no">macula_gateway_clients</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Clients Worker GenServer - tracks connected clients.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_gateway_dht.html" translate="no">macula_gateway_dht</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>DHT Query Handler Module - handles DHT message forwarding to routing server.</p></div>
 
 </div>
 <div class="summary-row">
@@ -165,6 +223,78 @@ macula
   </div>
 
     <div class="summary-synopsis"><p>Macula Gateway Health Check Server</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_gateway_mesh.html" translate="no">macula_gateway_mesh</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Mesh Connection Manager GenServer - manages peer-to-peer QUIC connections.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_gateway_pubsub.html" translate="no">macula_gateway_pubsub</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Pub/Sub Handler GenServer - manages topic subscriptions and message routing.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_gateway_pubsub_router.html" translate="no">macula_gateway_pubsub_router</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Macula Gateway Pub/Sub Router - DHT-Routed Message Distribution</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_gateway_quic_server.html" translate="no">macula_gateway_quic_server</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>QUIC Transport Layer Gen_Server</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_gateway_rpc.html" translate="no">macula_gateway_rpc</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>RPC Handler GenServer - manages RPC handler registration and call routing.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_gateway_rpc_router.html" translate="no">macula_gateway_rpc_router</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>RPC Router Module - handles routed RPC messages (CALL/REPLY).</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_gateway_system.html" translate="no">macula_gateway_system</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Gateway Root Supervisor - top-level supervisor for gateway subsystem.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_gateway_workers_sup.html" translate="no">macula_gateway_workers_sup</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Gateway Workers Supervisor - supervises gateway worker processes.</p></div>
 
 </div>
 <div class="summary-row">
@@ -232,6 +362,15 @@ macula
 </div>
 <div class="summary-row">
   <div class="summary-signature">
+    <a href="macula_peer.html" translate="no">macula_peer</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Macula Peer - Mesh Participant API (v0.7.0+).</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
     <a href="macula_protocol_decoder.html" translate="no">macula_protocol_decoder</a>
 
   </div>
@@ -259,6 +398,15 @@ macula
 </div>
 <div class="summary-row">
   <div class="summary-signature">
+    <a href="macula_provider_selector.html" translate="no">macula_provider_selector</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Provider selection strategies for multi-provider RPC load balancing.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
     <a href="macula_pubsub_cache.html" translate="no">macula_pubsub_cache</a>
 
   </div>
@@ -277,11 +425,38 @@ macula
 </div>
 <div class="summary-row">
   <div class="summary-signature">
+    <a href="macula_pubsub_dht.html" translate="no">macula_pubsub_dht</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>DHT operations for pub/sub - handles subscription advertisement and discovery.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
     <a href="macula_pubsub_discovery.html" translate="no">macula_pubsub_discovery</a>
 
   </div>
 
     <div class="summary-synopsis"><p>DHT integration for finding remote subscribers. Uses Kademlia DHT to publish and discover subscriptions. Wraps macula_discovery with pub/sub-specific types.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_pubsub_handler.html" translate="no">macula_pubsub_handler</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>PubSub handler GenServer - facade that orchestrates pub/sub operations.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_pubsub_qos.html" translate="no">macula_pubsub_qos</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>QoS (Quality of Service) manager for pub/sub.</p></div>
 
 </div>
 <div class="summary-row">
@@ -295,11 +470,29 @@ macula
 </div>
 <div class="summary-row">
   <div class="summary-signature">
+    <a href="macula_pubsub_routing.html" translate="no">macula_pubsub_routing</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Pub/Sub routing for multi-hop DHT-routed pub/sub. Handles wrapping, unwrapping, and routing of PUBLISH messages through the Kademlia DHT mesh.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
     <a href="macula_pubsub_server.html" translate="no">macula_pubsub_server</a>
 
   </div>
 
     <div class="summary-synopsis"><p>Pub/Sub GenServer - manages subscriptions and message delivery. Ties together registry, cache, discovery, and delivery layers.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_pubsub_subscription.html" translate="no">macula_pubsub_subscription</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Subscription management for pub/sub.</p></div>
 
 </div>
 <div class="summary-row">
@@ -327,6 +520,24 @@ macula
   </div>
 
     <div class="summary-synopsis"><p>Macula QUIC certificate utilities. Provides functions for generating and validating self-signed certificates for QUIC connections via OpenSSL command-line tool.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_quic_conn_callback.html" translate="no">macula_quic_conn_callback</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>QUIC connection callback module for Macula. Implements quicer_connection behavior to handle connection lifecycle.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_quic_stream_acceptor.html" translate="no">macula_quic_stream_acceptor</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>QUIC stream acceptor process. Dedicated process that waits for incoming streams on a connection and forwards them to the gateway for processing.</p></div>
 
 </div>
 <div class="summary-row">
@@ -421,6 +632,15 @@ macula
 </div>
 <div class="summary-row">
   <div class="summary-signature">
+    <a href="macula_rpc_handler.html" translate="no">macula_rpc_handler</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>RPC handler GenServer - manages RPC calls, replies, and failover.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
     <a href="macula_rpc_names.html" translate="no">macula_rpc_names</a>
 
   </div>
@@ -448,11 +668,38 @@ macula
 </div>
 <div class="summary-row">
   <div class="summary-signature">
+    <a href="macula_rpc_routing.html" translate="no">macula_rpc_routing</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>RPC routing for multi-hop DHT-routed RPC. Handles wrapping, unwrapping, and routing of RPC messages through the Kademlia DHT mesh.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
     <a href="macula_rpc_server.html" translate="no">macula_rpc_server</a>
 
   </div>
 
     <div class="summary-synopsis"><p>RPC server managing registrations and calls. GenServer that integrates registry, cache, discovery, router, and executor.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_service_registry.html" translate="no">macula_service_registry</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Decentralized service advertisement registry using DHT.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_stream_acceptor.html" translate="no">macula_stream_acceptor</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Dedicated process for accepting QUIC streams on a connection.</p></div>
 
 </div>
 <div class="summary-row">
@@ -482,6 +729,15 @@ macula
     <div class="summary-synopsis"><p>Macula URI parsing and construction. Format: macula://realm/node_id Example: macula://org.example.mesh/0123456789abcdef...</p></div>
 
 </div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_utils.html" translate="no">macula_utils</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Common utility functions for Macula.</p></div>
+
+</div>
 
       </div>
     </section>
@@ -492,9 +748,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.4.4" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.7.10" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.4.4">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.7.10">Hex Preview</a>
 
           </span>
 

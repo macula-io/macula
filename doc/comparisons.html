@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.7.10">
+
+
+    <title>Comparisons — macula v0.7.10</title>
+
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-D67BC5A8.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="hello_world.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="hello_world.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.7.10
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-extra" id="main" data-type="extras">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>How Macula Compares to Similar Systems</h1>
+
+
+      <a href="https://github.com/macula-io/macula/blob/0.7.10/docs/COMPARISONS.md#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+<p>Distributed networking is not new, and several excellent projects tackle similar problems. Here's how Macula differs:</p><h2 id="vs-libp2p-ipfs-networking-stack" class="section-heading"><a href="#vs-libp2p-ipfs-networking-stack" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">vs. libp2p (IPFS Networking Stack)</span></h2><p><strong><a href="https://libp2p.io/">libp2p</a></strong> is the modular networking stack behind IPFS and Filecoin.</p><ul><li><strong>What it is</strong>: A comprehensive peer-to-peer networking library with many transport options, NAT traversal, and discovery mechanisms</li><li><strong>Maintained by</strong>: Protocol Labs</li><li><strong>Key difference</strong>: libp2p is a <strong>library</strong> you integrate into your application. Macula is a <strong>platform</strong> providing complete pub/sub and RPC primitives built specifically for the BEAM (Erlang/Elixir) ecosystem</li><li><strong>When to use libp2p</strong>: Building file-sharing applications or integrating with the IPFS ecosystem</li><li><strong>When to use Macula</strong>: Building business applications, IoT systems, or collaborative AI on Erlang/Elixir with built-in service discovery, multi-tenancy, and OTP supervision</li></ul><h2 id="vs-distributed-erlang" class="section-heading"><a href="#vs-distributed-erlang" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">vs. Distributed Erlang</span></h2><p><strong><a href="https://www.erlang.org/doc/reference_manual/distributed.html">Distributed Erlang</a></strong> is Erlang's built-in clustering.</p><ul><li><strong>What it is</strong>: Native clustering for Erlang nodes with transparent process messaging</li><li><strong>Maintained by</strong>: Ericsson (part of Erlang/OTP)</li><li><strong>Key difference</strong>: Distributed Erlang requires <strong>full mesh connectivity</strong> (every node connects to every other node) and doesn't work through NAT/firewalls. Macula uses <strong>HTTP/3 (QUIC)</strong> for NAT-friendly transport and <strong>Kademlia DHT routing</strong> for O(log N) scalability without full mesh connectivity</li><li><strong>When to use Distributed Erlang</strong>: Datacenter deployments with full network control and trusted environments</li><li><strong>When to use Macula</strong>: Edge deployments, IoT networks, or any scenario involving NAT, firewalls, or untrusted networks</li></ul><h2 id="vs-akka-cluster-jvm" class="section-heading"><a href="#vs-akka-cluster-jvm" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">vs. Akka Cluster (JVM)</span></h2><p><strong><a href="https://doc.akka.io/docs/akka/current/typed/cluster.html">Akka Cluster</a></strong> provides distributed actor systems for the JVM.</p><ul><li><strong>What it is</strong>: Clustering and distributed messaging for Scala/Java applications using the Actor model</li><li><strong>Maintained by</strong>: Lightbend</li><li><strong>Key difference</strong>: Akka runs on the <strong>JVM</strong> and uses TCP with gossip protocols. Macula runs on <strong>BEAM</strong> (Erlang VM) and uses <strong>HTTP/3 (QUIC)</strong> for modern, efficient transport with built-in encryption and NAT traversal</li><li><strong>When to use Akka</strong>: JVM-based applications requiring distributed actors</li><li><strong>When to use Macula</strong>: Erlang/Elixir applications requiring edge-friendly networking and standards-based transport</li></ul><h2 id="vs-kubernetes-orchestration" class="section-heading"><a href="#vs-kubernetes-orchestration" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">vs. Kubernetes (Orchestration)</span></h2><p><strong><a href="https://kubernetes.io/">Kubernetes</a></strong> orchestrates containerized applications at scale.</p><ul><li><strong>What it is</strong>: Container orchestration platform for deploying and managing microservices</li><li><strong>Maintained by</strong>: Cloud Native Computing Foundation (CNCF)</li><li><strong>Key difference</strong>: Kubernetes <strong>orchestrates centralized infrastructure</strong> (datacenters). Macula <strong>enables peer-to-peer decentralized networks</strong> at the edge. They solve different problems</li><li><strong>When to use Kubernetes</strong>: Deploying microservices in datacenters or cloud environments</li><li><strong>When to use Macula</strong>: Building peer-to-peer applications where nodes discover and communicate directly, without central orchestration</li></ul><h2 id="vs-webrtc-browser-p2p" class="section-heading"><a href="#vs-webrtc-browser-p2p" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">vs. WebRTC (Browser P2P)</span></h2><p><strong><a href="https://webrtc.org/">WebRTC</a></strong> enables peer-to-peer communication in web browsers.</p><ul><li><strong>What it is</strong>: Browser APIs for real-time video, audio, and data channels between peers</li><li><strong>Maintained by</strong>: W3C and browser vendors</li><li><strong>Key difference</strong>: WebRTC targets <strong>browser-to-browser</strong> communication for media streaming. Macula targets <strong>server-to-server</strong> and <strong>device-to-device</strong> communication for business applications, IoT, and AI systems</li><li><strong>When to use WebRTC</strong>: Real-time video/audio in web browsers</li><li><strong>When to use Macula</strong>: Backend services, IoT devices, and edge computing platforms</li></ul><h2 id="macula-s-unique-position" class="section-heading"><a href="#macula-s-unique-position" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Macula's Unique Position</span></h2><p>Macula combines ideas from these systems but targets a specific niche:</p><p>✅ <strong>BEAM-native</strong> (Erlang/Elixir OTP supervision and fault tolerance)
+✅ <strong>HTTP/3 (QUIC)</strong> transport (modern, encrypted, NAT-friendly)
+✅ <strong>Edge-first design</strong> (works through firewalls and NAT)
+✅ <strong>Built-in pub/sub &amp; RPC</strong> (no external message broker needed)
+✅ <strong>Multi-tenancy</strong> (realm isolation for SaaS and shared infrastructure)
+✅ <strong>Self-organizing mesh</strong> (DHT-based service discovery, O(log N) routing)
+✅ <strong>Production-ready patterns</strong> (OTP behaviors, comprehensive testing, memory management)</p><p>If you're building <strong>decentralized Erlang/Elixir applications</strong> that need to work in <strong>real-world network conditions</strong> (edge, IoT, hybrid cloud), Macula provides the infrastructure layer you need.</p><hr class="thin"/><p><strong><a href="hello_world.html">← Back to README</a></strong> | <strong><a href="use_cases.html">Use Cases →</a></strong></p>
+
+</div>
+
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
+
+      <a href="executive_summary.html" class="bottom-actions-button" rel="prev">
+        <span class="subheader">
+          ← Previous Page
+        </span>
+        <span class="title">
+Executive Summary
+        </span>
+      </a>
+
+  </div>
+  <div class="bottom-actions-item">
+
+      <a href="use_cases.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+Use Cases
+        </span>
+      </a>
+
+  </div>
+</div>
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.7.10" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.7.10">Hex Preview</a>
+
+              (<a href="https://preview.hex.pm/preview/macula/0.7.10/show/docs/COMPARISONS.md">current file</a>)
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

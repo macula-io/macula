@@ -32,7 +32,7 @@ The tutorial includes:
 # mix.exs
 def deps do
   [
-    {:macula, git: "https://github.com/macula-io/macula.git", branch: "main"}
+    {:macula, "~> 0.6"}
   ]
 end
 ```
@@ -44,7 +44,7 @@ end
 Macula.PubSub.subscribe("chat.room.general", self())
 Macula.PubSub.publish("chat.room.general", %{
   username: "Alice",
-  message: "Hello distributed world!"
+  message: "Hello, Macula!"
 })
 ```
 

@@ -25,7 +25,8 @@
     handle_store/2,
     handle_find_value/2,
     handle_find_node/2,
-    handle_query/3
+    handle_query/3,
+    lookup_value/1
 ]).
 
 %%%===================================================================
@@ -92,6 +93,31 @@ handle_query(FromPid, _QueryType, QueryData) ->
     %% Send reply back to requesting process
     FromPid ! {dht_reply, ReplyData},
     ok.
+
+%% @doc Look up a value from the DHT by key.
+%% Synchronous lookup from local DHT storage.
+%% Returns list of subscribers for the given key.
+-spec lookup_value(binary()) -> {ok, list()} | {error, not_found}.
+lookup_value(Key) ->
+    case whereis(macula_routing_server) of
+        undefined ->
+            io:format("[DHT] Routing server not running~n"),
+            {error, not_found};
+        RoutingServerPid ->
+            %% K=20 is the standard Kademlia replication factor
+            case macula_routing_server:find_value(RoutingServerPid, Key, 20) of
+                {ok, []} ->
+                    {error, not_found};
+                {ok, Value} when is_list(Value) ->
+                    {ok, Value};
+                {ok, Value} ->
+                    %% Single value, wrap in list
+                    {ok, [Value]};
+                {error, Reason} ->
+                    io:format("[DHT] Lookup error: ~p~n", [Reason]),
+                    {error, Reason}
+            end
+    end.
 
 %%%===================================================================
 %%% Internal functions

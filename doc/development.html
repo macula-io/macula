@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.7.10">
+
+
+    <title>Development Guide — macula v0.7.10</title>
+
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-D67BC5A8.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="hello_world.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="hello_world.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.7.10
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-extra" id="main" data-type="extras">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>Development Guide</h1>
+
+
+      <a href="https://github.com/macula-io/macula/blob/0.7.10/docs/DEVELOPMENT.md#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+<p>This guide covers setting up a development environment for contributing to Macula.</p><h2 id="prerequisites" class="section-heading"><a href="#prerequisites" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Prerequisites</span></h2><ul><li><strong>Erlang/OTP 26+</strong> - <a href="https://www.erlang.org/downloads">Installation Guide</a></li><li><strong>Rebar3</strong> - Erlang build tool (<a href="https://rebar3.org/docs/getting-started/">Installation</a>)</li><li><strong>Git</strong> - Version control</li><li><strong>Docker</strong> (optional) - For multi-node testing</li></ul><h2 id="quick-setup" class="section-heading"><a href="#quick-setup" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Quick Setup</span></h2><pre><code class="makeup bash" translate="no"><span class=""># Clone the repository
+</span><span class="">git clone https://github.com/macula-io/macula.git
+</span><span class="">cd macula
+</span><span class="">
+</span><span class=""># Fetch dependencies
+</span><span class="">rebar3 get-deps
+</span><span class="">
+</span><span class=""># Compile
+</span><span class="">rebar3 compile
+</span><span class="">
+</span><span class=""># Run tests
+</span><span class="">rebar3 eunit
+</span><span class="">
+</span><span class=""># Start a shell with Macula loaded
+</span><span class="">rebar3 shell
+</span></code></pre><h2 id="project-structure" class="section-heading"><a href="#project-structure" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Project Structure</span></h2><p>Macula is organized as a single Erlang/OTP library with ~68 modules:</p><pre><code class="makeup erlang" translate="no"><span class="ss">macula</span><span class="o">/</span><span class="w">
+</span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">src</span><span class="o">/</span><span class="w">                    </span><span class="p">#</span><span class="w"> </span><span class="n">Source</span><span class="w"> </span><span class="nf">code</span><span class="w"> </span><span class="p" data-group-id="2422649283-1">(</span><span class="err">~</span><span class="mi">68</span><span class="w"> </span><span class="p">.</span><span class="ss">erl</span><span class="w"> </span><span class="ss">files</span><span class="p" data-group-id="2422649283-1">)</span><span class="w">
+</span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_quic</span><span class="o">*</span><span class="p">.</span><span class="ss">erl</span><span class="w">   </span><span class="p">#</span><span class="w"> </span><span class="n">QUIC</span><span class="w"> </span><span class="ss">transport</span><span class="w"> </span><span class="ss">layer</span><span class="w">
+</span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_protocol</span><span class="o">*</span><span class="p">.</span><span class="ss">erl</span><span class="w"> </span><span class="p">#</span><span class="w"> </span><span class="n">Wire</span><span class="w"> </span><span class="ss">protocol</span><span class="w"> </span><span class="ss">encoding</span><span class="o">/</span><span class="ss">decoding</span><span class="w">
+</span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_connection</span><span class="o">*</span><span class="p">.</span><span class="ss">erl</span><span class="w"> </span><span class="p">#</span><span class="w"> </span><span class="n">Connection</span><span class="w"> </span><span class="ss">management</span><span class="w">
+</span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway</span><span class="o">*</span><span class="p">.</span><span class="ss">erl</span><span class="w"> </span><span class="p">#</span><span class="w"> </span><span class="n">Gateway</span><span class="w"> </span><span class="ss">components</span><span class="w">
+</span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_routing</span><span class="o">*</span><span class="p">.</span><span class="ss">erl</span><span class="w"> </span><span class="p">#</span><span class="w"> </span><span class="n">Kademlia</span><span class="w"> </span><span class="n">DHT</span><span class="w"> </span><span class="ss">routing</span><span class="w">
+</span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_pubsub</span><span class="o">*</span><span class="p">.</span><span class="ss">erl</span><span class="w"> </span><span class="p">#</span><span class="w"> </span><span class="n">Pub</span><span class="o">/</span><span class="n">Sub</span><span class="w"> </span><span class="ss">messaging</span><span class="w">
+</span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_rpc</span><span class="o">*</span><span class="p">.</span><span class="ss">erl</span><span class="w">    </span><span class="p">#</span><span class="w"> </span><span class="n">RPC</span><span class="w"> </span><span class="ss">operations</span><span class="w">
+</span><span class="err">│</span><span class="w">   </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_</span><span class="o">*</span><span class="p">.</span><span class="ss">erl</span><span class="w">       </span><span class="p">#</span><span class="w"> </span><span class="n">Core</span><span class="w"> </span><span class="ss">utilities</span><span class="w">
+</span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">test</span><span class="o">/</span><span class="w">                  </span><span class="p">#</span><span class="w"> </span><span class="n">EUnit</span><span class="w"> </span><span class="ss">tests</span><span class="w">
+</span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">include</span><span class="o">/</span><span class="w">               </span><span class="p">#</span><span class="w"> </span><span class="n">Header</span><span class="w"> </span><span class="nf">files</span><span class="w"> </span><span class="p" data-group-id="2422649283-2">(</span><span class="p">.</span><span class="ss">hrl</span><span class="p" data-group-id="2422649283-2">)</span><span class="w">
+</span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">architecture</span><span class="o">/</span><span class="w">          </span><span class="p">#</span><span class="w"> </span><span class="n">Architecture</span><span class="w"> </span><span class="ss">documentation</span><span class="w">
+</span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">docs</span><span class="o">/</span><span class="w">                  </span><span class="p">#</span><span class="w"> </span><span class="n">User</span><span class="o">-</span><span class="ss">facing</span><span class="w"> </span><span class="ss">documentation</span><span class="w">
+</span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">examples</span><span class="o">/</span><span class="w">              </span><span class="p">#</span><span class="w"> </span><span class="n">Example</span><span class="w"> </span><span class="ss">applications</span><span class="w">
+</span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">rebar</span><span class="p">.</span><span class="ss">config</span><span class="w">          </span><span class="p">#</span><span class="w"> </span><span class="n">Build</span><span class="w"> </span><span class="ss">configuration</span></code></pre><p>See <a href="macula_project_structure.html">Project Structure</a> for complete module documentation.</p><h2 id="running-tests" class="section-heading"><a href="#running-tests" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Running Tests</span></h2><h3 id="all-tests" class="section-heading"><a href="#all-tests" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">All Tests</span></h3><pre><code class="makeup bash" translate="no"><span class="">rebar3 eunit
+</span></code></pre><h3 id="specific-module-tests" class="section-heading"><a href="#specific-module-tests" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Specific Module Tests</span></h3><pre><code class="makeup bash" translate="no"><span class="">rebar3 eunit --module=macula_id_tests
+</span><span class="">rebar3 eunit --module=macula_gateway_client_manager_tests
+</span></code></pre><h3 id="test-coverage" class="section-heading"><a href="#test-coverage" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Test Coverage</span></h3><pre><code class="makeup bash" translate="no"><span class="">rebar3 do eunit, cover
+</span></code></pre><h3 id="multi-node-integration-tests" class="section-heading"><a href="#multi-node-integration-tests" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Multi-Node Integration Tests</span></h3><pre><code class="makeup bash" translate="no"><span class="">cd docker
+</span><span class="">docker compose -f docker-compose.multi-node-test.yml build --no-cache
+</span><span class="">docker compose -f docker-compose.multi-node-test.yml up
+</span></code></pre><h2 id="code-quality-standards" class="section-heading"><a href="#code-quality-standards" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Code Quality Standards</span></h2><p>Macula follows <strong>Idiomatic Erlang</strong> principles:</p><h3 id="core-principles" class="section-heading"><a href="#core-principles" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Core Principles</span></h3><ul><li>✅ <strong>Pattern matching on function heads</strong> - Avoid <code class="inline">if</code> and <code class="inline">cond</code></li><li>✅ <strong>Guards instead of case</strong> - Use guards for simple conditions</li><li>✅ <strong>Shallow nesting</strong> - Keep nesting to 1-2 levels maximum</li><li>✅ <strong>Let it crash</strong> - Don't catch errors unless you can handle them meaningfully</li><li>✅ <strong>OTP behaviors</strong> - Use gen_server, gen_statem, supervisor where appropriate</li></ul><h3 id="example-good-vs-bad" class="section-heading"><a href="#example-good-vs-bad" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Example: Good vs. Bad</span></h3><p>❌ <strong>Bad:</strong></p><pre><code class="makeup erlang" translate="no"><span class="nf">process_message</span><span class="p" data-group-id="7039723363-1">(</span><span class="n">Msg</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="7039723363-1">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+    </span><span class="k">if</span><span class="w">
+        </span><span class="nf">is_binary</span><span class="p" data-group-id="7039723363-2">(</span><span class="n">Msg</span><span class="p" data-group-id="7039723363-2">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+            </span><span class="k">case</span><span class="w"> </span><span class="nf">decode_message</span><span class="p" data-group-id="7039723363-3">(</span><span class="n">Msg</span><span class="p" data-group-id="7039723363-3">)</span><span class="w"> </span><span class="k">of</span><span class="w">
+                </span><span class="p" data-group-id="7039723363-4">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Data</span><span class="p" data-group-id="7039723363-4">}</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+                    </span><span class="k">if</span><span class="w">
+                        </span><span class="n">Data</span><span class="o">#</span><span class="ss">data</span><span class="p">.</span><span class="ss">type</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="ss">request</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+                            </span><span class="nf">handle_request</span><span class="p" data-group-id="7039723363-5">(</span><span class="n">Data</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="7039723363-5">)</span><span class="p">;</span><span class="w">
+                        </span><span class="n">Data</span><span class="o">#</span><span class="ss">data</span><span class="p">.</span><span class="ss">type</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="ss">response</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+                            </span><span class="nf">handle_response</span><span class="p" data-group-id="7039723363-6">(</span><span class="n">Data</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="7039723363-6">)</span><span class="w">
+                    </span><span class="k">end</span><span class="w">
+            </span><span class="k">end</span><span class="w">
+    </span><span class="k">end</span><span class="p">.</span></code></pre><p>✅ <strong>Good:</strong></p><pre><code class="makeup erlang" translate="no"><span class="c1">%% Guard ensures binary input</span><span class="w">
+</span><span class="nf">process_message</span><span class="p" data-group-id="9460041983-1">(</span><span class="n">Msg</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="9460041983-1">)</span><span class="w"> </span><span class="k">when</span><span class="w"> </span><span class="nf">is_binary</span><span class="p" data-group-id="9460041983-2">(</span><span class="n">Msg</span><span class="p" data-group-id="9460041983-2">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+    </span><span class="k">case</span><span class="w"> </span><span class="nf">decode_message</span><span class="p" data-group-id="9460041983-3">(</span><span class="n">Msg</span><span class="p" data-group-id="9460041983-3">)</span><span class="w"> </span><span class="k">of</span><span class="w">
+        </span><span class="p" data-group-id="9460041983-4">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Data</span><span class="p" data-group-id="9460041983-4">}</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nf">handle_decoded_message</span><span class="p" data-group-id="9460041983-5">(</span><span class="n">Data</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="9460041983-5">)</span><span class="p">;</span><span class="w">
+        </span><span class="p" data-group-id="9460041983-6">{</span><span class="ss">error</span><span class="p">,</span><span class="w"> </span><span class="n">Reason</span><span class="p" data-group-id="9460041983-6">}</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="p" data-group-id="9460041983-7">{</span><span class="ss">error</span><span class="p">,</span><span class="w"> </span><span class="n">Reason</span><span class="p" data-group-id="9460041983-7">}</span><span class="w">
+    </span><span class="k">end</span><span class="p">;</span><span class="w">
+</span><span class="nf">process_message</span><span class="p" data-group-id="9460041983-8">(</span><span class="p">_</span><span class="n">Msg</span><span class="p">,</span><span class="w"> </span><span class="p">_</span><span class="n">State</span><span class="p" data-group-id="9460041983-8">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+    </span><span class="p" data-group-id="9460041983-9">{</span><span class="ss">error</span><span class="p">,</span><span class="w"> </span><span class="ss">invalid_message</span><span class="p" data-group-id="9460041983-9">}</span><span class="p">.</span><span class="w">
+
+</span><span class="c1">%% Pattern match on data type</span><span class="w">
+</span><span class="nf">handle_decoded_message</span><span class="p" data-group-id="9460041983-10">(</span><span class="o">#</span><span class="ss">data</span><span class="p" data-group-id="9460041983-11">{</span><span class="ss">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ss">request</span><span class="p" data-group-id="9460041983-11">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Data</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="9460041983-10">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+    </span><span class="nf">handle_request</span><span class="p" data-group-id="9460041983-12">(</span><span class="n">Data</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="9460041983-12">)</span><span class="p">;</span><span class="w">
+</span><span class="nf">handle_decoded_message</span><span class="p" data-group-id="9460041983-13">(</span><span class="o">#</span><span class="ss">data</span><span class="p" data-group-id="9460041983-14">{</span><span class="ss">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ss">response</span><span class="p" data-group-id="9460041983-14">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Data</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="9460041983-13">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+    </span><span class="nf">handle_response</span><span class="p" data-group-id="9460041983-15">(</span><span class="n">Data</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p" data-group-id="9460041983-15">)</span><span class="p">.</span></code></pre><p>See <a href="../CLAUDE.md">CLAUDE.md</a> for complete coding guidelines.</p><h2 id="building-documentation" class="section-heading"><a href="#building-documentation" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Building Documentation</span></h2><p>Macula uses ex_doc for documentation generation:</p><pre><code class="makeup bash" translate="no"><span class="">rebar3 ex_doc
+</span></code></pre><p>Generated docs appear in <code class="inline">doc/</code> directory. Open <code class="inline">doc/index.html</code> in a browser.</p><h2 id="docker-development" class="section-heading"><a href="#docker-development" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Docker Development</span></h2><h3 id="clean-build-always-after-code-changes" class="section-heading"><a href="#clean-build-always-after-code-changes" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Clean Build (Always After Code Changes)</span></h3><pre><code class="makeup bash" translate="no"><span class=""># Prune cache and rebuild from scratch
+</span><span class="">docker builder prune -af
+</span><span class="">docker compose -f &lt;compose-file&gt; build --no-cache
+</span></code></pre><p><strong>Why?</strong> Docker build cache can use stale layers even after code changes. Always prune and rebuild when testing code changes.</p><h3 id="multi-node-test-environment" class="section-heading"><a href="#multi-node-test-environment" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Multi-Node Test Environment</span></h3><pre><code class="makeup bash" translate="no"><span class="">cd docker
+</span><span class="">docker-compose -f docker-compose.multi-node-test.yml up
+</span></code></pre><p>This starts:</p><ul><li>1 registry node (gateway)</li><li>3 provider nodes (advertise services)</li><li>1 client node (discovers and calls services)</li></ul><h2 id="memory-management" class="section-heading"><a href="#memory-management" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Memory Management</span></h2><p>Macula implements comprehensive memory leak prevention. See <a href="readme.html">Memory Management</a> for details.</p><p><strong>Key Mechanisms:</strong></p><ul><li>Bounded connection pools (max 1,000 connections, LRU eviction)</li><li>Client connection limits (max 10,000 clients, configurable)</li><li>Service TTL/cleanup (5-minute TTL, 60-second cleanup interval)</li><li>Stream cleanup on disconnect</li><li>Caller process monitoring for RPC handlers</li></ul><p><strong>Monitoring:</strong></p><pre><code class="makeup erlang" translate="no"><span class="c1">%% Check connection pool size</span><span class="w">
+</span><span class="nc">macula_gateway_mesh</span><span class="p">:</span><span class="nf">pool_size</span><span class="p" data-group-id="3061547893-1">(</span><span class="n">GatewayPid</span><span class="p" data-group-id="3061547893-1">)</span><span class="p">.</span><span class="w">
+
+</span><span class="c1">%% Check client count</span><span class="w">
+</span><span class="nc">macula_gateway_client_manager</span><span class="p">:</span><span class="nf">client_count</span><span class="p" data-group-id="3061547893-2">(</span><span class="n">ManagerPid</span><span class="p" data-group-id="3061547893-2">)</span><span class="p">.</span><span class="w">
+
+</span><span class="c1">%% Check service registry size</span><span class="w">
+</span><span class="nc">macula_service_registry</span><span class="p">:</span><span class="nf">service_count</span><span class="p" data-group-id="3061547893-3">(</span><span class="p" data-group-id="3061547893-3">)</span><span class="p">.</span></code></pre><h2 id="refactoring-status" class="section-heading"><a href="#refactoring-status" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Refactoring Status</span></h2><h3 id="gateway-refactoring-completed-jan-2025" class="section-heading"><a href="#gateway-refactoring-completed-jan-2025" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Gateway Refactoring (COMPLETED - Jan 2025)</span></h3><p>The gateway module has been refactored into 6 focused modules with comprehensive tests:</p><ul><li>✅ <code class="inline">macula_gateway_client_manager.erl</code> - Client lifecycle (24 tests)</li><li>✅ <code class="inline">macula_gateway_pubsub.erl</code> - Pub/Sub routing (31 tests)</li><li>✅ <code class="inline">macula_gateway_rpc.erl</code> - RPC handler management (20 tests)</li><li>✅ <code class="inline">macula_gateway_mesh.erl</code> - Mesh connection pooling (16 tests)</li><li>✅ <code class="inline">macula_gateway_dht.erl</code> - DHT query forwarding (stateless)</li><li>✅ <code class="inline">macula_gateway_rpc_router.erl</code> - Multi-hop RPC routing (17 tests)</li><li>✅ <code class="inline">macula_gateway_sup.erl</code> - Supervision tree (24 tests)</li></ul><p>Total: 132 tests, all passing.</p><h3 id="connection-refactoring-in-progress-jan-2025" class="section-heading"><a href="#connection-refactoring-in-progress-jan-2025" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Connection Refactoring (IN PROGRESS - Jan 2025)</span></h3><p><code class="inline">macula_connection.erl</code> (2,030 LOC god module) is being refactored using TDD.</p><p>See:</p><ul><li><a href="../architecture/god_module_refactoring_plan.md">God Module Refactoring Plan</a> - 9-week TDD plan</li><li><a href="../architecture/macula_connection_behaviors.md">Connection Behaviors</a> - 275+ test scenarios</li><li><a href="../architecture/god_module_refactoring_status.md">Refactoring Status</a> - Current progress</li></ul><p><strong>DO NOT</strong> modify <code class="inline">macula_connection.erl</code> without reading the refactoring plan first!</p><h2 id="contributing-workflow" class="section-heading"><a href="#contributing-workflow" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Contributing Workflow</span></h2><ol><li><p><strong>Read the documentation</strong></p><ul><li><a href="readme.html">README.md</a></li><li><a href="../CONTRIBUTING.md">CONTRIBUTING.md</a></li><li><a href="../CLAUDE.md">CLAUDE.md</a> - Coding guidelines</li></ul></li><li><p><strong>Create a feature branch</strong></p><pre><code class="makeup bash" translate="no"><span class="">git checkout -b feature/your-feature-name
+</span></code></pre></li><li><p><strong>Write tests first</strong> (TDD approach preferred)</p><pre><code class="makeup bash" translate="no"><span class=""># Create test file
+</span><span class="">touch test/macula_your_module_tests.erl
+</span><span class="">
+</span><span class=""># Write failing tests
+</span><span class=""># Implement functionality
+</span><span class=""># Verify tests pass
+</span><span class="">rebar3 eunit --module=macula_your_module_tests
+</span></code></pre></li><li><p><strong>Follow code quality standards</strong></p><ul><li>Pattern matching over conditionals</li><li>Guards instead of case where possible</li><li>Maximum 1-2 levels of nesting</li><li>Comprehensive tests for new functionality</li></ul></li><li><p><strong>Commit and push</strong></p><pre><code class="makeup bash" translate="no"><span class="">git add .
+</span><span class="">git commit -m &quot;Add feature: your feature description&quot;
+</span><span class="">git push origin feature/your-feature-name
+</span></code></pre></li><li><p><strong>Create pull request</strong></p><ul><li>Describe what the PR does</li><li>Reference any related issues</li><li>Ensure all tests pass</li><li>Follow PR template guidelines</li></ul></li></ol><h2 id="getting-help" class="section-heading"><a href="#getting-help" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Getting Help</span></h2><ul><li><strong>Issues</strong>: <a href="https://github.com/macula-io/macula/issues">GitHub Issues</a></li><li><strong>Documentation</strong>: <a href="../architecture/">Architecture Docs</a></li><li><strong>Code Quality</strong>: <a href="../CODE_REVIEW_REPORT.md">CODE_REVIEW_REPORT.md</a></li></ul><hr class="thin"/><p><strong><a href="hello_world.html">← Back to README</a></strong> | <strong><a href="macula_http3_mesh_root.html">Technical Documentation →</a></strong></p>
+
+</div>
+
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
+
+      <a href="use_cases.html" class="bottom-actions-button" rel="prev">
+        <span class="subheader">
+          ← Previous Page
+        </span>
+        <span class="title">
+Use Cases
+        </span>
+      </a>
+
+  </div>
+  <div class="bottom-actions-item">
+
+      <a href="readme-2.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+Documentation Index
+        </span>
+      </a>
+
+  </div>
+</div>
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.7.10" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.7.10">Hex Preview</a>
+
+              (<a href="https://preview.hex.pm/preview/macula/0.7.10/show/docs/DEVELOPMENT.md">current file</a>)
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

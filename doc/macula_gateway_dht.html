@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.7.10">
+
+
+    <title>macula_gateway_dht — macula v0.7.10</title>
+
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-D67BC5A8.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="hello_world.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="hello_world.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.7.10
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_gateway_dht</span> 
+      <small class="app-vsn" translate="no">(macula v0.7.10)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.7.10/src/macula_gateway_dht.erl#L21" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+    <section id="moduledoc">
+<p>DHT Query Handler Module - handles DHT message forwarding to routing server.</p><p>Responsibilities: - Forward DHT STORE messages to routing server - Forward DHT FIND_VALUE messages to routing server, send encoded replies - Forward DHT FIND_NODE messages to routing server, send encoded replies - Handle DHT queries from process messages - Encode replies using protocol encoder - Handle errors gracefully</p><p>Pattern: Stateless delegation module - No GenServer (no state to manage) - Pure functions forwarding to routing server - Consistent error handling ({ok, Result} | {error, Reason})</p><p>Extracted from macula_gateway.erl (Phase 10)</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_find_node/2" data-no-tooltip="" translate="no">handle_find_node(Stream, FindNodeMsg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Handle DHT FIND_NODE message. Forwards to routing server and sends encoded reply over stream. Crashes on routing server or encoding failures - exposes DHT/protocol bugs.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_find_value/2" data-no-tooltip="" translate="no">handle_find_value(Stream, FindValueMsg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Handle DHT FIND_VALUE message. Forwards to routing server and sends encoded reply over stream. Crashes on routing server or encoding failures - exposes DHT/protocol bugs.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_query/3" data-no-tooltip="" translate="no">handle_query(FromPid, QueryType, QueryData)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Handle DHT query from process message. Decodes query, forwards to routing server, encodes reply, sends to requesting process. Crashes on decode or routing failures - exposes protocol/DHT bugs.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_store/2" data-no-tooltip="" translate="no">handle_store(Stream, StoreMsg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Handle DHT STORE message. Forwards to routing server (no reply sent back). Crashes on routing server failures - this exposes DHT issues immediately.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#lookup_value/1" data-no-tooltip="" translate="no">lookup_value(Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Look up a value from the DHT by key. Synchronous lookup from local DHT storage. Returns list of subscribers for the given key.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="handle_find_node/2">
+
+  <div class="detail-header">
+    <a href="#handle_find_node/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_find_node(Stream, FindNodeMsg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.7.10/src/macula_gateway_dht.erl#L67" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> handle_find_node(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Handle DHT FIND_NODE message. Forwards to routing server and sends encoded reply over stream. Crashes on routing server or encoding failures - exposes DHT/protocol bugs.</p>
+  </section>
+</section>
+<section class="detail" id="handle_find_value/2">
+
+  <div class="detail-header">
+    <a href="#handle_find_value/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_find_value(Stream, FindValueMsg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.7.10/src/macula_gateway_dht.erl#L52" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> handle_find_value(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Handle DHT FIND_VALUE message. Forwards to routing server and sends encoded reply over stream. Crashes on routing server or encoding failures - exposes DHT/protocol bugs.</p>
+  </section>
+</section>
+<section class="detail" id="handle_query/3">
+
+  <div class="detail-header">
+    <a href="#handle_query/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_query(FromPid, QueryType, QueryData)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.7.10/src/macula_gateway_dht.erl#L82" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> handle_query(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Handle DHT query from process message. Decodes query, forwards to routing server, encodes reply, sends to requesting process. Crashes on decode or routing failures - exposes protocol/DHT bugs.</p>
+  </section>
+</section>
+<section class="detail" id="handle_store/2">
+
+  <div class="detail-header">
+    <a href="#handle_store/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_store(Stream, StoreMsg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.7.10/src/macula_gateway_dht.erl#L40" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> handle_store(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Handle DHT STORE message. Forwards to routing server (no reply sent back). Crashes on routing server failures - this exposes DHT issues immediately.</p>
+  </section>
+</section>
+<section class="detail" id="lookup_value/1">
+
+  <div class="detail-header">
+    <a href="#lookup_value/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">lookup_value(Key)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.7.10/src/macula_gateway_dht.erl#L101" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> lookup_value(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>()} | {error, not_found}.</pre>
+
+      </div>
+
+<p>Look up a value from the DHT by key. Synchronous lookup from local DHT storage. Returns list of subscribers for the given key.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.7.10" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.7.10">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

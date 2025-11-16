@@ -307,7 +307,7 @@ send_find_value_async(ServiceKey, Procedure, Args, Opts, From, State) ->
 
     %% Send over QUIC via connection manager
     ConnMgrPid = State#state.connection_manager_pid,
-    case macula_connection_manager:send_message(ConnMgrPid, find_value, FindValueMsg) of
+    case macula_connection:send_message(ConnMgrPid, find_value, FindValueMsg) of
         ok ->
             %% Start timeout timer
             Timer = erlang:send_after(?DHT_QUERY_TIMEOUT, self(),
@@ -418,7 +418,7 @@ do_remote_call_to_provider(Procedure, Args, Opts, From, Provider, AllProviders, 
 
     %% Send call message via connection manager
     ConnMgrPid = State#state.connection_manager_pid,
-    case macula_connection_manager:send_message(ConnMgrPid, call, CallMsg) of
+    case macula_connection:send_message(ConnMgrPid, call, CallMsg) of
         ok ->
             %% Set up timeout timer
             Timeout = maps:get(timeout, Opts, ?DEFAULT_CALL_TIMEOUT),

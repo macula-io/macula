@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120" width="400" height="120">
+  <defs>
+    <!-- Gradient for the main elements (dark theme) -->
+    <linearGradient id="meshGradientDark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00FF7F;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#32CD32;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00CED1;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Gradient for connections (dark theme) -->
+    <linearGradient id="connectionGradientDark" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#32CD32;stop-opacity:0.8" />
+      <stop offset="50%" style="stop-color:#00CED1;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#32CD32;stop-opacity:0.8" />
+    </linearGradient>
+
+    <!-- Glow effect for dark theme -->
+    <filter id="glowDark" x="-30%" y="-30%" width="160%" height="160%">
+      <feMorphology operator="dilate" radius="2"/>
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge> 
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/> 
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Transparent background -->
+  <rect width="400" height="120" fill="none"/>
+  
+  <!-- Mesh Network Visualization (Left side) -->
+  <g id="mesh-network" transform="translate(10, 10)">
+    <!-- Connection lines -->
+    <g id="connections" stroke="url(#connectionGradientDark)" stroke-width="2.5" fill="none" opacity="0.9">
+      <!-- Hub cluster connections -->
+      <line x1="30" y1="25" x2="50" y2="45"/>
+      <line x1="30" y1="25" x2="70" y2="25"/>
+      <line x1="50" y1="45" x2="70" y2="25"/>
+      
+      <!-- Edge connections -->
+      <line x1="15" y1="50" x2="30" y2="25"/>
+      <line x1="15" y1="50" x2="50" y2="45"/>
+      <line x1="85" y1="15" x2="70" y2="25"/>
+      <line x1="85" y1="40" x2="70" y2="25"/>
+      <line x1="85" y1="40" x2="50" y2="45"/>
+      
+      <!-- Cross-ring bridge (highlighted) -->
+      <line x1="70" y1="25" x2="90" y2="60" stroke-dasharray="4,4" stroke-width="4" opacity="1" stroke="#00FF7F"/>
+      
+      <!-- Second ring connections -->
+      <line x1="90" y1="60" x2="110" y2="75"/>
+      <line x1="90" y1="60" x2="110" y2="45"/>
+      <line x1="110" y1="75" x2="110" y2="45"/>
+    </g>
+    
+    <!-- Hub Microclusters (μCh) -->
+    <g id="hub-clusters" fill="url(#meshGradientDark)">
+      <circle cx="30" cy="25" r="9" filter="url(#glowDark)"/>
+      <circle cx="50" cy="45" r="9" filter="url(#glowDark)"/>
+      <circle cx="70" cy="25" r="9" filter="url(#glowDark)"/>
+      <circle cx="90" cy="60" r="9" filter="url(#glowDark)"/>
+    </g>
+    
+    <!-- Edge Microclusters (μCe) -->
+    <g id="edge-clusters" fill="#00FF7F" opacity="0.9">
+      <circle cx="15" cy="50" r="6"/>
+      <circle cx="85" cy="15" r="6"/>
+      <circle cx="85" cy="40" r="6"/>
+      <circle cx="110" cy="45" r="6"/>
+      <circle cx="110" cy="75" r="6"/>
+    </g>
+    
+    <!-- Ring boundaries (more visible in dark theme) -->
+    <g id="ring-boundaries" stroke="#00CED1" stroke-width="2" fill="none" opacity="0.5" stroke-dasharray="3,4">
+      <ellipse cx="50" cy="32" rx="45" ry="25"/>
+      <ellipse cx="100" cy="60" rx="25" ry="20"/>
+    </g>
+  </g>
+  
+  <!-- Typography -->
+  <g id="text">
+    <!-- Main "Macula" text -->
+    <text x="150" y="50" font-size="42" fill="url(#meshGradientDark)" letter-spacing="2px" 
+          font-family="system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" 
+          font-weight="700">Macula</text>
+    
+    <!-- Tagline -->
+    <text x="150" y="75" font-size="13" fill="#E0E0E0" opacity="0.9" 
+          font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" 
+          font-weight="400" letter-spacing="0.5px">Decentralized Platform</text>
+  </g>
+  
+  <!-- Data flow animations along mesh connections (dark theme) -->
+  <g id="mesh-animations" opacity="0.8" transform="translate(10, 10)">
+    <!-- Enhanced data packets flowing along connections -->
+    <g>
+      <!-- Flow from edge to hub -->
+      <circle r="2.5" fill="#00FF7F" opacity="0">
+        <animateMotion dur="2.5s" repeatCount="indefinite" path="M 15,50 L 30,25">
+          <animate attributeName="begin" values="0s" dur="2.5s" repeatCount="indefinite"/>
+        </animateMotion>
+        <animate attributeName="opacity" values="0;1;0.9;0" dur="2.5s" repeatCount="indefinite"/>
+      </circle>
+      
+      <!-- Flow between hubs -->
+      <circle r="3" fill="#00CED1" opacity="0">
+        <animateMotion dur="1.8s" repeatCount="indefinite" path="M 30,25 L 50,45">
+          <animate attributeName="begin" values="0.5s" dur="1.8s" repeatCount="indefinite"/>
+        </animateMotion>
+        <animate attributeName="opacity" values="0;1;0.9;0" dur="1.8s" repeatCount="indefinite" begin="0.5s"/>
+      </circle>
+      
+      <!-- Flow along horizontal hub connection -->
+      <circle r="2.5" fill="#32CD32" opacity="0">
+        <animateMotion dur="2.2s" repeatCount="indefinite" path="M 30,25 L 70,25">
+          <animate attributeName="begin" values="1s" dur="2.2s" repeatCount="indefinite"/>
+        </animateMotion>
+        <animate attributeName="opacity" values="0;1;0.8;0" dur="2.2s" repeatCount="indefinite" begin="1s"/>
+      </circle>
+      
+      <!-- Cross-ring bridge flow (special bright) -->
+      <circle r="4" fill="#FF4500" opacity="0">
+        <animateMotion dur="3s" repeatCount="indefinite" path="M 70,25 L 90,60">
+          <animate attributeName="begin" values="1.5s" dur="3s" repeatCount="indefinite"/>
+        </animateMotion>
+        <animate attributeName="opacity" values="0;1;0.9;0.4;0" dur="3s" repeatCount="indefinite" begin="1.5s"/>
+      </circle>
+      
+      <!-- Flow to edge devices -->
+      <circle r="2" fill="#00FF7F" opacity="0">
+        <animateMotion dur="2s" repeatCount="indefinite" path="M 70,25 L 85,15">
+          <animate attributeName="begin" values="2s" dur="2s" repeatCount="indefinite"/>
+        </animateMotion>
+        <animate attributeName="opacity" values="0;0.9;0.7;0" dur="2s" repeatCount="indefinite" begin="2s"/>
+      </circle>
+      
+      <!-- Second ring internal flow -->
+      <circle r="2" fill="#00CED1" opacity="0">
+        <animateMotion dur="1.5s" repeatCount="indefinite" path="M 90,60 L 110,75">
+          <animate attributeName="begin" values="2.5s" dur="1.5s" repeatCount="indefinite"/>
+        </animateMotion>
+        <animate attributeName="opacity" values="0;0.8;0.6;0" dur="1.5s" repeatCount="indefinite" begin="2.5s"/>
+      </circle>
+    </g>
+    
+    <!-- Enhanced connection pulse effects -->
+    <g stroke="#00CED1" stroke-width="1" fill="none" opacity="0.4">
+      <line x1="30" y1="25" x2="50" y2="45" stroke-dasharray="2,3">
+        <animate attributeName="stroke-dashoffset" values="0;5;0" dur="4s" repeatCount="indefinite"/>
+      </line>
+      <line x1="30" y1="25" x2="70" y2="25" stroke-dasharray="2,3">
+        <animate attributeName="stroke-dashoffset" values="0;5;0" dur="3.5s" repeatCount="indefinite" begin="0.5s"/>
+      </line>
+      <!-- Cross-ring bridge pulse -->
+      <line x1="70" y1="25" x2="90" y2="60" stroke="#00FF7F" stroke-dasharray="3,4" stroke-width="1.5">
+        <animate attributeName="stroke-dashoffset" values="0;7;0" dur="3s" repeatCount="indefinite" begin="1.5s"/>
+      </line>
+    </g>
+  </g>
+</svg>

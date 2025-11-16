@@ -26,7 +26,8 @@
     call_msg/0,
     reply_msg/0,
     cast_msg/0,
-    rpc_route_msg/0
+    rpc_route_msg/0,
+    pubsub_route_msg/0
 ]).
 
 %%%===================================================================
@@ -43,6 +44,7 @@
 -define(MSG_PUBLISH,        16#10).
 -define(MSG_SUBSCRIBE,      16#11).
 -define(MSG_UNSUBSCRIBE,    16#12).
+-define(MSG_PUBSUB_ROUTE,   16#13).
 
 %% RPC messages
 -define(MSG_CALL,           16#20).
@@ -68,7 +70,7 @@
 
 -type message_type() ::
     connect | disconnect | ping | pong |
-    publish | subscribe | unsubscribe |
+    publish | subscribe | unsubscribe | pubsub_route |
     call | reply | cast | rpc_route |
     swim_ping | swim_ack | swim_ping_req |
     find_node | find_node_reply | store | find_value | find_value_reply.
@@ -81,6 +83,7 @@
     {publish, publish_msg()} |
     {subscribe, subscribe_msg()} |
     {unsubscribe, unsubscribe_msg()} |
+    {pubsub_route, pubsub_route_msg()} |
     {call, call_msg()} |
     {reply, reply_msg()} |
     {cast, cast_msg()} |
@@ -163,6 +166,17 @@
     payload := call_msg() | reply_msg()  % The actual RPC message
 }.
 
+%% Pub/Sub Routing Message (for multi-hop DHT routing)
+
+-type pubsub_route_msg() :: #{
+    destination_node_id := binary(),  % 32-byte subscriber node ID
+    source_node_id := binary(),       % 32-byte publisher node ID
+    hop_count := non_neg_integer(),   % Current hop count (for debugging/metrics)
+    max_hops := pos_integer(),        % Max hops allowed (TTL protection, default: 10)
+    topic := binary(),                % Pub/sub topic
+    payload := publish_msg()          % The actual PUBLISH message
+}.
+
 %%%===================================================================
 %%% API Functions
 %%%===================================================================
@@ -176,6 +190,7 @@ message_type_id(pong) -> ?MSG_PONG;
 message_type_id(publish) -> ?MSG_PUBLISH;
 message_type_id(subscribe) -> ?MSG_SUBSCRIBE;
 message_type_id(unsubscribe) -> ?MSG_UNSUBSCRIBE;
+message_type_id(pubsub_route) -> ?MSG_PUBSUB_ROUTE;
 message_type_id(call) -> ?MSG_CALL;
 message_type_id(reply) -> ?MSG_REPLY;
 message_type_id(cast) -> ?MSG_CAST;
@@ -198,6 +213,7 @@ message_type_name(?MSG_PONG) -> {ok, pong};
 message_type_name(?MSG_PUBLISH) -> {ok, publish};
 message_type_name(?MSG_SUBSCRIBE) -> {ok, subscribe};
 message_type_name(?MSG_UNSUBSCRIBE) -> {ok, unsubscribe};
+message_type_name(?MSG_PUBSUB_ROUTE) -> {ok, pubsub_route};
 message_type_name(?MSG_CALL) -> {ok, call};
 message_type_name(?MSG_REPLY) -> {ok, reply};
 message_type_name(?MSG_CAST) -> {ok, cast};

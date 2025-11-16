@@ -66,7 +66,7 @@ advertise_subscription(Topic, SubRef, NodeId, Url, ConnMgrPid) ->
     ?LOG_INFO("[~s] Advertising subscription to topic ~s in DHT", [NodeId, Topic]),
     try
         StoreMsg = macula_routing_protocol:encode_store(TopicKey, SubscriberValue),
-        case macula_connection_manager:send_message(ConnMgrPid, store, StoreMsg) of
+        case macula_connection:send_message(ConnMgrPid, store, StoreMsg) of
             ok ->
                 ?LOG_DEBUG("[~s] Successfully stored subscription for ~s in DHT", [NodeId, Topic]);
             {error, SendError} ->
@@ -149,27 +149,48 @@ handle_discovery_response(MsgId, _Subscribers, PendingQueries) ->
             {ok, maps:remove(MsgId, PendingQueries)}
     end.
 
-%% @doc Route message to remote subscribers.
-%% Sends publish message to each subscriber endpoint.
+%% @doc Route message to remote subscribers via DHT routing (v0.7.8+).
+%% Wraps publish in pubsub_route envelope and sends to each subscriber node.
 -spec route_to_subscribers(topic(), payload(), qos(), list(), node_id()) -> ok.
 route_to_subscribers(_Topic, _Payload, _Qos, [], _NodeId) ->
     ok;
-route_to_subscribers(Topic, _Payload, _Qos, Subscribers, NodeId) ->
-    ?LOG_INFO("[~s] Routing message to ~p remote subscriber(s) for topic: ~s",
-             [NodeId, length(Subscribers), Topic]),
+route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId) ->
+    ?LOG_INFO("[~s] Routing message to ~p remote subscriber(s) for topic: ~s via DHT",
+             [SourceNodeId, length(Subscribers), Topic]),
 
-    %% Send publish message to each subscriber endpoint
+    %% Get connection manager PID to send routed messages
+    ConnMgrPid = gproc:lookup_local_name(macula_connection),
+
+    %% Route to each subscriber via pubsub_route envelope
     lists:foreach(
         fun(Subscriber) ->
-            %% Extract subscriber endpoint
-            Endpoint = maps:get(endpoint, Subscriber, undefined),
-            case Endpoint of
+            %% Extract subscriber node_id (not endpoint - we route via DHT)
+            case maps:get(node_id, Subscriber, maps:get(<<"node_id">>, Subscriber, undefined)) of
                 undefined ->
-                    ?LOG_WARNING("[~s] Subscriber missing endpoint, skipping", [NodeId]);
-                _ ->
-                    %% TODO: Route message to remote endpoint
-                    %% This will be implemented when multi-endpoint connections are added
-                    ?LOG_DEBUG("[~s] Would route to endpoint: ~s", [NodeId, Endpoint])
+                    ?LOG_WARNING("[~s] Subscriber missing node_id, skipping", [SourceNodeId]);
+                DestNodeId ->
+                    %% Build PUBLISH message
+                    PublishMsg = #{
+                        <<"topic">> => Topic,
+                        <<"payload">> => Payload,
+                        <<"qos">> => Qos,
+                        <<"retain">> => false,
+                        <<"message_id">> => crypto:strong_rand_bytes(16)
+                    },
+
+                    %% Wrap in pubsub_route envelope (MaxHops = 10)
+                    PubSubRouteMsg = macula_pubsub_routing:wrap_publish(
+                        SourceNodeId, DestNodeId, PublishMsg, 10
+                    ),
+
+                    %% Send via connection manager
+                    case macula_connection:send_message(ConnMgrPid, pubsub_route, PubSubRouteMsg) of
+                        ok ->
+                            ?LOG_DEBUG("[~s] Sent pubsub_route to subscriber ~s for topic ~s",
+                                      [SourceNodeId, binary:encode_hex(DestNodeId), Topic]);
+                        {error, Reason} ->
+                            ?LOG_ERROR("[~s] Failed to send pubsub_route: ~p", [SourceNodeId, Reason])
+                    end
             end
         end,
         Subscribers
@@ -197,7 +218,7 @@ query_dht_async(Topic, _Payload, _Qos, MsgId, ConnMgrPid) ->
     spawn(fun() ->
         try
             FindValueMsg = macula_routing_protocol:encode_find_value(TopicKey),
-            case macula_connection_manager:send_message(ConnMgrPid, find_value, FindValueMsg) of
+            case macula_connection:send_message(ConnMgrPid, find_value, FindValueMsg) of
                 ok ->
                     ?LOG_DEBUG("Sent FIND_VALUE for topic ~s", [Topic]);
                 {error, SendError} ->

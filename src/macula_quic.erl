@@ -45,7 +45,8 @@ listen(Port, Opts) ->
         {keyfile, KeyFile},
         {alpn, AlpnProtocols},
         {peer_unidi_stream_count, PeerUnidiStreamCount},
-        {peer_bidi_stream_count, PeerBidiStreamCount}
+        {peer_bidi_stream_count, PeerBidiStreamCount},
+        {idle_timeout_ms, 0}  % Disable QUIC idle timeout (application handles keep-alive)
     ],
 
     %% Start QUIC listener
@@ -68,7 +69,8 @@ connect(Host, Port, Opts, Timeout) ->
     %% Build quicer options
     QuicerOpts = [
         {alpn, AlpnProtocols},
-        {verify, Verify}
+        {verify, Verify},
+        {idle_timeout_ms, 0}  % Disable QUIC idle timeout (application handles keep-alive)
     ],
 
     %% Connect
