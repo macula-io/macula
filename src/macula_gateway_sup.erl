@@ -1,26 +1,38 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% Gateway Supervisor - supervises all gateway worker processes.
+%%% Gateway Root Supervisor - top-level supervisor for gateway subsystem.
 %%%
 %%% Supervision Strategy:
-%%% - rest_for_one: If child N crashes, restart N and all children after N
-%%% - Rationale: Only client_manager is foundational; pubsub/rpc/mesh depend
-%%%   on it but are independent of each other. This strategy provides fault
-%%%   isolation while maintaining consistency when client_manager restarts.
+%%% - rest_for_one: Dependency-based restart ordering
+%%% - Child order reflects dependencies:
+%%%   1. quic_server (owns QUIC listener, no dependencies)
+%%%   2. gateway (depends on quic_server PID)
+%%%   3. workers_sup (depends on gateway PID)
 %%%
-%%% Children (in dependency order):
-%%% - macula_gateway_client_manager: Client lifecycle management (foundational)
-%%% - macula_gateway_pubsub: Pub/Sub message routing (depends on client_manager)
-%%% - macula_gateway_rpc: RPC handler registration and routing (depends on client_manager)
-%%% - macula_gateway_mesh: Mesh connection pooling and management (independent)
+%%% Fault Isolation:
+%%% - quic_server crash → restart quic_server, gateway, workers_sup
+%%% - gateway crash → restart gateway, workers_sup (quic_server continues)
+%%% - workers_sup crash → restart workers_sup only (quic_server and gateway continue)
 %%%
-%%% Fault Isolation Examples:
-%%% - mesh crash → only mesh restarts (0 clients disconnected)
-%%% - rpc crash → rpc + mesh restart (0 clients disconnected)
-%%% - pubsub crash → pubsub + rpc + mesh restart (0 clients disconnected)
-%%% - client_manager crash → all restart (unavoidable - foundational)
+%%% Architecture:
+%%% ```
+%%% macula_gateway_sup (this module)
+%%% ├── macula_gateway_quic_server  - QUIC transport layer
+%%% ├── macula_gateway              - Message routing coordinator
+%%% └── macula_gateway_workers_sup  - Business logic workers
+%%%     ├── macula_gateway_clients  - Client tracking
+%%%     ├── macula_gateway_pubsub   - Pub/Sub routing
+%%%     ├── macula_gateway_rpc      - RPC handling
+%%%     └── macula_gateway_mesh     - Mesh connections
+%%% ```
 %%%
-%%% Extracted from macula_gateway.erl (Phase 6, 9)
+%%% Circular Dependency Resolution:
+%%% - quic_server starts first (without gateway PID)
+%%% - gateway starts second (receives quic_server PID)
+%%% - Supervisor calls quic_server:set_gateway/1 to complete link
+%%% - workers_sup starts last (receives gateway PID)
+%%%
+%%% Created during Phase 2 QUIC refactoring to enable proper OTP supervision.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_gateway_sup).
@@ -28,124 +40,100 @@
 -behaviour(supervisor).
 
 %% API
--export([
-    start_link/1,
-    get_client_manager/1,
-    get_pubsub/1,
-    get_rpc/1,
-    get_mesh/1
-]).
+-export([start_link/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
-
--define(SERVER, ?MODULE).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
-%% @doc Start the gateway supervisor with configuration.
--spec start_link(map()) -> {ok, pid()} | {error, term()}.
-start_link(Config) ->
-    supervisor:start_link(?MODULE, Config).
-
-%% @doc Get the client manager child PID.
--spec get_client_manager(pid()) -> {ok, pid()} | {error, not_found}.
-get_client_manager(SupPid) ->
-    get_child_pid(SupPid, macula_gateway_client_manager).
-
-%% @doc Get the pubsub handler child PID.
--spec get_pubsub(pid()) -> {ok, pid()} | {error, not_found}.
-get_pubsub(SupPid) ->
-    get_child_pid(SupPid, macula_gateway_pubsub).
-
-%% @doc Get the RPC handler child PID.
--spec get_rpc(pid()) -> {ok, pid()} | {error, not_found}.
-get_rpc(SupPid) ->
-    get_child_pid(SupPid, macula_gateway_rpc).
-
-%% @doc Get the mesh connection manager child PID.
--spec get_mesh(pid()) -> {ok, pid()} | {error, not_found}.
-get_mesh(SupPid) ->
-    get_child_pid(SupPid, macula_gateway_mesh).
+%% @doc Start the root gateway supervisor with configuration.
+-spec start_link(proplists:proplist()) -> {ok, pid()} | {error, term()}.
+start_link(Opts) ->
+    supervisor:start_link(?MODULE, Opts).
 
 %%%===================================================================
 %%% Supervisor callbacks
 %%%===================================================================
 
-init(Config) ->
+init(Opts) when is_list(Opts) ->
+    %% Called with proplist (legacy tests, application startup)
+    Port = proplists:get_value(port, Opts, 9443),
+    Realm = proplists:get_value(realm, Opts, <<"macula.default">>),
+    CertFile = proplists:get_value(cert_file, Opts),
+    KeyFile = proplists:get_value(key_file, Opts),
+    init_supervisor(Port, Realm, CertFile, KeyFile);
+
+init(Opts) when is_map(Opts) ->
+    %% Called with map (new style)
+    Port = maps:get(port, Opts, 9443),
+    Realm = maps:get(realm, Opts, <<"macula.default">>),
+    CertFile = maps:get(cert_file, Opts, undefined),
+    KeyFile = maps:get(key_file, Opts, undefined),
+    init_supervisor(Port, Realm, CertFile, KeyFile).
+
+%% @private
+%% @doc Initialize the supervisor with extracted configuration.
+init_supervisor(Port, Realm, CertFile, KeyFile) ->
+
+    io:format("[GatewaySup] Initializing gateway supervisor for realm ~s on port ~p~n",
+              [Realm, Port]),
+
     %% Supervision strategy: rest_for_one
-    %% - If child N crashes, restart N and all children after N
-    %% - Provides fault isolation while maintaining dependency consistency
-    %% - Max 10 restarts in 60 seconds
+    %% - quic_server fails → restart quic_server, gateway, workers_sup
+    %% - gateway fails → restart gateway, workers_sup
+    %% - workers_sup fails → restart workers_sup only
     SupFlags = #{
         strategy => rest_for_one,
         intensity => 10,
         period => 60
     },
 
-    %% Child specifications
-    Children = [
-        %% Client Manager - tracks connected clients and streams
-        #{
-            id => macula_gateway_client_manager,
-            start => {macula_gateway_client_manager, start_link, [Config]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_gateway_client_manager]
-        },
+    %% Child 1: QUIC Server (starts without gateway PID)
+    QuicServerSpec = #{
+        id => macula_gateway_quic_server,
+        start => {macula_gateway_quic_server, start_link, [[
+            {port, Port},
+            {realm, Realm},
+            {cert_file, CertFile},
+            {key_file, KeyFile}
+            %% Note: NO gateway PID yet!
+        ]]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [macula_gateway_quic_server]
+    },
 
-        %% Pub/Sub Handler - routes published messages to subscribers
-        #{
-            id => macula_gateway_pubsub,
-            start => {macula_gateway_pubsub, start_link, [Config]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_gateway_pubsub]
-        },
+    %% Child 2: Gateway (receives quic_server PID after it starts)
+    GatewaySpec = #{
+        id => macula_gateway,
+        start => {macula_gateway, start_link, [[
+            {port, Port},
+            {realm, Realm}
+            %% Note: Gateway will find quic_server via supervisor
+        ]]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [macula_gateway]
+    },
 
-        %% RPC Handler - manages RPC handler registration and routing
-        #{
-            id => macula_gateway_rpc,
-            start => {macula_gateway_rpc, start_link, [Config]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_gateway_rpc]
-        },
+    %% Child 3: Workers Supervisor (supervises business logic workers)
+    WorkersSupSpec = #{
+        id => macula_gateway_workers_sup,
+        start => {macula_gateway_workers_sup, start_link, [#{
+            port => Port,
+            realm => Realm
+        }]},
+        restart => permanent,
+        shutdown => infinity,  % supervisor shutdown
+        type => supervisor,
+        modules => [macula_gateway_workers_sup]
+    },
 
-        %% Mesh Connection Manager - pools QUIC connections to remote peers
-        #{
-            id => macula_gateway_mesh,
-            start => {macula_gateway_mesh, start_link, [Config]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_gateway_mesh]
-        }
-    ],
+    Children = [QuicServerSpec, GatewaySpec, WorkersSupSpec],
 
     {ok, {SupFlags, Children}}.
-
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================
-
-%% @doc Get a child process PID by child ID.
--spec get_child_pid(pid(), atom()) -> {ok, pid()} | {error, not_found}.
-get_child_pid(SupPid, ChildId) ->
-    case supervisor:which_children(SupPid) of
-        Children when is_list(Children) ->
-            extract_child_pid(lists:keyfind(ChildId, 1, Children));
-        _ ->
-            {error, not_found}
-    end.
-
-%% @doc Extract child PID from keyfind result.
-extract_child_pid({_, ChildPid, _Type, _Modules}) when is_pid(ChildPid) ->
-    {ok, ChildPid};
-extract_child_pid(_) ->
-    {error, not_found}.

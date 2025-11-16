@@ -14,8 +14,8 @@
 %%%   - Supervisor Coordination
 %%%   - API Facade
 %%%
-%%% Child Modules (managed via macula_gateway_sup):
-%%%   - macula_gateway_client_manager: Client lifecycle management
+%%% Child Modules (managed via macula_gateway_workers_sup):
+%%%   - macula_gateway_clients: Client lifecycle management
 %%%   - macula_gateway_pubsub: Pub/Sub message routing with wildcards
 %%%   - macula_gateway_rpc: RPC handler registration &amp; invocation
 %%%   - macula_gateway_mesh: Mesh connection pooling
@@ -64,17 +64,6 @@
     register_handler/2,
     unregister_handler/1
 ]).
-
-%% Export for testing only
--ifdef(TEST).
--export([
-    parse_endpoint/1,
-    complete_handshake/1,
-    accept_streams/1,
-    register_next_connection/1,
-    resolve_host/2
-]).
--endif.
 
 %% gen_server callbacks
 -export([
@@ -153,41 +142,138 @@ init(Opts) ->
     Port = proplists:get_value(port, Opts, ?DEFAULT_PORT),
     Realm = proplists:get_value(realm, Opts, ?DEFAULT_REALM),
 
-    %% Get TLS certificates
-    %% Priority: 1. Environment variables (production)
-    %%           2. Pre-generated certs (development)
-    {CertFile, KeyFile} = get_tls_certificates(),
+    io:format("[Gateway] Initializing gateway (supervised mode)~n"),
+    io:format("[Gateway] Port: ~p, Realm: ~s~n", [Port, Realm]),
 
-    io:format("Using TLS certificates:~n"),
-    io:format("  Cert: ~s~n", [CertFile]),
-    io:format("  Key:  ~s~n", [KeyFile]),
+    %% Gateway is now supervised by macula_gateway_sup (root supervisor)
+    %% We need to find our sibling processes and wire ourselves together
 
-    %% Validate certificate files exist
-    case macula_quic_cert:validate_files(CertFile, KeyFile) of
-        ok ->
-            start_quic_listener(Port, Realm, CertFile, KeyFile);
+    %% Step 1: Get parent supervisor
+    case find_parent_supervisor() of
+        {ok, ParentSup} ->
+            init_with_supervisor(ParentSup, Port, Realm);
         {error, Reason} ->
-            io:format("Certificate validation failed: ~p~n", [Reason]),
-            {stop, {cert_validation_failed, Reason}}
+            io:format("[Gateway] Failed to find parent supervisor: ~p~n", [Reason]),
+            {stop, {no_parent_supervisor, Reason}}
     end.
 
 %% @private
-%% @doc Get TLS certificate paths from environment or use pre-generated ones.
-get_tls_certificates() ->
-    case {os:getenv("TLS_CERT_FILE"), os:getenv("TLS_KEY_FILE")} of
-        {false, false} ->
-            %% No env vars, use pre-generated certs
-            io:format("Using pre-generated TLS certificates~n"),
-            {"/opt/macula/certs/cert.pem", "/opt/macula/certs/key.pem"};
-        {CertEnv, KeyEnv} when CertEnv =/= false andalso KeyEnv =/= false ->
-            %% Use mounted certificates (production)
-            io:format("Using mounted TLS certificates from environment~n"),
-            {CertEnv, KeyEnv};
+%% @doc Find the parent supervisor (macula_gateway_sup).
+%% Uses process dictionary and supervisor hierarchy traversal.
+-spec find_parent_supervisor() -> {ok, pid()} | {error, term()}.
+find_parent_supervisor() ->
+    case get('$ancestors') of
+        [ParentSup | _] when is_pid(ParentSup) ->
+            {ok, ParentSup};
         _ ->
-            %% Partial configuration, log warning and use defaults
-            io:format("WARNING: Partial TLS environment config, using pre-generated certs~n"),
-            {"/opt/macula/certs/cert.pem", "/opt/macula/certs/key.pem"}
+            {error, no_parent_found}
     end.
+
+%% @private
+%% @doc Initialize gateway with supervisor context.
+%% Finds sibling processes, wires them together, and starts routing server.
+-spec init_with_supervisor(pid(), inet:port_number(), binary()) ->
+    {ok, #state{}} | {stop, term()}.
+init_with_supervisor(ParentSup, Port, Realm) ->
+    io:format("[Gateway] Parent supervisor found: ~p~n", [ParentSup]),
+
+    %% Step 2: Find sibling processes from parent supervisor
+    case find_sibling(ParentSup, macula_gateway_quic_server) of
+        {ok, QuicServerPid} ->
+            io:format("[Gateway] Found QUIC server sibling: ~p~n", [QuicServerPid]),
+
+            %% Step 3: Wire ourselves to QUIC server
+            ok = macula_gateway_quic_server:set_gateway(QuicServerPid, self()),
+            io:format("[Gateway] Wired gateway to QUIC server~n"),
+
+            %% Step 4: Find workers supervisor sibling
+            case find_sibling(ParentSup, macula_gateway_workers_sup) of
+                {ok, WorkersSupPid} ->
+                    io:format("[Gateway] Found workers supervisor sibling: ~p~n", [WorkersSupPid]),
+
+                    %% Step 5: Get worker PIDs from workers supervisor
+                    {ok, ClientsPid} = macula_gateway_workers_sup:get_clients(WorkersSupPid),
+                    {ok, PubSubPid} = macula_gateway_workers_sup:get_pubsub(WorkersSupPid),
+                    {ok, RpcPid} = macula_gateway_workers_sup:get_rpc(WorkersSupPid),
+                    {ok, MeshPid} = macula_gateway_workers_sup:get_mesh(WorkersSupPid),
+
+                    io:format("[Gateway] Worker PIDs retrieved:~n"),
+                    io:format("[Gateway]   - Clients: ~p~n", [ClientsPid]),
+                    io:format("[Gateway]   - PubSub: ~p~n", [PubSubPid]),
+                    io:format("[Gateway]   - RPC: ~p~n", [RpcPid]),
+                    io:format("[Gateway]   - Mesh: ~p~n", [MeshPid]),
+
+                    %% Step 6: Start routing server for DHT operations
+                    LocalNodeId = get_node_id(Realm, Port),
+                    io:format("[Gateway] Using node ID: ~p~n", [binary:encode_hex(LocalNodeId)]),
+
+                    RoutingConfig = #{
+                        k => 20,      % Kademlia k-bucket size
+                        alpha => 3    % Kademlia concurrency parameter
+                    },
+
+                    case macula_routing_server:start_link(LocalNodeId, RoutingConfig) of
+                        {ok, _RoutingPid} ->
+                            io:format("[Gateway] DHT routing server started~n"),
+                            ok;
+                        {error, {already_started, _}} ->
+                            io:format("[Gateway] DHT routing server already running~n"),
+                            ok;
+                        {error, RoutingErr} ->
+                            io:format("[Gateway] WARNING: Failed to start routing server: ~p~n", [RoutingErr]),
+                            ok  % Continue without routing server
+                    end,
+
+                    %% Mark health server as ready (if running)
+                    notify_health_server_ready(),
+
+                    %% Register diagnostics procedures (if running)
+                    register_diagnostics_procedures(self()),
+
+                    %% Step 7: Build final state
+                    State = #state{
+                        port = Port,
+                        realm = Realm,
+                        node_id = LocalNodeId,
+                        listener = QuicServerPid,  % QUIC server PID
+                        supervisor = WorkersSupPid,  % Workers supervisor PID
+                        client_manager = ClientsPid,
+                        pubsub = PubSubPid,
+                        rpc = RpcPid,
+                        mesh = MeshPid,
+                        client_streams = #{}
+                    },
+
+                    io:format("[Gateway] Initialization complete (supervised mode)~n"),
+                    {ok, State};
+
+                {error, WorkersSupErr} ->
+                    io:format("[Gateway] Failed to find workers supervisor: ~p~n", [WorkersSupErr]),
+                    {stop, {no_workers_supervisor, WorkersSupErr}}
+            end;
+
+        {error, QuicServerErr} ->
+            io:format("[Gateway] Failed to find QUIC server: ~p~n", [QuicServerErr]),
+            {stop, {no_quic_server, QuicServerErr}}
+    end.
+
+%% @private
+%% @doc Find a sibling process by module name in parent supervisor's children.
+-spec find_sibling(pid(), module()) -> {ok, pid()} | {error, term()}.
+find_sibling(ParentSup, Module) ->
+    Children = supervisor:which_children(ParentSup),
+    find_sibling_in_children(Children, Module).
+
+%% Pattern match on child list - found the module
+find_sibling_in_children([{Module, Pid, _Type, _Modules} | _Rest], Module) when is_pid(Pid) ->
+    {ok, Pid};
+%% Pattern match on child list - keep searching
+find_sibling_in_children([_Child | Rest], Module) ->
+    find_sibling_in_children(Rest, Module);
+%% Pattern match on empty list - not found
+find_sibling_in_children([], Module) ->
+    {error, {not_found, Module}}.
+
 
 %% @private
 %% @doc Get node ID from NODE_NAME environment variable or generate from realm/port.
@@ -206,122 +292,13 @@ get_node_id(Realm, Port) ->
             NodeNameBin
     end.
 
-%% @private
-%% @doc Start the QUIC listener with given certificates.
-start_quic_listener(Port, Realm, CertFile, KeyFile) ->
-    %% Start QUIC listener using simple quicer API
-    ListenOpts = [
-        {cert, CertFile},
-        {key, KeyFile},
-        {alpn, ["macula"]},
-        {peer_unidi_stream_count, 3},
-        {peer_bidi_stream_count, 100}  % Allow clients to create bidirectional streams
-    ],
-
-    case macula_quic:listen(Port, ListenOpts) of
-        {ok, Listener} ->
-            io:format("Macula Gateway listening on port ~p (realm: ~s)~n", [Port, Realm]),
-
-            %% Mark health server as ready (if running)
-            notify_health_server_ready(),
-
-            %% Register diagnostics procedures (if running)
-            register_diagnostics_procedures(self()),
-
-            %% Start async accept to receive connection events
-            case quicer:async_accept(Listener, #{}) of
-                {ok, Listener} ->
-                    io:format("[Gateway] Async accept registered, ready for connections~n"),
-                    ok;
-                {error, AcceptErr} ->
-                    io:format("[Gateway] WARNING: async_accept failed: ~p~n", [AcceptErr]),
-                    ok  % Continue anyway, maybe we can still work
-            end,
-
-            %% Start routing server for DHT operations
-            %% Use NODE_NAME from environment if available, otherwise generate hash
-            LocalNodeId = get_node_id(Realm, Port),
-            io:format("[Gateway] Using node ID: ~p (binary: ~p)~n",
-                     [binary:encode_hex(LocalNodeId), LocalNodeId]),
-            RoutingConfig = #{
-                k => 20,      % Kademlia k-bucket size
-                alpha => 3    % Kademlia concurrency parameter
-            },
-            case macula_routing_server:start_link(LocalNodeId, RoutingConfig) of
-                {ok, _RoutingPid} ->
-                    io:format("[Gateway] DHT routing server started with node ID: ~p~n",
-                             [binary:encode_hex(LocalNodeId)]),
-                    ok;
-                {error, {already_started, _}} ->
-                    io:format("[Gateway] DHT routing server already running~n"),
-                    ok;
-                {error, RoutingErr} ->
-                    io:format("[Gateway] WARNING: Failed to start routing server: ~p~n", [RoutingErr]),
-                    ok  % Continue without routing server
-            end,
-
-            %% Start supervisor with configuration
-            Config = #{
-                port => Port,
-                realm => Realm,
-                node_id => LocalNodeId
-            },
-
-            case macula_gateway_sup:start_link(Config) of
-                {ok, SupPid} ->
-                    io:format("[Gateway] Supervisor started: ~p~n", [SupPid]),
-
-                    %% Get child PIDs from supervisor
-                    {ok, ClientMgrPid} = macula_gateway_sup:get_client_manager(SupPid),
-                    {ok, PubSubPid} = macula_gateway_sup:get_pubsub(SupPid),
-                    {ok, RpcPid} = macula_gateway_sup:get_rpc(SupPid),
-                    {ok, MeshPid} = macula_gateway_sup:get_mesh(SupPid),
-
-                    io:format("[Gateway] Child modules started:~n"),
-                    io:format("[Gateway]   - Client Manager: ~p~n", [ClientMgrPid]),
-                    io:format("[Gateway]   - Pub/Sub: ~p~n", [PubSubPid]),
-                    io:format("[Gateway]   - RPC: ~p~n", [RpcPid]),
-                    io:format("[Gateway]   - Mesh: ~p~n", [MeshPid]),
-
-                    State = #state{
-                        port = Port,
-                        realm = Realm,
-                        node_id = LocalNodeId,
-                        listener = Listener,
-                        supervisor = SupPid,
-                        client_manager = ClientMgrPid,
-                        pubsub = PubSubPid,
-                        rpc = RpcPid,
-                        mesh = MeshPid,
-                        client_streams = #{}
-                    },
-
-                    {ok, State};
-
-                {error, SupErr} ->
-                    io:format("[Gateway] Failed to start supervisor: ~p~n", [SupErr]),
-                    {stop, {supervisor_failed, SupErr}}
-            end;
-
-        {error, Reason} ->
-            io:format("QUIC listen failed: ~p~n", [Reason]),
-            {stop, {listen_failed, Reason}};
-
-        {error, Type, Details} ->
-            io:format("QUIC listen failed: ~p ~p~n", [Type, Details]),
-            {stop, {listen_failed, {Type, Details}}};
-
-        Other ->
-            io:format("QUIC listen unexpected result: ~p~n", [Other]),
-            {stop, {listen_failed, Other}}
-    end.
 
 handle_call(get_stats, _From, State) ->
     ClientMgr = State#state.client_manager,
     Rpc = State#state.rpc,
 
     %% Query child modules for their stats
-    {ok, AllClients} = macula_gateway_client_manager:get_all_clients(ClientMgr),
+    {ok, AllClients} = macula_gateway_clients:get_all_clients(ClientMgr),
     {ok, AllHandlers} = macula_gateway_rpc:list_handlers(Rpc),
 
     Stats = #{
@@ -344,6 +321,16 @@ handle_call({unregister_handler, Procedure}, _From, State) ->
     ok = macula_gateway_rpc:unregister_handler(Rpc, Procedure),
     {reply, ok, State};
 
+%% @doc Handle message routed from QUIC server.
+%% Routes decoded QUIC messages to appropriate business logic handlers.
+handle_call({route_message, MessageType, Message, Stream}, _From, State) ->
+    io:format("[Gateway] Routing message type ~p from QUIC server~n", [MessageType]),
+    %% Use existing handle_decoded_message logic
+    Result = handle_decoded_message({ok, {MessageType, Message}}, Stream, State),
+    %% Extract new state from {noreply, NewState} tuple
+    NewState = element(2, Result),
+    {reply, ok, NewState};
+
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
@@ -359,35 +346,11 @@ handle_cast(_Request, State) ->
     {noreply, State}.
 
 %% Handle new stream created by peer (quicer message)
-handle_info({quic, new_stream, Stream, StreamProps}, State) ->
-    io:format("[Gateway] ========================================~n"),
-    io:format("[Gateway] NEW STREAM RECEIVED!~n"),
-    io:format("[Gateway] Stream: ~p~n", [Stream]),
-    io:format("[Gateway] StreamProps: ~p~n", [StreamProps]),
-    io:format("[Gateway] ========================================~n"),
-
-    %% Set stream to active mode to receive data automatically
-    case quicer:setopt(Stream, active, true) of
-        ok ->
-            io:format("[Gateway] Stream set to active mode~n"),
-            {noreply, State};
-        {error, Reason} ->
-            io:format("[Gateway] Failed to set stream active: ~p~n", [Reason]),
-            {noreply, State}
-    end;
-
-%% Handle data from QUIC stream (active mode)
-handle_info({quic, Data, Stream, _Flags}, State) when is_binary(Data) ->
-    io:format("[Gateway] ===== Received ~p bytes from stream ~p =====~n", [byte_size(Data), Stream]),
-    io:format("[Gateway] Raw data (first 100 bytes): ~p~n", [binary:part(Data, 0, min(100, byte_size(Data)))]),
-    DecodeResult = macula_protocol_decoder:decode(Data),
-    handle_decoded_message(DecodeResult, Stream, State);
-
-%% Client connected - delegate to client_manager
+%% Client connected - delegate to clients module
 handle_info({client_connected, ClientPid, ClientInfo}, State) ->
-    io:format("[Gateway] Client connected: ~p (delegating to client_manager)~n", [ClientInfo]),
+    io:format("[Gateway] Client connected: ~p (delegating to clients)~n", [ClientInfo]),
     ClientMgr = State#state.client_manager,
-    ok = macula_gateway_client_manager:client_connected(ClientMgr, ClientPid, ClientInfo),
+    ok = macula_gateway_clients:client_connected(ClientMgr, ClientPid, ClientInfo),
     {noreply, State};
 
 %% Client disconnected - delegate cleanup to all child modules
@@ -398,8 +361,8 @@ handle_info({'DOWN', _Ref, process, ClientPid, _Reason}, State) ->
     PubSub = State#state.pubsub,
     Rpc = State#state.rpc,
 
-    %% Client manager handles client removal
-    macula_gateway_client_manager:client_disconnected(ClientMgr, ClientPid),
+    %% Clients module handles client removal
+    macula_gateway_clients:client_disconnected(ClientMgr, ClientPid),
 
     %% Clean up subscriptions in pubsub
     case macula_gateway_pubsub:get_stream_topics(PubSub, ClientPid) of
@@ -422,36 +385,6 @@ handle_info({'DOWN', _Ref, process, ClientPid, _Reason}, State) ->
 
     {noreply, State};
 
-%% QUIC control event: peer_needs_streams
-handle_info({quic, peer_needs_streams, _Conn, _StreamType}, State) ->
-    %% Peer is signaling it wants to open more streams (bidi_streams or uni_streams)
-    %% This is normal - just acknowledge
-    {noreply, State};
-
-%% QUIC event: new_conn (connection established)
-handle_info({quic, new_conn, Conn, ConnInfo}, State) ->
-    io:format("[Gateway] ========================================~n"),
-    io:format("[Gateway] NEW CONNECTION RECEIVED!~n"),
-    io:format("[Gateway] Connection: ~p~n", [Conn]),
-    io:format("[Gateway] Connection Info: ~p~n", [ConnInfo]),
-    io:format("[Gateway] ========================================~n"),
-
-    %% Extracted functions eliminate nested case statements
-    complete_handshake(Conn),
-    register_next_connection(State#state.listener),
-
-    {noreply, State};
-
-%% QUIC event: shutdown (connection shutting down)
-handle_info({quic, shutdown, Conn, Reason}, State) ->
-    io:format("[Gateway] QUIC shutdown: Conn=~p, Reason=~p~n", [Conn, Reason]),
-    {noreply, State};
-
-%% QUIC event: transport_shutdown (transport layer shutting down)
-handle_info({quic, transport_shutdown, Conn, Reason}, State) ->
-    io:format("[Gateway] QUIC transport_shutdown: Conn=~p, Reason=~p~n", [Conn, Reason]),
-    {noreply, State};
-
 %% DHT query (find_node, find_value, store)
 handle_info({dht_query, FromPid, QueryType, QueryData}, State) ->
     %% Delegate to DHT module
@@ -462,21 +395,10 @@ handle_info(Info, State) ->
     io:format("[Gateway] WARNING: Unhandled handle_info message: ~p~n", [Info]),
     {noreply, State}.
 
-terminate(_Reason, #state{listener = Listener, supervisor = SupPid}) ->
-    %% Close listener
-    case Listener of
-        undefined -> ok;
-        _ -> macula_quic:close(Listener)
-    end,
-
-    %% Stop supervisor (will stop all children: client_manager, pubsub, rpc)
-    case SupPid of
-        undefined -> ok;
-        _ ->
-            erlang:unlink(SupPid),
-            exit(SupPid, shutdown)
-    end,
-
+terminate(_Reason, _State) ->
+    %% Gateway is now supervised - parent supervisor will handle cleanup
+    %% No need to manually stop QUIC server or workers supervisor
+    io:format("[Gateway] Shutting down (supervised mode)~n"),
     ok.
 
 %%%===================================================================
@@ -492,16 +414,14 @@ handle_connect(Stream, ConnectMsg, #state{realm = Realm} = State) ->
 handle_connect_realm(true, Stream, ConnectMsg, State) ->
     RealmId = maps:get(<<"realm_id">>, ConnectMsg),
     NodeId = maps:get(<<"node_id">>, ConnectMsg),
-    %% Extract and parse endpoint from CONNECT message for peer-to-peer connections
+    %% Extract endpoint from CONNECT message for peer-to-peer connections
     Endpoint = maps:get(<<"endpoint">>, ConnectMsg, undefined),
-    Address = parse_endpoint(Endpoint),
 
     ClientInfo = #{
         realm => RealmId,
         node_id => NodeId,
         capabilities => maps:get(<<"capabilities">>, ConnectMsg, []),
-        endpoint => Endpoint,
-        address => Address
+        endpoint => Endpoint
     },
     io:format("[Gateway] Client connected: ~p~n", [ClientInfo]),
 
@@ -880,65 +800,20 @@ handle_unsubscribe(Stream, UnsubMsg, State) ->
 
     {noreply, State}.
 
-%% @doc Handle publish message - distribute to all topic subscribers via pubsub module.
-%% Queries both local subscribers and DHT for remote subscribers.
+%% @doc Handle publish message - distribute to all topic subscribers via DHT routing.
+%% Uses multi-hop Kademlia routing for remote subscribers (v0.7.8+).
+%% Delegates to macula_gateway_pubsub_router for distribution logic.
 handle_publish(_PublisherStream, PubMsg, State) ->
     Topic = maps:get(<<"topic">>, PubMsg),
     io:format("[Gateway] Publishing message to topic: ~s~n", [Topic]),
 
+    LocalNodeId = State#state.node_id,
+    Mesh = State#state.mesh,
     PubSub = State#state.pubsub,
-    ClientManager = State#state.client_manager,
 
-    %% 1. Get local subscribers from pubsub module
+    %% Get local subscribers and delegate distribution to pubsub_router
     {ok, LocalSubscribers} = macula_gateway_pubsub:get_subscribers(PubSub, Topic),
-    io:format("[Gateway] Found ~p local subscribers~n", [length(LocalSubscribers)]),
-
-    %% 2. Query DHT for remote subscribers
-    TopicKey = crypto:hash(sha256, Topic),
-    RemoteStreams = case macula_gateway_dht:lookup_value(TopicKey) of
-        {ok, RemoteSubscribers} ->
-            io:format("[Gateway] Found ~p remote subscribers in DHT~n", [length(RemoteSubscribers)]),
-            %% Convert endpoints to stream PIDs
-            lists:filtermap(
-                fun(Subscriber) ->
-                    Endpoint = maps:get(<<"endpoint">>, Subscriber, <<>>),
-                    case macula_gateway_client_manager:get_stream_by_endpoint(ClientManager, Endpoint) of
-                        {ok, StreamPid} ->
-                            io:format("[Gateway] Resolved endpoint ~s → stream ~p~n", [Endpoint, StreamPid]),
-                            {true, StreamPid};
-                        {error, not_found} ->
-                            io:format("[Gateway] Endpoint not connected: ~s~n", [Endpoint]),
-                            false
-                    end
-                end,
-                RemoteSubscribers
-            );
-        {error, not_found} ->
-            io:format("[Gateway] No remote subscribers found in DHT~n"),
-            []
-    end,
-
-    %% 3. Combine local + remote (remove duplicates)
-    AllSubscribers = lists:usort(LocalSubscribers ++ RemoteStreams),
-    io:format("[Gateway] Total subscribers: ~p (~p local + ~p remote)~n",
-             [length(AllSubscribers), length(LocalSubscribers), length(RemoteStreams)]),
-
-    %% 4. Encode and send to all subscribers
-    PubBinary = macula_protocol_encoder:encode(publish, PubMsg),
-    lists:foreach(
-        fun(SubscriberStream) ->
-            case macula_quic:send(SubscriberStream, PubBinary) of
-                ok ->
-                    io:format("[Gateway] Successfully sent to stream ~p~n", [SubscriberStream]);
-                {error, Reason} ->
-                    io:format("[Gateway] Failed to send to stream ~p: ~p~n",
-                              [SubscriberStream, Reason])
-            end
-        end,
-        AllSubscribers
-    ),
-
-    io:format("[Gateway] Finished distributing message to ~p subscribers~n", [length(AllSubscribers)]),
+    macula_gateway_pubsub_router:distribute(LocalSubscribers, PubMsg, LocalNodeId, Mesh),
 
     {noreply, State}.
 
@@ -967,87 +842,8 @@ check_and_register_diagnostics(_Pid, GatewayPid) ->
     macula_gateway_diagnostics:register_procedures(GatewayPid).
 
 %%%===================================================================
-%%% Connection Lifecycle Functions
-%%%
-%%% Extracted from handle_info({quic, new_conn...}) to eliminate
-%%% nested case statements and follow idiomatic Erlang patterns.
+%%% Helper Functions
 %%%===================================================================
-
-%% @doc Complete TLS handshake on new connection.
-%% Calls accept_streams/1 on success, logs error on failure.
--spec complete_handshake(quicer:connection_handle()) -> ok.
-complete_handshake(Conn) ->
-    case quicer:handshake(Conn) of
-        ok ->
-            accept_streams(Conn);
-        {ok, _} ->
-            accept_streams(Conn);
-        {error, Reason} ->
-            io:format("[Gateway] Handshake failed: ~p~n", [Reason]),
-            ok
-    end.
-
-%% @doc Start accepting streams on an established connection.
--spec accept_streams(quicer:connection_handle()) -> ok.
-accept_streams(Conn) ->
-    io:format("[Gateway] Connection handshake completed successfully~n"),
-    case quicer:async_accept_stream(Conn, #{}) of
-        {ok, Conn} ->
-            io:format("[Gateway] Ready to accept streams on connection~n"),
-            ok;
-        {error, StreamAcceptErr} ->
-            io:format("[Gateway] WARNING: async_accept_stream failed: ~p~n", [StreamAcceptErr]),
-            ok
-    end.
-
-%% @doc Register listener for next incoming connection.
--spec register_next_connection(quicer:listener_handle()) -> ok.
-register_next_connection(Listener) ->
-    case quicer:async_accept(Listener, #{}) of
-        {ok, _} ->
-            io:format("[Gateway] Ready for next connection~n"),
-            ok;
-        {error, AcceptErr} ->
-            io:format("[Gateway] WARNING: async_accept failed: ~p~n", [AcceptErr]),
-            ok
-    end.
-
-%%%===================================================================
-%%% Endpoint Parsing
-%%%===================================================================
-
-%% @doc Parse endpoint URL to address tuple.
-%% Converts "https://host:port" to {{IP_tuple}, Port}
-%% Returns placeholder on parsing errors instead of crashing.
--spec parse_endpoint(undefined | binary()) -> {{byte(), byte(), byte(), byte()}, inet:port_number()}.
-parse_endpoint(undefined) ->
-    {{0,0,0,0}, 0};
-parse_endpoint(Endpoint) when is_binary(Endpoint) ->
-    %% Parse URL using uri_string
-    case uri_string:parse(Endpoint) of
-        #{host := Host, port := Port} when is_integer(Port) ->
-            resolve_host(Host, Port);
-        #{host := Host} ->
-            resolve_host(Host, 9443);  %% Default port
-        _ ->
-            io:format("[Gateway] Invalid endpoint URL format: ~s, using placeholder~n", [Endpoint]),
-            {{0,0,0,0}, 0}
-    end.
-
-%% @doc Resolve hostname to IP address.
-%% Returns localhost fallback on DNS resolution failure.
-%% Extracted to eliminate duplicate DNS resolution logic.
--spec resolve_host(binary(), inet:port_number()) -> {{byte(), byte(), byte(), byte()}, inet:port_number()}.
-resolve_host(Host, Port) when is_binary(Host), is_integer(Port) ->
-    HostStr = binary_to_list(Host),
-    case inet:getaddr(HostStr, inet) of
-        {ok, IPTuple} ->
-            {IPTuple, Port};
-        {error, Reason} ->
-            io:format("[Gateway] Failed to resolve host ~s: ~p, using localhost fallback~n",
-                     [Host, Reason]),
-            {{127,0,0,1}, Port}
-    end.
 
 %% @doc Unwrap result to map format.
 unwrap_result_to_map({ok, Map}) when is_map(Map) -> Map;

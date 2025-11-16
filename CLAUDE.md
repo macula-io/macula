@@ -457,3 +457,38 @@ process_request(Request, State) ->
 3. **Use guards liberally** - They're more readable than `case` or `if`
 4. **Keep functions small** - Each function should do one thing
 5. **Declarative > Imperative** - Express what you want, not how to get it
+
+## Bash Scripting Guidelines
+
+### NEVER Use HEREDOC
+
+**CRITICAL**: Do NOT use heredoc syntax (cat <<'EOF' ... EOF) in bash commands or git commit messages.
+
+#### ❌ Bad: Using HEREDOC
+```bash
+git commit -m "$(cat <<'EOF'
+Commit message here.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+EOF
+)"
+```
+
+#### ✅ Good: Direct command with proper quoting
+```bash
+git commit -m "Commit message here.
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+**Why?**
+- HEREDOC syntax is fragile and error-prone in automated contexts
+- Can cause parsing issues with quotes and special characters
+- Makes commands harder to read and maintain
+- Not necessary when proper quoting works fine
+
+**Key Rules:**
+1. Use direct strings with proper quoting (single or double quotes)
+2. Use -F flag for git commit if message is in a file
+3. Prefer shell scripts over complex one-liners
+4. Keep bash commands simple and readable

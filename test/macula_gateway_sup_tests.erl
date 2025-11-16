@@ -1,23 +1,22 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% EUnit tests for macula_gateway_sup module.
-%%% Tests supervisor functionality - Phase 6 of gateway refactoring.
+%%% EUnit tests for macula_gateway_sup module (ROOT SUPERVISOR).
+%%% Tests root supervisor functionality - supervises quic_server, gateway, workers_sup.
 %%%
-%%% TDD Approach:
-%%% 1. Write failing tests first
-%%% 2. Implement minimal functionality
-%%% 3. Make tests pass incrementally
-%%% 4. Refactor for idiomatic Erlang
+%%% After Phase 2 QUIC Refactoring:
+%%% - macula_gateway_sup is the ROOT supervisor
+%%% - It supervises: quic_server, gateway, workers_sup (as siblings)
+%%% - Worker accessor functions moved to macula_gateway_workers_sup
 %%%
 %%% Responsibilities:
-%%% - Start all gateway worker children
-%%% - Supervise children with rest_for_one strategy (fault isolation)
-%%% - Provide access to child PIDs
+%%% - Start quic_server, gateway, and workers_sup as siblings
+%%% - Use rest_for_one strategy for dependency-based restarts
+%%% - Wire quic_server and gateway together via set_gateway/2
 %%%
 %%% Supervision Tests:
-%%% - Verify rest_for_one behavior: killing child N restarts N and all after N
-%%% - Verify fault isolation: mesh/rpc/pubsub crashes don't restart client_manager
-%%% - Verify dependency consistency: client_manager crash restarts all
+%%% - Verify rest_for_one behavior with 3 siblings
+%%% - Verify quic_server crash restarts gateway and workers_sup
+%%% - Verify gateway crash restarts workers_sup only
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_gateway_sup_tests).
@@ -49,10 +48,8 @@ cleanup(Pid) ->
 module_exports_test() ->
     Exports = macula_gateway_sup:module_info(exports),
 
+    %% Root supervisor only has start_link and init (no worker accessors)
     ?assert(lists:member({start_link, 1}, Exports)),
-    ?assert(lists:member({get_client_manager, 1}, Exports)),
-    ?assert(lists:member({get_pubsub, 1}, Exports)),
-    ?assert(lists:member({get_rpc, 1}, Exports)),
     ?assert(lists:member({init, 1}, Exports)).
 
 supervisor_callbacks_test() ->
@@ -91,7 +88,7 @@ supervisor_starts_all_children_test_() ->
         Children = supervisor:which_children(SupPid),
         [
             ?_assertEqual(4, length(Children)),
-            ?_assert(lists:keymember(macula_gateway_client_manager, 1, Children)),
+            ?_assert(lists:keymember(macula_gateway_clients, 1, Children)),
             ?_assert(lists:keymember(macula_gateway_pubsub, 1, Children)),
             ?_assert(lists:keymember(macula_gateway_rpc, 1, Children)),
             ?_assert(lists:keymember(macula_gateway_mesh, 1, Children))
@@ -311,9 +308,9 @@ children_are_functional_test_() ->
 
         %% Test client manager functionality
         Client = spawn(fun() -> timer:sleep(1000) end),
-        ok = macula_gateway_client_manager:client_connected(ClientMgr, Client,
+        ok = macula_gateway_clients:client_connected(ClientMgr, Client,
             #{realm => <<"test">>, node_id => <<"node1">>}),
-        {ok, _Info} = macula_gateway_client_manager:get_client_info(ClientMgr, Client),
+        {ok, _Info} = macula_gateway_clients:get_client_info(ClientMgr, Client),
 
         %% Test pubsub functionality
         Stream = spawn(fun() -> timer:sleep(1000) end),

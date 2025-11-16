@@ -412,9 +412,9 @@ decode_multiple_messages_in_buffer_test() ->
         retain => false,
         message_id => <<"mid1">>
     }),
-    Msg2 = macula_protocol_encoder:encode(connected, #{
-        server_node_id => <<"server">>,
-        capabilities => [pubsub, rpc]
+    Msg2 = macula_protocol_encoder:encode(subscribe, #{
+        topics => [<<"test.topic">>],
+        qos => 0
     }),
     Msg3 = macula_protocol_encoder:encode(publish, #{
         topic => <<"t2">>,
@@ -434,7 +434,7 @@ decode_multiple_messages_in_buffer_test() ->
     %% Messages should be in order
     [{Type1, _}, {Type2, _}, {Type3, _}] = Messages,
     ?assertEqual(publish, Type1),
-    ?assertEqual(connected, Type2),
+    ?assertEqual(subscribe, Type2),
     ?assertEqual(publish, Type3).
 
 decode_partial_message_leaves_buffer_intact_test() ->
@@ -474,9 +474,9 @@ decode_one_complete_one_partial_test() ->
         retain => false,
         message_id => <<"m1">>
     }),
-    Msg2Full = macula_protocol_encoder:encode(connected, #{
-        server_node_id => <<"server">>,
-        capabilities => [pubsub]
+    Msg2Full = macula_protocol_encoder:encode(subscribe, #{
+        topics => [<<"test.topic">>],
+        qos => 0
     }),
 
     <<Msg2Partial:10/binary, _/binary>> = Msg2Full,
