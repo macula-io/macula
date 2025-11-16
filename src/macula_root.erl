@@ -8,9 +8,9 @@
 %% <pre>
 %% macula_root (this module - application root)
 %% ├── macula_routing_server (core DHT infrastructure)
-%% ├── macula_gateway_health (optional - health checks)
-%% ├── macula_gateway_diagnostics (optional - diagnostics)
 %% └── macula_gateway_system (optional - gateway subsystem)
+%%     ├── macula_gateway_health
+%%     ├── macula_gateway_diagnostics
 %%     ├── macula_gateway_quic_server
 %%     ├── macula_gateway
 %%     └── macula_gateway_workers_sup
@@ -97,28 +97,14 @@ maybe_start_gateway() ->
             io:format("Starting health check server on port ~p~n", [HealthPort]),
 
             [
-                %% Health check server
-                #{
-                    id => macula_gateway_health,
-                    start => {macula_gateway_health, start_link, [[{health_port, HealthPort}]]},
-                    restart => permanent,
-                    shutdown => 5000,
-                    type => worker,
-                    modules => [macula_gateway_health]
-                },
-                %% Diagnostics service
-                #{
-                    id => macula_gateway_diagnostics,
-                    start => {macula_gateway_diagnostics, start_link, [[{realm, Realm}]]},
-                    restart => permanent,
-                    shutdown => 5000,
-                    type => worker,
-                    modules => [macula_gateway_diagnostics]
-                },
-                %% Gateway system supervisor (manages gateway, QUIC server, workers)
+                %% Gateway system supervisor (manages all gateway components)
                 #{
                     id => macula_gateway_system,
-                    start => {macula_gateway_system, start_link, [[{port, Port}, {realm, Realm}]]},
+                    start => {macula_gateway_system, start_link, [[
+                        {port, Port},
+                        {realm, Realm},
+                        {health_port, HealthPort}
+                    ]]},
                     restart => permanent,
                     shutdown => infinity,
                     type => supervisor,

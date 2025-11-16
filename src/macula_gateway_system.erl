@@ -17,13 +17,15 @@
 %%% Architecture:
 %%% <pre>
 %%% macula_gateway_system (this module)
-%%% ├── macula_gateway_quic_server  - QUIC transport layer
-%%% ├── macula_gateway              - Message routing coordinator
-%%% └── macula_gateway_workers_sup  - Business logic workers
-%%%     ├── macula_gateway_clients  - Client tracking
-%%%     ├── macula_gateway_pubsub   - Pub/Sub routing
-%%%     ├── macula_gateway_rpc      - RPC handling
-%%%     └── macula_gateway_mesh     - Mesh connections
+%%% ├── macula_gateway_health        - Health check HTTP server
+%%% ├── macula_gateway_diagnostics   - Diagnostics service
+%%% ├── macula_gateway_quic_server   - QUIC transport layer
+%%% ├── macula_gateway               - Message routing coordinator
+%%% └── macula_gateway_workers_sup   - Business logic workers
+%%%     ├── macula_gateway_clients   - Client tracking
+%%%     ├── macula_gateway_pubsub    - Pub/Sub routing
+%%%     ├── macula_gateway_rpc       - RPC handling
+%%%     └── macula_gateway_mesh      - Mesh connections
 %%% </pre>
 %%%
 %%% Circular Dependency Resolution:
@@ -62,26 +64,30 @@ init(Opts) when is_list(Opts) ->
     %% Called with proplist (legacy tests, application startup)
     Port = proplists:get_value(port, Opts, 9443),
     Realm = proplists:get_value(realm, Opts, <<"macula.default">>),
+    HealthPort = proplists:get_value(health_port, Opts, 8080),
     CertFile = proplists:get_value(cert_file, Opts),
     KeyFile = proplists:get_value(key_file, Opts),
-    init_supervisor(Port, Realm, CertFile, KeyFile);
+    init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile);
 
 init(Opts) when is_map(Opts) ->
     %% Called with map (new style)
     Port = maps:get(port, Opts, 9443),
     Realm = maps:get(realm, Opts, <<"macula.default">>),
+    HealthPort = maps:get(health_port, Opts, 8080),
     CertFile = maps:get(cert_file, Opts, undefined),
     KeyFile = maps:get(key_file, Opts, undefined),
-    init_supervisor(Port, Realm, CertFile, KeyFile).
+    init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile).
 
 %% @private
 %% @doc Initialize the supervisor with extracted configuration.
-init_supervisor(Port, Realm, CertFile, KeyFile) ->
+init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile) ->
 
     io:format("[GatewaySup] Initializing gateway supervisor for realm ~s on port ~p~n",
               [Realm, Port]),
 
     %% Supervision strategy: rest_for_one
+    %% - health fails → restart health, diagnostics, quic_server, gateway, workers_sup
+    %% - diagnostics fails → restart diagnostics, quic_server, gateway, workers_sup
     %% - quic_server fails → restart quic_server, gateway, workers_sup
     %% - gateway fails → restart gateway, workers_sup
     %% - workers_sup fails → restart workers_sup only
@@ -91,7 +97,27 @@ init_supervisor(Port, Realm, CertFile, KeyFile) ->
         period => 60
     },
 
-    %% Child 1: QUIC Server (starts without gateway PID)
+    %% Child 1: Health Check Server
+    HealthSpec = #{
+        id => macula_gateway_health,
+        start => {macula_gateway_health, start_link, [[{health_port, HealthPort}]]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [macula_gateway_health]
+    },
+
+    %% Child 2: Diagnostics Service
+    DiagnosticsSpec = #{
+        id => macula_gateway_diagnostics,
+        start => {macula_gateway_diagnostics, start_link, [[{realm, Realm}]]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [macula_gateway_diagnostics]
+    },
+
+    %% Child 3: QUIC Server (starts without gateway PID)
     QuicServerSpec = #{
         id => macula_gateway_quic_server,
         start => {macula_gateway_quic_server, start_link, [[
@@ -107,7 +133,7 @@ init_supervisor(Port, Realm, CertFile, KeyFile) ->
         modules => [macula_gateway_quic_server]
     },
 
-    %% Child 2: Gateway (receives quic_server PID after it starts)
+    %% Child 4: Gateway (receives quic_server PID after it starts)
     GatewaySpec = #{
         id => macula_gateway,
         start => {macula_gateway, start_link, [[
@@ -121,7 +147,7 @@ init_supervisor(Port, Realm, CertFile, KeyFile) ->
         modules => [macula_gateway]
     },
 
-    %% Child 3: Workers Supervisor (supervises business logic workers)
+    %% Child 5: Workers Supervisor (supervises business logic workers)
     WorkersSupSpec = #{
         id => macula_gateway_workers_sup,
         start => {macula_gateway_workers_sup, start_link, [#{
@@ -134,6 +160,6 @@ init_supervisor(Port, Realm, CertFile, KeyFile) ->
         modules => [macula_gateway_workers_sup]
     },
 
-    Children = [QuicServerSpec, GatewaySpec, WorkersSupSpec],
+    Children = [HealthSpec, DiagnosticsSpec, QuicServerSpec, GatewaySpec, WorkersSupSpec],
 
     {ok, {SupFlags, Children}}.
