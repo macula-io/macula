@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.7.4">
+    <meta name="project" content="macula v0.7.7">
 
 
-    <title>macula_gateway_dht — macula v0.7.4</title>
+    <title>macula_gateway_dht — macula v0.7.7</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-04AAC83B.js"></script>
+    <script defer src="dist/sidebar_items-62100C5B.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.7.4
+          v0.7.7
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_gateway_dht</span> 
-      <small class="app-vsn" translate="no">(macula v0.7.4)</small>
+      <small class="app-vsn" translate="no">(macula v0.7.7)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.7.4/src/macula_gateway_dht.erl#L21" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.7.7/src/macula_gateway_dht.erl#L21" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -150,6 +150,16 @@ macula
 
     </div>
 
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#lookup_value/1" data-no-tooltip="" translate="no">lookup_value(Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Look up a value from the DHT by key. Synchronous lookup from local DHT storage. Returns list of subscribers for the given key.</p></div>
+
+    </div>
+
 </div>
 
   </section>
@@ -173,7 +183,7 @@ macula
       <h1 class="signature" translate="no">handle_find_node(Stream, FindNodeMsg)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.4/src/macula_gateway_dht.erl#L66" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.7/src/macula_gateway_dht.erl#L67" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -201,7 +211,7 @@ macula
       <h1 class="signature" translate="no">handle_find_value(Stream, FindValueMsg)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.4/src/macula_gateway_dht.erl#L51" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.7/src/macula_gateway_dht.erl#L52" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -229,7 +239,7 @@ macula
       <h1 class="signature" translate="no">handle_query(FromPid, QueryType, QueryData)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.4/src/macula_gateway_dht.erl#L81" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.7/src/macula_gateway_dht.erl#L82" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -257,7 +267,7 @@ macula
       <h1 class="signature" translate="no">handle_store(Stream, StoreMsg)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.4/src/macula_gateway_dht.erl#L39" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.7/src/macula_gateway_dht.erl#L40" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -275,6 +285,34 @@ macula
 <p>Handle DHT STORE message. Forwards to routing server (no reply sent back). Crashes on routing server failures - this exposes DHT issues immediately.</p>
   </section>
 </section>
+<section class="detail" id="lookup_value/1">
+
+  <div class="detail-header">
+    <a href="#lookup_value/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">lookup_value(Key)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.7.7/src/macula_gateway_dht.erl#L101" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> lookup_value(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>()} | {error, not_found}.</pre>
+
+      </div>
+
+<p>Look up a value from the DHT by key. Synchronous lookup from local DHT storage. Returns list of subscribers for the given key.</p>
+  </section>
+</section>
 
     </div>
   </section>
@@ -283,9 +321,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.7.4" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.7.7" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.7.4">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.7.7">Hex Preview</a>
 
           </span>
 

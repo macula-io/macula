@@ -102,6 +102,16 @@ validate_message(rpc_route, Msg) ->
                        <<"payload_type">> := _, <<"payload">> := _} = Msg
     end,
     ok;
+validate_message(pubsub_route, Msg) ->
+    %% Accept both atom and binary keys
+    case {maps:is_key(destination_node_id, Msg), maps:is_key(<<"destination_node_id">>, Msg)} of
+        {true, _} -> #{destination_node_id := _, source_node_id := _, hop_count := _,
+                       max_hops := _, topic := _, payload := _} = Msg;
+        {_, true} -> #{<<"destination_node_id">> := _, <<"source_node_id">> := _,
+                       <<"hop_count">> := _, <<"max_hops">> := _,
+                       <<"topic">> := _, <<"payload">> := _} = Msg
+    end,
+    ok;
 validate_message(_Type, _Msg) ->
     %% For message types not yet validated, allow anything
     ok.

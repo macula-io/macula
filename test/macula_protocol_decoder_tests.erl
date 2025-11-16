@@ -58,6 +58,16 @@ sample_subscribe_msg() ->
 sample_unsubscribe_msg() ->
     #{topics => [<<"test.topic">>]}.
 
+sample_pubsub_route_msg() ->
+    #{
+        destination_node_id => crypto:strong_rand_bytes(32),
+        source_node_id => crypto:strong_rand_bytes(32),
+        hop_count => 0,
+        max_hops => 10,
+        topic => <<"test.topic">>,
+        payload => sample_publish_msg()
+    }.
+
 %%%===================================================================
 %%% Basic Decoding Tests
 %%%===================================================================
@@ -115,6 +125,11 @@ decode_unsubscribe_message_test() ->
     Binary = encode_message(unsubscribe, sample_unsubscribe_msg()),
     {ok, {Type, _Msg}} = macula_protocol_decoder:decode(Binary),
     ?assertEqual(unsubscribe, Type).
+
+decode_pubsub_route_message_test() ->
+    Binary = encode_message(pubsub_route, sample_pubsub_route_msg()),
+    {ok, {Type, _Msg}} = macula_protocol_decoder:decode(Binary),
+    ?assertEqual(pubsub_route, Type).
 
 %%%===================================================================
 %%% Error Handling Tests
@@ -210,6 +225,21 @@ roundtrip_unsubscribe_preserves_data_test() ->
     {ok, {unsubscribe, Decoded}} = macula_protocol_decoder:decode(Encoded),
     ?assertEqual(maps:get(topics, OrigMsg), maps:get(<<"topics">>, Decoded)).
 
+roundtrip_pubsub_route_preserves_data_test() ->
+    OrigMsg = sample_pubsub_route_msg(),
+    Encoded = encode_message(pubsub_route, OrigMsg),
+    {ok, {pubsub_route, Decoded}} = macula_protocol_decoder:decode(Encoded),
+    ?assertEqual(maps:get(destination_node_id, OrigMsg), maps:get(<<"destination_node_id">>, Decoded)),
+    ?assertEqual(maps:get(source_node_id, OrigMsg), maps:get(<<"source_node_id">>, Decoded)),
+    ?assertEqual(maps:get(hop_count, OrigMsg), maps:get(<<"hop_count">>, Decoded)),
+    ?assertEqual(maps:get(max_hops, OrigMsg), maps:get(<<"max_hops">>, Decoded)),
+    ?assertEqual(maps:get(topic, OrigMsg), maps:get(<<"topic">>, Decoded)),
+    %% Payload is a nested map, so compare as nested structure
+    OrigPayload = maps:get(payload, OrigMsg),
+    DecodedPayload = maps:get(<<"payload">>, Decoded),
+    ?assertEqual(maps:get(topic, OrigPayload), maps:get(<<"topic">>, DecodedPayload)),
+    ?assertEqual(maps:get(payload, OrigPayload), maps:get(<<"payload">>, DecodedPayload)).
+
 %%%===================================================================
 %%% Data Type Preservation Tests
 %%%===================================================================
@@ -301,7 +331,8 @@ encode_decode_symmetry_test() ->
         {disconnect, sample_disconnect_msg()},
         {publish, sample_publish_msg()},
         {subscribe, sample_subscribe_msg()},
-        {unsubscribe, sample_unsubscribe_msg()}
+        {unsubscribe, sample_unsubscribe_msg()},
+        {pubsub_route, sample_pubsub_route_msg()}
     ],
     lists:foreach(fun({Type, Msg}) ->
         Encoded = encode_message(Type, Msg),

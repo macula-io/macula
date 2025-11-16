@@ -90,17 +90,21 @@ init(Opts) ->
     {ok, State}.
 
 handle_call({subscribe, Stream, Topic}, _From, State) when is_pid(Stream), is_binary(Topic) ->
+    io:format("[PubSub ~p] SUBSCRIBE called: Stream=~p, Topic=~s~n", [self(), Stream, Topic]),
     %% Check if already subscribed
     CurrentTopics = maps:get(Stream, State#state.stream_subscriptions, []),
 
     NewState = case lists:member(Topic, CurrentTopics) of
         true ->
+            io:format("[PubSub ~p] Stream ~p already subscribed to ~s~n", [self(), Stream, Topic]),
             %% Already subscribed - idempotent
             State;
         false ->
             %% Add to topic → streams mapping
             Subscribers = maps:get(Topic, State#state.subscriptions, []),
             NewSubscriptions = maps:put(Topic, [Stream | Subscribers], State#state.subscriptions),
+            io:format("[PubSub ~p] Added stream ~p to topic ~s (total subscribers: ~p)~n",
+                     [self(), Stream, Topic, length([Stream | Subscribers])]),
 
             %% Add to stream → topics mapping
             NewTopics = [Topic | CurrentTopics],
@@ -110,10 +114,13 @@ handle_call({subscribe, Stream, Topic}, _From, State) when is_pid(Stream), is_bi
             NewMonitors = case length(CurrentTopics) of
                 0 ->
                     MonitorRef = erlang:monitor(process, Stream),
+                    io:format("[PubSub ~p] Monitoring stream ~p (first subscription)~n", [self(), Stream]),
                     maps:put(MonitorRef, {Stream, Topic}, State#state.monitors);
                 _ ->
                     State#state.monitors
             end,
+
+            io:format("[PubSub ~p] Current subscriptions map: ~p~n", [self(), NewSubscriptions]),
 
             State#state{
                 subscriptions = NewSubscriptions,
@@ -222,19 +229,32 @@ terminate(_Reason, _State) ->
 find_matching_subscribers(Topic, State) ->
     %% Get all subscription patterns
     AllPatterns = maps:keys(State#state.subscriptions),
+    io:format("[PubSub ~p] Finding subscribers for topic: ~s~n", [self(), Topic]),
+    io:format("[PubSub ~p] All subscription patterns: ~p~n", [self(), AllPatterns]),
+    io:format("[PubSub ~p] Subscriptions map: ~p~n", [self(), State#state.subscriptions]),
 
     %% Find patterns that match the topic
     MatchingPatterns = lists:filter(fun(Pattern) ->
-        topic_matches(Pattern, Topic)
+        Matches = topic_matches(Pattern, Topic),
+        io:format("[PubSub ~p] Pattern ~s matches topic ~s: ~p~n", [self(), Pattern, Topic, Matches]),
+        Matches
     end, AllPatterns),
+
+    io:format("[PubSub ~p] Matching patterns: ~p~n", [self(), MatchingPatterns]),
 
     %% Collect all unique streams from matching patterns
     AllStreams = lists:flatmap(fun(Pattern) ->
-        maps:get(Pattern, State#state.subscriptions, [])
+        Streams = maps:get(Pattern, State#state.subscriptions, []),
+        io:format("[PubSub ~p] Pattern ~s has streams: ~p~n", [self(), Pattern, Streams]),
+        Streams
     end, MatchingPatterns),
 
+    io:format("[PubSub ~p] All streams before dedup: ~p~n", [self(), AllStreams]),
+
     %% Remove duplicates
-    lists:usort(AllStreams).
+    Result = lists:usort(AllStreams),
+    io:format("[PubSub ~p] Final subscribers: ~p~n", [self(), Result]),
+    Result.
 
 %% @doc Check if a topic pattern matches a concrete topic.
 %% Supports:

@@ -5,6 +5,133 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.8] - 2025-11-16
+
+### Fixed
+- **CRITICAL**: Implemented multi-hop DHT routing for pub/sub to fix matchmaking
+  - Bug: v0.7.7 gateway queried DHT but routed to endpoints, which failed for NAT peers
+  - Impact: Matchmaking still broken - messages couldn't reach subscribers behind NAT
+  - Root cause: Split-brain architecture - subscribers register locally but routing via gateway
+  - Solution: Multi-hop Kademlia DHT routing (same pattern as RPC routing)
+
+### Added
+- **Protocol Layer**: New `pubsub_route` message type (0x13)
+  - Wraps PUBLISH messages for multi-hop routing through mesh
+  - Fields: `destination_node_id`, `source_node_id`, `hop_count`, `max_hops`, `topic`, `payload`
+  - Protocol encoder/decoder support with validation
+  - 8 encoder tests + 3 decoder tests added
+
+- **Routing Module**: `macula_pubsub_routing.erl` (NEW - 115 LOC)
+  - Stateless routing logic for pub/sub messages
+  - `wrap_publish/4` - Wraps PUBLISH in routing envelope
+  - `route_or_deliver/3` - Routes to next hop or delivers locally
+  - `should_deliver_locally/2` - Checks if destination matches
+  - TTL protection via `max_hops` (default: 10)
+  - 14 comprehensive tests (all passing)
+
+- **Gateway Integration**: Enhanced `macula_gateway.erl`
+  - Added `handle_decoded_message` clause for `pubsub_route` messages
+  - Routes via XOR distance to next hop OR delivers locally
+  - `handle_pubsub_route_deliver/2` - Unwraps and delivers to local subscribers
+  - `forward_pubsub_route/3` - Forwards to next hop through mesh
+
+- **Pub/Sub Handler**: Updated `macula_pubsub_dht.erl`
+  - `route_to_subscribers/5` now uses actual DHT routing (was TODO stub)
+  - Extracts subscriber `node_id` (not endpoint) from DHT results
+  - Wraps PUBLISH in `pubsub_route` envelope
+  - Sends via connection manager which routes through gateway
+
+### Technical Details
+
+**v0.7.7 Architecture (BROKEN):**
+- ❌ Publisher queries DHT for subscriber endpoints
+- ❌ Tries to route directly to endpoints
+- ❌ Fails for NAT peers (can't accept connections)
+- ❌ Matchmaking stuck on "Looking for opponent..."
+
+**v0.7.8 Architecture (FIXED):**
+- ✅ Publisher queries DHT for subscriber node IDs
+- ✅ Wraps PUBLISH in `pubsub_route` envelope
+- ✅ Routes via multi-hop Kademlia (same as RPC)
+- ✅ Works with relay OR direct connections
+- ✅ Matchmaking succeeds across NAT peers
+
+**Message Flow:**
+```
+Publisher                Gateway              Node A               Subscriber
+  |                         |                    |                      |
+  |--pubsub_route---------->|                    |                      |
+  |  dest: Subscriber       |--pubsub_route----->|                      |
+  |  topic: "matchmaking"   |  (forward closer)  |--pubsub_route------->|
+  |  payload: {msg}         |                    |                      |
+  |                         |                    |                      | Deliver locally
+```
+
+### Tests
+- Protocol encoder: 49 tests (8 new for pubsub_route)
+- Protocol decoder: 35 tests (3 new for pubsub_route)
+- Pub/sub routing: 14 tests (all passing)
+  - wrap_publish envelope creation
+  - should_deliver_locally checks
+  - route_or_deliver decision logic
+  - TTL exhaustion handling
+  - No-route error handling
+
+### Architecture Documentation
+- Added `architecture/dht_routed_pubsub.md` with complete design
+- Future refactoring note: Consider unifying RPC and pub/sub routing modules (nearly identical logic)
+
+**This completes the DHT-routed pub/sub implementation and should enable working matchmaking.**
+
+---
+
+## [0.7.7] - 2025-11-15
+
+### Fixed
+- **CRITICAL**: Gateway pub/sub now queries DHT for remote subscribers
+  - Bug: Gateway only checked local subscriptions, never queried DHT for remote subscribers
+  - Impact: Distributed pub/sub and matchmaking completely broken - remote peers couldn't receive messages
+  - Root cause: `handle_publish` only called `macula_gateway_pubsub:get_subscribers` (local streams only)
+  - Fix Phase 1: Added endpoint → stream PID tracking in `macula_gateway_client_manager`
+    - New state field: `endpoint_to_stream :: #{binary() => pid()}`
+    - New API: `get_stream_by_endpoint/2`
+    - Updated `store_client_stream/4` to track endpoints
+    - Updated `remove_client/2` to clean up endpoint mappings
+  - Fix Phase 2: Modified `handle_publish` to query DHT
+    - Queries local subscribers (existing behavior)
+    - Queries DHT for remote subscribers via `crypto:hash(sha256, Topic)`
+    - Converts remote endpoints to stream PIDs using client_manager
+    - Combines local + remote and delivers to all
+  - Fix Phase 3: Added `macula_gateway_dht:lookup_value/1`
+    - Synchronous lookup from local DHT storage
+    - Calls `macula_routing_server:find_value/3` with K=20
+    - Returns `{ok, [Subscriber]}` or `{error, not_found}`
+  - Tests: 90 tests passing (39 client_manager + 49 gateway + 7 endpoint + 5 pub/sub DHT)
+
+**This completes the distributed pub/sub fix and enables working matchmaking across multiple peer containers.**
+
+### Technical Details
+
+Before v0.7.7:
+- ❌ Gateway only queried `macula_gateway_pubsub` (local subscriptions)
+- ❌ Remote subscribers stored in DHT but never looked up
+- ❌ Pub/sub messages only delivered to local streams
+- ❌ Multi-peer matchmaking broken
+
+After v0.7.7:
+- ✅ Gateway queries both local + DHT for subscribers
+- ✅ Remote endpoints resolved to stream PIDs via endpoint tracking
+- ✅ Messages delivered to all subscribers (local + remote)
+- ✅ Multi-peer matchmaking works correctly
+
+The architecture remains hub-and-spoke (v0.7.x):
+- All peers connect to gateway
+- Gateway routes all pub/sub messages
+- Subscriptions stored in DHT for discovery
+- Gateway has stream PIDs for all connected peers
+
+---
+
 ## [0.8.0] - TBD (Q2 2025)
 
 ### Planned - True Mesh Architecture
@@ -18,6 +145,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **This will transform Macula from hub-and-spoke (star topology) to true decentralized mesh.**
 
 See `architecture/NAT_TRAVERSAL_ROADMAP.md` for complete design.
+
+---
+
+## [0.7.6] - 2025-11-15
+
+### Fixed
+- **CRITICAL**: Disabled QUIC transport-layer idle timeout causing connection closures
+  - Root cause: MsQuic default idle timeout of 30 seconds (2x = 60s to closure)
+  - v0.7.4-0.7.5 application-level PING/PONG worked but didn't reset QUIC transport timer
+  - Added `idle_timeout_ms => 0` to both client connection and gateway listener options
+  - Setting to 0 disables QUIC idle timeout entirely
+  - Connections now stay alive indefinitely (application PING/PONG provides health checks)
+  - Modified: `macula_quic:connect/4` and `macula_quic:listen/2`
+
+**This completes the connection stability fix started in v0.7.4-0.7.5.**
+
+### Tests
+- Added `test/macula_quic_idle_timeout_tests.erl` with 7 tests
+  - Client connection idle timeout configuration
+  - Gateway listener idle timeout configuration
+  - Option structure and value validation
+  - Defense-in-depth architecture documentation
+
+### Technical Details
+
+**Defense in Depth** approach:
+1. **Transport Layer** (v0.7.6): QUIC idle timeout disabled (`idle_timeout_ms => 0`)
+2. **Application Layer** (v0.7.4-0.7.5): PING/PONG keep-alive every 30 seconds
+3. **Result**: Connections stay alive + health monitoring
+
+Previous versions had application keep-alive but QUIC transport still enforced 30s idle timeout independently.
+
+---
+
+## [0.7.5] - 2025-11-15
+
+### Fixed
+- **CRITICAL**: Gateway PING message handler missing, preventing keep-alive from working
+  - v0.7.4 implemented keep-alive on edge peer side only
+  - Gateway had no handler for incoming PING messages
+  - Result: PINGs sent but never acknowledged, connections still timed out after 2 minutes
+  - Added `handle_decoded_message({ok, {ping, PingMsg}}, ...)` to gateway
+  - Gateway now responds with PONG to all incoming PING messages
+  - Keep-alive now works bidirectionally (edge peer ↔ gateway)
+  - Also added PONG message handler to gateway for completeness
+
+**This completes the keep-alive implementation started in v0.7.4.**
+
+### Technical Details
+
+The keep-alive flow now works correctly:
+1. Edge peer timer fires every 30 seconds (configurable)
+2. Edge peer sends PING to gateway
+3. **Gateway receives PING and responds with PONG** (new in v0.7.5)
+4. Edge peer receives PONG confirmation
+5. QUIC connection stays alive (no idle timeout)
+
+Without this fix, PINGs were sent but ignored, causing connections to timeout despite v0.7.4's implementation.
 
 ---
 

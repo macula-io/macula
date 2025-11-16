@@ -588,6 +588,43 @@ handle_rpc_reply_routed(ReplyMsg, RpcRouteMsg, State) ->
     ),
     {noreply, State}.
 
+%% @doc Handle routed PUBLISH message delivered locally.
+%% Deliver to local pub/sub subscribers.
+handle_pubsub_route_deliver(PublishMsg, State) ->
+    %% Extract topic from publish message
+    Topic = maps:get(<<"topic">>, PublishMsg),
+    Payload = maps:get(<<"payload">>, PublishMsg),
+
+    io:format("[Gateway] Delivering routed PUBLISH to topic ~p~n", [Topic]),
+
+    %% Publish to local subscribers (delegate to pubsub module)
+    macula_gateway_pubsub:publish(State#state.pubsub, Topic, Payload),
+    {noreply, State}.
+
+%% @doc Forward pubsub_route message to next hop through mesh.
+forward_pubsub_route(NextHopNodeInfo, PubSubRouteMsg, MeshPid) ->
+    io:format("[Gateway] Forwarding pubsub_route to next hop~n"),
+
+    %% Extract next hop info
+    #{<<"node_id">> := NextHopNodeId,
+      <<"address">> := AddressBin,
+      <<"port">> := Port} = NextHopNodeInfo,
+
+    %% Parse address (inline implementation to avoid module dependency)
+    Address = case inet:parse_address(binary_to_list(AddressBin)) of
+        {ok, IpTuple} -> IpTuple;
+        {error, _} -> binary_to_list(AddressBin)  % Treat as hostname
+    end,
+
+    %% Get or create mesh connection
+    {ok, Stream} = macula_gateway_mesh:get_or_create_connection(MeshPid, NextHopNodeId, {Address, Port}),
+
+    %% Encode and send pubsub_route message
+    EncodedMsg = macula_protocol_encoder:encode(pubsub_route, PubSubRouteMsg),
+    macula_quic:send(Stream, EncodedMsg),
+    io:format("[Gateway] Forwarded pubsub_route successfully~n"),
+    ok.
+
 %% @doc Handle RPC call message (legacy direct handling).
 handle_rpc_call(Stream, CallMsg, State) ->
     io:format("[Gateway] Processing RPC CALL message: ~p~n", [CallMsg]),
@@ -728,6 +765,32 @@ handle_decoded_message({ok, {rpc_route, RpcRouteMsg}}, Stream, State) ->
             {noreply, State}
     end;
 
+%% Handle Pub/Sub route message (multi-hop DHT routing).
+handle_decoded_message({ok, {pubsub_route, PubSubRouteMsg}}, _Stream, State) ->
+    io:format("[Gateway] *** RECEIVED PUBSUB_ROUTE MESSAGE ***~n"),
+    io:format("[Gateway] Pub/Sub route message: ~p~n", [PubSubRouteMsg]),
+
+    LocalNodeId = State#state.node_id,
+    RoutingServerPid = whereis(macula_routing_server),
+
+    case macula_pubsub_routing:route_or_deliver(LocalNodeId, PubSubRouteMsg, RoutingServerPid) of
+        {deliver, Topic, PublishMsg} ->
+            %% Unwrap and deliver PUBLISH locally to subscribers
+            io:format("[Gateway] Pub/Sub route: delivering PUBLISH locally to topic ~p~n", [Topic]),
+            handle_pubsub_route_deliver(PublishMsg, State);
+
+        {forward, NextHopNodeInfo, UpdatedPubSubRouteMsg} ->
+            %% Forward to next hop through mesh
+            io:format("[Gateway] Pub/Sub route: forwarding to next hop~n"),
+            forward_pubsub_route(NextHopNodeInfo, UpdatedPubSubRouteMsg, State#state.mesh),
+            {noreply, State};
+
+        {error, Reason} ->
+            %% Routing error (max hops, no route, etc.)
+            io:format("[Gateway] Pub/Sub route error: ~p~n", [Reason]),
+            {noreply, State}
+    end;
+
 %% Handle RPC call message (legacy direct call - will be deprecated).
 handle_decoded_message({ok, {call, CallMsg}}, Stream, State) ->
     io:format("[Gateway] *** RECEIVED RPC CALL (DIRECT) ***~n"),
@@ -751,6 +814,29 @@ handle_decoded_message({ok, {publish, PubMsg}}, Stream, State) ->
     io:format("[Gateway] *** RECEIVED PUBLISH MESSAGE ***~n"),
     io:format("[Gateway] Publish message: ~p~n", [PubMsg]),
     handle_publish(Stream, PubMsg, State);
+
+%% Handle PING message - respond with PONG to keep connection alive.
+handle_decoded_message({ok, {ping, PingMsg}}, Stream, State) ->
+    io:format("[Gateway] Received PING, responding with PONG~n"),
+    Timestamp = maps:get(<<"timestamp">>, PingMsg, erlang:system_time(millisecond)),
+    PongMsg = #{
+        timestamp => Timestamp,
+        server_time => erlang:system_time(millisecond)
+    },
+    PongBinary = macula_protocol_encoder:encode(pong, PongMsg),
+    case macula_quic:send(Stream, PongBinary) of
+        ok ->
+            io:format("[Gateway] Sent PONG (keep-alive)~n"),
+            {noreply, State};
+        {error, SendErr} ->
+            io:format("[Gateway] WARNING: Failed to send PONG: ~p~n", [SendErr]),
+            {noreply, State}
+    end;
+
+%% Handle PONG message - connection keep-alive acknowledgment.
+handle_decoded_message({ok, {pong, _PongMsg}}, _Stream, State) ->
+    io:format("[Gateway] Received PONG - connection alive~n"),
+    {noreply, State};
 
 %% Handle other decoded message types.
 handle_decoded_message({ok, {Type, Other}}, _Stream, State) ->
@@ -795,18 +881,49 @@ handle_unsubscribe(Stream, UnsubMsg, State) ->
     {noreply, State}.
 
 %% @doc Handle publish message - distribute to all topic subscribers via pubsub module.
+%% Queries both local subscribers and DHT for remote subscribers.
 handle_publish(_PublisherStream, PubMsg, State) ->
     Topic = maps:get(<<"topic">>, PubMsg),
-    io:format("[Gateway] Publishing message to topic: ~s (delegating to pubsub)~n", [Topic]),
+    io:format("[Gateway] Publishing message to topic: ~s~n", [Topic]),
 
     PubSub = State#state.pubsub,
+    ClientManager = State#state.client_manager,
 
-    %% Get matching subscribers from pubsub module
-    {ok, Subscribers} = macula_gateway_pubsub:get_subscribers(PubSub, Topic),
+    %% 1. Get local subscribers from pubsub module
+    {ok, LocalSubscribers} = macula_gateway_pubsub:get_subscribers(PubSub, Topic),
+    io:format("[Gateway] Found ~p local subscribers~n", [length(LocalSubscribers)]),
 
-    io:format("[Gateway] Found ~p subscribers for topic ~s~n", [length(Subscribers), Topic]),
+    %% 2. Query DHT for remote subscribers
+    TopicKey = crypto:hash(sha256, Topic),
+    RemoteStreams = case macula_gateway_dht:lookup_value(TopicKey) of
+        {ok, RemoteSubscribers} ->
+            io:format("[Gateway] Found ~p remote subscribers in DHT~n", [length(RemoteSubscribers)]),
+            %% Convert endpoints to stream PIDs
+            lists:filtermap(
+                fun(Subscriber) ->
+                    Endpoint = maps:get(<<"endpoint">>, Subscriber, <<>>),
+                    case macula_gateway_client_manager:get_stream_by_endpoint(ClientManager, Endpoint) of
+                        {ok, StreamPid} ->
+                            io:format("[Gateway] Resolved endpoint ~s → stream ~p~n", [Endpoint, StreamPid]),
+                            {true, StreamPid};
+                        {error, not_found} ->
+                            io:format("[Gateway] Endpoint not connected: ~s~n", [Endpoint]),
+                            false
+                    end
+                end,
+                RemoteSubscribers
+            );
+        {error, not_found} ->
+            io:format("[Gateway] No remote subscribers found in DHT~n"),
+            []
+    end,
 
-    %% Encode and send to each subscriber
+    %% 3. Combine local + remote (remove duplicates)
+    AllSubscribers = lists:usort(LocalSubscribers ++ RemoteStreams),
+    io:format("[Gateway] Total subscribers: ~p (~p local + ~p remote)~n",
+             [length(AllSubscribers), length(LocalSubscribers), length(RemoteStreams)]),
+
+    %% 4. Encode and send to all subscribers
     PubBinary = macula_protocol_encoder:encode(publish, PubMsg),
     lists:foreach(
         fun(SubscriberStream) ->
@@ -818,10 +935,10 @@ handle_publish(_PublisherStream, PubMsg, State) ->
                               [SubscriberStream, Reason])
             end
         end,
-        Subscribers
+        AllSubscribers
     ),
 
-    io:format("[Gateway] Finished distributing message to ~p subscribers~n", [length(Subscribers)]),
+    io:format("[Gateway] Finished distributing message to ~p subscribers~n", [length(AllSubscribers)]),
 
     {noreply, State}.
 

@@ -54,6 +54,16 @@ sample_subscribe_msg() ->
 sample_unsubscribe_msg() ->
     #{topics => [<<"test.topic">>]}.
 
+sample_pubsub_route_msg() ->
+    #{
+        destination_node_id => crypto:strong_rand_bytes(32),
+        source_node_id => crypto:strong_rand_bytes(32),
+        hop_count => 0,
+        max_hops => 10,
+        topic => <<"test.topic">>,
+        payload => sample_publish_msg()
+    }.
+
 %%%===================================================================
 %%% Frame Format Tests
 %%%===================================================================
@@ -148,6 +158,13 @@ encode_unsubscribe_message_test() ->
     <<_Version:8, TypeId:8, _/binary>> = Result,
     %% Unsubscribe type ID is 0x12
     ?assertEqual(16#12, TypeId).
+
+encode_pubsub_route_message_test() ->
+    Msg = sample_pubsub_route_msg(),
+    Result = macula_protocol_encoder:encode(pubsub_route, Msg),
+    <<_Version:8, TypeId:8, _/binary>> = Result,
+    %% PubSub Route type ID is 0x13
+    ?assertEqual(16#13, TypeId).
 
 %%%===================================================================
 %%% Validation Tests - Connect Message
@@ -260,6 +277,46 @@ unsubscribe_requires_topics_test() ->
 unsubscribe_accepts_binary_keys_test() ->
     Msg = #{<<"topics">> => [<<"test.topic">>]},
     Result = macula_protocol_encoder:encode(unsubscribe, Msg),
+    ?assert(is_binary(Result)).
+
+%%%===================================================================
+%%% Validation Tests - PubSub Route Message
+%%%===================================================================
+
+pubsub_route_requires_destination_node_id_test() ->
+    Msg = maps:remove(destination_node_id, sample_pubsub_route_msg()),
+    ?assertError({case_clause, _}, macula_protocol_encoder:encode(pubsub_route, Msg)).
+
+pubsub_route_requires_source_node_id_test() ->
+    Msg = maps:remove(source_node_id, sample_pubsub_route_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(pubsub_route, Msg)).
+
+pubsub_route_requires_hop_count_test() ->
+    Msg = maps:remove(hop_count, sample_pubsub_route_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(pubsub_route, Msg)).
+
+pubsub_route_requires_max_hops_test() ->
+    Msg = maps:remove(max_hops, sample_pubsub_route_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(pubsub_route, Msg)).
+
+pubsub_route_requires_topic_test() ->
+    Msg = maps:remove(topic, sample_pubsub_route_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(pubsub_route, Msg)).
+
+pubsub_route_requires_payload_test() ->
+    Msg = maps:remove(payload, sample_pubsub_route_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(pubsub_route, Msg)).
+
+pubsub_route_accepts_binary_keys_test() ->
+    Msg = #{
+        <<"destination_node_id">> => crypto:strong_rand_bytes(32),
+        <<"source_node_id">> => crypto:strong_rand_bytes(32),
+        <<"hop_count">> => 0,
+        <<"max_hops">> => 10,
+        <<"topic">> => <<"test.topic">>,
+        <<"payload">> => sample_publish_msg()
+    },
+    Result = macula_protocol_encoder:encode(pubsub_route, Msg),
     ?assert(is_binary(Result)).
 
 %%%===================================================================
