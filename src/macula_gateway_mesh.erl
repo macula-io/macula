@@ -97,8 +97,10 @@ list_connections(Pid) ->
 %%%===================================================================
 
 init(Opts) ->
+    io:format("[Mesh] Initializing mesh connection manager~n"),
     %% Get max connections from opts or use default (1000)
     MaxConnections = maps:get(max_mesh_connections, Opts, 1000),
+    io:format("[Mesh] Max connections: ~p~n", [MaxConnections]),
 
     State = #state{
         opts = Opts,
@@ -106,6 +108,7 @@ init(Opts) ->
         mesh_connections = #{},
         monitors = #{}
     },
+    io:format("[Mesh] Mesh connection manager initialized~n"),
     {ok, State}.
 
 %%%===================================================================

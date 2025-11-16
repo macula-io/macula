@@ -202,23 +202,31 @@ init_with_supervisor(ParentSup, Port, Realm) ->
     io:format("[Gateway] Parent supervisor found: ~p~n", [ParentSup]),
 
     %% Step 2: Find sibling processes from parent supervisor
+    io:format("[Gateway] Step 2: Finding QUIC server sibling...~n"),
     case find_sibling(ParentSup, macula_gateway_quic_server) of
         {ok, QuicServerPid} ->
             io:format("[Gateway] Found QUIC server sibling: ~p~n", [QuicServerPid]),
 
             %% Step 3: Wire ourselves to QUIC server
+            io:format("[Gateway] Step 3: Wiring gateway to QUIC server...~n"),
             ok = macula_gateway_quic_server:set_gateway(QuicServerPid, self()),
             io:format("[Gateway] Wired gateway to QUIC server~n"),
 
             %% Step 4: Find workers supervisor sibling
+            io:format("[Gateway] Step 4: Finding workers supervisor...~n"),
             case find_sibling(ParentSup, macula_gateway_workers_sup) of
                 {ok, WorkersSupPid} ->
                     io:format("[Gateway] Found workers supervisor sibling: ~p~n", [WorkersSupPid]),
 
                     %% Step 5: Get worker PIDs from workers supervisor
+                    io:format("[Gateway] Step 5: Getting worker PIDs...~n"),
+                    io:format("[Gateway] Getting clients PID...~n"),
                     {ok, ClientsPid} = macula_gateway_workers_sup:get_clients(WorkersSupPid),
+                    io:format("[Gateway] Getting pubsub PID...~n"),
                     {ok, PubSubPid} = macula_gateway_workers_sup:get_pubsub(WorkersSupPid),
+                    io:format("[Gateway] Getting rpc PID...~n"),
                     {ok, RpcPid} = macula_gateway_workers_sup:get_rpc(WorkersSupPid),
+                    io:format("[Gateway] Getting mesh PID...~n"),
                     {ok, MeshPid} = macula_gateway_workers_sup:get_mesh(WorkersSupPid),
 
                     io:format("[Gateway] Worker PIDs retrieved:~n"),
@@ -228,6 +236,7 @@ init_with_supervisor(ParentSup, Port, Realm) ->
                     io:format("[Gateway]   - Mesh: ~p~n", [MeshPid]),
 
                     %% Step 6: Start routing server for DHT operations
+                    io:format("[Gateway] Step 6: Starting DHT routing server...~n"),
                     LocalNodeId = get_node_id(Realm, Port),
                     io:format("[Gateway] Using node ID: ~p~n", [binary:encode_hex(LocalNodeId)]),
 
@@ -236,6 +245,7 @@ init_with_supervisor(ParentSup, Port, Realm) ->
                         alpha => 3    % Kademlia concurrency parameter
                     },
 
+                    io:format("[Gateway] Calling macula_routing_server:start_link...~n"),
                     case macula_routing_server:start_link(LocalNodeId, RoutingConfig) of
                         {ok, _RoutingPid} ->
                             io:format("[Gateway] DHT routing server started~n"),
@@ -249,10 +259,14 @@ init_with_supervisor(ParentSup, Port, Realm) ->
                     end,
 
                     %% Mark health server as ready (if running)
+                    io:format("[Gateway] Step 7: Notifying health server...~n"),
                     notify_health_server_ready(),
+                    io:format("[Gateway] Health server notified~n"),
 
                     %% Register diagnostics procedures (if running)
+                    io:format("[Gateway] Step 8: Registering diagnostics...~n"),
                     register_diagnostics_procedures(self()),
+                    io:format("[Gateway] Diagnostics registered~n"),
 
                     %% Step 7: Build final state
                     State = #state{

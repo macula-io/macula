@@ -8,7 +8,7 @@
     <meta name="project" content="macula v0.7.13">
 
 
-    <title>macula_rpc_routing — macula v0.7.13</title>
+    <title>macula_peer_system — macula v0.7.13</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
@@ -79,12 +79,12 @@ macula
 <div id="top-content">
   <div class="heading-with-actions top-heading">
     <h1>
-      <span translate="no">macula_rpc_routing</span> 
+      <span translate="no">macula_peer_system</span> 
       <small class="app-vsn" translate="no">(macula v0.7.13)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_rpc_routing.erl#L8" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer_system.erl#L36" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -93,7 +93,12 @@ macula
 
 
     <section id="moduledoc">
-<p>RPC routing for multi-hop DHT-routed RPC. Handles wrapping, unwrapping, and routing of RPC messages through the Kademlia DHT mesh.</p>
+<p>Peer System Supervisor - supervises the peer subsystem.</p><p>Supervision Strategy: - rest_for_one: If child N crashes, restart N and all children after N - Rationale: connection_manager is foundational; handlers depend on it but are independent of each other. This provides fault isolation while maintaining consistency when connection_manager restarts.</p><p>Architecture:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="nf">macula_peer_system</span><span class="w"> </span><span class="p" data-group-id="2345410420-1">(</span><span class="ss">this</span><span class="w"> </span><span class="ss">module</span><span class="p" data-group-id="2345410420-1">)</span><span class="w">
+   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_connection</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">QUIC</span><span class="w"> </span><span class="ss">connection</span><span class="w"> </span><span class="nf">lifecycle</span><span class="w"> </span><span class="p" data-group-id="2345410420-2">(</span><span class="ss">transport</span><span class="w"> </span><span class="ss">layer</span><span class="p" data-group-id="2345410420-2">)</span><span class="w">
+   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_pubsub_handler</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">Pub</span><span class="o">/</span><span class="ss">sub</span><span class="w"> </span><span class="ss">operations</span><span class="w">
+   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_rpc_handler</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">RPC</span><span class="w"> </span><span class="ss">operations</span><span class="w">
+   </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_advertisement_manager</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">DHT</span><span class="w"> </span><span class="ss">service</span><span class="w"> </span><span class="ss">advertisements</span><span class="w">
+   </span></code></pre><p>Children (in dependency order): - macula_connection: QUIC connection lifecycle (foundational) - macula_pubsub_handler: Pub/sub operations (depends on connection) - macula_rpc_handler: RPC operations (depends on connection) - macula_advertisement_manager: DHT advertisements (depends on connection)</p><p>Fault Isolation: - advertisement_manager crash → only advertisement restarts - rpc_handler crash → rpc + advertisement restart - pubsub_handler crash → pubsub + rpc + advertisement restart - connection crash → all restart (unavoidable - foundational)</p><p>Renamed from macula_connection_sup (v0.7.10) to align with macula_peer nomenclature and macula_gateway_system naming convention.</p>
     </section>
 
 </div>
@@ -112,41 +117,31 @@ macula
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#route_or_deliver/3" data-no-tooltip="" translate="no">route_or_deliver(LocalNodeId, RpcRouteMsg, RoutingServerPid)</a>
+        <a href="#init/1" data-no-tooltip="" translate="no">init(_)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Route an rpc_route message: either deliver locally or forward to next hop. Returns one of: {deliver, PayloadType, Payload} - Message is for this node {forward, NextHopNodeInfo, UpdatedRpcRouteMsg} - Forward to next hop {error, Reason} - Cannot route (TTL exceeded, no route, etc.)</p></div>
+        <div class="summary-synopsis"><p>Initialize the supervisor with child specifications.</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#should_deliver_locally/2" data-no-tooltip="" translate="no">should_deliver_locally(LocalNodeId, RpcRouteMsg)</a>
+        <a href="#start_link/2" data-no-tooltip="" translate="no">start_link(Url, Opts)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Determine if this node should deliver the message locally or forward it.</p></div>
+        <div class="summary-synopsis"><p>Start the peer system supervisor with given URL and options.</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#wrap_call/4" data-no-tooltip="" translate="no">wrap_call(SourceNodeId, DestinationNodeId, CallMsg, MaxHops)</a>
+        <a href="#stop/1" data-no-tooltip="" translate="no">stop(Sup)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Wrap a CALL message in rpc_route envelope for DHT routing.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#wrap_reply/4" data-no-tooltip="" translate="no">wrap_reply(SourceNodeId, DestinationNodeId, ReplyMsg, MaxHops)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Wrap a REPLY message in rpc_route envelope for DHT routing back to caller.</p></div>
+        <div class="summary-synopsis"><p>Stop the peer system supervisor and all children.</p></div>
 
     </div>
 
@@ -163,17 +158,17 @@ macula
       <span class="text">Functions</span>
     </h1>
     <div class="functions-list">
-<section class="detail" id="route_or_deliver/3">
+<section class="detail" id="init/1">
 
   <div class="detail-header">
-    <a href="#route_or_deliver/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#init/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">route_or_deliver(LocalNodeId, RpcRouteMsg, RoutingServerPid)</h1>
+      <h1 class="signature" translate="no">init(_)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_rpc_routing.erl#L69" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer_system.erl#L71" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -184,29 +179,24 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> route_or_deliver(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="macula_protocol_types.html#t:rpc_route_msg/0">macula_protocol_types:rpc_route_msg</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) ->
-                          {deliver, call | reply, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()} |
-                          {forward,
-                           <a href="macula_routing_bucket.html#t:node_info/0">macula_routing_bucket:node_info</a>(),
-                           <a href="macula_protocol_types.html#t:rpc_route_msg/0">macula_protocol_types:rpc_route_msg</a>()} |
-                          {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> init({<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()}) -> {ok, {<a href="https://www.erlang.org/doc/apps/stdlib/supervisor.html#t:sup_flags/0">supervisor:sup_flags</a>(), [<a href="https://www.erlang.org/doc/apps/stdlib/supervisor.html#t:child_spec/0">supervisor:child_spec</a>()]}}.</pre>
 
       </div>
 
-<p>Route an rpc_route message: either deliver locally or forward to next hop. Returns one of: {deliver, PayloadType, Payload} - Message is for this node {forward, NextHopNodeInfo, UpdatedRpcRouteMsg} - Forward to next hop {error, Reason} - Cannot route (TTL exceeded, no route, etc.)</p>
+<p>Initialize the supervisor with child specifications.</p>
   </section>
 </section>
-<section class="detail" id="should_deliver_locally/2">
+<section class="detail" id="start_link/2">
 
   <div class="detail-header">
-    <a href="#should_deliver_locally/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#start_link/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">should_deliver_locally(LocalNodeId, RpcRouteMsg)</h1>
+      <h1 class="signature" translate="no">start_link(Url, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_rpc_routing.erl#L55" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer_system.erl#L56" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -217,24 +207,24 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> should_deliver_locally(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="macula_protocol_types.html#t:rpc_route_msg/0">macula_protocol_types:rpc_route_msg</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+          <pre translate="no"><span class="attribute">-spec</span> start_link(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
 
       </div>
 
-<p>Determine if this node should deliver the message locally or forward it.</p>
+<p>Start the peer system supervisor with given URL and options.</p>
   </section>
 </section>
-<section class="detail" id="wrap_call/4">
+<section class="detail" id="stop/1">
 
   <div class="detail-header">
-    <a href="#wrap_call/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#stop/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">wrap_call(SourceNodeId, DestinationNodeId, CallMsg, MaxHops)</h1>
+      <h1 class="signature" translate="no">stop(Sup)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_rpc_routing.erl#L28" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer_system.erl#L61" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -245,41 +235,11 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> wrap_call(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="macula_protocol_types.html#t:call_msg/0">macula_protocol_types:call_msg</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) ->
-                   <a href="macula_protocol_types.html#t:rpc_route_msg/0">macula_protocol_types:rpc_route_msg</a>().</pre>
+          <pre translate="no"><span class="attribute">-spec</span> stop(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> ok.</pre>
 
       </div>
 
-<p>Wrap a CALL message in rpc_route envelope for DHT routing.</p>
-  </section>
-</section>
-<section class="detail" id="wrap_reply/4">
-
-  <div class="detail-header">
-    <a href="#wrap_reply/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">wrap_reply(SourceNodeId, DestinationNodeId, ReplyMsg, MaxHops)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_rpc_routing.erl#L42" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> wrap_reply(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="macula_protocol_types.html#t:reply_msg/0">macula_protocol_types:reply_msg</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) ->
-                    <a href="macula_protocol_types.html#t:rpc_route_msg/0">macula_protocol_types:rpc_route_msg</a>().</pre>
-
-      </div>
-
-<p>Wrap a REPLY message in rpc_route envelope for DHT routing back to caller.</p>
+<p>Stop the peer system supervisor and all children.</p>
   </section>
 </section>
 

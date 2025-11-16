@@ -81,12 +81,14 @@ get_stream_topics(Pid, Stream) ->
 %%%===================================================================
 
 init(Opts) ->
+    io:format("[PubSub] Initializing pub/sub handler~n"),
     State = #state{
         opts = Opts,
         subscriptions = #{},
         stream_subscriptions = #{},
         monitors = #{}
     },
+    io:format("[PubSub] Pub/sub handler initialized~n"),
     {ok, State}.
 
 handle_call({subscribe, Stream, Topic}, _From, State) when is_pid(Stream), is_binary(Topic) ->

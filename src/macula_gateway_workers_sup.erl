@@ -76,6 +76,9 @@ get_mesh(SupPid) ->
 %%%===================================================================
 
 init(Config) ->
+    io:format("[WorkersSup] Initializing gateway workers supervisor~n"),
+    io:format("[WorkersSup] Config: ~p~n", [Config]),
+
     %% Supervision strategy: rest_for_one
     %% - If child N crashes, restart N and all children after N
     %% - Provides fault isolation while maintaining dependency consistency
@@ -86,6 +89,7 @@ init(Config) ->
         period => 60
     },
 
+    io:format("[WorkersSup] Building child specifications...~n"),
     %% Child specifications
     Children = [
         %% Clients - tracks connected clients and streams
@@ -129,6 +133,7 @@ init(Config) ->
         }
     ],
 
+    io:format("[WorkersSup] Child specs built, returning from init~n"),
     {ok, {SupFlags, Children}}.
 
 %%%===================================================================

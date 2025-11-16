@@ -65,8 +65,8 @@ init(Opts) when is_list(Opts) ->
     Port = proplists:get_value(port, Opts, 9443),
     Realm = proplists:get_value(realm, Opts, <<"macula.default">>),
     HealthPort = proplists:get_value(health_port, Opts, 8080),
-    CertFile = proplists:get_value(cert_file, Opts),
-    KeyFile = proplists:get_value(key_file, Opts),
+    CertFile = get_cert_file(proplists:get_value(cert_file, Opts)),
+    KeyFile = get_key_file(proplists:get_value(key_file, Opts)),
     init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile);
 
 init(Opts) when is_map(Opts) ->
@@ -74,8 +74,8 @@ init(Opts) when is_map(Opts) ->
     Port = maps:get(port, Opts, 9443),
     Realm = maps:get(realm, Opts, <<"macula.default">>),
     HealthPort = maps:get(health_port, Opts, 8080),
-    CertFile = maps:get(cert_file, Opts, undefined),
-    KeyFile = maps:get(key_file, Opts, undefined),
+    CertFile = get_cert_file(maps:get(cert_file, Opts, undefined)),
+    KeyFile = get_key_file(maps:get(key_file, Opts, undefined)),
     init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile).
 
 %% @private
@@ -84,6 +84,8 @@ init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile) ->
 
     io:format("[GatewaySup] Initializing gateway supervisor for realm ~s on port ~p~n",
               [Realm, Port]),
+    io:format("[GatewaySup] Certificate file: ~p~n", [CertFile]),
+    io:format("[GatewaySup] Key file: ~p~n", [KeyFile]),
 
     %% Supervision strategy: rest_for_one
     %% - health fails → restart health, diagnostics, quic_server, gateway, workers_sup
@@ -163,3 +165,29 @@ init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile) ->
     Children = [HealthSpec, DiagnosticsSpec, QuicServerSpec, GatewaySpec, WorkersSupSpec],
 
     {ok, {SupFlags, Children}}.
+
+%%%===================================================================
+%%% Private helper functions
+%%%===================================================================
+
+%% @private
+%% @doc Get certificate file path from opts or OS environment variable.
+%% Falls back to TLS_CERT_FILE environment variable when not provided in opts.
+get_cert_file(undefined) ->
+    case os:getenv("TLS_CERT_FILE") of
+        false -> "/opt/macula/certs/cert.pem";  % Default fallback
+        CertFile -> CertFile
+    end;
+get_cert_file(CertFile) when is_list(CertFile) ->
+    CertFile.
+
+%% @private
+%% @doc Get key file path from opts or OS environment variable.
+%% Falls back to TLS_KEY_FILE environment variable when not provided in opts.
+get_key_file(undefined) ->
+    case os:getenv("TLS_KEY_FILE") of
+        false -> "/opt/macula/certs/key.pem";  % Default fallback
+        KeyFile -> KeyFile
+    end;
+get_key_file(KeyFile) when is_list(KeyFile) ->
+    KeyFile.

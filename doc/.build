@@ -20,8 +20,8 @@ dist/lato-latin-700-normal-2XVSBPG4.woff2
 dist/lato-latin-ext-400-normal-N27NCBWW.woff2
 dist/lato-latin-ext-700-normal-Q2L5DVMW.woff2
 dist/remixicon-QPNJX265.woff2
-dist/search_data-55202477.js
-dist/sidebar_items-D67BC5A8.js
+dist/search_data-17390612.js
+dist/sidebar_items-BEDF5EBA.js
 documentation_status.html
 executive_summary.html
 hello_world.html
@@ -34,7 +34,6 @@ macula_cache.html
 macula_client.html
 macula_connection.html
 macula_connection_pool.html
-macula_connection_sup.html
 macula_core_types.html
 macula_dht_rpc.html
 macula_discovery.html
@@ -64,6 +63,7 @@ macula_membership_member.html
 macula_names.html
 macula_node.html
 macula_peer.html
+macula_peer_system.html
 macula_project_structure.html
 macula_protocol_decoder.html
 macula_protocol_encoder.html
@@ -85,6 +85,7 @@ macula_quic_cert.html
 macula_quic_conn_callback.html
 macula_quic_stream_acceptor.html
 macula_realm.html
+macula_root.html
 macula_routing_bucket.html
 macula_routing_dht.html
 macula_routing_nodeid.html
@@ -102,7 +103,6 @@ macula_rpc_routing.html
 macula_rpc_server.html
 macula_service_registry.html
 macula_stream_acceptor.html
-macula_sup.html
 macula_time.html
 macula_uri.html
 macula_utils.html

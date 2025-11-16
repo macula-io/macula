@@ -124,8 +124,10 @@ get_stream_by_endpoint(Pid, Endpoint) ->
 %%%===================================================================
 
 init(Opts) ->
+    io:format("[Clients] Initializing client manager~n"),
     %% Get max clients from opts or use default (10,000)
     MaxClients = maps:get(max_clients, Opts, 10000),
+    io:format("[Clients] Max clients: ~p~n", [MaxClients]),
 
     State = #state{
         opts = Opts,
@@ -135,6 +137,7 @@ init(Opts) ->
         client_streams = #{},
         endpoint_to_stream = #{}
     },
+    io:format("[Clients] Client manager initialized~n"),
     {ok, State}.
 
 handle_call({client_connected, ClientPid, ClientInfo}, _From,

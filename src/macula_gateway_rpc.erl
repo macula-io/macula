@@ -79,11 +79,13 @@ list_handlers(Pid) ->
 %%%===================================================================
 
 init(Opts) ->
+    io:format("[RPC] Initializing RPC handler~n"),
     State = #state{
         opts = Opts,
         registrations = #{},
         monitors = #{}
     },
+    io:format("[RPC] RPC handler initialized~n"),
     {ok, State}.
 
 handle_call({register_handler, Procedure, Handler}, _From, State)

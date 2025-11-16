@@ -106,6 +106,12 @@ init(Opts) ->
 
             {ok, State};
 
+        {error, ErrorType, ErrorDetail} ->
+            io:format("[QuicServer] QUIC listen failed: ~p ~p~n", [ErrorType, ErrorDetail]),
+            io:format("[QuicServer] Certificate file: ~p~n", [CertFile]),
+            io:format("[QuicServer] Key file: ~p~n", [KeyFile]),
+            {stop, {listen_failed, {ErrorType, ErrorDetail}}};
+
         {error, Reason} ->
             io:format("[QuicServer] QUIC listen failed: ~p~n", [Reason]),
             {stop, {listen_failed, Reason}}
