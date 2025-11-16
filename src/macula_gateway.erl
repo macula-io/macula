@@ -70,6 +70,7 @@
     init/1,
     handle_call/3,
     handle_cast/2,
+    handle_continue/2,
     handle_info/2,
     terminate/2
 ]).
@@ -77,7 +78,8 @@
 -record(state, {
     port :: inet:port_number(),
     realm :: binary(),
-    node_id :: binary(),                          % 32-byte local node ID
+    node_id :: binary() | undefined,              % 32-byte local node ID
+    parent_sup :: pid() | undefined,              % Parent supervisor (macula_gateway_system)
     listener :: pid() | undefined,
     supervisor :: pid() | undefined,              % Supervisor PID
     client_manager :: pid() | undefined,          % Client manager child PID
@@ -195,14 +197,34 @@ find_gateway_system_in_children([]) ->
 
 %% @private
 %% @doc Initialize gateway with supervisor context.
-%% Finds sibling processes, wires them together, and starts routing server.
+%% Defers sibling wiring to handle_continue to avoid initialization deadlock.
 -spec init_with_supervisor(pid(), inet:port_number(), binary()) ->
-    {ok, #state{}} | {stop, term()}.
+    {ok, #state{}, {continue, wire_siblings}}.
 init_with_supervisor(ParentSup, Port, Realm) ->
     io:format("[Gateway] Parent supervisor found: ~p~n", [ParentSup]),
+    io:format("[Gateway] Deferring sibling wiring to handle_continue~n"),
 
-    %% Step 2: Find sibling processes from parent supervisor
-    io:format("[Gateway] Step 2: Finding QUIC server sibling...~n"),
+    %% Build initial state and defer sibling finding to handle_continue
+    %% This avoids deadlock where init/1 calls supervisor:which_children/1
+    State = #state{
+        port = Port,
+        realm = Realm,
+        parent_sup = ParentSup,
+        client_streams = #{}
+    },
+
+    io:format("[Gateway] Returning from init with continue action~n"),
+    {ok, State, {continue, wire_siblings}}.
+
+%% @private
+%% @doc Wire gateway to sibling processes after init completes.
+%% Called via handle_continue to avoid supervisor initialization deadlock.
+-spec wire_siblings(#state{}) -> #state{} | {stop, term()}.
+wire_siblings(State) ->
+    #state{parent_sup = ParentSup, port = Port, realm = Realm} = State,
+
+    io:format("[Gateway] handle_continue: Wiring siblings...~n"),
+    io:format("[Gateway] Step 1: Finding QUIC server sibling...~n"),
     case find_sibling(ParentSup, macula_gateway_quic_server) of
         {ok, QuicServerPid} ->
             io:format("[Gateway] Found QUIC server sibling: ~p~n", [QuicServerPid]),
@@ -269,21 +291,18 @@ init_with_supervisor(ParentSup, Port, Realm) ->
                     io:format("[Gateway] Diagnostics registered~n"),
 
                     %% Step 7: Build final state
-                    State = #state{
-                        port = Port,
-                        realm = Realm,
+                    NewState = State#state{
                         node_id = LocalNodeId,
                         listener = QuicServerPid,  % QUIC server PID
                         supervisor = WorkersSupPid,  % Workers supervisor PID
                         client_manager = ClientsPid,
                         pubsub = PubSubPid,
                         rpc = RpcPid,
-                        mesh = MeshPid,
-                        client_streams = #{}
+                        mesh = MeshPid
                     },
 
                     io:format("[Gateway] Initialization complete (supervised mode)~n"),
-                    {ok, State};
+                    NewState;
 
                 {error, WorkersSupErr} ->
                     io:format("[Gateway] Failed to find workers supervisor: ~p~n", [WorkersSupErr]),
@@ -382,6 +401,28 @@ handle_cast({process_rpc_route, RpcRouteMsg}, State) ->
 
 handle_cast(_Request, State) ->
     {noreply, State}.
+
+%%%===================================================================
+%%% Continue Callbacks (Post-Init Wiring)
+%%%===================================================================
+
+%% @doc Wire gateway to siblings after init completes.
+%% This avoids initialization deadlock from calling supervisor:which_children/1
+%% during init/1 before supervisor has finished starting all children.
+handle_continue(wire_siblings, State) ->
+    io:format("[Gateway] handle_continue(wire_siblings) called~n"),
+    case wire_siblings(State) of
+        #state{} = NewState ->
+            io:format("[Gateway] Sibling wiring completed successfully~n"),
+            {noreply, NewState};
+        {stop, Reason} ->
+            io:format("[Gateway] Sibling wiring failed: ~p~n", [Reason]),
+            {stop, Reason, State}
+    end.
+
+%%%===================================================================
+%%% Info Callbacks
+%%%===================================================================
 
 %% Handle new stream created by peer (quicer message)
 %% Client connected - delegate to clients module
