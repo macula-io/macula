@@ -15,7 +15,7 @@
 %%% - workers_sup crash → restart workers_sup only (quic_server and gateway continue)
 %%%
 %%% Architecture:
-%%% ```
+%%% <pre>
 %%% macula_gateway_sup (this module)
 %%% ├── macula_gateway_quic_server  - QUIC transport layer
 %%% ├── macula_gateway              - Message routing coordinator
@@ -24,7 +24,7 @@
 %%%     ├── macula_gateway_pubsub   - Pub/Sub routing
 %%%     ├── macula_gateway_rpc      - RPC handling
 %%%     └── macula_gateway_mesh     - Mesh connections
-%%% ```
+%%% </pre>
 %%%
 %%% Circular Dependency Resolution:
 %%% - quic_server starts first (without gateway PID)
