@@ -1,9 +1,30 @@
 %%%-------------------------------------------------------------------
-%% @doc macula top level supervisor.
+%% @doc Macula Application Root Supervisor.
+%%
+%% This is the top-level supervisor for the Macula application.
+%% It manages core infrastructure and optionally starts gateway services.
+%%
+%% Supervision Hierarchy:
+%% <pre>
+%% macula_root (this module - application root)
+%% ├── macula_routing_server (core DHT infrastructure)
+%% ├── macula_gateway_health (optional - health checks)
+%% ├── macula_gateway_diagnostics (optional - diagnostics)
+%% └── macula_gateway_system (optional - gateway subsystem)
+%%     ├── macula_gateway_quic_server
+%%     ├── macula_gateway
+%%     └── macula_gateway_workers_sup
+%% </pre>
+%%
+%% Naming Convention (v0.7.10+):
+%% - _root: Application root supervisor (one per application)
+%% - _system: Subsystem root supervisors (gateway, peer, etc.)
+%% - _sup: Worker supervisors (workers_sup)
+%%
 %% @end
 %%%-------------------------------------------------------------------
 
--module(macula_sup).
+-module(macula_root).
 
 -behaviour(supervisor).
 
