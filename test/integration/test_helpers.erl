@@ -100,17 +100,19 @@ wait_for_healthy_loop(Retries) ->
 -spec register_test_service(Container :: string(), ServiceName :: binary(), Endpoint :: binary()) ->
     ok | {error, term()}.
 register_test_service(Container, ServiceName, Endpoint) ->
+    %% Use proplists instead of maps to avoid shell escaping issues
     ErlCode = io_lib:format("
         case whereis(macula_routing_server) of
             undefined ->
-                io:format('ERROR: Routing server not running~n'),
+                io:format(<<\"ERROR: Routing server not running~n\">>),
                 {error, no_routing_server};
             Pid ->
                 ServiceKey = ~p,
                 NodeId = crypto:strong_rand_bytes(32),
-                ServiceValue = #{node_id => NodeId, endpoint => ~p},
-                ok = macula_routing_server:store_local(Pid, ServiceKey, ServiceValue),
-                io:format('Service registered: ~~p~n', [ServiceKey]),
+                ServiceValue = [{node_id, NodeId}, {endpoint, ~p}],
+                ServiceMap = maps:from_list(ServiceValue),
+                ok = macula_routing_server:store_local(Pid, ServiceKey, ServiceMap),
+                io:format(<<\"Service registered: ~~p~n\">>, [ServiceKey]),
                 ok
         end.
     ", [ServiceName, Endpoint]),
