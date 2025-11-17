@@ -28,12 +28,17 @@ services:
     hostname: bootstrap
     environment:
       - MODE=bootstrap
-      - START_GATEWAY=false
+      - START_GATEWAY=true
+      - GATEWAY_PORT=9443
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
       - MACULA_REALM=macula.test
       - HEALTH_PORT=8080
       - BOOTSTRAP_HEALTH_INTERVAL=30000
       # Fixed node ID for bootstrap (makes testing easier)
       - NODE_ID=0000000000000000000000000000000000000000000000000000000000000001
+    volumes:
+      - ../docker/certs:/opt/macula/certs:ro
     ports:
       - "8080:8080"  # Health check (exposed to host)
     networks:
@@ -103,10 +108,15 @@ services:
     hostname: edge1
     environment:
       - MODE=edge
-      - START_GATEWAY=false
+      - START_GATEWAY=true
+      - GATEWAY_PORT=9443
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
       - BOOTSTRAP_NODES=bootstrap:9443
       - MACULA_REALM=macula.test
       - NODE_NAME=edge1@edge1
+    volumes:
+      - ../docker/certs:/opt/macula/certs:ro
     depends_on:
       bootstrap:
         condition: service_healthy
@@ -136,10 +146,15 @@ services:
     hostname: edge2
     environment:
       - MODE=edge
-      - START_GATEWAY=false
+      - START_GATEWAY=true
+      - GATEWAY_PORT=9443
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
       - BOOTSTRAP_NODES=bootstrap:9443
       - MACULA_REALM=macula.test
       - NODE_NAME=edge2@edge2
+    volumes:
+      - ../docker/certs:/opt/macula/certs:ro
     depends_on:
       bootstrap:
         condition: service_healthy
@@ -169,10 +184,15 @@ services:
     hostname: edge3
     environment:
       - MODE=edge
-      - START_GATEWAY=false
+      - START_GATEWAY=true
+      - GATEWAY_PORT=9443
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
       - BOOTSTRAP_NODES=bootstrap:9443
       - MACULA_REALM=macula.test
       - NODE_NAME=edge3@edge3
+    volumes:
+      - ../docker/certs:/opt/macula/certs:ro
     depends_on:
       bootstrap:
         condition: service_healthy

@@ -64,11 +64,17 @@ RUN chown -R macula:macula /opt/macula
 
 # Edge mode environment
 ENV MODE=edge
-ENV START_GATEWAY=false
+ENV START_GATEWAY=true
+ENV GATEWAY_PORT=9443
 ENV BOOTSTRAP_NODES=bootstrap:9443
 ENV MACULA_REALM=macula.edge
 
-# No ports exposed (client-only mode)
+# Expose QUIC port for P2P connections
+EXPOSE 9443
+
+# Create certs directory for TLS
+WORKDIR /opt/macula
+RUN mkdir -p /opt/macula/certs
 
 USER macula
 
@@ -76,7 +82,7 @@ USER macula
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
     CMD ./bin/macula ping || exit 1
 
-# Start in edge mode
+# Start in edge mode with gateway enabled for P2P
 CMD ["./bin/macula", "foreground", \
      "-macula", "mode", "edge", \
-     "-macula", "start_gateway", "false"]
+     "-macula", "start_gateway", "true"]

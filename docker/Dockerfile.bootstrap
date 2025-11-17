@@ -65,13 +65,18 @@ RUN chown -R macula:macula /opt/macula
 
 # Bootstrap mode environment
 ENV MODE=bootstrap
-ENV START_GATEWAY=false
+ENV START_GATEWAY=true
+ENV GATEWAY_PORT=9443
 ENV MACULA_REALM=macula.global
 ENV HEALTH_PORT=8080
 ENV BOOTSTRAP_HEALTH_INTERVAL=30000
 
-# Expose health port
-EXPOSE 8080
+# Expose ports
+EXPOSE 8080 9443
+
+# Copy TLS certs (will be mounted from volume)
+WORKDIR /opt/macula
+RUN mkdir -p /opt/macula/certs
 
 USER macula
 
@@ -79,7 +84,7 @@ USER macula
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Start in bootstrap mode
+# Start in bootstrap mode with gateway enabled
 CMD ["./bin/macula", "foreground", \
      "-macula", "mode", "bootstrap", \
-     "-macula", "start_gateway", "false"]
+     "-macula", "start_gateway", "true"]

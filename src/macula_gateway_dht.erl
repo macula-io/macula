@@ -135,19 +135,9 @@ send_to_peer(NodeInfo, MessageType, Message) ->
         undefined ->
             {error, no_endpoint};
         _ ->
-            %% Encode the message
-            MessageBinary = macula_protocol_encoder:encode(MessageType, Message),
-
-            %% Send via gateway mesh (establishes connection if needed)
-            case whereis(macula_gateway) of
-                undefined ->
-                    io:format("[DHT] No gateway running, cannot send to peer ~p~n", [Endpoint]),
-                    {error, no_gateway};
-                GatewayPid ->
-                    %% Get or create connection to peer
-                    NodeId = maps:get(node_id, NodeInfo, crypto:strong_rand_bytes(32)),
-                    send_via_gateway(GatewayPid, NodeId, Endpoint, MessageType, MessageBinary)
-            end
+            %% Send directly via peer connector (establishes QUIC connection)
+            io:format("[DHT] Sending ~p to peer ~p~n", [MessageType, Endpoint]),
+            macula_peer_connector:send_message(Endpoint, MessageType, Message)
     end.
 
 %% @doc Query remote peer and wait for response.
@@ -169,20 +159,3 @@ encode_reply_by_type(store, Reply) ->
     macula_protocol_encoder:encode(store, Reply);
 encode_reply_by_type(_UnknownType, _Reply) ->
     macula_protocol_encoder:encode(reply, #{error => <<"Unknown DHT message type">>}).
-
-%% @private
-%% @doc Send message via gateway to remote peer.
-send_via_gateway(GatewayPid, NodeId, Endpoint, MessageType, MessageBinary) ->
-    io:format("[DHT] Sending ~p to peer ~p (~p)~n", [MessageType, NodeId, Endpoint]),
-
-    %% Try to send via gateway's mesh connections
-    %% The gateway will handle connection establishment if needed
-    try
-        %% Send as a cast to avoid blocking
-        gen_server:cast(GatewayPid, {forward_dht_message, NodeId, Endpoint, MessageType, MessageBinary}),
-        ok
-    catch
-        error:Reason ->
-            io:format("[DHT] Failed to send to peer: ~p~n", [Reason]),
-            {error, Reason}
-    end.
