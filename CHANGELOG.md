@@ -7,7 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.4] - 2025-11-17
+
+### Fixed
+- **Hex docs landing page redirect** - Fixed broken redirect with compact README
+  - **Root cause 1**: README too large (303 lines) - ex_doc splits into readme-1.html, readme-2.html
+  - **Root cause 2**: docs/README.md in extras - content merged with root README, making it larger
+  - **Solution 1**: Compacted README to 55 lines (SVG diagram + TOC only)
+  - **Solution 2**: Moved detailed content to GETTING_STARTED.md
+  - **Solution 3**: Removed docs/README.md from hex extras
+  - **Solution 4**: Set `{main, "readme"}` to redirect to single readme.html
+  - Result: Single readme.html (8KB) with SVG diagram prominently displayed
+
+### Added
+- **GETTING_STARTED.md** - Complete getting started guide with all examples, code samples, API overview
+  - Moved from README.md to keep landing page compact
+  - Full installation instructions
+  - Comprehensive code examples
+  - Core concepts explained
+  - API reference overview
+
+### Changed
+- **README.md** - Compacted from 303 lines to 55 lines
+  - SVG architecture diagram prominently displayed
+  - Clean table of contents linking to detailed guides
+  - Quick start code example
+  - Latest release info
+  - Community links
+
+### Result
+- Hex docs at https://hexdocs.pm/macula now properly load readme.html
+- Professional SVG architecture diagram visible immediately on landing page
+- No more "PAGE NOT FOUND" error (was redirecting to hello_world.html)
+- Clean navigation to detailed guides
+
+**No functional changes** - This is a documentation deployment fix.
+
+---
+
 ## [0.8.3] - 2025-11-17
+
+### Note
+⚠️ **This version had a broken hex docs redirect** - superseded by v0.8.4
 
 ### Fixed
 - **Hex docs landing page redirect** - Fixed broken redirect to non-existent page

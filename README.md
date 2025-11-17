@@ -33,7 +33,7 @@
 
 ---
 
-## Latest Release: v0.8.3 (2025-11-17)
+## Latest Release: v0.8.4 (2025-11-17)
 
 **Major features from v0.8.0:**
 - ✅ Direct P2P QUIC connections (50% latency improvement)

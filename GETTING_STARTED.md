@@ -106,11 +106,11 @@ end
 
 ```erlang
 {deps, [
-    {macula, "0.8.3"}
+    {macula, "0.8.4"}
 ]}.
 ```
 
-**Latest Release**: v0.8.3 (2025-11-17) - Fixed hex docs landing page redirect (v0.8.0: Direct P2P with DHT propagation)
+**Latest Release**: v0.8.4 (2025-11-17) - Fixed hex docs landing page redirect (v0.8.0: Direct P2P with DHT propagation)
 
 ---
 
