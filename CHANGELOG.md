@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.3] - 2025-11-17
+
+### Fixed
+- **Hex docs landing page redirect** - Fixed broken redirect to non-existent page
+  - Changed `{main, "Overview"}` to `{main, "readme-1"}` in rebar.config
+  - Hex docs now properly redirect to README with SVG architecture diagram
+  - Issue: v0.8.2 redirected to non-existent `hello_world.html` causing "PAGE NOT FOUND"
+  - Root cause: ex_doc splits long README into multiple pages (readme-1.html, readme-2.html)
+  - Solution: Configure main page to point to actual generated file (readme-1.html)
+
+### Result
+- Hex docs at https://hexdocs.pm/macula now properly load landing page
+- Professional SVG architecture diagram visible immediately
+- No more "PAGE NOT FOUND" error
+
+**No functional changes** - This is a documentation deployment fix.
+
+---
+
 ## [0.8.2] - 2025-11-17
 
 ### Documentation
