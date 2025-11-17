@@ -46,8 +46,7 @@
 
 suite() ->
     [
-        {timetrap, {minutes, 5}},
-        {require, docker_compose}
+        {timetrap, {minutes, 5}}
     ].
 
 all() ->

@@ -137,10 +137,10 @@ discover_service(Container, ServiceName) ->
                 ServiceKey = ~p,
                 case macula_routing_server:get_local(Pid, ServiceKey) of
                     {ok, Value} ->
-                        io:format('Service found: ~p~n', [Value]),
+                        io:format('Service found: ~~p~~n', [Value]),
                         {ok, found};
                     not_found ->
-                        io:format('Service not found~n'),
+                        io:format('Service not found~~n'),
                         {error, not_found}
                 end
         end.
