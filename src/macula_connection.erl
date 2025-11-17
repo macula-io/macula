@@ -211,7 +211,7 @@ do_connect(State) ->
 build_quic_opts() ->
     [
         {alpn, ["macula"]},
-        {verify, none}  %% TODO: Add proper TLS verification
+        {verify, none}  %% TODO(v0.9.0): Add proper TLS verification - see TODO.md
     ].
 
 %% @doc Attempt QUIC connection and stream setup

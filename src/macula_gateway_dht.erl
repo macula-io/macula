@@ -145,7 +145,7 @@ send_to_peer(NodeInfo, MessageType, Message) ->
 -spec query_peer(map(), atom(), map()) -> {ok, term()} | {error, term()}.
 query_peer(NodeInfo, MessageType, Message) ->
     %% For now, use send_to_peer (fire-and-forget)
-    %% TODO: Implement request/response pattern with timeout
+    %% TODO(v0.9.0): Implement request/response pattern with timeout - see TODO.md
     io:format("[DHT] query_peer not yet implemented for ~p, using send_to_peer~n", [MessageType]),
     send_to_peer(NodeInfo, MessageType, Message).
 

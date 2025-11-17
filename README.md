@@ -59,7 +59,7 @@ Macula is infrastructure for building **decentralized applications and services*
 ```elixir
 def deps do
   [
-    {:macula, "~> 0.6"}
+    {:macula, "~> 0.8"}
   ]
 end
 ```
@@ -68,9 +68,13 @@ end
 
 ```erlang
 {deps, [
-    {macula, "0.6.6"}
+    {macula, "0.8.0"}
 ]}.
 ```
+
+**Latest Release**: v0.8.0 (2025-11-17) - Direct P2P with DHT propagation
+
+See [`architecture/v0.8.0-OVERVIEW.md`](architecture/v0.8.0-OVERVIEW.md) for what's new.
 
 ---
 

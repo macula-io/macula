@@ -68,7 +68,7 @@ create_connection(Endpoint, NodeId, RealmId, Pool) when is_map(Pool) ->
             %% Connect via QUIC
             QuicOpts = [
                 {alpn, ["macula"]},
-                {verify, none}  %% TODO: Add proper TLS verification
+                {verify, none}  %% TODO(v0.9.0): Add proper TLS verification - see TODO.md
             ],
 
             ConnectResult = try

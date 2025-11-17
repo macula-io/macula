@@ -117,4 +117,3 @@ get_pending(PendingPubacks) ->
 %%% Internal functions
 %%%===================================================================
 
-%% TODO: Add internal helper functions as needed

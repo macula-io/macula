@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+---
+
+## [0.8.0] - 2025-11-17
+
+### Added
+- **Direct P2P QUIC connections** via new `macula_peer_connector` module (112 LOC)
+- **DHT STORE propagation** to k=20 closest nodes for service registrations
+- **RPC via direct P2P** - Service discovery + direct connection (11/11 tests passing)
+- **PubSub via direct P2P** - Subscription discovery + direct messaging (10/10 tests passing)
+- **Gateway on all node types** - Bootstrap, Gateway, and Edge nodes all run QUIC listeners
+- **Comprehensive integration tests** - 21/21 tests passing (100% success rate)
+  - `test/integration/multi_hop_rpc_SUITE.erl` (11 RPC tests)
+  - `test/integration/multi_hop_pubsub_SUITE.erl` (10 PubSub tests)
+- **TODO tracking** - Created `TODO.md` for known limitations and planned improvements
+
+### Changed
+- **RPC architecture** - Now uses direct P2P instead of multi-hop routing (50% latency improvement)
+- **PubSub architecture** - Now uses direct P2P for message delivery (50% latency improvement)
+- **DHT operations** - Service registry now uses `store/3` with k-node propagation
+- **Node configuration** - All node types expose port 9443 for P2P connections
+- **Version** - Updated to 0.8.0 in `macula.app.src`
+
+### Fixed
+- Edge nodes can now send messages (via peer_connector, no gateway required)
+- Edge nodes can now receive messages (gateway enabled on all node types)
+- QUIC connection errors properly handled (transport_down 3-tuple)
+- Stream closing race condition fixed (100ms delay added)
+- Docker configuration now respects environment variables
+
+### Deprecated
+- `macula_dht_rpc` module - Superseded by `macula_peer_connector` (moved to `src/archive/`)
+
+### Documentation
+- Created comprehensive v0.8.0 documentation:
+  - `architecture/v0.8.0-OVERVIEW.md` - Release overview and achievements
+  - `architecture/v0.8.0-CHANGELOG.md` - Detailed changes
+  - `architecture/v0.8.0-ROADMAP.md` - Future plans (v0.9.0)
+  - `architecture/INDEX.md` - Master architecture documentation index
+- Archived development documentation to `architecture/archive/v0.8.0-development/`
+- Updated `README.md` for v0.8.0
+
+### Breaking Changes
+None - Fully backward compatible with v0.7.x
+
+**Upgrade Guide**: Simply update dependency version - no code changes required.
+
+**Full Details**: See [`architecture/v0.8.0-OVERVIEW.md`](architecture/v0.8.0-OVERVIEW.md) and [`architecture/v0.8.0-CHANGELOG.md`](architecture/v0.8.0-CHANGELOG.md)
+
+---
+
 ## [0.7.9] - 2025-11-16
 
 ### Added

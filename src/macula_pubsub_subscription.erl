@@ -113,4 +113,3 @@ invoke_callbacks(Matches, Topic, Payload, NodeId) ->
 %%% Internal functions
 %%%===================================================================
 
-%% TODO: Add internal helper functions as needed

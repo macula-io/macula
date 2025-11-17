@@ -79,7 +79,7 @@ send_via_quic(Host, Port, MessageBinary, Timeout) ->
     %% Connect to peer
     ConnectOpts = [
         {alpn, ["macula"]},
-        {verify, none}  % TODO: Add proper certificate verification
+        {verify, none}  %% TODO(v0.9.0): Add proper certificate verification - see TODO.md
     ],
 
     case macula_quic:connect(Host, Port, ConnectOpts, Timeout) of

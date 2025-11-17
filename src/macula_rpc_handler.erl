@@ -75,14 +75,14 @@ call(Pid, Procedure, Args, Opts) ->
 -spec register_handler(binary() | list() | atom(), fun((term()) -> {ok, term()} | {error, term()})) ->
     {ok, reference()} | {error, term()}.
 register_handler(_Service, _Handler) ->
-    %% TODO: Phase 6 - Move to advertisement_manager
+    
     %%  Handler registration involves DHT advertisement and re-advertisement timers
     %%  This belongs in the advertisement_manager module
     {error, not_implemented_use_advertisement_manager}.
 
 -spec unregister_handler(binary() | list() | atom()) -> ok | {error, term()}.
 unregister_handler(_Service) ->
-    %% TODO: Phase 6 - Move to advertisement_manager
+    
     {error, not_implemented_use_advertisement_manager}.
 
 -spec handle_incoming_reply(pid(), map()) -> ok.

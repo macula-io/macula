@@ -48,7 +48,7 @@
 %% Returns {ok, SubInfo}.
 -spec advertise_subscription(topic(), subscription_ref(), node_id(), url(), connection_manager_pid()) ->
     {ok, #{sub_ref := reference(), ttl := pos_integer(), timer_ref := reference()}} | {error, term()}.
-advertise_subscription(Topic, SubRef, NodeId, Url, ConnMgrPid) ->
+advertise_subscription(Topic, SubRef, NodeId, Url, _ConnMgrPid) ->
     %% Default TTL for subscriptions is 300 seconds (5 minutes)
     TTL = 300,
 
@@ -62,16 +62,20 @@ advertise_subscription(Topic, SubRef, NodeId, Url, ConnMgrPid) ->
         ttl => TTL
     },
 
-    %% Send STORE message to DHT via connection manager
+    %% Store subscription in DHT with propagation to k closest nodes (v0.8.0+)
     ?LOG_INFO("[~s] Advertising subscription to topic ~s in DHT", [NodeId, Topic]),
     try
-        StoreMsg = macula_routing_protocol:encode_store(TopicKey, SubscriberValue),
-        case macula_connection:send_message(ConnMgrPid, store, StoreMsg) of
-            ok ->
-                ?LOG_DEBUG("[~s] Successfully stored subscription for ~s in DHT", [NodeId, Topic]);
-            {error, SendError} ->
-                ?LOG_WARNING("[~s] Failed to send STORE for subscription ~s: ~p",
-                            [NodeId, Topic, SendError])
+        case whereis(macula_routing_server) of
+            undefined ->
+                ?LOG_WARNING("[~s] Routing server not running, cannot advertise subscription", [NodeId]);
+            RoutingServerPid ->
+                case macula_routing_server:store(RoutingServerPid, TopicKey, SubscriberValue) of
+                    ok ->
+                        ?LOG_DEBUG("[~s] Successfully stored subscription for ~s in DHT", [NodeId, Topic]);
+                    {error, StoreError} ->
+                        ?LOG_WARNING("[~s] Failed to store subscription ~s: ~p",
+                                    [NodeId, Topic, StoreError])
+                end
         end
     catch
         _:DhtError ->
@@ -149,26 +153,29 @@ handle_discovery_response(MsgId, _Subscribers, PendingQueries) ->
             {ok, maps:remove(MsgId, PendingQueries)}
     end.
 
-%% @doc Route message to remote subscribers via DHT routing (v0.7.8+).
-%% Wraps publish in pubsub_route envelope and sends to each subscriber node.
+%% @doc Route message to remote subscribers via direct P2P connections (v0.8.0+).
+%% Wraps publish in pubsub_route envelope and sends directly to each subscriber.
+%% Uses macula_peer_connector for direct QUIC connections to subscriber endpoints.
 -spec route_to_subscribers(topic(), payload(), qos(), list(), node_id()) -> ok.
 route_to_subscribers(_Topic, _Payload, _Qos, [], _NodeId) ->
     ok;
 route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId) ->
-    ?LOG_INFO("[~s] Routing message to ~p remote subscriber(s) for topic: ~s via DHT",
+    ?LOG_INFO("[~s] Routing message to ~p remote subscriber(s) for topic: ~s via P2P",
              [SourceNodeId, length(Subscribers), Topic]),
 
-    %% Get connection manager PID to send routed messages
-    ConnMgrPid = gproc:lookup_local_name(macula_connection),
-
-    %% Route to each subscriber via pubsub_route envelope
+    %% Route to each subscriber via direct P2P connection
     lists:foreach(
         fun(Subscriber) ->
-            %% Extract subscriber node_id (not endpoint - we route via DHT)
-            case maps:get(node_id, Subscriber, maps:get(<<"node_id">>, Subscriber, undefined)) of
-                undefined ->
+            %% Extract subscriber node_id and endpoint
+            NodeId = maps:get(node_id, Subscriber, maps:get(<<"node_id">>, Subscriber, undefined)),
+            Endpoint = maps:get(endpoint, Subscriber, maps:get(<<"endpoint">>, Subscriber, undefined)),
+
+            case {NodeId, Endpoint} of
+                {undefined, _} ->
                     ?LOG_WARNING("[~s] Subscriber missing node_id, skipping", [SourceNodeId]);
-                DestNodeId ->
+                {_, undefined} ->
+                    ?LOG_WARNING("[~s] Subscriber missing endpoint, skipping", [SourceNodeId]);
+                {DestNodeId, DestEndpoint} ->
                     %% Build PUBLISH message
                     PublishMsg = #{
                         <<"topic">> => Topic,
@@ -183,13 +190,14 @@ route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId) ->
                         SourceNodeId, DestNodeId, PublishMsg, 10
                     ),
 
-                    %% Send via connection manager
-                    case macula_connection:send_message(ConnMgrPid, pubsub_route, PubSubRouteMsg) of
+                    %% Send directly to subscriber via peer connector
+                    case macula_peer_connector:send_message(DestEndpoint, pubsub_route, PubSubRouteMsg) of
                         ok ->
-                            ?LOG_DEBUG("[~s] Sent pubsub_route to subscriber ~s for topic ~s",
-                                      [SourceNodeId, binary:encode_hex(DestNodeId), Topic]);
+                            ?LOG_DEBUG("[~s] Sent pubsub_route directly to subscriber ~s at ~s for topic ~s",
+                                      [SourceNodeId, binary:encode_hex(DestNodeId), DestEndpoint, Topic]);
                         {error, Reason} ->
-                            ?LOG_ERROR("[~s] Failed to send pubsub_route: ~p", [SourceNodeId, Reason])
+                            ?LOG_ERROR("[~s] Failed to send pubsub_route to ~s: ~p",
+                                      [SourceNodeId, DestEndpoint, Reason])
                     end
             end
         end,
@@ -206,29 +214,39 @@ route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId) ->
 next_message_id(Counter) ->
     macula_utils:next_message_id(Counter).
 
-%% @doc Query DHT for subscribers asynchronously
+%% @doc Query DHT for subscribers synchronously (v0.8.0+).
+%% Directly queries local routing server instead of sending message to connection manager.
 -spec query_dht_async(topic(), payload(), qos(), binary(), connection_manager_pid()) -> ok.
-query_dht_async(Topic, _Payload, _Qos, MsgId, ConnMgrPid) ->
+query_dht_async(Topic, _Payload, _Qos, _MsgId, _ConnMgrPid) ->
     %% Create DHT key from topic
     TopicKey = crypto:hash(sha256, Topic),
 
-    ?LOG_DEBUG("Querying DHT for remote subscribers to topic: ~s (MsgId: ~s)", [Topic, MsgId]),
+    ?LOG_DEBUG("Querying DHT for remote subscribers to topic: ~s", [Topic]),
 
-    %% Send FIND_VALUE query to DHT asynchronously (spawn to avoid blocking)
-    spawn(fun() ->
-        try
-            FindValueMsg = macula_routing_protocol:encode_find_value(TopicKey),
-            case macula_connection:send_message(ConnMgrPid, find_value, FindValueMsg) of
-                ok ->
-                    ?LOG_DEBUG("Sent FIND_VALUE for topic ~s", [Topic]);
-                {error, SendError} ->
-                    ?LOG_WARNING("Failed to send FIND_VALUE for topic ~s: ~p",
-                                [Topic, SendError])
-            end
-        catch
-            _:QueryError:Stack ->
-                ?LOG_WARNING("Failed to query DHT for topic ~s: ~p~nStack: ~p",
-                            [Topic, QueryError, Stack])
+    %% Query local routing server directly (v0.8.0+)
+    %% This is actually synchronous now, but we keep the function name for compatibility
+    try
+        case whereis(macula_routing_server) of
+            undefined ->
+                ?LOG_WARNING("Routing server not running, cannot query for subscribers to ~s", [Topic]);
+            RoutingServerPid ->
+                %% K=20 is standard Kademlia replication factor
+                case macula_routing_server:find_value(RoutingServerPid, TopicKey, 20) of
+                    {ok, Subscribers} when is_list(Subscribers), length(Subscribers) > 0 ->
+                        ?LOG_DEBUG("Found ~p subscriber(s) for topic ~s in DHT",
+                                  [length(Subscribers), Topic]);
+                    {ok, []} ->
+                        ?LOG_DEBUG("No subscribers found for topic ~s in DHT", [Topic]);
+                    {error, not_found} ->
+                        ?LOG_DEBUG("No subscribers found for topic ~s in DHT", [Topic]);
+                    {error, QueryError} ->
+                        ?LOG_WARNING("Failed to query DHT for topic ~s: ~p",
+                                    [Topic, QueryError])
+                end
         end
-    end),
+    catch
+        _:Error:Stack ->
+            ?LOG_WARNING("Failed to query DHT for topic ~s: ~p~nStack: ~p",
+                        [Topic, Error, Stack])
+    end,
     ok.
