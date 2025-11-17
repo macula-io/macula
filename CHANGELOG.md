@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.1] - 2025-11-17
+
+### Documentation
+- **Hex docs completely redesigned** - Professional, comprehensive documentation for hex.pm
+- **README.md improvements**:
+  - Added comprehensive Quick Start section with practical code examples
+  - Added "What's New in v0.8.0" section highlighting key features
+  - Added Core Concepts section (mesh architecture, realms, DHT, direct P2P)
+  - Added API Overview section with main modules and configuration
+  - Removed all broken links to non-existent files
+  - Replaced broken table of contents with working internal links
+- **Enhanced module documentation**:
+  - `macula_peer`: Added comprehensive examples for pub/sub and RPC usage
+  - `macula_gateway`: Added embedded and standalone gateway configuration examples
+  - `macula_peer_connector`: Added usage examples and performance characteristics
+- **rebar.config cleanup**:
+  - Removed references to non-existent files (HELLO_WORLD.md, EXECUTIVE_SUMMARY.md, etc.)
+  - Added v0.8.0 documentation files (OVERVIEW, CHANGELOG, ROADMAP)
+  - Added TODO.md to hex docs
+  - Updated hex package description to mention v0.8.0 features
+  - Changed main page to "readme" for better landing experience
+
+### Result
+- Hex docs now render professionally on hex.pm
+- Clear navigation and documentation structure
+- v0.8.0 features prominently showcased
+- Code examples visible and practical
+- Warnings reduced from 100+ to ~30 (mostly future docs references)
+
+**No functional changes** - This is purely a documentation release to fix the hex.pm documentation quality.
+
+---
+
 ## [0.8.0] - 2025-11-17
 
 ### Added
