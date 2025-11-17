@@ -2,11 +2,11 @@
 # Purpose: Integration and E2E testing with all deployment modes
 #
 # Topology:
-#   Bootstrap (172.20.0.10) - DHT entry point
-#   ├── Gateway (172.20.0.20) - Relay node
-#   │   ├── Edge1 (172.20.0.31) - Pure P2P peer
-#   │   └── Edge2 (172.20.0.32) - Pure P2P peer (RPC client)
-#   └── Edge3 (172.20.0.33) - Pure P2P peer (RPC provider)
+#   Bootstrap (172.21.0.10) - DHT entry point
+#   ├── Gateway (172.21.0.20) - Relay node
+#   │   ├── Edge1 (172.21.0.31) - Pure P2P peer
+#   │   └── Edge2 (172.21.0.32) - Pure P2P peer (RPC client)
+#   └── Edge3 (172.21.0.33) - Pure P2P peer (RPC provider)
 #
 # Test Scenarios:
 # 1. DHT Bootstrap: Edge nodes discover each other via bootstrap
@@ -38,9 +38,9 @@ services:
       - "8080:8080"  # Health check (exposed to host)
     networks:
       macula_mesh:
-        ipv4_address: 172.20.0.10
+        ipv4_address: 172.21.0.10
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "./bin/macula", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -77,7 +77,7 @@ services:
         condition: service_healthy
     networks:
       macula_mesh:
-        ipv4_address: 172.20.0.20
+        ipv4_address: 172.21.0.20
     volumes:
       - ../docker/certs:/opt/macula/certs:ro
     healthcheck:
@@ -112,7 +112,7 @@ services:
         condition: service_healthy
     networks:
       macula_mesh:
-        ipv4_address: 172.20.0.31
+        ipv4_address: 172.21.0.31
     healthcheck:
       test: ["CMD", "./bin/macula", "ping"]
       interval: 10s
@@ -145,7 +145,7 @@ services:
         condition: service_healthy
     networks:
       macula_mesh:
-        ipv4_address: 172.20.0.32
+        ipv4_address: 172.21.0.32
     healthcheck:
       test: ["CMD", "./bin/macula", "ping"]
       interval: 10s
@@ -178,7 +178,7 @@ services:
         condition: service_healthy
     networks:
       macula_mesh:
-        ipv4_address: 172.20.0.33
+        ipv4_address: 172.21.0.33
     healthcheck:
       test: ["CMD", "./bin/macula", "ping"]
       interval: 10s
@@ -201,8 +201,8 @@ networks:
     ipam:
       driver: default
       config:
-        - subnet: 172.20.0.0/16
-          gateway: 172.20.0.1
+        - subnet: 172.21.0.0/16
+          gateway: 172.21.0.1
 
 #############################################################################
 # Volumes (optional - for persistent data)

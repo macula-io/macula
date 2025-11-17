@@ -1,26 +1,65 @@
 # Macula Edge Node
 # Pure P2P peer with DHT-routed communication
+#
+# Build from root: docker build -f docker/Dockerfile.edge -t macula-edge .
 
+# Build stage
 FROM erlang:26-alpine AS builder
 
-RUN apk add --no-cache git make gcc g++ musl-dev openssl-dev
+# Install build dependencies (including tools for quicer native compilation)
+RUN apk add --no-cache \
+    git \
+    make \
+    gcc \
+    g++ \
+    musl-dev \
+    openssl-dev \
+    cmake \
+    curl \
+    bash \
+    linux-headers \
+    perl
 
 WORKDIR /opt/macula
+
+# Copy rebar files first (for caching)
 COPY rebar.config rebar.lock ./
+
+# Fetch dependencies (separate layer for better caching)
+RUN rebar3 get-deps
+
+# Copy source code
 COPY src ./src
 COPY include ./include
 COPY priv ./priv
 COPY config ./config
+COPY README.md LICENSE ./
 
+# Compile application
 RUN rebar3 compile
+
+# Create production release
 RUN rebar3 as prod release
 
+# Runtime stage
 FROM alpine:3.18
-RUN apk add --no-cache ncurses-libs libstdc++ openssl libgcc
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ncurses-libs \
+    libstdc++ \
+    openssl \
+    libgcc
+
+# Create macula user
 RUN addgroup -S macula && adduser -S macula -G macula
 
 WORKDIR /opt/macula
+
+# Copy release from builder
 COPY --from=builder /opt/macula/_build/prod/rel/macula .
+
+# Change ownership
 RUN chown -R macula:macula /opt/macula
 
 # Edge mode environment
