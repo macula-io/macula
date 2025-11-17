@@ -8,7 +8,7 @@
     <meta name="project" content="macula v0.8.3">
 
 
-    <title>macula_gateway_pubsub_router — macula v0.8.3</title>
+    <title>Overview — macula v0.8.3</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
@@ -51,7 +51,7 @@ macula
 
 <output role="status" id="toast"></output>
 
-<main class="content page-module" id="main" data-type="modules">
+<main class="content page-extra" id="main" data-type="extras">
   <div id="content" class="content-inner">
     <div class="top-search">
       <div class="search-settings">
@@ -78,13 +78,10 @@ macula
 
 <div id="top-content">
   <div class="heading-with-actions top-heading">
-    <h1>
-      <span translate="no">macula_gateway_pubsub_router</span> 
-      <small class="app-vsn" translate="no">(macula v0.8.3)</small>
+    <h1>Overview</h1>
 
-    </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.3/src/macula_gateway_pubsub_router.erl#L18" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.8.3/README.md#L1" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -92,84 +89,36 @@ macula
   </div>
 
 
-    <section id="moduledoc">
-<p>Macula Gateway Pub/Sub Router - DHT-Routed Message Distribution</p><p>Handles distribution of pub/sub messages to both local and remote subscribers using multi-hop Kademlia DHT routing (v0.7.8+).</p><p>Responsibilities: - Deliver messages to local subscribers via QUIC streams - Query DHT for remote subscribers - Route messages via DHT multi-hop (pubsub_route protocol) - Wrap PUBLISH messages in pubsub_route envelopes</p><p>Extracted from macula_gateway.erl (v0.7.9) for better separation of concerns.</p>
-    </section>
+<div align="center">  <img src="artwork/macula-alt-logo.svg" alt="Macula Logo" width="500"/>
+
+  <h1>Macula HTTP/3 Mesh</h1>
+  <p><em>Self-organizing distributed mesh for decentralized applications</em></p>
+
+  <p>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"/></a>
+    <a href="https://www.erlang.org"><img src="https://img.shields.io/badge/Erlang%2FOTP-26+-brightgreen" alt="Erlang/OTP"/></a>
+    <a href="https://hex.pm/packages/macula"><img src="https://img.shields.io/hexpm/v/macula.svg" alt="Hex.pm"/></a>
+  </p></div><hr class="thin"/><div align="center">  <img src="assets/macula-architecture-overview.svg" alt="Macula Architecture Overview" width="800"/></div><div align="center">  <p><strong>BEAM-Native • HTTP/3 (QUIC) • Kademlia DHT • Direct P2P • Multi-Tenant • 50% Faster (v0.8.0)</strong></p></div><hr class="thin"/><h2 id="documentation" class="section-heading"><a href="#documentation" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Documentation</span></h2><ul><li>🚀 <strong><a href="getting_started.html">Getting Started</a></strong> - Installation, quick start, code examples</li><li>🏗️ <strong><a href="architecture.html">Architecture Guide</a></strong> - Visual guide with C4 diagrams, deployment topologies</li><li>📄 <strong><a href="changelog.html">Changelog</a></strong> - Version history and migration guides</li><li>🧪 <strong><a href="development.html">Development Guide</a></strong> - Contributing and testing</li><li>🌐 <strong><a href="kademlia_dht_architecture.html">Kademlia DHT</a></strong> - DHT implementation details</li></ul><hr class="thin"/><h2 id="latest-release-v0-8-3-2025-11-17" class="section-heading"><a href="#latest-release-v0-8-3-2025-11-17" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Latest Release: v0.8.3 (2025-11-17)</span></h2><p><strong>Major features from v0.8.0:</strong></p><ul><li>✅ Direct P2P QUIC connections (50% latency improvement)</li><li>✅ DHT propagation to k=20 closest nodes</li><li>✅ RPC and PubSub via direct P2P</li><li>✅ Production-ready memory management</li></ul><hr class="thin"/><h2 id="community" class="section-heading"><a href="#community" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Community</span></h2><ul><li><strong>Hex</strong>: <a href="https://hex.pm/packages/macula">hex.pm/packages/macula</a></li><li><strong>GitHub</strong>: <a href="https://github.com/macula-io/macula">github.com/macula-io/macula</a></li><li><strong>Issues</strong>: <a href="https://github.com/macula-io/macula/issues">github.com/macula-io/macula/issues</a></li></ul><hr class="thin"/><p><strong>Built with ❤️ for the BEAM community</strong></p>
 
 </div>
 
-  <section id="summary" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#summary">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Summary</span>
-    </h1>
-<div class="summary-functions summary">
-  <h2>
-    <a href="#functions">Functions</a>
-  </h2>
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
 
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#distribute/5" data-no-tooltip="" translate="no">distribute(LocalSubscribers, PubMsg, LocalNodeId, Mesh, Clients)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Distribute pub/sub message to both local and remote subscribers. Uses DHT routing for remote subscribers (multi-hop Kademlia). For connected clients, uses existing bidirectional streams instead of mesh connections.</p></div>
-
-    </div>
-
-</div>
-
-  </section>
-
-
-  <section id="functions" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#functions">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Functions</span>
-    </h1>
-    <div class="functions-list">
-<section class="detail" id="distribute/5">
-
-  <div class="detail-header">
-    <a href="#distribute/5" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">distribute(LocalSubscribers, PubMsg, LocalNodeId, Mesh, Clients)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.3/src/macula_gateway_pubsub_router.erl#L49" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
   </div>
+  <div class="bottom-actions-item">
 
-  <section class="docstring">
+      <a href="getting_started.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+Getting Started
+        </span>
+      </a>
 
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> distribute(LocalSubscribers :: [<a href="https://hexdocs.pm/quicer/quicer.html#t:stream_handle/0">quicer:stream_handle</a>()],
-                 PubMsg :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(),
-                 LocalNodeId :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-                 Mesh :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(),
-                 Clients :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) ->
-                    ok.</pre>
-
-      </div>
-
-<p>Distribute pub/sub message to both local and remote subscribers. Uses DHT routing for remote subscribers (multi-hop Kademlia). For connected clients, uses existing bidirectional streams instead of mesh connections.</p>
-  </section>
-</section>
-
-    </div>
-  </section>
-
+  </div>
+</div>
     <footer class="footer">
       <p>
 
@@ -177,6 +126,8 @@ macula
             <a href="https://hex.pm/packages/macula/0.8.3" class="footer-hex-package">Hex Package</a>
 
             <a href="https://preview.hex.pm/preview/macula/0.8.3">Hex Preview</a>
+
+              (<a href="https://preview.hex.pm/preview/macula/0.8.3/show/README.md">current file</a>)
 
           </span>
 
