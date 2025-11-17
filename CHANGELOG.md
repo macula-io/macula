@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.2] - 2025-11-17
+
+### Documentation
+- **NEW: Professional SVG Architecture Diagram** - Compelling visual on hex docs landing page
+  - Created `artwork/macula-architecture-overview.svg` (5KB, scalable)
+  - System overview showing App → Peer → Gateway/DHT → Remote Services
+  - Color-coded components (purple=app, green=peer, blue=gateway, orange=DHT)
+  - Direct P2P connections highlighted with green dashed arrows
+  - Key features listed (6 bullet points)
+  - Performance metric: "50% Latency Improvement (v0.8.0)"
+- **README.md landing page enhanced**:
+  - SVG diagram prominently displayed immediately after logo
+  - Added hex.pm version badge
+  - Enhanced subtitle: "Self-organizing distributed mesh for decentralized applications"
+  - Feature tagline: BEAM-Native • HTTP/3 • DHT • Direct P2P • Multi-Tenant • 50% Faster
+
+### Result
+- Hex docs now open with compelling architecture diagram
+- Immediate visual understanding without reading text
+- Professional, polished first impression
+- Sparks interest of developers and architects
+- v0.8.0 Direct P2P feature prominently showcased
+
+**No functional changes** - This is purely a documentation/visual improvement release.
+
+---
+
 ## [0.8.1] - 2025-11-17
 
 ### Documentation
