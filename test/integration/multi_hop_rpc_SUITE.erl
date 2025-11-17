@@ -79,6 +79,9 @@ init_per_suite(Config) ->
             %% Wait for all services to be healthy
             wait_for_healthy_services(),
 
+            %% Seed routing tables with known peers
+            seed_routing_tables(),
+
             %% Store container info
             [{bootstrap_container, "macula-bootstrap"},
              {gateway_container, "macula-gateway"},
@@ -343,3 +346,63 @@ http_get(Url) ->
 %% @doc Parse JSON (simple version for health checks)
 parse_json(JsonStr) ->
     test_helpers:parse_health_json(JsonStr).
+
+%% @private
+%% @doc Seed routing tables with known peers so DHT propagation works.
+seed_routing_tables() ->
+    ct:pal("Seeding routing tables with known peers..."),
+
+    %% Define all nodes with their endpoints
+    Nodes = [
+        {"macula-bootstrap", <<"bootstrap">>, <<"172.21.0.10:9443">>},
+        {"macula-gateway", <<"gateway">>, <<"172.21.0.20:9443">>},
+        {"macula-edge1", <<"edge1">>, <<"172.21.0.31:9443">>},
+        {"macula-edge2", <<"edge2">>, <<"172.21.0.32:9443">>},
+        {"macula-edge3", <<"edge3">>, <<"172.21.0.33:9443">>}
+    ],
+
+    %% For each node, add all other nodes to its routing table
+    lists:foreach(fun({Container, _NodeName, _Endpoint}) ->
+        lists:foreach(fun({_OtherContainer, OtherName, OtherEndpoint}) ->
+            %% Don't add self
+            case Container == _OtherContainer of
+                true -> ok;
+                false ->
+                    add_peer_to_routing_table(Container, OtherName, OtherEndpoint)
+            end
+        end, Nodes)
+    end, Nodes),
+
+    ct:pal("Routing tables seeded successfully"),
+    ok.
+
+%% @private
+%% @doc Add a peer to a container's routing table.
+add_peer_to_routing_table(Container, PeerName, PeerEndpoint) ->
+    ErlCode = io_lib:format("
+        case whereis(macula_routing_server) of
+            undefined -> {error, no_routing_server};
+            Pid ->
+                %% Generate a stable node ID from the peer name
+                NodeId = crypto:hash(sha256, ~p),
+                NodeInfo = #{
+                    node_id => NodeId,
+                    endpoint => ~p,
+                    public_key => <<\"test_key\">>
+                },
+                ok = macula_routing_server:add_node(Pid, NodeInfo),
+                {ok, added}
+        end.
+    ", [PeerName, PeerEndpoint]),
+
+    case test_helpers:docker_exec_erl(Container, ErlCode) of
+        {ok, Output} ->
+            case string:str(Output, "{ok,added}") of
+                0 ->
+                    ct:pal("Warning: Failed to add peer ~s to ~s: ~s", [PeerName, Container, Output]);
+                _ ->
+                    ok
+            end;
+        {error, Reason} ->
+            ct:pal("Warning: Error adding peer ~s to ~s: ~p", [PeerName, Container, Reason])
+    end.

@@ -13,6 +13,7 @@
     add_node/2,
     find_closest/3,
     store_local/3,
+    store/3,
     get_local/2,
     find_value/3,
     get_routing_table/1,
@@ -63,6 +64,12 @@ find_closest(Pid, Target, K) ->
 -spec store_local(pid(), binary(), term()) -> ok.
 store_local(Pid, Key, Value) ->
     gen_server:call(Pid, {store_local, Key, Value}).
+
+%% @doc Store value in DHT by propagating to k closest nodes.
+%% Stores locally first, then sends STORE messages to k closest peers.
+-spec store(pid(), binary(), term()) -> ok.
+store(Pid, Key, Value) ->
+    gen_server:call(Pid, {store, Key, Value}, 10000).
 
 %% @doc Get value from local storage.
 -spec get_local(pid(), binary()) -> {ok, term()} | not_found.
@@ -159,6 +166,35 @@ handle_call({store_local, Key, Value}, _From, #state{storage = Storage} = State)
 
     NewStorage = Storage#{Key => UpdatedProviders},
     {reply, ok, State#state{storage = NewStorage}};
+
+handle_call({store, Key, Value}, _From, #state{routing_table = Table, config = Config} = State) ->
+    io:format("[DHT] store: Propagating key ~p to k closest nodes~n", [Key]),
+
+    %% 1. Store locally first
+    NewState = case handle_call({store_local, Key, Value}, _From, State) of
+        {reply, ok, S} -> S;
+        _ -> State  %% Shouldn't happen but be safe
+    end,
+
+    %% 2. Find k closest nodes to Key
+    K = maps:get(k, Config, 20),
+    ClosestNodes = macula_routing_table:find_closest(Table, Key, K),
+    io:format("[DHT] store: Found ~p closest nodes for key~n", [length(ClosestNodes)]),
+
+    %% 3. Send STORE message to each node (fire-and-forget)
+    StoreMsg = macula_routing_protocol:encode_store(Key, Value),
+    lists:foreach(fun(NodeInfo) ->
+        io:format("[DHT] store: Sending STORE to node ~p~n", [maps:get(node_id, NodeInfo, unknown)]),
+        %% Best effort - don't fail if send fails
+        case macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg) of
+            ok -> ok;
+            {error, Reason} ->
+                io:format("[DHT] store: Failed to send to peer: ~p~n", [Reason]),
+                ok
+        end
+    end, ClosestNodes),
+
+    {reply, ok, NewState};
 
 handle_call({get_local, Key}, _From, #state{storage = Storage} = State) ->
     Reply = case maps:get(Key, Storage, undefined) of

@@ -421,9 +421,8 @@ publish_to_dht(DhtPid, ServiceId, ProviderInfo, TTL, _K) ->
             %% DHT not available - this is a configuration error
             error(dht_not_available);
         Pid when is_pid(Pid) ->
-            %% TODO: Replace with actual macula_routing_server:store_value call
-            %% For now, store locally in routing server (let it crash on errors)
-            ok = gen_server:call(Pid, {store_local, Key, EnrichedProviderInfo}),
+            %% Store in DHT with propagation to k closest nodes
+            ok = macula_routing_server:store(Pid, Key, EnrichedProviderInfo),
             ok
     end.
 

@@ -26,7 +26,9 @@
     handle_find_value/2,
     handle_find_node/2,
     handle_query/3,
-    lookup_value/1
+    lookup_value/1,
+    send_to_peer/3,
+    query_peer/3
 ]).
 
 %%%===================================================================
@@ -123,6 +125,40 @@ lookup_value(Key) ->
 %%% Internal functions
 %%%===================================================================
 
+%% @doc Send DHT message to remote peer (fire-and-forget).
+%% Used for STORE operations that don't need a response.
+-spec send_to_peer(map(), atom(), map()) -> ok | {error, term()}.
+send_to_peer(NodeInfo, MessageType, Message) ->
+    %% Extract endpoint from node info
+    Endpoint = maps:get(endpoint, NodeInfo, undefined),
+    case Endpoint of
+        undefined ->
+            {error, no_endpoint};
+        _ ->
+            %% Encode the message
+            MessageBinary = macula_protocol_encoder:encode(MessageType, Message),
+
+            %% Send via gateway mesh (establishes connection if needed)
+            case whereis(macula_gateway) of
+                undefined ->
+                    io:format("[DHT] No gateway running, cannot send to peer ~p~n", [Endpoint]),
+                    {error, no_gateway};
+                GatewayPid ->
+                    %% Get or create connection to peer
+                    NodeId = maps:get(node_id, NodeInfo, crypto:strong_rand_bytes(32)),
+                    send_via_gateway(GatewayPid, NodeId, Endpoint, MessageType, MessageBinary)
+            end
+    end.
+
+%% @doc Query remote peer and wait for response.
+%% Used for FIND_NODE and FIND_VALUE operations.
+-spec query_peer(map(), atom(), map()) -> {ok, term()} | {error, term()}.
+query_peer(NodeInfo, MessageType, Message) ->
+    %% For now, use send_to_peer (fire-and-forget)
+    %% TODO: Implement request/response pattern with timeout
+    io:format("[DHT] query_peer not yet implemented for ~p, using send_to_peer~n", [MessageType]),
+    send_to_peer(NodeInfo, MessageType, Message).
+
 %% @private
 %% @doc Encode reply based on message type.
 encode_reply_by_type(find_node, Reply) ->
@@ -133,3 +169,20 @@ encode_reply_by_type(store, Reply) ->
     macula_protocol_encoder:encode(store, Reply);
 encode_reply_by_type(_UnknownType, _Reply) ->
     macula_protocol_encoder:encode(reply, #{error => <<"Unknown DHT message type">>}).
+
+%% @private
+%% @doc Send message via gateway to remote peer.
+send_via_gateway(GatewayPid, NodeId, Endpoint, MessageType, MessageBinary) ->
+    io:format("[DHT] Sending ~p to peer ~p (~p)~n", [MessageType, NodeId, Endpoint]),
+
+    %% Try to send via gateway's mesh connections
+    %% The gateway will handle connection establishment if needed
+    try
+        %% Send as a cast to avoid blocking
+        gen_server:cast(GatewayPid, {forward_dht_message, NodeId, Endpoint, MessageType, MessageBinary}),
+        ok
+    catch
+        error:Reason ->
+            io:format("[DHT] Failed to send to peer: ~p~n", [Reason]),
+            {error, Reason}
+    end.

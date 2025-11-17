@@ -111,7 +111,7 @@ register_test_service(Container, ServiceName, Endpoint) ->
                 NodeId = crypto:strong_rand_bytes(32),
                 ServiceValue = [{node_id, NodeId}, {endpoint, ~p}],
                 ServiceMap = maps:from_list(ServiceValue),
-                case macula_routing_server:store_local(Pid, ServiceKey, ServiceMap) of
+                case macula_routing_server:store(Pid, ServiceKey, ServiceMap) of
                     ok ->
                         io:format(<<\"SUCCESS: Service registered~n\">>),
                         {ok, registered};
@@ -145,13 +145,19 @@ discover_service(Container, ServiceName) ->
                 {error, no_routing_server};
             Pid ->
                 ServiceKey = ~p,
-                case macula_routing_server:get_local(Pid, ServiceKey) of
-                    {ok, Value} ->
+                case macula_routing_server:find_value(Pid, ServiceKey, 20) of
+                    {ok, Value} when is_list(Value), length(Value) > 0 ->
                         io:format(<<\"SUCCESS: Service found~n\">>),
                         {ok, found};
+                    {ok, []} ->
+                        io:format(<<\"INFO: Service not found (empty list)~n\">>),
+                        {error, not_found};
                     not_found ->
                         io:format(<<\"INFO: Service not found~n\">>),
-                        {error, not_found}
+                        {error, not_found};
+                    {error, Reason} ->
+                        io:format(<<\"ERROR: Find value failed: ~~p~n\">>, [Reason]),
+                        {error, Reason}
                 end
         end.
     ", [ServiceName]),
