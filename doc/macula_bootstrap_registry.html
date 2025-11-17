@@ -8,7 +8,7 @@
     <meta name="project" content="macula v0.8.0">
 
 
-    <title>macula_gateway_health — macula v0.8.0</title>
+    <title>macula_bootstrap_registry — macula v0.8.0</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
@@ -79,12 +79,12 @@ macula
 <div id="top-content">
   <div class="heading-with-actions top-heading">
     <h1>
-      <span translate="no">macula_gateway_health</span> 
+      <span translate="no">macula_bootstrap_registry</span> 
       <small class="app-vsn" translate="no">(macula v0.8.0)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_gateway_health.erl#L16" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L14" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -93,7 +93,7 @@ macula
 
 
     <section id="moduledoc">
-<p>Macula Gateway Health Check Server</p><p>Provides HTTP health endpoints for Kubernetes liveness and readiness probes. Runs on a separate port (8080) from the main QUIC gateway (9443).</p><p>Endpoints: GET /health - Overall health status GET /ready - Readiness check (can accept traffic) GET /live - Liveness check (process is alive) GET /metrics - Basic metrics (optional)</p>
+<p>Bootstrap Registry - Thin wrapper around macula_routing_server DHT.</p><p>Delegates all storage/lookup operations to the DHT routing server. Bootstrap nodes use the DHT's built-in key-value storage for: 1. RPC Services - Advertised RPC endpoints 2. Pub/Sub Topics - Topic subscriptions</p><p>The DHT routing_server handles storage, TTL, and cleanup internally.</p>
     </section>
 
 </div>
@@ -112,6 +112,14 @@ macula
 
     <div class="summary-row">
       <div class="summary-signature">
+        <a href="#code_change/3" data-no-tooltip="" translate="no">code_change(OldVsn, State, Extra)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
         <a href="#handle_call/3" data-no-tooltip="" translate="no">handle_call(Request, From, State)</a>
 
       </div>
@@ -120,7 +128,7 @@ macula
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#handle_cast/2" data-no-tooltip="" translate="no">handle_cast(Request, State)</a>
+        <a href="#handle_cast/2" data-no-tooltip="" translate="no">handle_cast(Msg, State)</a>
 
       </div>
 
@@ -136,7 +144,7 @@ macula
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#init/1" data-no-tooltip="" translate="no">init(Opts)</a>
+        <a href="#init/1" data-no-tooltip="" translate="no">init(Config)</a>
 
       </div>
 
@@ -144,41 +152,69 @@ macula
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#is_healthy/0" data-no-tooltip="" translate="no">is_healthy()</a>
+        <a href="#lookup/1" data-no-tooltip="" translate="no">lookup(Key)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Check if the gateway is healthy.</p></div>
+        <div class="summary-synopsis"><p>Generic lookup (delegates to DHT)</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#set_ready/1" data-no-tooltip="" translate="no">set_ready(Ready)</a>
+        <a href="#lookup_service/1" data-no-tooltip="" translate="no">lookup_service(Key)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Set the readiness state.</p></div>
+        <div class="summary-synopsis"><p>Lookup RPC service by key (delegates to DHT)</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#start_link/1" data-no-tooltip="" translate="no">start_link(Opts)</a>
+        <a href="#lookup_topic/1" data-no-tooltip="" translate="no">lookup_topic(Topic)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Start the health check server.</p></div>
+        <div class="summary-synopsis"><p>Lookup subscribers for a topic (delegates to DHT)</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#stop/0" data-no-tooltip="" translate="no">stop()</a>
+        <a href="#start_link/1" data-no-tooltip="" translate="no">start_link(Config)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Stop the health check server.</p></div>
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#store/2" data-no-tooltip="" translate="no">store(Key, Value)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Generic store (delegates to DHT)</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#store_service/2" data-no-tooltip="" translate="no">store_service(Key, Value)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Store RPC service registration (delegates to DHT)</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#store_topic/2" data-no-tooltip="" translate="no">store_topic(Topic, Subscriber)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Store pub/sub topic subscription (delegates to DHT)</p></div>
 
     </div>
 
@@ -203,6 +239,28 @@ macula
       <span class="text">Functions</span>
     </h1>
     <div class="functions-list">
+<section class="detail" id="code_change/3">
+
+  <div class="detail-header">
+    <a href="#code_change/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">code_change(OldVsn, State, Extra)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L117" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
 <section class="detail" id="handle_call/3">
 
   <div class="detail-header">
@@ -213,7 +271,7 @@ macula
       <h1 class="signature" translate="no">handle_call(Request, From, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_gateway_health.erl#L108" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L88" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -232,10 +290,10 @@ macula
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_cast(Request, State)</h1>
+      <h1 class="signature" translate="no">handle_cast(Msg, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_gateway_health.erl#L117" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L107" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -257,7 +315,7 @@ macula
       <h1 class="signature" translate="no">handle_info(Info, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_gateway_health.erl#L123" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L110" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -276,10 +334,10 @@ macula
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">init(Opts)</h1>
+      <h1 class="signature" translate="no">init(Config)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_gateway_health.erl#L78" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L73" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -291,17 +349,17 @@ macula
 
   </section>
 </section>
-<section class="detail" id="is_healthy/0">
+<section class="detail" id="lookup/1">
 
   <div class="detail-header">
-    <a href="#is_healthy/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#lookup/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">is_healthy()</h1>
+      <h1 class="signature" translate="no">lookup(Key)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_gateway_health.erl#L62" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L66" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -312,24 +370,24 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> is_healthy() -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+          <pre translate="no"><span class="attribute">-spec</span> lookup(Key :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, not_found}.</pre>
 
       </div>
 
-<p>Check if the gateway is healthy.</p>
+<p>Generic lookup (delegates to DHT)</p>
   </section>
 </section>
-<section class="detail" id="set_ready/1">
+<section class="detail" id="lookup_service/1">
 
   <div class="detail-header">
-    <a href="#set_ready/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#lookup_service/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">set_ready(Ready)</h1>
+      <h1 class="signature" translate="no">lookup_service(Key)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_gateway_health.erl#L71" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L46" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -340,11 +398,39 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> set_ready(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>()) -> ok.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> lookup_service(Key :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, not_found}.</pre>
 
       </div>
 
-<p>Set the readiness state.</p>
+<p>Lookup RPC service by key (delegates to DHT)</p>
+  </section>
+</section>
+<section class="detail" id="lookup_topic/1">
+
+  <div class="detail-header">
+    <a href="#lookup_topic/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">lookup_topic(Topic)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L56" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> lookup_topic(Topic :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()]} | {error, not_found}.</pre>
+
+      </div>
+
+<p>Lookup subscribers for a topic (delegates to DHT)</p>
   </section>
 </section>
 <section class="detail" id="start_link/1">
@@ -354,10 +440,10 @@ macula
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">start_link(Opts)</h1>
+      <h1 class="signature" translate="no">start_link(Config)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_gateway_health.erl#L52" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L36" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -368,24 +454,24 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> start_link(<a href="https://www.erlang.org/doc/apps/stdlib/proplists.html#t:proplist/0">proplists:proplist</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> start_link(Config :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
 
       </div>
 
-<p>Start the health check server.</p>
+
   </section>
 </section>
-<section class="detail" id="stop/0">
+<section class="detail" id="store/2">
 
   <div class="detail-header">
-    <a href="#stop/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#store/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">stop()</h1>
+      <h1 class="signature" translate="no">store(Key, Value)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_gateway_health.erl#L57" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L61" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -396,11 +482,67 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> stop() -> ok.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> store(Key :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), Value :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()) -> ok.</pre>
 
       </div>
 
-<p>Stop the health check server.</p>
+<p>Generic store (delegates to DHT)</p>
+  </section>
+</section>
+<section class="detail" id="store_service/2">
+
+  <div class="detail-header">
+    <a href="#store_service/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">store_service(Key, Value)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L41" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> store_service(Key :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), Value :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Store RPC service registration (delegates to DHT)</p>
+  </section>
+</section>
+<section class="detail" id="store_topic/2">
+
+  <div class="detail-header">
+    <a href="#store_topic/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">store_topic(Topic, Subscriber)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L51" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> store_topic(Topic :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), Subscriber :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Store pub/sub topic subscription (delegates to DHT)</p>
   </section>
 </section>
 <section class="detail" id="terminate/2">
@@ -413,7 +555,7 @@ macula
       <h1 class="signature" translate="no">terminate(Reason, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_gateway_health.erl#L126" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_registry.erl#L113" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 

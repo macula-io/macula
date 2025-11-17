@@ -3,15 +3,57 @@
 %%% Macula Peer - Mesh Participant API (v0.7.0+).
 %%%
 %%% This module provides the high-level API for mesh participants.
-%%% It acts as a facade/coordinator, delegating to specialized child processes:
-%%%   - macula_connection: QUIC transport layer (send/receive, encoding/decoding)
-%%%   - macula_pubsub_handler: Pub/sub message routing
-%%%   - macula_rpc_handler: RPC call/response handling
-%%%   - macula_advertisement_manager: DHT service advertisements
+%%% Use this module to connect to a Macula mesh and communicate via pub/sub or RPC.
+%%%
+%%% == Quick Start ==
+%%%
+%%% ```
+%%% %% 1. Connect to a gateway
+%%% {ok, Peer} = macula_peer:start_link(<<"https://gateway.example.com:9443">>, #{
+%%%     realm => <<"com.example.app">>
+%%% }).
+%%%
+%%% %% 2. Subscribe to events
+%%% ok = macula_peer:subscribe(Peer, <<"sensor.temperature">>, self()).
+%%%
+%%% %% 3. Publish an event
+%%% ok = macula_peer:publish(Peer, <<"sensor.temperature">>, #{
+%%%     device_id => <<"sensor-001">>,
+%%%     celsius => 21.5
+%%% }).
+%%%
+%%% %% 4. Call a remote service
+%%% {ok, Result} = macula_peer:call(Peer, <<"calculator.add">>, #{a => 5, b => 3}).
+%%%
+%%% %% 5. Advertise a service
+%%% ok = macula_peer:advertise(Peer, <<"calculator.add">>, fun(#{a := A, b := B}) ->
+%%%     #{result => A + B}
+%%% end, #{ttl => 300}).
+%%% '''
+%%%
+%%% == Architecture ==
+%%%
+%%% The peer acts as a facade/coordinator, delegating to specialized child processes:
+%%%   - `macula_connection': QUIC transport layer (send/receive, encoding/decoding)
+%%%   - `macula_pubsub_handler': Pub/sub message routing
+%%%   - `macula_rpc_handler': RPC call/response handling
+%%%   - `macula_advertisement_manager': DHT service advertisements
 %%%
 %%% Renamed from macula_connection in v0.7.0 for clarity:
-%%% - macula_peer = mesh participant (this module)
-%%% - macula_connection = QUIC transport (low-level)
+%%%   - `macula_peer' = mesh participant (this module)
+%%%   - `macula_connection' = QUIC transport (low-level)
+%%%
+%%% == Multi-Tenancy via Realms ==
+%%%
+%%% Realms provide logical isolation for different applications:
+%%%
+%%% ```
+%%% %% App 1
+%%% {ok, Peer1} = macula_peer:start_link(GatewayUrl, #{realm => <<"com.app1">>}).
+%%%
+%%% %% App 2 (completely isolated from App 1)
+%%% {ok, Peer2} = macula_peer:start_link(GatewayUrl, #{realm => <<"com.app2">>}).
+%%% '''
 %%%
 %%% @end
 %%%-------------------------------------------------------------------

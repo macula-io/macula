@@ -14,25 +14,12 @@
 
 ## Table of Contents
 
-📖 **[Executive Summary](docs/EXECUTIVE_SUMMARY.md)** - What Macula is and why it matters
-
-🚀 **[Quick Start](architecture/macula_http3_mesh_quick_start.md)** - Get running in 15 minutes
-
-💡 **[Hello World Tutorial](HELLO_WORLD.md)** - Build a distributed chat app in 30 minutes
-
-📚 **[Technical Documentation](architecture/macula_http3_mesh_root.md)** - Complete architecture and implementation guides
-
-🔧 **[Development Guide](docs/DEVELOPMENT.md)** - Setup, testing, and contributing
-
-🏗️ **[Comparisons](docs/COMPARISONS.md)** - How Macula compares to similar systems
-
-📊 **[Use Cases](docs/USE_CASES.md)** - Real-world applications and examples
-
-📝 **[Project Structure](architecture/MACULA_PROJECT_STRUCTURE.md)** - Module organization and dependencies
-
-🗺️ **[Roadmap](architecture/macula_http3_mesh_roadmap.md)** - 20-week implementation plan
-
-📄 **[Changelog](CHANGELOG.md)** - Version history and migration guides
+- 🚀 [Quick Start](#quick-start) - Get started in minutes
+- 💡 [What's New in v0.8.0](#whats-new-in-v080) - Latest features
+- 📚 [Core Concepts](#core-concepts) - Understanding the mesh
+- 🔧 [API Overview](#api-overview) - Using Macula in your application
+- 📄 [Changelog](CHANGELOG.md) - Version history and migration guides
+- 🐛 [Issues](https://github.com/macula-io/macula/issues) - Report bugs and request features
 
 ---
 
@@ -74,7 +61,142 @@ end
 
 **Latest Release**: v0.8.0 (2025-11-17) - Direct P2P with DHT propagation
 
-See [`architecture/v0.8.0-OVERVIEW.md`](architecture/v0.8.0-OVERVIEW.md) for what's new.
+---
+
+##  What's New in v0.8.0
+
+**Major Features:**
+- ✅ Direct P2P QUIC connections via `macula_peer_connector`
+- ✅ DHT propagation to k=20 closest nodes (Kademlia-based)
+- ✅ RPC via direct P2P (50% latency improvement)
+- ✅ PubSub via direct P2P (50% latency improvement)
+- ✅ 21/21 integration tests passing (100% coverage)
+
+**Performance:**
+- 1-hop direct connections vs 2+ hop relay routing
+- Reduced gateway load
+- Better scalability for large meshes
+
+**Breaking Changes:** None - fully backward compatible with v0.7.x
+
+---
+
+## Quick Start
+
+### 1. Connect to a Gateway
+
+```erlang
+%% Start a peer connection
+{ok, Peer} = macula_peer:start_link(<<"https://gateway.example.com:9443">>, #{
+    realm => <<"com.example.app">>
+}).
+```
+
+### 2. Publish/Subscribe
+
+```erlang
+%% Subscribe to events
+ok = macula_peer:subscribe(Peer, <<"sensor.temperature">>, self()).
+
+%% Publish an event
+ok = macula_peer:publish(Peer, <<"sensor.temperature">>, #{
+    device_id => <<"sensor-001">>,
+    celsius => 21.5,
+    timestamp => erlang:system_time(millisecond)
+}).
+
+%% Receive events
+receive
+    {macula_event, <<"sensor.temperature">>, Payload} ->
+        io:format("Temperature: ~p°C~n", [maps:get(celsius, Payload)])
+end.
+```
+
+### 3. RPC (Remote Procedure Calls)
+
+```erlang
+%% Call a remote service
+{ok, Result} = macula_peer:call(Peer, <<"calculator.add">>, #{
+    a => 5,
+    b => 3
+}).
+%% Result: #{result => 8}
+```
+
+### 4. Advertise Services (Providers)
+
+```erlang
+%% Advertise a service handler
+ok = macula_peer:advertise(Peer, <<"calculator.add">>, fun(Args) ->
+    A = maps:get(a, Args),
+    B = maps:get(b, Args),
+    #{result => A + B}
+end, #{ttl => 300}).
+```
+
+---
+
+## Core Concepts
+
+### Mesh Architecture
+Macula creates a self-organizing mesh network where nodes communicate over HTTP/3 (QUIC). Each node can act as:
+- **Peer** - Application client/server participating in the mesh
+- **Gateway** - Relay node for NAT-traversed peers (optional)
+- **Registry** - DHT participant storing service advertisements
+
+### Multi-Tenancy via Realms
+Realms provide logical isolation for different applications sharing the same physical mesh:
+```erlang
+%% App 1
+{ok, Peer1} = macula_peer:start_link(GatewayUrl, #{realm => <<"com.app1">>}).
+
+%% App 2 (completely isolated from App 1)
+{ok, Peer2} = macula_peer:start_link(GatewayUrl, #{realm => <<"com.app2">>}).
+```
+
+### DHT-Based Service Discovery
+Services are discovered via a Kademlia DHT with k=20 replication:
+1. Provider advertises: `advertise(<<"my.service">>, Handler)`
+2. DHT propagates to k=20 closest nodes
+3. Consumer discovers: `call(<<"my.service">>, Args)`
+4. Direct P2P connection established (v0.8.0+)
+
+### Direct P2P Connections (v0.8.0)
+Instead of relaying through gateways, v0.8.0 establishes direct QUIC connections:
+- Discovered endpoint → Direct connection
+- 50% latency reduction (1-hop vs 2+ hops)
+- Reduced gateway load
+
+---
+
+## API Overview
+
+### Main Modules
+
+**`macula_peer`** - High-level mesh participant API
+- `start_link/2` - Connect to gateway
+- `publish/3`, `subscribe/3` - Pub/sub messaging
+- `call/3`, `advertise/4` - RPC and service registration
+
+**`macula_gateway`** - Gateway/relay node
+- Embedded or standalone gateway deployment
+- Client lifecycle management
+- Message routing and forwarding
+
+**`macula_peer_connector`** - Direct P2P connections (v0.8.0)
+- Establishes outbound QUIC connections
+- Fire-and-forget message delivery
+
+### Configuration Options
+
+```erlang
+Opts = #{
+    realm => <<"com.example.app">>,        %% Required: Realm for isolation
+    node_id => <<"my-node-001">>,         %% Optional: Custom node ID
+    cert_file => "cert.pem",               %% Optional: TLS certificate
+    key_file => "key.pem"                  %% Optional: TLS private key
+}
+```
 
 ---
 
@@ -100,9 +222,16 @@ rebar3 shell
 
 ---
 
-## Contributing
+## Testing
 
-We welcome contributions! See [Development Guide](docs/DEVELOPMENT.md) for setup instructions and [Contributing Guide](CONTRIBUTING.md) for guidelines.
+```bash
+# Run unit tests
+rebar3 eunit
+
+# Run integration tests (requires Docker)
+rebar3 ct --suite=test/integration/multi_hop_rpc_SUITE
+rebar3 ct --suite=test/integration/multi_hop_pubsub_SUITE
+```
 
 ---
 
@@ -115,8 +244,8 @@ Macula is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for deta
 ## Community & Support
 
 - **Issues**: [GitHub Issues](https://github.com/macula-io/macula/issues)
-- **Documentation**: [Architecture Docs](architecture/)
-- **Examples**: [Examples Directory](examples/)
+- **Hex Package**: [hex.pm/packages/macula](https://hex.pm/packages/macula)
+- **Source Code**: [github.com/macula-io/macula](https://github.com/macula-io/macula)
 
 ---
 

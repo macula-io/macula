@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.8.0">
+
+
+    <title>v0.9.0 Roadmap — macula v0.8.0</title>
+
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-E52AB0FC.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="readme.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.8.0
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-extra" id="main" data-type="extras">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>Macula v0.8.0 Roadmap - What's Next</h1>
+
+
+      <a href="https://github.com/macula-io/macula/blob/0.8.0/architecture/v0.8.0-ROADMAP.md#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+<p><strong>Current Version</strong>: v0.8.0
+<strong>Next Release</strong>: v0.9.0 (Planned Q2 2025)</p><hr class="thin"/><h2 id="v0-8-0-status" class="section-heading"><a href="#v0-8-0-status" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">v0.8.0 Status</span></h2><p>✅ <strong>COMPLETE</strong> - All features implemented and tested</p><ul><li>✅ Direct P2P QUIC connections</li><li>✅ DHT propagation (k=20 replication)</li><li>✅ Gateway on all node types</li><li>✅ RPC via direct P2P (11/11 tests)</li><li>✅ PubSub via direct P2P (10/10 tests)</li><li>✅ Comprehensive integration tests</li></ul><p><strong>Test Coverage</strong>: 21/21 integration tests passing (100%)</p><hr class="thin"/><h2 id="v0-9-0-planning-production-hardening" class="section-heading"><a href="#v0-9-0-planning-production-hardening" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">v0.9.0 Planning - Production Hardening</span></h2><p><strong>Target Release</strong>: Q2 2025 (4-6 months)
+<strong>Focus</strong>: Security, Performance, NAT Traversal</p><h3 id="theme-production-ready-infrastructure" class="section-heading"><a href="#theme-production-ready-infrastructure" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Theme: Production-Ready Infrastructure</span></h3><p>v0.8.0 provides the foundation. v0.9.0 makes it production-grade with security hardening, performance optimization, and NAT traversal.</p><hr class="thin"/><h2 id="high-priority-features" class="section-heading"><a href="#high-priority-features" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">High Priority Features</span></h2><h3 id="1-connection-pooling" class="section-heading"><a href="#1-connection-pooling" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">1. Connection Pooling</span></h3><p><strong>Problem</strong>: New connection per message creates overhead
+<strong>Impact</strong>: Performance (100-200ms per operation)
+<strong>Effort</strong>: 2-3 weeks</p><p><strong>Implementation</strong>:</p><ul><li>Create <code class="inline">macula_connection_pool</code> enhancement</li><li>LRU eviction policy</li><li>Max 100 connections per pool</li><li>TTL-based cleanup (5-minute idle timeout)</li><li>Automatic reconnection on failure</li></ul><p><strong>Benefits</strong>:</p><ul><li>10x performance improvement for repeated operations</li><li>Reduced connection establishment overhead</li><li>Better resource utilization</li><li>Lower latency for frequent P2P operations</li></ul><p><strong>API</strong>:</p><pre><code class="makeup erlang" translate="no"><span class="c1">%% Get connection from pool (or create new)</span><span class="w">
+</span><span class="p" data-group-id="0130178623-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Conn</span><span class="p" data-group-id="0130178623-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_connection_pool</span><span class="p">:</span><span class="nf">get_connection</span><span class="p" data-group-id="0130178623-2">(</span><span class="n">Endpoint</span><span class="p" data-group-id="0130178623-2">)</span><span class="p">.</span><span class="w">
+
+</span><span class="c1">%% Send via pooled connection</span><span class="w">
+</span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_connection_pool</span><span class="p">:</span><span class="nf">send_message</span><span class="p" data-group-id="0130178623-3">(</span><span class="n">Conn</span><span class="p">,</span><span class="w"> </span><span class="n">MessageType</span><span class="p">,</span><span class="w"> </span><span class="n">Message</span><span class="p" data-group-id="0130178623-3">)</span><span class="p">.</span><span class="w">
+
+</span><span class="c1">%% Return to pool (automatic via monitoring)</span></code></pre><h3 id="2-tls-certificate-verification" class="section-heading"><a href="#2-tls-certificate-verification" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">2. TLS Certificate Verification</span></h3><p><strong>Problem</strong>: Currently using <code class="inline">{verify, none}</code> (security risk)
+<strong>Impact</strong>: Security (high)
+<strong>Effort</strong>: 1-2 weeks</p><p><strong>Implementation</strong>:</p><ul><li>Add CA certificate bundle support</li><li>Implement certificate validation</li><li>Support custom CA paths</li><li>Add certificate pinning option</li></ul><p><strong>Configuration</strong>:</p><pre><code class="makeup erlang" translate="no"><span class="p" data-group-id="3577687819-1">{</span><span class="ss">macula</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="3577687819-2">[</span><span class="w">
+    </span><span class="p" data-group-id="3577687819-3">{</span><span class="ss">tls</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="3577687819-4">#{</span><span class="w">
+        </span><span class="ss">verify</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ss">verify_peer</span><span class="p">,</span><span class="w">
+        </span><span class="ss">cacertfile</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="s">&quot;/etc/macula/ca-bundle.pem&quot;</span><span class="p">,</span><span class="w">
+        </span><span class="ss">certfile</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="s">&quot;/etc/macula/node-cert.pem&quot;</span><span class="p">,</span><span class="w">
+        </span><span class="ss">keyfile</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="s">&quot;/etc/macula/node-key.pem&quot;</span><span class="p">,</span><span class="w">
+        </span><span class="c1">%% Optional: Pin specific certificates</span><span class="w">
+        </span><span class="ss">pinned_certs</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="3577687819-5">[</span><span class="w">
+            </span><span class="p" data-group-id="3577687819-6">&lt;&lt;</span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="p" data-group-id="3577687819-6">&gt;&gt;</span><span class="w">  </span><span class="c1">% SHA256 fingerprint</span><span class="w">
+        </span><span class="p" data-group-id="3577687819-5">]</span><span class="w">
+    </span><span class="p" data-group-id="3577687819-4">}</span><span class="p" data-group-id="3577687819-3">}</span><span class="w">
+</span><span class="p" data-group-id="3577687819-2">]</span><span class="p" data-group-id="3577687819-1">}</span><span class="p">.</span></code></pre><p><strong>Modules to Update</strong>:</p><ul><li><code class="inline">macula_connection.erl</code></li><li><code class="inline">macula_connection_pool.erl</code></li><li><code class="inline">macula_peer_connector.erl</code></li><li><code class="inline">macula_quic.erl</code></li></ul><h3 id="3-request-response-pattern-for-dht" class="section-heading"><a href="#3-request-response-pattern-for-dht" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">3. Request/Response Pattern for DHT</span></h3><p><strong>Problem</strong>: Fire-and-forget provides no feedback
+<strong>Impact</strong>: Observability (medium)
+<strong>Effort</strong>: 2-3 weeks</p><p><strong>Implementation</strong>:</p><ul><li>Add correlation IDs to DHT messages</li><li>Implement response tracking with timeout</li><li>Return query results to caller</li><li>Add retry logic for failed queries</li></ul><p><strong>API</strong>:</p><pre><code class="makeup erlang" translate="no"><span class="c1">%% Query with response</span><span class="w">
+</span><span class="p" data-group-id="0428822477-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Result</span><span class="p" data-group-id="0428822477-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_routing_server</span><span class="p">:</span><span class="nf">query_with_response</span><span class="p" data-group-id="0428822477-2">(</span><span class="w">
+    </span><span class="n">Pid</span><span class="p">,</span><span class="w"> </span><span class="n">Key</span><span class="p">,</span><span class="w"> </span><span class="n">Timeout</span><span class="w">
+</span><span class="p" data-group-id="0428822477-2">)</span><span class="p">.</span><span class="w">
+
+</span><span class="c1">%% Store with confirmation</span><span class="w">
+</span><span class="p" data-group-id="0428822477-3">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">StoredNodes</span><span class="p" data-group-id="0428822477-3">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_routing_server</span><span class="p">:</span><span class="nf">store_with_confirmation</span><span class="p" data-group-id="0428822477-4">(</span><span class="w">
+    </span><span class="n">Pid</span><span class="p">,</span><span class="w"> </span><span class="n">Key</span><span class="p">,</span><span class="w"> </span><span class="n">Value</span><span class="p">,</span><span class="w"> </span><span class="n">Timeout</span><span class="w">
+</span><span class="p" data-group-id="0428822477-4">)</span><span class="p">.</span></code></pre><p><strong>Benefits</strong>:</p><ul><li>Confirm DHT operations succeeded</li><li>Monitor propagation success rate</li><li>Better debugging and observability</li><li>Retry failed operations</li></ul><hr class="thin"/><h2 id="medium-priority-features" class="section-heading"><a href="#medium-priority-features" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Medium Priority Features</span></h2><h3 id="4-nat-traversal-opportunistic-hole-punching" class="section-heading"><a href="#4-nat-traversal-opportunistic-hole-punching" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">4. NAT Traversal - Opportunistic Hole Punching</span></h3><p><strong>Problem</strong>: Edge nodes behind NAT cannot accept connections
+<strong>Impact</strong>: Connectivity (medium)
+<strong>Effort</strong>: 6-8 weeks</p><p><strong>Strategy</strong>: Attempt direct connection while keeping relay fallback</p><p><strong>Implementation Phases</strong>:</p><h4>Phase A: NAT Discovery (2 weeks)</h4><ul><li>Create <code class="inline">macula_nat_discovery.erl</code></li><li>Detect public IP/port via gateway</li><li>Detect NAT type (cone, symmetric, etc.)</li><li>Cache NAT type and public address</li></ul><h4>Phase B: Hole Punching (3 weeks)</h4><ul><li>Create <code class="inline">macula_hole_punch.erl</code></li><li>Coordinate simultaneous connection attempts</li><li>Exchange addresses via gateway</li><li>Timeout and fallback to relay</li></ul><h4>Phase C: Connection Upgrade (2 weeks)</h4><ul><li>Create <code class="inline">macula_connection_upgrade.erl</code></li><li>Migrate active streams from relay to direct</li><li>Handle graceful transition</li><li>Update routing tables</li></ul><h4>Phase D: Testing (1 week)</h4><ul><li>Docker-based NAT simulation</li><li>Test various NAT types</li><li>Verify fallback behavior</li><li>Integration tests</li></ul><p><strong>Success Metrics</strong>:</p><ul><li>80%+ direct P2P success (non-symmetric NAT)</li><li>100% connectivity (with relay fallback)</li><li>&lt;100ms upgrade time (relay → direct)</li><li>No message loss during upgrade</li></ul><p><strong>See</strong>: <code class="inline">architecture/NAT_TRAVERSAL_ROADMAP.md</code> for detailed design</p><h3 id="5-performance-tuning" class="section-heading"><a href="#5-performance-tuning" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">5. Performance Tuning</span></h3><p><strong>Problem</strong>: Various performance bottlenecks
+<strong>Impact</strong>: Performance (medium)
+<strong>Effort</strong>: 2-3 weeks</p><p><strong>Optimizations</strong>:</p><h4>5.1. Adaptive Delay Tuning</h4><ul><li>Currently 100ms fixed delay before closing streams</li><li>Implement adaptive delay based on network conditions</li><li>Measure actual transmission time</li><li>Tune per-connection</li></ul><h4>5.2. Batch DHT Operations</h4><ul><li>Combine multiple STORE operations</li><li>Batch FIND_VALUE queries</li><li>Reduce connection overhead</li><li>Better throughput</li></ul><h4>5.3. DHT Cache Tuning</h4><ul><li>Optimize cache TTL values</li><li>Implement cache warming</li><li>Add cache statistics</li><li>Monitor hit rates</li></ul><h4>5.4. Message Batching</h4><ul><li>Batch multiple messages to same peer</li><li>Reduce per-message overhead</li><li>Improve throughput</li></ul><p><strong>Target Improvements</strong>:</p><ul><li>2-3x throughput increase</li><li>30-50% latency reduction</li><li>50% reduction in connection overhead</li></ul><h3 id="6-observability-metrics" class="section-heading"><a href="#6-observability-metrics" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">6. Observability &amp; Metrics</span></h3><p><strong>Problem</strong>: Limited visibility into mesh operations
+<strong>Impact</strong>: Operations (medium)
+<strong>Effort</strong>: 2 weeks</p><p><strong>Implementation</strong>:</p><ul><li>Add telemetry events for DHT operations</li><li>Track connection pool statistics</li><li>Monitor P2P connection success rates</li><li>Add health check endpoints</li><li>Integration with Prometheus/Grafana</li></ul><p><strong>Metrics</strong>:</p><pre><code class="makeup erlang" translate="no"><span class="c1">%% DHT metrics</span><span class="w">
+</span><span class="ss">dht_store_operations_total</span><span class="w">
+</span><span class="ss">dht_store_propagation_success_rate</span><span class="w">
+</span><span class="ss">dht_query_latency_milliseconds</span><span class="w">
+</span><span class="ss">dht_cache_hit_rate</span><span class="w">
+
+</span><span class="c1">%% Connection metrics</span><span class="w">
+</span><span class="ss">p2p_connections_total</span><span class="w">
+</span><span class="ss">p2p_connection_duration_seconds</span><span class="w">
+</span><span class="ss">p2p_connection_pool_size</span><span class="w">
+</span><span class="ss">p2p_connection_errors_total</span><span class="w">
+
+</span><span class="c1">%% RPC/PubSub metrics</span><span class="w">
+</span><span class="ss">rpc_calls_total</span><span class="w">
+</span><span class="ss">rpc_call_latency_milliseconds</span><span class="w">
+</span><span class="ss">pubsub_messages_total</span><span class="w">
+</span><span class="ss">pubsub_delivery_latency_milliseconds</span></code></pre><hr class="thin"/><h2 id="low-priority-future-considerations" class="section-heading"><a href="#low-priority-future-considerations" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Low Priority / Future Considerations</span></h2><h3 id="7-subsystem-refactoring" class="section-heading"><a href="#7-subsystem-refactoring" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">7. Subsystem Refactoring</span></h3><p><strong>Problem</strong>: Gateway module mixes bootstrap and relay concerns
+<strong>Impact</strong>: Architecture (low)
+<strong>Effort</strong>: 4 weeks</p><p><strong>Deferred Reason</strong>: Current architecture works well. Refactoring is architectural cleanup, not critical for production.</p><p><strong>When to Reconsider</strong>:</p><ul><li>If deploying dedicated bootstrap nodes</li><li>If relay logic becomes complex</li><li>If separation of concerns becomes important</li></ul><p><strong>See</strong>: <code class="inline">architecture/V0.8.0_IMPLEMENTATION_ROADMAP.md</code> for original plan</p><h3 id="8-stun-turn-infrastructure" class="section-heading"><a href="#8-stun-turn-infrastructure" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">8. STUN/TURN Infrastructure</span></h3><p><strong>Problem</strong>: Symmetric NAT requires TURN relay
+<strong>Impact</strong>: Connectivity (low - already have relay fallback)
+<strong>Effort</strong>: 8-10 weeks + infrastructure costs</p><p><strong>Deferred Reason</strong>: v0.8.0 relay fallback works for 100% connectivity. STUN/TURN improves from 80% direct to 95% direct, but requires external infrastructure.</p><p><strong>When to Reconsider</strong>:</p><ul><li>If 80% direct P2P isn't sufficient</li><li>If relay costs become prohibitive</li><li>If symmetric NAT is common in target deployment</li></ul><p><strong>See</strong>: <code class="inline">architecture/NAT_TRAVERSAL_ROADMAP.md</code> Phase 3</p><hr class="thin"/><h2 id="version-roadmap" class="section-heading"><a href="#version-roadmap" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Version Roadmap</span></h2><h3 id="v0-8-1-optional-q1-2025" class="section-heading"><a href="#v0-8-1-optional-q1-2025" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">v0.8.1 (Optional - Q1 2025)</span></h3><p>Quick quality-of-life improvements:</p><ul><li>Remove remaining empty TODOs</li><li>Add more integration tests</li><li>Improve error messages</li><li>Documentation polish</li></ul><p><strong>Effort</strong>: 1 week</p><h3 id="v0-9-0-target-q2-2025" class="section-heading"><a href="#v0-9-0-target-q2-2025" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">v0.9.0 (Target - Q2 2025)</span></h3><p>Production hardening:</p><ul><li>✅ Connection pooling (High Priority)</li><li>✅ TLS certificate verification (High Priority)</li><li>✅ Request/response DHT pattern (High Priority)</li><li>✅ NAT hole punching (Medium Priority)</li><li>✅ Performance tuning (Medium Priority)</li><li>✅ Observability &amp; metrics (Medium Priority)</li></ul><p><strong>Effort</strong>: 18-24 weeks (4-6 months)</p><h3 id="v0-10-0-future-q3-2025" class="section-heading"><a href="#v0-10-0-future-q3-2025" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">v0.10.0 (Future - Q3 2025)</span></h3><p>Advanced features:</p><ul><li>STUN/TURN infrastructure (if needed)</li><li>Subsystem refactoring (if needed)</li><li>Advanced routing strategies</li><li>Multi-datacenter support</li></ul><p><strong>Effort</strong>: TBD</p><hr class="thin"/><h2 id="development-priorities" class="section-heading"><a href="#development-priorities" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Development Priorities</span></h2><h3 id="phase-1-security-weeks-1-3" class="section-heading"><a href="#phase-1-security-weeks-1-3" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Phase 1: Security (Weeks 1-3)</span></h3><ol><li>TLS certificate verification</li><li>Certificate pinning</li><li>Security audit</li></ol><h3 id="phase-2-performance-weeks-4-9" class="section-heading"><a href="#phase-2-performance-weeks-4-9" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Phase 2: Performance (Weeks 4-9)</span></h3><ol><li>Connection pooling</li><li>Adaptive delay tuning</li><li>Batch operations</li><li>Performance benchmarking</li></ol><h3 id="phase-3-reliability-weeks-10-12" class="section-heading"><a href="#phase-3-reliability-weeks-10-12" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Phase 3: Reliability (Weeks 10-12)</span></h3><ol><li>Request/response DHT pattern</li><li>Retry logic</li><li>Error handling improvements</li></ol><h3 id="phase-4-connectivity-weeks-13-20" class="section-heading"><a href="#phase-4-connectivity-weeks-13-20" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Phase 4: Connectivity (Weeks 13-20)</span></h3><ol><li>NAT discovery</li><li>Hole punching</li><li>Connection upgrade</li><li>NAT traversal testing</li></ol><h3 id="phase-5-observability-weeks-21-22" class="section-heading"><a href="#phase-5-observability-weeks-21-22" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Phase 5: Observability (Weeks 21-22)</span></h3><ol><li>Telemetry integration</li><li>Metrics endpoints</li><li>Dashboards</li><li>Monitoring</li></ol><h3 id="phase-6-polish-weeks-23-24" class="section-heading"><a href="#phase-6-polish-weeks-23-24" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Phase 6: Polish (Weeks 23-24)</span></h3><ol><li>Documentation</li><li>Tutorial updates</li><li>Integration testing</li><li>Release preparation</li></ol><hr class="thin"/><h2 id="success-criteria-v0-9-0" class="section-heading"><a href="#success-criteria-v0-9-0" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Success Criteria (v0.9.0)</span></h2><h3 id="performance" class="section-heading"><a href="#performance" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Performance</span></h3><ul><li>✅ 10x improvement in repeated P2P operations (via connection pooling)</li><li>✅ &lt;50ms P2P message delivery (cached routes)</li><li>✅ 2-3x throughput increase (batching + tuning)</li></ul><h3 id="security" class="section-heading"><a href="#security" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Security</span></h3><ul><li>✅ TLS certificate verification enabled by default</li><li>✅ Certificate pinning option available</li><li>✅ Security audit passed</li></ul><h3 id="reliability" class="section-heading"><a href="#reliability" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Reliability</span></h3><ul><li>✅ 100% test coverage maintained</li><li>✅ DHT operation confirmation available</li><li>✅ Retry logic for failed operations</li></ul><h3 id="connectivity" class="section-heading"><a href="#connectivity" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Connectivity</span></h3><ul><li>✅ 80%+ direct P2P connections (NAT hole punching)</li><li>✅ 100% connectivity maintained (relay fallback)</li><li>✅ Graceful connection upgrade</li></ul><h3 id="observability" class="section-heading"><a href="#observability" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Observability</span></h3><ul><li>✅ Comprehensive metrics available</li><li>✅ Integration with Prometheus</li><li>✅ Sample Grafana dashboards</li></ul><hr class="thin"/><h2 id="breaking-changes-v0-9-0" class="section-heading"><a href="#breaking-changes-v0-9-0" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Breaking Changes (v0.9.0)</span></h2><h3 id="minimal-breaking-changes-expected" class="section-heading"><a href="#minimal-breaking-changes-expected" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Minimal Breaking Changes Expected</span></h3><p><strong>Possible</strong>:</p><ul><li>TLS verification enabled by default (may require configuration)</li><li>Connection pool configuration (optional)</li><li>Metrics endpoint (new feature)</li></ul><p><strong>Mitigation</strong>:</p><ul><li>Feature flags for gradual rollout</li><li>Backward compatibility mode</li><li>Clear migration guide</li></ul><hr class="thin"/><h2 id="community-feedback" class="section-heading"><a href="#community-feedback" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Community Feedback</span></h2><p>We welcome feedback on this roadmap!</p><p><strong>High Priority Questions</strong>:</p><ul><li>Is NAT traversal critical for your use case?</li><li>What performance metrics matter most?</li><li>What observability features do you need?</li></ul><p><strong>How to Provide Feedback</strong>:</p><ul><li>GitHub Issues: <a href="https://github.com/macula-io/macula/issues">https://github.com/macula-io/macula/issues</a></li><li>GitHub Discussions: <a href="https://github.com/macula-io/macula/discussions">https://github.com/macula-io/macula/discussions</a></li></ul><hr class="thin"/><h2 id="references" class="section-heading"><a href="#references" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">References</span></h2><ul><li><strong>NAT Traversal Design</strong>: <code class="inline">architecture/NAT_TRAVERSAL_ROADMAP.md</code></li><li><strong>Original v0.8.0 Roadmap</strong>: <code class="inline">architecture/V0.8.0_IMPLEMENTATION_ROADMAP.md</code></li><li><strong>Current Architecture</strong>: <code class="inline">architecture/v0.8.0-ARCHITECTURE.md</code></li><li><strong>Known Issues</strong>: <code class="inline">TODO.md</code></li></ul><hr class="thin"/><p><strong>Document Version</strong>: 1.0
+<strong>Last Updated</strong>: 2025-11-17
+<strong>Next Review</strong>: After v0.8.0 release</p>
+
+</div>
+
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
+
+      <a href="v0-8-0-changelog.html" class="bottom-actions-button" rel="prev">
+        <span class="subheader">
+          ← Previous Page
+        </span>
+        <span class="title">
+v0.8.0 Detailed Changelog
+        </span>
+      </a>
+
+  </div>
+  <div class="bottom-actions-item">
+
+      <a href="index.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+Architecture Index
+        </span>
+      </a>
+
+  </div>
+</div>
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.8.0" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.8.0">Hex Preview</a>
+
+              (<a href="https://preview.hex.pm/preview/macula/0.8.0/show/architecture/v0.8.0-ROADMAP.md">current file</a>)
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

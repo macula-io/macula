@@ -1,15 +1,45 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% Peer Connector - Establishes direct QUIC connections to remote peers.
+%%% Peer Connector - Establishes direct QUIC connections to remote peers (v0.8.0+).
 %%%
 %%% This module enables peer-to-peer communication by establishing outbound
 %%% QUIC connections to arbitrary peers. Used by DHT for STORE/FIND_VALUE
-%%% message propagation.
+%%% message propagation and by RPC/PubSub for direct delivery.
+%%%
+%%% == Overview ==
 %%%
 %%% Pattern: Stateless utility module (no GenServer)
-%%% - Direct QUIC connections using macula_quic
-%%% - Fire-and-forget message sending
-%%% - No connection pooling (future optimization)
+%%%   - Direct QUIC connections using `macula_quic'
+%%%   - Fire-and-forget message sending
+%%%   - No connection pooling (future optimization for v0.9.0)
+%%%
+%%% == Usage ==
+%%%
+%%% Used internally by:
+%%%   - `macula_pubsub_dht': Direct pub/sub delivery to discovered subscribers
+%%%   - `macula_service_registry': DHT STORE propagation to k=20 nodes
+%%%   - Future: Multi-hop RPC routing
+%%%
+%%% ```
+%%% %% Send a DHT STORE message to a peer
+%%% Endpoint = <<"192.168.1.100:9443">>,
+%%% Message = #{
+%%%     key => <<"service.calculator.add">>,
+%%%     value => <<"192.168.1.50:9443">>,
+%%%     ttl => 300
+%%% },
+%%% ok = macula_peer_connector:send_message(Endpoint, dht_store, Message).
+%%% '''
+%%%
+%%% == Performance Characteristics ==
+%%%
+%%% v0.8.0: Fire-and-forget pattern
+%%%   - Creates new connection per message
+%%%   - Simple but inefficient for high-frequency messaging
+%%%
+%%% v0.9.0 (planned): Connection pooling
+%%%   - Reuse existing connections
+%%%   - 10x performance improvement for repeated messaging
 %%%
 %%% @end
 %%%-------------------------------------------------------------------

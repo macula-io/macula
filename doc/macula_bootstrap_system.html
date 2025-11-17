@@ -8,7 +8,7 @@
     <meta name="project" content="macula v0.8.0">
 
 
-    <title>macula_connection_pool — macula v0.8.0</title>
+    <title>macula_bootstrap_system — macula v0.8.0</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
@@ -79,12 +79,12 @@ macula
 <div id="top-content">
   <div class="heading-with-actions top-heading">
     <h1>
-      <span translate="no">macula_connection_pool</span> 
+      <span translate="no">macula_bootstrap_system</span> 
       <small class="app-vsn" translate="no">(macula v0.8.0)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_connection_pool.erl#L13" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_system.erl#L16" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -93,7 +93,7 @@ macula
 
 
     <section id="moduledoc">
-<p>Connection pool manager for endpoint connections.</p><p>Manages a pool of QUIC connections to remote endpoints, providing connection caching and reuse to avoid connection overhead for multi-endpoint RPC operations.</p><p>Connection pool structure: #{Endpoint =&gt; #{connection =&gt; Conn, stream =&gt; Stream, last_used =&gt; Timestamp}}</p>
+<p>Macula Bootstrap System - Supervision tree for bootstrap nodes.</p><p>Bootstrap nodes provide: - DHT bootstrap and peer discovery - Service registry (advertised RPC endpoints) - Health monitoring</p><p>Bootstrap nodes do NOT: - Relay messages (that's macula_relay_system) - Bridge realms (that's macula_bridge_system)</p>
     </section>
 
 </div>
@@ -112,31 +112,39 @@ macula
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#close_all_connections/1" data-no-tooltip="" translate="no">close_all_connections(Pool)</a>
+        <a href="#get_server_pid/0" data-no-tooltip="" translate="no">get_server_pid()</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Close all connections in the pool.</p></div>
+        <div class="summary-synopsis"><p>Get bootstrap server PID</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#create_connection/4" data-no-tooltip="" translate="no">create_connection(Endpoint, NodeId, RealmId, Pool)</a>
+        <a href="#get_stats/0" data-no-tooltip="" translate="no">get_stats()</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Create a new connection to an endpoint.</p></div>
+        <div class="summary-synopsis"><p>Get bootstrap system statistics</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#get_or_create_connection/4" data-no-tooltip="" translate="no">get_or_create_connection(Endpoint, NodeId, RealmId, Pool)</a>
+        <a href="#init/1" data-no-tooltip="" translate="no">init(Config)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Get or create a connection to an endpoint. Returns {ok, Conn, Stream, UpdatedPool} or {error, Reason, Pool}.</p></div>
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start_link/1" data-no-tooltip="" translate="no">start_link(Config)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Start bootstrap system supervisor</p></div>
 
     </div>
 
@@ -153,17 +161,17 @@ macula
       <span class="text">Functions</span>
     </h1>
     <div class="functions-list">
-<section class="detail" id="close_all_connections/1">
+<section class="detail" id="get_server_pid/0">
 
   <div class="detail-header">
-    <a href="#close_all_connections/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#get_server_pid/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">close_all_connections(Pool)</h1>
+      <h1 class="signature" translate="no">get_server_pid()</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_connection_pool.erl#L142" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_system.erl#L35" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -174,24 +182,24 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> close_all_connections(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> get_server_pid() -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, not_started}.</pre>
 
       </div>
 
-<p>Close all connections in the pool.</p>
+<p>Get bootstrap server PID</p>
   </section>
 </section>
-<section class="detail" id="create_connection/4">
+<section class="detail" id="get_stats/0">
 
   <div class="detail-header">
-    <a href="#create_connection/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#get_stats/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">create_connection(Endpoint, NodeId, RealmId, Pool)</h1>
+      <h1 class="signature" translate="no">get_stats()</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_connection_pool.erl#L62" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_system.erl#L43" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -202,25 +210,46 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> create_connection(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) ->
-                           {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()}.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> get_stats() -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
 
       </div>
 
-<p>Create a new connection to an endpoint.</p>
+<p>Get bootstrap system statistics</p>
   </section>
 </section>
-<section class="detail" id="get_or_create_connection/4">
+<section class="detail" id="init/1">
 
   <div class="detail-header">
-    <a href="#get_or_create_connection/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#init/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">get_or_create_connection(Endpoint, NodeId, RealmId, Pool)</h1>
+      <h1 class="signature" translate="no">init(Config)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_connection_pool.erl#L33" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_system.erl#L53" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="start_link/1">
+
+  <div class="detail-header">
+    <a href="#start_link/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">start_link(Config)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.0/src/macula_bootstrap_system/macula_bootstrap_system.erl#L30" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -231,12 +260,11 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> get_or_create_connection(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) ->
-                                  {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()}.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> start_link(Config :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
 
       </div>
 
-<p>Get or create a connection to an endpoint. Returns {ok, Conn, Stream, UpdatedPool} or {error, Reason, Pool}.</p>
+<p>Start bootstrap system supervisor</p>
   </section>
 </section>
 

@@ -3,10 +3,49 @@
 %%% Macula Gateway - HTTP/3 Message Router &amp; Orchestrator
 %%%
 %%% Main API module and coordinator for the Macula Gateway.
-%%% The gateway can be embedded in applications or run standalone.
+%%% The gateway can be embedded in applications or run standalone as a relay node.
 %%%
-%%% Architecture (Modular Design - Refactored Jan 2025):
-%%% ========================================================
+%%% == Quick Start (Embedded Gateway) ==
+%%%
+%%% ```
+%%% %% Start an embedded gateway
+%%% {ok, Gateway} = macula_gateway:start_link([
+%%%     {port, 9443},
+%%%     {realm, <<"com.example.realm">>},
+%%%     {cert_file, "cert.pem"},
+%%%     {key_file, "key.pem"}
+%%% ]).
+%%%
+%%% %% Register an RPC handler
+%%% ok = macula_gateway:register_handler(Gateway, <<"calculator.add">>, fun(Args) ->
+%%%     A = maps:get(a, Args),
+%%%     B = maps:get(b, Args),
+%%%     #{result => A + B}
+%%% end).
+%%% '''
+%%%
+%%% == Quick Start (Standalone Gateway) ==
+%%%
+%%% Configure `sys.config':
+%%%
+%%% ```
+%%% [
+%%%   {macula, [
+%%%     {gateway_port, 9443},
+%%%     {gateway_realm, <<"com.example.realm">>},
+%%%     {cert_file, "/path/to/cert.pem"},
+%%%     {key_file, "/path/to/key.pem"}
+%%%   ]}
+%%% ].
+%%% '''
+%%%
+%%% Start application:
+%%%
+%%% ```
+%%% application:start(macula).
+%%% '''
+%%%
+%%% == Architecture (Modular Design - Refactored Jan 2025) ==
 %%%
 %%% Gateway (this module):
 %%%   - QUIC Listener Management
@@ -14,37 +53,19 @@
 %%%   - Supervisor Coordination
 %%%   - API Facade
 %%%
-%%% Child Modules (managed via macula_gateway_workers_sup):
-%%%   - macula_gateway_clients: Client lifecycle management
-%%%   - macula_gateway_pubsub: Pub/Sub message routing with wildcards
-%%%   - macula_gateway_rpc: RPC handler registration &amp; invocation
-%%%   - macula_gateway_mesh: Mesh connection pooling
+%%% Child Modules (managed via macula_gateway_sup):
+%%%   - `macula_gateway_client_manager': Client lifecycle management
+%%%   - `macula_gateway_pubsub': Pub/Sub message routing with wildcards
+%%%   - `macula_gateway_rpc': RPC handler registration &amp; invocation
+%%%   - `macula_gateway_mesh': Mesh connection pooling
 %%%
 %%% Stateless Delegation Modules:
-%%%   - macula_gateway_dht: DHT query forwarding to routing server
-%%%   - macula_gateway_rpc_router: Multi-hop RPC routing via DHT
+%%%   - `macula_gateway_dht': DHT query forwarding to routing server
+%%%   - `macula_gateway_rpc_router': Multi-hop RPC routing via DHT
 %%%
 %%% Single Responsibility Principle:
 %%%   Each module has one clear purpose and delegates to specialized
 %%%   child modules. Gateway acts as orchestrator, not implementer.
-%%%
-%%% Usage (Embedded):
-%%% ```
-%%% {ok, Pid} = macula_gateway:start_link([
-%%%     {port, 9443},
-%%%     {realm, &lt;&lt;"com.example.realm"&gt;&gt;}
-%%% ]).
-%%%
-%%% %% Register RPC handler
-%%% macula_gateway:register_handler(&lt;&lt;"add"&gt;&gt;, fun(#{a := A, b := B}) ->
-%%%     #{result => A + B}
-%%% end).
-%%% '''
-%%%
-%%% Usage (Standalone):
-%%% ```
-%%% application:start(macula_gateway).
-%%% '''
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
