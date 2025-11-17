@@ -145,9 +145,12 @@ handle_call({store_local, Key, Value}, _From, #state{storage = Storage} = State)
             case ExistingIndex of
                 not_found ->
                     %% Append new provider
+                    io:format("[DHT] store_local: Adding new subscriber (was ~p, now ~p)~n",
+                             [length(ProviderList), length(ProviderList) + 1]),
                     [Value | ProviderList];
                 Index ->
                     %% Update existing provider (replace at index)
+                    io:format("[DHT] store_local: Updating existing subscriber at index ~p~n", [Index]),
                     lists:sublist(ProviderList, Index - 1) ++
                         [Value] ++
                         lists:nthtail(Index, ProviderList)
@@ -206,6 +209,7 @@ handle_call({find_value, Key, K}, _From, #state{routing_table = Table, storage =
     %% First check local storage
     Reply = case maps:get(Key, Storage, undefined) of
         undefined ->
+            io:format("[DHT] find_value: Key not found in local storage~n"),
             %% Not found locally - use DHT iterative lookup
             QueryFn = fun(_NodeInfo, _QueryKey) ->
                 %% TODO: For now, we can't directly query remote nodes without a connection
@@ -224,8 +228,10 @@ handle_call({find_value, Key, K}, _From, #state{routing_table = Table, storage =
                     {error, Reason}
             end;
         Value when is_list(Value) ->
+            io:format("[DHT] find_value: Found ~p subscriber(s) in local storage~n", [length(Value)]),
             {ok, Value};
         Value ->
+            io:format("[DHT] find_value: Found 1 subscriber (legacy single value)~n"),
             {ok, [Value]}
     end,
     {reply, Reply, State};
@@ -261,7 +267,12 @@ find_provider_index(NodeId, ProviderList) ->
 find_provider_index(_NodeId, [], _Index) ->
     not_found;
 find_provider_index(NodeId, [Provider | Rest], Index) ->
-    case maps:get(node_id, Provider, undefined) of
+    %% Handle both atom and binary keys from MessagePack
+    ProviderNodeId = case maps:get(node_id, Provider, undefined) of
+        undefined -> maps:get(<<"node_id">>, Provider, undefined);
+        Id -> Id
+    end,
+    case ProviderNodeId of
         NodeId -> Index;
         _ -> find_provider_index(NodeId, Rest, Index + 1)
     end.
@@ -305,8 +316,50 @@ handle_find_node(Message, #state{routing_table = Table, config = Config} = State
 handle_store(Message, #state{storage = Storage} = State) ->
     {ok, Key, Value} = macula_routing_protocol:decode_store(Message),
 
-    %% Store locally
-    NewStorage = Storage#{Key => Value},
+    %% DEBUG: Log the Value to see its structure
+    io:format("[DHT] handle_store: Value = ~p~n", [Value]),
+    io:format("[DHT] handle_store: Value keys = ~p~n", [maps:keys(Value)]),
+
+    %% Store using multi-value logic (same as store_local)
+    ExistingProviders = maps:get(Key, Storage, []),
+
+    %% Ensure we're working with a list (for backward compatibility)
+    ProviderList = case is_list(ExistingProviders) of
+        true -> ExistingProviders;
+        false -> [ExistingProviders]  %% Legacy: convert single value to list
+    end,
+
+    %% Get node_id from the new provider (handle both atom and binary keys from MessagePack)
+    NodeId = case maps:get(node_id, Value, undefined) of
+        undefined -> maps:get(<<"node_id">>, Value, undefined);
+        Id -> Id
+    end,
+
+    %% Update or append provider
+    UpdatedProviders = case NodeId of
+        undefined ->
+            %% No node_id, just append (shouldn't happen in practice)
+            io:format("[DHT] handle_store: Appending provider without node_id~n"),
+            [Value | ProviderList];
+        _ ->
+            %% Check if this provider already exists by comparing node_ids
+            ExistingIndex = find_provider_index(NodeId, ProviderList),
+            case ExistingIndex of
+                not_found ->
+                    %% Append new provider
+                    io:format("[DHT] handle_store: Adding new subscriber (was ~p, now ~p)~n",
+                             [length(ProviderList), length(ProviderList) + 1]),
+                    [Value | ProviderList];
+                Index ->
+                    %% Update existing provider (replace at index)
+                    io:format("[DHT] handle_store: Updating existing subscriber at index ~p~n", [Index]),
+                    lists:sublist(ProviderList, Index - 1) ++
+                        [Value] ++
+                        lists:nthtail(Index, ProviderList)
+            end
+    end,
+
+    NewStorage = Storage#{Key => UpdatedProviders},
 
     %% Return success
     Reply = #{type => store_reply, result => ok},
@@ -322,12 +375,19 @@ handle_find_value(Message, #state{storage = Storage, routing_table = Table, conf
     Reply = case maps:get(Key, Storage, undefined) of
         undefined ->
             %% Value not found locally, return closest nodes
+            io:format("[DHT] handle_find_value: Key not found, returning nodes~n"),
             K = maps:get(k, Config, 20),
             Closest = macula_routing_table:find_closest(Table, Key, K),
             macula_routing_protocol:encode_find_value_reply({nodes, Closest});
 
+        Value when is_list(Value) ->
+            %% Value found (multi-value list)
+            io:format("[DHT] handle_find_value: Returning ~p subscriber(s)~n", [length(Value)]),
+            macula_routing_protocol:encode_find_value_reply({value, Value});
+
         Value ->
-            %% Value found
+            %% Value found (legacy single value)
+            io:format("[DHT] handle_find_value: Returning 1 subscriber (legacy)~n"),
             macula_routing_protocol:encode_find_value_reply({value, Value})
     end,
 

@@ -395,9 +395,16 @@ decode_messages(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
 %% Route PUBLISH messages to pub/sub handler
 process_message({publish, Msg}, State) ->
     ?LOG_INFO("Connection manager routing message type: ~p", [publish]),
-    macula_pubsub_handler:handle_incoming_publish(Msg),
-    ?LOG_DEBUG("Routed PUBLISH to pubsub_handler"),
-    State;
+    %% Look up the pubsub handler PID via gproc
+    case gproc:lookup_local_name({pubsub_handler, State#state.realm}) of
+        undefined ->
+            ?LOG_WARNING("PubSub handler not found for realm ~s", [State#state.realm]),
+            State;
+        PubSubPid ->
+            macula_pubsub_handler:handle_incoming_publish(PubSubPid, Msg),
+            ?LOG_DEBUG("Routed PUBLISH to pubsub_handler"),
+            State
+    end;
 
 %% Route REPLY messages to RPC handler
 process_message({reply, Msg}, State) ->

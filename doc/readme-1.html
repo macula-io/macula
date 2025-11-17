@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.7.13">
+    <meta name="project" content="macula v0.7.30">
 
 
-    <title>Overview — macula v0.7.13</title>
+    <title>Overview — macula v0.7.30</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-BEDF5EBA.js"></script>
+    <script defer src="dist/sidebar_items-E9FD6A7E.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.7.13
+          v0.7.30
         </div>
       </div>
     </div>
@@ -81,7 +81,7 @@ macula
     <h1>Overview</h1>
 
 
-      <a href="https://github.com/macula-io/macula/blob/0.7.13/README.md#L1" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.7.30/README.md#L1" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -99,13 +99,13 @@ macula
 ✅ <strong>Built-in pub/sub &amp; RPC</strong> (no external message broker needed)
 ✅ <strong>Multi-tenancy</strong> (realm isolation for SaaS and shared infrastructure)
 ✅ <strong>Self-organizing mesh</strong> (DHT-based service discovery, O(log N) routing)
-✅ <strong>Production-ready patterns</strong> (OTP behaviors, comprehensive testing, memory management)</p><hr class="thin"/><h2 id="installation" class="section-heading"><a href="#installation" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Installation</span></h2><p><strong>Elixir (mix.exs):</strong></p><pre><code class="makeup elixir" translate="no"><span class="kd">def</span><span class="w"> </span><span class="nf">deps</span><span class="w"> </span><span class="k" data-group-id="4884616918-1">do</span><span class="w">
-  </span><span class="p" data-group-id="4884616918-2">[</span><span class="w">
-    </span><span class="p" data-group-id="4884616918-3">{</span><span class="ss">:macula</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;~&gt; 0.6&quot;</span><span class="p" data-group-id="4884616918-3">}</span><span class="w">
-  </span><span class="p" data-group-id="4884616918-2">]</span><span class="w">
-</span><span class="k" data-group-id="4884616918-1">end</span></code></pre><p><strong>Erlang (rebar.config):</strong></p><pre><code class="makeup erlang" translate="no"><span class="p" data-group-id="0174344187-1">{</span><span class="ss">deps</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="0174344187-2">[</span><span class="w">
-    </span><span class="p" data-group-id="0174344187-3">{</span><span class="ss">macula</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;0.6.6&quot;</span><span class="p" data-group-id="0174344187-3">}</span><span class="w">
-</span><span class="p" data-group-id="0174344187-2">]</span><span class="p" data-group-id="0174344187-1">}</span><span class="p">.</span></code></pre><hr class="thin"/><h2 id="development-setup" class="section-heading"><a href="#development-setup" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Development Setup</span></h2><pre><code class="makeup bash" translate="no"><span class=""># Clone the repository
+✅ <strong>Production-ready patterns</strong> (OTP behaviors, comprehensive testing, memory management)</p><hr class="thin"/><h2 id="installation" class="section-heading"><a href="#installation" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Installation</span></h2><p><strong>Elixir (mix.exs):</strong></p><pre><code class="makeup elixir" translate="no"><span class="kd">def</span><span class="w"> </span><span class="nf">deps</span><span class="w"> </span><span class="k" data-group-id="8378178338-1">do</span><span class="w">
+  </span><span class="p" data-group-id="8378178338-2">[</span><span class="w">
+    </span><span class="p" data-group-id="8378178338-3">{</span><span class="ss">:macula</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;~&gt; 0.6&quot;</span><span class="p" data-group-id="8378178338-3">}</span><span class="w">
+  </span><span class="p" data-group-id="8378178338-2">]</span><span class="w">
+</span><span class="k" data-group-id="8378178338-1">end</span></code></pre><p><strong>Erlang (rebar.config):</strong></p><pre><code class="makeup erlang" translate="no"><span class="p" data-group-id="4467928808-1">{</span><span class="ss">deps</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4467928808-2">[</span><span class="w">
+    </span><span class="p" data-group-id="4467928808-3">{</span><span class="ss">macula</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;0.6.6&quot;</span><span class="p" data-group-id="4467928808-3">}</span><span class="w">
+</span><span class="p" data-group-id="4467928808-2">]</span><span class="p" data-group-id="4467928808-1">}</span><span class="p">.</span></code></pre><hr class="thin"/><h2 id="development-setup" class="section-heading"><a href="#development-setup" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Development Setup</span></h2><pre><code class="makeup bash" translate="no"><span class=""># Clone the repository
 </span><span class="">git clone https://github.com/macula-io/macula.git
 </span><span class="">cd macula
 </span><span class="">
@@ -145,11 +145,11 @@ Hello World Tutorial
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.7.13" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.7.30" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.7.13">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.7.30">Hex Preview</a>
 
-              (<a href="https://preview.hex.pm/preview/macula/0.7.13/show/README.md">current file</a>)
+              (<a href="https://preview.hex.pm/preview/macula/0.7.30/show/README.md">current file</a>)
 
           </span>
 

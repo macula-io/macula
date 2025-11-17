@@ -111,17 +111,25 @@ register_test_service(Container, ServiceName, Endpoint) ->
                 NodeId = crypto:strong_rand_bytes(32),
                 ServiceValue = [{node_id, NodeId}, {endpoint, ~p}],
                 ServiceMap = maps:from_list(ServiceValue),
-                ok = macula_routing_server:store_local(Pid, ServiceKey, ServiceMap),
-                io:format(<<\"Service registered: ~~p~n\">>, [ServiceKey]),
-                ok
+                case macula_routing_server:store_local(Pid, ServiceKey, ServiceMap) of
+                    ok ->
+                        io:format(<<\"SUCCESS: Service registered~n\">>),
+                        {ok, registered};
+                    Error ->
+                        io:format(<<\"ERROR: Registration failed: ~~p~n\">>, [Error]),
+                        Error
+                end
         end.
     ", [ServiceName, Endpoint]),
 
     case docker_exec_erl(Container, ErlCode) of
         {ok, Output} ->
-            case string:str(Output, "Service registered") of
-                0 -> {error, Output};
-                _ -> ok
+            %% Check if the result was {ok, registered} (with or without spaces)
+            HasOk = string:str(Output, "{ok") > 0,
+            HasRegistered = string:str(Output, "registered}") > 0,
+            if
+                HasOk andalso HasRegistered -> ok;
+                true -> {error, Output}
             end;
         {error, Reason} ->
             {error, Reason}
@@ -139,10 +147,10 @@ discover_service(Container, ServiceName) ->
                 ServiceKey = ~p,
                 case macula_routing_server:get_local(Pid, ServiceKey) of
                     {ok, Value} ->
-                        io:format('Service found: ~~p~~n', [Value]),
+                        io:format(<<\"SUCCESS: Service found~n\">>),
                         {ok, found};
                     not_found ->
-                        io:format('Service not found~~n'),
+                        io:format(<<\"INFO: Service not found~n\">>),
                         {error, not_found}
                 end
         end.
@@ -150,9 +158,13 @@ discover_service(Container, ServiceName) ->
 
     case docker_exec_erl(Container, ErlCode) of
         {ok, Output} ->
-            case string:str(Output, "Service found") of
-                0 -> {error, not_found};
-                _ -> {ok, found}
+            %% Check the actual return value in the output (with or without spaces)
+            HasOkFound = string:str(Output, "{ok") > 0 andalso string:str(Output, "found}") > 0,
+            HasErrorNotFound = string:str(Output, "{error") > 0 andalso string:str(Output, "not_found}") > 0,
+            if
+                HasOkFound -> {ok, found};
+                HasErrorNotFound -> {error, not_found};
+                true -> {error, Output}
             end;
         {error, Reason} ->
             {error, Reason}

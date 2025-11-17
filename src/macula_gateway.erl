@@ -505,15 +505,16 @@ handle_connect_realm(true, Stream, ConnectMsg, State) ->
     io:format("[Gateway] Client connected: ~p~n", [ClientInfo]),
 
     %% HTTP/3 streams are bidirectional - we can send messages back on the same stream
-    %% Store the client's incoming stream for sending replies (enables client-only mode)
-    %% Also store endpoint address for creating mesh connections when needed
-    ClientStreams = State#state.client_streams,
-    NewClientStreams = ClientStreams#{NodeId => Stream},
-    io:format("[Gateway] Stored client stream for node ~p (bidirectional communication)~n",
+    %% Store the client's incoming stream in CLIENT MANAGER for routing (enables client-only mode)
+    ok = macula_gateway_clients:store_client_stream(State#state.client_manager, NodeId, Stream),
+    io:format("[Gateway] Stored client stream for node ~p in client manager (bidirectional communication)~n",
              [binary:encode_hex(NodeId)]),
 
+    %% Also store endpoint for this stream in client manager
+    ok = macula_gateway_clients:store_client_stream(State#state.client_manager, Endpoint, Stream),
+
     %% Connection management now handled by macula_gateway_mesh module
-    NewState = State#state{client_streams = NewClientStreams},
+    NewState = State,
 
     %% Add peer to DHT routing table with endpoint (binary string, not parsed tuple)
     %% IMPORTANT: DHT must store serializable values - binary strings, not tuples
@@ -626,76 +627,26 @@ forward_pubsub_route(NextHopNodeInfo, PubSubRouteMsg, MeshPid) ->
 
 %% @doc Handle RPC call message (legacy direct handling).
 handle_rpc_call(Stream, CallMsg, State) ->
-    io:format("[Gateway] Processing RPC CALL message: ~p~n", [CallMsg]),
-
-    %% Extract call data (CallMsg has binary keys from msgpack)
     Procedure = maps:get(<<"procedure">>, CallMsg),
     CallId = maps:get(<<"call_id">>, CallMsg),
-    ArgsJson = maps:get(<<"args">>, CallMsg),
 
-    io:format("[Gateway] Procedure: ~s, CallId: ~p~n", [Procedure, CallId]),
+    io:format("[Gateway] BOOTSTRAP-ONLY MODE: Rejecting RPC call to ~s (peers must communicate directly via DHT)~n", [Procedure]),
 
-    %% Look up handler (delegate to rpc module)
-    Rpc = State#state.rpc,
-    case macula_gateway_rpc:get_handler(Rpc, Procedure) of
-        not_found ->
-            %% No handler registered
-            io:format("[Gateway] No handler found for procedure: ~s~n", [Procedure]),
-            ErrorReply = #{
-                call_id => CallId,
-                error => #{
-                    code => <<"no_such_procedure">>,
-                    message => <<"No handler registered for ", Procedure/binary>>
-                }
-            },
-            ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
-            macula_quic:send(Stream, ReplyBinary),
-            {noreply, State};
+    %% Gateway is BOOTSTRAP-ONLY - it does NOT handle RPC calls!
+    %% Peers must discover service providers via DHT and call them directly
+    ErrorReply = #{
+        call_id => CallId,
+        error => #{
+            code => <<"gateway_bootstrap_only">>,
+            message => <<"Gateway is bootstrap-only. Discover service via DHT and call peer directly">>
+        }
+    },
+    ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+    macula_quic:send(Stream, ReplyBinary),
+    {noreply, State}.
 
-        {ok, Handler} ->
-            %% Decode args from JSON
-            try
-                Args = json:decode(ArgsJson),
-                io:format("[Gateway] Decoded args: ~p~n", [Args]),
-
-                %% Invoke handler
-                io:format("[Gateway] Invoking handler~n"),
-                Result = Handler(Args),
-                io:format("[Gateway] Handler result: ~p~n", [Result]),
-
-                %% Unwrap result tuple if needed
-                ResultMap = unwrap_result_to_map(Result),
-
-                %% Send reply (don't close stream - let connection idle timeout handle cleanup)
-                Reply = #{
-                    call_id => CallId,
-                    result => encode_json(ResultMap)
-                },
-                SuccessReplyBinary = macula_protocol_encoder:encode(reply, Reply),
-                SendResult = macula_quic:send(Stream, SuccessReplyBinary),
-                io:format("[Gateway] Sent reply (result: ~p, stream: ~p, size: ~p bytes)~n",
-                         [SendResult, Stream, byte_size(SuccessReplyBinary)]),
-                {noreply, State}
-            catch
-                Class:Reason:Stacktrace ->
-                    io:format("[Gateway] Handler error: ~p:~p~n~p~n", [Class, Reason, Stacktrace]),
-                    ErrorReply = #{
-                        call_id => CallId,
-                        error => #{
-                            code => <<"handler_error">>,
-                            message => iolist_to_binary(io_lib:format("~p:~p", [Class, Reason]))
-                        }
-                    },
-                    ErrorReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
-                    macula_quic:send(Stream, ErrorReplyBinary),
-                    {noreply, State}
-            end
-    end.
-
-%% @doc Encode map/list to JSON binary.
--spec encode_json(map() | list()) -> binary().
-encode_json(Data) ->
-    macula_utils:encode_json(Data).
+%% REMOVED: encode_json/1 - no longer needed since gateway is bootstrap-only
+%% (was used for RPC reply encoding)
 
 %%%===================================================================
 %%% Mesh Connection Management
@@ -884,16 +835,10 @@ handle_unsubscribe(Stream, UnsubMsg, State) ->
 %% Delegates to macula_gateway_pubsub_router for distribution logic.
 handle_publish(_PublisherStream, PubMsg, State) ->
     Topic = maps:get(<<"topic">>, PubMsg),
-    io:format("[Gateway] Publishing message to topic: ~s~n", [Topic]),
+    io:format("[Gateway] BOOTSTRAP-ONLY MODE: Rejecting publish to topic: ~s (peers must communicate directly via DHT)~n", [Topic]),
 
-    LocalNodeId = State#state.node_id,
-    Mesh = State#state.mesh,
-    PubSub = State#state.pubsub,
-
-    %% Get local subscribers and delegate distribution to pubsub_router
-    {ok, LocalSubscribers} = macula_gateway_pubsub:get_subscribers(PubSub, Topic),
-    macula_gateway_pubsub_router:distribute(LocalSubscribers, PubMsg, LocalNodeId, Mesh),
-
+    %% Gateway is BOOTSTRAP-ONLY - it does NOT route messages!
+    %% Peers must discover each other via DHT and communicate directly
     {noreply, State}.
 
 %%%===================================================================
@@ -924,8 +869,6 @@ check_and_register_diagnostics(_Pid, GatewayPid) ->
 %%% Helper Functions
 %%%===================================================================
 
-%% @doc Unwrap result to map format.
-unwrap_result_to_map({ok, Map}) when is_map(Map) -> Map;
-unwrap_result_to_map(Map) when is_map(Map) -> Map;
-unwrap_result_to_map(Other) -> #{value => Other}.
+%% REMOVED: unwrap_result_to_map/1 - no longer needed since gateway is bootstrap-only
+%% (was used for RPC result unwrapping)
 

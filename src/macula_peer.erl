@@ -27,10 +27,12 @@
     publish/4,
     subscribe/3,
     unsubscribe/2,
+    discover_subscribers/2,
     call/3,
     call/4,
     advertise/4,
-    unadvertise/2
+    unadvertise/2,
+    get_node_id/1
 ]).
 
 %% gen_server callbacks
@@ -95,6 +97,17 @@ subscribe(Client, Topic, Callback) ->
 -spec unsubscribe(pid(), reference()) -> ok | {error, term()}.
 unsubscribe(Client, SubRef) ->
     gen_server:call(Client, {unsubscribe, SubRef}, ?DEFAULT_TIMEOUT).
+
+%% @doc Discover subscribers to a topic via DHT query.
+-spec discover_subscribers(pid(), binary()) ->
+    {ok, [#{node_id := binary(), endpoint := binary()}]} | {error, term()}.
+discover_subscribers(Client, Topic) ->
+    gen_server:call(Client, {discover_subscribers, Topic}, ?DEFAULT_TIMEOUT).
+
+%% @doc Get the node ID of this peer.
+-spec get_node_id(pid()) -> {ok, binary()} | {error, term()}.
+get_node_id(Client) ->
+    gen_server:call(Client, get_node_id, ?DEFAULT_TIMEOUT).
 
 %% @doc Make an RPC call through this client (default timeout).
 -spec call(pid(), binary(), map() | list()) -> {ok, term()} | {error, term()}.
@@ -196,6 +209,15 @@ handle_call({subscribe, Topic, Callback}, _From, State) ->
 handle_call({unsubscribe, SubRef}, _From, State) ->
     Result = macula_pubsub_handler:unsubscribe(State#state.pubsub_handler_pid, SubRef),
     {reply, Result, State};
+
+%% Discover subscribers via DHT
+handle_call({discover_subscribers, Topic}, _From, State) ->
+    Result = macula_pubsub_discovery:find_subscribers(State#state.connection_manager_pid, Topic),
+    {reply, Result, State};
+
+%% Get node ID
+handle_call(get_node_id, _From, State) ->
+    {reply, {ok, State#state.node_id}, State};
 
 %% Delegate to rpc_handler
 handle_call({call, Procedure, Args, Opts}, _From, State) ->

@@ -416,9 +416,13 @@ do_remote_call_to_provider(Procedure, Args, Opts, From, Provider, AllProviders, 
         realm => State#state.realm
     },
 
-    %% Send call message via connection manager
+    %% Wrap call in DHT routing envelope
+    LocalNodeId = State#state.node_id,
+    RpcRouteMsg = macula_rpc_routing:wrap_call(LocalNodeId, ProviderNodeId, CallMsg, 10),
+
+    %% Send DHT-routed call message via connection manager
     ConnMgrPid = State#state.connection_manager_pid,
-    case macula_connection:send_message(ConnMgrPid, call, CallMsg) of
+    case macula_connection:send_message(ConnMgrPid, rpc_route, RpcRouteMsg) of
         ok ->
             %% Set up timeout timer
             Timeout = maps:get(timeout, Opts, ?DEFAULT_CALL_TIMEOUT),

@@ -19,14 +19,16 @@
 
 %% API
 -export([
-    distribute/4
+    distribute/5
 ]).
 
 %% Exported for testing
 -ifdef(TEST).
 -export([
     deliver_to_local_subscribers/2,
-    route_to_remote_subscribers/4
+    route_to_remote_subscribers/5,
+    parse_endpoint/1,
+    parse_endpoint_host/2
 ]).
 -endif.
 
@@ -36,18 +38,20 @@
 
 %% @doc Distribute pub/sub message to both local and remote subscribers.
 %% Uses DHT routing for remote subscribers (multi-hop Kademlia).
+%% For connected clients, uses existing bidirectional streams instead of mesh connections.
 -spec distribute(
     LocalSubscribers :: [quicer:stream_handle()],
     PubMsg :: map(),
     LocalNodeId :: binary(),
-    Mesh :: pid()
+    Mesh :: pid(),
+    Clients :: pid()
 ) -> ok.
-distribute(LocalSubscribers, PubMsg, LocalNodeId, Mesh) ->
+distribute(LocalSubscribers, PubMsg, LocalNodeId, Mesh, Clients) ->
     Topic = maps:get(<<"topic">>, PubMsg),
 
     %% Deliver to local and remote subscribers
     deliver_to_local_subscribers(LocalSubscribers, PubMsg),
-    route_to_remote_subscribers(Topic, PubMsg, LocalNodeId, Mesh),
+    route_to_remote_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients),
 
     io:format("[PubSubRouter] Finished distributing message to ~p local + DHT remote subscribers~n",
              [length(LocalSubscribers)]),
@@ -87,13 +91,13 @@ send_to_local_stream(Stream, Binary) ->
 
 %% @private
 %% @doc Route message to remote subscribers via DHT multi-hop routing.
--spec route_to_remote_subscribers(binary(), map(), binary(), pid()) -> ok.
-route_to_remote_subscribers(Topic, PubMsg, LocalNodeId, Mesh) ->
+-spec route_to_remote_subscribers(binary(), map(), binary(), pid(), pid()) -> ok.
+route_to_remote_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     TopicKey = crypto:hash(sha256, Topic),
     case macula_gateway_dht:lookup_value(TopicKey) of
         {ok, RemoteSubscribers} ->
             io:format("[PubSubRouter] Found ~p remote subscriber(s) in DHT~n", [length(RemoteSubscribers)]),
-            route_to_each_subscriber(RemoteSubscribers, Topic, PubMsg, LocalNodeId, Mesh);
+            route_to_each_subscriber(RemoteSubscribers, Topic, PubMsg, LocalNodeId, Mesh, Clients);
         {error, not_found} ->
             io:format("[PubSubRouter] No remote subscribers found in DHT~n"),
             ok
@@ -101,19 +105,25 @@ route_to_remote_subscribers(Topic, PubMsg, LocalNodeId, Mesh) ->
 
 %% @private
 %% @doc Route message to each remote subscriber via DHT.
--spec route_to_each_subscriber([map()], binary(), map(), binary(), pid()) -> ok.
-route_to_each_subscriber([], _Topic, _PubMsg, _LocalNodeId, _Mesh) ->
+-spec route_to_each_subscriber([map()], binary(), map(), binary(), pid(), pid()) -> ok.
+route_to_each_subscriber([], _Topic, _PubMsg, _LocalNodeId, _Mesh, _Clients) ->
     ok;
-route_to_each_subscriber([Subscriber | Rest], Topic, PubMsg, LocalNodeId, Mesh) ->
-    route_to_single_subscriber(Subscriber, Topic, PubMsg, LocalNodeId, Mesh),
-    route_to_each_subscriber(Rest, Topic, PubMsg, LocalNodeId, Mesh).
+route_to_each_subscriber([Subscriber | Rest], Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
+    route_to_single_subscriber(Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients),
+    route_to_each_subscriber(Rest, Topic, PubMsg, LocalNodeId, Mesh, Clients).
 
 %% @private
 %% @doc Route message to a single remote subscriber (if node_id present).
--spec route_to_single_subscriber(map(), binary(), map(), binary(), pid()) -> ok.
-route_to_single_subscriber(#{<<"node_id">> := DestNodeId}, Topic, PubMsg, LocalNodeId, Mesh) ->
+%% Checks if subscriber is a connected client first - if so, uses existing bidirectional stream.
+%% Otherwise creates mesh connection.
+-spec route_to_single_subscriber(map(), binary(), map(), binary(), pid(), pid()) -> ok.
+route_to_single_subscriber(#{<<"node_id">> := DestNodeId} = Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     Payload = maps:get(<<"payload">>, PubMsg),
     Qos = maps:get(<<"qos">>, PubMsg, 0),
+
+    %% DEBUG: Log the node_id from DHT (should be raw 32-byte binary)
+    io:format("[PubSubRouter DEBUG] DestNodeId size: ~p bytes, hex: ~s~n",
+             [byte_size(DestNodeId), binary:encode_hex(DestNodeId)]),
 
     %% Create PUBLISH message for this subscriber
     PublishMsg = #{
@@ -124,23 +134,68 @@ route_to_single_subscriber(#{<<"node_id">> := DestNodeId}, Topic, PubMsg, LocalN
         <<"message_id">> => crypto:strong_rand_bytes(16)
     },
 
-    %% Wrap in pubsub_route envelope and send via DHT
-    PubSubRouteMsg = macula_pubsub_routing:wrap_publish(LocalNodeId, DestNodeId, PublishMsg, 10),
-    send_via_dht(DestNodeId, PubSubRouteMsg, Mesh);
-route_to_single_subscriber(_Subscriber, _Topic, _PubMsg, _LocalNodeId, _Mesh) ->
-    io:format("[PubSubRouter] Subscriber missing node_id, skipping~n"),
+    %% Check if this is a connected client (has existing bidirectional stream)
+    case macula_gateway_clients:get_client_stream(Clients, DestNodeId) of
+        {ok, Stream} ->
+            %% Subscriber is a connected client - send directly via their stream
+            io:format("[PubSubRouter] ✅ Routing to connected client ~s via existing stream~n",
+                     [binary:encode_hex(DestNodeId)]),
+            send_to_client_stream(Stream, PublishMsg);
+        not_found ->
+            %% Not a connected client - must be remote gateway, use mesh connection
+            io:format("[PubSubRouter] ❌ Client stream NOT FOUND for ~s, routing via mesh~n",
+                     [binary:encode_hex(DestNodeId)]),
+
+            %% DEBUG: List all stored client streams to compare
+            io:format("[PubSubRouter DEBUG] Getting all client stream keys...~n"),
+            AllKeys = macula_gateway_clients:get_all_node_ids(Clients),
+            io:format("[PubSubRouter DEBUG] Stored client stream node_ids:~n"),
+            lists:foreach(fun(KeyNodeId) ->
+                io:format("  - ~s (size: ~p bytes)~n", [binary:encode_hex(KeyNodeId), byte_size(KeyNodeId)])
+            end, AllKeys),
+            io:format("[PubSubRouter DEBUG] Looking for: ~s (size: ~p bytes)~n",
+                     [binary:encode_hex(DestNodeId), byte_size(DestNodeId)]),
+
+            EndpointUrl = maps:get(<<"endpoint">>, Subscriber, undefined),
+            PubSubRouteMsg = macula_pubsub_routing:wrap_publish(LocalNodeId, DestNodeId, PublishMsg, 10),
+            send_via_dht(DestNodeId, EndpointUrl, PubSubRouteMsg, Mesh)
+    end;
+route_to_single_subscriber(Subscriber, _Topic, _PubMsg, _LocalNodeId, _Mesh, _Clients) ->
+    io:format("[PubSubRouter] Subscriber missing node_id, skipping: ~p~n", [Subscriber]),
     ok.
 
 %% @private
 %% @doc Send pubsub_route message via DHT mesh connection.
--spec send_via_dht(binary(), map(), pid()) -> ok.
-send_via_dht(DestNodeId, PubSubRouteMsg, Mesh) ->
-    case macula_gateway_mesh:get_or_create_connection(Mesh, DestNodeId, undefined) of
-        {ok, Stream} ->
-            send_route_message(Stream, PubSubRouteMsg, DestNodeId);
+%% Parses endpoint URL to extract address and port.
+-spec send_via_dht(binary(), binary(), map(), pid()) -> ok.
+send_via_dht(DestNodeId, EndpointUrl, PubSubRouteMsg, Mesh) ->
+    case parse_endpoint(EndpointUrl) of
+        {ok, {Address, Port}} ->
+            case macula_gateway_mesh:get_or_create_connection(Mesh, DestNodeId, {Address, Port}) of
+                {ok, Stream} ->
+                    send_route_message(Stream, PubSubRouteMsg, DestNodeId);
+                {error, Reason} ->
+                    io:format("[PubSubRouter] Failed to get connection for ~s: ~p~n",
+                             [binary:encode_hex(DestNodeId), Reason]),
+                    ok
+            end;
+        {error, ParseReason} ->
+            io:format("[PubSubRouter] Failed to parse endpoint ~s: ~p~n",
+                     [EndpointUrl, ParseReason]),
+            ok
+    end.
+
+%% @private
+%% @doc Send PUBLISH message directly to connected client stream.
+-spec send_to_client_stream(quicer:stream_handle(), map()) -> ok.
+send_to_client_stream(Stream, PublishMsg) ->
+    PubBinary = macula_protocol_encoder:encode(publish, PublishMsg),
+    case macula_quic:send(Stream, PubBinary) of
+        ok ->
+            io:format("[PubSubRouter] Sent PUBLISH to connected client stream~n"),
+            ok;
         {error, Reason} ->
-            io:format("[PubSubRouter] Failed to get connection for ~s: ~p~n",
-                     [binary:encode_hex(DestNodeId), Reason]),
+            io:format("[PubSubRouter] Failed to send to client stream: ~p~n", [Reason]),
             ok
     end.
 
@@ -158,3 +213,43 @@ send_route_message(Stream, PubSubRouteMsg, DestNodeId) ->
             io:format("[PubSubRouter] Failed to send pubsub_route: ~p~n", [Reason]),
             ok
     end.
+
+%%%===================================================================
+%%% Node ID Helpers (Removed - not needed)
+%%%===================================================================
+%% Per Kademlia spec: node IDs are always 256-bit (32-byte) raw binary.
+%% Hex encoding is ONLY for display/logging, never for internal storage.
+%% DHT stores and returns raw binary node IDs.
+
+%%%===================================================================
+%%% Endpoint Parsing Helper
+%%%===================================================================
+
+%% @private
+%% @doc Parse endpoint URL (e.g., "https://192.168.1.100:4433") to {Address, Port}.
+%% Returns {ok, {Address, Port}} or {error, Reason}.
+-spec parse_endpoint(binary()) -> {ok, {inet:ip_address() | list(), inet:port_number()}} | {error, term()}.
+parse_endpoint(EndpointUrl) when is_binary(EndpointUrl) ->
+    case uri_string:parse(EndpointUrl) of
+        #{host := Host, port := Port} when is_integer(Port) ->
+            parse_endpoint_host(Host, Port);
+        #{host := Host} ->
+            parse_endpoint_host(Host, 4433);  % Default QUIC port
+        _Other ->
+            {error, {invalid_endpoint_format, EndpointUrl}}
+    end;
+parse_endpoint(_Other) ->
+    {error, invalid_endpoint_type}.
+
+%% @private
+%% Parse hostname to IP address tuple.
+parse_endpoint_host(Host, Port) when is_list(Host) ->
+    case inet:parse_address(Host) of
+        {ok, IpTuple} ->
+            {ok, {IpTuple, Port}};
+        {error, _} ->
+            %% Not an IP address, treat as hostname
+            {ok, {Host, Port}}
+    end;
+parse_endpoint_host(Host, Port) when is_binary(Host) ->
+    parse_endpoint_host(binary_to_list(Host), Port).

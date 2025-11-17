@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.7.13">
+    <meta name="project" content="macula v0.7.30">
 
 
-    <title>macula_peer — macula v0.7.13</title>
+    <title>macula_peer — macula v0.7.30</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-BEDF5EBA.js"></script>
+    <script defer src="dist/sidebar_items-E9FD6A7E.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.7.13
+          v0.7.30
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_peer</span> 
-      <small class="app-vsn" translate="no">(macula v0.7.13)</small>
+      <small class="app-vsn" translate="no">(macula v0.7.30)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer.erl#L18" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L18" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -137,6 +137,26 @@ macula
       </div>
 
         <div class="summary-synopsis"><p>Make an RPC call through this client with options.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#discover_subscribers/2" data-no-tooltip="" translate="no">discover_subscribers(Client, Topic)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Discover subscribers to a topic via DHT query.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_node_id/1" data-no-tooltip="" translate="no">get_node_id(Client)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get the node ID of this peer.</p></div>
 
     </div>
 
@@ -233,7 +253,7 @@ macula
       <h1 class="signature" translate="no">advertise(Client, Procedure, Handler, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer.erl#L117" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L130" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -262,7 +282,7 @@ macula
       <h1 class="signature" translate="no">call(Client, Procedure, Args)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer.erl#L101" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L114" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -290,7 +310,7 @@ macula
       <h1 class="signature" translate="no">call(Client, Procedure, Args, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer.erl#L107" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L120" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -308,6 +328,63 @@ macula
 <p>Make an RPC call through this client with options.</p>
   </section>
 </section>
+<section class="detail" id="discover_subscribers/2">
+
+  <div class="detail-header">
+    <a href="#discover_subscribers/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">discover_subscribers(Client, Topic)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L104" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> discover_subscribers(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) ->
+                              {ok, [#{node_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), endpoint := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()}]} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Discover subscribers to a topic via DHT query.</p>
+  </section>
+</section>
+<section class="detail" id="get_node_id/1">
+
+  <div class="detail-header">
+    <a href="#get_node_id/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_node_id(Client)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L109" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_node_id(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Get the node ID of this peer.</p>
+  </section>
+</section>
 <section class="detail" id="publish/3">
 
   <div class="detail-header">
@@ -318,7 +395,7 @@ macula
       <h1 class="signature" translate="no">publish(Client, Topic, Data)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer.erl#L80" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L82" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -346,7 +423,7 @@ macula
       <h1 class="signature" translate="no">publish(Client, Topic, Data, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer.erl#L85" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L87" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -374,7 +451,7 @@ macula
       <h1 class="signature" translate="no">start_link(Url, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer.erl#L70" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L72" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -402,7 +479,7 @@ macula
       <h1 class="signature" translate="no">stop(Client)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer.erl#L75" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L77" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -430,7 +507,7 @@ macula
       <h1 class="signature" translate="no">subscribe(Client, Topic, Callback)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer.erl#L91" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L93" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -458,7 +535,7 @@ macula
       <h1 class="signature" translate="no">unadvertise(Client, Procedure)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer.erl#L124" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L137" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -486,7 +563,7 @@ macula
       <h1 class="signature" translate="no">unsubscribe(Client, SubRef)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.7.13/src/macula_peer.erl#L96" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.7.30/src/macula_peer.erl#L98" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -512,9 +589,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.7.13" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.7.30" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.7.13">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.7.30">Hex Preview</a>
 
           </span>
 

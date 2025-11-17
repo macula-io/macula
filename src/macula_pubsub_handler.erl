@@ -107,6 +107,10 @@ init(Opts) ->
     Url = maps:get(url, Opts, <<"unknown">>),
     Realm = maps:get(realm, Opts, <<"default">>),
 
+    %% Register in gproc for incoming publish message routing
+    true = gproc:reg({n, l, {pubsub_handler, Realm}}),
+    ?LOG_INFO("PubSub handler registered in gproc for realm ~s", [Realm]),
+
     %% connection_manager_pid will be set via cast message after init
     ConnMgrPid = undefined,
 
@@ -250,16 +254,10 @@ handle_call(_Request, _From, State) ->
 handle_cast({set_connection_manager_pid, Pid}, State) ->
     {noreply, State#state{connection_manager_pid = Pid}};
 
-handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, State) ->
-    %% Send the publish message to the server via connection manager
-    case macula_connection:send_message(State#state.connection_manager_pid, publish, PublishMsg) of
-        ok ->
-            ?LOG_DEBUG("[~s] Published message to topic ~s (qos=~p, msg_id=~s)",
-                      [State#state.node_id, BinaryTopic, Qos, MsgId]);
-        {error, SendError} ->
-            ?LOG_ERROR("[~s] Failed to publish to topic ~s: ~p",
-                      [State#state.node_id, BinaryTopic, SendError])
-    end,
+handle_cast({do_publish, _PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, State) ->
+    %% PURE P2P: No gateway publish - peers communicate directly via DHT routing
+    ?LOG_DEBUG("[~s] Publishing message to topic ~s (qos=~p, msg_id=~s) via P2P DHT",
+              [State#state.node_id, BinaryTopic, Qos, MsgId]),
 
     %% Handle QoS 1 (at-least-once delivery) - delegate to QoS module
     {ok, UpdatedPendingPubacks} = macula_pubsub_qos:track_message(
@@ -267,8 +265,7 @@ handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, St
     ),
     State2 = State#state{pending_pubacks = UpdatedPendingPubacks},
 
-    %% Trigger async discovery of remote subscribers (mesh-wide pub/sub)
-    %% Using cast to make the entire discovery process asynchronous
+    %% Discover subscribers via DHT and route directly to them (pure P2P)
     gen_server:cast(self(), {discover_subscribers, BinaryTopic, Payload, Qos, Opts}),
 
     {noreply, State2};

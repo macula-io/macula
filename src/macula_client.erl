@@ -23,11 +23,13 @@
     publish/4,
     subscribe/3,
     unsubscribe/2,
+    discover_subscribers/2,
     call/3,
     call/4,
     advertise/3,
     advertise/4,
-    unadvertise/2
+    unadvertise/2,
+    get_node_id/1
 ]).
 
 %% Type exports
@@ -190,6 +192,24 @@ subscribe(Client, Topic, Callback) when is_pid(Client), is_binary(Topic), is_fun
     ok | {error, Reason :: term()}.
 unsubscribe(Client, SubRef) when is_pid(Client), is_reference(SubRef) ->
     macula_peer:unsubscribe(Client, SubRef).
+
+%% @doc Discover subscribers to a topic via DHT query.
+%%
+%% Queries the DHT for all nodes subscribed to the given topic.
+%% Returns a list of subscriber nodes with their node IDs and endpoints.
+%%
+%% This is used for P2P discovery before sending direct messages.
+-spec discover_subscribers(Client :: client(), Topic :: topic()) ->
+    {ok, [#{node_id := binary(), endpoint := binary()}]} | {error, Reason :: term()}.
+discover_subscribers(Client, Topic) when is_pid(Client), is_binary(Topic) ->
+    macula_peer:discover_subscribers(Client, Topic).
+
+%% @doc Get the node ID of this client.
+%%
+%% Returns the 32-byte node ID assigned to this client.
+-spec get_node_id(Client :: client()) -> {ok, binary()} | {error, Reason :: term()}.
+get_node_id(Client) when is_pid(Client) ->
+    macula_peer:get_node_id(Client).
 
 %% @doc Make a synchronous RPC call.
 %%

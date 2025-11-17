@@ -36,7 +36,8 @@
     is_client_alive/2,
     store_client_stream/3,
     get_client_stream/2,
-    get_stream_by_endpoint/2
+    get_stream_by_endpoint/2,
+    get_all_node_ids/1
 ]).
 
 %% gen_server callbacks
@@ -118,6 +119,11 @@ get_client_stream(Pid, NodeId) ->
 -spec get_stream_by_endpoint(pid(), binary()) -> {ok, pid()} | {error, not_found}.
 get_stream_by_endpoint(Pid, Endpoint) ->
     gen_server:call(Pid, {get_stream_by_endpoint, Endpoint}).
+
+%% @doc Get all node IDs with stored client streams (for debugging).
+-spec get_all_node_ids(pid()) -> [binary()].
+get_all_node_ids(Pid) ->
+    gen_server:call(Pid, get_all_node_ids).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -216,6 +222,10 @@ handle_call({get_stream_by_endpoint, Endpoint}, _From, State) ->
         StreamPid -> {ok, StreamPid}
     end,
     {reply, Result, State};
+
+handle_call(get_all_node_ids, _From, State) ->
+    NodeIds = maps:keys(State#state.client_streams),
+    {reply, NodeIds, State};
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.

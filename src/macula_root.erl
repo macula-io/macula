@@ -47,19 +47,23 @@ start_link() ->
 %%                  type => worker(),       % optional
 %%                  modules => modules()}   % optional
 init([]) ->
+    %% Determine deployment mode
+    Mode = application:get_env(macula, mode, gateway),
+    validate_mode_config(Mode),
+    io:format("Starting Macula in ~p mode~n", [Mode]),
+
     SupFlags = #{
         strategy => one_for_one,
         intensity => 10,
         period => 5
     },
 
-    %% Core infrastructure (always started)
+    %% Build child specs based on mode
     CoreSpecs = get_core_child_specs(),
+    BootstrapSpecs = maybe_start_bootstrap(Mode),
+    GatewaySpecs = maybe_start_gateway(Mode),
 
-    %% Gateway services (conditionally started)
-    GatewaySpecs = maybe_start_gateway(),
-
-    ChildSpecs = CoreSpecs ++ GatewaySpecs,
+    ChildSpecs = CoreSpecs ++ BootstrapSpecs ++ GatewaySpecs,
 
     {ok, {SupFlags, ChildSpecs}}.
 
@@ -83,10 +87,44 @@ get_core_child_specs() ->
     ].
 
 %% @private
-%% @doc Conditionally start gateway services based on configuration.
-%% Set {start_gateway, false} in config to disable gateway (for client-only mode).
-maybe_start_gateway() ->
-    case application:get_env(macula, start_gateway, true) of
+%% @doc Conditionally start bootstrap system based on mode.
+%% Bootstrap system is started for: bootstrap, hybrid modes.
+maybe_start_bootstrap(bootstrap) -> get_bootstrap_specs();
+maybe_start_bootstrap(hybrid) -> get_bootstrap_specs();
+maybe_start_bootstrap(_) -> [].
+
+%% @private
+%% @doc Get bootstrap system child specs.
+get_bootstrap_specs() ->
+    Realm = get_gateway_realm(),
+    HealthInterval = application:get_env(macula, bootstrap_health_interval, 60000),
+
+    io:format("Starting Bootstrap System (realm: ~s, health_interval: ~pms)~n", [Realm, HealthInterval]),
+
+    [
+        #{
+            id => macula_bootstrap_system,
+            start => {macula_bootstrap_system, start_link, [#{
+                realm => Realm,
+                health_check_interval => HealthInterval
+            }]},
+            restart => permanent,
+            shutdown => infinity,  % supervisor shutdown
+            type => supervisor,
+            modules => [macula_bootstrap_system]
+        }
+    ].
+
+%% @private
+%% @doc Conditionally start gateway services based on mode and configuration.
+%% Gateway required for: gateway, hybrid modes.
+%% Can be overridden by: {start_gateway, false}.
+maybe_start_gateway(Mode) ->
+    %% Determine if gateway should start based on mode
+    DefaultStartGateway = mode_requires_gateway(Mode),
+    StartGateway = application:get_env(macula, start_gateway, DefaultStartGateway),
+
+    case StartGateway of
         true ->
             %% Read gateway configuration from environment or config
             Port = get_gateway_port(),
@@ -112,8 +150,27 @@ maybe_start_gateway() ->
                 }
             ];
         false ->
-            io:format("Gateway auto-start disabled (client-only mode)~n"),
+            io:format("Gateway disabled for ~p mode~n", [Mode]),
             []
+    end.
+
+%% @private
+%% @doc Determine if mode requires gateway by default.
+mode_requires_gateway(gateway) -> true;
+mode_requires_gateway(hybrid) -> true;
+mode_requires_gateway(bootstrap) -> false;  % Bootstrap-only, no gateway
+mode_requires_gateway(edge) -> false.       % Pure P2P, no gateway
+
+%% @private
+%% @doc Validate mode configuration.
+%% Crashes on invalid mode to prevent misconfiguration.
+validate_mode_config(Mode) ->
+    ValidModes = [bootstrap, edge, gateway, hybrid],
+    case lists:member(Mode, ValidModes) of
+        true -> ok;
+        false ->
+            io:format("ERROR: Invalid mode ~p. Valid modes: ~p~n", [Mode, ValidModes]),
+            erlang:error({invalid_mode, Mode, ValidModes})
     end.
 
 %% @private

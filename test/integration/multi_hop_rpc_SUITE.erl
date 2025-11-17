@@ -268,15 +268,17 @@ test_rpc_timeout_handling(Config) ->
                 case macula_routing_server:get_local(Pid, ServiceKey) of
                     {ok, _} -> {error, unexpected_success};
                     not_found ->
-                        io:format('Service not found (expected for timeout test)~n'),
+                        io:format(<<\"Service not found as expected~n\">>),
                         {ok, not_found_as_expected}
                 end
         end.
     ", [NonExistentService])),
 
     ct:pal("Timeout test result: ~s", [Output]),
-    ?assert(string:str(Output, "not_found_as_expected") > 0 orelse
-            string:str(Output, "not_found") > 0),
+    %% Check for the return value (with or without spaces)
+    HasOk = string:str(Output, "{ok") > 0,
+    HasNotFoundExpected = string:str(Output, "not_found_as_expected") > 0,
+    ?assert(HasOk andalso HasNotFoundExpected),
 
     ct:pal("✓ RPC timeout/error handling validated").
 
