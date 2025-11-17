@@ -1,0 +1,63 @@
+# Macula Base Docker Image
+# Multi-stage build for optimized production images
+
+FROM erlang:26-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    git \
+    make \
+    gcc \
+    g++ \
+    musl-dev \
+    openssl-dev
+
+# Set working directory
+WORKDIR /opt/macula
+
+# Copy rebar files first (for caching)
+COPY rebar.config rebar.lock ./
+
+# Copy source code
+COPY src ./src
+COPY include ./include
+COPY priv ./priv
+COPY config ./config
+
+# Compile application
+RUN rebar3 compile
+
+# Create release
+RUN rebar3 as prod release
+
+# Runtime image
+FROM alpine:3.18
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ncurses-libs \
+    libstdc++ \
+    openssl \
+    libgcc
+
+# Create macula user
+RUN addgroup -S macula && adduser -S macula -G macula
+
+# Set working directory
+WORKDIR /opt/macula
+
+# Copy release from builder
+COPY --from=builder /opt/macula/_build/prod/rel/macula .
+
+# Change ownership
+RUN chown -R macula:macula /opt/macula
+
+# Switch to macula user
+USER macula
+
+# Health check (overridden by mode-specific images)
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
+    CMD echo "health check not configured"
+
+# Default command (overridden by mode-specific images)
+CMD ["./bin/macula", "foreground"]

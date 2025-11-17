@@ -1,0 +1,214 @@
+# Macula Multi-Mode Test Environment
+# Purpose: Integration and E2E testing with all deployment modes
+#
+# Topology:
+#   Bootstrap (172.20.0.10) - DHT entry point
+#   ├── Gateway (172.20.0.20) - Relay node
+#   │   ├── Edge1 (172.20.0.31) - Pure P2P peer
+#   │   └── Edge2 (172.20.0.32) - Pure P2P peer (RPC client)
+#   └── Edge3 (172.20.0.33) - Pure P2P peer (RPC provider)
+#
+# Test Scenarios:
+# 1. DHT Bootstrap: Edge nodes discover each other via bootstrap
+# 2. Multi-hop RPC: Edge2 → Edge1 → Gateway → Edge3
+# 3. Multi-hop Pub/Sub: Edge2 publishes → Edge1, Edge3 receive
+# 4. NAT Fallback: Gateway relay when direct P2P fails
+
+version: '3.8'
+
+services:
+  #############################################################################
+  # Bootstrap Node - Well-known DHT entry point
+  #############################################################################
+  bootstrap:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.bootstrap
+    container_name: macula-bootstrap
+    hostname: bootstrap
+    environment:
+      - MODE=bootstrap
+      - START_GATEWAY=false
+      - MACULA_REALM=macula.test
+      - HEALTH_PORT=8080
+      - BOOTSTRAP_HEALTH_INTERVAL=30000
+      # Fixed node ID for bootstrap (makes testing easier)
+      - NODE_ID=0000000000000000000000000000000000000000000000000000000000000001
+    ports:
+      - "8080:8080"  # Health check (exposed to host)
+    networks:
+      macula_mesh:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #############################################################################
+  # Gateway Node - Relay for NAT-ed peers
+  #############################################################################
+  gateway:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gateway
+    container_name: macula-gateway
+    hostname: gateway
+    environment:
+      - MODE=gateway
+      - START_GATEWAY=true
+      - GATEWAY_PORT=9443
+      - HEALTH_PORT=8080
+      - MACULA_REALM=macula.test
+      - BOOTSTRAP_NODES=bootstrap:9443
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
+    ports:
+      - "9443:9443"  # QUIC listener (exposed to host)
+      - "8081:8080"  # Health check (exposed to host)
+    depends_on:
+      bootstrap:
+        condition: service_healthy
+    networks:
+      macula_mesh:
+        ipv4_address: 172.20.0.20
+    volumes:
+      - ../docker/certs:/opt/macula/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #############################################################################
+  # Edge Node 1 - Pure P2P peer (intermediate hop)
+  #############################################################################
+  edge1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.edge
+    container_name: macula-edge1
+    hostname: edge1
+    environment:
+      - MODE=edge
+      - START_GATEWAY=false
+      - BOOTSTRAP_NODES=bootstrap:9443
+      - MACULA_REALM=macula.test
+      - NODE_NAME=edge1@edge1
+    depends_on:
+      bootstrap:
+        condition: service_healthy
+    networks:
+      macula_mesh:
+        ipv4_address: 172.20.0.31
+    healthcheck:
+      test: ["CMD", "./bin/macula", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #############################################################################
+  # Edge Node 2 - Pure P2P peer (RPC client, pub/sub publisher)
+  #############################################################################
+  edge2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.edge
+    container_name: macula-edge2
+    hostname: edge2
+    environment:
+      - MODE=edge
+      - START_GATEWAY=false
+      - BOOTSTRAP_NODES=bootstrap:9443
+      - MACULA_REALM=macula.test
+      - NODE_NAME=edge2@edge2
+    depends_on:
+      bootstrap:
+        condition: service_healthy
+    networks:
+      macula_mesh:
+        ipv4_address: 172.20.0.32
+    healthcheck:
+      test: ["CMD", "./bin/macula", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #############################################################################
+  # Edge Node 3 - Pure P2P peer (RPC provider, pub/sub subscriber)
+  #############################################################################
+  edge3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.edge
+    container_name: macula-edge3
+    hostname: edge3
+    environment:
+      - MODE=edge
+      - START_GATEWAY=false
+      - BOOTSTRAP_NODES=bootstrap:9443
+      - MACULA_REALM=macula.test
+      - NODE_NAME=edge3@edge3
+    depends_on:
+      bootstrap:
+        condition: service_healthy
+    networks:
+      macula_mesh:
+        ipv4_address: 172.20.0.33
+    healthcheck:
+      test: ["CMD", "./bin/macula", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+#############################################################################
+# Networks
+#############################################################################
+networks:
+  macula_mesh:
+    name: macula_mesh
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+
+#############################################################################
+# Volumes (optional - for persistent data)
+#############################################################################
+volumes:
+  bootstrap_data:
+    name: macula_bootstrap_data
+  gateway_data:
+    name: macula_gateway_data

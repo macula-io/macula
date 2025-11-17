@@ -1,0 +1,45 @@
+# Macula Bootstrap Node
+# Well-known DHT entry point for peer discovery
+
+FROM erlang:26-alpine AS builder
+
+RUN apk add --no-cache git make gcc g++ musl-dev openssl-dev
+
+WORKDIR /opt/macula
+COPY rebar.config rebar.lock ./
+COPY src ./src
+COPY include ./include
+COPY priv ./priv
+COPY config ./config
+
+RUN rebar3 compile
+RUN rebar3 as prod release
+
+FROM alpine:3.18
+RUN apk add --no-cache ncurses-libs libstdc++ openssl libgcc curl
+RUN addgroup -S macula && adduser -S macula -G macula
+
+WORKDIR /opt/macula
+COPY --from=builder /opt/macula/_build/prod/rel/macula .
+RUN chown -R macula:macula /opt/macula
+
+# Bootstrap mode environment
+ENV MODE=bootstrap
+ENV START_GATEWAY=false
+ENV MACULA_REALM=macula.global
+ENV HEALTH_PORT=8080
+ENV BOOTSTRAP_HEALTH_INTERVAL=30000
+
+# Expose health port
+EXPOSE 8080
+
+USER macula
+
+# Health check via HTTP
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Start in bootstrap mode
+CMD ["./bin/macula", "foreground", \
+     "-macula", "mode", "bootstrap", \
+     "-macula", "start_gateway", "false"]

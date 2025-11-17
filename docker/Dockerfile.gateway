@@ -1,0 +1,52 @@
+# Macula Gateway Node
+# Relay for NAT-ed peers, fallback for unreachable nodes
+
+FROM erlang:26-alpine AS builder
+
+RUN apk add --no-cache git make gcc g++ musl-dev openssl-dev
+
+WORKDIR /opt/macula
+COPY rebar.config rebar.lock ./
+COPY src ./src
+COPY include ./include
+COPY priv ./priv
+COPY config ./config
+
+RUN rebar3 compile
+RUN rebar3 as prod release
+
+FROM alpine:3.18
+RUN apk add --no-cache ncurses-libs libstdc++ openssl libgcc curl
+RUN addgroup -S macula && adduser -S macula -G macula
+
+WORKDIR /opt/macula
+COPY --from=builder /opt/macula/_build/prod/rel/macula .
+
+# Copy TLS certificates (will be mounted as volume)
+RUN mkdir -p /opt/macula/certs
+RUN chown -R macula:macula /opt/macula
+
+# Gateway mode environment
+ENV MODE=gateway
+ENV START_GATEWAY=true
+ENV GATEWAY_PORT=9443
+ENV HEALTH_PORT=8080
+ENV MACULA_REALM=macula.relay
+ENV BOOTSTRAP_NODES=bootstrap:9443
+ENV TLS_CERT_FILE=/opt/macula/certs/cert.pem
+ENV TLS_KEY_FILE=/opt/macula/certs/key.pem
+
+# Expose gateway and health ports
+EXPOSE 9443 8080
+
+USER macula
+
+# Health check via HTTP
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Start in gateway mode
+CMD ["./bin/macula", "foreground", \
+     "-macula", "mode", "gateway", \
+     "-macula", "start_gateway", "true", \
+     "-macula", "gateway_port", "9443"]
