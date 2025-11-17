@@ -11,7 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 - **Hex docs completely redesigned** - Professional, comprehensive documentation for hex.pm
+- **NEW: Comprehensive Architecture Guide** (`ARCHITECTURE.md`):
+  - C4 diagrams (system context, container views) with Mermaid
+  - 3 deployment topologies (edge-first, microservices, hybrid cloud-edge)
+  - Supervision tree diagrams (peer, gateway)
+  - Message flow diagrams (RPC, PubSub with direct P2P)
+  - DHT architecture (Kademlia routing, k-buckets, STORE/FIND_VALUE)
+  - Performance comparison (v0.7.x vs v0.8.0)
+  - Module dependency graph
+  - "When to use Macula" decision guide
 - **README.md improvements**:
+  - Added "Architecture at a Glance" section with ASCII diagrams
+  - Prominent link to Architecture Guide as first ToC item
   - Added comprehensive Quick Start section with practical code examples
   - Added "What's New in v0.8.0" section highlighting key features
   - Added Core Concepts section (mesh architecture, realms, DHT, direct P2P)
@@ -24,13 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `macula_peer_connector`: Added usage examples and performance characteristics
 - **rebar.config cleanup**:
   - Removed references to non-existent files (HELLO_WORLD.md, EXECUTIVE_SUMMARY.md, etc.)
+  - Added ARCHITECTURE.md to hex docs (prominently featured)
   - Added v0.8.0 documentation files (OVERVIEW, CHANGELOG, ROADMAP)
   - Added TODO.md to hex docs
   - Updated hex package description to mention v0.8.0 features
   - Changed main page to "readme" for better landing experience
 
 ### Result
-- Hex docs now render professionally on hex.pm
+- Hex docs now render professionally on hex.pm with compelling visuals
+- Architecture diagrams showcase system design to developers and architects
 - Clear navigation and documentation structure
 - v0.8.0 features prominently showcased
 - Code examples visible and practical

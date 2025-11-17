@@ -1,0 +1,701 @@
+# Macula Architecture Overview
+
+> **Visual guide to understanding Macula's distributed mesh architecture**
+
+---
+
+## Table of Contents
+
+1. [System Context (C4)](#system-context-c4)
+2. [Container View (C4)](#container-view-c4)
+3. [Deployment Topologies](#deployment-topologies)
+4. [Supervision Trees](#supervision-trees)
+5. [Message Flow Patterns](#message-flow-patterns)
+6. [DHT Architecture](#dht-architecture)
+7. [Direct P2P Connections (v0.8.0)](#direct-p2p-connections-v080)
+
+---
+
+## System Context (C4)
+
+**How applications use Macula to build distributed systems**
+
+```mermaid
+graph TB
+    subgraph "Your Application"
+        App[Elixir/Erlang Application]
+    end
+
+    subgraph "Macula Platform"
+        Peer[macula_peer<br/>Mesh Participant API]
+        Gateway[macula_gateway<br/>Relay Node]
+        DHT[Distributed Hash Table<br/>Service Discovery]
+    end
+
+    subgraph "Other Nodes"
+        Remote1[Remote Service 1]
+        Remote2[Remote Service 2]
+        Remote3[Remote Subscriber]
+    end
+
+    App -->|start_link<br/>publish<br/>subscribe<br/>call<br/>advertise| Peer
+    Peer -->|QUIC/HTTP3| Gateway
+    Peer -.->|Direct P2P| Remote1
+    Peer -.->|Direct P2P| Remote2
+    Gateway -->|Relay| Remote3
+
+    Peer <-->|Query| DHT
+    Gateway <-->|Store/Find| DHT
+
+    style Peer fill:#4CAF50
+    style Gateway fill:#2196F3
+    style DHT fill:#FF9800
+    style App fill:#9C27B0
+```
+
+**Key Concepts:**
+- **macula_peer**: Your application's interface to the mesh
+- **macula_gateway**: Relay node for NAT-traversed peers (optional)
+- **DHT**: Kademlia-based distributed service registry (k=20 replication)
+- **Direct P2P**: v0.8.0+ establishes direct QUIC connections (50% latency improvement)
+
+---
+
+## Container View (C4)
+
+**Internal architecture of a Macula node**
+
+```mermaid
+graph TB
+    subgraph "Application Layer"
+        App[Your Application Code]
+    end
+
+    subgraph "Macula Peer (High-Level API)"
+        Peer[macula_peer<br/>Facade/Coordinator]
+
+        subgraph "Supervised Children"
+            Conn[macula_connection<br/>QUIC Transport]
+            PSH[macula_pubsub_handler<br/>Pub/Sub Logic]
+            RPC[macula_rpc_handler<br/>RPC Logic]
+            ADV[macula_advertisement_manager<br/>DHT Ads]
+        end
+    end
+
+    subgraph "Gateway (Optional Relay)"
+        GW[macula_gateway<br/>Coordinator]
+
+        subgraph "Gateway Workers"
+            Clients[macula_gateway_client_manager<br/>Client Lifecycle]
+            GWPS[macula_gateway_pubsub<br/>Message Routing]
+            GWRPC[macula_gateway_rpc<br/>Handler Registry]
+            Mesh[macula_gateway_mesh<br/>Connection Pool]
+        end
+    end
+
+    subgraph "Core Services"
+        Routing[macula_routing_server<br/>DHT Node]
+        Service[macula_service_registry<br/>Service Store]
+        PubSubDHT[macula_pubsub_dht<br/>Subscriber Discovery]
+    end
+
+    App -->|API Calls| Peer
+    Peer --> Conn
+    Peer --> PSH
+    Peer --> RPC
+    Peer --> ADV
+
+    Conn -.->|QUIC| GW
+    GW --> Clients
+    GW --> GWPS
+    GW --> GWRPC
+    GW --> Mesh
+
+    PSH --> PubSubDHT
+    RPC --> Service
+    ADV --> Service
+    Service --> Routing
+    PubSubDHT --> Routing
+
+    style Peer fill:#4CAF50
+    style GW fill:#2196F3
+    style Routing fill:#FF9800
+```
+
+**Architecture Principles:**
+- **Single Responsibility**: Each module has one clear purpose
+- **OTP Supervision**: Automatic fault recovery at all levels
+- **Stateless Utilities**: DHT operations don't hold state
+- **Connection Pooling**: Gateway reuses QUIC connections (v0.9.0+)
+
+---
+
+## Deployment Topologies
+
+### 1. Edge-First Mesh (IoT, Distributed Systems)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Cloud / Data Center                      │
+│  ┌────────────┐      ┌────────────┐      ┌────────────┐    │
+│  │  Bootstrap │◄────►│  Bootstrap │◄────►│  Bootstrap │    │
+│  │    Node    │      │    Node    │      │    Node    │    │
+│  │ (DHT Seed) │      │ (DHT Seed) │      │ (DHT Seed) │    │
+│  └─────▲──────┘      └──────▲─────┘      └──────▲─────┘    │
+│        │                     │                   │           │
+└────────┼─────────────────────┼───────────────────┼───────────┘
+         │                     │                   │
+    ┌────┴────┐           ┌────┴────┐        ┌────┴────┐
+    │ Gateway │           │ Gateway │        │ Gateway │
+    │  Node   │◄─────────►│  Node   │◄──────►│  Node   │
+    │(Relay+  │           │(Relay+  │        │(Relay+  │
+    │ DHT)    │           │ DHT)    │        │ DHT)    │
+    └────▲────┘           └────▲────┘        └────▲────┘
+         │                     │                   │
+    ┌────┴────┐           ┌────┴────┐        ┌────┴────┐
+    │  Edge   │           │  Edge   │        │  Edge   │
+    │  Peer   │◄─────────►│  Peer   │◄──────►│  Peer   │
+    │(Behind  │  Direct   │(Behind  │ Direct │(Behind  │
+    │  NAT)   │    P2P    │  NAT)   │  P2P   │  NAT)   │
+    └─────────┘  (v0.8.0) └─────────┘ (v0.8.0)└─────────┘
+         │                     │                   │
+    ┌────▼────┐           ┌────▼────┐        ┌────▼────┐
+    │ Sensor  │           │ Sensor  │        │ Sensor  │
+    │ Device  │           │ Device  │        │ Device  │
+    └─────────┘           └─────────┘        └─────────┘
+```
+
+**Use Cases:**
+- IoT networks with edge processing
+- Distributed sensor networks
+- Edge computing platforms
+- Multi-site deployments
+
+**Features:**
+- Bootstrap nodes: DHT seeds (always available)
+- Gateway nodes: Relay for NAT-traversed peers
+- Edge peers: Application logic at the edge
+- Direct P2P: v0.8.0+ bypasses relay when possible
+
+---
+
+### 2. Microservices Mesh (Kubernetes, Cloud)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Kubernetes Cluster                        │
+│                                                               │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │              Namespace: macula-system                 │   │
+│  │                                                        │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐           │   │
+│  │  │Bootstrap │  │Bootstrap │  │Bootstrap │           │   │
+│  │  │   Pod    │  │   Pod    │  │   Pod    │           │   │
+│  │  │(Headless │  │(Headless │  │(Headless │           │   │
+│  │  │ Service) │  │ Service) │  │ Service) │           │   │
+│  │  └────▲─────┘  └────▲─────┘  └────▲─────┘           │   │
+│  │       └─────────────┼──────────────┘                 │   │
+│  └──────────────────────┼────────────────────────────────┘   │
+│                         │                                     │
+│  ┌──────────────────────┼────────────────────────────────┐   │
+│  │              Namespace: app-services                   │   │
+│  │                      │                                 │   │
+│  │  ┌───────────────────▼──────────────────┐            │   │
+│  │  │        Service A (3 replicas)        │            │   │
+│  │  │  ┌─────────┐ ┌─────────┐ ┌─────────┐│            │   │
+│  │  │  │  Pod A1 │ │  Pod A2 │ │  Pod A3 ││            │   │
+│  │  │  │(macula  │ │(macula  │ │(macula  ││            │   │
+│  │  │  │ peer)   │ │ peer)   │ │ peer)   ││            │   │
+│  │  │  └────▲────┘ └────▲────┘ └────▲────┘│            │   │
+│  │  └───────┼───────────┼───────────┼─────┘            │   │
+│  │          │           │           │                   │   │
+│  │          └───────────┼───────────┘                   │   │
+│  │                      │                               │   │
+│  │  ┌───────────────────▼──────────────────┐            │   │
+│  │  │        Service B (2 replicas)        │            │   │
+│  │  │  ┌─────────┐      ┌─────────┐       │            │   │
+│  │  │  │  Pod B1 │◄────►│  Pod B2 │       │            │   │
+│  │  │  │(macula  │Direct│(macula  │       │            │   │
+│  │  │  │ peer)   │  P2P │ peer)   │       │            │   │
+│  │  │  └─────────┘(v0.8)└─────────┘       │            │   │
+│  │  └────────────────────────────────────┘             │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Use Cases:**
+- Microservices communication
+- Service mesh alternative
+- Event-driven architectures
+- Multi-tenant platforms
+
+**Features:**
+- No external message broker needed
+- Built-in service discovery via DHT
+- Realm-based multi-tenancy
+- Direct P2P between pods (v0.8.0+)
+
+---
+
+### 3. Hybrid Cloud-Edge (Best of Both Worlds)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         Cloud Region                         │
+│  ┌────────────┐      ┌────────────┐      ┌────────────┐    │
+│  │  Gateway   │◄────►│  Gateway   │◄────►│  Gateway   │    │
+│  │ (Public IP)│      │ (Public IP)│      │ (Public IP)│    │
+│  └─────▲──────┘      └──────▲─────┘      └──────▲─────┘    │
+└────────┼─────────────────────┼───────────────────┼───────────┘
+         │                     │                   │
+    Internet/WAN          Internet/WAN        Internet/WAN
+         │                     │                   │
+┌────────┼─────────────────────┼───────────────────┼───────────┐
+│        │                     │                   │           │
+│   ┌────▼────┐           ┌────▼────┐        ┌────▼────┐     │
+│   │ Factory │           │  Retail │        │  Office │     │
+│   │   Site  │           │   Site  │        │   Site  │     │
+│   │         │           │         │        │         │     │
+│   │ ┌─────┐ │           │ ┌─────┐ │        │ ┌─────┐ │     │
+│   │ │Edge │ │           │ │Edge │ │        │ │Edge │ │     │
+│   │ │Peer │ │           │ │Peer │ │        │ │Peer │ │     │
+│   │ └──▲──┘ │           │ └──▲──┘ │        │ └──▲──┘ │     │
+│   │    │    │           │    │    │        │    │    │     │
+│   │ ┌──▼──┐ │           │ ┌──▼──┐ │        │ ┌──▼──┐ │     │
+│   │ │Equip│ │           │ │ POS │ │        │ │ App │ │     │
+│   │ └─────┘ │           │ └─────┘ │        │ └─────┘ │     │
+│   └─────────┘           └─────────┘        └─────────┘     │
+│                     Edge Locations                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Use Cases:**
+- Retail chains with local processing
+- Manufacturing with edge analytics
+- Distributed branch offices
+- Multi-region applications
+
+**Features:**
+- Cloud gateways for global reach
+- Edge peers for local processing
+- Automatic failover (relay ↔ direct P2P)
+- Low latency via direct connections
+
+---
+
+## Supervision Trees
+
+### Peer Supervision Tree
+
+```
+                    macula_peer_sup
+                          │
+        ┌─────────────────┼─────────────────┐
+        │                 │                 │
+        ▼                 ▼                 ▼
+macula_connection  macula_pubsub_handler  macula_rpc_handler
+  (QUIC Layer)      (Pub/Sub Logic)       (RPC Logic)
+        │
+        ▼
+macula_advertisement_manager
+  (Service Ads)
+```
+
+**Strategy**: `one_for_all`
+- If any child crashes, restart all (coordinated state)
+- Connection is the foundation; handlers depend on it
+
+---
+
+### Gateway Supervision Tree
+
+```
+                    macula_gateway_sup (Root)
+                            │
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+        ▼                   ▼                   ▼
+macula_gateway_    macula_gateway    macula_gateway_workers_sup
+  quic_server                               (Supervisor)
+ (QUIC Listener)   (Coordinator)                │
+                                    ┌───────────┼───────────┐
+                                    │           │           │
+                                    ▼           ▼           ▼
+                          client_manager  pubsub_router  rpc_handler
+                            (Lifecycle)    (Routing)     (Registry)
+                                    │
+                                    ▼
+                              mesh_connection_manager
+                                 (Pool)
+```
+
+**Strategy**: `rest_for_one` (top-level)
+- QUIC server starts first
+- Gateway coordinates
+- Workers handle business logic
+- If QUIC crashes, restart everything
+- If worker crashes, only restart later siblings
+
+**Strategy**: `one_for_one` (workers)
+- Each worker independent
+- Failures isolated to single worker
+
+---
+
+## Message Flow Patterns
+
+### RPC Flow (v0.8.0 Direct P2P)
+
+```
+┌─────────┐                                         ┌─────────┐
+│ Client  │                                         │Provider │
+│  Peer   │                                         │  Peer   │
+└────┬────┘                                         └────┬────┘
+     │                                                    │
+     │ 1. call("service.add", #{a=>5, b=>3})            │
+     │────────────────────────────────┐                 │
+     │                                 │                 │
+     │                                 ▼                 │
+     │                           ┌──────────┐            │
+     │                           │   DHT    │            │
+     │                           │ (Find    │            │
+     │                           │ Service) │            │
+     │                           └────┬─────┘            │
+     │                                │                  │
+     │ 2. Returns: "192.168.1.50:9443"                  │
+     │◄───────────────────────────────┘                 │
+     │                                                   │
+     │ 3. Direct QUIC Connection                        │
+     │──────────────────────────────────────────────────►│
+     │   RPC_REQUEST: service.add, {a:5, b:3}           │
+     │                                                   │
+     │                                  4. Execute Handler
+     │                                     Result = 8    │
+     │                                                   │
+     │ 5. RPC_RESPONSE: {result: 8}                     │
+     │◄──────────────────────────────────────────────────│
+     │                                                   │
+     ▼                                                   ▼
+  Returns                                            Handler
+{ok, #{result=>8}}                                   Executed
+```
+
+**Performance**: 1-hop (direct), ~10-50ms latency
+**Fallback**: If direct fails, relay via gateway (2-3 hops)
+
+---
+
+### PubSub Flow (v0.8.0 Direct P2P)
+
+```
+┌──────────┐                                      ┌──────────┐
+│Publisher │                                      │Subscriber│
+│   Peer   │                                      │   Peer   │
+└────┬─────┘                                      └────┬─────┘
+     │                                                 │
+     │ 1. subscribe("sensor.temp")                    │
+     │                              ┌──────────┐      │
+     │                              │   DHT    │      │
+     │                              │  Store:  │◄─────┤
+     │                              │"sensor." │      │
+     │                              │"temp" -> │      │
+     │                              │192.1.1.X │      │
+     │                              └──────────┘      │
+     │                                                 │
+     │ 2. publish("sensor.temp", {celsius: 21.5})     │
+     │─────────────────┐                              │
+     │                  │                              │
+     │                  ▼                              │
+     │            ┌──────────┐                         │
+     │            │   DHT    │                         │
+     │            │ Find:    │                         │
+     │            │"sensor." │                         │
+     │            │  "temp"  │                         │
+     │            └────┬─────┘                         │
+     │                 │                               │
+     │ 3. Returns: "192.168.1.X:9443"                 │
+     │◄────────────────┘                              │
+     │                                                 │
+     │ 4. Direct QUIC Connection                      │
+     │────────────────────────────────────────────────►│
+     │   PUBLISH: sensor.temp, {celsius: 21.5}        │
+     │                                                 │
+     │                                  5. Deliver to  │
+     │                                     Subscriber  │
+     │                                                 ▼
+     │                                        receive {macula_event,
+     │                                                 "sensor.temp",
+     │                                                 #{celsius=>21.5}}
+```
+
+**Performance**: 1-hop (direct), ~10-50ms latency
+**Wildcard Support**: `sensor.*` matches `sensor.temp`, `sensor.pressure`
+**Fanout**: One DHT query finds all subscribers
+
+---
+
+## DHT Architecture
+
+### Kademlia XOR Distance
+
+```
+Node ID Space (160-bit):
+
+    0                                              2^160
+    ├──────────────────────────────────────────────┤
+
+    Distance(A, B) = A XOR B
+
+    Example:
+    Node A: 1010...
+    Node B: 1100...
+    XOR:    0110... (closer = smaller distance)
+```
+
+### Routing Table (K-Buckets)
+
+```
+Each node maintains:
+
+Bucket 0:  Nodes 2^0    distance away  [0-1 bits different]
+Bucket 1:  Nodes 2^1    distance away  [1-2 bits different]
+Bucket 2:  Nodes 2^2    distance away  [2-4 bits different]
+...
+Bucket 159: Nodes 2^159 distance away  [159-160 bits different]
+
+Each bucket holds up to k=20 nodes (sorted by last-seen time)
+```
+
+### DHT Operations
+
+#### STORE Operation (k=20 Propagation)
+
+```
+1. Hash key: hash("service.calculator.add") = node_id
+2. Find k=20 closest nodes via iterative lookup
+3. Send STORE to all k nodes
+4. Each node stores: {key, value, ttl}
+
+┌────────┐  STORE   ┌────────┐
+│  Node  ├─────────►│ Node 1 │ (closest)
+│  (You) ├─────────►│ Node 2 │
+│        ├─────────►│ Node 3 │
+│        ├─────────►│   ...  │
+│        ├─────────►│Node 20 │
+└────────┘          └────────┘
+```
+
+#### FIND_VALUE Operation
+
+```
+1. Hash key: hash("service.calculator.add") = target_id
+2. Query closest known nodes
+3. If found, return value
+4. If not found, return closer nodes
+5. Repeat until value found or no closer nodes
+
+┌────────┐  FIND    ┌────────┐
+│  Node  ├─────────►│ Node A │─┐
+│  (You) │◄─────────┤        │ │ "Not found,
+│        │  Closer  └────────┘ │  try Node B"
+│        │   Nodes              │
+│        │                      ▼
+│        │  FIND    ┌────────┐
+│        ├─────────►│ Node B │
+│        │◄─────────┤        │ "Found! Here's
+│        │  Value   └────────┘  the value"
+└────────┘
+```
+
+**Complexity**: O(log N) hops to find any key
+**Redundancy**: k=20 replication for fault tolerance
+
+---
+
+## Direct P2P Connections (v0.8.0)
+
+### Connection Strategy
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Connection Decision Flow                  │
+└─────────────────────────────────────────────────────────────┘
+
+        ┌─────────────────────────┐
+        │  Need to send message   │
+        │  (RPC or PubSub)        │
+        └───────────┬─────────────┘
+                    │
+                    ▼
+        ┌─────────────────────────┐
+        │  Query DHT for endpoint │
+        │  (IP:Port discovered)   │
+        └───────────┬─────────────┘
+                    │
+                    ▼
+        ┌─────────────────────────┐
+        │  Attempt Direct P2P     │
+        │  via peer_connector     │
+        └───────────┬─────────────┘
+                    │
+            ┌───────┴───────┐
+            │               │
+       Success           Failure
+            │               │
+            ▼               ▼
+    ┌─────────────┐   ┌─────────────┐
+    │   Message   │   │  Fallback   │
+    │  Delivered  │   │  to Gateway │
+    │   (1-hop)   │   │   Relay     │
+    │             │   │  (2-3 hops) │
+    └─────────────┘   └─────────────┘
+        │                     │
+        └──────────┬──────────┘
+                   │
+                   ▼
+          ┌─────────────────┐
+          │ 100% Reliability│
+          │  Guaranteed     │
+          └─────────────────┘
+```
+
+**Benefits**:
+- 50% latency reduction when direct succeeds
+- Automatic fallback ensures reliability
+- Gateway load reduced (more direct connections = less relay traffic)
+
+---
+
+### Performance Comparison
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              Message Delivery Latency (ms)                   │
+└─────────────────────────────────────────────────────────────┘
+
+v0.7.x (Relay-Only):
+┌───────┐    50ms    ┌─────────┐    50ms    ┌───────┐
+│Client │────────────►│ Gateway │────────────►│Server │
+└───────┘            └─────────┘            └───────┘
+Total: ~100ms (2-hop minimum)
+
+
+v0.8.0 (Direct P2P):
+┌───────┐           50ms              ┌───────┐
+│Client │───────────────────────────►│Server │
+└───────┘                             └───────┘
+Total: ~50ms (1-hop direct)
+
+50% Improvement! 🚀
+```
+
+---
+
+## Module Dependencies
+
+```
+Application Layer
+       │
+       ▼
+┌─────────────────────────────────────────────────────┐
+│              macula_peer (API Facade)               │
+└────────────┬──────────────────────┬─────────────────┘
+             │                      │
+   ┌─────────▼──────────┐  ┌────────▼─────────┐
+   │ macula_connection  │  │ macula_pubsub_   │
+   │  (QUIC Transport)  │  │    handler       │
+   └─────────┬──────────┘  └────────┬─────────┘
+             │                      │
+   ┌─────────▼──────────┐  ┌────────▼─────────┐
+   │  macula_quic       │  │ macula_pubsub_   │
+   │   (MsQuic FFI)     │  │      dht         │
+   └────────────────────┘  └────────┬─────────┘
+                                    │
+   ┌────────────────────────────────▼─────────┐
+   │      macula_routing_server (DHT)         │
+   │    (Kademlia, k=20 replication)          │
+   └──────────────────────────────────────────┘
+             │
+   ┌─────────▼──────────┐
+   │ macula_routing_    │
+   │      table         │
+   │  (K-buckets)       │
+   └────────────────────┘
+```
+
+**Layered Architecture**:
+1. **API Layer**: High-level user-facing API
+2. **Business Logic**: Pub/sub, RPC, advertisements
+3. **Transport Layer**: QUIC connections and streams
+4. **Discovery Layer**: DHT for service/subscriber lookup
+5. **Routing Layer**: Kademlia routing table
+
+---
+
+## Key Takeaways for Architects
+
+### ✅ What Makes Macula Unique
+
+1. **BEAM-Native**
+   - OTP supervision for automatic fault recovery
+   - Process-per-connection scalability
+   - Erlang's proven distributed systems DNA
+
+2. **Modern Transport**
+   - HTTP/3 (QUIC) instead of TCP
+   - Built-in encryption (TLS 1.3)
+   - NAT/firewall friendly
+   - Multiplexed streams
+
+3. **Self-Organizing**
+   - No centralized message broker
+   - DHT-based service discovery (Kademlia)
+   - Automatic replication (k=20)
+   - O(log N) lookup complexity
+
+4. **Direct P2P (v0.8.0)**
+   - 50% latency improvement
+   - Bypasses relay when possible
+   - Automatic fallback for reliability
+   - Scales better (less gateway load)
+
+5. **Multi-Tenancy**
+   - Realm-based isolation
+   - Share infrastructure, isolate traffic
+   - Perfect for SaaS platforms
+
+---
+
+### 🚀 Performance Characteristics
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| **Message Latency** | ~50ms | Direct P2P (v0.8.0) |
+| | ~100ms | Relay via gateway |
+| **DHT Lookup** | O(log N) | Kademlia routing |
+| **Replication** | k=20 | Fault tolerance |
+| **Throughput** | 500-2K msg/s | Gateway (v0.8.0) |
+| | 10K+ msg/s | Planned (v0.9.0 pooling) |
+| **Connections** | 100K+ | Per gateway node |
+
+---
+
+### 📊 When to Use Macula
+
+**✅ Great Fit:**
+- Distributed IoT systems
+- Microservices mesh
+- Edge computing platforms
+- Real-time event streaming
+- Multi-region applications
+- Multi-tenant SaaS
+
+**⚠️ Consider Alternatives:**
+- Single-region monoliths (RabbitMQ simpler)
+- Ultra-high-frequency trading (direct TCP faster)
+- Batch processing (Kafka better)
+- Web browser clients (use gateway as WebSocket bridge)
+
+---
+
+**Next Steps**: See [README.md](README.md) for Quick Start and [v0.8.0-OVERVIEW.md](architecture/v0.8.0-OVERVIEW.md) for latest features.

@@ -12,7 +12,7 @@
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-153DFE5F.js"></script>
+    <script defer src="dist/sidebar_items-07A1ACC4.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -93,9 +93,9 @@ macula
 
 
     <section id="moduledoc">
-<p>Macula Application Root Supervisor.</p><p>This is the top-level supervisor for the Macula application. It manages core infrastructure and optionally starts gateway services.</p><p>Supervision Hierarchy:</p><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="nf">macula_root</span><span class="w"> </span><span class="p" data-group-id="8014503785-1">(</span><span class="ss">this</span><span class="w"> </span><span class="ss">module</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">application</span><span class="w"> </span><span class="ss">root</span><span class="p" data-group-id="8014503785-1">)</span><span class="w">
-  </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_routing_server</span><span class="w"> </span><span class="p" data-group-id="8014503785-2">(</span><span class="ss">core</span><span class="w"> </span><span class="n">DHT</span><span class="w"> </span><span class="ss">infrastructure</span><span class="p" data-group-id="8014503785-2">)</span><span class="w">
-  </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_gateway_system</span><span class="w"> </span><span class="p" data-group-id="8014503785-3">(</span><span class="ss">optional</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">gateway</span><span class="w"> </span><span class="ss">subsystem</span><span class="p" data-group-id="8014503785-3">)</span><span class="w">
+<p>Macula Application Root Supervisor.</p><p>This is the top-level supervisor for the Macula application. It manages core infrastructure and optionally starts gateway services.</p><p>Supervision Hierarchy:</p><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="nf">macula_root</span><span class="w"> </span><span class="p" data-group-id="6742431745-1">(</span><span class="ss">this</span><span class="w"> </span><span class="ss">module</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">application</span><span class="w"> </span><span class="ss">root</span><span class="p" data-group-id="6742431745-1">)</span><span class="w">
+  </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_routing_server</span><span class="w"> </span><span class="p" data-group-id="6742431745-2">(</span><span class="ss">core</span><span class="w"> </span><span class="n">DHT</span><span class="w"> </span><span class="ss">infrastructure</span><span class="p" data-group-id="6742431745-2">)</span><span class="w">
+  </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_gateway_system</span><span class="w"> </span><span class="p" data-group-id="6742431745-3">(</span><span class="ss">optional</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">gateway</span><span class="w"> </span><span class="ss">subsystem</span><span class="p" data-group-id="6742431745-3">)</span><span class="w">
       </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway_health</span><span class="w">
       </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway_diagnostics</span><span class="w">
       </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway_quic_server</span><span class="w">

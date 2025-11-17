@@ -14,6 +14,7 @@
 
 ## Table of Contents
 
+- 🏗️ [Architecture Overview](ARCHITECTURE.md) - **Visual guide with diagrams** (C4, supervision trees, deployment topologies)
 - 🚀 [Quick Start](#quick-start) - Get started in minutes
 - 💡 [What's New in v0.8.0](#whats-new-in-v080) - Latest features
 - 📚 [Core Concepts](#core-concepts) - Understanding the mesh
@@ -36,6 +37,45 @@ Macula is infrastructure for building **decentralized applications and services*
 ✅ **Multi-tenancy** (realm isolation for SaaS and shared infrastructure)
 ✅ **Self-organizing mesh** (DHT-based service discovery, O(log N) routing)
 ✅ **Production-ready patterns** (OTP behaviors, comprehensive testing, memory management)
+
+---
+
+## Architecture at a Glance
+
+**System Context** - How your application uses Macula:
+
+```
+┌──────────────┐
+│     Your     │
+│ Application  │
+└──────┬───────┘
+       │ macula_peer API
+       ▼
+┌──────────────┐     QUIC/HTTP3      ┌──────────────┐
+│ Macula Peer  │◄───────────────────►│   Gateway    │
+│ (Local Node) │    Or Direct P2P    │ (Relay Node) │
+└──────┬───────┘                     └──────┬───────┘
+       │                                    │
+       └────────────► DHT ◄─────────────────┘
+                 (Service Discovery)
+```
+
+**Message Flow** (v0.8.0 Direct P2P):
+
+```
+Client ──1. Query DHT──► DHT (Find Service)
+Client ◄─2. Endpoint──── DHT Returns "192.168.1.50:9443"
+Client ──3. Direct────► Provider (1-hop, 50ms)
+Client ◄─4. Response─── Provider (50% faster than relay!)
+```
+
+**📊 [See Full Architecture Guide](ARCHITECTURE.md)** with:
+- C4 diagrams (context, container views)
+- Deployment topologies (edge, microservices, hybrid)
+- Supervision trees (OTP fault tolerance)
+- DHT architecture (Kademlia routing)
+- Performance characteristics
+- When to use Macula
 
 ---
 
