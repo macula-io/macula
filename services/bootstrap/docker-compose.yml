@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  bootstrap:
+    build:
+      context: ../../
+      dockerfile: services/bootstrap/Dockerfile
+    container_name: macula-bootstrap
+    hostname: macula-bootstrap
+    environment:
+      # Bootstrap-only mode
+      MACULA_MODE: "bootstrap"
+      MACULA_REALM: "macula.bootstrap"
+      MACULA_GATEWAY_PORT: "4433"
+
+      # TLS certificates (will be generated if not present)
+      MACULA_CERT_PATH: "/opt/macula/certs/cert.pem"
+      MACULA_KEY_PATH: "/opt/macula/certs/key.pem"
+
+      # Logging
+      LOG_LEVEL: "info"
+
+      # Health check interval (60 seconds)
+      BOOTSTRAP_HEALTH_INTERVAL: "60000"
+
+    ports:
+      - "4433:4433/udp"   # QUIC/HTTP3 (UDP protocol)
+
+    volumes:
+      - bootstrap-certs:/opt/macula/certs
+      - bootstrap-logs:/opt/macula/log
+
+    networks:
+      macula-mesh:
+        ipv4_address: 172.30.0.10
+
+    healthcheck:
+      test: ["/opt/macula/bin/macula_bootstrap", "ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+    restart: unless-stopped
+
+volumes:
+  bootstrap-certs:
+  bootstrap-logs:
+
+networks:
+  macula-mesh:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
