@@ -2,24 +2,35 @@
 %% @doc Macula Application Root Supervisor.
 %%
 %% This is the top-level supervisor for the Macula application.
-%% It manages core infrastructure and optionally starts gateway services.
+%% It manages all Macula subsystems in an always-on architecture.
 %%
-%% Supervision Hierarchy:
+%% Supervision Hierarchy (v0.8.5+):
 %% <pre>
 %% macula_root (this module - application root)
-%% ├── macula_routing_server (core DHT infrastructure)
-%% └── macula_gateway_system (optional - gateway subsystem)
-%%     ├── macula_gateway_health
-%%     ├── macula_gateway_diagnostics
-%%     ├── macula_gateway_quic_server
-%%     ├── macula_gateway
-%%     └── macula_gateway_workers_sup
+%% ├── macula_routing_server (core DHT infrastructure - always on)
+%% ├── macula_bootstrap_system (bootstrap services - always on)
+%% │   ├── macula_bootstrap_server
+%% │   ├── macula_bootstrap_registry
+%% │   └── macula_bootstrap_health
+%% ├── macula_gateway_system (gateway services - always on)
+%% │   ├── macula_gateway_health
+%% │   ├── macula_gateway_diagnostics
+%% │   ├── macula_gateway_quic_server
+%% │   ├── macula_gateway
+%% │   └── macula_gateway_workers_sup
+%% └── macula_peers_sup (dynamic peer connections - always on)
 %% </pre>
+%%
+%% Architecture Philosophy (v0.8.5):
+%% - All nodes have ALL capabilities (no mode selection)
+%% - Zero configuration required (TLS auto-generated)
+%% - Simplified deployment (every node is bootstrap + gateway + peer)
+%% - True P2P mesh (nodes connect on-demand based on capability discovery)
 %%
 %% Naming Convention (v0.7.10+):
 %% - _root: Application root supervisor (one per application)
-%% - _system: Subsystem root supervisors (gateway, peer, etc.)
-%% - _sup: Worker supervisors (workers_sup)
+%% - _system: Subsystem root supervisors (gateway, peer, bootstrap, etc.)
+%% - _sup: Worker supervisors (workers_sup, peers_sup)
 %%
 %% @end
 %%%-------------------------------------------------------------------
@@ -47,10 +58,34 @@ start_link() ->
 %%                  type => worker(),       % optional
 %%                  modules => modules()}   % optional
 init([]) ->
-    %% Determine deployment mode
-    Mode = application:get_env(macula, mode, gateway),
-    validate_mode_config(Mode),
-    io:format("Starting Macula in ~p mode~n", [Mode]),
+    io:format("~n"),
+    io:format("═══════════════════════════════════════════════════════════════~n"),
+    io:format("  Starting Macula v0.8.5 (Always-On Architecture)~n"),
+    io:format("  All capabilities enabled: Bootstrap + Gateway + Peer~n"),
+    io:format("═══════════════════════════════════════════════════════════════~n"),
+    io:format("~n"),
+
+    %% Ensure TLS certificates exist (auto-generate if missing)
+    {CertPath, KeyPath} = macula_tls:get_cert_paths(),
+    {ok, _CertPath, _KeyPath, NodeID} = macula_tls:ensure_cert_exists(CertPath, KeyPath),
+
+    io:format("✓ TLS Certificate: ~s~n", [CertPath]),
+    io:format("✓ Private Key: ~s~n", [KeyPath]),
+    io:format("✓ Node ID: ~s~n", [NodeID]),
+    io:format("~n"),
+
+    %% Get configuration
+    Port = get_quic_port(),
+    Realm = get_realm(),
+    HealthPort = get_health_port(),
+    HealthInterval = get_bootstrap_health_interval(),
+
+    io:format("Configuration:~n"),
+    io:format("  QUIC Port: ~p~n", [Port]),
+    io:format("  Realm: ~s~n", [Realm]),
+    io:format("  Health Port: ~p~n", [HealthPort]),
+    io:format("  Bootstrap Health Interval: ~pms~n", [HealthInterval]),
+    io:format("~n"),
 
     SupFlags = #{
         strategy => one_for_one,
@@ -58,137 +93,111 @@ init([]) ->
         period => 5
     },
 
-    %% Build child specs based on mode
-    CoreSpecs = get_core_child_specs(),
-    BootstrapSpecs = maybe_start_bootstrap(Mode),
-    GatewaySpecs = maybe_start_gateway(Mode),
+    ChildSpecs = [
+        %% 1. Core DHT routing (always on)
+        get_routing_server_spec(NodeID),
 
-    ChildSpecs = CoreSpecs ++ BootstrapSpecs ++ GatewaySpecs,
+        %% 2. Bootstrap system (always on)
+        get_bootstrap_system_spec(Realm, HealthInterval),
+
+        %% 3. Gateway system (always on)
+        get_gateway_system_spec(Port, Realm, HealthPort),
+
+        %% 4. Peer connections supervisor (always on)
+        get_peers_sup_spec()
+    ],
+
+    io:format("Starting subsystems:~n"),
+    io:format("  [1/4] Core DHT Routing~n"),
+    io:format("  [2/4] Bootstrap System~n"),
+    io:format("  [3/4] Gateway System~n"),
+    io:format("  [4/4] Peers Supervisor~n"),
+    io:format("~n"),
 
     {ok, {SupFlags, ChildSpecs}}.
 
 %% internal functions
 
 %% @private
-%% @doc Get core infrastructure child specs (always started, even in embedded mode).
-%% The routing server is essential for DHT operations in any mode.
-get_core_child_specs() ->
-    io:format("Starting Macula core infrastructure (routing server)~n"),
-    [
-        %% DHT routing server (essential for all DHT operations)
-        #{
-            id => macula_routing_server,
-            start => {macula_routing_server, start_link, [get_node_id(), get_routing_config()]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_routing_server]
-        }
-    ].
+%% @doc Get routing server child spec (core DHT infrastructure).
+get_routing_server_spec(NodeID) ->
+    #{
+        id => macula_routing_server,
+        start => {macula_routing_server, start_link, [NodeID, get_routing_config()]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [macula_routing_server]
+    }.
 
 %% @private
-%% @doc Conditionally start bootstrap system based on mode.
-%% Bootstrap system is started for: bootstrap, hybrid modes.
-maybe_start_bootstrap(bootstrap) -> get_bootstrap_specs();
-maybe_start_bootstrap(hybrid) -> get_bootstrap_specs();
-maybe_start_bootstrap(_) -> [].
+%% @doc Get bootstrap system child spec.
+get_bootstrap_system_spec(Realm, HealthInterval) ->
+    #{
+        id => macula_bootstrap_system,
+        start => {macula_bootstrap_system, start_link, [#{
+            realm => Realm,
+            health_check_interval => HealthInterval
+        }]},
+        restart => permanent,
+        shutdown => infinity,  % supervisor shutdown
+        type => supervisor,
+        modules => [macula_bootstrap_system]
+    }.
 
 %% @private
-%% @doc Get bootstrap system child specs.
-get_bootstrap_specs() ->
-    Realm = get_gateway_realm(),
-    HealthInterval = application:get_env(macula, bootstrap_health_interval, 60000),
-
-    io:format("Starting Bootstrap System (realm: ~s, health_interval: ~pms)~n", [Realm, HealthInterval]),
-
-    [
-        #{
-            id => macula_bootstrap_system,
-            start => {macula_bootstrap_system, start_link, [#{
-                realm => Realm,
-                health_check_interval => HealthInterval
-            }]},
-            restart => permanent,
-            shutdown => infinity,  % supervisor shutdown
-            type => supervisor,
-            modules => [macula_bootstrap_system]
-        }
-    ].
+%% @doc Get gateway system child spec.
+get_gateway_system_spec(Port, Realm, HealthPort) ->
+    #{
+        id => macula_gateway_system,
+        start => {macula_gateway_system, start_link, [[
+            {port, Port},
+            {realm, Realm},
+            {health_port, HealthPort}
+        ]]},
+        restart => permanent,
+        shutdown => infinity,  % supervisor shutdown
+        type => supervisor,
+        modules => [macula_gateway_system]
+    }.
 
 %% @private
-%% @doc Conditionally start gateway services based on mode and configuration.
-%% Gateway required for: gateway, hybrid modes.
-%% Can be overridden by: {start_gateway, false}.
-maybe_start_gateway(Mode) ->
-    %% Determine if gateway should start based on mode
-    DefaultStartGateway = mode_requires_gateway(Mode),
-    StartGateway = application:get_env(macula, start_gateway, DefaultStartGateway),
+%% @doc Get peers supervisor child spec (simple_one_for_one for dynamic peers).
+get_peers_sup_spec() ->
+    #{
+        id => macula_peers_sup,
+        start => {macula_peers_sup, start_link, []},
+        restart => permanent,
+        shutdown => infinity,  % supervisor shutdown
+        type => supervisor,
+        modules => [macula_peers_sup]
+    }.
 
-    case StartGateway of
-        true ->
-            %% Read gateway configuration from environment or config
-            Port = get_gateway_port(),
-            Realm = get_gateway_realm(),
-            HealthPort = get_health_port(),
-
-            io:format("Starting Macula Gateway on port ~p (realm: ~s)~n", [Port, Realm]),
-            io:format("Starting health check server on port ~p~n", [HealthPort]),
-
-            [
-                %% Gateway system supervisor (manages all gateway components)
-                #{
-                    id => macula_gateway_system,
-                    start => {macula_gateway_system, start_link, [[
-                        {port, Port},
-                        {realm, Realm},
-                        {health_port, HealthPort}
-                    ]]},
-                    restart => permanent,
-                    shutdown => infinity,
-                    type => supervisor,
-                    modules => [macula_gateway_system]
-                }
-            ];
+%% @private
+%% @doc Get QUIC port from environment variable or config.
+%% Environment variable renamed from GATEWAY_PORT to MACULA_QUIC_PORT (v0.8.5).
+get_quic_port() ->
+    case os:getenv("MACULA_QUIC_PORT") of
         false ->
-            io:format("Gateway disabled for ~p mode~n", [Mode]),
-            []
-    end.
-
-%% @private
-%% @doc Determine if mode requires gateway by default.
-mode_requires_gateway(gateway) -> true;
-mode_requires_gateway(hybrid) -> true;
-mode_requires_gateway(bootstrap) -> false;  % Bootstrap-only, no gateway
-mode_requires_gateway(edge) -> false.       % Pure P2P, no gateway
-
-%% @private
-%% @doc Validate mode configuration.
-%% Crashes on invalid mode to prevent misconfiguration.
-validate_mode_config(Mode) ->
-    ValidModes = [bootstrap, edge, gateway, hybrid],
-    case lists:member(Mode, ValidModes) of
-        true -> ok;
-        false ->
-            io:format("ERROR: Invalid mode ~p. Valid modes: ~p~n", [Mode, ValidModes]),
-            erlang:error({invalid_mode, Mode, ValidModes})
-    end.
-
-%% @private
-%% @doc Get gateway port from environment variable or config.
-get_gateway_port() ->
-    case os:getenv("GATEWAY_PORT") of
-        false ->
-            application:get_env(macula, gateway_port, 9443);
+            %% Fallback to old GATEWAY_PORT for backward compatibility
+            case os:getenv("GATEWAY_PORT") of
+                false ->
+                    application:get_env(macula, quic_port,
+                        application:get_env(macula, gateway_port, 9443));
+                PortStr ->
+                    list_to_integer(PortStr)
+            end;
         PortStr ->
             list_to_integer(PortStr)
     end.
 
 %% @private
-%% @doc Get gateway realm from environment variable or config.
-get_gateway_realm() ->
+%% @doc Get realm from environment variable or config.
+get_realm() ->
     case os:getenv("MACULA_REALM") of
         false ->
-            application:get_env(macula, gateway_realm, <<"com.example.realm">>);
+            application:get_env(macula, realm,
+                application:get_env(macula, gateway_realm, <<"com.example.realm">>));
         RealmStr ->
             list_to_binary(RealmStr)
     end.
@@ -204,21 +213,9 @@ get_health_port() ->
     end.
 
 %% @private
-%% @doc Get node ID for DHT routing (32-byte identifier).
-get_node_id() ->
-    %% Try environment variable first, then config, finally generate one
-    case os:getenv("NODE_ID") of
-        false ->
-            case application:get_env(macula, node_id) of
-                {ok, NodeId} when is_binary(NodeId), byte_size(NodeId) == 32 ->
-                    NodeId;
-                _ ->
-                    %% Generate a random 32-byte node ID
-                    crypto:strong_rand_bytes(32)
-            end;
-        NodeIdStr ->
-            list_to_binary(NodeIdStr)
-    end.
+%% @doc Get bootstrap health check interval.
+get_bootstrap_health_interval() ->
+    application:get_env(macula, bootstrap_health_interval, 60000).
 
 %% @private
 %% @doc Get DHT routing configuration.
