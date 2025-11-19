@@ -21,6 +21,7 @@ WORKDIR /build
 
 # Copy source code
 COPY src /build/src
+COPY include /build/include
 COPY _checkouts /build/_checkouts
 COPY rebar.config /build/rebar.config
 COPY rebar.lock /build/rebar.lock
@@ -45,6 +46,7 @@ WORKDIR /macula
 # Copy compiled artifacts from builder stage
 COPY --from=builder /build/_build /macula/_build
 COPY --from=builder /build/src /macula/src
+COPY --from=builder /build/include /macula/include
 COPY --from=builder /build/_checkouts /macula/_checkouts
 COPY --from=builder /build/rebar.config /macula/rebar.config
 COPY --from=builder /build/rebar.lock /macula/rebar.lock

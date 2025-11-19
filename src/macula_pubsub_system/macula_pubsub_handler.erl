@@ -254,9 +254,10 @@ handle_call(_Request, _From, State) ->
 handle_cast({set_connection_manager_pid, Pid}, State) ->
     {noreply, State#state{connection_manager_pid = Pid}};
 
-handle_cast({do_publish, _PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, State) ->
-    %% PURE P2P: No gateway publish - peers communicate directly via DHT routing
-    ?LOG_DEBUG("[~s] Publishing message to topic ~s (qos=~p, msg_id=~s) via P2P DHT",
+handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, State) ->
+    %% HYBRID: Send to gateway for routing AND discover via DHT
+    %% This enables both gateway-centric and pure P2P topologies
+    ?LOG_DEBUG("[~s] Publishing message to topic ~s (qos=~p, msg_id=~s) via gateway + DHT",
               [State#state.node_id, BinaryTopic, Qos, MsgId]),
 
     %% Handle QoS 1 (at-least-once delivery) - delegate to QoS module
@@ -265,7 +266,20 @@ handle_cast({do_publish, _PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, S
     ),
     State2 = State#state{pending_pubacks = UpdatedPendingPubacks},
 
-    %% Discover subscribers via DHT and route directly to them (pure P2P)
+    %% Send publish to gateway for routing to connected subscribers
+    %% This is essential for gateway-centric topologies where peers can't reach each other
+    case State#state.connection_manager_pid of
+        undefined ->
+            ?LOG_WARNING("[~s] No connection manager - cannot send publish to gateway",
+                        [State#state.node_id]);
+        ConnMgrPid ->
+            %% Send publish message via the gateway connection
+            macula_connection:send_message(ConnMgrPid, publish, PublishMsg),
+            ?LOG_DEBUG("[~s] Sent publish to gateway for topic ~s",
+                      [State#state.node_id, BinaryTopic])
+    end,
+
+    %% Also discover subscribers via DHT for pure P2P routing (if available)
     gen_server:cast(self(), {discover_subscribers, BinaryTopic, Payload, Qos, Opts}),
 
     {noreply, State2};

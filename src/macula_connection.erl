@@ -430,6 +430,20 @@ process_message({pong, _Msg}, State) ->
     ?LOG_DEBUG("Received PONG - connection alive"),
     State;
 
+%% Handle FIND_VALUE_REPLY message - route to RPC handler for DHT query results
+process_message({find_value_reply, Msg}, State) ->
+    ?LOG_INFO("Connection manager routing message type: ~p", [find_value_reply]),
+    %% Look up the RPC handler and forward the reply
+    case gproc:lookup_local_name({rpc_handler, State#state.realm}) of
+        undefined ->
+            ?LOG_WARNING("RPC handler not found for realm ~s", [State#state.realm]),
+            State;
+        RpcPid ->
+            macula_rpc_handler:handle_find_value_reply(RpcPid, Msg),
+            ?LOG_DEBUG("Routed FIND_VALUE_REPLY to rpc_handler"),
+            State
+    end;
+
 %% Handle unknown message types
 process_message({Type, _Msg}, State) ->
     ?LOG_INFO("Connection manager routing message type: ~p", [Type]),

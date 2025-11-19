@@ -26,7 +26,7 @@
 -include("macula_config.hrl").
 
 %% API
--export([start_link/1, call/4, register_handler/2, unregister_handler/1, handle_incoming_reply/2]).
+-export([start_link/1, call/4, register_handler/2, unregister_handler/1, handle_incoming_reply/2, handle_find_value_reply/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -88,6 +88,11 @@ unregister_handler(_Service) ->
 -spec handle_incoming_reply(pid(), map()) -> ok.
 handle_incoming_reply(Pid, Msg) ->
     gen_server:cast(Pid, {incoming_reply, Msg}).
+
+%% @doc Handle FIND_VALUE_REPLY from DHT query
+-spec handle_find_value_reply(pid(), map()) -> ok.
+handle_find_value_reply(Pid, Msg) ->
+    gen_server:cast(Pid, {find_value_reply, Msg}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -181,6 +186,26 @@ handle_cast({incoming_reply, Msg}, State) ->
             {noreply, State};
         _ ->
             handle_rpc_reply(CallId, Msg, State)
+    end;
+
+handle_cast({find_value_reply, Msg}, State) ->
+    %% Handle FIND_VALUE_REPLY from DHT query
+    ?LOG_INFO("[~s] Received FIND_VALUE_REPLY: ~p", [State#state.node_id, Msg]),
+
+    %% Decode the reply to get value or nodes
+    case macula_routing_protocol:decode_find_value_reply(Msg) of
+        {ok, {value, Providers}} when is_list(Providers) ->
+            ?LOG_INFO("[~s] DHT returned ~p provider(s)", [State#state.node_id, length(Providers)]),
+            %% Find the pending query and complete the RPC call
+            %% For now, we'll complete ALL pending queries with this result
+            %% (In a real implementation, we'd match by service key)
+            handle_dht_providers_found(Providers, State);
+        {ok, {nodes, _Nodes}} ->
+            ?LOG_DEBUG("[~s] DHT returned nodes (no value found)", [State#state.node_id]),
+            {noreply, State};
+        {error, Reason} ->
+            ?LOG_WARNING("[~s] Failed to decode find_value_reply: ~p", [State#state.node_id, Reason]),
+            {noreply, State}
     end;
 
 handle_cast(_Msg, State) ->
@@ -334,6 +359,37 @@ send_find_value_async(ServiceKey, Procedure, Args, Opts, From, State) ->
                         [State#state.node_id, Procedure, Reason]),
             gen_server:reply(From, {error, Reason}),
             {noreply, State}
+    end.
+
+%% @doc Handle DHT providers found - complete pending RPC calls
+-spec handle_dht_providers_found(list(), #state{}) -> {noreply, #state{}}.
+handle_dht_providers_found(Providers, State) ->
+    %% Get the first pending query (simplified - in real impl would match by key)
+    case maps:to_list(State#state.pending_queries) of
+        [] ->
+            ?LOG_WARNING("[~s] Received providers but no pending queries", [State#state.node_id]),
+            {noreply, State};
+        [{ServiceKey, {From, Procedure, Args, Opts, _Registry, Timer, MonitorRef}} | _Rest] ->
+            %% Cancel timeout timer
+            erlang:cancel_timer(Timer),
+
+            %% Remove monitor
+            erlang:demonitor(MonitorRef, [flush]),
+
+            %% Remove from pending
+            PendingQueries = maps:remove(ServiceKey, State#state.pending_queries),
+            CallerMonitors = maps:remove(MonitorRef, State#state.caller_monitors),
+
+            State2 = State#state{
+                pending_queries = PendingQueries,
+                caller_monitors = CallerMonitors
+            },
+
+            ?LOG_INFO("[~s] Completing RPC call for ~s with ~p providers",
+                     [State#state.node_id, Procedure, length(Providers)]),
+
+            %% Continue with the actual RPC call using discovered providers
+            do_remote_call(Procedure, Args, Opts, From, Providers, State2)
     end.
 
 %% @doc Make RPC call with failover support (entry point)

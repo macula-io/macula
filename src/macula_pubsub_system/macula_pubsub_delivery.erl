@@ -70,17 +70,23 @@ deliver_remote(Message, RemoteSubscribers, SendFun) ->
 publish(Message, Registry, DiscoveryFun, SendFun) ->
     Topic = maps:get(topic, Message),
 
+    logger:info("[PubSub Delivery] Publishing to topic: ~p", [Topic]),
+
     %% Deliver to local subscribers
     LocalResults = deliver_local(Message, Registry),
+    logger:info("[PubSub Delivery] Local delivery results: ~p subscriber(s)", [length(LocalResults)]),
 
     %% Find matching patterns for remote discovery
     MatchingPatterns = get_matching_patterns(Topic, Registry),
+    logger:info("[PubSub Delivery] Matching patterns for remote discovery: ~p", [MatchingPatterns]),
 
     %% Discover remote subscribers for each matching pattern
     RemoteSubscribers = discover_remote_subscribers(MatchingPatterns, DiscoveryFun),
+    logger:info("[PubSub Delivery] Found ~p remote subscriber(s)", [length(RemoteSubscribers)]),
 
     %% Deliver to remote subscribers
     RemoteResults = deliver_remote(Message, RemoteSubscribers, SendFun),
+    logger:info("[PubSub Delivery] Remote delivery results: ~p", [length(RemoteResults)]),
 
     {LocalResults, RemoteResults}.
 

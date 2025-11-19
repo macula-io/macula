@@ -12,6 +12,7 @@ assets/macula-logo-color.png
 assets/macula-logo-color.svg
 assets/macula-logo-dark.svg
 assets/macula-logo-white.svg
+assets/macula-platform-vision.svg
 changelog.html
 development.html
 dist/html-DPJLHKSM.js
@@ -21,8 +22,9 @@ dist/lato-latin-700-normal-2XVSBPG4.woff2
 dist/lato-latin-ext-400-normal-N27NCBWW.woff2
 dist/lato-latin-ext-700-normal-Q2L5DVMW.woff2
 dist/remixicon-QPNJX265.woff2
-dist/search_data-0D95BC68.js
-dist/sidebar_items-39FB5AEC.js
+dist/search_data-A776965D.js
+dist/sidebar_items-63D0EC31.js
+full_supervision_tree.html
 getting_started.html
 index.html
 kademlia_dht_architecture.html
@@ -63,6 +65,7 @@ macula_node.html
 macula_peer.html
 macula_peer_connector.html
 macula_peer_system.html
+macula_peers_sup.html
 macula_project_structure.html
 macula_protocol_decoder.html
 macula_protocol_encoder.html
@@ -103,11 +106,16 @@ macula_rpc_server.html
 macula_service_registry.html
 macula_stream_acceptor.html
 macula_time.html
+macula_tls.html
 macula_uri.html
 macula_utils.html
+mesh_hot_upgrade.html
+migration_v0-8-4_to_v0-8-5.html
+platform_vision.html
 readme.html
 search.html
 todo.html
 v0-8-0-changelog.html
 v0-8-0-overview.html
 v0-8-0-roadmap.html
+v1-0-0-roadmap.html

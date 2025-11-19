@@ -30,11 +30,14 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
+%% Stream handle can be either a pid (process) or reference (QUIC stream)
+-type stream_handle() :: pid() | reference().
+
 -record(state, {
     opts :: map(),
-    subscriptions :: #{binary() => [pid()]},        % topic => [stream_pids]
-    stream_subscriptions :: #{pid() => [binary()]}, % stream_pid => [topics]
-    monitors :: #{reference() => {pid(), binary()}} % monitor_ref => {stream_pid, topic}
+    subscriptions :: #{binary() => [stream_handle()]},        % topic => [stream_handles]
+    stream_subscriptions :: #{stream_handle() => [binary()]}, % stream_handle => [topics]
+    monitors :: #{reference() => {stream_handle(), binary()}} % monitor_ref => {stream_handle, topic}
 }).
 
 %%%===================================================================
@@ -91,7 +94,7 @@ init(Opts) ->
     io:format("[PubSub] Pub/sub handler initialized~n"),
     {ok, State}.
 
-handle_call({subscribe, Stream, Topic}, _From, State) when is_pid(Stream), is_binary(Topic) ->
+handle_call({subscribe, Stream, Topic}, _From, State) when (is_pid(Stream) orelse is_reference(Stream)), is_binary(Topic) ->
     io:format("[PubSub ~p] SUBSCRIBE called: Stream=~p, Topic=~s~n", [self(), Stream, Topic]),
     %% Check if already subscribed
     CurrentTopics = maps:get(Stream, State#state.stream_subscriptions, []),
@@ -112,9 +115,9 @@ handle_call({subscribe, Stream, Topic}, _From, State) when is_pid(Stream), is_bi
             NewTopics = [Topic | CurrentTopics],
             NewStreamSubs = maps:put(Stream, NewTopics, State#state.stream_subscriptions),
 
-            %% Monitor stream if first subscription
-            NewMonitors = case length(CurrentTopics) of
-                0 ->
+            %% Monitor stream if first subscription (only for pids - can't monitor references)
+            NewMonitors = case {length(CurrentTopics), is_pid(Stream)} of
+                {0, true} ->
                     MonitorRef = erlang:monitor(process, Stream),
                     io:format("[PubSub ~p] Monitoring stream ~p (first subscription)~n", [self(), Stream]),
                     maps:put(MonitorRef, {Stream, Topic}, State#state.monitors);
@@ -132,7 +135,7 @@ handle_call({subscribe, Stream, Topic}, _From, State) when is_pid(Stream), is_bi
     end,
     {reply, ok, NewState};
 
-handle_call({unsubscribe, Stream, Topic}, _From, State) when is_pid(Stream), is_binary(Topic) ->
+handle_call({unsubscribe, Stream, Topic}, _From, State) when (is_pid(Stream) orelse is_reference(Stream)), is_binary(Topic) ->
     %% Remove from stream → topics mapping
     CurrentTopics = maps:get(Stream, State#state.stream_subscriptions, []),
     NewTopics = lists:delete(Topic, CurrentTopics),
@@ -177,7 +180,7 @@ handle_call({get_subscribers, Topic}, _From, State) when is_binary(Topic) ->
     Subscribers = find_matching_subscribers(Topic, State),
     {reply, {ok, Subscribers}, State};
 
-handle_call({get_stream_topics, Stream}, _From, State) when is_pid(Stream) ->
+handle_call({get_stream_topics, Stream}, _From, State) when is_pid(Stream) orelse is_reference(Stream) ->
     Topics = maps:get(Stream, State#state.stream_subscriptions, []),
     {reply, {ok, Topics}, State};
 

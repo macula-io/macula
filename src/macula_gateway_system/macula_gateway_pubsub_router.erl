@@ -116,8 +116,22 @@ route_to_each_subscriber([Subscriber | Rest], Topic, PubMsg, LocalNodeId, Mesh, 
 %% @doc Route message to a single remote subscriber (if node_id present).
 %% Checks if subscriber is a connected client first - if so, uses existing bidirectional stream.
 %% Otherwise creates mesh connection.
+%% Handles both atom keys (from local DHT storage) and binary keys (from protocol).
 -spec route_to_single_subscriber(map(), binary(), map(), binary(), pid(), pid()) -> ok.
+route_to_single_subscriber(#{node_id := DestNodeId} = Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
+    %% Atom key version (from local DHT storage)
+    route_to_subscriber_impl(DestNodeId, Subscriber, node_id, Topic, PubMsg, LocalNodeId, Mesh, Clients);
 route_to_single_subscriber(#{<<"node_id">> := DestNodeId} = Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
+    %% Binary key version (from protocol)
+    route_to_subscriber_impl(DestNodeId, Subscriber, <<"node_id">>, Topic, PubMsg, LocalNodeId, Mesh, Clients);
+route_to_single_subscriber(Subscriber, _Topic, _PubMsg, _LocalNodeId, _Mesh, _Clients) ->
+    io:format("[PubSubRouter] Subscriber missing node_id, skipping: ~p~n", [Subscriber]),
+    ok.
+
+%% @private
+%% @doc Implementation of routing to a single subscriber.
+-spec route_to_subscriber_impl(binary(), map(), atom() | binary(), binary(), map(), binary(), pid(), pid()) -> ok.
+route_to_subscriber_impl(DestNodeId, Subscriber, EndpointKey, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     Payload = maps:get(<<"payload">>, PubMsg),
     Qos = maps:get(<<"qos">>, PubMsg, 0),
 
@@ -156,13 +170,16 @@ route_to_single_subscriber(#{<<"node_id">> := DestNodeId} = Subscriber, Topic, P
             io:format("[PubSubRouter DEBUG] Looking for: ~s (size: ~p bytes)~n",
                      [binary:encode_hex(DestNodeId), byte_size(DestNodeId)]),
 
-            EndpointUrl = maps:get(<<"endpoint">>, Subscriber, undefined),
+            %% Get endpoint using same key type as node_id (atom or binary)
+            EndpointUrl = case EndpointKey of
+                endpoint -> maps:get(endpoint, Subscriber, undefined);
+                <<"endpoint">> -> maps:get(<<"endpoint">>, Subscriber, undefined);
+                node_id -> maps:get(endpoint, Subscriber, undefined);
+                <<"node_id">> -> maps:get(<<"endpoint">>, Subscriber, undefined)
+            end,
             PubSubRouteMsg = macula_pubsub_routing:wrap_publish(LocalNodeId, DestNodeId, PublishMsg, 10),
             send_via_dht(DestNodeId, EndpointUrl, PubSubRouteMsg, Mesh)
-    end;
-route_to_single_subscriber(Subscriber, _Topic, _PubMsg, _LocalNodeId, _Mesh, _Clients) ->
-    io:format("[PubSubRouter] Subscriber missing node_id, skipping: ~p~n", [Subscriber]),
-    ok.
+    end.
 
 %% @private
 %% @doc Send pubsub_route message via DHT mesh connection.

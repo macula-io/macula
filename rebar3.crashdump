@@ -12,13 +12,11 @@ Error: badarg
  {rebar3_hex_config,get_hex_config,3,
                     [{file,"/home/rl/work/github.com/macula-io/macula/_build/default/plugins/rebar3_hex/src/rebar3_hex_config.erl"},
                      {line,216}]},
- {rebar3_hex_publish,publish_docs,4,
+ {rebar3_hex_publish,publish,4,
                      [{file,"/home/rl/work/github.com/macula-io/macula/_build/default/plugins/rebar3_hex/src/rebar3_hex_publish.erl"},
-                      {line,547}]},
+                      {line,391}]},
+ {lists,foreach_1,2,[{file,"lists.erl"},{line,2310}]},
  {rebar3_hex_publish,handle_task,1,
                      [{file,"/home/rl/work/github.com/macula-io/macula/_build/default/plugins/rebar3_hex/src/rebar3_hex_publish.erl"},
-                      {line,332}]},
- {rebar_core,do,2,
-             [{file,"/home/runner/work/rebar3/rebar3/apps/rebar/src/rebar_core.erl"},
-              {line,155}]}]
+                      {line,374}]}]
 

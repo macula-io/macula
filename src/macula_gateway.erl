@@ -856,10 +856,21 @@ handle_unsubscribe(Stream, UnsubMsg, State) ->
 %% Delegates to macula_gateway_pubsub_router for distribution logic.
 handle_publish(_PublisherStream, PubMsg, State) ->
     Topic = maps:get(<<"topic">>, PubMsg),
-    io:format("[Gateway] BOOTSTRAP-ONLY MODE: Rejecting publish to topic: ~s (peers must communicate directly via DHT)~n", [Topic]),
+    io:format("[Gateway] Routing publish to topic: ~s~n", [Topic]),
 
-    %% Gateway is BOOTSTRAP-ONLY - it does NOT route messages!
-    %% Peers must discover each other via DHT and communicate directly
+    %% Get local subscribers for this topic
+    {ok, LocalSubscribers} = macula_gateway_pubsub:get_subscribers(State#state.pubsub, Topic),
+    io:format("[Gateway] Found ~p local subscriber(s) for topic ~s~n", [length(LocalSubscribers), Topic]),
+
+    %% Distribute to local and remote subscribers via the router
+    macula_gateway_pubsub_router:distribute(
+        LocalSubscribers,
+        PubMsg,
+        State#state.node_id,
+        State#state.mesh,
+        State#state.client_manager
+    ),
+
     {noreply, State}.
 
 %%%===================================================================

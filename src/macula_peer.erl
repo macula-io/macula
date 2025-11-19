@@ -253,8 +253,32 @@ handle_call({unsubscribe, SubRef}, _From, State) ->
     {reply, Result, State};
 
 %% Discover subscribers via DHT
+%% NOTE: This queries the local routing server which only has local subscriptions.
+%% For full DHT discovery, peers should query the gateway via RPC.
 handle_call({discover_subscribers, Topic}, _From, State) ->
-    Result = macula_pubsub_discovery:find_subscribers(State#state.connection_manager_pid, Topic),
+    TopicKey = crypto:hash(sha256, Topic),
+
+    Result = case whereis(macula_routing_server) of
+        undefined ->
+            logger:warning("[~s] Routing server not running, cannot discover subscribers",
+                          [State#state.node_id]),
+            {error, routing_server_not_running};
+        RoutingServerPid ->
+            case macula_routing_server:find_value(RoutingServerPid, TopicKey, 20) of
+                {ok, Subscribers} when is_list(Subscribers) ->
+                    logger:debug("[~s] Found ~p subscriber(s) for topic ~s in local DHT",
+                                [State#state.node_id, length(Subscribers), Topic]),
+                    {ok, Subscribers};
+                {error, not_found} ->
+                    logger:debug("[~s] No subscribers found for topic ~s in local DHT",
+                                [State#state.node_id, Topic]),
+                    {ok, []};
+                {error, Reason} ->
+                    logger:warning("[~s] Failed to discover subscribers for ~s: ~p",
+                                  [State#state.node_id, Topic, Reason]),
+                    {error, Reason}
+            end
+    end,
     {reply, Result, State};
 
 %% Get node ID

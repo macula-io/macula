@@ -1,10 +1,11 @@
 # Macula Full Supervision Tree
 
-## Complete Supervision Hierarchy for a Fully-Capable Peer
+## Complete Supervision Hierarchy (v0.8.5 Always-On Architecture)
 
 **Date:** 2025-11-18
-**Mode:** `hybrid` (all capabilities enabled: bootstrap + gateway + peer)
-**Based on:** Current codebase after subsystem reorganization
+**Version:** v0.8.5+
+**Architecture:** Always-On (all capabilities enabled on every node)
+**Based on:** v0.8.5 architectural foundations release
 
 ---
 
@@ -15,9 +16,9 @@ macula (OTP application)
 └── macula_root [one_for_one]
     │
     ├── macula_routing_server (worker)
-    │   └── Core DHT infrastructure (always running)
+    │   └── Core DHT infrastructure (always on)
     │
-    ├── macula_bootstrap_system [one_for_one] (optional: bootstrap/hybrid modes)
+    ├── macula_bootstrap_system [one_for_one] (always on)
     │   ├── macula_bootstrap_server (worker)
     │   │   └── DHT queries, routing table storage
     │   │
@@ -27,31 +28,34 @@ macula (OTP application)
     │   └── macula_bootstrap_health (worker)
     │       └── System health monitoring
     │
-    └── macula_gateway_system [rest_for_one] (optional: gateway/hybrid modes)
-        ├── macula_gateway_health (worker)
-        │   └── Health check HTTP server
-        │
-        ├── macula_gateway_diagnostics (worker)
-        │   └── Diagnostics service
-        │
-        ├── macula_gateway_quic_server (worker)
-        │   └── QUIC transport layer (UDP listener)
-        │
-        ├── macula_gateway (worker)
-        │   └── Message routing coordinator
-        │
-        └── macula_gateway_workers_sup [rest_for_one]
-            ├── macula_gateway_clients (worker)
-            │   └── Client connection tracking and stream management
-            │
-            ├── macula_gateway_pubsub (worker)
-            │   └── Pub/Sub message routing with wildcards
-            │
-            ├── macula_gateway_rpc (worker)
-            │   └── RPC handler registration and management
-            │
-            └── macula_gateway_mesh (worker)
-                └── Mesh connection pooling (LRU, max 1000 connections)
+    ├── macula_gateway_system [rest_for_one] (always on)
+    │   ├── macula_gateway_health (worker)
+    │   │   └── Health check HTTP server
+    │   │
+    │   ├── macula_gateway_diagnostics (worker)
+    │   │   └── Diagnostics service
+    │   │
+    │   ├── macula_gateway_quic_server (worker)
+    │   │   └── QUIC transport layer (UDP listener)
+    │   │
+    │   ├── macula_gateway (worker)
+    │   │   └── Message routing coordinator
+    │   │
+    │   └── macula_gateway_workers_sup [rest_for_one]
+    │       ├── macula_gateway_clients (worker)
+    │       │   └── Client connection tracking and stream management
+    │       │
+    │       ├── macula_gateway_pubsub (worker)
+    │       │   └── Pub/Sub message routing with wildcards
+    │       │
+    │       ├── macula_gateway_rpc (worker)
+    │       │   └── RPC handler registration and management
+    │       │
+    │       └── macula_gateway_mesh (worker)
+    │           └── Mesh connection pooling (LRU, max 1000 connections)
+    │
+    └── macula_peers_sup [simple_one_for_one] (always on)
+        └── (dynamically spawned macula_peer_system instances)
 ```
 
 ---
@@ -86,15 +90,23 @@ macula_peer_system [rest_for_one] (per connection)
 **Strategy:** `one_for_one`
 **Intensity:** 10 restarts in 5 seconds
 
-**Children (mode-dependent):**
-1. `macula_routing_server` - Always started (core DHT)
-2. `macula_bootstrap_system` - Only in `bootstrap` or `hybrid` modes
-3. `macula_gateway_system` - Only in `gateway` or `hybrid` modes
+**Children (v0.8.5 - always-on):**
+1. `macula_routing_server` - Core DHT infrastructure (always on)
+2. `macula_bootstrap_system` - Bootstrap services (always on)
+3. `macula_gateway_system` - Gateway services (always on)
+4. `macula_peers_sup` - Dynamic peer connections supervisor (always on)
+
+**Startup Sequence:**
+- TLS certificates auto-generated if missing (stable Node ID)
+- All subsystems start unconditionally
+- Beautiful startup banner displays configuration
+- Node ready for P2P mesh participation
 
 **Fault Isolation:**
 - Routing server crash → Only routing restarts
 - Bootstrap system crash → Only bootstrap restarts
 - Gateway system crash → Only gateway restarts
+- Peers supervisor crash → Only peers supervisor restarts (existing connections preserved)
 - Each subsystem is isolated
 
 ---
@@ -269,110 +281,91 @@ macula_peer_system [rest_for_one] (per connection)
 - `macula_gateway_workers_sup` - clients is foundational, others depend on it
 - `macula_peer_system` - connection is foundational, handlers depend on it
 
----
+### simple_one_for_one
+- **Purpose:** Template-based dynamic child spawning
+- **Restart:** Each child has its own restart strategy (not collective)
+- **Use case:** Managing many similar children (peer connections)
 
-## Mode-Based Configuration
-
-### Mode: `bootstrap`
-```erlang
-macula_root
-├── macula_routing_server ✓
-├── macula_bootstrap_system ✓
-└── macula_gateway_system ✗ (disabled)
-```
-
-**Use case:** Lightweight DHT bootstrap node
+**Used by:**
+- `macula_peers_sup` - Dynamic peer connections (v0.8.5+)
 
 ---
 
-### Mode: `edge` (peer-only)
+## v0.8.5 Always-On Architecture
+
+**As of v0.8.5, mode-based configuration has been removed.**
+
+### Always-On Configuration
 ```erlang
-macula_root
-├── macula_routing_server ✓
-├── macula_bootstrap_system ✗
-└── macula_gateway_system ✗
+macula_root [one_for_one]
+├── macula_routing_server (always on)
+├── macula_bootstrap_system (always on)
+├── macula_gateway_system (always on)
+└── macula_peers_sup (always on)
 ```
 
-**Use case:** Pure P2P peer (connects to others, doesn't accept incoming)
+**Every node has ALL capabilities:**
+- ✅ DHT routing (core infrastructure)
+- ✅ Bootstrap service (helps new peers join)
+- ✅ Gateway with QUIC listener (accepts connections)
+- ✅ Dynamic peer management (on-demand connections)
 
----
+**Benefits:**
+- Zero configuration required
+- Simplified deployment (no mode selection)
+- True P2P mesh (nodes connect on-demand)
+- TLS auto-generated (stable Node ID)
 
-### Mode: `gateway`
-```erlang
-macula_root
-├── macula_routing_server ✓
-├── macula_bootstrap_system ✗
-└── macula_gateway_system ✓
+**Environment Variables (v0.8.5+):**
+```bash
+MACULA_QUIC_PORT=4433                  # QUIC listener port
+MACULA_REALM=my.realm                  # Realm name
+MACULA_BOOTSTRAP_URL=https://...       # Optional bootstrap peer
+HEALTH_PORT=8080                       # Health check port
+MACULA_CERT_PATH=/path/to/cert.pem    # Optional (auto-generated)
+MACULA_KEY_PATH=/path/to/key.pem      # Optional (auto-generated)
 ```
 
-**Use case:** Message routing/relay node (no bootstrap capability)
+### Legacy Mode Configuration (v0.8.4 and earlier)
 
----
+**DEPRECATED:** Mode-based configuration was removed in v0.8.5.
 
-### Mode: `hybrid` (fully-capable peer)
-```erlang
-macula_root
-├── macula_routing_server ✓
-├── macula_bootstrap_system ✓
-└── macula_gateway_system ✓
-    └── (full gateway tree with all workers)
-```
-
-**Use case:** All capabilities enabled
-- DHT bootstrap ✓
-- Gateway routing ✓
-- Mesh connections ✓
-- Can act as bootstrap, gateway, or relay as needed
+For historical reference, v0.8.4 supported these modes:
+- `bootstrap` - DHT bootstrap only
+- `edge` - Peer-only (no incoming connections)
+- `gateway` - Gateway routing only
+- `hybrid` - All capabilities (equivalent to v0.8.5 default)
 
 ---
 
 ## Process Count Estimation
 
-### Minimal (edge mode):
-```
-1   macula_root
-1   macula_routing_server
----
-2   processes
-```
-
-### Bootstrap only:
+### v0.8.5 Always-On Architecture:
 ```
 1   macula_root
 1   macula_routing_server
 1   macula_bootstrap_system
 3   bootstrap workers (server, registry, health)
----
-6   processes
-```
-
-### Gateway only:
-```
-1   macula_root
-1   macula_routing_server
 1   macula_gateway_system
 5   gateway workers (health, diagnostics, quic, gateway, workers_sup)
 4   business logic workers (clients, pubsub, rpc, mesh)
+1   macula_peers_sup
 ---
-12  processes
+17  processes (base)
+
++ 4 per peer connection (peer_system with 4 handlers)
 ```
 
-### Hybrid (fully-capable):
-```
-1   macula_root
-1   macula_routing_server
-1   macula_bootstrap_system
-3   bootstrap workers
-1   macula_gateway_system
-5   gateway workers
-4   business logic workers
----
-16  processes (base)
+**Example:** Node with 10 peer connections = 17 + (10 × 4) = **57 processes**
 
-+ 4 per connected peer (peer_system with 4 handlers)
-```
+**Example:** Node with 100 peer connections = 17 + (100 × 4) = **417 processes**
 
-**Example:** Hybrid node with 10 peer connections = 16 + (10 × 4) = **56 processes**
+### Legacy v0.8.4 (for reference):
+
+**Minimal (edge mode):** 2 processes
+**Bootstrap only:** 6 processes
+**Gateway only:** 12 processes
+**Hybrid:** 16 + (4 × peers) processes
 
 ---
 
@@ -433,34 +426,47 @@ Each subsystem implements bounded data structures:
 
 ## Configuration
 
-### Environment Variables
+### Environment Variables (v0.8.5+)
 ```bash
-# Mode selection
-MACULA_MODE=hybrid                    # bootstrap|edge|gateway|hybrid
-
-# Gateway configuration
-MACULA_START_GATEWAY=true             # Override mode-based default
+# QUIC configuration
 MACULA_QUIC_PORT=4433                 # QUIC listener port
 MACULA_REALM=macula.arcade            # Realm name
 HEALTH_PORT=8080                      # Health check HTTP port
 
-# TLS certificates
-TLS_CERT_FILE=/path/to/cert.pem
-TLS_KEY_FILE=/path/to/key.pem
+# TLS certificates (auto-generated if not provided)
+MACULA_CERT_PATH=/var/lib/macula/cert.pem    # Optional
+MACULA_KEY_PATH=/var/lib/macula/key.pem      # Optional
 
-# Bootstrap
-MACULA_BOOTSTRAP_URL=https://bootstrap:4433  # For edge/gateway modes
+# Bootstrap (optional - for joining existing mesh)
+MACULA_BOOTSTRAP_URL=https://bootstrap:4433
+
+# Legacy support (v0.8.4 compatibility)
+GATEWAY_PORT=4433                     # Falls back to MACULA_QUIC_PORT
 ```
 
-### Application Config (sys.config)
+### Application Config (sys.config) - v0.8.5+
 ```erlang
 {macula, [
-    {mode, hybrid},                    % bootstrap|edge|gateway|hybrid
-    {start_gateway, true},             % Override
-    {gateway_port, 4433},              % QUIC listener
-    {gateway_realm, <<"macula.arcade">>},
-    {health_port, 8080},
-    {bootstrap_health_interval, 60000} % Health check interval (ms)
+    {quic_port, 4433},                 % QUIC listener
+    {realm, <<"macula.arcade">>},      % Realm name
+    {health_port, 8080},               % Health check port
+    {bootstrap_health_interval, 60000}, % Health check interval (ms)
+
+    % TLS configuration (optional - auto-generated if missing)
+    {cert_path, "/var/lib/macula/cert.pem"},
+    {key_path, "/var/lib/macula/key.pem"},
+    {cert_validity_days, 3650},        % 10 years
+    {cert_key_bits, 2048}              % RSA key size
+]}
+```
+
+### Legacy Configuration (v0.8.4)
+```erlang
+{macula, [
+    {mode, hybrid},                    % DEPRECATED in v0.8.5
+    {start_gateway, true},             % DEPRECATED in v0.8.5
+    {gateway_port, 4433},              % Use quic_port in v0.8.5
+    {gateway_realm, <<"macula.arcade">>} % Use realm in v0.8.5
 ]}
 ```
 
@@ -478,8 +484,8 @@ MACULA_BOOTSTRAP_URL=https://bootstrap:4433  # For edge/gateway modes
 
 ## Summary
 
-**Fully-capable peer (hybrid mode) runs:**
-- ✅ Core DHT routing (always)
+**v0.8.5 Always-On Architecture - Every node runs:**
+- ✅ Core DHT routing (always on)
 - ✅ Bootstrap service (helps new peers join)
 - ✅ Gateway with QUIC listener (accepts connections)
 - ✅ Pub/Sub routing (message forwarding)
@@ -487,7 +493,12 @@ MACULA_BOOTSTRAP_URL=https://bootstrap:4433  # For edge/gateway modes
 - ✅ Mesh connections (connection pooling)
 - ✅ Per-peer handlers (connection + pubsub + rpc + advertisements)
 
-**Total processes:** 16 base + 4 per connected peer
+**Total processes:** 17 base + 4 per connected peer
+
+**Zero configuration:**
+- TLS certificates auto-generated on first boot
+- Stable Node ID derived from public key (SHA-256)
+- No mode selection needed
 
 **Fault tolerance:** Proper OTP supervision with `one_for_one` and `rest_for_one` strategies
 

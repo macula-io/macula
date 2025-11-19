@@ -166,8 +166,9 @@ generate_self_signed_cert(_Opts) ->
 -spec derive_node_id(CertPEM :: binary()) -> NodeID :: binary().
 
 derive_node_id(CertPEM) when is_binary(CertPEM) ->
-    %% Decode PEM
-    [{'Certificate', CertDER, not_encrypted}] = public_key:pem_decode(CertPEM),
+    %% Decode PEM - extract certificate (may contain other entries like private key)
+    PemEntries = public_key:pem_decode(CertPEM),
+    {'Certificate', CertDER, not_encrypted} = lists:keyfind('Certificate', 1, PemEntries),
 
     %% Decode certificate
     Certificate = public_key:der_decode('Certificate', CertDER),

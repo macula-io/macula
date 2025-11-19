@@ -50,7 +50,8 @@ stop(Pid) ->
     gen_server:stop(Pid).
 
 %% @doc Register a handler for an RPC procedure.
--spec register_handler(pid(), binary(), pid()) -> ok.
+%% Handler can be either a PID or a function.
+-spec register_handler(pid(), binary(), pid() | fun()) -> ok.
 register_handler(Pid, Procedure, Handler) ->
     gen_server:call(Pid, {register_handler, Procedure, Handler}).
 
@@ -89,7 +90,7 @@ init(Opts) ->
     {ok, State}.
 
 handle_call({register_handler, Procedure, Handler}, _From, State)
-    when is_binary(Procedure), is_pid(Handler) ->
+    when is_binary(Procedure), (is_pid(Handler) orelse is_function(Handler)) ->
     %% Check if procedure already has a handler
     NewMonitors = case maps:get(Procedure, State#state.registrations, undefined) of
         undefined ->
@@ -108,9 +109,17 @@ handle_call({register_handler, Procedure, Handler}, _From, State)
     end,
 
     %% Register new handler
-    MonitorRef = erlang:monitor(process, Handler),
-    Registrations = maps:put(Procedure, Handler, State#state.registrations),
-    Monitors = maps:put(MonitorRef, Procedure, NewMonitors),
+    %% Only monitor PID handlers (functions can't be monitored)
+    {Registrations, Monitors} = case is_pid(Handler) of
+        true ->
+            MonitorRef = erlang:monitor(process, Handler),
+            {maps:put(Procedure, Handler, State#state.registrations),
+             maps:put(MonitorRef, Procedure, NewMonitors)};
+        false ->
+            %% Function handler - no monitoring needed
+            {maps:put(Procedure, Handler, State#state.registrations),
+             NewMonitors}
+    end,
 
     NewState = State#state{
         registrations = Registrations,
