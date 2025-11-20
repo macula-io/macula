@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.8.5">
+    <meta name="project" content="macula v0.8.6">
 
 
-    <title>v0.9.0 Roadmap — macula v0.8.5</title>
+    <title>v0.9.0 Roadmap — macula v0.8.6</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-63D0EC31.js"></script>
+    <script defer src="dist/sidebar_items-BD101DD4.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.8.5
+          v0.8.6
         </div>
       </div>
     </div>
@@ -81,7 +81,7 @@ macula
     <h1>Macula v0.8.0 Roadmap - What's Next</h1>
 
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.5/architecture/v0.8.0-ROADMAP.md#L1" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.8.6/architecture/v0.8.0-ROADMAP.md#L1" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -94,35 +94,35 @@ macula
 <strong>Focus</strong>: Security, Performance, NAT Traversal</p><h3 id="theme-production-ready-infrastructure" class="section-heading"><a href="#theme-production-ready-infrastructure" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Theme: Production-Ready Infrastructure</span></h3><p>v0.8.0 provides the foundation. v0.9.0 makes it production-grade with security hardening, performance optimization, and NAT traversal.</p><hr class="thin"/><h2 id="high-priority-features" class="section-heading"><a href="#high-priority-features" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">High Priority Features</span></h2><h3 id="1-connection-pooling" class="section-heading"><a href="#1-connection-pooling" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">1. Connection Pooling</span></h3><p><strong>Problem</strong>: New connection per message creates overhead
 <strong>Impact</strong>: Performance (100-200ms per operation)
 <strong>Effort</strong>: 2-3 weeks</p><p><strong>Implementation</strong>:</p><ul><li>Create <code class="inline">macula_connection_pool</code> enhancement</li><li>LRU eviction policy</li><li>Max 100 connections per pool</li><li>TTL-based cleanup (5-minute idle timeout)</li><li>Automatic reconnection on failure</li></ul><p><strong>Benefits</strong>:</p><ul><li>10x performance improvement for repeated operations</li><li>Reduced connection establishment overhead</li><li>Better resource utilization</li><li>Lower latency for frequent P2P operations</li></ul><p><strong>API</strong>:</p><pre><code class="makeup erlang" translate="no"><span class="c1">%% Get connection from pool (or create new)</span><span class="w">
-</span><span class="p" data-group-id="3554319184-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Conn</span><span class="p" data-group-id="3554319184-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_connection_pool</span><span class="p">:</span><span class="nf">get_connection</span><span class="p" data-group-id="3554319184-2">(</span><span class="n">Endpoint</span><span class="p" data-group-id="3554319184-2">)</span><span class="p">.</span><span class="w">
+</span><span class="p" data-group-id="2229885779-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Conn</span><span class="p" data-group-id="2229885779-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_connection_pool</span><span class="p">:</span><span class="nf">get_connection</span><span class="p" data-group-id="2229885779-2">(</span><span class="n">Endpoint</span><span class="p" data-group-id="2229885779-2">)</span><span class="p">.</span><span class="w">
 
 </span><span class="c1">%% Send via pooled connection</span><span class="w">
-</span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_connection_pool</span><span class="p">:</span><span class="nf">send_message</span><span class="p" data-group-id="3554319184-3">(</span><span class="n">Conn</span><span class="p">,</span><span class="w"> </span><span class="n">MessageType</span><span class="p">,</span><span class="w"> </span><span class="n">Message</span><span class="p" data-group-id="3554319184-3">)</span><span class="p">.</span><span class="w">
+</span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_connection_pool</span><span class="p">:</span><span class="nf">send_message</span><span class="p" data-group-id="2229885779-3">(</span><span class="n">Conn</span><span class="p">,</span><span class="w"> </span><span class="n">MessageType</span><span class="p">,</span><span class="w"> </span><span class="n">Message</span><span class="p" data-group-id="2229885779-3">)</span><span class="p">.</span><span class="w">
 
 </span><span class="c1">%% Return to pool (automatic via monitoring)</span></code></pre><h3 id="2-tls-certificate-verification" class="section-heading"><a href="#2-tls-certificate-verification" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">2. TLS Certificate Verification</span></h3><p><strong>Problem</strong>: Currently using <code class="inline">{verify, none}</code> (security risk)
 <strong>Impact</strong>: Security (high)
-<strong>Effort</strong>: 1-2 weeks</p><p><strong>Implementation</strong>:</p><ul><li>Add CA certificate bundle support</li><li>Implement certificate validation</li><li>Support custom CA paths</li><li>Add certificate pinning option</li></ul><p><strong>Configuration</strong>:</p><pre><code class="makeup erlang" translate="no"><span class="p" data-group-id="4044614969-1">{</span><span class="ss">macula</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4044614969-2">[</span><span class="w">
-    </span><span class="p" data-group-id="4044614969-3">{</span><span class="ss">tls</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4044614969-4">#{</span><span class="w">
+<strong>Effort</strong>: 1-2 weeks</p><p><strong>Implementation</strong>:</p><ul><li>Add CA certificate bundle support</li><li>Implement certificate validation</li><li>Support custom CA paths</li><li>Add certificate pinning option</li></ul><p><strong>Configuration</strong>:</p><pre><code class="makeup erlang" translate="no"><span class="p" data-group-id="7249022122-1">{</span><span class="ss">macula</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="7249022122-2">[</span><span class="w">
+    </span><span class="p" data-group-id="7249022122-3">{</span><span class="ss">tls</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="7249022122-4">#{</span><span class="w">
         </span><span class="ss">verify</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ss">verify_peer</span><span class="p">,</span><span class="w">
         </span><span class="ss">cacertfile</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="s">&quot;/etc/macula/ca-bundle.pem&quot;</span><span class="p">,</span><span class="w">
         </span><span class="ss">certfile</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="s">&quot;/etc/macula/node-cert.pem&quot;</span><span class="p">,</span><span class="w">
         </span><span class="ss">keyfile</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="s">&quot;/etc/macula/node-key.pem&quot;</span><span class="p">,</span><span class="w">
         </span><span class="c1">%% Optional: Pin specific certificates</span><span class="w">
-        </span><span class="ss">pinned_certs</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4044614969-5">[</span><span class="w">
-            </span><span class="p" data-group-id="4044614969-6">&lt;&lt;</span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="p" data-group-id="4044614969-6">&gt;&gt;</span><span class="w">  </span><span class="c1">% SHA256 fingerprint</span><span class="w">
-        </span><span class="p" data-group-id="4044614969-5">]</span><span class="w">
-    </span><span class="p" data-group-id="4044614969-4">}</span><span class="p" data-group-id="4044614969-3">}</span><span class="w">
-</span><span class="p" data-group-id="4044614969-2">]</span><span class="p" data-group-id="4044614969-1">}</span><span class="p">.</span></code></pre><p><strong>Modules to Update</strong>:</p><ul><li><code class="inline">macula_connection.erl</code></li><li><code class="inline">macula_connection_pool.erl</code></li><li><code class="inline">macula_peer_connector.erl</code></li><li><code class="inline">macula_quic.erl</code></li></ul><h3 id="3-request-response-pattern-for-dht" class="section-heading"><a href="#3-request-response-pattern-for-dht" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">3. Request/Response Pattern for DHT</span></h3><p><strong>Problem</strong>: Fire-and-forget provides no feedback
+        </span><span class="ss">pinned_certs</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="7249022122-5">[</span><span class="w">
+            </span><span class="p" data-group-id="7249022122-6">&lt;&lt;</span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="p" data-group-id="7249022122-6">&gt;&gt;</span><span class="w">  </span><span class="c1">% SHA256 fingerprint</span><span class="w">
+        </span><span class="p" data-group-id="7249022122-5">]</span><span class="w">
+    </span><span class="p" data-group-id="7249022122-4">}</span><span class="p" data-group-id="7249022122-3">}</span><span class="w">
+</span><span class="p" data-group-id="7249022122-2">]</span><span class="p" data-group-id="7249022122-1">}</span><span class="p">.</span></code></pre><p><strong>Modules to Update</strong>:</p><ul><li><code class="inline">macula_connection.erl</code></li><li><code class="inline">macula_connection_pool.erl</code></li><li><code class="inline">macula_peer_connector.erl</code></li><li><code class="inline">macula_quic.erl</code></li></ul><h3 id="3-request-response-pattern-for-dht" class="section-heading"><a href="#3-request-response-pattern-for-dht" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">3. Request/Response Pattern for DHT</span></h3><p><strong>Problem</strong>: Fire-and-forget provides no feedback
 <strong>Impact</strong>: Observability (medium)
 <strong>Effort</strong>: 2-3 weeks</p><p><strong>Implementation</strong>:</p><ul><li>Add correlation IDs to DHT messages</li><li>Implement response tracking with timeout</li><li>Return query results to caller</li><li>Add retry logic for failed queries</li></ul><p><strong>API</strong>:</p><pre><code class="makeup erlang" translate="no"><span class="c1">%% Query with response</span><span class="w">
-</span><span class="p" data-group-id="7498263426-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Result</span><span class="p" data-group-id="7498263426-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_routing_server</span><span class="p">:</span><span class="nf">query_with_response</span><span class="p" data-group-id="7498263426-2">(</span><span class="w">
+</span><span class="p" data-group-id="8528146592-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Result</span><span class="p" data-group-id="8528146592-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_routing_server</span><span class="p">:</span><span class="nf">query_with_response</span><span class="p" data-group-id="8528146592-2">(</span><span class="w">
     </span><span class="n">Pid</span><span class="p">,</span><span class="w"> </span><span class="n">Key</span><span class="p">,</span><span class="w"> </span><span class="n">Timeout</span><span class="w">
-</span><span class="p" data-group-id="7498263426-2">)</span><span class="p">.</span><span class="w">
+</span><span class="p" data-group-id="8528146592-2">)</span><span class="p">.</span><span class="w">
 
 </span><span class="c1">%% Store with confirmation</span><span class="w">
-</span><span class="p" data-group-id="7498263426-3">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">StoredNodes</span><span class="p" data-group-id="7498263426-3">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_routing_server</span><span class="p">:</span><span class="nf">store_with_confirmation</span><span class="p" data-group-id="7498263426-4">(</span><span class="w">
+</span><span class="p" data-group-id="8528146592-3">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">StoredNodes</span><span class="p" data-group-id="8528146592-3">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_routing_server</span><span class="p">:</span><span class="nf">store_with_confirmation</span><span class="p" data-group-id="8528146592-4">(</span><span class="w">
     </span><span class="n">Pid</span><span class="p">,</span><span class="w"> </span><span class="n">Key</span><span class="p">,</span><span class="w"> </span><span class="n">Value</span><span class="p">,</span><span class="w"> </span><span class="n">Timeout</span><span class="w">
-</span><span class="p" data-group-id="7498263426-4">)</span><span class="p">.</span></code></pre><p><strong>Benefits</strong>:</p><ul><li>Confirm DHT operations succeeded</li><li>Monitor propagation success rate</li><li>Better debugging and observability</li><li>Retry failed operations</li></ul><hr class="thin"/><h2 id="medium-priority-features" class="section-heading"><a href="#medium-priority-features" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Medium Priority Features</span></h2><h3 id="4-nat-traversal-opportunistic-hole-punching" class="section-heading"><a href="#4-nat-traversal-opportunistic-hole-punching" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">4. NAT Traversal - Opportunistic Hole Punching</span></h3><p><strong>Problem</strong>: Edge nodes behind NAT cannot accept connections
+</span><span class="p" data-group-id="8528146592-4">)</span><span class="p">.</span></code></pre><p><strong>Benefits</strong>:</p><ul><li>Confirm DHT operations succeeded</li><li>Monitor propagation success rate</li><li>Better debugging and observability</li><li>Retry failed operations</li></ul><hr class="thin"/><h2 id="medium-priority-features" class="section-heading"><a href="#medium-priority-features" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Medium Priority Features</span></h2><h3 id="4-nat-traversal-opportunistic-hole-punching" class="section-heading"><a href="#4-nat-traversal-opportunistic-hole-punching" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">4. NAT Traversal - Opportunistic Hole Punching</span></h3><p><strong>Problem</strong>: Edge nodes behind NAT cannot accept connections
 <strong>Impact</strong>: Connectivity (medium)
 <strong>Effort</strong>: 6-8 weeks</p><p><strong>Strategy</strong>: Attempt direct connection while keeping relay fallback</p><p><strong>Implementation Phases</strong>:</p><h4>Phase A: NAT Discovery (2 weeks)</h4><ul><li>Create <code class="inline">macula_nat_discovery.erl</code></li><li>Detect public IP/port via gateway</li><li>Detect NAT type (cone, symmetric, etc.)</li><li>Cache NAT type and public address</li></ul><h4>Phase B: Hole Punching (3 weeks)</h4><ul><li>Create <code class="inline">macula_hole_punch.erl</code></li><li>Coordinate simultaneous connection attempts</li><li>Exchange addresses via gateway</li><li>Timeout and fallback to relay</li></ul><h4>Phase C: Connection Upgrade (2 weeks)</h4><ul><li>Create <code class="inline">macula_connection_upgrade.erl</code></li><li>Migrate active streams from relay to direct</li><li>Handle graceful transition</li><li>Update routing tables</li></ul><h4>Phase D: Testing (1 week)</h4><ul><li>Docker-based NAT simulation</li><li>Test various NAT types</li><li>Verify fallback behavior</li><li>Integration tests</li></ul><p><strong>Success Metrics</strong>:</p><ul><li>80%+ direct P2P success (non-symmetric NAT)</li><li>100% connectivity (with relay fallback)</li><li>&lt;100ms upgrade time (relay → direct)</li><li>No message loss during upgrade</li></ul><p><strong>See</strong>: <code class="inline">architecture/NAT_TRAVERSAL_ROADMAP.md</code> for detailed design</p><h3 id="5-performance-tuning" class="section-heading"><a href="#5-performance-tuning" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">5. Performance Tuning</span></h3><p><strong>Problem</strong>: Various performance bottlenecks
 <strong>Impact</strong>: Performance (medium)
@@ -184,11 +184,11 @@ v1.0.0 Roadmap
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.8.5" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.8.6" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.8.5">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.8.6">Hex Preview</a>
 
-              (<a href="https://preview.hex.pm/preview/macula/0.8.5/show/architecture/v0.8.0-ROADMAP.md">current file</a>)
+              (<a href="https://preview.hex.pm/preview/macula/0.8.6/show/architecture/v0.8.0-ROADMAP.md">current file</a>)
 
           </span>
 

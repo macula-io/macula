@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.8.5">
+    <meta name="project" content="macula v0.8.6">
 
 
-    <title>macula_gateway_pubsub — macula v0.8.5</title>
+    <title>macula_gateway_pubsub — macula v0.8.6</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-63D0EC31.js"></script>
+    <script defer src="dist/sidebar_items-BD101DD4.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.8.5
+          v0.8.6
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_gateway_pubsub</span> 
-      <small class="app-vsn" translate="no">(macula v0.8.5)</small>
+      <small class="app-vsn" translate="no">(macula v0.8.6)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L15" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L15" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -105,6 +105,20 @@ macula
       </a>
       <span class="text">Summary</span>
     </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:stream_handle/0" data-no-tooltip="" translate="no">stream_handle/0</a>
+
+      </div>
+
+    </div>
+
+</div>
 <div class="summary-functions summary">
   <h2>
     <a href="#functions">Functions</a>
@@ -227,6 +241,46 @@ macula
   </section>
 
 
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:stream_handle/0">
+
+  <div class="detail-header">
+    <a href="#t:stream_handle/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">stream_handle/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L34" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> stream_handle() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
   <section id="functions" class="details-list">
     <h1 class="section-heading">
       <a class="hover-link" href="#functions">
@@ -245,7 +299,7 @@ macula
       <h1 class="signature" translate="no">get_stream_topics(Pid, Stream)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L76" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L79" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -273,7 +327,7 @@ macula
       <h1 class="signature" translate="no">get_subscribers(Pid, Topic)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L71" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L74" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -301,7 +355,7 @@ macula
       <h1 class="signature" translate="no">handle_call(Request, From, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L94" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L97" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -323,7 +377,7 @@ macula
       <h1 class="signature" translate="no">handle_cast(Msg, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L187" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L190" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -345,7 +399,7 @@ macula
       <h1 class="signature" translate="no">handle_info(Info, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L191" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L194" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -367,7 +421,7 @@ macula
       <h1 class="signature" translate="no">init(Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L83" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L86" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -389,7 +443,7 @@ macula
       <h1 class="signature" translate="no">publish(Pid, Topic, Payload)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L66" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L69" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -417,7 +471,7 @@ macula
       <h1 class="signature" translate="no">start_link(Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L46" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L49" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -445,7 +499,7 @@ macula
       <h1 class="signature" translate="no">stop(Pid)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L51" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L54" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -473,7 +527,7 @@ macula
       <h1 class="signature" translate="no">subscribe(Pid, Stream, Topic)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L56" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L59" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -501,7 +555,7 @@ macula
       <h1 class="signature" translate="no">terminate(Reason, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L221" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L224" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -523,7 +577,7 @@ macula
       <h1 class="signature" translate="no">unsubscribe(Pid, Stream, Topic)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_gateway_system/macula_gateway_pubsub.erl#L61" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.6/src/macula_gateway_system/macula_gateway_pubsub.erl#L64" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -549,9 +603,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.8.5" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.8.6" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.8.5">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.8.6">Hex Preview</a>
 
           </span>
 
