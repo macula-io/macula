@@ -16,7 +16,7 @@
 
 %% API
 -export([start_link/1, stop/1]).
--export([publish/3, subscribe/3, unsubscribe/2]).
+-export([publish/3, publish/4, subscribe/3, unsubscribe/2]).
 -export([call/4, register_procedure/3, unregister_procedure/2]).
 
 %% gen_server callbacks
@@ -47,7 +47,12 @@ stop(Pid) ->
 %% @doc Publish an event to a topic
 -spec publish(pid(), binary(), map()) -> ok | {error, term()}.
 publish(Pid, Topic, Payload) ->
-    gen_server:call(Pid, {publish, Topic, Payload}).
+    publish(Pid, Topic, Payload, #{}).
+
+%% @doc Publish an event to a topic with options
+-spec publish(pid(), binary(), map(), map()) -> ok | {error, term()}.
+publish(Pid, Topic, Payload, Opts) ->
+    gen_server:call(Pid, {publish, Topic, Payload, Opts}).
 
 %% @doc Subscribe to a topic
 -spec subscribe(pid(), binary(), pid()) -> {ok, reference()} | {error, term()}.
@@ -100,10 +105,12 @@ init(Opts) ->
             {stop, {gateway_not_found, Reason}}
     end.
 
-handle_call({publish, Topic, Payload}, _From, State) ->
+handle_call({publish, Topic, Payload, Opts}, _From, State) ->
     #state{gateway_pid = Gateway, realm = Realm} = State,
 
     %% Send publish request to gateway via gen_server:call
+    %% Note: Opts are currently ignored for local clients
+    _ = Opts,
     Result = case gen_server:call(Gateway, {local_publish, Realm, Topic, Payload}) of
         ok -> ok;
         {error, _} = Error -> Error
