@@ -13,12 +13,18 @@
 %% @end
 -module(macula_local_client).
 -behaviour(gen_server).
+-behaviour(macula_client_behaviour).
 
-%% API
--export([start_link/1, stop/1]).
--export([publish/3, publish/4, subscribe/3, unsubscribe/2]).
--export([call/4, register_procedure/3, unregister_procedure/2]).
+%% API - Connection management
+-export([connect/2, connect_local/1, disconnect/1]).
+%% API - Pub/Sub
+-export([publish/3, publish/4, subscribe/3, unsubscribe/2, discover_subscribers/2]).
+%% API - RPC
+-export([call/3, call/4, advertise/3, advertise/4, unadvertise/2]).
+%% API - Utility
 -export([get_node_id/1]).
+%% Legacy API (kept for backward compatibility)
+-export([start_link/1, stop/1, register_procedure/3, unregister_procedure/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -35,15 +41,39 @@
 %% API
 %%==============================================================================
 
-%% @doc Start a local client connection to the gateway
+%%------------------------------------------------------------------------------
+%% Connection Management
+%%------------------------------------------------------------------------------
+
+%% @doc Connect to remote gateway (not supported for local client)
+%% For compatibility with macula_client_behaviour
+-spec connect(map(), pid()) -> {error, not_supported}.
+connect(_Opts, _EventHandler) ->
+    {error, not_supported}.
+
+%% @doc Create a local client connection to the gateway
+-spec connect_local(map()) -> {ok, pid()} | {error, term()}.
+connect_local(Opts) ->
+    start_link(Opts).
+
+%% @doc Disconnect the client
+-spec disconnect(pid()) -> ok.
+disconnect(Pid) ->
+    stop(Pid).
+
+%% @doc Start a local client connection to the gateway (legacy API)
 -spec start_link(map()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
 
-%% @doc Stop the local client
+%% @doc Stop the local client (legacy API)
 -spec stop(pid()) -> ok.
 stop(Pid) ->
     gen_server:stop(Pid).
+
+%%------------------------------------------------------------------------------
+%% Pub/Sub Operations
+%%------------------------------------------------------------------------------
 
 %% @doc Publish an event to a topic
 -spec publish(pid(), binary(), map()) -> ok | {error, term()}.
@@ -65,20 +95,53 @@ subscribe(Pid, Topic, HandlerPid) ->
 unsubscribe(Pid, SubRef) ->
     gen_server:call(Pid, {unsubscribe, SubRef}).
 
+%% @doc Discover subscribers of a topic via DHT query
+-spec discover_subscribers(pid(), binary()) -> {ok, [binary()]} | {error, term()}.
+discover_subscribers(Pid, Topic) ->
+    gen_server:call(Pid, {discover_subscribers, Topic}).
+
+%%------------------------------------------------------------------------------
+%% RPC Operations
+%%------------------------------------------------------------------------------
+
+%% @doc Call an RPC procedure with default options
+-spec call(pid(), binary(), list()) -> {ok, term()} | {error, term()}.
+call(Pid, Procedure, Args) ->
+    call(Pid, Procedure, Args, #{}).
+
 %% @doc Call an RPC procedure
 -spec call(pid(), binary(), list(), map()) -> {ok, term()} | {error, term()}.
 call(Pid, Procedure, Args, Opts) ->
     gen_server:call(Pid, {call, Procedure, Args, Opts}, 30000).
 
-%% @doc Register an RPC procedure
+%% @doc Advertise an RPC service with default options
+-spec advertise(pid(), binary(), fun()) -> ok | {error, term()}.
+advertise(Pid, Procedure, Handler) ->
+    advertise(Pid, Procedure, Handler, #{}).
+
+%% @doc Advertise an RPC service with options
+-spec advertise(pid(), binary(), fun(), map()) -> ok | {error, term()}.
+advertise(Pid, Procedure, Handler, Opts) ->
+    gen_server:call(Pid, {advertise, Procedure, Handler, Opts}).
+
+%% @doc Unadvertise an RPC service
+-spec unadvertise(pid(), binary()) -> ok | {error, term()}.
+unadvertise(Pid, Procedure) ->
+    gen_server:call(Pid, {unadvertise, Procedure}).
+
+%% @doc Register an RPC procedure (legacy API, use advertise/3 instead)
 -spec register_procedure(pid(), binary(), fun()) -> ok | {error, term()}.
 register_procedure(Pid, Procedure, Handler) ->
-    gen_server:call(Pid, {register, Procedure, Handler}).
+    advertise(Pid, Procedure, Handler, #{}).
 
-%% @doc Unregister an RPC procedure
+%% @doc Unregister an RPC procedure (legacy API, use unadvertise/2 instead)
 -spec unregister_procedure(pid(), binary()) -> ok | {error, term()}.
 unregister_procedure(Pid, Procedure) ->
-    gen_server:call(Pid, {unregister, Procedure}).
+    unadvertise(Pid, Procedure).
+
+%%------------------------------------------------------------------------------
+%% Utility Operations
+%%------------------------------------------------------------------------------
 
 %% @doc Get the node ID of the local gateway
 -spec get_node_id(pid()) -> {ok, binary()} | {error, term()}.
@@ -147,12 +210,43 @@ handle_call({unsubscribe, SubRef}, _From, State) ->
             {reply, Error, State}
     end;
 
+handle_call({discover_subscribers, Topic}, _From, State) ->
+    #state{gateway_pid = Gateway, realm = Realm} = State,
+
+    %% Forward DHT query to gateway
+    Result = gen_server:call(Gateway, {local_discover_subscribers, Realm, Topic}),
+    {reply, Result, State};
+
 handle_call({call, Procedure, Args, Opts}, _From, State) ->
     #state{gateway_pid = Gateway, realm = Realm} = State,
 
     %% Route RPC call through local gateway
     Result = gen_server:call(Gateway, {local_rpc_call, Realm, Procedure, Args, Opts}, 30000),
     {reply, Result, State};
+
+handle_call({advertise, Procedure, Handler, Opts}, _From, State) ->
+    #state{gateway_pid = Gateway, realm = Realm, registrations = Regs} = State,
+
+    %% Forward advertise request to gateway
+    case gen_server:call(Gateway, {local_advertise, Realm, Procedure, Handler, Opts}) of
+        ok ->
+            NewRegs = maps:put(Procedure, Handler, Regs),
+            {reply, ok, State#state{registrations = NewRegs}};
+        {error, _} = Error ->
+            {reply, Error, State}
+    end;
+
+handle_call({unadvertise, Procedure}, _From, State) ->
+    #state{gateway_pid = Gateway, registrations = Regs} = State,
+
+    %% Forward unadvertise request to gateway
+    case gen_server:call(Gateway, {local_unadvertise, Procedure}) of
+        ok ->
+            NewRegs = maps:remove(Procedure, Regs),
+            {reply, ok, State#state{registrations = NewRegs}};
+        {error, _} = Error ->
+            {reply, Error, State}
+    end;
 
 handle_call({register, Procedure, Handler}, _From, State) ->
     #state{gateway_pid = Gateway, realm = Realm, registrations = Regs} = State,
@@ -206,9 +300,9 @@ terminate(_Reason, #state{subscriptions = Subs, registrations = Regs, gateway_pi
         gen_server:call(Gateway, {local_unsubscribe, SubRef})
     end, Subs),
 
-    %% Clean up registrations
+    %% Clean up registrations (unadvertise all procedures)
     maps:foreach(fun(Procedure, _) ->
-        gen_server:call(Gateway, {local_unregister_procedure, Procedure})
+        gen_server:call(Gateway, {local_unadvertise, Procedure})
     end, Regs),
 
     ok.

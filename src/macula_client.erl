@@ -41,6 +41,7 @@
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_client).
+-behaviour(macula_client_behaviour).
 
 %% API exports
 -export([

@@ -447,6 +447,25 @@ handle_call({local_unregister_procedure, Procedure}, _From, State) ->
     ok = macula_gateway_rpc:unregister_handler(Rpc, Procedure),
     {reply, ok, State};
 
+handle_call({local_advertise, _Realm, Procedure, Handler, _Opts}, _From, State) ->
+    io:format("[Gateway] Local advertise: ~s~n", [Procedure]),
+    Rpc = State#state.rpc,
+    ok = macula_gateway_rpc:register_handler(Rpc, Procedure, Handler),
+    {reply, ok, State};
+
+handle_call({local_unadvertise, Procedure}, _From, State) ->
+    io:format("[Gateway] Local unadvertise: ~s~n", [Procedure]),
+    Rpc = State#state.rpc,
+    ok = macula_gateway_rpc:unregister_handler(Rpc, Procedure),
+    {reply, ok, State};
+
+handle_call({local_discover_subscribers, _Realm, Topic}, _From, State) ->
+    io:format("[Gateway] Local discover subscribers for topic: ~s~n", [Topic]),
+    %% TODO: Implement DHT discovery for local clients
+    %% For now return empty list (local clients can't do DHT queries directly)
+    _ = Topic,
+    {reply, {ok, []}, State};
+
 handle_call(local_get_node_id, _From, State) ->
     io:format("[Gateway] Local get node ID~n"),
     {reply, {ok, State#state.node_id}, State};
