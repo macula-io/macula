@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.8] - 2025-01-21
+
+### 🐛 Bug Fix Release
+
+This is a critical bug fix release for TLS certificate generation.
+
+### Fixed
+
+- **CRITICAL: TLS certificate path handling** (`macula_tls.erl:280`)
+  - Fixed ArgumentError when auto-generating TLS certificates
+  - Issue: `ensure_parent_dir/1` tried to concatenate binary string with charlist `"/"`
+  - Solution: Use `filename:join/2` to handle both binary and list paths correctly
+  - Affects: All deployments using auto-generated TLS certificates (most common case)
+  - Symptom: Container crashes on startup with `ArgumentError` in `macula_tls:ensure_parent_dir/1`
+
+### Test Results
+
+- **44/44 tests passing** (100% pass rate)
+- No regressions introduced
+- Bug fix validated through macula-arcade integration testing
+
+---
+
 ## [0.8.7] - 2025-01-21
 
 ### 🌐 Platform-Level DHT Bootstrapping Release

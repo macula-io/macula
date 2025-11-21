@@ -277,7 +277,10 @@ generate_and_save_cert(CertPath, KeyPath) ->
 
 ensure_parent_dir(FilePath) ->
     ParentDir = filename:dirname(FilePath),
-    case filelib:ensure_dir(ParentDir ++ "/") of
+    %% filelib:ensure_dir/1 requires trailing separator for directories
+    %% Use filename:join/2 to handle both binary and list paths correctly
+    DirWithSeparator = filename:join(ParentDir, "dummy"),
+    case filelib:ensure_dir(DirWithSeparator) of
         ok -> ok;
         {error, Reason} -> {error, Reason}
     end.
