@@ -1,0 +1,210 @@
+%% @doc Local client for in-VM workloads to connect to macula_gateway
+%%
+%% This module provides process-to-process communication between workloads
+%% running in the same BEAM VM as the Macula platform and the local gateway.
+%% Unlike macula_peer which creates QUIC connections, this connects directly
+%% to the local macula_gateway process.
+%%
+%% Architecture:
+%%   Phoenix/Elixir App → macula_local_client → macula_gateway
+%%                                               ↓ (QUIC)
+%%                                          Other Peers
+%%
+%% @end
+-module(macula_local_client).
+-behaviour(gen_server).
+
+%% API
+-export([start_link/1, stop/1]).
+-export([publish/3, subscribe/3, unsubscribe/2]).
+-export([call/4, register_procedure/3, unregister_procedure/2]).
+
+%% gen_server callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+
+-record(state, {
+    realm :: binary(),
+    gateway_pid :: pid() | undefined,
+    subscriptions = #{} :: #{binary() => reference()},
+    registrations = #{} :: #{binary() => fun()},
+    event_handler :: pid() | undefined
+}).
+
+%%==============================================================================
+%% API
+%%==============================================================================
+
+%% @doc Start a local client connection to the gateway
+-spec start_link(map()) -> {ok, pid()} | {error, term()}.
+start_link(Opts) ->
+    gen_server:start_link(?MODULE, Opts, []).
+
+%% @doc Stop the local client
+-spec stop(pid()) -> ok.
+stop(Pid) ->
+    gen_server:stop(Pid).
+
+%% @doc Publish an event to a topic
+-spec publish(pid(), binary(), map()) -> ok | {error, term()}.
+publish(Pid, Topic, Payload) ->
+    gen_server:call(Pid, {publish, Topic, Payload}).
+
+%% @doc Subscribe to a topic
+-spec subscribe(pid(), binary(), pid()) -> {ok, reference()} | {error, term()}.
+subscribe(Pid, Topic, HandlerPid) ->
+    gen_server:call(Pid, {subscribe, Topic, HandlerPid}).
+
+%% @doc Unsubscribe from a topic
+-spec unsubscribe(pid(), reference()) -> ok | {error, term()}.
+unsubscribe(Pid, SubRef) ->
+    gen_server:call(Pid, {unsubscribe, SubRef}).
+
+%% @doc Call an RPC procedure
+-spec call(pid(), binary(), list(), map()) -> {ok, term()} | {error, term()}.
+call(Pid, Procedure, Args, Opts) ->
+    gen_server:call(Pid, {call, Procedure, Args, Opts}, 30000).
+
+%% @doc Register an RPC procedure
+-spec register_procedure(pid(), binary(), fun()) -> ok | {error, term()}.
+register_procedure(Pid, Procedure, Handler) ->
+    gen_server:call(Pid, {register, Procedure, Handler}).
+
+%% @doc Unregister an RPC procedure
+-spec unregister_procedure(pid(), binary()) -> ok | {error, term()}.
+unregister_procedure(Pid, Procedure) ->
+    gen_server:call(Pid, {unregister, Procedure}).
+
+%%==============================================================================
+%% gen_server callbacks
+%%==============================================================================
+
+init(Opts) ->
+    Realm = maps:get(realm, Opts, <<"default">>),
+    EventHandler = maps:get(event_handler, Opts, self()),
+
+    io:format("[LocalClient] Initializing local client for realm ~s~n", [Realm]),
+
+    %% Find the local gateway process
+    case find_gateway() of
+        {ok, GatewayPid} ->
+            io:format("[LocalClient] Connected to local gateway: ~p~n", [GatewayPid]),
+            monitor(process, GatewayPid),
+            State = #state{
+                realm = Realm,
+                gateway_pid = GatewayPid,
+                event_handler = EventHandler
+            },
+            {ok, State};
+        {error, Reason} ->
+            io:format("[LocalClient] Failed to find gateway: ~p~n", [Reason]),
+            {stop, {gateway_not_found, Reason}}
+    end.
+
+handle_call({publish, Topic, Payload}, _From, State) ->
+    #state{gateway_pid = Gateway, realm = Realm} = State,
+
+    %% Send publish request to gateway via gen_server:call
+    Result = case gen_server:call(Gateway, {local_publish, Realm, Topic, Payload}) of
+        ok -> ok;
+        {error, _} = Error -> Error
+    end,
+    {reply, Result, State};
+
+handle_call({subscribe, Topic, HandlerPid}, _From, State) ->
+    #state{gateway_pid = Gateway, realm = Realm, subscriptions = Subs} = State,
+
+    %% Subscribe via local gateway
+    case gen_server:call(Gateway, {local_subscribe, Realm, Topic, HandlerPid}) of
+        {ok, SubRef} ->
+            NewSubs = maps:put(Topic, SubRef, Subs),
+            {reply, {ok, SubRef}, State#state{subscriptions = NewSubs}};
+        {error, _} = Error ->
+            {reply, Error, State}
+    end;
+
+handle_call({unsubscribe, SubRef}, _From, State) ->
+    #state{gateway_pid = Gateway, subscriptions = Subs} = State,
+
+    case gen_server:call(Gateway, {local_unsubscribe, SubRef}) of
+        ok ->
+            %% Remove from local tracking
+            NewSubs = maps:filter(fun(_, Ref) -> Ref =/= SubRef end, Subs),
+            {reply, ok, State#state{subscriptions = NewSubs}};
+        {error, _} = Error ->
+            {reply, Error, State}
+    end;
+
+handle_call({call, Procedure, Args, Opts}, _From, State) ->
+    #state{gateway_pid = Gateway, realm = Realm} = State,
+
+    %% Route RPC call through local gateway
+    Result = gen_server:call(Gateway, {local_rpc_call, Realm, Procedure, Args, Opts}, 30000),
+    {reply, Result, State};
+
+handle_call({register, Procedure, Handler}, _From, State) ->
+    #state{gateway_pid = Gateway, realm = Realm, registrations = Regs} = State,
+
+    case gen_server:call(Gateway, {local_register_procedure, Realm, Procedure, Handler}) of
+        ok ->
+            NewRegs = maps:put(Procedure, Handler, Regs),
+            {reply, ok, State#state{registrations = NewRegs}};
+        {error, _} = Error ->
+            {reply, Error, State}
+    end;
+
+handle_call({unregister, Procedure}, _From, State) ->
+    #state{gateway_pid = Gateway, registrations = Regs} = State,
+
+    case gen_server:call(Gateway, {local_unregister_procedure, Procedure}) of
+        ok ->
+            NewRegs = maps:remove(Procedure, Regs),
+            {reply, ok, State#state{registrations = NewRegs}};
+        {error, _} = Error ->
+            {reply, Error, State}
+    end.
+
+handle_cast(_Msg, State) ->
+    {noreply, State}.
+
+handle_info({'DOWN', _Ref, process, GatewayPid, Reason}, #state{gateway_pid = GatewayPid} = State) ->
+    io:format("[LocalClient] Gateway down: ~p. Attempting reconnect...~n", [Reason]),
+    %% Try to reconnect to gateway
+    case find_gateway() of
+        {ok, NewGateway} ->
+            io:format("[LocalClient] Reconnected to gateway: ~p~n", [NewGateway]),
+            monitor(process, NewGateway),
+            {noreply, State#state{gateway_pid = NewGateway}};
+        {error, _} ->
+            io:format("[LocalClient] Gateway not available, stopping~n"),
+            {stop, gateway_unavailable, State}
+    end;
+
+handle_info(_Info, State) ->
+    {noreply, State}.
+
+terminate(_Reason, #state{subscriptions = Subs, registrations = Regs, gateway_pid = Gateway}) ->
+    %% Clean up subscriptions
+    maps:foreach(fun(_, SubRef) ->
+        gen_server:call(Gateway, {local_unsubscribe, SubRef})
+    end, Subs),
+
+    %% Clean up registrations
+    maps:foreach(fun(Procedure, _) ->
+        gen_server:call(Gateway, {local_unregister_procedure, Procedure})
+    end, Regs),
+
+    ok.
+
+%%==============================================================================
+%% Internal functions
+%%==============================================================================
+
+%% @doc Find the local gateway process via whereis
+-spec find_gateway() -> {ok, pid()} | {error, not_found}.
+find_gateway() ->
+    case whereis(macula_gateway) of
+        Pid when is_pid(Pid) ->
+            {ok, Pid};
+        undefined ->
+            {error, not_found}
+    end.
