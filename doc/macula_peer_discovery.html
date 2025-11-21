@@ -8,7 +8,7 @@
     <meta name="project" content="macula v0.8.24">
 
 
-    <title>macula_rpc_names — macula v0.8.24</title>
+    <title>macula_peer_discovery — macula v0.8.24</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
@@ -79,12 +79,12 @@ macula
 <div id="top-content">
   <div class="heading-with-actions top-heading">
     <h1>
-      <span translate="no">macula_rpc_names</span> 
+      <span translate="no">macula_peer_discovery</span> 
       <small class="app-vsn" translate="no">(macula v0.8.24)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_names.erl#L7" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_discovery.erl#L21" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -93,7 +93,7 @@ macula
 
 
     <section id="moduledoc">
-<p>Name validation and utilities for RPC procedures. Uses reverse DNS notation: org.domain.service.procedure</p>
+<p>Peer Discovery - DHT-based gateway discovery and P2P mesh formation.</p><p>This module implements automatic peer discovery to enable true P2P mesh: 1. Gateways register themselves in the bootstrap DHT 2. Peers periodically query DHT to discover other gateways 3. Peers establish direct QUIC connections to discovered gateways 4. Cross-peer relay works automatically via these mesh connections</p><p>Architecture: Peer1 Gateway - Peer2 Gateway - Peer3 Gateway | | | Local Clients Local Clients Local Clients</p><p>DHT Storage: Key pattern: &quot;peer.gateway.&quot; + NodeID Value: map with node_id, host, port, realm fields</p>
     </section>
 
 </div>
@@ -105,20 +105,6 @@ macula
       </a>
       <span class="text">Summary</span>
     </h1>
-<div class="summary-types summary">
-  <h2>
-    <a href="#types">Types</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:name/0" data-no-tooltip="" translate="no">name/0</a>
-
-      </div>
-
-    </div>
-
-</div>
 <div class="summary-functions summary">
   <h2>
     <a href="#functions">Functions</a>
@@ -126,51 +112,71 @@ macula
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#matches/2" data-no-tooltip="" translate="no">matches(Name, Pattern)</a>
+        <a href="#discover_peers/0" data-no-tooltip="" translate="no">discover_peers()</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Check if name matches pattern. For now, only exact matching (no wildcards). Future: Could add wildcard patterns if needed.</p></div>
+        <div class="summary-synopsis"><p>Discover other peer gateways from DHT</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#namespace/1" data-no-tooltip="" translate="no">namespace(Name)</a>
+        <a href="#handle_call/3" data-no-tooltip="" translate="no">handle_call(Request, From, State)</a>
 
       </div>
-
-        <div class="summary-synopsis"><p>Extract namespace (first segment).</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#normalize/1" data-no-tooltip="" translate="no">normalize(Name)</a>
+        <a href="#handle_cast/2" data-no-tooltip="" translate="no">handle_cast(Msg, State)</a>
 
       </div>
-
-        <div class="summary-synopsis"><p>Normalize name (lowercase, trim, remove double dots).</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#segment_count/1" data-no-tooltip="" translate="no">segment_count(Name)</a>
+        <a href="#handle_info/2" data-no-tooltip="" translate="no">handle_info(Info, State)</a>
 
       </div>
-
-        <div class="summary-synopsis"><p>Count number of segments in name.</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#validate/1" data-no-tooltip="" translate="no">validate(Name)</a>
+        <a href="#init/1" data-no-tooltip="" translate="no">init(Config)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Validate RPC procedure name syntax. Valid names: - Non-empty - Segments separated by dots - Segments contain alphanumeric, underscore, hyphen - No leading or trailing dots - No double dots - No wildcards allowed (unlike topics)</p></div>
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#register_gateway/0" data-no-tooltip="" translate="no">register_gateway()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Register this gateway in the bootstrap DHT</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start_link/1" data-no-tooltip="" translate="no">start_link(Config)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Start the peer discovery process</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#terminate/2" data-no-tooltip="" translate="no">terminate(Reason, State)</a>
+
+      </div>
 
     </div>
 
@@ -178,46 +184,6 @@ macula
 
   </section>
 
-
-  <section id="types" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#types">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Types</span>
-    </h1>
-    <div class="types-list">
-<section class="detail" id="t:name/0">
-
-  <div class="detail-header">
-    <a href="#t:name/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">name/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_names.erl#L19" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> name() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-
-    </div>
-  </section>
 
   <section id="functions" class="details-list">
     <h1 class="section-heading">
@@ -227,17 +193,17 @@ macula
       <span class="text">Functions</span>
     </h1>
     <div class="functions-list">
-<section class="detail" id="matches/2">
+<section class="detail" id="discover_peers/0">
 
   <div class="detail-header">
-    <a href="#matches/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#discover_peers/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">matches(Name, Pattern)</h1>
+      <h1 class="signature" translate="no">discover_peers()</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_names.erl#L42" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_discovery.erl#L56" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -248,24 +214,24 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> matches(<a href="#t:name/0">name</a>(), <a href="#t:name/0">name</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+          <pre translate="no"><span class="attribute">-spec</span> discover_peers() -> {ok, [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()]} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
 
       </div>
 
-<p>Check if name matches pattern. For now, only exact matching (no wildcards). Future: Could add wildcard patterns if needed.</p>
+<p>Discover other peer gateways from DHT</p>
   </section>
 </section>
-<section class="detail" id="namespace/1">
+<section class="detail" id="handle_call/3">
 
   <div class="detail-header">
-    <a href="#namespace/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#handle_call/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">namespace(Name)</h1>
+      <h1 class="signature" translate="no">handle_call(Request, From, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_names.erl#L52" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_discovery.erl#L88" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -274,26 +240,20 @@ macula
 
   <section class="docstring">
 
-      <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> namespace(<a href="#t:name/0">name</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-<p>Extract namespace (first segment).</p>
   </section>
 </section>
-<section class="detail" id="normalize/1">
+<section class="detail" id="handle_cast/2">
 
   <div class="detail-header">
-    <a href="#normalize/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#handle_cast/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">normalize(Name)</h1>
+      <h1 class="signature" translate="no">handle_cast(Msg, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_names.erl#L47" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_discovery.erl#L99" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -302,26 +262,20 @@ macula
 
   <section class="docstring">
 
-      <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> normalize(<a href="#t:name/0">name</a>()) -> <a href="#t:name/0">name</a>().</pre>
-
-      </div>
-
-<p>Normalize name (lowercase, trim, remove double dots).</p>
   </section>
 </section>
-<section class="detail" id="segment_count/1">
+<section class="detail" id="handle_info/2">
 
   <div class="detail-header">
-    <a href="#segment_count/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#handle_info/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">segment_count(Name)</h1>
+      <h1 class="signature" translate="no">handle_info(Info, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_names.erl#L57" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_discovery.erl#L102" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -330,26 +284,42 @@ macula
 
   <section class="docstring">
 
-      <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> segment_count(<a href="#t:name/0">name</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>().</pre>
-
-      </div>
-
-<p>Count number of segments in name.</p>
   </section>
 </section>
-<section class="detail" id="validate/1">
+<section class="detail" id="init/1">
 
   <div class="detail-header">
-    <a href="#validate/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#init/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">validate(Name)</h1>
+      <h1 class="signature" translate="no">init(Config)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_names.erl#L35" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_discovery.erl#L63" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="register_gateway/0">
+
+  <div class="detail-header">
+    <a href="#register_gateway/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">register_gateway()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_discovery.erl#L51" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -360,11 +330,61 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> validate(<a href="#t:name/0">name</a>()) -> ok | {error, invalid_name}.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> register_gateway() -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
 
       </div>
 
-<p>Validate RPC procedure name syntax. Valid names: - Non-empty - Segments separated by dots - Segments contain alphanumeric, underscore, hyphen - No leading or trailing dots - No double dots - No wildcards allowed (unlike topics)</p>
+<p>Register this gateway in the bootstrap DHT</p>
+  </section>
+</section>
+<section class="detail" id="start_link/1">
+
+  <div class="detail-header">
+    <a href="#start_link/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">start_link(Config)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_discovery.erl#L46" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> start_link(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Start the peer discovery process</p>
+  </section>
+</section>
+<section class="detail" id="terminate/2">
+
+  <div class="detail-header">
+    <a href="#terminate/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">terminate(Reason, State)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_discovery.erl#L134" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
   </section>
 </section>
 

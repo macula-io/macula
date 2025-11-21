@@ -413,7 +413,15 @@ handle_call({route_message, MessageType, Message, Stream}, _From, State) ->
 handle_call({local_publish, _Realm, Topic, Payload}, _From, State) ->
     io:format("[Gateway] Local publish: ~s~n", [Topic]),
     PubSub = State#state.pubsub,
+    Mesh = State#state.mesh,
+
+    %% Publish to local subscribers
     ok = macula_gateway_pubsub:publish(PubSub, Topic, Payload),
+
+    %% Relay to all connected mesh peers (cross-peer pub/sub)
+    io:format("[Gateway] Relaying ~s to mesh peers~n", [Topic]),
+    relay_to_mesh_peers(Mesh, Topic, Payload),
+
     {reply, ok, State};
 
 handle_call({local_subscribe, _Realm, Topic, HandlerPid}, _From, State) ->
@@ -756,25 +764,116 @@ forward_pubsub_route(NextHopNodeInfo, PubSubRouteMsg, MeshPid) ->
     io:format("[Gateway] Forwarded pubsub_route successfully~n"),
     ok.
 
+%% @doc Relay pub/sub event to all connected mesh peers.
+%% This enables cross-peer event propagation for distributed applications.
+relay_to_mesh_peers(MeshPid, Topic, Payload) ->
+    case macula_gateway_mesh:list_connections(MeshPid) of
+        {ok, []} ->
+            ok;  % No peers - nothing to relay
+        {ok, Connections} ->
+            io:format("[Gateway] Relaying ~s to ~p peer(s)~n", [Topic, length(Connections)]),
+            PublishMsg = #{<<"topic">> => Topic, <<"payload">> => Payload},
+            EncodedMsg = macula_protocol_encoder:encode(publish, PublishMsg),
+            lists:foreach(fun(Conn) -> relay_to_peer(MeshPid, Conn, EncodedMsg) end, Connections),
+            ok;
+        {error, Reason} ->
+            io:format("[Gateway] Failed to list connections: ~p~n", [Reason]),
+            ok
+    end.
+
+%% @private Helper to relay message to single peer
+relay_to_peer(MeshPid, {NodeId, #{address := Address}}, EncodedMsg) ->
+    case macula_gateway_mesh:get_or_create_connection(MeshPid, NodeId, Address) of
+        {ok, Stream} ->
+            case macula_quic:send(Stream, EncodedMsg) of
+                ok ->
+                    io:format("[Gateway] Relayed to ~s~n", [binary:encode_hex(NodeId)]);
+                {error, Reason} ->
+                    io:format("[Gateway] Send failed to ~s: ~p~n", [binary:encode_hex(NodeId), Reason])
+            end;
+        {error, Reason} ->
+            io:format("[Gateway] Connection failed to ~s: ~p~n", [binary:encode_hex(NodeId), Reason])
+    end.
+
 %% @doc Handle RPC call message (legacy direct handling).
 handle_rpc_call(Stream, CallMsg, State) ->
     Procedure = maps:get(<<"procedure">>, CallMsg),
     CallId = maps:get(<<"call_id">>, CallMsg),
 
-    io:format("[Gateway] BOOTSTRAP-ONLY MODE: Rejecting RPC call to ~s (peers must communicate directly via DHT)~n", [Procedure]),
+    %% Special exception: handle _dht.list_gateways for peer discovery
+    case Procedure of
+        <<"_dht.list_gateways">> ->
+            handle_dht_list_gateways(Stream, CallId, State);
+        _ ->
+            io:format("[Gateway] BOOTSTRAP-ONLY MODE: Rejecting RPC call to ~s (peers must communicate directly via DHT)~n", [Procedure]),
 
-    %% Gateway is BOOTSTRAP-ONLY - it does NOT handle RPC calls!
-    %% Peers must discover service providers via DHT and call them directly
-    ErrorReply = #{
-        call_id => CallId,
-        error => #{
-            code => <<"gateway_bootstrap_only">>,
-            message => <<"Gateway is bootstrap-only. Discover service via DHT and call peer directly">>
-        }
-    },
-    ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
-    macula_quic:send(Stream, ReplyBinary),
-    {noreply, State}.
+            %% Gateway is BOOTSTRAP-ONLY - it does NOT handle RPC calls!
+            %% Peers must discover service providers via DHT and call them directly
+            ErrorReply = #{
+                call_id => CallId,
+                error => #{
+                    code => <<"gateway_bootstrap_only">>,
+                    message => <<"Gateway is bootstrap-only. Discover service via DHT and call peer directly">>
+                }
+            },
+            ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+            macula_quic:send(Stream, ReplyBinary),
+            {noreply, State}
+    end.
+
+%% @private Handle _dht.list_gateways RPC for peer discovery
+handle_dht_list_gateways(Stream, CallId, _State) ->
+    io:format("[Gateway] Handling _dht.list_gateways RPC~n"),
+
+    %% Query local DHT for all peer.gateway.* entries
+    case whereis(macula_routing_server) of
+        undefined ->
+            ErrorReply = #{
+                call_id => CallId,
+                error => #{
+                    code => <<"routing_server_not_found">>,
+                    message => <<"Routing server not available">>
+                }
+            },
+            ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+            macula_quic:send(Stream, ReplyBinary);
+        RoutingServer ->
+            %% Get all keys from DHT
+            PeersList = case macula_routing_server:get_all_keys(RoutingServer) of
+                {ok, Keys} ->
+                    %% Filter for peer.gateway.* keys
+                    GatewayKeys = lists:filter(fun(Key) ->
+                        case Key of
+                            <<"peer.gateway.", _/binary>> -> true;
+                            _ -> false
+                        end
+                    end, Keys),
+
+                    %% Get values for each gateway key
+                    lists:filtermap(fun(Key) ->
+                        case macula_routing_server:get_local(RoutingServer, Key) of
+                            {ok, [Value|_]} -> {true, Value};
+                            {ok, []} -> false;
+                            _ -> false
+                        end
+                    end, GatewayKeys);
+                _ ->
+                    []
+            end,
+
+            io:format("[Gateway] Returning ~p registered gateway(s) from DHT~n", [length(PeersList)]),
+
+            %% Send successful reply with peers list
+            SuccessReply = #{
+                call_id => CallId,
+                result => #{
+                    <<"peers">> => PeersList
+                }
+            },
+            ReplyBinary = macula_protocol_encoder:encode(reply, SuccessReply),
+            macula_quic:send(Stream, ReplyBinary)
+    end,
+    {noreply, _State}.
 
 %% REMOVED: encode_json/1 - no longer needed since gateway is bootstrap-only
 %% (was used for RPC reply encoding)

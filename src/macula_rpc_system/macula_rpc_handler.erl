@@ -26,7 +26,7 @@
 -include("macula_config.hrl").
 
 %% API
--export([start_link/1, call/4, register_handler/2, unregister_handler/1, handle_incoming_reply/2, handle_find_value_reply/2]).
+-export([start_link/1, call/4, register_handler/2, unregister_handler/1, register_local_procedure/3, handle_incoming_reply/2, handle_find_value_reply/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -82,8 +82,17 @@ register_handler(_Service, _Handler) ->
 
 -spec unregister_handler(binary() | list() | atom()) -> ok | {error, term()}.
 unregister_handler(_Service) ->
-    
+
     {error, not_implemented_use_advertisement_manager}.
+
+%% @doc Register a local procedure handler (no DHT advertisement).
+%%
+%% This registers the handler function in the service registry so this RPC handler
+%% can execute it locally when called. Unlike register_handler/2, this does NOT
+%% advertise to the DHT - it's for purely local services.
+-spec register_local_procedure(pid(), binary(), fun((term()) -> {ok, term()} | {error, term()})) -> ok.
+register_local_procedure(Pid, Procedure, Handler) when is_pid(Pid), is_binary(Procedure), is_function(Handler) ->
+    gen_server:cast(Pid, {register_local_procedure, Procedure, Handler}).
 
 -spec handle_incoming_reply(pid(), map()) -> ok.
 handle_incoming_reply(Pid, Msg) ->
@@ -174,6 +183,13 @@ handle_call(_Request, _From, State) ->
 %% Set connection manager PID (sent by facade after init)
 handle_cast({set_connection_manager_pid, Pid}, State) ->
     {noreply, State#state{connection_manager_pid = Pid}};
+
+%% Register local procedure handler
+handle_cast({register_local_procedure, Procedure, Handler}, State) ->
+    Registry = State#state.service_registry,
+    NewRegistry = macula_service_registry:advertise_local(Registry, Procedure, Handler, #{}),
+    ?LOG_INFO("[~s] Registered local procedure: ~s", [State#state.node_id, Procedure]),
+    {noreply, State#state{service_registry = NewRegistry}};
 
 handle_cast({incoming_reply, Msg}, State) ->
     %% Handle RPC reply from network

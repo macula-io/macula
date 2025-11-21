@@ -32,7 +32,7 @@
 -record(state, {
     realm :: binary(),
     gateway_pid :: pid() | undefined,
-    subscriptions = #{} :: #{binary() => reference()},
+    subscriptions = #{} :: #{reference() => {binary(), fun()}},  % SubRef -> {Topic, Callback}
     registrations = #{} :: #{binary() => fun()},
     event_handler :: pid() | undefined
 }).
@@ -186,13 +186,15 @@ handle_call({publish, Topic, Payload, Opts}, _From, State) ->
     end,
     {reply, Result, State};
 
-handle_call({subscribe, Topic, HandlerPid}, _From, State) ->
+handle_call({subscribe, Topic, Callback}, _From, State) ->
     #state{gateway_pid = Gateway, realm = Realm, subscriptions = Subs} = State,
 
-    %% Subscribe via local gateway
-    case gen_server:call(Gateway, {local_subscribe, Realm, Topic, HandlerPid}) of
+    %% Subscribe via local gateway, passing our PID (not the callback)
+    %% Gateway will send pubsub events to us, and we'll invoke the callback
+    case gen_server:call(Gateway, {local_subscribe, Realm, Topic, self()}) of
         {ok, SubRef} ->
-            NewSubs = maps:put(Topic, SubRef, Subs),
+            %% Store callback for later invocation
+            NewSubs = maps:put(SubRef, {Topic, Callback}, Subs),
             {reply, {ok, SubRef}, State#state{subscriptions = NewSubs}};
         {error, _} = Error ->
             {reply, Error, State}
@@ -203,8 +205,8 @@ handle_call({unsubscribe, SubRef}, _From, State) ->
 
     case gen_server:call(Gateway, {local_unsubscribe, SubRef}) of
         ok ->
-            %% Remove from local tracking
-            NewSubs = maps:filter(fun(_, Ref) -> Ref =/= SubRef end, Subs),
+            %% Remove from local callback tracking
+            NewSubs = maps:remove(SubRef, Subs),
             {reply, ok, State#state{subscriptions = NewSubs}};
         {error, _} = Error ->
             {reply, Error, State}
@@ -278,6 +280,32 @@ handle_call(get_node_id, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+%% @doc Handle pubsub events from gateway
+%% Gateway sends messages in format: {publish, Topic, Payload}
+handle_info({publish, Topic, Payload}, State) ->
+    #state{subscriptions = Subs} = State,
+
+    %% Find all callbacks for subscriptions matching this topic
+    %% (since we store SubRef -> {Topic, Callback})
+    maps:foreach(fun(_SubRef, {SubTopic, Callback}) ->
+        case SubTopic of
+            Topic ->
+                %% Topic matches exactly, invoke callback
+                try
+                    Callback(Payload)
+                catch
+                    Class:Reason:Stacktrace ->
+                        io:format("[LocalClient] Callback error for topic ~s: ~p:~p~n~p~n",
+                                  [Topic, Class, Reason, Stacktrace])
+                end;
+            _ ->
+                %% Different topic, skip
+                ok
+        end
+    end, Subs),
+
+    {noreply, State};
+
 handle_info({'DOWN', _Ref, process, GatewayPid, Reason}, #state{gateway_pid = GatewayPid} = State) ->
     io:format("[LocalClient] Gateway down: ~p. Attempting reconnect...~n", [Reason]),
     %% Try to reconnect to gateway
@@ -295,8 +323,8 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, #state{subscriptions = Subs, registrations = Regs, gateway_pid = Gateway}) ->
-    %% Clean up subscriptions
-    maps:foreach(fun(_, SubRef) ->
+    %% Clean up subscriptions (keys are SubRefs now)
+    maps:foreach(fun(SubRef, _TopicCallback) ->
         gen_server:call(Gateway, {local_unsubscribe, SubRef})
     end, Subs),
 

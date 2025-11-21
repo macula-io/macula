@@ -22,8 +22,8 @@ dist/lato-latin-700-normal-2XVSBPG4.woff2
 dist/lato-latin-ext-400-normal-N27NCBWW.woff2
 dist/lato-latin-ext-700-normal-Q2L5DVMW.woff2
 dist/remixicon-QPNJX265.woff2
-dist/search_data-175C3CD1.js
-dist/sidebar_items-4E638E5E.js
+dist/search_data-938A96E5.js
+dist/sidebar_items-D7A6E70D.js
 full_supervision_tree.html
 getting_started.html
 index.html
@@ -66,6 +66,7 @@ macula_names.html
 macula_node.html
 macula_peer.html
 macula_peer_connector.html
+macula_peer_discovery.html
 macula_peer_system.html
 macula_peers_sup.html
 macula_project_structure.html

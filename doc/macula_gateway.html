@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.8.14">
+    <meta name="project" content="macula v0.8.24">
 
 
-    <title>macula_gateway — macula v0.8.14</title>
+    <title>macula_gateway — macula v0.8.24</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-4E638E5E.js"></script>
+    <script defer src="dist/sidebar_items-D7A6E70D.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.8.14
+          v0.8.24
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_gateway</span> 
-      <small class="app-vsn" translate="no">(macula v0.8.14)</small>
+      <small class="app-vsn" translate="no">(macula v0.8.24)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L72" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L72" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -94,26 +94,26 @@ macula
 
     <section id="moduledoc">
 <p>Macula Gateway - HTTP/3 Message Router &amp; Orchestrator</p><p>Main API module and coordinator for the Macula Gateway. The gateway can be embedded in applications or run standalone as a relay node.</p><h3 id="module-quick-start-embedded-gateway" class="section-heading"><a href="#module-quick-start-embedded-gateway" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Quick_Start_(Embedded_Gateway)">Quick Start (Embedded Gateway)</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="c1">%% Start an embedded gateway</span><span class="w">
-   </span><span class="p" data-group-id="2339292012-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Gateway</span><span class="p" data-group-id="2339292012-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_gateway</span><span class="p">:</span><span class="nf">start_link</span><span class="p" data-group-id="2339292012-2">(</span><span class="p" data-group-id="2339292012-3">[</span><span class="w">
-       </span><span class="p" data-group-id="2339292012-4">{</span><span class="ss">port</span><span class="p">,</span><span class="w"> </span><span class="mi">9443</span><span class="p" data-group-id="2339292012-4">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="2339292012-5">{</span><span class="ss">realm</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="2339292012-6">&lt;&lt;</span><span class="s">&quot;com.example.realm&quot;</span><span class="p" data-group-id="2339292012-6">&gt;&gt;</span><span class="p" data-group-id="2339292012-5">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="2339292012-7">{</span><span class="ss">cert_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cert.pem&quot;</span><span class="p" data-group-id="2339292012-7">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="2339292012-8">{</span><span class="ss">key_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;key.pem&quot;</span><span class="p" data-group-id="2339292012-8">}</span><span class="w">
-   </span><span class="p" data-group-id="2339292012-3">]</span><span class="p" data-group-id="2339292012-2">)</span><span class="p">.</span><span class="w">
+   </span><span class="p" data-group-id="2231543330-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Gateway</span><span class="p" data-group-id="2231543330-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_gateway</span><span class="p">:</span><span class="nf">start_link</span><span class="p" data-group-id="2231543330-2">(</span><span class="p" data-group-id="2231543330-3">[</span><span class="w">
+       </span><span class="p" data-group-id="2231543330-4">{</span><span class="ss">port</span><span class="p">,</span><span class="w"> </span><span class="mi">9443</span><span class="p" data-group-id="2231543330-4">}</span><span class="p">,</span><span class="w">
+       </span><span class="p" data-group-id="2231543330-5">{</span><span class="ss">realm</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="2231543330-6">&lt;&lt;</span><span class="s">&quot;com.example.realm&quot;</span><span class="p" data-group-id="2231543330-6">&gt;&gt;</span><span class="p" data-group-id="2231543330-5">}</span><span class="p">,</span><span class="w">
+       </span><span class="p" data-group-id="2231543330-7">{</span><span class="ss">cert_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cert.pem&quot;</span><span class="p" data-group-id="2231543330-7">}</span><span class="p">,</span><span class="w">
+       </span><span class="p" data-group-id="2231543330-8">{</span><span class="ss">key_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;key.pem&quot;</span><span class="p" data-group-id="2231543330-8">}</span><span class="w">
+   </span><span class="p" data-group-id="2231543330-3">]</span><span class="p" data-group-id="2231543330-2">)</span><span class="p">.</span><span class="w">
   
    </span><span class="c1">%% Register an RPC handler</span><span class="w">
-   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_gateway</span><span class="p">:</span><span class="nf">register_handler</span><span class="p" data-group-id="2339292012-9">(</span><span class="n">Gateway</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="2339292012-10">&lt;&lt;</span><span class="s">&quot;calculator.add&quot;</span><span class="p" data-group-id="2339292012-10">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="nf">fun</span><span class="p" data-group-id="2339292012-11">(</span><span class="n">Args</span><span class="p" data-group-id="2339292012-11">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
-       </span><span class="n">A</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">maps</span><span class="p">:</span><span class="nf">get</span><span class="p" data-group-id="2339292012-12">(</span><span class="ss">a</span><span class="p">,</span><span class="w"> </span><span class="n">Args</span><span class="p" data-group-id="2339292012-12">)</span><span class="p">,</span><span class="w">
-       </span><span class="n">B</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">maps</span><span class="p">:</span><span class="nf">get</span><span class="p" data-group-id="2339292012-13">(</span><span class="ss">b</span><span class="p">,</span><span class="w"> </span><span class="n">Args</span><span class="p" data-group-id="2339292012-13">)</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="2339292012-14">#{</span><span class="ss">result</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">B</span><span class="p" data-group-id="2339292012-14">}</span><span class="w">
-   </span><span class="k">end</span><span class="p" data-group-id="2339292012-9">)</span><span class="p">.</span></code></pre><h3 id="module-quick-start-standalone-gateway" class="section-heading"><a href="#module-quick-start-standalone-gateway" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Quick_Start_(Standalone_Gateway)">Quick Start (Standalone Gateway)</a></span></h3><p>Configure <code>sys.config</code>:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="p" data-group-id="4139404499-1">[</span><span class="w">
-     </span><span class="p" data-group-id="4139404499-2">{</span><span class="ss">macula</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4139404499-3">[</span><span class="w">
-       </span><span class="p" data-group-id="4139404499-4">{</span><span class="ss">gateway_port</span><span class="p">,</span><span class="w"> </span><span class="mi">9443</span><span class="p" data-group-id="4139404499-4">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="4139404499-5">{</span><span class="ss">gateway_realm</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4139404499-6">&lt;&lt;</span><span class="s">&quot;com.example.realm&quot;</span><span class="p" data-group-id="4139404499-6">&gt;&gt;</span><span class="p" data-group-id="4139404499-5">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="4139404499-7">{</span><span class="ss">cert_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;/path/to/cert.pem&quot;</span><span class="p" data-group-id="4139404499-7">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="4139404499-8">{</span><span class="ss">key_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;/path/to/key.pem&quot;</span><span class="p" data-group-id="4139404499-8">}</span><span class="w">
-     </span><span class="p" data-group-id="4139404499-3">]</span><span class="p" data-group-id="4139404499-2">}</span><span class="w">
-   </span><span class="p" data-group-id="4139404499-1">]</span><span class="p">.</span></code></pre><p>Start application:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="nc">application</span><span class="p">:</span><span class="nf">start</span><span class="p" data-group-id="7643391734-1">(</span><span class="ss">macula</span><span class="p" data-group-id="7643391734-1">)</span><span class="p">.</span></code></pre><h3 id="module-architecture-modular-design-refactored-jan-2025" class="section-heading"><a href="#module-architecture-modular-design-refactored-jan-2025" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Architecture_(Modular_Design_-_Refactored_Jan_2025)">Architecture (Modular Design - Refactored Jan 2025)</a></span></h3><p>Gateway (this module): - QUIC Listener Management - Message Decoding &amp; Routing - Supervisor Coordination - API Facade</p><p>Child Modules (managed via macula_gateway_sup): - <code>macula_gateway_client_manager</code>: Client lifecycle management - <code>macula_gateway_pubsub</code>: Pub/Sub message routing with wildcards - <code>macula_gateway_rpc</code>: RPC handler registration &amp; invocation - <code>macula_gateway_mesh</code>: Mesh connection pooling</p><p>Stateless Delegation Modules: - <code>macula_gateway_dht</code>: DHT query forwarding to routing server - <code>macula_gateway_rpc_router</code>: Multi-hop RPC routing via DHT</p><p>Single Responsibility Principle: Each module has one clear purpose and delegates to specialized child modules. Gateway acts as orchestrator, not implementer.</p>
+   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_gateway</span><span class="p">:</span><span class="nf">register_handler</span><span class="p" data-group-id="2231543330-9">(</span><span class="n">Gateway</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="2231543330-10">&lt;&lt;</span><span class="s">&quot;calculator.add&quot;</span><span class="p" data-group-id="2231543330-10">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="nf">fun</span><span class="p" data-group-id="2231543330-11">(</span><span class="n">Args</span><span class="p" data-group-id="2231543330-11">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+       </span><span class="n">A</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">maps</span><span class="p">:</span><span class="nf">get</span><span class="p" data-group-id="2231543330-12">(</span><span class="ss">a</span><span class="p">,</span><span class="w"> </span><span class="n">Args</span><span class="p" data-group-id="2231543330-12">)</span><span class="p">,</span><span class="w">
+       </span><span class="n">B</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">maps</span><span class="p">:</span><span class="nf">get</span><span class="p" data-group-id="2231543330-13">(</span><span class="ss">b</span><span class="p">,</span><span class="w"> </span><span class="n">Args</span><span class="p" data-group-id="2231543330-13">)</span><span class="p">,</span><span class="w">
+       </span><span class="p" data-group-id="2231543330-14">#{</span><span class="ss">result</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">B</span><span class="p" data-group-id="2231543330-14">}</span><span class="w">
+   </span><span class="k">end</span><span class="p" data-group-id="2231543330-9">)</span><span class="p">.</span></code></pre><h3 id="module-quick-start-standalone-gateway" class="section-heading"><a href="#module-quick-start-standalone-gateway" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Quick_Start_(Standalone_Gateway)">Quick Start (Standalone Gateway)</a></span></h3><p>Configure <code>sys.config</code>:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="p" data-group-id="8495961939-1">[</span><span class="w">
+     </span><span class="p" data-group-id="8495961939-2">{</span><span class="ss">macula</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="8495961939-3">[</span><span class="w">
+       </span><span class="p" data-group-id="8495961939-4">{</span><span class="ss">gateway_port</span><span class="p">,</span><span class="w"> </span><span class="mi">9443</span><span class="p" data-group-id="8495961939-4">}</span><span class="p">,</span><span class="w">
+       </span><span class="p" data-group-id="8495961939-5">{</span><span class="ss">gateway_realm</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="8495961939-6">&lt;&lt;</span><span class="s">&quot;com.example.realm&quot;</span><span class="p" data-group-id="8495961939-6">&gt;&gt;</span><span class="p" data-group-id="8495961939-5">}</span><span class="p">,</span><span class="w">
+       </span><span class="p" data-group-id="8495961939-7">{</span><span class="ss">cert_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;/path/to/cert.pem&quot;</span><span class="p" data-group-id="8495961939-7">}</span><span class="p">,</span><span class="w">
+       </span><span class="p" data-group-id="8495961939-8">{</span><span class="ss">key_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;/path/to/key.pem&quot;</span><span class="p" data-group-id="8495961939-8">}</span><span class="w">
+     </span><span class="p" data-group-id="8495961939-3">]</span><span class="p" data-group-id="8495961939-2">}</span><span class="w">
+   </span><span class="p" data-group-id="8495961939-1">]</span><span class="p">.</span></code></pre><p>Start application:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="nc">application</span><span class="p">:</span><span class="nf">start</span><span class="p" data-group-id="0657497024-1">(</span><span class="ss">macula</span><span class="p" data-group-id="0657497024-1">)</span><span class="p">.</span></code></pre><h3 id="module-architecture-modular-design-refactored-jan-2025" class="section-heading"><a href="#module-architecture-modular-design-refactored-jan-2025" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Architecture_(Modular_Design_-_Refactored_Jan_2025)">Architecture (Modular Design - Refactored Jan 2025)</a></span></h3><p>Gateway (this module): - QUIC Listener Management - Message Decoding &amp; Routing - Supervisor Coordination - API Facade</p><p>Child Modules (managed via macula_gateway_sup): - <code>macula_gateway_client_manager</code>: Client lifecycle management - <code>macula_gateway_pubsub</code>: Pub/Sub message routing with wildcards - <code>macula_gateway_rpc</code>: RPC handler registration &amp; invocation - <code>macula_gateway_mesh</code>: Mesh connection pooling</p><p>Stateless Delegation Modules: - <code>macula_gateway_dht</code>: DHT query forwarding to routing server - <code>macula_gateway_rpc_router</code>: Multi-hop RPC routing via DHT</p><p>Single Responsibility Principle: Each module has one clear purpose and delegates to specialized child modules. Gateway acts as orchestrator, not implementer.</p>
     </section>
 
 </div>
@@ -265,7 +265,7 @@ macula
       <h1 class="signature" translate="no">get_stats(Gateway)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L137" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L137" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -293,7 +293,7 @@ macula
       <h1 class="signature" translate="no">handle_call(Request, From, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L374" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L374" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -315,7 +315,7 @@ macula
       <h1 class="signature" translate="no">handle_cast(Request, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L524" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L534" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -337,7 +337,7 @@ macula
       <h1 class="signature" translate="no">handle_continue(_, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L541" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L551" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -359,7 +359,7 @@ macula
       <h1 class="signature" translate="no">handle_info(Info, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L558" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L568" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -381,7 +381,7 @@ macula
       <h1 class="signature" translate="no">init(Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L164" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L164" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -403,7 +403,7 @@ macula
       <h1 class="signature" translate="no">register_handler(Procedure, Handler)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L142" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L142" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -431,7 +431,7 @@ macula
       <h1 class="signature" translate="no">start_link()</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L119" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L119" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -459,7 +459,7 @@ macula
       <h1 class="signature" translate="no">start_link(Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L127" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L127" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -487,7 +487,7 @@ macula
       <h1 class="signature" translate="no">stop(Gateway)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L132" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L132" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -515,7 +515,7 @@ macula
       <h1 class="signature" translate="no">terminate(Reason, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L606" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L616" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -537,7 +537,7 @@ macula
       <h1 class="signature" translate="no">unregister_handler(Procedure)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_gateway.erl#L152" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway.erl#L152" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -563,9 +563,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.8.14" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.8.24" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.8.14">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.8.24">Hex Preview</a>
 
           </span>
 

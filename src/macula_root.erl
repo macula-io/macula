@@ -110,14 +110,18 @@ init([]) ->
         get_gateway_system_spec(Port, Realm, HealthPort),
 
         %% 4. Peer connections supervisor (always on)
-        get_peers_sup_spec()
+        get_peers_sup_spec(),
+
+        %% 5. Peer discovery (DHT-based P2P mesh formation)
+        get_peer_discovery_spec(NodeID, Port, Realm)
     ],
 
     io:format("Starting subsystems:~n"),
-    io:format("  [1/4] Core DHT Routing~n"),
-    io:format("  [2/4] Bootstrap System~n"),
-    io:format("  [3/4] Gateway System~n"),
-    io:format("  [4/4] Peers Supervisor~n"),
+    io:format("  [1/5] Core DHT Routing~n"),
+    io:format("  [2/5] Bootstrap System~n"),
+    io:format("  [3/5] Gateway System~n"),
+    io:format("  [4/5] Peers Supervisor~n"),
+    io:format("  [5/5] Peer Discovery (P2P Mesh)~n"),
     io:format("~n"),
 
     %% Schedule bootstrap peer connections after supervision tree is up
@@ -190,6 +194,25 @@ get_peers_sup_spec() ->
     }.
 
 %% @private
+%% @doc Get peer discovery child spec (DHT-based P2P mesh formation).
+get_peer_discovery_spec(NodeID, Port, Realm) ->
+    Host = get_hostname(),
+    #{
+        id => macula_peer_discovery,
+        start => {macula_peer_discovery, start_link, [#{
+            node_id => NodeID,
+            host => Host,
+            port => Port,
+            realm => Realm,
+            discovery_interval => 30000  % 30 seconds
+        }]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [macula_peer_discovery]
+    }.
+
+%% @private
 %% @doc Get QUIC port from environment variable or config.
 %% Environment variable renamed from GATEWAY_PORT to MACULA_QUIC_PORT (v0.8.5).
 get_quic_port() ->
@@ -253,6 +276,18 @@ get_bootstrap_peers() ->
             %% Split comma-separated URLs and convert to binaries
             Urls = string:tokens(PeersStr, ","),
             [list_to_binary(string:trim(Url)) || Url <- Urls]
+    end.
+
+%% @private
+%% @doc Get hostname from environment variable or default to localhost.
+%% Environment variable: MACULA_HOSTNAME
+%% Used for peer discovery registration so peers can reach each other.
+get_hostname() ->
+    case os:getenv("MACULA_HOSTNAME") of
+        false ->
+            <<"localhost">>;
+        HostnameStr ->
+            list_to_binary(HostnameStr)
     end.
 
 %% @private

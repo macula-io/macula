@@ -15,6 +15,7 @@
     store_local/3,
     store/3,
     get_local/2,
+    get_all_keys/1,
     find_value/3,
     get_routing_table/1,
     size/1,
@@ -75,6 +76,11 @@ store(Pid, Key, Value) ->
 -spec get_local(pid(), binary()) -> {ok, term()} | not_found.
 get_local(Pid, Key) ->
     gen_server:call(Pid, {get_local, Key}).
+
+%% @doc Get all keys from local storage.
+-spec get_all_keys(pid()) -> {ok, [binary()]} | {error, term()}.
+get_all_keys(Pid) ->
+    gen_server:call(Pid, get_all_keys).
 
 %% @doc Find value in DHT using iterative lookup.
 %% Returns {ok, Value} if found, {nodes, Nodes} if not found.
@@ -208,6 +214,10 @@ handle_call({get_local, Key}, _From, #state{storage = Storage} = State) ->
             {ok, [Value]}
     end,
     {reply, Reply, State};
+
+handle_call(get_all_keys, _From, #state{storage = Storage} = State) ->
+    Keys = maps:keys(Storage),
+    {reply, {ok, Keys}, State};
 
 handle_call(get_routing_table, _From, #state{routing_table = Table} = State) ->
     {reply, Table, State};

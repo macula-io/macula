@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.8.14">
+    <meta name="project" content="macula v0.8.24">
 
 
-    <title>macula_peer_system — macula v0.8.14</title>
+    <title>macula_peer_system — macula v0.8.24</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-4E638E5E.js"></script>
+    <script defer src="dist/sidebar_items-D7A6E70D.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.8.14
+          v0.8.24
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_peer_system</span> 
-      <small class="app-vsn" translate="no">(macula v0.8.14)</small>
+      <small class="app-vsn" translate="no">(macula v0.8.24)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_peer_system/macula_peer_system.erl#L36" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_system.erl#L36" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -93,8 +93,8 @@ macula
 
 
     <section id="moduledoc">
-<p>Peer System Supervisor - supervises the peer subsystem.</p><p>Supervision Strategy: - rest_for_one: If child N crashes, restart N and all children after N - Rationale: connection_manager is foundational; handlers depend on it but are independent of each other. This provides fault isolation while maintaining consistency when connection_manager restarts.</p><p>Architecture:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="nf">macula_peer_system</span><span class="w"> </span><span class="p" data-group-id="3582014544-1">(</span><span class="ss">this</span><span class="w"> </span><span class="ss">module</span><span class="p" data-group-id="3582014544-1">)</span><span class="w">
-   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_connection</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">QUIC</span><span class="w"> </span><span class="ss">connection</span><span class="w"> </span><span class="nf">lifecycle</span><span class="w"> </span><span class="p" data-group-id="3582014544-2">(</span><span class="ss">transport</span><span class="w"> </span><span class="ss">layer</span><span class="p" data-group-id="3582014544-2">)</span><span class="w">
+<p>Peer System Supervisor - supervises the peer subsystem.</p><p>Supervision Strategy: - rest_for_one: If child N crashes, restart N and all children after N - Rationale: connection_manager is foundational; handlers depend on it but are independent of each other. This provides fault isolation while maintaining consistency when connection_manager restarts.</p><p>Architecture:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="nf">macula_peer_system</span><span class="w"> </span><span class="p" data-group-id="4681834048-1">(</span><span class="ss">this</span><span class="w"> </span><span class="ss">module</span><span class="p" data-group-id="4681834048-1">)</span><span class="w">
+   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_connection</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">QUIC</span><span class="w"> </span><span class="ss">connection</span><span class="w"> </span><span class="nf">lifecycle</span><span class="w"> </span><span class="p" data-group-id="4681834048-2">(</span><span class="ss">transport</span><span class="w"> </span><span class="ss">layer</span><span class="p" data-group-id="4681834048-2">)</span><span class="w">
    </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_pubsub_handler</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">Pub</span><span class="o">/</span><span class="ss">sub</span><span class="w"> </span><span class="ss">operations</span><span class="w">
    </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_rpc_handler</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">RPC</span><span class="w"> </span><span class="ss">operations</span><span class="w">
    </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_advertisement_manager</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">DHT</span><span class="w"> </span><span class="ss">service</span><span class="w"> </span><span class="ss">advertisements</span><span class="w">
@@ -168,7 +168,7 @@ macula
       <h1 class="signature" translate="no">init(_)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_peer_system/macula_peer_system.erl#L71" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_system.erl#L71" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -196,7 +196,7 @@ macula
       <h1 class="signature" translate="no">start_link(Url, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_peer_system/macula_peer_system.erl#L56" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_system.erl#L56" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -224,7 +224,7 @@ macula
       <h1 class="signature" translate="no">stop(Sup)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.14/src/macula_peer_system/macula_peer_system.erl#L61" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_peer_system/macula_peer_system.erl#L61" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -250,9 +250,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.8.14" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.8.24" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.8.14">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.8.24">Hex Preview</a>
 
           </span>
 
