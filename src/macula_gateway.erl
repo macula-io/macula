@@ -447,10 +447,42 @@ handle_call({local_unregister_procedure, Procedure}, _From, State) ->
     ok = macula_gateway_rpc:unregister_handler(Rpc, Procedure),
     {reply, ok, State};
 
-handle_call({local_advertise, _Realm, Procedure, Handler, _Opts}, _From, State) ->
+handle_call({local_advertise, _Realm, Procedure, Handler, Opts}, _From, State) ->
     io:format("[Gateway] Local advertise: ~s~n", [Procedure]),
+
+    %% 1. Register handler locally with gateway RPC
     Rpc = State#state.rpc,
     ok = macula_gateway_rpc:register_handler(Rpc, Procedure, Handler),
+    io:format("[Gateway] Registered handler for ~s with local RPC~n", [Procedure]),
+
+    %% 2. Advertise to DHT for service discovery
+    ServiceKey = crypto:hash(sha256, Procedure),
+    TTL = maps:get(ttl, Opts, 300),  % Default 5 minutes
+    Metadata = maps:get(metadata, Opts, #{}),
+
+    %% Service value includes node ID and endpoint for P2P discovery
+    ServiceValue = #{
+        node_id => State#state.node_id,
+        endpoint => <<"gateway://localhost">>,  % Local clients connect via gateway
+        metadata => Metadata,
+        ttl => TTL
+    },
+
+    %% Store in DHT (propagates to k closest nodes)
+    case whereis(macula_routing_server) of
+        undefined ->
+            io:format("[Gateway] WARNING: Routing server not running, service ~s advertised locally only~n",
+                     [Procedure]);
+        RoutingServerPid ->
+            case macula_routing_server:store(RoutingServerPid, ServiceKey, ServiceValue) of
+                ok ->
+                    io:format("[Gateway] Successfully stored service ~s in DHT~n", [Procedure]);
+                {error, StoreError} ->
+                    io:format("[Gateway] WARNING: Failed to store service ~s in DHT: ~p~n",
+                             [Procedure, StoreError])
+            end
+    end,
+
     {reply, ok, State};
 
 handle_call({local_unadvertise, Procedure}, _From, State) ->
