@@ -483,7 +483,9 @@ handle_call({local_advertise, _Realm, Procedure, Handler, Opts}, _From, State) -
             end
     end,
 
-    {reply, ok, State};
+    %% Return reference for tracking (matching behaviour spec)
+    Ref = make_ref(),
+    {reply, {ok, Ref}, State};
 
 handle_call({local_unadvertise, Procedure}, _From, State) ->
     io:format("[Gateway] Local unadvertise: ~s~n", [Procedure]),

@@ -115,12 +115,12 @@ call(Pid, Procedure, Args, Opts) ->
     gen_server:call(Pid, {call, Procedure, Args, Opts}, 30000).
 
 %% @doc Advertise an RPC service with default options
--spec advertise(pid(), binary(), fun()) -> ok | {error, term()}.
+-spec advertise(pid(), binary(), fun()) -> {ok, reference()} | {error, term()}.
 advertise(Pid, Procedure, Handler) ->
     advertise(Pid, Procedure, Handler, #{}).
 
 %% @doc Advertise an RPC service with options
--spec advertise(pid(), binary(), fun(), map()) -> ok | {error, term()}.
+-spec advertise(pid(), binary(), fun(), map()) -> {ok, reference()} | {error, term()}.
 advertise(Pid, Procedure, Handler, Opts) ->
     gen_server:call(Pid, {advertise, Procedure, Handler, Opts}).
 
@@ -229,9 +229,9 @@ handle_call({advertise, Procedure, Handler, Opts}, _From, State) ->
 
     %% Forward advertise request to gateway
     case gen_server:call(Gateway, {local_advertise, Realm, Procedure, Handler, Opts}) of
-        ok ->
+        {ok, Ref} ->
             NewRegs = maps:put(Procedure, Handler, Regs),
-            {reply, ok, State#state{registrations = NewRegs}};
+            {reply, {ok, Ref}, State#state{registrations = NewRegs}};
         {error, _} = Error ->
             {reply, Error, State}
     end;

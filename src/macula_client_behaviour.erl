@@ -44,10 +44,10 @@
     {ok, term()} | {error, term()}.
 
 -callback advertise(Client :: pid(), Procedure :: binary(), Handler :: fun()) ->
-    ok | {error, term()}.
+    {ok, reference()} | {error, term()}.
 
 -callback advertise(Client :: pid(), Procedure :: binary(), Handler :: fun(), Opts :: map()) ->
-    ok | {error, term()}.
+    {ok, reference()} | {error, term()}.
 
 -callback unadvertise(Client :: pid(), Procedure :: binary()) ->
     ok | {error, term()}.
