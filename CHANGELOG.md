@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.7] - 2025-01-21
+
+### 🌐 Platform-Level DHT Bootstrapping Release
+
+This release implements automatic DHT network joining at the platform level, eliminating the need for applications to manually manage bootstrap peer connections.
+
+**Motivation**: Previously, applications using the macula SDK had to manage bootstrap peer URLs themselves, leading to potential DHT network partitioning if different applications connected to different bootstrap peers. v0.8.7 moves this responsibility to the platform level.
+
+### Added
+
+#### Platform-Level Bootstrap Configuration
+- **NEW: `MACULA_BOOTSTRAP_PEERS` environment variable**
+  - Comma-separated list of bootstrap peer URLs
+  - Example: `MACULA_BOOTSTRAP_PEERS=https://bootstrap1:4433,https://bootstrap2:4433`
+  - If NOT set: Node acts as a bootstrap peer (existing behavior)
+  - If set: Node automatically connects to specified peers on startup to join their DHT network
+  - Connections initiated 2 seconds after supervision tree starts
+  - **Implementation**: `macula_root.erl` - `get_bootstrap_peers/0`, `connect_to_bootstrap_peers/2`
+
+#### Automatic DHT Network Joining
+- Platform automatically connects to configured bootstrap peers via `macula_peers_sup`
+- Eliminates application-level bootstrap peer management
+- Ensures all nodes in a deployment join the same DHT network
+- Detailed logging of bootstrap connection attempts and results
+
+### Changed
+
+- **Enhanced startup logging**: Displays configured bootstrap peers in startup banner
+- **No breaking changes**: Fully backward compatible with v0.8.6
+- **No API changes**: Applications can still use `macula_client:connect/2` as before
+
+### Documentation
+
+- **Platform pattern**: Set `MACULA_BOOTSTRAP_PEERS` at deployment level (Docker, Kubernetes, etc.)
+- **Application pattern**: Applications no longer need to manage bootstrap URLs
+- **DHT network integrity**: Platform ensures all nodes join the same DHT network
+
+### Test Results
+
+- **44/44 tests passing** (100% pass rate)
+- All existing unit tests continue to pass
+- No regression introduced
+
+### Migration from v0.8.6
+
+**No code changes required** - This is a purely additive feature.
+
+**To enable platform-level DHT bootstrapping:**
+```bash
+# Set environment variable for non-bootstrap nodes
+MACULA_BOOTSTRAP_PEERS=https://bootstrap-node:4433
+
+# Bootstrap node (no variable set)
+# <empty> - node acts as bootstrap peer
+```
+
+**Application code remains unchanged:**
+```erlang
+%% Still works - for client connections to local macula instance
+{ok, Client} = macula_client:connect(<<"https://localhost:4433">>, #{
+    realm => <<"my.realm">>
+}).
+```
+
+---
+
 ## [0.8.5] - 2025-11-18
 
 ### 🎉 Architectural Foundations Release

@@ -11,6 +11,33 @@
 %%% Connect to a mesh, publish events, subscribe to topics, and make RPC calls.
 %%% See individual function documentation for detailed examples with code.
 %%%
+%%% == DHT Network Bootstrap (v0.8.7+) ==
+%%%
+%%% Macula v0.8.7+ implements platform-level DHT bootstrapping. Each macula node
+%%% automatically joins the configured DHT network on startup via the
+%%% `MACULA_BOOTSTRAP_PEERS` environment variable.
+%%%
+%%% <b>Platform Configuration (Recommended):</b>
+%%% ```
+%%% # Bootstrap node (no peers configured)
+%%% MACULA_BOOTSTRAP_PEERS=  # empty - this IS a bootstrap peer
+%%%
+%%% # Other nodes (connect to bootstrap)
+%%% MACULA_BOOTSTRAP_PEERS=https://bootstrap-node:4433
+%%% '''
+%%%
+%%% <b>Client SDK Usage:</b>
+%%% Applications connect to their LOCAL macula instance, which is already part
+%%% of the DHT network:
+%%% ```
+%%% {ok, Client} = macula_client:connect(&lt;&lt;"https://localhost:4433"&gt;&gt;, #{
+%%%     realm => &lt;&lt;"my.app"&gt;&gt;
+%%% }).
+%%% '''
+%%%
+%%% The platform handles DHT network formation - applications don't need to
+%%% manage bootstrap peer URLs.
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_client).

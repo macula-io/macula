@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.8.5">
+    <meta name="project" content="macula v0.8.7">
 
 
-    <title>macula_peers_sup — macula v0.8.5</title>
+    <title>macula_peers_sup — macula v0.8.7</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-63D0EC31.js"></script>
+    <script defer src="dist/sidebar_items-B75815A1.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.8.5
+          v0.8.7
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_peers_sup</span> 
-      <small class="app-vsn" translate="no">(macula v0.8.5)</small>
+      <small class="app-vsn" translate="no">(macula v0.8.7)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_peers_sup.erl#L32" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.8.7/src/macula_peers_sup.erl#L32" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -94,16 +94,16 @@ macula
 
     <section id="moduledoc">
 <p>Macula Peers Supervisor.</p><p>This supervisor manages dynamic peer connections using a simple_one_for_one strategy. Each peer connection gets its own macula_peer_system supervisor with dedicated handlers.</p><p>Architecture (v0.8.5): - One macula_peers_sup instance per Macula node - Dynamically adds/removes macula_peer_system children - Each child = one peer connection - simple_one_for_one strategy for efficient scaling</p><p>Usage:</p><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Start new peer connection</span><span class="w">
-  </span><span class="p" data-group-id="5538261206-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">PeerPid</span><span class="p" data-group-id="5538261206-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">start_peer</span><span class="p" data-group-id="5538261206-2">(</span><span class="n">Url</span><span class="p">,</span><span class="w"> </span><span class="n">Opts</span><span class="p" data-group-id="5538261206-2">)</span><span class="p">.</span><span class="w">
+  </span><span class="p" data-group-id="2366723181-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">PeerPid</span><span class="p" data-group-id="2366723181-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">start_peer</span><span class="p" data-group-id="2366723181-2">(</span><span class="n">Url</span><span class="p">,</span><span class="w"> </span><span class="n">Opts</span><span class="p" data-group-id="2366723181-2">)</span><span class="p">.</span><span class="w">
  
   </span><span class="c1">%% List all active peers</span><span class="w">
-  </span><span class="n">Peers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">list_peers</span><span class="p" data-group-id="5538261206-3">(</span><span class="p" data-group-id="5538261206-3">)</span><span class="p">.</span><span class="w">
+  </span><span class="n">Peers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">list_peers</span><span class="p" data-group-id="2366723181-3">(</span><span class="p" data-group-id="2366723181-3">)</span><span class="p">.</span><span class="w">
  
   </span><span class="c1">%% Count active peers</span><span class="w">
-  </span><span class="n">Count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">count_peers</span><span class="p" data-group-id="5538261206-4">(</span><span class="p" data-group-id="5538261206-4">)</span><span class="p">.</span><span class="w">
+  </span><span class="n">Count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">count_peers</span><span class="p" data-group-id="2366723181-4">(</span><span class="p" data-group-id="2366723181-4">)</span><span class="p">.</span><span class="w">
  
   </span><span class="c1">%% Stop peer connection</span><span class="w">
-  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">stop_peer</span><span class="p" data-group-id="5538261206-5">(</span><span class="n">PeerPid</span><span class="p" data-group-id="5538261206-5">)</span><span class="p">.</span><span class="w">
+  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">stop_peer</span><span class="p" data-group-id="2366723181-5">(</span><span class="n">PeerPid</span><span class="p" data-group-id="2366723181-5">)</span><span class="p">.</span><span class="w">
   </span></code></pre>
     </section>
 
@@ -204,7 +204,7 @@ macula
       <h1 class="signature" translate="no">count_peers()</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_peers_sup.erl#L130" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.7/src/macula_peers_sup.erl#L130" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -232,7 +232,7 @@ macula
       <h1 class="signature" translate="no">init(_)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_peers_sup.erl#L155" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.7/src/macula_peers_sup.erl#L155" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -254,7 +254,7 @@ macula
       <h1 class="signature" translate="no">list_peers()</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_peers_sup.erl#L116" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.7/src/macula_peers_sup.erl#L116" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -282,7 +282,7 @@ macula
       <h1 class="signature" translate="no">start_link()</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_peers_sup.erl#L64" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.7/src/macula_peers_sup.erl#L64" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -310,7 +310,7 @@ macula
       <h1 class="signature" translate="no">start_peer(Url, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_peers_sup.erl#L81" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.7/src/macula_peers_sup.erl#L81" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -338,7 +338,7 @@ macula
       <h1 class="signature" translate="no">stop_peer(PeerPid)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.5/src/macula_peers_sup.erl#L98" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.7/src/macula_peers_sup.erl#L98" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -364,9 +364,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.8.5" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.8.7" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.8.5">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.8.7">Hex Preview</a>
 
           </span>
 

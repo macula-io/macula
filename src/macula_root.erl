@@ -80,11 +80,17 @@ init([]) ->
     HealthPort = get_health_port(),
     HealthInterval = get_bootstrap_health_interval(),
 
+    BootstrapPeers = get_bootstrap_peers(),
+
     io:format("Configuration:~n"),
     io:format("  QUIC Port: ~p~n", [Port]),
     io:format("  Realm: ~s~n", [Realm]),
     io:format("  Health Port: ~p~n", [HealthPort]),
     io:format("  Bootstrap Health Interval: ~pms~n", [HealthInterval]),
+    case BootstrapPeers of
+        [] -> io:format("  Bootstrap Peers: none (this node is a bootstrap peer)~n");
+        _ -> io:format("  Bootstrap Peers: ~s~n", [string:join([binary_to_list(P) || P <- BootstrapPeers], ", ")])
+    end,
     io:format("~n"),
 
     SupFlags = #{
@@ -113,6 +119,16 @@ init([]) ->
     io:format("  [3/4] Gateway System~n"),
     io:format("  [4/4] Peers Supervisor~n"),
     io:format("~n"),
+
+    %% Schedule bootstrap peer connections after supervision tree is up
+    case BootstrapPeers of
+        [] ->
+            io:format("No bootstrap peers configured - this node is a bootstrap peer~n~n"),
+            ok;
+        _ ->
+            io:format("Will connect to bootstrap peers after startup: ~p~n~n", [BootstrapPeers]),
+            spawn(fun() -> connect_to_bootstrap_peers(BootstrapPeers, Realm) end)
+    end,
 
     {ok, {SupFlags, ChildSpecs}}.
 
@@ -224,3 +240,43 @@ get_routing_config() ->
         k => application:get_env(macula, dht_k, 20),        %% Kademlia K parameter
         alpha => application:get_env(macula, dht_alpha, 3)  %% Concurrent queries
     }.
+
+%% @private
+%% @doc Get bootstrap peer URLs from environment variable.
+%% Returns list of binary URLs or empty list if not configured.
+%% Environment variable format: "https://peer1:4433,https://peer2:4433"
+get_bootstrap_peers() ->
+    case os:getenv("MACULA_BOOTSTRAP_PEERS") of
+        false ->
+            [];
+        PeersStr ->
+            %% Split comma-separated URLs and convert to binaries
+            Urls = string:tokens(PeersStr, ","),
+            [list_to_binary(string:trim(Url)) || Url <- Urls]
+    end.
+
+%% @private
+%% @doc Connect to bootstrap peers to join their DHT network.
+%% Waits briefly for supervision tree to stabilize, then initiates connections.
+connect_to_bootstrap_peers(Peers, Realm) ->
+    %% Wait for supervision tree to fully start
+    timer:sleep(2000),
+
+    io:format("[DHT Bootstrap] Connecting to bootstrap peers...~n"),
+
+    lists:foreach(fun(PeerUrl) ->
+        io:format("[DHT Bootstrap] Connecting to: ~s~n", [PeerUrl]),
+
+        %% Start a peer connection via macula_peers_sup
+        case macula_peers_sup:start_peer(PeerUrl, #{realm => Realm}) of
+            {ok, PeerPid} ->
+                io:format("[DHT Bootstrap] Successfully connected to ~s (PID: ~p)~n",
+                         [PeerUrl, PeerPid]);
+            {error, Reason} ->
+                io:format("[DHT Bootstrap] Failed to connect to ~s: ~p~n",
+                         [PeerUrl, Reason])
+        end
+    end, Peers),
+
+    io:format("[DHT Bootstrap] Bootstrap peer connections initiated~n"),
+    ok.
