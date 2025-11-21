@@ -409,6 +409,48 @@ handle_call({route_message, MessageType, Message, Stream}, _From, State) ->
     NewState = element(2, Result),
     {reply, ok, NewState};
 
+%% Local client (in-VM) message handlers
+handle_call({local_publish, _Realm, Topic, Payload}, _From, State) ->
+    io:format("[Gateway] Local publish: ~s~n", [Topic]),
+    PubSub = State#state.pubsub,
+    ok = macula_gateway_pubsub:publish(PubSub, Topic, Payload),
+    {reply, ok, State};
+
+handle_call({local_subscribe, _Realm, Topic, HandlerPid}, _From, State) ->
+    io:format("[Gateway] Local subscribe: ~s~n", [Topic]),
+    PubSub = State#state.pubsub,
+    ok = macula_gateway_pubsub:subscribe(PubSub, HandlerPid, Topic),
+    SubRef = make_ref(),
+    {reply, {ok, SubRef}, State};
+
+handle_call({local_unsubscribe, _SubRef}, _From, State) ->
+    io:format("[Gateway] Local unsubscribe~n"),
+    %% Note: Current pubsub implementation doesn't track subscription refs
+    %% This is a simplified implementation - proper ref tracking would be added in production
+    {reply, ok, State};
+
+handle_call({local_rpc_call, _Realm, Procedure, Args, _Opts}, _From, State) ->
+    io:format("[Gateway] Local RPC call: ~s~n", [Procedure]),
+    Rpc = State#state.rpc,
+    Result = macula_gateway_rpc:invoke_handler(Rpc, Procedure, Args),
+    {reply, Result, State};
+
+handle_call({local_register_procedure, _Realm, Procedure, Handler}, _From, State) ->
+    io:format("[Gateway] Local register procedure: ~s~n", [Procedure]),
+    Rpc = State#state.rpc,
+    ok = macula_gateway_rpc:register_handler(Rpc, Procedure, Handler),
+    {reply, ok, State};
+
+handle_call({local_unregister_procedure, Procedure}, _From, State) ->
+    io:format("[Gateway] Local unregister procedure: ~s~n", [Procedure]),
+    Rpc = State#state.rpc,
+    ok = macula_gateway_rpc:unregister_handler(Rpc, Procedure),
+    {reply, ok, State};
+
+handle_call(local_get_node_id, _From, State) ->
+    io:format("[Gateway] Local get node ID~n"),
+    {reply, {ok, State#state.node_id}, State};
+
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 

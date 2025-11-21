@@ -18,6 +18,7 @@
 -export([start_link/1, stop/1]).
 -export([publish/3, publish/4, subscribe/3, unsubscribe/2]).
 -export([call/4, register_procedure/3, unregister_procedure/2]).
+-export([get_node_id/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -78,6 +79,11 @@ register_procedure(Pid, Procedure, Handler) ->
 -spec unregister_procedure(pid(), binary()) -> ok | {error, term()}.
 unregister_procedure(Pid, Procedure) ->
     gen_server:call(Pid, {unregister, Procedure}).
+
+%% @doc Get the node ID of the local gateway
+-spec get_node_id(pid()) -> {ok, binary()} | {error, term()}.
+get_node_id(Pid) ->
+    gen_server:call(Pid, get_node_id).
 
 %%==============================================================================
 %% gen_server callbacks
@@ -168,7 +174,12 @@ handle_call({unregister, Procedure}, _From, State) ->
             {reply, ok, State#state{registrations = NewRegs}};
         {error, _} = Error ->
             {reply, Error, State}
-    end.
+    end;
+
+handle_call(get_node_id, _From, State) ->
+    #state{gateway_pid = Gateway} = State,
+    Result = gen_server:call(Gateway, local_get_node_id),
+    {reply, Result, State}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.

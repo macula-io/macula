@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.8.7">
+    <meta name="project" content="macula v0.8.11">
 
 
-    <title>macula_root — macula v0.8.7</title>
+    <title>macula_root — macula v0.8.11</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-B75815A1.js"></script>
+    <script defer src="dist/sidebar_items-D1992CA9.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.8.7
+          v0.8.11
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_root</span> 
-      <small class="app-vsn" translate="no">(macula v0.8.7)</small>
+      <small class="app-vsn" translate="no">(macula v0.8.11)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.7/src/macula_root.erl#L38" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_root.erl#L38" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -93,19 +93,19 @@ macula
 
 
     <section id="moduledoc">
-<p>Macula Application Root Supervisor.</p><p>This is the top-level supervisor for the Macula application. It manages all Macula subsystems in an always-on architecture.</p><p>Supervision Hierarchy (v0.8.5+):</p><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="nf">macula_root</span><span class="w"> </span><span class="p" data-group-id="9482189242-1">(</span><span class="ss">this</span><span class="w"> </span><span class="ss">module</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">application</span><span class="w"> </span><span class="ss">root</span><span class="p" data-group-id="9482189242-1">)</span><span class="w">
-  </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_routing_server</span><span class="w"> </span><span class="p" data-group-id="9482189242-2">(</span><span class="ss">core</span><span class="w"> </span><span class="n">DHT</span><span class="w"> </span><span class="ss">infrastructure</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">always</span><span class="w"> </span><span class="ss">on</span><span class="p" data-group-id="9482189242-2">)</span><span class="w">
-  </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_bootstrap_system</span><span class="w"> </span><span class="p" data-group-id="9482189242-3">(</span><span class="ss">bootstrap</span><span class="w"> </span><span class="ss">services</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">always</span><span class="w"> </span><span class="ss">on</span><span class="p" data-group-id="9482189242-3">)</span><span class="w">
+<p>Macula Application Root Supervisor.</p><p>This is the top-level supervisor for the Macula application. It manages all Macula subsystems in an always-on architecture.</p><p>Supervision Hierarchy (v0.8.5+):</p><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="nf">macula_root</span><span class="w"> </span><span class="p" data-group-id="5946519287-1">(</span><span class="ss">this</span><span class="w"> </span><span class="ss">module</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">application</span><span class="w"> </span><span class="ss">root</span><span class="p" data-group-id="5946519287-1">)</span><span class="w">
+  </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_routing_server</span><span class="w"> </span><span class="p" data-group-id="5946519287-2">(</span><span class="ss">core</span><span class="w"> </span><span class="n">DHT</span><span class="w"> </span><span class="ss">infrastructure</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">always</span><span class="w"> </span><span class="ss">on</span><span class="p" data-group-id="5946519287-2">)</span><span class="w">
+  </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_bootstrap_system</span><span class="w"> </span><span class="p" data-group-id="5946519287-3">(</span><span class="ss">bootstrap</span><span class="w"> </span><span class="ss">services</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">always</span><span class="w"> </span><span class="ss">on</span><span class="p" data-group-id="5946519287-3">)</span><span class="w">
   </span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_bootstrap_server</span><span class="w">
   </span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_bootstrap_registry</span><span class="w">
   </span><span class="err">│</span><span class="w">   </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_bootstrap_health</span><span class="w">
-  </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_gateway_system</span><span class="w"> </span><span class="p" data-group-id="9482189242-4">(</span><span class="ss">gateway</span><span class="w"> </span><span class="ss">services</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">always</span><span class="w"> </span><span class="ss">on</span><span class="p" data-group-id="9482189242-4">)</span><span class="w">
+  </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_gateway_system</span><span class="w"> </span><span class="p" data-group-id="5946519287-4">(</span><span class="ss">gateway</span><span class="w"> </span><span class="ss">services</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">always</span><span class="w"> </span><span class="ss">on</span><span class="p" data-group-id="5946519287-4">)</span><span class="w">
   </span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway_health</span><span class="w">
   </span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway_diagnostics</span><span class="w">
   </span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway_quic_server</span><span class="w">
   </span><span class="err">│</span><span class="w">   </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway</span><span class="w">
   </span><span class="err">│</span><span class="w">   </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway_workers_sup</span><span class="w">
-  </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_peers_sup</span><span class="w"> </span><span class="p" data-group-id="9482189242-5">(</span><span class="ss">dynamic</span><span class="w"> </span><span class="ss">peer</span><span class="w"> </span><span class="ss">connections</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">always</span><span class="w"> </span><span class="ss">on</span><span class="p" data-group-id="9482189242-5">)</span><span class="w">
+  </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="nf">macula_peers_sup</span><span class="w"> </span><span class="p" data-group-id="5946519287-5">(</span><span class="ss">dynamic</span><span class="w"> </span><span class="ss">peer</span><span class="w"> </span><span class="ss">connections</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">always</span><span class="w"> </span><span class="ss">on</span><span class="p" data-group-id="5946519287-5">)</span><span class="w">
   </span></code></pre><p>Architecture Philosophy (v0.8.5): - All nodes have ALL capabilities (no mode selection) - Zero configuration required (TLS auto-generated) - Simplified deployment (every node is bootstrap + gateway + peer) - True P2P mesh (nodes connect on-demand based on capability discovery)</p><p>Naming Convention (v0.7.10+): - _root: Application root supervisor (one per application) - _system: Subsystem root supervisors (gateway, peer, bootstrap, etc.) - _sup: Worker supervisors (workers_sup, peers_sup)</p>
     </section>
 
@@ -162,7 +162,7 @@ macula
       <h1 class="signature" translate="no">init(_)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.7/src/macula_root.erl#L60" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_root.erl#L60" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -184,7 +184,7 @@ macula
       <h1 class="signature" translate="no">start_link()</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.7/src/macula_root.erl#L48" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_root.erl#L48" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -204,9 +204,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.8.7" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.8.11" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.8.7">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.8.11">Hex Preview</a>
 
           </span>
 

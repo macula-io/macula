@@ -8,7 +8,7 @@
     <meta name="project" content="macula v0.8.11">
 
 
-    <title>macula_gateway_pubsub — macula v0.8.11</title>
+    <title>macula_local_client — macula v0.8.11</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
@@ -79,12 +79,12 @@ macula
 <div id="top-content">
   <div class="heading-with-actions top-heading">
     <h1>
-      <span translate="no">macula_gateway_pubsub</span> 
+      <span translate="no">macula_local_client</span> 
       <small class="app-vsn" translate="no">(macula v0.8.11)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L15" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L14" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -93,7 +93,7 @@ macula
 
 
     <section id="moduledoc">
-<p>Pub/Sub Handler GenServer - manages topic subscriptions and message routing.</p><p>Responsibilities: - Subscribe/unsubscribe streams to topics - Route published messages to matching subscribers - Support wildcard topics (* single-level, ** multi-level) - Track bidirectional mapping (topic ↔ stream) - Monitor stream processes for automatic cleanup</p><p>Extracted from macula_gateway.erl (Phase 3)</p>
+<p>Local client for in-VM workloads to connect to macula_gateway</p><p>This module provides process-to-process communication between workloads running in the same BEAM VM as the Macula platform and the local gateway. Unlike macula_peer which creates QUIC connections, this connects directly to the local macula_gateway process.</p><p>Architecture: Phoenix/Elixir App → macula_local_client → macula_gateway ↓ (QUIC) Other Peers</p>
     </section>
 
 </div>
@@ -105,20 +105,6 @@ macula
       </a>
       <span class="text">Summary</span>
     </h1>
-<div class="summary-types summary">
-  <h2>
-    <a href="#types">Types</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:stream_handle/0" data-no-tooltip="" translate="no">stream_handle/0</a>
-
-      </div>
-
-    </div>
-
-</div>
 <div class="summary-functions summary">
   <h2>
     <a href="#functions">Functions</a>
@@ -126,27 +112,17 @@ macula
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#get_stream_topics/2" data-no-tooltip="" translate="no">get_stream_topics(Pid, Stream)</a>
+        <a href="#call/4" data-no-tooltip="" translate="no">call(Pid, Procedure, Args, Opts)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Get all topics a stream is subscribed to.</p></div>
+        <div class="summary-synopsis"><p>Call an RPC procedure</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#get_subscribers/2" data-no-tooltip="" translate="no">get_subscribers(Pid, Topic)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Get all subscribers for a topic (exact and wildcard matches).</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#handle_call/3" data-no-tooltip="" translate="no">handle_call(Request, From, State)</a>
+        <a href="#handle_call/3" data-no-tooltip="" translate="no">handle_call(_, From, State)</a>
 
       </div>
 
@@ -166,8 +142,6 @@ macula
 
       </div>
 
-        <div class="summary-synopsis"><p>Handle stream process death - automatic cleanup.</p></div>
-
     </div>
 
     <div class="summary-row">
@@ -184,7 +158,27 @@ macula
 
       </div>
 
-        <div class="summary-synopsis"><p>Publish a message to a topic (routes to matching subscribers).</p></div>
+        <div class="summary-synopsis"><p>Publish an event to a topic</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#publish/4" data-no-tooltip="" translate="no">publish(Pid, Topic, Payload, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Publish an event to a topic with options</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#register_procedure/3" data-no-tooltip="" translate="no">register_procedure(Pid, Procedure, Handler)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Register an RPC procedure</p></div>
 
     </div>
 
@@ -194,7 +188,7 @@ macula
 
       </div>
 
-        <div class="summary-synopsis"><p>Start the pub/sub handler with options.</p></div>
+        <div class="summary-synopsis"><p>Start a local client connection to the gateway</p></div>
 
     </div>
 
@@ -204,17 +198,17 @@ macula
 
       </div>
 
-        <div class="summary-synopsis"><p>Stop the pub/sub handler.</p></div>
+        <div class="summary-synopsis"><p>Stop the local client</p></div>
 
     </div>
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#subscribe/3" data-no-tooltip="" translate="no">subscribe(Pid, Stream, Topic)</a>
+        <a href="#subscribe/3" data-no-tooltip="" translate="no">subscribe(Pid, Topic, HandlerPid)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Subscribe a stream to a topic (supports wildcards).</p></div>
+        <div class="summary-synopsis"><p>Subscribe to a topic</p></div>
 
     </div>
 
@@ -228,11 +222,21 @@ macula
 
     <div class="summary-row">
       <div class="summary-signature">
-        <a href="#unsubscribe/3" data-no-tooltip="" translate="no">unsubscribe(Pid, Stream, Topic)</a>
+        <a href="#unregister_procedure/2" data-no-tooltip="" translate="no">unregister_procedure(Pid, Procedure)</a>
 
       </div>
 
-        <div class="summary-synopsis"><p>Unsubscribe a stream from a topic.</p></div>
+        <div class="summary-synopsis"><p>Unregister an RPC procedure</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#unsubscribe/2" data-no-tooltip="" translate="no">unsubscribe(Pid, SubRef)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Unsubscribe from a topic</p></div>
 
     </div>
 
@@ -240,46 +244,6 @@ macula
 
   </section>
 
-
-  <section id="types" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#types">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Types</span>
-    </h1>
-    <div class="types-list">
-<section class="detail" id="t:stream_handle/0">
-
-  <div class="detail-header">
-    <a href="#t:stream_handle/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">stream_handle/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L34" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> stream_handle() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-
-    </div>
-  </section>
 
   <section id="functions" class="details-list">
     <h1 class="section-heading">
@@ -289,17 +253,17 @@ macula
       <span class="text">Functions</span>
     </h1>
     <div class="functions-list">
-<section class="detail" id="get_stream_topics/2">
+<section class="detail" id="call/4">
 
   <div class="detail-header">
-    <a href="#get_stream_topics/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#call/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">get_stream_topics(Pid, Stream)</h1>
+      <h1 class="signature" translate="no">call(Pid, Procedure, Args, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L79" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L69" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -310,39 +274,11 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> get_stream_topics(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> {ok, [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()]}.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> call(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
 
       </div>
 
-<p>Get all topics a stream is subscribed to.</p>
-  </section>
-</section>
-<section class="detail" id="get_subscribers/2">
-
-  <div class="detail-header">
-    <a href="#get_subscribers/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">get_subscribers(Pid, Topic)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L74" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> get_subscribers(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()]}.</pre>
-
-      </div>
-
-<p>Get all subscribers for a topic (exact and wildcard matches).</p>
+<p>Call an RPC procedure</p>
   </section>
 </section>
 <section class="detail" id="handle_call/3">
@@ -352,10 +288,10 @@ macula
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_call(Request, From, State)</h1>
+      <h1 class="signature" translate="no">handle_call(_, From, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L97" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L108" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -377,7 +313,7 @@ macula
       <h1 class="signature" translate="no">handle_cast(Msg, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L190" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L173" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -399,7 +335,7 @@ macula
       <h1 class="signature" translate="no">handle_info(Info, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L194" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L176" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -408,7 +344,7 @@ macula
 
   <section class="docstring">
 
-<p>Handle stream process death - automatic cleanup.</p>
+
   </section>
 </section>
 <section class="detail" id="init/1">
@@ -421,7 +357,7 @@ macula
       <h1 class="signature" translate="no">init(Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L86" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L86" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -443,7 +379,7 @@ macula
       <h1 class="signature" translate="no">publish(Pid, Topic, Payload)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L69" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L49" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -454,11 +390,67 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> publish(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> publish(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
 
       </div>
 
-<p>Publish a message to a topic (routes to matching subscribers).</p>
+<p>Publish an event to a topic</p>
+  </section>
+</section>
+<section class="detail" id="publish/4">
+
+  <div class="detail-header">
+    <a href="#publish/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">publish(Pid, Topic, Payload, Opts)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L54" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> publish(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Publish an event to a topic with options</p>
+  </section>
+</section>
+<section class="detail" id="register_procedure/3">
+
+  <div class="detail-header">
+    <a href="#register_procedure/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">register_procedure(Pid, Procedure, Handler)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L74" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> register_procedure(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), fun()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Register an RPC procedure</p>
   </section>
 </section>
 <section class="detail" id="start_link/1">
@@ -471,7 +463,7 @@ macula
       <h1 class="signature" translate="no">start_link(Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L49" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L39" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -486,7 +478,7 @@ macula
 
       </div>
 
-<p>Start the pub/sub handler with options.</p>
+<p>Start a local client connection to the gateway</p>
   </section>
 </section>
 <section class="detail" id="stop/1">
@@ -499,7 +491,7 @@ macula
       <h1 class="signature" translate="no">stop(Pid)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L54" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L44" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -514,7 +506,7 @@ macula
 
       </div>
 
-<p>Stop the pub/sub handler.</p>
+<p>Stop the local client</p>
   </section>
 </section>
 <section class="detail" id="subscribe/3">
@@ -524,10 +516,10 @@ macula
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">subscribe(Pid, Stream, Topic)</h1>
+      <h1 class="signature" translate="no">subscribe(Pid, Topic, HandlerPid)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L59" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L59" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -538,11 +530,11 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> subscribe(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> ok.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> subscribe(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
 
       </div>
 
-<p>Subscribe a stream to a topic (supports wildcards).</p>
+<p>Subscribe to a topic</p>
   </section>
 </section>
 <section class="detail" id="terminate/2">
@@ -555,7 +547,7 @@ macula
       <h1 class="signature" translate="no">terminate(Reason, State)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L224" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L192" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -567,17 +559,17 @@ macula
 
   </section>
 </section>
-<section class="detail" id="unsubscribe/3">
+<section class="detail" id="unregister_procedure/2">
 
   <div class="detail-header">
-    <a href="#unsubscribe/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+    <a href="#unregister_procedure/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
       <i class="ri-link-m" aria-hidden="true"></i>
     </a>
     <div class="heading-with-actions">
-      <h1 class="signature" translate="no">unsubscribe(Pid, Stream, Topic)</h1>
+      <h1 class="signature" translate="no">unregister_procedure(Pid, Procedure)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_gateway_system/macula_gateway_pubsub.erl#L64" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L79" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -588,11 +580,39 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> unsubscribe(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> ok.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> unregister_procedure(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
 
       </div>
 
-<p>Unsubscribe a stream from a topic.</p>
+<p>Unregister an RPC procedure</p>
+  </section>
+</section>
+<section class="detail" id="unsubscribe/2">
+
+  <div class="detail-header">
+    <a href="#unsubscribe/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">unsubscribe(Pid, SubRef)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.8.11/src/macula_local_client.erl#L64" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> unsubscribe(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Unsubscribe from a topic</p>
   </section>
 </section>
 

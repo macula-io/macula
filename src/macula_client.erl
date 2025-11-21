@@ -45,6 +45,7 @@
 %% API exports
 -export([
     connect/2,
+    connect_local/1,
     disconnect/1,
     publish/3,
     publish/4,
@@ -134,6 +135,56 @@ connect(Url, Opts) when is_binary(Url), is_map(Opts) ->
     macula_peer:start_link(Url, Opts);
 connect(Url, Opts) when is_list(Url), is_map(Opts) ->
     connect(list_to_binary(Url), Opts).
+
+%% @doc Connect to the local Macula gateway (for in-VM workloads).
+%%
+%% This function is used by applications running in the same BEAM VM as
+%% the Macula platform. Instead of creating a QUIC connection to localhost,
+%% it connects directly to the local `macula_gateway' process via
+%% process-to-process communication.
+%%
+%% == Architecture ==
+%%
+%% ```
+%% Phoenix/Elixir App → macula_local_client → macula_gateway
+%%                                             ↓ (QUIC)
+%%                                        Other Peers
+%% '''
+%%
+%% == When to Use ==
+%%
+%% <ul>
+%% <li>✅ Use `connect_local/1' when your application runs in the same VM as Macula</li>
+%% <li>✅ Phoenix applications deployed with Macula in the same container</li>
+%% <li>❌ Do NOT use `connect/2' with localhost URL - it creates unnecessary QUIC overhead</li>
+%% </ul>
+%%
+%% == Options ==
+%%
+%% <ul>
+%% <li>`realm' - Required. Binary realm identifier (e.g., `&lt;&lt;"my.app.realm"&gt;&gt;')</li>
+%% <li>`event_handler' - Optional. PID to receive events (default: caller PID)</li>
+%% </ul>
+%%
+%% == Examples ==
+%%
+%% ```
+%% %% Elixir Phoenix application
+%% {:ok, client} = :macula_client.connect_local(%{
+%%     realm: "macula.arcade.dev"
+%% })
+%%
+%% %% Erlang application
+%% {ok, Client} = macula_client:connect_local(#{
+%%     realm => &lt;&lt;"my.app.realm"&gt;&gt;
+%% }).
+%% '''
+%%
+%% @since v0.8.9
+-spec connect_local(Opts :: options()) ->
+    {ok, client()} | {error, Reason :: term()}.
+connect_local(Opts) when is_map(Opts) ->
+    macula_local_client:start_link(Opts).
 
 %% @doc Disconnect from the Macula mesh.
 %%
