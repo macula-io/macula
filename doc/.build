@@ -22,8 +22,8 @@ dist/lato-latin-700-normal-2XVSBPG4.woff2
 dist/lato-latin-ext-400-normal-N27NCBWW.woff2
 dist/lato-latin-ext-700-normal-Q2L5DVMW.woff2
 dist/remixicon-QPNJX265.woff2
-dist/search_data-F18D7E05.js
-dist/sidebar_items-112BA56B.js
+dist/search_data-68A16763.js
+dist/sidebar_items-4E638E5E.js
 full_supervision_tree.html
 getting_started.html
 index.html
@@ -37,6 +37,7 @@ macula_bootstrap_server.html
 macula_bootstrap_system.html
 macula_cache.html
 macula_client.html
+macula_client_behaviour.html
 macula_connection.html
 macula_connection_pool.html
 macula_core_types.html

@@ -461,10 +461,25 @@ handle_call({local_unadvertise, Procedure}, _From, State) ->
 
 handle_call({local_discover_subscribers, _Realm, Topic}, _From, State) ->
     io:format("[Gateway] Local discover subscribers for topic: ~s~n", [Topic]),
-    %% TODO: Implement DHT discovery for local clients
-    %% For now return empty list (local clients can't do DHT queries directly)
-    _ = Topic,
-    {reply, {ok, []}, State};
+    %% Hash the topic to create DHT key
+    TopicKey = crypto:hash(sha256, Topic),
+
+    %% Query the routing server (DHT) for subscribers
+    Result = case whereis(macula_routing_server) of
+        undefined ->
+            io:format("[Gateway] Routing server not running~n"),
+            {error, routing_server_not_running};
+        RoutingServerPid ->
+            case macula_routing_server:find_value(RoutingServerPid, TopicKey, 20) of
+                {ok, Subscribers} when is_list(Subscribers) ->
+                    {ok, Subscribers};
+                {ok, _Other} ->
+                    {ok, []};
+                {error, Reason} ->
+                    {error, Reason}
+            end
+    end,
+    {reply, Result, State};
 
 handle_call(local_get_node_id, _From, State) ->
     io:format("[Gateway] Local get node ID~n"),
