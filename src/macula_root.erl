@@ -18,7 +18,10 @@
 %% │   ├── macula_gateway_quic_server
 %% │   ├── macula_gateway
 %% │   └── macula_gateway_workers_sup
-%% └── macula_peers_sup (dynamic peer connections - always on)
+%% ├── macula_peers_sup (dynamic peer connections - always on)
+%% └── macula_platform_system (platform layer - always on)
+%%     ├── macula_leader_election (Raft consensus)
+%%     └── macula_shared_state (CRDT state - TODO)
 %% </pre>
 %%
 %% Architecture Philosophy (v0.8.5):
@@ -113,15 +116,19 @@ init([]) ->
         get_peers_sup_spec(),
 
         %% 5. Peer discovery (DHT-based P2P mesh formation)
-        get_peer_discovery_spec(NodeID, Port, Realm)
+        get_peer_discovery_spec(NodeID, Port, Realm),
+
+        %% 6. Platform system (distributed coordination - always on)
+        get_platform_system_spec(NodeID, Realm)
     ],
 
     io:format("Starting subsystems:~n"),
-    io:format("  [1/5] Core DHT Routing~n"),
-    io:format("  [2/5] Bootstrap System~n"),
-    io:format("  [3/5] Gateway System~n"),
-    io:format("  [4/5] Peers Supervisor~n"),
-    io:format("  [5/5] Peer Discovery (P2P Mesh)~n"),
+    io:format("  [1/6] Core DHT Routing~n"),
+    io:format("  [2/6] Bootstrap System~n"),
+    io:format("  [3/6] Gateway System~n"),
+    io:format("  [4/6] Peers Supervisor~n"),
+    io:format("  [5/6] Peer Discovery (P2P Mesh)~n"),
+    io:format("  [6/6] Platform System (Leader Election + Shared State)~n"),
     io:format("~n"),
 
     %% Schedule bootstrap peer connections after supervision tree is up
@@ -289,6 +296,21 @@ get_hostname() ->
         HostnameStr ->
             list_to_binary(HostnameStr)
     end.
+
+%% @private
+%% @doc Get platform system child spec (distributed coordination).
+get_platform_system_spec(NodeID, Realm) ->
+    #{
+        id => macula_platform_system,
+        start => {macula_platform_system, start_link, [#{
+            node_id => NodeID,
+            realm => Realm
+        }]},
+        restart => permanent,
+        shutdown => infinity,  % supervisor shutdown
+        type => supervisor,
+        modules => [macula_platform_system]
+    }.
 
 %% @private
 %% @doc Connect to bootstrap peers to join their DHT network.

@@ -1,6 +1,6 @@
 {application, macula, [
     {description, "Macula HTTP/3 Mesh Platform - Complete distributed application framework"},
-    {vsn, "0.8.25"},
+    {vsn, "0.9.0"},
     {registered, []},
     {mod, {macula_app, []}},
     {applications, [
@@ -11,7 +11,8 @@
         ssl,
         quicer,
         msgpack,
-        gproc
+        gproc,
+        ra
     ]},
     {env, []},
     {modules, []},
