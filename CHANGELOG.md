@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.2] - 2025-11-23
+
+### 📚 Documentation Release
+
+This patch release updates public-facing documentation on Hex.pm to accurately reflect v0.9.0/v0.9.1 releases and plan v0.10.0.
+
+### Changed
+
+#### Documentation Updates
+- **Roadmap Revision** (`architecture/v0.8.0-ROADMAP.md`)
+  - Complete rewrite from 381 to 274 lines
+  - Added "Release History" section documenting v0.9.1 and v0.9.0 accurately
+  - Added "The Pivot" explanation - why we diverged from original NAT/TLS roadmap to Platform Layer
+  - Replaced outdated v0.9.0 planning with realistic v0.10.0 production hardening goals
+  - Deferred features (NAT traversal, TLS cert verification, connection pooling) moved to "Beyond v0.10.0"
+
+- **Hex Package Description**
+  - Updated from "v0.9.0 introduces Platform Layer" to reflect v0.9.1 (CRDT support and comprehensive Platform Layer tests)
+  - Important for public visibility since GitHub repo is private
+
+#### Title Updates
+- `rebar.config`: Roadmap title changed to "Roadmap (v0.9.1 History + v0.10.0 Planning)"
+
+### Why This Release?
+
+Hex.pm does not allow republishing documentation for an existing version. Since the GitHub repository is private, Hex docs are the only public-facing documentation. This patch release ensures accurate, professional documentation is available to the Erlang/Elixir community.
+
+---
+
 ## [0.9.1] - 2025-11-23
 
 ### 🧪 Test Coverage & CRDT Support
