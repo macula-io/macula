@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.10.0] - 2025-11-23
+
+### 🚀 Platform Layer APIs & Clean Workload Interface
+
+BREAKING CHANGE: `macula_client` module renamed to `macula`
+
+This major release exposes Platform Layer capabilities to workload applications through a clean, single-entry-point API.
+
+### Breaking Changes
+
+#### Module Rename
+- **macula_client → macula**
+  - All function calls: `macula_client:foo()` → `macula:foo()`
+  - Elixir: `:macula_client.foo()` → `:macula.foo()`
+  - Migration: Simple find-and-replace in workload code
+
+### Added
+
+#### Platform Layer APIs (New in v0.10.0)
+- **`macula:register_workload/2`** - Register with Platform Layer, get cluster info
+- **`macula:get_leader/1`** - Query current Raft leader node
+- **`macula:subscribe_leader_changes/2`** - Subscribe to leadership change notifications
+- **`macula:propose_crdt_update/3,4`** - Update shared state via CRDTs (LWW-Register supported)
+- **`macula:read_crdt/2`** - Read CRDT-managed shared state
+
+These APIs enable workloads to:
+- Access distributed coordination via Raft leader election
+- Manage conflict-free shared state via CRDTs
+- React to leadership changes for failover scenarios
+
+#### Implementation Details
+- Platform Layer APIs implemented in `macula_local_client.erl`
+- Leader election integrated with `macula_leader_election` module
+- CRDT storage using ETS (simple implementation for v0.10.0)
+- Comprehensive API documentation with examples
+
+### Changed
+
+#### API Simplification
+- **Single Entry Point:** `macula` module is now THE ONLY public API
+- **Clear Contract:** `macula` = PUBLIC (stable), all other modules = PRIVATE (internal)
+- **Improved Documentation:** All examples updated, architecture design doc added
+
+#### Updated Documentation
+- Created `architecture/WORKLOAD_PLATFORM_API.md` (comprehensive design document)
+- Updated module documentation with Platform Layer examples
+- Added migration guide for v0.9.x → v0.10.0
+
+### Migration Guide
+
+```elixir
+# Update imports
+# Old
+{:ok, client} = :macula_client.connect_local(%{realm: "my.app"})
+:macula_client.publish(client, "topic", data)
+
+# New
+{:ok, client} = :macula.connect_local(%{realm: "my.app"})
+:macula.publish(client, "topic", data)
+
+# Use Platform Layer APIs
+{:ok, info} = :macula.register_workload(client, %{
+  workload_name: "my_app"
+})
+
+{:ok, leader} = :macula.get_leader(client)
+:macula.propose_crdt_update(client, "my.key", value)
+{:ok, value} = :macula.read_crdt(client, "my.key")
+```
+
+### Benefits for Workload Developers
+- Simpler API (single module to learn)
+- Stable interface (version guarantees)
+- Platform Layer coordination built-in
+- Clear architectural boundaries
+
+---
+
 ## [0.9.2] - 2025-11-23
 
 ### 📚 Documentation Release

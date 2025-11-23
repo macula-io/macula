@@ -23,6 +23,15 @@
 -export([call/3, call/4, advertise/3, advertise/4, unadvertise/2]).
 %% API - Utility
 -export([get_node_id/1]).
+%% API - Platform Layer (v0.10.0+)
+-export([
+    register_workload/2,
+    get_leader/1,
+    subscribe_leader_changes/2,
+    propose_crdt_update/3,
+    propose_crdt_update/4,
+    read_crdt/2
+]).
 %% Legacy API (kept for backward compatibility)
 -export([start_link/1, stop/1, register_procedure/3, unregister_procedure/2]).
 
@@ -147,6 +156,41 @@ unregister_procedure(Pid, Procedure) ->
 -spec get_node_id(pid()) -> {ok, binary()} | {error, term()}.
 get_node_id(Pid) ->
     gen_server:call(Pid, get_node_id).
+
+%%------------------------------------------------------------------------------
+%% Platform Layer Operations (v0.10.0+)
+%%------------------------------------------------------------------------------
+
+%% @doc Register this workload with the Platform Layer
+-spec register_workload(pid(), map()) -> {ok, map()} | {error, term()}.
+register_workload(Pid, Opts) ->
+    gen_server:call(Pid, {register_workload, Opts}).
+
+%% @doc Get the current Platform Layer leader node ID
+-spec get_leader(pid()) -> {ok, binary()} | {error, no_leader | term()}.
+get_leader(Pid) ->
+    gen_server:call(Pid, get_leader).
+
+%% @doc Subscribe to Platform Layer leader change notifications
+-spec subscribe_leader_changes(pid(), fun((map()) -> ok)) ->
+    {ok, reference()} | {error, term()}.
+subscribe_leader_changes(Pid, Callback) ->
+    gen_server:call(Pid, {subscribe_leader_changes, Callback}).
+
+%% @doc Propose a CRDT update with default options (LWW-Register)
+-spec propose_crdt_update(pid(), binary(), term()) -> ok | {error, term()}.
+propose_crdt_update(Pid, Key, Value) ->
+    propose_crdt_update(Pid, Key, Value, #{crdt_type => lww_register}).
+
+%% @doc Propose a CRDT update with specific type
+-spec propose_crdt_update(pid(), binary(), term(), map()) -> ok | {error, term()}.
+propose_crdt_update(Pid, Key, Value, Opts) ->
+    gen_server:call(Pid, {propose_crdt_update, Key, Value, Opts}).
+
+%% @doc Read the current value of a CRDT-managed state entry
+-spec read_crdt(pid(), binary()) -> {ok, term()} | {error, not_found | term()}.
+read_crdt(Pid, Key) ->
+    gen_server:call(Pid, {read_crdt, Key}).
 
 %%==============================================================================
 %% gen_server callbacks
@@ -275,7 +319,113 @@ handle_call({unregister, Procedure}, _From, State) ->
 handle_call(get_node_id, _From, State) ->
     #state{gateway_pid = Gateway} = State,
     Result = gen_server:call(Gateway, local_get_node_id),
-    {reply, Result, State}.
+    {reply, Result, State};
+
+%%------------------------------------------------------------------------------
+%% Platform Layer Handlers (v0.10.0+)
+%%------------------------------------------------------------------------------
+
+handle_call({register_workload, Opts}, _From, State) ->
+    %% Query Platform Layer for current state
+    Leader = macula_leader_election:get_leader(),
+    Members = macula_leader_election:get_members(),
+
+    WorkloadName = maps:get(workload_name, Opts, <<"unknown">>),
+    Capabilities = maps:get(capabilities, Opts, []),
+
+    io:format("[LocalClient] Registered workload ~s with capabilities ~p~n",
+              [WorkloadName, Capabilities]),
+
+    %% Return platform info
+    Info = #{
+        leader_node => Leader,
+        cluster_size => length(Members),
+        platform_version => <<"0.10.0">>
+    },
+    {reply, {ok, Info}, State};
+
+handle_call(get_leader, _From, State) ->
+    %% Query current Raft leader from Platform Layer
+    case macula_leader_election:get_leader() of
+        undefined ->
+            {reply, {error, no_leader}, State};
+        Leader ->
+            {reply, {ok, Leader}, State}
+    end;
+
+handle_call({subscribe_leader_changes, Callback}, _From, State) ->
+    %% Subscribe to leader change events from Platform Layer
+    %% Generate unique callback ID
+    CallbackId = make_ref(),
+
+    %% Create wrapper that transforms boolean to map format
+    Wrapper = fun(IsLeader) ->
+        Leader = macula_leader_election:get_leader(),
+        OldLeader = case IsLeader of
+            true -> undefined;
+            false -> Leader
+        end,
+        NewLeader = case IsLeader of
+            true -> Leader;
+            false -> undefined
+        end,
+        Change = #{
+            old_leader => OldLeader,
+            new_leader => NewLeader
+        },
+        Callback(Change)
+    end,
+
+    %% Register callback with leader election
+    ok = macula_leader_election:register_callback(CallbackId, Wrapper),
+    {reply, {ok, CallbackId}, State};
+
+handle_call({propose_crdt_update, Key, Value, Opts}, _From, State) ->
+    CrdtType = maps:get(crdt_type, Opts, lww_register),
+
+    %% Propose update to CRDT system
+    %% For v0.10.0, store in ETS table (simple implementation)
+    %% TODO: Proper CRDT replication in future version
+    case CrdtType of
+        lww_register ->
+            %% LWW-Register: store value with timestamp
+            Timestamp = erlang:system_time(millisecond),
+            TableName = macula_crdt_storage,
+
+            %% Ensure table exists
+            case ets:whereis(TableName) of
+                undefined ->
+                    try
+                        ets:new(TableName, [named_table, public, set])
+                    catch
+                        error:badarg -> ok  % Table already exists (race condition)
+                    end;
+                _ -> ok
+            end,
+
+            %% Store or update value
+            ets:insert(TableName, {Key, {Value, Timestamp}}),
+            {reply, ok, State};
+        _ ->
+            %% Other CRDT types can be added later
+            {reply, {error, {unsupported_crdt_type, CrdtType}}, State}
+    end;
+
+handle_call({read_crdt, Key}, _From, State) ->
+    %% Read current value from CRDT system
+    TableName = macula_crdt_storage,
+
+    case ets:whereis(TableName) of
+        undefined ->
+            {reply, {error, not_found}, State};
+        _ ->
+            case ets:lookup(TableName, Key) of
+                [{Key, {Value, _Timestamp}}] ->
+                    {reply, {ok, Value}, State};
+                [] ->
+                    {reply, {error, not_found}, State}
+            end
+    end.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
