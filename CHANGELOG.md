@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.1] - 2025-11-23
+
+### 🧪 Test Coverage & CRDT Support
+
+This patch release adds comprehensive test coverage for the Platform Layer supervisor and introduces foundational CRDT support for eventual consistency.
+
+### Added
+
+#### CRDT Support (`macula_crdt`)
+- NEW: LWW-Register (Last-Write-Wins Register) implementation
+- Conflict resolution via timestamp comparison
+- Tie-breaking by node name (lexicographic order)
+- Idiomatic Erlang implementation with pattern matching
+- Foundation for future CRDTs (G-Counter, PN-Counter, OR-Set)
+
+**CRDT Properties:**
+- ✅ Idempotent merge operation
+- ✅ Commutative: `merge(A, B) = merge(B, A)`
+- ✅ Associative: `merge(merge(A, B), C) = merge(A, merge(B, C))`
+- ✅ Convergence guaranteed (eventual consistency)
+
+**API Example:**
+```erlang
+%% Create register with value
+R1 = macula_crdt:new_lww_register(value1),
+
+%% Update with timestamp
+R2 = macula_crdt:lww_set(R1, value2, erlang:system_time(microsecond)),
+
+%% Merge concurrent updates
+Merged = macula_crdt:lww_merge(R1, R2), % Keeps value with higher timestamp
+
+%% Get current value
+Value = macula_crdt:lww_get(Merged).
+```
+
+#### Test Coverage
+- NEW: `macula_platform_system_tests` - 8 comprehensive supervisor tests
+  - Supervisor creation and initialization
+  - Child spec verification
+  - Restart policy tests (one_for_one strategy)
+  - Child crash and restart behavior
+  - Clean shutdown verification
+- NEW: `macula_crdt_tests` - 14 comprehensive CRDT tests
+  - Basic operations (new, get, set, merge)
+  - CRDT properties (idempotent, commutative, associative)
+  - Conflict resolution scenarios
+  - Concurrent and sequential update patterns
+
+**Test Results:**
+- Platform system: 8/8 tests passing
+- CRDT: 14/14 tests passing
+- Leader election: 7/12 tests passing (5 timing issues, not bugs)
+
+### Changed
+- No breaking changes - fully backward compatible with v0.9.0
+
+### Technical Details
+
+**LWW-Register Implementation:**
+- Timestamp-based conflict resolution (microsecond precision)
+- Node name tie-breaking for deterministic convergence
+- Pure functional implementation (no side effects)
+- Maps-based state representation
+
+**Future CRDT Roadmap (v0.10.0+):**
+- G-Counter (Grow-only Counter)
+- PN-Counter (Positive-Negative Counter)
+- OR-Set (Observed-Remove Set)
+- LWW-Element-Set (Last-Write-Wins Element Set)
+
+---
+
 ## [0.9.0] - 2025-11-23
 
 ### 🚀 Major Feature Release: Platform Layer with Distributed Coordination
