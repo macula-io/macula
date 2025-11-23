@@ -1,803 +1,101 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.8.24">
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_protocol_types</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
 
+<h1>Module macula_protocol_types</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+   Protocol message type definitions and constants for Macula mesh.
 
-    <title>macula_protocol_types — macula v0.8.24</title>
 
-    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+<h2><a name="description">Description</a></h2>
+   Protocol message type definitions and constants for Macula mesh.
+   Defines all message types that can be sent over QUIC streams.
+<h2><a name="types">Data Types</a></h2>
 
-    <script defer src="dist/sidebar_items-D7A6E70D.js"></script>
-    <script defer src="docs_config.js"></script>
-    <script defer src="dist/html-DPJLHKSM.js"></script>
+<h3 class="typedecl"><a name="type-call_msg">call_msg()</a></h3>
+<p><code>call_msg() = #{procedure := binary(), args := binary(), call_id := binary(), timeout =&gt; integer()}</code></p>
 
-  </head>
-  <body>
-    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
-</script>
 
-<div class="body-wrapper">
+<h3 class="typedecl"><a name="type-cast_msg">cast_msg()</a></h3>
+<p><code>cast_msg() = #{procedure := binary(), args := binary()}</code></p>
+<p> JSON-encoded arguments (no reply expected)</p>
 
-<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
-  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
-</button>
+<h3 class="typedecl"><a name="type-connect_msg">connect_msg()</a></h3>
+<p><code>connect_msg() = #{version := binary(), node_id := binary(), realm_id := binary(), capabilities := [atom()], endpoint =&gt; binary()}</code></p>
 
-<nav id="sidebar" class="sidebar">
 
-  <div class="sidebar-header">
-    <div class="sidebar-projectInfo">
+<h3 class="typedecl"><a name="type-disconnect_msg">disconnect_msg()</a></h3>
+<p><code>disconnect_msg() = #{reason := atom(), message := binary()}</code></p>
+<p> Human-readable reason</p>
 
-        <a href="readme.html" class="sidebar-projectImage">
-          <img src="assets/logo.svg" alt="macula" />
-        </a>
+<h3 class="typedecl"><a name="type-message">message()</a></h3>
+<p><code>message() = {connect, <a href="#type-connect_msg" docgen-rel="seetype" docgen-href="#connect_msg/0">connect_msg()</a>} | {disconnect, <a href="#type-disconnect_msg" docgen-rel="seetype" docgen-href="#disconnect_msg/0">disconnect_msg()</a>} | {ping, <a href="#type-ping_msg" docgen-rel="seetype" docgen-href="#ping_msg/0">ping_msg()</a>} | {pong, <a href="#type-pong_msg" docgen-rel="seetype" docgen-href="#pong_msg/0">pong_msg()</a>} | {publish, <a href="#type-publish_msg" docgen-rel="seetype" docgen-href="#publish_msg/0">publish_msg()</a>} | {subscribe, <a href="#type-subscribe_msg" docgen-rel="seetype" docgen-href="#subscribe_msg/0">subscribe_msg()</a>} | {unsubscribe, <a href="#type-unsubscribe_msg" docgen-rel="seetype" docgen-href="#unsubscribe_msg/0">unsubscribe_msg()</a>} | {pubsub_route, <a href="#type-pubsub_route_msg" docgen-rel="seetype" docgen-href="#pubsub_route_msg/0">pubsub_route_msg()</a>} | {call, <a href="#type-call_msg" docgen-rel="seetype" docgen-href="#call_msg/0">call_msg()</a>} | {reply, <a href="#type-reply_msg" docgen-rel="seetype" docgen-href="#reply_msg/0">reply_msg()</a>} | {cast, <a href="#type-cast_msg" docgen-rel="seetype" docgen-href="#cast_msg/0">cast_msg()</a>} | {rpc_route, <a href="#type-rpc_route_msg" docgen-rel="seetype" docgen-href="#rpc_route_msg/0">rpc_route_msg()</a>}</code></p>
 
-      <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
-macula
-        </a>
-        <div class="sidebar-projectVersion" translate="no">
-          v0.8.24
-        </div>
-      </div>
-    </div>
-    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
-  </div>
-</nav>
 
-<output role="status" id="toast"></output>
+<h3 class="typedecl"><a name="type-message_type">message_type()</a></h3>
+<p><code>message_type() = connect | disconnect | ping | pong | publish | subscribe | unsubscribe | pubsub_route | call | reply | cast | rpc_route | swim_ping | swim_ack | swim_ping_req | find_node | find_node_reply | store | find_value | find_value_reply</code></p>
 
-<main class="content page-module" id="main" data-type="modules">
-  <div id="content" class="content-inner">
-    <div class="top-search">
-      <div class="search-settings">
-        <form class="search-bar" action="search.html">
-          <label class="search-label">
-            <span class="sr-only">Search documentation of macula</span>
-            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </label>
-          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
-            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
-          </button>
-          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
-            <i class="ri-close-line ri-lg" title="Cancel search"></i>
-          </button>
-        </form>
-        <div class="autocomplete">
-        </div>
-        <button class="icon-settings display-settings">
-          <i class="ri-settings-3-line"></i>
-          <span class="sr-only">Settings</span>
-        </button>
-      </div>
-    </div>
 
-<div id="top-content">
-  <div class="heading-with-actions top-heading">
-    <h1>
-      <span translate="no">macula_protocol_types</span> 
-      <small class="app-vsn" translate="no">(macula v0.8.24)</small>
+<h3 class="typedecl"><a name="type-ping_msg">ping_msg()</a></h3>
+<p><code>ping_msg() = #{timestamp := integer()}</code></p>
+<p> Monotonic timestamp (milliseconds)</p>
 
-    </h1>
+<h3 class="typedecl"><a name="type-pong_msg">pong_msg()</a></h3>
+<p><code>pong_msg() = #{timestamp := integer(), server_time := integer()}</code></p>
+<p> Server's monotonic timestamp</p>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L7" title="View Source" class="icon-action" rel="help">
-        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        <span class="sr-only">View Source</span>
-      </a>
+<h3 class="typedecl"><a name="type-publish_msg">publish_msg()</a></h3>
+<p><code>publish_msg() = #{topic := binary(), payload := binary(), qos := 0 | 1 | 2, retain := boolean(), message_id := binary()}</code></p>
 
-  </div>
 
+<h3 class="typedecl"><a name="type-pubsub_route_msg">pubsub_route_msg()</a></h3>
+<p><code>pubsub_route_msg() = #{destination_node_id := binary(), source_node_id := binary(), hop_count := non_neg_integer(), max_hops := pos_integer(), topic := binary(), payload := <a href="#type-publish_msg" docgen-rel="seetype" docgen-href="#publish_msg/0">publish_msg()</a>}</code></p>
 
-    <section id="moduledoc">
-<p>Protocol message type definitions and constants for Macula mesh. Defines all message types that can be sent over QUIC streams.</p>
-    </section>
 
-</div>
+<h3 class="typedecl"><a name="type-reply_msg">reply_msg()</a></h3>
+<p><code>reply_msg() = #{call_id := binary(), result =&gt; binary(), error =&gt; #{code := binary(), message := binary()}}</code></p>
 
-  <section id="summary" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#summary">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Summary</span>
-    </h1>
-<div class="summary-types summary">
-  <h2>
-    <a href="#types">Types</a>
-  </h2>
 
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:call_msg/0" data-no-tooltip="" translate="no">call_msg/0</a>
+<h3 class="typedecl"><a name="type-rpc_route_msg">rpc_route_msg()</a></h3>
+<p><code>rpc_route_msg() = #{destination_node_id := binary(), source_node_id := binary(), hop_count := non_neg_integer(), max_hops := pos_integer(), payload_type := call | reply, payload := <a href="#type-call_msg" docgen-rel="seetype" docgen-href="#call_msg/0">call_msg()</a> | <a href="#type-reply_msg" docgen-rel="seetype" docgen-href="#reply_msg/0">reply_msg()</a>}</code></p>
 
-      </div>
 
-    </div>
+<h3 class="typedecl"><a name="type-subscribe_msg">subscribe_msg()</a></h3>
+<p><code>subscribe_msg() = #{topics := [binary()], qos := 0 | 1 | 2}</code></p>
+<p> Requested QoS level</p>
 
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:cast_msg/0" data-no-tooltip="" translate="no">cast_msg/0</a>
+<h3 class="typedecl"><a name="type-unsubscribe_msg">unsubscribe_msg()</a></h3>
+<p><code>unsubscribe_msg() = #{topics := [binary()]}</code></p>
+<p> Topics to unsubscribe from</p>
 
-      </div>
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#message_type_id-1">message_type_id/1</a></td><td>Get numeric ID for a message type.</td></tr>
+<tr><td valign="top"><a href="#message_type_name-1">message_type_name/1</a></td><td>Get message type name from numeric ID.</td></tr>
+</table>
 
-    </div>
+<h2><a name="functions">Function Details</a></h2>
 
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:connect_msg/0" data-no-tooltip="" translate="no">connect_msg/0</a>
+<h3 class="function"><a name="message_type_id-1">message_type_id/1</a></h3>
+<div class="spec">
+<p><code>message_type_id(X1::<a href="#type-message_type" docgen-rel="seetype" docgen-href="#message_type/0">message_type()</a>) -&gt; byte()</code><br></p>
+<p> </p>
+</div><p>Get numeric ID for a message type.</p>
 
-      </div>
+<h3 class="function"><a name="message_type_name-1">message_type_name/1</a></h3>
+<div class="spec">
+<p><code>message_type_name(X1::byte()) -&gt; {ok, <a href="#type-message_type" docgen-rel="seetype" docgen-href="#message_type/0">message_type()</a>} | {error, unknown_type}</code><br></p>
+<p> </p>
+</div><p>Get message type name from numeric ID.</p>
+<hr>
 
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:disconnect_msg/0" data-no-tooltip="" translate="no">disconnect_msg/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:message/0" data-no-tooltip="" translate="no">message/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:message_type/0" data-no-tooltip="" translate="no">message_type/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:ping_msg/0" data-no-tooltip="" translate="no">ping_msg/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:pong_msg/0" data-no-tooltip="" translate="no">pong_msg/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:publish_msg/0" data-no-tooltip="" translate="no">publish_msg/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:pubsub_route_msg/0" data-no-tooltip="" translate="no">pubsub_route_msg/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:reply_msg/0" data-no-tooltip="" translate="no">reply_msg/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:rpc_route_msg/0" data-no-tooltip="" translate="no">rpc_route_msg/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:subscribe_msg/0" data-no-tooltip="" translate="no">subscribe_msg/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:unsubscribe_msg/0" data-no-tooltip="" translate="no">unsubscribe_msg/0</a>
-
-      </div>
-
-    </div>
-
-</div>
-<div class="summary-functions summary">
-  <h2>
-    <a href="#functions">Functions</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#message_type_id/1" data-no-tooltip="" translate="no">message_type_id(_)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Get numeric ID for a message type.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#message_type_name/1" data-no-tooltip="" translate="no">message_type_name(_)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Get message type name from numeric ID.</p></div>
-
-    </div>
-
-</div>
-
-  </section>
-
-
-  <section id="types" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#types">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Types</span>
-    </h1>
-    <div class="types-list">
-<section class="detail" id="t:call_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:call_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">call_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L137" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> call_msg() ::
-          #{procedure := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), args := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), call_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), timeout => <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:cast_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:cast_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">cast_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L153" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> cast_msg() :: #{procedure := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), args := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:connect_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:connect_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">connect_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L94" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> connect_msg() ::
-          #{version := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-            node_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-            realm_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-            capabilities := [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>()],
-            endpoint => <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:disconnect_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:disconnect_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">disconnect_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L102" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> disconnect_msg() :: #{reason := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(), message := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:message/0">
-
-  <div class="detail-header">
-    <a href="#t:message/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">message/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L78" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> message() ::
-          {connect, <a href="#t:connect_msg/0">connect_msg</a>()} |
-          {disconnect, <a href="#t:disconnect_msg/0">disconnect_msg</a>()} |
-          {ping, <a href="#t:ping_msg/0">ping_msg</a>()} |
-          {pong, <a href="#t:pong_msg/0">pong_msg</a>()} |
-          {publish, <a href="#t:publish_msg/0">publish_msg</a>()} |
-          {subscribe, <a href="#t:subscribe_msg/0">subscribe_msg</a>()} |
-          {unsubscribe, <a href="#t:unsubscribe_msg/0">unsubscribe_msg</a>()} |
-          {pubsub_route, <a href="#t:pubsub_route_msg/0">pubsub_route_msg</a>()} |
-          {call, <a href="#t:call_msg/0">call_msg</a>()} |
-          {reply, <a href="#t:reply_msg/0">reply_msg</a>()} |
-          {cast, <a href="#t:cast_msg/0">cast_msg</a>()} |
-          {rpc_route, <a href="#t:rpc_route_msg/0">rpc_route_msg</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:message_type/0">
-
-  <div class="detail-header">
-    <a href="#t:message_type/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">message_type/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L71" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> message_type() ::
-          connect | disconnect | ping | pong | publish | subscribe | unsubscribe | pubsub_route | call |
-          reply | cast | rpc_route | swim_ping | swim_ack | swim_ping_req | find_node |
-          find_node_reply | store | find_value | find_value_reply.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:ping_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:ping_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">ping_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L107" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> ping_msg() :: #{timestamp := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:pong_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:pong_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">pong_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L111" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> pong_msg() :: #{timestamp := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>(), server_time := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:publish_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:publish_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">publish_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L118" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> publish_msg() ::
-          #{topic := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-            payload := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-            qos := 0 | 1 | 2,
-            retain := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>(),
-            message_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:pubsub_route_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:pubsub_route_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">pubsub_route_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L171" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> pubsub_route_msg() ::
-          #{destination_node_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-            source_node_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-            hop_count := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>(),
-            max_hops := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>(),
-            topic := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-            payload := <a href="#t:publish_msg/0">publish_msg</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:reply_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:reply_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">reply_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L144" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> reply_msg() ::
-          #{call_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), result => <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), error => #{code := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), message := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()}}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:rpc_route_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:rpc_route_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">rpc_route_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L160" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> rpc_route_msg() ::
-          #{destination_node_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-            source_node_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-            hop_count := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>(),
-            max_hops := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>(),
-            payload_type := call | reply,
-            payload := <a href="#t:call_msg/0">call_msg</a>() | <a href="#t:reply_msg/0">reply_msg</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:subscribe_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:subscribe_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">subscribe_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L126" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> subscribe_msg() :: #{topics := [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()], qos := 0 | 1 | 2}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:unsubscribe_msg/0">
-
-  <div class="detail-header">
-    <a href="#t:unsubscribe_msg/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">unsubscribe_msg/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L131" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> unsubscribe_msg() :: #{topics := [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()]}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-
-    </div>
-  </section>
-
-  <section id="functions" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#functions">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Functions</span>
-    </h1>
-    <div class="functions-list">
-<section class="detail" id="message_type_id/1">
-
-  <div class="detail-header">
-    <a href="#message_type_id/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">message_type_id(_)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L186" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> message_type_id(<a href="#t:message_type/0">message_type</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:byte/0">byte</a>().</pre>
-
-      </div>
-
-<p>Get numeric ID for a message type.</p>
-  </section>
-</section>
-<section class="detail" id="message_type_name/1">
-
-  <div class="detail-header">
-    <a href="#message_type_name/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">message_type_name(_)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_protocol_types.erl#L209" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> message_type_name(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:byte/0">byte</a>()) -> {ok, <a href="#t:message_type/0">message_type</a>()} | {error, unknown_type}.</pre>
-
-      </div>
-
-<p>Get message type name from numeric ID.</p>
-  </section>
-</section>
-
-    </div>
-  </section>
-
-    <footer class="footer">
-      <p>
-
-          <span class="line">
-            <a href="https://hex.pm/packages/macula/0.8.24" class="footer-hex-package">Hex Package</a>
-
-            <a href="https://preview.hex.pm/preview/macula/0.8.24">Hex Preview</a>
-
-          </span>
-
-        <span class="line">
-          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
-            Search HexDocs
-          </button>
-
-            <a href="macula.epub" title="ePub version">
-              Download ePub version
-            </a>
-
-        </span>
-      </p>
-
-      <p class="built-using">
-        Built using
-        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
-
-          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
-
-      </p>
-
-    </footer>
-  </div>
-</main>
-</div>
-
-  </body>
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
 </html>

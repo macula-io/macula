@@ -1,535 +1,132 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.8.24">
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_rpc_handler</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
 
+<h1>Module macula_rpc_handler</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+RPC handler GenServer - manages RPC calls, replies, and failover.
 
-    <title>macula_rpc_handler — macula v0.8.24</title>
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
 
-    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+<h2><a name="description">Description</a></h2><p>   
+RPC handler GenServer - manages RPC calls, replies, and failover.</p>
+  
+   <p>Responsibilities:   
+- Execute RPC calls (local check first, then DHT discovery)   
+- Handle incoming RPC replies from network   
+- Manage call timeouts with automatic failover   
+- Track pending calls with call IDs   
+- Monitor caller processes for automatic cleanup   
+- Provider selection strategies (random, round-robin, etc.)</p>
+  
+   <p>Memory Safety:   
+- Monitors caller processes to prevent memory leaks   
+- Cleans up immediately when caller dies (no waiting for timeout)   
+- Cancels timers and removes pending entries on cleanup</p>
+  
+   Extracted from macula_connection.erl (Phase 5)
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#call-4">call/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_find_value_reply-2">handle_find_value_reply/2</a></td><td>Handle FIND_VALUE_REPLY from DHT query.</td></tr>
+<tr><td valign="top"><a href="#handle_incoming_reply-2">handle_incoming_reply/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#register_handler-2">register_handler/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#register_local_procedure-3">register_local_procedure/3</a></td><td>Register a local procedure handler (no DHT advertisement).</td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#unregister_handler-1">unregister_handler/1</a></td><td></td></tr>
+</table>
 
-    <script defer src="dist/sidebar_items-D7A6E70D.js"></script>
-    <script defer src="docs_config.js"></script>
-    <script defer src="dist/html-DPJLHKSM.js"></script>
+<h2><a name="functions">Function Details</a></h2>
 
-  </head>
-  <body>
-    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
-</script>
-
-<div class="body-wrapper">
-
-<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
-  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
-</button>
-
-<nav id="sidebar" class="sidebar">
-
-  <div class="sidebar-header">
-    <div class="sidebar-projectInfo">
-
-        <a href="readme.html" class="sidebar-projectImage">
-          <img src="assets/logo.svg" alt="macula" />
-        </a>
-
-      <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
-macula
-        </a>
-        <div class="sidebar-projectVersion" translate="no">
-          v0.8.24
-        </div>
-      </div>
-    </div>
-    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
-  </div>
-</nav>
-
-<output role="status" id="toast"></output>
-
-<main class="content page-module" id="main" data-type="modules">
-  <div id="content" class="content-inner">
-    <div class="top-search">
-      <div class="search-settings">
-        <form class="search-bar" action="search.html">
-          <label class="search-label">
-            <span class="sr-only">Search documentation of macula</span>
-            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </label>
-          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
-            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
-          </button>
-          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
-            <i class="ri-close-line ri-lg" title="Cancel search"></i>
-          </button>
-        </form>
-        <div class="autocomplete">
-        </div>
-        <button class="icon-settings display-settings">
-          <i class="ri-settings-3-line"></i>
-          <span class="sr-only">Settings</span>
-        </button>
-      </div>
-    </div>
-
-<div id="top-content">
-  <div class="heading-with-actions top-heading">
-    <h1>
-      <span translate="no">macula_rpc_handler</span> 
-      <small class="app-vsn" translate="no">(macula v0.8.24)</small>
-
-    </h1>
-
-      <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L21" title="View Source" class="icon-action" rel="help">
-        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        <span class="sr-only">View Source</span>
-      </a>
-
-  </div>
-
-
-    <section id="moduledoc">
-<p>RPC handler GenServer - manages RPC calls, replies, and failover.</p><p>Responsibilities: - Execute RPC calls (local check first, then DHT discovery) - Handle incoming RPC replies from network - Manage call timeouts with automatic failover - Track pending calls with call IDs - Monitor caller processes for automatic cleanup - Provider selection strategies (random, round-robin, etc.)</p><p>Memory Safety: - Monitors caller processes to prevent memory leaks - Cleans up immediately when caller dies (no waiting for timeout) - Cancels timers and removes pending entries on cleanup</p><p>Extracted from macula_connection.erl (Phase 5)</p>
-    </section>
-
+<h3 class="function"><a name="call-4">call/4</a></h3>
+<div class="spec">
+<p><code>call(Pid::pid(), Procedure::binary() | list() | atom(), Args::term(), Opts::map()) -&gt; {ok, term()} | {error, term()}</code><br></p>
+<p> </p>
 </div>
 
-  <section id="summary" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#summary">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Summary</span>
-    </h1>
-<div class="summary-functions summary">
-  <h2>
-    <a href="#functions">Functions</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#call/4" data-no-tooltip="" translate="no">call(Pid, Procedure, Args, Opts)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#handle_call/3" data-no-tooltip="" translate="no">handle_call(Request, From, State)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#handle_cast/2" data-no-tooltip="" translate="no">handle_cast(Msg, State)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#handle_find_value_reply/2" data-no-tooltip="" translate="no">handle_find_value_reply(Pid, Msg)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Handle FIND_VALUE_REPLY from DHT query</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#handle_incoming_reply/2" data-no-tooltip="" translate="no">handle_incoming_reply(Pid, Msg)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#handle_info/2" data-no-tooltip="" translate="no">handle_info(Info, State)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#init/1" data-no-tooltip="" translate="no">init(Opts)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#register_handler/2" data-no-tooltip="" translate="no">register_handler(Service, Handler)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#start_link/1" data-no-tooltip="" translate="no">start_link(Opts)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#terminate/2" data-no-tooltip="" translate="no">terminate(Reason, State)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#unregister_handler/1" data-no-tooltip="" translate="no">unregister_handler(Service)</a>
-
-      </div>
-
-    </div>
-
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
+<p> </p>
 </div>
 
-  </section>
-
-
-  <section id="functions" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#functions">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Functions</span>
-    </h1>
-    <div class="functions-list">
-<section class="detail" id="call/4">
-
-  <div class="detail-header">
-    <a href="#call/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">call(Pid, Procedure, Args, Opts)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L71" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> call(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="handle_call/3">
-
-  <div class="detail-header">
-    <a href="#handle_call/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_call(Request, From, State)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L131" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-
-  </section>
-</section>
-<section class="detail" id="handle_cast/2">
-
-  <div class="detail-header">
-    <a href="#handle_cast/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_cast(Msg, State)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L175" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-
-  </section>
-</section>
-<section class="detail" id="handle_find_value_reply/2">
-
-  <div class="detail-header">
-    <a href="#handle_find_value_reply/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_find_value_reply(Pid, Msg)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L94" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> handle_find_value_reply(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
-
-      </div>
-
-<p>Handle FIND_VALUE_REPLY from DHT query</p>
-  </section>
-</section>
-<section class="detail" id="handle_incoming_reply/2">
-
-  <div class="detail-header">
-    <a href="#handle_incoming_reply/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_incoming_reply(Pid, Msg)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L89" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> handle_incoming_reply(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="handle_info/2">
-
-  <div class="detail-header">
-    <a href="#handle_info/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_info(Info, State)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L218" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-
-  </section>
-</section>
-<section class="detail" id="init/1">
-
-  <div class="detail-header">
-    <a href="#init/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">init(Opts)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L101" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-
-  </section>
-</section>
-<section class="detail" id="register_handler/2">
-
-  <div class="detail-header">
-    <a href="#register_handler/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">register_handler(Service, Handler)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L77" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> register_handler(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(), fun((<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()})) ->
-                          {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="start_link/1">
-
-  <div class="detail-header">
-    <a href="#start_link/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">start_link(Opts)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L66" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> start_link(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="terminate/2">
-
-  <div class="detail-header">
-    <a href="#terminate/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">terminate(Reason, State)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L318" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-
-  </section>
-</section>
-<section class="detail" id="unregister_handler/1">
-
-  <div class="detail-header">
-    <a href="#unregister_handler/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">unregister_handler(Service)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_rpc_system/macula_rpc_handler.erl#L84" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> unregister_handler(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-
-    </div>
-  </section>
-
-    <footer class="footer">
-      <p>
-
-          <span class="line">
-            <a href="https://hex.pm/packages/macula/0.8.24" class="footer-hex-package">Hex Package</a>
-
-            <a href="https://preview.hex.pm/preview/macula/0.8.24">Hex Preview</a>
-
-          </span>
-
-        <span class="line">
-          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
-            Search HexDocs
-          </button>
-
-            <a href="macula.epub" title="ePub version">
-              Download ePub version
-            </a>
-
-        </span>
-      </p>
-
-      <p class="built-using">
-        Built using
-        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
-
-          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
-
-      </p>
-
-    </footer>
-  </div>
-</main>
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
+<p> </p>
 </div>
 
-  </body>
+<h3 class="function"><a name="handle_find_value_reply-2">handle_find_value_reply/2</a></h3>
+<div class="spec">
+<p><code>handle_find_value_reply(Pid::pid(), Msg::map()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Handle FIND_VALUE_REPLY from DHT query</p>
+
+<h3 class="function"><a name="handle_incoming_reply-2">handle_incoming_reply/2</a></h3>
+<div class="spec">
+<p><code>handle_incoming_reply(Pid::pid(), Msg::map()) -&gt; ok</code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="register_handler-2">register_handler/2</a></h3>
+<div class="spec">
+<p><code>register_handler(Service::binary() | list() | atom(), Handler::fun((term()) -&gt; {ok, term()} | {error, term()})) -&gt; {ok, reference()} | {error, term()}</code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="register_local_procedure-3">register_local_procedure/3</a></h3>
+<div class="spec">
+<p><code>register_local_procedure(Pid::pid(), Procedure::binary(), Handler::fun((term()) -&gt; {ok, term()} | {error, term()})) -&gt; ok</code><br></p>
+<p> </p>
+</div><p><p>Register a local procedure handler (no DHT advertisement).</p>
+ 
+  This registers the handler function in the service registry so this RPC handler
+  can execute it locally when called. Unlike register_handler/2, this does NOT
+  advertise to the DHT - it's for purely local services.</p>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Opts::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="unregister_handler-1">unregister_handler/1</a></h3>
+<div class="spec">
+<p><code>unregister_handler(Service::binary() | list() | atom()) -&gt; ok | {error, term()}</code><br></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
 </html>

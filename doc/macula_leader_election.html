@@ -1,0 +1,121 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_leader_election</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_leader_election</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>Macula Leader Election using Raft Consensus (via ra library).
+
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>Macula Leader Election using Raft Consensus (via ra library).</p>
+ 
+  <p>This module provides distributed leader election for platform services.  
+It uses the ra library (Raft implementation) to achieve consensus across  
+the mesh network.</p>
+ 
+  <p>Use Cases:  
+- Single coordinator election for matchmaking  
+- Primary node selection for stateful services  
+- Distributed locking primitives</p>
+ 
+  Architecture:
+  - Uses ra (Raft) for consensus
+  - Discovers cluster members via Macula DHT
+  - Provides callbacks for leadership changes
+ 
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#get_leader-0">get_leader/0</a></td><td>Get the current leader node.</td></tr>
+<tr><td valign="top"><a href="#get_members-0">get_members/0</a></td><td>Get all cluster members.</td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#is_leader-0">is_leader/0</a></td><td>Check if this node is the leader.</td></tr>
+<tr><td valign="top"><a href="#register_callback-2">register_callback/2</a></td><td>Register a callback for leadership changes
+  Callback fun takes (IsLeader :: boolean()).</td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#unregister_callback-1">unregister_callback/1</a></td><td>Unregister a leadership callback.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="get_leader-0">get_leader/0</a></h3>
+<div class="spec">
+<p><code>get_leader() -&gt; any()</code></p>
+<p> </p>
+</div><p>Get the current leader node</p>
+
+<h3 class="function"><a name="get_members-0">get_members/0</a></h3>
+<div class="spec">
+<p><code>get_members() -&gt; any()</code></p>
+<p> </p>
+</div><p>Get all cluster members</p>
+
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(X1, From, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(Config) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="is_leader-0">is_leader/0</a></h3>
+<div class="spec">
+<p><code>is_leader() -&gt; any()</code></p>
+<p> </p>
+</div><p>Check if this node is the leader</p>
+
+<h3 class="function"><a name="register_callback-2">register_callback/2</a></h3>
+<div class="spec">
+<p><code>register_callback(CallbackId, Fun) -&gt; any()</code></p>
+<p> </p>
+</div><p>Register a callback for leadership changes
+  Callback fun takes (IsLeader :: boolean())</p>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Config) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="unregister_callback-1">unregister_callback/1</a></h3>
+<div class="spec">
+<p><code>unregister_callback(CallbackId) -&gt; any()</code></p>
+<p> </p>
+</div><p>Unregister a leadership callback</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

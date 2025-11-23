@@ -1,630 +1,95 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.8.24">
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_pubsub_discovery</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
 
+<h1>Module macula_pubsub_discovery</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+   DHT integration for finding remote subscribers.
 
-    <title>macula_pubsub_discovery — macula v0.8.24</title>
 
-    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+<h2><a name="description">Description</a></h2>
+   DHT integration for finding remote subscribers.
+   Uses Kademlia DHT to publish and discover subscriptions.
+   Wraps macula_discovery with pub/sub-specific types.
+<h2><a name="types">Data Types</a></h2>
 
-    <script defer src="dist/sidebar_items-D7A6E70D.js"></script>
-    <script defer src="docs_config.js"></script>
-    <script defer src="dist/html-DPJLHKSM.js"></script>
+<h3 class="typedecl"><a name="type-address">address()</a></h3>
+<p><code>address() = {<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-ip_address" docgen-rel="seetype" docgen-href="kernel:inet#ip_address/0">inet:ip_address()</a>, <a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>}</code></p>
 
-  </head>
-  <body>
-    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
-</script>
 
-<div class="body-wrapper">
+<h3 class="typedecl"><a name="type-dht_lookup_fun">dht_lookup_fun()</a></h3>
+<p><code>dht_lookup_fun() = fun((<a href="#type-pattern" docgen-rel="seetype" docgen-href="#pattern/0">pattern()</a>) -&gt; {ok, [<a href="#type-subscriber" docgen-rel="seetype" docgen-href="#subscriber/0">subscriber()</a>]} | {error, term()})</code></p>
 
-<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
-  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
-</button>
 
-<nav id="sidebar" class="sidebar">
+<h3 class="typedecl"><a name="type-dht_publish_fun">dht_publish_fun()</a></h3>
+<p><code>dht_publish_fun() = fun((<a href="#type-pattern" docgen-rel="seetype" docgen-href="#pattern/0">pattern()</a>, <a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, <a href="#type-address" docgen-rel="seetype" docgen-href="#address/0">address()</a>) -&gt; ok | {error, term()})</code></p>
 
-  <div class="sidebar-header">
-    <div class="sidebar-projectInfo">
 
-        <a href="readme.html" class="sidebar-projectImage">
-          <img src="assets/logo.svg" alt="macula" />
-        </a>
+<h3 class="typedecl"><a name="type-dht_unpublish_fun">dht_unpublish_fun()</a></h3>
+<p><code>dht_unpublish_fun() = fun((<a href="#type-pattern" docgen-rel="seetype" docgen-href="#pattern/0">pattern()</a>, <a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>) -&gt; ok | {error, term()})</code></p>
 
-      <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
-macula
-        </a>
-        <div class="sidebar-projectVersion" translate="no">
-          v0.8.24
-        </div>
-      </div>
-    </div>
-    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
-  </div>
-</nav>
 
-<output role="status" id="toast"></output>
+<h3 class="typedecl"><a name="type-node_id">node_id()</a></h3>
+<p><code>node_id() = binary()</code></p>
 
-<main class="content page-module" id="main" data-type="modules">
-  <div id="content" class="content-inner">
-    <div class="top-search">
-      <div class="search-settings">
-        <form class="search-bar" action="search.html">
-          <label class="search-label">
-            <span class="sr-only">Search documentation of macula</span>
-            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </label>
-          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
-            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
-          </button>
-          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
-            <i class="ri-close-line ri-lg" title="Cancel search"></i>
-          </button>
-        </form>
-        <div class="autocomplete">
-        </div>
-        <button class="icon-settings display-settings">
-          <i class="ri-settings-3-line"></i>
-          <span class="sr-only">Settings</span>
-        </button>
-      </div>
-    </div>
 
-<div id="top-content">
-  <div class="heading-with-actions top-heading">
-    <h1>
-      <span translate="no">macula_pubsub_discovery</span> 
-      <small class="app-vsn" translate="no">(macula v0.8.24)</small>
+<h3 class="typedecl"><a name="type-pattern">pattern()</a></h3>
+<p><code>pattern() = binary()</code></p>
 
-    </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L8" title="View Source" class="icon-action" rel="help">
-        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        <span class="sr-only">View Source</span>
-      </a>
+<h3 class="typedecl"><a name="type-subscriber">subscriber()</a></h3>
+<p><code>subscriber() = #{node_id := <a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, address := <a href="#type-address" docgen-rel="seetype" docgen-href="#address/0">address()</a>}</code></p>
 
-  </div>
 
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#announce-4">announce/4</a></td><td>Announce local subscription to DHT.</td></tr>
+<tr><td valign="top"><a href="#find_subscribers-2">find_subscribers/2</a></td><td>Find remote subscribers for a pattern via DHT.</td></tr>
+<tr><td valign="top"><a href="#find_with_cache-3">find_with_cache/3</a></td><td>Find subscribers with cache (default TTL: 300 seconds).</td></tr>
+<tr><td valign="top"><a href="#find_with_cache-4">find_with_cache/4</a></td><td>Find subscribers with cache and custom TTL.</td></tr>
+<tr><td valign="top"><a href="#unannounce-3">unannounce/3</a></td><td>Remove local subscription from DHT.</td></tr>
+</table>
 
-    <section id="moduledoc">
-<p>DHT integration for finding remote subscribers. Uses Kademlia DHT to publish and discover subscriptions. Wraps macula_discovery with pub/sub-specific types.</p>
-    </section>
+<h2><a name="functions">Function Details</a></h2>
 
-</div>
+<h3 class="function"><a name="announce-4">announce/4</a></h3>
+<div class="spec">
+<p><code>announce(Pattern::<a href="#type-pattern" docgen-rel="seetype" docgen-href="#pattern/0">pattern()</a>, LocalNodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, LocalAddress::<a href="#type-address" docgen-rel="seetype" docgen-href="#address/0">address()</a>, DhtPublishFun::<a href="#type-dht_publish_fun" docgen-rel="seetype" docgen-href="#dht_publish_fun/0">dht_publish_fun()</a>) -&gt; ok | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Announce local subscription to DHT.</p>
 
-  <section id="summary" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#summary">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Summary</span>
-    </h1>
-<div class="summary-types summary">
-  <h2>
-    <a href="#types">Types</a>
-  </h2>
+<h3 class="function"><a name="find_subscribers-2">find_subscribers/2</a></h3>
+<div class="spec">
+<p><code>find_subscribers(Pattern::<a href="#type-pattern" docgen-rel="seetype" docgen-href="#pattern/0">pattern()</a>, DhtLookupFun::<a href="#type-dht_lookup_fun" docgen-rel="seetype" docgen-href="#dht_lookup_fun/0">dht_lookup_fun()</a>) -&gt; {ok, [<a href="#type-subscriber" docgen-rel="seetype" docgen-href="#subscriber/0">subscriber()</a>]} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Find remote subscribers for a pattern via DHT.</p>
 
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:address/0" data-no-tooltip="" translate="no">address/0</a>
+<h3 class="function"><a name="find_with_cache-3">find_with_cache/3</a></h3>
+<div class="spec">
+<p><code>find_with_cache(Pattern::<a href="#type-pattern" docgen-rel="seetype" docgen-href="#pattern/0">pattern()</a>, Cache::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>, DhtLookupFun::<a href="#type-dht_lookup_fun" docgen-rel="seetype" docgen-href="#dht_lookup_fun/0">dht_lookup_fun()</a>) -&gt; {ok, [<a href="#type-subscriber" docgen-rel="seetype" docgen-href="#subscriber/0">subscriber()</a>], <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>} | {error, term(), <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>}</code><br></p>
+<p> </p>
+</div><p>Find subscribers with cache (default TTL: 300 seconds).</p>
 
-      </div>
+<h3 class="function"><a name="find_with_cache-4">find_with_cache/4</a></h3>
+<div class="spec">
+<p><code>find_with_cache(Pattern::<a href="#type-pattern" docgen-rel="seetype" docgen-href="#pattern/0">pattern()</a>, Cache::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>, DhtLookupFun::<a href="#type-dht_lookup_fun" docgen-rel="seetype" docgen-href="#dht_lookup_fun/0">dht_lookup_fun()</a>, TTL::pos_integer()) -&gt; {ok, [<a href="#type-subscriber" docgen-rel="seetype" docgen-href="#subscriber/0">subscriber()</a>], <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>} | {error, term(), <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>}</code><br></p>
+<p> </p>
+</div><p>Find subscribers with cache and custom TTL.</p>
 
-    </div>
+<h3 class="function"><a name="unannounce-3">unannounce/3</a></h3>
+<div class="spec">
+<p><code>unannounce(Pattern::<a href="#type-pattern" docgen-rel="seetype" docgen-href="#pattern/0">pattern()</a>, LocalNodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, DhtUnpublishFun::<a href="#type-dht_unpublish_fun" docgen-rel="seetype" docgen-href="#dht_unpublish_fun/0">dht_unpublish_fun()</a>) -&gt; ok | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Remove local subscription from DHT.</p>
+<hr>
 
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:dht_lookup_fun/0" data-no-tooltip="" translate="no">dht_lookup_fun/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:dht_publish_fun/0" data-no-tooltip="" translate="no">dht_publish_fun/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:dht_unpublish_fun/0" data-no-tooltip="" translate="no">dht_unpublish_fun/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:node_id/0" data-no-tooltip="" translate="no">node_id/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:pattern/0" data-no-tooltip="" translate="no">pattern/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:subscriber/0" data-no-tooltip="" translate="no">subscriber/0</a>
-
-      </div>
-
-    </div>
-
-</div>
-<div class="summary-functions summary">
-  <h2>
-    <a href="#functions">Functions</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#announce/4" data-no-tooltip="" translate="no">announce(Pattern, LocalNodeId, LocalAddress, DhtPublishFun)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Announce local subscription to DHT.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#find_subscribers/2" data-no-tooltip="" translate="no">find_subscribers(Pattern, DhtLookupFun)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Find remote subscribers for a pattern via DHT.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#find_with_cache/3" data-no-tooltip="" translate="no">find_with_cache(Pattern, Cache, DhtLookupFun)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Find subscribers with cache (default TTL: 300 seconds).</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#find_with_cache/4" data-no-tooltip="" translate="no">find_with_cache(Pattern, Cache, DhtLookupFun, TTL)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Find subscribers with cache and custom TTL.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#unannounce/3" data-no-tooltip="" translate="no">unannounce(Pattern, LocalNodeId, DhtUnpublishFun)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Remove local subscription from DHT.</p></div>
-
-    </div>
-
-</div>
-
-  </section>
-
-
-  <section id="types" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#types">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Types</span>
-    </h1>
-    <div class="types-list">
-<section class="detail" id="t:address/0">
-
-  <div class="detail-header">
-    <a href="#t:address/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">address/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L22" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> address() :: {<a href="https://www.erlang.org/doc/apps/kernel/inet.html#t:ip_address/0">inet:ip_address</a>(), <a href="https://www.erlang.org/doc/apps/kernel/inet.html#t:port_number/0">inet:port_number</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:dht_lookup_fun/0">
-
-  <div class="detail-header">
-    <a href="#t:dht_lookup_fun/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">dht_lookup_fun/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L25" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> dht_lookup_fun() :: fun((<a href="#t:pattern/0">pattern</a>()) -> {ok, [<a href="#t:subscriber/0">subscriber</a>()]} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}).</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:dht_publish_fun/0">
-
-  <div class="detail-header">
-    <a href="#t:dht_publish_fun/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">dht_publish_fun/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L26" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> dht_publish_fun() :: fun((<a href="#t:pattern/0">pattern</a>(), <a href="#t:node_id/0">node_id</a>(), <a href="#t:address/0">address</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}).</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:dht_unpublish_fun/0">
-
-  <div class="detail-header">
-    <a href="#t:dht_unpublish_fun/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">dht_unpublish_fun/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L27" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> dht_unpublish_fun() :: fun((<a href="#t:pattern/0">pattern</a>(), <a href="#t:node_id/0">node_id</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}).</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:node_id/0">
-
-  <div class="detail-header">
-    <a href="#t:node_id/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">node_id/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L21" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> node_id() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:pattern/0">
-
-  <div class="detail-header">
-    <a href="#t:pattern/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">pattern/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L20" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> pattern() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:subscriber/0">
-
-  <div class="detail-header">
-    <a href="#t:subscriber/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">subscriber/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L23" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> subscriber() :: #{node_id := <a href="#t:node_id/0">node_id</a>(), address := <a href="#t:address/0">address</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-
-    </div>
-  </section>
-
-  <section id="functions" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#functions">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Functions</span>
-    </h1>
-    <div class="functions-list">
-<section class="detail" id="announce/4">
-
-  <div class="detail-header">
-    <a href="#announce/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">announce(Pattern, LocalNodeId, LocalAddress, DhtPublishFun)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L62" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> announce(<a href="#t:pattern/0">pattern</a>(), <a href="#t:node_id/0">node_id</a>(), <a href="#t:address/0">address</a>(), <a href="#t:dht_publish_fun/0">dht_publish_fun</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Announce local subscription to DHT.</p>
-  </section>
-</section>
-<section class="detail" id="find_subscribers/2">
-
-  <div class="detail-header">
-    <a href="#find_subscribers/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">find_subscribers(Pattern, DhtLookupFun)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L45" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> find_subscribers(<a href="#t:pattern/0">pattern</a>(), <a href="#t:dht_lookup_fun/0">dht_lookup_fun</a>()) -> {ok, [<a href="#t:subscriber/0">subscriber</a>()]} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Find remote subscribers for a pattern via DHT.</p>
-  </section>
-</section>
-<section class="detail" id="find_with_cache/3">
-
-  <div class="detail-header">
-    <a href="#find_with_cache/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">find_with_cache(Pattern, Cache, DhtLookupFun)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L51" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> find_with_cache(<a href="#t:pattern/0">pattern</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>(), <a href="#t:dht_lookup_fun/0">dht_lookup_fun</a>()) ->
-                         {ok, [<a href="#t:subscriber/0">subscriber</a>()], <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()} |
-                         {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()}.</pre>
-
-      </div>
-
-<p>Find subscribers with cache (default TTL: 300 seconds).</p>
-  </section>
-</section>
-<section class="detail" id="find_with_cache/4">
-
-  <div class="detail-header">
-    <a href="#find_with_cache/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">find_with_cache(Pattern, Cache, DhtLookupFun, TTL)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L57" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> find_with_cache(<a href="#t:pattern/0">pattern</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>(), <a href="#t:dht_lookup_fun/0">dht_lookup_fun</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) ->
-                         {ok, [<a href="#t:subscriber/0">subscriber</a>()], <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()} |
-                         {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()}.</pre>
-
-      </div>
-
-<p>Find subscribers with cache and custom TTL.</p>
-  </section>
-</section>
-<section class="detail" id="unannounce/3">
-
-  <div class="detail-header">
-    <a href="#unannounce/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">unannounce(Pattern, LocalNodeId, DhtUnpublishFun)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_pubsub_system/macula_pubsub_discovery.erl#L71" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> unannounce(<a href="#t:pattern/0">pattern</a>(), <a href="#t:node_id/0">node_id</a>(), <a href="#t:dht_unpublish_fun/0">dht_unpublish_fun</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Remove local subscription from DHT.</p>
-  </section>
-</section>
-
-    </div>
-  </section>
-
-    <footer class="footer">
-      <p>
-
-          <span class="line">
-            <a href="https://hex.pm/packages/macula/0.8.24" class="footer-hex-package">Hex Package</a>
-
-            <a href="https://preview.hex.pm/preview/macula/0.8.24">Hex Preview</a>
-
-          </span>
-
-        <span class="line">
-          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
-            Search HexDocs
-          </button>
-
-            <a href="macula.epub" title="ePub version">
-              Download ePub version
-            </a>
-
-        </span>
-      </p>
-
-      <p class="built-using">
-        Built using
-        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
-
-          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
-
-      </p>
-
-    </footer>
-  </div>
-</main>
-</div>
-
-  </body>
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
 </html>

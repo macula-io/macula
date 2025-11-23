@@ -1,0 +1,7 @@
+#{id => test_realm_test_node_5378,
+  machine => {module,macula_leader_machine,#{}},
+  cluster_name => macula_platform_cluster,uid => <<"MACULAMPDIV32VAYMR">>,
+  log_init_args => #{uid => <<"MACULAMPDIV32VAYMR">>},
+  initial_members => [test_realm_test_node_5378],
+  broadcast_time => 100,tick_timeout => 1000,
+  install_snap_rpc_timeout => 120000,await_condition_timeout => 30000}.

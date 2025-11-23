@@ -1,0 +1,7 @@
+#{id => test_realm_test_node_3,
+  machine => {module,ra_fifo,#{}},
+  cluster_name => macula_platform_cluster,uid => <<"test_realm_test_node_3">>,
+  log_init_args => #{uid => <<"test_realm_test_node_3">>},
+  initial_members => [test_realm_test_node_3],
+  broadcast_time => 100,tick_timeout => 1000,
+  install_snap_rpc_timeout => 120000,await_condition_timeout => 30000}.

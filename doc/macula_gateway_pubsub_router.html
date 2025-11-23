@@ -1,209 +1,49 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.8.24">
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_gateway_pubsub_router</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_gateway_pubsub_router</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+Macula Gateway Pub/Sub Router - DHT-Routed Message Distribution.
 
 
-    <title>macula_gateway_pubsub_router — macula v0.8.24</title>
+<h2><a name="description">Description</a></h2><p>   
+Macula Gateway Pub/Sub Router - DHT-Routed Message Distribution</p>
+  
+   <p>Handles distribution of pub/sub messages to both local and remote   
+subscribers using multi-hop Kademlia DHT routing (v0.7.8+).</p>
+  
+   <p>Responsibilities:     
+- Deliver messages to local subscribers via QUIC streams     
+- Query DHT for remote subscribers     
+- Route messages via DHT multi-hop (pubsub_route protocol)     
+- Wrap PUBLISH messages in pubsub_route envelopes</p>
+  
+   Extracted from macula_gateway.erl (v0.7.9) for better separation of concerns.
+  
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#distribute-5">distribute/5</a></td><td>Distribute pub/sub message to both local and remote subscribers.</td></tr>
+</table>
 
-    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+<h2><a name="functions">Function Details</a></h2>
 
-    <script defer src="dist/sidebar_items-D7A6E70D.js"></script>
-    <script defer src="docs_config.js"></script>
-    <script defer src="dist/html-DPJLHKSM.js"></script>
+<h3 class="function"><a name="distribute-5">distribute/5</a></h3>
+<div class="spec">
+<p><code>distribute(LocalSubscribers::[<a href="/home/rl/work/github.com/macula-io/quicer/doc/quicer.html#type-stream_handle" docgen-rel="seetype" docgen-href="quicer:quicer#stream_handle/0">quicer:stream_handle()</a>], PubMsg::map(), LocalNodeId::binary(), Mesh::pid(), Clients::pid()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Distribute pub/sub message to both local and remote subscribers.
+  Uses DHT routing for remote subscribers (multi-hop Kademlia).
+  For connected clients, uses existing bidirectional streams instead of mesh connections.</p>
+<hr>
 
-  </head>
-  <body>
-    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
-</script>
-
-<div class="body-wrapper">
-
-<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
-  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
-</button>
-
-<nav id="sidebar" class="sidebar">
-
-  <div class="sidebar-header">
-    <div class="sidebar-projectInfo">
-
-        <a href="readme.html" class="sidebar-projectImage">
-          <img src="assets/logo.svg" alt="macula" />
-        </a>
-
-      <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
-macula
-        </a>
-        <div class="sidebar-projectVersion" translate="no">
-          v0.8.24
-        </div>
-      </div>
-    </div>
-    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
-  </div>
-</nav>
-
-<output role="status" id="toast"></output>
-
-<main class="content page-module" id="main" data-type="modules">
-  <div id="content" class="content-inner">
-    <div class="top-search">
-      <div class="search-settings">
-        <form class="search-bar" action="search.html">
-          <label class="search-label">
-            <span class="sr-only">Search documentation of macula</span>
-            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </label>
-          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
-            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
-          </button>
-          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
-            <i class="ri-close-line ri-lg" title="Cancel search"></i>
-          </button>
-        </form>
-        <div class="autocomplete">
-        </div>
-        <button class="icon-settings display-settings">
-          <i class="ri-settings-3-line"></i>
-          <span class="sr-only">Settings</span>
-        </button>
-      </div>
-    </div>
-
-<div id="top-content">
-  <div class="heading-with-actions top-heading">
-    <h1>
-      <span translate="no">macula_gateway_pubsub_router</span> 
-      <small class="app-vsn" translate="no">(macula v0.8.24)</small>
-
-    </h1>
-
-      <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway_system/macula_gateway_pubsub_router.erl#L18" title="View Source" class="icon-action" rel="help">
-        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        <span class="sr-only">View Source</span>
-      </a>
-
-  </div>
-
-
-    <section id="moduledoc">
-<p>Macula Gateway Pub/Sub Router - DHT-Routed Message Distribution</p><p>Handles distribution of pub/sub messages to both local and remote subscribers using multi-hop Kademlia DHT routing (v0.7.8+).</p><p>Responsibilities: - Deliver messages to local subscribers via QUIC streams - Query DHT for remote subscribers - Route messages via DHT multi-hop (pubsub_route protocol) - Wrap PUBLISH messages in pubsub_route envelopes</p><p>Extracted from macula_gateway.erl (v0.7.9) for better separation of concerns.</p>
-    </section>
-
-</div>
-
-  <section id="summary" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#summary">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Summary</span>
-    </h1>
-<div class="summary-functions summary">
-  <h2>
-    <a href="#functions">Functions</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#distribute/5" data-no-tooltip="" translate="no">distribute(LocalSubscribers, PubMsg, LocalNodeId, Mesh, Clients)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Distribute pub/sub message to both local and remote subscribers. Uses DHT routing for remote subscribers (multi-hop Kademlia). For connected clients, uses existing bidirectional streams instead of mesh connections.</p></div>
-
-    </div>
-
-</div>
-
-  </section>
-
-
-  <section id="functions" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#functions">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Functions</span>
-    </h1>
-    <div class="functions-list">
-<section class="detail" id="distribute/5">
-
-  <div class="detail-header">
-    <a href="#distribute/5" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">distribute(LocalSubscribers, PubMsg, LocalNodeId, Mesh, Clients)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.8.24/src/macula_gateway_system/macula_gateway_pubsub_router.erl#L49" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> distribute(LocalSubscribers :: [<a href="https://hexdocs.pm/quicer/quicer.html#t:stream_handle/0">quicer:stream_handle</a>()],
-                 PubMsg :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(),
-                 LocalNodeId :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
-                 Mesh :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(),
-                 Clients :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) ->
-                    ok.</pre>
-
-      </div>
-
-<p>Distribute pub/sub message to both local and remote subscribers. Uses DHT routing for remote subscribers (multi-hop Kademlia). For connected clients, uses existing bidirectional streams instead of mesh connections.</p>
-  </section>
-</section>
-
-    </div>
-  </section>
-
-    <footer class="footer">
-      <p>
-
-          <span class="line">
-            <a href="https://hex.pm/packages/macula/0.8.24" class="footer-hex-package">Hex Package</a>
-
-            <a href="https://preview.hex.pm/preview/macula/0.8.24">Hex Preview</a>
-
-          </span>
-
-        <span class="line">
-          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
-            Search HexDocs
-          </button>
-
-            <a href="macula.epub" title="ePub version">
-              Download ePub version
-            </a>
-
-        </span>
-      </p>
-
-      <p class="built-using">
-        Built using
-        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
-
-          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
-
-      </p>
-
-    </footer>
-  </div>
-</main>
-</div>
-
-  </body>
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
 </html>
