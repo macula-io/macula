@@ -79,7 +79,7 @@ test_connect_requires_realm(_Config) ->
     %% WHEN: Attempting to connect
     %% THEN: Should fail with missing_required_option
     ?assertMatch({error, {missing_required_option, realm}},
-                 catch macula_client:connect(Url, Opts)).
+                 catch macula:connect(Url, Opts)).
 
 test_connect_with_valid_options(_Config) ->
     %% GIVEN: Valid URL and options with realm
@@ -87,12 +87,12 @@ test_connect_with_valid_options(_Config) ->
     Opts = #{realm => <<"test.realm">>},
 
     %% WHEN: Attempting to connect
-    Result = macula_client:connect(Url, Opts),
+    Result = macula:connect(Url, Opts),
 
     %% THEN: Should return a client pid (even if connection fails, process starts)
     case Result of
         {ok, Client} when is_pid(Client) ->
-            macula_client:disconnect(Client),
+            macula:disconnect(Client),
             ok;
         {error, _Reason} ->
             %% Connection may fail if no server running, but API should work
@@ -104,7 +104,7 @@ test_disconnect(_Config) ->
     Client = spawn(fun() -> timer:sleep(1000) end),
 
     %% WHEN: Disconnecting
-    Result = macula_client:disconnect(Client),
+    Result = macula:disconnect(Client),
 
     %% THEN: Should return ok
     ?assertEqual(ok, Result).
@@ -119,7 +119,7 @@ test_publish_requires_connection(_Config) ->
     timer:sleep(10), %% Ensure process is dead
 
     %% WHEN: Attempting to publish
-    Result = (catch macula_client:publish(DeadPid, <<"test.topic">>, #{data => <<"test">>})),
+    Result = (catch macula:publish(DeadPid, <<"test.topic">>, #{data => <<"test">>})),
 
     %% THEN: Should fail (process is dead)
     ?assertMatch({'EXIT', _}, Result).
@@ -133,7 +133,7 @@ test_publish_with_map_data(_Config) ->
 
     %% Should not crash on API call
     %% (will fail at gen_server:call but API accepts the types)
-    Result = (catch macula_client:publish(Client, Topic, Data)),
+    Result = (catch macula:publish(Client, Topic, Data)),
     ?assertMatch({'EXIT', {noproc, _}}, Result). %% Expected: process not a gen_server
 
 test_publish_with_binary_data(_Config) ->
@@ -143,7 +143,7 @@ test_publish_with_binary_data(_Config) ->
     Data = <<"binary payload">>,
 
     %% Should not crash on API call
-    Result = (catch macula_client:publish(Client, Topic, Data)),
+    Result = (catch macula:publish(Client, Topic, Data)),
     ?assertMatch({'EXIT', {noproc, _}}, Result). %% Expected: process not a gen_server
 
 test_subscribe_requires_connection(_Config) ->
@@ -153,7 +153,7 @@ test_subscribe_requires_connection(_Config) ->
 
     %% WHEN: Attempting to subscribe
     Callback = fun(_Event) -> ok end,
-    Result = (catch macula_client:subscribe(DeadPid, <<"test.topic">>, Callback)),
+    Result = (catch macula:subscribe(DeadPid, <<"test.topic">>, Callback)),
 
     %% THEN: Should fail
     ?assertMatch({'EXIT', _}, Result).
@@ -168,7 +168,7 @@ test_subscribe_with_callback(_Config) ->
     end,
 
     %% Should accept 1-arity function
-    Result = (catch macula_client:subscribe(Client, Topic, Callback)),
+    Result = (catch macula:subscribe(Client, Topic, Callback)),
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
 test_unsubscribe(_Config) ->
@@ -176,7 +176,7 @@ test_unsubscribe(_Config) ->
     Client = self(),
     SubRef = make_ref(),
 
-    Result = (catch macula_client:unsubscribe(Client, SubRef)),
+    Result = (catch macula:unsubscribe(Client, SubRef)),
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
 %%%===================================================================
@@ -189,7 +189,7 @@ test_call_requires_connection(_Config) ->
     timer:sleep(10),
 
     %% WHEN: Attempting RPC call
-    Result = (catch macula_client:call(DeadPid, <<"test.procedure">>, #{})),
+    Result = (catch macula:call(DeadPid, <<"test.procedure">>, #{})),
 
     %% THEN: Should fail
     ?assertMatch({'EXIT', _}, Result).
@@ -201,5 +201,5 @@ test_call_with_timeout(_Config) ->
     Args = #{arg1 => <<"value">>},
     Opts = #{timeout => 10000},
 
-    Result = (catch macula_client:call(Client, Procedure, Args, Opts)),
+    Result = (catch macula:call(Client, Procedure, Args, Opts)),
     ?assertMatch({'EXIT', {noproc, _}}, Result).

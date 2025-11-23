@@ -1,102 +1,562 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_pubsub_cache</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_pubsub_cache</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   LRU cache for remote subscriber lists.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.9.2">
 
 
-<h2><a name="description">Description</a></h2>
-   LRU cache for remote subscriber lists.
-   Caches DHT query results to avoid repeated lookups.
-   Wraps macula_cache with subscriber-specific logic.
-<h2><a name="types">Data Types</a></h2>
+    <title>macula_pubsub_cache — macula v0.9.2</title>
 
-<h3 class="typedecl"><a name="type-cache">cache()</a></h3>
-<p><code>cache() = <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a></code></p>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-91483A11.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="readme.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.9.2
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_pubsub_cache</span> 
+      <small class="app-vsn" translate="no">(macula v0.9.2)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_pubsub_system/macula_pubsub_cache.erl#L8" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#clear-1">clear/1</a></td><td>Clear all entries.</td></tr>
-<tr><td valign="top"><a href="#get-2">get/2</a></td><td>Get entry from cache.</td></tr>
-<tr><td valign="top"><a href="#invalidate-2">invalidate/2</a></td><td>Invalidate (remove) entry.</td></tr>
-<tr><td valign="top"><a href="#is_expired-3">is_expired/3</a></td><td>Check if entry is expired based on TTL.</td></tr>
-<tr><td valign="top"><a href="#max_size-1">max_size/1</a></td><td>Get max size.</td></tr>
-<tr><td valign="top"><a href="#new-1">new/1</a></td><td>Create new cache with max size.</td></tr>
-<tr><td valign="top"><a href="#put-3">put/3</a></td><td>Put entry in cache.</td></tr>
-<tr><td valign="top"><a href="#put_with_timestamp-4">put_with_timestamp/4</a></td><td>Put entry with custom timestamp (for testing).</td></tr>
-<tr><td valign="top"><a href="#size-1">size/1</a></td><td>Get number of entries.</td></tr>
-</table>
+    <section id="moduledoc">
+<p>LRU cache for remote subscriber lists. Caches DHT query results to avoid repeated lookups. Wraps macula_cache with subscriber-specific logic.</p>
+    </section>
 
-<h2><a name="functions">Function Details</a></h2>
+</div>
 
-<h3 class="function"><a name="clear-1">clear/1</a></h3>
-<div class="spec">
-<p><code>clear(Cache::<a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a>) -&gt; <a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a></code><br></p>
-<p> </p>
-</div><p>Clear all entries.</p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
 
-<h3 class="function"><a name="get-2">get/2</a></h3>
-<div class="spec">
-<p><code>get(Cache::<a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a>, Pattern::binary()) -&gt; {ok, [map()], <a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a>} | not_found</code><br></p>
-<p> </p>
-</div><p>Get entry from cache.
-  Returns {ok, Subscribers, UpdatedCache} or not_found.
-  The updated cache has the entry moved to front (LRU).</p>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:cache/0" data-no-tooltip="" translate="no">cache/0</a>
 
-<h3 class="function"><a name="invalidate-2">invalidate/2</a></h3>
-<div class="spec">
-<p><code>invalidate(Cache::<a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a>, Pattern::binary()) -&gt; <a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a></code><br></p>
-<p> </p>
-</div><p>Invalidate (remove) entry.</p>
+      </div>
 
-<h3 class="function"><a name="is_expired-3">is_expired/3</a></h3>
-<div class="spec">
-<p><code>is_expired(Cache::<a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a>, Pattern::binary(), TTL::pos_integer()) -&gt; boolean()</code><br></p>
-<p> </p>
-</div><p>Check if entry is expired based on TTL.
-  This checks if entry exists and its age exceeds TTL.</p>
+    </div>
 
-<h3 class="function"><a name="max_size-1">max_size/1</a></h3>
-<div class="spec">
-<p><code>max_size(Cache::<a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a>) -&gt; pos_integer()</code><br></p>
-<p> </p>
-</div><p>Get max size.</p>
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
 
-<h3 class="function"><a name="new-1">new/1</a></h3>
-<div class="spec">
-<p><code>new(MaxSize::pos_integer()) -&gt; <a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a></code><br></p>
-<p> </p>
-</div><p>Create new cache with max size.</p>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#clear/1" data-no-tooltip="" translate="no">clear(Cache)</a>
 
-<h3 class="function"><a name="put-3">put/3</a></h3>
-<div class="spec">
-<p><code>put(Cache::<a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a>, Pattern::binary(), Subscribers::[map()]) -&gt; <a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a></code><br></p>
-<p> </p>
-</div><p>Put entry in cache.</p>
+      </div>
 
-<h3 class="function"><a name="put_with_timestamp-4">put_with_timestamp/4</a></h3>
-<div class="spec">
-<p><code>put_with_timestamp(Cache::<a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a>, Pattern::binary(), Subscribers::[map()], Timestamp::integer()) -&gt; <a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a></code><br></p>
-<p> </p>
-</div><p>Put entry with custom timestamp (for testing).</p>
+        <div class="summary-synopsis"><p>Clear all entries.</p></div>
 
-<h3 class="function"><a name="size-1">size/1</a></h3>
-<div class="spec">
-<p><code>size(Cache::<a href="#type-cache" docgen-rel="seetype" docgen-href="#cache/0">cache()</a>) -&gt; non_neg_integer()</code><br></p>
-<p> </p>
-</div><p>Get number of entries.</p>
-<hr>
+    </div>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get/2" data-no-tooltip="" translate="no">get(Cache, Pattern)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get entry from cache. Returns {ok, Subscribers, UpdatedCache} or not_found. The updated cache has the entry moved to front (LRU).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#invalidate/2" data-no-tooltip="" translate="no">invalidate(Cache, Pattern)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Invalidate (remove) entry.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#is_expired/3" data-no-tooltip="" translate="no">is_expired(Cache, Pattern, TTL)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if entry is expired based on TTL. This checks if entry exists and its age exceeds TTL.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#max_size/1" data-no-tooltip="" translate="no">max_size(Cache)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get max size.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#new/1" data-no-tooltip="" translate="no">new(MaxSize)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Create new cache with max size.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#put/3" data-no-tooltip="" translate="no">put(Cache, Pattern, Subscribers)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Put entry in cache.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#put_with_timestamp/4" data-no-tooltip="" translate="no">put_with_timestamp(Cache, Pattern, Subscribers, Timestamp)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Put entry with custom timestamp (for testing).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#size/1" data-no-tooltip="" translate="no">size(Cache)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get number of entries.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:cache/0">
+
+  <div class="detail-header">
+    <a href="#t:cache/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">cache/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_pubsub_system/macula_pubsub_cache.erl#L24" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> cache() :: <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="clear/1">
+
+  <div class="detail-header">
+    <a href="#clear/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">clear(Cache)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_pubsub_system/macula_pubsub_cache.erl#L61" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> clear(<a href="#t:cache/0">cache</a>()) -> <a href="#t:cache/0">cache</a>().</pre>
+
+      </div>
+
+<p>Clear all entries.</p>
+  </section>
+</section>
+<section class="detail" id="get/2">
+
+  <div class="detail-header">
+    <a href="#get/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get(Cache, Pattern)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_pubsub_system/macula_pubsub_cache.erl#L51" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get(<a href="#t:cache/0">cache</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()], <a href="#t:cache/0">cache</a>()} | not_found.</pre>
+
+      </div>
+
+<p>Get entry from cache. Returns {ok, Subscribers, UpdatedCache} or not_found. The updated cache has the entry moved to front (LRU).</p>
+  </section>
+</section>
+<section class="detail" id="invalidate/2">
+
+  <div class="detail-header">
+    <a href="#invalidate/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">invalidate(Cache, Pattern)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_pubsub_system/macula_pubsub_cache.erl#L56" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> invalidate(<a href="#t:cache/0">cache</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> <a href="#t:cache/0">cache</a>().</pre>
+
+      </div>
+
+<p>Invalidate (remove) entry.</p>
+  </section>
+</section>
+<section class="detail" id="is_expired/3">
+
+  <div class="detail-header">
+    <a href="#is_expired/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">is_expired(Cache, Pattern, TTL)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_pubsub_system/macula_pubsub_cache.erl#L67" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> is_expired(<a href="#t:cache/0">cache</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+
+      </div>
+
+<p>Check if entry is expired based on TTL. This checks if entry exists and its age exceeds TTL.</p>
+  </section>
+</section>
+<section class="detail" id="max_size/1">
+
+  <div class="detail-header">
+    <a href="#max_size/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">max_size(Cache)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_pubsub_system/macula_pubsub_cache.erl#L92" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> max_size(<a href="#t:cache/0">cache</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>().</pre>
+
+      </div>
+
+<p>Get max size.</p>
+  </section>
+</section>
+<section class="detail" id="new/1">
+
+  <div class="detail-header">
+    <a href="#new/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">new(MaxSize)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_pubsub_system/macula_pubsub_cache.erl#L33" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> new(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> <a href="#t:cache/0">cache</a>().</pre>
+
+      </div>
+
+<p>Create new cache with max size.</p>
+  </section>
+</section>
+<section class="detail" id="put/3">
+
+  <div class="detail-header">
+    <a href="#put/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">put(Cache, Pattern, Subscribers)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_pubsub_system/macula_pubsub_cache.erl#L38" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> put(<a href="#t:cache/0">cache</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()]) -> <a href="#t:cache/0">cache</a>().</pre>
+
+      </div>
+
+<p>Put entry in cache.</p>
+  </section>
+</section>
+<section class="detail" id="put_with_timestamp/4">
+
+  <div class="detail-header">
+    <a href="#put_with_timestamp/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">put_with_timestamp(Cache, Pattern, Subscribers, Timestamp)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_pubsub_system/macula_pubsub_cache.erl#L44" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> put_with_timestamp(<a href="#t:cache/0">cache</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()], <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>()) -> <a href="#t:cache/0">cache</a>().</pre>
+
+      </div>
+
+<p>Put entry with custom timestamp (for testing).</p>
+  </section>
+</section>
+<section class="detail" id="size/1">
+
+  <div class="detail-header">
+    <a href="#size/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">size(Cache)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_pubsub_system/macula_pubsub_cache.erl#L87" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> size(<a href="#t:cache/0">cache</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>().</pre>
+
+      </div>
+
+<p>Get number of entries.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.9.2" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.9.2">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

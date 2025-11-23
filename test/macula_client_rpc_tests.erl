@@ -59,7 +59,7 @@ test_call_map_args() ->
     %% THEN: API should accept map arguments
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_client:call(Client, Procedure, Args)),
+    Result = (catch macula:call(Client, Procedure, Args)),
 
     %% Should fail with noproc (not badarg - type is correct)
     ?assertMatch({'EXIT', {noproc, _}}, Result).
@@ -73,7 +73,7 @@ test_call_list_args() ->
     %% THEN: API should accept list arguments
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_client:call(Client, Procedure, Args)),
+    Result = (catch macula:call(Client, Procedure, Args)),
 
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
@@ -86,7 +86,7 @@ test_call_binary_args() ->
     %% THEN: API should accept binary arguments
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_client:call(Client, Procedure, Args)),
+    Result = (catch macula:call(Client, Procedure, Args)),
 
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
@@ -96,7 +96,7 @@ test_call_disconnected() ->
     timer:sleep(10), %% Ensure dead
 
     %% WHEN: Attempting RPC call
-    Result = (catch macula_client:call(Client, <<"test.proc">>, #{})),
+    Result = (catch macula:call(Client, <<"test.proc">>, #{})),
 
     %% THEN: Should fail
     ?assertMatch({'EXIT', _}, Result).
@@ -110,7 +110,7 @@ test_call_empty_args() ->
     %% THEN: API should accept empty map
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_client:call(Client, Procedure, Args)),
+    Result = (catch macula:call(Client, Procedure, Args)),
 
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
@@ -128,7 +128,7 @@ test_call_timeout_option() ->
     %% THEN: API should accept timeout option
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_client:call(Client, Procedure, Args, Opts)),
+    Result = (catch macula:call(Client, Procedure, Args, Opts)),
 
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
@@ -172,7 +172,7 @@ test_call_timeout_triggers() ->
     Args = #{},
     Opts = #{timeout => 100}, %% Very short timeout
 
-    Result = (catch macula_client:call(Client, Procedure, Args, Opts)),
+    Result = (catch macula:call(Client, Procedure, Args, Opts)),
     ?assertMatch({'EXIT', {noproc, _}}, Result).
 
 %%%===================================================================
@@ -189,13 +189,13 @@ test_concurrent_calls() ->
     %% Make multiple calls concurrently
     Calls = [
         spawn(fun() ->
-            (catch macula_client:call(Client, <<"proc1">>, #{}))
+            (catch macula:call(Client, <<"proc1">>, #{}))
         end),
         spawn(fun() ->
-            (catch macula_client:call(Client, <<"proc2">>, #{}))
+            (catch macula:call(Client, <<"proc2">>, #{}))
         end),
         spawn(fun() ->
-            (catch macula_client:call(Client, <<"proc3">>, #{}))
+            (catch macula:call(Client, <<"proc3">>, #{}))
         end)
     ],
 
@@ -240,7 +240,7 @@ test_procedure_names() ->
     timer:sleep(10), %% Ensure dead
 
     lists:foreach(fun(Proc) ->
-        Result = (catch macula_client:call(Client, Proc, #{})),
+        Result = (catch macula:call(Client, Proc, #{})),
         ?assertMatch({'EXIT', {noproc, _}}, Result)
     end, Procedures).
 
@@ -277,7 +277,7 @@ test_complex_args_encoding() ->
     %% WHEN: Making call with complex args
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_client:call(Client, Procedure, Args)),
+    Result = (catch macula:call(Client, Procedure, Args)),
 
     %% THEN: Should not crash with badarg (type is valid)
     ?assertMatch({'EXIT', {noproc, _}}, Result).
@@ -295,7 +295,7 @@ test_invalid_procedure_type() ->
     %% THEN: Should fail with function_clause or badarg
     Client = spawn(fun() -> ok end),
     timer:sleep(10), %% Ensure dead
-    Result = (catch macula_client:call(Client, Procedure, Args)),
+    Result = (catch macula:call(Client, Procedure, Args)),
 
     %% Should fail with type error, not noproc
     ?assertMatch({'EXIT', {function_clause, _}}, Result).

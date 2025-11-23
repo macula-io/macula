@@ -1,111 +1,639 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_routing_bucket</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_routing_bucket</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   K-bucket for Kademlia routing table.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.9.2">
 
 
-<h2><a name="description">Description</a></h2>
-   K-bucket for Kademlia routing table.
-   Stores up to k nodes with LRU eviction policy.
-<h2><a name="types">Data Types</a></h2>
+    <title>macula_routing_bucket — macula v0.9.2</title>
 
-<h3 class="typedecl"><a name="type-bucket">bucket()</a></h3>
-<p><code>bucket() = #{capacity := pos_integer(), nodes := [<a href="#type-node_info" docgen-rel="seetype" docgen-href="#node_info/0">node_info()</a>]}</code></p>
-<p> Ordered: head = oldest, tail = most recent</p>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-<h3 class="typedecl"><a name="type-node_info">node_info()</a></h3>
-<p><code>node_info() = #{node_id := binary(), address := {<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-ip_address" docgen-rel="seetype" docgen-href="kernel:inet#ip_address/0">inet:ip_address()</a>, <a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>}, last_seen =&gt; integer()}</code></p>
-<p> Optional timestamp</p>
+    <script defer src="dist/sidebar_items-91483A11.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_node-2">add_node/2</a></td><td>Add a node to the bucket.</td></tr>
-<tr><td valign="top"><a href="#capacity-1">capacity/1</a></td><td>Get bucket capacity.</td></tr>
-<tr><td valign="top"><a href="#find_closest-3">find_closest/3</a></td><td>Find n closest nodes to target (sorted by XOR distance).</td></tr>
-<tr><td valign="top"><a href="#find_node-2">find_node/2</a></td><td>Find a node by ID.</td></tr>
-<tr><td valign="top"><a href="#get_nodes-1">get_nodes/1</a></td><td>Get all nodes in the bucket (ordered: oldest first).</td></tr>
-<tr><td valign="top"><a href="#has_node-2">has_node/2</a></td><td>Check if bucket contains node.</td></tr>
-<tr><td valign="top"><a href="#new-1">new/1</a></td><td>Create a new bucket with capacity k.</td></tr>
-<tr><td valign="top"><a href="#remove_node-2">remove_node/2</a></td><td>Remove a node from the bucket.</td></tr>
-<tr><td valign="top"><a href="#size-1">size/1</a></td><td>Get number of nodes in bucket.</td></tr>
-<tr><td valign="top"><a href="#update_timestamp-2">update_timestamp/2</a></td><td>Update node's last_seen timestamp (moves to tail).</td></tr>
-</table>
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
 
-<h2><a name="functions">Function Details</a></h2>
+<div class="body-wrapper">
 
-<h3 class="function"><a name="add_node-2">add_node/2</a></h3>
-<div class="spec">
-<p><code>add_node(Bucket::<a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a>, NodeInfo::<a href="#type-node_info" docgen-rel="seetype" docgen-href="#node_info/0">node_info()</a>) -&gt; <a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a> | {error, bucket_full}</code><br></p>
-<p> </p>
-</div><p>Add a node to the bucket.
-  If node exists, move to tail (most recent).
-  If bucket full, return {error, bucket_full}.</p>
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
 
-<h3 class="function"><a name="capacity-1">capacity/1</a></h3>
-<div class="spec">
-<p><code>capacity(X1::<a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a>) -&gt; pos_integer()</code><br></p>
-<p> </p>
-</div><p>Get bucket capacity.</p>
+<nav id="sidebar" class="sidebar">
 
-<h3 class="function"><a name="find_closest-3">find_closest/3</a></h3>
-<div class="spec">
-<p><code>find_closest(X1::<a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a>, Target::binary(), N::pos_integer()) -&gt; [<a href="#type-node_info" docgen-rel="seetype" docgen-href="#node_info/0">node_info()</a>]</code><br></p>
-<p> </p>
-</div><p>Find n closest nodes to target (sorted by XOR distance).</p>
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
 
-<h3 class="function"><a name="find_node-2">find_node/2</a></h3>
-<div class="spec">
-<p><code>find_node(X1::<a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a>, NodeId::binary()) -&gt; {ok, <a href="#type-node_info" docgen-rel="seetype" docgen-href="#node_info/0">node_info()</a>} | not_found</code><br></p>
-<p> </p>
-</div><p>Find a node by ID.</p>
+        <a href="readme.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
 
-<h3 class="function"><a name="get_nodes-1">get_nodes/1</a></h3>
-<div class="spec">
-<p><code>get_nodes(X1::<a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a>) -&gt; [<a href="#type-node_info" docgen-rel="seetype" docgen-href="#node_info/0">node_info()</a>]</code><br></p>
-<p> </p>
-</div><p>Get all nodes in the bucket (ordered: oldest first).</p>
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.9.2
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
 
-<h3 class="function"><a name="has_node-2">has_node/2</a></h3>
-<div class="spec">
-<p><code>has_node(X1::<a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a>, NodeId::binary()) -&gt; boolean()</code><br></p>
-<p> </p>
-</div><p>Check if bucket contains node.</p>
+<output role="status" id="toast"></output>
 
-<h3 class="function"><a name="new-1">new/1</a></h3>
-<div class="spec">
-<p><code>new(Capacity::pos_integer()) -&gt; <a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a></code><br></p>
-<p> </p>
-</div><p>Create a new bucket with capacity k.</p>
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
 
-<h3 class="function"><a name="remove_node-2">remove_node/2</a></h3>
-<div class="spec">
-<p><code>remove_node(Bucket::<a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a>, NodeId::binary()) -&gt; <a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a></code><br></p>
-<p> </p>
-</div><p>Remove a node from the bucket.</p>
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_routing_bucket</span> 
+      <small class="app-vsn" translate="no">(macula v0.9.2)</small>
 
-<h3 class="function"><a name="size-1">size/1</a></h3>
-<div class="spec">
-<p><code>size(X1::<a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a>) -&gt; non_neg_integer()</code><br></p>
-<p> </p>
-</div><p>Get number of nodes in bucket.</p>
+    </h1>
 
-<h3 class="function"><a name="update_timestamp-2">update_timestamp/2</a></h3>
-<div class="spec">
-<p><code>update_timestamp(Bucket::<a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a>, NodeId::binary()) -&gt; <a href="#type-bucket" docgen-rel="seetype" docgen-href="#bucket/0">bucket()</a></code><br></p>
-<p> </p>
-</div><p>Update node's last_seen timestamp (moves to tail).</p>
-<hr>
+      <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L7" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  </div>
+
+
+    <section id="moduledoc">
+<p>K-bucket for Kademlia routing table. Stores up to k nodes with LRU eviction policy.</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:bucket/0" data-no-tooltip="" translate="no">bucket/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:node_info/0" data-no-tooltip="" translate="no">node_info/0</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#add_node/2" data-no-tooltip="" translate="no">add_node(Bucket, NodeInfo)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Add a node to the bucket. If node exists, move to tail (most recent). If bucket full, return {error, bucket_full}.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#capacity/1" data-no-tooltip="" translate="no">capacity(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get bucket capacity.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_closest/3" data-no-tooltip="" translate="no">find_closest(_, Target, N)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find n closest nodes to target (sorted by XOR distance).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_node/2" data-no-tooltip="" translate="no">find_node(_, NodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find a node by ID.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_nodes/1" data-no-tooltip="" translate="no">get_nodes(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get all nodes in the bucket (ordered: oldest first).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#has_node/2" data-no-tooltip="" translate="no">has_node(_, NodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if bucket contains node.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#new/1" data-no-tooltip="" translate="no">new(Capacity)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Create a new bucket with capacity k.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#remove_node/2" data-no-tooltip="" translate="no">remove_node(Bucket, NodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Remove a node from the bucket.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#size/1" data-no-tooltip="" translate="no">size(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get number of nodes in bucket.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#update_timestamp/2" data-no-tooltip="" translate="no">update_timestamp(Bucket, NodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Update node's last_seen timestamp (moves to tail).</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:bucket/0">
+
+  <div class="detail-header">
+    <a href="#t:bucket/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">bucket/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L30" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> bucket() :: #{capacity := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>(), nodes := [<a href="#t:node_info/0">node_info</a>()]}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:node_info/0">
+
+  <div class="detail-header">
+    <a href="#t:node_info/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">node_info/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L24" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> node_info() ::
+          #{node_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
+            address := {<a href="https://www.erlang.org/doc/apps/kernel/inet.html#t:ip_address/0">inet:ip_address</a>(), <a href="https://www.erlang.org/doc/apps/kernel/inet.html#t:port_number/0">inet:port_number</a>()},
+            last_seen => <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>()}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="add_node/2">
+
+  <div class="detail-header">
+    <a href="#add_node/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">add_node(Bucket, NodeInfo)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L53" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> add_node(<a href="#t:bucket/0">bucket</a>(), <a href="#t:node_info/0">node_info</a>()) -> <a href="#t:bucket/0">bucket</a>() | {error, bucket_full}.</pre>
+
+      </div>
+
+<p>Add a node to the bucket. If node exists, move to tail (most recent). If bucket full, return {error, bucket_full}.</p>
+  </section>
+</section>
+<section class="detail" id="capacity/1">
+
+  <div class="detail-header">
+    <a href="#capacity/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">capacity(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L140" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> capacity(<a href="#t:bucket/0">bucket</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>().</pre>
+
+      </div>
+
+<p>Get bucket capacity.</p>
+  </section>
+</section>
+<section class="detail" id="find_closest/3">
+
+  <div class="detail-header">
+    <a href="#find_closest/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">find_closest(_, Target, N)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L100" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> find_closest(<a href="#t:bucket/0">bucket</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> [<a href="#t:node_info/0">node_info</a>()].</pre>
+
+      </div>
+
+<p>Find n closest nodes to target (sorted by XOR distance).</p>
+  </section>
+</section>
+<section class="detail" id="find_node/2">
+
+  <div class="detail-header">
+    <a href="#find_node/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">find_node(_, NodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L92" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> find_node(<a href="#t:bucket/0">bucket</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="#t:node_info/0">node_info</a>()} | not_found.</pre>
+
+      </div>
+
+<p>Find a node by ID.</p>
+  </section>
+</section>
+<section class="detail" id="get_nodes/1">
+
+  <div class="detail-header">
+    <a href="#get_nodes/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_nodes(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L87" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_nodes(<a href="#t:bucket/0">bucket</a>()) -> [<a href="#t:node_info/0">node_info</a>()].</pre>
+
+      </div>
+
+<p>Get all nodes in the bucket (ordered: oldest first).</p>
+  </section>
+</section>
+<section class="detail" id="has_node/2">
+
+  <div class="detail-header">
+    <a href="#has_node/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">has_node(_, NodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L114" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> has_node(<a href="#t:bucket/0">bucket</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+
+      </div>
+
+<p>Check if bucket contains node.</p>
+  </section>
+</section>
+<section class="detail" id="new/1">
+
+  <div class="detail-header">
+    <a href="#new/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">new(Capacity)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L43" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> new(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> <a href="#t:bucket/0">bucket</a>().</pre>
+
+      </div>
+
+<p>Create a new bucket with capacity k.</p>
+  </section>
+</section>
+<section class="detail" id="remove_node/2">
+
+  <div class="detail-header">
+    <a href="#remove_node/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">remove_node(Bucket, NodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L82" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> remove_node(<a href="#t:bucket/0">bucket</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> <a href="#t:bucket/0">bucket</a>().</pre>
+
+      </div>
+
+<p>Remove a node from the bucket.</p>
+  </section>
+</section>
+<section class="detail" id="size/1">
+
+  <div class="detail-header">
+    <a href="#size/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">size(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L135" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> size(<a href="#t:bucket/0">bucket</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>().</pre>
+
+      </div>
+
+<p>Get number of nodes in bucket.</p>
+  </section>
+</section>
+<section class="detail" id="update_timestamp/2">
+
+  <div class="detail-header">
+    <a href="#update_timestamp/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">update_timestamp(Bucket, NodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_bucket.erl#L122" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> update_timestamp(<a href="#t:bucket/0">bucket</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> <a href="#t:bucket/0">bucket</a>().</pre>
+
+      </div>
+
+<p>Update node's last_seen timestamp (moves to tail).</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.9.2" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.9.2">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

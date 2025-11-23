@@ -1,102 +1,669 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_rpc_discovery</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_rpc_discovery</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   DHT integration for finding RPC service providers.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.9.2">
 
 
-<h2><a name="description">Description</a></h2>
-   DHT integration for finding RPC service providers.
-   Uses Kademlia DHT to publish and discover RPC registrations.
-   Wraps macula_discovery with RPC-specific types.
-<h2><a name="types">Data Types</a></h2>
+    <title>macula_rpc_discovery — macula v0.9.2</title>
 
-<h3 class="typedecl"><a name="type-address">address()</a></h3>
-<p><code>address() = {<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-ip_address" docgen-rel="seetype" docgen-href="kernel:inet#ip_address/0">inet:ip_address()</a>, <a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>}</code></p>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-91483A11.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="readme.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.9.2
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_rpc_discovery</span> 
+      <small class="app-vsn" translate="no">(macula v0.9.2)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L8" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
 
 
-<h3 class="typedecl"><a name="type-dht_lookup_fun">dht_lookup_fun()</a></h3>
-<p><code>dht_lookup_fun() = fun((<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>) -&gt; {ok, [<a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>]} | {error, term()})</code></p>
+    <section id="moduledoc">
+<p>DHT integration for finding RPC service providers. Uses Kademlia DHT to publish and discover RPC registrations. Wraps macula_discovery with RPC-specific types.</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:address/0" data-no-tooltip="" translate="no">address/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:dht_lookup_fun/0" data-no-tooltip="" translate="no">dht_lookup_fun/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:dht_publish_fun/0" data-no-tooltip="" translate="no">dht_publish_fun/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:dht_unpublish_fun/0" data-no-tooltip="" translate="no">dht_unpublish_fun/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:node_id/0" data-no-tooltip="" translate="no">node_id/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:provider_info/0" data-no-tooltip="" translate="no">provider_info/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:uri/0" data-no-tooltip="" translate="no">uri/0</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#announce/5" data-no-tooltip="" translate="no">announce(Uri, LocalNodeId, LocalAddress, Metadata, DhtPublishFun)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Announce local registration to DHT.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#filter_available/2" data-no-tooltip="" translate="no">filter_available(Providers, TTL)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Filter providers to only available ones (based on last_seen TTL).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_providers/2" data-no-tooltip="" translate="no">find_providers(Uri, DhtLookupFun)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find service providers for a URI via DHT.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_with_cache/3" data-no-tooltip="" translate="no">find_with_cache(Uri, Cache, DhtLookupFun)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find providers with cache (default TTL: 300 seconds).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_with_cache/4" data-no-tooltip="" translate="no">find_with_cache(Uri, Cache, DhtLookupFun, TTL)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find providers with cache and custom TTL.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#unannounce/3" data-no-tooltip="" translate="no">unannounce(Uri, LocalNodeId, DhtUnpublishFun)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Remove local registration from DHT.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
 
 
-<h3 class="typedecl"><a name="type-dht_publish_fun">dht_publish_fun()</a></h3>
-<p><code>dht_publish_fun() = fun((<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>, <a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, <a href="#type-address" docgen-rel="seetype" docgen-href="#address/0">address()</a>, map()) -&gt; ok | {error, term()})</code></p>
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:address/0">
+
+  <div class="detail-header">
+    <a href="#t:address/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">address/0</h1>
 
 
-<h3 class="typedecl"><a name="type-dht_unpublish_fun">dht_unpublish_fun()</a></h3>
-<p><code>dht_unpublish_fun() = fun((<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>, <a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>) -&gt; ok | {error, term()})</code></p>
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L23" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> address() :: {<a href="https://www.erlang.org/doc/apps/kernel/inet.html#t:ip_address/0">inet:ip_address</a>(), <a href="https://www.erlang.org/doc/apps/kernel/inet.html#t:port_number/0">inet:port_number</a>()}.</pre>
+
+      </div>
 
 
-<h3 class="typedecl"><a name="type-node_id">node_id()</a></h3>
-<p><code>node_id() = binary()</code></p>
+  </section>
+</section>
+<section class="detail" id="t:dht_lookup_fun/0">
+
+  <div class="detail-header">
+    <a href="#t:dht_lookup_fun/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">dht_lookup_fun/0</h1>
 
 
-<h3 class="typedecl"><a name="type-provider_info">provider_info()</a></h3>
-<p><code>provider_info() = #{node_id := <a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, address := <a href="#type-address" docgen-rel="seetype" docgen-href="#address/0">address()</a>, metadata := map(), last_seen := integer()}</code></p>
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L32" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> dht_lookup_fun() :: fun((<a href="#t:uri/0">uri</a>()) -> {ok, [<a href="#t:provider_info/0">provider_info</a>()]} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}).</pre>
+
+      </div>
 
 
-<h3 class="typedecl"><a name="type-uri">uri()</a></h3>
-<p><code>uri() = binary()</code></p>
+  </section>
+</section>
+<section class="detail" id="t:dht_publish_fun/0">
+
+  <div class="detail-header">
+    <a href="#t:dht_publish_fun/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">dht_publish_fun/0</h1>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#announce-5">announce/5</a></td><td>Announce local registration to DHT.</td></tr>
-<tr><td valign="top"><a href="#filter_available-2">filter_available/2</a></td><td>Filter providers to only available ones (based on last_seen TTL).</td></tr>
-<tr><td valign="top"><a href="#find_providers-2">find_providers/2</a></td><td>Find service providers for a URI via DHT.</td></tr>
-<tr><td valign="top"><a href="#find_with_cache-3">find_with_cache/3</a></td><td>Find providers with cache (default TTL: 300 seconds).</td></tr>
-<tr><td valign="top"><a href="#find_with_cache-4">find_with_cache/4</a></td><td>Find providers with cache and custom TTL.</td></tr>
-<tr><td valign="top"><a href="#unannounce-3">unannounce/3</a></td><td>Remove local registration from DHT.</td></tr>
-</table>
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L33" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
 
-<h2><a name="functions">Function Details</a></h2>
+    </div>
+  </div>
 
-<h3 class="function"><a name="announce-5">announce/5</a></h3>
-<div class="spec">
-<p><code>announce(Uri::<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>, LocalNodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, LocalAddress::<a href="#type-address" docgen-rel="seetype" docgen-href="#address/0">address()</a>, Metadata::map(), DhtPublishFun::<a href="#type-dht_publish_fun" docgen-rel="seetype" docgen-href="#dht_publish_fun/0">dht_publish_fun()</a>) -&gt; ok | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Announce local registration to DHT.</p>
+  <section class="docstring">
 
-<h3 class="function"><a name="filter_available-2">filter_available/2</a></h3>
-<div class="spec">
-<p><code>filter_available(Providers::[<a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>], TTL::pos_integer()) -&gt; [<a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>]</code><br></p>
-<p> </p>
-</div><p>Filter providers to only available ones (based on last_seen TTL).</p>
+      <div class="specs">
 
-<h3 class="function"><a name="find_providers-2">find_providers/2</a></h3>
-<div class="spec">
-<p><code>find_providers(Uri::<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>, DhtLookupFun::<a href="#type-dht_lookup_fun" docgen-rel="seetype" docgen-href="#dht_lookup_fun/0">dht_lookup_fun()</a>) -&gt; {ok, [<a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>]} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Find service providers for a URI via DHT.</p>
+          <pre translate="no"><span class="attribute">-type</span> dht_publish_fun() :: fun((<a href="#t:uri/0">uri</a>(), <a href="#t:node_id/0">node_id</a>(), <a href="#t:address/0">address</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}).</pre>
 
-<h3 class="function"><a name="find_with_cache-3">find_with_cache/3</a></h3>
-<div class="spec">
-<p><code>find_with_cache(Uri::<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>, Cache::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>, DhtLookupFun::<a href="#type-dht_lookup_fun" docgen-rel="seetype" docgen-href="#dht_lookup_fun/0">dht_lookup_fun()</a>) -&gt; {ok, [<a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>], <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>} | {error, term(), <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>}</code><br></p>
-<p> </p>
-</div><p>Find providers with cache (default TTL: 300 seconds).</p>
+      </div>
 
-<h3 class="function"><a name="find_with_cache-4">find_with_cache/4</a></h3>
-<div class="spec">
-<p><code>find_with_cache(Uri::<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>, Cache::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>, DhtLookupFun::<a href="#type-dht_lookup_fun" docgen-rel="seetype" docgen-href="#dht_lookup_fun/0">dht_lookup_fun()</a>, TTL::pos_integer()) -&gt; {ok, [<a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>], <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>} | {error, term(), <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>}</code><br></p>
-<p> </p>
-</div><p>Find providers with cache and custom TTL.</p>
 
-<h3 class="function"><a name="unannounce-3">unannounce/3</a></h3>
-<div class="spec">
-<p><code>unannounce(Uri::<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>, LocalNodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, DhtUnpublishFun::<a href="#type-dht_unpublish_fun" docgen-rel="seetype" docgen-href="#dht_unpublish_fun/0">dht_unpublish_fun()</a>) -&gt; ok | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Remove local registration from DHT.</p>
-<hr>
+  </section>
+</section>
+<section class="detail" id="t:dht_unpublish_fun/0">
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  <div class="detail-header">
+    <a href="#t:dht_unpublish_fun/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">dht_unpublish_fun/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L34" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> dht_unpublish_fun() :: fun((<a href="#t:uri/0">uri</a>(), <a href="#t:node_id/0">node_id</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}).</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:node_id/0">
+
+  <div class="detail-header">
+    <a href="#t:node_id/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">node_id/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L22" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> node_id() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:provider_info/0">
+
+  <div class="detail-header">
+    <a href="#t:provider_info/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">provider_info/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L25" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> provider_info() ::
+          #{node_id := <a href="#t:node_id/0">node_id</a>(), address := <a href="#t:address/0">address</a>(), metadata := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(), last_seen := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>()}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:uri/0">
+
+  <div class="detail-header">
+    <a href="#t:uri/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">uri/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L21" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> uri() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="announce/5">
+
+  <div class="detail-header">
+    <a href="#announce/5" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">announce(Uri, LocalNodeId, LocalAddress, Metadata, DhtPublishFun)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L70" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> announce(<a href="#t:uri/0">uri</a>(), <a href="#t:node_id/0">node_id</a>(), <a href="#t:address/0">address</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(), <a href="#t:dht_publish_fun/0">dht_publish_fun</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Announce local registration to DHT.</p>
+  </section>
+</section>
+<section class="detail" id="filter_available/2">
+
+  <div class="detail-header">
+    <a href="#filter_available/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">filter_available(Providers, TTL)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L88" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> filter_available([<a href="#t:provider_info/0">provider_info</a>()], <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> [<a href="#t:provider_info/0">provider_info</a>()].</pre>
+
+      </div>
+
+<p>Filter providers to only available ones (based on last_seen TTL).</p>
+  </section>
+</section>
+<section class="detail" id="find_providers/2">
+
+  <div class="detail-header">
+    <a href="#find_providers/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">find_providers(Uri, DhtLookupFun)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L52" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> find_providers(<a href="#t:uri/0">uri</a>(), <a href="#t:dht_lookup_fun/0">dht_lookup_fun</a>()) -> {ok, [<a href="#t:provider_info/0">provider_info</a>()]} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Find service providers for a URI via DHT.</p>
+  </section>
+</section>
+<section class="detail" id="find_with_cache/3">
+
+  <div class="detail-header">
+    <a href="#find_with_cache/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">find_with_cache(Uri, Cache, DhtLookupFun)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L58" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> find_with_cache(<a href="#t:uri/0">uri</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>(), <a href="#t:dht_lookup_fun/0">dht_lookup_fun</a>()) ->
+                         {ok, [<a href="#t:provider_info/0">provider_info</a>()], <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()} |
+                         {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()}.</pre>
+
+      </div>
+
+<p>Find providers with cache (default TTL: 300 seconds).</p>
+  </section>
+</section>
+<section class="detail" id="find_with_cache/4">
+
+  <div class="detail-header">
+    <a href="#find_with_cache/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">find_with_cache(Uri, Cache, DhtLookupFun, TTL)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L64" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> find_with_cache(<a href="#t:uri/0">uri</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>(), <a href="#t:dht_lookup_fun/0">dht_lookup_fun</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) ->
+                         {ok, [<a href="#t:provider_info/0">provider_info</a>()], <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()} |
+                         {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()}.</pre>
+
+      </div>
+
+<p>Find providers with cache and custom TTL.</p>
+  </section>
+</section>
+<section class="detail" id="unannounce/3">
+
+  <div class="detail-header">
+    <a href="#unannounce/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">unannounce(Uri, LocalNodeId, DhtUnpublishFun)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_rpc_system/macula_rpc_discovery.erl#L79" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> unannounce(<a href="#t:uri/0">uri</a>(), <a href="#t:node_id/0">node_id</a>(), <a href="#t:dht_unpublish_fun/0">dht_unpublish_fun</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Remove local registration from DHT.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.9.2" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.9.2">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

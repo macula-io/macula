@@ -1,140 +1,794 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_routing_protocol</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_routing_protocol</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   DHT protocol message encoding/decoding.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.9.2">
 
 
-<h2><a name="description">Description</a></h2>
-   DHT protocol message encoding/decoding.
-   Maps DHT operations to/from message format.
-<h2><a name="types">Data Types</a></h2>
+    <title>macula_routing_protocol — macula v0.9.2</title>
 
-<h3 class="typedecl"><a name="type-message">message()</a></h3>
-<p><code>message() = map()</code></p>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-91483A11.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="readme.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.9.2
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_routing_protocol</span> 
+      <small class="app-vsn" translate="no">(macula v0.9.2)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L7" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#decode_find_node-1">decode_find_node/1</a></td><td>Decode FIND_NODE request.</td></tr>
-<tr><td valign="top"><a href="#decode_find_node_reply-1">decode_find_node_reply/1</a></td><td>Decode FIND_NODE reply.</td></tr>
-<tr><td valign="top"><a href="#decode_find_value-1">decode_find_value/1</a></td><td>Decode FIND_VALUE request.</td></tr>
-<tr><td valign="top"><a href="#decode_find_value_reply-1">decode_find_value_reply/1</a></td><td>Decode FIND_VALUE reply.</td></tr>
-<tr><td valign="top"><a href="#decode_node_info-1">decode_node_info/1</a></td><td>Decode node info.</td></tr>
-<tr><td valign="top"><a href="#decode_store-1">decode_store/1</a></td><td>Decode STORE request.</td></tr>
-<tr><td valign="top"><a href="#encode_find_node-1">encode_find_node/1</a></td><td>Encode FIND_NODE request.</td></tr>
-<tr><td valign="top"><a href="#encode_find_node_reply-1">encode_find_node_reply/1</a></td><td>Encode FIND_NODE reply.</td></tr>
-<tr><td valign="top"><a href="#encode_find_value-1">encode_find_value/1</a></td><td>Encode FIND_VALUE request.</td></tr>
-<tr><td valign="top"><a href="#encode_find_value_reply-1">encode_find_value_reply/1</a></td><td>Encode FIND_VALUE reply.</td></tr>
-<tr><td valign="top"><a href="#encode_node_info-1">encode_node_info/1</a></td><td>Encode node info (for transmission).</td></tr>
-<tr><td valign="top"><a href="#encode_store-2">encode_store/2</a></td><td>Encode STORE request.</td></tr>
-<tr><td valign="top"><a href="#is_find_node-1">is_find_node/1</a></td><td>Check if message is FIND_NODE.</td></tr>
-<tr><td valign="top"><a href="#is_find_value-1">is_find_value/1</a></td><td>Check if message is FIND_VALUE.</td></tr>
-<tr><td valign="top"><a href="#is_store-1">is_store/1</a></td><td>Check if message is STORE.</td></tr>
-</table>
+    <section id="moduledoc">
+<p>DHT protocol message encoding/decoding. Maps DHT operations to/from message format.</p>
+    </section>
 
-<h2><a name="functions">Function Details</a></h2>
+</div>
 
-<h3 class="function"><a name="decode_find_node-1">decode_find_node/1</a></h3>
-<div class="spec">
-<p><code>decode_find_node(X1::<a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a>) -&gt; {ok, binary()} | {error, invalid_message}</code><br></p>
-<p> </p>
-</div><p>Decode FIND_NODE request.</p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
 
-<h3 class="function"><a name="decode_find_node_reply-1">decode_find_node_reply/1</a></h3>
-<div class="spec">
-<p><code>decode_find_node_reply(X1::<a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a>) -&gt; {ok, [<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_routing_bucket.html#type-node_info" docgen-rel="seetype" docgen-href="macula:macula_routing_bucket#node_info/0">macula_routing_bucket:node_info()</a>]} | {error, invalid_message}</code><br></p>
-<p> </p>
-</div><p>Decode FIND_NODE reply.</p>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:message/0" data-no-tooltip="" translate="no">message/0</a>
 
-<h3 class="function"><a name="decode_find_value-1">decode_find_value/1</a></h3>
-<div class="spec">
-<p><code>decode_find_value(X1::<a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a>) -&gt; {ok, binary()} | {error, invalid_message}</code><br></p>
-<p> </p>
-</div><p>Decode FIND_VALUE request.</p>
+      </div>
 
-<h3 class="function"><a name="decode_find_value_reply-1">decode_find_value_reply/1</a></h3>
-<div class="spec">
-<p><code>decode_find_value_reply(X1::<a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a>) -&gt; {ok, {value, term()} | {nodes, [<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_routing_bucket.html#type-node_info" docgen-rel="seetype" docgen-href="macula:macula_routing_bucket#node_info/0">macula_routing_bucket:node_info()</a>]}} | {error, invalid_message}</code><br></p>
-<p> </p>
-</div><p>Decode FIND_VALUE reply.</p>
+    </div>
 
-<h3 class="function"><a name="decode_node_info-1">decode_node_info/1</a></h3>
-<div class="spec">
-<p><code>decode_node_info(X1::map()) -&gt; {ok, <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_routing_bucket.html#type-node_info" docgen-rel="seetype" docgen-href="macula:macula_routing_bucket#node_info/0">macula_routing_bucket:node_info()</a>} | {error, invalid_node_info}</code><br></p>
-<p> </p>
-</div><p>Decode node info.</p>
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
 
-<h3 class="function"><a name="decode_store-1">decode_store/1</a></h3>
-<div class="spec">
-<p><code>decode_store(X1::<a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a>) -&gt; {ok, binary(), term()} | {error, invalid_message}</code><br></p>
-<p> </p>
-</div><p>Decode STORE request.</p>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#decode_find_node/1" data-no-tooltip="" translate="no">decode_find_node(_)</a>
 
-<h3 class="function"><a name="encode_find_node-1">encode_find_node/1</a></h3>
-<div class="spec">
-<p><code>encode_find_node(Target::binary()) -&gt; <a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a></code><br></p>
-<p> </p>
-</div><p>Encode FIND_NODE request.</p>
+      </div>
 
-<h3 class="function"><a name="encode_find_node_reply-1">encode_find_node_reply/1</a></h3>
-<div class="spec">
-<p><code>encode_find_node_reply(Nodes::[<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_routing_bucket.html#type-node_info" docgen-rel="seetype" docgen-href="macula:macula_routing_bucket#node_info/0">macula_routing_bucket:node_info()</a>]) -&gt; <a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a></code><br></p>
-<p> </p>
-</div><p>Encode FIND_NODE reply.</p>
+        <div class="summary-synopsis"><p>Decode FIND_NODE request.</p></div>
 
-<h3 class="function"><a name="encode_find_value-1">encode_find_value/1</a></h3>
-<div class="spec">
-<p><code>encode_find_value(Key::binary()) -&gt; <a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a></code><br></p>
-<p> </p>
-</div><p>Encode FIND_VALUE request.</p>
+    </div>
 
-<h3 class="function"><a name="encode_find_value_reply-1">encode_find_value_reply/1</a></h3>
-<div class="spec">
-<p><code>encode_find_value_reply(X1::{value, term()} | {nodes, [<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_routing_bucket.html#type-node_info" docgen-rel="seetype" docgen-href="macula:macula_routing_bucket#node_info/0">macula_routing_bucket:node_info()</a>]}) -&gt; <a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a></code><br></p>
-<p> </p>
-</div><p>Encode FIND_VALUE reply.</p>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#decode_find_node_reply/1" data-no-tooltip="" translate="no">decode_find_node_reply(_)</a>
 
-<h3 class="function"><a name="encode_node_info-1">encode_node_info/1</a></h3>
-<div class="spec">
-<p><code>encode_node_info(NodeInfo::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_routing_bucket.html#type-node_info" docgen-rel="seetype" docgen-href="macula:macula_routing_bucket#node_info/0">macula_routing_bucket:node_info()</a>) -&gt; map()</code><br></p>
-<p> </p>
-</div><p>Encode node info (for transmission).</p>
+      </div>
 
-<h3 class="function"><a name="encode_store-2">encode_store/2</a></h3>
-<div class="spec">
-<p><code>encode_store(Key::binary(), Value::term()) -&gt; <a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a></code><br></p>
-<p> </p>
-</div><p>Encode STORE request.</p>
+        <div class="summary-synopsis"><p>Decode FIND_NODE reply.</p></div>
 
-<h3 class="function"><a name="is_find_node-1">is_find_node/1</a></h3>
-<div class="spec">
-<p><code>is_find_node(X1::<a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a>) -&gt; boolean()</code><br></p>
-<p> </p>
-</div><p>Check if message is FIND_NODE.</p>
+    </div>
 
-<h3 class="function"><a name="is_find_value-1">is_find_value/1</a></h3>
-<div class="spec">
-<p><code>is_find_value(X1::<a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a>) -&gt; boolean()</code><br></p>
-<p> </p>
-</div><p>Check if message is FIND_VALUE.</p>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#decode_find_value/1" data-no-tooltip="" translate="no">decode_find_value(_)</a>
 
-<h3 class="function"><a name="is_store-1">is_store/1</a></h3>
-<div class="spec">
-<p><code>is_store(X1::<a href="#type-message" docgen-rel="seetype" docgen-href="#message/0">message()</a>) -&gt; boolean()</code><br></p>
-<p> </p>
-</div><p>Check if message is STORE.</p>
-<hr>
+      </div>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+        <div class="summary-synopsis"><p>Decode FIND_VALUE request.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#decode_find_value_reply/1" data-no-tooltip="" translate="no">decode_find_value_reply(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Decode FIND_VALUE reply.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#decode_node_info/1" data-no-tooltip="" translate="no">decode_node_info(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Decode node info.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#decode_store/1" data-no-tooltip="" translate="no">decode_store(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Decode STORE request.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#encode_find_node/1" data-no-tooltip="" translate="no">encode_find_node(Target)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Encode FIND_NODE request.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#encode_find_node_reply/1" data-no-tooltip="" translate="no">encode_find_node_reply(Nodes)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Encode FIND_NODE reply.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#encode_find_value/1" data-no-tooltip="" translate="no">encode_find_value(Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Encode FIND_VALUE request.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#encode_find_value_reply/1" data-no-tooltip="" translate="no">encode_find_value_reply(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Encode FIND_VALUE reply.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#encode_node_info/1" data-no-tooltip="" translate="no">encode_node_info(NodeInfo)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Encode node info (for transmission).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#encode_store/2" data-no-tooltip="" translate="no">encode_store(Key, Value)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Encode STORE request.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#is_find_node/1" data-no-tooltip="" translate="no">is_find_node(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if message is FIND_NODE.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#is_find_value/1" data-no-tooltip="" translate="no">is_find_value(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if message is FIND_VALUE.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#is_store/1" data-no-tooltip="" translate="no">is_store(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if message is STORE.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:message/0">
+
+  <div class="detail-header">
+    <a href="#t:message/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">message/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L37" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> message() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="decode_find_node/1">
+
+  <div class="detail-header">
+    <a href="#decode_find_node/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">decode_find_node(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L106" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> decode_find_node(<a href="#t:message/0">message</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()} | {error, invalid_message}.</pre>
+
+      </div>
+
+<p>Decode FIND_NODE request.</p>
+  </section>
+</section>
+<section class="detail" id="decode_find_node_reply/1">
+
+  <div class="detail-header">
+    <a href="#decode_find_node_reply/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">decode_find_node_reply(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L113" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> decode_find_node_reply(<a href="#t:message/0">message</a>()) ->
+                                {ok, [<a href="macula_routing_bucket.html#t:node_info/0">macula_routing_bucket:node_info</a>()]} | {error, invalid_message}.</pre>
+
+      </div>
+
+<p>Decode FIND_NODE reply.</p>
+  </section>
+</section>
+<section class="detail" id="decode_find_value/1">
+
+  <div class="detail-header">
+    <a href="#decode_find_value/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">decode_find_value(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L127" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> decode_find_value(<a href="#t:message/0">message</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()} | {error, invalid_message}.</pre>
+
+      </div>
+
+<p>Decode FIND_VALUE request.</p>
+  </section>
+</section>
+<section class="detail" id="decode_find_value_reply/1">
+
+  <div class="detail-header">
+    <a href="#decode_find_value_reply/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">decode_find_value_reply(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L136" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> decode_find_value_reply(<a href="#t:message/0">message</a>()) ->
+                                 {ok, {value, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {nodes, [<a href="macula_routing_bucket.html#t:node_info/0">macula_routing_bucket:node_info</a>()]}} |
+                                 {error, invalid_message}.</pre>
+
+      </div>
+
+<p>Decode FIND_VALUE reply.</p>
+  </section>
+</section>
+<section class="detail" id="decode_node_info/1">
+
+  <div class="detail-header">
+    <a href="#decode_node_info/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">decode_node_info(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L145" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> decode_node_info(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="macula_routing_bucket.html#t:node_info/0">macula_routing_bucket:node_info</a>()} | {error, invalid_node_info}.</pre>
+
+      </div>
+
+<p>Decode node info.</p>
+  </section>
+</section>
+<section class="detail" id="decode_store/1">
+
+  <div class="detail-header">
+    <a href="#decode_store/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">decode_store(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L120" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> decode_store(<a href="#t:message/0">message</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, invalid_message}.</pre>
+
+      </div>
+
+<p>Decode STORE request.</p>
+  </section>
+</section>
+<section class="detail" id="encode_find_node/1">
+
+  <div class="detail-header">
+    <a href="#encode_find_node/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">encode_find_node(Target)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L46" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> encode_find_node(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> <a href="#t:message/0">message</a>().</pre>
+
+      </div>
+
+<p>Encode FIND_NODE request.</p>
+  </section>
+</section>
+<section class="detail" id="encode_find_node_reply/1">
+
+  <div class="detail-header">
+    <a href="#encode_find_node_reply/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">encode_find_node_reply(Nodes)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L54" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> encode_find_node_reply([<a href="macula_routing_bucket.html#t:node_info/0">macula_routing_bucket:node_info</a>()]) -> <a href="#t:message/0">message</a>().</pre>
+
+      </div>
+
+<p>Encode FIND_NODE reply.</p>
+  </section>
+</section>
+<section class="detail" id="encode_find_value/1">
+
+  <div class="detail-header">
+    <a href="#encode_find_value/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">encode_find_value(Key)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L71" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> encode_find_value(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> <a href="#t:message/0">message</a>().</pre>
+
+      </div>
+
+<p>Encode FIND_VALUE request.</p>
+  </section>
+</section>
+<section class="detail" id="encode_find_value_reply/1">
+
+  <div class="detail-header">
+    <a href="#encode_find_value_reply/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">encode_find_value_reply(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L79" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> encode_find_value_reply({value, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {nodes, [<a href="macula_routing_bucket.html#t:node_info/0">macula_routing_bucket:node_info</a>()]}) ->
+                                 <a href="#t:message/0">message</a>().</pre>
+
+      </div>
+
+<p>Encode FIND_VALUE reply.</p>
+  </section>
+</section>
+<section class="detail" id="encode_node_info/1">
+
+  <div class="detail-header">
+    <a href="#encode_node_info/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">encode_node_info(NodeInfo)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L94" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> encode_node_info(<a href="macula_routing_bucket.html#t:node_info/0">macula_routing_bucket:node_info</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>().</pre>
+
+      </div>
+
+<p>Encode node info (for transmission).</p>
+  </section>
+</section>
+<section class="detail" id="encode_store/2">
+
+  <div class="detail-header">
+    <a href="#encode_store/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">encode_store(Key, Value)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L62" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> encode_store(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()) -> <a href="#t:message/0">message</a>().</pre>
+
+      </div>
+
+<p>Encode STORE request.</p>
+  </section>
+</section>
+<section class="detail" id="is_find_node/1">
+
+  <div class="detail-header">
+    <a href="#is_find_node/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">is_find_node(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L159" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> is_find_node(<a href="#t:message/0">message</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+
+      </div>
+
+<p>Check if message is FIND_NODE.</p>
+  </section>
+</section>
+<section class="detail" id="is_find_value/1">
+
+  <div class="detail-header">
+    <a href="#is_find_value/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">is_find_value(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L169" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> is_find_value(<a href="#t:message/0">message</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+
+      </div>
+
+<p>Check if message is FIND_VALUE.</p>
+  </section>
+</section>
+<section class="detail" id="is_store/1">
+
+  <div class="detail-header">
+    <a href="#is_store/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">is_store(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_protocol.erl#L164" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> is_store(<a href="#t:message/0">message</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+
+      </div>
+
+<p>Check if message is STORE.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.9.2" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.9.2">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

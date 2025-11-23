@@ -13,8 +13,8 @@
 %%%===================================================================
 
 %% This test suite covers:
-%% 1. Service advertisement via macula_client:advertise/3,4
-%% 2. Service unadvertisement via macula_client:unadvertise/2
+%% 1. Service advertisement via macula:advertise/3,4
+%% 2. Service unadvertisement via macula:unadvertise/2
 %% 3. Local service calls (same connection)
 %% 4. Service not found error handling
 %% 5. Handler error propagation

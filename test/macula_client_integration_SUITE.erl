@@ -70,7 +70,7 @@ test_connection_lifecycle(Config) ->
     Opts = #{realm => <<"test.realm">>},
 
     %% WHEN: Connecting to the server
-    Result = macula_client:connect(Url, Opts),
+    Result = macula:connect(Url, Opts),
 
     %% THEN: Connection should succeed
     case Result of
@@ -79,7 +79,7 @@ test_connection_lifecycle(Config) ->
             true = is_process_alive(Client),
 
             %% WHEN: Disconnecting
-            ok = macula_client:disconnect(Client),
+            ok = macula:disconnect(Client),
 
             %% THEN: Client should stop
             timer:sleep(100),
@@ -100,20 +100,20 @@ test_publish_event(Config) ->
     Url = iolist_to_binary(io_lib:format("https://localhost:~p", [Port])),
     Opts = #{realm => <<"test.realm">>},
 
-    case macula_client:connect(Url, Opts) of
+    case macula:connect(Url, Opts) of
         {ok, Client} ->
             %% WHEN: Publishing an event
             Event = #{
                 type => <<"test.event">>,
                 data => <<"test data">>
             },
-            Result = macula_client:publish(Client, <<"test.topic">>, Event),
+            Result = macula:publish(Client, <<"test.topic">>, Event),
 
             %% THEN: Publish should succeed
             ok = Result,
 
             %% Cleanup
-            macula_client:disconnect(Client),
+            macula:disconnect(Client),
             ok;
         {error, _Reason} ->
             {skip, "Could not connect to test server"}
@@ -126,11 +126,11 @@ test_rpc_call(Config) ->
     Url = iolist_to_binary(io_lib:format("https://localhost:~p", [Port])),
     Opts = #{realm => <<"test.realm">>},
 
-    case macula_client:connect(Url, Opts) of
+    case macula:connect(Url, Opts) of
         {ok, Client} ->
             %% WHEN: Making an RPC call
             Args = #{user_id => <<"123">>},
-            Result = macula_client:call(Client, <<"test.procedure">>, Args),
+            Result = macula:call(Client, <<"test.procedure">>, Args),
 
             %% THEN: Call should return result
             case Result of
@@ -145,7 +145,7 @@ test_rpc_call(Config) ->
             end,
 
             %% Cleanup
-            macula_client:disconnect(Client),
+            macula:disconnect(Client),
             ok;
         {error, _Reason} ->
             {skip, "Could not connect to test server"}

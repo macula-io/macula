@@ -1,49 +1,51 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% Macula SDK - Main API module for HTTP/3 mesh client operations.
+%%% Macula - Main API for distributed workloads on Macula platform.
 %%%
-%%% This module provides the primary interface for applications to
-%%% connect to Macula mesh networks and perform pub/sub and RPC
-%%% operations over HTTP/3 (QUIC) transport.
+%%% This is the ONLY module workload applications should import. It provides
+%%% a stable, versioned API for all platform operations:
+%%%
+%%% - Mesh networking (connect, publish, subscribe, RPC)
+%%% - Platform Layer (leader election, CRDTs, workload registration)
+%%% - Service discovery (DHT queries, node identity)
 %%%
 %%% == Quick Start ==
 %%%
-%%% Connect to a mesh, publish events, subscribe to topics, and make RPC calls.
-%%% See individual function documentation for detailed examples with code.
-%%%
-%%% == DHT Network Bootstrap (v0.8.7+) ==
-%%%
-%%% Macula v0.8.7+ implements platform-level DHT bootstrapping. Each macula node
-%%% automatically joins the configured DHT network on startup via the
-%%% `MACULA_BOOTSTRAP_PEERS` environment variable.
-%%%
-%%% <b>Platform Configuration (Recommended):</b>
+%%% Connect to local platform and publish events:
 %%% ```
-%%% # Bootstrap node (no peers configured)
-%%% MACULA_BOOTSTRAP_PEERS=  # empty - this IS a bootstrap peer
-%%%
-%%% # Other nodes (connect to bootstrap)
-%%% MACULA_BOOTSTRAP_PEERS=https://bootstrap-node:4433
+%%% {ok, Client} = macula:connect_local(#{realm => &lt;&lt;"my.app"&gt;&gt;}),
+%%% ok = macula:publish(Client, &lt;&lt;"my.events"&gt;&gt;, #{type => &lt;&lt;"test"&gt;&gt;}).
 %%% '''
 %%%
-%%% <b>Client SDK Usage:</b>
-%%% Applications connect to their LOCAL macula instance, which is already part
-%%% of the DHT network:
+%%% == Architecture ==
+%%%
+%%% Workload applications run in the same BEAM VM as the Macula platform.
+%%% Use `connect_local/1` to connect via process-to-process communication:
+%%%
 %%% ```
-%%% {ok, Client} = macula_client:connect(&lt;&lt;"https://localhost:4433"&gt;&gt;, #{
-%%%     realm => &lt;&lt;"my.app"&gt;&gt;
+%%% Workload App → macula:connect_local/1 → macula_gateway → Mesh (QUIC/HTTP3)
+%%% '''
+%%%
+%%% == Platform Layer (v0.10.0+) ==
+%%%
+%%% Register with platform for coordination features:
+%%% ```
+%%% {ok, #{leader_node := Leader}} = macula:register_workload(Client, #{
+%%%     workload_name => &lt;&lt;"my_app"&gt;&gt;
 %%% }).
 %%% '''
 %%%
-%%% The platform handles DHT network formation - applications don't need to
-%%% manage bootstrap peer URLs.
+%%% == DHT Network Bootstrap ==
+%%%
+%%% The platform handles DHT bootstrapping via `MACULA_BOOTSTRAP_PEERS`.
+%%% Workloads don't need to manage peer discovery.
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_client).
+-module(macula).
 -behaviour(macula_client_behaviour).
 
-%% API exports
+%% Mesh Networking API
 -export([
     connect/2,
     connect_local/1,
@@ -59,6 +61,16 @@
     advertise/4,
     unadvertise/2,
     get_node_id/1
+]).
+
+%% Platform Layer API (v0.10.0+)
+-export([
+    register_workload/2,
+    get_leader/1,
+    subscribe_leader_changes/2,
+    propose_crdt_update/3,
+    propose_crdt_update/4,
+    read_crdt/2
 ]).
 
 %% Type exports
@@ -120,12 +132,12 @@
 %%
 %% ```
 %% %% Basic connection
-%% {ok, Client} = macula_client:connect(&lt;&lt;"https://mesh.local:443"&gt;&gt;, #{
+%% {ok, Client} = macula:connect(&lt;&lt;"https://mesh.local:443"&gt;&gt;, #{
 %%     realm => &lt;&lt;"my.realm"&gt;&gt;
 %% }).
 %%
 %% %% With API key authentication
-%% {ok, Client} = macula_client:connect(&lt;&lt;"https://mesh.local:443"&gt;&gt;, #{
+%% {ok, Client} = macula:connect(&lt;&lt;"https://mesh.local:443"&gt;&gt;, #{
 %%     realm => &lt;&lt;"my.realm"&gt;&gt;,
 %%     auth => #{api_key => &lt;&lt;"secret-key"&gt;&gt;}
 %% }).
@@ -171,12 +183,12 @@ connect(Url, Opts) when is_list(Url), is_map(Opts) ->
 %%
 %% ```
 %% %% Elixir Phoenix application
-%% {:ok, client} = :macula_client.connect_local(%{
+%% {:ok, client} = :macula.connect_local(%{
 %%     realm: "macula.arcade.dev"
 %% })
 %%
 %% %% Erlang application
-%% {ok, Client} = macula_client:connect_local(#{
+%% {ok, Client} = macula:connect_local(#{
 %%     realm => &lt;&lt;"my.app.realm"&gt;&gt;
 %% }).
 %% '''
@@ -213,14 +225,14 @@ disconnect(Client) when is_pid(Client) ->
 %%
 %% ```
 %% %% Publish with default options
-%% ok = macula_client:publish(Client, &lt;&lt;"my.app.events"&gt;&gt;, #{
+%% ok = macula:publish(Client, &lt;&lt;"my.app.events"&gt;&gt;, #{
 %%     type => &lt;&lt;"user.registered"&gt;&gt;,
 %%     user_id => &lt;&lt;"user-123"&gt;&gt;,
 %%     email => &lt;&lt;"user@example.com"&gt;&gt;
 %% }).
 %%
 %% %% Publish with options
-%% ok = macula_client:publish(Client, &lt;&lt;"my.app.events"&gt;&gt;, #{
+%% ok = macula:publish(Client, &lt;&lt;"my.app.events"&gt;&gt;, #{
 %%     data => &lt;&lt;"important"&gt;&gt;
 %% }, #{acknowledge => true}).
 %% '''
@@ -249,14 +261,14 @@ publish(Client, Topic, Data, Opts) when is_pid(Client), is_binary(Topic), is_map
 %%
 %% ```
 %% %% Simple subscription
-%% {ok, SubRef} = macula_client:subscribe(Client, &lt;&lt;"my.app.events"&gt;&gt;,
+%% {ok, SubRef} = macula:subscribe(Client, &lt;&lt;"my.app.events"&gt;&gt;,
 %%     fun(EventData) ->
 %%         io:format("Event: ~p~n", [EventData]),
 %%         ok
 %%     end).
 %%
 %% %% Unsubscribe later
-%% ok = macula_client:unsubscribe(Client, SubRef).
+%% ok = macula:unsubscribe(Client, SubRef).
 %% '''
 -spec subscribe(Client :: client(), Topic :: topic(),
                 Callback :: fun((event_data()) -> ok)) ->
@@ -298,12 +310,12 @@ get_node_id(Client) when is_pid(Client) ->
 %%
 %% ```
 %% %% Simple RPC call
-%% {ok, User} = macula_client:call(Client, &lt;&lt;"my.app.get_user"&gt;&gt;, #{
+%% {ok, User} = macula:call(Client, &lt;&lt;"my.app.get_user"&gt;&gt;, #{
 %%     user_id => &lt;&lt;"user-123"&gt;&gt;
 %% }).
 %%
 %% %% With timeout
-%% {ok, Result} = macula_client:call(Client, &lt;&lt;"my.app.process"&gt;&gt;,
+%% {ok, Result} = macula:call(Client, &lt;&lt;"my.app.process"&gt;&gt;,
 %%     #{data => &lt;&lt;"large"&gt;&gt;},
 %%     #{timeout => 30000}).
 %% '''
@@ -343,14 +355,14 @@ call(Client, Procedure, Args, Opts) when is_pid(Client), is_binary(Procedure), i
 %% end.
 %%
 %% %% Advertise the service
-%% {ok, Ref} = macula_client:advertise(
+%% {ok, Ref} = macula:advertise(
 %%     Client,
 %%     &lt;&lt;"my.app.get_user"&gt;&gt;,
 %%     Handler
 %% ).
 %%
 %% %% Other clients can now call:
-%% %% {ok, User} = macula_client:call(OtherClient, &lt;&lt;"my.app.get_user"&gt;&gt;,
+%% %% {ok, User} = macula:call(OtherClient, &lt;&lt;"my.app.get_user"&gt;&gt;,
 %% %%     #{user_id => &lt;&lt;"user-123"&gt;&gt;}).
 %% '''
 -spec advertise(Client :: client(), Procedure :: procedure(),
@@ -375,12 +387,219 @@ advertise(Client, Procedure, Handler, Opts) when is_pid(Client), is_binary(Proce
 %% == Examples ==
 %%
 %% ```
-%% ok = macula_client:unadvertise(Client, &lt;&lt;"my.app.get_user"&gt;&gt;).
+%% ok = macula:unadvertise(Client, &lt;&lt;"my.app.get_user"&gt;&gt;).
 %% '''
 -spec unadvertise(Client :: client(), Procedure :: procedure()) ->
     ok | {error, Reason :: term()}.
 unadvertise(Client, Procedure) when is_pid(Client), is_binary(Procedure) ->
     macula_peer:unadvertise(Client, Procedure).
+
+%%%===================================================================
+%%% Platform Layer API (v0.10.0+)
+%%%===================================================================
+
+%% @doc Register this workload with the Platform Layer.
+%%
+%% Registers the workload application with Macula's Platform Layer and
+%% returns information about the current platform cluster state, including
+%% the current leader node.
+%%
+%% == Options ==
+%%
+%% <ul>
+%% <li>`workload_name' - Required. Binary name identifying this workload type
+%%     (e.g., `&lt;&lt;"macula_arcade"&gt;&gt;', `&lt;&lt;"my_app"&gt;&gt;')</li>
+%% <li>`capabilities' - Optional. List of atoms describing workload capabilities
+%%     (e.g., `[coordinator, game_server]')</li>
+%% </ul>
+%%
+%% == Returns ==
+%%
+%% <ul>
+%% <li>`leader_node' - Binary node ID of the current Platform Layer leader</li>
+%% <li>`cluster_size' - Integer count of nodes in the platform cluster</li>
+%% <li>`platform_version' - Binary version string (e.g., `&lt;&lt;"0.10.0"&gt;&gt;')</li>
+%% </ul>
+%%
+%% == Examples ==
+%%
+%% ```
+%% {ok, Client} = macula:connect_local(#{realm => &lt;&lt;"my.app"&gt;&gt;}),
+%% {ok, Info} = macula:register_workload(Client, #{
+%%     workload_name => &lt;&lt;"my_app_coordinator"&gt;&gt;,
+%%     capabilities => [coordinator, matchmaking]
+%% }),
+%% #{leader_node := Leader, cluster_size := Size} = Info.
+%% '''
+%%
+%% @since v0.10.0
+-spec register_workload(Client :: client(), Opts :: options()) ->
+    {ok, map()} | {error, Reason :: term()}.
+register_workload(Client, Opts) when is_pid(Client), is_map(Opts) ->
+    macula_local_client:register_workload(Client, Opts).
+
+%% @doc Get the current Platform Layer leader node.
+%%
+%% Queries the Platform Layer for the current leader node ID. The leader
+%% is elected via Raft consensus and handles coordination tasks.
+%%
+%% Returns `{error, no_leader}' if leader election is in progress.
+%%
+%% == Examples ==
+%%
+%% ```
+%% case macula:get_leader(Client) of
+%%     {ok, LeaderNodeId} ->
+%%         %% Check if we're the leader
+%%         {ok, OurNodeId} = macula:get_node_id(Client),
+%%         case LeaderNodeId == OurNodeId of
+%%             true -> coordinate_globally();
+%%             false -> defer_to_leader()
+%%         end;
+%%     {error, no_leader} ->
+%%         wait_for_leader_election()
+%% end.
+%% '''
+%%
+%% @since v0.10.0
+-spec get_leader(Client :: client()) ->
+    {ok, binary()} | {error, no_leader | term()}.
+get_leader(Client) when is_pid(Client) ->
+    macula_local_client:get_leader(Client).
+
+%% @doc Subscribe to Platform Layer leader change notifications.
+%%
+%% Registers a callback function to be invoked whenever the Platform Layer
+%% leader changes due to election or node failure.
+%%
+%% The callback receives a map with:
+%% <ul>
+%% <li>`old_leader' - Previous leader node ID (may be `undefined')</li>
+%% <li>`new_leader' - New leader node ID</li>
+%% <li>`term' - Raft term number (monotonically increasing)</li>
+%% </ul>
+%%
+%% == Examples ==
+%%
+%% ```
+%% {ok, SubRef} = macula:subscribe_leader_changes(Client,
+%%     fun(#{old_leader := Old, new_leader := New}) ->
+%%         io:format("Leader changed: ~p -> ~p~n", [Old, New]),
+%%         handle_leadership_transition(New),
+%%         ok
+%%     end).
+%% '''
+%%
+%% @since v0.10.0
+-spec subscribe_leader_changes(Client :: client(), Callback :: fun((map()) -> ok)) ->
+    {ok, subscription_ref()} | {error, Reason :: term()}.
+subscribe_leader_changes(Client, Callback) when is_pid(Client), is_function(Callback, 1) ->
+    macula_local_client:subscribe_leader_changes(Client, Callback).
+
+%% @doc Propose a CRDT update to Platform Layer shared state.
+%%
+%% Updates platform-managed shared state using Conflict-Free Replicated
+%% Data Types (CRDTs) for automatic conflict resolution across nodes.
+%%
+%% Default CRDT type is `lww_register' (Last-Write-Wins Register).
+%% See `propose_crdt_update/4' for other CRDT types.
+%%
+%% == Examples ==
+%%
+%% ```
+%% %% Store simple value (LWW-Register)
+%% ok = macula:propose_crdt_update(
+%%     Client,
+%%     &lt;&lt;"my.app.config.max_users"&gt;&gt;,
+%%     1000
+%% ).
+%%
+%% %% Later read it back
+%% {ok, 1000} = macula:read_crdt(Client, &lt;&lt;"my.app.config.max_users"&gt;&gt;).
+%% '''
+%%
+%% @since v0.10.0
+-spec propose_crdt_update(Client :: client(), Key :: binary(), Value :: term()) ->
+    ok | {error, Reason :: term()}.
+propose_crdt_update(Client, Key, Value) when is_pid(Client), is_binary(Key) ->
+    propose_crdt_update(Client, Key, Value, #{crdt_type => lww_register}).
+
+%% @doc Propose a CRDT update with specific CRDT type.
+%%
+%% Updates platform-managed shared state using the specified CRDT type
+%% for automatic conflict resolution.
+%%
+%% == CRDT Types ==
+%%
+%% <ul>
+%% <li>`lww_register' - Last-Write-Wins Register (default)
+%%     <ul><li>Use for: Configuration values, latest status</li>
+%%     <li>Conflict resolution: Latest timestamp wins</li></ul></li>
+%% <li>`g_counter' - Grow-Only Counter
+%%     <ul><li>Use for: Metrics, totals (never decrease)</li>
+%%     <li>Operations: increment only</li></ul></li>
+%% <li>`pn_counter' - Positive-Negative Counter
+%%     <ul><li>Use for: Bidirectional counters (can increase/decrease)</li>
+%%     <li>Operations: increment, decrement</li></ul></li>
+%% <li>`g_set' - Grow-Only Set
+%%     <ul><li>Use for: Accumulating collections (never remove)</li>
+%%     <li>Operations: add elements only</li></ul></li>
+%% <li>`or_set' - Observed-Remove Set
+%%     <ul><li>Use for: Sets with add/remove operations</li>
+%%     <li>Operations: add, remove elements</li></ul></li>
+%% </ul>
+%%
+%% == Examples ==
+%%
+%% ```
+%% %% Increment a counter
+%% ok = macula:propose_crdt_update(
+%%     Client,
+%%     &lt;&lt;"my.app.active_games"&gt;&gt;,
+%%     {increment, 1},
+%%     #{crdt_type => pn_counter}
+%% ).
+%%
+%% %% Add to a set
+%% ok = macula:propose_crdt_update(
+%%     Client,
+%%     &lt;&lt;"my.app.player_ids"&gt;&gt;,
+%%     {add, &lt;&lt;"player123"&gt;&gt;},
+%%     #{crdt_type => or_set}
+%% ).
+%% '''
+%%
+%% @since v0.10.0
+-spec propose_crdt_update(Client :: client(), Key :: binary(), Value :: term(), Opts :: options()) ->
+    ok | {error, Reason :: term()}.
+propose_crdt_update(Client, Key, Value, Opts) when is_pid(Client), is_binary(Key), is_map(Opts) ->
+    macula_local_client:propose_crdt_update(Client, Key, Value, Opts).
+
+%% @doc Read the current value of a CRDT-managed shared state entry.
+%%
+%% Reads from the local CRDT replica. The value reflects all converged
+%% updates from across the platform cluster.
+%%
+%% Returns `{error, not_found}' if the key has never been written.
+%%
+%% == Examples ==
+%%
+%% ```
+%% %% Read LWW-Register value
+%% {ok, MaxUsers} = macula:read_crdt(Client, &lt;&lt;"my.app.config.max_users"&gt;&gt;).
+%%
+%% %% Read counter value
+%% {ok, GameCount} = macula:read_crdt(Client, &lt;&lt;"my.app.active_games"&gt;&gt;).
+%%
+%% %% Read set value
+%% {ok, PlayerSet} = macula:read_crdt(Client, &lt;&lt;"my.app.player_ids"&gt;&gt;).
+%% '''
+%%
+%% @since v0.10.0
+-spec read_crdt(Client :: client(), Key :: binary()) ->
+    {ok, term()} | {error, not_found | term()}.
+read_crdt(Client, Key) when is_pid(Client), is_binary(Key) ->
+    macula_local_client:read_crdt(Client, Key).
 
 %%%===================================================================
 %%% Internal functions

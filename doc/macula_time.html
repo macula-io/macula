@@ -1,100 +1,546 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_time</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_time</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   Time utilities for Macula.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.9.2">
 
 
-<h2><a name="description">Description</a></h2>
-   Time utilities for Macula.
-   Provides functions for timestamps, durations, and timeouts.
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#duration_ms-2">duration_ms/2</a></td><td>Calculate duration in milliseconds between two timestamps.</td></tr>
-<tr><td valign="top"><a href="#format_duration_ms-1">format_duration_ms/1</a></td><td>Format duration in milliseconds to human-readable string.</td></tr>
-<tr><td valign="top"><a href="#format_timestamp-1">format_timestamp/1</a></td><td>Format timestamp to ISO 8601 string.</td></tr>
-<tr><td valign="top"><a href="#is_expired-2">is_expired/2</a></td><td>Check if timeout has expired.</td></tr>
-<tr><td valign="top"><a href="#minutes_to_ms-1">minutes_to_ms/1</a></td><td>Convert minutes to milliseconds.</td></tr>
-<tr><td valign="top"><a href="#ms_to_seconds-1">ms_to_seconds/1</a></td><td>Convert milliseconds to seconds (truncates).</td></tr>
-<tr><td valign="top"><a href="#seconds_to_ms-1">seconds_to_ms/1</a></td><td>Convert seconds to milliseconds.</td></tr>
-<tr><td valign="top"><a href="#time_remaining-2">time_remaining/2</a></td><td>Calculate remaining time before timeout (in milliseconds).</td></tr>
-<tr><td valign="top"><a href="#timestamp-0">timestamp/0</a></td><td>Get current timestamp in milliseconds since epoch.</td></tr>
-<tr><td valign="top"><a href="#timestamp_microseconds-0">timestamp_microseconds/0</a></td><td>Get current timestamp in microseconds since epoch.</td></tr>
-</table>
+    <title>macula_time — macula v0.9.2</title>
 
-<h2><a name="functions">Function Details</a></h2>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-<h3 class="function"><a name="duration_ms-2">duration_ms/2</a></h3>
-<div class="spec">
-<p><code>duration_ms(StartTimestamp::integer(), EndTimestamp::integer()) -&gt; non_neg_integer()</code><br></p>
-<p> </p>
-</div><p>Calculate duration in milliseconds between two timestamps.</p>
+    <script defer src="dist/sidebar_items-91483A11.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
 
-<h3 class="function"><a name="format_duration_ms-1">format_duration_ms/1</a></h3>
-<div class="spec">
-<p><code>format_duration_ms(Ms::non_neg_integer()) -&gt; binary()</code><br></p>
-<p> </p>
-</div><p>Format duration in milliseconds to human-readable string.</p>
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
 
-<h3 class="function"><a name="format_timestamp-1">format_timestamp/1</a></h3>
-<div class="spec">
-<p><code>format_timestamp(TimestampMs::integer()) -&gt; binary()</code><br></p>
-<p> </p>
-</div><p>Format timestamp to ISO 8601 string.</p>
+<div class="body-wrapper">
 
-<h3 class="function"><a name="is_expired-2">is_expired/2</a></h3>
-<div class="spec">
-<p><code>is_expired(StartTimestamp::integer(), TimeoutMs::pos_integer()) -&gt; boolean()</code><br></p>
-<p> </p>
-</div><p>Check if timeout has expired.</p>
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
 
-<h3 class="function"><a name="minutes_to_ms-1">minutes_to_ms/1</a></h3>
-<div class="spec">
-<p><code>minutes_to_ms(Minutes::non_neg_integer()) -&gt; non_neg_integer()</code><br></p>
-<p> </p>
-</div><p>Convert minutes to milliseconds.</p>
+<nav id="sidebar" class="sidebar">
 
-<h3 class="function"><a name="ms_to_seconds-1">ms_to_seconds/1</a></h3>
-<div class="spec">
-<p><code>ms_to_seconds(Ms::non_neg_integer()) -&gt; non_neg_integer()</code><br></p>
-<p> </p>
-</div><p>Convert milliseconds to seconds (truncates).</p>
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
 
-<h3 class="function"><a name="seconds_to_ms-1">seconds_to_ms/1</a></h3>
-<div class="spec">
-<p><code>seconds_to_ms(Seconds::non_neg_integer()) -&gt; non_neg_integer()</code><br></p>
-<p> </p>
-</div><p>Convert seconds to milliseconds.</p>
+        <a href="readme.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
 
-<h3 class="function"><a name="time_remaining-2">time_remaining/2</a></h3>
-<div class="spec">
-<p><code>time_remaining(StartTimestamp::integer(), TimeoutMs::pos_integer()) -&gt; non_neg_integer()</code><br></p>
-<p> </p>
-</div><p>Calculate remaining time before timeout (in milliseconds).
-  Returns 0 if already expired.</p>
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.9.2
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
 
-<h3 class="function"><a name="timestamp-0">timestamp/0</a></h3>
-<div class="spec">
-<p><code>timestamp() -&gt; integer()</code><br></p>
-<p> </p>
-</div><p>Get current timestamp in milliseconds since epoch.</p>
+<output role="status" id="toast"></output>
 
-<h3 class="function"><a name="timestamp_microseconds-0">timestamp_microseconds/0</a></h3>
-<div class="spec">
-<p><code>timestamp_microseconds() -&gt; integer()</code><br></p>
-<p> </p>
-</div><p>Get current timestamp in microseconds since epoch.</p>
-<hr>
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_time</span> 
+      <small class="app-vsn" translate="no">(macula v0.9.2)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_time.erl#L7" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+    <section id="moduledoc">
+<p>Time utilities for Macula. Provides functions for timestamps, durations, and timeouts.</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#duration_ms/2" data-no-tooltip="" translate="no">duration_ms(StartTimestamp, EndTimestamp)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Calculate duration in milliseconds between two timestamps.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#format_duration_ms/1" data-no-tooltip="" translate="no">format_duration_ms(Ms)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Format duration in milliseconds to human-readable string.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#format_timestamp/1" data-no-tooltip="" translate="no">format_timestamp(TimestampMs)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Format timestamp to ISO 8601 string.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#is_expired/2" data-no-tooltip="" translate="no">is_expired(StartTimestamp, TimeoutMs)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if timeout has expired.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#minutes_to_ms/1" data-no-tooltip="" translate="no">minutes_to_ms(Minutes)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Convert minutes to milliseconds.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#ms_to_seconds/1" data-no-tooltip="" translate="no">ms_to_seconds(Ms)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Convert milliseconds to seconds (truncates).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#seconds_to_ms/1" data-no-tooltip="" translate="no">seconds_to_ms(Seconds)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Convert seconds to milliseconds.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#time_remaining/2" data-no-tooltip="" translate="no">time_remaining(StartTimestamp, TimeoutMs)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Calculate remaining time before timeout (in milliseconds). Returns 0 if already expired.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#timestamp/0" data-no-tooltip="" translate="no">timestamp()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get current timestamp in milliseconds since epoch.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#timestamp_microseconds/0" data-no-tooltip="" translate="no">timestamp_microseconds()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get current timestamp in microseconds since epoch.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="duration_ms/2">
+
+  <div class="detail-header">
+    <a href="#duration_ms/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">duration_ms(StartTimestamp, EndTimestamp)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_time.erl#L39" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> duration_ms(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>().</pre>
+
+      </div>
+
+<p>Calculate duration in milliseconds between two timestamps.</p>
+  </section>
+</section>
+<section class="detail" id="format_duration_ms/1">
+
+  <div class="detail-header">
+    <a href="#format_duration_ms/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">format_duration_ms(Ms)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_time.erl#L58" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> format_duration_ms(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+<p>Format duration in milliseconds to human-readable string.</p>
+  </section>
+</section>
+<section class="detail" id="format_timestamp/1">
+
+  <div class="detail-header">
+    <a href="#format_timestamp/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">format_timestamp(TimestampMs)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_time.erl#L74" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> format_timestamp(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+<p>Format timestamp to ISO 8601 string.</p>
+  </section>
+</section>
+<section class="detail" id="is_expired/2">
+
+  <div class="detail-header">
+    <a href="#is_expired/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">is_expired(StartTimestamp, TimeoutMs)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_time.erl#L44" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> is_expired(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+
+      </div>
+
+<p>Check if timeout has expired.</p>
+  </section>
+</section>
+<section class="detail" id="minutes_to_ms/1">
+
+  <div class="detail-header">
+    <a href="#minutes_to_ms/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">minutes_to_ms(Minutes)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_time.erl#L101" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> minutes_to_ms(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>().</pre>
+
+      </div>
+
+<p>Convert minutes to milliseconds.</p>
+  </section>
+</section>
+<section class="detail" id="ms_to_seconds/1">
+
+  <div class="detail-header">
+    <a href="#ms_to_seconds/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">ms_to_seconds(Ms)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_time.erl#L96" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> ms_to_seconds(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>().</pre>
+
+      </div>
+
+<p>Convert milliseconds to seconds (truncates).</p>
+  </section>
+</section>
+<section class="detail" id="seconds_to_ms/1">
+
+  <div class="detail-header">
+    <a href="#seconds_to_ms/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">seconds_to_ms(Seconds)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_time.erl#L91" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> seconds_to_ms(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>().</pre>
+
+      </div>
+
+<p>Convert seconds to milliseconds.</p>
+  </section>
+</section>
+<section class="detail" id="time_remaining/2">
+
+  <div class="detail-header">
+    <a href="#time_remaining/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">time_remaining(StartTimestamp, TimeoutMs)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_time.erl#L51" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> time_remaining(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>().</pre>
+
+      </div>
+
+<p>Calculate remaining time before timeout (in milliseconds). Returns 0 if already expired.</p>
+  </section>
+</section>
+<section class="detail" id="timestamp/0">
+
+  <div class="detail-header">
+    <a href="#timestamp/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">timestamp()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_time.erl#L29" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> timestamp() -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>().</pre>
+
+      </div>
+
+<p>Get current timestamp in milliseconds since epoch.</p>
+  </section>
+</section>
+<section class="detail" id="timestamp_microseconds/0">
+
+  <div class="detail-header">
+    <a href="#timestamp_microseconds/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">timestamp_microseconds()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_time.erl#L34" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> timestamp_microseconds() -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>().</pre>
+
+      </div>
+
+<p>Get current timestamp in microseconds since epoch.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.9.2" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.9.2">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

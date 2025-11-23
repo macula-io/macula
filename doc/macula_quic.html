@@ -1,103 +1,509 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_quic</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_quic</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   Main API module for Macula QUIC transport.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.9.2">
 
 
-<h2><a name="description">Description</a></h2>
-   Main API module for Macula QUIC transport.
-   Provides a simplified wrapper around the quicer library.
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#accept-2">accept/2</a></td><td>Accept an incoming connection on a listener.</td></tr>
-<tr><td valign="top"><a href="#accept_stream-2">accept_stream/2</a></td><td>Accept an incoming stream on a connection.</td></tr>
-<tr><td valign="top"><a href="#async_send-2">async_send/2</a></td><td>Send data on a stream asynchronously (non-blocking).</td></tr>
-<tr><td valign="top"><a href="#close-1">close/1</a></td><td>Close a listener, connection, or stream.</td></tr>
-<tr><td valign="top"><a href="#connect-4">connect/4</a></td><td>Connect to a QUIC server.</td></tr>
-<tr><td valign="top"><a href="#listen-2">listen/2</a></td><td>Start a QUIC listener on the specified port.</td></tr>
-<tr><td valign="top"><a href="#open_stream-1">open_stream/1</a></td><td>Open a new bidirectional stream on a connection.</td></tr>
-<tr><td valign="top"><a href="#recv-2">recv/2</a></td><td>Receive data from a stream (blocking).</td></tr>
-<tr><td valign="top"><a href="#send-2">send/2</a></td><td>Send data on a stream (blocking).</td></tr>
-</table>
+    <title>macula_quic — macula v0.9.2</title>
 
-<h2><a name="functions">Function Details</a></h2>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-<h3 class="function"><a name="accept-2">accept/2</a></h3>
-<div class="spec">
-<p><code>accept(ListenerPid::pid(), Timeout::timeout()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Accept an incoming connection on a listener.
-  After accepting, the connection needs handshake to complete.</p>
+    <script defer src="dist/sidebar_items-91483A11.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
 
-<h3 class="function"><a name="accept_stream-2">accept_stream/2</a></h3>
-<div class="spec">
-<p><code>accept_stream(ConnPid::pid(), Timeout::timeout()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Accept an incoming stream on a connection.</p>
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
 
-<h3 class="function"><a name="async_send-2">async_send/2</a></h3>
-<div class="spec">
-<p><code>async_send(StreamPid::pid(), Data::binary()) -&gt; ok | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Send data on a stream asynchronously (non-blocking).
-  This returns immediately without waiting for QUIC flow control.</p>
+<div class="body-wrapper">
 
-<h3 class="function"><a name="close-1">close/1</a></h3>
-<div class="spec">
-<p><code>close(Pid::pid()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Close a listener, connection, or stream.</p>
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
 
-<h3 class="function"><a name="connect-4">connect/4</a></h3>
-<div class="spec">
-<p><code>connect(Host::string() | <a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-ip_address" docgen-rel="seetype" docgen-href="kernel:inet#ip_address/0">inet:ip_address()</a>, Port::<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>, Opts::list(), Timeout::timeout()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Connect to a QUIC server.
-  Options:
-    {alpn, [Protocol]} - List of ALPN protocols
-    {verify, none | verify_peer} - Certificate verification mode</p>
+<nav id="sidebar" class="sidebar">
 
-<h3 class="function"><a name="listen-2">listen/2</a></h3>
-<div class="spec">
-<p><code>listen(Port::<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>, Opts::list()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Start a QUIC listener on the specified port.
-  Options:
-    {cert, CertFile} - Path to PEM certificate file
-    {key, KeyFile} - Path to PEM private key file
-    {alpn, [Protocol]} - List of ALPN protocols (e.g., ["macula"])
-    {peer_unidi_stream_count, N} - Max unidirectional streams
-    {peer_bidi_stream_count, N} - Max bidirectional streams</p>
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
 
-<h3 class="function"><a name="open_stream-1">open_stream/1</a></h3>
-<div class="spec">
-<p><code>open_stream(ConnPid::pid()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Open a new bidirectional stream on a connection.</p>
+        <a href="readme.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
 
-<h3 class="function"><a name="recv-2">recv/2</a></h3>
-<div class="spec">
-<p><code>recv(StreamPid::pid(), Timeout::timeout()) -&gt; {ok, binary()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Receive data from a stream (blocking).</p>
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.9.2
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
 
-<h3 class="function"><a name="send-2">send/2</a></h3>
-<div class="spec">
-<p><code>send(StreamPid::pid(), Data::binary()) -&gt; ok | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Send data on a stream (blocking).</p>
-<hr>
+<output role="status" id="toast"></output>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_quic</span> 
+      <small class="app-vsn" translate="no">(macula v0.9.2)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_quic.erl#L7" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+    <section id="moduledoc">
+<p>Main API module for Macula QUIC transport. Provides a simplified wrapper around the quicer library.</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#accept/2" data-no-tooltip="" translate="no">accept(ListenerPid, Timeout)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Accept an incoming connection on a listener. After accepting, the connection needs handshake to complete.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#accept_stream/2" data-no-tooltip="" translate="no">accept_stream(ConnPid, Timeout)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Accept an incoming stream on a connection.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#async_send/2" data-no-tooltip="" translate="no">async_send(StreamPid, Data)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Send data on a stream asynchronously (non-blocking). This returns immediately without waiting for QUIC flow control.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#close/1" data-no-tooltip="" translate="no">close(Pid)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Close a listener, connection, or stream.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#connect/4" data-no-tooltip="" translate="no">connect(Host, Port, Opts, Timeout)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Connect to a QUIC server. Options: {alpn, [Protocol]} - List of ALPN protocols {verify, none | verify_peer} - Certificate verification mode</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#listen/2" data-no-tooltip="" translate="no">listen(Port, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Start a QUIC listener on the specified port. Options: {cert, CertFile} - Path to PEM certificate file {key, KeyFile} - Path to PEM private key file {alpn, [Protocol]} - List of ALPN protocols (e.g., [&quot;macula&quot;]) {peer_unidi_stream_count, N} - Max unidirectional streams {peer_bidi_stream_count, N} - Max bidirectional streams</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#open_stream/1" data-no-tooltip="" translate="no">open_stream(ConnPid)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Open a new bidirectional stream on a connection.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#recv/2" data-no-tooltip="" translate="no">recv(StreamPid, Timeout)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Receive data from a stream (blocking).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#send/2" data-no-tooltip="" translate="no">send(StreamPid, Data)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Send data on a stream (blocking).</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="accept/2">
+
+  <div class="detail-header">
+    <a href="#accept/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">accept(ListenerPid, Timeout)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_quic.erl#L82" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> accept(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:timeout/0">timeout</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Accept an incoming connection on a listener. After accepting, the connection needs handshake to complete.</p>
+  </section>
+</section>
+<section class="detail" id="accept_stream/2">
+
+  <div class="detail-header">
+    <a href="#accept_stream/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">accept_stream(ConnPid, Timeout)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_quic.erl#L96" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> accept_stream(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:timeout/0">timeout</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Accept an incoming stream on a connection.</p>
+  </section>
+</section>
+<section class="detail" id="async_send/2">
+
+  <div class="detail-header">
+    <a href="#async_send/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">async_send(StreamPid, Data)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_quic.erl#L116" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> async_send(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Send data on a stream asynchronously (non-blocking). This returns immediately without waiting for QUIC flow control.</p>
+  </section>
+</section>
+<section class="detail" id="close/1">
+
+  <div class="detail-header">
+    <a href="#close/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">close(Pid)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_quic.erl#L135" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> close(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Close a listener, connection, or stream.</p>
+  </section>
+</section>
+<section class="detail" id="connect/4">
+
+  <div class="detail-header">
+    <a href="#connect/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">connect(Host, Port, Opts, Timeout)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_quic.erl#L64" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> connect(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>() | <a href="https://www.erlang.org/doc/apps/kernel/inet.html#t:ip_address/0">inet:ip_address</a>(), <a href="https://www.erlang.org/doc/apps/kernel/inet.html#t:port_number/0">inet:port_number</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:timeout/0">timeout</a>()) ->
+                 {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Connect to a QUIC server. Options: {alpn, [Protocol]} - List of ALPN protocols {verify, none | verify_peer} - Certificate verification mode</p>
+  </section>
+</section>
+<section class="detail" id="listen/2">
+
+  <div class="detail-header">
+    <a href="#listen/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">listen(Port, Opts)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_quic.erl#L34" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> listen(<a href="https://www.erlang.org/doc/apps/kernel/inet.html#t:port_number/0">inet:port_number</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Start a QUIC listener on the specified port. Options: {cert, CertFile} - Path to PEM certificate file {key, KeyFile} - Path to PEM private key file {alpn, [Protocol]} - List of ALPN protocols (e.g., [&quot;macula&quot;]) {peer_unidi_stream_count, N} - Max unidirectional streams {peer_bidi_stream_count, N} - Max bidirectional streams</p>
+  </section>
+</section>
+<section class="detail" id="open_stream/1">
+
+  <div class="detail-header">
+    <a href="#open_stream/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">open_stream(ConnPid)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_quic.erl#L102" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> open_stream(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Open a new bidirectional stream on a connection.</p>
+  </section>
+</section>
+<section class="detail" id="recv/2">
+
+  <div class="detail-header">
+    <a href="#recv/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">recv(StreamPid, Timeout)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_quic.erl#L124" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> recv(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:timeout/0">timeout</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Receive data from a stream (blocking).</p>
+  </section>
+</section>
+<section class="detail" id="send/2">
+
+  <div class="detail-header">
+    <a href="#send/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">send(StreamPid, Data)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_quic.erl#L107" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> send(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Send data on a stream (blocking).</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.9.2" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.9.2">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

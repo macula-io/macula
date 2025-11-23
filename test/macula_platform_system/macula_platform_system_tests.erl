@@ -172,7 +172,7 @@ test_supervisor_restarts_crashed_child() ->
     timer:sleep(200),
 
     %% Get new child PID
-    [{_Id, ChildPid2, _Type, _Modules}] = supervisor:which_children(Pid),
+    [{_, ChildPid2, _, _}] = supervisor:which_children(Pid),
 
     %% Verify child was restarted with new PID
     ?assertNot(ChildPid1 =:= ChildPid2),

@@ -1,109 +1,585 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_routing_server</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.9.2">
 
-<h1>Module macula_routing_server</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   GenServer managing Kademlia DHT routing table and operations.
 
-<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
+    <title>macula_routing_server — macula v0.9.2</title>
 
-<h2><a name="description">Description</a></h2>
-   GenServer managing Kademlia DHT routing table and operations.
-   Integrates all routing components: table, DHT algorithms, protocol.
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_node-2">add_node/2</a></td><td>Add node to routing table.</td></tr>
-<tr><td valign="top"><a href="#find_closest-3">find_closest/3</a></td><td>Find k closest nodes to target.</td></tr>
-<tr><td valign="top"><a href="#find_value-3">find_value/3</a></td><td>Find value in DHT using iterative lookup.</td></tr>
-<tr><td valign="top"><a href="#get_all_keys-1">get_all_keys/1</a></td><td>Get all keys from local storage.</td></tr>
-<tr><td valign="top"><a href="#get_local-2">get_local/2</a></td><td>Get value from local storage.</td></tr>
-<tr><td valign="top"><a href="#get_routing_table-1">get_routing_table/1</a></td><td>Get routing table snapshot.</td></tr>
-<tr><td valign="top"><a href="#handle_message-2">handle_message/2</a></td><td>Handle incoming DHT message and return reply.</td></tr>
-<tr><td valign="top"><a href="#size-1">size/1</a></td><td>Get number of nodes in routing table.</td></tr>
-<tr><td valign="top"><a href="#start_link-2">start_link/2</a></td><td>Start routing server with registered name macula_routing_server.</td></tr>
-<tr><td valign="top"><a href="#store-3">store/3</a></td><td>Store value in DHT by propagating to k closest nodes.</td></tr>
-<tr><td valign="top"><a href="#store_local-3">store_local/3</a></td><td>Store value locally.</td></tr>
-</table>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-<h2><a name="functions">Function Details</a></h2>
+    <script defer src="dist/sidebar_items-91483A11.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
 
-<h3 class="function"><a name="add_node-2">add_node/2</a></h3>
-<div class="spec">
-<p><code>add_node(Pid::pid(), NodeInfo::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_routing_bucket.html#type-node_info" docgen-rel="seetype" docgen-href="macula:macula_routing_bucket#node_info/0">macula_routing_bucket:node_info()</a>) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Add node to routing table.</p>
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
 
-<h3 class="function"><a name="find_closest-3">find_closest/3</a></h3>
-<div class="spec">
-<p><code>find_closest(Pid::pid(), Target::binary(), K::pos_integer()) -&gt; [<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_routing_bucket.html#type-node_info" docgen-rel="seetype" docgen-href="macula:macula_routing_bucket#node_info/0">macula_routing_bucket:node_info()</a>]</code><br></p>
-<p> </p>
-</div><p>Find k closest nodes to target.</p>
+<div class="body-wrapper">
 
-<h3 class="function"><a name="find_value-3">find_value/3</a></h3>
-<div class="spec">
-<p><code>find_value(Pid::pid(), Key::binary(), K::pos_integer()) -&gt; {ok, term()} | {nodes, [<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_routing_bucket.html#type-node_info" docgen-rel="seetype" docgen-href="macula:macula_routing_bucket#node_info/0">macula_routing_bucket:node_info()</a>]} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Find value in DHT using iterative lookup.
-  Returns {ok, Value} if found, {nodes, Nodes} if not found.</p>
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
 
-<h3 class="function"><a name="get_all_keys-1">get_all_keys/1</a></h3>
-<div class="spec">
-<p><code>get_all_keys(Pid::pid()) -&gt; {ok, [binary()]} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Get all keys from local storage.</p>
+<nav id="sidebar" class="sidebar">
 
-<h3 class="function"><a name="get_local-2">get_local/2</a></h3>
-<div class="spec">
-<p><code>get_local(Pid::pid(), Key::binary()) -&gt; {ok, term()} | not_found</code><br></p>
-<p> </p>
-</div><p>Get value from local storage.</p>
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
 
-<h3 class="function"><a name="get_routing_table-1">get_routing_table/1</a></h3>
-<div class="spec">
-<p><code>get_routing_table(Pid::pid()) -&gt; <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_routing_table.html#type-routing_table" docgen-rel="seetype" docgen-href="macula:macula_routing_table#routing_table/0">macula_routing_table:routing_table()</a></code><br></p>
-<p> </p>
-</div><p>Get routing table snapshot.</p>
+        <a href="readme.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
 
-<h3 class="function"><a name="handle_message-2">handle_message/2</a></h3>
-<div class="spec">
-<p><code>handle_message(Pid::pid(), Message::map()) -&gt; map()</code><br></p>
-<p> </p>
-</div><p>Handle incoming DHT message and return reply.</p>
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.9.2
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
 
-<h3 class="function"><a name="size-1">size/1</a></h3>
-<div class="spec">
-<p><code>size(Pid::pid()) -&gt; non_neg_integer()</code><br></p>
-<p> </p>
-</div><p>Get number of nodes in routing table.</p>
+<output role="status" id="toast"></output>
 
-<h3 class="function"><a name="start_link-2">start_link/2</a></h3>
-<div class="spec">
-<p><code>start_link(LocalNodeId::binary(), Config::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Start routing server with registered name macula_routing_server.</p>
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
 
-<h3 class="function"><a name="store-3">store/3</a></h3>
-<div class="spec">
-<p><code>store(Pid::pid(), Key::binary(), Value::term()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Store value in DHT by propagating to k closest nodes.
-  Stores locally first, then sends STORE messages to k closest peers.</p>
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_routing_server</span> 
+      <small class="app-vsn" translate="no">(macula v0.9.2)</small>
 
-<h3 class="function"><a name="store_local-3">store_local/3</a></h3>
-<div class="spec">
-<p><code>store_local(Pid::pid(), Key::binary(), Value::term()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Store value locally.</p>
-<hr>
+    </h1>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+      <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L7" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+    <section id="moduledoc">
+<p>GenServer managing Kademlia DHT routing table and operations. Integrates all routing components: table, DHT algorithms, protocol.</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#add_node/2" data-no-tooltip="" translate="no">add_node(Pid, NodeInfo)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Add node to routing table.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_closest/3" data-no-tooltip="" translate="no">find_closest(Pid, Target, K)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find k closest nodes to target.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_value/3" data-no-tooltip="" translate="no">find_value(Pid, Key, K)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find value in DHT using iterative lookup. Returns {ok, Value} if found, {nodes, Nodes} if not found.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_all_keys/1" data-no-tooltip="" translate="no">get_all_keys(Pid)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get all keys from local storage.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_local/2" data-no-tooltip="" translate="no">get_local(Pid, Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get value from local storage.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_routing_table/1" data-no-tooltip="" translate="no">get_routing_table(Pid)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get routing table snapshot.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_message/2" data-no-tooltip="" translate="no">handle_message(Pid, Message)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Handle incoming DHT message and return reply.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#size/1" data-no-tooltip="" translate="no">size(Pid)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get number of nodes in routing table.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start_link/2" data-no-tooltip="" translate="no">start_link(LocalNodeId, Config)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Start routing server with registered name macula_routing_server.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#store/3" data-no-tooltip="" translate="no">store(Pid, Key, Value)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Store value in DHT by propagating to k closest nodes. Stores locally first, then sends STORE messages to k closest peers.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#store_local/3" data-no-tooltip="" translate="no">store_local(Pid, Key, Value)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Store value locally.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="add_node/2">
+
+  <div class="detail-header">
+    <a href="#add_node/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">add_node(Pid, NodeInfo)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L56" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> add_node(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="macula_routing_bucket.html#t:node_info/0">macula_routing_bucket:node_info</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Add node to routing table.</p>
+  </section>
+</section>
+<section class="detail" id="find_closest/3">
+
+  <div class="detail-header">
+    <a href="#find_closest/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">find_closest(Pid, Target, K)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L61" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> find_closest(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> [<a href="macula_routing_bucket.html#t:node_info/0">macula_routing_bucket:node_info</a>()].</pre>
+
+      </div>
+
+<p>Find k closest nodes to target.</p>
+  </section>
+</section>
+<section class="detail" id="find_value/3">
+
+  <div class="detail-header">
+    <a href="#find_value/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">find_value(Pid, Key, K)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L89" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> find_value(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) ->
+                    {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {nodes, [<a href="macula_routing_bucket.html#t:node_info/0">macula_routing_bucket:node_info</a>()]} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Find value in DHT using iterative lookup. Returns {ok, Value} if found, {nodes, Nodes} if not found.</p>
+  </section>
+</section>
+<section class="detail" id="get_all_keys/1">
+
+  <div class="detail-header">
+    <a href="#get_all_keys/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_all_keys(Pid)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L82" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_all_keys(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> {ok, [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()]} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Get all keys from local storage.</p>
+  </section>
+</section>
+<section class="detail" id="get_local/2">
+
+  <div class="detail-header">
+    <a href="#get_local/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_local(Pid, Key)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L77" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_local(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | not_found.</pre>
+
+      </div>
+
+<p>Get value from local storage.</p>
+  </section>
+</section>
+<section class="detail" id="get_routing_table/1">
+
+  <div class="detail-header">
+    <a href="#get_routing_table/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_routing_table(Pid)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L94" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_routing_table(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> <a href="macula_routing_table.html#t:routing_table/0">macula_routing_table:routing_table</a>().</pre>
+
+      </div>
+
+<p>Get routing table snapshot.</p>
+  </section>
+</section>
+<section class="detail" id="handle_message/2">
+
+  <div class="detail-header">
+    <a href="#handle_message/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_message(Pid, Message)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L104" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> handle_message(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>().</pre>
+
+      </div>
+
+<p>Handle incoming DHT message and return reply.</p>
+  </section>
+</section>
+<section class="detail" id="size/1">
+
+  <div class="detail-header">
+    <a href="#size/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">size(Pid)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L99" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> size(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>().</pre>
+
+      </div>
+
+<p>Get number of nodes in routing table.</p>
+  </section>
+</section>
+<section class="detail" id="start_link/2">
+
+  <div class="detail-header">
+    <a href="#start_link/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">start_link(LocalNodeId, Config)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L51" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> start_link(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Start routing server with registered name macula_routing_server.</p>
+  </section>
+</section>
+<section class="detail" id="store/3">
+
+  <div class="detail-header">
+    <a href="#store/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">store(Pid, Key, Value)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L72" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> store(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Store value in DHT by propagating to k closest nodes. Stores locally first, then sends STORE messages to k closest peers.</p>
+  </section>
+</section>
+<section class="detail" id="store_local/3">
+
+  <div class="detail-header">
+    <a href="#store_local/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">store_local(Pid, Key, Value)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_routing_system/macula_routing_server.erl#L66" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> store_local(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Store value locally.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.9.2" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.9.2">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>
