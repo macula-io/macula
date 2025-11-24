@@ -328,7 +328,7 @@ handle_call(get_node_id, _From, State) ->
 handle_call({register_workload, Opts}, _From, State) ->
     %% Query Platform Layer for current state
     Leader = macula_leader_election:get_leader(),
-    Members = macula_leader_election:get_members(),
+    {ok, Members} = macula_leader_election:get_members(),
 
     WorkloadName = maps:get(workload_name, Opts, <<"unknown">>),
     Capabilities = maps:get(capabilities, Opts, []),
