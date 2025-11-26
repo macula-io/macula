@@ -268,16 +268,11 @@ route_to_gateway({ok, {MessageType, Message}}, Stream, State) when State#state.g
     io:format("[QuicServer] Decoded message type: ~p~n", [MessageType]),
     Gateway = State#state.gateway,
 
-    %% Route to gateway via gen_server:call with extended timeout
-    %% (mesh connection creation can take longer than default 5s)
-    case gen_server:call(Gateway, {route_message, MessageType, Message, Stream}, 30000) of
-        ok ->
-            io:format("[QuicServer] Message routed successfully~n"),
-            {noreply, State};
-        {error, Reason} ->
-            io:format("[QuicServer] Routing failed: ~p~n", [Reason]),
-            {noreply, State}
-    end;
+    %% Route to gateway via gen_server:cast (async) to prevent blocking
+    %% This avoids timeout issues when gateway is busy processing other messages
+    gen_server:cast(Gateway, {route_message, MessageType, Message, Stream}),
+    io:format("[QuicServer] Message routed (async)~n"),
+    {noreply, State};
 
 %% Pattern 2: No gateway configured yet - log warning
 route_to_gateway({ok, {MessageType, _Message}}, _Stream, State) ->

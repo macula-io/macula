@@ -29,6 +29,8 @@
 %%   {alpn, [Protocol]} - List of ALPN protocols (e.g., ["macula"])
 %%   {peer_unidi_stream_count, N} - Max unidirectional streams
 %%   {peer_bidi_stream_count, N} - Max bidirectional streams
+%%   {idle_timeout_ms, N} - Connection idle timeout in milliseconds
+%%   {keep_alive_interval_ms, N} - Keep-alive PING interval in milliseconds
 %% @end
 -spec listen(inet:port_number(), list()) -> {ok, pid()} | {error, term()}.
 listen(Port, Opts) ->
@@ -39,6 +41,15 @@ listen(Port, Opts) ->
     PeerUnidiStreamCount = proplists:get_value(peer_unidi_stream_count, Opts, 3),
     PeerBidiStreamCount = proplists:get_value(peer_bidi_stream_count, Opts, 100),
 
+    %% Timeout and keep-alive configuration for mesh stability
+    %% - idle_timeout_ms: How long connection can be idle before closing (60s default)
+    %% - keep_alive_interval_ms: PING interval to keep connection alive (20s default)
+    %% - Keep-alive MUST be < idle_timeout to prevent premature closure
+    %% - 20s keep-alive stays ahead of typical NAT timeouts (20-30s)
+    IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 60000),
+    KeepAliveIntervalMs = proplists:get_value(keep_alive_interval_ms, Opts, 20000),
+    HandshakeIdleTimeoutMs = proplists:get_value(handshake_idle_timeout_ms, Opts, 30000),
+
     %% Build quicer listener options
     ListenerOpts = [
         {certfile, CertFile},
@@ -46,18 +57,23 @@ listen(Port, Opts) ->
         {alpn, AlpnProtocols},
         {peer_unidi_stream_count, PeerUnidiStreamCount},
         {peer_bidi_stream_count, PeerBidiStreamCount},
-        {idle_timeout_ms, 0}  % Disable QUIC idle timeout (application handles keep-alive)
+        {idle_timeout_ms, IdleTimeoutMs},
+        {keep_alive_interval_ms, KeepAliveIntervalMs},
+        {handshake_idle_timeout_ms, HandshakeIdleTimeoutMs}
     ],
 
     %% Start QUIC listener
     %% The calling process becomes the owner and will receive connection messages
-    io:format("[QUIC] Starting listener on port ~p~n", [Port]),
+    io:format("[QUIC] Starting listener on port ~p with idle_timeout=~pms, keep_alive=~pms~n",
+              [Port, IdleTimeoutMs, KeepAliveIntervalMs]),
     quicer:listen(Port, ListenerOpts).
 
 %% @doc Connect to a QUIC server.
 %% Options:
 %%   {alpn, [Protocol]} - List of ALPN protocols
 %%   {verify, none | verify_peer} - Certificate verification mode
+%%   {idle_timeout_ms, N} - Connection idle timeout in milliseconds
+%%   {keep_alive_interval_ms, N} - Keep-alive PING interval in milliseconds
 %% @end
 -spec connect(string() | inet:ip_address(), inet:port_number(), list(), timeout()) ->
     {ok, pid()} | {error, term()}.
@@ -66,14 +82,25 @@ connect(Host, Port, Opts, Timeout) ->
     AlpnProtocols = proplists:get_value(alpn, Opts, ["macula"]),
     Verify = proplists:get_value(verify, Opts, none),
 
+    %% Timeout and keep-alive configuration for mesh stability
+    %% CRITICAL: Both endpoints negotiate idle timeout - the SMALLER value wins
+    %% So we must configure our client with proper values too
+    IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 60000),
+    KeepAliveIntervalMs = proplists:get_value(keep_alive_interval_ms, Opts, 20000),
+    HandshakeIdleTimeoutMs = proplists:get_value(handshake_idle_timeout_ms, Opts, 30000),
+
     %% Build quicer options
     QuicerOpts = [
         {alpn, AlpnProtocols},
         {verify, Verify},
-        {idle_timeout_ms, 0}  % Disable QUIC idle timeout (application handles keep-alive)
+        {idle_timeout_ms, IdleTimeoutMs},
+        {keep_alive_interval_ms, KeepAliveIntervalMs},
+        {handshake_idle_timeout_ms, HandshakeIdleTimeoutMs}
     ],
 
     %% Connect
+    io:format("[QUIC] Connecting to ~s:~p with idle_timeout=~pms, keep_alive=~pms~n",
+              [Host, Port, IdleTimeoutMs, KeepAliveIntervalMs]),
     quicer:connect(Host, Port, QuicerOpts, Timeout).
 
 %% @doc Accept an incoming connection on a listener.

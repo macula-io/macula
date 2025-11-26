@@ -26,7 +26,7 @@
 -include("macula_config.hrl").
 
 %% API
--export([start_link/2, send_message/3, get_status/1, default_config/0]).
+-export([start_link/2, send_message/3, send_message_async/3, get_status/1, default_config/0]).
 
 %% API for testing
 -export([decode_messages/2]).
@@ -70,6 +70,13 @@ default_config() ->
 -spec send_message(pid(), atom(), map()) -> ok | {error, term()}.
 send_message(Pid, Type, Msg) ->
     gen_server:call(Pid, {send_message, Type, Msg}, 5000).
+
+%% @doc Send message asynchronously (fire-and-forget).
+%% Use for operations where blocking is unacceptable and failures can be tolerated.
+%% The message will be sent if connected, silently dropped if not.
+-spec send_message_async(pid(), atom(), map()) -> ok.
+send_message_async(Pid, Type, Msg) ->
+    gen_server:cast(Pid, {send_message_async, Type, Msg}).
 
 -spec get_status(pid()) -> connecting | connected | disconnected | error.
 get_status(Pid) ->
@@ -125,6 +132,21 @@ handle_call(get_status, _From, State) ->
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
+%% @doc Handle async send message - fire and forget.
+%% Sends if connected, logs warning and drops if not.
+handle_cast({send_message_async, Type, Msg}, #state{status = connected, stream = Stream} = State) ->
+    case send_message_raw(Type, Msg, Stream) of
+        ok ->
+            {noreply, State};
+        {error, Reason} ->
+            ?LOG_WARNING("Async send failed for type ~p: ~p", [Type, Reason]),
+            {noreply, State}
+    end;
+
+handle_cast({send_message_async, Type, _Msg}, State) ->
+    ?LOG_DEBUG("Async send dropped (not connected): type=~p, status=~p", [Type, State#state.status]),
+    {noreply, State};
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -145,10 +167,9 @@ handle_info({quic, Data, Stream, _Props}, State) when is_binary(Data) ->
     handle_stream_data(Stream =:= MainStream, Data, Stream, State);
 
 %% Handle QUIC control messages (non-binary Data)
-handle_info({quic, ControlMsg, _Stream, _Props}, State) when is_atom(ControlMsg) ->
-    %% QUIC control message (send_shutdown_complete, etc.) - ignore
-    ?LOG_DEBUG("Ignoring QUIC control message: ~p", [ControlMsg]),
-    {noreply, State};
+handle_info({quic, ControlMsg, Stream, _Props}, State) when is_atom(ControlMsg) ->
+    %% QUIC control message - check if it indicates closure
+    handle_quic_control_message(ControlMsg, Stream, State);
 
 %% Handle keep-alive tick - send PING message
 handle_info(keepalive_tick, #state{status = connected, stream = Stream} = State) ->
@@ -193,6 +214,61 @@ handle_stream_data(false, _Data, Stream, State) ->
     ?LOG_WARNING("Received data from unknown stream: ~p", [Stream]),
     {noreply, State}.
 
+%% @doc Handle QUIC control messages - trigger reconnect on connection/stream closure.
+-spec handle_quic_control_message(atom(), pid(), #state{}) -> {noreply, #state{}}.
+
+%% Stream closed - trigger reconnection
+handle_quic_control_message(peer_send_shutdown, _Stream, State) ->
+    ?LOG_WARNING("QUIC stream closed by peer (peer_send_shutdown), reconnecting..."),
+    trigger_reconnect(State);
+
+handle_quic_control_message(peer_send_aborted, _Stream, State) ->
+    ?LOG_WARNING("QUIC stream aborted by peer, reconnecting..."),
+    trigger_reconnect(State);
+
+handle_quic_control_message(send_shutdown_complete, _Stream, State) ->
+    ?LOG_WARNING("QUIC send shutdown complete, reconnecting..."),
+    trigger_reconnect(State);
+
+handle_quic_control_message(shutdown, _Stream, State) ->
+    ?LOG_WARNING("QUIC shutdown, reconnecting..."),
+    trigger_reconnect(State);
+
+handle_quic_control_message(closed, _Stream, State) ->
+    ?LOG_WARNING("QUIC connection closed, reconnecting..."),
+    trigger_reconnect(State);
+
+%% Other control messages - log and ignore
+handle_quic_control_message(ControlMsg, _Stream, State) ->
+    ?LOG_DEBUG("Ignoring QUIC control message: ~p", [ControlMsg]),
+    {noreply, State}.
+
+%% @doc Trigger reconnection by cleaning up and scheduling reconnect.
+-spec trigger_reconnect(#state{}) -> {noreply, #state{}}.
+trigger_reconnect(#state{stream = Stream, connection = Conn, keepalive_timer = Timer} = State) ->
+    %% Cancel keep-alive timer
+    case Timer of
+        undefined -> ok;
+        _ -> erlang:cancel_timer(Timer)
+    end,
+
+    %% Clean up old connection resources
+    catch macula_quic:close(Stream),
+    catch macula_quic:close(Conn),
+
+    %% Schedule reconnect after delay
+    erlang:send_after(?CONNECT_RETRY_DELAY, self(), connect),
+
+    %% Update state to disconnected
+    NewState = State#state{
+        connection = undefined,
+        stream = undefined,
+        status = disconnected,
+        recv_buffer = <<>>,
+        keepalive_timer = undefined
+    },
+    {noreply, NewState}.
+
 %% @doc Establish QUIC connection and perform handshake.
 -spec do_connect(#state{}) -> {ok, #state{}} | {error, term()}.
 do_connect(State) ->
@@ -211,7 +287,10 @@ do_connect(State) ->
 build_quic_opts() ->
     [
         {alpn, ["macula"]},
-        {verify, none}  %% TODO(v0.9.0): Add proper TLS verification - see TODO.md
+        {verify, none},  %% TODO(v0.9.0): Add proper TLS verification - see TODO.md
+        {idle_timeout_ms, 60000},
+        {keep_alive_interval_ms, 20000},
+        {handshake_idle_timeout_ms, 30000}
     ].
 
 %% @doc Attempt QUIC connection and stream setup
@@ -316,11 +395,33 @@ get_advertise_endpoint() ->
             construct_default_endpoint()
     end.
 
-%% @doc Construct default endpoint from NODE_HOST environment variable
+%% @doc Construct default endpoint from MACULA_HOSTNAME environment variable.
+%% Also uses MACULA_QUIC_PORT if set, otherwise defaults to 9443.
 -spec construct_default_endpoint() -> binary().
 construct_default_endpoint() ->
-    NodeHost = list_to_binary(os:getenv("NODE_HOST", "localhost")),
-    <<"https://", NodeHost/binary, ":9443">>.
+    NodeHost = get_hostname_from_env(),
+    Port = list_to_binary(os:getenv("MACULA_QUIC_PORT", "9443")),
+    <<"https://", NodeHost/binary, ":", Port/binary>>.
+
+%% @doc Get hostname from environment variables.
+%% Checks MACULA_HOSTNAME first (Docker), then NODE_HOST, then HOSTNAME, fallback to localhost.
+-spec get_hostname_from_env() -> binary().
+get_hostname_from_env() ->
+    get_hostname_from_env([
+        "MACULA_HOSTNAME",  %% Docker compose sets this
+        "NODE_HOST",        %% Legacy/alternative
+        "HOSTNAME"          %% Standard shell variable
+    ]).
+
+%% @doc Try environment variables in order, return first non-false value.
+-spec get_hostname_from_env([string()]) -> binary().
+get_hostname_from_env([]) ->
+    <<"localhost">>;
+get_hostname_from_env([EnvVar | Rest]) ->
+    case os:getenv(EnvVar) of
+        false -> get_hostname_from_env(Rest);
+        Value -> list_to_binary(Value)
+    end.
 
 %% @doc Register connected server in DHT routing table (best effort).
 %% If DHT is not running, logs warning but continues.

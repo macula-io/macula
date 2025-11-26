@@ -35,9 +35,11 @@
     get_all_clients/1,
     is_client_alive/2,
     store_client_stream/3,
+    store_client_stream/4,
     get_client_stream/2,
     get_stream_by_endpoint/2,
-    get_all_node_ids/1
+    get_all_node_ids/1,
+    broadcast/2
 ]).
 
 %% gen_server callbacks
@@ -124,6 +126,11 @@ get_stream_by_endpoint(Pid, Endpoint) ->
 -spec get_all_node_ids(pid()) -> [binary()].
 get_all_node_ids(Pid) ->
     gen_server:call(Pid, get_all_node_ids).
+
+%% @doc Broadcast a message to all connected clients.
+-spec broadcast(pid(), binary()) -> ok.
+broadcast(Pid, EncodedMsg) ->
+    gen_server:cast(Pid, {broadcast, EncodedMsg}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -229,6 +236,20 @@ handle_call(get_all_node_ids, _From, State) ->
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
+
+handle_cast({broadcast, EncodedMsg}, State) ->
+    %% Broadcast message to all connected clients
+    Streams = State#state.client_streams,
+    Count = maps:fold(fun(_NodeId, Stream, Acc) ->
+        case macula_quic:send(Stream, EncodedMsg) of
+            ok -> Acc + 1;
+            {error, Reason} ->
+                io:format("[Clients] Broadcast send failed: ~p~n", [Reason]),
+                Acc
+        end
+    end, 0, Streams),
+    io:format("[Clients] Broadcast sent to ~p client(s)~n", [Count]),
+    {noreply, State};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.

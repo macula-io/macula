@@ -427,6 +427,16 @@ handle_call({read_crdt, Key}, _From, State) ->
             end
     end.
 
+%% Async publish - fire-and-forget from caller's perspective
+handle_cast({publish_async, Topic, Payload, Opts}, State) ->
+    #state{gateway_pid = Gateway, realm = Realm} = State,
+
+    %% Send publish request to gateway via gen_server:cast (async)
+    %% Note: Opts are currently ignored for local clients
+    _ = Opts,
+    gen_server:cast(Gateway, {local_publish_async, Realm, Topic, Payload}),
+    {noreply, State};
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -435,24 +445,35 @@ handle_cast(_Msg, State) ->
 handle_info({publish, Topic, Payload}, State) ->
     #state{subscriptions = Subs} = State,
 
+    io:format("[LocalClient] Received publish message for topic ~s~n", [Topic]),
+    io:format("[LocalClient] Current subscriptions: ~p~n", [Subs]),
+
     %% Find all callbacks for subscriptions matching this topic
     %% (since we store SubRef -> {Topic, Callback})
-    maps:foreach(fun(_SubRef, {SubTopic, Callback}) ->
+    MatchCount = maps:fold(fun(SubRef, {SubTopic, Callback}, Acc) ->
+        io:format("[LocalClient] Checking SubRef=~p, SubTopic=~p against Topic=~p~n",
+                  [SubRef, SubTopic, Topic]),
         case SubTopic of
             Topic ->
                 %% Topic matches exactly, invoke callback
+                io:format("[LocalClient] MATCH FOUND! Invoking callback for topic ~s~n", [Topic]),
                 try
-                    Callback(Payload)
+                    Callback(Payload),
+                    io:format("[LocalClient] Callback completed successfully for topic ~s~n", [Topic])
                 catch
                     Class:Reason:Stacktrace ->
                         io:format("[LocalClient] Callback error for topic ~s: ~p:~p~n~p~n",
                                   [Topic, Class, Reason, Stacktrace])
-                end;
+                end,
+                Acc + 1;
             _ ->
                 %% Different topic, skip
-                ok
+                io:format("[LocalClient] No match: ~p =/= ~p~n", [SubTopic, Topic]),
+                Acc
         end
-    end, Subs),
+    end, 0, Subs),
+
+    io:format("[LocalClient] Total callbacks invoked for topic ~s: ~p~n", [Topic, MatchCount]),
 
     {noreply, State};
 

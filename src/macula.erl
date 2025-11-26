@@ -45,6 +45,8 @@
 -module(macula).
 -behaviour(macula_client_behaviour).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% Mesh Networking API
 -export([
     connect/2,
@@ -239,14 +241,20 @@ disconnect(Client) when is_pid(Client) ->
 -spec publish(Client :: client(), Topic :: topic(), Data :: event_data()) ->
     ok | {error, Reason :: term()}.
 publish(Client, Topic, Data) when is_pid(Client), is_binary(Topic) ->
-    macula_peer:publish(Client, Topic, Data).
+    publish(Client, Topic, Data, #{}).
 
 %% @doc Publish an event with options.
+%%
+%% This is fire-and-forget - returns ok immediately without blocking.
+%% Uses gen_server:cast to avoid blocking the caller (prevents LiveView freezes).
+%% Both macula_local_client and macula_peer handle {publish_async, ...} casts.
 -spec publish(Client :: client(), Topic :: topic(), Data :: event_data(),
               Opts :: options()) ->
     ok | {error, Reason :: term()}.
 publish(Client, Topic, Data, Opts) when is_pid(Client), is_binary(Topic), is_map(Opts) ->
-    macula_peer:publish(Client, Topic, Data, Opts).
+    %% Use cast for async fire-and-forget semantics (prevents UI freezes)
+    gen_server:cast(Client, {publish_async, Topic, Data, Opts}),
+    ok.
 
 %% @doc Subscribe to a topic.
 %%

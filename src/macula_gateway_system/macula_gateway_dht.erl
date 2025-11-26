@@ -27,6 +27,7 @@
     handle_find_node/2,
     handle_query/3,
     lookup_value/1,
+    forward_publish_to_bootstrap/1,
     send_to_peer/3,
     query_peer/3
 ]).
@@ -98,6 +99,8 @@ handle_query(FromPid, _QueryType, QueryData) ->
 
 %% @doc Look up a value from the DHT by key.
 %% Synchronous lookup from local DHT storage.
+%% NOTE: For pubsub, use forward_publish_to_bootstrap/2 instead of looking up
+%% subscribers locally - the bootstrap has the complete subscriber list.
 %% Returns list of subscribers for the given key.
 -spec lookup_value(binary()) -> {ok, list()} | {error, not_found}.
 lookup_value(Key) ->
@@ -121,6 +124,29 @@ lookup_value(Key) ->
             end
     end.
 
+%% @doc Forward a PUBLISH message to the bootstrap gateway for distribution.
+%% The bootstrap has all DHT subscriptions and can distribute to all subscribers.
+%% This avoids the problem of local DHT not having remote peer subscriptions.
+-spec forward_publish_to_bootstrap(map()) -> ok | {error, term()}.
+forward_publish_to_bootstrap(PubMsg) ->
+    %% Find the connection PID (connects to bootstrap)
+    Realm = application:get_env(macula, realm, <<"default">>),
+    case gproc:lookup_local_name({connection, Realm}) of
+        undefined ->
+            io:format("[DHT] No connection to bootstrap found~n"),
+            {error, no_connection};
+        ConnPid ->
+            io:format("[DHT] Forwarding PUBLISH to bootstrap for distribution~n"),
+            case macula_connection:send_message(ConnPid, publish, PubMsg) of
+                ok ->
+                    io:format("[DHT] PUBLISH forwarded to bootstrap successfully~n"),
+                    ok;
+                {error, Reason} ->
+                    io:format("[DHT] Failed to forward PUBLISH to bootstrap: ~p~n", [Reason]),
+                    {error, Reason}
+            end
+    end.
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -129,8 +155,36 @@ lookup_value(Key) ->
 %% Used for STORE operations that don't need a response.
 -spec send_to_peer(map(), atom(), map()) -> ok | {error, term()}.
 send_to_peer(NodeInfo, MessageType, Message) ->
-    %% Extract endpoint from node info
-    Endpoint = maps:get(endpoint, NodeInfo, undefined),
+    %% Extract endpoint - either from endpoint field or construct from address
+    Endpoint = case maps:get(endpoint, NodeInfo, undefined) of
+        undefined ->
+            %% No endpoint, try to construct from address tuple
+            case maps:get(address, NodeInfo, undefined) of
+                undefined ->
+                    undefined;
+                {Host, Port} when is_integer(Port) ->
+                    %% Construct "host:port" string from address tuple
+                    %% Note: peer_connector expects "host:port" format, NOT URL
+                    HostBin = case Host of
+                        {_, _, _, _} -> list_to_binary(inet:ntoa(Host));  % IPv4
+                        {_, _, _, _, _, _, _, _} -> list_to_binary(inet:ntoa(Host));  % IPv6
+                        _ when is_list(Host) -> list_to_binary(Host);
+                        _ when is_binary(Host) -> Host
+                    end,
+                    PortBin = integer_to_binary(Port),
+                    <<HostBin/binary, ":", PortBin/binary>>;
+                HostPortStr when is_binary(HostPortStr) ->
+                    %% Address is already a "host:port" string
+                    HostPortStr;
+                HostPortStr when is_list(HostPortStr) ->
+                    %% Address is a "host:port" string (as list), convert to binary
+                    list_to_binary(HostPortStr);
+                _Other ->
+                    undefined
+            end;
+        Ep -> Ep
+    end,
+
     case Endpoint of
         undefined ->
             {error, no_endpoint};

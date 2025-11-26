@@ -106,10 +106,16 @@ parse_endpoint(Endpoint) when is_list(Endpoint) ->
 send_via_quic(Host, Port, MessageBinary, Timeout) ->
     io:format("[PeerConnector] Connecting to ~s:~p~n", [Host, Port]),
 
-    %% Connect to peer
+    %% Connect to peer with proper QUIC configuration
+    %% - idle_timeout_ms: Connection idle timeout (60s)
+    %% - keep_alive_interval_ms: PING interval to keep connection alive (20s)
+    %% - handshake_idle_timeout_ms: Time allowed for TLS handshake (30s)
     ConnectOpts = [
         {alpn, ["macula"]},
-        {verify, none}  %% TODO(v0.9.0): Add proper certificate verification - see TODO.md
+        {verify, none},  %% TODO(v0.9.0): Add proper certificate verification - see TODO.md
+        {idle_timeout_ms, 60000},
+        {keep_alive_interval_ms, 20000},
+        {handshake_idle_timeout_ms, 30000}
     ],
 
     case macula_quic:connect(Host, Port, ConnectOpts, Timeout) of

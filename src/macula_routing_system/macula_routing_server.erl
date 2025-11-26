@@ -51,10 +51,10 @@
 start_link(LocalNodeId, Config) ->
     gen_server:start_link({local, macula_routing_server}, ?MODULE, {LocalNodeId, Config}, []).
 
-%% @doc Add node to routing table.
+%% @doc Add node to routing table (async - does not block caller).
 -spec add_node(pid(), macula_routing_bucket:node_info()) -> ok.
 add_node(Pid, NodeInfo) ->
-    gen_server:call(Pid, {add_node, NodeInfo}).
+    gen_server:cast(Pid, {add_node, NodeInfo}).
 
 %% @doc Find k closest nodes to target.
 -spec find_closest(pid(), binary(), pos_integer()) -> [macula_routing_bucket:node_info()].
@@ -126,10 +126,6 @@ init({LocalNodeId, Config}) ->
     {ok, State}.
 
 %% @private
-handle_call({add_node, NodeInfo}, _From, #state{routing_table = Table} = State) ->
-    NewTable = macula_routing_table:add_node(Table, NodeInfo),
-    {reply, ok, State#state{routing_table = NewTable}};
-
 handle_call({find_closest, Target, K}, _From, #state{routing_table = Table} = State) ->
     Closest = macula_routing_table:find_closest(Table, Target, K),
     {reply, Closest, State};
@@ -189,16 +185,24 @@ handle_call({store, Key, Value}, _From, #state{routing_table = Table, config = C
 
     %% 3. Send STORE message to each node (fire-and-forget)
     StoreMsg = macula_routing_protocol:encode_store(Key, Value),
-    lists:foreach(fun(NodeInfo) ->
-        io:format("[DHT] store: Sending STORE to node ~p~n", [maps:get(node_id, NodeInfo, unknown)]),
-        %% Best effort - don't fail if send fails
-        case macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg) of
-            ok -> ok;
-            {error, Reason} ->
-                io:format("[DHT] store: Failed to send to peer: ~p~n", [Reason]),
-                ok
-        end
-    end, ClosestNodes),
+    case ClosestNodes of
+        [] ->
+            %% No nodes in routing table - this is an embedded gateway connected to bootstrap
+            %% Forward the STORE to bootstrap gateway via RPC instead
+            io:format("[DHT] store: No routing table entries, forwarding to bootstrap via RPC~n"),
+            forward_store_to_bootstrap(Key, Value);
+        _ ->
+            lists:foreach(fun(NodeInfo) ->
+                io:format("[DHT] store: Sending STORE to node ~p~n", [maps:get(node_id, NodeInfo, unknown)]),
+                %% Best effort - don't fail if send fails
+                case macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg) of
+                    ok -> ok;
+                    {error, Reason} ->
+                        io:format("[DHT] store: Failed to send to peer: ~p~n", [Reason]),
+                        ok
+                end
+            end, ClosestNodes)
+    end,
 
     {reply, ok, NewState};
 
@@ -290,6 +294,11 @@ handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
 %% @private
+%% Add node to routing table (async operation)
+handle_cast({add_node, NodeInfo}, #state{routing_table = Table} = State) ->
+    NewTable = macula_routing_table:add_node(Table, NodeInfo),
+    {noreply, State#state{routing_table = NewTable}};
+
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -304,6 +313,48 @@ terminate(_Reason, _State) ->
 %%%===================================================================
 %%% Internal Functions
 %%%===================================================================
+
+%% @doc Forward DHT STORE to bootstrap gateway via RPC when routing table is empty.
+%% This allows embedded gateways to propagate subscriptions to the central bootstrap DHT.
+-spec forward_store_to_bootstrap(binary(), term()) -> ok.
+forward_store_to_bootstrap(Key, Value) ->
+    %% Call the _dht.store RPC procedure on the bootstrap gateway
+    %% This is a fire-and-forget operation - we don't wait for response
+    case whereis(macula_rpc_handler) of
+        undefined ->
+            io:format("[DHT] store: No RPC handler available for bootstrap forwarding~n"),
+            ok;
+        _RpcHandler ->
+            io:format("[DHT] store: Forwarding to bootstrap via _dht.store RPC~n"),
+            %% Call _dht.store(Key, Value) on the bootstrap gateway
+            %% Using cast (fire-and-forget) since we don't need the response
+            try
+                Procedure = <<"_dht.store">>,
+                Args = #{
+                    <<"key">> => Key,
+                    <<"value">> => Value
+                },
+                %% Use macula module's call function which handles bootstrap routing
+                spawn(fun() ->
+                    case whereis(macula_local_client) of
+                        undefined ->
+                            io:format("[DHT] store: No local client for bootstrap RPC~n");
+                        LocalClient ->
+                            case macula:call(LocalClient, Procedure, Args, #{timeout => 5000}) of
+                                {ok, _Result} ->
+                                    io:format("[DHT] store: Successfully forwarded to bootstrap~n");
+                                {error, Reason} ->
+                                    io:format("[DHT] store: Failed to forward to bootstrap: ~p~n", [Reason])
+                            end
+                    end
+                end),
+                ok
+            catch
+                _:Error ->
+                    io:format("[DHT] store: Exception forwarding to bootstrap: ~p~n", [Error]),
+                    ok
+            end
+    end.
 
 %% @doc Find index of provider with matching node_id in provider list.
 -spec find_provider_index(binary(), [map()]) -> pos_integer() | not_found.

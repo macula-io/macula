@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.9.2">
+    <meta name="project" content="macula v0.10.0">
 
 
-    <title>macula_gateway_system — macula v0.9.2</title>
+    <title>macula_gateway_system — macula v0.10.0</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-91483A11.js"></script>
+    <script defer src="dist/sidebar_items-074F6B0F.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.9.2
+          v0.10.0
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_gateway_system</span> 
-      <small class="app-vsn" translate="no">(macula v0.9.2)</small>
+      <small class="app-vsn" translate="no">(macula v0.10.0)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_gateway_system/macula_gateway_system.erl#L40" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_gateway_system/macula_gateway_system.erl#L40" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -93,7 +93,7 @@ macula
 
 
     <section id="moduledoc">
-<p>Gateway Root Supervisor - top-level supervisor for gateway subsystem.</p><p>Supervision Strategy: - rest_for_one: Dependency-based restart ordering - Child order reflects dependencies: 1. quic_server (owns QUIC listener, no dependencies) 2. gateway (depends on quic_server PID) 3. workers_sup (depends on gateway PID)</p><p>Fault Isolation: - quic_server crash → restart quic_server, gateway, workers_sup - gateway crash → restart gateway, workers_sup (quic_server continues) - workers_sup crash → restart workers_sup only (quic_server and gateway continue)</p><p>Architecture:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="nf">macula_gateway_system</span><span class="w"> </span><span class="p" data-group-id="9209629162-1">(</span><span class="ss">this</span><span class="w"> </span><span class="ss">module</span><span class="p" data-group-id="9209629162-1">)</span><span class="w">
+<p>Gateway Root Supervisor - top-level supervisor for gateway subsystem.</p><p>Supervision Strategy: - rest_for_one: Dependency-based restart ordering - Child order reflects dependencies: 1. quic_server (owns QUIC listener, no dependencies) 2. gateway (depends on quic_server PID) 3. workers_sup (depends on gateway PID)</p><p>Fault Isolation: - quic_server crash → restart quic_server, gateway, workers_sup - gateway crash → restart gateway, workers_sup (quic_server continues) - workers_sup crash → restart workers_sup only (quic_server and gateway continue)</p><p>Architecture:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="nf">macula_gateway_system</span><span class="w"> </span><span class="p" data-group-id="1060516812-1">(</span><span class="ss">this</span><span class="w"> </span><span class="ss">module</span><span class="p" data-group-id="1060516812-1">)</span><span class="w">
    </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway_health</span><span class="w">        </span><span class="o">-</span><span class="w"> </span><span class="n">Health</span><span class="w"> </span><span class="ss">check</span><span class="w"> </span><span class="n">HTTP</span><span class="w"> </span><span class="ss">server</span><span class="w">
    </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway_diagnostics</span><span class="w">   </span><span class="o">-</span><span class="w"> </span><span class="n">Diagnostics</span><span class="w"> </span><span class="ss">service</span><span class="w">
    </span><span class="err">├</span><span class="err">─</span><span class="err">─</span><span class="w"> </span><span class="ss">macula_gateway_quic_server</span><span class="w">   </span><span class="o">-</span><span class="w"> </span><span class="n">QUIC</span><span class="w"> </span><span class="ss">transport</span><span class="w"> </span><span class="ss">layer</span><span class="w">
@@ -161,7 +161,7 @@ macula
       <h1 class="signature" translate="no">init(Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_gateway_system/macula_gateway_system.erl#L63" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_gateway_system/macula_gateway_system.erl#L63" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -183,7 +183,7 @@ macula
       <h1 class="signature" translate="no">start_link(Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_gateway_system/macula_gateway_system.erl#L56" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_gateway_system/macula_gateway_system.erl#L56" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -209,9 +209,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.9.2" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.10.0" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.9.2">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.10.0">Hex Preview</a>
 
           </span>
 

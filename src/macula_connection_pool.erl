@@ -65,10 +65,13 @@ create_connection(Endpoint, NodeId, RealmId, Pool) when is_map(Pool) ->
         {Host, Port} ->
             ?LOG_INFO("Creating connection to endpoint: ~s:~p", [Host, Port]),
 
-            %% Connect via QUIC
+            %% Connect via QUIC with proper keep-alive settings
             QuicOpts = [
                 {alpn, ["macula"]},
-                {verify, none}  %% TODO(v0.9.0): Add proper TLS verification - see TODO.md
+                {verify, none},  %% TODO(v0.9.0): Add proper TLS verification - see TODO.md
+                {idle_timeout_ms, 60000},
+                {keep_alive_interval_ms, 20000},
+                {handshake_idle_timeout_ms, 30000}
             ],
 
             ConnectResult = try

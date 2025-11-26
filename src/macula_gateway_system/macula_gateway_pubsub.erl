@@ -55,14 +55,16 @@ stop(Pid) ->
     gen_server:stop(Pid).
 
 %% @doc Subscribe a stream to a topic (supports wildcards).
--spec subscribe(pid(), pid(), binary()) -> ok.
+%% Async (cast) to prevent blocking callers when PubSub is busy.
+-spec subscribe(pid(), pid() | reference(), binary()) -> ok.
 subscribe(Pid, Stream, Topic) ->
-    gen_server:call(Pid, {subscribe, Stream, Topic}).
+    gen_server:cast(Pid, {subscribe, Stream, Topic}).
 
 %% @doc Unsubscribe a stream from a topic.
--spec unsubscribe(pid(), pid(), binary()) -> ok.
+%% Async (cast) to prevent blocking callers when PubSub is busy.
+-spec unsubscribe(pid(), pid() | reference(), binary()) -> ok.
 unsubscribe(Pid, Stream, Topic) ->
-    gen_server:call(Pid, {unsubscribe, Stream, Topic}).
+    gen_server:cast(Pid, {unsubscribe, Stream, Topic}).
 
 %% @doc Publish a message to a topic (routes to matching subscribers).
 -spec publish(pid(), binary(), map()) -> ok.
@@ -85,16 +87,28 @@ get_stream_topics(Pid, Stream) ->
 
 init(Opts) ->
     io:format("[PubSub] Initializing pub/sub handler~n"),
+
+    %% DEBUG: Log what's in Opts to verify node_id/url are present
+    io:format("[PubSub DEBUG] Opts map keys: ~p~n", [maps:keys(Opts)]),
+    io:format("[PubSub DEBUG] node_id in opts: ~p~n", [maps:get(node_id, Opts, not_found)]),
+    io:format("[PubSub DEBUG] url in opts: ~p~n", [maps:get(url, Opts, not_found)]),
+
     State = #state{
         opts = Opts,
         subscriptions = #{},
         stream_subscriptions = #{},
         monitors = #{}
     },
+
+    %% Schedule re-advertisement of all subscriptions after DHT routing table is populated
+    %% Initial subscriptions happen before bootstrap connects, so this ensures they propagate
+    erlang:send_after(5000, self(), readvertise_all_subscriptions),
+
     io:format("[PubSub] Pub/sub handler initialized~n"),
     {ok, State}.
 
-handle_call({subscribe, Stream, Topic}, _From, State) when (is_pid(Stream) orelse is_reference(Stream)), is_binary(Topic) ->
+%% Subscribe is async (cast) to prevent blocking callers when PubSub is busy
+handle_cast({subscribe, Stream, Topic}, State) when (is_pid(Stream) orelse is_reference(Stream)), is_binary(Topic) ->
     io:format("[PubSub ~p] SUBSCRIBE called: Stream=~p, Topic=~s~n", [self(), Stream, Topic]),
     %% Check if already subscribed
     CurrentTopics = maps:get(Stream, State#state.stream_subscriptions, []),
@@ -110,6 +124,9 @@ handle_call({subscribe, Stream, Topic}, _From, State) when (is_pid(Stream) orels
             NewSubscriptions = maps:put(Topic, [Stream | Subscribers], State#state.subscriptions),
             io:format("[PubSub ~p] Added stream ~p to topic ~s (total subscribers: ~p)~n",
                      [self(), Stream, Topic, length([Stream | Subscribers])]),
+
+            %% Advertise subscription in DHT for cross-gateway discovery
+            advertise_subscription_in_dht(Topic, State),
 
             %% Add to stream → topics mapping
             NewTopics = [Topic | CurrentTopics],
@@ -133,9 +150,10 @@ handle_call({subscribe, Stream, Topic}, _From, State) when (is_pid(Stream) orels
                 monitors = NewMonitors
             }
     end,
-    {reply, ok, NewState};
+    {noreply, NewState};
 
-handle_call({unsubscribe, Stream, Topic}, _From, State) when (is_pid(Stream) orelse is_reference(Stream)), is_binary(Topic) ->
+%% Unsubscribe is async (cast) to prevent blocking callers when PubSub is busy
+handle_cast({unsubscribe, Stream, Topic}, State) when (is_pid(Stream) orelse is_reference(Stream)), is_binary(Topic) ->
     %% Remove from stream → topics mapping
     CurrentTopics = maps:get(Stream, State#state.stream_subscriptions, []),
     NewTopics = lists:delete(Topic, CurrentTopics),
@@ -158,21 +176,66 @@ handle_call({unsubscribe, Stream, Topic}, _From, State) when (is_pid(Stream) ore
         subscriptions = NewSubscriptions,
         stream_subscriptions = NewStreamSubs
     },
-    {reply, ok, NewState};
+    {noreply, NewState};
+
+handle_cast(_Msg, State) ->
+    {noreply, State}.
 
 handle_call({publish, Topic, Payload}, _From, State) when is_binary(Topic) ->
-    %% Find all matching subscribers (exact + wildcard patterns)
-    MatchingStreams = find_matching_subscribers(Topic, State),
+    %% Find all LOCAL matching subscribers (exact + wildcard patterns)
+    LocalStreams = find_matching_subscribers(Topic, State),
 
-    %% Send message to all matching streams
-    lists:foreach(fun(Stream) ->
-        case erlang:is_process_alive(Stream) of
-            true ->
-                Stream ! {publish, Topic, Payload};
-            false ->
-                ok  %% Ignore dead streams
-        end
-    end, MatchingStreams),
+    io:format("[PubSub ~p] Publishing to topic ~s: found ~p local subscribers~n",
+             [self(), Topic, length(LocalStreams)]),
+
+    %% Get node_id for distribute call
+    LocalNodeId = maps:get(node_id, State#state.opts, <<"unknown">>),
+
+    %% Create PUBLISH message map as expected by pubsub_router
+    PubMsg = #{
+        <<"topic">> => Topic,
+        <<"payload">> => Payload
+    },
+
+    %% Use the pubsub_router to distribute to both local and remote subscribers
+    %% This properly uses DHT routing + mesh connections + pubsub_route envelopes
+    case {whereis(macula_gateway_mesh), whereis(macula_gateway_client_manager)} of
+        {undefined, _} ->
+            io:format("[PubSub ~p] WARNING: macula_gateway_mesh not running, cannot route remotely~n", [self()]),
+            %% Fallback: at least deliver locally
+            lists:foreach(fun(Stream) ->
+                case erlang:is_process_alive(Stream) of
+                    true ->
+                        io:format("[PubSub ~p] Sending to local stream ~p~n", [self(), Stream]),
+                        Stream ! {publish, Topic, Payload};
+                    false ->
+                        ok
+                end
+            end, LocalStreams);
+        {_, undefined} ->
+            io:format("[PubSub ~p] WARNING: macula_gateway_client_manager not running, cannot route remotely~n", [self()]),
+            %% Fallback: at least deliver locally
+            lists:foreach(fun(Stream) ->
+                case erlang:is_process_alive(Stream) of
+                    true ->
+                        io:format("[PubSub ~p] Sending to local stream ~p~n", [self(), Stream]),
+                        Stream ! {publish, Topic, Payload};
+                    false ->
+                        ok
+                end
+            end, LocalStreams);
+        {MeshPid, ClientsPid} ->
+            %% Use pubsub_router for proper DHT-based routing
+            io:format("[PubSub ~p] Using pubsub_router to distribute (mesh=~p, clients=~p)~n",
+                     [self(), MeshPid, ClientsPid]),
+            macula_gateway_pubsub_router:distribute(
+                LocalStreams,
+                PubMsg,
+                LocalNodeId,
+                MeshPid,
+                ClientsPid
+            )
+    end,
 
     {reply, ok, State};
 
@@ -186,9 +249,6 @@ handle_call({get_stream_topics, Stream}, _From, State) when is_pid(Stream) orels
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
-
-handle_cast(_Msg, State) ->
-    {noreply, State}.
 
 %% @doc Handle stream process death - automatic cleanup.
 handle_info({'DOWN', MonitorRef, process, StreamPid, _Reason}, State) ->
@@ -217,6 +277,17 @@ handle_info({'DOWN', MonitorRef, process, StreamPid, _Reason}, State) ->
         monitors = Monitors
     },
     {noreply, NewState};
+
+%% @doc Re-advertise all existing subscriptions in the DHT.
+%% Called after bootstrap connection to ensure subscriptions propagate.
+handle_info(readvertise_all_subscriptions, State) ->
+    Topics = maps:keys(State#state.subscriptions),
+    io:format("[PubSub] Re-advertising ~p subscription(s) after DHT routing table populated~n",
+             [length(Topics)]),
+    lists:foreach(fun(Topic) ->
+        advertise_subscription_in_dht(Topic, State)
+    end, Topics),
+    {noreply, State};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -311,3 +382,49 @@ try_multi_wildcard(Pattern, Topic, Skip) ->
         false ->
             false
     end.
+
+%% @private
+%% @doc Advertise a subscription in the DHT so other gateways can discover it.
+%% This enables cross-gateway pub/sub routing.
+-spec advertise_subscription_in_dht(binary(), #state{}) -> ok.
+advertise_subscription_in_dht(Topic, State) ->
+    %% Get gateway node_id and endpoint from opts
+    NodeId = maps:get(node_id, State#state.opts, <<"unknown">>),
+    Url = maps:get(url, State#state.opts, <<"unknown">>),
+
+    %% DEBUG: Log what we got from State#state.opts
+    io:format("[GatewayPubSub DEBUG] Advertising subscription for topic ~s~n", [Topic]),
+    io:format("[GatewayPubSub DEBUG] NodeId from opts: ~p~n", [NodeId]),
+    io:format("[GatewayPubSub DEBUG] Url from opts: ~p~n", [Url]),
+
+    %% Create DHT key by hashing the topic
+    TopicKey = crypto:hash(sha256, Topic),
+
+    %% Create subscriber value with endpoint info for routing messages back
+    SubscriberValue = #{
+        node_id => NodeId,
+        endpoint => Url,
+        ttl => 300  % 5 minutes TTL
+    },
+
+    %% Store subscription in DHT (will propagate to k closest nodes or bootstrap)
+    io:format("[GatewayPubSub] Advertising subscription to topic ~s in DHT~n", [Topic]),
+    try
+        case whereis(macula_routing_server) of
+            undefined ->
+                io:format("[GatewayPubSub] Routing server not running, cannot advertise subscription~n");
+            RoutingServerPid ->
+                case macula_routing_server:store(RoutingServerPid, TopicKey, SubscriberValue) of
+                    ok ->
+                        io:format("[GatewayPubSub] Successfully stored subscription for ~s in DHT~n", [Topic]);
+                    {error, StoreError} ->
+                        io:format("[GatewayPubSub] Failed to store subscription ~s: ~p~n",
+                                 [Topic, StoreError])
+                end
+        end
+    catch
+        _:DhtError ->
+            io:format("[GatewayPubSub] Failed to advertise subscription ~s in DHT: ~p (continuing)~n",
+                     [Topic, DhtError])
+    end,
+    ok.

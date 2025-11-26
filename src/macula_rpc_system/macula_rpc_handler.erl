@@ -114,6 +114,10 @@ init(Opts) ->
     NodeId = maps:get(node_id, Opts, generate_node_id()),
     Realm = maps:get(realm, Opts, <<"default">>),
 
+    %% Register this RPC handler with gproc so connection manager can find us
+    gproc:reg({n, l, {rpc_handler, Realm}}),
+    ?LOG_INFO("RPC handler registered in gproc for realm ~s", [Realm]),
+
     %% connection_manager_pid will be set via cast message after init
     ConnMgrPid = undefined,
 

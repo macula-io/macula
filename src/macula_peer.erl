@@ -125,9 +125,12 @@ publish(Client, Topic, Data) ->
     publish(Client, Topic, Data, #{}).
 
 %% @doc Publish an event through this client with options.
--spec publish(pid(), binary(), map() | binary(), map()) -> ok | {error, term()}.
+%% This is fire-and-forget - returns ok immediately without blocking.
+%% Use QoS 1 in Opts if you need delivery confirmation.
+-spec publish(pid(), binary(), map() | binary(), map()) -> ok.
 publish(Client, Topic, Data, Opts) ->
-    gen_server:call(Client, {publish, Topic, Data, Opts}, ?DEFAULT_TIMEOUT).
+    gen_server:cast(Client, {publish, Topic, Data, Opts}),
+    ok.
 
 %% @doc Subscribe to a topic through this client.
 -spec subscribe(pid(), binary(), fun((map()) -> ok)) ->
@@ -237,10 +240,7 @@ init({Url, Opts}) ->
     {ok, State}.
 
 %% @private
-%% Delegate to pubsub_handler
-handle_call({publish, Topic, Data, Opts}, _From, State) ->
-    Result = macula_pubsub_handler:publish(State#state.pubsub_handler_pid, Topic, Data, Opts),
-    {reply, Result, State};
+%% NOTE: publish is now handled via handle_cast (fire-and-forget semantics)
 
 %% Delegate to pubsub_handler
 handle_call({subscribe, Topic, Callback}, _From, State) ->
@@ -304,6 +304,14 @@ handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
 %% @private
+%% Async publish - fire-and-forget semantics
+handle_cast({publish, Topic, Data, Opts}, State) ->
+    ?LOG_INFO("[Peer] handle_cast publish received: topic=~s, pubsub_pid=~p",
+              [Topic, State#state.pubsub_handler_pid]),
+    %% Delegate to pubsub_handler (which is also async now)
+    macula_pubsub_handler:publish(State#state.pubsub_handler_pid, Topic, Data, Opts),
+    {noreply, State};
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 

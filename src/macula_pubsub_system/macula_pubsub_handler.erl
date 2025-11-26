@@ -89,7 +89,10 @@ unsubscribe(Pid, SubRef) ->
 
 -spec publish(pid(), binary() | list() | atom(), term(), map()) -> ok | {error, term()}.
 publish(Pid, Topic, Data, Opts) ->
-    gen_server:call(Pid, {publish, Topic, Data, Opts}, 5000).
+    %% Use cast to avoid blocking on publish operations
+    %% The internal handler will manage async delivery and QoS retries
+    gen_server:cast(Pid, {publish_async, Topic, Data, Opts}),
+    ok.
 
 -spec handle_incoming_publish(pid(), map()) -> ok.
 handle_incoming_publish(Pid, Msg) ->
@@ -143,34 +146,31 @@ handle_call({subscribe, Topic, Callback}, _From, State) ->
     SubRef = make_ref(),
     BinaryTopic = ensure_binary(Topic),
 
-    %% Send subscribe message via connection manager
+    %% Store subscription locally first (delegate to subscription module)
+    {ok, UpdatedSubscriptions, SubRef} = macula_pubsub_subscription:add_subscription(
+        BinaryTopic, Callback, State#state.subscriptions, SubRef
+    ),
+    State2 = State#state{subscriptions = UpdatedSubscriptions},
+
+    %% Send subscribe message via connection manager ASYNC (fire-and-forget)
+    %% This prevents blocking when the connection is busy or slow
     SubscribeMsg = #{
         topics => [BinaryTopic],
         qos => 0
     },
+    macula_connection:send_message_async(State#state.connection_manager_pid, subscribe, SubscribeMsg),
 
-    case macula_connection:send_message(State#state.connection_manager_pid, subscribe, SubscribeMsg) of
-        ok ->
-            %% Store subscription locally (delegate to subscription module)
-            {ok, UpdatedSubscriptions, SubRef} = macula_pubsub_subscription:add_subscription(
-                BinaryTopic, Callback, State#state.subscriptions, SubRef
-            ),
-            State2 = State#state{subscriptions = UpdatedSubscriptions},
+    %% Advertise subscription in DHT (delegate to DHT module)
+    {ok, SubInfo} = macula_pubsub_dht:advertise_subscription(
+        BinaryTopic, SubRef, State#state.node_id, State#state.url,
+        State#state.connection_manager_pid
+    ),
+    AdvertisedSubscriptions = State2#state.advertised_subscriptions,
+    State3 = State2#state{
+        advertised_subscriptions = AdvertisedSubscriptions#{BinaryTopic => SubInfo}
+    },
 
-            %% Advertise subscription in DHT (delegate to DHT module)
-            {ok, SubInfo} = macula_pubsub_dht:advertise_subscription(
-                BinaryTopic, SubRef, State#state.node_id, State#state.url,
-                State#state.connection_manager_pid
-            ),
-            AdvertisedSubscriptions = State2#state.advertised_subscriptions,
-            State3 = State2#state{
-                advertised_subscriptions = AdvertisedSubscriptions#{BinaryTopic => SubInfo}
-            },
-
-            {reply, {ok, SubRef}, State3};
-        {error, Reason} ->
-            {reply, {error, Reason}, State}
-    end;
+    {reply, {ok, SubRef}, State3};
 
 handle_call({unsubscribe, SubRef}, _From, State) ->
     %% Remove subscription (delegate to subscription module)
@@ -178,26 +178,23 @@ handle_call({unsubscribe, SubRef}, _From, State) ->
         {error, not_found} ->
             {reply, {error, not_subscribed}, State};
         {ok, UpdatedSubscriptions, Topic} ->
-            %% Send unsubscribe message via connection manager
+            %% Send unsubscribe message via connection manager ASYNC (fire-and-forget)
+            %% This prevents blocking when the connection is busy or slow
             UnsubscribeMsg = #{
                 topics => [Topic]
             },
+            macula_connection:send_message_async(State#state.connection_manager_pid, unsubscribe, UnsubscribeMsg),
 
-            case macula_connection:send_message(State#state.connection_manager_pid, unsubscribe, UnsubscribeMsg) of
-                ok ->
-                    %% Cancel DHT advertisement (delegate to DHT module)
-                    UpdatedAdvertised = macula_pubsub_dht:cancel_advertisement(
-                        Topic, State#state.advertised_subscriptions
-                    ),
+            %% Cancel DHT advertisement (delegate to DHT module)
+            UpdatedAdvertised = macula_pubsub_dht:cancel_advertisement(
+                Topic, State#state.advertised_subscriptions
+            ),
 
-                    State2 = State#state{
-                        subscriptions = UpdatedSubscriptions,
-                        advertised_subscriptions = UpdatedAdvertised
-                    },
-                    {reply, ok, State2};
-                {error, Reason} ->
-                    {reply, {error, Reason}, State}
-            end
+            State2 = State#state{
+                subscriptions = UpdatedSubscriptions,
+                advertised_subscriptions = UpdatedAdvertised
+            },
+            {reply, ok, State2}
     end;
 
 %%%===================================================================
@@ -254,11 +251,49 @@ handle_call(_Request, _From, State) ->
 handle_cast({set_connection_manager_pid, Pid}, State) ->
     {noreply, State#state{connection_manager_pid = Pid}};
 
+%% Async publish (fire-and-forget from caller's perspective)
+%% This handles the {publish_async, ...} cast from the publish/4 API function
+handle_cast({publish_async, Topic, Data, Opts}, State) ->
+    ?LOG_INFO("[PubSubHandler] publish_async received: topic=~p", [Topic]),
+    %% Check if we have a connection manager and are connected
+    case State#state.connection_manager_pid of
+        undefined ->
+            %% No connection manager - silently drop (fire-and-forget semantics)
+            ?LOG_WARNING("[PubSubHandler] Publish dropped - no connection manager"),
+            {noreply, State};
+        _ConnMgrPid ->
+            %% Skip status check for async publish - just send it
+            %% The connection module will handle the send or drop silently
+            Qos = maps:get(qos, Opts, 0),
+            Retain = maps:get(retain, Opts, false),
+
+            {MsgId, State2} = next_message_id(State),
+            BinaryTopic = ensure_binary(Topic),
+
+            %% Encode data to binary if it's a map or list
+            Payload = encode_payload(Data),
+
+            PublishMsg = #{
+                topic => BinaryTopic,
+                payload => Payload,
+                qos => Qos,
+                retain => Retain,
+                message_id => MsgId
+            },
+
+            ?LOG_INFO("[PubSubHandler] Sending to do_publish: topic=~s", [BinaryTopic]),
+
+            %% Send publish message asynchronously using cast to self
+            gen_server:cast(self(), {do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}),
+
+            {noreply, State2}
+    end;
+
 handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, State) ->
     %% HYBRID: Send to gateway for routing AND discover via DHT
     %% This enables both gateway-centric and pure P2P topologies
-    ?LOG_DEBUG("[~s] Publishing message to topic ~s (qos=~p, msg_id=~s) via gateway + DHT",
-              [State#state.node_id, BinaryTopic, Qos, MsgId]),
+    ?LOG_INFO("[PubSubHandler] do_publish: topic=~s, ConnMgr=~p",
+              [BinaryTopic, State#state.connection_manager_pid]),
 
     %% Handle QoS 1 (at-least-once delivery) - delegate to QoS module
     {ok, UpdatedPendingPubacks} = macula_pubsub_qos:track_message(
@@ -268,15 +303,16 @@ handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, St
 
     %% Send publish to gateway for routing to connected subscribers
     %% This is essential for gateway-centric topologies where peers can't reach each other
+    %% Use async send to prevent blocking on QUIC operations
     case State#state.connection_manager_pid of
         undefined ->
-            ?LOG_WARNING("[~s] No connection manager - cannot send publish to gateway",
-                        [State#state.node_id]);
+            ?LOG_ERROR("[PubSubHandler] No connection manager for publish!");
         ConnMgrPid ->
-            %% Send publish message via the gateway connection
-            macula_connection:send_message(ConnMgrPid, publish, PublishMsg),
-            ?LOG_DEBUG("[~s] Sent publish to gateway for topic ~s",
-                      [State#state.node_id, BinaryTopic])
+            %% Send publish message via the gateway connection ASYNC (fire-and-forget)
+            ?LOG_INFO("[PubSubHandler] Calling send_message_async: pid=~p, topic=~s",
+                      [ConnMgrPid, BinaryTopic]),
+            macula_connection:send_message_async(ConnMgrPid, publish, PublishMsg),
+            ?LOG_INFO("[PubSubHandler] send_message_async returned")
     end,
 
     %% Also discover subscribers via DHT for pure P2P routing (if available)
@@ -388,15 +424,10 @@ handle_info({puback_timeout, MsgId}, State) ->
     %% Delegate QoS timeout handling to QoS module
     case macula_pubsub_qos:handle_timeout(MsgId, State#state.connection_manager_pid, State#state.pending_pubacks) of
         {retry, UpdatedPending, PublishMsg} ->
-            %% Send retry message
-            case macula_connection:send_message(State#state.connection_manager_pid, publish, PublishMsg) of
-                ok ->
-                    {noreply, State#state{pending_pubacks = UpdatedPending}};
-                {error, SendError} ->
-                    ?LOG_ERROR("[~s] Failed to retry publish: ~p - giving up", [State#state.node_id, SendError]),
-                    %% Remove from pending on send failure
-                    {noreply, State#state{pending_pubacks = maps:remove(MsgId, UpdatedPending)}}
-            end;
+            %% Send retry message ASYNC (fire-and-forget)
+            %% If it fails, we'll retry again on next timeout
+            macula_connection:send_message_async(State#state.connection_manager_pid, publish, PublishMsg),
+            {noreply, State#state{pending_pubacks = UpdatedPending}};
         {give_up, UpdatedPending} ->
             {noreply, State#state{pending_pubacks = UpdatedPending}};
         {not_found, UpdatedPending} ->

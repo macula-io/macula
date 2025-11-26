@@ -121,27 +121,24 @@ send_reply_via_routing(ReplyMsg, DestNodeId, NodeId, MeshPid) ->
     end.
 
 %% @doc Forward rpc_route message to next hop.
-%% Gets mesh connection and sends encoded message.
-%% Crashes on connection/encoding failures - exposes mesh/protocol issues.
+%% Uses async (fire-and-forget) pattern to avoid blocking.
+%% Graceful error handling - logs errors but doesn't crash gateway.
 -spec forward_rpc_route(map(), map(), pid()) -> ok.
 forward_rpc_route(NextHopNodeInfo, RpcRouteMsg, MeshPid) ->
-    io:format("[RPC Router] Forwarding rpc_route to next hop~n"),
+    io:format("[RPC Router] Forwarding rpc_route to next hop (async)~n"),
 
-    %% Extract next hop info (let it crash on missing fields)
-    #{<<"node_id">> := NextHopNodeId,
-      <<"address">> := AddressBin,
-      <<"port">> := Port} = NextHopNodeInfo,
+    %% Extract next hop info (routing_bucket:node_info uses atom keys, not binary)
+    #{node_id := NextHopNodeId,
+      address := Address} = NextHopNodeInfo,
 
-    %% Parse address
-    Address = parse_address(AddressBin),
-
-    %% Get or create mesh connection (let it crash on errors)
-    {ok, Stream} = macula_gateway_mesh:get_or_create_connection(MeshPid, NextHopNodeId, {Address, Port}),
-
-    %% Encode and send rpc_route message (let it crash on errors)
+    %% Encode message
     EncodedMsg = macula_protocol_encoder:encode(rpc_route, RpcRouteMsg),
-    macula_quic:send(Stream, EncodedMsg),
-    io:format("[RPC Router] Forwarded rpc_route successfully~n"),
+
+    %% Send asynchronously - does NOT block
+    %% Connection creation and sending happens in a spawned process
+    macula_gateway_mesh:send_async(MeshPid, NextHopNodeId, Address, EncodedMsg),
+    io:format("[RPC Router] Queued rpc_route for async send to ~s~n",
+             [binary:encode_hex(NextHopNodeId)]),
     ok.
 
 %%%===================================================================
@@ -230,17 +227,6 @@ deliver_reply_to_remote_client(_ReplyMsg, RpcRouteMsg, ClientStreams) ->
                     ok
             end
     end.
-
-%% @private
-%% @doc Parse address binary to tuple or string.
-parse_address(AddressBin) when is_binary(AddressBin) ->
-    %% Try to parse as IP address
-    case inet:parse_address(binary_to_list(AddressBin)) of
-        {ok, IpTuple} -> IpTuple;
-        {error, _} -> binary_to_list(AddressBin)  % Treat as hostname
-    end;
-parse_address(Address) ->
-    Address.
 
 %% @private
 %% @doc Encode result to JSON binary.

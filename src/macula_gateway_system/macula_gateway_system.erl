@@ -87,6 +87,12 @@ init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile) ->
     io:format("[GatewaySup] Certificate file: ~p~n", [CertFile]),
     io:format("[GatewaySup] Key file: ~p~n", [KeyFile]),
 
+    %% Compute node_id and url early so workers can use them
+    NodeId = get_node_id(Realm, Port),
+    Url = get_url(Port),
+    io:format("[GatewaySup] NodeId: ~s~n", [binary:encode_hex(NodeId)]),
+    io:format("[GatewaySup] Endpoint URL: ~s~n", [Url]),
+
     %% Supervision strategy: rest_for_one
     %% - health fails → restart health, diagnostics, quic_server, gateway, workers_sup
     %% - diagnostics fails → restart diagnostics, quic_server, gateway, workers_sup
@@ -154,7 +160,9 @@ init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile) ->
         id => macula_gateway_workers_sup,
         start => {macula_gateway_workers_sup, start_link, [#{
             port => Port,
-            realm => Realm
+            realm => Realm,
+            node_id => NodeId,
+            url => Url
         }]},
         restart => permanent,
         shutdown => infinity,  % supervisor shutdown
@@ -191,3 +199,58 @@ get_key_file(undefined) ->
     end;
 get_key_file(KeyFile) when is_list(KeyFile) ->
     KeyFile.
+
+%% @private
+%% @doc Get node ID from NODE_NAME env var or generate from {Realm, MAC, Port}.
+%% Returns a 32-byte binary (raw binary for Kademlia, never hex-encoded).
+%% MUST match macula_gateway:get_node_id/2 exactly!
+get_node_id(Realm, Port) ->
+    case os:getenv("NODE_NAME") of
+        false ->
+            %% No NODE_NAME, generate from {Realm, MAC, Port} for true uniqueness
+            Mac = get_primary_mac(),
+            io:format("[GatewaySup] Using MAC-based node ID: MAC=~w, Realm=~s, Port=~p~n",
+                     [Mac, Realm, Port]),
+            crypto:hash(sha256, term_to_binary({Realm, Mac, Port}));
+        NodeName when is_list(NodeName) ->
+            %% Use NODE_NAME from environment - hash it to get 32-byte binary
+            io:format("[GatewaySup] Using NODE_NAME from environment: ~s~n", [NodeName]),
+            crypto:hash(sha256, list_to_binary(NodeName))
+    end.
+
+%% @private
+%% @doc Get primary MAC address from a valid network interface.
+%% Filters out loopback, docker, bridge, and veth interfaces.
+%% Fails hard if no valid interface found - operator must ensure proper network config.
+-spec get_primary_mac() -> binary().
+get_primary_mac() ->
+    {ok, Interfaces} = inet:getifaddrs(),
+    ValidMacs = [list_to_binary(HwAddr) || {Name, Props} <- Interfaces,
+                                            not is_virtual_interface(Name),
+                                            {hwaddr, HwAddr} <- Props,
+                                            HwAddr =/= [0,0,0,0,0,0]],
+    case ValidMacs of
+        [First | _] -> First;
+        [] -> error(no_valid_network_interface)
+    end.
+
+%% @private
+%% @doc Check if interface name is a virtual/loopback interface.
+-spec is_virtual_interface(string()) -> boolean().
+is_virtual_interface("lo") -> true;
+is_virtual_interface("lo" ++ _) -> true;
+is_virtual_interface("docker" ++ _) -> true;
+is_virtual_interface("br-" ++ _) -> true;
+is_virtual_interface("veth" ++ _) -> true;
+is_virtual_interface("virbr" ++ _) -> true;
+is_virtual_interface(_) -> false.
+
+%% @private
+%% @doc Get endpoint URL for this gateway.
+%% Constructs "https://hostname:port" using HOSTNAME env var or "localhost".
+get_url(Port) ->
+    Hostname = case os:getenv("HOSTNAME") of
+        false -> "localhost";
+        Host when is_list(Host) -> Host
+    end,
+    iolist_to_binary([<<"https://">>, list_to_binary(Hostname), <<":">>, integer_to_binary(Port)]).

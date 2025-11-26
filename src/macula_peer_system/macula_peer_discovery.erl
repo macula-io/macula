@@ -333,6 +333,16 @@ get_rpc_handler_pid(PeerSupPid) when is_pid(PeerSupPid) ->
             {error, rpc_handler_not_found}
     end.
 
+%% @private Get the advertisement manager PID from a peer system supervisor
+get_advertisement_manager_pid(PeerSupPid) when is_pid(PeerSupPid) ->
+    Children = supervisor:which_children(PeerSupPid),
+    case lists:keyfind(advertisement_manager, 1, Children) of
+        {advertisement_manager, AdvMgrPid, _Type, _Modules} when is_pid(AdvMgrPid) ->
+            {ok, AdvMgrPid};
+        _ ->
+            {error, advertisement_manager_not_found}
+    end.
+
 %% @private Register the _dht.list_gateways RPC service on the gateway
 %%
 %% This service queries the local DHT for all registered gateways and returns them.
@@ -350,8 +360,9 @@ register_dht_list_gateways_service() ->
             Children = supervisor:which_children(macula_peers_sup),
             case Children of
                 [{_Id, PeerSupPid, _Type, _Modules} | _] when is_pid(PeerSupPid) ->
-                    case get_rpc_handler_pid(PeerSupPid) of
-                        {ok, RpcHandlerPid} ->
+                    %% Get both RPC handler and advertisement manager PIDs
+                    case {get_rpc_handler_pid(PeerSupPid), get_advertisement_manager_pid(PeerSupPid)} of
+                        {{ok, _RpcHandlerPid}, {ok, AdvMgrPid}} ->
                             %% Create handler function that queries DHT
                             Handler = fun(_Args) ->
                                 case whereis(macula_routing_server) of
@@ -395,12 +406,26 @@ register_dht_list_gateways_service() ->
                                 end
                             end,
 
-                            %% Register the handler
-                            macula_rpc_handler:register_local_procedure(RpcHandlerPid, <<"_dht.list_gateways">>, Handler),
-                            io:format("[PeerDiscovery] Successfully registered _dht.list_gateways~n"),
-                            ok;
-                        {error, Reason} ->
+                            %% ✅ FIX: Advertise service to DHT (not just register locally)
+                            %% This will both register the handler locally AND send STORE message to DHT
+                            case macula_advertisement_manager:advertise_service(
+                                AdvMgrPid,
+                                <<"_dht.list_gateways">>,
+                                Handler,
+                                #{}  %% Empty metadata
+                            ) of
+                                ok ->
+                                    io:format("[PeerDiscovery] Successfully advertised _dht.list_gateways to DHT~n"),
+                                    ok;
+                                {error, AdvReason} ->
+                                    io:format("[PeerDiscovery] ERROR: Failed to advertise service: ~p~n", [AdvReason]),
+                                    {error, AdvReason}
+                            end;
+                        {{error, Reason}, _} ->
                             io:format("[PeerDiscovery] ERROR: Failed to get RPC handler: ~p~n", [Reason]),
+                            {error, Reason};
+                        {_, {error, Reason}} ->
+                            io:format("[PeerDiscovery] ERROR: Failed to get advertisement manager: ~p~n", [Reason]),
                             {error, Reason}
                     end;
                 _ ->

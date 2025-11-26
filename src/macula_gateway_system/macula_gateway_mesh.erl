@@ -31,6 +31,7 @@
     start_link/1,
     stop/1,
     get_or_create_connection/3,
+    send_async/4,
     remove_connection/2,
     get_connection_info/2,
     list_connections/1
@@ -42,6 +43,7 @@
 %% Types
 -type connection_info() :: #{
     connection => pid() | reference() | undefined,
+    stream => pid() | reference() | undefined,  % Persistent stream for reuse
     address => {inet:ip_address(), inet:port_number()},
     last_used => integer()
 }.
@@ -76,6 +78,15 @@ stop(Pid) ->
     {ok, pid()} | {error, term()}.
 get_or_create_connection(Pid, NodeId, Address) ->
     gen_server:call(Pid, {get_or_create_connection, NodeId, Address}, 10000).
+
+%% @doc Send message asynchronously (fire-and-forget).
+%% Connection creation and sending happens in a spawned process.
+%% Does NOT block the caller - returns immediately with 'ok'.
+%% Use this for pubsub_route and other non-critical messages.
+-spec send_async(pid(), binary(), binary() | {inet:ip_address(), inet:port_number()}, binary()) -> ok.
+send_async(Pid, NodeId, Address, EncodedMessage) ->
+    gen_server:cast(Pid, {send_async, NodeId, Address, EncodedMessage}),
+    ok.
 
 %% @doc Explicitly remove connection from cache.
 -spec remove_connection(pid(), binary()) -> ok.
@@ -178,8 +189,19 @@ handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
 %%%===================================================================
-%%% Cast handlers (currently unused)
+%%% Cast handlers - Async message sending
 %%%===================================================================
+
+%% @doc Handle async send request - spawns process for connection + send.
+%% Fire-and-forget pattern - does not block the gen_server.
+handle_cast({send_async, NodeId, Address, EncodedMessage}, State) ->
+    %% Spawn a process to handle connection and send
+    %% This way the gen_server is not blocked by slow QUIC connections
+    MeshPid = self(),
+    spawn(fun() ->
+        async_send_worker(MeshPid, NodeId, Address, EncodedMessage, State#state.opts)
+    end),
+    {noreply, State};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -232,8 +254,8 @@ terminate(_Reason, #state{mesh_connections = MeshConns}) ->
 create_new_connection(NodeId, Address, State) ->
     case create_mesh_connection(Address, State) of
         {ok, Conn, Stream} ->
-            %% Monitor the connection
-            MonitorRef = erlang:monitor(process, Conn),
+            %% Note: Cannot monitor QUIC connections (they are NIF references, not processes)
+            %% Connection failures will be detected on send errors
 
             %% Cache connection info
             ConnectionInfo = #{
@@ -244,11 +266,9 @@ create_new_connection(NodeId, Address, State) ->
 
             NewMeshConns = maps:put(NodeId,
                 ConnectionInfo, State#state.mesh_connections),
-            NewMonitors = maps:put(MonitorRef, NodeId, State#state.monitors),
 
             NewState = State#state{
-                mesh_connections = NewMeshConns,
-                monitors = NewMonitors
+                mesh_connections = NewMeshConns
             },
 
             {reply, {ok, Stream}, NewState};
@@ -259,19 +279,38 @@ create_new_connection(NodeId, Address, State) ->
     end.
 
 %% @private
-%% Reuse existing alive connection (open new stream)
+%% Reuse existing alive connection and its stream (create stream only once per connection)
 reuse_connection(NodeId, ConnInfo, State) ->
     #{connection := Conn, address := Address} = ConnInfo,
 
-    io:format("[Mesh] Reusing connection to ~p, opening new stream~n",
-             [binary:encode_hex(NodeId)]),
+    %% Check if we already have a cached stream for this connection
+    case maps:get(stream, ConnInfo, undefined) of
+        undefined ->
+            %% No cached stream - create one and cache it
+            io:format("[Mesh] Reusing connection to ~p, opening new stream (first time)~n",
+                     [binary:encode_hex(NodeId)]),
+            open_and_cache_stream(NodeId, Conn, ConnInfo, Address, State);
+        Stream ->
+            %% Have a cached stream - reuse it
+            io:format("[Mesh] Reusing connection and stream to ~p~n",
+                     [binary:encode_hex(NodeId)]),
+            UpdatedConnInfo = ConnInfo#{last_used => erlang:system_time(second)},
+            NewMeshConns = maps:put(NodeId, UpdatedConnInfo, State#state.mesh_connections),
+            NewState = State#state{mesh_connections = NewMeshConns},
+            {reply, {ok, Stream}, NewState}
+    end.
 
+%% @private
+%% Open a new stream and cache it in connection info
+open_and_cache_stream(NodeId, Conn, ConnInfo, Address, State) ->
     case macula_quic:open_stream(Conn) of
         {ok, Stream} ->
-            %% Update last_used timestamp
-            UpdatedConnInfo = ConnInfo#{last_used => erlang:system_time(second)},
-            NewMeshConns = maps:put(NodeId,
-                UpdatedConnInfo, State#state.mesh_connections),
+            %% Update connection info with the new stream
+            UpdatedConnInfo = ConnInfo#{
+                stream => Stream,
+                last_used => erlang:system_time(second)
+            },
+            NewMeshConns = maps:put(NodeId, UpdatedConnInfo, State#state.mesh_connections),
             NewState = State#state{mesh_connections = NewMeshConns},
             {reply, {ok, Stream}, NewState};
 
@@ -364,26 +403,34 @@ extract_monitor_ref(false) -> undefined.
 
 %% @private
 %% @doc Create QUIC connection to peer.
-create_mesh_connection({Host, Port}, State) ->
+%% Handles address in various formats:
+%%   - {Host, Port} tuple (expected format)
+%%   - <<"host:port">> binary string
+%%   - "host:port" list string
+create_mesh_connection(Address, State) ->
+    {Host, Port} = parse_address(Address),
     %% Get TLS certificates from opts or environment
     {CertFile, KeyFile} = get_tls_certificates(State#state.opts),
 
-    %% Connection options
+    %% Connection options with proper keep-alive settings
     ConnOpts = [
         {cert, CertFile},
         {key, KeyFile},
         {alpn, ["macula"]},
         {verify, none},  % For now, accept any certificate
-        {peer_unidi_stream_count, 3}
+        {peer_unidi_stream_count, 3},
+        {idle_timeout_ms, 60000},
+        {keep_alive_interval_ms, 20000},
+        {handshake_idle_timeout_ms, 30000}
     ],
 
-    %% Format address
-    Address = format_address(Host),
+    %% Format address for QUIC connection
+    FormattedAddress = format_address(Host),
 
-    io:format("[Mesh] Connecting to peer at ~s:~p~n", [Address, Port]),
+    io:format("[Mesh] Connecting to peer at ~s:~p~n", [FormattedAddress, Port]),
 
     %% Connect to peer
-    case macula_quic:connect(Address, Port, ConnOpts, 5000) of
+    case macula_quic:connect(FormattedAddress, Port, ConnOpts, 5000) of
         {ok, Conn} ->
             io:format("[Mesh] Connected, opening stream~n"),
             case macula_quic:open_stream(Conn) of
@@ -408,6 +455,52 @@ format_address(HostStr) when is_list(HostStr) ->
     HostStr;
 format_address(HostBin) when is_binary(HostBin) ->
     binary_to_list(HostBin).
+
+%%%===================================================================
+%%% Address parsing - Handle various formats
+%%%===================================================================
+
+%% @private
+%% @doc Parse address from various formats to {Host, Port} tuple.
+%% Handles:
+%%   - {Host, Port} tuple - passthrough
+%%   - <<"host:port">> binary - parse and convert
+%%   - "host:port" string - parse
+-spec parse_address(term()) -> {string(), inet:port_number()}.
+parse_address({Host, Port}) when is_integer(Port) ->
+    %% Already a tuple - just ensure Host is a string
+    {format_host(Host), Port};
+parse_address(Address) when is_binary(Address) ->
+    parse_address(binary_to_list(Address));
+parse_address(Address) when is_list(Address) ->
+    parse_host_port_string(Address).
+
+%% @private
+%% @doc Parse "host:port" string into {Host, Port} tuple.
+-spec parse_host_port_string(string()) -> {string(), inet:port_number()}.
+parse_host_port_string(Address) ->
+    case string:rchr(Address, $:) of
+        0 ->
+            %% No port specified, use default QUIC port
+            {Address, 4433};
+        Pos ->
+            Host = string:substr(Address, 1, Pos - 1),
+            PortStr = string:substr(Address, Pos + 1),
+            Port = list_to_integer(PortStr),
+            {Host, Port}
+    end.
+
+%% @private
+%% @doc Format host to string for QUIC connection.
+-spec format_host(term()) -> string().
+format_host(Host) when is_binary(Host) ->
+    binary_to_list(Host);
+format_host(Host) when is_list(Host) ->
+    Host;
+format_host({_, _, _, _} = IPv4) ->
+    inet:ntoa(IPv4);
+format_host({_, _, _, _, _, _, _, _} = IPv6) ->
+    inet:ntoa(IPv6).
 
 %%%===================================================================
 %%% TLS certificate management
@@ -448,14 +541,88 @@ get_tls_certificates_from_env() ->
 %%%===================================================================
 
 %% @private
-%% Check if connection process is alive
+%% @doc Check if QUIC connection is still valid.
+%% QUIC connections are NIF references, NOT processes - cannot use is_process_alive.
+%% We use quicer:sockname/1 as a liveness probe - if it returns {ok, _} the connection is alive.
 is_connection_alive(undefined) ->
     false;
-is_connection_alive(Conn) when is_pid(Conn) orelse is_reference(Conn) ->
-    try
-        erlang:is_process_alive(Conn)
+is_connection_alive(Conn) when is_reference(Conn) ->
+    %% QUIC connection reference - use sockname as liveness probe
+    try quicer:sockname(Conn) of
+        {ok, _} -> true;
+        {error, _} -> false
     catch
         _:_ -> false
     end;
+is_connection_alive(Conn) when is_pid(Conn) ->
+    %% Erlang process - use is_process_alive
+    erlang:is_process_alive(Conn);
 is_connection_alive(_Other) ->
     false.
+
+%%%===================================================================
+%%% Async send worker (runs in spawned process)
+%%%===================================================================
+
+%% @private
+%% @doc Worker process for async message sending.
+%% Creates connection, opens stream, sends message, closes stream.
+%% Does NOT use the connection pool to avoid coordination overhead.
+%% For fire-and-forget messages where delivery is best-effort.
+-spec async_send_worker(pid(), binary(), term(), binary(), map()) -> ok | {error, term()}.
+async_send_worker(_MeshPid, NodeId, Address, EncodedMessage, Opts) ->
+    io:format("[Mesh/Async] Starting async send to ~p~n", [binary:encode_hex(NodeId)]),
+
+    %% Parse address and create connection
+    {Host, Port} = parse_address(Address),
+    {CertFile, KeyFile} = get_tls_certificates(Opts),
+
+    ConnOpts = [
+        {cert, CertFile},
+        {key, KeyFile},
+        {alpn, ["macula"]},
+        {verify, none},
+        {peer_unidi_stream_count, 3},
+        {idle_timeout_ms, 60000},
+        {keep_alive_interval_ms, 20000},
+        {handshake_idle_timeout_ms, 30000}
+    ],
+
+    FormattedAddress = format_address(Host),
+    io:format("[Mesh/Async] Connecting to ~s:~p~n", [FormattedAddress, Port]),
+
+    %% Try to connect with a shorter timeout for async sends
+    case macula_quic:connect(FormattedAddress, Port, ConnOpts, 5000) of
+        {ok, Conn} ->
+            case macula_quic:open_stream(Conn) of
+                {ok, Stream} ->
+                    case macula_quic:send(Stream, EncodedMessage) of
+                        ok ->
+                            io:format("[Mesh/Async] Message sent successfully to ~p~n",
+                                     [binary:encode_hex(NodeId)]),
+                            %% Brief delay for data transmission
+                            timer:sleep(50),
+                            %% Close stream and connection
+                            catch macula_quic:close(Stream),
+                            catch macula_quic:close(Conn),
+                            ok;
+                        {error, SendErr} ->
+                            io:format("[Mesh/Async] Send failed: ~p~n", [SendErr]),
+                            catch macula_quic:close(Stream),
+                            catch macula_quic:close(Conn),
+                            {error, {send_failed, SendErr}}
+                    end;
+                {error, StreamErr} ->
+                    io:format("[Mesh/Async] Stream open failed: ~p~n", [StreamErr]),
+                    catch macula_quic:close(Conn),
+                    {error, {stream_failed, StreamErr}}
+            end;
+        {error, ConnErr} ->
+            io:format("[Mesh/Async] Connection failed to ~s:~p: ~p~n",
+                     [FormattedAddress, Port, ConnErr]),
+            {error, {connect_failed, ConnErr}};
+        {error, Type, Details} ->
+            io:format("[Mesh/Async] Connection failed to ~s:~p: ~p ~p~n",
+                     [FormattedAddress, Port, Type, Details]),
+            {error, {connect_failed, {Type, Details}}}
+    end.

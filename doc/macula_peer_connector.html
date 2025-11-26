@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.9.2">
+    <meta name="project" content="macula v0.10.0">
 
 
-    <title>macula_peer_connector — macula v0.9.2</title>
+    <title>macula_peer_connector — macula v0.10.0</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-91483A11.js"></script>
+    <script defer src="dist/sidebar_items-074F6B0F.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.9.2
+          v0.10.0
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_peer_connector</span> 
-      <small class="app-vsn" translate="no">(macula v0.9.2)</small>
+      <small class="app-vsn" translate="no">(macula v0.10.0)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_peer_system/macula_peer_connector.erl#L46" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer_system/macula_peer_connector.erl#L46" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -94,13 +94,13 @@ macula
 
     <section id="moduledoc">
 <p>Peer Connector - Establishes direct QUIC connections to remote peers (v0.8.0+).</p><p>This module enables peer-to-peer communication by establishing outbound QUIC connections to arbitrary peers. Used by DHT for STORE/FIND_VALUE message propagation and by RPC/PubSub for direct delivery.</p><h3 id="module-overview" class="section-heading"><a href="#module-overview" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Overview">Overview</a></span></h3><p>Pattern: Stateless utility module (no GenServer) - Direct QUIC connections using <code>macula_quic</code> - Fire-and-forget message sending - No connection pooling (future optimization for v0.9.0)</p><h3 id="module-usage" class="section-heading"><a href="#module-usage" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Usage">Usage</a></span></h3><p>Used internally by: - <code>macula_pubsub_dht</code>: Direct pub/sub delivery to discovered subscribers - <code>macula_service_registry</code>: DHT STORE propagation to k=20 nodes - Future: Multi-hop RPC routing</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="c1">%% Send a DHT STORE message to a peer</span><span class="w">
-   </span><span class="n">Endpoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p" data-group-id="9362325572-1">&lt;&lt;</span><span class="s">&quot;192.168.1.100:9443&quot;</span><span class="p" data-group-id="9362325572-1">&gt;&gt;</span><span class="p">,</span><span class="w">
-   </span><span class="n">Message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p" data-group-id="9362325572-2">#{</span><span class="w">
-       </span><span class="ss">key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="9362325572-3">&lt;&lt;</span><span class="s">&quot;service.calculator.add&quot;</span><span class="p" data-group-id="9362325572-3">&gt;&gt;</span><span class="p">,</span><span class="w">
-       </span><span class="ss">value</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="9362325572-4">&lt;&lt;</span><span class="s">&quot;192.168.1.50:9443&quot;</span><span class="p" data-group-id="9362325572-4">&gt;&gt;</span><span class="p">,</span><span class="w">
+   </span><span class="n">Endpoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p" data-group-id="6903658797-1">&lt;&lt;</span><span class="s">&quot;192.168.1.100:9443&quot;</span><span class="p" data-group-id="6903658797-1">&gt;&gt;</span><span class="p">,</span><span class="w">
+   </span><span class="n">Message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p" data-group-id="6903658797-2">#{</span><span class="w">
+       </span><span class="ss">key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="6903658797-3">&lt;&lt;</span><span class="s">&quot;service.calculator.add&quot;</span><span class="p" data-group-id="6903658797-3">&gt;&gt;</span><span class="p">,</span><span class="w">
+       </span><span class="ss">value</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="6903658797-4">&lt;&lt;</span><span class="s">&quot;192.168.1.50:9443&quot;</span><span class="p" data-group-id="6903658797-4">&gt;&gt;</span><span class="p">,</span><span class="w">
        </span><span class="ss">ttl</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">300</span><span class="w">
-   </span><span class="p" data-group-id="9362325572-2">}</span><span class="p">,</span><span class="w">
-   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer_connector</span><span class="p">:</span><span class="nf">send_message</span><span class="p" data-group-id="9362325572-5">(</span><span class="n">Endpoint</span><span class="p">,</span><span class="w"> </span><span class="ss">dht_store</span><span class="p">,</span><span class="w"> </span><span class="n">Message</span><span class="p" data-group-id="9362325572-5">)</span><span class="p">.</span></code></pre><h3 id="module-performance-characteristics" class="section-heading"><a href="#module-performance-characteristics" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Performance_Characteristics">Performance Characteristics</a></span></h3><p>v0.8.0: Fire-and-forget pattern - Creates new connection per message - Simple but inefficient for high-frequency messaging</p><p>v0.9.0 (planned): Connection pooling - Reuse existing connections - 10x performance improvement for repeated messaging</p>
+   </span><span class="p" data-group-id="6903658797-2">}</span><span class="p">,</span><span class="w">
+   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer_connector</span><span class="p">:</span><span class="nf">send_message</span><span class="p" data-group-id="6903658797-5">(</span><span class="n">Endpoint</span><span class="p">,</span><span class="w"> </span><span class="ss">dht_store</span><span class="p">,</span><span class="w"> </span><span class="n">Message</span><span class="p" data-group-id="6903658797-5">)</span><span class="p">.</span></code></pre><h3 id="module-performance-characteristics" class="section-heading"><a href="#module-performance-characteristics" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Performance_Characteristics">Performance Characteristics</a></span></h3><p>v0.8.0: Fire-and-forget pattern - Creates new connection per message - Simple but inefficient for high-frequency messaging</p><p>v0.9.0 (planned): Connection pooling - Reuse existing connections - 10x performance improvement for repeated messaging</p>
     </section>
 
 </div>
@@ -160,7 +160,7 @@ macula
       <h1 class="signature" translate="no">send_message(Endpoint, MessageType, Message)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_peer_system/macula_peer_connector.erl#L64" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer_system/macula_peer_connector.erl#L64" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -188,7 +188,7 @@ macula
       <h1 class="signature" translate="no">send_message(Endpoint, MessageType, Message, Timeout)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.9.2/src/macula_peer_system/macula_peer_connector.erl#L69" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer_system/macula_peer_connector.erl#L69" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -214,9 +214,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.9.2" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.10.0" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.9.2">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.10.0">Hex Preview</a>
 
           </span>
 

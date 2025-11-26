@@ -54,7 +54,15 @@
 %% @doc Start the peer system supervisor with given URL and options.
 -spec start_link(binary(), map()) -> {ok, pid()} | {error, term()}.
 start_link(Url, Opts) ->
-    supervisor:start_link(?MODULE, {Url, Opts}).
+    case supervisor:start_link(?MODULE, {Url, Opts}) of
+        {ok, SupPid} ->
+            %% Initialize handlers after supervisor has started
+            %% This must be done asynchronously to avoid blocking the start_link call
+            spawn(fun() -> init_handlers(SupPid) end),
+            {ok, SupPid};
+        Error ->
+            Error
+    end.
 
 %% @doc Stop the peer system supervisor and all children.
 -spec stop(pid()) -> ok.
@@ -124,8 +132,64 @@ init({Url, Opts}) ->
         }
     ],
 
+    %% Schedule initialization of handlers after supervisor starts
+    %% This must be done asynchronously because supervisor init/1 must return
+    %% before children can be queried
+    %% Note: We return the supervisor PID in the return value, but we need to
+    %% handle initialization in the start_link callback instead
     {ok, {SupFlags, ChildSpecs}}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% @private
+%% @doc Initialize handlers by sending them the connection_manager_pid.
+%% This must be called after the supervisor has started and children are running.
+%% The function waits a brief moment for children to fully initialize, then
+%% looks up their PIDs and sends the set_connection_manager_pid message.
+-spec init_handlers(pid()) -> ok.
+init_handlers(SupPid) ->
+    %% Brief delay to ensure supervisor and children are fully initialized
+    timer:sleep(50),
+
+    %% Look up child PIDs from supervisor
+    case supervisor:which_children(SupPid) of
+        Children when is_list(Children) ->
+            %% Extract PIDs for each child
+            ConnMgrPid = find_child_pid(Children, connection_manager),
+            PubSubPid = find_child_pid(Children, pubsub_handler),
+            RpcPid = find_child_pid(Children, rpc_handler),
+            AdvMgrPid = find_child_pid(Children, advertisement_manager),
+
+            %% Send connection_manager_pid to children that need it
+            case ConnMgrPid of
+                undefined ->
+                    ?LOG_ERROR("Connection manager not found in peer system");
+                _ ->
+                    send_if_pid(PubSubPid, {set_connection_manager_pid, ConnMgrPid}),
+                    send_if_pid(RpcPid, {set_connection_manager_pid, ConnMgrPid}),
+                    send_if_pid(AdvMgrPid, {set_connection_manager_pid, ConnMgrPid}),
+                    ?LOG_INFO("Initialized handlers with connection_manager_pid: ~p", [ConnMgrPid])
+            end;
+        _ ->
+            ?LOG_ERROR("Failed to query supervisor children")
+    end,
+    ok.
+
+%% @private
+%% @doc Find a child PID by child ID in supervisor children list.
+-spec find_child_pid(list(), atom()) -> pid() | undefined.
+find_child_pid(Children, ChildId) ->
+    case lists:keyfind(ChildId, 1, Children) of
+        {ChildId, Pid, _Type, _Modules} when is_pid(Pid) -> Pid;
+        _ -> undefined
+    end.
+
+%% @private
+%% @doc Send a cast message to a PID if it's valid.
+-spec send_if_pid(pid() | undefined, term()) -> ok.
+send_if_pid(undefined, _Msg) -> ok;
+send_if_pid(Pid, Msg) when is_pid(Pid) ->
+    gen_server:cast(Pid, Msg),
+    ok.

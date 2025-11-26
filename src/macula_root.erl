@@ -328,7 +328,10 @@ connect_to_bootstrap_peers(Peers, Realm) ->
         case macula_peers_sup:start_peer(PeerUrl, #{realm => Realm}) of
             {ok, PeerPid} ->
                 io:format("[DHT Bootstrap] Successfully connected to ~s (PID: ~p)~n",
-                         [PeerUrl, PeerPid]);
+                         [PeerUrl, PeerPid]),
+
+                %% Add bootstrap peer to routing table for DHT routing
+                add_bootstrap_to_routing_table(PeerUrl);
             {error, Reason} ->
                 io:format("[DHT Bootstrap] Failed to connect to ~s: ~p~n",
                          [PeerUrl, Reason])
@@ -336,4 +339,34 @@ connect_to_bootstrap_peers(Peers, Realm) ->
     end, Peers),
 
     io:format("[DHT Bootstrap] Bootstrap peer connections initiated~n"),
+    ok.
+
+%% @private
+%% @doc Add bootstrap peer to routing table after successful connection.
+%% Parses URL to extract host/port, generates node_id from URL, adds to DHT routing table.
+add_bootstrap_to_routing_table(PeerUrl) ->
+    %% Parse URL to get host and port
+    case uri_string:parse(PeerUrl) of
+        #{host := Host, port := Port} ->
+            %% Generate node_id for bootstrap peer (deterministic from URL)
+            NodeId = crypto:hash(sha256, PeerUrl),
+
+            %% Create node info for routing table
+            NodeInfo = #{
+                node_id => NodeId,
+                address => {Host, Port}
+            },
+
+            %% Add to routing table
+            case whereis(macula_routing_server) of
+                undefined ->
+                    io:format("[DHT Bootstrap] Routing server not available, skipping routing table add~n");
+                RoutingServerPid ->
+                    macula_routing_server:add_node(RoutingServerPid, NodeInfo),
+                    io:format("[DHT Bootstrap] Added bootstrap peer ~s to routing table (node_id: ~s)~n",
+                             [PeerUrl, binary:encode_hex(NodeId)])
+            end;
+        _Other ->
+            io:format("[DHT Bootstrap] Failed to parse bootstrap URL: ~s~n", [PeerUrl])
+    end,
     ok.

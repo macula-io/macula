@@ -354,21 +354,50 @@ find_sibling_in_children([], Module) ->
 
 
 %% @private
-%% @doc Get node ID from NODE_NAME environment variable or generate from realm/port.
-%% Uses idiomatic Erlang pattern matching on function heads.
+%% @doc Get node ID from NODE_NAME env var or generate from {Realm, MAC, Port}.
+%% Returns a 32-byte binary (raw binary for Kademlia, never hex-encoded).
+%% MUST match macula_gateway_system:get_node_id/2 exactly!
 -spec get_node_id(binary(), inet:port_number()) -> binary().
 get_node_id(Realm, Port) ->
     case os:getenv("NODE_NAME") of
         false ->
-            %% No NODE_NAME set, generate hash for backward compatibility
-            io:format("[Gateway] No NODE_NAME env var, generating node ID from realm/port~n"),
-            crypto:hash(sha256, term_to_binary({Realm, Port}));
+            %% No NODE_NAME, generate from {Realm, MAC, Port} for true uniqueness
+            Mac = get_primary_mac(),
+            io:format("[Gateway] Using MAC-based node ID: MAC=~w, Realm=~s, Port=~p~n",
+                     [Mac, Realm, Port]),
+            crypto:hash(sha256, term_to_binary({Realm, Mac, Port}));
         NodeName when is_list(NodeName) ->
-            %% Use NODE_NAME from environment (converted to binary)
-            NodeNameBin = list_to_binary(NodeName),
+            %% Use NODE_NAME from environment - hash it to get 32-byte binary
             io:format("[Gateway] Using NODE_NAME from environment: ~s~n", [NodeName]),
-            NodeNameBin
+            crypto:hash(sha256, list_to_binary(NodeName))
     end.
+
+%% @private
+%% @doc Get primary MAC address from a valid network interface.
+%% Filters out loopback, docker, bridge, and veth interfaces.
+%% Fails hard if no valid interface found - operator must ensure proper network config.
+-spec get_primary_mac() -> binary().
+get_primary_mac() ->
+    {ok, Interfaces} = inet:getifaddrs(),
+    ValidMacs = [list_to_binary(HwAddr) || {Name, Props} <- Interfaces,
+                                            not is_virtual_interface(Name),
+                                            {hwaddr, HwAddr} <- Props,
+                                            HwAddr =/= [0,0,0,0,0,0]],
+    case ValidMacs of
+        [First | _] -> First;
+        [] -> error(no_valid_network_interface)
+    end.
+
+%% @private
+%% @doc Check if interface name is a virtual/loopback interface.
+-spec is_virtual_interface(string()) -> boolean().
+is_virtual_interface("lo") -> true;
+is_virtual_interface("lo" ++ _) -> true;
+is_virtual_interface("docker" ++ _) -> true;
+is_virtual_interface("br-" ++ _) -> true;
+is_virtual_interface("veth" ++ _) -> true;
+is_virtual_interface("virbr" ++ _) -> true;
+is_virtual_interface(_) -> false.
 
 
 handle_call(get_stats, _From, State) ->
@@ -399,28 +428,17 @@ handle_call({unregister_handler, Procedure}, _From, State) ->
     ok = macula_gateway_rpc:unregister_handler(Rpc, Procedure),
     {reply, ok, State};
 
-%% @doc Handle message routed from QUIC server.
+%% @doc Handle message routed from QUIC server (async).
 %% Routes decoded QUIC messages to appropriate business logic handlers.
-handle_call({route_message, MessageType, Message, Stream}, _From, State) ->
-    io:format("[Gateway] Routing message type ~p from QUIC server~n", [MessageType]),
-    %% Use existing handle_decoded_message logic
-    Result = handle_decoded_message({ok, {MessageType, Message}}, Stream, State),
-    %% Extract new state from {noreply, NewState} tuple
-    NewState = element(2, Result),
-    {reply, ok, NewState};
+%% This is now a cast to prevent blocking the QUIC server on message processing.
 
 %% Local client (in-VM) message handlers
 handle_call({local_publish, _Realm, Topic, Payload}, _From, State) ->
     io:format("[Gateway] Local publish: ~s~n", [Topic]),
-    PubSub = State#state.pubsub,
-    Mesh = State#state.mesh,
 
-    %% Publish to local subscribers
-    ok = macula_gateway_pubsub:publish(PubSub, Topic, Payload),
-
-    %% Relay to all connected mesh peers (cross-peer pub/sub)
-    io:format("[Gateway] Relaying ~s to mesh peers~n", [Topic]),
-    relay_to_mesh_peers(Mesh, Topic, Payload),
+    %% Reply immediately to avoid blocking the caller
+    %% Distribution happens asynchronously in a spawned process
+    gen_server:cast(self(), {distribute_publish, Topic, Payload}),
 
     {reply, ok, State};
 
@@ -538,6 +556,55 @@ handle_cast({process_rpc_route, RpcRouteMsg}, State) ->
     %% Call handle_rpc_call_routed with Stream=undefined, CallMsg, RpcRouteMsg, State
     handle_rpc_call_routed(undefined, CallMsg, RpcRouteMsg, State);
 
+%% @doc Handle async distribution of published messages
+handle_cast({distribute_publish, Topic, Payload}, State) ->
+    io:format("[Gateway] Async distributing ~s via DHT-based routing~n", [Topic]),
+    PubSub = State#state.pubsub,
+
+    %% Get local subscribers for the topic
+    {ok, LocalSubscribers} = macula_gateway_pubsub:get_subscribers(PubSub, Topic),
+
+    %% Create PUBLISH message for routing
+    PubMsg = #{
+        <<"topic">> => Topic,
+        <<"payload">> => Payload,
+        <<"qos">> => 0,
+        <<"retain">> => false,
+        <<"message_id">> => crypto:strong_rand_bytes(16)
+    },
+
+    %% Distribute to local + remote subscribers (runs in cast, so it's async)
+    macula_gateway_pubsub_router:distribute(
+        LocalSubscribers,
+        PubMsg,
+        State#state.node_id,
+        State#state.mesh,
+        State#state.client_manager
+    ),
+
+    %% Also relay to mesh peers (bootstrap and connected clients)
+    %% This ensures local publishes reach remote subscribers via bootstrap
+    relay_to_mesh_peers(State, Topic, Payload),
+
+    {noreply, State};
+
+%% @doc Handle message routed from QUIC server (async).
+%% Routes decoded QUIC messages to appropriate business logic handlers.
+handle_cast({route_message, MessageType, Message, Stream}, State) ->
+    io:format("[Gateway] Routing message type ~p from QUIC server (async)~n", [MessageType]),
+    %% Use existing handle_decoded_message logic
+    Result = handle_decoded_message({ok, {MessageType, Message}}, Stream, State),
+    %% Extract new state from {noreply, NewState} tuple
+    NewState = element(2, Result),
+    {noreply, NewState};
+
+%% Async local publish - fire-and-forget from local client
+handle_cast({local_publish_async, _Realm, Topic, Payload}, State) ->
+    io:format("[Gateway] Local publish async: ~s~n", [Topic]),
+    %% Distribute to subscribers asynchronously
+    gen_server:cast(self(), {distribute_publish, Topic, Payload}),
+    {noreply, State};
+
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -645,12 +712,9 @@ handle_connect_realm(true, Stream, ConnectMsg, State) ->
 
     %% HTTP/3 streams are bidirectional - we can send messages back on the same stream
     %% Store the client's incoming stream in CLIENT MANAGER for routing (enables client-only mode)
-    ok = macula_gateway_clients:store_client_stream(State#state.client_manager, NodeId, Stream),
-    io:format("[Gateway] Stored client stream for node ~p in client manager (bidirectional communication)~n",
-             [binary:encode_hex(NodeId)]),
-
-    %% Also store endpoint for this stream in client manager
-    ok = macula_gateway_clients:store_client_stream(State#state.client_manager, Endpoint, Stream),
+    ok = macula_gateway_clients:store_client_stream(State#state.client_manager, NodeId, Stream, Endpoint),
+    io:format("[Gateway] Stored client stream for node ~p (endpoint: ~s) in client manager (bidirectional communication)~n",
+             [binary:encode_hex(NodeId), Endpoint]),
 
     %% Connection management now handled by macula_gateway_mesh module
     NewState = State,
@@ -741,69 +805,116 @@ handle_pubsub_route_deliver(PublishMsg, State) ->
     {noreply, State}.
 
 %% @doc Forward pubsub_route message to next hop through mesh.
+%% Uses async (fire-and-forget) pattern to avoid blocking gateway.
+%% Graceful error handling - logs errors but doesn't crash gateway.
 forward_pubsub_route(NextHopNodeInfo, PubSubRouteMsg, MeshPid) ->
-    io:format("[Gateway] Forwarding pubsub_route to next hop~n"),
+    io:format("[Gateway] Forwarding pubsub_route to next hop (async)~n"),
 
-    %% Extract next hop info
-    #{<<"node_id">> := NextHopNodeId,
-      <<"address">> := AddressBin,
-      <<"port">> := Port} = NextHopNodeInfo,
+    %% Extract next hop info (routing_bucket:node_info uses atom keys, not binary)
+    #{node_id := NextHopNodeId,
+      address := Address} = NextHopNodeInfo,
 
-    %% Parse address (inline implementation to avoid module dependency)
-    Address = case inet:parse_address(binary_to_list(AddressBin)) of
-        {ok, IpTuple} -> IpTuple;
-        {error, _} -> binary_to_list(AddressBin)  % Treat as hostname
-    end,
-
-    %% Get or create mesh connection
-    {ok, Stream} = macula_gateway_mesh:get_or_create_connection(MeshPid, NextHopNodeId, {Address, Port}),
-
-    %% Encode and send pubsub_route message
+    %% Encode message
     EncodedMsg = macula_protocol_encoder:encode(pubsub_route, PubSubRouteMsg),
-    macula_quic:send(Stream, EncodedMsg),
-    io:format("[Gateway] Forwarded pubsub_route successfully~n"),
+
+    %% Send asynchronously - does NOT block the gateway
+    %% Connection creation and sending happens in a spawned process
+    macula_gateway_mesh:send_async(MeshPid, NextHopNodeId, Address, EncodedMsg),
+    io:format("[Gateway] Queued pubsub_route for async send to ~s~n",
+             [binary:encode_hex(NextHopNodeId)]),
     ok.
 
 %% @doc Relay pub/sub event to all connected mesh peers.
 %% This enables cross-peer event propagation for distributed applications.
-relay_to_mesh_peers(MeshPid, Topic, Payload) ->
-    case macula_gateway_mesh:list_connections(MeshPid) of
-        {ok, []} ->
-            ok;  % No peers - nothing to relay
-        {ok, Connections} ->
-            io:format("[Gateway] Relaying ~s to ~p peer(s)~n", [Topic, length(Connections)]),
-            PublishMsg = #{<<"topic">> => Topic, <<"payload">> => Payload},
-            EncodedMsg = macula_protocol_encoder:encode(publish, PublishMsg),
-            lists:foreach(fun(Conn) -> relay_to_peer(MeshPid, Conn, EncodedMsg) end, Connections),
-            ok;
-        {error, Reason} ->
-            io:format("[Gateway] Failed to list connections: ~p~n", [Reason]),
-            ok
-    end.
+relay_to_mesh_peers(State, Topic, Payload) ->
+    %% Strategy: Relay via TWO mechanisms to form a mesh:
+    %% 1. Broadcast to connected CLIENTS (applications/gateways connected TO this gateway)
+    %% 2. Forward to connected BOOTSTRAP PEERS (gateways this gateway connected TO)
 
-%% @private Helper to relay message to single peer
-relay_to_peer(MeshPid, {NodeId, #{address := Address}}, EncodedMsg) ->
-    case macula_gateway_mesh:get_or_create_connection(MeshPid, NodeId, Address) of
-        {ok, Stream} ->
-            case macula_quic:send(Stream, EncodedMsg) of
-                ok ->
-                    io:format("[Gateway] Relayed to ~s~n", [binary:encode_hex(NodeId)]);
-                {error, Reason} ->
-                    io:format("[Gateway] Send failed to ~s: ~p~n", [binary:encode_hex(NodeId), Reason])
-            end;
+    %% 1. Broadcast to connected clients (existing implementation)
+    PublishMsg = #{
+        <<"topic">> => Topic,
+        <<"payload">> => Payload,
+        <<"qos">> => 0,
+        <<"retain">> => false,
+        <<"message_id">> => erlang:unique_integer([positive])
+    },
+
+    case macula_protocol_encoder:encode(publish, PublishMsg) of
         {error, Reason} ->
-            io:format("[Gateway] Connection failed to ~s: ~p~n", [binary:encode_hex(NodeId), Reason])
-    end.
+            io:format("[Gateway] Failed to encode publish message: ~p~n", [Reason]),
+            ok;
+        EncodedMsg ->
+            %% Broadcast to all connected clients (applications/child gateways)
+            ClientManager = State#state.client_manager,
+            macula_gateway_clients:broadcast(ClientManager, EncodedMsg),
+            io:format("[Gateway] Broadcasted ~s to all clients~n", [Topic]),
+            ok
+    end,
+
+    %% 2. Forward to bootstrap peers (parent gateways)
+    %% Get peer system supervisors
+    PeerSystems = macula_peers_sup:list_peers(),
+    io:format("[Gateway] Peer systems: ~p~n", [PeerSystems]),
+
+    %% Extract connection PIDs from each peer system supervisor
+    ConnectionPids = lists:filtermap(fun(PeerSup) ->
+        case supervisor:which_children(PeerSup) of
+            Children when is_list(Children) ->
+                %% Find the connection_manager PID (macula_connection)
+                case lists:keyfind(connection_manager, 1, Children) of
+                    {connection_manager, ConnPid, _Type, _Modules} when is_pid(ConnPid) ->
+                        {true, ConnPid};
+                    _ ->
+                        false
+                end;
+            _ ->
+                false
+        end
+    end, PeerSystems),
+
+    io:format("[Gateway] Bootstrap connection PIDs: ~p~n", [ConnectionPids]),
+
+    case ConnectionPids of
+        [] ->
+            io:format("[Gateway] No bootstrap peers to forward to~n"),
+            ok;
+        Connections ->
+            %% Build publish message for forwarding
+            ForwardMsg = #{
+                <<"topic">> => Topic,
+                <<"payload">> => Payload,
+                <<"qos">> => 0,
+                <<"retain">> => false,
+                <<"message_id">> => erlang:unique_integer([positive])
+            },
+
+            %% Forward to each bootstrap peer via macula_connection:send_message
+            lists:foreach(fun(ConnPid) ->
+                case macula_connection:send_message(ConnPid, publish, ForwardMsg) of
+                    ok ->
+                        io:format("[Gateway] Forwarded ~s to bootstrap peer ~p~n", [Topic, ConnPid]);
+                    {error, PeerReason} ->
+                        io:format("[Gateway] Failed to forward ~s to peer ~p: ~p~n",
+                                 [Topic, ConnPid, PeerReason])
+                end
+            end, Connections),
+            io:format("[Gateway] Forwarded ~s to ~p bootstrap peer(s)~n", [Topic, length(Connections)])
+    end,
+    ok.
+
 
 %% @doc Handle RPC call message (legacy direct handling).
 handle_rpc_call(Stream, CallMsg, State) ->
     Procedure = maps:get(<<"procedure">>, CallMsg),
     CallId = maps:get(<<"call_id">>, CallMsg),
 
-    %% Special exception: handle _dht.list_gateways for peer discovery
+    %% Special exception: handle DHT-related procedures
     case Procedure of
         <<"_dht.list_gateways">> ->
             handle_dht_list_gateways(Stream, CallId, State);
+        <<"_dht.store">> ->
+            handle_dht_store(Stream, CallId, CallMsg, State);
         _ ->
             io:format("[Gateway] BOOTSTRAP-ONLY MODE: Rejecting RPC call to ~s (peers must communicate directly via DHT)~n", [Procedure]),
 
@@ -872,6 +983,68 @@ handle_dht_list_gateways(Stream, CallId, _State) ->
             },
             ReplyBinary = macula_protocol_encoder:encode(reply, SuccessReply),
             macula_quic:send(Stream, ReplyBinary)
+    end,
+    {noreply, _State}.
+
+%% @private Handle _dht.store RPC for DHT sync from embedded gateways
+handle_dht_store(Stream, CallId, CallMsg, _State) ->
+    io:format("[Gateway] Handling _dht.store RPC~n"),
+
+    %% Extract key and value from args
+    Args = maps:get(<<"args">>, CallMsg, #{}),
+    Key = maps:get(<<"key">>, Args, undefined),
+    Value = maps:get(<<"value">>, Args, undefined),
+
+    %% Validate parameters
+    case {Key, Value} of
+        {undefined, _} ->
+            ErrorReply = #{
+                call_id => CallId,
+                error => #{
+                    code => <<"invalid_args">>,
+                    message => <<"Missing required parameter: key">>
+                }
+            },
+            ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+            macula_quic:send(Stream, ReplyBinary);
+        {_, undefined} ->
+            ErrorReply = #{
+                call_id => CallId,
+                error => #{
+                    code => <<"invalid_args">>,
+                    message => <<"Missing required parameter: value">>
+                }
+            },
+            ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+            macula_quic:send(Stream, ReplyBinary);
+        {_, _} ->
+            %% Forward to local routing server to store in DHT
+            case whereis(macula_routing_server) of
+                undefined ->
+                    ErrorReply = #{
+                        call_id => CallId,
+                        error => #{
+                            code => <<"routing_server_not_found">>,
+                            message => <<"Routing server not available">>
+                        }
+                    },
+                    ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+                    macula_quic:send(Stream, ReplyBinary);
+                RoutingServer ->
+                    io:format("[Gateway] Storing in DHT: key=~p~n", [Key]),
+                    %% Store in DHT (will propagate to k-closest nodes)
+                    gen_server:cast(RoutingServer, {store, Key, Value}),
+
+                    %% Send success reply
+                    SuccessReply = #{
+                        call_id => CallId,
+                        result => #{
+                            <<"status">> => <<"ok">>
+                        }
+                    },
+                    ReplyBinary = macula_protocol_encoder:encode(reply, SuccessReply),
+                    macula_quic:send(Stream, ReplyBinary)
+            end
     end,
     {noreply, _State}.
 
@@ -1065,6 +1238,7 @@ handle_unsubscribe(Stream, UnsubMsg, State) ->
 %% Delegates to macula_gateway_pubsub_router for distribution logic.
 handle_publish(_PublisherStream, PubMsg, State) ->
     Topic = maps:get(<<"topic">>, PubMsg),
+    Payload = maps:get(<<"payload">>, PubMsg),
     io:format("[Gateway] Routing publish to topic: ~s~n", [Topic]),
 
     %% Get local subscribers for this topic
@@ -1079,6 +1253,9 @@ handle_publish(_PublisherStream, PubMsg, State) ->
         State#state.mesh,
         State#state.client_manager
     ),
+
+    %% Relay to mesh peers (both clients and bootstrap peers)
+    relay_to_mesh_peers(State, Topic, Payload),
 
     {noreply, State}.
 
