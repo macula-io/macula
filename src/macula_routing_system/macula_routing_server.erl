@@ -243,6 +243,10 @@ handle_call({delete_local, Key, NodeId}, _From, #state{storage = Storage} = Stat
     {reply, ok, State#state{storage = NewStorage}};
 
 handle_call({find_value, Key, K}, _From, #state{routing_table = Table, storage = Storage} = State) ->
+    %% Debug: log the key and storage size
+    io:format("[RoutingServer] find_value: key=~p, storage_size=~p~n", [Key, maps:size(Storage)]),
+    io:format("[RoutingServer] find_value: storage keys=~p~n", [maps:keys(Storage)]),
+
     %% First check local storage
     Reply = case maps:get(Key, Storage, undefined) of
         undefined ->
@@ -282,6 +286,49 @@ handle_call(_Request, _From, State) ->
 handle_cast({add_node, NodeInfo}, #state{routing_table = Table} = State) ->
     NewTable = macula_routing_table:add_node(Table, NodeInfo),
     {noreply, State#state{routing_table = NewTable}};
+
+%% @private
+%% Handle async store (from _dht.store RPC) - stores locally only without propagation
+%% This is used by bootstrap gateway when receiving store requests from peers
+handle_cast({store, Key, Value}, #state{storage = Storage} = State) when is_binary(Key) ->
+    io:format("[RoutingServer] Async STORE received - key hash prefix: ~p, value: ~p~n",
+              [binary:part(Key, 0, min(8, byte_size(Key))), Value]),
+
+    %% Store providers as a list to support multiple providers per service
+    ExistingProviders = maps:get(Key, Storage, []),
+
+    %% Ensure we're working with a list (for backward compatibility)
+    ProviderList = case is_list(ExistingProviders) of
+        true -> ExistingProviders;
+        false -> [ExistingProviders]
+    end,
+
+    %% Get node_id from the new provider (handle both atom and binary keys)
+    NodeId = get_node_id_from_value(Value),
+
+    %% Update or append provider
+    UpdatedProviders = case NodeId of
+        undefined ->
+            [Value | ProviderList];
+        _ ->
+            ExistingIndex = find_provider_index(NodeId, ProviderList),
+            case ExistingIndex of
+                not_found ->
+                    [Value | ProviderList];
+                Index ->
+                    lists:sublist(ProviderList, Index - 1) ++
+                        [Value] ++
+                        lists:nthtail(Index, ProviderList)
+            end
+    end,
+
+    NewStorage = Storage#{Key => UpdatedProviders},
+    io:format("[RoutingServer] Stored value for key, now have ~p provider(s)~n", [length(UpdatedProviders)]),
+    {noreply, State#state{storage = NewStorage}};
+
+handle_cast({store, Key, _Value}, State) ->
+    io:format("[RoutingServer] ERROR: Async STORE received with non-binary key: ~p~n", [Key]),
+    {noreply, State};
 
 handle_cast(_Request, State) ->
     {noreply, State}.
@@ -332,6 +379,16 @@ forward_store_to_bootstrap(Key, Value) ->
                     ok
             end
     end.
+
+%% @doc Extract node_id from value map, handling both atom and binary keys.
+-spec get_node_id_from_value(map()) -> binary() | undefined.
+get_node_id_from_value(Value) when is_map(Value) ->
+    case maps:get(node_id, Value, undefined) of
+        undefined -> maps:get(<<"node_id">>, Value, undefined);
+        NodeId -> NodeId
+    end;
+get_node_id_from_value(_Value) ->
+    undefined.
 
 %% @doc Find index of provider with matching node_id in provider list.
 -spec find_provider_index(binary(), [map()]) -> pos_integer() | not_found.
@@ -389,6 +446,7 @@ handle_find_node(Message, #state{routing_table = Table, config = Config} = State
 -spec handle_store(map(), #state{}) -> {map(), #state{}}.
 handle_store(Message, #state{storage = Storage} = State) ->
     {ok, Key, Value} = macula_routing_protocol:decode_store(Message),
+    io:format("[RoutingServer] STORE: key=~p, value=~p~n", [Key, Value]),
 
     %% Store using multi-value logic (same as store_local)
     ExistingProviders = maps:get(Key, Storage, []),
@@ -426,6 +484,8 @@ handle_store(Message, #state{storage = Storage} = State) ->
     end,
 
     NewStorage = Storage#{Key => UpdatedProviders},
+    io:format("[RoutingServer] STORE complete: new_storage_size=~p, key_prefix=~p~n",
+              [maps:size(NewStorage), binary:part(Key, 0, min(8, byte_size(Key)))]),
 
     %% Return success
     Reply = #{type => store_reply, result => ok},

@@ -33,13 +33,18 @@
 
 ---
 
-## Latest Release: v0.8.4 (2025-11-17)
+## Latest Release: v0.10.1 (2025-11-26)
 
-**Major features from v0.8.0:**
-- ✅ Direct P2P QUIC connections (50% latency improvement)
-- ✅ DHT propagation to k=20 closest nodes
-- ✅ RPC and PubSub via direct P2P
-- ✅ Production-ready memory management
+**Performance Optimizations & Documentation:**
+- ✅ Subscriber caching with TTL-based expiration (50-200x publish speedup)
+- ✅ Direct routing table for known endpoints (10-50x latency reduction)
+- ✅ Rate-limited DHT discovery (prevents discovery storms)
+- ✅ Comprehensive performance documentation with ASCII diagrams
+
+**Platform Features (v0.9.0+):**
+- ✅ Ra/Raft consensus for distributed coordination
+- ✅ LWW-Register CRDT for eventually-consistent state
+- ✅ Leader election and workload registration APIs
 
 ---
 

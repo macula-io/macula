@@ -386,8 +386,12 @@ try_multi_wildcard(Pattern, Topic, Skip) ->
 %% @private
 %% @doc Advertise a subscription in the DHT so other gateways can discover it.
 %% This enables cross-gateway pub/sub routing.
+%% Also invalidates subscriber cache to ensure fresh lookups.
 -spec advertise_subscription_in_dht(binary(), #state{}) -> ok.
 advertise_subscription_in_dht(Topic, State) ->
+    %% Invalidate subscriber cache - subscription change means cached subscribers are stale
+    invalidate_subscriber_cache(Topic),
+
     %% Get gateway node_id and endpoint from opts
     NodeId = maps:get(node_id, State#state.opts, <<"unknown">>),
     Url = maps:get(url, State#state.opts, <<"unknown">>),
@@ -428,3 +432,16 @@ advertise_subscription_in_dht(Topic, State) ->
                      [Topic, DhtError])
     end,
     ok.
+
+%% @private
+%% @doc Invalidate subscriber cache for a topic.
+%% Called when subscription changes to ensure fresh DHT lookups.
+-spec invalidate_subscriber_cache(binary()) -> ok.
+invalidate_subscriber_cache(Topic) ->
+    case whereis(macula_subscriber_cache) of
+        undefined ->
+            %% Cache not running yet - that's fine
+            ok;
+        _Pid ->
+            macula_subscriber_cache:invalidate(Topic)
+    end.

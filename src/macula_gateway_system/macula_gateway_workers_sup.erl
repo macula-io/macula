@@ -102,6 +102,26 @@ init(Config) ->
             modules => [macula_gateway_clients]
         },
 
+        %% Subscriber Cache - caches DHT topic→subscribers lookups (5-10x latency improvement)
+        #{
+            id => macula_subscriber_cache,
+            start => {macula_subscriber_cache, start_link, [#{ttl_ms => 5000}]},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [macula_subscriber_cache]
+        },
+
+        %% Direct Routing Table - caches NodeId→Endpoint for direct P2P routing (3-5x improvement)
+        #{
+            id => macula_direct_routing,
+            start => {macula_direct_routing, start_link, [#{ttl_ms => 300000}]},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [macula_direct_routing]
+        },
+
         %% Pub/Sub Handler - routes published messages to subscribers
         #{
             id => macula_gateway_pubsub,
@@ -130,6 +150,16 @@ init(Config) ->
             shutdown => 5000,
             type => worker,
             modules => [macula_gateway_mesh]
+        },
+
+        %% Peer Connection Pool - pools outbound QUIC connections (1.5-2x latency improvement)
+        #{
+            id => macula_peer_connection_pool,
+            start => {macula_peer_connection_pool, start_link, [#{max_connections => 100, idle_timeout_ms => 60000}]},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [macula_peer_connection_pool]
         }
     ],
 

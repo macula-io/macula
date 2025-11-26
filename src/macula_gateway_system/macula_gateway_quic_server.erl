@@ -203,12 +203,30 @@ terminate(_Reason, _State) ->
 %%% Internal Helper Functions
 %%%===================================================================
 
-%% @doc Generate node ID from realm and port.
-%% Uses MD5 hash of "realm:port" similar to gateway implementation.
+%% @doc Generate node ID from HOSTNAME env var (set by Docker) or generate from {Realm, Port}.
+%% Returns a 32-byte binary (raw binary for Kademlia, never hex-encoded).
+%% MUST match macula_gateway_system:get_node_id/2 and macula_gateway:get_node_id/2!
+%%
+%% Priority:
+%% 1. NODE_NAME env var (explicit, highest priority)
+%% 2. HOSTNAME env var (Docker sets this to container hostname - unique per container)
+%% 3. Fallback to {Realm, Port} only (NO MAC - MAC is shared across Docker containers)
 get_node_id(Realm, Port) when is_binary(Realm), is_integer(Port) ->
-    PortBin = integer_to_binary(Port),
-    Input = <<Realm/binary, ":", PortBin/binary>>,
-    crypto:hash(md5, Input).
+    case os:getenv("NODE_NAME") of
+        false ->
+            %% No NODE_NAME, try HOSTNAME (Docker sets this to container hostname)
+            case os:getenv("HOSTNAME") of
+                false ->
+                    %% No HOSTNAME either, use {Realm, Port} as last resort
+                    crypto:hash(sha256, term_to_binary({Realm, Port}));
+                Hostname when is_list(Hostname) ->
+                    %% Use HOSTNAME from Docker - unique per container
+                    crypto:hash(sha256, term_to_binary({Realm, list_to_binary(Hostname), Port}))
+            end;
+        NodeName when is_list(NodeName) ->
+            %% Use NODE_NAME from environment - hash it to get 32-byte binary
+            crypto:hash(sha256, list_to_binary(NodeName))
+    end.
 
 %%%===================================================================
 %%% QUIC Connection Helper Functions

@@ -1,0 +1,352 @@
+%%%-------------------------------------------------------------------
+%%% @doc
+%%% Latency test module for measuring pub/sub and RPC performance.
+%%%
+%%% Usage:
+%%%   1. Load into running node: c(latency_test).
+%%%   2. Run pubsub test: latency_test:pubsub_latency(Topic, NumMessages).
+%%%   3. Run RPC test: latency_test:rpc_latency(Procedure, NumCalls).
+%%%
+%%% Example:
+%%%   latency_test:pubsub_latency(<<"test.latency">>, 100).
+%%%   latency_test:rpc_latency(<<"echo">>, 100).
+%%% @end
+%%%-------------------------------------------------------------------
+-module(latency_test).
+
+-export([
+    pubsub_latency/2,
+    pubsub_latency/3,
+    rpc_latency/2,
+    rpc_latency/3,
+    run_all/0,
+    run_all/1
+]).
+
+%%%===================================================================
+%%% API
+%%%===================================================================
+
+%% @doc Run all latency tests with default parameters.
+-spec run_all() -> ok.
+run_all() ->
+    run_all(#{}).
+
+%% @doc Run all latency tests with options.
+-spec run_all(map()) -> ok.
+run_all(Opts) ->
+    NumMessages = maps:get(num_messages, Opts, 50),
+    Topic = maps:get(topic, Opts, <<"latency.test">>),
+
+    io:format("~n========================================~n"),
+    io:format("MACULA LATENCY TEST SUITE~n"),
+    io:format("========================================~n~n"),
+
+    %% Test 1: PubSub latency
+    io:format("Test 1: PubSub Latency (~p messages)~n", [NumMessages]),
+    io:format("----------------------------------------~n"),
+    pubsub_latency(Topic, NumMessages, Opts),
+
+    io:format("~n========================================~n"),
+    io:format("TESTS COMPLETE~n"),
+    io:format("========================================~n~n"),
+    ok.
+
+%% @doc Measure pub/sub latency by publishing messages and timing round-trip.
+-spec pubsub_latency(binary(), pos_integer()) -> map().
+pubsub_latency(Topic, NumMessages) ->
+    pubsub_latency(Topic, NumMessages, #{}).
+
+-spec pubsub_latency(binary(), pos_integer(), map()) -> map().
+pubsub_latency(Topic, NumMessages, Opts) ->
+    %% Find the local client
+    case whereis(macula_local_client) of
+        undefined ->
+            io:format("ERROR: macula_local_client not found~n"),
+            #{error => no_local_client};
+        LocalClient ->
+            run_pubsub_test(LocalClient, Topic, NumMessages, Opts)
+    end.
+
+%% @doc Measure RPC latency by calling a procedure and timing round-trip.
+-spec rpc_latency(binary(), pos_integer()) -> map().
+rpc_latency(Procedure, NumCalls) ->
+    rpc_latency(Procedure, NumCalls, #{}).
+
+-spec rpc_latency(binary(), pos_integer(), map()) -> map().
+rpc_latency(Procedure, NumCalls, Opts) ->
+    case whereis(macula_local_client) of
+        undefined ->
+            io:format("ERROR: macula_local_client not found~n"),
+            #{error => no_local_client};
+        LocalClient ->
+            run_rpc_test(LocalClient, Procedure, NumCalls, Opts)
+    end.
+
+%%%===================================================================
+%%% Internal Functions - PubSub Test
+%%%===================================================================
+
+run_pubsub_test(LocalClient, Topic, NumMessages, Opts) ->
+    Self = self(),
+    TestRef = make_ref(),
+
+    %% Subscribe to the topic to receive our own messages back
+    SubscriberPid = spawn_link(fun() ->
+        subscriber_loop(Self, TestRef, NumMessages, [])
+    end),
+
+    %% Subscribe using the local client
+    case macula:subscribe(LocalClient, Topic, fun(T, Payload) ->
+        SubscriberPid ! {received, T, Payload, erlang:system_time(microsecond)}
+    end) of
+        ok ->
+            io:format("Subscribed to topic: ~s~n", [Topic]),
+            %% Give subscription time to propagate to DHT
+            WaitTime = maps:get(subscription_wait_ms, Opts, 2000),
+            io:format("Waiting ~pms for subscription propagation...~n", [WaitTime]),
+            timer:sleep(WaitTime),
+
+            %% Run the test
+            Results = run_pubsub_messages(LocalClient, Topic, NumMessages, TestRef, SubscriberPid),
+
+            %% Cleanup
+            %% Note: No unsubscribe API currently
+
+            Results;
+        {error, Reason} ->
+            io:format("ERROR subscribing: ~p~n", [Reason]),
+            #{error => Reason}
+    end.
+
+run_pubsub_messages(LocalClient, Topic, NumMessages, TestRef, SubscriberPid) ->
+    io:format("Publishing ~p messages to ~s...~n", [NumMessages, Topic]),
+
+    %% Collect send times
+    SendTimes = lists:map(fun(N) ->
+        Payload = #{
+            <<"msg_id">> => N,
+            <<"test_ref">> => term_to_binary(TestRef),
+            <<"sent_at">> => erlang:system_time(microsecond)
+        },
+        SendTime = erlang:system_time(microsecond),
+
+        %% Publish the message
+        case macula:publish(LocalClient, Topic, Payload) of
+            ok ->
+                {N, SendTime};
+            {error, Reason} ->
+                io:format("ERROR publishing message ~p: ~p~n", [N, Reason]),
+                {N, error}
+        end,
+
+        %% Small delay between messages to avoid overwhelming
+        timer:sleep(maps:get(inter_message_delay_ms, #{}, 10)),
+        {N, SendTime}
+    end, lists:seq(1, NumMessages)),
+
+    %% Wait for all messages to be received (with timeout)
+    io:format("Waiting for messages to be received...~n"),
+    SubscriberPid ! {get_results, self()},
+
+    receive
+        {results, TestRef, ReceivedMessages} ->
+            calculate_pubsub_stats(SendTimes, ReceivedMessages, NumMessages)
+    after 30000 ->
+        io:format("TIMEOUT waiting for messages~n"),
+        #{error => timeout, sent => NumMessages}
+    end.
+
+subscriber_loop(Parent, TestRef, Expected, Received) when length(Received) >= Expected ->
+    %% All messages received, wait for results request
+    receive
+        {get_results, From} ->
+            From ! {results, TestRef, Received}
+    end;
+subscriber_loop(Parent, TestRef, Expected, Received) ->
+    receive
+        {received, _Topic, Payload, RecvTime} ->
+            %% Extract message info
+            MsgId = maps:get(<<"msg_id">>, Payload, unknown),
+            SentAt = maps:get(<<"sent_at">>, Payload, 0),
+            subscriber_loop(Parent, TestRef, Expected, [{MsgId, SentAt, RecvTime} | Received]);
+        {get_results, From} ->
+            %% Results requested before all messages received
+            From ! {results, TestRef, Received}
+    after 10000 ->
+        %% Timeout - return what we have
+        receive
+            {get_results, From} ->
+                From ! {results, TestRef, Received}
+        after 0 ->
+            subscriber_loop(Parent, TestRef, Expected, Received)
+        end
+    end.
+
+calculate_pubsub_stats(SendTimes, ReceivedMessages, NumMessages) ->
+    NumReceived = length(ReceivedMessages),
+
+    %% Calculate latencies for received messages
+    Latencies = lists:filtermap(fun({MsgId, SentAt, RecvTime}) ->
+        case SentAt of
+            0 -> false;
+            _ -> {true, RecvTime - SentAt}
+        end
+    end, ReceivedMessages),
+
+    case Latencies of
+        [] ->
+            io:format("~nNo messages received with valid timestamps~n"),
+            #{
+                sent => NumMessages,
+                received => NumReceived,
+                loss_pct => 100.0
+            };
+        _ ->
+            MinLatency = lists:min(Latencies),
+            MaxLatency = lists:max(Latencies),
+            AvgLatency = lists:sum(Latencies) / length(Latencies),
+
+            %% Calculate percentiles
+            SortedLatencies = lists:sort(Latencies),
+            P50 = percentile(SortedLatencies, 50),
+            P95 = percentile(SortedLatencies, 95),
+            P99 = percentile(SortedLatencies, 99),
+
+            LossPct = (NumMessages - NumReceived) / NumMessages * 100,
+
+            io:format("~n--- PubSub Latency Results ---~n"),
+            io:format("Messages sent:     ~p~n", [NumMessages]),
+            io:format("Messages received: ~p~n", [NumReceived]),
+            io:format("Loss:              ~.1f%~n", [LossPct]),
+            io:format("~n"),
+            io:format("Latency (microseconds):~n"),
+            io:format("  Min:  ~.0f us (~.2f ms)~n", [MinLatency, MinLatency/1000]),
+            io:format("  Max:  ~.0f us (~.2f ms)~n", [MaxLatency, MaxLatency/1000]),
+            io:format("  Avg:  ~.0f us (~.2f ms)~n", [AvgLatency, AvgLatency/1000]),
+            io:format("  P50:  ~.0f us (~.2f ms)~n", [P50, P50/1000]),
+            io:format("  P95:  ~.0f us (~.2f ms)~n", [P95, P95/1000]),
+            io:format("  P99:  ~.0f us (~.2f ms)~n", [P99, P99/1000]),
+
+            #{
+                sent => NumMessages,
+                received => NumReceived,
+                loss_pct => LossPct,
+                min_us => MinLatency,
+                max_us => MaxLatency,
+                avg_us => AvgLatency,
+                p50_us => P50,
+                p95_us => P95,
+                p99_us => P99
+            }
+    end.
+
+%%%===================================================================
+%%% Internal Functions - RPC Test
+%%%===================================================================
+
+run_rpc_test(LocalClient, Procedure, NumCalls, Opts) ->
+    io:format("Running ~p RPC calls to ~s...~n", [NumCalls, Procedure]),
+
+    %% Run RPC calls and measure latency
+    Results = lists:map(fun(N) ->
+        Args = #{<<"call_id">> => N, <<"timestamp">> => erlang:system_time(microsecond)},
+        StartTime = erlang:system_time(microsecond),
+
+        Result = macula:call(LocalClient, Procedure, Args, #{timeout => 5000}),
+
+        EndTime = erlang:system_time(microsecond),
+        Latency = EndTime - StartTime,
+
+        case Result of
+            {ok, _Response} ->
+                {ok, Latency};
+            {error, Reason} ->
+                {error, Reason}
+        end
+    end, lists:seq(1, NumCalls)),
+
+    calculate_rpc_stats(Results, NumCalls).
+
+calculate_rpc_stats(Results, NumCalls) ->
+    {Successes, Failures} = lists:partition(fun
+        ({ok, _}) -> true;
+        (_) -> false
+    end, Results),
+
+    Latencies = [L || {ok, L} <- Successes],
+    NumSuccess = length(Successes),
+    NumFailed = length(Failures),
+
+    case Latencies of
+        [] ->
+            io:format("~nNo successful RPC calls~n"),
+            #{
+                calls => NumCalls,
+                success => 0,
+                failed => NumFailed,
+                success_pct => 0.0
+            };
+        _ ->
+            MinLatency = lists:min(Latencies),
+            MaxLatency = lists:max(Latencies),
+            AvgLatency = lists:sum(Latencies) / length(Latencies),
+
+            SortedLatencies = lists:sort(Latencies),
+            P50 = percentile(SortedLatencies, 50),
+            P95 = percentile(SortedLatencies, 95),
+            P99 = percentile(SortedLatencies, 99),
+
+            SuccessPct = NumSuccess / NumCalls * 100,
+
+            io:format("~n--- RPC Latency Results ---~n"),
+            io:format("Calls made:   ~p~n", [NumCalls]),
+            io:format("Successful:   ~p~n", [NumSuccess]),
+            io:format("Failed:       ~p~n", [NumFailed]),
+            io:format("Success rate: ~.1f%~n", [SuccessPct]),
+            io:format("~n"),
+            io:format("Latency (microseconds):~n"),
+            io:format("  Min:  ~.0f us (~.2f ms)~n", [MinLatency, MinLatency/1000]),
+            io:format("  Max:  ~.0f us (~.2f ms)~n", [MaxLatency, MaxLatency/1000]),
+            io:format("  Avg:  ~.0f us (~.2f ms)~n", [AvgLatency, AvgLatency/1000]),
+            io:format("  P50:  ~.0f us (~.2f ms)~n", [P50, P50/1000]),
+            io:format("  P95:  ~.0f us (~.2f ms)~n", [P95, P95/1000]),
+            io:format("  P99:  ~.0f us (~.2f ms)~n", [P99, P99/1000]),
+
+            #{
+                calls => NumCalls,
+                success => NumSuccess,
+                failed => NumFailed,
+                success_pct => SuccessPct,
+                min_us => MinLatency,
+                max_us => MaxLatency,
+                avg_us => AvgLatency,
+                p50_us => P50,
+                p95_us => P95,
+                p99_us => P99
+            }
+    end.
+
+%%%===================================================================
+%%% Utility Functions
+%%%===================================================================
+
+percentile(SortedList, P) when P >= 0, P =< 100 ->
+    Len = length(SortedList),
+    case Len of
+        0 -> 0;
+        1 -> hd(SortedList);
+        _ ->
+            Index = (P / 100) * (Len - 1) + 1,
+            Lower = trunc(Index),
+            Upper = Lower + 1,
+            Fraction = Index - Lower,
+
+            LowerVal = lists:nth(Lower, SortedList),
+            case Upper > Len of
+                true -> LowerVal;
+                false ->
+                    UpperVal = lists:nth(Upper, SortedList),
+                    LowerVal + Fraction * (UpperVal - LowerVal)
+            end
+    end.

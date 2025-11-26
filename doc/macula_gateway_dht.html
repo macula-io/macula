@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.10.0">
+    <meta name="project" content="macula v0.10.1">
 
 
-    <title>macula_gateway_dht — macula v0.10.0</title>
+    <title>macula_gateway_dht — macula v0.10.1</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-074F6B0F.js"></script>
+    <script defer src="dist/sidebar_items-1151EC94.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.10.0
+          v0.10.1
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_gateway_dht</span> 
-      <small class="app-vsn" translate="no">(macula v0.10.0)</small>
+      <small class="app-vsn" translate="no">(macula v0.10.1)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_gateway_system/macula_gateway_dht.erl#L21" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway_system/macula_gateway_dht.erl#L21" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -109,6 +109,16 @@ macula
   <h2>
     <a href="#functions">Functions</a>
   </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#forward_publish_to_bootstrap/1" data-no-tooltip="" translate="no">forward_publish_to_bootstrap(PubMsg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Forward a PUBLISH message to the bootstrap gateway for distribution. The bootstrap has all DHT subscriptions and can distribute to all subscribers. This avoids the problem of local DHT not having remote peer subscriptions.</p></div>
+
+    </div>
 
     <div class="summary-row">
       <div class="summary-signature">
@@ -156,7 +166,7 @@ macula
 
       </div>
 
-        <div class="summary-synopsis"><p>Look up a value from the DHT by key. Synchronous lookup from local DHT storage. Returns list of subscribers for the given key.</p></div>
+        <div class="summary-synopsis"><p>Look up a value from the DHT by key. Synchronous lookup from local DHT storage. NOTE: For pubsub, use forward_publish_to_bootstrap/2 instead of looking up subscribers locally - the bootstrap has the complete subscriber list. Returns list of subscribers for the given key.</p></div>
 
     </div>
 
@@ -193,6 +203,34 @@ macula
       <span class="text">Functions</span>
     </h1>
     <div class="functions-list">
+<section class="detail" id="forward_publish_to_bootstrap/1">
+
+  <div class="detail-header">
+    <a href="#forward_publish_to_bootstrap/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">forward_publish_to_bootstrap(PubMsg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway_system/macula_gateway_dht.erl#L124" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> forward_publish_to_bootstrap(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Forward a PUBLISH message to the bootstrap gateway for distribution. The bootstrap has all DHT subscriptions and can distribute to all subscribers. This avoids the problem of local DHT not having remote peer subscriptions.</p>
+  </section>
+</section>
 <section class="detail" id="handle_find_node/2">
 
   <div class="detail-header">
@@ -203,7 +241,7 @@ macula
       <h1 class="signature" translate="no">handle_find_node(Stream, FindNodeMsg)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_gateway_system/macula_gateway_dht.erl#L69" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway_system/macula_gateway_dht.erl#L67" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -231,7 +269,7 @@ macula
       <h1 class="signature" translate="no">handle_find_value(Stream, FindValueMsg)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_gateway_system/macula_gateway_dht.erl#L54" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway_system/macula_gateway_dht.erl#L55" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -259,7 +297,7 @@ macula
       <h1 class="signature" translate="no">handle_query(FromPid, QueryType, QueryData)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_gateway_system/macula_gateway_dht.erl#L84" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway_system/macula_gateway_dht.erl#L79" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -287,7 +325,7 @@ macula
       <h1 class="signature" translate="no">handle_store(Stream, StoreMsg)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_gateway_system/macula_gateway_dht.erl#L42" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway_system/macula_gateway_dht.erl#L43" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -315,7 +353,7 @@ macula
       <h1 class="signature" translate="no">lookup_value(Key)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_gateway_system/macula_gateway_dht.erl#L103" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway_system/macula_gateway_dht.erl#L96" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -330,7 +368,7 @@ macula
 
       </div>
 
-<p>Look up a value from the DHT by key. Synchronous lookup from local DHT storage. Returns list of subscribers for the given key.</p>
+<p>Look up a value from the DHT by key. Synchronous lookup from local DHT storage. NOTE: For pubsub, use forward_publish_to_bootstrap/2 instead of looking up subscribers locally - the bootstrap has the complete subscriber list. Returns list of subscribers for the given key.</p>
   </section>
 </section>
 <section class="detail" id="query_peer/3">
@@ -343,7 +381,7 @@ macula
       <h1 class="signature" translate="no">query_peer(NodeInfo, MessageType, Message)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_gateway_system/macula_gateway_dht.erl#L146" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway_system/macula_gateway_dht.erl#L188" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -371,7 +409,7 @@ macula
       <h1 class="signature" translate="no">send_to_peer(NodeInfo, MessageType, Message)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_gateway_system/macula_gateway_dht.erl#L131" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway_system/macula_gateway_dht.erl#L146" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -397,9 +435,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.10.0" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.10.1" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.10.0">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.10.1">Hex Preview</a>
 
           </span>
 

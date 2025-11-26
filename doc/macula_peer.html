@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.10.0">
+    <meta name="project" content="macula v0.10.1">
 
 
-    <title>macula_peer — macula v0.10.0</title>
+    <title>macula_peer — macula v0.10.1</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-074F6B0F.js"></script>
+    <script defer src="dist/sidebar_items-1151EC94.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.10.0
+          v0.10.1
         </div>
       </div>
     </div>
@@ -80,11 +80,11 @@ macula
   <div class="heading-with-actions top-heading">
     <h1>
       <span translate="no">macula_peer</span> 
-      <small class="app-vsn" translate="no">(macula v0.10.0)</small>
+      <small class="app-vsn" translate="no">(macula v0.10.1)</small>
 
     </h1>
 
-      <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L60" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L60" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -94,30 +94,30 @@ macula
 
     <section id="moduledoc">
 <p>Macula Peer - Mesh Participant API (v0.7.0+).</p><p>This module provides the high-level API for mesh participants. Use this module to connect to a Macula mesh and communicate via pub/sub or RPC.</p><h3 id="module-quick-start" class="section-heading"><a href="#module-quick-start" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Quick_Start">Quick Start</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="c1">%% 1. Connect to a gateway</span><span class="w">
-   </span><span class="p" data-group-id="0093994717-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Peer</span><span class="p" data-group-id="0093994717-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">start_link</span><span class="p" data-group-id="0093994717-2">(</span><span class="p" data-group-id="0093994717-3">&lt;&lt;</span><span class="s">&quot;https://gateway.example.com:9443&quot;</span><span class="p" data-group-id="0093994717-3">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="0093994717-4">#{</span><span class="w">
-       </span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="0093994717-5">&lt;&lt;</span><span class="s">&quot;com.example.app&quot;</span><span class="p" data-group-id="0093994717-5">&gt;&gt;</span><span class="w">
-   </span><span class="p" data-group-id="0093994717-4">}</span><span class="p" data-group-id="0093994717-2">)</span><span class="p">.</span><span class="w">
+   </span><span class="p" data-group-id="6895226009-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Peer</span><span class="p" data-group-id="6895226009-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">start_link</span><span class="p" data-group-id="6895226009-2">(</span><span class="p" data-group-id="6895226009-3">&lt;&lt;</span><span class="s">&quot;https://gateway.example.com:9443&quot;</span><span class="p" data-group-id="6895226009-3">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="6895226009-4">#{</span><span class="w">
+       </span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="6895226009-5">&lt;&lt;</span><span class="s">&quot;com.example.app&quot;</span><span class="p" data-group-id="6895226009-5">&gt;&gt;</span><span class="w">
+   </span><span class="p" data-group-id="6895226009-4">}</span><span class="p" data-group-id="6895226009-2">)</span><span class="p">.</span><span class="w">
   
    </span><span class="c1">%% 2. Subscribe to events</span><span class="w">
-   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">subscribe</span><span class="p" data-group-id="0093994717-6">(</span><span class="n">Peer</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="0093994717-7">&lt;&lt;</span><span class="s">&quot;sensor.temperature&quot;</span><span class="p" data-group-id="0093994717-7">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="nf">self</span><span class="p" data-group-id="0093994717-8">(</span><span class="p" data-group-id="0093994717-8">)</span><span class="p" data-group-id="0093994717-6">)</span><span class="p">.</span><span class="w">
+   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">subscribe</span><span class="p" data-group-id="6895226009-6">(</span><span class="n">Peer</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="6895226009-7">&lt;&lt;</span><span class="s">&quot;sensor.temperature&quot;</span><span class="p" data-group-id="6895226009-7">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="nf">self</span><span class="p" data-group-id="6895226009-8">(</span><span class="p" data-group-id="6895226009-8">)</span><span class="p" data-group-id="6895226009-6">)</span><span class="p">.</span><span class="w">
   
    </span><span class="c1">%% 3. Publish an event</span><span class="w">
-   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">publish</span><span class="p" data-group-id="0093994717-9">(</span><span class="n">Peer</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="0093994717-10">&lt;&lt;</span><span class="s">&quot;sensor.temperature&quot;</span><span class="p" data-group-id="0093994717-10">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="0093994717-11">#{</span><span class="w">
-       </span><span class="ss">device_id</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="0093994717-12">&lt;&lt;</span><span class="s">&quot;sensor-001&quot;</span><span class="p" data-group-id="0093994717-12">&gt;&gt;</span><span class="p">,</span><span class="w">
+   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">publish</span><span class="p" data-group-id="6895226009-9">(</span><span class="n">Peer</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="6895226009-10">&lt;&lt;</span><span class="s">&quot;sensor.temperature&quot;</span><span class="p" data-group-id="6895226009-10">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="6895226009-11">#{</span><span class="w">
+       </span><span class="ss">device_id</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="6895226009-12">&lt;&lt;</span><span class="s">&quot;sensor-001&quot;</span><span class="p" data-group-id="6895226009-12">&gt;&gt;</span><span class="p">,</span><span class="w">
        </span><span class="ss">celsius</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mf">21.5</span><span class="w">
-   </span><span class="p" data-group-id="0093994717-11">}</span><span class="p" data-group-id="0093994717-9">)</span><span class="p">.</span><span class="w">
+   </span><span class="p" data-group-id="6895226009-11">}</span><span class="p" data-group-id="6895226009-9">)</span><span class="p">.</span><span class="w">
   
    </span><span class="c1">%% 4. Call a remote service</span><span class="w">
-   </span><span class="p" data-group-id="0093994717-13">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Result</span><span class="p" data-group-id="0093994717-13">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">call</span><span class="p" data-group-id="0093994717-14">(</span><span class="n">Peer</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="0093994717-15">&lt;&lt;</span><span class="s">&quot;calculator.add&quot;</span><span class="p" data-group-id="0093994717-15">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="0093994717-16">#{</span><span class="ss">a</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="ss">b</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">3</span><span class="p" data-group-id="0093994717-16">}</span><span class="p" data-group-id="0093994717-14">)</span><span class="p">.</span><span class="w">
+   </span><span class="p" data-group-id="6895226009-13">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Result</span><span class="p" data-group-id="6895226009-13">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">call</span><span class="p" data-group-id="6895226009-14">(</span><span class="n">Peer</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="6895226009-15">&lt;&lt;</span><span class="s">&quot;calculator.add&quot;</span><span class="p" data-group-id="6895226009-15">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="6895226009-16">#{</span><span class="ss">a</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="ss">b</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">3</span><span class="p" data-group-id="6895226009-16">}</span><span class="p" data-group-id="6895226009-14">)</span><span class="p">.</span><span class="w">
   
    </span><span class="c1">%% 5. Advertise a service</span><span class="w">
-   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">advertise</span><span class="p" data-group-id="0093994717-17">(</span><span class="n">Peer</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="0093994717-18">&lt;&lt;</span><span class="s">&quot;calculator.add&quot;</span><span class="p" data-group-id="0093994717-18">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="nf">fun</span><span class="p" data-group-id="0093994717-19">(</span><span class="p" data-group-id="0093994717-20">#{</span><span class="ss">a</span><span class="w"> </span><span class="p">:=</span><span class="w"> </span><span class="n">A</span><span class="p">,</span><span class="w"> </span><span class="ss">b</span><span class="w"> </span><span class="p">:=</span><span class="w"> </span><span class="n">B</span><span class="p" data-group-id="0093994717-20">}</span><span class="p" data-group-id="0093994717-19">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
-       </span><span class="p" data-group-id="0093994717-21">#{</span><span class="ss">result</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">B</span><span class="p" data-group-id="0093994717-21">}</span><span class="w">
-   </span><span class="k">end</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="0093994717-22">#{</span><span class="ss">ttl</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">300</span><span class="p" data-group-id="0093994717-22">}</span><span class="p" data-group-id="0093994717-17">)</span><span class="p">.</span></code></pre><h3 id="module-architecture" class="section-heading"><a href="#module-architecture" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Architecture">Architecture</a></span></h3><p>The peer acts as a facade/coordinator, delegating to specialized child processes: - <code>macula_connection</code>: QUIC transport layer (send/receive, encoding/decoding) - <code>macula_pubsub_handler</code>: Pub/sub message routing - <code>macula_rpc_handler</code>: RPC call/response handling - <code>macula_advertisement_manager</code>: DHT service advertisements</p><p>Renamed from macula_connection in v0.7.0 for clarity: - <code>macula_peer</code> = mesh participant (this module) - <code>macula_connection</code> = QUIC transport (low-level)</p><h3 id="module-multi-tenancy-via-realms" class="section-heading"><a href="#module-multi-tenancy-via-realms" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Multi-Tenancy_via_Realms">Multi-Tenancy via Realms</a></span></h3><p>Realms provide logical isolation for different applications:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="c1">%% App 1</span><span class="w">
-   </span><span class="p" data-group-id="4864049822-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Peer1</span><span class="p" data-group-id="4864049822-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">start_link</span><span class="p" data-group-id="4864049822-2">(</span><span class="n">GatewayUrl</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4864049822-3">#{</span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4864049822-4">&lt;&lt;</span><span class="s">&quot;com.app1&quot;</span><span class="p" data-group-id="4864049822-4">&gt;&gt;</span><span class="p" data-group-id="4864049822-3">}</span><span class="p" data-group-id="4864049822-2">)</span><span class="p">.</span><span class="w">
+   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">advertise</span><span class="p" data-group-id="6895226009-17">(</span><span class="n">Peer</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="6895226009-18">&lt;&lt;</span><span class="s">&quot;calculator.add&quot;</span><span class="p" data-group-id="6895226009-18">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="nf">fun</span><span class="p" data-group-id="6895226009-19">(</span><span class="p" data-group-id="6895226009-20">#{</span><span class="ss">a</span><span class="w"> </span><span class="p">:=</span><span class="w"> </span><span class="n">A</span><span class="p">,</span><span class="w"> </span><span class="ss">b</span><span class="w"> </span><span class="p">:=</span><span class="w"> </span><span class="n">B</span><span class="p" data-group-id="6895226009-20">}</span><span class="p" data-group-id="6895226009-19">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
+       </span><span class="p" data-group-id="6895226009-21">#{</span><span class="ss">result</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">B</span><span class="p" data-group-id="6895226009-21">}</span><span class="w">
+   </span><span class="k">end</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="6895226009-22">#{</span><span class="ss">ttl</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">300</span><span class="p" data-group-id="6895226009-22">}</span><span class="p" data-group-id="6895226009-17">)</span><span class="p">.</span></code></pre><h3 id="module-architecture" class="section-heading"><a href="#module-architecture" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Architecture">Architecture</a></span></h3><p>The peer acts as a facade/coordinator, delegating to specialized child processes: - <code>macula_connection</code>: QUIC transport layer (send/receive, encoding/decoding) - <code>macula_pubsub_handler</code>: Pub/sub message routing - <code>macula_rpc_handler</code>: RPC call/response handling - <code>macula_advertisement_manager</code>: DHT service advertisements</p><p>Renamed from macula_connection in v0.7.0 for clarity: - <code>macula_peer</code> = mesh participant (this module) - <code>macula_connection</code> = QUIC transport (low-level)</p><h3 id="module-multi-tenancy-via-realms" class="section-heading"><a href="#module-multi-tenancy-via-realms" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Multi-Tenancy_via_Realms">Multi-Tenancy via Realms</a></span></h3><p>Realms provide logical isolation for different applications:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="c1">%% App 1</span><span class="w">
+   </span><span class="p" data-group-id="7378974388-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Peer1</span><span class="p" data-group-id="7378974388-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">start_link</span><span class="p" data-group-id="7378974388-2">(</span><span class="n">GatewayUrl</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="7378974388-3">#{</span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="7378974388-4">&lt;&lt;</span><span class="s">&quot;com.app1&quot;</span><span class="p" data-group-id="7378974388-4">&gt;&gt;</span><span class="p" data-group-id="7378974388-3">}</span><span class="p" data-group-id="7378974388-2">)</span><span class="p">.</span><span class="w">
   
    </span><span class="c1">%% App 2 (completely isolated from App 1)</span><span class="w">
-   </span><span class="p" data-group-id="4864049822-5">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Peer2</span><span class="p" data-group-id="4864049822-5">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">start_link</span><span class="p" data-group-id="4864049822-6">(</span><span class="n">GatewayUrl</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4864049822-7">#{</span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4864049822-8">&lt;&lt;</span><span class="s">&quot;com.app2&quot;</span><span class="p" data-group-id="4864049822-8">&gt;&gt;</span><span class="p" data-group-id="4864049822-7">}</span><span class="p" data-group-id="4864049822-6">)</span><span class="p">.</span></code></pre>
+   </span><span class="p" data-group-id="7378974388-5">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Peer2</span><span class="p" data-group-id="7378974388-5">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peer</span><span class="p">:</span><span class="nf">start_link</span><span class="p" data-group-id="7378974388-6">(</span><span class="n">GatewayUrl</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="7378974388-7">#{</span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="7378974388-8">&lt;&lt;</span><span class="s">&quot;com.app2&quot;</span><span class="p" data-group-id="7378974388-8">&gt;&gt;</span><span class="p" data-group-id="7378974388-7">}</span><span class="p" data-group-id="7378974388-6">)</span><span class="p">.</span></code></pre>
     </section>
 
 </div>
@@ -200,7 +200,7 @@ macula
 
       </div>
 
-        <div class="summary-synopsis"><p>Publish an event through this client with options.</p></div>
+        <div class="summary-synopsis"><p>Publish an event through this client with options. This is fire-and-forget - returns ok immediately without blocking. Use QoS 1 in Opts if you need delivery confirmation.</p></div>
 
     </div>
 
@@ -277,7 +277,7 @@ macula
       <h1 class="signature" translate="no">advertise(Client, Procedure, Handler, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L172" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L175" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -306,7 +306,7 @@ macula
       <h1 class="signature" translate="no">call(Client, Procedure, Args)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L156" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L159" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -334,7 +334,7 @@ macula
       <h1 class="signature" translate="no">call(Client, Procedure, Args, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L162" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L165" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -362,7 +362,7 @@ macula
       <h1 class="signature" translate="no">discover_subscribers(Client, Topic)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L146" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L149" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -391,7 +391,7 @@ macula
       <h1 class="signature" translate="no">get_node_id(Client)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L151" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L154" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -419,7 +419,7 @@ macula
       <h1 class="signature" translate="no">publish(Client, Topic, Data)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L124" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L124" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -447,7 +447,7 @@ macula
       <h1 class="signature" translate="no">publish(Client, Topic, Data, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L129" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L131" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -458,11 +458,11 @@ macula
 
       <div class="specs">
 
-          <pre translate="no"><span class="attribute">-spec</span> publish(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+          <pre translate="no"><span class="attribute">-spec</span> publish(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
 
       </div>
 
-<p>Publish an event through this client with options.</p>
+<p>Publish an event through this client with options. This is fire-and-forget - returns ok immediately without blocking. Use QoS 1 in Opts if you need delivery confirmation.</p>
   </section>
 </section>
 <section class="detail" id="start_link/2">
@@ -475,7 +475,7 @@ macula
       <h1 class="signature" translate="no">start_link(Url, Opts)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L114" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L114" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -503,7 +503,7 @@ macula
       <h1 class="signature" translate="no">stop(Client)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L119" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L119" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -531,7 +531,7 @@ macula
       <h1 class="signature" translate="no">subscribe(Client, Topic, Callback)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L135" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L138" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -559,7 +559,7 @@ macula
       <h1 class="signature" translate="no">unadvertise(Client, Procedure)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L179" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L182" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -587,7 +587,7 @@ macula
       <h1 class="signature" translate="no">unsubscribe(Client, SubRef)</h1>
 
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.0/src/macula_peer.erl#L140" class="icon-action" rel="help" aria-label="View Source">
+        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_peer.erl#L143" class="icon-action" rel="help" aria-label="View Source">
           <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         </a>
 
@@ -613,9 +613,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.10.0" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.10.1" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.10.0">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.10.1">Hex Preview</a>
 
           </span>
 

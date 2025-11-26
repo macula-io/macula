@@ -201,49 +201,36 @@ get_key_file(KeyFile) when is_list(KeyFile) ->
     KeyFile.
 
 %% @private
-%% @doc Get node ID from NODE_NAME env var or generate from {Realm, MAC, Port}.
+%% @doc Get node ID from HOSTNAME env var (set by Docker) or generate from {Realm, Port}.
 %% Returns a 32-byte binary (raw binary for Kademlia, never hex-encoded).
 %% MUST match macula_gateway:get_node_id/2 exactly!
+%%
+%% Priority:
+%% 1. NODE_NAME env var (explicit, highest priority)
+%% 2. HOSTNAME env var (Docker sets this to container hostname - unique per container)
+%% 3. Fallback to {Realm, Port} only (NO MAC - MAC is shared across Docker containers)
 get_node_id(Realm, Port) ->
     case os:getenv("NODE_NAME") of
         false ->
-            %% No NODE_NAME, generate from {Realm, MAC, Port} for true uniqueness
-            Mac = get_primary_mac(),
-            io:format("[GatewaySup] Using MAC-based node ID: MAC=~w, Realm=~s, Port=~p~n",
-                     [Mac, Realm, Port]),
-            crypto:hash(sha256, term_to_binary({Realm, Mac, Port}));
+            %% No NODE_NAME, try HOSTNAME (Docker sets this to container hostname)
+            case os:getenv("HOSTNAME") of
+                false ->
+                    %% No HOSTNAME either, use {Realm, Port} as last resort
+                    %% Note: This WILL collide if multiple nodes share same realm+port
+                    io:format("[GatewaySup] WARNING: No HOSTNAME or NODE_NAME set, using realm+port only~n"),
+                    io:format("[GatewaySup] This may cause node_id collisions in Docker!~n"),
+                    crypto:hash(sha256, term_to_binary({Realm, Port}));
+                Hostname when is_list(Hostname) ->
+                    %% Use HOSTNAME from Docker - unique per container
+                    io:format("[GatewaySup] Using HOSTNAME-based node ID: ~s, Realm=~s, Port=~p~n",
+                             [Hostname, Realm, Port]),
+                    crypto:hash(sha256, term_to_binary({Realm, list_to_binary(Hostname), Port}))
+            end;
         NodeName when is_list(NodeName) ->
             %% Use NODE_NAME from environment - hash it to get 32-byte binary
             io:format("[GatewaySup] Using NODE_NAME from environment: ~s~n", [NodeName]),
             crypto:hash(sha256, list_to_binary(NodeName))
     end.
-
-%% @private
-%% @doc Get primary MAC address from a valid network interface.
-%% Filters out loopback, docker, bridge, and veth interfaces.
-%% Fails hard if no valid interface found - operator must ensure proper network config.
--spec get_primary_mac() -> binary().
-get_primary_mac() ->
-    {ok, Interfaces} = inet:getifaddrs(),
-    ValidMacs = [list_to_binary(HwAddr) || {Name, Props} <- Interfaces,
-                                            not is_virtual_interface(Name),
-                                            {hwaddr, HwAddr} <- Props,
-                                            HwAddr =/= [0,0,0,0,0,0]],
-    case ValidMacs of
-        [First | _] -> First;
-        [] -> error(no_valid_network_interface)
-    end.
-
-%% @private
-%% @doc Check if interface name is a virtual/loopback interface.
--spec is_virtual_interface(string()) -> boolean().
-is_virtual_interface("lo") -> true;
-is_virtual_interface("lo" ++ _) -> true;
-is_virtual_interface("docker" ++ _) -> true;
-is_virtual_interface("br-" ++ _) -> true;
-is_virtual_interface("veth" ++ _) -> true;
-is_virtual_interface("virbr" ++ _) -> true;
-is_virtual_interface(_) -> false.
 
 %% @private
 %% @doc Get endpoint URL for this gateway.

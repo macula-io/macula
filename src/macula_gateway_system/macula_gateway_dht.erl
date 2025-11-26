@@ -42,7 +42,9 @@
 -spec handle_store(pid(), map()) -> ok.
 handle_store(_Stream, StoreMsg) ->
     %% Forward to routing server (let it crash on errors)
-    _Reply = macula_routing_server:handle_message(macula_routing_server, StoreMsg),
+    io:format("[DHT] Processing STORE message, forwarding to routing_server~n"),
+    Reply = macula_routing_server:handle_message(macula_routing_server, StoreMsg),
+    io:format("[DHT] STORE reply from routing_server: ~p~n", [Reply]),
     %% STORE doesn't require a response to be sent back
     ok.
 
@@ -92,12 +94,17 @@ handle_query(FromPid, _QueryType, QueryData) ->
 %% Returns list of subscribers for the given key.
 -spec lookup_value(binary()) -> {ok, list()} | {error, not_found}.
 lookup_value(Key) ->
+    io:format("[DHT] lookup_value called with key hash: ~p~n", [Key]),
     case whereis(macula_routing_server) of
         undefined ->
+            io:format("[DHT] ERROR: routing_server not found!~n"),
             {error, not_found};
         RoutingServerPid ->
             %% K=20 is the standard Kademlia replication factor
-            case macula_routing_server:find_value(RoutingServerPid, Key, 20) of
+            io:format("[DHT] Calling routing_server:find_value...~n"),
+            Result = macula_routing_server:find_value(RoutingServerPid, Key, 20),
+            io:format("[DHT] find_value result: ~p~n", [Result]),
+            case Result of
                 {ok, []} ->
                     {error, not_found};
                 {ok, Value} when is_list(Value) ->

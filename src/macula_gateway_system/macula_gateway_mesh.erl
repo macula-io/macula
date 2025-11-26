@@ -383,9 +383,9 @@ extract_monitor_ref(false) -> undefined.
 %% @private
 %% @doc Create QUIC connection to peer.
 %% Handles address in various formats:
-%%   - {Host, Port} tuple (expected format)
-%%   - <<"host:port">> binary string
-%%   - "host:port" list string
+%%   - `{Host, Port}' tuple (expected format)
+%%   - Binary string like `host:port'
+%%   - List string like `"host:port"'
 create_mesh_connection(Address, State) ->
     {Host, Port} = parse_address(Address),
     %% Get TLS certificates from opts or environment
@@ -439,9 +439,9 @@ format_address(HostBin) when is_binary(HostBin) ->
 %% @private
 %% @doc Parse address from various formats to {Host, Port} tuple.
 %% Handles:
-%%   - {Host, Port} tuple - passthrough
-%%   - <<"host:port">> binary - parse and convert
-%%   - "host:port" string - parse
+%%   - `{Host, Port}' tuple - passthrough
+%%   - Binary `host:port' - parse and convert
+%%   - String `"host:port"' - parse
 -spec parse_address(term()) -> {string(), inet:port_number()}.
 parse_address({Host, Port}) when is_integer(Port) ->
     %% Already a tuple - just ensure Host is a string
