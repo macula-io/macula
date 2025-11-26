@@ -52,9 +52,6 @@ distribute(LocalSubscribers, PubMsg, LocalNodeId, Mesh, Clients) ->
     %% Deliver to local and remote subscribers
     deliver_to_local_subscribers(LocalSubscribers, PubMsg),
     route_to_remote_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients),
-
-    io:format("[PubSubRouter] Finished distributing message to ~p local + DHT remote subscribers~n",
-             [length(LocalSubscribers)]),
     ok.
 
 %%%===================================================================
@@ -68,7 +65,6 @@ deliver_to_local_subscribers([], _PubMsg) ->
     ok;
 deliver_to_local_subscribers(Subscribers, PubMsg) ->
     PubBinary = macula_protocol_encoder:encode(publish, PubMsg),
-    io:format("[PubSubRouter] Found ~p local subscribers~n", [length(Subscribers)]),
     lists:foreach(fun(Stream) -> send_to_local_stream(Stream, PubBinary) end, Subscribers),
     ok.
 
@@ -84,22 +80,14 @@ send_to_local_stream(Stream, Binary) when is_pid(Stream) ->
             Topic = maps:get(<<"topic">>, PubMsg),
             Payload = maps:get(<<"payload">>, PubMsg),
             Stream ! {publish, Topic, Payload},
-            io:format("[PubSubRouter] Successfully sent Erlang message to handler PID ~p~n", [Stream]),
             ok;
-        {error, DecodeReason} ->
-            io:format("[PubSubRouter] Failed to decode message for handler PID ~p: ~p~n", [Stream, DecodeReason]),
+        {error, _DecodeReason} ->
             ok
     end;
 send_to_local_stream(Stream, Binary) ->
     %% Stream is a QUIC reference - send via QUIC
-    case macula_quic:send(Stream, Binary) of
-        ok ->
-            io:format("[PubSubRouter] Successfully sent to local stream ~p~n", [Stream]),
-            ok;
-        {error, Reason} ->
-            io:format("[PubSubRouter] Failed to send to local stream ~p: ~p~n", [Stream, Reason]),
-            ok
-    end.
+    _ = macula_quic:send(Stream, Binary),
+    ok.
 
 %%%===================================================================
 %%% Internal Functions - DHT Remote Routing
@@ -116,14 +104,11 @@ route_to_remote_subscribers(_Topic, PubMsg, _LocalNodeId, _Mesh, _Clients) ->
     %% It will look up subscribers and distribute the message
     case macula_gateway_dht:forward_publish_to_bootstrap(PubMsg) of
         ok ->
-            io:format("[PubSubRouter] Forwarded PUBLISH to bootstrap for distribution~n"),
             ok;
         {error, no_connection} ->
             %% We're probably the bootstrap node - try local DHT lookup
-            io:format("[PubSubRouter] No bootstrap connection (we may be bootstrap), trying local DHT~n"),
             route_via_local_dht(_Topic, PubMsg, _LocalNodeId, _Mesh, _Clients);
-        {error, Reason} ->
-            io:format("[PubSubRouter] Failed to forward to bootstrap: ~p~n", [Reason]),
+        {error, _Reason} ->
             ok
     end.
 
@@ -134,10 +119,8 @@ route_via_local_dht(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     TopicKey = crypto:hash(sha256, Topic),
     case macula_gateway_dht:lookup_value(TopicKey) of
         {ok, RemoteSubscribers} ->
-            io:format("[PubSubRouter] Found ~p remote subscriber(s) in local DHT~n", [length(RemoteSubscribers)]),
             route_to_each_subscriber(RemoteSubscribers, Topic, PubMsg, LocalNodeId, Mesh, Clients);
         {error, not_found} ->
-            io:format("[PubSubRouter] No remote subscribers found in local DHT~n"),
             ok
     end.
 
@@ -145,11 +128,8 @@ route_via_local_dht(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
 %% @doc Route message to each remote subscriber via DHT.
 -spec route_to_each_subscriber([map()], binary(), map(), binary(), pid(), pid()) -> ok.
 route_to_each_subscriber([], _Topic, _PubMsg, _LocalNodeId, _Mesh, _Clients) ->
-    io:format("[PubSubRouter] Finished routing to all subscribers~n"),
     ok;
 route_to_each_subscriber([Subscriber | Rest], Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
-    io:format("[PubSubRouter] Processing subscriber ~p of ~p remaining, data: ~p~n",
-             [1, length(Rest) + 1, Subscriber]),
     route_to_single_subscriber(Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients),
     route_to_each_subscriber(Rest, Topic, PubMsg, LocalNodeId, Mesh, Clients).
 
@@ -165,8 +145,8 @@ route_to_single_subscriber(#{node_id := DestNodeId} = Subscriber, Topic, PubMsg,
 route_to_single_subscriber(#{<<"node_id">> := DestNodeId} = Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     %% Binary key version (from protocol)
     route_to_subscriber_impl(DestNodeId, Subscriber, <<"node_id">>, Topic, PubMsg, LocalNodeId, Mesh, Clients);
-route_to_single_subscriber(Subscriber, _Topic, _PubMsg, _LocalNodeId, _Mesh, _Clients) ->
-    io:format("[PubSubRouter] Subscriber missing node_id, skipping: ~p~n", [Subscriber]),
+route_to_single_subscriber(_Subscriber, _Topic, _PubMsg, _LocalNodeId, _Mesh, _Clients) ->
+    %% Subscriber missing node_id - skip silently
     ok.
 
 %% @private
@@ -175,15 +155,10 @@ route_to_single_subscriber(Subscriber, _Topic, _PubMsg, _LocalNodeId, _Mesh, _Cl
 route_to_subscriber_impl(DestNodeId, _Subscriber, _EndpointKey, _Topic, _PubMsg, LocalNodeId, _Mesh, _Clients)
     when DestNodeId =:= LocalNodeId ->
     %% SKIP: This is our own node_id - already delivered locally
-    io:format("[PubSubRouter] Skipping self-routing (destination = local node)~n"),
     ok;
 route_to_subscriber_impl(DestNodeId, Subscriber, EndpointKey, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     Payload = maps:get(<<"payload">>, PubMsg),
     Qos = maps:get(<<"qos">>, PubMsg, 0),
-
-    %% DEBUG: Log the node_id from DHT (should be raw 32-byte binary)
-    io:format("[PubSubRouter DEBUG] DestNodeId size: ~p bytes, hex: ~s~n",
-             [byte_size(DestNodeId), binary:encode_hex(DestNodeId)]),
 
     %% Create PUBLISH message for this subscriber
     PublishMsg = #{
@@ -198,24 +173,9 @@ route_to_subscriber_impl(DestNodeId, Subscriber, EndpointKey, Topic, PubMsg, Loc
     case macula_gateway_clients:get_client_stream(Clients, DestNodeId) of
         {ok, Stream} ->
             %% Subscriber is a connected client - send directly via their stream
-            io:format("[PubSubRouter] ✅ Routing to connected client ~s via existing stream~n",
-                     [binary:encode_hex(DestNodeId)]),
             send_to_client_stream(Stream, PublishMsg);
         not_found ->
             %% Not a connected client - must be remote gateway, use mesh connection
-            io:format("[PubSubRouter] ❌ Client stream NOT FOUND for ~s, routing via mesh~n",
-                     [binary:encode_hex(DestNodeId)]),
-
-            %% DEBUG: List all stored client streams to compare
-            io:format("[PubSubRouter DEBUG] Getting all client stream keys...~n"),
-            AllKeys = macula_gateway_clients:get_all_node_ids(Clients),
-            io:format("[PubSubRouter DEBUG] Stored client stream node_ids:~n"),
-            lists:foreach(fun(KeyNodeId) ->
-                io:format("  - ~s (size: ~p bytes)~n", [binary:encode_hex(KeyNodeId), byte_size(KeyNodeId)])
-            end, AllKeys),
-            io:format("[PubSubRouter DEBUG] Looking for: ~s (size: ~p bytes)~n",
-                     [binary:encode_hex(DestNodeId), byte_size(DestNodeId)]),
-
             %% Get endpoint using same key type as node_id (atom or binary)
             EndpointUrl = case EndpointKey of
                 endpoint -> maps:get(endpoint, Subscriber, undefined);
@@ -236,15 +196,11 @@ send_via_dht(DestNodeId, EndpointUrl, PubSubRouteMsg, Mesh) ->
         {ok, {Address, Port}} ->
             case macula_gateway_mesh:get_or_create_connection(Mesh, DestNodeId, {Address, Port}) of
                 {ok, Stream} ->
-                    send_route_message(Stream, PubSubRouteMsg, DestNodeId);
-                {error, Reason} ->
-                    io:format("[PubSubRouter] Failed to get connection for ~s: ~p~n",
-                             [binary:encode_hex(DestNodeId), Reason]),
+                    send_route_message(Stream, PubSubRouteMsg);
+                {error, _Reason} ->
                     ok
             end;
-        {error, ParseReason} ->
-            io:format("[PubSubRouter] Failed to parse endpoint ~s: ~p~n",
-                     [EndpointUrl, ParseReason]),
+        {error, _ParseReason} ->
             ok
     end.
 
@@ -253,32 +209,19 @@ send_via_dht(DestNodeId, EndpointUrl, PubSubRouteMsg, Mesh) ->
 -spec send_to_client_stream(quicer:stream_handle(), map()) -> ok.
 send_to_client_stream(Stream, PublishMsg) ->
     PubBinary = macula_protocol_encoder:encode(publish, PublishMsg),
-    case macula_quic:send(Stream, PubBinary) of
-        ok ->
-            io:format("[PubSubRouter] Sent PUBLISH to connected client stream~n"),
-            ok;
-        {error, Reason} ->
-            io:format("[PubSubRouter] Failed to send to client stream: ~p~n", [Reason]),
-            ok
-    end.
+    _ = macula_quic:send(Stream, PubBinary),
+    ok.
 
 %% @private
 %% @doc Send encoded pubsub_route message to stream.
 %% NOTE: We DON'T close streams here - the stream stays open for the
 %% QUIC connection's lifetime. Closing a stream doesn't close the connection,
 %% and quicer handles stream cleanup on connection close.
--spec send_route_message(quicer:stream_handle(), map(), binary()) -> ok.
-send_route_message(Stream, PubSubRouteMsg, DestNodeId) ->
+-spec send_route_message(quicer:stream_handle(), map()) -> ok.
+send_route_message(Stream, PubSubRouteMsg) ->
     RouteMsg = macula_protocol_encoder:encode(pubsub_route, PubSubRouteMsg),
-    case macula_quic:send(Stream, RouteMsg) of
-        ok ->
-            io:format("[PubSubRouter] Sent pubsub_route to ~s via DHT~n",
-                     [binary:encode_hex(DestNodeId)]),
-            ok;
-        {error, Reason} ->
-            io:format("[PubSubRouter] Failed to send pubsub_route: ~p~n", [Reason]),
-            ok
-    end.
+    _ = macula_quic:send(Stream, RouteMsg),
+    ok.
 
 %%%===================================================================
 %%% Node ID Helpers (Removed - not needed)

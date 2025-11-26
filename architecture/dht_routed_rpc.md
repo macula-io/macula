@@ -1,5 +1,28 @@
 # DHT-Routed RPC Architecture
 
+> **⚠️ HISTORICAL DOCUMENT (v0.7.x Planning)**
+>
+> This document describes the **originally planned** multi-hop DHT routing approach.
+> **v0.8.0 took a different approach**: direct P2P connections via `macula_peer_connector`
+> with DHT used only for service/subscriber propagation.
+>
+> **Current Implementation (v0.8.0+)**:
+> - RPC uses direct QUIC connections to providers
+> - DHT stores provider locations (not used for message routing)
+> - No multi-hop message forwarding
+> - See `v0.8.0-OVERVIEW.md` for current architecture
+>
+> **Why the change?** Direct connections provide:
+> - Lower latency (1 hop vs O(log N) hops)
+> - Simpler debugging
+> - Better throughput
+> - NAT traversal via gateway relay (acceptable for v0.8.x)
+>
+> This document is preserved for historical reference and may inform future
+> optimization if multi-hop becomes beneficial.
+
+---
+
 ## Problem Statement
 
 The initial RPC implementation used a **client/server model** where clients created direct QUIC connections to providers after DHT discovery. This violated the mesh network architecture principles:

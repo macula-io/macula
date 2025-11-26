@@ -108,18 +108,14 @@ list_connections(Pid) ->
 %%%===================================================================
 
 init(Opts) ->
-    io:format("[Mesh] Initializing mesh connection manager~n"),
     %% Get max connections from opts or use default (1000)
     MaxConnections = maps:get(max_mesh_connections, Opts, 1000),
-    io:format("[Mesh] Max connections: ~p~n", [MaxConnections]),
-
     State = #state{
         opts = Opts,
         max_connections = MaxConnections,
         mesh_connections = #{},
         monitors = #{}
     },
-    io:format("[Mesh] Mesh connection manager initialized~n"),
     {ok, State}.
 
 %%%===================================================================
@@ -135,15 +131,10 @@ handle_call({get_or_create_connection, NodeId, Address}, _From,
     case maps:size(MeshConns) >= MaxConns of
         true ->
             %% Pool full - evict LRU entry
-            io:format("[Mesh] Pool full (~p connections), evicting LRU~n", [MaxConns]),
             NewState = evict_lru_connection(State),
-            io:format("[Mesh] Creating new connection to ~p at ~p~n",
-                     [binary:encode_hex(NodeId), Address]),
             create_new_connection(NodeId, Address, NewState);
         false ->
             %% Pool has space
-            io:format("[Mesh] Creating new connection to ~p at ~p~n",
-                     [binary:encode_hex(NodeId), Address]),
             create_new_connection(NodeId, Address, State)
     end;
 
@@ -217,8 +208,6 @@ handle_info({'DOWN', MonitorRef, process, _Pid, _Reason}, State) ->
         undefined ->
             {noreply, State};
         NodeId ->
-            io:format("[Mesh] Connection to ~p died, removing from cache~n",
-                     [binary:encode_hex(NodeId)]),
             NewMonitors = maps:remove(MonitorRef, Monitors),
             NewMeshConns = maps:remove(NodeId, MeshConns),
             NewState = State#state{
@@ -257,9 +246,10 @@ create_new_connection(NodeId, Address, State) ->
             %% Note: Cannot monitor QUIC connections (they are NIF references, not processes)
             %% Connection failures will be detected on send errors
 
-            %% Cache connection info
+            %% Cache connection info with stream
             ConnectionInfo = #{
                 connection => Conn,
+                stream => Stream,
                 address => Address,
                 last_used => erlang:system_time(second)
             },
@@ -274,7 +264,6 @@ create_new_connection(NodeId, Address, State) ->
             {reply, {ok, Stream}, NewState};
 
         {error, Reason} ->
-            io:format("[Mesh] Failed to create connection: ~p~n", [Reason]),
             {reply, {error, Reason}, State}
     end.
 
@@ -287,13 +276,9 @@ reuse_connection(NodeId, ConnInfo, State) ->
     case maps:get(stream, ConnInfo, undefined) of
         undefined ->
             %% No cached stream - create one and cache it
-            io:format("[Mesh] Reusing connection to ~p, opening new stream (first time)~n",
-                     [binary:encode_hex(NodeId)]),
             open_and_cache_stream(NodeId, Conn, ConnInfo, Address, State);
         Stream ->
             %% Have a cached stream - reuse it
-            io:format("[Mesh] Reusing connection and stream to ~p~n",
-                     [binary:encode_hex(NodeId)]),
             UpdatedConnInfo = ConnInfo#{last_used => erlang:system_time(second)},
             NewMeshConns = maps:put(NodeId, UpdatedConnInfo, State#state.mesh_connections),
             NewState = State#state{mesh_connections = NewMeshConns},
@@ -316,7 +301,6 @@ open_and_cache_stream(NodeId, Conn, ConnInfo, Address, State) ->
 
         {error, _StreamReason} ->
             %% Stream opening failed - connection likely dead
-            io:format("[Mesh] Failed to open stream, removing connection and retrying~n"),
             NewState = do_remove_connection(NodeId, State),
             %% Retry recursively (will create new connection)
             handle_call({get_or_create_connection, NodeId, Address}, undefined, NewState)
@@ -325,10 +309,7 @@ open_and_cache_stream(NodeId, Conn, ConnInfo, Address, State) ->
 %% @private
 %% Remove dead connection and retry
 remove_and_retry(NodeId, State) ->
-    io:format("[Mesh] Connection to ~p is dead, removing and recreating~n",
-             [binary:encode_hex(NodeId)]),
     NewState = do_remove_connection(NodeId, State),
-
     %% Retry - need to get address from removed connection info
     #{NodeId := #{address := Address}} = State#state.mesh_connections,
     handle_call({get_or_create_connection, NodeId, Address}, undefined, NewState).
@@ -354,8 +335,6 @@ evict_lru_connection(#state{mesh_connections = MeshConns} = State) ->
 
     %% Get oldest connection's NodeId
     [{OldestNodeId, _} | _] = SortedConns,
-
-    io:format("[Mesh] Evicting LRU connection: ~p~n", [binary:encode_hex(OldestNodeId)]),
 
     %% Remove oldest connection
     do_remove_connection(OldestNodeId, State).
@@ -427,12 +406,9 @@ create_mesh_connection(Address, State) ->
     %% Format address for QUIC connection
     FormattedAddress = format_address(Host),
 
-    io:format("[Mesh] Connecting to peer at ~s:~p~n", [FormattedAddress, Port]),
-
     %% Connect to peer
     case macula_quic:connect(FormattedAddress, Port, ConnOpts, 5000) of
         {ok, Conn} ->
-            io:format("[Mesh] Connected, opening stream~n"),
             case macula_quic:open_stream(Conn) of
                 {ok, Stream} ->
                     {ok, Conn, Stream};
@@ -518,7 +494,6 @@ get_tls_certificates(Opts) when is_map(Opts) ->
             {CertFile, KeyFile};
         _ ->
             %% Partial config in opts, use defaults
-            io:format("[Mesh] WARNING: Partial TLS config in opts, using defaults~n"),
             {"/opt/macula/certs/cert.pem", "/opt/macula/certs/key.pem"}
     end.
 

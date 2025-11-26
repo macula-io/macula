@@ -1,5 +1,36 @@
 # DHT-Routed Pub/Sub Architecture
 
+> **⚠️ HISTORICAL DOCUMENT (v0.7.x Planning)**
+>
+> This document describes the **originally planned** multi-hop DHT routing approach.
+> **v0.8.0 implemented a hybrid approach** that combines elements from this plan
+> with direct gateway-to-peer delivery:
+>
+> **Current Implementation (v0.8.0+)**:
+> - Peers forward PUBLISH to bootstrap gateway
+> - Bootstrap looks up subscribers in local DHT storage
+> - Bootstrap delivers directly to subscribers via `pubsub_route` messages
+> - No multi-hop forwarding through intermediate nodes
+>
+> **Key Modules (v0.8.0)**:
+> - `macula_gateway_pubsub_router.erl` - distributes to local + remote subscribers
+> - `macula_gateway_dht.erl` - DHT lookup/store operations
+> - `macula_pubsub_routing.erl` - wraps PUBLISH in routing envelopes
+>
+> **What was kept from this design**:
+> - DHT subscription advertisement (Topic → subscribers)
+> - `pubsub_route` message envelope format
+> - TTL/hop count protection
+>
+> **What changed**:
+> - No multi-hop routing through mesh nodes
+> - Bootstrap acts as central distributor (not pure P2P)
+> - Direct delivery to subscriber endpoints
+>
+> This document is preserved for historical reference.
+
+---
+
 ## Problem Statement
 
 The v0.7.7 pub/sub implementation has a **split-brain architecture** where subscribers register in two places:

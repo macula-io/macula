@@ -41,10 +41,8 @@
 %% Crashes on routing server failures - this exposes DHT issues immediately.
 -spec handle_store(pid(), map()) -> ok.
 handle_store(_Stream, StoreMsg) ->
-    io:format("[DHT] Processing STORE message: ~p~n", [StoreMsg]),
     %% Forward to routing server (let it crash on errors)
     _Reply = macula_routing_server:handle_message(macula_routing_server, StoreMsg),
-    io:format("[DHT] STORE processed successfully~n"),
     %% STORE doesn't require a response to be sent back
     ok.
 
@@ -53,11 +51,8 @@ handle_store(_Stream, StoreMsg) ->
 %% Crashes on routing server or encoding failures - exposes DHT/protocol bugs.
 -spec handle_find_value(pid(), map()) -> ok.
 handle_find_value(Stream, FindValueMsg) ->
-    io:format("[DHT] Processing FIND_VALUE message: ~p~n", [FindValueMsg]),
     %% Forward to routing server (let it crash on errors)
     Reply = macula_routing_server:handle_message(macula_routing_server, FindValueMsg),
-    io:format("[DHT] FIND_VALUE processed, reply: ~p~n", [Reply]),
-
     %% Send reply back over stream (let it crash on errors)
     ReplyBinary = macula_protocol_encoder:encode(find_value_reply, Reply),
     macula_quic:send(Stream, ReplyBinary),
@@ -68,11 +63,8 @@ handle_find_value(Stream, FindValueMsg) ->
 %% Crashes on routing server or encoding failures - exposes DHT/protocol bugs.
 -spec handle_find_node(pid(), map()) -> ok.
 handle_find_node(Stream, FindNodeMsg) ->
-    io:format("[DHT] Processing FIND_NODE message: ~p~n", [FindNodeMsg]),
     %% Forward to routing server (let it crash on errors)
     Reply = macula_routing_server:handle_message(macula_routing_server, FindNodeMsg),
-    io:format("[DHT] FIND_NODE processed, reply: ~p~n", [Reply]),
-
     %% Send reply back over stream (let it crash on errors)
     ReplyBinary = macula_protocol_encoder:encode(find_node_reply, Reply),
     macula_quic:send(Stream, ReplyBinary),
@@ -83,16 +75,12 @@ handle_find_node(Stream, FindNodeMsg) ->
 %% Crashes on decode or routing failures - exposes protocol/DHT bugs.
 -spec handle_query(pid(), atom(), binary()) -> ok.
 handle_query(FromPid, _QueryType, QueryData) ->
-    io:format("[DHT] Processing query from process ~p~n", [FromPid]),
     %% Decode the query message (let it crash on decode errors)
     {ok, {MessageType, Message}} = macula_protocol_decoder:decode(QueryData),
-
     %% Forward to DHT routing server (let it crash on errors)
     Reply = macula_routing_server:handle_message(macula_routing_server, Message),
-
     %% Encode reply based on message type (let it crash on encoding errors)
     ReplyData = encode_reply_by_type(MessageType, Reply),
-
     %% Send reply back to requesting process
     FromPid ! {dht_reply, ReplyData},
     ok.
@@ -106,7 +94,6 @@ handle_query(FromPid, _QueryType, QueryData) ->
 lookup_value(Key) ->
     case whereis(macula_routing_server) of
         undefined ->
-            io:format("[DHT] Routing server not running~n"),
             {error, not_found};
         RoutingServerPid ->
             %% K=20 is the standard Kademlia replication factor
@@ -119,7 +106,6 @@ lookup_value(Key) ->
                     %% Single value, wrap in list
                     {ok, [Value]};
                 {error, Reason} ->
-                    io:format("[DHT] Lookup error: ~p~n", [Reason]),
                     {error, Reason}
             end
     end.
@@ -133,16 +119,12 @@ forward_publish_to_bootstrap(PubMsg) ->
     Realm = application:get_env(macula, realm, <<"default">>),
     case gproc:lookup_local_name({connection, Realm}) of
         undefined ->
-            io:format("[DHT] No connection to bootstrap found~n"),
             {error, no_connection};
         ConnPid ->
-            io:format("[DHT] Forwarding PUBLISH to bootstrap for distribution~n"),
             case macula_connection:send_message(ConnPid, publish, PubMsg) of
                 ok ->
-                    io:format("[DHT] PUBLISH forwarded to bootstrap successfully~n"),
                     ok;
                 {error, Reason} ->
-                    io:format("[DHT] Failed to forward PUBLISH to bootstrap: ~p~n", [Reason]),
                     {error, Reason}
             end
     end.
@@ -190,7 +172,6 @@ send_to_peer(NodeInfo, MessageType, Message) ->
             {error, no_endpoint};
         _ ->
             %% Send directly via peer connector (establishes QUIC connection)
-            io:format("[DHT] Sending ~p to peer ~p~n", [MessageType, Endpoint]),
             macula_peer_connector:send_message(Endpoint, MessageType, Message)
     end.
 
@@ -200,7 +181,6 @@ send_to_peer(NodeInfo, MessageType, Message) ->
 query_peer(NodeInfo, MessageType, Message) ->
     %% For now, use send_to_peer (fire-and-forget)
     %% TODO(v0.9.0): Implement request/response pattern with timeout - see TODO.md
-    io:format("[DHT] query_peer not yet implemented for ~p, using send_to_peer~n", [MessageType]),
     send_to_peer(NodeInfo, MessageType, Message).
 
 %% @private

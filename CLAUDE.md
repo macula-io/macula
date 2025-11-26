@@ -1,5 +1,19 @@
 # CLAUDE.md - Macula Project Guidelines
 
+**Current Version**: v0.10.0 (November 2025)
+
+## Version History
+
+| Version | Date | Key Features |
+|---------|------|--------------|
+| v0.7.0 | Nov 2025 | Nomenclature refactoring (macula_peer/macula_connection) |
+| v0.8.0 | Nov 2025 | Direct P2P via macula_peer_connector, DHT propagation |
+| v0.9.0 | Nov 2025 | Platform Layer (Ra/Raft consensus, leader election) |
+| v0.9.1 | Nov 2025 | LWW-Register CRDT foundation |
+| v0.10.0 | Nov 2025 | Production hardening, stream caching, performance fixes |
+
+---
+
 ## ✅ v0.7.0 Nomenclature Refactoring (COMPLETED - Nov 2025)
 
 **COMPLETED**: Macula v0.7.0 introduces clearer nomenclature following industry standards (libp2p, IPFS, BitTorrent):
@@ -33,78 +47,216 @@
 
 **Note:** The refactoring maintains backward compatibility at the supervision tree level - internal modules continue to use `macula_connection` for QUIC transport operations.
 
-## 🚧 DHT-Routed RPC Architecture (IN PROGRESS)
+## ✅ v0.8.0 Direct P2P Architecture (COMPLETED - Nov 2025)
 
-**IMPORTANT**: The RPC system is being refactored from direct client→provider connections to proper multi-hop Kademlia DHT routing. This is a fundamental architectural change to align with true P2P mesh principles.
+**COMPLETED**: v0.8.0 implemented a different approach than originally planned - direct P2P connections via `macula_peer_connector` with DHT used for service/subscriber discovery.
 
-📋 **See `architecture/dht_routed_rpc.md`** for complete design
-📊 **See `architecture/dht_rpc_implementation_status.md`** for current status
+📋 **See `architecture/v0.8.0-OVERVIEW.md`** for current architecture
+📋 **See `architecture/dht_routed_rpc.md`** for historical reference (planning doc)
 
-**Why?** The original RPC used direct connections which violated mesh architecture:
-- ❌ Client/server model (not true P2P)
-- ❌ O(N²) connection scaling
-- ❌ NAT traversal problems
-- ❌ Connection idle timeout issues
+**Original Plan (v0.7.x)**: Multi-hop Kademlia DHT routing
+**Actual Implementation (v0.8.0)**: Direct P2P + DHT discovery
 
-**New Approach:** Messages hop through DHT using Kademlia XOR distance routing:
-- ✅ True P2P mesh (no client/server distinction)
-- ✅ O(log N) routing hops
-- ✅ NAT-friendly (routes through existing connections)
-- ✅ No new connections per RPC call
+**Why the change?** Direct connections provide:
+- ✅ Lower latency (1 hop vs O(log N) hops)
+- ✅ Simpler debugging
+- ✅ Better throughput
+- ✅ NAT traversal via gateway relay (acceptable for v0.8.x-v0.10.x)
 
-**Status:**
-- ✅ Protocol type added (`rpc_route`)
-- ✅ Encoding/decoding support
-- ⏳ Routing logic module
-- ⏳ Gateway integration
-- ⏳ Connection integration
-- ⏳ Multi-hop test topology
+**Current Architecture (v0.8.0+)**:
+```
+RPC Flow:
+  Client → DHT lookup → Direct QUIC → Provider → Response
 
-**DO NOT** rely on direct endpoint connections in new code - they will be removed.
+PubSub Flow:
+  Publisher → Bootstrap → DHT lookup → Direct to each Subscriber
+```
 
-## 🚀 NAT Traversal & P2P Connectivity Roadmap (v0.8.0 - v0.9.0)
+**Key Module**: `macula_peer_connector.erl` - Fire-and-forget P2P QUIC connections
 
-**PLANNING**: Enabling direct peer-to-peer connections for edge nodes behind NAT/firewalls.
+## 🚀 NAT Traversal & P2P Connectivity (FUTURE - v1.x)
 
-📋 **See `architecture/NAT_TRAVERSAL_ROADMAP.md`** for complete roadmap and technical design
+**STATUS**: Deferred to post-v1.0 (gateway relay is sufficient for current use cases)
 
-**Problem**: Edge peers behind NAT cannot accept incoming connections, forcing all traffic through gateway relay (bottleneck).
+📋 **See `architecture/NAT_TRAVERSAL_ROADMAP.md`** for future roadmap
 
-**Solution Phases**:
-
-### v0.8.0: Opportunistic Hole Punching (Q2 2025)
-- **Goal**: 80% direct P2P + 20% relay fallback = 100% connectivity
-- **New Modules**:
-  - `macula_nat_discovery.erl` - Detect public IP and NAT type
-  - `macula_hole_punch.erl` - Coordinate simultaneous connection attempts
-  - `macula_connection_upgrade.erl` - Migrate relay → direct
-- **Strategy**: Attempt direct while keeping relay as fallback
-- **Timeline**: 6-8 weeks development
-
-### v0.9.0: Full STUN/TURN/ICE (Q4 2025)
-- **Goal**: 95% direct P2P + 5% relay = 100% connectivity
-- **New Infrastructure**:
-  - STUN server for address discovery
-  - TURN relay for symmetric NAT
-- **New Modules**:
-  - `macula_stun_client.erl` - STUN address discovery
-  - `macula_turn_client.erl` - TURN relay allocation
-  - `macula_ice_agent.erl` - ICE-like candidate gathering
-  - `macula_candidate_exchange.erl` - Exchange candidates via gateway
-  - `macula_connection_strategy.erl` - Select optimal connection method
-- **Strategy**: WebRTC-inspired NAT traversal (ICE/STUN/TURN)
-- **Timeline**: 8-10 weeks development
-
-**Why NOT WebTransport?**
-- ❌ WebTransport is client→server, not peer↔peer
-- ❌ Does NOT solve NAT traversal (peers behind NAT still can't accept connections)
-- ❌ Designed for browsers connecting to servers, not symmetric P2P mesh
-- ✅ We're using WebRTC NAT traversal principles instead
-
-**Current State (v0.7.x)**:
+**Current State (v0.10.0)**:
 - ✅ Gateway relay works 100% (universal fallback)
-- ⚠️ All traffic goes through gateway (bottleneck)
-- ⏳ No direct P2P yet
+- ✅ Direct P2P when both peers have public IPs
+- ⏳ NAT hole punching deferred (not needed for demo/development)
+
+**Future Plans (v1.x)**:
+- STUN/TURN/ICE for NAT traversal
+- Hole punching coordination
+- Connection strategy optimization
+
+## ✅ v0.9.0 Platform Layer (COMPLETED - Nov 2025)
+
+**COMPLETED**: v0.9.0 added distributed coordination primitives for workload applications.
+
+📋 **See `architecture/PLATFORM_VISION.md`** for complete Platform Layer vision
+📋 **See `architecture/v0.8.0-ROADMAP.md`** for roadmap (file name is historical)
+
+**Problem Solved**: Workload applications had no way to:
+- Elect a single coordinator across peers
+- Share state in eventually-consistent manner
+- Coordinate distributed operations
+
+**Platform Layer Features (v0.9.0+)**:
+- **Ra/Raft Consensus** - Leader election via `macula_platform_ra`
+- **LWW-Register CRDT** - Eventually-consistent state sharing (v0.9.1)
+- **Workload Registration** - `macula_client:register_workload/2`
+- **Leader Queries** - `macula_client:get_leader/1`
+
+**Key Modules**:
+- `macula_platform_system/` - Platform layer subsystem
+- `macula_platform_ra.erl` - Ra/Raft cluster integration
+- `macula_platform_api.erl` - Client-facing API
+
+---
+
+## v0.10.0 Architecture Diagrams
+
+### PubSub Message Flow (Current Implementation)
+
+```
+┌─────────────┐                           ┌─────────────────┐
+│  Publisher  │                           │    Bootstrap    │
+│  (Peer 1)   │                           │    Gateway      │
+└──────┬──────┘                           └────────┬────────┘
+       │                                           │
+       │ 1. PUBLISH(topic, msg)                    │
+       │ ─────────────────────────────────────────>│
+       │    (via macula_connection)                │
+       │                                           │
+       │                                    ┌──────▼──────┐
+       │                                    │ DHT Lookup  │
+       │                                    │ topic →     │
+       │                                    │ subscribers │
+       │                                    └──────┬──────┘
+       │                                           │
+       │                                    ┌──────▼──────┐
+       │                                    │   For each  │
+       │                                    │  subscriber │
+       │                                    └──────┬──────┘
+       │                                           │
+       │                     ┌─────────────────────┼─────────────────────┐
+       │                     │                     │                     │
+       │              ┌──────▼──────┐       ┌──────▼──────┐       ┌──────▼──────┐
+       │              │  Peer 2     │       │  Peer 3     │       │  Peer N     │
+       │              │  endpoint   │       │  endpoint   │       │  endpoint   │
+       │              └──────┬──────┘       └──────┬──────┘       └──────┬──────┘
+       │                     │                     │                     │
+       │              2. pubsub_route        2. pubsub_route       2. pubsub_route
+       │              ───────┼────────>     ───────┼────────>     ───────┼────────>
+       │                     │                     │                     │
+       │              ┌──────▼──────┐       ┌──────▼──────┐       ┌──────▼──────┐
+       │              │ Subscriber  │       │ Subscriber  │       │ Subscriber  │
+       │              │ callback()  │       │ callback()  │       │ callback()  │
+       │              └─────────────┘       └─────────────┘       └─────────────┘
+```
+
+### RPC Message Flow (Current Implementation)
+
+```
+┌─────────────┐                           ┌─────────────────┐
+│   Client    │                           │    Bootstrap    │
+│  (Peer 1)   │                           │    Gateway      │
+└──────┬──────┘                           └────────┬────────┘
+       │                                           │
+       │ 1. RPC call(procedure, args)              │
+       │ ─────────────────────────────────────────>│
+       │    (via macula_connection)                │
+       │                                           │
+       │                                    ┌──────▼──────┐
+       │                                    │ DHT Lookup  │
+       │                                    │ procedure → │
+       │                                    │  providers  │
+       │                                    └──────┬──────┘
+       │                                           │
+       │                                    ┌──────▼──────┐
+       │                                    │  Provider   │
+       │                                    │  endpoint   │
+       │                                    └──────┬──────┘
+       │                                           │
+       │                    2. RPC_CALL            │
+       │                    ────────────────────── │ ────────────────────┐
+       │                                           │                     │
+       │                                           │              ┌──────▼──────┐
+       │                                           │              │  Provider   │
+       │                                           │              │  (Peer 2)   │
+       │                                           │              └──────┬──────┘
+       │                                           │                     │
+       │                                           │              ┌──────▼──────┐
+       │                                           │              │  Execute    │
+       │                                           │              │  handler()  │
+       │                                           │              └──────┬──────┘
+       │                                           │                     │
+       │                    3. RPC_REPLY           │                     │
+       │<────────────────────────────────── ────── │ ────────────────────┘
+       │                                           │
+       │                                           │
+```
+
+### DHT Service Registration Flow
+
+```
+┌─────────────┐                           ┌─────────────────┐
+│  Provider   │                           │    Bootstrap    │
+│  (Peer 2)   │                           │    Gateway      │
+└──────┬──────┘                           └────────┬────────┘
+       │                                           │
+       │ 1. register(procedure, handler)           │
+       │ ─────────────────────────────────────────>│
+       │    (via macula_service_registry)          │
+       │                                           │
+       │                                    ┌──────▼──────┐
+       │                                    │  DHT STORE  │
+       │                                    │  key: proc  │
+       │                                    │  value: {   │
+       │                                    │   node_id,  │
+       │                                    │   endpoint  │
+       │                                    │  }          │
+       │                                    └──────┬──────┘
+       │                                           │
+       │                                    ┌──────▼──────┐
+       │                                    │ Propagate   │
+       │                                    │ to k=20     │
+       │                                    │ closest     │
+       │                                    │ nodes       │
+       │                                    └─────────────┘
+```
+
+### Subscription Advertisement Flow
+
+```
+┌─────────────┐                           ┌─────────────────┐
+│ Subscriber  │                           │    Bootstrap    │
+│  (Peer 3)   │                           │    Gateway      │
+└──────┬──────┘                           └────────┬────────┘
+       │                                           │
+       │ 1. subscribe(topic, callback)             │
+       │ ─────────────────────────────────────────>│
+       │    (via macula_pubsub_dht)                │
+       │                                           │
+       │                                    ┌──────▼──────┐
+       │                                    │  DHT STORE  │
+       │                                    │  key: topic │
+       │                                    │  value: {   │
+       │                                    │   node_id,  │
+       │                                    │   endpoint  │
+       │                                    │  }          │
+       │                                    └──────┬──────┘
+       │                                           │
+       │                                    ┌──────▼──────┐
+       │                                    │ Propagate   │
+       │                                    │ to k=20     │
+       │                                    │ closest     │
+       │                                    │ nodes       │
+       │                                    └─────────────┘
+```
+
+---
 
 ## Code Quality & Test Coverage
 

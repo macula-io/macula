@@ -154,12 +154,9 @@ handle_call({store_local, Key, Value}, _From, #state{storage = Storage} = State)
             case ExistingIndex of
                 not_found ->
                     %% Append new provider
-                    io:format("[DHT] store_local: Adding new subscriber (was ~p, now ~p)~n",
-                             [length(ProviderList), length(ProviderList) + 1]),
                     [Value | ProviderList];
                 Index ->
                     %% Update existing provider (replace at index)
-                    io:format("[DHT] store_local: Updating existing subscriber at index ~p~n", [Index]),
                     lists:sublist(ProviderList, Index - 1) ++
                         [Value] ++
                         lists:nthtail(Index, ProviderList)
@@ -170,8 +167,6 @@ handle_call({store_local, Key, Value}, _From, #state{storage = Storage} = State)
     {reply, ok, State#state{storage = NewStorage}};
 
 handle_call({store, Key, Value}, _From, #state{routing_table = Table, config = Config} = State) ->
-    io:format("[DHT] store: Propagating key ~p to k closest nodes~n", [Key]),
-
     %% 1. Store locally first
     NewState = case handle_call({store_local, Key, Value}, _From, State) of
         {reply, ok, S} -> S;
@@ -181,7 +176,6 @@ handle_call({store, Key, Value}, _From, #state{routing_table = Table, config = C
     %% 2. Find k closest nodes to Key
     K = maps:get(k, Config, 20),
     ClosestNodes = macula_routing_table:find_closest(Table, Key, K),
-    io:format("[DHT] store: Found ~p closest nodes for key~n", [length(ClosestNodes)]),
 
     %% 3. Send STORE message to each node (fire-and-forget)
     StoreMsg = macula_routing_protocol:encode_store(Key, Value),
@@ -189,18 +183,11 @@ handle_call({store, Key, Value}, _From, #state{routing_table = Table, config = C
         [] ->
             %% No nodes in routing table - this is an embedded gateway connected to bootstrap
             %% Forward the STORE to bootstrap gateway via RPC instead
-            io:format("[DHT] store: No routing table entries, forwarding to bootstrap via RPC~n"),
             forward_store_to_bootstrap(Key, Value);
         _ ->
             lists:foreach(fun(NodeInfo) ->
-                io:format("[DHT] store: Sending STORE to node ~p~n", [maps:get(node_id, NodeInfo, unknown)]),
                 %% Best effort - don't fail if send fails
-                case macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg) of
-                    ok -> ok;
-                    {error, Reason} ->
-                        io:format("[DHT] store: Failed to send to peer: ~p~n", [Reason]),
-                        ok
-                end
+                _ = macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg)
             end, ClosestNodes)
     end,
 
@@ -259,7 +246,6 @@ handle_call({find_value, Key, K}, _From, #state{routing_table = Table, storage =
     %% First check local storage
     Reply = case maps:get(Key, Storage, undefined) of
         undefined ->
-            io:format("[DHT] find_value: Key not found in local storage~n"),
             %% Not found locally - use DHT iterative lookup
             QueryFn = fun(_NodeInfo, _QueryKey) ->
                 %% TODO: For now, we can't directly query remote nodes without a connection
@@ -278,10 +264,8 @@ handle_call({find_value, Key, K}, _From, #state{routing_table = Table, storage =
                     {error, Reason}
             end;
         Value when is_list(Value) ->
-            io:format("[DHT] find_value: Found ~p subscriber(s) in local storage~n", [length(Value)]),
             {ok, Value};
         Value ->
-            io:format("[DHT] find_value: Found 1 subscriber (legacy single value)~n"),
             {ok, [Value]}
     end,
     {reply, Reply, State};
@@ -322,10 +306,8 @@ forward_store_to_bootstrap(Key, Value) ->
     %% This is a fire-and-forget operation - we don't wait for response
     case whereis(macula_rpc_handler) of
         undefined ->
-            io:format("[DHT] store: No RPC handler available for bootstrap forwarding~n"),
             ok;
         _RpcHandler ->
-            io:format("[DHT] store: Forwarding to bootstrap via _dht.store RPC~n"),
             %% Call _dht.store(Key, Value) on the bootstrap gateway
             %% Using cast (fire-and-forget) since we don't need the response
             try
@@ -338,20 +320,15 @@ forward_store_to_bootstrap(Key, Value) ->
                 spawn(fun() ->
                     case whereis(macula_local_client) of
                         undefined ->
-                            io:format("[DHT] store: No local client for bootstrap RPC~n");
+                            ok;
                         LocalClient ->
-                            case macula:call(LocalClient, Procedure, Args, #{timeout => 5000}) of
-                                {ok, _Result} ->
-                                    io:format("[DHT] store: Successfully forwarded to bootstrap~n");
-                                {error, Reason} ->
-                                    io:format("[DHT] store: Failed to forward to bootstrap: ~p~n", [Reason])
-                            end
+                            _ = macula:call(LocalClient, Procedure, Args, #{timeout => 5000}),
+                            ok
                     end
                 end),
                 ok
             catch
-                _:Error ->
-                    io:format("[DHT] store: Exception forwarding to bootstrap: ~p~n", [Error]),
+                _:_Error ->
                     ok
             end
     end.
@@ -413,10 +390,6 @@ handle_find_node(Message, #state{routing_table = Table, config = Config} = State
 handle_store(Message, #state{storage = Storage} = State) ->
     {ok, Key, Value} = macula_routing_protocol:decode_store(Message),
 
-    %% DEBUG: Log the Value to see its structure
-    io:format("[DHT] handle_store: Value = ~p~n", [Value]),
-    io:format("[DHT] handle_store: Value keys = ~p~n", [maps:keys(Value)]),
-
     %% Store using multi-value logic (same as store_local)
     ExistingProviders = maps:get(Key, Storage, []),
 
@@ -436,7 +409,6 @@ handle_store(Message, #state{storage = Storage} = State) ->
     UpdatedProviders = case NodeId of
         undefined ->
             %% No node_id, just append (shouldn't happen in practice)
-            io:format("[DHT] handle_store: Appending provider without node_id~n"),
             [Value | ProviderList];
         _ ->
             %% Check if this provider already exists by comparing node_ids
@@ -444,12 +416,9 @@ handle_store(Message, #state{storage = Storage} = State) ->
             case ExistingIndex of
                 not_found ->
                     %% Append new provider
-                    io:format("[DHT] handle_store: Adding new subscriber (was ~p, now ~p)~n",
-                             [length(ProviderList), length(ProviderList) + 1]),
                     [Value | ProviderList];
                 Index ->
                     %% Update existing provider (replace at index)
-                    io:format("[DHT] handle_store: Updating existing subscriber at index ~p~n", [Index]),
                     lists:sublist(ProviderList, Index - 1) ++
                         [Value] ++
                         lists:nthtail(Index, ProviderList)
@@ -472,19 +441,16 @@ handle_find_value(Message, #state{storage = Storage, routing_table = Table, conf
     Reply = case maps:get(Key, Storage, undefined) of
         undefined ->
             %% Value not found locally, return closest nodes
-            io:format("[DHT] handle_find_value: Key not found, returning nodes~n"),
             K = maps:get(k, Config, 20),
             Closest = macula_routing_table:find_closest(Table, Key, K),
             macula_routing_protocol:encode_find_value_reply({nodes, Closest});
 
         Value when is_list(Value) ->
             %% Value found (multi-value list)
-            io:format("[DHT] handle_find_value: Returning ~p subscriber(s)~n", [length(Value)]),
             macula_routing_protocol:encode_find_value_reply({value, Value});
 
         Value ->
             %% Value found (legacy single value)
-            io:format("[DHT] handle_find_value: Returning 1 subscriber (legacy)~n"),
             macula_routing_protocol:encode_find_value_reply({value, Value})
     end,
 
