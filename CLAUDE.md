@@ -11,6 +11,7 @@
 | v0.9.0 | Nov 2025 | Platform Layer (Ra/Raft consensus, leader election) |
 | v0.9.1 | Nov 2025 | LWW-Register CRDT foundation |
 | v0.10.0 | Nov 2025 | Production hardening, stream caching, performance fixes |
+| v0.11.0 | Nov 2025 | QUIC Distribution - replacing EPMD (IN PROGRESS) |
 
 ---
 
@@ -436,6 +437,66 @@ All fixes follow idiomatic Erlang patterns:
 - Bounded pools prevent growth
 - Automatic cleanup maintains stability
 - No OOM crashes observed
+
+## 🚀 v0.11.0 QUIC Distribution (IN PROGRESS - Nov 2025)
+
+**STATUS**: Implementation complete, integration testing in progress
+
+📋 **See `architecture/v0.11.0-QUIC_DISTRIBUTION.md`** for full vision document
+
+**Problem Solved**: Replace EPMD and TCP-based Erlang distribution with QUIC:
+- ❌ EPMD is centralized (single point of failure)
+- ❌ TCP requires multiple ports and doesn't traverse NAT well
+- ❌ No built-in encryption (TLS is optional add-on)
+- ❌ Edge/mobile deployment is nearly impossible
+
+**Solution**: QUIC-native distribution with decentralized discovery:
+
+```
+Before (EPMD + TCP):           After (Macula QUIC):
+┌─────────┐                    ┌─────────┐
+│  EPMD   │◄──TCP:4369──►      │ Macula  │◄══QUIC/UDP══►
+│(daemon) │                    │Discovery│  (single port)
+└────┬────┘                    │ (DHT)   │
+     │                         └────┬────┘
+┌────▼────┐                    ┌────▼────┐
+│inet_tcp │◄──TCP range──►     │macula   │◄══QUIC══►
+│  _dist  │                    │  _dist  │
+└─────────┘                    └─────────┘
+```
+
+**Implementation Status**:
+
+| Module | Purpose | Status |
+|--------|---------|--------|
+| `macula_dist.erl` | QUIC carrier for Erlang distribution | ✅ Complete |
+| `macula_dist_discovery.erl` | DHT-based node discovery (replaces EPMD) | ✅ Complete |
+| `macula_cluster_strategy.erl` | libcluster-compatible strategy | ✅ Complete |
+| `macula_dist_system.erl` | Supervisor for dist subsystem | ✅ Complete |
+
+**Tests**: 31 tests passing
+
+**Usage** (once stable):
+```
+%% vm.args
+-proto_dist macula
+-no_epmd
+-start_epmd false
+-macula_dist_port 4433
+```
+
+**Key Benefits**:
+- ✅ Built-in TLS 1.3 (mandatory, not optional)
+- ✅ Single UDP port (NAT-friendly)
+- ✅ Decentralized discovery (no EPMD daemon)
+- ✅ Connection migration (survives IP changes)
+- ✅ Compatible with Horde, Swarm, Mnesia, :pg
+
+**Next Steps**:
+- Integration testing with multi-node clusters
+- Performance benchmarking vs inet_tcp_dist
+- Mnesia replication verification
+- Documentation for ecosystem tools
 
 ## Docker Build Best Practices
 

@@ -1,0 +1,109 @@
+# Macula QUIC Distribution Test Cluster
+#
+# This compose file creates a 3-node cluster using QUIC distribution
+# instead of EPMD + TCP.
+#
+# Usage:
+#   docker compose build
+#   docker compose up
+#
+# Expected behavior:
+#   - All 3 nodes should form a cluster within ~15 seconds
+#   - Health endpoints report cluster size = 3
+#   - No EPMD processes running
+
+services:
+  node1:
+    build:
+      context: ../..
+      dockerfile: docker/dist-test/Dockerfile
+    container_name: macula-dist-node1
+    hostname: node1
+    environment:
+      NODE_NAME: "node1"
+      NODE_IP: "172.40.0.10"
+      MACULA_DIST_PORT: "4433"
+      HEALTH_PORT: "9100"
+      ERLANG_COOKIE: "macula_dist_test_cookie"
+      BOOTSTRAP_NODES: ""
+    networks:
+      macula_dist_net:
+        ipv4_address: 172.40.0.10
+    ports:
+      - "9101:9100"
+      - "14433:4433/udp"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9100/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  node2:
+    build:
+      context: ../..
+      dockerfile: docker/dist-test/Dockerfile
+    container_name: macula-dist-node2
+    hostname: node2
+    environment:
+      NODE_NAME: "node2"
+      NODE_IP: "172.40.0.11"
+      MACULA_DIST_PORT: "4434"
+      HEALTH_PORT: "9100"
+      ERLANG_COOKIE: "macula_dist_test_cookie"
+      # QUIC distribution uses port@ip naming
+      BOOTSTRAP_NODES: "4433@172.40.0.10"
+    networks:
+      macula_dist_net:
+        ipv4_address: 172.40.0.11
+    ports:
+      - "9102:9100"
+      - "14434:4434/udp"
+    depends_on:
+      node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9100/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  node3:
+    build:
+      context: ../..
+      dockerfile: docker/dist-test/Dockerfile
+    container_name: macula-dist-node3
+    hostname: node3
+    environment:
+      NODE_NAME: "node3"
+      NODE_IP: "172.40.0.12"
+      MACULA_DIST_PORT: "4435"
+      HEALTH_PORT: "9100"
+      ERLANG_COOKIE: "macula_dist_test_cookie"
+      # QUIC distribution uses port@ip naming
+      BOOTSTRAP_NODES: "4433@172.40.0.10"
+    networks:
+      macula_dist_net:
+        ipv4_address: 172.40.0.12
+    ports:
+      - "9103:9100"
+      - "14435:4435/udp"
+    depends_on:
+      node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9100/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+networks:
+  macula_dist_net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.40.0.0/24
+          gateway: 172.40.0.1

@@ -15,7 +15,8 @@
     send/2,
     async_send/2,
     recv/2,
-    close/1
+    close/1,
+    peername/1
 ]).
 
 %%%===================================================================
@@ -174,3 +175,11 @@ close(Pid) ->
             end
     end,
     ok.
+
+%% @doc Get the peer's address from a stream or connection handle.
+%% Returns {ok, {IP, Port}} on success or {error, Reason} on failure.
+%% Works with both stream and connection handles.
+-spec peername(term()) -> {ok, {inet:ip_address(), inet:port_number()}} | {error, term()}.
+peername(Handle) ->
+    %% quicer:peername/1 works on both stream and connection handles
+    quicer:peername(Handle).

@@ -85,9 +85,40 @@ closed(_Conn, _Flags, State) ->
 local_address_changed(_Conn, _NewAddr, State) ->
     {ok, State}.
 
-%% @doc Handle peer address changed
-peer_address_changed(_Conn, _NewAddr, State) ->
-    {ok, State}.
+%% @doc Handle peer address changed (NAT rebinding)
+%% This callback is triggered when the peer's observed address changes,
+%% typically due to NAT rebinding. We need to:
+%% 1. Log the address change
+%% 2. Invalidate cached NAT profile for the peer
+%% 3. Update connection tracking
+peer_address_changed(Conn, NewAddr, #{gateway_pid := GatewayPid} = State) ->
+    io:format("[ConnCallback] Peer address changed!~n"),
+    io:format("[ConnCallback]   Connection: ~p~n", [Conn]),
+    io:format("[ConnCallback]   New address: ~p~n", [NewAddr]),
+
+    %% Notify gateway of address change (it can update client tracking)
+    GatewayPid ! {peer_address_changed, Conn, NewAddr},
+
+    %% If we have a node_id for this connection, invalidate its NAT profile
+    %% The new address means NAT rebinding occurred - cached profile is stale
+    case maps:get(node_id, State, undefined) of
+        undefined ->
+            io:format("[ConnCallback] No node_id in state, skipping NAT cache invalidation~n");
+        NodeId ->
+            io:format("[ConnCallback] Invalidating NAT cache for node ~s~n", [NodeId]),
+            case whereis(macula_nat_cache) of
+                undefined ->
+                    io:format("[ConnCallback] NAT cache not running~n");
+                _Pid ->
+                    macula_nat_cache:invalidate(NodeId)
+            end
+    end,
+
+    {ok, State#{last_peer_address => NewAddr}};
+peer_address_changed(Conn, NewAddr, State) ->
+    %% Fallback without gateway_pid
+    io:format("[ConnCallback] Peer address changed (no gateway): ~p -> ~p~n", [Conn, NewAddr]),
+    {ok, State#{last_peer_address => NewAddr}}.
 
 %% @doc Handle streams available
 streams_available(_Conn, #{bidi_streams := Bidi, unidi_streams := Unidi}, State) ->

@@ -64,6 +64,16 @@
 -define(MSG_FIND_VALUE,     16#43).
 -define(MSG_FIND_VALUE_REPLY,16#44).
 
+%% NAT Traversal messages (0x50-0x5F range)
+-define(MSG_NAT_PROBE,          16#50).
+-define(MSG_NAT_PROBE_REPLY,    16#51).
+-define(MSG_PUNCH_REQUEST,      16#52).
+-define(MSG_PUNCH_COORDINATE,   16#53).
+-define(MSG_PUNCH_EXECUTE,      16#54).
+-define(MSG_PUNCH_RESULT,       16#55).
+-define(MSG_RELAY_REQUEST,      16#56).
+-define(MSG_RELAY_DATA,         16#57).
+
 %%%===================================================================
 %%% Type Definitions
 %%%===================================================================
@@ -73,7 +83,9 @@
     publish | subscribe | unsubscribe | pubsub_route |
     call | reply | cast | rpc_route |
     swim_ping | swim_ack | swim_ping_req |
-    find_node | find_node_reply | store | find_value | find_value_reply.
+    find_node | find_node_reply | store | find_value | find_value_reply |
+    nat_probe | nat_probe_reply | punch_request | punch_coordinate |
+    punch_execute | punch_result | relay_request | relay_data.
 
 -type message() ::
     {connect, connect_msg()} |
@@ -202,7 +214,15 @@ message_type_id(find_node) -> ?MSG_FIND_NODE;
 message_type_id(find_node_reply) -> ?MSG_FIND_NODE_REPLY;
 message_type_id(store) -> ?MSG_STORE;
 message_type_id(find_value) -> ?MSG_FIND_VALUE;
-message_type_id(find_value_reply) -> ?MSG_FIND_VALUE_REPLY.
+message_type_id(find_value_reply) -> ?MSG_FIND_VALUE_REPLY;
+message_type_id(nat_probe) -> ?MSG_NAT_PROBE;
+message_type_id(nat_probe_reply) -> ?MSG_NAT_PROBE_REPLY;
+message_type_id(punch_request) -> ?MSG_PUNCH_REQUEST;
+message_type_id(punch_coordinate) -> ?MSG_PUNCH_COORDINATE;
+message_type_id(punch_execute) -> ?MSG_PUNCH_EXECUTE;
+message_type_id(punch_result) -> ?MSG_PUNCH_RESULT;
+message_type_id(relay_request) -> ?MSG_RELAY_REQUEST;
+message_type_id(relay_data) -> ?MSG_RELAY_DATA.
 
 %% @doc Get message type name from numeric ID.
 -spec message_type_name(byte()) -> {ok, message_type()} | {error, unknown_type}.
@@ -226,4 +246,12 @@ message_type_name(?MSG_FIND_NODE_REPLY) -> {ok, find_node_reply};
 message_type_name(?MSG_STORE) -> {ok, store};
 message_type_name(?MSG_FIND_VALUE) -> {ok, find_value};
 message_type_name(?MSG_FIND_VALUE_REPLY) -> {ok, find_value_reply};
+message_type_name(?MSG_NAT_PROBE) -> {ok, nat_probe};
+message_type_name(?MSG_NAT_PROBE_REPLY) -> {ok, nat_probe_reply};
+message_type_name(?MSG_PUNCH_REQUEST) -> {ok, punch_request};
+message_type_name(?MSG_PUNCH_COORDINATE) -> {ok, punch_coordinate};
+message_type_name(?MSG_PUNCH_EXECUTE) -> {ok, punch_execute};
+message_type_name(?MSG_PUNCH_RESULT) -> {ok, punch_result};
+message_type_name(?MSG_RELAY_REQUEST) -> {ok, relay_request};
+message_type_name(?MSG_RELAY_DATA) -> {ok, relay_data};
 message_type_name(_) -> {error, unknown_type}.

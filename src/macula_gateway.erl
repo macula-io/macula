@@ -1178,6 +1178,28 @@ handle_decoded_message({ok, {pong, _PongMsg}}, _Stream, State) ->
     io:format("[Gateway] Received PONG - connection alive~n"),
     {noreply, State};
 
+%% Handle NAT_PROBE message - respond with peer's reflexive address for NAT detection.
+%% This enables NATCracker-style NAT type detection by providing the reflexive address.
+handle_decoded_message({ok, {nat_probe, NatProbeMsg}}, Stream, State) ->
+    io:format("[Gateway] Received NAT_PROBE message~n"),
+    handle_nat_probe(Stream, NatProbeMsg, State);
+
+%% Handle NAT_PROBE_REPLY message (client-side, for completeness).
+handle_decoded_message({ok, {nat_probe_reply, NatProbeReplyMsg}}, _Stream, State) ->
+    io:format("[Gateway] Received NAT_PROBE_REPLY: ~p~n", [NatProbeReplyMsg]),
+    %% Forward to NAT detector if running
+    case whereis(macula_nat_detector) of
+        undefined ->
+            io:format("[Gateway] NAT detector not running, ignoring reply~n");
+        _Pid ->
+            %% Extract reflexive address and forward to detector
+            ObserverId = State#state.node_id,
+            ReflexiveIP = maps:get(<<"reflexive_ip">>, NatProbeReplyMsg),
+            ReflexivePort = maps:get(<<"reflexive_port">>, NatProbeReplyMsg),
+            macula_nat_detector:add_observation(ObserverId, {ReflexiveIP, ReflexivePort})
+    end,
+    {noreply, State};
+
 %% Handle other decoded message types.
 handle_decoded_message({ok, {Type, Other}}, _Stream, State) ->
     io:format("[Gateway] Received message type ~p: ~p~n", [Type, Other]),
@@ -1276,4 +1298,61 @@ check_and_register_diagnostics(_Pid, GatewayPid) ->
 
 %% REMOVED: unwrap_result_to_map/1 - no longer needed since gateway is bootstrap-only
 %% (was used for RPC result unwrapping)
+
+%%%===================================================================
+%%% NAT Traversal Functions
+%%%===================================================================
+
+%% @doc Handle NAT_PROBE message.
+%% Gets the peer's reflexive address from the QUIC stream and sends NAT_PROBE_REPLY.
+%% This enables NATCracker-style NAT type detection.
+-spec handle_nat_probe(term(), map(), #state{}) -> {noreply, #state{}}.
+handle_nat_probe(Stream, NatProbeMsg, State) ->
+    %% Extract node_id from probe message
+    NodeId = maps:get(<<"node_id">>, NatProbeMsg, maps:get(node_id, NatProbeMsg, undefined)),
+
+    io:format("[Gateway] Processing NAT_PROBE from node ~p~n",
+              [case NodeId of undefined -> <<"unknown">>; _ -> binary:encode_hex(NodeId) end]),
+
+    %% Get the peer's reflexive address from the QUIC stream
+    case macula_quic:peername(Stream) of
+        {ok, {IP, Port}} ->
+            io:format("[Gateway] Peer reflexive address: ~p:~p~n", [IP, Port]),
+
+            %% Convert IP to binary string for serialization
+            IPBinary = format_ip_address(IP),
+
+            %% Build NAT_PROBE_REPLY message
+            ReplyMsg = #{
+                node_id => NodeId,
+                reflexive_ip => IPBinary,
+                reflexive_port => Port,
+                server_time => erlang:system_time(millisecond)
+            },
+
+            %% Encode and send reply
+            ReplyBinary = macula_protocol_encoder:encode(nat_probe_reply, ReplyMsg),
+            case macula_quic:send(Stream, ReplyBinary) of
+                ok ->
+                    io:format("[Gateway] Sent NAT_PROBE_REPLY to ~p:~p~n", [IP, Port]);
+                {error, SendErr} ->
+                    io:format("[Gateway] WARNING: Failed to send NAT_PROBE_REPLY: ~p~n", [SendErr])
+            end;
+
+        {error, Reason} ->
+            io:format("[Gateway] WARNING: Could not get peer address: ~p~n", [Reason])
+    end,
+
+    {noreply, State}.
+
+%% @doc Format IP address as binary string.
+%% Handles both IPv4 and IPv6 addresses.
+-spec format_ip_address(inet:ip_address()) -> binary().
+format_ip_address({A, B, C, D}) ->
+    %% IPv4: {192, 168, 1, 1} -> <<"192.168.1.1">>
+    list_to_binary(io_lib:format("~p.~p.~p.~p", [A, B, C, D]));
+format_ip_address({A, B, C, D, E, F, G, H}) ->
+    %% IPv6: {0, 0, 0, 0, 0, 65535, 49320, 257} -> <<"::ffff:192.168.1.1">>
+    list_to_binary(io_lib:format("~4.16.0B:~4.16.0B:~4.16.0B:~4.16.0B:~4.16.0B:~4.16.0B:~4.16.0B:~4.16.0B",
+                                 [A, B, C, D, E, F, G, H])).
 

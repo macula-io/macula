@@ -1,0 +1,189 @@
+version: '3.8'
+
+# NAT Traversal Test Environment
+# Simulates different NAT types to test hole punching and relay
+
+services:
+  # Public bootstrap/relay node (no NAT)
+  bootstrap:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: nat-test-bootstrap
+    hostname: bootstrap
+    networks:
+      public:
+        ipv4_address: 10.0.0.10
+    environment:
+      - NODE_TYPE=bootstrap
+      - NODE_ID=bootstrap-001
+      - QUIC_PORT=4433
+      - HTTP_PORT=8080
+      - RELAY_ENABLED=true
+    ports:
+      - "8080:8080"
+      - "4433:4433/udp"
+
+  # Peer behind Full Cone NAT (EI/EI/PP) - Easy to connect
+  peer_full_cone:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: nat-test-full-cone
+    hostname: peer-full-cone
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.20.1.10
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=peer-full-cone
+      - BOOTSTRAP_HOST=10.0.0.10
+      - BOOTSTRAP_PORT=4433
+    depends_on:
+      - bootstrap
+      - nat_full_cone_router
+    cap_add:
+      - NET_ADMIN
+
+  # Full Cone NAT router
+  nat_full_cone_router:
+    image: alpine:latest
+    container_name: nat-router-full-cone
+    hostname: nat-full-cone-router
+    networks:
+      public:
+        ipv4_address: 10.0.0.20
+      nat_full_cone:
+        ipv4_address: 172.20.1.1
+    cap_add:
+      - NET_ADMIN
+    command: >
+      sh -c "
+        apk add --no-cache iptables &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        # Full Cone NAT: EI mapping, EI filtering
+        iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE &&
+        iptables -A FORWARD -i eth1 -o eth0 -j ACCEPT &&
+        iptables -A FORWARD -i eth0 -o eth1 -j ACCEPT &&
+        echo 'Full Cone NAT configured' &&
+        tail -f /dev/null
+      "
+
+  # Peer behind Restricted Cone NAT (EI/HD/PP) - Moderate difficulty
+  peer_restricted:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: nat-test-restricted
+    hostname: peer-restricted
+    networks:
+      nat_restricted:
+        ipv4_address: 172.21.1.10
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=peer-restricted
+      - BOOTSTRAP_HOST=10.0.0.10
+      - BOOTSTRAP_PORT=4433
+    depends_on:
+      - bootstrap
+      - nat_restricted_router
+    cap_add:
+      - NET_ADMIN
+
+  # Restricted Cone NAT router
+  nat_restricted_router:
+    image: alpine:latest
+    container_name: nat-router-restricted
+    hostname: nat-restricted-router
+    networks:
+      public:
+        ipv4_address: 10.0.0.21
+      nat_restricted:
+        ipv4_address: 172.21.1.1
+    cap_add:
+      - NET_ADMIN
+    command: >
+      sh -c "
+        apk add --no-cache iptables &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        # Restricted Cone NAT: EI mapping, HD filtering
+        iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE &&
+        iptables -A FORWARD -i eth1 -o eth0 -j ACCEPT &&
+        iptables -A FORWARD -i eth0 -o eth1 -m state --state ESTABLISHED,RELATED -j ACCEPT &&
+        echo 'Restricted Cone NAT configured' &&
+        tail -f /dev/null
+      "
+
+  # Peer behind Symmetric NAT (PD/PD/RD) - Requires relay
+  peer_symmetric:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: nat-test-symmetric
+    hostname: peer-symmetric
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.22.1.10
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=peer-symmetric
+      - BOOTSTRAP_HOST=10.0.0.10
+      - BOOTSTRAP_PORT=4433
+    depends_on:
+      - bootstrap
+      - nat_symmetric_router
+    cap_add:
+      - NET_ADMIN
+
+  # Symmetric NAT router (most restrictive)
+  nat_symmetric_router:
+    image: alpine:latest
+    container_name: nat-router-symmetric
+    hostname: nat-symmetric-router
+    networks:
+      public:
+        ipv4_address: 10.0.0.22
+      nat_symmetric:
+        ipv4_address: 172.22.1.1
+    cap_add:
+      - NET_ADMIN
+    command: >
+      sh -c "
+        apk add --no-cache iptables &&
+        echo 1 > /proc/sys/net/ipv4/ip_forward &&
+        # Symmetric NAT: PD mapping (random ports per destination)
+        iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE --random &&
+        iptables -A FORWARD -i eth1 -o eth0 -j ACCEPT &&
+        iptables -A FORWARD -i eth0 -o eth1 -m state --state ESTABLISHED,RELATED -j ACCEPT &&
+        echo 'Symmetric NAT configured' &&
+        tail -f /dev/null
+      "
+
+networks:
+  # Public network (internet simulation)
+  public:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.0.0/24
+
+  # Full Cone NAT network
+  nat_full_cone:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.1.0/24
+
+  # Restricted Cone NAT network
+  nat_restricted:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.1.0/24
+
+  # Symmetric NAT network
+  nat_symmetric:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.1.0/24

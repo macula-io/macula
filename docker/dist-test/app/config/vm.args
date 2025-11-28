@@ -1,0 +1,16 @@
+## Macula Distribution Test Node
+## This file is overwritten by entrypoint.sh with actual node configuration
+
+## Placeholder - replaced at runtime
+-name placeholder@127.0.0.1
+-setcookie macula_dist_test
+
+## For now, use standard TCP distribution until QUIC config is fixed
+## TODO: Enable QUIC distribution once macula_dist is debugged
+## -proto_dist macula
+## -no_epmd
+## -start_epmd false
+
+## Kernel settings
++K true
++A 32

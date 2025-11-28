@@ -1,0 +1,20 @@
+{application, macula_dist_test, [
+    {description, "Macula QUIC Distribution Test Application"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {macula_dist_test_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        sasl,
+        quicer
+    ]},
+    {env, []},
+    {modules, [
+        macula_dist,
+        macula_dist_test_app,
+        macula_dist_test_sup,
+        macula_dist_test_connector,
+        macula_dist_test_health
+    ]}
+]}.

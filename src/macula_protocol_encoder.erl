@@ -112,6 +112,20 @@ validate_message(pubsub_route, Msg) ->
                        <<"topic">> := _, <<"payload">> := _} = Msg
     end,
     ok;
+validate_message(nat_probe, Msg) ->
+    %% NAT probe: node_id, local_port, observer_id
+    case {maps:is_key(node_id, Msg), maps:is_key(<<"node_id">>, Msg)} of
+        {true, _} -> #{node_id := _, local_port := _} = Msg;
+        {_, true} -> #{<<"node_id">> := _, <<"local_port">> := _} = Msg
+    end,
+    ok;
+validate_message(nat_probe_reply, Msg) ->
+    %% NAT probe reply: node_id, reflexive_ip, reflexive_port, server_time
+    case {maps:is_key(node_id, Msg), maps:is_key(<<"node_id">>, Msg)} of
+        {true, _} -> #{node_id := _, reflexive_ip := _, reflexive_port := _, server_time := _} = Msg;
+        {_, true} -> #{<<"node_id">> := _, <<"reflexive_ip">> := _, <<"reflexive_port">> := _, <<"server_time">> := _} = Msg
+    end,
+    ok;
 validate_message(_Type, _Msg) ->
     %% For message types not yet validated, allow anything
     ok.
