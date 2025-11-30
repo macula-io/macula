@@ -117,11 +117,9 @@ handle_call({advertise_service, Procedure, Handler, Opts}, _From, State) ->
     %% Register handler with local gateway (if it's running)
     case macula_gateway:register_handler(BinaryProcedure, Handler) of
         ok ->
-            io:format("[~p] Registered handler for ~s with local gateway~n",
-                     [State#state.node_id, BinaryProcedure]);
+            ?LOG_INFO("Registered handler for ~s with local gateway", [BinaryProcedure]);
         {error, no_gateway} ->
-            io:format("[~p] No local gateway running, handler stored locally only~n",
-                     [State#state.node_id])
+            ?LOG_DEBUG("No local gateway running, handler stored locally only")
     end,
 
     %% Store service in DHT for decentralized discovery
@@ -138,11 +136,8 @@ handle_call({advertise_service, Procedure, Handler, Opts}, _From, State) ->
     },
 
     %% Send STORE message to connected DHT node (distributed approach)
-    ?LOG_INFO("[~s] Sending STORE to DHT for service ~s", [State#state.node_id, BinaryProcedure]),
-    io:format("[~s] Sending STORE to DHT for service ~s~n",
-             [State#state.node_id, BinaryProcedure]),
-    io:format("[~s]   ServiceKey: ~p~n", [State#state.node_id, ServiceKey]),
-    io:format("[~s]   ServiceValue: ~p~n", [State#state.node_id, ServiceValue]),
+    ?LOG_INFO("Sending STORE to DHT for service ~s", [BinaryProcedure]),
+    ?LOG_DEBUG("ServiceKey: ~p, ServiceValue: ~p", [ServiceKey, ServiceValue]),
 
     %% Send STORE to DHT if connection manager is available (best effort)
     %% This allows local-only operation for testing and offline scenarios
@@ -185,8 +180,7 @@ handle_call({unadvertise_service, Procedure}, _From, State) ->
 
     %% Unregister handler from local gateway
     macula_gateway:unregister_handler(BinaryProcedure),
-    io:format("[~p] Unregistered handler for ~s from local gateway~n",
-             [State#state.node_id, BinaryProcedure]),
+    ?LOG_INFO("Unregistered handler for ~s from local gateway", [BinaryProcedure]),
 
     %% Send UNREGISTER message to gateway (best effort)
     UnregisterMsg = #{
@@ -225,62 +219,16 @@ handle_cast(_Msg, State) ->
 
 %% @doc Handle re-advertisement timer
 handle_info({readvertise, Procedure}, State) ->
-    %% Re-advertisement timer fired - re-publish to DHT
     AdvertisedServices = State#state.advertised_services,
-
-    case maps:get(Procedure, AdvertisedServices, undefined) of
-        undefined ->
-            %% Service was unadvertised, timer should have been cancelled but wasn't
-            ?LOG_WARNING("Re-advertisement timer fired for unadvertised service: ~s",
-                        [Procedure]),
-            {noreply, State};
-
-        #{metadata := Metadata, ttl := TTL} = ServiceInfo ->
-            %% Re-publish to DHT
-            ProviderInfo = #{
-                node_id => State#state.node_id,
-                endpoint => State#state.url,
-                metadata => Metadata
-            },
-
-            case macula_service_registry:publish_to_dht(macula_routing_server, Procedure,
-                                                       ProviderInfo, TTL, 20) of
-                ok ->
-                    ?LOG_DEBUG("Re-advertised service ~s to DHT", [Procedure]);
-                {error, Reason} ->
-                    ?LOG_WARNING("Failed to re-advertise service ~s to DHT: ~p",
-                                [Procedure, Reason])
-            end,
-
-            %% Schedule next re-advertisement
-            ReadvInterval = max(10, TTL - 60) * 1000,
-            TimerRef = erlang:send_after(ReadvInterval, self(), {readvertise, Procedure}),
-            ?LOG_DEBUG("Scheduled next re-advertisement for ~s in ~p seconds",
-                      [Procedure, ReadvInterval div 1000]),
-
-            %% Update timer reference
-            ServiceInfo2 = ServiceInfo#{timer_ref => TimerRef},
-            AdvertisedServices2 = AdvertisedServices#{Procedure => ServiceInfo2},
-
-            {noreply, State#state{advertised_services = AdvertisedServices2}}
-    end;
+    ServiceInfo = maps:get(Procedure, AdvertisedServices, undefined),
+    do_readvertise(ServiceInfo, Procedure, State);
 
 %% @doc Handle periodic service registry cleanup
 handle_info(cleanup_expired_services, State) ->
-    %% Prune expired local services from the registry
     Registry = State#state.service_registry,
     {Registry2, RemovedCount} = macula_service_registry:prune_expired_local_services(Registry),
-
-    case RemovedCount of
-        0 ->
-            ?LOG_DEBUG("Service cleanup: no expired services");
-        N ->
-            ?LOG_INFO("Service cleanup: removed ~p expired service(s)", [N])
-    end,
-
-    %% Schedule next cleanup in 60 seconds
+    log_cleanup_result(RemovedCount),
     erlang:send_after(60000, self(), cleanup_expired_services),
-
     {noreply, State#state{service_registry = Registry2}};
 
 handle_info(_Info, State) ->
@@ -308,25 +256,19 @@ terminate(_Reason, State) ->
 %% @private
 %% @doc Send STORE to DHT if connection manager is available (best effort).
 %% Pattern match on undefined - allows local-only operation.
-send_store_to_dht(undefined, _ServiceKey, _ServiceValue, Procedure, State) ->
-    io:format("[~s] No connection manager, skipping DHT STORE for ~s (local-only mode)~n",
-             [State#state.node_id, Procedure]),
+send_store_to_dht(undefined, _ServiceKey, _ServiceValue, Procedure, _State) ->
     ?LOG_INFO("No connection manager, service ~s advertised locally only", [Procedure]),
     ok;
-send_store_to_dht(ConnMgrPid, ServiceKey, ServiceValue, Procedure, State) when is_pid(ConnMgrPid) ->
+send_store_to_dht(ConnMgrPid, ServiceKey, ServiceValue, Procedure, _State) when is_pid(ConnMgrPid) ->
     %% Create STORE protocol message (let it crash on encoding errors)
     StoreMsg = macula_routing_protocol:encode_store(ServiceKey, ServiceValue),
-    io:format("[~s]   Encoded STORE message: ~p~n", [State#state.node_id, StoreMsg]),
+    ?LOG_DEBUG("Encoded STORE message: ~p", [StoreMsg]),
 
     %% Send over QUIC to connected node (best effort - connection may not be established yet)
     case macula_connection:send_message(ConnMgrPid, store, StoreMsg) of
         ok ->
-            io:format("[~s] STORE sent successfully for ~s~n",
-                     [State#state.node_id, Procedure]),
             ?LOG_INFO("Sent STORE to DHT for service ~s", [Procedure]);
         {error, Reason} ->
-            io:format("[~s] Failed to send STORE for ~s: ~p (local-only mode)~n",
-                     [State#state.node_id, Procedure, Reason]),
             ?LOG_WARNING("Failed to send STORE for service ~s: ~p (advertised locally only)",
                         [Procedure, Reason])
     end,
@@ -334,9 +276,7 @@ send_store_to_dht(ConnMgrPid, ServiceKey, ServiceValue, Procedure, State) when i
 
 %% @doc Send UNREGISTER to gateway if connection manager is available (best effort).
 %% Pattern match on undefined - allows local-only operation.
-send_unregister_to_gateway(undefined, _UnregisterMsg, Procedure, State) ->
-    io:format("[~s] No connection manager, skipping UNREGISTER for ~s (local-only mode)~n",
-             [State#state.node_id, Procedure]),
+send_unregister_to_gateway(undefined, _UnregisterMsg, Procedure, _State) ->
     ?LOG_INFO("No connection manager, service ~s unregistered locally only", [Procedure]),
     ok;
 send_unregister_to_gateway(ConnMgrPid, UnregisterMsg, Procedure, _State) when is_pid(ConnMgrPid) ->
@@ -353,24 +293,72 @@ send_unregister_to_gateway(ConnMgrPid, UnregisterMsg, Procedure, _State) when is
 %% @doc Cancel re-advertisement timer for a service (service not found).
 -spec cancel_advertisement_timer(binary(), map()) -> map().
 cancel_advertisement_timer(Procedure, AdvertisedServices) ->
-    case maps:find(Procedure, AdvertisedServices) of
-        error ->
-            AdvertisedServices;
-        {ok, #{timer_ref := TimerRef}} ->
-            erlang:cancel_timer(TimerRef),
-            ?LOG_DEBUG("Cancelled re-advertisement timer for ~s", [Procedure]),
-            maps:remove(Procedure, AdvertisedServices)
-    end.
+    FindResult = maps:find(Procedure, AdvertisedServices),
+    do_cancel_timer(FindResult, Procedure, AdvertisedServices).
+
+%% @private Service not found
+do_cancel_timer(error, _Procedure, AdvertisedServices) ->
+    AdvertisedServices;
+%% @private Service found - cancel timer and remove
+do_cancel_timer({ok, #{timer_ref := TimerRef}}, Procedure, AdvertisedServices) ->
+    erlang:cancel_timer(TimerRef),
+    ?LOG_DEBUG("Cancelled re-advertisement timer for ~s", [Procedure]),
+    maps:remove(Procedure, AdvertisedServices).
+
+%% @private Service was unadvertised before timer fired
+do_readvertise(undefined, Procedure, State) ->
+    ?LOG_WARNING("Re-advertisement timer fired for unadvertised service: ~s", [Procedure]),
+    {noreply, State};
+%% @private Re-publish service to DHT and reschedule timer
+do_readvertise(#{metadata := Metadata, ttl := TTL} = ServiceInfo, Procedure, State) ->
+    ?LOG_DEBUG("Re-advertising service ~s", [Procedure]),
+
+    %% Compute service key and value
+    ServiceKey = crypto:hash(sha256, Procedure),
+    ServiceValue = #{
+        node_id => State#state.node_id,
+        endpoint => State#state.url,
+        metadata => Metadata,
+        ttl => TTL
+    },
+
+    %% Send STORE to DHT (best effort)
+    ConnMgrPid = State#state.connection_manager_pid,
+    send_store_to_dht(ConnMgrPid, ServiceKey, ServiceValue, Procedure, State),
+
+    %% Reschedule timer
+    ReadvInterval = max(10, TTL - 60) * 1000,
+    erlang:cancel_timer(maps:get(timer_ref, ServiceInfo)),
+    NewTimerRef = erlang:send_after(ReadvInterval, self(), {readvertise, Procedure}),
+    ?LOG_DEBUG("Rescheduled re-advertisement for ~s in ~p seconds",
+              [Procedure, ReadvInterval div 1000]),
+
+    %% Update timer_ref in state
+    UpdatedServiceInfo = ServiceInfo#{timer_ref => NewTimerRef},
+    AdvertisedServices = State#state.advertised_services,
+    AdvertisedServices2 = AdvertisedServices#{Procedure => UpdatedServiceInfo},
+    State2 = State#state{advertised_services = AdvertisedServices2},
+
+    {noreply, State2}.
+
+%% @private No expired services removed
+log_cleanup_result(0) ->
+    ?LOG_DEBUG("Service cleanup: no expired services");
+%% @private N expired services removed
+log_cleanup_result(N) ->
+    ?LOG_INFO("Service cleanup: removed ~p expired service(s)", [N]).
 
 %% @doc Cancel existing advertisement timer when re-advertising.
 -spec cancel_existing_advertisement(binary(), map()) -> ok.
 cancel_existing_advertisement(Procedure, AdvertisedServices) ->
-    case maps:is_key(Procedure, AdvertisedServices) of
-        true ->
-            ?LOG_WARNING("Service ~s already advertised, updating", [Procedure]),
-            #{timer_ref := OldTimerRef} = maps:get(Procedure, AdvertisedServices),
-            erlang:cancel_timer(OldTimerRef),
-            ok;
-        false ->
-            ok
-    end.
+    ServiceInfo = maps:get(Procedure, AdvertisedServices, undefined),
+    do_cancel_existing_advertisement(ServiceInfo, Procedure).
+
+%% @private Service not found - nothing to cancel
+do_cancel_existing_advertisement(undefined, _Procedure) ->
+    ok;
+%% @private Service found - cancel old timer and log warning
+do_cancel_existing_advertisement(#{timer_ref := OldTimerRef}, Procedure) ->
+    ?LOG_WARNING("Service ~s already advertised, updating", [Procedure]),
+    erlang:cancel_timer(OldTimerRef),
+    ok.

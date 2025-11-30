@@ -63,27 +63,25 @@ put_with_timestamp(Cache, Uri, Args, Result, TTL, Timestamp) ->
 -spec get(cache(), binary(), map()) -> {ok, term(), cache()} | not_found.
 get(Cache, Uri, Args) ->
     Key = make_key(Uri, Args),
+    CacheResult = macula_cache:get(Cache, Key),
+    do_cache_get(CacheResult, Cache, Key).
 
-    case macula_cache:get(Cache, Key) of
-        {ok, Value, TempCache} ->
-            %% Check if expired
-            Result = maps:get(result, Value),
+%% @private Cache miss
+do_cache_get(not_found, _Cache, _Key) ->
+    not_found;
+%% @private Cache hit - check expiration
+do_cache_get({ok, Value, TempCache}, Cache, Key) ->
+    Result = maps:get(result, Value),
+    Expired = is_value_expired(Value, TempCache, Key),
+    return_if_valid(Expired, Result, TempCache, Cache, Key).
 
-            case is_value_expired(Value, TempCache, Key) of
-                true ->
-                    %% Entry expired, remove it
-                    _UpdatedCache = macula_cache:remove(Cache, Key),
-                    not_found;
-
-                false ->
-                    %% Valid entry, return it
-                    %% Note: TempCache already has entry moved to front
-                    {ok, Result, TempCache}
-            end;
-
-        not_found ->
-            not_found
-    end.
+%% @private Entry expired - remove and return not_found
+return_if_valid(true, _Result, _TempCache, Cache, Key) ->
+    _UpdatedCache = macula_cache:remove(Cache, Key),
+    not_found;
+%% @private Valid entry - return it
+return_if_valid(false, Result, TempCache, _Cache, _Key) ->
+    {ok, Result, TempCache}.
 
 %% @doc Invalidate (remove) entry.
 -spec invalidate(cache(), binary(), map()) -> cache().

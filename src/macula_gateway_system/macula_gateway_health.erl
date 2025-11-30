@@ -18,6 +18,7 @@
 -behaviour(gen_server).
 
 -include("macula_config.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 %% API
 -export([
@@ -78,7 +79,7 @@ set_ready(Ready) ->
 init(Opts) ->
     Port = proplists:get_value(health_port, Opts, ?DEFAULT_HEALTH_PORT),
 
-    io:format("Starting health check server on port ~p~n", [Port]),
+    ?LOG_INFO("Starting health check server on port ~p", [Port]),
 
     case gen_tcp:listen(Port, [
         {active, false},
@@ -89,7 +90,7 @@ init(Opts) ->
             %% Start accepting connections
             spawn_link(fun() -> accept_loop(ListenSocket) end),
 
-            io:format("Health check server listening on port ~p~n", [Port]),
+            ?LOG_INFO("Health check server listening on port ~p", [Port]),
 
             State = #state{
                 port = Port,
@@ -101,7 +102,7 @@ init(Opts) ->
             {ok, State};
 
         {error, Reason} ->
-            io:format("Failed to start health server: ~p~n", [Reason]),
+            ?LOG_ERROR("Failed to start health server: ~p", [Reason]),
             {stop, {health_server_failed, Reason}}
     end.
 
@@ -145,7 +146,7 @@ accept_loop(ListenSocket) ->
         {error, closed} ->
             ok;
         {error, Reason} ->
-            io:format("Accept error: ~p~n", [Reason]),
+            ?LOG_WARNING("Accept error: ~p", [Reason]),
             timer:sleep(1000),
             accept_loop(ListenSocket)
     end.

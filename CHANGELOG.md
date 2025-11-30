@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.4] - 2025-11-30
+
+### 📚 Documentation Fixes
+
+Fixed all broken links in hexdocs documentation, reducing ex_doc warnings from 80+ to 0.
+
+### Fixed
+
+- **Documentation broken links** - Fixed 77 broken links across 13 documentation files
+  - Removed links to planned-but-never-created docs (`macula_http3_mesh_*.md`)
+  - Fixed relative paths for ex_doc (which flattens directories)
+  - Updated See Also sections with valid cross-references
+  - Converted root-level doc references to plain text where ex_doc path resolution fails
+
+- **ex_doc configuration** - Fixed `{main, "readme"}` → `{main, "overview"}` to match generated filename
+
+### Files Updated
+
+| File | Fixes |
+|------|-------|
+| `docs/developer/DEVELOPMENT.md` | Fixed relative paths, removed non-existent refs |
+| `docs/developer/RPC_GUIDE.md` | Replaced broken See Also links |
+| `docs/user/HELLO_WORLD.md` | Fixed prerequisite and Next Steps links |
+| `docs/user/QUICK_START.md` | Fixed Learn More section |
+| `docs/guides/NAT_TYPES_EXPLAINED.md` | Removed broken roadmap/config links |
+| `docs/guides/NAT_TRAVERSAL_DEVELOPER_GUIDE.md` | Simplified See Also section |
+| `docs/business/WHY_DECENTRALIZED.md` | Replaced WHY_BEAM.md with Glossary |
+| `docs/business/USE_CASES.md` | Fixed architecture link |
+| `docs/GLOSSARY.md` | Changed ReckonDB link to plain text |
+| `README.md` | Changed DHT doc link to DHT_GUIDE.md |
+| `GETTING_STARTED.md` | Fixed operator guide link |
+| `docs/operator/MONITORING_GUIDE.md` | Removed broken QUIC_TLS link |
+| `CHANGELOG.md` | Fixed hidden function reference |
+
+---
+
 ## [0.10.1] - 2025-11-26
 
 ### 🚀 Performance Optimizations & Documentation Release
@@ -497,10 +533,10 @@ This is a critical bug fix release for TLS certificate generation.
 
 - **CRITICAL: TLS certificate path handling** (`macula_tls.erl:280`)
   - Fixed ArgumentError when auto-generating TLS certificates
-  - Issue: `ensure_parent_dir/1` tried to concatenate binary string with charlist `"/"`
+  - Issue: The `ensure_parent_dir` function tried to concatenate binary string with charlist `"/"`
   - Solution: Use `filename:join/2` to handle both binary and list paths correctly
   - Affects: All deployments using auto-generated TLS certificates (most common case)
-  - Symptom: Container crashes on startup with `ArgumentError` in `macula_tls:ensure_parent_dir/1`
+  - Symptom: Container crashes on startup with ArgumentError in the `ensure_parent_dir` function
 
 ### Test Results
 

@@ -26,15 +26,12 @@
 decode(Binary) when byte_size(Binary) < ?HEADER_SIZE ->
     {error, invalid_header};
 
-decode(<<Version:8, TypeId:8, _Flags:8, _Reserved:8,
+decode(<<?PROTOCOL_VERSION:8, TypeId:8, _Flags:8, _Reserved:8,
          PayloadLen:32/big-unsigned, Rest/binary>>) ->
-    %% Validate version
-    case Version of
-        ?PROTOCOL_VERSION ->
-            decode_with_type(TypeId, PayloadLen, Rest);
-        Other ->
-            {error, {unsupported_version, Other}}
-    end.
+    decode_with_type(TypeId, PayloadLen, Rest);
+decode(<<Version:8, _TypeId:8, _Flags:8, _Reserved:8,
+         _PayloadLen:32/big-unsigned, _Rest/binary>>) ->
+    {error, {unsupported_version, Version}}.
 
 %%%===================================================================
 %%% Internal Functions
@@ -43,31 +40,30 @@ decode(<<Version:8, TypeId:8, _Flags:8, _Reserved:8,
 %% @doc Decode payload with known type ID.
 -spec decode_with_type(byte(), non_neg_integer(), binary()) ->
     {ok, {atom(), map()}} | {error, term()}.
+decode_with_type(_TypeId, PayloadLen, Payload) when byte_size(Payload) < PayloadLen ->
+    {error, incomplete_payload};
 decode_with_type(TypeId, PayloadLen, Payload) ->
-    %% Validate we have enough payload
-    case byte_size(Payload) of
-        ActualLen when ActualLen < PayloadLen ->
-            {error, incomplete_payload};
-        _ ->
-            %% Extract exact payload
-            <<PayloadBytes:PayloadLen/binary, _Rest/binary>> = Payload,
+    <<PayloadBytes:PayloadLen/binary, _Rest/binary>> = Payload,
+    TypeResult = macula_protocol_types:message_type_name(TypeId),
+    do_decode_with_type(TypeResult, TypeId, PayloadBytes).
 
-            %% Get message type name
-            case macula_protocol_types:message_type_name(TypeId) of
-                {ok, Type} ->
-                    decode_payload(Type, PayloadBytes);
-                {error, unknown_type} ->
-                    {error, {unknown_type, TypeId}}
-            end
-    end.
+%% @private Type lookup succeeded
+do_decode_with_type({ok, Type}, _TypeId, PayloadBytes) ->
+    decode_payload(Type, PayloadBytes);
+%% @private Type lookup failed
+do_decode_with_type({error, unknown_type}, TypeId, _PayloadBytes) ->
+    {error, {unknown_type, TypeId}}.
 
 %% @doc Decode MessagePack payload.
 %% Returns {error, Reason} for invalid msgpack data.
 -spec decode_payload(atom(), binary()) -> {ok, {atom(), map()}} | {error, term()}.
 decode_payload(Type, PayloadBytes) ->
-    case msgpack:unpack(PayloadBytes, [{map_format, map}]) of
-        {ok, Msg} ->
-            {ok, {Type, Msg}};
-        {error, Reason} ->
-            {error, {msgpack_decode_error, Reason}}
-    end.
+    UnpackResult = msgpack:unpack(PayloadBytes, [{map_format, map}]),
+    do_decode_payload(UnpackResult, Type).
+
+%% @private Unpack succeeded
+do_decode_payload({ok, Msg}, Type) ->
+    {ok, {Type, Msg}};
+%% @private Unpack failed
+do_decode_payload({error, Reason}, _Type) ->
+    {error, {msgpack_decode_error, Reason}}.

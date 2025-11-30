@@ -1,0 +1,103 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_rpc_failover</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_rpc_failover</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+RPC Failover Strategy Module.
+
+
+<h2><a name="description">Description</a></h2><p>   
+RPC Failover Strategy Module</p>
+  
+   <p>Encapsulates failover logic for RPC calls:   
+- Determines if a call should be retried after failure   
+- Manages provider exclusion list (failed providers)   
+- Tracks attempt counts against max attempts   
+- Provides retry decisions based on failure type</p>
+  
+   Extracted from macula_rpc_handler.erl (Dec 2025) to improve testability
+   and separation of concerns.
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-failover_context">failover_context()</a></h3>
+<p><code>failover_context() = #{procedure := binary(), args := term(), opts := map(), providers := [map()], excluded := [binary()], attempt := pos_integer(), max_attempts := pos_integer(), tried_node_id =&gt; binary() | undefined}</code></p>
+
+
+<h3 class="typedecl"><a name="type-failure_reason">failure_reason()</a></h3>
+<p><code>failure_reason() = timeout | connection_error | provider_error | gateway_timeout</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#can_retry-1">can_retry/1</a></td><td>Check if the call can be retried based on current context.</td></tr>
+<tr><td valign="top"><a href="#get_attempt_count-1">get_attempt_count/1</a></td><td>Get current attempt count.</td></tr>
+<tr><td valign="top"><a href="#get_available_providers-1">get_available_providers/1</a></td><td>Get list of providers that haven't been excluded.</td></tr>
+<tr><td valign="top"><a href="#increment_attempt-1">increment_attempt/1</a></td><td>Increment the attempt counter.</td></tr>
+<tr><td valign="top"><a href="#mark_provider_failed-2">mark_provider_failed/2</a></td><td>Mark a provider as failed and add to exclusion list.</td></tr>
+<tr><td valign="top"><a href="#new_context-4">new_context/4</a></td><td>Create a new failover context for an RPC call.</td></tr>
+<tr><td valign="top"><a href="#should_failover-2">should_failover/2</a></td><td>Determine if failover should be attempted for a given failure reason.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="can_retry-1">can_retry/1</a></h3>
+<div class="spec">
+<p><code>can_retry(Context::<a href="#type-failover_context" docgen-rel="seetype" docgen-href="#failover_context/0">failover_context()</a>) -&gt; boolean()</code><br></p>
+<p> </p>
+</div><p>Check if the call can be retried based on current context.
+  Returns true if there are available providers and max attempts not exceeded.</p>
+
+<h3 class="function"><a name="get_attempt_count-1">get_attempt_count/1</a></h3>
+<div class="spec">
+<p><code>get_attempt_count(X1::<a href="#type-failover_context" docgen-rel="seetype" docgen-href="#failover_context/0">failover_context()</a>) -&gt; pos_integer()</code><br></p>
+<p> </p>
+</div><p>Get current attempt count.</p>
+
+<h3 class="function"><a name="get_available_providers-1">get_available_providers/1</a></h3>
+<div class="spec">
+<p><code>get_available_providers(X1::<a href="#type-failover_context" docgen-rel="seetype" docgen-href="#failover_context/0">failover_context()</a>) -&gt; [map()]</code><br></p>
+<p> </p>
+</div><p>Get list of providers that haven't been excluded.
+  Filters out all previously failed providers.</p>
+
+<h3 class="function"><a name="increment_attempt-1">increment_attempt/1</a></h3>
+<div class="spec">
+<p><code>increment_attempt(Context::<a href="#type-failover_context" docgen-rel="seetype" docgen-href="#failover_context/0">failover_context()</a>) -&gt; <a href="#type-failover_context" docgen-rel="seetype" docgen-href="#failover_context/0">failover_context()</a></code><br></p>
+<p> </p>
+</div><p>Increment the attempt counter.
+  Call this before each retry attempt.</p>
+
+<h3 class="function"><a name="mark_provider_failed-2">mark_provider_failed/2</a></h3>
+<div class="spec">
+<p><code>mark_provider_failed(NodeId::binary() | undefined, Context::<a href="#type-failover_context" docgen-rel="seetype" docgen-href="#failover_context/0">failover_context()</a>) -&gt; <a href="#type-failover_context" docgen-rel="seetype" docgen-href="#failover_context/0">failover_context()</a></code><br></p>
+<p> </p>
+</div><p>Mark a provider as failed and add to exclusion list.
+  Returns updated context with provider added to excluded list.</p>
+
+<h3 class="function"><a name="new_context-4">new_context/4</a></h3>
+<div class="spec">
+<p><code>new_context(Procedure::binary(), Args::term(), Opts::map(), Providers::[map()]) -&gt; <a href="#type-failover_context" docgen-rel="seetype" docgen-href="#failover_context/0">failover_context()</a></code><br></p>
+<p> </p>
+</div><p>Create a new failover context for an RPC call.
+  Used when initiating a call that might need failover.
+  max_attempts is capped at provider count (can't try more providers than exist).</p>
+
+<h3 class="function"><a name="should_failover-2">should_failover/2</a></h3>
+<div class="spec">
+<p><code>should_failover(X1::<a href="#type-failure_reason" docgen-rel="seetype" docgen-href="#failure_reason/0">failure_reason()</a>, Context::<a href="#type-failover_context" docgen-rel="seetype" docgen-href="#failover_context/0">failover_context()</a>) -&gt; boolean()</code><br></p>
+<p> </p>
+</div><p>Determine if failover should be attempted for a given failure reason.
+  Some failures are not retryable (e.g., invalid procedure).</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

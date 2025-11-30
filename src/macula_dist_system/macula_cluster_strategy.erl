@@ -5,42 +5,16 @@
 %%% decentralized discovery (DHT/mDNS) instead of EPMD. It can be used
 %%% with libcluster in Elixir or standalone in Erlang.
 %%%
-%%% == Integration with libcluster (Elixir) ==
+%%% Integration: Works with libcluster (Elixir) or standalone (Erlang).
 %%%
-%%% In config.exs:
-%%% ```
-%%% config :libcluster,
-%%%   topologies: [
-%%%     macula: [
-%%%       strategy: Cluster.Strategy.Macula,
-%%%       config: [
-%%%         realm: "my-app.local",
-%%%         discovery_type: :mdns  # or :dht
-%%%       ]
-%%%     ]
-%%%   ]
-%%% ```
+%%% Discovery Modes:
+%%%   mdns - Local network discovery via mDNS (no bootstrap needed)
+%%%   dht - Internet-scale discovery via Macula DHT
+%%%   both - Try mDNS first, fall back to DHT
 %%%
-%%% == Standalone Usage (Erlang) ==
+%%% Configuration: topology, realm, discovery_type
 %%%
-%%% ```
-%%% {ok, _} = macula_cluster_strategy:start_link(#{
-%%%     topology => my_topology,
-%%%     config => #{
-%%%         realm => <<"my-app.local">>,
-%%%         discovery_type => both
-%%%     }
-%%% }).
-%%% ```
-%%%
-%%% == Discovery Modes ==
-%%%
-%%% - `mdns` - Local network discovery via mDNS (no bootstrap needed)
-%%% - `dht` - Internet-scale discovery via Macula DHT
-%%% - `both` - Try mDNS first, fall back to DHT
-%%%
-%%% @copyright 2025 Macula.io
-%%% @license Apache-2.0
+%%% @copyright 2025 Macula.io Apache-2.0
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_cluster_strategy).

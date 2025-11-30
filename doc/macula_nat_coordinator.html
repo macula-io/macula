@@ -1,0 +1,145 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_nat_coordinator</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_nat_coordinator</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+NAT Hole Punch Coordinator.
+
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>   
+NAT Hole Punch Coordinator.</p>
+  
+   <p>Coordinates hole punching between two NATted peers using   
+NATCracker-informed strategies. Determines the optimal connection   
+approach based on both peers' NAT profiles:</p>
+  
+   <p>Connection Strategy Decision Tree:   
+1. Direct Connection - Possible when:      
+- Either peer has public IP (no NAT)      
+- Target has EI mapping + EI filtering (Full Cone)</p>
+  
+   <p>2. Hole Punching - Possible when:      
+- Both peers have EI or HD mapping (predictable external address)      
+- At least one has PP or PC allocation (predictable ports)      
+- Neither has PD mapping + PD filtering + RD allocation</p>
+  
+   <p>3. Relay Required - When:      
+- Either peer has symmetric NAT (PD+PD+RD)      
+- Hole punching attempts fail</p>
+  
+   Hole Punch Coordination Protocol:
+   1. Initiator sends PUNCH_REQUEST to coordinator (any public-IP peer)
+   2. Coordinator fetches both peers' NAT profiles from DHT
+   3. Coordinator sends PUNCH_COORDINATE to both peers with timing info
+   4. Both peers send PUNCH_EXECUTE at coordinated time
+   5. Coordinator receives PUNCH_RESULT from both peers
+   6. If failed, falls back to relay
+  
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-connection_strategy">connection_strategy()</a></h3>
+<p><code>connection_strategy() = direct | hole_punch | relay</code></p>
+
+
+<h3 class="typedecl"><a name="type-punch_session">punch_session()</a></h3>
+<p><code>punch_session() = #{session_id := binary(), initiator_id := binary(), target_id := binary(), initiator_profile := <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_nat_cache.html#type-nat_profile" docgen-rel="seetype" docgen-href="macula:macula_nat_cache#nat_profile/0">macula_nat_cache:nat_profile()</a> | undefined, target_profile := <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_nat_cache.html#type-nat_profile" docgen-rel="seetype" docgen-href="macula:macula_nat_cache#nat_profile/0">macula_nat_cache:nat_profile()</a> | undefined, strategy := <a href="#type-connection_strategy" docgen-rel="seetype" docgen-href="#connection_strategy/0">connection_strategy()</a>, state := pending | coordinating | executing | completed | failed, attempts := non_neg_integer(), created_at := integer(), result =&gt; success | timeout | unreachable}</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#coordinate_punch-3">coordinate_punch/3</a></td><td>Coordinate a hole punch between two peers.</td></tr>
+<tr><td valign="top"><a href="#get_pending-0">get_pending/0</a></td><td>Get all pending punch sessions (for debugging).</td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#report_result-3">report_result/3</a></td><td>Report result of a hole punch attempt.</td></tr>
+<tr><td valign="top"><a href="#request_connection-2">request_connection/2</a></td><td>Request a connection to a target peer.</td></tr>
+<tr><td valign="top"><a href="#request_connection-3">request_connection/3</a></td><td>Request connection with options.</td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td>Start the NAT coordinator server.</td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="coordinate_punch-3">coordinate_punch/3</a></h3>
+<div class="spec">
+<p><code>coordinate_punch(InitiatorId::binary(), TargetId::binary(), Opts::map()) -&gt; ok | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Coordinate a hole punch between two peers.
+  Called by a public-IP peer acting as coordinator.</p>
+
+<h3 class="function"><a name="get_pending-0">get_pending/0</a></h3>
+<div class="spec">
+<p><code>get_pending() -&gt; [<a href="#type-punch_session" docgen-rel="seetype" docgen-href="#punch_session/0">punch_session()</a>]</code><br></p>
+<p> </p>
+</div><p>Get all pending punch sessions (for debugging).</p>
+
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="report_result-3">report_result/3</a></h3>
+<div class="spec">
+<p><code>report_result(SessionId::binary(), ReporterId::binary(), Result::success | failure) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Report result of a hole punch attempt.</p>
+
+<h3 class="function"><a name="request_connection-2">request_connection/2</a></h3>
+<div class="spec">
+<p><code>request_connection(InitiatorId::binary(), TargetId::binary()) -&gt; {ok, <a href="#type-connection_strategy" docgen-rel="seetype" docgen-href="#connection_strategy/0">connection_strategy()</a>, binary()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Request a connection to a target peer.
+  Returns the recommended strategy and session ID for tracking.</p>
+
+<h3 class="function"><a name="request_connection-3">request_connection/3</a></h3>
+<div class="spec">
+<p><code>request_connection(InitiatorId::binary(), TargetId::binary(), Opts::map()) -&gt; {ok, <a href="#type-connection_strategy" docgen-rel="seetype" docgen-href="#connection_strategy/0">connection_strategy()</a>, binary()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Request connection with options.</p>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Opts::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the NAT coordinator server.</p>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

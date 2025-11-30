@@ -126,6 +126,55 @@ validate_message(nat_probe_reply, Msg) ->
         {_, true} -> #{<<"node_id">> := _, <<"reflexive_ip">> := _, <<"reflexive_port">> := _, <<"server_time">> := _} = Msg
     end,
     ok;
+validate_message(punch_request, Msg) ->
+    %% Punch request: session_id, requester_id, target_id
+    case {maps:is_key(session_id, Msg), maps:is_key(<<"session_id">>, Msg)} of
+        {true, _} -> #{session_id := _, requester_id := _, target_id := _} = Msg;
+        {_, true} -> #{<<"session_id">> := _, <<"requester_id">> := _, <<"target_id">> := _} = Msg
+    end,
+    ok;
+validate_message(punch_coordinate, Msg) ->
+    %% Punch coordinate: session_id, peer_id, peer_host, peer_ports, punch_time, role
+    case {maps:is_key(session_id, Msg), maps:is_key(<<"session_id">>, Msg)} of
+        {true, _} -> #{session_id := _, peer_id := _, peer_host := _, peer_ports := _, punch_time := _, role := _} = Msg;
+        {_, true} -> #{<<"session_id">> := _, <<"peer_id">> := _, <<"peer_host">> := _, <<"peer_ports">> := _, <<"punch_time">> := _, <<"role">> := _} = Msg
+    end,
+    ok;
+validate_message(punch_result, Msg) ->
+    %% Punch result: session_id, success (connected_port is optional)
+    case {maps:is_key(session_id, Msg), maps:is_key(<<"session_id">>, Msg)} of
+        {true, _} -> #{session_id := _, success := _} = Msg;
+        {_, true} -> #{<<"session_id">> := _, <<"success">> := _} = Msg
+    end,
+    ok;
+validate_message(relay_request, Msg) ->
+    %% Relay request: session_id, target_id (reason is optional)
+    case {maps:is_key(session_id, Msg), maps:is_key(<<"session_id">>, Msg)} of
+        {true, _} -> #{session_id := _, target_id := _} = Msg;
+        {_, true} -> #{<<"session_id">> := _, <<"target_id">> := _} = Msg
+    end,
+    ok;
+validate_message(relay_data, Msg) ->
+    %% Relay data: session_id, payload
+    case {maps:is_key(session_id, Msg), maps:is_key(<<"session_id">>, Msg)} of
+        {true, _} -> #{session_id := _, payload := _} = Msg;
+        {_, true} -> #{<<"session_id">> := _, <<"payload">> := _} = Msg
+    end,
+    ok;
+validate_message(rpc_request, Msg) ->
+    %% NATS-style async RPC request
+    case {maps:is_key(request_id, Msg), maps:is_key(<<"request_id">>, Msg)} of
+        {true, _} -> #{request_id := _, procedure := _, args := _, from_node := _} = Msg;
+        {_, true} -> #{<<"request_id">> := _, <<"procedure">> := _, <<"args">> := _, <<"from_node">> := _} = Msg
+    end,
+    ok;
+validate_message(rpc_reply, Msg) ->
+    %% NATS-style async RPC reply
+    case {maps:is_key(request_id, Msg), maps:is_key(<<"request_id">>, Msg)} of
+        {true, _} -> #{request_id := _, from_node := _} = Msg;
+        {_, true} -> #{<<"request_id">> := _, <<"from_node">> := _} = Msg
+    end,
+    ok;
 validate_message(_Type, _Msg) ->
     %% For message types not yet validated, allow anything
     ok.

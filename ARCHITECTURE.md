@@ -20,37 +20,39 @@
 
 **How applications use Macula to build distributed systems**
 
-```mermaid
-graph TB
-    subgraph "Your Application"
-        App[Elixir/Erlang Application]
-    end
-
-    subgraph "Macula Platform"
-        Peer[macula_peer<br/>Mesh Participant API]
-        Gateway[macula_gateway<br/>Relay Node]
-        DHT[Distributed Hash Table<br/>Service Discovery]
-    end
-
-    subgraph "Other Nodes"
-        Remote1[Remote Service 1]
-        Remote2[Remote Service 2]
-        Remote3[Remote Subscriber]
-    end
-
-    App -->|start_link<br/>publish<br/>subscribe<br/>call<br/>advertise| Peer
-    Peer -->|QUIC/HTTP3| Gateway
-    Peer -.->|Direct P2P| Remote1
-    Peer -.->|Direct P2P| Remote2
-    Gateway -->|Relay| Remote3
-
-    Peer <-->|Query| DHT
-    Gateway <-->|Store/Find| DHT
-
-    style Peer fill:#4CAF50
-    style Gateway fill:#2196F3
-    style DHT fill:#FF9800
-    style App fill:#9C27B0
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              YOUR APPLICATION                                 │
+│                       ┌─────────────────────────────┐                        │
+│                       │  Elixir/Erlang Application  │                        │
+│                       └─────────────┬───────────────┘                        │
+│                                     │                                         │
+│                          start_link │ publish                                │
+│                          subscribe  │ call                                   │
+│                          advertise  │                                         │
+└──────────────────────────────────────┼────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              MACULA PLATFORM                                  │
+│                                                                               │
+│   ┌──────────────────┐       ┌──────────────────┐      ┌─────────────────┐  │
+│   │   macula_peer    │       │  macula_gateway  │      │       DHT       │  │
+│   │ Mesh Participant │       │   Relay Node     │      │    Kademlia     │  │
+│   │       API        │       │                  │      │   Discovery     │  │
+│   └────────┬─────────┘       └────────┬─────────┘      └────────┬────────┘  │
+│            │                          │                         │            │
+│            └───────QUIC/HTTP3─────────┤◄────────Store/Find──────┘            │
+│                                       │                                       │
+└───────────────────────────────────────┼───────────────────────────────────────┘
+                                        │
+       ┌────────────────────────────────┼────────────────────────────────┐
+       │                                │                                │
+       ▼ Direct P2P                     ▼ Relay                         ▼ Direct P2P
+┌──────────────┐               ┌──────────────┐                ┌──────────────┐
+│   Remote     │               │   Remote     │                │   Remote     │
+│  Service 1   │               │ Subscriber   │                │  Service 2   │
+└──────────────┘               └──────────────┘                └──────────────┘
 ```
 
 **Key Concepts:**
@@ -65,61 +67,58 @@ graph TB
 
 **Internal architecture of a Macula node**
 
-```mermaid
-graph TB
-    subgraph "Application Layer"
-        App[Your Application Code]
-    end
-
-    subgraph "Macula Peer (High-Level API)"
-        Peer[macula_peer<br/>Facade/Coordinator]
-
-        subgraph "Supervised Children"
-            Conn[macula_connection<br/>QUIC Transport]
-            PSH[macula_pubsub_handler<br/>Pub/Sub Logic]
-            RPC[macula_rpc_handler<br/>RPC Logic]
-            ADV[macula_advertisement_manager<br/>DHT Ads]
-        end
-    end
-
-    subgraph "Gateway (Optional Relay)"
-        GW[macula_gateway<br/>Coordinator]
-
-        subgraph "Gateway Workers"
-            Clients[macula_gateway_client_manager<br/>Client Lifecycle]
-            GWPS[macula_gateway_pubsub<br/>Message Routing]
-            GWRPC[macula_gateway_rpc<br/>Handler Registry]
-            Mesh[macula_gateway_mesh<br/>Connection Pool]
-        end
-    end
-
-    subgraph "Core Services"
-        Routing[macula_routing_server<br/>DHT Node]
-        Service[macula_service_registry<br/>Service Store]
-        PubSubDHT[macula_pubsub_dht<br/>Subscriber Discovery]
-    end
-
-    App -->|API Calls| Peer
-    Peer --> Conn
-    Peer --> PSH
-    Peer --> RPC
-    Peer --> ADV
-
-    Conn -.->|QUIC| GW
-    GW --> Clients
-    GW --> GWPS
-    GW --> GWRPC
-    GW --> Mesh
-
-    PSH --> PubSubDHT
-    RPC --> Service
-    ADV --> Service
-    Service --> Routing
-    PubSubDHT --> Routing
-
-    style Peer fill:#4CAF50
-    style GW fill:#2196F3
-    style Routing fill:#FF9800
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           APPLICATION LAYER                                  │
+│                    ┌──────────────────────────┐                             │
+│                    │   Your Application Code   │                             │
+│                    └────────────┬─────────────┘                             │
+└─────────────────────────────────┼───────────────────────────────────────────┘
+                                  │ API Calls
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      MACULA PEER (High-Level API)                           │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                macula_peer (Facade/Coordinator)                     │    │
+│  └────────────────────────────────┬───────────────────────────────────┘    │
+│                                   │                                         │
+│  ┌──────────────── SUPERVISED CHILDREN ─────────────────────────────┐      │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐│      │
+│  │  │ macula_     │ │ macula_     │ │ macula_     │ │ macula_     ││      │
+│  │  │ connection  │ │ pubsub_     │ │ rpc_        │ │ advertisement││      │
+│  │  │ (QUIC)      │ │ handler     │ │ handler     │ │ _manager    ││      │
+│  │  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └──────┬──────┘│      │
+│  └─────────┼───────────────┼───────────────┼───────────────┼────────┘      │
+└────────────┼───────────────┼───────────────┼───────────────┼────────────────┘
+             │               │               │               │
+             │ QUIC          │               │               │
+             ▼               ▼               ▼               ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      GATEWAY (Optional Relay Node)                          │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                macula_gateway (Coordinator)                         │    │
+│  └────────────────────────────────┬───────────────────────────────────┘    │
+│                                   │                                         │
+│  ┌──────────────── GATEWAY WORKERS ─────────────────────────────────┐      │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐│      │
+│  │  │ client_     │ │ gateway_    │ │ gateway_    │ │ gateway_    ││      │
+│  │  │ manager     │ │ pubsub      │ │ rpc         │ │ mesh        ││      │
+│  │  │ (Lifecycle) │ │ (Routing)   │ │ (Registry)  │ │ (Pool)      ││      │
+│  │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘│      │
+│  └──────────────────────────────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CORE SERVICES                                   │
+│  ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐         │
+│  │ macula_routing_   │ │ macula_service_   │ │ macula_pubsub_    │         │
+│  │ server (DHT Node) │ │ registry (Store)  │ │ dht (Subscriber)  │         │
+│  └─────────┬─────────┘ └─────────┬─────────┘ └─────────┬─────────┘         │
+│            └───────────────────┬─┴─────────────────────┘                    │
+│                                │                                             │
+│                     Kademlia DHT (k=20 replication)                          │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Architecture Principles:**

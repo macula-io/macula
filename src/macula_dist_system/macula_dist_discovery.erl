@@ -32,8 +32,7 @@
 %%%   %% Receive: {node_discovered, Node, IP, Port}
 %%%   %% Receive: {node_lost, Node}
 %%%
-%%% @copyright 2025 Macula.io
-%%% @license Apache-2.0
+%%% @copyright 2025 Macula.io Apache-2.0
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_dist_discovery).

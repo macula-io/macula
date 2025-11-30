@@ -42,6 +42,8 @@
 
 -behaviour(supervisor).
 
+-include_lib("kernel/include/logger.hrl").
+
 -export([start_link/0]).
 
 -export([init/1]).
@@ -61,21 +63,25 @@ start_link() ->
 %%                  type => worker(),       % optional
 %%                  modules => modules()}   % optional
 init([]) ->
-    io:format("~n"),
-    io:format("═══════════════════════════════════════════════════════════════~n"),
-    io:format("  Starting Macula v0.8.5 (Always-On Architecture)~n"),
-    io:format("  All capabilities enabled: Bootstrap + Gateway + Peer~n"),
-    io:format("═══════════════════════════════════════════════════════════════~n"),
-    io:format("~n"),
+    ?LOG_INFO(""),
+    ?LOG_INFO("═══════════════════════════════════════════════════════════════"),
+    ?LOG_INFO("  Starting Macula v0.8.5 (Always-On Architecture)"),
+    ?LOG_INFO("  All capabilities enabled: Bootstrap + Gateway + Peer"),
+    ?LOG_INFO("═══════════════════════════════════════════════════════════════"),
+    ?LOG_INFO(""),
 
     %% Ensure TLS certificates exist (auto-generate if missing)
     {CertPath, KeyPath} = macula_tls:get_cert_paths(),
-    {ok, _CertPath, _KeyPath, NodeID} = macula_tls:ensure_cert_exists(CertPath, KeyPath),
+    {ok, _CertPath, _KeyPath, TlsNodeID} = macula_tls:ensure_cert_exists(CertPath, KeyPath),
 
-    io:format("✓ TLS Certificate: ~s~n", [CertPath]),
-    io:format("✓ Private Key: ~s~n", [KeyPath]),
-    io:format("✓ Node ID: ~s~n", [NodeID]),
-    io:format("~n"),
+    %% Use NODE_ID from environment if available, otherwise use TLS-derived ID
+    %% NODE_ID env var is used by applications like ping_pong for peer addressing
+    NodeID = get_node_id_from_env_or_tls(TlsNodeID),
+
+    ?LOG_INFO("✓ TLS Certificate: ~s", [CertPath]),
+    ?LOG_INFO("✓ Private Key: ~s", [KeyPath]),
+    ?LOG_INFO("✓ Node ID: ~s (source: ~s)", [NodeID, case os:getenv("NODE_ID") of false -> "TLS"; _ -> "NODE_ID env" end]),
+    ?LOG_INFO(""),
 
     %% Get configuration
     Port = get_quic_port(),
@@ -85,16 +91,16 @@ init([]) ->
 
     BootstrapPeers = get_bootstrap_peers(),
 
-    io:format("Configuration:~n"),
-    io:format("  QUIC Port: ~p~n", [Port]),
-    io:format("  Realm: ~s~n", [Realm]),
-    io:format("  Health Port: ~p~n", [HealthPort]),
-    io:format("  Bootstrap Health Interval: ~pms~n", [HealthInterval]),
+    ?LOG_INFO("Configuration:"),
+    ?LOG_INFO("  QUIC Port: ~p", [Port]),
+    ?LOG_INFO("  Realm: ~s", [Realm]),
+    ?LOG_INFO("  Health Port: ~p", [HealthPort]),
+    ?LOG_INFO("  Bootstrap Health Interval: ~pms", [HealthInterval]),
     case BootstrapPeers of
-        [] -> io:format("  Bootstrap Peers: none (this node is a bootstrap peer)~n");
-        _ -> io:format("  Bootstrap Peers: ~s~n", [string:join([binary_to_list(P) || P <- BootstrapPeers], ", ")])
+        [] -> ?LOG_INFO("  Bootstrap Peers: none (this node is a bootstrap peer)");
+        _ -> ?LOG_INFO("  Bootstrap Peers: ~s", [string:join([binary_to_list(P) || P <- BootstrapPeers], ", ")])
     end,
-    io:format("~n"),
+    ?LOG_INFO(""),
 
     SupFlags = #{
         strategy => one_for_one,
@@ -106,39 +112,43 @@ init([]) ->
         %% 1. Core DHT routing (always on)
         get_routing_server_spec(NodeID),
 
-        %% 2. Bootstrap system (always on)
+        %% 2. NAT system (NAT detection, hole punching, relay - always on)
+        get_nat_system_spec(),
+
+        %% 3. Bootstrap system (always on)
         get_bootstrap_system_spec(Realm, HealthInterval),
 
-        %% 3. Gateway system (always on)
+        %% 4. Gateway system (always on)
         get_gateway_system_spec(Port, Realm, HealthPort),
 
-        %% 4. Peer connections supervisor (always on)
+        %% 5. Peer connections supervisor (always on)
         get_peers_sup_spec(),
 
-        %% 5. Peer discovery (DHT-based P2P mesh formation)
+        %% 6. Peer discovery (DHT-based P2P mesh formation)
         get_peer_discovery_spec(NodeID, Port, Realm),
 
-        %% 6. Platform system (distributed coordination - always on)
+        %% 7. Platform system (distributed coordination - always on)
         get_platform_system_spec(NodeID, Realm)
     ],
 
-    io:format("Starting subsystems:~n"),
-    io:format("  [1/6] Core DHT Routing~n"),
-    io:format("  [2/6] Bootstrap System~n"),
-    io:format("  [3/6] Gateway System~n"),
-    io:format("  [4/6] Peers Supervisor~n"),
-    io:format("  [5/6] Peer Discovery (P2P Mesh)~n"),
-    io:format("  [6/6] Platform System (Leader Election + Shared State)~n"),
-    io:format("~n"),
+    ?LOG_INFO("Starting subsystems:"),
+    ?LOG_INFO("  [1/7] Core DHT Routing"),
+    ?LOG_INFO("  [2/7] NAT System (Detection + Hole Punch + Relay)"),
+    ?LOG_INFO("  [3/7] Bootstrap System"),
+    ?LOG_INFO("  [4/7] Gateway System"),
+    ?LOG_INFO("  [5/7] Peers Supervisor"),
+    ?LOG_INFO("  [6/7] Peer Discovery (P2P Mesh)"),
+    ?LOG_INFO("  [7/7] Platform System (Leader Election + Shared State)"),
+    ?LOG_INFO(""),
 
     %% Schedule bootstrap peer connections after supervision tree is up
     case BootstrapPeers of
         [] ->
-            io:format("No bootstrap peers configured - this node is a bootstrap peer~n~n"),
+            ?LOG_INFO("No bootstrap peers configured - this node is a bootstrap peer"),
             ok;
         _ ->
-            io:format("Will connect to bootstrap peers after startup: ~p~n~n", [BootstrapPeers]),
-            spawn(fun() -> connect_to_bootstrap_peers(BootstrapPeers, Realm) end)
+            ?LOG_INFO("Will connect to bootstrap peers after startup: ~p", [BootstrapPeers]),
+            spawn(fun() -> connect_to_bootstrap_peers(BootstrapPeers, Realm, NodeID) end)
     end,
 
     {ok, {SupFlags, ChildSpecs}}.
@@ -155,6 +165,18 @@ get_routing_server_spec(NodeID) ->
         shutdown => 5000,
         type => worker,
         modules => [macula_routing_server]
+    }.
+
+%% @private
+%% @doc Get NAT system child spec (NAT detection, hole punching, relay).
+get_nat_system_spec() ->
+    #{
+        id => macula_nat_system,
+        start => {macula_nat_system, start_link, [#{}]},
+        restart => permanent,
+        shutdown => infinity,  % supervisor shutdown
+        type => supervisor,
+        modules => [macula_nat_system]
     }.
 
 %% @private
@@ -298,6 +320,19 @@ get_hostname() ->
     end.
 
 %% @private
+%% @doc Get node ID from NODE_ID environment variable or fall back to TLS-derived ID.
+%% NODE_ID env var allows applications to set consistent peer identifiers.
+%% This is critical for peer addressing in demos like ping_pong.
+-spec get_node_id_from_env_or_tls(binary()) -> binary().
+get_node_id_from_env_or_tls(TlsNodeId) ->
+    case os:getenv("NODE_ID") of
+        false ->
+            TlsNodeId;
+        NodeIdStr ->
+            list_to_binary(NodeIdStr)
+    end.
+
+%% @private
 %% @doc Get platform system child spec (distributed coordination).
 get_platform_system_spec(NodeID, Realm) ->
     #{
@@ -315,30 +350,34 @@ get_platform_system_spec(NodeID, Realm) ->
 %% @private
 %% @doc Connect to bootstrap peers to join their DHT network.
 %% Waits briefly for supervision tree to stabilize, then initiates connections.
-connect_to_bootstrap_peers(Peers, Realm) ->
+%% NodeID is passed to the peer connection so the gateway stores the stream
+%% under the correct identifier (matching what applications like ping_pong use).
+connect_to_bootstrap_peers(Peers, Realm, NodeID) ->
     %% Wait for supervision tree to fully start
     timer:sleep(2000),
 
-    io:format("[DHT Bootstrap] Connecting to bootstrap peers...~n"),
+    ?LOG_INFO("[DHT Bootstrap] Connecting to ~p bootstrap peers with node_id: ~s...",
+              [length(Peers), NodeID]),
 
     lists:foreach(fun(PeerUrl) ->
-        io:format("[DHT Bootstrap] Connecting to: ~s~n", [PeerUrl]),
+        ?LOG_INFO("[DHT Bootstrap] Connecting to: ~s", [PeerUrl]),
 
         %% Start a peer connection via macula_peers_sup
-        case macula_peers_sup:start_peer(PeerUrl, #{realm => Realm}) of
+        %% Pass node_id so the connection uses this ID in CONNECT message
+        case macula_peers_sup:start_peer(PeerUrl, #{realm => Realm, node_id => NodeID}) of
             {ok, PeerPid} ->
-                io:format("[DHT Bootstrap] Successfully connected to ~s (PID: ~p)~n",
-                         [PeerUrl, PeerPid]),
+                ?LOG_INFO("[DHT Bootstrap] Successfully connected to ~s (PID: ~p, node_id: ~s)",
+                         [PeerUrl, PeerPid, NodeID]),
 
                 %% Add bootstrap peer to routing table for DHT routing
                 add_bootstrap_to_routing_table(PeerUrl);
             {error, Reason} ->
-                io:format("[DHT Bootstrap] Failed to connect to ~s: ~p~n",
+                ?LOG_ERROR("[DHT Bootstrap] Failed to connect to ~s: ~p",
                          [PeerUrl, Reason])
         end
     end, Peers),
 
-    io:format("[DHT Bootstrap] Bootstrap peer connections initiated~n"),
+    ?LOG_INFO("[DHT Bootstrap] Bootstrap peer connections initiated"),
     ok.
 
 %% @private
@@ -360,13 +399,13 @@ add_bootstrap_to_routing_table(PeerUrl) ->
             %% Add to routing table
             case whereis(macula_routing_server) of
                 undefined ->
-                    io:format("[DHT Bootstrap] Routing server not available, skipping routing table add~n");
+                    ?LOG_WARNING("[DHT Bootstrap] Routing server not available, skipping routing table add");
                 RoutingServerPid ->
                     macula_routing_server:add_node(RoutingServerPid, NodeInfo),
-                    io:format("[DHT Bootstrap] Added bootstrap peer ~s to routing table (node_id: ~s)~n",
+                    ?LOG_INFO("[DHT Bootstrap] Added bootstrap peer ~s to routing table (node_id: ~s)",
                              [PeerUrl, binary:encode_hex(NodeId)])
             end;
         _Other ->
-            io:format("[DHT Bootstrap] Failed to parse bootstrap URL: ~s~n", [PeerUrl])
+            ?LOG_ERROR("[DHT Bootstrap] Failed to parse bootstrap URL: ~s", [PeerUrl])
     end,
     ok.

@@ -45,20 +45,12 @@ new_state(Strategy) ->
 -spec select_provider(strategy(), [registration()], [provider_info()]) ->
     {local, registration()} | {remote, provider_info()} | {error, no_provider}.
 select_provider(local_first, LocalHandlers, RemoteProviders) ->
-    case select_local(LocalHandlers) of
-        {ok, Handler} -> {local, Handler};
-        not_found ->
-            case select_remote_random(RemoteProviders) of
-                {ok, Provider} -> {remote, Provider};
-                not_found -> {error, no_provider}
-            end
-    end;
+    LocalResult = select_local(LocalHandlers),
+    do_local_first(LocalResult, RemoteProviders);
 
 select_provider(random, _LocalHandlers, RemoteProviders) ->
-    case select_remote_random(RemoteProviders) of
-        {ok, Provider} -> {remote, Provider};
-        not_found -> {error, no_provider}
-    end;
+    RemoteResult = select_remote_random(RemoteProviders),
+    wrap_remote_result(RemoteResult);
 
 select_provider(round_robin, _LocalHandlers, _RemoteProviders) ->
     %% Round robin requires state, use select_provider_stateful instead
@@ -95,15 +87,29 @@ select_provider_stateful(#{strategy := Strategy} = State, LocalHandlers, RemoteP
 %% @doc Select provider using closest strategy (requires local node ID).
 -spec select_provider_closest(binary(), [registration()], [provider_info()]) ->
     {local, registration()} | {remote, provider_info()} | {error, no_provider}.
-select_provider_closest(_LocalNodeId, LocalHandlers, RemoteProviders) ->
-    case select_local(LocalHandlers) of
-        {ok, Handler} -> {local, Handler};
-        not_found ->
-            case find_closest_provider(_LocalNodeId, RemoteProviders) of
-                {ok, Provider} -> {remote, Provider};
-                not_found -> {error, no_provider}
-            end
-    end.
+select_provider_closest(LocalNodeId, LocalHandlers, RemoteProviders) ->
+    LocalResult = select_local(LocalHandlers),
+    do_closest(LocalResult, LocalNodeId, RemoteProviders).
+
+%% @private Local handler found
+do_local_first({ok, Handler}, _RemoteProviders) ->
+    {local, Handler};
+%% @private No local handler - try remote
+do_local_first(not_found, RemoteProviders) ->
+    RemoteResult = select_remote_random(RemoteProviders),
+    wrap_remote_result(RemoteResult).
+
+%% @private Local handler found
+do_closest({ok, Handler}, _LocalNodeId, _RemoteProviders) ->
+    {local, Handler};
+%% @private No local handler - try closest remote
+do_closest(not_found, LocalNodeId, RemoteProviders) ->
+    ClosestResult = find_closest_provider(LocalNodeId, RemoteProviders),
+    wrap_remote_result(ClosestResult).
+
+%% @private Wrap remote provider result
+wrap_remote_result({ok, Provider}) -> {remote, Provider};
+wrap_remote_result(not_found) -> {error, no_provider}.
 
 %% @doc Select local handler (returns first one).
 -spec select_local([registration()]) -> {ok, registration()} | not_found.

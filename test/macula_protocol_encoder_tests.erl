@@ -393,3 +393,200 @@ roundtrip_preserves_map_structure_test() ->
     ?assertEqual(#{<<"key">> => <<"value">>}, maps:get(<<"nested">>, Decoded)),
     %% Check list
     ?assertEqual([1, 2, 3], maps:get(<<"list">>, Decoded)).
+
+%%%===================================================================
+%%% NAT Traversal Message Tests (v0.12.0)
+%%%===================================================================
+
+%% Sample NAT messages for testing
+sample_nat_probe_msg() ->
+    #{
+        node_id => crypto:strong_rand_bytes(32),
+        local_port => 4433
+    }.
+
+sample_nat_probe_reply_msg() ->
+    #{
+        node_id => crypto:strong_rand_bytes(32),
+        reflexive_ip => <<"192.0.2.1">>,
+        reflexive_port => 54321,
+        server_time => erlang:system_time(millisecond)
+    }.
+
+sample_punch_request_msg() ->
+    #{
+        session_id => crypto:strong_rand_bytes(16),
+        requester_id => crypto:strong_rand_bytes(32),
+        target_id => crypto:strong_rand_bytes(32)
+    }.
+
+sample_punch_coordinate_msg() ->
+    #{
+        session_id => crypto:strong_rand_bytes(16),
+        peer_id => crypto:strong_rand_bytes(32),
+        peer_host => <<"192.0.2.100">>,
+        peer_ports => [4433, 4434, 4435],
+        punch_time => erlang:system_time(millisecond) + 1000,
+        role => initiator
+    }.
+
+sample_punch_result_msg() ->
+    #{
+        session_id => crypto:strong_rand_bytes(16),
+        success => true,
+        connected_port => 4433
+    }.
+
+sample_relay_request_msg() ->
+    #{
+        session_id => crypto:strong_rand_bytes(16),
+        target_id => crypto:strong_rand_bytes(32),
+        reason => nat_symmetric
+    }.
+
+sample_relay_data_msg() ->
+    #{
+        session_id => crypto:strong_rand_bytes(16),
+        payload => <<"Hello via relay">>
+    }.
+
+%% NAT_PROBE encoding tests
+encode_nat_probe_message_test() ->
+    Msg = sample_nat_probe_msg(),
+    Result = macula_protocol_encoder:encode(nat_probe, Msg),
+    <<_Version:8, TypeId:8, _/binary>> = Result,
+    ?assertEqual(16#50, TypeId).
+
+nat_probe_requires_node_id_test() ->
+    Msg = maps:remove(node_id, sample_nat_probe_msg()),
+    ?assertError({case_clause, _}, macula_protocol_encoder:encode(nat_probe, Msg)).
+
+nat_probe_requires_local_port_test() ->
+    Msg = maps:remove(local_port, sample_nat_probe_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(nat_probe, Msg)).
+
+nat_probe_accepts_binary_keys_test() ->
+    Msg = #{
+        <<"node_id">> => crypto:strong_rand_bytes(32),
+        <<"local_port">> => 4433
+    },
+    Result = macula_protocol_encoder:encode(nat_probe, Msg),
+    ?assert(is_binary(Result)).
+
+%% NAT_PROBE_REPLY encoding tests
+encode_nat_probe_reply_message_test() ->
+    Msg = sample_nat_probe_reply_msg(),
+    Result = macula_protocol_encoder:encode(nat_probe_reply, Msg),
+    <<_Version:8, TypeId:8, _/binary>> = Result,
+    ?assertEqual(16#51, TypeId).
+
+nat_probe_reply_requires_node_id_test() ->
+    Msg = maps:remove(node_id, sample_nat_probe_reply_msg()),
+    ?assertError({case_clause, _}, macula_protocol_encoder:encode(nat_probe_reply, Msg)).
+
+nat_probe_reply_requires_reflexive_ip_test() ->
+    Msg = maps:remove(reflexive_ip, sample_nat_probe_reply_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(nat_probe_reply, Msg)).
+
+nat_probe_reply_requires_reflexive_port_test() ->
+    Msg = maps:remove(reflexive_port, sample_nat_probe_reply_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(nat_probe_reply, Msg)).
+
+nat_probe_reply_requires_server_time_test() ->
+    Msg = maps:remove(server_time, sample_nat_probe_reply_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(nat_probe_reply, Msg)).
+
+%% PUNCH_REQUEST encoding tests
+encode_punch_request_message_test() ->
+    Msg = sample_punch_request_msg(),
+    Result = macula_protocol_encoder:encode(punch_request, Msg),
+    <<_Version:8, TypeId:8, _/binary>> = Result,
+    ?assertEqual(16#52, TypeId).
+
+punch_request_requires_session_id_test() ->
+    Msg = maps:remove(session_id, sample_punch_request_msg()),
+    ?assertError({case_clause, _}, macula_protocol_encoder:encode(punch_request, Msg)).
+
+punch_request_requires_requester_id_test() ->
+    Msg = maps:remove(requester_id, sample_punch_request_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(punch_request, Msg)).
+
+punch_request_requires_target_id_test() ->
+    Msg = maps:remove(target_id, sample_punch_request_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(punch_request, Msg)).
+
+%% PUNCH_COORDINATE encoding tests
+encode_punch_coordinate_message_test() ->
+    Msg = sample_punch_coordinate_msg(),
+    Result = macula_protocol_encoder:encode(punch_coordinate, Msg),
+    <<_Version:8, TypeId:8, _/binary>> = Result,
+    ?assertEqual(16#53, TypeId).
+
+punch_coordinate_requires_session_id_test() ->
+    Msg = maps:remove(session_id, sample_punch_coordinate_msg()),
+    ?assertError({case_clause, _}, macula_protocol_encoder:encode(punch_coordinate, Msg)).
+
+punch_coordinate_requires_peer_id_test() ->
+    Msg = maps:remove(peer_id, sample_punch_coordinate_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(punch_coordinate, Msg)).
+
+punch_coordinate_requires_peer_host_test() ->
+    Msg = maps:remove(peer_host, sample_punch_coordinate_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(punch_coordinate, Msg)).
+
+punch_coordinate_requires_peer_ports_test() ->
+    Msg = maps:remove(peer_ports, sample_punch_coordinate_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(punch_coordinate, Msg)).
+
+punch_coordinate_requires_punch_time_test() ->
+    Msg = maps:remove(punch_time, sample_punch_coordinate_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(punch_coordinate, Msg)).
+
+punch_coordinate_requires_role_test() ->
+    Msg = maps:remove(role, sample_punch_coordinate_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(punch_coordinate, Msg)).
+
+%% PUNCH_RESULT encoding tests
+encode_punch_result_message_test() ->
+    Msg = sample_punch_result_msg(),
+    Result = macula_protocol_encoder:encode(punch_result, Msg),
+    <<_Version:8, TypeId:8, _/binary>> = Result,
+    ?assertEqual(16#55, TypeId).
+
+punch_result_requires_session_id_test() ->
+    Msg = maps:remove(session_id, sample_punch_result_msg()),
+    ?assertError({case_clause, _}, macula_protocol_encoder:encode(punch_result, Msg)).
+
+punch_result_requires_success_test() ->
+    Msg = maps:remove(success, sample_punch_result_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(punch_result, Msg)).
+
+%% RELAY_REQUEST encoding tests
+encode_relay_request_message_test() ->
+    Msg = sample_relay_request_msg(),
+    Result = macula_protocol_encoder:encode(relay_request, Msg),
+    <<_Version:8, TypeId:8, _/binary>> = Result,
+    ?assertEqual(16#56, TypeId).
+
+relay_request_requires_session_id_test() ->
+    Msg = maps:remove(session_id, sample_relay_request_msg()),
+    ?assertError({case_clause, _}, macula_protocol_encoder:encode(relay_request, Msg)).
+
+relay_request_requires_target_id_test() ->
+    Msg = maps:remove(target_id, sample_relay_request_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(relay_request, Msg)).
+
+%% RELAY_DATA encoding tests
+encode_relay_data_message_test() ->
+    Msg = sample_relay_data_msg(),
+    Result = macula_protocol_encoder:encode(relay_data, Msg),
+    <<_Version:8, TypeId:8, _/binary>> = Result,
+    ?assertEqual(16#57, TypeId).
+
+relay_data_requires_session_id_test() ->
+    Msg = maps:remove(session_id, sample_relay_data_msg()),
+    ?assertError({case_clause, _}, macula_protocol_encoder:encode(relay_data, Msg)).
+
+relay_data_requires_payload_test() ->
+    Msg = maps:remove(payload, sample_relay_data_msg()),
+    ?assertError({badmatch, _}, macula_protocol_encoder:encode(relay_data, Msg)).

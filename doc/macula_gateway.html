@@ -1,598 +1,178 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.10.1">
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_gateway</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
 
+<h1>Module macula_gateway</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+Macula Gateway - HTTP/3 Message Router &amp; Orchestrator.
 
-    <title>macula_gateway — macula v0.10.1</title>
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
 
-    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
-
-    <script defer src="dist/sidebar_items-1151EC94.js"></script>
-    <script defer src="docs_config.js"></script>
-    <script defer src="dist/html-DPJLHKSM.js"></script>
-
-  </head>
-  <body>
-    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
-</script>
-
-<div class="body-wrapper">
-
-<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
-  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
-</button>
-
-<nav id="sidebar" class="sidebar">
-
-  <div class="sidebar-header">
-    <div class="sidebar-projectInfo">
-
-        <a href="readme.html" class="sidebar-projectImage">
-          <img src="assets/logo.svg" alt="macula" />
-        </a>
-
-      <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
-macula
-        </a>
-        <div class="sidebar-projectVersion" translate="no">
-          v0.10.1
-        </div>
-      </div>
-    </div>
-    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
-  </div>
-</nav>
-
-<output role="status" id="toast"></output>
-
-<main class="content page-module" id="main" data-type="modules">
-  <div id="content" class="content-inner">
-    <div class="top-search">
-      <div class="search-settings">
-        <form class="search-bar" action="search.html">
-          <label class="search-label">
-            <span class="sr-only">Search documentation of macula</span>
-            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </label>
-          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
-            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
-          </button>
-          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
-            <i class="ri-close-line ri-lg" title="Cancel search"></i>
-          </button>
-        </form>
-        <div class="autocomplete">
-        </div>
-        <button class="icon-settings display-settings">
-          <i class="ri-settings-3-line"></i>
-          <span class="sr-only">Settings</span>
-        </button>
-      </div>
-    </div>
-
-<div id="top-content">
-  <div class="heading-with-actions top-heading">
-    <h1>
-      <span translate="no">macula_gateway</span> 
-      <small class="app-vsn" translate="no">(macula v0.10.1)</small>
-
-    </h1>
-
-      <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L72" title="View Source" class="icon-action" rel="help">
-        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        <span class="sr-only">View Source</span>
-      </a>
-
-  </div>
-
-
-    <section id="moduledoc">
-<p>Macula Gateway - HTTP/3 Message Router &amp; Orchestrator</p><p>Main API module and coordinator for the Macula Gateway. The gateway can be embedded in applications or run standalone as a relay node.</p><h3 id="module-quick-start-embedded-gateway" class="section-heading"><a href="#module-quick-start-embedded-gateway" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Quick_Start_(Embedded_Gateway)">Quick Start (Embedded Gateway)</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="c1">%% Start an embedded gateway</span><span class="w">
-   </span><span class="p" data-group-id="2054516661-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Gateway</span><span class="p" data-group-id="2054516661-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_gateway</span><span class="p">:</span><span class="nf">start_link</span><span class="p" data-group-id="2054516661-2">(</span><span class="p" data-group-id="2054516661-3">[</span><span class="w">
-       </span><span class="p" data-group-id="2054516661-4">{</span><span class="ss">port</span><span class="p">,</span><span class="w"> </span><span class="mi">9443</span><span class="p" data-group-id="2054516661-4">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="2054516661-5">{</span><span class="ss">realm</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="2054516661-6">&lt;&lt;</span><span class="s">&quot;com.example.realm&quot;</span><span class="p" data-group-id="2054516661-6">&gt;&gt;</span><span class="p" data-group-id="2054516661-5">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="2054516661-7">{</span><span class="ss">cert_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cert.pem&quot;</span><span class="p" data-group-id="2054516661-7">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="2054516661-8">{</span><span class="ss">key_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;key.pem&quot;</span><span class="p" data-group-id="2054516661-8">}</span><span class="w">
-   </span><span class="p" data-group-id="2054516661-3">]</span><span class="p" data-group-id="2054516661-2">)</span><span class="p">.</span><span class="w">
+<h2><a name="description">Description</a></h2><p>   
+Macula Gateway - HTTP/3 Message Router &amp; Orchestrator</p>
   
-   </span><span class="c1">%% Register an RPC handler</span><span class="w">
-   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_gateway</span><span class="p">:</span><span class="nf">register_handler</span><span class="p" data-group-id="2054516661-9">(</span><span class="n">Gateway</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="2054516661-10">&lt;&lt;</span><span class="s">&quot;calculator.add&quot;</span><span class="p" data-group-id="2054516661-10">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="nf">fun</span><span class="p" data-group-id="2054516661-11">(</span><span class="n">Args</span><span class="p" data-group-id="2054516661-11">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
-       </span><span class="n">A</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">maps</span><span class="p">:</span><span class="nf">get</span><span class="p" data-group-id="2054516661-12">(</span><span class="ss">a</span><span class="p">,</span><span class="w"> </span><span class="n">Args</span><span class="p" data-group-id="2054516661-12">)</span><span class="p">,</span><span class="w">
-       </span><span class="n">B</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">maps</span><span class="p">:</span><span class="nf">get</span><span class="p" data-group-id="2054516661-13">(</span><span class="ss">b</span><span class="p">,</span><span class="w"> </span><span class="n">Args</span><span class="p" data-group-id="2054516661-13">)</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="2054516661-14">#{</span><span class="ss">result</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">B</span><span class="p" data-group-id="2054516661-14">}</span><span class="w">
-   </span><span class="k">end</span><span class="p" data-group-id="2054516661-9">)</span><span class="p">.</span></code></pre><h3 id="module-quick-start-standalone-gateway" class="section-heading"><a href="#module-quick-start-standalone-gateway" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Quick_Start_(Standalone_Gateway)">Quick Start (Standalone Gateway)</a></span></h3><p>Configure <code>sys.config</code>:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="p" data-group-id="3669700433-1">[</span><span class="w">
-     </span><span class="p" data-group-id="3669700433-2">{</span><span class="ss">macula</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="3669700433-3">[</span><span class="w">
-       </span><span class="p" data-group-id="3669700433-4">{</span><span class="ss">gateway_port</span><span class="p">,</span><span class="w"> </span><span class="mi">9443</span><span class="p" data-group-id="3669700433-4">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="3669700433-5">{</span><span class="ss">gateway_realm</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="3669700433-6">&lt;&lt;</span><span class="s">&quot;com.example.realm&quot;</span><span class="p" data-group-id="3669700433-6">&gt;&gt;</span><span class="p" data-group-id="3669700433-5">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="3669700433-7">{</span><span class="ss">cert_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;/path/to/cert.pem&quot;</span><span class="p" data-group-id="3669700433-7">}</span><span class="p">,</span><span class="w">
-       </span><span class="p" data-group-id="3669700433-8">{</span><span class="ss">key_file</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;/path/to/key.pem&quot;</span><span class="p" data-group-id="3669700433-8">}</span><span class="w">
-     </span><span class="p" data-group-id="3669700433-3">]</span><span class="p" data-group-id="3669700433-2">}</span><span class="w">
-   </span><span class="p" data-group-id="3669700433-1">]</span><span class="p">.</span></code></pre><p>Start application:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="nc">application</span><span class="p">:</span><span class="nf">start</span><span class="p" data-group-id="0132393618-1">(</span><span class="ss">macula</span><span class="p" data-group-id="0132393618-1">)</span><span class="p">.</span></code></pre><h3 id="module-architecture-modular-design-refactored-jan-2025" class="section-heading"><a href="#module-architecture-modular-design-refactored-jan-2025" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Architecture_(Modular_Design_-_Refactored_Jan_2025)">Architecture (Modular Design - Refactored Jan 2025)</a></span></h3><p>Gateway (this module): - QUIC Listener Management - Message Decoding &amp; Routing - Supervisor Coordination - API Facade</p><p>Child Modules (managed via macula_gateway_sup): - <code>macula_gateway_client_manager</code>: Client lifecycle management - <code>macula_gateway_pubsub</code>: Pub/Sub message routing with wildcards - <code>macula_gateway_rpc</code>: RPC handler registration &amp; invocation - <code>macula_gateway_mesh</code>: Mesh connection pooling</p><p>Stateless Delegation Modules: - <code>macula_gateway_dht</code>: DHT query forwarding to routing server - <code>macula_gateway_rpc_router</code>: Multi-hop RPC routing via DHT</p><p>Single Responsibility Principle: Each module has one clear purpose and delegates to specialized child modules. Gateway acts as orchestrator, not implementer.</p>
-    </section>
+   <p>Main API module and coordinator for the Macula Gateway.   
+The gateway can be embedded in applications or run standalone as a relay node.</p>
+  
+   <h3><a name="Quick_Start_(Embedded_Gateway)">Quick Start (Embedded Gateway)</a></h3>
+  
+   <pre>   %% Start an embedded gateway
+   {ok, Gateway} = macula_gateway:start_link([
+       {port, 9443},
+       {realm, &lt;&lt;"com.example.realm"&gt;&gt;},
+       {cert_file, "cert.pem"},
+       {key_file, "key.pem"}
+   ]).
+  
+   %% Register an RPC handler
+   ok = macula_gateway:register_handler(Gateway, &lt;&lt;"calculator.add"&gt;&gt;, fun(Args) -&gt;
+       A = maps:get(a, Args),
+       B = maps:get(b, Args),
+       #{result =&gt; A + B}
+   end).</pre>
+  
+   <h3><a name="Quick_Start_(Standalone_Gateway)">Quick Start (Standalone Gateway)</a></h3>
+  
+   <p>Configure <code>sys.config</code>:</p>
+  
+   <pre>   [
+     {macula, [
+       {gateway_port, 9443},
+       {gateway_realm, &lt;&lt;"com.example.realm"&gt;&gt;},
+       {cert_file, "/path/to/cert.pem"},
+       {key_file, "/path/to/key.pem"}
+     ]}
+   ].</pre>
+  
+   <p>Start application:</p>
+  
+   <pre>   application:start(macula).</pre>
+  
+   <h3><a name="Architecture_(Modular_Design_-_Refactored_Jan_2025)">Architecture (Modular Design - Refactored Jan 2025)</a></h3>
+  
+   <p>Gateway (this module):
+     - QUIC Listener Management
+     - Message Decoding &amp; Routing     
+- Supervisor Coordination     
+- API Facade</p>
+  
+   <p>Child Modules (managed via macula_gateway_sup):
+     - <code>macula_gateway_client_manager</code>: Client lifecycle management
+     - <code>macula_gateway_pubsub</code>: Pub/Sub message routing with wildcards
+     - <code>macula_gateway_rpc</code>: RPC handler registration &amp; invocation
+     - <code>macula_gateway_mesh</code>: Mesh connection pooling</p>
+  
+   <p>Stateless Delegation Modules:
+     - <code>macula_gateway_dht</code>: DHT query forwarding to routing server
+     - <code>macula_gateway_rpc_router</code>: Multi-hop RPC routing via DHT</p>
+  
+   Single Responsibility Principle:
+     Each module has one clear purpose and delegates to specialized
+     child modules. Gateway acts as orchestrator, not implementer.
+  
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#get_stats-1">get_stats/1</a></td><td>Get gateway statistics.</td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td>Handle rpc_route message forwarded from connection.</td></tr>
+<tr><td valign="top"><a href="#handle_continue-2">handle_continue/2</a></td><td>Wire gateway to siblings after init completes.</td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#register_handler-2">register_handler/2</a></td><td>Register a handler for a procedure.</td></tr>
+<tr><td valign="top"><a href="#start_link-0">start_link/0</a></td><td>Start the gateway with default options.</td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td>Start the gateway with custom options.</td></tr>
+<tr><td valign="top"><a href="#stop-1">stop/1</a></td><td>Stop the gateway.</td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#unregister_handler-1">unregister_handler/1</a></td><td>Unregister a handler for a procedure.</td></tr>
+</table>
 
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="get_stats-1">get_stats/1</a></h3>
+<div class="spec">
+<p><code>get_stats(Gateway::pid()) -&gt; map()</code><br></p>
+<p> </p>
+</div><p>Get gateway statistics.</p>
+
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
+<p> </p>
 </div>
 
-  <section id="summary" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#summary">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Summary</span>
-    </h1>
-<div class="summary-functions summary">
-  <h2>
-    <a href="#functions">Functions</a>
-  </h2>
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Request, State) -&gt; any()</code></p>
+<p> </p>
+</div><p>Handle rpc_route message forwarded from connection</p>
 
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#get_stats/1" data-no-tooltip="" translate="no">get_stats(Gateway)</a>
+<h3 class="function"><a name="handle_continue-2">handle_continue/2</a></h3>
+<div class="spec">
+<p><code>handle_continue(X1, State) -&gt; any()</code></p>
+<p> </p>
+</div><p>Wire gateway to siblings after init completes.
+  This avoids initialization deadlock from calling supervisor:which_children/1
+  during init/1 before supervisor has finished starting all children.</p>
 
-      </div>
-
-        <div class="summary-synopsis"><p>Get gateway statistics.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#handle_call/3" data-no-tooltip="" translate="no">handle_call(Request, From, State)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#handle_cast/2" data-no-tooltip="" translate="no">handle_cast(Request, State)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Handle rpc_route message forwarded from connection</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#handle_continue/2" data-no-tooltip="" translate="no">handle_continue(_, State)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Wire gateway to siblings after init completes. This avoids initialization deadlock from calling supervisor:which_children/1 during init/1 before supervisor has finished starting all children.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#handle_info/2" data-no-tooltip="" translate="no">handle_info(Info, State)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#init/1" data-no-tooltip="" translate="no">init(Opts)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#register_handler/2" data-no-tooltip="" translate="no">register_handler(Procedure, Handler)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Register a handler for a procedure.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#start_link/0" data-no-tooltip="" translate="no">start_link()</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Start the gateway with default options.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#start_link/1" data-no-tooltip="" translate="no">start_link(Opts)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Start the gateway with custom options. Options: {port, Port} - Listen port (default: 9443) {realm, Realm} - Default realm (default: &quot;macula.default&quot;)</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#stop/1" data-no-tooltip="" translate="no">stop(Gateway)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Stop the gateway.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#terminate/2" data-no-tooltip="" translate="no">terminate(Reason, State)</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#unregister_handler/1" data-no-tooltip="" translate="no">unregister_handler(Procedure)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Unregister a handler for a procedure.</p></div>
-
-    </div>
-
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
 </div>
 
-  </section>
-
-
-  <section id="functions" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#functions">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Functions</span>
-    </h1>
-    <div class="functions-list">
-<section class="detail" id="get_stats/1">
-
-  <div class="detail-header">
-    <a href="#get_stats/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">get_stats(Gateway)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L137" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> get_stats(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>().</pre>
-
-      </div>
-
-<p>Get gateway statistics.</p>
-  </section>
-</section>
-<section class="detail" id="handle_call/3">
-
-  <div class="detail-header">
-    <a href="#handle_call/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_call(Request, From, State)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L390" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-
-  </section>
-</section>
-<section class="detail" id="handle_cast/2">
-
-  <div class="detail-header">
-    <a href="#handle_cast/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_cast(Request, State)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L539" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-<p>Handle rpc_route message forwarded from connection</p>
-  </section>
-</section>
-<section class="detail" id="handle_continue/2">
-
-  <div class="detail-header">
-    <a href="#handle_continue/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_continue(_, State)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L605" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-<p>Wire gateway to siblings after init completes. This avoids initialization deadlock from calling supervisor:which_children/1 during init/1 before supervisor has finished starting all children.</p>
-  </section>
-</section>
-<section class="detail" id="handle_info/2">
-
-  <div class="detail-header">
-    <a href="#handle_info/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_info(Info, State)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L622" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-
-  </section>
-</section>
-<section class="detail" id="init/1">
-
-  <div class="detail-header">
-    <a href="#init/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">init(Opts)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L164" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-
-  </section>
-</section>
-<section class="detail" id="register_handler/2">
-
-  <div class="detail-header">
-    <a href="#register_handler/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">register_handler(Procedure, Handler)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L142" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> register_handler(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), fun()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Register a handler for a procedure.</p>
-  </section>
-</section>
-<section class="detail" id="start_link/0">
-
-  <div class="detail-header">
-    <a href="#start_link/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">start_link()</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L119" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> start_link() -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Start the gateway with default options.</p>
-  </section>
-</section>
-<section class="detail" id="start_link/1">
-
-  <div class="detail-header">
-    <a href="#start_link/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">start_link(Opts)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L127" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> start_link(<a href="https://www.erlang.org/doc/apps/stdlib/proplists.html#t:proplist/0">proplists:proplist</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Start the gateway with custom options. Options: {port, Port} - Listen port (default: 9443) {realm, Realm} - Default realm (default: &quot;macula.default&quot;)</p>
-  </section>
-</section>
-<section class="detail" id="stop/1">
-
-  <div class="detail-header">
-    <a href="#stop/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">stop(Gateway)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L132" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> stop(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> ok.</pre>
-
-      </div>
-
-<p>Stop the gateway.</p>
-  </section>
-</section>
-<section class="detail" id="terminate/2">
-
-  <div class="detail-header">
-    <a href="#terminate/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">terminate(Reason, State)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L670" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-
-  </section>
-</section>
-<section class="detail" id="unregister_handler/1">
-
-  <div class="detail-header">
-    <a href="#unregister_handler/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">unregister_handler(Procedure)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_gateway.erl#L152" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> unregister_handler(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> ok.</pre>
-
-      </div>
-
-<p>Unregister a handler for a procedure.</p>
-  </section>
-</section>
-
-    </div>
-  </section>
-
-    <footer class="footer">
-      <p>
-
-          <span class="line">
-            <a href="https://hex.pm/packages/macula/0.10.1" class="footer-hex-package">Hex Package</a>
-
-            <a href="https://preview.hex.pm/preview/macula/0.10.1">Hex Preview</a>
-
-          </span>
-
-        <span class="line">
-          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
-            Search HexDocs
-          </button>
-
-            <a href="macula.epub" title="ePub version">
-              Download ePub version
-            </a>
-
-        </span>
-      </p>
-
-      <p class="built-using">
-        Built using
-        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
-
-          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
-
-      </p>
-
-    </footer>
-  </div>
-</main>
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(Opts) -&gt; any()</code></p>
+<p> </p>
 </div>
 
-  </body>
+<h3 class="function"><a name="register_handler-2">register_handler/2</a></h3>
+<div class="spec">
+<p><code>register_handler(Procedure::binary(), Handler::function()) -&gt; ok | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Register a handler for a procedure.</p>
+
+<h3 class="function"><a name="start_link-0">start_link/0</a></h3>
+<div class="spec">
+<p><code>start_link() -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the gateway with default options.</p>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Opts::<a href="/home/rl/work/github.com/macula-io/stdlib/doc/proplists.html#type-proplist" docgen-rel="seetype" docgen-href="stdlib:proplists#proplist/0">proplists:proplist()</a>) -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the gateway with custom options.
+  Options:
+    {port, Port} - Listen port (default: 9443)
+    {realm, Realm} - Default realm (default: "macula.default")</p>
+
+<h3 class="function"><a name="stop-1">stop/1</a></h3>
+<div class="spec">
+<p><code>stop(Gateway::pid()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Stop the gateway.</p>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="unregister_handler-1">unregister_handler/1</a></h3>
+<div class="spec">
+<p><code>unregister_handler(Procedure::binary()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Unregister a handler for a procedure.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
 </html>

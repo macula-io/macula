@@ -25,6 +25,8 @@
 
 -behaviour(supervisor).
 
+-include_lib("kernel/include/logger.hrl").
+
 -export([start_link/1]).
 -export([init/1]).
 
@@ -42,9 +44,9 @@ start_link(Config) ->
 %%====================================================================
 
 init(Config) ->
-    io:format("[Platform] Starting Macula Platform System~n"),
-    io:format("[Platform] Node ID: ~s~n", [maps:get(node_id, Config, <<"unknown">>)]),
-    io:format("[Platform] Realm: ~s~n", [maps:get(realm, Config, <<"unknown">>)]),
+    ?LOG_INFO("Starting Macula Platform System"),
+    ?LOG_INFO("Node ID: ~s", [maps:get(node_id, Config, <<"unknown">>)]),
+    ?LOG_INFO("Realm: ~s", [maps:get(realm, Config, <<"unknown">>)]),
 
     SupFlags = #{
         strategy => one_for_one,
@@ -75,7 +77,7 @@ init(Config) ->
         %% }
     ],
 
-    io:format("[Platform] Platform services initialized~n"),
+    ?LOG_INFO("Platform services initialized"),
     {ok, {SupFlags, ChildSpecs}}.
 
 %%====================================================================

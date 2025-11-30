@@ -1,0 +1,130 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_dist</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_dist</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>QUIC Distribution Carrier for Erlang.
+<p>Copyright © 2025 Macula.io Apache-2.0</p>
+
+
+<h2><a name="description">Description</a></h2><p>QUIC Distribution Carrier for Erlang.</p>
+  
+   <p>This module implements the Erlang distribution carrier interface   
+using QUIC transport via quicer. It replaces inet_tcp_dist to enable   
+distributed Erlang over QUIC with:</p>
+  
+   <p>- Built-in TLS 1.3 encryption (mandatory)   
+- NAT-friendly UDP-based transport   
+- Connection migration support   
+- Stream multiplexing for message priorities   
+- Decentralized discovery (no EPMD required)</p>
+  
+   <h3><a name="Usage">Usage</a></h3>
+  
+   <p>Start the VM with:     
+erl -proto_dist macula -no_epmd -start_epmd false</p>
+  
+   <p>Or in vm.args:     
+-proto_dist macula     
+-no_epmd     
+-start_epmd false     
+-macula_dist_port 4433</p>
+  
+   <p>Architecture: net_kernel - macula_dist - quicer - UDP/QUIC - remote node</p>
+  
+   Node naming convention: port@ip (e.g., 4433@192.168.1.100)
+  
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#accept-1">accept/1</a></td><td>Accept incoming connections.</td></tr>
+<tr><td valign="top"><a href="#accept_connection-5">accept_connection/5</a></td><td>Accept a distribution connection.</td></tr>
+<tr><td valign="top"><a href="#address-0">address/0</a></td><td>Return address information for this distribution.</td></tr>
+<tr><td valign="top"><a href="#childspecs-0">childspecs/0</a></td><td>Return child specifications for the distribution supervisor.</td></tr>
+<tr><td valign="top"><a href="#close-1">close/1</a></td><td>Close a distribution connection.</td></tr>
+<tr><td valign="top"><a href="#is_node_name-1">is_node_name/1</a></td><td>Check if a string is a valid node name.</td></tr>
+<tr><td valign="top"><a href="#listen-1">listen/1</a></td><td>Listen for incoming distribution connections.</td></tr>
+<tr><td valign="top"><a href="#select-1">select/1</a></td><td>Check if this module should handle distribution to the given node.</td></tr>
+<tr><td valign="top"><a href="#setup-5">setup/5</a></td><td>Setup an outgoing distribution connection.</td></tr>
+<tr><td valign="top"><a href="#splitname-1">splitname/1</a></td><td>Split a node name into port and host.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="accept-1">accept/1</a></h3>
+<div class="spec">
+<p><code>accept(ListenerHandle::term()) -&gt; pid()</code><br></p>
+<p> </p>
+</div><p>Accept incoming connections.
+  Called in a loop by net_kernel.</p>
+
+<h3 class="function"><a name="accept_connection-5">accept_connection/5</a></h3>
+<div class="spec">
+<p><code>accept_connection(AcceptPid::pid(), X2::term(), MyNode::node(), Allowed::term(), SetupTime::term()) -&gt; pid()</code><br></p>
+<p> </p>
+</div><p>Accept a distribution connection.
+  This is called when a connection is being accepted from a remote node.</p>
+
+<h3 class="function"><a name="address-0">address/0</a></h3>
+<div class="spec">
+<p><code>address() -&gt; #net_address{}</code><br></p>
+<p> </p>
+</div><p>Return address information for this distribution.</p>
+
+<h3 class="function"><a name="childspecs-0">childspecs/0</a></h3>
+<div class="spec">
+<p><code>childspecs() -&gt; [<a href="/home/rl/work/github.com/macula-io/stdlib/doc/supervisor.html#type-child_spec" docgen-rel="seetype" docgen-href="stdlib:supervisor#child_spec/0">supervisor:child_spec()</a>]</code><br></p>
+<p> </p>
+</div><p>Return child specifications for the distribution supervisor.
+  Called by net_sup during startup.</p>
+
+<h3 class="function"><a name="close-1">close/1</a></h3>
+<div class="spec">
+<p><code>close(QuicConn::term()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Close a distribution connection.</p>
+
+<h3 class="function"><a name="is_node_name-1">is_node_name/1</a></h3>
+<div class="spec">
+<p><code>is_node_name(Name::string()) -&gt; boolean()</code><br></p>
+<p> </p>
+</div><p>Check if a string is a valid node name.</p>
+
+<h3 class="function"><a name="listen-1">listen/1</a></h3>
+<div class="spec">
+<p><code>listen(NodeName::atom()) -&gt; {ok, {term(), #net_address{}, 1..3}} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Listen for incoming distribution connections.
+  Returns a "listen handle" used by accept/1.</p>
+
+<h3 class="function"><a name="select-1">select/1</a></h3>
+<div class="spec">
+<p><code>select(Node::atom()) -&gt; boolean()</code><br></p>
+<p> </p>
+</div><p>Check if this module should handle distribution to the given node.
+  Returns true if the node name is in port@host format.</p>
+
+<h3 class="function"><a name="setup-5">setup/5</a></h3>
+<div class="spec">
+<p><code>setup(Node::node(), Type::term(), MyNode::atom(), LongOrShortNames::term(), SetupTime::term()) -&gt; pid()</code><br></p>
+<p> </p>
+</div><p>Setup an outgoing distribution connection.
+  Called when this node wants to connect to another node.</p>
+
+<h3 class="function"><a name="splitname-1">splitname/1</a></h3>
+<div class="spec">
+<p><code>splitname(NodeName::atom() | string()) -&gt; {integer(), string()} | false</code><br></p>
+<p> </p>
+</div><p>Split a node name into port and host.
+  Node name format: port@host (e.g., 4433@192.168.1.100)</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

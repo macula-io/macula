@@ -350,3 +350,166 @@ is_hex_char(C) when C >= $0, C =< $9 -> true;
 is_hex_char(C) when C >= $a, C =< $f -> true;
 is_hex_char(C) when C >= $A, C =< $F -> true;
 is_hex_char(_) -> false.
+
+%%%=============================================================================
+%%% TLS Mode Detection Tests (v0.11.0+)
+%%%=============================================================================
+
+tls_mode_test_() ->
+    {setup,
+     fun() ->
+         %% Save current environment
+         SavedMode = os:getenv("MACULA_TLS_MODE"),
+         SavedVerify = os:getenv("MACULA_TLS_VERIFY_HOSTNAME"),
+         {SavedMode, SavedVerify}
+     end,
+     fun({SavedMode, SavedVerify}) ->
+         %% Restore environment
+         case SavedMode of
+             false -> os:unsetenv("MACULA_TLS_MODE");
+             V -> os:putenv("MACULA_TLS_MODE", V)
+         end,
+         case SavedVerify of
+             false -> os:unsetenv("MACULA_TLS_VERIFY_HOSTNAME");
+             V2 -> os:putenv("MACULA_TLS_VERIFY_HOSTNAME", V2)
+         end
+     end,
+     fun(_) ->
+         [
+          {"Default TLS mode is development",
+           fun test_default_tls_mode/0},
+          {"TLS mode from app env",
+           fun test_tls_mode_from_app_env/0},
+          {"TLS mode from env var",
+           fun test_tls_mode_from_env_var/0},
+          {"TLS mode env var shorthands",
+           fun test_tls_mode_shorthands/0},
+          {"is_production_mode returns correct value",
+           fun test_is_production_mode/0}
+         ]
+     end}.
+
+test_default_tls_mode() ->
+    os:unsetenv("MACULA_TLS_MODE"),
+    application:set_env(macula, tls_mode, development),
+    ?assertEqual(development, macula_tls:get_tls_mode()).
+
+test_tls_mode_from_app_env() ->
+    os:unsetenv("MACULA_TLS_MODE"),
+    application:set_env(macula, tls_mode, production),
+    ?assertEqual(production, macula_tls:get_tls_mode()),
+    application:set_env(macula, tls_mode, development).
+
+test_tls_mode_from_env_var() ->
+    application:set_env(macula, tls_mode, development),
+    os:putenv("MACULA_TLS_MODE", "production"),
+    ?assertEqual(production, macula_tls:get_tls_mode()),
+    os:unsetenv("MACULA_TLS_MODE").
+
+test_tls_mode_shorthands() ->
+    %% Test 'dev' shorthand
+    os:putenv("MACULA_TLS_MODE", "dev"),
+    ?assertEqual(development, macula_tls:get_tls_mode()),
+
+    %% Test 'prod' shorthand
+    os:putenv("MACULA_TLS_MODE", "prod"),
+    ?assertEqual(production, macula_tls:get_tls_mode()),
+
+    os:unsetenv("MACULA_TLS_MODE").
+
+test_is_production_mode() ->
+    os:unsetenv("MACULA_TLS_MODE"),
+    application:set_env(macula, tls_mode, development),
+    ?assertNot(macula_tls:is_production_mode()),
+
+    os:putenv("MACULA_TLS_MODE", "production"),
+    ?assert(macula_tls:is_production_mode()),
+
+    os:unsetenv("MACULA_TLS_MODE").
+
+%%%=============================================================================
+%%% QUIC Client Options Tests (v0.11.0+)
+%%%=============================================================================
+
+quic_client_opts_test_() ->
+    {setup,
+     fun() ->
+         os:unsetenv("MACULA_TLS_MODE"),
+         application:set_env(macula, tls_mode, development)
+     end,
+     fun(_) ->
+         os:unsetenv("MACULA_TLS_MODE"),
+         application:set_env(macula, tls_mode, development)
+     end,
+     fun(_) ->
+         [
+          {"Client opts returns list in dev mode",
+           fun test_client_opts_returns_list/0},
+          {"Client opts has verify none in dev mode",
+           fun test_client_opts_verify_none/0},
+          {"Client opts with overrides",
+           fun test_client_opts_with_overrides/0},
+          {"Client opts with hostname (dev mode)",
+           fun test_client_opts_with_hostname_dev/0}
+         ]
+     end}.
+
+test_client_opts_returns_list() ->
+    Opts = macula_tls:quic_client_opts(),
+    ?assert(is_list(Opts)).
+
+test_client_opts_verify_none() ->
+    Opts = macula_tls:quic_client_opts(),
+    ?assertEqual(none, proplists:get_value(verify, Opts)).
+
+test_client_opts_with_overrides() ->
+    Opts = macula_tls:quic_client_opts(#{custom_opt => test_value}),
+    ?assertEqual(test_value, proplists:get_value(custom_opt, Opts)).
+
+test_client_opts_with_hostname_dev() ->
+    %% In development mode, hostname verification is skipped
+    Opts = macula_tls:quic_client_opts_with_hostname("example.com"),
+    ?assertEqual(none, proplists:get_value(verify, Opts)).
+
+%%%=============================================================================
+%%% Hostname Verification Tests (v0.11.0+)
+%%%=============================================================================
+
+hostname_verify_fun_test_() ->
+    [
+     {"valid_peer with hostname succeeds",
+      fun test_verify_fun_valid_peer_hostname/0},
+     {"valid_peer without hostname succeeds",
+      fun test_verify_fun_valid_peer_no_hostname/0},
+     {"valid event passes through",
+      fun test_verify_fun_valid/0},
+     {"extension returns unknown",
+      fun test_verify_fun_extension/0},
+     {"bad_cert returns fail with reason",
+      fun test_verify_fun_bad_cert/0}
+    ].
+
+test_verify_fun_valid_peer_hostname() ->
+    State = #{hostname => <<"example.com">>},
+    Result = macula_tls:hostname_verify_fun(dummy_cert, valid_peer, State),
+    ?assertMatch({valid, _}, Result).
+
+test_verify_fun_valid_peer_no_hostname() ->
+    State = #{},
+    Result = macula_tls:hostname_verify_fun(dummy_cert, valid_peer, State),
+    ?assertMatch({valid, _}, Result).
+
+test_verify_fun_valid() ->
+    State = #{hostname => <<"example.com">>},
+    Result = macula_tls:hostname_verify_fun(dummy_cert, valid, State),
+    ?assertMatch({valid, _}, Result).
+
+test_verify_fun_extension() ->
+    State = #{hostname => <<"example.com">>},
+    Result = macula_tls:hostname_verify_fun(dummy_cert, {extension, some_ext}, State),
+    ?assertMatch({unknown, _}, Result).
+
+test_verify_fun_bad_cert() ->
+    State = #{hostname => <<"example.com">>},
+    Result = macula_tls:hostname_verify_fun(dummy_cert, {bad_cert, expired}, State),
+    ?assertMatch({fail, expired}, Result).

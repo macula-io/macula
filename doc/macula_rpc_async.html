@@ -1,0 +1,96 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_rpc_async</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_rpc_async</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+Async RPC Module (NATS-style Request/Reply).
+
+
+<h2><a name="description">Description</a></h2><p>   
+Async RPC Module (NATS-style Request/Reply)</p>
+  
+   <p>Handles asynchronous RPC operations with callback-based responses:   
+- Callback management (fun callbacks and pid callbacks)   
+- Request ID generation and tracking   
+- Request message building for P2P delivery   
+- Reply processing and callback invocation   
+- Timeout handling for async requests</p>
+  
+   <p>This module provides stateless helper functions used by macula_rpc_handler.   
+The actual state (pending_requests map) remains in the handler.</p>
+  
+   Extracted from macula_rpc_handler.erl (Dec 2025) to improve testability
+   and separation of concerns.
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-callback">callback()</a></h3>
+<p><code>callback() = {fun_cb, fun((term()) -&gt; any())} | {pid_cb, pid()}</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#build_request_message-5">build_request_message/5</a></td><td>Build an RPC_REQUEST message for NATS-style async RPC.</td></tr>
+<tr><td valign="top"><a href="#calculate_rtt-1">calculate_rtt/1</a></td><td>Calculate RTT from sent_at timestamp.</td></tr>
+<tr><td valign="top"><a href="#extract_result-1">extract_result/1</a></td><td>Extract result from RPC reply message.</td></tr>
+<tr><td valign="top"><a href="#get_callback-2">get_callback/2</a></td><td>Extract callback from options, defaulting to pid callback.</td></tr>
+<tr><td valign="top"><a href="#get_local_endpoint-0">get_local_endpoint/0</a></td><td>Get local endpoint from environment variables.</td></tr>
+<tr><td valign="top"><a href="#invoke_callback-3">invoke_callback/3</a></td><td>Invoke async callback with result.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="build_request_message-5">build_request_message/5</a></h3>
+<div class="spec">
+<p><code>build_request_message(RequestId::binary(), Procedure::binary(), EncodedArgs::binary(), FromNodeId::binary(), Realm::binary()) -&gt; map()</code><br></p>
+<p> </p>
+</div><p>Build an RPC_REQUEST message for NATS-style async RPC.
+  Includes from_endpoint so receiver can route reply back directly.</p>
+
+<h3 class="function"><a name="calculate_rtt-1">calculate_rtt/1</a></h3>
+<div class="spec">
+<p><code>calculate_rtt(SentAt::integer()) -&gt; non_neg_integer()</code><br></p>
+<p> </p>
+</div><p>Calculate RTT from sent_at timestamp.</p>
+
+<h3 class="function"><a name="extract_result-1">extract_result/1</a></h3>
+<div class="spec">
+<p><code>extract_result(Msg::map()) -&gt; {ok, term()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Extract result from RPC reply message.
+  Returns {ok, DecodedValue} or {error, ErrorReason}.</p>
+
+<h3 class="function"><a name="get_callback-2">get_callback/2</a></h3>
+<div class="spec">
+<p><code>get_callback(Opts::map(), CallerPid::pid()) -&gt; <a href="#type-callback" docgen-rel="seetype" docgen-href="#callback/0">callback()</a></code><br></p>
+<p> </p>
+</div><p>Extract callback from options, defaulting to pid callback.
+  If opts contains a callback function, use it. Otherwise send to caller pid.</p>
+
+<h3 class="function"><a name="get_local_endpoint-0">get_local_endpoint/0</a></h3>
+<div class="spec">
+<p><code>get_local_endpoint() -&gt; binary()</code><br></p>
+<p> </p>
+</div><p>Get local endpoint from environment variables.
+  Used to include sender's endpoint in RPC requests so receivers can route replies back.
+  Format: "hostname:port" (e.g., "fc01:4433" in Docker)</p>
+
+<h3 class="function"><a name="invoke_callback-3">invoke_callback/3</a></h3>
+<div class="spec">
+<p><code>invoke_callback(X1::<a href="#type-callback" docgen-rel="seetype" docgen-href="#callback/0">callback()</a>, RequestId::binary(), Result::term()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Invoke async callback with result.
+  For function callbacks, spawns a process to avoid blocking.
+  For pid callbacks, sends a message.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

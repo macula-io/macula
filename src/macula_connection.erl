@@ -45,6 +45,7 @@
     opts :: map(),
     node_id :: binary(),
     realm :: binary(),
+    peer_id :: integer(),  %% Unique peer system identifier for gproc lookups
     connection :: pid() | undefined,
     stream :: pid() | undefined,
     status = connecting :: connecting | connected | disconnected | error,
@@ -87,7 +88,7 @@ get_status(Pid) ->
 %%%===================================================================
 
 init({Url, Opts}) ->
-    ?LOG_INFO("Connection manager starting for ~s", [Url]),
+    ?LOG_INFO("[Connection] Starting for ~s", [Url]),
 
     %% Parse URL to extract host and port
     {Host, Port} = parse_url(Url),
@@ -98,11 +99,15 @@ init({Url, Opts}) ->
     %% Generate or get node ID
     NodeId = maps:get(node_id, Opts, generate_node_id()),
 
+    %% Get peer_id from opts (set by macula_peer_system)
+    PeerId = maps:get(peer_id, Opts, erlang:unique_integer([monotonic, positive])),
+
     State = #state{
         url = Url,
         opts = Opts#{host => Host, port => Port},
         node_id = NodeId,
         realm = Realm,
+        peer_id = PeerId,
         connection = undefined,
         stream = undefined,
         status = connecting,
@@ -151,12 +156,14 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(connect, State) ->
+    ?LOG_DEBUG("[Connection] Attempting connect to ~s", [State#state.url]),
     case do_connect(State) of
         {ok, State2} ->
+            ?LOG_INFO("[Connection] Successfully connected to ~s", [State#state.url]),
             {noreply, State2};
         {error, Reason} ->
-            ?LOG_ERROR("Connection failed: ~p, retrying in ~p ms",
-                      [Reason, ?CONNECT_RETRY_DELAY]),
+            ?LOG_ERROR("[Connection] Failed to connect to ~s: ~p, retrying in ~p ms",
+                      [State#state.url, Reason, ?CONNECT_RETRY_DELAY]),
             erlang:send_after(?CONNECT_RETRY_DELAY, self(), connect),
             {noreply, State#state{status = error}}
     end;
@@ -164,6 +171,8 @@ handle_info(connect, State) ->
 handle_info({quic, Data, Stream, _Props}, State) when is_binary(Data) ->
     %% Received data from QUIC stream
     MainStream = State#state.stream,
+    ?LOG_WARNING("[Connection] QUIC data received: ~p bytes, from_stream=~p, main_stream=~p, match=~p",
+                 [byte_size(Data), Stream, MainStream, Stream =:= MainStream]),
     handle_stream_data(Stream =:= MainStream, Data, Stream, State);
 
 %% Handle QUIC control messages (non-binary Data)
@@ -209,6 +218,7 @@ terminate(_Reason, #state{stream = Stream, connection = Conn}) ->
 
 %% @doc Dispatch stream data based on validity (pattern matching on boolean).
 handle_stream_data(true, Data, _Stream, State) ->
+    ?LOG_WARNING("[Connection] handle_stream_data(true) ENTRY: ~p bytes", [byte_size(Data)]),
     handle_received_data(Data, State);
 handle_stream_data(false, _Data, Stream, State) ->
     ?LOG_WARNING("Received data from unknown stream: ~p", [Stream]),
@@ -273,7 +283,7 @@ trigger_reconnect(#state{stream = Stream, connection = Conn, keepalive_timer = T
 -spec do_connect(#state{}) -> {ok, #state{}} | {error, term()}.
 do_connect(State) ->
     #{host := Host, port := Port} = State#state.opts,
-    QuicOpts = build_quic_opts(),
+    QuicOpts = build_quic_opts(Host),
 
     case attempt_quic_connection(Host, Port, QuicOpts) of
         {ok, Conn, Stream} ->
@@ -282,16 +292,33 @@ do_connect(State) ->
             Error
     end.
 
-%% @doc Build QUIC connection options
--spec build_quic_opts() -> list().
-build_quic_opts() ->
-    [
+%% @doc Build QUIC connection options with TLS configuration.
+%% Uses macula_tls module for centralized TLS settings (v0.11.0+).
+%% Hostname is used for TLS hostname verification in production mode.
+-spec build_quic_opts(Host :: string() | binary()) -> list().
+build_quic_opts(Host) ->
+    %% Get TLS options with hostname verification from centralized module
+    TlsOpts = macula_tls:quic_client_opts_with_hostname(Host),
+
+    %% Merge with QUIC-specific options
+    BaseOpts = [
         {alpn, ["macula"]},
-        {verify, none},  %% TODO(v0.9.0): Add proper TLS verification - see TODO.md
         {idle_timeout_ms, 60000},
         {keep_alive_interval_ms, 20000},
         {handshake_idle_timeout_ms, 30000}
-    ].
+    ],
+    merge_opts(BaseOpts, TlsOpts).
+
+%% @doc Merge two option lists, with second list taking precedence.
+-spec merge_opts(list(), list()) -> list().
+merge_opts(BaseOpts, OverrideOpts) ->
+    lists:foldl(
+        fun({Key, Value}, Acc) ->
+            lists:keystore(Key, 1, Acc, {Key, Value})
+        end,
+        BaseOpts,
+        OverrideOpts
+    ).
 
 %% @doc Attempt QUIC connection and stream setup
 -spec attempt_quic_connection(string(), integer(), list()) ->
@@ -447,7 +474,7 @@ register_server_in_dht(State) ->
 %% Crashes if message is invalid - this indicates a bug in the caller.
 -spec send_message_raw(atom(), map(), pid()) -> ok | {error, term()}.
 send_message_raw(Type, Msg, Stream) ->
-    io:format("[send_message_raw] Type=~p, Msg=~p~n", [Type, Msg]),
+    ?LOG_DEBUG("Type=~p, Msg=~p", [Type, Msg]),
     Binary = macula_protocol_encoder:encode(Type, Msg),
     macula_quic:async_send(Stream, Binary).
 
@@ -456,9 +483,11 @@ send_message_raw(Type, Msg, Stream) ->
 handle_received_data(Data, State) ->
     %% Append to receive buffer
     Buffer = <<(State#state.recv_buffer)/binary, Data/binary>>,
+    ?LOG_WARNING("[Connection] handle_received_data ENTRY: data=~p bytes, buffer=~p bytes", [byte_size(Data), byte_size(Buffer)]),
 
     %% Try to decode messages
     {Messages, RemainingBuffer} = decode_messages(Buffer, []),
+    ?LOG_WARNING("[Connection] decode_messages returned: ~p messages, remaining=~p bytes", [length(Messages), byte_size(RemainingBuffer)]),
 
     %% Process each message
     State2 = lists:foldl(fun process_message/2, State, Messages),
@@ -475,14 +504,18 @@ decode_messages(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
     case byte_size(Rest) of
         ActualLen when ActualLen >= PayloadLen ->
             %% We have a complete message
+            ?LOG_WARNING("[Connection] DECODING message: buffer=~p bytes, payload_len=~p", [byte_size(Buffer), PayloadLen]),
             case macula_protocol_decoder:decode(Buffer) of
                 {ok, {Type, Msg}} ->
                     %% Skip this message and continue
+                    ?LOG_WARNING("[Connection] DECODED OK: type=~p", [Type]),
                     <<_:8/binary, _Payload:PayloadLen/binary, Remaining/binary>> = Buffer,
                     decode_messages(Remaining, [{Type, Msg} | Acc]);
-                {error, _Reason} ->
-                    %% Decode error, skip this message
-                    <<_:8/binary, _Payload:PayloadLen/binary, Remaining/binary>> = Buffer,
+                {error, Reason} ->
+                    %% Decode error, skip this message - LOG THE ERROR
+                    <<_:8, TypeIdByte:8, _:6/binary, _Payload:PayloadLen/binary, Remaining/binary>> = Buffer,
+                    ?LOG_WARNING("[Connection] DECODE ERROR: type_id=~p (0x~.16B), reason=~p, payload_len=~p",
+                                 [TypeIdByte, TypeIdByte, Reason, PayloadLen]),
                     decode_messages(Remaining, Acc)
             end;
         _ ->
@@ -496,10 +529,10 @@ decode_messages(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
 %% Route PUBLISH messages to pub/sub handler
 process_message({publish, Msg}, State) ->
     ?LOG_INFO("Connection manager routing message type: ~p", [publish]),
-    %% Look up the pubsub handler PID via gproc
-    case gproc:lookup_local_name({pubsub_handler, State#state.realm}) of
+    %% Look up the pubsub handler PID via gproc (using peer_id for uniqueness)
+    case gproc:lookup_local_name({pubsub_handler, State#state.realm, State#state.peer_id}) of
         undefined ->
-            ?LOG_WARNING("PubSub handler not found for realm ~s", [State#state.realm]),
+            ?LOG_WARNING("PubSub handler not found for realm ~s, peer_id ~p", [State#state.realm, State#state.peer_id]),
             State;
         PubSubPid ->
             macula_pubsub_handler:handle_incoming_publish(PubSubPid, Msg),
@@ -510,9 +543,18 @@ process_message({publish, Msg}, State) ->
 %% Route REPLY messages to RPC handler
 process_message({reply, Msg}, State) ->
     ?LOG_INFO("Connection manager routing message type: ~p", [reply]),
-    macula_rpc_handler:handle_incoming_reply(Msg),
-    ?LOG_DEBUG("Routed REPLY to rpc_handler"),
-    State;
+    %% Look up the RPC handler by node_id (not peer_id) so replies arriving on ANY
+    %% connection belonging to this node route to the correct handler
+    case gproc:lookup_local_name({rpc_handler, State#state.realm, State#state.node_id}) of
+        undefined ->
+            ?LOG_WARNING("RPC handler not found for realm ~s, node_id ~s when routing REPLY",
+                        [State#state.realm, binary:encode_hex(State#state.node_id)]),
+            State;
+        RpcPid ->
+            macula_rpc_handler:handle_incoming_reply(RpcPid, Msg),
+            ?LOG_DEBUG("Routed REPLY to rpc_handler"),
+            State
+    end;
 
 %% Handle CONNECTED acknowledgment
 process_message({connected, Msg}, State) ->
@@ -534,14 +576,98 @@ process_message({pong, _Msg}, State) ->
 %% Handle FIND_VALUE_REPLY message - route to RPC handler for DHT query results
 process_message({find_value_reply, Msg}, State) ->
     ?LOG_INFO("Connection manager routing message type: ~p", [find_value_reply]),
-    %% Look up the RPC handler and forward the reply
-    case gproc:lookup_local_name({rpc_handler, State#state.realm}) of
+    %% Look up the RPC handler by node_id (not peer_id) so replies arriving on ANY
+    %% connection belonging to this node route to the correct handler
+    case gproc:lookup_local_name({rpc_handler, State#state.realm, State#state.node_id}) of
         undefined ->
-            ?LOG_WARNING("RPC handler not found for realm ~s", [State#state.realm]),
+            ?LOG_WARNING("RPC handler not found for realm ~s, node_id ~s",
+                        [State#state.realm, binary:encode_hex(State#state.node_id)]),
             State;
         RpcPid ->
             macula_rpc_handler:handle_find_value_reply(RpcPid, Msg),
             ?LOG_DEBUG("Routed FIND_VALUE_REPLY to rpc_handler"),
+            State
+    end;
+
+%% Handle RPC_REQUEST message - execute local handler and send reply back via stream.
+%% This is used for relay scenarios: bootstrap forwards RPC_REQUEST through client stream,
+%% and we handle it locally and reply through the same stream.
+%%
+%% IMPORTANT: We search ALL RPC handlers in this realm for the procedure, not just
+%% the one associated with this connection's peer_id. This is because:
+%% - The procedure handler (e.g., ping.handler) is registered by macula_ping_pong
+%% - macula_ping_pong uses the RPC handler from macula_peers_sup (outbound connection)
+%% - But the RPC_REQUEST arrives via the gateway's inbound client stream (different peer_id)
+%% - So we need to search all RPC handlers to find the procedure
+process_message({rpc_request, Msg}, #state{stream = Stream} = State) ->
+    ?LOG_WARNING("[Connection] PROCESSING RPC_REQUEST locally (relay scenario)"),
+    RequestId = maps:get(<<"request_id">>, Msg, undefined),
+    Procedure = maps:get(<<"procedure">>, Msg, undefined),
+    Args = maps:get(<<"args">>, Msg, <<>>),
+    FromNode = maps:get(<<"from_node">>, Msg, undefined),
+
+    ?LOG_WARNING("[Connection] RPC_REQUEST details: procedure=~s, request_id=~p, from_node=~p",
+                [Procedure, RequestId, FromNode]),
+
+    %% Search ALL RPC handlers in this realm for the procedure
+    %% This handles relay scenarios where handler is in a different peer system
+    Result = find_and_execute_handler(State#state.realm, Procedure, Args),
+
+    ?LOG_WARNING("[Connection] RPC_REQUEST processing result: ~p", [Result]),
+
+    %% Build and send reply back through the same stream
+    %% Include to_node (original requester) so bootstrap can forward the reply
+    ReplyMsg = case Result of
+        {ok, ResultValue} ->
+            EncodedResult = try macula_utils:encode_json(ResultValue) catch _:_ -> ResultValue end,
+            #{
+                request_id => RequestId,
+                result => EncodedResult,
+                from_node => State#state.node_id,
+                to_node => FromNode,  %% Original requester - bootstrap uses this to route reply
+                timestamp => erlang:system_time(millisecond)
+            };
+        {error, ErrorReason} ->
+            #{
+                request_id => RequestId,
+                error => ErrorReason,
+                from_node => State#state.node_id,
+                to_node => FromNode,  %% Original requester - bootstrap uses this to route reply
+                timestamp => erlang:system_time(millisecond)
+            }
+    end,
+
+    ?LOG_WARNING("[Connection] Sending RPC_REPLY back through stream: ~p", [ReplyMsg]),
+    EncodedReply = macula_protocol_encoder:encode(rpc_reply, ReplyMsg),
+    ?LOG_WARNING("[Connection] EncodedReply size: ~p bytes", [byte_size(EncodedReply)]),
+    case macula_quic:send(Stream, EncodedReply) of
+        ok ->
+            ?LOG_WARNING("[Connection] Successfully sent RPC_REPLY");
+        {error, SendError} ->
+            ?LOG_WARNING("[Connection] Failed to send RPC_REPLY: ~p", [SendError])
+    end,
+    State;
+
+%% Handle RPC_REPLY message - route to RPC handler for async callback invocation.
+%% This handles replies that come back through the client connection stream.
+%% IMPORTANT: Use handle_async_reply (not handle_incoming_reply) because
+%% async RPC uses request_id field, while sync RPC uses call_id field.
+%% CRITICAL: Look up by node_id (not peer_id) so replies arriving on ANY connection
+%% belonging to this node route to the correct handler. This fixes the relay scenario
+%% where request goes out via outbound connection but reply arrives via inbound stream.
+process_message({rpc_reply, Msg}, State) ->
+    RequestId = maps:get(<<"request_id">>, Msg, maps:get(request_id, Msg, undefined)),
+    ?LOG_WARNING("[Connection] RECEIVED RPC_REPLY: request_id=~p, node_id=~s",
+                [RequestId, binary:encode_hex(State#state.node_id)]),
+    case gproc:lookup_local_name({rpc_handler, State#state.realm, State#state.node_id}) of
+        undefined ->
+            ?LOG_WARNING("[Connection] RPC_REPLY: RPC handler not found, realm=~p, node_id=~s",
+                        [State#state.realm, binary:encode_hex(State#state.node_id)]),
+            State;
+        RpcPid ->
+            ?LOG_WARNING("[Connection] RPC_REPLY: routing to RPC handler pid=~p", [RpcPid]),
+            macula_rpc_handler:handle_async_reply(RpcPid, Msg),
+            ?LOG_WARNING("[Connection] RPC_REPLY: delivered to RPC handler"),
             State
     end;
 
@@ -624,3 +750,61 @@ start_keepalive_timer(true, #state{opts = Opts} = State) ->
     Interval = maps:get(keepalive_interval, Opts, 30000),
     TimerRef = erlang:send_after(Interval, self(), keepalive_tick),
     State#state{keepalive_timer = TimerRef}.
+
+%% @private Find and execute a procedure handler by searching all RPC handlers in the realm.
+%% This is used for relay scenarios where the handler may be registered with a different
+%% peer system than the one associated with the incoming connection.
+-spec find_and_execute_handler(binary(), binary(), binary() | map()) ->
+    {ok, term()} | {error, binary()}.
+find_and_execute_handler(Realm, Procedure, Args) ->
+    ?LOG_WARNING("[Connection] Searching ALL RPC handlers in realm ~s for procedure ~s",
+                [Realm, Procedure]),
+
+    %% Get all RPC handlers registered in gproc for this realm
+    %% Pattern: {rpc_handler, Realm, _} matches any peer_id
+    Pattern = {n, l, {rpc_handler, Realm, '_'}},
+    RpcHandlers = gproc:lookup_pids(Pattern),
+
+    ?LOG_WARNING("[Connection] Found ~p RPC handlers in realm", [length(RpcHandlers)]),
+
+    %% Search each RPC handler's service registry for the procedure
+    find_handler_in_registries(RpcHandlers, Procedure, Args).
+
+%% @private Search through RPC handlers to find one that has the procedure registered.
+-spec find_handler_in_registries([pid()], binary(), binary() | map()) ->
+    {ok, term()} | {error, binary()}.
+find_handler_in_registries([], Procedure, _Args) ->
+    ?LOG_WARNING("[Connection] Procedure ~s not found in any RPC handler", [Procedure]),
+    {error, <<"procedure_not_found">>};
+find_handler_in_registries([RpcPid | Rest], Procedure, Args) ->
+    ?LOG_WARNING("[Connection] Checking RPC handler ~p for procedure ~s", [RpcPid, Procedure]),
+    case macula_rpc_handler:get_service_registry(RpcPid) of
+        {error, _} ->
+            %% Try next handler
+            find_handler_in_registries(Rest, Procedure, Args);
+        Registry ->
+            case macula_service_registry:get_local_handler(Registry, Procedure) of
+                {ok, Handler} ->
+                    ?LOG_WARNING("[Connection] FOUND handler for ~s in RPC handler ~p",
+                                [Procedure, RpcPid]),
+                    execute_handler(Handler, Args);
+                not_found ->
+                    %% Try next handler
+                    find_handler_in_registries(Rest, Procedure, Args)
+            end
+    end.
+
+%% @private Execute a handler function with the provided arguments.
+-spec execute_handler(fun((map()) -> {ok, term()} | {error, term()}), binary() | map()) ->
+    {ok, term()} | {error, binary()}.
+execute_handler(Handler, Args) ->
+    try
+        DecodedArgs = try macula_utils:decode_json(Args) catch _:_ -> Args end,
+        HandlerResult = Handler(DecodedArgs),
+        ?LOG_WARNING("[Connection] Handler executed, result=~p", [HandlerResult]),
+        HandlerResult
+    catch
+        _:Error ->
+            ?LOG_WARNING("[Connection] Handler THREW error: ~p", [Error]),
+            {error, iolist_to_binary(io_lib:format("~p", [Error]))}
+    end.

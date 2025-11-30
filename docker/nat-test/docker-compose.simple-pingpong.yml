@@ -1,0 +1,101 @@
+# Simplified PING/PONG Test Environment
+# 3 peers for quick testing of NATS-style pub/sub PING/PONG
+
+services:
+  # Bootstrap/relay node
+  bootstrap:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: pingpong-bootstrap
+    hostname: bootstrap
+    networks:
+      pingpong_net:
+        ipv4_address: 172.41.0.10
+    environment:
+      - NODE_TYPE=bootstrap
+      - NODE_ID=bootstrap
+      - QUIC_PORT=4433
+      - HTTP_PORT=8080
+      - RELAY_ENABLED=true
+      - DEMO_MODE=ping_pong
+      - MACULA_HOSTNAME=172.41.0.10
+    ports:
+      - "28080:8080"
+      - "24433:4433/udp"
+
+  # Full Cone NAT peer
+  fc01:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: pingpong-fc01
+    hostname: fc01
+    networks:
+      pingpong_net:
+        ipv4_address: 172.41.0.20
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=fc01
+      - BOOTSTRAP_HOST=172.41.0.10
+      - BOOTSTRAP_PORT=4433
+      - DEMO_MODE=ping_pong
+      - PING_INTERVAL=5000
+      - PING_TIMEOUT=3000
+      - MACULA_HOSTNAME=172.41.0.20
+      - PEER_COUNT=3
+    depends_on:
+      - bootstrap
+
+  # Restricted NAT peer
+  rc01:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: pingpong-rc01
+    hostname: rc01
+    networks:
+      pingpong_net:
+        ipv4_address: 172.41.0.30
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=rc01
+      - BOOTSTRAP_HOST=172.41.0.10
+      - BOOTSTRAP_PORT=4433
+      - DEMO_MODE=ping_pong
+      - PING_INTERVAL=5000
+      - PING_TIMEOUT=3000
+      - MACULA_HOSTNAME=172.41.0.30
+      - PEER_COUNT=3
+    depends_on:
+      - bootstrap
+
+  # Symmetric NAT peer
+  sy01:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: pingpong-sy01
+    hostname: sy01
+    networks:
+      pingpong_net:
+        ipv4_address: 172.41.0.40
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=sy01
+      - BOOTSTRAP_HOST=172.41.0.10
+      - BOOTSTRAP_PORT=4433
+      - DEMO_MODE=ping_pong
+      - PING_INTERVAL=5000
+      - PING_TIMEOUT=3000
+      - MACULA_HOSTNAME=172.41.0.40
+      - PEER_COUNT=3
+    depends_on:
+      - bootstrap
+
+networks:
+  pingpong_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.41.0.0/24

@@ -17,14 +17,8 @@
 %%% - DHT for distributed discovery
 %%% - TTL-based cleanup for stale entries
 %%%
-%%% Usage:
-%%% ```
-%%% %% Register as relay-capable
-%%% ok = macula_relay_registry:register(NodeId, Endpoint).
-%%%
-%%% %% Find best relay for a target
-%%% {ok, RelayInfo} = macula_relay_registry:find_relay(TargetNodeId).
-%%% ```
+%%% Usage: register(NodeId, Endpoint) to register as relay-capable,
+%%% find_relay(TargetNodeId) to find best relay for a target.
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -171,6 +165,7 @@ handle_call({register, NodeId, Endpoint, Opts}, _From, State) ->
     CurrentCount = ets:info(Table, size),
     case CurrentCount >= MaxRelays of
         true ->
+            ?LOG_WARNING("[RELAY_REGISTRY] Registration rejected: max_relays_reached (~p)", [MaxRelays]),
             {reply, {error, max_relays_reached}, State};
         false ->
             Now = erlang:system_time(second),
@@ -190,8 +185,8 @@ handle_call({register, NodeId, Endpoint, Opts}, _From, State) ->
             %% Publish to DHT for distributed discovery
             publish_relay_to_dht(NodeId, RelayInfo),
 
-            ?LOG_DEBUG("Registered relay: ~s at ~p (capacity: ~p)",
-                       [NodeId, Endpoint, Capacity]),
+            ?LOG_WARNING("[RELAY_REGISTRY] Registered relay: ~s at ~p (capacity: ~p, table_size: ~p)",
+                       [NodeId, Endpoint, Capacity, ets:info(Table, size)]),
             {reply, ok, State}
     end;
 
@@ -202,6 +197,10 @@ handle_call({find_relay, TargetNodeId, Opts}, _From, State) ->
     %% Get all valid relays
     Exclude = maps:get(exclude, Opts, []),
     MaxLatency = maps:get(max_latency_ms, Opts, infinity),
+
+    %% Debug: log current ETS contents
+    TableSize = ets:info(Table, size),
+    ?LOG_WARNING("[RELAY_REGISTRY] find_relay called: target=~p, table_size=~p", [TargetNodeId, TableSize]),
 
     Candidates = ets:foldl(
         fun({NodeId, Info}, Acc) ->

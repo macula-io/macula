@@ -1,0 +1,66 @@
+# Simplified NAT Traversal Test Environment
+# Single network for basic connectivity testing
+
+services:
+  # Bootstrap/relay node
+  bootstrap:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: nat-test-bootstrap
+    hostname: bootstrap
+    networks:
+      nat_test:
+        ipv4_address: 172.40.0.10
+    environment:
+      - NODE_TYPE=bootstrap
+      - NODE_ID=bootstrap-001
+      - QUIC_PORT=4433
+      - HTTP_PORT=8080
+      - RELAY_ENABLED=true
+    ports:
+      - "18080:8080"
+      - "14433:4433/udp"
+
+  # Peer 1
+  peer1:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: nat-test-peer1
+    hostname: peer1
+    networks:
+      nat_test:
+        ipv4_address: 172.40.0.20
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=peer-001
+      - BOOTSTRAP_HOST=172.40.0.10
+      - BOOTSTRAP_PORT=4433
+    depends_on:
+      - bootstrap
+
+  # Peer 2
+  peer2:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: nat-test-peer2
+    hostname: peer2
+    networks:
+      nat_test:
+        ipv4_address: 172.40.0.30
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=peer-002
+      - BOOTSTRAP_HOST=172.40.0.10
+      - BOOTSTRAP_PORT=4433
+    depends_on:
+      - bootstrap
+
+networks:
+  nat_test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.40.0.0/24

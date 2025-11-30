@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.10.1">
+    <meta name="project" content="macula v0.12.4">
 
 
-    <title>API Reference — macula v0.10.1</title>
+    <title>API Reference — macula v0.12.4</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-1151EC94.js"></script>
+    <script defer src="dist/sidebar_items-DE2E663F.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -32,16 +32,16 @@
   <div class="sidebar-header">
     <div class="sidebar-projectInfo">
 
-        <a href="readme.html" class="sidebar-projectImage">
+        <a href="overview.html" class="sidebar-projectImage">
           <img src="assets/logo.svg" alt="macula" />
         </a>
 
       <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
+        <a href="overview.html" class="sidebar-projectName" translate="no">
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.10.1
+          v0.12.4
         </div>
       </div>
     </div>
@@ -78,7 +78,7 @@ macula
 
 <div id="top-content">
   <div class="heading-with-actions top-heading">
-    <h1>API Reference <small class="app-vsn">macula v#0.10.1</small></h1>
+    <h1>API Reference <small class="app-vsn">macula v#0.12.4</small></h1>
 
       <a href="https://github.com/macula-io/macula" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
@@ -164,11 +164,29 @@ macula
 </div>
 <div class="summary-row">
   <div class="summary-signature">
+    <a href="macula_chatter.html" translate="no">macula_chatter</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Macula Chatter - P2P Chat Demo for NAT Traversal Testing</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
     <a href="macula_client_behaviour.html" translate="no">macula_client_behaviour</a>
 
   </div>
 
     <div class="summary-synopsis"><p>Behaviour defining the client API contract for Macula connections</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_cluster_strategy.html" translate="no">macula_cluster_strategy</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Macula Cluster Strategy for libcluster.</p></div>
 
 </div>
 <div class="summary-row">
@@ -187,6 +205,15 @@ macula
   </div>
 
     <div class="summary-synopsis"><p>Connection pool manager for endpoint connections.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_connection_upgrade.html" translate="no">macula_connection_upgrade</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Connection Upgrade Manager.</p></div>
 
 </div>
 <div class="summary-row">
@@ -232,6 +259,33 @@ macula
   </div>
 
     <div class="summary-synopsis"><p>Generic DHT-based service discovery. Provides cache-integrated lookup and announcement operations. Used by both pub/sub and RPC discovery layers.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_dist.html" translate="no">macula_dist</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>QUIC Distribution Carrier for Erlang.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_dist_discovery.html" translate="no">macula_dist_discovery</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>EPMD Replacement using Macula DHT Discovery.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_dist_system.html" translate="no">macula_dist_system</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Macula Distribution System Supervisor.</p></div>
 
 </div>
 <div class="summary-row">
@@ -353,6 +407,15 @@ macula
 </div>
 <div class="summary-row">
   <div class="summary-signature">
+    <a href="macula_hole_punch.html" translate="no">macula_hole_punch</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>QUIC Hole Punch Executor with Cancellation and Adaptive Timing.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
     <a href="macula_id.html" translate="no">macula_id</a>
 
   </div>
@@ -434,6 +497,51 @@ macula
 </div>
 <div class="summary-row">
   <div class="summary-signature">
+    <a href="macula_nat_cache.html" translate="no">macula_nat_cache</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>NAT Profile Cache with TTL and Stale-While-Revalidate.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_nat_connector.html" translate="no">macula_nat_connector</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>NAT-aware Peer Connector.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_nat_coordinator.html" translate="no">macula_nat_coordinator</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>NAT Hole Punch Coordinator.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_nat_detector.html" translate="no">macula_nat_detector</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>NAT Type Detector using NATCracker Methodology.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_nat_system.html" translate="no">macula_nat_system</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>NAT Traversal System Supervisor.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
     <a href="macula_node.html" translate="no">macula_node</a>
 
   </div>
@@ -497,11 +605,29 @@ macula
 </div>
 <div class="summary-row">
   <div class="summary-signature">
+    <a href="macula_ping_pong.html" translate="no">macula_ping_pong</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Macula Ping/Pong - Direct P2P Async RPC Demo</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
     <a href="macula_platform_system.html" translate="no">macula_platform_system</a>
 
   </div>
 
     <div class="summary-synopsis"><p>Macula Platform System Supervisor.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_port_predictor.html" translate="no">macula_port_predictor</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Port Prediction for NAT Traversal.</p></div>
 
 </div>
 <div class="summary-row">
@@ -682,6 +808,33 @@ macula
   </div>
 
     <div class="summary-synopsis"><p>Realm management and validation. Realms provide logical isolation boundaries in the mesh. Realm names follow reverse DNS notation (e.g., &quot;org.example.mesh&quot;).</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_realm_trust.html" translate="no">macula_realm_trust</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Realm Trust Management for Hybrid Trust Model</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_relay_node.html" translate="no">macula_relay_node</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Peer Relay Node.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="macula_relay_registry.html" translate="no">macula_relay_registry</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Distributed Relay Registry.</p></div>
 
 </div>
 <div class="summary-row">
@@ -870,7 +1023,7 @@ macula
 
   </div>
 
-    <div class="summary-synopsis"><p>TLS Certificate Auto-Generation Module</p></div>
+    <div class="summary-synopsis"><p>TLS Certificate Management and Verification Module (v0.11.0+)</p></div>
 
 </div>
 <div class="summary-row">
@@ -901,9 +1054,9 @@ macula
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.10.1" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.12.4" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.10.1">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.12.4">Hex Preview</a>
 
           </span>
 

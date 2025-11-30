@@ -1,0 +1,159 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_port_predictor</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_port_predictor</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+Port Prediction for NAT Traversal.
+
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>   
+Port Prediction for NAT Traversal.</p>
+  
+   <p>Provides intelligent port prediction based on NAT allocation policies   
+and historical port allocation data. Improves hole punch success rates   
+by predicting the external ports a peer will use.</p>
+  
+   <p>Prediction Strategies by Allocation Policy:</p>
+  
+   <p>- PP (Port Preservation): External port = internal port     
+Prediction: Use last known port (high confidence)</p>
+  
+   <p>- PC (Port Contiguity): Sequential port allocation     
+Prediction: Calculate delta from history, predict next ports     
+Delta tracking with exponential moving average</p>
+  
+   <p>- RD (Random): Random port allocation     
+Prediction: Use historical range + common NAT port ranges     
+Statistical approach with lower confidence</p>
+  
+   Port History Storage:
+   - Tracks last N port allocations per peer (default: 10)
+   - Calculates port deltas for PC allocation
+   - Maintains statistics for RD allocation (mean, stddev, range)
+  
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-allocation_policy">allocation_policy()</a></h3>
+<p><code>allocation_policy() = pp | pc | rd | unknown</code></p>
+
+
+<h3 class="typedecl"><a name="type-port_history">port_history()</a></h3>
+<p><code>port_history() = #{node_id := binary(), ports := [<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>], deltas := [integer()], updated_at := integer()}</code></p>
+
+
+<h3 class="typedecl"><a name="type-port_prediction">port_prediction()</a></h3>
+<p><code>port_prediction() = #{ports := [<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>], confidence := float(), strategy := pp | pc | rd | fallback, delta =&gt; integer(), stats =&gt; <a href="#type-port_stats" docgen-rel="seetype" docgen-href="#port_stats/0">port_stats()</a>}</code></p>
+
+
+<h3 class="typedecl"><a name="type-port_stats">port_stats()</a></h3>
+<p><code>port_stats() = #{mean := float(), stddev := float(), min := <a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>, max := <a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>, count := non_neg_integer()}</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#clear-1">clear/1</a></td><td>Clear port history for a peer.</td></tr>
+<tr><td valign="top"><a href="#get_history-1">get_history/1</a></td><td>Get port history for a peer.</td></tr>
+<tr><td valign="top"><a href="#get_stats-1">get_stats/1</a></td><td>Get port statistics for a peer.</td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#predict-2">predict/2</a></td><td>Predict external ports for a peer.</td></tr>
+<tr><td valign="top"><a href="#predict-3">predict/3</a></td><td>Predict external ports with options.</td></tr>
+<tr><td valign="top"><a href="#record_port-3">record_port/3</a></td><td>Record an observed external port for a peer.</td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td>Start the port predictor server.</td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="clear-1">clear/1</a></h3>
+<div class="spec">
+<p><code>clear(NodeId::binary()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Clear port history for a peer.</p>
+
+<h3 class="function"><a name="get_history-1">get_history/1</a></h3>
+<div class="spec">
+<p><code>get_history(NodeId::binary()) -&gt; {ok, <a href="#type-port_history" docgen-rel="seetype" docgen-href="#port_history/0">port_history()</a>} | not_found</code><br></p>
+<p> </p>
+</div><p>Get port history for a peer.</p>
+
+<h3 class="function"><a name="get_stats-1">get_stats/1</a></h3>
+<div class="spec">
+<p><code>get_stats(NodeId::binary()) -&gt; {ok, <a href="#type-port_stats" docgen-rel="seetype" docgen-href="#port_stats/0">port_stats()</a>} | not_found</code><br></p>
+<p> </p>
+</div><p>Get port statistics for a peer.</p>
+
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="predict-2">predict/2</a></h3>
+<div class="spec">
+<p><code>predict(NodeId::binary(), AllocationPolicy::<a href="#type-allocation_policy" docgen-rel="seetype" docgen-href="#allocation_policy/0">allocation_policy()</a>) -&gt; <a href="#type-port_prediction" docgen-rel="seetype" docgen-href="#port_prediction/0">port_prediction()</a></code><br></p>
+<p> </p>
+</div><p>Predict external ports for a peer.
+  Uses NAT profile if available, otherwise uses historical data.</p>
+
+<h3 class="function"><a name="predict-3">predict/3</a></h3>
+<div class="spec">
+<p><code>predict(NodeId::binary(), AllocationPolicy::<a href="#type-allocation_policy" docgen-rel="seetype" docgen-href="#allocation_policy/0">allocation_policy()</a>, Opts::map()) -&gt; <a href="#type-port_prediction" docgen-rel="seetype" docgen-href="#port_prediction/0">port_prediction()</a></code><br></p>
+<p> </p>
+</div><p>Predict external ports with options.
+  Options:
+    base_port - Known/expected base port for prediction
+    count - Number of ports to predict (default: 5)</p>
+
+<h3 class="function"><a name="record_port-3">record_port/3</a></h3>
+<div class="spec">
+<p><code>record_port(NodeId::binary(), Port::<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>, AllocationPolicy::<a href="#type-allocation_policy" docgen-rel="seetype" docgen-href="#allocation_policy/0">allocation_policy()</a>) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Record an observed external port for a peer.
+  Used to build history for better predictions.</p>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Opts::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the port predictor server.</p>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

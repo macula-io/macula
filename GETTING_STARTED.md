@@ -6,7 +6,7 @@
 
   <p>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"/></a>
-    <a href="https://www.erlang.org"><img src="https://img.shields.io/badge/Erlang%2FOTP-26+-brightgreen" alt="Erlang/OTP"/></a>
+    <a href="https://www.erlang.org"><img src="https://img.shields.io/badge/Erlang%2FOTP-27+-brightgreen" alt="Erlang/OTP"/></a>
     <a href="https://hex.pm/packages/macula"><img src="https://img.shields.io/hexpm/v/macula.svg" alt="Hex.pm"/></a>
   </p>
 </div>
@@ -18,20 +18,19 @@
 </div>
 
 <div align="center">
-  <p><strong>BEAM-Native • HTTP/3 (QUIC) • Kademlia DHT • Direct P2P • Multi-Tenant • 50% Faster (v0.8.0)</strong></p>
+  <p><strong>BEAM-Native | HTTP/3 (QUIC) | Kademlia DHT | Direct P2P | Multi-Tenant | Platform Layer</strong></p>
 </div>
 
 ---
 
 ## Table of Contents
 
-- 🏗️ [Architecture Overview](ARCHITECTURE.md) - **Visual guide with diagrams** (C4, supervision trees, deployment topologies)
-- 🚀 [Quick Start](#quick-start) - Get started in minutes
-- 💡 [What's New in v0.8.0](#whats-new-in-v080) - Latest features
-- 📚 [Core Concepts](#core-concepts) - Understanding the mesh
-- 🔧 [API Overview](#api-overview) - Using Macula in your application
-- 📄 [Changelog](CHANGELOG.md) - Version history and migration guides
-- 🐛 [Issues](https://github.com/macula-io/macula/issues) - Report bugs and request features
+- [Architecture Overview](ARCHITECTURE.md) - Visual guide with C4 diagrams
+- [Quick Start](#quick-start) - Get started in minutes
+- [Documentation](#documentation) - Full documentation index
+- [Core Concepts](#core-concepts) - Understanding the mesh
+- [API Overview](#api-overview) - Using Macula in your application
+- [Changelog](CHANGELOG.md) - Version history and migration guides
 
 ---
 
@@ -41,13 +40,32 @@ Macula is infrastructure for building **decentralized applications and services*
 
 **Key Features:**
 
-✅ **BEAM-native** (Erlang/Elixir OTP supervision and fault tolerance)
-✅ **HTTP/3 (QUIC)** transport (modern, encrypted, NAT-friendly)
-✅ **Edge-first design** (works through firewalls and NAT)
-✅ **Built-in pub/sub & RPC** (no external message broker needed)
-✅ **Multi-tenancy** (realm isolation for SaaS and shared infrastructure)
-✅ **Self-organizing mesh** (DHT-based service discovery, O(log N) routing)
-✅ **Production-ready patterns** (OTP behaviors, comprehensive testing, memory management)
+- **BEAM-native** - Erlang/Elixir OTP supervision and fault tolerance
+- **HTTP/3 (QUIC)** - Modern, encrypted, NAT-friendly transport
+- **Edge-first design** - Works through firewalls and NAT
+- **Built-in pub/sub & RPC** - No external message broker needed
+- **Multi-tenancy** - Realm isolation for SaaS and shared infrastructure
+- **Self-organizing mesh** - DHT-based service discovery
+- **Platform Layer** - Raft consensus and CRDT support (v0.9.0+)
+- **Production-ready** - Memory management, comprehensive testing
+
+---
+
+## Documentation
+
+| I want to... | Go to... |
+|--------------|----------|
+| Understand why Macula exists | [Platform Overview](docs/business/OVERVIEW.md) |
+| Understand the socio-economic vision | [Motivation](docs/business/MOTIVATION.md) |
+| Compare Macula to Kafka/RabbitMQ/NATS | [Technology Comparison](docs/business/COMPARISON.md) |
+| Get started quickly | [Quick Start](docs/user/QUICK_START.md) |
+| Build my first app | [Hello World Tutorial](docs/user/HELLO_WORLD.md) |
+| Deploy to production | [Performance Guide](docs/operator/PERFORMANCE_GUIDE.md) |
+| Understand RPC patterns | [RPC Guide](docs/developer/RPC_GUIDE.md) |
+| Understand PubSub patterns | [PubSub Guide](docs/developer/PUBSUB_GUIDE.md) |
+| Look up terminology | [Glossary](docs/GLOSSARY.md) |
+
+**[Full Documentation Index](docs/README.md)**
 
 ---
 
@@ -60,7 +78,7 @@ Macula is infrastructure for building **decentralized applications and services*
 │     Your     │
 │ Application  │
 └──────┬───────┘
-       │ macula_peer API
+       │ macula API
        ▼
 ┌──────────────┐     QUIC/HTTP3      ┌──────────────┐
 │ Macula Peer  │◄───────────────────►│   Gateway    │
@@ -71,22 +89,16 @@ Macula is infrastructure for building **decentralized applications and services*
                  (Service Discovery)
 ```
 
-**Message Flow** (v0.8.0 Direct P2P):
+**Message Flow** (Direct P2P):
 
 ```
 Client ──1. Query DHT──► DHT (Find Service)
 Client ◄─2. Endpoint──── DHT Returns "192.168.1.50:9443"
-Client ──3. Direct────► Provider (1-hop, 50ms)
-Client ◄─4. Response─── Provider (50% faster than relay!)
+Client ──3. Direct────► Provider (1-hop, ~50ms)
+Client ◄─4. Response─── Provider
 ```
 
-**📊 [See Full Architecture Guide](ARCHITECTURE.md)** with:
-- C4 diagrams (context, container views)
-- Deployment topologies (edge, microservices, hybrid)
-- Supervision trees (OTP fault tolerance)
-- DHT architecture (Kademlia routing)
-- Performance characteristics
-- When to use Macula
+**[See Full Architecture Guide](ARCHITECTURE.md)** with C4 diagrams, supervision trees, and deployment topologies.
 
 ---
 
@@ -97,7 +109,7 @@ Client ◄─4. Response─── Provider (50% faster than relay!)
 ```elixir
 def deps do
   [
-    {:macula, "~> 0.8"}
+    {:macula, "~> 0.10"}
   ]
 end
 ```
@@ -106,29 +118,11 @@ end
 
 ```erlang
 {deps, [
-    {macula, "0.8.4"}
+    {macula, "0.10.1"}
 ]}.
 ```
 
-**Latest Release**: v0.8.4 (2025-11-17) - Fixed hex docs landing page redirect (v0.8.0: Direct P2P with DHT propagation)
-
----
-
-##  What's New in v0.8.0
-
-**Major Features:**
-- ✅ Direct P2P QUIC connections via `macula_peer_connector`
-- ✅ DHT propagation to k=20 closest nodes (Kademlia-based)
-- ✅ RPC via direct P2P (50% latency improvement)
-- ✅ PubSub via direct P2P (50% latency improvement)
-- ✅ 21/21 integration tests passing (100% coverage)
-
-**Performance:**
-- 1-hop direct connections vs 2+ hop relay routing
-- Reduced gateway load
-- Better scalability for large meshes
-
-**Breaking Changes:** None - fully backward compatible with v0.7.x
+**Latest Release**: v0.10.1 (November 2025)
 
 ---
 
@@ -137,8 +131,13 @@ end
 ### 1. Connect to a Gateway
 
 ```erlang
-%% Start a peer connection
-{ok, Peer} = macula_peer:start_link(<<"https://gateway.example.com:9443">>, #{
+%% Connect to a remote gateway
+{ok, Client} = macula:connect(<<"https://gateway.example.com:9443">>, #{
+    realm => <<"com.example.app">>
+}).
+
+%% Or connect locally (same node)
+{ok, Client} = macula:connect_local(#{
     realm => <<"com.example.app">>
 }).
 ```
@@ -147,27 +146,27 @@ end
 
 ```erlang
 %% Subscribe to events
-ok = macula_peer:subscribe(Peer, <<"sensor.temperature">>, self()).
+{ok, SubRef} = macula:subscribe(Client, <<"sensor.temperature">>, fun(Event) ->
+    #{celsius := Temp} = Event,
+    io:format("Temperature: ~p C~n", [Temp])
+end).
 
 %% Publish an event
-ok = macula_peer:publish(Peer, <<"sensor.temperature">>, #{
+ok = macula:publish(Client, <<"sensor.temperature">>, #{
     device_id => <<"sensor-001">>,
     celsius => 21.5,
     timestamp => erlang:system_time(millisecond)
 }).
 
-%% Receive events
-receive
-    {macula_event, <<"sensor.temperature">>, Payload} ->
-        io:format("Temperature: ~p°C~n", [maps:get(celsius, Payload)])
-end.
+%% Unsubscribe when done
+ok = macula:unsubscribe(Client, SubRef).
 ```
 
 ### 3. RPC (Remote Procedure Calls)
 
 ```erlang
 %% Call a remote service
-{ok, Result} = macula_peer:call(Peer, <<"calculator.add">>, #{
+{ok, Result} = macula:call(Client, <<"calculator.add">>, #{
     a => 5,
     b => 3
 }).
@@ -178,11 +177,14 @@ end.
 
 ```erlang
 %% Advertise a service handler
-ok = macula_peer:advertise(Peer, <<"calculator.add">>, fun(Args) ->
+{ok, AdvRef} = macula:advertise(Client, <<"calculator.add">>, fun(Args) ->
     A = maps:get(a, Args),
     B = maps:get(b, Args),
-    #{result => A + B}
-end, #{ttl => 300}).
+    {ok, #{result => A + B}}
+end).
+
+%% Unadvertise when done
+ok = macula:unadvertise(Client, AdvRef).
 ```
 
 ---
@@ -190,60 +192,81 @@ end, #{ttl => 300}).
 ## Core Concepts
 
 ### Mesh Architecture
+
 Macula creates a self-organizing mesh network where nodes communicate over HTTP/3 (QUIC). Each node can act as:
+
 - **Peer** - Application client/server participating in the mesh
 - **Gateway** - Relay node for NAT-traversed peers (optional)
 - **Registry** - DHT participant storing service advertisements
 
 ### Multi-Tenancy via Realms
+
 Realms provide logical isolation for different applications sharing the same physical mesh:
+
 ```erlang
 %% App 1
-{ok, Peer1} = macula_peer:start_link(GatewayUrl, #{realm => <<"com.app1">>}).
+{ok, Client1} = macula:connect_local(#{realm => <<"com.app1">>}).
 
 %% App 2 (completely isolated from App 1)
-{ok, Peer2} = macula_peer:start_link(GatewayUrl, #{realm => <<"com.app2">>}).
+{ok, Client2} = macula:connect_local(#{realm => <<"com.app2">>}).
 ```
 
 ### DHT-Based Service Discovery
-Services are discovered via a Kademlia DHT with k=20 replication:
-1. Provider advertises: `advertise(<<"my.service">>, Handler)`
-2. DHT propagates to k=20 closest nodes
-3. Consumer discovers: `call(<<"my.service">>, Args)`
-4. Direct P2P connection established (v0.8.0+)
 
-### Direct P2P Connections (v0.8.0)
-Instead of relaying through gateways, v0.8.0 establishes direct QUIC connections:
-- Discovered endpoint → Direct connection
-- 50% latency reduction (1-hop vs 2+ hops)
-- Reduced gateway load
+Services are discovered via a Kademlia DHT with k=20 replication:
+
+1. Provider advertises: `macula:advertise(Client, <<"my.service">>, Handler)`
+2. DHT propagates to k=20 closest nodes
+3. Consumer discovers: `macula:call(Client, <<"my.service">>, Args)`
+4. Direct P2P connection established
+
+### Platform Layer (v0.9.0+)
+
+Distributed coordination primitives for workload applications:
+
+```erlang
+%% Leader election
+{ok, LeaderNodeId} = macula:get_leader(Client).
+
+%% CRDT state sharing
+ok = macula:propose_crdt_update(Client, <<"counter">>, {increment, 1},
+    #{crdt_type => pn_counter}).
+```
 
 ---
 
 ## API Overview
 
-### Main Modules
+### Main Module
 
-**`macula_peer`** - High-level mesh participant API
-- `start_link/2` - Connect to gateway
-- `publish/3`, `subscribe/3` - Pub/sub messaging
-- `call/3`, `advertise/4` - RPC and service registration
+**`macula`** - The public API (facade)
 
-**`macula_gateway`** - Gateway/relay node
-- Embedded or standalone gateway deployment
-- Client lifecycle management
-- Message routing and forwarding
+```erlang
+%% Connection
+macula:connect/2          %% Connect to remote gateway
+macula:connect_local/1    %% Connect locally
 
-**`macula_peer_connector`** - Direct P2P connections (v0.8.0)
-- Establishes outbound QUIC connections
-- Fire-and-forget message delivery
+%% Pub/Sub
+macula:publish/3, /4      %% Publish event
+macula:subscribe/3        %% Subscribe to topic
+macula:unsubscribe/2      %% Unsubscribe
+
+%% RPC
+macula:call/3, /4         %% Call remote procedure
+macula:advertise/3        %% Advertise service
+macula:unadvertise/2      %% Remove advertisement
+
+%% Platform Layer (v0.9.0+)
+macula:get_leader/1       %% Get current leader
+macula:propose_crdt_update/4  %% Update CRDT state
+```
 
 ### Configuration Options
 
 ```erlang
 Opts = #{
     realm => <<"com.example.app">>,        %% Required: Realm for isolation
-    node_id => <<"my-node-001">>,         %% Optional: Custom node ID
+    node_id => <<"my-node-001">>,          %% Optional: Custom node ID
     cert_file => "cert.pem",               %% Optional: TLS certificate
     key_file => "key.pem"                  %% Optional: TLS private key
 }
@@ -279,10 +302,25 @@ rebar3 shell
 # Run unit tests
 rebar3 eunit
 
-# Run integration tests (requires Docker)
-rebar3 ct --suite=test/integration/multi_hop_rpc_SUITE
-rebar3 ct --suite=test/integration/multi_hop_pubsub_SUITE
+# Run dialyzer (type checking)
+rebar3 dialyzer
+
+# Generate documentation
+rebar3 ex_doc
 ```
+
+---
+
+## Version History
+
+| Version | Date | Key Features |
+|---------|------|--------------|
+| v0.10.x | Nov 2025 | Production hardening, memory management |
+| v0.9.x | Nov 2025 | Platform Layer (Raft consensus, CRDTs) |
+| v0.8.x | Nov 2025 | Direct P2P connections, DHT propagation |
+| v0.7.x | Nov 2025 | Nomenclature refactoring |
+
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
 ---
 
@@ -300,4 +338,4 @@ Macula is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for deta
 
 ---
 
-**Built with ❤️ for the BEAM community**
+**Built for the BEAM community**

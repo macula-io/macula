@@ -1,8 +1,13 @@
 # Macula TLS Auto-Generation Strategy
 
 **Date:** 2025-11-18
-**Status:** Planning / v0.9.0
+**Updated:** 2025-11-28
+**Status:** Phase 1 COMPLETED (v0.11.0), Phases 2-4 Planned
 **Context:** Zero-config TLS for scalable P2P mesh deployment
+
+> **Note:** Phase 1 (Basic Auto-Generation) was implemented in v0.11.0.
+> See `docs/operator/TLS_CONFIGURATION.md` for operator documentation.
+> See `src/macula_tls.erl` for implementation.
 
 ---
 
@@ -313,25 +318,34 @@ Extensions:
 
 ## Implementation Plan
 
-### Phase 1: Basic Auto-Generation (v0.9.0)
+### Phase 1: Basic Auto-Generation (COMPLETED - v0.11.0)
 
-**Scope:**
+**Status:** IMPLEMENTED
+
+**Implementation (v0.11.0):**
 - ✅ Auto-generate self-signed certs on first boot
 - ✅ Persist to disk (configurable path)
 - ✅ Derive Node ID from public key hash
-- ✅ Accept all peer certificates (no verification)
+- ✅ Two TLS modes: `development` (no verification) and `production` (strict verification)
+- ✅ CA bundle configuration for production mode
+- ✅ Hostname verification in production mode
+- ✅ Environment variable configuration (MACULA_TLS_MODE, MACULA_TLS_CACERTFILE, etc.)
 
 **Module:** `macula_tls.erl`
 **Functions:**
 - `generate_self_signed_cert/1` → `{Cert, Key}`
 - `derive_node_id/1` → `NodeID`
 - `ensure_cert_exists/2` → `{ok, CertPath, KeyPath} | {error, Reason}`
+- `get_tls_mode/0` → `production | development`
+- `quic_client_opts/0` → QUIC client TLS options
+- `quic_server_opts/0` → QUIC server TLS options
+- `quic_client_opts_with_hostname/1` → Hostname-aware client TLS options
 
-**Tests:**
-- Generate cert and verify format
-- Persist and reload cert
-- Derive consistent Node ID
-- Handle missing/corrupted certs
+**Tests:** 29 tests passing (`macula_tls_tests.erl`)
+
+**Documentation:**
+- `docs/operator/TLS_CONFIGURATION.md` - Operator guide
+- `scripts/setup-dev-tls.sh` - Development certificate generation
 
 ---
 

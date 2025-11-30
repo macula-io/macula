@@ -46,13 +46,16 @@ add_subscription(Topic, Callback, Subscriptions, SubRef) ->
 -spec remove_subscription(subscription_ref(), subscriptions()) ->
     {ok, subscriptions(), topic()} | {error, not_found}.
 remove_subscription(SubRef, Subscriptions) ->
-    case maps:get(SubRef, Subscriptions, undefined) of
-        undefined ->
-            {error, not_found};
-        {Topic, _Callback} ->
-            UpdatedSubscriptions = maps:remove(SubRef, Subscriptions),
-            {ok, UpdatedSubscriptions, Topic}
-    end.
+    SubInfo = maps:get(SubRef, Subscriptions, undefined),
+    do_remove_subscription(SubInfo, SubRef, Subscriptions).
+
+%% @private Subscription not found
+do_remove_subscription(undefined, _SubRef, _Subscriptions) ->
+    {error, not_found};
+%% @private Remove subscription
+do_remove_subscription({Topic, _Callback}, SubRef, Subscriptions) ->
+    UpdatedSubscriptions = maps:remove(SubRef, Subscriptions),
+    {ok, UpdatedSubscriptions, Topic}.
 
 %% @doc Find matching subscriptions for a topic.
 %% Returns list of {SubRef, {Pattern, Callback}} tuples.

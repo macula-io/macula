@@ -1,0 +1,163 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_relay_node</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_relay_node</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+Peer Relay Node.
+
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>   
+Peer Relay Node.</p>
+  
+   <p>Provides relay functionality for peers that cannot establish   
+direct connections due to NAT restrictions. A relay node:</p>
+  
+   <p>- Accepts connections from peers behind restrictive NATs   
+- Forwards traffic between connected peers   
+- Manages relay sessions with bandwidth limits   
+- Auto-registers with relay registry when capable</p>
+  
+   <p>Relay Protocol:   
+1. Peer A connects to relay with RELAY_REQUEST(target_id)   
+2. Relay checks if target is reachable and accepts   
+3. Relay establishes/reuses connection to target   
+4. Relay forwards bidirectional traffic   
+5. Either peer can close the relay session</p>
+  
+   Resource Limits:
+   - Max concurrent relay sessions (default: 100)
+   - Per-session bandwidth limit (default: 1 MB/s)
+   - Session timeout (default: 30 minutes)
+  
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-relay_session">relay_session()</a></h3>
+<p><code>relay_session() = #{session_id := binary(), initiator_id := binary(), target_id := binary(), initiator_conn =&gt; term(), target_conn =&gt; term(), started_at := integer(), bytes_relayed := non_neg_integer(), last_activity := integer()}</code></p>
+
+
+<h3 class="typedecl"><a name="type-relay_stats">relay_stats()</a></h3>
+<p><code>relay_stats() = #{enabled := boolean(), max_sessions := pos_integer(), active_sessions := non_neg_integer(), total_bytes_relayed := non_neg_integer(), total_sessions_created := non_neg_integer()}</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#close_relay-1">close_relay/1</a></td><td>Close a relay session.</td></tr>
+<tr><td valign="top"><a href="#disable-0">disable/0</a></td><td>Disable relay functionality.</td></tr>
+<tr><td valign="top"><a href="#enable-0">enable/0</a></td><td>Enable relay functionality on this node.</td></tr>
+<tr><td valign="top"><a href="#enable-1">enable/1</a></td><td>Enable relay with options.</td></tr>
+<tr><td valign="top"><a href="#get_sessions-0">get_sessions/0</a></td><td>Get active relay sessions.</td></tr>
+<tr><td valign="top"><a href="#get_stats-0">get_stats/0</a></td><td>Get relay statistics.</td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#is_enabled-0">is_enabled/0</a></td><td>Check if relay is enabled.</td></tr>
+<tr><td valign="top"><a href="#request_relay-2">request_relay/2</a></td><td>Request a relay session to target.</td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td>Start the relay node server.</td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="close_relay-1">close_relay/1</a></h3>
+<div class="spec">
+<p><code>close_relay(SessionId::binary()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Close a relay session.</p>
+
+<h3 class="function"><a name="disable-0">disable/0</a></h3>
+<div class="spec">
+<p><code>disable() -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Disable relay functionality.</p>
+
+<h3 class="function"><a name="enable-0">enable/0</a></h3>
+<div class="spec">
+<p><code>enable() -&gt; ok | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Enable relay functionality on this node.</p>
+
+<h3 class="function"><a name="enable-1">enable/1</a></h3>
+<div class="spec">
+<p><code>enable(Opts::map()) -&gt; ok | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Enable relay with options.
+  Options:
+    node_id - This node's ID
+    endpoint - This node's endpoint for relay registry
+    capacity - Max concurrent sessions</p>
+
+<h3 class="function"><a name="get_sessions-0">get_sessions/0</a></h3>
+<div class="spec">
+<p><code>get_sessions() -&gt; [<a href="#type-relay_session" docgen-rel="seetype" docgen-href="#relay_session/0">relay_session()</a>]</code><br></p>
+<p> </p>
+</div><p>Get active relay sessions.</p>
+
+<h3 class="function"><a name="get_stats-0">get_stats/0</a></h3>
+<div class="spec">
+<p><code>get_stats() -&gt; <a href="#type-relay_stats" docgen-rel="seetype" docgen-href="#relay_stats/0">relay_stats()</a></code><br></p>
+<p> </p>
+</div><p>Get relay statistics.</p>
+
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="is_enabled-0">is_enabled/0</a></h3>
+<div class="spec">
+<p><code>is_enabled() -&gt; boolean()</code><br></p>
+<p> </p>
+</div><p>Check if relay is enabled.</p>
+
+<h3 class="function"><a name="request_relay-2">request_relay/2</a></h3>
+<div class="spec">
+<p><code>request_relay(InitiatorId::binary(), TargetId::binary()) -&gt; {ok, binary()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Request a relay session to target.
+  Returns session ID on success.</p>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Opts::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the relay node server.</p>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

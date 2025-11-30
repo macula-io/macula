@@ -102,16 +102,17 @@ advertise_subscription(Topic, SubRef, NodeId, Url, _ConnMgrPid) ->
 %% Returns updated advertised_subscriptions map.
 -spec cancel_advertisement(topic(), advertised_subscriptions()) -> advertised_subscriptions().
 cancel_advertisement(Topic, AdvertisedSubscriptions) ->
-    case maps:get(Topic, AdvertisedSubscriptions, undefined) of
-        undefined ->
-            %% Not advertised, return unchanged
-            AdvertisedSubscriptions;
-        SubInfo ->
-            %% Cancel timer and remove from map
-            TimerRef = maps:get(timer_ref, SubInfo),
-            erlang:cancel_timer(TimerRef),
-            maps:remove(Topic, AdvertisedSubscriptions)
-    end.
+    SubInfo = maps:get(Topic, AdvertisedSubscriptions, undefined),
+    do_cancel_advertisement(SubInfo, Topic, AdvertisedSubscriptions).
+
+%% @private Not advertised, return unchanged
+do_cancel_advertisement(undefined, _Topic, AdvertisedSubscriptions) ->
+    AdvertisedSubscriptions;
+%% @private Cancel timer and remove from map
+do_cancel_advertisement(SubInfo, Topic, AdvertisedSubscriptions) ->
+    TimerRef = maps:get(timer_ref, SubInfo),
+    erlang:cancel_timer(TimerRef),
+    maps:remove(Topic, AdvertisedSubscriptions).
 
 %% @doc Discover remote subscribers for a topic.
 %% Checks cache first, queries DHT on cache miss.
@@ -143,15 +144,15 @@ discover_subscribers(Topic, Payload, Qos, ConnMgrPid, ServiceRegistry, MsgIdCoun
 -spec handle_discovery_response(binary(), list(), pending_queries()) ->
     {ok, pending_queries()} | {not_found, pending_queries()}.
 handle_discovery_response(MsgId, _Subscribers, PendingQueries) ->
-    case maps:get(MsgId, PendingQueries, undefined) of
-        undefined ->
-            %% Query not found (already handled or unknown)
-            {not_found, PendingQueries};
-        {_Topic, _Payload, _Qos, _Opts} ->
-            %% Query found - remove from pending
-            %% Note: Actual routing happens in the caller
-            {ok, maps:remove(MsgId, PendingQueries)}
-    end.
+    QueryInfo = maps:get(MsgId, PendingQueries, undefined),
+    do_handle_discovery_response(QueryInfo, MsgId, PendingQueries).
+
+%% @private Query not found (already handled or unknown)
+do_handle_discovery_response(undefined, _MsgId, PendingQueries) ->
+    {not_found, PendingQueries};
+%% @private Query found - remove from pending
+do_handle_discovery_response({_Topic, _Payload, _Qos, _Opts}, MsgId, PendingQueries) ->
+    {ok, maps:remove(MsgId, PendingQueries)}.
 
 %% @doc Route message to remote subscribers via direct P2P connections (v0.8.0+).
 %% Wraps publish in pubsub_route envelope and sends directly to each subscriber.
@@ -190,15 +191,8 @@ route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId) ->
                         SourceNodeId, DestNodeId, PublishMsg, 10
                     ),
 
-                    %% Send directly to subscriber via peer connector
-                    case macula_peer_connector:send_message(DestEndpoint, pubsub_route, PubSubRouteMsg) of
-                        ok ->
-                            ?LOG_DEBUG("[~s] Sent pubsub_route directly to subscriber ~s at ~s for topic ~s",
-                                      [SourceNodeId, binary:encode_hex(DestNodeId), DestEndpoint, Topic]);
-                        {error, Reason} ->
-                            ?LOG_ERROR("[~s] Failed to send pubsub_route to ~s: ~p",
-                                      [SourceNodeId, DestEndpoint, Reason])
-                    end
+                    %% Try direct send first, fall back to NAT-aware routing (v0.12.0+)
+                    send_to_subscriber(SourceNodeId, DestNodeId, DestEndpoint, Topic, PubSubRouteMsg)
             end
         end,
         Subscribers
@@ -250,3 +244,33 @@ query_dht_async(Topic, _Payload, _Qos, _MsgId, _ConnMgrPid) ->
                         [Topic, Error, Stack])
     end,
     ok.
+
+%% @doc Send message to subscriber with NAT-aware fallback (v0.12.0+).
+%% Tries direct connection first, then falls back to NAT-aware routing.
+-spec send_to_subscriber(node_id(), node_id(), binary(), topic(), map()) -> ok.
+send_to_subscriber(SourceNodeId, DestNodeId, DestEndpoint, Topic, PubSubRouteMsg) ->
+    %% Try direct send first (works for public IPs and same-network peers)
+    case macula_peer_connector:send_message(DestEndpoint, pubsub_route, PubSubRouteMsg) of
+        ok ->
+            ?LOG_DEBUG("[~s] Sent pubsub_route directly to subscriber ~s at ~s for topic ~s",
+                      [SourceNodeId, binary:encode_hex(DestNodeId), DestEndpoint, Topic]);
+        {error, Reason} ->
+            ?LOG_DEBUG("[~s] Direct send to ~s failed (~p), trying NAT-aware routing",
+                      [SourceNodeId, DestEndpoint, Reason]),
+            %% Fall back to NAT-aware routing (hole punch, relay)
+            send_to_subscriber_nat_aware(SourceNodeId, DestNodeId, DestEndpoint, Topic, PubSubRouteMsg)
+    end.
+
+%% @private Use NAT-aware routing to reach subscriber behind NAT.
+-spec send_to_subscriber_nat_aware(node_id(), node_id(), binary(), topic(), map()) -> ok.
+send_to_subscriber_nat_aware(SourceNodeId, DestNodeId, DestEndpoint, Topic, PubSubRouteMsg) ->
+    %% Use NAT-aware connector with endpoint hint
+    Opts = #{endpoint => DestEndpoint},
+    case macula_peer_connector:send_message_nat_aware(SourceNodeId, DestNodeId, pubsub_route, PubSubRouteMsg, Opts) of
+        ok ->
+            ?LOG_INFO("[~s] NAT-aware send to subscriber ~s succeeded for topic ~s",
+                     [SourceNodeId, binary:encode_hex(DestNodeId), Topic]);
+        {error, Reason} ->
+            ?LOG_ERROR("[~s] NAT-aware send to ~s failed: ~p (topic: ~s)",
+                      [SourceNodeId, binary:encode_hex(DestNodeId), Reason, Topic])
+    end.

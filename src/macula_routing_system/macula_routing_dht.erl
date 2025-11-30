@@ -94,24 +94,17 @@ find_value(RoutingTable, Key, K, QueryFn) ->
     pos_integer()
 ) -> [macula_routing_bucket:node_info()].
 update_closest(CurrentClosest, NewNodes, Target, K) ->
-    %% Combine current and new
     Combined = CurrentClosest ++ NewNodes,
-
-    %% Remove duplicates by node_id
     Deduplicated = deduplicate_nodes(Combined),
+    sort_by_distance_and_take(Deduplicated, Target, K).
 
-    %% Sort by distance to target
-    Sorted = lists:sort(
-        fun(A, B) ->
-            DistA = macula_routing_nodeid:distance(Target, maps:get(node_id, A)),
-            DistB = macula_routing_nodeid:distance(Target, maps:get(node_id, B)),
-            DistA =< DistB
-        end,
-        Deduplicated
-    ),
+sort_by_distance_and_take(Nodes, Target, K) ->
+    WithDistance = [{distance_to(Target, N), N} || N <- Nodes],
+    Sorted = lists:keysort(1, WithDistance),
+    [Node || {_Dist, Node} <- lists:sublist(Sorted, K)].
 
-    %% Take k closest
-    lists:sublist(Sorted, K).
+distance_to(Target, #{node_id := NodeId}) ->
+    macula_routing_nodeid:distance(Target, NodeId).
 
 %% @doc Select up to alpha unqueried nodes from closest set.
 -spec select_alpha(
@@ -120,16 +113,8 @@ update_closest(CurrentClosest, NewNodes, Target, K) ->
     pos_integer()
 ) -> [macula_routing_bucket:node_info()].
 select_alpha(Closest, Queried, Alpha) ->
-    %% Filter out already queried nodes
-    Unqueried = lists:filter(
-        fun(Node) ->
-            NodeId = maps:get(node_id, Node),
-            not lists:member(NodeId, Queried)
-        end,
-        Closest
-    ),
-
-    %% Take up to alpha
+    QueriedSet = sets:from_list(Queried),
+    Unqueried = [N || #{node_id := Id} = N <- Closest, not sets:is_element(Id, QueriedSet)],
     lists:sublist(Unqueried, Alpha).
 
 %%%===================================================================
@@ -146,30 +131,22 @@ select_alpha(Closest, Queried, Alpha) ->
     query_fn()
 ) -> [macula_routing_bucket:node_info()].
 iterative_lookup(Closest, Target, K, Alpha, Queried, QueryFn) ->
-    %% Select alpha nodes to query
     ToQuery = select_alpha(Closest, Queried, Alpha),
+    do_iterative_lookup(ToQuery, Closest, Target, K, Alpha, Queried, QueryFn).
 
-    case ToQuery of
-        [] ->
-            %% No more nodes to query, return current closest
-            Closest;
+%% No more nodes to query - return current closest
+do_iterative_lookup([], Closest, _Target, _K, _Alpha, _Queried, _QueryFn) ->
+    Closest;
+%% Query nodes and continue if closer found
+do_iterative_lookup(ToQuery, Closest, Target, K, Alpha, Queried, QueryFn) ->
+    {NewNodes, NewQueried} = query_nodes(ToQuery, Target, Queried, QueryFn),
+    UpdatedClosest = update_closest(Closest, NewNodes, Target, K),
+    continue_if_closer(Closest, UpdatedClosest, Target, K, Alpha, NewQueried, QueryFn).
 
-        _ ->
-            %% Query nodes in parallel (simplified: sequential for now)
-            {NewNodes, NewQueried} = query_nodes(ToQuery, Target, Queried, QueryFn),
-
-            %% Update closest set with responses
-            UpdatedClosest = update_closest(Closest, NewNodes, Target, K),
-
-            %% Check if we found closer nodes
-            case found_closer_nodes(Closest, UpdatedClosest, K) of
-                true ->
-                    %% Continue iterating
-                    iterative_lookup(UpdatedClosest, Target, K, Alpha, NewQueried, QueryFn);
-                false ->
-                    %% No closer nodes found, we're done
-                    UpdatedClosest
-            end
+continue_if_closer(OldClosest, NewClosest, Target, K, Alpha, Queried, QueryFn) ->
+    case found_closer_nodes(OldClosest, NewClosest, K) of
+        true -> iterative_lookup(NewClosest, Target, K, Alpha, Queried, QueryFn);
+        false -> NewClosest
     end.
 
 %% @doc Iterative lookup for FIND_VALUE (stops when value found).
@@ -182,33 +159,26 @@ iterative_lookup(Closest, Target, K, Alpha, Queried, QueryFn) ->
     query_fn()
 ) -> {ok, term()} | {nodes, [macula_routing_bucket:node_info()]}.
 iterative_find_value(Closest, Key, K, Alpha, Queried, QueryFn) ->
-    %% Select alpha nodes to query
     ToQuery = select_alpha(Closest, Queried, Alpha),
+    do_iterative_find_value(ToQuery, Closest, Key, K, Alpha, Queried, QueryFn).
 
-    case ToQuery of
-        [] ->
-            %% No more nodes to query, value not found
-            {nodes, Closest};
+%% No more nodes to query
+do_iterative_find_value([], Closest, _Key, _K, _Alpha, _Queried, _QueryFn) ->
+    {nodes, Closest};
+%% Query nodes for value
+do_iterative_find_value(ToQuery, Closest, Key, K, Alpha, Queried, QueryFn) ->
+    handle_value_query_result(
+        query_nodes_for_value(ToQuery, Key, Queried, QueryFn),
+        Closest, Key, K, Alpha, QueryFn
+    ).
 
-        _ ->
-            %% Query nodes for value
-            case query_nodes_for_value(ToQuery, Key, Queried, QueryFn) of
-                {value, Value} ->
-                    %% Found the value!
-                    {ok, Value};
-
-                {nodes, NewNodes, NewQueried} ->
-                    %% Update closest set
-                    UpdatedClosest = update_closest(Closest, NewNodes, Key, K),
-
-                    %% Continue searching
-                    case found_closer_nodes(Closest, UpdatedClosest, K) of
-                        true ->
-                            iterative_find_value(UpdatedClosest, Key, K, Alpha, NewQueried, QueryFn);
-                        false ->
-                            {nodes, UpdatedClosest}
-                    end
-            end
+handle_value_query_result({value, Value}, _Closest, _Key, _K, _Alpha, _QueryFn) ->
+    {ok, Value};
+handle_value_query_result({nodes, NewNodes, NewQueried}, Closest, Key, K, Alpha, QueryFn) ->
+    UpdatedClosest = update_closest(Closest, NewNodes, Key, K),
+    case found_closer_nodes(Closest, UpdatedClosest, K) of
+        true -> iterative_find_value(UpdatedClosest, Key, K, Alpha, NewQueried, QueryFn);
+        false -> {nodes, UpdatedClosest}
     end.
 
 %% @doc Query nodes and collect responses.
@@ -272,35 +242,21 @@ query_nodes_for_value([Node | Rest], Key, Queried, QueryFn) ->
     pos_integer()
 ) -> boolean().
 found_closer_nodes(OldClosest, NewClosest, K) ->
-    %% Take k from each
-    OldK = lists:sublist(OldClosest, K),
-    NewK = lists:sublist(NewClosest, K),
-
-    %% Extract node IDs
-    OldIds = lists:sort([maps:get(node_id, N) || N <- OldK]),
-    NewIds = lists:sort([maps:get(node_id, N) || N <- NewK]),
-
-    %% If node IDs changed, we found closer nodes
+    OldIds = extract_node_ids(lists:sublist(OldClosest, K)),
+    NewIds = extract_node_ids(lists:sublist(NewClosest, K)),
     OldIds =/= NewIds.
+
+extract_node_ids(Nodes) ->
+    lists:sort([Id || #{node_id := Id} <- Nodes]).
 
 %% @doc Remove duplicate nodes (by node_id).
 -spec deduplicate_nodes([macula_routing_bucket:node_info()]) -> [macula_routing_bucket:node_info()].
 deduplicate_nodes(Nodes) ->
-    %% Use map to track seen node IDs
-    {_, Deduplicated} = lists:foldl(
-        fun(Node, {Seen, Acc}) ->
-            NodeId = maps:get(node_id, Node),
-            case maps:is_key(NodeId, Seen) of
-                true ->
-                    %% Already seen, skip
-                    {Seen, Acc};
-                false ->
-                    %% New node, add to result
-                    {Seen#{NodeId => true}, [Node | Acc]}
-            end
-        end,
-        {#{}, []},
-        Nodes
-    ),
+    {_, Result} = lists:foldl(fun dedupe_node/2, {#{}, []}, Nodes),
+    lists:reverse(Result).
 
-    lists:reverse(Deduplicated).
+dedupe_node(#{node_id := Id} = Node, {Seen, Acc}) ->
+    case maps:is_key(Id, Seen) of
+        true -> {Seen, Acc};
+        false -> {Seen#{Id => true}, [Node | Acc]}
+    end.

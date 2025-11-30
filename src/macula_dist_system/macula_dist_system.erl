@@ -6,31 +6,15 @@
 %%% - macula_dist_discovery - Decentralized node discovery (replaces EPMD)
 %%% - macula_cluster_strategy - Automatic cluster formation
 %%%
-%%% == Startup ==
+%%% Startup: The distribution system starts automatically with macula application.
+%%% Can also be started manually with macula_dist_system:start_link(Opts).
 %%%
-%%% The distribution system is started automatically when macula application
-%%% starts. It can also be started manually:
+%%% Configuration options (in sys.config):
+%%%   dist_port - QUIC port (default 4433)
+%%%   discovery_type - mdns, dht, or both
+%%%   auto_cluster - automatically form cluster
 %%%
-%%% ```
-%%% macula_dist_system:start_link(#{
-%%%     discovery_type => both,  % mdns, dht, or both
-%%%     auto_cluster => true     % automatically form cluster
-%%% }).
-%%% ```
-%%%
-%%% == Configuration ==
-%%%
-%%% In sys.config:
-%%% ```
-%%% {macula, [
-%%%     {dist_port, 4433},
-%%%     {discovery_type, both},
-%%%     {auto_cluster, true}
-%%% ]}
-%%% ```
-%%%
-%%% @copyright 2025 Macula.io
-%%% @license Apache-2.0
+%%% @copyright 2025 Macula.io Apache-2.0
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_dist_system).

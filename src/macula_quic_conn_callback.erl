@@ -8,6 +8,8 @@
 
 -behaviour(quicer_connection).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% Callback init
 -export([init/1]).
 
@@ -35,7 +37,7 @@
 
 %% @doc Initialize connection callback state
 init(ConnOpts) when is_map(ConnOpts) ->
-    io:format("[ConnCallback] Initializing with opts: ~p~n", [maps:keys(ConnOpts)]),
+    ?LOG_DEBUG("Initializing with opts: ~p", [maps:keys(ConnOpts)]),
     {ok, ConnOpts};
 init(ConnOpts) when is_list(ConnOpts) ->
     init(maps:from_list(ConnOpts)).
@@ -43,12 +45,12 @@ init(ConnOpts) when is_list(ConnOpts) ->
 %% @doc Handle new connection
 %% With quicer_server, streams are delivered automatically via new_stream/3
 new_conn(Conn, #{version := Vsn}, #{gateway_pid := GatewayPid} = State) ->
-    io:format("[ConnCallback] New connection: ~p (QUIC v~p)~n", [Conn, Vsn]),
-    io:format("[ConnCallback] Gateway PID: ~p~n", [GatewayPid]),
+    ?LOG_INFO("New connection: ~p (QUIC v~p)", [Conn, Vsn]),
+    ?LOG_DEBUG("Gateway PID: ~p", [GatewayPid]),
 
     %% quicer_server will automatically deliver streams via new_stream/3 callback
     %% No need to spawn stream acceptor - quicer_server handles it
-    io:format("[ConnCallback] Using quicer_server automatic stream delivery~n"),
+    ?LOG_DEBUG("Using quicer_server automatic stream delivery"),
 
     %% Store connection and gateway_pid in state
     {ok, State#{
@@ -57,28 +59,28 @@ new_conn(Conn, #{version := Vsn}, #{gateway_pid := GatewayPid} = State) ->
     }};
 new_conn(Conn, ConnProps, State) ->
     %% Fallback if gateway_pid not provided
-    io:format("[ConnCallback] New connection without gateway_pid: ~p~n", [Conn]),
+    ?LOG_WARNING("New connection without gateway_pid: ~p", [Conn]),
     new_conn(Conn, ConnProps, State#{gateway_pid => whereis(macula_gateway)}).
 
 %% @doc Handle connection established
 connected(_Conn, _Flags, State) ->
-    io:format("[ConnCallback] Connection established~n"),
+    ?LOG_INFO("Connection established"),
     {ok, State}.
 
 %% @doc Handle transport shutdown
 transport_shutdown(Conn, #{error := Error, status := Status}, State) ->
-    io:format("[ConnCallback] Transport shutdown: Conn=~p, Error=~p, Status=~p~n",
+    ?LOG_WARNING("Transport shutdown: Conn=~p, Error=~p, Status=~p",
               [Conn, Error, Status]),
     {ok, State}.
 
 %% @doc Handle connection shutdown
 shutdown(Conn, Reason, State) ->
-    io:format("[ConnCallback] Connection shutdown: Conn=~p, Reason=~p~n", [Conn, Reason]),
+    ?LOG_INFO("Connection shutdown: Conn=~p, Reason=~p", [Conn, Reason]),
     {ok, State}.
 
 %% @doc Handle connection closed
 closed(_Conn, _Flags, State) ->
-    io:format("[ConnCallback] Connection closed~n"),
+    ?LOG_INFO("Connection closed"),
     {stop, normal, State}.
 
 %% @doc Handle local address changed
@@ -92,9 +94,9 @@ local_address_changed(_Conn, _NewAddr, State) ->
 %% 2. Invalidate cached NAT profile for the peer
 %% 3. Update connection tracking
 peer_address_changed(Conn, NewAddr, #{gateway_pid := GatewayPid} = State) ->
-    io:format("[ConnCallback] Peer address changed!~n"),
-    io:format("[ConnCallback]   Connection: ~p~n", [Conn]),
-    io:format("[ConnCallback]   New address: ~p~n", [NewAddr]),
+    ?LOG_WARNING("Peer address changed!"),
+    ?LOG_INFO("  Connection: ~p", [Conn]),
+    ?LOG_INFO("  New address: ~p", [NewAddr]),
 
     %% Notify gateway of address change (it can update client tracking)
     GatewayPid ! {peer_address_changed, Conn, NewAddr},
@@ -103,12 +105,12 @@ peer_address_changed(Conn, NewAddr, #{gateway_pid := GatewayPid} = State) ->
     %% The new address means NAT rebinding occurred - cached profile is stale
     case maps:get(node_id, State, undefined) of
         undefined ->
-            io:format("[ConnCallback] No node_id in state, skipping NAT cache invalidation~n");
+            ?LOG_DEBUG("No node_id in state, skipping NAT cache invalidation");
         NodeId ->
-            io:format("[ConnCallback] Invalidating NAT cache for node ~s~n", [NodeId]),
+            ?LOG_INFO("Invalidating NAT cache for node ~s", [NodeId]),
             case whereis(macula_nat_cache) of
                 undefined ->
-                    io:format("[ConnCallback] NAT cache not running~n");
+                    ?LOG_DEBUG("NAT cache not running");
                 _Pid ->
                     macula_nat_cache:invalidate(NodeId)
             end
@@ -117,12 +119,12 @@ peer_address_changed(Conn, NewAddr, #{gateway_pid := GatewayPid} = State) ->
     {ok, State#{last_peer_address => NewAddr}};
 peer_address_changed(Conn, NewAddr, State) ->
     %% Fallback without gateway_pid
-    io:format("[ConnCallback] Peer address changed (no gateway): ~p -> ~p~n", [Conn, NewAddr]),
+    ?LOG_WARNING("Peer address changed (no gateway): ~p -> ~p", [Conn, NewAddr]),
     {ok, State#{last_peer_address => NewAddr}}.
 
 %% @doc Handle streams available
 streams_available(_Conn, #{bidi_streams := Bidi, unidi_streams := Unidi}, State) ->
-    io:format("[ConnCallback] Streams available: Bidi=~p, Unidi=~p~n", [Bidi, Unidi]),
+    ?LOG_DEBUG("Streams available: Bidi=~p, Unidi=~p", [Bidi, Unidi]),
     {ok, State}.
 
 %% @doc Handle peer needs streams
@@ -141,24 +143,24 @@ nst_received(_Conn, _Data, State) ->
 %% With quicer_server, ALL streams are delivered here (not just orphans)
 %% Forward them to the gateway for processing
 new_stream(Stream, Props, #{gateway_pid := GatewayPid} = State) ->
-    io:format("[ConnCallback] ========================================~n"),
-    io:format("[ConnCallback] NEW STREAM RECEIVED!~n"),
-    io:format("[ConnCallback] Stream: ~p~n", [Stream]),
-    io:format("[ConnCallback] Props: ~p~n", [Props]),
-    io:format("[ConnCallback] ========================================~n"),
+    ?LOG_DEBUG("========================================"),
+    ?LOG_INFO("NEW STREAM RECEIVED!"),
+    ?LOG_DEBUG("Stream: ~p", [Stream]),
+    ?LOG_DEBUG("Props: ~p", [Props]),
+    ?LOG_DEBUG("========================================"),
 
     %% Forward stream to gateway
-    io:format("[ConnCallback] Forwarding stream to gateway: ~p~n", [GatewayPid]),
+    ?LOG_DEBUG("Forwarding stream to gateway: ~p", [GatewayPid]),
     GatewayPid ! {quic_stream, Stream, Props},
 
     {ok, State};
 new_stream(Stream, Props, State) ->
     %% Fallback if no gateway_pid in state
-    io:format("[ConnCallback] WARNING: Stream received but no gateway_pid in state~n"),
-    io:format("[ConnCallback] Stream: ~p, Props: ~p~n", [Stream, Props]),
+    ?LOG_WARNING("Stream received but no gateway_pid in state"),
+    ?LOG_WARNING("Stream: ~p, Props: ~p", [Stream, Props]),
     {ok, State}.
 
 %% @doc Handle other messages
 handle_info(Info, State) ->
-    io:format("[ConnCallback] Unhandled info: ~p~n", [Info]),
+    ?LOG_WARNING("Unhandled info: ~p", [Info]),
     {ok, State}.

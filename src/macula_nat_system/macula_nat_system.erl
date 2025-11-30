@@ -71,77 +71,56 @@ start_link(Opts) ->
 -spec init(map()) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init(Opts) ->
     ?LOG_INFO("Starting NAT traversal system"),
+    SupFlags = sup_flags(),
+    ChildSpecs = child_specs(Opts),
+    {ok, {SupFlags, ChildSpecs}}.
 
-    %% Supervision strategy: one_for_one
-    %% Each child is independent - failures don't cascade
-    SupFlags = #{
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
+
+sup_flags() ->
+    #{
         strategy => one_for_one,
         intensity => 5,   % Max 5 restarts
         period => 60      % Within 60 seconds
-    },
+    }.
 
-    %% Children in start order
-    %% Cache must start before detector (detector may cache results)
-    ChildSpecs = [
-        %% 1. NAT Cache - stores NAT profiles with TTL
-        #{
-            id => nat_cache,
-            start => {macula_nat_cache, start_link, [Opts]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_nat_cache]
-        },
+%% @private
+%% @doc Build child specifications for all NAT subsystem workers.
+%% Children in start order - cache must start before detector.
+child_specs(Opts) ->
+    [
+        worker_spec(nat_cache, macula_nat_cache, Opts),
+        worker_spec(nat_detector, macula_nat_detector, Opts),
+        worker_spec(nat_coordinator, macula_nat_coordinator, Opts),
+        worker_spec_no_args(hole_punch, macula_hole_punch),
+        worker_spec_no_args(connection_upgrade, macula_connection_upgrade),
+        worker_spec(port_predictor, macula_port_predictor, Opts),
+        worker_spec(relay_registry, macula_relay_registry, Opts),
+        worker_spec(relay_node, macula_relay_node, Opts)
+    ].
 
-        %% 2. NAT Detector - detects local NAT type
-        #{
-            id => nat_detector,
-            start => {macula_nat_detector, start_link, [Opts]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_nat_detector]
-        },
+%% @private
+%% @doc Create a standard worker child spec.
+worker_spec(Id, Module, Opts) ->
+    #{
+        id => Id,
+        start => {Module, start_link, [Opts]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [Module]
+    }.
 
-        %% 3. NAT Coordinator - coordinates hole punching (Phase 2)
-        #{
-            id => nat_coordinator,
-            start => {macula_nat_coordinator, start_link, [Opts]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_nat_coordinator]
-        },
-
-        %% 4. Port Predictor - intelligent port prediction (Phase 3)
-        #{
-            id => port_predictor,
-            start => {macula_port_predictor, start_link, [Opts]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_port_predictor]
-        },
-
-        %% 5. Relay Registry - tracks relay-capable peers (Phase 4)
-        #{
-            id => relay_registry,
-            start => {macula_relay_registry, start_link, [Opts]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_relay_registry]
-        },
-
-        %% 6. Relay Node - provides relay functionality (Phase 4)
-        #{
-            id => relay_node,
-            start => {macula_relay_node, start_link, [Opts]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_relay_node]
-        }
-    ],
-
-    {ok, {SupFlags, ChildSpecs}}.
+%% @private
+%% @doc Create a worker child spec with no arguments.
+worker_spec_no_args(Id, Module) ->
+    #{
+        id => Id,
+        start => {Module, start_link, []},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [Module]
+    }.

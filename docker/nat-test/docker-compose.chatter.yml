@@ -1,0 +1,342 @@
+# Chatter Demo - Multiple Peers behind NAT
+# Tests peer-to-peer messaging across NAT boundaries
+
+services:
+  # Public bootstrap/relay node (no NAT)
+  bootstrap:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: chatter-bootstrap
+    hostname: bootstrap
+    networks:
+      public:
+        ipv4_address: 10.100.0.10
+    environment:
+      - NODE_TYPE=bootstrap
+      - NODE_ID=bootstrap
+      - QUIC_PORT=4433
+      - HTTP_PORT=8080
+      - RELAY_ENABLED=true
+      - MACULA_QUIC_PORT=4433
+      - GATEWAY_PORT=4433
+      - HEALTH_PORT=8080
+      - MACULA_REALM=com.macula.chatter
+      - MACULA_TLS_MODE=development
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
+    ports:
+      - "18080:8080"
+      - "14433:4433/udp"
+
+  # ==========================================
+  # FULL CONE NAT - 3 Chatters
+  # ==========================================
+
+  nat_full_cone_router:
+    image: alpine:latest
+    container_name: chatter-router-fullcone
+    hostname: router-fullcone
+    networks:
+      public:
+        ipv4_address: 10.100.0.20
+      nat_full_cone:
+        ipv4_address: 172.31.1.2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: >
+      sh -c "
+        apk add --no-cache iptables iproute2 &&
+        PUBLIC_IF=$$(ip -o addr | grep '10.100.0' | awk '{print $$2}') &&
+        INTERNAL_IF=$$(ip -o addr | grep '172.31.1' | awk '{print $$2}') &&
+        iptables -t nat -A POSTROUTING -o $$PUBLIC_IF -j MASQUERADE &&
+        iptables -A FORWARD -i $$INTERNAL_IF -o $$PUBLIC_IF -j ACCEPT &&
+        iptables -A FORWARD -i $$PUBLIC_IF -o $$INTERNAL_IF -j ACCEPT &&
+        echo 'Full Cone NAT configured' &&
+        tail -f /dev/null
+      "
+
+  chatter_alice:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: chatter-alice
+    hostname: alice
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.10
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=alice
+      - BOOTSTRAP_HOST=10.100.0.10
+      - BOOTSTRAP_PORT=4433
+      - MACULA_QUIC_PORT=4433
+      - GATEWAY_PORT=4433
+      - HEALTH_PORT=8080
+      - MACULA_REALM=com.macula.chatter
+      - MACULA_TLS_MODE=development
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
+      - MACULA_BOOTSTRAP_PEERS=https://10.100.0.10:4433
+    depends_on:
+      - bootstrap
+      - nat_full_cone_router
+    cap_add:
+      - NET_ADMIN
+
+  chatter_bob:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: chatter-bob
+    hostname: bob
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.11
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=bob
+      - BOOTSTRAP_HOST=10.100.0.10
+      - BOOTSTRAP_PORT=4433
+      - MACULA_QUIC_PORT=4433
+      - GATEWAY_PORT=4433
+      - HEALTH_PORT=8080
+      - MACULA_REALM=com.macula.chatter
+      - MACULA_TLS_MODE=development
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
+      - MACULA_BOOTSTRAP_PEERS=https://10.100.0.10:4433
+    depends_on:
+      - bootstrap
+      - nat_full_cone_router
+    cap_add:
+      - NET_ADMIN
+
+  chatter_charlie:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: chatter-charlie
+    hostname: charlie
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.12
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=charlie
+      - BOOTSTRAP_HOST=10.100.0.10
+      - BOOTSTRAP_PORT=4433
+      - MACULA_QUIC_PORT=4433
+      - GATEWAY_PORT=4433
+      - HEALTH_PORT=8080
+      - MACULA_REALM=com.macula.chatter
+      - MACULA_TLS_MODE=development
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
+      - MACULA_BOOTSTRAP_PEERS=https://10.100.0.10:4433
+    depends_on:
+      - bootstrap
+      - nat_full_cone_router
+    cap_add:
+      - NET_ADMIN
+
+  # ==========================================
+  # RESTRICTED NAT - 2 Chatters
+  # ==========================================
+
+  nat_restricted_router:
+    image: alpine:latest
+    container_name: chatter-router-restricted
+    hostname: router-restricted
+    networks:
+      public:
+        ipv4_address: 10.100.0.21
+      nat_restricted:
+        ipv4_address: 172.32.1.2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: >
+      sh -c "
+        apk add --no-cache iptables iproute2 &&
+        PUBLIC_IF=$$(ip -o addr | grep '10.100.0' | awk '{print $$2}') &&
+        INTERNAL_IF=$$(ip -o addr | grep '172.32.1' | awk '{print $$2}') &&
+        iptables -t nat -A POSTROUTING -o $$PUBLIC_IF -j MASQUERADE &&
+        iptables -A FORWARD -i $$INTERNAL_IF -o $$PUBLIC_IF -j ACCEPT &&
+        iptables -A FORWARD -i $$PUBLIC_IF -o $$INTERNAL_IF -m state --state ESTABLISHED,RELATED -j ACCEPT &&
+        echo 'Restricted Cone NAT configured' &&
+        tail -f /dev/null
+      "
+
+  chatter_diana:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: chatter-diana
+    hostname: diana
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.10
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=diana
+      - BOOTSTRAP_HOST=10.100.0.10
+      - BOOTSTRAP_PORT=4433
+      - MACULA_QUIC_PORT=4433
+      - GATEWAY_PORT=4433
+      - HEALTH_PORT=8080
+      - MACULA_REALM=com.macula.chatter
+      - MACULA_TLS_MODE=development
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
+      - MACULA_BOOTSTRAP_PEERS=https://10.100.0.10:4433
+    depends_on:
+      - bootstrap
+      - nat_restricted_router
+    cap_add:
+      - NET_ADMIN
+
+  chatter_eve:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: chatter-eve
+    hostname: eve
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.11
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=eve
+      - BOOTSTRAP_HOST=10.100.0.10
+      - BOOTSTRAP_PORT=4433
+      - MACULA_QUIC_PORT=4433
+      - GATEWAY_PORT=4433
+      - HEALTH_PORT=8080
+      - MACULA_REALM=com.macula.chatter
+      - MACULA_TLS_MODE=development
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
+      - MACULA_BOOTSTRAP_PEERS=https://10.100.0.10:4433
+    depends_on:
+      - bootstrap
+      - nat_restricted_router
+    cap_add:
+      - NET_ADMIN
+
+  # ==========================================
+  # SYMMETRIC NAT - 2 Chatters (hardest)
+  # ==========================================
+
+  nat_symmetric_router:
+    image: alpine:latest
+    container_name: chatter-router-symmetric
+    hostname: router-symmetric
+    networks:
+      public:
+        ipv4_address: 10.100.0.22
+      nat_symmetric:
+        ipv4_address: 172.33.1.2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: >
+      sh -c "
+        apk add --no-cache iptables iproute2 &&
+        PUBLIC_IF=$$(ip -o addr | grep '10.100.0' | awk '{print $$2}') &&
+        INTERNAL_IF=$$(ip -o addr | grep '172.33.1' | awk '{print $$2}') &&
+        iptables -t nat -A POSTROUTING -o $$PUBLIC_IF -j MASQUERADE --random &&
+        iptables -A FORWARD -i $$INTERNAL_IF -o $$PUBLIC_IF -j ACCEPT &&
+        iptables -A FORWARD -i $$PUBLIC_IF -o $$INTERNAL_IF -m state --state ESTABLISHED,RELATED -j ACCEPT &&
+        echo 'Symmetric NAT configured' &&
+        tail -f /dev/null
+      "
+
+  chatter_frank:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: chatter-frank
+    hostname: frank
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.10
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=frank
+      - BOOTSTRAP_HOST=10.100.0.10
+      - BOOTSTRAP_PORT=4433
+      - MACULA_QUIC_PORT=4433
+      - GATEWAY_PORT=4433
+      - HEALTH_PORT=8080
+      - MACULA_REALM=com.macula.chatter
+      - MACULA_TLS_MODE=development
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
+      - MACULA_BOOTSTRAP_PEERS=https://10.100.0.10:4433
+    depends_on:
+      - bootstrap
+      - nat_symmetric_router
+    cap_add:
+      - NET_ADMIN
+
+  chatter_grace:
+    build:
+      context: ../..
+      dockerfile: docker/nat-test/Dockerfile
+    container_name: chatter-grace
+    hostname: grace
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.11
+    environment:
+      - NODE_TYPE=peer
+      - NODE_ID=grace
+      - BOOTSTRAP_HOST=10.100.0.10
+      - BOOTSTRAP_PORT=4433
+      - MACULA_QUIC_PORT=4433
+      - GATEWAY_PORT=4433
+      - HEALTH_PORT=8080
+      - MACULA_REALM=com.macula.chatter
+      - MACULA_TLS_MODE=development
+      - TLS_CERT_FILE=/opt/macula/certs/cert.pem
+      - TLS_KEY_FILE=/opt/macula/certs/key.pem
+      - MACULA_BOOTSTRAP_PEERS=https://10.100.0.10:4433
+    depends_on:
+      - bootstrap
+      - nat_symmetric_router
+    cap_add:
+      - NET_ADMIN
+
+networks:
+  # Public network (internet simulation)
+  public:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.100.0.0/24
+
+  # Full Cone NAT network
+  nat_full_cone:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.1.0/24
+
+  # Restricted Cone NAT network
+  nat_restricted:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.32.1.0/24
+
+  # Symmetric NAT network
+  nat_symmetric:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.33.1.0/24

@@ -19,6 +19,8 @@
 -module(macula_gateway_quic_server).
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% Suppress warnings for functions only used in tests
 -compile({nowarn_unused_function, [parse_endpoint/1, resolve_host/2]}).
 
@@ -71,7 +73,7 @@ init(Opts) ->
     KeyFile = proplists:get_value(key_file, Opts),
     NodeId = get_node_id(Realm, Port),
 
-    io:format("[QuicServer] Initializing QUIC server for realm ~s on port ~p~n", [Realm, Port]),
+    ?LOG_INFO("Initializing QUIC server for realm ~s on port ~p", [Realm, Port]),
 
     %% Start QUIC listener
     ListenOpts = [
@@ -84,15 +86,15 @@ init(Opts) ->
 
     case macula_quic:listen(Port, ListenOpts) of
         {ok, Listener} ->
-            io:format("[QuicServer] QUIC listener started on port ~p~n", [Port]),
+            ?LOG_INFO("QUIC listener started on port ~p", [Port]),
 
             %% Start async accept to receive connections
             case quicer:async_accept(Listener, #{}) of
                 {ok, Listener} ->
-                    io:format("[QuicServer] Async accept registered~n"),
+                    ?LOG_INFO("Async accept registered", []),
                     ok;
                 {error, AcceptErr} ->
-                    io:format("[QuicServer] WARNING: async_accept failed: ~p~n", [AcceptErr]),
+                    ?LOG_WARNING("async_accept failed: ~p", [AcceptErr]),
                     ok
             end,
 
@@ -107,20 +109,20 @@ init(Opts) ->
             {ok, State};
 
         {error, ErrorType, ErrorDetail} ->
-            io:format("[QuicServer] QUIC listen failed: ~p ~p~n", [ErrorType, ErrorDetail]),
-            io:format("[QuicServer] Certificate file: ~p~n", [CertFile]),
-            io:format("[QuicServer] Key file: ~p~n", [KeyFile]),
+            ?LOG_ERROR("QUIC listen failed: ~p ~p", [ErrorType, ErrorDetail]),
+            ?LOG_ERROR("Certificate file: ~p", [CertFile]),
+            ?LOG_ERROR("Key file: ~p", [KeyFile]),
             {stop, {listen_failed, {ErrorType, ErrorDetail}}};
 
         {error, Reason} ->
-            io:format("[QuicServer] QUIC listen failed: ~p~n", [Reason]),
+            ?LOG_ERROR("QUIC listen failed: ~p", [Reason]),
             {stop, {listen_failed, Reason}}
     end.
 
 %% @doc Handle synchronous calls.
 %% Set gateway PID for message routing
 handle_call({set_gateway, GatewayPid}, _From, State) when is_pid(GatewayPid) ->
-    io:format("[QuicServer] Gateway PID set: ~p~n", [GatewayPid]),
+    ?LOG_INFO("Gateway PID set: ~p", [GatewayPid]),
     {reply, ok, State#state{gateway = GatewayPid}};
 
 %% Unknown calls
@@ -132,42 +134,82 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 %% @doc Handle QUIC event: new_stream (stream created by peer).
+%% Associates the stream with its parent connection to enable peer address lookup.
 handle_info({quic, new_stream, Stream, StreamProps}, State) ->
-    io:format("[QuicServer] ========================================~n"),
-    io:format("[QuicServer] NEW STREAM RECEIVED!~n"),
-    io:format("[QuicServer] Stream: ~p~n", [Stream]),
-    io:format("[QuicServer] StreamProps: ~p~n", [StreamProps]),
-    io:format("[QuicServer] ========================================~n"),
+    ?LOG_DEBUG("[Gateway QUIC] New stream received: ~p, props=~p", [Stream, StreamProps]),
+
+    %% Get the pending connection this stream belongs to
+    %% This was set by accept_streams when we called async_accept_stream
+    Conn = get(pending_stream_conn),
+    ?LOG_DEBUG("[Gateway QUIC] Stream's connection: ~p", [Conn]),
+
+    %% Look up peer address from the connection (stored in new_conn handler)
+    PeerAddr = case Conn of
+        undefined -> undefined;
+        _ -> get({conn_peer_addr, Conn})
+    end,
+    ?LOG_DEBUG("[Gateway QUIC] Peer addr from conn: ~p", [PeerAddr]),
+
+    %% Store stream->peer_addr mapping for quick lookup during data handling
+    case PeerAddr of
+        undefined -> ok;
+        Addr -> put({stream_peer_addr, Stream}, Addr)
+    end,
+
+    %% Accept more streams on this connection
+    case Conn of
+        undefined -> ok;
+        _ -> quicer:async_accept_stream(Conn, #{})
+    end,
 
     %% Set stream to active mode to receive data automatically
     case quicer:setopt(Stream, active, true) of
         ok ->
-            io:format("[QuicServer] Stream set to active mode~n"),
+            ?LOG_DEBUG("[Gateway QUIC] Stream set to active mode"),
             {noreply, State};
         {error, Reason} ->
-            io:format("[QuicServer] Failed to set stream active: ~p~n", [Reason]),
+            ?LOG_ERROR("[Gateway QUIC] Failed to set stream active: ~p", [Reason]),
             {noreply, State}
     end;
 
 %% @doc Handle QUIC data reception - decode and route to gateway.
 %% Pattern matches on binary data, uses buffer for partial messages.
-handle_info({quic, Data, Stream, _Flags}, State) when is_binary(Data) ->
-    io:format("[QuicServer] ===== Received ~p bytes from stream ~p =====~n",
-              [byte_size(Data), Stream]),
-    io:format("[QuicServer] Raw data (first 100 bytes): ~p~n",
-              [binary:part(Data, 0, min(100, byte_size(Data)))]),
+%% Uses stored stream->peer_addr mapping (populated in new_stream handler).
+handle_info({quic, Data, Stream, Flags}, State) when is_binary(Data) ->
+    ?LOG_DEBUG("[Gateway QUIC] Received ~p bytes, Flags=~p", [byte_size(Data), Flags]),
 
-    %% Decode message and route to gateway
+    %% Look up peer address from stored mapping (v0.12.0 fix)
+    %% This was populated in new_stream handler when we associated stream with connection
+    PeerAddr = case get({stream_peer_addr, Stream}) of
+        undefined ->
+            %% Fallback: try quicer:peername (may fail for streams)
+            quicer:peername(Stream);
+        StoredAddr ->
+            {ok, StoredAddr}
+    end,
+    ?LOG_DEBUG("[Gateway QUIC] Peer address for stream: ~p", [PeerAddr]),
+
+    %% Decode message and route to gateway with peer address
     DecodeResult = macula_protocol_decoder:decode(Data),
-    route_to_gateway(DecodeResult, Stream, State);
+    ?LOG_DEBUG("[Gateway QUIC] Decoded result: ~p", [element(1, DecodeResult)]),
+    route_to_gateway(DecodeResult, Stream, PeerAddr, State);
 
 %% @doc Handle QUIC event: new_conn (connection established).
 handle_info({quic, new_conn, Conn, ConnInfo}, State) ->
-    io:format("[QuicServer] ========================================~n"),
-    io:format("[QuicServer] NEW CONNECTION RECEIVED!~n"),
-    io:format("[QuicServer] Connection: ~p~n", [Conn]),
-    io:format("[QuicServer] Connection Info: ~p~n", [ConnInfo]),
-    io:format("[QuicServer] ========================================~n"),
+    %% Try to get peer address from CONNECTION handle (not stream)
+    PeerAddrResult = quicer:peername(Conn),
+    ?LOG_DEBUG("[Gateway QUIC] New connection: ~p, info=~p, peer=~p",
+              [Conn, ConnInfo, PeerAddrResult]),
+
+    %% Store the connection->peer_addr mapping in process dictionary
+    %% (We'll use this to look up peer addr when we get streams)
+    case PeerAddrResult of
+        {ok, PeerAddr} ->
+            %% Store connection ref as key, peer addr as value
+            put({conn_peer_addr, Conn}, PeerAddr);
+        _ ->
+            ok
+    end,
 
     %% Use helper functions to complete handshake
     complete_handshake(Conn),
@@ -182,12 +224,12 @@ handle_info({quic, peer_needs_streams, _Conn, _StreamType}, State) ->
 
 %% @doc Handle QUIC event: shutdown (connection shutting down).
 handle_info({quic, shutdown, Conn, Reason}, State) ->
-    io:format("[QuicServer] QUIC shutdown: Conn=~p, Reason=~p~n", [Conn, Reason]),
+    ?LOG_INFO("QUIC shutdown: Conn=~p, Reason=~p", [Conn, Reason]),
     {noreply, State};
 
 %% @doc Handle QUIC event: transport_shutdown (transport layer shutting down).
 handle_info({quic, transport_shutdown, Conn, Reason}, State) ->
-    io:format("[QuicServer] QUIC transport_shutdown: Conn=~p, Reason=~p~n", [Conn, Reason]),
+    ?LOG_INFO("QUIC transport_shutdown: Conn=~p, Reason=~p", [Conn, Reason]),
     {noreply, State};
 
 %% @doc Handle unknown messages.
@@ -196,7 +238,7 @@ handle_info(_Info, State) ->
 
 %% @doc Cleanup on termination.
 terminate(_Reason, _State) ->
-    io:format("[QuicServer] Shutting down QUIC server~n"),
+    ?LOG_INFO("Shutting down QUIC server", []),
     ok.
 
 %%%===================================================================
@@ -241,20 +283,24 @@ complete_handshake(Conn) ->
         {ok, _} ->
             accept_streams(Conn);
         {error, Reason} ->
-            io:format("[QuicServer] Handshake failed: ~p~n", [Reason]),
+            ?LOG_ERROR("Handshake failed: ~p", [Reason]),
             ok
     end.
 
 %% @doc Start accepting streams on an established connection.
+%% Also stores the connection in process dictionary so we can look up peer address later.
 -spec accept_streams(quicer:connection_handle()) -> ok.
 accept_streams(Conn) ->
-    io:format("[QuicServer] Connection handshake completed successfully~n"),
+    ?LOG_INFO("Connection handshake completed successfully", []),
     case quicer:async_accept_stream(Conn, #{}) of
         {ok, Conn} ->
-            io:format("[QuicServer] Ready to accept streams on connection~n"),
+            %% Track which connection we're accepting streams for
+            %% We'll need this to look up peer address when streams arrive
+            put(pending_stream_conn, Conn),
+            ?LOG_INFO("Ready to accept streams on connection ~p", [Conn]),
             ok;
         {error, StreamAcceptErr} ->
-            io:format("[QuicServer] WARNING: async_accept_stream failed: ~p~n", [StreamAcceptErr]),
+            ?LOG_WARNING("async_accept_stream failed: ~p", [StreamAcceptErr]),
             ok
     end.
 
@@ -263,10 +309,10 @@ accept_streams(Conn) ->
 register_next_connection(Listener) ->
     case quicer:async_accept(Listener, #{}) of
         {ok, _} ->
-            io:format("[QuicServer] Ready for next connection~n"),
+            ?LOG_INFO("Ready for next connection", []),
             ok;
         {error, AcceptErr} ->
-            io:format("[QuicServer] WARNING: async_accept failed: ~p~n", [AcceptErr]),
+            ?LOG_WARNING("async_accept failed: ~p", [AcceptErr]),
             ok
     end.
 
@@ -276,31 +322,34 @@ register_next_connection(Listener) ->
 
 %% @doc Route decoded message to gateway for business logic handling.
 %% Pattern matches on decode result - uses declarative style.
--spec route_to_gateway(DecodeResult, Stream, State) -> {noreply, State}
+%% PeerAddr is captured at receive time for NAT detection (v0.12.0+).
+-spec route_to_gateway(DecodeResult, Stream, PeerAddr, State) -> {noreply, State}
     when DecodeResult :: {ok, {atom(), map()}} | {error, term()},
          Stream :: quicer:stream_handle(),
+         PeerAddr :: {ok, {inet:ip_address(), inet:port_number()}} | {error, term()},
          State :: #state{}.
 
-%% Pattern 1: Successfully decoded message - route to gateway
-route_to_gateway({ok, {MessageType, Message}}, Stream, State) when State#state.gateway =/= undefined ->
-    io:format("[QuicServer] Decoded message type: ~p~n", [MessageType]),
+%% Pattern 1: Successfully decoded message - route to gateway with peer address
+route_to_gateway({ok, {MessageType, Message}}, Stream, PeerAddr, State) when State#state.gateway =/= undefined ->
+    ?LOG_DEBUG("[Gateway QUIC] Routing message type=~p to gateway", [MessageType]),
     Gateway = State#state.gateway,
 
     %% Route to gateway via gen_server:cast (async) to prevent blocking
     %% This avoids timeout issues when gateway is busy processing other messages
-    gen_server:cast(Gateway, {route_message, MessageType, Message, Stream}),
-    io:format("[QuicServer] Message routed (async)~n"),
+    %% Include PeerAddr for NAT detection (v0.12.0+)
+    gen_server:cast(Gateway, {route_message, MessageType, Message, Stream, PeerAddr}),
+    ?LOG_DEBUG("Message routed (async)", []),
     {noreply, State};
 
 %% Pattern 2: No gateway configured yet - log warning
-route_to_gateway({ok, {MessageType, _Message}}, _Stream, State) ->
-    io:format("[QuicServer] WARNING: No gateway configured, dropping message type: ~p~n",
+route_to_gateway({ok, {MessageType, _Message}}, _Stream, _PeerAddr, State) ->
+    ?LOG_WARNING("No gateway configured, dropping message type: ~p",
               [MessageType]),
     {noreply, State};
 
 %% Pattern 3: Decode error - log and continue
-route_to_gateway({error, Reason}, _Stream, State) ->
-    io:format("[QuicServer] Decode error: ~p~n", [Reason]),
+route_to_gateway({error, Reason}, _Stream, _PeerAddr, State) ->
+    ?LOG_ERROR("Decode error: ~p", [Reason]),
     {noreply, State}.
 
 %%%===================================================================
@@ -321,7 +370,7 @@ parse_endpoint(Endpoint) when is_binary(Endpoint) ->
         #{host := Host} ->
             resolve_host(Host, 9443);  %% Default port
         _ ->
-            io:format("[QuicServer] Invalid endpoint URL format: ~s, using placeholder~n", [Endpoint]),
+            ?LOG_WARNING("Invalid endpoint URL format: ~s, using placeholder", [Endpoint]),
             {{0,0,0,0}, 0}
     end.
 
@@ -334,7 +383,7 @@ resolve_host(Host, Port) when is_binary(Host), is_integer(Port) ->
         {ok, IPTuple} ->
             {IPTuple, Port};
         {error, Reason} ->
-            io:format("[QuicServer] Failed to resolve host ~s: ~p, using localhost fallback~n",
+            ?LOG_WARNING("Failed to resolve host ~s: ~p, using localhost fallback",
                      [Host, Reason]),
             {{127,0,0,1}, Port}
     end.

@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v0.10.0 (November 2025)
+**Current Version**: v0.12.5 (November 2025)
 
 ## Version History
 
@@ -11,7 +11,37 @@
 | v0.9.0 | Nov 2025 | Platform Layer (Ra/Raft consensus, leader election) |
 | v0.9.1 | Nov 2025 | LWW-Register CRDT foundation |
 | v0.10.0 | Nov 2025 | Production hardening, stream caching, performance fixes |
-| v0.11.0 | Nov 2025 | QUIC Distribution - replacing EPMD (IN PROGRESS) |
+| v0.11.0 | Nov 2025 | Security Hardening - TLS Certificate Verification (COMPLETED) |
+| v0.11.1 | Nov 2025 | Hybrid Trust Model - Realm auth + TOFU fingerprints (24 tests) |
+| v0.11.2 | Nov 2025 | Rate limiting + Audit logging for realm trust (37 tests) |
+| v0.11.3 | Nov 2025 | DHT integration for fingerprint storage (41 tests) |
+| v0.12.0 | Nov 2025 | NAT Traversal - Complete implementation (70 tests) - Hole punch, pooling, relay |
+| v0.12.1 | Nov 2025 | NATS-style Async RPC - Direct P2P request/reply (14 tests) |
+| v0.12.2 | Nov 2025 | Async DHT Discovery - Request queuing on cache miss (17 tests) |
+| v0.12.3 | Nov 2025 | Pull-based Service Discovery - Prefetch on startup (22 tests) |
+| v0.12.4 | Nov 2025 | Documentation fixes - Fixed 77 broken links in hexdocs (0 warnings) |
+| v0.12.5 | Nov 2025 | PubSub delivery metrics, console colored output, bug fixes (gproc, quic errors) |
+
+---
+
+## Terminology (v0.8.5+ Always-On Architecture)
+
+📋 **See `docs/GLOSSARY.md`** for complete terminology reference
+
+Since v0.8.5, Macula uses an **always-on architecture** where every node has all capabilities. Key terms:
+
+| Term | Definition |
+|------|------------|
+| **Node** | A Macula instance with all subsystems (Gateway, Bootstrap, Peer, Platform) |
+| **Seed Node** | A well-known node address for initial mesh discovery (no special code) |
+| **Peer** | Any connected node in the mesh |
+| **Gateway System** | Subsystem for QUIC message routing (`src/macula_gateway_system/`) |
+| **Bootstrap System** | Subsystem for DHT/discovery (`src/macula_bootstrap_system/`) |
+
+**Deprecated Terms (pre-v0.8.5):**
+- ❌ "Gateway mode" / "Edge peer mode" - No mode selection in v0.8.5+
+- ❌ `MACULA_START_GATEWAY` - No longer used
+- ❌ "The gateway" (as special node) - Use "seed node" instead
 
 ---
 
@@ -75,21 +105,218 @@ PubSub Flow:
 
 **Key Module**: `macula_peer_connector.erl` - Fire-and-forget P2P QUIC connections
 
-## 🚀 NAT Traversal & P2P Connectivity (FUTURE - v1.x)
+## ✅ v0.12.0 NAT Traversal - Complete Implementation (COMPLETED - Nov 2025)
 
-**STATUS**: Deferred to post-v1.0 (gateway relay is sufficient for current use cases)
+**STATUS**: Core Implementation COMPLETE
+**Hex Published**: v0.11.3
+**Target**: Complete P2P mesh with 80%+ direct connections
 
-📋 **See `architecture/NAT_TRAVERSAL_ROADMAP.md`** for future roadmap
+📋 **See `architecture/V0.12.0_NAT_COMPLETE_PLAN.md`** for detailed implementation plan
+📋 **See `architecture/NAT_TRAVERSAL_ROADMAP.md`** for status tracking
 
-**Current State (v0.10.0)**:
-- ✅ Gateway relay works 100% (universal fallback)
-- ✅ Direct P2P when both peers have public IPs
-- ⏳ NAT hole punching deferred (not needed for demo/development)
+### v0.12.0 Scope (Consolidated from v0.12.x-v0.14.x)
 
-**Future Plans (v1.x)**:
-- STUN/TURN/ICE for NAT traversal
-- Hole punching coordination
-- Connection strategy optimization
+v0.12.0 delivers **complete NAT traversal** in one release:
+
+| Feature | Status | Impact |
+|---------|--------|--------|
+| Connection Pooling | ✅ Complete | 94.5% hit rate |
+| Direct Hole Punching | ✅ Complete | Adaptive timing by NAT type |
+| Hierarchical Relay | ✅ Complete | Load-based selection |
+
+### What's Complete
+
+**Phase 1 - Foundation:**
+- ✅ NAT_PROBE/NAT_PROBE_REPLY message flow
+- ✅ PUNCH_COORDINATE direct delivery
+- ✅ Docker NAT simulation (Full Cone, Restricted, Symmetric)
+- ✅ Chatter demo cross-NAT messaging
+
+**Phase 2 - Bug Fixes:**
+- ✅ Binary key handling in peer discovery
+- ✅ gproc registration conflicts (peer_id uniqueness)
+- ✅ REPLY message routing
+- ✅ MACULA_HOSTNAME configuration
+
+**Phase 3 - Connection Pooling:**
+- ✅ `macula_peer_connection_pool.erl` - ETS-based pooling with 94.5% hit rate
+- ✅ Pool integration in peer_connector
+- ✅ LRU eviction
+
+**Phase 4 - Complete Hole Punching:**
+- ✅ `macula_nat_detector.erl` - Local port/IP/public IP detection fixed
+- ✅ `macula_hole_punch.erl` - gen_server with cancellation + adaptive timing
+- ✅ `macula_connection_upgrade.erl` - Relay → direct upgrade (10 tests)
+
+**Phase 5 - Hierarchical Relay:**
+- ✅ `macula_relay_registry.erl` - Relay tracking + selection (18 tests)
+- ✅ Load-based relay selection integrated
+- ✅ DHT integration for distributed relay discovery
+
+### NAT Message Types (0x50-0x5F)
+
+| Type | ID | Purpose |
+|------|-----|---------|
+| NAT_PROBE | 0x50 | Request reflexive address from observer |
+| NAT_PROBE_REPLY | 0x51 | Return reflexive address to requester |
+| PUNCH_REQUEST | 0x52 | Request hole punch coordination |
+| PUNCH_COORDINATE | 0x53 | Synchronized punch timing info |
+| PUNCH_RESULT | 0x55 | Report punch success/failure |
+| RELAY_REQUEST | 0x56 | Request relay tunnel setup |
+| RELAY_DATA | 0x57 | Relayed data frame |
+
+### Key Files
+
+**NAT System:**
+- `src/macula_nat_system/` - NAT detection, coordination, hole punching
+- `src/macula_gateway.erl` - NAT_PROBE and PUNCH_COORDINATE handlers
+- `docker/nat-test/` - Docker NAT simulation
+
+**Tests (70 NAT tests):**
+- `test/macula_nat_integration_tests.erl` - 28 integration tests
+- `test/macula_hole_punch_tests.erl` - 14 unit tests
+- `test/macula_connection_upgrade_tests.erl` - 10 unit tests
+- `test/macula_relay_registry_tests.erl` - 18 unit tests
+
+### Success Metrics
+
+| Metric | Current | Target | Status |
+|--------|---------|--------|--------|
+| Connection pool hit rate | 94.5% | 95%+ | ✅ Close |
+| Direct P2P | Pending | 80%+ | ⏳ TBD |
+| Max nodes | ~100 | 1000+ | ⏳ TBD |
+
+## ✅ v0.12.1/v0.12.2/v0.12.3 NATS-style Async RPC (COMPLETED - Nov 2025)
+
+**STATUS**: ✅ COMPLETE (v0.12.3 adds pull-based service discovery)
+**Tests**: 22 unit tests passing
+
+📋 **See `architecture/NATS_STYLE_ASYNC_RPC.md`** for detailed design document
+
+### What's Implemented
+
+NATS-style asynchronous RPC as a **first-class citizen** in the macula library, with direct P2P delivery (not routed through Bootstrap pub/sub).
+
+**Key Features:**
+- Fire-and-forget request pattern with inbox callbacks
+- Direct P2P delivery between peers
+- Local handler registration for same-node optimization
+- Protocol message types: `rpc_request` (0x24), `rpc_reply` (0x25)
+- Callback patterns: function callbacks and PID-based callbacks
+- **v0.12.2:** Async DHT discovery - requests on cache miss queue while DHT lookup runs
+- **v0.12.3:** Pull-based service discovery - prefetch known services on startup
+
+### API Usage
+
+**Register a local procedure handler:**
+```erlang
+Handler = fun(Args) ->
+    %% Process request, return response
+    {ok, #{<<"result">> => <<"value">>}}
+end,
+macula_rpc_handler:register_local_procedure(RpcPid, <<"my.procedure">>, Handler).
+```
+
+**Make an async RPC request (auto-discover provider):**
+```erlang
+%% With function callback
+Callback = fun(Result) ->
+    case Result of
+        {ok, Response} -> io:format("Got: ~p~n", [Response]);
+        {error, Reason} -> io:format("Error: ~p~n", [Reason])
+    end
+end,
+{ok, RequestId} = macula_rpc_handler:request(RpcPid, <<"my.procedure">>, Args, #{callback => Callback}).
+
+%% With PID callback (receives {rpc_response, RequestId, Result})
+{ok, RequestId} = macula_rpc_handler:request(RpcPid, <<"my.procedure">>, Args, #{callback => self()}).
+```
+
+**Make request to specific node:**
+```erlang
+{ok, RequestId} = macula_rpc_handler:request_to(RpcPid, TargetNodeId, <<"my.procedure">>, Args, #{callback => Callback}).
+```
+
+**Pull-based service discovery (v0.12.3):**
+```erlang
+%% Configure at init time - prefetch services when connection manager is set
+{ok, RpcPid} = macula_rpc_handler:start_link(#{
+    node_id => NodeId,
+    realm => Realm,
+    peer_id => PeerId,
+    service_interests => [<<"ping.handler">>, <<"user.service">>]  %% Services to prefetch
+}).
+
+%% Or dynamically prefetch at runtime
+macula_rpc_handler:prefetch_services(RpcPid, [<<"new.service">>]).
+
+%% Query configured interests
+Interests = macula_rpc_handler:get_service_interests(RpcPid).
+%% => [<<"ping.handler">>, <<"user.service">>, <<"new.service">>]
+```
+
+### Protocol Message Types
+
+| Type | ID | Purpose |
+|------|-----|---------|
+| RPC_REQUEST | 0x24 | Async request with procedure, args, from_node |
+| RPC_REPLY | 0x25 | Response with result or error |
+
+### Message Format
+
+**rpc_request:**
+```erlang
+#{
+    request_id => <<"unique-request-id">>,
+    procedure => <<"service.method">>,
+    args => #{...},
+    from_node => <<"requester-node-id">>
+}
+```
+
+**rpc_reply:**
+```erlang
+#{
+    request_id => <<"unique-request-id">>,
+    from_node => <<"provider-node-id">>,
+    result => #{...}  %% or error => #{code => ..., message => ...}
+}
+```
+
+### Key Files
+
+**Implementation:**
+- `src/macula_rpc_system/macula_rpc_handler.erl` - Core RPC handler with async support
+- `src/macula_rpc_system/macula_service_registry.erl` - Local handler registry
+- `src/macula_protocol_types.erl` - Protocol message type definitions (0x24, 0x25)
+- `src/macula_protocol_encoder.erl` - Message validation and encoding
+- `src/macula_ping_pong.erl` - Example implementation using async RPC
+
+**Tests:**
+- `test/macula_async_rpc_tests.erl` - 14 unit tests
+
+### Test Coverage
+
+| Test Category | Tests | Description |
+|---------------|-------|-------------|
+| Local handler | 7 | Handler registration, invocation, args, errors |
+| Protocol types | 5 | Message type IDs, validation, binary keys |
+| Async reply | 2 | Unknown request handling, unique IDs |
+
+### Design Principles
+
+1. **Local-first optimization** - Requests to locally-registered handlers execute immediately without network
+2. **Direct P2P** - Replies route directly to requester, not through Bootstrap
+3. **Callback flexibility** - Function callbacks for simple cases, PID callbacks for complex flows
+4. **Request tracking** - Unique request IDs prevent response confusion
+5. **Graceful degradation** - Unknown replies are logged and ignored (no crash)
+
+### Integration with NAT Traversal
+
+Async RPC integrates with v0.12.0 NAT traversal:
+- Uses connection pool for P2P delivery
+- Falls back to relay when direct connection fails
+- Hole-punched connections preferred for low latency
 
 ## ✅ v0.9.0 Platform Layer (COMPLETED - Nov 2025)
 
@@ -438,11 +665,53 @@ All fixes follow idiomatic Erlang patterns:
 - Automatic cleanup maintains stability
 - No OOM crashes observed
 
-## 🚀 v0.11.0 QUIC Distribution (IN PROGRESS - Nov 2025)
+## ✅ v0.11.0 Security Hardening - TLS Certificate Verification (COMPLETED - Nov 2025)
 
-**STATUS**: Implementation complete, integration testing in progress
+**COMPLETED**: v0.11.0 implemented centralized TLS configuration with two-mode operation.
 
-📋 **See `architecture/v0.11.0-QUIC_DISTRIBUTION.md`** for full vision document
+📋 **See `docs/operator/TLS_CONFIGURATION.md`** for operator documentation
+
+**Problem Solved**: Previous TLS configuration used `{verify, none}` everywhere, accepting any certificate.
+
+**Implementation:**
+- Created `macula_tls.erl` - centralized TLS configuration module
+- **Production mode**: Strict certificate verification with CA bundle, hostname verification
+- **Development mode**: Self-signed certificates, no verification (default)
+- Environment variable configuration: `MACULA_TLS_MODE`, `MACULA_TLS_CACERTFILE`, etc.
+
+**Key Files:**
+- `src/macula_tls.erl` - Centralized TLS configuration
+- `config/sys.config` - TLS configuration options
+- `scripts/setup-dev-tls.sh` - Development certificate generation
+- `docs/operator/TLS_CONFIGURATION.md` - Operator documentation
+- `test/macula_tls_tests.erl` - 29 tests passing
+
+**TLS Configuration Options:**
+
+| Environment Variable | Application Config | Description |
+|---------------------|-------------------|-------------|
+| `MACULA_TLS_MODE` | `{tls_mode, production}` | `production` or `development` |
+| `MACULA_TLS_CACERTFILE` | `{tls_cacertfile, Path}` | CA bundle path |
+| `MACULA_TLS_CERTFILE` | `{tls_certfile, Path}` | Certificate path |
+| `MACULA_TLS_KEYFILE` | `{tls_keyfile, Path}` | Private key path |
+| `MACULA_TLS_VERIFY_HOSTNAME` | `{tls_verify_hostname, true}` | Hostname verification |
+
+**Quick Start:**
+```erlang
+%% Production
+{macula, [{tls_mode, production}, {tls_cacertfile, "/etc/ssl/certs/ca-certificates.crt"}]}
+
+%% Development (default)
+{macula, [{tls_mode, development}]}
+```
+
+---
+
+## 🚀 QUIC Distribution (DEFERRED - v1.1.0+)
+
+**STATUS**: Deferred until after v1.0.0 is proven in production
+
+📋 **See `architecture/archive/` for historical planning documents**
 
 **Problem Solved**: Replace EPMD and TCP-based Erlang distribution with QUIC:
 - ❌ EPMD is centralized (single point of failure)
@@ -705,3 +974,78 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 2. Use -F flag for git commit if message is in a file
 3. Prefer shell scripts over complex one-liners
 4. Keep bash commands simple and readable
+
+## Version Management & Documentation Guidelines
+
+### ⚠️ CRITICAL: Documentation Updates Are MANDATORY
+
+**Documentation is of PRIMORDIAL importance.** After ANY work session:
+
+1. **ALWAYS update planning documents** - Roadmaps, architecture docs, status summaries
+2. **ALWAYS update CLAUDE.md** - Version history, feature status, architecture changes
+3. **ALWAYS sync documentation with code** - If code changed, docs must change
+4. **NEVER leave stale documentation** - Outdated docs are worse than no docs
+
+**Stakeholders depend on accurate documentation:**
+- **Developers** need current architecture and API docs
+- **Operators** need deployment and configuration guides
+- **Product owners** need accurate roadmaps and status
+- **Future Claude sessions** need updated context
+
+**Before ending ANY session:**
+- [ ] Planning docs updated (ROADMAP.md, architecture/*.md)
+- [ ] CLAUDE.md version history updated
+- [ ] Feature status marked complete/in-progress
+- [ ] New files/modules documented
+- [ ] Test counts updated
+
+### ALWAYS Check Version Before Making Changes
+
+Before implementing any feature or fix:
+1. **Read CLAUDE.md** - Check current version in header
+2. **Read ROADMAP.md** - Check current milestones and what's complete
+3. **Determine next version** - Follow semver (MAJOR.MINOR.PATCH)
+
+### Version Numbering
+
+| Change Type | Version Bump | Example |
+|-------------|--------------|---------|
+| Breaking API change | MAJOR | v0.x.x → v1.0.0 |
+| New feature (backwards compatible) | MINOR | v0.11.x → v0.12.0 |
+| Bug fix, documentation, tests | PATCH | v0.11.1 → v0.11.2 |
+
+### After Completing Work - ALWAYS Update
+
+1. **CLAUDE.md Version History Table**
+   - Add new version row with date and key features
+   - Update "Current Version" in header
+
+2. **ROADMAP.md**
+   - Update current version in header
+   - Mark completed items with [x] and status
+   - Add new files/tests to file lists
+
+3. **Sync All Documentation**
+   - `docs/GLOSSARY.md` - If terminology changed
+   - `docs/operator/*.md` - If operator-facing changes
+   - ADRs in `architecture/decisions/` - If architectural decisions made
+
+### Release Preparation Checklist
+
+Before publishing a release:
+- [ ] All tests passing (`rebar3 eunit`)
+- [ ] Version updated in CLAUDE.md and ROADMAP.md
+- [ ] New features documented with test counts
+- [ ] ADRs created for architectural decisions
+- [ ] GLOSSARY.md updated if terminology changed
+
+### Example: Adding a Feature
+
+```
+1. Check: CLAUDE.md says "v0.11.1"
+2. Plan: This is a new feature → bump to v0.11.2
+3. Implement with TDD
+4. Update CLAUDE.md: Add "v0.11.2 | Nov 2025 | Feature X (N tests)"
+5. Update ROADMAP.md: Mark feature complete, update version
+6. Commit with version in message
+```

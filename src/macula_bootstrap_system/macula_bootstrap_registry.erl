@@ -19,7 +19,7 @@
 -export([
     store_service/2, lookup_service/1,
     store_topic/2, lookup_topic/1,
-    store/2, lookup/1  % Generic API
+    store/2, lookup/1, delete/1  % Generic API
 ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -66,6 +66,11 @@ store(Key, Value) ->
 lookup(Key) ->
     gen_server:call(?MODULE, {lookup, Key}).
 
+%% @doc Generic delete (delegates to DHT)
+-spec delete(Key :: binary()) -> ok | {error, not_found}.
+delete(Key) ->
+    gen_server:call(?MODULE, {delete, Key}).
+
 %%%===================================================================
 %%% GenServer Callbacks
 %%%===================================================================
@@ -97,6 +102,20 @@ handle_call({lookup, Key}, _From, State) ->
     case macula_routing_server:get_local(RoutingServerPid, Key) of
         {ok, Value} ->
             {reply, {ok, Value}, State};
+        not_found ->
+            {reply, {error, not_found}, State}
+    end;
+
+%% Delete key-value pair from DHT
+handle_call({delete, Key}, _From, State) ->
+    RoutingServerPid = State#state.routing_server,
+    %% Check if exists first, then delete
+    case macula_routing_server:get_local(RoutingServerPid, Key) of
+        {ok, _Value} ->
+            %% Delete using the local node ID (empty binary means delete all)
+            ok = macula_routing_server:delete_local(RoutingServerPid, Key, <<>>),
+            ?LOG_DEBUG("[BootstrapRegistry] Deleted from DHT: ~p", [Key]),
+            {reply, ok, State};
         not_found ->
             {reply, {error, not_found}, State}
     end;

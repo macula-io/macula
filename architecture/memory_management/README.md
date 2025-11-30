@@ -112,13 +112,37 @@ Macula implements comprehensive memory management to prevent OOM (Out-Of-Memory)
 9. [**Housekeeping Report**](09_housekeeping_report.md) - Architecture review, code quality analysis, future improvements
 
 ### Visual Documentation
-10. [**Diagrams**](diagrams/) - Mermaid diagrams for all memory management mechanisms
+10. [**Diagrams**](diagrams/) - ASCII diagrams for all memory management mechanisms (hexdocs compatible)
 
 ---
 
 ## Architecture Diagram
 
-![Memory Management Overview](diagrams/memory_management_overview.mermaid)
+```
+                    ┌─────────────────────────────────┐
+                    │        Macula Platform          │
+                    └────────────┬────────────────────┘
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        │                        │                        │
+        ▼                        ▼                        ▼
+┌───────────────┐      ┌─────────────────┐      ┌─────────────────┐
+│ Gateway Layer │      │  Service Layer  │      │Application Layer│
+└───────┬───────┘      └────────┬────────┘      └────────┬────────┘
+        │                       │                        │
+        ├──────────────┐        ├──────────────┐         │
+        │              │        │              │         │
+        ▼              ▼        ▼              ▼         ▼
+┌─────────────┐ ┌───────────┐ ┌───────────┐ ┌──────────┐ ┌──────────────┐
+│    mesh:    │ │  client   │ │  service  │ │advertise │ │ rpc_handler: │
+│   Bounded   │ │ _manager: │ │ _registry:│ │_manager: │ │   Caller     │
+│    Pool     │ │  Client   │ │    TTL    │ │ Periodic │ │  Monitoring  │
+│ LRU, max    │ │  Limits   │ │  Cleanup  │ │ Cleanup  │ │  immediate   │
+│   1,000     │ │backpres-  │ │   300s    │ │   60s    │ │   cleanup    │
+│             │ │sure, max  │ │  expiry   │ │ interval │ │              │
+│             │ │  10,000   │ │           │ │          │ │              │
+└─────────────┘ └───────────┘ └───────────┘ └──────────┘ └──────────────┘
+```
 
 The platform implements memory management at 3 layers:
 

@@ -1,0 +1,130 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_console</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_console</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>Macula Console Formatter - Beautiful colored terminal output.
+
+
+<h2><a name="description">Description</a></h2><p>Macula Console Formatter - Beautiful colored terminal output.</p>
+  
+   <p>Provides ANSI-colored output for ping-pong demo and general logging.   
+Makes demo output visually appealing and easy to read.</p>
+  
+   Example output:
+   <pre>
+   --&gt; fc01 -&gt; rc05 [full_cone -&gt; restricted]
+   &lt;-- fc01 &lt;- rc05 42ms [restricted]
+   [!!] fc01 -&gt; sy07 TIMEOUT [symmetric]
+   </pre>
+  
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#banner-1">banner/1</a></td><td>Display a startup banner for the node.</td></tr>
+<tr><td valign="top"><a href="#error-2">error/2</a></td><td>Output an error message: [!!] Error message.</td></tr>
+<tr><td valign="top"><a href="#info-2">info/2</a></td><td>Output an info message: [i] Info message.</td></tr>
+<tr><td valign="top"><a href="#node_connected-2">node_connected/2</a></td><td>Output a node connected event: [*] Node fc01 connected (full_cone).</td></tr>
+<tr><td valign="top"><a href="#node_disconnected-2">node_disconnected/2</a></td><td>Output a node disconnected event: [*] Node fc01 disconnected.</td></tr>
+<tr><td valign="top"><a href="#ping-4">ping/4</a></td><td>Output a PING message showing source to target with NAT types.</td></tr>
+<tr><td valign="top"><a href="#pong-4">pong/4</a></td><td>Output a PONG message with RTT.</td></tr>
+<tr><td valign="top"><a href="#pubsub_recv-5">pubsub_recv/5</a></td><td>Output a PubSub receive message with delivery rate.</td></tr>
+<tr><td valign="top"><a href="#pubsub_send-3">pubsub_send/3</a></td><td>Output a PubSub broadcast message with sequence number.</td></tr>
+<tr><td valign="top"><a href="#stats-2">stats/2</a></td><td>Output statistics for a node
+  StatsMap should contain: pings_sent, pongs_received, timeouts, avg_rtt_ms.</td></tr>
+<tr><td valign="top"><a href="#success-2">success/2</a></td><td>Output a success message: [ok] Success message.</td></tr>
+<tr><td valign="top"><a href="#timeout-3">timeout/3</a></td><td>Output a TIMEOUT message for a failed ping.</td></tr>
+<tr><td valign="top"><a href="#warning-2">warning/2</a></td><td>Output a warning message: [!] Warning message.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="banner-1">banner/1</a></h3>
+<div class="spec">
+<p><code>banner(Config::map()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Display a startup banner for the node</p>
+
+<h3 class="function"><a name="error-2">error/2</a></h3>
+<div class="spec">
+<p><code>error(Prefix::binary() | string(), Msg::binary() | string()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output an error message: [!!] Error message</p>
+
+<h3 class="function"><a name="info-2">info/2</a></h3>
+<div class="spec">
+<p><code>info(Prefix::binary() | string(), Msg::binary() | string()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output an info message: [i] Info message</p>
+
+<h3 class="function"><a name="node_connected-2">node_connected/2</a></h3>
+<div class="spec">
+<p><code>node_connected(NodeId::binary() | string(), NatType::binary() | string() | atom()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output a node connected event: [*] Node fc01 connected (full_cone)</p>
+
+<h3 class="function"><a name="node_disconnected-2">node_disconnected/2</a></h3>
+<div class="spec">
+<p><code>node_disconnected(NodeId::binary() | string(), Reason::binary() | string()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output a node disconnected event: [*] Node fc01 disconnected</p>
+
+<h3 class="function"><a name="ping-4">ping/4</a></h3>
+<div class="spec">
+<p><code>ping(FromNode::binary() | string(), ToNode::binary() | string(), FromNat::binary() | string() | atom(), ToNat::binary() | string() | atom()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output a PING message showing source to target with NAT types</p>
+
+<h3 class="function"><a name="pong-4">pong/4</a></h3>
+<div class="spec">
+<p><code>pong(FromNode::binary() | string(), ToNode::binary() | string(), RTT::integer(), NatType::binary() | string() | atom()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output a PONG message with RTT</p>
+
+<h3 class="function"><a name="pubsub_recv-5">pubsub_recv/5</a></h3>
+<div class="spec">
+<p><code>pubsub_recv(ToNode::binary() | string(), FromNode::binary() | string(), SeqNum::integer(), SenderNat::binary() | string() | atom(), DeliveryRate::float()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output a PubSub receive message with delivery rate</p>
+
+<h3 class="function"><a name="pubsub_send-3">pubsub_send/3</a></h3>
+<div class="spec">
+<p><code>pubsub_send(FromNode::binary() | string(), SeqNum::integer(), NatType::binary() | string() | atom()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output a PubSub broadcast message with sequence number</p>
+
+<h3 class="function"><a name="stats-2">stats/2</a></h3>
+<div class="spec">
+<p><code>stats(NodeId::binary() | string(), StatsMap::map()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output statistics for a node
+  StatsMap should contain: pings_sent, pongs_received, timeouts, avg_rtt_ms</p>
+
+<h3 class="function"><a name="success-2">success/2</a></h3>
+<div class="spec">
+<p><code>success(Prefix::binary() | string(), Msg::binary() | string()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output a success message: [ok] Success message</p>
+
+<h3 class="function"><a name="timeout-3">timeout/3</a></h3>
+<div class="spec">
+<p><code>timeout(FromNode::binary() | string(), ToNode::binary() | string(), NatInfo::binary() | string() | atom()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output a TIMEOUT message for a failed ping</p>
+
+<h3 class="function"><a name="warning-2">warning/2</a></h3>
+<div class="spec">
+<p><code>warning(Prefix::binary() | string(), Msg::binary() | string()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Output a warning message: [!] Warning message</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

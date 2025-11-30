@@ -244,21 +244,21 @@ prune_expired(#{cache := Cache, cache_ttl := CacheTTL} = Registry) ->
         fun(ServiceId, CacheEntry, {Acc, Count}) ->
             CachedAt = maps:get(cached_at, CacheEntry),
             Age = Now - CachedAt,
-
-            if
-                Age >= CacheTTL ->
-                    %% Expired - don't include in new cache (>= allows 0-second TTL)
-                    {Acc, Count + 1};
-                true ->
-                    %% Still valid
-                    {Acc#{ServiceId => CacheEntry}, Count}
-            end
+            prune_cache_by_age(Age, CacheTTL, ServiceId, CacheEntry, Acc, Count)
         end,
         {#{}, 0},
         Cache
     ),
 
     {Registry#{cache => NewCache}, Removed}.
+
+%% @private Cache entry expired - don't include (>= allows 0-second TTL)
+prune_cache_by_age(Age, CacheTTL, _ServiceId, _CacheEntry, Acc, Count)
+  when Age >= CacheTTL ->
+    {Acc, Count + 1};
+%% @private Cache entry still valid
+prune_cache_by_age(_Age, _CacheTTL, ServiceId, CacheEntry, Acc, Count) ->
+    {Acc#{ServiceId => CacheEntry}, Count}.
 
 %% @doc Clear the entire discovery cache.
 -spec clear_cache(registry()) -> registry().
@@ -306,12 +306,15 @@ prune_service_by_age(_Age, _ServiceTTL, ServiceId, LocalService, Acc, Count) ->
 -spec discover_subscribers(registry(), binary()) ->
     {ok, [provider_info()], registry()} | {cache_miss, registry()}.
 discover_subscribers(#{subscriber_cache := Cache, cache_ttl := CacheTTL} = Registry, Topic) ->
-    case maps:get(Topic, Cache, undefined) of
-        undefined ->
-            {cache_miss, Registry};
-        CacheEntry ->
-            check_subscriber_cache_expiry(CacheEntry, CacheTTL, Registry)
-    end.
+    CacheEntry = maps:get(Topic, Cache, undefined),
+    do_discover_subscribers(CacheEntry, CacheTTL, Registry).
+
+%% @private No cache entry
+do_discover_subscribers(undefined, _CacheTTL, Registry) ->
+    {cache_miss, Registry};
+%% @private Cache entry found - check expiry
+do_discover_subscribers(CacheEntry, CacheTTL, Registry) ->
+    check_subscriber_cache_expiry(CacheEntry, CacheTTL, Registry).
 
 %% Check if cached entry is expired (pattern matching)
 check_subscriber_cache_expiry(#{cached_at := CachedAt, providers := Subscribers}, CacheTTL, Registry) ->
@@ -403,28 +406,21 @@ clear_subscriber_cache(Registry) ->
 -spec publish_to_dht(pid() | atom(), service_id(), provider_info(), pos_integer(), pos_integer()) ->
     ok | {error, term()}.
 publish_to_dht(DhtPid, ServiceId, ProviderInfo, TTL, _K) ->
-    %% Compute DHT key from service_id
     Key = service_key(ServiceId),
-
-    %% Add TTL and timestamp to provider info
     EnrichedProviderInfo = ProviderInfo#{
         advertised_at => erlang:system_time(second),
         ttl => TTL
     },
-
-    %% Store in DHT - for now, use gen_server:call pattern
-    %% This will be replaced with actual DHT routing calls
-    %% Crashes if DHT not available or gen_server:call fails - exposes configuration issues
     ResolvedPid = resolve_pid(DhtPid),
-    case ResolvedPid of
-        undefined ->
-            %% DHT not available - this is a configuration error
-            error(dht_not_available);
-        Pid when is_pid(Pid) ->
-            %% Store in DHT with propagation to k closest nodes
-            ok = macula_routing_server:store(Pid, Key, EnrichedProviderInfo),
-            ok
-    end.
+    do_publish_to_dht(ResolvedPid, Key, EnrichedProviderInfo).
+
+%% @private DHT not available - configuration error
+do_publish_to_dht(undefined, _Key, _ProviderInfo) ->
+    error(dht_not_available);
+%% @private DHT available - store with propagation
+do_publish_to_dht(Pid, Key, ProviderInfo) when is_pid(Pid) ->
+    ok = macula_routing_server:store(Pid, Key, ProviderInfo),
+    ok.
 
 %% @doc Query the DHT for service providers.
 %%
@@ -450,36 +446,33 @@ publish_to_dht(DhtPid, ServiceId, ProviderInfo, TTL, _K) ->
 -spec query_dht_for_service(pid() | atom(), service_id(), pos_integer()) ->
     {ok, [provider_info()]} | {error, term()}.
 query_dht_for_service(DhtPid, ServiceId, K) ->
-    %% Compute DHT key from service_id
     Key = service_key(ServiceId),
-
-    %% Query DHT using distributed find_value
-    %% Crashes if DHT not available or query fails - exposes configuration/routing issues
     ResolvedPid = resolve_pid(DhtPid),
-    case ResolvedPid of
-        undefined ->
-            error(dht_not_available);
-        Pid when is_pid(Pid) ->
-            %% Use distributed DHT lookup (let it crash on errors)
-            case macula_routing_server:find_value(Pid, Key, K) of
-                {ok, Value} when is_map(Value) ->
-                    %% Single provider stored
-                    {ok, [Value]};
-                {ok, Values} when is_list(Values) ->
-                    %% Multiple providers stored
-                    {ok, Values};
-                {ok, []} ->
-                    %% No providers found
-                    {ok, []};
-                {nodes, _Nodes} ->
-                    %% Value not found in DHT
-                    {ok, []};
-                {error, Reason} ->
-                    error({dht_query_failed, Reason});
-                Other ->
-                    error({unexpected_dht_response, Other})
-            end
-    end.
+    do_query_dht(ResolvedPid, Key, K).
+
+%% @private DHT not available
+do_query_dht(undefined, _Key, _K) ->
+    error(dht_not_available);
+%% @private DHT available - perform query
+do_query_dht(Pid, Key, K) when is_pid(Pid) ->
+    QueryResult = macula_routing_server:find_value(Pid, Key, K),
+    handle_dht_query_result(QueryResult).
+
+%% @private Single provider stored
+handle_dht_query_result({ok, Value}) when is_map(Value) ->
+    {ok, [Value]};
+%% @private Multiple providers stored
+handle_dht_query_result({ok, Values}) when is_list(Values) ->
+    {ok, Values};
+%% @private Value not found in DHT
+handle_dht_query_result({nodes, _Nodes}) ->
+    {ok, []};
+%% @private DHT query failed
+handle_dht_query_result({error, Reason}) ->
+    error({dht_query_failed, Reason});
+%% @private Unexpected DHT response
+handle_dht_query_result(Other) ->
+    error({unexpected_dht_response, Other}).
 
 %% @doc Remove a service advertisement from the DHT.
 %%

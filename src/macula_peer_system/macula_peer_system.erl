@@ -79,6 +79,11 @@ stop(Sup) when is_pid(Sup) ->
 init({Url, Opts}) ->
     ?LOG_INFO("Starting peer system supervisor for ~s", [Url]),
 
+    %% Generate a unique peer_id for this peer system
+    %% Used for gproc registration to support multiple peer connections per realm
+    PeerId = erlang:unique_integer([monotonic, positive]),
+    OptsWithPeerId = Opts#{peer_id => PeerId},
+
     %% Supervision strategy: rest_for_one
     %% If child N crashes, restart N and all children after N
     %% - connection_manager crash → all restart (they depend on it)
@@ -94,7 +99,7 @@ init({Url, Opts}) ->
         %% 1. Connection Manager (must start first)
         #{
             id => connection_manager,
-            start => {macula_connection, start_link, [Url, Opts]},
+            start => {macula_connection, start_link, [Url, OptsWithPeerId]},
             restart => permanent,
             shutdown => 5000,
             type => worker,
@@ -104,7 +109,7 @@ init({Url, Opts}) ->
         %% 2. PubSub Handler
         #{
             id => pubsub_handler,
-            start => {macula_pubsub_handler, start_link, [Opts]},
+            start => {macula_pubsub_handler, start_link, [OptsWithPeerId]},
             restart => permanent,
             shutdown => 5000,
             type => worker,
@@ -114,7 +119,7 @@ init({Url, Opts}) ->
         %% 3. RPC Handler
         #{
             id => rpc_handler,
-            start => {macula_rpc_handler, start_link, [Opts]},
+            start => {macula_rpc_handler, start_link, [OptsWithPeerId]},
             restart => permanent,
             shutdown => 5000,
             type => worker,
@@ -124,7 +129,7 @@ init({Url, Opts}) ->
         %% 4. Advertisement Manager
         #{
             id => advertisement_manager,
-            start => {macula_advertisement_manager, start_link, [Opts]},
+            start => {macula_advertisement_manager, start_link, [OptsWithPeerId]},
             restart => permanent,
             shutdown => 5000,
             type => worker,

@@ -1,320 +1,218 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.10.1">
-
-
-    <title>macula_tls — macula v0.10.1</title>
-
-    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
-
-    <script defer src="dist/sidebar_items-1151EC94.js"></script>
-    <script defer src="docs_config.js"></script>
-    <script defer src="dist/html-DPJLHKSM.js"></script>
-
-  </head>
-  <body>
-    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
-</script>
-
-<div class="body-wrapper">
-
-<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
-  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
-</button>
-
-<nav id="sidebar" class="sidebar">
-
-  <div class="sidebar-header">
-    <div class="sidebar-projectInfo">
-
-        <a href="readme.html" class="sidebar-projectImage">
-          <img src="assets/logo.svg" alt="macula" />
-        </a>
-
-      <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
-macula
-        </a>
-        <div class="sidebar-projectVersion" translate="no">
-          v0.10.1
-        </div>
-      </div>
-    </div>
-    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
-  </div>
-</nav>
-
-<output role="status" id="toast"></output>
-
-<main class="content page-module" id="main" data-type="modules">
-  <div id="content" class="content-inner">
-    <div class="top-search">
-      <div class="search-settings">
-        <form class="search-bar" action="search.html">
-          <label class="search-label">
-            <span class="sr-only">Search documentation of macula</span>
-            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </label>
-          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
-            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
-          </button>
-          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
-            <i class="ri-close-line ri-lg" title="Cancel search"></i>
-          </button>
-        </form>
-        <div class="autocomplete">
-        </div>
-        <button class="icon-settings display-settings">
-          <i class="ri-settings-3-line"></i>
-          <span class="sr-only">Settings</span>
-        </button>
-      </div>
-    </div>
-
-<div id="top-content">
-  <div class="heading-with-actions top-heading">
-    <h1>
-      <span translate="no">macula_tls</span> 
-      <small class="app-vsn" translate="no">(macula v0.10.1)</small>
-
-    </h1>
-
-      <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_tls.erl#L16" title="View Source" class="icon-action" rel="help">
-        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        <span class="sr-only">View Source</span>
-      </a>
-
-  </div>
-
-
-    <section id="moduledoc">
-<p>TLS Certificate Auto-Generation Module</p><p>This module provides zero-config TLS certificate management for Macula nodes. Certificates are auto-generated on first boot and persisted to disk for stable node identity across restarts.</p><p>Key Features: - Auto-generate self-signed certificates on first boot - Derive stable Node ID from public key (SHA-256 hash) - Persist certificates to disk (survives restarts) - Proper file permissions (0600 for private key)</p>
-    </section>
-
-</div>
-
-  <section id="summary" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#summary">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Summary</span>
-    </h1>
-<div class="summary-functions summary">
-  <h2>
-    <a href="#functions">Functions</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#derive_node_id/1" data-no-tooltip="" translate="no">derive_node_id(CertPEM)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Derive Node ID from certificate public key.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#ensure_cert_exists/2" data-no-tooltip="" translate="no">ensure_cert_exists(CertPath, KeyPath)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Ensure TLS certificate exists, generate if missing.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#generate_self_signed_cert/1" data-no-tooltip="" translate="no">generate_self_signed_cert(Opts)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Generate self-signed TLS certificate using OpenSSL.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#get_cert_paths/0" data-no-tooltip="" translate="no">get_cert_paths()</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Get default certificate paths from application environment.</p></div>
-
-    </div>
-
-</div>
-
-  </section>
-
-
-  <section id="functions" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#functions">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Functions</span>
-    </h1>
-    <div class="functions-list">
-<section class="detail" id="derive_node_id/1">
-
-  <div class="detail-header">
-    <a href="#derive_node_id/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">derive_node_id(CertPEM)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_tls.erl#L168" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> derive_node_id(CertPEM :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> NodeID :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-<p>Derive Node ID from certificate public key.</p><p>Extracts the public key from the PEM-encoded certificate and computes SHA-256 hash to create a stable, cryptographically-derived Node ID.</p>
-  </section>
-</section>
-<section class="detail" id="ensure_cert_exists/2">
-
-  <div class="detail-header">
-    <a href="#ensure_cert_exists/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">ensure_cert_exists(CertPath, KeyPath)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_tls.erl#L52" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> ensure_cert_exists(CertPath :: <a href="https://www.erlang.org/doc/apps/kernel/file.html#t:filename/0">file:filename</a>(), KeyPath :: <a href="https://www.erlang.org/doc/apps/kernel/file.html#t:filename/0">file:filename</a>()) ->
-                            {ok, <a href="https://www.erlang.org/doc/apps/kernel/file.html#t:filename/0">file:filename</a>(), <a href="https://www.erlang.org/doc/apps/kernel/file.html#t:filename/0">file:filename</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Ensure TLS certificate exists, generate if missing.</p><p>Checks if certificate and key files exist at the specified paths. If they don't exist, generates new self-signed certificate and saves to disk. Returns the paths and derived Node ID.</p>
-  </section>
-</section>
-<section class="detail" id="generate_self_signed_cert/1">
-
-  <div class="detail-header">
-    <a href="#generate_self_signed_cert/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">generate_self_signed_cert(Opts)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_tls.erl#L91" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> generate_self_signed_cert(Opts :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) ->
-                                   {ok, CertPEM :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), KeyPEM :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Generate self-signed TLS certificate using OpenSSL.</p><p>Creates a new RSA key pair and self-signed X.509 certificate with: - RSA 2048-bit key - 10-year validity period - Subject: CN=macula-node - Self-signed (issuer = subject)</p>
-  </section>
-</section>
-<section class="detail" id="get_cert_paths/0">
-
-  <div class="detail-header">
-    <a href="#get_cert_paths/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">get_cert_paths()</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_tls.erl#L206" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> get_cert_paths() -> {<a href="https://www.erlang.org/doc/apps/kernel/file.html#t:filename/0">file:filename</a>(), <a href="https://www.erlang.org/doc/apps/kernel/file.html#t:filename/0">file:filename</a>()}.</pre>
-
-      </div>
-
-<p>Get default certificate paths from application environment.</p>
-  </section>
-</section>
-
-    </div>
-  </section>
-
-    <footer class="footer">
-      <p>
-
-          <span class="line">
-            <a href="https://hex.pm/packages/macula/0.10.1" class="footer-hex-package">Hex Package</a>
-
-            <a href="https://preview.hex.pm/preview/macula/0.10.1">Hex Preview</a>
-
-          </span>
-
-        <span class="line">
-          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
-            Search HexDocs
-          </button>
-
-            <a href="macula.epub" title="ePub version">
-              Download ePub version
-            </a>
-
-        </span>
-      </p>
-
-      <p class="built-using">
-        Built using
-        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
-
-          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
-
-      </p>
-
-    </footer>
-  </div>
-</main>
-</div>
-
-  </body>
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_tls</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_tls</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>TLS Certificate Management and Verification Module (v0.11.0+).
+
+
+<h2><a name="description">Description</a></h2><p>TLS Certificate Management and Verification Module (v0.11.0+)</p>
+  
+   <p>This module provides TLS certificate management for Macula nodes with   
+two operating modes:</p>
+  
+   <p>- **Production Mode**: Strict certificate verification with CA bundle   
+- **Development Mode**: Self-signed certificates (auto-generated)</p>
+  
+   <h3><a name="Configuration_(sys.config)">Configuration (sys.config)</a></h3>
+  
+     <p>{macula, [         
+%% TLS mode: production (strict) or development (permissive)         
+{tls_mode, development},  % or production</p>
+  
+         <p>%% CA certificate bundle (production mode)         
+{tls_cacertfile, "/path/to/ca-bundle.crt"},</p>
+  
+         <p>%% Server/client certificate and key         
+{tls_certfile, "/path/to/server.crt"},         
+{tls_keyfile, "/path/to/server.key"},</p>
+  
+         <p>%% Hostname verification (production mode, default: true)         
+{tls_verify_hostname, true}     
+]}</p>
+  
+   <h3><a name="Environment_Variables">Environment Variables</a></h3>
+  
+   <p>- MACULA_TLS_MODE: production | development   
+- MACULA_TLS_CACERTFILE: Path to CA bundle   
+- MACULA_TLS_CERTFILE: Path to certificate   
+- MACULA_TLS_KEYFILE: Path to private key</p>
+  
+   <h3><a name="Security_Note">Security Note</a></h3>
+  
+   In production mode, TLS connections will:
+   - Verify the server certificate chain against the CA bundle
+   - Reject expired or invalid certificates
+   - Optionally verify hostname matches certificate CN/SAN
+  
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#derive_node_id-1">derive_node_id/1</a></td><td>Derive Node ID from certificate public key.</td></tr>
+<tr><td valign="top"><a href="#ensure_cert_exists-2">ensure_cert_exists/2</a></td><td>Ensure TLS certificate exists, generate if missing.</td></tr>
+<tr><td valign="top"><a href="#generate_self_signed_cert-1">generate_self_signed_cert/1</a></td><td>Generate self-signed TLS certificate using OpenSSL.</td></tr>
+<tr><td valign="top"><a href="#get_cert_paths-0">get_cert_paths/0</a></td><td>Get default certificate paths from application environment.</td></tr>
+<tr><td valign="top"><a href="#get_tls_mode-0">get_tls_mode/0</a></td><td>Get the current TLS mode (production or development).</td></tr>
+<tr><td valign="top"><a href="#hostname_verify_fun-3">hostname_verify_fun/3</a></td><td>TLS verify_fun callback for hostname verification.</td></tr>
+<tr><td valign="top"><a href="#is_production_mode-0">is_production_mode/0</a></td><td>Check if running in production TLS mode.</td></tr>
+<tr><td valign="top"><a href="#quic_client_opts-0">quic_client_opts/0</a></td><td>Get QUIC client TLS options based on current TLS mode.</td></tr>
+<tr><td valign="top"><a href="#quic_client_opts-1">quic_client_opts/1</a></td><td>Get QUIC client TLS options with overrides.</td></tr>
+<tr><td valign="top"><a href="#quic_client_opts_with_hostname-1">quic_client_opts_with_hostname/1</a></td><td>Get QUIC client TLS options with hostname verification.</td></tr>
+<tr><td valign="top"><a href="#quic_server_opts-0">quic_server_opts/0</a></td><td>Get QUIC server TLS options based on current TLS mode.</td></tr>
+<tr><td valign="top"><a href="#quic_server_opts-1">quic_server_opts/1</a></td><td>Get QUIC server TLS options with overrides.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="derive_node_id-1">derive_node_id/1</a></h3>
+<div class="spec">
+<p><code>derive_node_id(CertPEM::binary()) -&gt; NodeID::binary()</code><br></p>
+<p><code>CertPEM</code>: PEM-encoded certificate binary<br>
+</p>
+<p>returns: NodeID Binary (32-byte SHA-256 hash, hex-encoded)</p>
+</div><p><p>Derive Node ID from certificate public key.</p>
+ 
+  Extracts the public key from the PEM-encoded certificate and computes
+  SHA-256 hash to create a stable, cryptographically-derived Node ID.
+ </p>
+
+<h3 class="function"><a name="ensure_cert_exists-2">ensure_cert_exists/2</a></h3>
+<div class="spec">
+<p><code>ensure_cert_exists(CertPath::<a href="/home/rl/work/github.com/macula-io/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>, KeyPath::<a href="/home/rl/work/github.com/macula-io/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>) -&gt; {ok, <a href="/home/rl/work/github.com/macula-io/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>, <a href="/home/rl/work/github.com/macula-io/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>, binary()} | {error, term()}</code><br></p>
+<p><code>CertPath</code>: Path to certificate file (PEM format)<br>
+<code>KeyPath</code>: Path to private key file (PEM format)<br>
+</p>
+<p>returns: {ok, CertPath, KeyPath, NodeID} | {error, Reason}</p>
+</div><p><p>Ensure TLS certificate exists, generate if missing.</p>
+ 
+  Checks if certificate and key files exist at the specified paths.
+  If they don't exist, generates new self-signed certificate and saves to disk.
+  Returns the paths and derived Node ID.
+ </p>
+
+<h3 class="function"><a name="generate_self_signed_cert-1">generate_self_signed_cert/1</a></h3>
+<div class="spec">
+<p><code>generate_self_signed_cert(Opts::map()) -&gt; {ok, CertPEM::binary(), KeyPEM::binary()} | {error, term()}</code><br></p>
+<p><code>Opts</code>: Options map (currently unused, reserved for future extensions)<br>
+</p>
+<p>returns: {ok, CertPEM, KeyPEM} | {error, Reason}</p>
+</div><p><p>Generate self-signed TLS certificate using OpenSSL.</p>
+ 
+  Creates a new RSA key pair and self-signed X.509 certificate with:
+  - RSA 2048-bit key
+  - 10-year validity period
+  - Subject: CN=macula-node
+  - Self-signed (issuer = subject)
+ </p>
+
+<h3 class="function"><a name="get_cert_paths-0">get_cert_paths/0</a></h3>
+<div class="spec">
+<p><code>get_cert_paths() -&gt; {<a href="/home/rl/work/github.com/macula-io/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>, <a href="/home/rl/work/github.com/macula-io/kernel/doc/file.html#type-filename" docgen-rel="seetype" docgen-href="kernel:file#filename/0">file:filename()</a>}</code><br></p>
+<p> </p>
+<p>returns: {CertPath, KeyPath}</p>
+</div><p>Get default certificate paths from application environment.
+ </p>
+
+<h3 class="function"><a name="get_tls_mode-0">get_tls_mode/0</a></h3>
+<div class="spec">
+<p><code>get_tls_mode() -&gt; production | development</code><br></p>
+<p> </p>
+<p>returns: production | development</p>
+</div><p><p>Get the current TLS mode (production or development).</p>
+ 
+  Checks in order:
+  1. MACULA_TLS_MODE environment variable
+  2. tls_mode application environment setting
+  3. Defaults to 'development'
+ </p>
+
+<h3 class="function"><a name="hostname_verify_fun-3">hostname_verify_fun/3</a></h3>
+<div class="spec">
+<p><code>hostname_verify_fun(Cert::term(), Event::{bad_cert, term()} | {extension, term()} | valid | valid_peer, State::map()) -&gt; {valid, map()} | {fail, term()} | {unknown, map()}</code><br></p>
+<p><code>Cert</code>: The DER-encoded certificate being verified<br>
+<code>Event</code>: The verification event (valid_peer, valid, extension, etc.)<br>
+<code>State</code>: User state containing verification options (#{hostname =&gt; ...})<br>
+</p>
+<p>returns: {valid, State} | {fail, Reason} | {unknown, State}</p>
+</div><p><p>TLS verify_fun callback for hostname verification.</p>
+ 
+  <p>This function is called during TLS handshake to verify the peer certificate.  
+When used with hostname verification, it checks that the server's certificate  
+contains the expected hostname in either the Subject CN or Subject Alt Names.</p>
+ 
+  <p>Usage:</p>
+ 
+    {verify_fun, {fun macula_tls:hostname_verify_fun/3, #{hostname =&gt; "example.com"}}}
+ </p>
+
+<h3 class="function"><a name="is_production_mode-0">is_production_mode/0</a></h3>
+<div class="spec">
+<p><code>is_production_mode() -&gt; boolean()</code><br></p>
+<p> </p>
+<p>returns: true if production mode, false if development mode</p>
+</div><p>Check if running in production TLS mode.
+ </p>
+
+<h3 class="function"><a name="quic_client_opts-0">quic_client_opts/0</a></h3>
+<div class="spec">
+<p><code>quic_client_opts() -&gt; list()</code><br></p>
+<p> </p>
+<p>returns: Proplist of QUIC TLS options suitable for quicer:connect/4</p>
+</div><p><p>Get QUIC client TLS options based on current TLS mode.</p>
+ 
+  In production mode: Returns options with certificate verification enabled.
+  In development mode: Returns options with verification disabled.
+ </p>
+
+<h3 class="function"><a name="quic_client_opts-1">quic_client_opts/1</a></h3>
+<div class="spec">
+<p><code>quic_client_opts(Overrides::map()) -&gt; list()</code><br></p>
+<p><code>Overrides</code>: Map of options to override defaults<br>
+</p>
+<p>returns: Proplist of QUIC TLS options</p>
+</div><p>Get QUIC client TLS options with overrides.
+ </p>
+
+<h3 class="function"><a name="quic_client_opts_with_hostname-1">quic_client_opts_with_hostname/1</a></h3>
+<div class="spec">
+<p><code>quic_client_opts_with_hostname(Hostname::string() | binary()) -&gt; list()</code><br></p>
+<p><code>Hostname</code>: The hostname to verify (string or binary)<br>
+</p>
+<p>returns: Proplist of QUIC TLS options with hostname verification</p>
+</div><p><p>Get QUIC client TLS options with hostname verification.</p>
+ 
+  In production mode, adds SNI and hostname verification if enabled.
+  In development mode, hostname verification is skipped.
+ </p>
+
+<h3 class="function"><a name="quic_server_opts-0">quic_server_opts/0</a></h3>
+<div class="spec">
+<p><code>quic_server_opts() -&gt; list()</code><br></p>
+<p> </p>
+<p>returns: Proplist of QUIC TLS options suitable for quicer:listen/2</p>
+</div><p><p>Get QUIC server TLS options based on current TLS mode.</p>
+ 
+  Server always needs a certificate and key.
+  In production mode: Also verifies client certificates if presented.
+  In development mode: Auto-generates self-signed certificate if needed.
+ </p>
+
+<h3 class="function"><a name="quic_server_opts-1">quic_server_opts/1</a></h3>
+<div class="spec">
+<p><code>quic_server_opts(Overrides::map()) -&gt; list()</code><br></p>
+<p><code>Overrides</code>: Map of options to override defaults<br>
+</p>
+<p>returns: Proplist of QUIC TLS options</p>
+</div><p>Get QUIC server TLS options with overrides.
+ </p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
 </html>

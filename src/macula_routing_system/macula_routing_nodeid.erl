@@ -95,11 +95,11 @@ closer_to(Target, NodeA, NodeB) ->
 compare(Target, NodeA, NodeB) ->
     DistA = distance(Target, NodeA),
     DistB = distance(Target, NodeB),
-    if
-        DistA < DistB -> less;
-        DistA > DistB -> greater;
-        true -> equal
-    end.
+    compare_distances(DistA, DistB).
+
+compare_distances(DistA, DistB) when DistA < DistB -> less;
+compare_distances(DistA, DistB) when DistA > DistB -> greater;
+compare_distances(_DistA, _DistB) -> equal.
 
 %% @doc Calculate bucket index for a node relative to local node.
 %% Returns leading zero count of XOR distance (0..255).
@@ -108,10 +108,11 @@ compare(Target, NodeA, NodeB) ->
 -spec bucket_index(binary(), binary()) -> 0..256.
 bucket_index(LocalNodeId, TargetNodeId) ->
     Distance = distance(LocalNodeId, TargetNodeId),
-    case Distance of
-        <<0:256>> -> 256;  % Same node (special case)
-        _ -> leading_zeros(Distance)
-    end.
+    distance_to_bucket_index(Distance).
+
+%% Same node (distance 0) gets special bucket index 256
+distance_to_bucket_index(<<0:256>>) -> 256;
+distance_to_bucket_index(Distance) -> leading_zeros(Distance).
 
 %% @doc Convert node ID to hex string.
 -spec to_hex(node_id()) -> string().

@@ -15,6 +15,8 @@
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([
     start_link/1,
@@ -80,76 +82,28 @@ list_handlers(Pid) ->
 %%%===================================================================
 
 init(Opts) ->
-    io:format("[RPC] Initializing RPC handler~n"),
+    ?LOG_INFO("Initializing RPC handler"),
     State = #state{
         opts = Opts,
         registrations = #{},
         monitors = #{}
     },
-    io:format("[RPC] RPC handler initialized~n"),
+    ?LOG_INFO("RPC handler initialized"),
     {ok, State}.
 
 handle_call({register_handler, Procedure, Handler}, _From, State)
     when is_binary(Procedure), (is_pid(Handler) orelse is_function(Handler)) ->
-    %% Check if procedure already has a handler
-    NewMonitors = case maps:get(Procedure, State#state.registrations, undefined) of
-        undefined ->
-            State#state.monitors;
-        ExistingHandler ->
-            %% Demonitor old handler
-            OldMonRef = find_monitor_ref(ExistingHandler, Procedure, State#state.monitors),
-            case OldMonRef of
-                undefined -> ok;
-                Ref -> erlang:demonitor(Ref, [flush])
-            end,
-            case OldMonRef of
-                undefined -> State#state.monitors;
-                _ -> maps:remove(OldMonRef, State#state.monitors)
-            end
-    end,
-
-    %% Register new handler
-    %% Only monitor PID handlers (functions can't be monitored)
-    {Registrations, Monitors} = case is_pid(Handler) of
-        true ->
-            MonitorRef = erlang:monitor(process, Handler),
-            {maps:put(Procedure, Handler, State#state.registrations),
-             maps:put(MonitorRef, Procedure, NewMonitors)};
-        false ->
-            %% Function handler - no monitoring needed
-            {maps:put(Procedure, Handler, State#state.registrations),
-             NewMonitors}
-    end,
-
-    NewState = State#state{
-        registrations = Registrations,
-        monitors = Monitors
-    },
+    ExistingHandler = maps:get(Procedure, State#state.registrations, undefined),
+    NewMonitors = cleanup_existing_handler(ExistingHandler, Procedure, State#state.monitors),
+    {Registrations, Monitors} = register_new_handler(Handler, Procedure, State#state.registrations, NewMonitors),
+    NewState = State#state{registrations = Registrations, monitors = Monitors},
     {reply, ok, NewState};
 
 handle_call({unregister_handler, Procedure}, _From, State) when is_binary(Procedure) ->
-    %% Remove registration
-    NewRegistrations = maps:remove(Procedure, State#state.registrations),
-
-    %% Find and remove monitor
     Handler = maps:get(Procedure, State#state.registrations, undefined),
-    NewMonitors = case Handler of
-        undefined ->
-            State#state.monitors;
-        _ ->
-            MonRef = find_monitor_ref(Handler, Procedure, State#state.monitors),
-            case MonRef of
-                undefined -> State#state.monitors;
-                Ref ->
-                    erlang:demonitor(Ref, [flush]),
-                    maps:remove(Ref, State#state.monitors)
-            end
-    end,
-
-    NewState = State#state{
-        registrations = NewRegistrations,
-        monitors = NewMonitors
-    },
+    NewMonitors = cleanup_existing_handler(Handler, Procedure, State#state.monitors),
+    NewRegistrations = maps:remove(Procedure, State#state.registrations),
+    NewState = State#state{registrations = NewRegistrations, monitors = NewMonitors},
     {reply, ok, NewState};
 
 handle_call({call, Procedure, Args, _Opts}, From, State) when is_binary(Procedure) ->
@@ -182,21 +136,8 @@ handle_cast(_Msg, State) ->
 
 %% @doc Handle handler process death - automatic cleanup.
 handle_info({'DOWN', MonitorRef, process, _HandlerPid, _Reason}, State) ->
-    case maps:get(MonitorRef, State#state.monitors, undefined) of
-        undefined ->
-            %% Unknown monitor (shouldn't happen)
-            {noreply, State};
-        Procedure ->
-            %% Remove registration and monitor
-            NewRegistrations = maps:remove(Procedure, State#state.registrations),
-            NewMonitors = maps:remove(MonitorRef, State#state.monitors),
-
-            NewState = State#state{
-                registrations = NewRegistrations,
-                monitors = NewMonitors
-            },
-            {noreply, NewState}
-    end;
+    NewState = handle_monitor_down(maps:get(MonitorRef, State#state.monitors, undefined), MonitorRef, State),
+    {noreply, NewState};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -225,3 +166,44 @@ find_monitor_ref(_Handler, Procedure, Monitors) ->
 %% @doc Extract monitor ref from filter result.
 extract_monitor_ref([{Ref, _Proc}]) -> Ref;
 extract_monitor_ref(_) -> undefined.
+
+%%%===================================================================
+%%% Handler registration helpers
+%%%===================================================================
+
+%% @private No existing handler to clean up
+cleanup_existing_handler(undefined, _Procedure, Monitors) ->
+    Monitors;
+%% @private Clean up existing handler's monitor
+cleanup_existing_handler(_ExistingHandler, Procedure, Monitors) ->
+    OldMonRef = find_monitor_ref(undefined, Procedure, Monitors),
+    demonitor_and_remove(OldMonRef, Monitors).
+
+demonitor_and_remove(undefined, Monitors) ->
+    Monitors;
+demonitor_and_remove(Ref, Monitors) ->
+    erlang:demonitor(Ref, [flush]),
+    maps:remove(Ref, Monitors).
+
+%% @private Register PID handler with monitoring
+register_new_handler(Handler, Procedure, Registrations, Monitors) when is_pid(Handler) ->
+    MonitorRef = erlang:monitor(process, Handler),
+    {maps:put(Procedure, Handler, Registrations),
+     maps:put(MonitorRef, Procedure, Monitors)};
+%% @private Register function handler (no monitoring)
+register_new_handler(Handler, Procedure, Registrations, Monitors) ->
+    {maps:put(Procedure, Handler, Registrations), Monitors}.
+
+%%%===================================================================
+%%% Monitor down helpers
+%%%===================================================================
+
+%% @private Unknown monitor - ignore
+handle_monitor_down(undefined, _MonitorRef, State) ->
+    State;
+%% @private Known monitor - clean up registration
+handle_monitor_down(Procedure, MonitorRef, State) ->
+    State#state{
+        registrations = maps:remove(Procedure, State#state.registrations),
+        monitors = maps:remove(MonitorRef, State#state.monitors)
+    }.

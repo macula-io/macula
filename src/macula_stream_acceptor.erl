@@ -8,6 +8,8 @@
 %%%-------------------------------------------------------------------
 -module(macula_stream_acceptor).
 
+-include_lib("kernel/include/logger.hrl").
+
 -export([start_link/2, init/2]).
 
 %% @doc Start a stream acceptor for a connection.
@@ -18,14 +20,14 @@ start_link(Conn, Gateway) ->
 
 %% @doc Initialize the stream acceptor loop.
 init(Conn, Gateway) ->
-    io:format("[StreamAcceptor] Started for connection ~p, gateway ~p~n", [Conn, Gateway]),
+    ?LOG_INFO("Started for connection ~p, gateway ~p", [Conn, Gateway]),
     %% Register interest in incoming streams
     case quicer:async_accept_stream(Conn, #{}) of
         {ok, Conn} ->
-            io:format("[StreamAcceptor] Async stream acceptance registered~n"),
+            ?LOG_DEBUG("Async stream acceptance registered"),
             receive_loop(Conn, Gateway);
         {error, AcceptErr} ->
-            io:format("[StreamAcceptor] ERROR: Failed to register async accept: ~p~n", [AcceptErr]),
+            ?LOG_ERROR("Failed to register async accept: ~p", [AcceptErr]),
             receive_loop(Conn, Gateway)
     end.
 
@@ -33,38 +35,38 @@ init(Conn, Gateway) ->
 receive_loop(Conn, Gateway) ->
     receive
         {quic, new_stream, Stream, _StreamProps} ->
-            io:format("[StreamAcceptor] ========================================~n"),
-            io:format("[StreamAcceptor] STREAM RECEIVED: ~p~n", [Stream]),
-            io:format("[StreamAcceptor] ========================================~n"),
+            ?LOG_DEBUG("========================================"),
+            ?LOG_INFO("STREAM RECEIVED: ~p", [Stream]),
+            ?LOG_DEBUG("========================================"),
 
             %% Set stream to active mode for automatic data delivery
             case quicer:setopt(Stream, active, true) of
                 ok ->
-                    io:format("[StreamAcceptor] Stream set to active mode~n"),
+                    ?LOG_DEBUG("Stream set to active mode"),
                     %% Transfer ownership to gateway
                     case quicer:controlling_process(Stream, Gateway) of
                         ok ->
-                            io:format("[StreamAcceptor] Stream ownership transferred to gateway~n"),
+                            ?LOG_DEBUG("Stream ownership transferred to gateway"),
                             %% Notify gateway about new stream
                             Gateway ! {stream_accepted, Stream},
                             %% Continue receiving more streams
                             receive_loop(Conn, Gateway);
                         {error, TransferErr} ->
-                            io:format("[StreamAcceptor] ERROR: Failed to transfer stream ownership: ~p~n", [TransferErr]),
+                            ?LOG_ERROR("Failed to transfer stream ownership: ~p", [TransferErr]),
                             quicer:close_stream(Stream),
                             receive_loop(Conn, Gateway)
                     end;
                 {error, SetOptErr} ->
-                    io:format("[StreamAcceptor] ERROR: Failed to set stream active: ~p~n", [SetOptErr]),
+                    ?LOG_ERROR("Failed to set stream active: ~p", [SetOptErr]),
                     quicer:close_stream(Stream),
                     receive_loop(Conn, Gateway)
             end;
 
         {quic, closed, Conn, _Flags} ->
-            io:format("[StreamAcceptor] Connection closed, exiting~n"),
+            ?LOG_INFO("Connection closed, exiting"),
             ok;
 
         Other ->
-            io:format("[StreamAcceptor] Unexpected message: ~p~n", [Other]),
+            ?LOG_WARNING("Unexpected message: ~p", [Other]),
             receive_loop(Conn, Gateway)
     end.

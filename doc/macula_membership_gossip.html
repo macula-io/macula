@@ -1,492 +1,86 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.10.1">
-
-
-    <title>macula_membership_gossip — macula v0.10.1</title>
-
-    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
-
-    <script defer src="dist/sidebar_items-1151EC94.js"></script>
-    <script defer src="docs_config.js"></script>
-    <script defer src="dist/html-DPJLHKSM.js"></script>
-
-  </head>
-  <body>
-    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
-</script>
-
-<div class="body-wrapper">
-
-<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
-  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
-</button>
-
-<nav id="sidebar" class="sidebar">
-
-  <div class="sidebar-header">
-    <div class="sidebar-projectInfo">
-
-        <a href="readme.html" class="sidebar-projectImage">
-          <img src="assets/logo.svg" alt="macula" />
-        </a>
-
-      <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
-macula
-        </a>
-        <div class="sidebar-projectVersion" translate="no">
-          v0.10.1
-        </div>
-      </div>
-    </div>
-    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
-  </div>
-</nav>
-
-<output role="status" id="toast"></output>
-
-<main class="content page-module" id="main" data-type="modules">
-  <div id="content" class="content-inner">
-    <div class="top-search">
-      <div class="search-settings">
-        <form class="search-bar" action="search.html">
-          <label class="search-label">
-            <span class="sr-only">Search documentation of macula</span>
-            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </label>
-          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
-            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
-          </button>
-          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
-            <i class="ri-close-line ri-lg" title="Cancel search"></i>
-          </button>
-        </form>
-        <div class="autocomplete">
-        </div>
-        <button class="icon-settings display-settings">
-          <i class="ri-settings-3-line"></i>
-          <span class="sr-only">Settings</span>
-        </button>
-      </div>
-    </div>
-
-<div id="top-content">
-  <div class="heading-with-actions top-heading">
-    <h1>
-      <span translate="no">macula_membership_gossip</span> 
-      <small class="app-vsn" translate="no">(macula v0.10.1)</small>
-
-    </h1>
-
-      <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_membership_system/macula_membership_gossip.erl#L8" title="View Source" class="icon-action" rel="help">
-        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        <span class="sr-only">View Source</span>
-      </a>
-
-  </div>
-
-
-    <section id="moduledoc">
-<p>Gossip dissemination for SWIM protocol. Tracks membership updates and provides them for piggybacking. Uses exponential decay: log(N) messages per update.</p>
-    </section>
-
-</div>
-
-  <section id="summary" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#summary">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Summary</span>
-    </h1>
-<div class="summary-types summary">
-  <h2>
-    <a href="#types">Types</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:gossip_state/0" data-no-tooltip="" translate="no">gossip_state/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:update/0" data-no-tooltip="" translate="no">update/0</a>
-
-      </div>
-
-    </div>
-
-</div>
-<div class="summary-functions summary">
-  <h2>
-    <a href="#functions">Functions</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#add_update/4" data-no-tooltip="" translate="no">add_update(State, NodeId, Status, Incarnation)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Add a membership update to gossip. If a more recent update exists, it's replaced.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#get_updates/2" data-no-tooltip="" translate="no">get_updates(_, MaxUpdates)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Get updates to piggyback on messages. Returns most recent updates first, limited by max_updates.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#mark_transmitted/2" data-no-tooltip="" translate="no">mark_transmitted(State, NodeId)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Mark an update as transmitted (increment transmit count).</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#merge_updates/2" data-no-tooltip="" translate="no">merge_updates(State, ReceivedUpdates)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Merge received gossip updates into local state. Uses SWIM merge semantics (higher incarnation wins, etc.).</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#new/0" data-no-tooltip="" translate="no">new()</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Create a new gossip state.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#prune/2" data-no-tooltip="" translate="no">prune(State, TargetTransmitCount)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Prune updates that have been transmitted enough times. Target is typically log(N) where N is cluster size.</p></div>
-
-    </div>
-
-</div>
-
-  </section>
-
-
-  <section id="types" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#types">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Types</span>
-    </h1>
-    <div class="types-list">
-<section class="detail" id="t:gossip_state/0">
-
-  <div class="detail-header">
-    <a href="#t:gossip_state/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">gossip_state/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_membership_system/macula_membership_gossip.erl#L23" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> gossip_state() ::
-          #{updates =>
-                #{<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() =>
-                      {<a href="macula_membership_member.html#t:status/0">macula_membership_member:status</a>(),
-                       <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>(),
-                       <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>(),
-                       <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>()}}}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:update/0">
-
-  <div class="detail-header">
-    <a href="#t:update/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">update/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_membership_system/macula_membership_gossip.erl#L21" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> update() :: {<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="macula_membership_member.html#t:status/0">macula_membership_member:status</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-
-    </div>
-  </section>
-
-  <section id="functions" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#functions">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Functions</span>
-    </h1>
-    <div class="functions-list">
-<section class="detail" id="add_update/4">
-
-  <div class="detail-header">
-    <a href="#add_update/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">add_update(State, NodeId, Status, Incarnation)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_membership_system/macula_membership_gossip.erl#L42" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> add_update(<a href="#t:gossip_state/0">gossip_state</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="macula_membership_member.html#t:status/0">macula_membership_member:status</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()) ->
-                    <a href="#t:gossip_state/0">gossip_state</a>().</pre>
-
-      </div>
-
-<p>Add a membership update to gossip. If a more recent update exists, it's replaced.</p>
-  </section>
-</section>
-<section class="detail" id="get_updates/2">
-
-  <div class="detail-header">
-    <a href="#get_updates/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">get_updates(_, MaxUpdates)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_membership_system/macula_membership_gossip.erl#L68" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> get_updates(<a href="#t:gossip_state/0">gossip_state</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> [<a href="#t:update/0">update</a>()].</pre>
-
-      </div>
-
-<p>Get updates to piggyback on messages. Returns most recent updates first, limited by max_updates.</p>
-  </section>
-</section>
-<section class="detail" id="mark_transmitted/2">
-
-  <div class="detail-header">
-    <a href="#mark_transmitted/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">mark_transmitted(State, NodeId)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_membership_system/macula_membership_gossip.erl#L85" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> mark_transmitted(<a href="#t:gossip_state/0">gossip_state</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> <a href="#t:gossip_state/0">gossip_state</a>().</pre>
-
-      </div>
-
-<p>Mark an update as transmitted (increment transmit count).</p>
-  </section>
-</section>
-<section class="detail" id="merge_updates/2">
-
-  <div class="detail-header">
-    <a href="#merge_updates/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">merge_updates(State, ReceivedUpdates)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_membership_system/macula_membership_gossip.erl#L98" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> merge_updates(<a href="#t:gossip_state/0">gossip_state</a>(), [{<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="macula_membership_member.html#t:status/0">macula_membership_member:status</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()}]) ->
-                       <a href="#t:gossip_state/0">gossip_state</a>().</pre>
-
-      </div>
-
-<p>Merge received gossip updates into local state. Uses SWIM merge semantics (higher incarnation wins, etc.).</p>
-  </section>
-</section>
-<section class="detail" id="new/0">
-
-  <div class="detail-header">
-    <a href="#new/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">new()</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_membership_system/macula_membership_gossip.erl#L35" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> new() -> <a href="#t:gossip_state/0">gossip_state</a>().</pre>
-
-      </div>
-
-<p>Create a new gossip state.</p>
-  </section>
-</section>
-<section class="detail" id="prune/2">
-
-  <div class="detail-header">
-    <a href="#prune/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">prune(State, TargetTransmitCount)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_membership_system/macula_membership_gossip.erl#L110" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> prune(<a href="#t:gossip_state/0">gossip_state</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()) -> <a href="#t:gossip_state/0">gossip_state</a>().</pre>
-
-      </div>
-
-<p>Prune updates that have been transmitted enough times. Target is typically log(N) where N is cluster size.</p>
-  </section>
-</section>
-
-    </div>
-  </section>
-
-    <footer class="footer">
-      <p>
-
-          <span class="line">
-            <a href="https://hex.pm/packages/macula/0.10.1" class="footer-hex-package">Hex Package</a>
-
-            <a href="https://preview.hex.pm/preview/macula/0.10.1">Hex Preview</a>
-
-          </span>
-
-        <span class="line">
-          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
-            Search HexDocs
-          </button>
-
-            <a href="macula.epub" title="ePub version">
-              Download ePub version
-            </a>
-
-        </span>
-      </p>
-
-      <p class="built-using">
-        Built using
-        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
-
-          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
-
-      </p>
-
-    </footer>
-  </div>
-</main>
-</div>
-
-  </body>
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_membership_gossip</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_membership_gossip</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+   Gossip dissemination for SWIM protocol.
+
+
+<h2><a name="description">Description</a></h2>
+   Gossip dissemination for SWIM protocol.
+   Tracks membership updates and provides them for piggybacking.
+   Uses exponential decay: log(N) messages per update.
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-gossip_state">gossip_state()</a></h3>
+<p><code>gossip_state() = #{updates =&gt; #{binary() =&gt; {<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-status" docgen-rel="seetype" docgen-href="macula:macula_membership_member#status/0">macula_membership_member:status()</a>, non_neg_integer(), non_neg_integer(), integer()}}}</code></p>
+
+
+<h3 class="typedecl"><a name="type-update">update()</a></h3>
+<p><code>update() = {binary(), <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-status" docgen-rel="seetype" docgen-href="macula:macula_membership_member#status/0">macula_membership_member:status()</a>, non_neg_integer(), non_neg_integer()}</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_update-4">add_update/4</a></td><td>Add a membership update to gossip.</td></tr>
+<tr><td valign="top"><a href="#get_updates-2">get_updates/2</a></td><td>Get updates to piggyback on messages.</td></tr>
+<tr><td valign="top"><a href="#mark_transmitted-2">mark_transmitted/2</a></td><td>Mark an update as transmitted (increment transmit count).</td></tr>
+<tr><td valign="top"><a href="#merge_updates-2">merge_updates/2</a></td><td>Merge received gossip updates into local state.</td></tr>
+<tr><td valign="top"><a href="#new-0">new/0</a></td><td>Create a new gossip state.</td></tr>
+<tr><td valign="top"><a href="#prune-2">prune/2</a></td><td>Prune updates that have been transmitted enough times.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="add_update-4">add_update/4</a></h3>
+<div class="spec">
+<p><code>add_update(State::<a href="#type-gossip_state" docgen-rel="seetype" docgen-href="#gossip_state/0">gossip_state()</a>, NodeId::binary(), Status::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-status" docgen-rel="seetype" docgen-href="macula:macula_membership_member#status/0">macula_membership_member:status()</a>, Incarnation::non_neg_integer()) -&gt; <a href="#type-gossip_state" docgen-rel="seetype" docgen-href="#gossip_state/0">gossip_state()</a></code><br></p>
+<p> </p>
+</div><p>Add a membership update to gossip.
+  If a more recent update exists, it's replaced.</p>
+
+<h3 class="function"><a name="get_updates-2">get_updates/2</a></h3>
+<div class="spec">
+<p><code>get_updates(X1::<a href="#type-gossip_state" docgen-rel="seetype" docgen-href="#gossip_state/0">gossip_state()</a>, MaxUpdates::pos_integer()) -&gt; [<a href="#type-update" docgen-rel="seetype" docgen-href="#update/0">update()</a>]</code><br></p>
+<p> </p>
+</div><p>Get updates to piggyback on messages.
+  Returns most recent updates first, limited by max_updates.</p>
+
+<h3 class="function"><a name="mark_transmitted-2">mark_transmitted/2</a></h3>
+<div class="spec">
+<p><code>mark_transmitted(State::<a href="#type-gossip_state" docgen-rel="seetype" docgen-href="#gossip_state/0">gossip_state()</a>, NodeId::binary()) -&gt; <a href="#type-gossip_state" docgen-rel="seetype" docgen-href="#gossip_state/0">gossip_state()</a></code><br></p>
+<p> </p>
+</div><p>Mark an update as transmitted (increment transmit count).</p>
+
+<h3 class="function"><a name="merge_updates-2">merge_updates/2</a></h3>
+<div class="spec">
+<p><code>merge_updates(State::<a href="#type-gossip_state" docgen-rel="seetype" docgen-href="#gossip_state/0">gossip_state()</a>, ReceivedUpdates::[{binary(), <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-status" docgen-rel="seetype" docgen-href="macula:macula_membership_member#status/0">macula_membership_member:status()</a>, non_neg_integer()}]) -&gt; <a href="#type-gossip_state" docgen-rel="seetype" docgen-href="#gossip_state/0">gossip_state()</a></code><br></p>
+<p> </p>
+</div><p>Merge received gossip updates into local state.
+  Uses SWIM merge semantics (higher incarnation wins, etc.).</p>
+
+<h3 class="function"><a name="new-0">new/0</a></h3>
+<div class="spec">
+<p><code>new() -&gt; <a href="#type-gossip_state" docgen-rel="seetype" docgen-href="#gossip_state/0">gossip_state()</a></code><br></p>
+<p> </p>
+</div><p>Create a new gossip state.</p>
+
+<h3 class="function"><a name="prune-2">prune/2</a></h3>
+<div class="spec">
+<p><code>prune(State::<a href="#type-gossip_state" docgen-rel="seetype" docgen-href="#gossip_state/0">gossip_state()</a>, TargetTransmitCount::non_neg_integer()) -&gt; <a href="#type-gossip_state" docgen-rel="seetype" docgen-href="#gossip_state/0">gossip_state()</a></code><br></p>
+<p> </p>
+</div><p>Prune updates that have been transmitted enough times.
+  Target is typically log(N) where N is cluster size.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
 </html>

@@ -1,0 +1,128 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_dist_discovery</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_dist_discovery</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>EPMD Replacement using Macula DHT Discovery.
+<p>Copyright © 2025 Macula.io Apache-2.0</p>
+
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>EPMD Replacement using Macula DHT Discovery.</p>
+  
+   <p>This module provides decentralized node discovery for Erlang distribution,   
+replacing the centralized EPMD (Erlang Port Mapper Daemon).</p>
+  
+   <h3><a name="How_it_Works">How it Works</a></h3>
+  
+   <p>Instead of registering with a local EPMD daemon on port 4369,   
+nodes announce themselves via Macula's DHT (Distributed Hash Table):</p>
+  
+   <p>1. On startup, nodes call register_node/2 to announce themselves   
+2. Other nodes find peers via lookup_node/1 which queries the DHT   
+3. Subscribers get notified of node join/leave events</p>
+  
+   <h3><a name="Discovery_Mechanisms">Discovery Mechanisms</a></h3>
+  
+   <p>- **mDNS**: For local network discovery (no bootstrap required)   
+- **DHT**: For internet-scale discovery (requires bootstrap nodes)   
+- **Bootstrap**: Initial DHT seeds from known nodes</p>
+  
+   <h3><a name="Usage">Usage</a></h3>
+  
+   <p>Register this node:     
+ok = macula_dist_discovery:register_node('4433@192.168.1.100', 4433).</p>
+  
+   <p>Look up a node:     
+{ok, #{host := Host, port := Port}} = macula_dist_discovery:lookup_node('4433@192.168.1.100').</p>
+  
+   Subscribe to node events:
+     ok = macula_dist_discovery:subscribe(self()).
+     %% Receive: {node_discovered, Node, IP, Port}
+     %% Receive: {node_lost, Node}
+  
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#list_nodes-0">list_nodes/0</a></td><td>List all known nodes.</td></tr>
+<tr><td valign="top"><a href="#lookup_node-1">lookup_node/1</a></td><td>Look up a node by name.</td></tr>
+<tr><td valign="top"><a href="#lookup_node-2">lookup_node/2</a></td><td>Look up a node by name with timeout.</td></tr>
+<tr><td valign="top"><a href="#register_node-2">register_node/2</a></td><td>Register this node in the distributed registry.</td></tr>
+<tr><td valign="top"><a href="#start_link-0">start_link/0</a></td><td>Start the discovery server with default options.</td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td>Start the discovery server with options.</td></tr>
+<tr><td valign="top"><a href="#subscribe-1">subscribe/1</a></td><td>Subscribe to node discovery events.</td></tr>
+<tr><td valign="top"><a href="#unregister_node-1">unregister_node/1</a></td><td>Unregister this node from the distributed registry.</td></tr>
+<tr><td valign="top"><a href="#unsubscribe-1">unsubscribe/1</a></td><td>Unsubscribe from node discovery events.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="list_nodes-0">list_nodes/0</a></h3>
+<div class="spec">
+<p><code>list_nodes() -&gt; [atom()]</code><br></p>
+<p> </p>
+</div><p>List all known nodes.</p>
+
+<h3 class="function"><a name="lookup_node-1">lookup_node/1</a></h3>
+<div class="spec">
+<p><code>lookup_node(NodeName::atom()) -&gt; {ok, map()} | {error, not_found}</code><br></p>
+<p> </p>
+</div><p>Look up a node by name.
+  This replaces EPMD lookup.</p>
+
+<h3 class="function"><a name="lookup_node-2">lookup_node/2</a></h3>
+<div class="spec">
+<p><code>lookup_node(NodeName::atom(), Timeout::timeout()) -&gt; {ok, map()} | {error, not_found}</code><br></p>
+<p> </p>
+</div><p>Look up a node by name with timeout.</p>
+
+<h3 class="function"><a name="register_node-2">register_node/2</a></h3>
+<div class="spec">
+<p><code>register_node(NodeName::atom(), Port::integer()) -&gt; ok | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Register this node in the distributed registry.
+  This replaces EPMD registration.</p>
+
+<h3 class="function"><a name="start_link-0">start_link/0</a></h3>
+<div class="spec">
+<p><code>start_link() -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the discovery server with default options.</p>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Opts::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the discovery server with options.</p>
+
+<h3 class="function"><a name="subscribe-1">subscribe/1</a></h3>
+<div class="spec">
+<p><code>subscribe(Pid::pid()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Subscribe to node discovery events.
+  Subscriber will receive:
+    {node_discovered, NodeName, IP, Port}
+    {node_lost, NodeName}</p>
+
+<h3 class="function"><a name="unregister_node-1">unregister_node/1</a></h3>
+<div class="spec">
+<p><code>unregister_node(NodeName::atom()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Unregister this node from the distributed registry.</p>
+
+<h3 class="function"><a name="unsubscribe-1">unsubscribe/1</a></h3>
+<div class="spec">
+<p><code>unsubscribe(Pid::pid()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Unsubscribe from node discovery events.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

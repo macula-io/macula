@@ -1,0 +1,146 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_hole_punch</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_hole_punch</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+QUIC Hole Punch Executor with Cancellation and Adaptive Timing.
+
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>   
+QUIC Hole Punch Executor with Cancellation and Adaptive Timing.</p>
+  
+   <p>Implements the simultaneous open (SYN-SYN) pattern for QUIC   
+to establish direct connections through NAT devices.</p>
+  
+   <p>Features:   
+- Proper cancellation of in-progress punch attempts   
+- Adaptive timing based on NAT type and previous attempts   
+- Tracks active punches via gen_server state   
+- Supports both sync and async execution</p>
+  
+   <p>QUIC Hole Punching Approach:   
+Unlike TCP's explicit SYN packets, QUIC uses encrypted handshakes.   
+The hole punching strategy is:</p>
+  
+   <p>1. Both peers start QUIC connect() at the same coordinated time   
+2. Initial packets "punch" holes in both NATs   
+3. One peer's connection will succeed (race condition)   
+4. The other peer retries connecting through the opened hole</p>
+  
+   <p>NAT Behavior Considerations:   
+- EI mapping: External address is consistent - easy hole punch   
+- HD mapping: Must target specific host - coordinate addresses   
+- PP allocation: Same port - single target port   
+- PC allocation: Sequential ports - try predicted range   
+- RD allocation: Random ports - harder to predict, try range</p>
+  
+   Adaptive Timing:
+   - Symmetric NAT: Longer timeouts, more port attempts
+   - Restricted NAT: Standard timeouts
+   - Full Cone: Fast timeouts, single port
+  
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-nat_type">nat_type()</a></h3>
+<p><code>nat_type() = full_cone | restricted | port_restricted | symmetric | unknown</code></p>
+
+
+<h3 class="typedecl"><a name="type-punch_opts">punch_opts()</a></h3>
+<p><code>punch_opts() = #{target_host := binary() | string(), target_ports := [<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>], local_port =&gt; <a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>, session_id := binary(), punch_time =&gt; integer(), role =&gt; initiator | target, local_nat_type =&gt; <a href="#type-nat_type" docgen-rel="seetype" docgen-href="#nat_type/0">nat_type()</a>, remote_nat_type =&gt; <a href="#type-nat_type" docgen-rel="seetype" docgen-href="#nat_type/0">nat_type()</a>}</code></p>
+
+
+<h3 class="typedecl"><a name="type-punch_result">punch_result()</a></h3>
+<p><code>punch_result() = {ok, <a href="/home/rl/work/github.com/macula-io/quicer/doc/quicer.html#type-connection_handle" docgen-rel="seetype" docgen-href="quicer:quicer#connection_handle/0">quicer:connection_handle()</a>} | {error, timeout | unreachable | all_ports_failed | cancelled}</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#cancel-1">cancel/1</a></td><td>Cancel an ongoing hole punch attempt.</td></tr>
+<tr><td valign="top"><a href="#execute-3">execute/3</a></td><td>Execute a hole punch attempt synchronously.</td></tr>
+<tr><td valign="top"><a href="#execute_async-3">execute_async/3</a></td><td>Execute hole punch asynchronously.</td></tr>
+<tr><td valign="top"><a href="#get_active_punches-0">get_active_punches/0</a></td><td>Get list of active punch attempts (for debugging/monitoring).</td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#start_link-0">start_link/0</a></td><td>Start the hole punch executor.</td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="cancel-1">cancel/1</a></h3>
+<div class="spec">
+<p><code>cancel(Ref::reference()) -&gt; ok | {error, not_found}</code><br></p>
+<p> </p>
+</div><p>Cancel an ongoing hole punch attempt.</p>
+
+<h3 class="function"><a name="execute-3">execute/3</a></h3>
+<div class="spec">
+<p><code>execute(TargetNodeId::binary(), Opts::<a href="#type-punch_opts" docgen-rel="seetype" docgen-href="#punch_opts/0">punch_opts()</a>, Timeout::timeout()) -&gt; <a href="#type-punch_result" docgen-rel="seetype" docgen-href="#punch_result/0">punch_result()</a></code><br></p>
+<p> </p>
+</div><p>Execute a hole punch attempt synchronously.
+  Blocks until connection established or timeout.</p>
+
+<h3 class="function"><a name="execute_async-3">execute_async/3</a></h3>
+<div class="spec">
+<p><code>execute_async(TargetNodeId::binary(), Opts::<a href="#type-punch_opts" docgen-rel="seetype" docgen-href="#punch_opts/0">punch_opts()</a>, ReplyTo::pid()) -&gt; reference()</code><br></p>
+<p> </p>
+</div><p>Execute hole punch asynchronously.
+  Returns immediately, caller receives result via message.</p>
+
+<h3 class="function"><a name="get_active_punches-0">get_active_punches/0</a></h3>
+<div class="spec">
+<p><code>get_active_punches() -&gt; [{reference(), map()}]</code><br></p>
+<p> </p>
+</div><p>Get list of active punch attempts (for debugging/monitoring).</p>
+
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(X1) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="start_link-0">start_link/0</a></h3>
+<div class="spec">
+<p><code>start_link() -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the hole punch executor.</p>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

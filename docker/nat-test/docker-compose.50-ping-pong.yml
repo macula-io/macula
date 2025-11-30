@@ -1,0 +1,797 @@
+# 50 Peers - PING/PONG Bidirectional Dialog Test
+# Distribution: 17 Full Cone + 17 Restricted + 16 Symmetric = 50 peers
+#
+# Purpose: Test bidirectional P2P communication with RTT measurement
+# across different NAT types.
+#
+# Key differences from chatter:
+# - DEMO_MODE=ping_pong (bidirectional request/response)
+# - Measures Round-Trip Time (RTT) per peer
+# - Statistics grouped by NAT type
+
+x-peer-common: &peer-common
+  build:
+    context: ../..
+    dockerfile: docker/nat-test/Dockerfile
+  cap_add:
+    - NET_ADMIN
+
+x-peer-env: &peer-env
+  NODE_TYPE: peer
+  BOOTSTRAP_HOST: 10.101.0.10
+  BOOTSTRAP_PORT: 4433
+  MACULA_QUIC_PORT: 4433
+  GATEWAY_PORT: 4433
+  HEALTH_PORT: 8080
+  MACULA_REALM: com.macula.pingpong50
+  MACULA_TLS_MODE: development
+  TLS_CERT_FILE: /opt/macula/certs/cert.pem
+  TLS_KEY_FILE: /opt/macula/certs/key.pem
+  MACULA_BOOTSTRAP_PEERS: https://10.101.0.10:4433
+  DEMO_MODE: ping_pong
+  PING_INTERVAL: "5000"
+  PING_TIMEOUT: "3000"
+
+services:
+  # ============================================================
+  # PUBLIC BOOTSTRAP/RELAY NODE
+  # ============================================================
+  bootstrap:
+    <<: *peer-common
+    container_name: pingpong50-bootstrap
+    hostname: bootstrap
+    networks:
+      public:
+        ipv4_address: 10.101.0.10
+    environment:
+      NODE_TYPE: bootstrap
+      NODE_ID: bootstrap
+      QUIC_PORT: 4433
+      HTTP_PORT: 8080
+      RELAY_ENABLED: "true"
+      MACULA_QUIC_PORT: 4433
+      GATEWAY_PORT: 4433
+      HEALTH_PORT: 8080
+      MACULA_REALM: com.macula.pingpong50
+      MACULA_TLS_MODE: development
+      TLS_CERT_FILE: /opt/macula/certs/cert.pem
+      TLS_KEY_FILE: /opt/macula/certs/key.pem
+      MACULA_HOSTNAME: 10.101.0.10
+      DEMO_MODE: ping_pong
+      # Geo-location: London, UK (Bootstrap)
+      MACULA_LATITUDE: "51.5074"
+      MACULA_LONGITUDE: "-0.1278"
+      MACULA_LOCATION: "London, UK"
+    ports:
+      - "18080:8080"
+      - "14433:4433/udp"
+
+  # ============================================================
+  # NAT ROUTERS
+  # ============================================================
+  router-fullcone:
+    image: alpine:latest
+    container_name: pingpong50-router-fullcone
+    hostname: router-fullcone
+    networks:
+      public:
+        ipv4_address: 10.101.0.20
+      nat_full_cone:
+        ipv4_address: 172.31.1.2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: >
+      sh -c "
+        apk add --no-cache iptables iproute2 &&
+        PUBLIC_IF=$$(ip -o addr | grep '10.101.0' | awk '{print $$2}') &&
+        INTERNAL_IF=$$(ip -o addr | grep '172.31.1' | awk '{print $$2}') &&
+        iptables -t nat -A POSTROUTING -o $$PUBLIC_IF -j MASQUERADE &&
+        iptables -A FORWARD -i $$INTERNAL_IF -o $$PUBLIC_IF -j ACCEPT &&
+        iptables -A FORWARD -i $$PUBLIC_IF -o $$INTERNAL_IF -j ACCEPT &&
+        echo 'Full Cone NAT router ready' &&
+        tail -f /dev/null
+      "
+
+  router-restricted:
+    image: alpine:latest
+    container_name: pingpong50-router-restricted
+    hostname: router-restricted
+    networks:
+      public:
+        ipv4_address: 10.101.0.21
+      nat_restricted:
+        ipv4_address: 172.32.1.2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: >
+      sh -c "
+        apk add --no-cache iptables iproute2 conntrack-tools &&
+        PUBLIC_IF=$$(ip -o addr | grep '10.101.0' | awk '{print $$2}') &&
+        INTERNAL_IF=$$(ip -o addr | grep '172.32.1' | awk '{print $$2}') &&
+        iptables -t nat -A POSTROUTING -o $$PUBLIC_IF -j MASQUERADE &&
+        iptables -A FORWARD -i $$INTERNAL_IF -o $$PUBLIC_IF -j ACCEPT &&
+        iptables -A FORWARD -i $$PUBLIC_IF -o $$INTERNAL_IF -m state --state ESTABLISHED,RELATED -j ACCEPT &&
+        iptables -A FORWARD -i $$PUBLIC_IF -o $$INTERNAL_IF -j DROP &&
+        echo 'Restricted NAT router ready' &&
+        tail -f /dev/null
+      "
+
+  router-symmetric:
+    image: alpine:latest
+    container_name: pingpong50-router-symmetric
+    hostname: router-symmetric
+    networks:
+      public:
+        ipv4_address: 10.101.0.22
+      nat_symmetric:
+        ipv4_address: 172.33.1.2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: >
+      sh -c "
+        apk add --no-cache iptables iproute2 conntrack-tools &&
+        PUBLIC_IF=$$(ip -o addr | grep '10.101.0' | awk '{print $$2}') &&
+        INTERNAL_IF=$$(ip -o addr | grep '172.33.1' | awk '{print $$2}') &&
+        iptables -t nat -A POSTROUTING -o $$PUBLIC_IF -j MASQUERADE --random &&
+        iptables -A FORWARD -i $$INTERNAL_IF -o $$PUBLIC_IF -j ACCEPT &&
+        iptables -A FORWARD -i $$PUBLIC_IF -o $$INTERNAL_IF -m state --state ESTABLISHED,RELATED -j ACCEPT &&
+        iptables -A FORWARD -i $$PUBLIC_IF -o $$INTERNAL_IF -j DROP &&
+        echo 'Symmetric NAT router ready' &&
+        tail -f /dev/null
+      "
+
+  # ============================================================
+  # FULL CONE NAT - 17 Peers (fc01 - fc17)
+  # ============================================================
+  fc01:
+    <<: *peer-common
+    container_name: pingpong50-fc01
+    hostname: fc01
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.10
+    environment:
+      <<: *peer-env
+      NODE_ID: fc01
+      # Geo-location: Amsterdam, Netherlands
+      MACULA_LATITUDE: "52.3676"
+      MACULA_LONGITUDE: "4.9041"
+      MACULA_LOCATION: "Amsterdam, NL"
+    depends_on: [bootstrap, router-fullcone]
+
+  fc02:
+    <<: *peer-common
+    container_name: pingpong50-fc02
+    hostname: fc02
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.11
+    environment:
+      <<: *peer-env
+      NODE_ID: fc02
+    depends_on: [bootstrap, router-fullcone]
+
+  fc03:
+    <<: *peer-common
+    container_name: pingpong50-fc03
+    hostname: fc03
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.12
+    environment:
+      <<: *peer-env
+      NODE_ID: fc03
+    depends_on: [bootstrap, router-fullcone]
+
+  fc04:
+    <<: *peer-common
+    container_name: pingpong50-fc04
+    hostname: fc04
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.13
+    environment:
+      <<: *peer-env
+      NODE_ID: fc04
+    depends_on: [bootstrap, router-fullcone]
+
+  fc05:
+    <<: *peer-common
+    container_name: pingpong50-fc05
+    hostname: fc05
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.14
+    environment:
+      <<: *peer-env
+      NODE_ID: fc05
+    depends_on: [bootstrap, router-fullcone]
+
+  fc06:
+    <<: *peer-common
+    container_name: pingpong50-fc06
+    hostname: fc06
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.15
+    environment:
+      <<: *peer-env
+      NODE_ID: fc06
+    depends_on: [bootstrap, router-fullcone]
+
+  fc07:
+    <<: *peer-common
+    container_name: pingpong50-fc07
+    hostname: fc07
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.16
+    environment:
+      <<: *peer-env
+      NODE_ID: fc07
+    depends_on: [bootstrap, router-fullcone]
+
+  fc08:
+    <<: *peer-common
+    container_name: pingpong50-fc08
+    hostname: fc08
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.17
+    environment:
+      <<: *peer-env
+      NODE_ID: fc08
+    depends_on: [bootstrap, router-fullcone]
+
+  fc09:
+    <<: *peer-common
+    container_name: pingpong50-fc09
+    hostname: fc09
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.18
+    environment:
+      <<: *peer-env
+      NODE_ID: fc09
+    depends_on: [bootstrap, router-fullcone]
+
+  fc10:
+    <<: *peer-common
+    container_name: pingpong50-fc10
+    hostname: fc10
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.19
+    environment:
+      <<: *peer-env
+      NODE_ID: fc10
+    depends_on: [bootstrap, router-fullcone]
+
+  fc11:
+    <<: *peer-common
+    container_name: pingpong50-fc11
+    hostname: fc11
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.20
+    environment:
+      <<: *peer-env
+      NODE_ID: fc11
+    depends_on: [bootstrap, router-fullcone]
+
+  fc12:
+    <<: *peer-common
+    container_name: pingpong50-fc12
+    hostname: fc12
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.21
+    environment:
+      <<: *peer-env
+      NODE_ID: fc12
+    depends_on: [bootstrap, router-fullcone]
+
+  fc13:
+    <<: *peer-common
+    container_name: pingpong50-fc13
+    hostname: fc13
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.22
+    environment:
+      <<: *peer-env
+      NODE_ID: fc13
+    depends_on: [bootstrap, router-fullcone]
+
+  fc14:
+    <<: *peer-common
+    container_name: pingpong50-fc14
+    hostname: fc14
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.23
+    environment:
+      <<: *peer-env
+      NODE_ID: fc14
+    depends_on: [bootstrap, router-fullcone]
+
+  fc15:
+    <<: *peer-common
+    container_name: pingpong50-fc15
+    hostname: fc15
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.24
+    environment:
+      <<: *peer-env
+      NODE_ID: fc15
+    depends_on: [bootstrap, router-fullcone]
+
+  fc16:
+    <<: *peer-common
+    container_name: pingpong50-fc16
+    hostname: fc16
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.25
+    environment:
+      <<: *peer-env
+      NODE_ID: fc16
+    depends_on: [bootstrap, router-fullcone]
+
+  fc17:
+    <<: *peer-common
+    container_name: pingpong50-fc17
+    hostname: fc17
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.26
+    environment:
+      <<: *peer-env
+      NODE_ID: fc17
+    depends_on: [bootstrap, router-fullcone]
+
+  # ============================================================
+  # RESTRICTED NAT - 17 Peers (rc01 - rc17)
+  # ============================================================
+  rc01:
+    <<: *peer-common
+    container_name: pingpong50-rc01
+    hostname: rc01
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.10
+    environment:
+      <<: *peer-env
+      NODE_ID: rc01
+      # Geo-location: Berlin, Germany
+      MACULA_LATITUDE: "52.5200"
+      MACULA_LONGITUDE: "13.4050"
+      MACULA_LOCATION: "Berlin, DE"
+    depends_on: [bootstrap, router-restricted]
+
+  rc02:
+    <<: *peer-common
+    container_name: pingpong50-rc02
+    hostname: rc02
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.11
+    environment:
+      <<: *peer-env
+      NODE_ID: rc02
+    depends_on: [bootstrap, router-restricted]
+
+  rc03:
+    <<: *peer-common
+    container_name: pingpong50-rc03
+    hostname: rc03
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.12
+    environment:
+      <<: *peer-env
+      NODE_ID: rc03
+    depends_on: [bootstrap, router-restricted]
+
+  rc04:
+    <<: *peer-common
+    container_name: pingpong50-rc04
+    hostname: rc04
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.13
+    environment:
+      <<: *peer-env
+      NODE_ID: rc04
+    depends_on: [bootstrap, router-restricted]
+
+  rc05:
+    <<: *peer-common
+    container_name: pingpong50-rc05
+    hostname: rc05
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.14
+    environment:
+      <<: *peer-env
+      NODE_ID: rc05
+    depends_on: [bootstrap, router-restricted]
+
+  rc06:
+    <<: *peer-common
+    container_name: pingpong50-rc06
+    hostname: rc06
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.15
+    environment:
+      <<: *peer-env
+      NODE_ID: rc06
+    depends_on: [bootstrap, router-restricted]
+
+  rc07:
+    <<: *peer-common
+    container_name: pingpong50-rc07
+    hostname: rc07
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.16
+    environment:
+      <<: *peer-env
+      NODE_ID: rc07
+    depends_on: [bootstrap, router-restricted]
+
+  rc08:
+    <<: *peer-common
+    container_name: pingpong50-rc08
+    hostname: rc08
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.17
+    environment:
+      <<: *peer-env
+      NODE_ID: rc08
+    depends_on: [bootstrap, router-restricted]
+
+  rc09:
+    <<: *peer-common
+    container_name: pingpong50-rc09
+    hostname: rc09
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.18
+    environment:
+      <<: *peer-env
+      NODE_ID: rc09
+    depends_on: [bootstrap, router-restricted]
+
+  rc10:
+    <<: *peer-common
+    container_name: pingpong50-rc10
+    hostname: rc10
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.19
+    environment:
+      <<: *peer-env
+      NODE_ID: rc10
+    depends_on: [bootstrap, router-restricted]
+
+  rc11:
+    <<: *peer-common
+    container_name: pingpong50-rc11
+    hostname: rc11
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.20
+    environment:
+      <<: *peer-env
+      NODE_ID: rc11
+    depends_on: [bootstrap, router-restricted]
+
+  rc12:
+    <<: *peer-common
+    container_name: pingpong50-rc12
+    hostname: rc12
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.21
+    environment:
+      <<: *peer-env
+      NODE_ID: rc12
+    depends_on: [bootstrap, router-restricted]
+
+  rc13:
+    <<: *peer-common
+    container_name: pingpong50-rc13
+    hostname: rc13
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.22
+    environment:
+      <<: *peer-env
+      NODE_ID: rc13
+    depends_on: [bootstrap, router-restricted]
+
+  rc14:
+    <<: *peer-common
+    container_name: pingpong50-rc14
+    hostname: rc14
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.23
+    environment:
+      <<: *peer-env
+      NODE_ID: rc14
+    depends_on: [bootstrap, router-restricted]
+
+  rc15:
+    <<: *peer-common
+    container_name: pingpong50-rc15
+    hostname: rc15
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.24
+    environment:
+      <<: *peer-env
+      NODE_ID: rc15
+    depends_on: [bootstrap, router-restricted]
+
+  rc16:
+    <<: *peer-common
+    container_name: pingpong50-rc16
+    hostname: rc16
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.25
+    environment:
+      <<: *peer-env
+      NODE_ID: rc16
+    depends_on: [bootstrap, router-restricted]
+
+  rc17:
+    <<: *peer-common
+    container_name: pingpong50-rc17
+    hostname: rc17
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.26
+    environment:
+      <<: *peer-env
+      NODE_ID: rc17
+    depends_on: [bootstrap, router-restricted]
+
+  # ============================================================
+  # SYMMETRIC NAT - 16 Peers (sy01 - sy16)
+  # ============================================================
+  sy01:
+    <<: *peer-common
+    container_name: pingpong50-sy01
+    hostname: sy01
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.10
+    environment:
+      <<: *peer-env
+      NODE_ID: sy01
+      # Geo-location: San Francisco, USA
+      MACULA_LATITUDE: "37.7749"
+      MACULA_LONGITUDE: "-122.4194"
+      MACULA_LOCATION: "San Francisco, US"
+    depends_on: [bootstrap, router-symmetric]
+
+  sy02:
+    <<: *peer-common
+    container_name: pingpong50-sy02
+    hostname: sy02
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.11
+    environment:
+      <<: *peer-env
+      NODE_ID: sy02
+    depends_on: [bootstrap, router-symmetric]
+
+  sy03:
+    <<: *peer-common
+    container_name: pingpong50-sy03
+    hostname: sy03
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.12
+    environment:
+      <<: *peer-env
+      NODE_ID: sy03
+    depends_on: [bootstrap, router-symmetric]
+
+  sy04:
+    <<: *peer-common
+    container_name: pingpong50-sy04
+    hostname: sy04
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.13
+    environment:
+      <<: *peer-env
+      NODE_ID: sy04
+    depends_on: [bootstrap, router-symmetric]
+
+  sy05:
+    <<: *peer-common
+    container_name: pingpong50-sy05
+    hostname: sy05
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.14
+    environment:
+      <<: *peer-env
+      NODE_ID: sy05
+    depends_on: [bootstrap, router-symmetric]
+
+  sy06:
+    <<: *peer-common
+    container_name: pingpong50-sy06
+    hostname: sy06
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.15
+    environment:
+      <<: *peer-env
+      NODE_ID: sy06
+    depends_on: [bootstrap, router-symmetric]
+
+  sy07:
+    <<: *peer-common
+    container_name: pingpong50-sy07
+    hostname: sy07
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.16
+    environment:
+      <<: *peer-env
+      NODE_ID: sy07
+    depends_on: [bootstrap, router-symmetric]
+
+  sy08:
+    <<: *peer-common
+    container_name: pingpong50-sy08
+    hostname: sy08
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.17
+    environment:
+      <<: *peer-env
+      NODE_ID: sy08
+    depends_on: [bootstrap, router-symmetric]
+
+  sy09:
+    <<: *peer-common
+    container_name: pingpong50-sy09
+    hostname: sy09
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.18
+    environment:
+      <<: *peer-env
+      NODE_ID: sy09
+    depends_on: [bootstrap, router-symmetric]
+
+  sy10:
+    <<: *peer-common
+    container_name: pingpong50-sy10
+    hostname: sy10
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.19
+    environment:
+      <<: *peer-env
+      NODE_ID: sy10
+    depends_on: [bootstrap, router-symmetric]
+
+  sy11:
+    <<: *peer-common
+    container_name: pingpong50-sy11
+    hostname: sy11
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.20
+    environment:
+      <<: *peer-env
+      NODE_ID: sy11
+    depends_on: [bootstrap, router-symmetric]
+
+  sy12:
+    <<: *peer-common
+    container_name: pingpong50-sy12
+    hostname: sy12
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.21
+    environment:
+      <<: *peer-env
+      NODE_ID: sy12
+    depends_on: [bootstrap, router-symmetric]
+
+  sy13:
+    <<: *peer-common
+    container_name: pingpong50-sy13
+    hostname: sy13
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.22
+    environment:
+      <<: *peer-env
+      NODE_ID: sy13
+    depends_on: [bootstrap, router-symmetric]
+
+  sy14:
+    <<: *peer-common
+    container_name: pingpong50-sy14
+    hostname: sy14
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.23
+    environment:
+      <<: *peer-env
+      NODE_ID: sy14
+    depends_on: [bootstrap, router-symmetric]
+
+  sy15:
+    <<: *peer-common
+    container_name: pingpong50-sy15
+    hostname: sy15
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.24
+    environment:
+      <<: *peer-env
+      NODE_ID: sy15
+    depends_on: [bootstrap, router-symmetric]
+
+  sy16:
+    <<: *peer-common
+    container_name: pingpong50-sy16
+    hostname: sy16
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.25
+    environment:
+      <<: *peer-env
+      NODE_ID: sy16
+    depends_on: [bootstrap, router-symmetric]
+
+networks:
+  # Public network (internet simulation) - Use different subnet to avoid conflict
+  public:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.101.0.0/24
+
+  # Full Cone NAT network
+  nat_full_cone:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.1.0/24
+
+  # Restricted Cone NAT network
+  nat_restricted:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.32.1.0/24
+
+  # Symmetric NAT network
+  nat_symmetric:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.33.1.0/24

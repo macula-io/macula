@@ -16,6 +16,8 @@
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([
     start_link/1,
@@ -86,12 +88,12 @@ get_stream_topics(Pid, Stream) ->
 %%%===================================================================
 
 init(Opts) ->
-    io:format("[PubSub] Initializing pub/sub handler~n"),
+    ?LOG_INFO("Initializing pub/sub handler"),
 
     %% DEBUG: Log what's in Opts to verify node_id/url are present
-    io:format("[PubSub DEBUG] Opts map keys: ~p~n", [maps:keys(Opts)]),
-    io:format("[PubSub DEBUG] node_id in opts: ~p~n", [maps:get(node_id, Opts, not_found)]),
-    io:format("[PubSub DEBUG] url in opts: ~p~n", [maps:get(url, Opts, not_found)]),
+    ?LOG_DEBUG("Opts map keys: ~p", [maps:keys(Opts)]),
+    ?LOG_DEBUG("node_id in opts: ~p", [maps:get(node_id, Opts, not_found)]),
+    ?LOG_DEBUG("url in opts: ~p", [maps:get(url, Opts, not_found)]),
 
     State = #state{
         opts = Opts,
@@ -104,52 +106,14 @@ init(Opts) ->
     %% Initial subscriptions happen before bootstrap connects, so this ensures they propagate
     erlang:send_after(5000, self(), readvertise_all_subscriptions),
 
-    io:format("[PubSub] Pub/sub handler initialized~n"),
+    ?LOG_INFO("Pub/sub handler initialized"),
     {ok, State}.
 
 %% Subscribe is async (cast) to prevent blocking callers when PubSub is busy
 handle_cast({subscribe, Stream, Topic}, State) when (is_pid(Stream) orelse is_reference(Stream)), is_binary(Topic) ->
-    io:format("[PubSub ~p] SUBSCRIBE called: Stream=~p, Topic=~s~n", [self(), Stream, Topic]),
-    %% Check if already subscribed
+    ?LOG_DEBUG("SUBSCRIBE called: Stream=~p, Topic=~s", [Stream, Topic]),
     CurrentTopics = maps:get(Stream, State#state.stream_subscriptions, []),
-
-    NewState = case lists:member(Topic, CurrentTopics) of
-        true ->
-            io:format("[PubSub ~p] Stream ~p already subscribed to ~s~n", [self(), Stream, Topic]),
-            %% Already subscribed - idempotent
-            State;
-        false ->
-            %% Add to topic → streams mapping
-            Subscribers = maps:get(Topic, State#state.subscriptions, []),
-            NewSubscriptions = maps:put(Topic, [Stream | Subscribers], State#state.subscriptions),
-            io:format("[PubSub ~p] Added stream ~p to topic ~s (total subscribers: ~p)~n",
-                     [self(), Stream, Topic, length([Stream | Subscribers])]),
-
-            %% Advertise subscription in DHT for cross-gateway discovery
-            advertise_subscription_in_dht(Topic, State),
-
-            %% Add to stream → topics mapping
-            NewTopics = [Topic | CurrentTopics],
-            NewStreamSubs = maps:put(Stream, NewTopics, State#state.stream_subscriptions),
-
-            %% Monitor stream if first subscription (only for pids - can't monitor references)
-            NewMonitors = case {length(CurrentTopics), is_pid(Stream)} of
-                {0, true} ->
-                    MonitorRef = erlang:monitor(process, Stream),
-                    io:format("[PubSub ~p] Monitoring stream ~p (first subscription)~n", [self(), Stream]),
-                    maps:put(MonitorRef, {Stream, Topic}, State#state.monitors);
-                _ ->
-                    State#state.monitors
-            end,
-
-            io:format("[PubSub ~p] Current subscriptions map: ~p~n", [self(), NewSubscriptions]),
-
-            State#state{
-                subscriptions = NewSubscriptions,
-                stream_subscriptions = NewStreamSubs,
-                monitors = NewMonitors
-            }
-    end,
+    NewState = do_subscribe(lists:member(Topic, CurrentTopics), Stream, Topic, CurrentTopics, State),
     {noreply, NewState};
 
 %% Unsubscribe is async (cast) to prevent blocking callers when PubSub is busy
@@ -182,61 +146,13 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_call({publish, Topic, Payload}, _From, State) when is_binary(Topic) ->
-    %% Find all LOCAL matching subscribers (exact + wildcard patterns)
     LocalStreams = find_matching_subscribers(Topic, State),
-
-    io:format("[PubSub ~p] Publishing to topic ~s: found ~p local subscribers~n",
-             [self(), Topic, length(LocalStreams)]),
-
-    %% Get node_id for distribute call
+    ?LOG_DEBUG("Publishing to topic ~s: found ~p local subscribers",
+             [Topic, length(LocalStreams)]),
     LocalNodeId = maps:get(node_id, State#state.opts, <<"unknown">>),
-
-    %% Create PUBLISH message map as expected by pubsub_router
-    PubMsg = #{
-        <<"topic">> => Topic,
-        <<"payload">> => Payload
-    },
-
-    %% Use the pubsub_router to distribute to both local and remote subscribers
-    %% This properly uses DHT routing + mesh connections + pubsub_route envelopes
-    case {whereis(macula_gateway_mesh), whereis(macula_gateway_client_manager)} of
-        {undefined, _} ->
-            io:format("[PubSub ~p] WARNING: macula_gateway_mesh not running, cannot route remotely~n", [self()]),
-            %% Fallback: at least deliver locally
-            lists:foreach(fun(Stream) ->
-                case erlang:is_process_alive(Stream) of
-                    true ->
-                        io:format("[PubSub ~p] Sending to local stream ~p~n", [self(), Stream]),
-                        Stream ! {publish, Topic, Payload};
-                    false ->
-                        ok
-                end
-            end, LocalStreams);
-        {_, undefined} ->
-            io:format("[PubSub ~p] WARNING: macula_gateway_client_manager not running, cannot route remotely~n", [self()]),
-            %% Fallback: at least deliver locally
-            lists:foreach(fun(Stream) ->
-                case erlang:is_process_alive(Stream) of
-                    true ->
-                        io:format("[PubSub ~p] Sending to local stream ~p~n", [self(), Stream]),
-                        Stream ! {publish, Topic, Payload};
-                    false ->
-                        ok
-                end
-            end, LocalStreams);
-        {MeshPid, ClientsPid} ->
-            %% Use pubsub_router for proper DHT-based routing
-            io:format("[PubSub ~p] Using pubsub_router to distribute (mesh=~p, clients=~p)~n",
-                     [self(), MeshPid, ClientsPid]),
-            macula_gateway_pubsub_router:distribute(
-                LocalStreams,
-                PubMsg,
-                LocalNodeId,
-                MeshPid,
-                ClientsPid
-            )
-    end,
-
+    PubMsg = #{<<"topic">> => Topic, <<"payload">> => Payload},
+    do_publish(whereis(macula_gateway_mesh), whereis(macula_gateway_client_manager),
+               LocalStreams, PubMsg, LocalNodeId, Topic, Payload),
     {reply, ok, State};
 
 handle_call({get_subscribers, Topic}, _From, State) when is_binary(Topic) ->
@@ -252,25 +168,10 @@ handle_call(_Request, _From, State) ->
 
 %% @doc Handle stream process death - automatic cleanup.
 handle_info({'DOWN', MonitorRef, process, StreamPid, _Reason}, State) ->
-    %% Remove monitor reference
     Monitors = maps:remove(MonitorRef, State#state.monitors),
-
-    %% Get all topics this stream was subscribed to
     Topics = maps:get(StreamPid, State#state.stream_subscriptions, []),
-
-    %% Remove stream from all topic subscriptions
-    NewSubscriptions = lists:foldl(fun(Topic, Acc) ->
-        Subscribers = maps:get(Topic, Acc, []),
-        NewSubscribers = lists:delete(StreamPid, Subscribers),
-        case NewSubscribers of
-            [] -> maps:remove(Topic, Acc);
-            _ -> maps:put(Topic, NewSubscribers, Acc)
-        end
-    end, State#state.subscriptions, Topics),
-
-    %% Remove stream from stream_subscriptions
+    NewSubscriptions = remove_stream_from_topics(StreamPid, Topics, State#state.subscriptions),
     NewStreamSubs = maps:remove(StreamPid, State#state.stream_subscriptions),
-
     NewState = State#state{
         subscriptions = NewSubscriptions,
         stream_subscriptions = NewStreamSubs,
@@ -282,7 +183,7 @@ handle_info({'DOWN', MonitorRef, process, StreamPid, _Reason}, State) ->
 %% Called after bootstrap connection to ensure subscriptions propagate.
 handle_info(readvertise_all_subscriptions, State) ->
     Topics = maps:keys(State#state.subscriptions),
-    io:format("[PubSub] Re-advertising ~p subscription(s) after DHT routing table populated~n",
+    ?LOG_INFO("Re-advertising ~p subscription(s) after DHT routing table populated",
              [length(Topics)]),
     lists:foreach(fun(Topic) ->
         advertise_subscription_in_dht(Topic, State)
@@ -305,31 +206,31 @@ terminate(_Reason, _State) ->
 find_matching_subscribers(Topic, State) ->
     %% Get all subscription patterns
     AllPatterns = maps:keys(State#state.subscriptions),
-    io:format("[PubSub ~p] Finding subscribers for topic: ~s~n", [self(), Topic]),
-    io:format("[PubSub ~p] All subscription patterns: ~p~n", [self(), AllPatterns]),
-    io:format("[PubSub ~p] Subscriptions map: ~p~n", [self(), State#state.subscriptions]),
+    ?LOG_DEBUG("Finding subscribers for topic: ~s", [Topic]),
+    ?LOG_DEBUG("All subscription patterns: ~p", [AllPatterns]),
+    ?LOG_DEBUG("Subscriptions map: ~p", [State#state.subscriptions]),
 
     %% Find patterns that match the topic
     MatchingPatterns = lists:filter(fun(Pattern) ->
         Matches = topic_matches(Pattern, Topic),
-        io:format("[PubSub ~p] Pattern ~s matches topic ~s: ~p~n", [self(), Pattern, Topic, Matches]),
+        ?LOG_DEBUG("Pattern ~s matches topic ~s: ~p", [Pattern, Topic, Matches]),
         Matches
     end, AllPatterns),
 
-    io:format("[PubSub ~p] Matching patterns: ~p~n", [self(), MatchingPatterns]),
+    ?LOG_DEBUG("Matching patterns: ~p", [MatchingPatterns]),
 
     %% Collect all unique streams from matching patterns
     AllStreams = lists:flatmap(fun(Pattern) ->
         Streams = maps:get(Pattern, State#state.subscriptions, []),
-        io:format("[PubSub ~p] Pattern ~s has streams: ~p~n", [self(), Pattern, Streams]),
+        ?LOG_DEBUG("Pattern ~s has streams: ~p", [Pattern, Streams]),
         Streams
     end, MatchingPatterns),
 
-    io:format("[PubSub ~p] All streams before dedup: ~p~n", [self(), AllStreams]),
+    ?LOG_DEBUG("All streams before dedup: ~p", [AllStreams]),
 
     %% Remove duplicates
     Result = lists:usort(AllStreams),
-    io:format("[PubSub ~p] Final subscribers: ~p~n", [self(), Result]),
+    ?LOG_DEBUG("Final subscribers: ~p", [Result]),
     Result.
 
 %% @doc Check if a topic pattern matches a concrete topic.
@@ -389,48 +290,16 @@ try_multi_wildcard(Pattern, Topic, Skip) ->
 %% Also invalidates subscriber cache to ensure fresh lookups.
 -spec advertise_subscription_in_dht(binary(), #state{}) -> ok.
 advertise_subscription_in_dht(Topic, State) ->
-    %% Invalidate subscriber cache - subscription change means cached subscribers are stale
     invalidate_subscriber_cache(Topic),
-
-    %% Get gateway node_id and endpoint from opts
     NodeId = maps:get(node_id, State#state.opts, <<"unknown">>),
     Url = maps:get(url, State#state.opts, <<"unknown">>),
-
-    %% DEBUG: Log what we got from State#state.opts
-    io:format("[GatewayPubSub DEBUG] Advertising subscription for topic ~s~n", [Topic]),
-    io:format("[GatewayPubSub DEBUG] NodeId from opts: ~p~n", [NodeId]),
-    io:format("[GatewayPubSub DEBUG] Url from opts: ~p~n", [Url]),
-
-    %% Create DHT key by hashing the topic
+    ?LOG_DEBUG("Advertising subscription for topic ~s", [Topic]),
+    ?LOG_DEBUG("NodeId from opts: ~p", [NodeId]),
+    ?LOG_DEBUG("Url from opts: ~p", [Url]),
     TopicKey = crypto:hash(sha256, Topic),
-
-    %% Create subscriber value with endpoint info for routing messages back
-    SubscriberValue = #{
-        node_id => NodeId,
-        endpoint => Url,
-        ttl => 300  % 5 minutes TTL
-    },
-
-    %% Store subscription in DHT (will propagate to k closest nodes or bootstrap)
-    io:format("[GatewayPubSub] Advertising subscription to topic ~s in DHT~n", [Topic]),
-    try
-        case whereis(macula_routing_server) of
-            undefined ->
-                io:format("[GatewayPubSub] Routing server not running, cannot advertise subscription~n");
-            RoutingServerPid ->
-                case macula_routing_server:store(RoutingServerPid, TopicKey, SubscriberValue) of
-                    ok ->
-                        io:format("[GatewayPubSub] Successfully stored subscription for ~s in DHT~n", [Topic]);
-                    {error, StoreError} ->
-                        io:format("[GatewayPubSub] Failed to store subscription ~s: ~p~n",
-                                 [Topic, StoreError])
-                end
-        end
-    catch
-        _:DhtError ->
-            io:format("[GatewayPubSub] Failed to advertise subscription ~s in DHT: ~p (continuing)~n",
-                     [Topic, DhtError])
-    end,
+    SubscriberValue = #{node_id => NodeId, endpoint => Url, ttl => 300},
+    ?LOG_INFO("Advertising subscription to topic ~s in DHT", [Topic]),
+    do_advertise_subscription(whereis(macula_routing_server), Topic, TopicKey, SubscriberValue),
     ok.
 
 %% @private
@@ -438,10 +307,114 @@ advertise_subscription_in_dht(Topic, State) ->
 %% Called when subscription changes to ensure fresh DHT lookups.
 -spec invalidate_subscriber_cache(binary()) -> ok.
 invalidate_subscriber_cache(Topic) ->
-    case whereis(macula_subscriber_cache) of
-        undefined ->
-            %% Cache not running yet - that's fine
-            ok;
-        _Pid ->
-            macula_subscriber_cache:invalidate(Topic)
-    end.
+    do_invalidate_subscriber_cache(whereis(macula_subscriber_cache), Topic).
+
+do_invalidate_subscriber_cache(undefined, _Topic) ->
+    ok;
+do_invalidate_subscriber_cache(_Pid, Topic) ->
+    macula_subscriber_cache:invalidate(Topic).
+
+%%%===================================================================
+%%% Subscribe helpers
+%%%===================================================================
+
+%% @private Already subscribed - idempotent
+do_subscribe(true, Stream, Topic, _CurrentTopics, State) ->
+    ?LOG_DEBUG("Stream ~p already subscribed to ~s", [Stream, Topic]),
+    State;
+%% @private New subscription
+do_subscribe(false, Stream, Topic, CurrentTopics, State) ->
+    Subscribers = maps:get(Topic, State#state.subscriptions, []),
+    NewSubscriptions = maps:put(Topic, [Stream | Subscribers], State#state.subscriptions),
+    ?LOG_INFO("Added stream ~p to topic ~s (total subscribers: ~p)",
+             [Stream, Topic, length([Stream | Subscribers])]),
+    advertise_subscription_in_dht(Topic, State),
+    NewTopics = [Topic | CurrentTopics],
+    NewStreamSubs = maps:put(Stream, NewTopics, State#state.stream_subscriptions),
+    NewMonitors = maybe_monitor_stream(Stream, CurrentTopics, State#state.monitors, Topic),
+    ?LOG_DEBUG("Current subscriptions map: ~p", [NewSubscriptions]),
+    State#state{
+        subscriptions = NewSubscriptions,
+        stream_subscriptions = NewStreamSubs,
+        monitors = NewMonitors
+    }.
+
+%% @private Monitor stream on first subscription (pids only)
+maybe_monitor_stream(Stream, [], Monitors, Topic) when is_pid(Stream) ->
+    MonitorRef = erlang:monitor(process, Stream),
+    ?LOG_DEBUG("Monitoring stream ~p (first subscription)", [Stream]),
+    maps:put(MonitorRef, {Stream, Topic}, Monitors);
+maybe_monitor_stream(_Stream, _CurrentTopics, Monitors, _Topic) ->
+    Monitors.
+
+%%%===================================================================
+%%% Publish helpers
+%%%===================================================================
+
+%% @private Mesh not running - deliver locally only
+do_publish(undefined, _, LocalStreams, _PubMsg, _LocalNodeId, Topic, Payload) ->
+    ?LOG_WARNING("macula_gateway_mesh not running, cannot route remotely"),
+    deliver_to_local_streams(LocalStreams, Topic, Payload);
+%% @private Clients not running - deliver locally only
+do_publish(_, undefined, LocalStreams, _PubMsg, _LocalNodeId, Topic, Payload) ->
+    ?LOG_WARNING("macula_gateway_client_manager not running, cannot route remotely"),
+    deliver_to_local_streams(LocalStreams, Topic, Payload);
+%% @private Full routing via pubsub_router
+do_publish(MeshPid, ClientsPid, LocalStreams, PubMsg, LocalNodeId, _Topic, _Payload) ->
+    ?LOG_DEBUG("Using pubsub_router to distribute (mesh=~p, clients=~p)",
+             [MeshPid, ClientsPid]),
+    macula_gateway_pubsub_router:distribute(LocalStreams, PubMsg, LocalNodeId, MeshPid, ClientsPid).
+
+%% @private Deliver to local streams
+deliver_to_local_streams([], _Topic, _Payload) ->
+    ok;
+deliver_to_local_streams([Stream | Rest], Topic, Payload) ->
+    deliver_to_stream_if_alive(erlang:is_process_alive(Stream), Stream, Topic, Payload),
+    deliver_to_local_streams(Rest, Topic, Payload).
+
+deliver_to_stream_if_alive(true, Stream, Topic, Payload) ->
+    ?LOG_DEBUG("Sending to local stream ~p", [Stream]),
+    Stream ! {publish, Topic, Payload};
+deliver_to_stream_if_alive(false, _Stream, _Topic, _Payload) ->
+    ok.
+
+%%%===================================================================
+%%% Stream cleanup helpers
+%%%===================================================================
+
+%% @private Remove stream from all topic subscriptions
+remove_stream_from_topics(StreamPid, Topics, Subscriptions) ->
+    lists:foldl(fun(Topic, Acc) ->
+        remove_stream_from_topic(StreamPid, Topic, Acc)
+    end, Subscriptions, Topics).
+
+remove_stream_from_topic(StreamPid, Topic, Subscriptions) ->
+    Subscribers = maps:get(Topic, Subscriptions, []),
+    NewSubscribers = lists:delete(StreamPid, Subscribers),
+    update_or_remove_topic(NewSubscribers, Topic, Subscriptions).
+
+update_or_remove_topic([], Topic, Subscriptions) ->
+    maps:remove(Topic, Subscriptions);
+update_or_remove_topic(Subscribers, Topic, Subscriptions) ->
+    maps:put(Topic, Subscribers, Subscriptions).
+
+%%%===================================================================
+%%% DHT advertisement helpers
+%%%===================================================================
+
+%% @private Routing server not available
+do_advertise_subscription(undefined, _Topic, _TopicKey, _SubscriberValue) ->
+    ?LOG_WARNING("Routing server not running, cannot advertise subscription");
+%% @private Store subscription in DHT
+do_advertise_subscription(RoutingServerPid, Topic, TopicKey, SubscriberValue) ->
+    Result = (catch macula_routing_server:store(RoutingServerPid, TopicKey, SubscriberValue)),
+    log_store_result(Result, Topic).
+
+log_store_result(ok, Topic) ->
+    ?LOG_INFO("Successfully stored subscription for ~s in DHT", [Topic]);
+log_store_result({error, StoreError}, Topic) ->
+    ?LOG_ERROR("Failed to store subscription ~s: ~p", [Topic, StoreError]);
+log_store_result({'EXIT', Reason}, Topic) ->
+    ?LOG_ERROR("Failed to advertise subscription ~s in DHT: ~p (continuing)", [Topic, Reason]);
+log_store_result(_Other, Topic) ->
+    ?LOG_WARNING("Unexpected result storing subscription ~s", [Topic]).

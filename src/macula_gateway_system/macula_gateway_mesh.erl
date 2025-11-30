@@ -26,6 +26,8 @@
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([
     start_link/1,
@@ -202,20 +204,8 @@ handle_cast(_Msg, State) ->
 %%%===================================================================
 
 handle_info({'DOWN', MonitorRef, process, _Pid, _Reason}, State) ->
-    #state{monitors = Monitors, mesh_connections = MeshConns} = State,
-
-    case maps:get(MonitorRef, Monitors, undefined) of
-        undefined ->
-            {noreply, State};
-        NodeId ->
-            NewMonitors = maps:remove(MonitorRef, Monitors),
-            NewMeshConns = maps:remove(NodeId, MeshConns),
-            NewState = State#state{
-                monitors = NewMonitors,
-                mesh_connections = NewMeshConns
-            },
-            {noreply, NewState}
-    end;
+    NewState = handle_monitor_down(MonitorRef, State),
+    {noreply, NewState};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -225,14 +215,33 @@ handle_info(_Info, State) ->
 %%%===================================================================
 
 terminate(_Reason, #state{mesh_connections = MeshConns}) ->
-    %% Close all connections on shutdown
-    lists:foreach(fun({_NodeId, #{connection := Conn}}) ->
-        case is_connection_alive(Conn) of
-            true -> macula_quic:close(Conn);
-            false -> ok
-        end
-    end, maps:to_list(MeshConns)),
+    close_all_connections(maps:to_list(MeshConns)),
     ok.
+
+close_all_connections([]) ->
+    ok;
+close_all_connections([{_NodeId, #{connection := Conn}} | Rest]) ->
+    close_connection_if_alive(Conn),
+    close_all_connections(Rest).
+
+close_connection_if_alive(Conn) ->
+    case is_connection_alive(Conn) of
+        true -> macula_quic:close(Conn);
+        false -> ok
+    end.
+
+%% @private
+%% @doc Handle monitor DOWN message - remove connection for the monitored process.
+handle_monitor_down(MonitorRef, #state{monitors = Monitors} = State) ->
+    do_handle_monitor_down(maps:get(MonitorRef, Monitors, undefined), MonitorRef, State).
+
+do_handle_monitor_down(undefined, _MonitorRef, State) ->
+    State;
+do_handle_monitor_down(NodeId, MonitorRef, #state{monitors = Monitors, mesh_connections = MeshConns} = State) ->
+    State#state{
+        monitors = maps:remove(MonitorRef, Monitors),
+        mesh_connections = maps:remove(NodeId, MeshConns)
+    }.
 
 %%%===================================================================
 %%% Internal functions - Connection creation
@@ -546,7 +555,7 @@ is_connection_alive(_Other) ->
 %% For fire-and-forget messages where delivery is best-effort.
 -spec async_send_worker(pid(), binary(), term(), binary(), map()) -> ok | {error, term()}.
 async_send_worker(_MeshPid, NodeId, Address, EncodedMessage, Opts) ->
-    io:format("[Mesh/Async] Starting async send to ~p~n", [binary:encode_hex(NodeId)]),
+    ?LOG_DEBUG("Starting async send to ~p", [binary:encode_hex(NodeId)]),
 
     %% Parse address and create connection
     {Host, Port} = parse_address(Address),
@@ -564,7 +573,7 @@ async_send_worker(_MeshPid, NodeId, Address, EncodedMessage, Opts) ->
     ],
 
     FormattedAddress = format_address(Host),
-    io:format("[Mesh/Async] Connecting to ~s:~p~n", [FormattedAddress, Port]),
+    ?LOG_DEBUG("Connecting to ~s:~p", [FormattedAddress, Port]),
 
     %% Try to connect with a shorter timeout for async sends
     case macula_quic:connect(FormattedAddress, Port, ConnOpts, 5000) of
@@ -573,7 +582,7 @@ async_send_worker(_MeshPid, NodeId, Address, EncodedMessage, Opts) ->
                 {ok, Stream} ->
                     case macula_quic:send(Stream, EncodedMessage) of
                         ok ->
-                            io:format("[Mesh/Async] Message sent successfully to ~p~n",
+                            ?LOG_DEBUG("Message sent successfully to ~p",
                                      [binary:encode_hex(NodeId)]),
                             %% Brief delay for data transmission
                             timer:sleep(50),
@@ -582,22 +591,22 @@ async_send_worker(_MeshPid, NodeId, Address, EncodedMessage, Opts) ->
                             catch macula_quic:close(Conn),
                             ok;
                         {error, SendErr} ->
-                            io:format("[Mesh/Async] Send failed: ~p~n", [SendErr]),
+                            ?LOG_WARNING("Send failed: ~p", [SendErr]),
                             catch macula_quic:close(Stream),
                             catch macula_quic:close(Conn),
                             {error, {send_failed, SendErr}}
                     end;
                 {error, StreamErr} ->
-                    io:format("[Mesh/Async] Stream open failed: ~p~n", [StreamErr]),
+                    ?LOG_WARNING("Stream open failed: ~p", [StreamErr]),
                     catch macula_quic:close(Conn),
                     {error, {stream_failed, StreamErr}}
             end;
         {error, ConnErr} ->
-            io:format("[Mesh/Async] Connection failed to ~s:~p: ~p~n",
+            ?LOG_WARNING("Connection failed to ~s:~p: ~p",
                      [FormattedAddress, Port, ConnErr]),
             {error, {connect_failed, ConnErr}};
         {error, Type, Details} ->
-            io:format("[Mesh/Async] Connection failed to ~s:~p: ~p ~p~n",
+            ?LOG_WARNING("Connection failed to ~s:~p: ~p ~p",
                      [FormattedAddress, Port, Type, Details]),
             {error, {connect_failed, {Type, Details}}}
     end.

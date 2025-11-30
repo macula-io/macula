@@ -13,10 +13,7 @@
 %%% 2. Hole Punch - If NAT profiles indicate feasibility
 %%% 3. Relay - Fallback via gateway
 %%%
-%%% Usage:
-%%% ```
-%%% {ok, Conn} = macula_nat_connector:connect(TargetNodeId, Opts).
-%%% ```
+%%% Usage: connect(TargetNodeId, Opts) to establish connection.
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -136,7 +133,7 @@ try_direct_connection(TargetNodeId, _Opts) ->
     %% Look up target's advertised endpoint from DHT
     case lookup_peer_endpoint(TargetNodeId) of
         {ok, Host, Port} ->
-            case attempt_quic_connect(Host, Port, ?DIRECT_TIMEOUT_MS) of
+            case normalize_quic_result(attempt_quic_connect(Host, Port, ?DIRECT_TIMEOUT_MS)) of
                 {ok, Conn} ->
                     {ok, Conn, direct};
                 {error, Reason} ->
@@ -151,56 +148,54 @@ try_direct_connection(TargetNodeId, _Opts) ->
 -spec try_hole_punch(binary(), binary(), binary(), connect_opts()) ->
     {ok, quicer:connection_handle()} | {error, term()}.
 try_hole_punch(_LocalNodeId, TargetNodeId, SessionId, Opts) ->
-    %% Get target's reflexive address and predicted ports
     case get_hole_punch_target(TargetNodeId) of
         {ok, Host, Ports} ->
-            PunchOpts = #{
-                target_host => Host,
-                target_ports => Ports,
-                session_id => SessionId,
-                role => initiator
-            },
-
-            SkipPunch = maps:get(skip_hole_punch, Opts, false),
-            case SkipPunch of
-                true ->
-                    {error, hole_punch_skipped};
-                false ->
-                    macula_hole_punch:execute(TargetNodeId, PunchOpts, ?HOLE_PUNCH_TIMEOUT_MS)
-            end;
+            PunchOpts = build_hole_punch_opts(Host, Ports, SessionId),
+            maybe_execute_hole_punch(TargetNodeId, PunchOpts, Opts);
         {error, Reason} ->
             {error, {hole_punch_target_not_found, Reason}}
     end.
+
+build_hole_punch_opts(Host, Ports, SessionId) ->
+    #{
+        target_host => Host,
+        target_ports => Ports,
+        session_id => SessionId,
+        role => initiator
+    }.
+
+maybe_execute_hole_punch(_TargetNodeId, _PunchOpts, #{skip_hole_punch := true}) ->
+    {error, hole_punch_skipped};
+maybe_execute_hole_punch(TargetNodeId, PunchOpts, _Opts) ->
+    macula_hole_punch:execute(TargetNodeId, PunchOpts, ?HOLE_PUNCH_TIMEOUT_MS).
 
 %% @private
 %% @doc Try relay connection via gateway.
 -spec try_relay_connection(binary(), connect_opts()) -> connect_result().
 try_relay_connection(TargetNodeId, Opts) ->
-    %% Get relay endpoint (use provided or find from DHT)
-    RelayEndpoint = case maps:get(relay_endpoint, Opts, undefined) of
-        undefined -> find_relay_endpoint();
-        Endpoint -> Endpoint
-    end,
+    RelayEndpoint = get_relay_endpoint(Opts),
+    do_relay_connection(RelayEndpoint, TargetNodeId).
 
-    case RelayEndpoint of
-        {ok, Host, Port} ->
-            %% Connect to relay
-            case attempt_quic_connect(Host, Port, ?DIRECT_TIMEOUT_MS) of
-                {ok, Conn} ->
-                    %% Send relay request to establish tunnel
-                    case setup_relay_tunnel(Conn, TargetNodeId) of
-                        ok ->
-                            {ok, Conn, relay};
-                        {error, Reason} ->
-                            quicer:close_connection(Conn),
-                            {error, {relay_setup_failed, Reason}}
-                    end;
-                {error, Reason} ->
-                    {error, {relay_connect_failed, Reason}}
-            end;
-        {error, Reason} ->
-            {error, {no_relay_available, Reason}}
-    end.
+get_relay_endpoint(#{relay_endpoint := Endpoint}) ->
+    Endpoint;
+get_relay_endpoint(_Opts) ->
+    find_relay_endpoint().
+
+do_relay_connection({ok, Host, Port}, TargetNodeId) ->
+    connect_and_setup_relay(normalize_quic_result(attempt_quic_connect(Host, Port, ?DIRECT_TIMEOUT_MS)), TargetNodeId);
+do_relay_connection({error, Reason}, _TargetNodeId) ->
+    {error, {no_relay_available, Reason}}.
+
+connect_and_setup_relay({ok, Conn}, TargetNodeId) ->
+    setup_relay_or_close(setup_relay_tunnel(Conn, TargetNodeId), Conn);
+connect_and_setup_relay({error, Reason}, _TargetNodeId) ->
+    {error, {relay_connect_failed, Reason}}.
+
+setup_relay_or_close(ok, Conn) ->
+    {ok, Conn, relay};
+setup_relay_or_close({error, Reason}, Conn) ->
+    quicer:close_connection(Conn),
+    {error, {relay_setup_failed, Reason}}.
 
 %%%===================================================================
 %%% Internal functions - Helpers
@@ -294,62 +289,129 @@ format_ip(IP) when is_tuple(IP), tuple_size(IP) == 8 ->
 
 %% @private
 %% @doc Find available relay endpoint.
+%% Uses relay registry which checks local ETS first, then DHT.
+%% Falls back to bootstrap peers if no relay found.
 -spec find_relay_endpoint() ->
     {ok, binary() | string(), inet:port_number()} | {error, term()}.
 find_relay_endpoint() ->
-    case whereis(macula_routing_server) of
+    case find_relay_from_registry() of
+        {ok, Host, Port} ->
+            ?LOG_DEBUG("[NAT_CONNECTOR] Found relay from registry: ~s:~p", [Host, Port]),
+            {ok, Host, Port};
+        {error, _} ->
+            %% Fallback: use bootstrap peer as relay
+            find_relay_from_bootstrap()
+    end.
+
+%% @private
+%% @doc Find relay from local registry.
+-spec find_relay_from_registry() ->
+    {ok, binary() | string(), inet:port_number()} | {error, term()}.
+find_relay_from_registry() ->
+    case whereis(macula_relay_registry) of
         undefined ->
-            {error, routing_unavailable};
-        Pid ->
-            %% Look for relay service in DHT
-            Key = crypto:hash(sha256, <<"service.relay">>),
-            case macula_routing_server:find_value(Pid, Key, 20) of
-                {ok, #{<<"host">> := Host, <<"port">> := Port}} ->
+            {error, relay_registry_unavailable};
+        _Pid ->
+            case macula_relay_registry:find_relay(<<>>) of
+                {ok, #{endpoint := {Host, Port}}} ->
                     {ok, Host, Port};
-                _ ->
-                    %% Fallback to bootstrap gateway
+                {error, no_relays_available} ->
                     {error, no_relay_found}
             end
+    end.
+
+%% @private
+%% @doc Find relay from bootstrap peers (fallback).
+%% Bootstrap nodes typically run relay services.
+-spec find_relay_from_bootstrap() ->
+    {ok, binary() | string(), inet:port_number()} | {error, term()}.
+find_relay_from_bootstrap() ->
+    case os:getenv("MACULA_BOOTSTRAP_PEERS") of
+        false ->
+            ?LOG_WARNING("[NAT_CONNECTOR] No bootstrap peers configured for relay fallback"),
+            {error, no_bootstrap_peers};
+        BootstrapPeers ->
+            parse_bootstrap_for_relay(BootstrapPeers)
+    end.
+
+%% @private
+%% @doc Parse bootstrap peers string and extract first as relay.
+%% Format: "https://host:port" or "host:port"
+-spec parse_bootstrap_for_relay(string()) ->
+    {ok, binary() | string(), inet:port_number()} | {error, term()}.
+parse_bootstrap_for_relay(BootstrapPeers) ->
+    %% Take first bootstrap peer
+    FirstPeer = hd(string:tokens(BootstrapPeers, ",")),
+    Stripped = string:trim(FirstPeer),
+    %% Remove https:// prefix if present
+    WithoutScheme = case string:prefix(Stripped, "https://") of
+        nomatch -> Stripped;
+        Rest -> Rest
+    end,
+    %% Parse host:port
+    case string:split(WithoutScheme, ":") of
+        [Host, PortStr] ->
+            try
+                Port = list_to_integer(string:trim(PortStr)),
+                ?LOG_WARNING("[NAT_CONNECTOR] Using bootstrap as relay: ~s:~p", [Host, Port]),
+                {ok, list_to_binary(Host), Port}
+            catch
+                _:_ ->
+                    ?LOG_WARNING("[NAT_CONNECTOR] Invalid bootstrap port: ~s", [PortStr]),
+                    {error, invalid_bootstrap_port}
+            end;
+        _ ->
+            ?LOG_WARNING("[NAT_CONNECTOR] Invalid bootstrap format: ~s", [Stripped]),
+            {error, invalid_bootstrap_format}
     end.
 
 %% @private
 %% @doc Attempt QUIC connection.
 -spec attempt_quic_connect(binary() | string(), inet:port_number(), timeout()) ->
     {ok, quicer:connection_handle()} | {error, term()}.
-attempt_quic_connect(Host, Port, Timeout) ->
-    HostStr = case is_binary(Host) of
-        true -> binary_to_list(Host);
-        false -> Host
-    end,
+attempt_quic_connect(Host, Port, Timeout) when is_binary(Host) ->
+    attempt_quic_connect(binary_to_list(Host), Port, Timeout);
+attempt_quic_connect(Host, Port, Timeout) when is_list(Host) ->
+    ConnOpts = quic_connection_opts(),
+    quicer:connect(Host, Port, ConnOpts, Timeout).
 
-    ConnOpts = [
+quic_connection_opts() ->
+    [
         {alpn, ["macula"]},
         {verify, none},
         {idle_timeout_ms, 60000},
         {keep_alive_interval_ms, 20000}
-    ],
+    ].
 
-    quicer:connect(HostStr, Port, ConnOpts, Timeout).
+%% @private
+%% @doc Normalize QUIC connection results to standard {ok, _} | {error, _} format.
+%% quicer:connect/4 can return various error formats including 3-tuples like
+%% {error, transport_down, Details} which need to be normalized to 2-tuples.
+-spec normalize_quic_result(term()) -> {ok, term()} | {error, term()}.
+normalize_quic_result({ok, Conn}) ->
+    {ok, Conn};
+normalize_quic_result({error, Type, Details}) when is_atom(Type), is_map(Details) ->
+    %% e.g., {error, transport_down, #{error => 2, status => connection_refused}}
+    {error, {Type, Details}};
+normalize_quic_result({error, Reason}) ->
+    {error, Reason};
+normalize_quic_result(Other) ->
+    {error, {unexpected_quic_result, Other}}.
 
 %% @private
 %% @doc Setup relay tunnel to target.
 -spec setup_relay_tunnel(quicer:connection_handle(), binary()) -> ok | {error, term()}.
 setup_relay_tunnel(Conn, TargetNodeId) ->
-    %% Open stream and send RELAY_REQUEST
-    case quicer:start_stream(Conn, []) of
-        {ok, Stream} ->
-            RelayRequest = #{
-                type => relay_request,
-                target_node_id => TargetNodeId
-            },
-            Encoded = msgpack:pack(RelayRequest),
-            case quicer:send(Stream, Encoded) of
-                {ok, _} -> ok;
-                Error -> Error
-            end;
-        Error ->
-            Error
-    end.
+    send_relay_request_on_stream(quicer:start_stream(Conn, []), TargetNodeId).
+
+send_relay_request_on_stream({ok, Stream}, TargetNodeId) ->
+    RelayRequest = #{type => relay_request, target_node_id => TargetNodeId},
+    send_relay_request(quicer:send(Stream, msgpack:pack(RelayRequest)));
+send_relay_request_on_stream(Error, _TargetNodeId) ->
+    Error.
+
+send_relay_request({ok, _}) -> ok;
+send_relay_request(Error) -> Error.
 
 %% @private
 %% @doc Report hole punch result to coordinator.

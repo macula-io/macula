@@ -1,99 +1,130 @@
 # Macula Documentation
 
-**Welcome to the Macula HTTP/3 Mesh documentation!**
+> **Audience:** All
+> **Last Updated:** 2025-11-28
+> **Version:** Macula v0.10.0+
 
 Macula is a distributed platform for building decentralized applications using HTTP/3 (QUIC) transport with P2P mesh networking.
 
 ---
 
-## 🚀 Getting Started
+## Quick Navigation
 
-- **[Quick Start](../HELLO_WORLD.md)** - Build a distributed chat app in 30 minutes
-- **[Architecture Overview](../architecture/macula_http3_mesh_root.md)** - Complete documentation hub
+| I want to... | Go to... |
+|--------------|----------|
+| Understand why Macula exists | [Business Overview](business/) |
+| Understand the socio-economic vision | [Motivation](business/MOTIVATION.md) |
+| Compare Macula to Kafka/RabbitMQ/NATS | [Technology Comparison](business/COMPARISON.md) |
+| Get started quickly | [Quick Start](user/QUICK_START.md) |
+| Build my first app | [Hello World Tutorial](user/HELLO_WORLD.md) |
+| Deploy to production | [Operator Guide](operator/) |
+| Understand the architecture | [Architecture Overview](../ARCHITECTURE.md) |
+| Use TWEANN or event sourcing | [Ecosystem Libraries](ecosystem/) |
+| Contribute to Macula | [Developer Guide](developer/) |
+| Look up terminology | [Glossary](GLOSSARY.md) |
+
+---
+
+## Documentation by Audience
+
+### For Business Leaders
+
+Understand the strategic value of decentralized systems:
+
+- **[Platform Overview](business/OVERVIEW.md)** - What Macula enables
+- **[Why Decentralized?](business/WHY_DECENTRALIZED.md)** - The case for decentralization
+- **[Why BEAM?](business/WHY_BEAM.md)** - Technology foundation
+- **[Use Cases](business/USE_CASES.md)** - Business applications
+
+### For Users (Application Developers)
+
+Build applications on the Macula mesh:
+
+- **[Quick Start](user/QUICK_START.md)** - 15-minute mesh setup
+- **[Hello World](user/HELLO_WORLD.md)** - Your first distributed app
+- **[RPC Guide](developer/RPC_GUIDE.md)** - Remote procedure calls
+- **[PubSub Guide](developer/PUBSUB_GUIDE.md)** - Publish/subscribe messaging
+
+### For Operators
+
+Run Macula in production:
+
+- **[Performance Guide](operator/PERFORMANCE_GUIDE.md)** - Tuning and optimization
+- **[Monitoring Guide](operator/MONITORING_GUIDE.md)** - Metrics, logs, and alerting
+- **[Troubleshooting Guide](operator/TROUBLESHOOTING_GUIDE.md)** - Common issues and solutions
+- **[QUIC/TLS Setup](operator/QUIC_TLS_GATEWAY_SETUP.md)** - Gateway TLS configuration
+- **[Memory Management](../architecture/memory_management/README.md)** - Production-ready leak prevention
+
+### For Developers (Contributors)
+
+Contribute to Macula core:
+
+- **[Development Guide](developer/DEVELOPMENT.md)** - Local development setup
+- **[RPC Guide](developer/RPC_GUIDE.md)** - Understanding RPC internals
+- **[PubSub Guide](developer/PUBSUB_GUIDE.md)** - Understanding PubSub internals
 - **[Project Structure](../architecture/MACULA_PROJECT_STRUCTURE.md)** - Module organization
 
 ---
 
-## 📚 Core Documentation
+## Guides (Deep-Dives)
 
-### Architecture & Design
-- **[Kademlia DHT Architecture](KADEMLIA_DHT_ARCHITECTURE.md)** - Distributed hash table implementation
-- **[QUIC/TLS Setup Guide](QUIC_TLS_GATEWAY_SETUP.md)** - Gateway TLS configuration
-- **[Memory Management](../architecture/memory_management/README.md)** - Production-ready leak prevention
-- **[C4 Diagrams](../architecture/macula_http3_mesh_c4_diagrams.md)** - Visual architecture overview
+### NAT Traversal
+- **[NAT Types Explained](guides/NAT_TYPES_EXPLAINED.md)** - Understanding NAT classification
+- **[NAT Developer Guide](guides/NAT_TRAVERSAL_DEVELOPER_GUIDE.md)** - API usage and code examples
+- **[NAT Configuration](guides/NAT_CONFIGURATION.md)** - Configuration reference
+- **[NAT Architecture](guides/NAT_ARCHITECTURE.md)** - Visual diagrams and flows
 
-### Planned Improvements
-- **[Peer-Connection Separation Plan](PEER_CONNECTION_SEPARATION_PLAN.md)** - v0.7.0 TDD refactoring (4.5 weeks)
-- **[Nomenclature Proposal](NOMENCLATURE_PROPOSAL_CONNECTION_TO_PEER.md)** - connection → peer rename
-- **[Peer vs Connection Analysis](PEER_VS_CONNECTION_ANALYSIS.md)** - Responsibility breakdown
+### DHT & Networking
+- **[DHT Guide](guides/DHT_GUIDE.md)** - Kademlia DHT architecture
 
 ---
 
-## 🛠️ Development
+## Comparisons
 
-### Development Guides
-- **[Testing Guide](development/TESTING.md)** - Unit, integration, and E2E testing
-- **[Docker Build Reference](development/DOCKER_BUILD_REFERENCE.md)** - Build best practices
-- **[Hex Publication Guide](development/HEX_PUBLICATION_GUIDE.md)** - Publishing to Hex.pm
-- **[mDNS Setup](development/MDNS_SETUP.md)** - Local service discovery configuration
-
-### Planning Documents
-- **[Implementation Plan](planning/IMPLEMENTATION_PLAN.md)** - Original 20-week roadmap
-- **[Multi-Node Testing Plan](planning/MULTI_NODE_TESTING_PLAN.md)** - Testing strategy
+- **[vs Distributed Erlang](comparisons/VS_DISTRIBUTED_ERLANG.md)** - QUIC benefits over inet_dist
+- **[Comparisons Overview](comparisons/README.md)** - Technology comparison matrix
 
 ---
 
-## 📖 User Guides
+## Ecosystem Libraries
 
-- **[Quick Start](../architecture/macula_http3_mesh_quick_start.md)** - 15-minute mesh setup
-- **[Hello World Tutorial](../architecture/macula_http3_mesh_hello_world.md)** - Build your first app
-- **[RPC Guide](../architecture/macula_http3_mesh_rpc_guide.md)** - Remote procedure calls
-- **[API Reference](../architecture/macula_http3_mesh_api_reference.md)** - Complete API docs
+Related libraries that extend Macula's capabilities:
 
----
-
-## 🔍 Reference
-
-### Technical Deep Dives
-- **[DHT Routed RPC](../architecture/dht_routed_rpc.md)** - Multi-hop Kademlia routing
-- **[Pub/Sub Optimization](../architecture/pubsub_optimization_recommendations.md)** - 10,000+ msg/sec
-- **[Isolation Mechanisms](../architecture/macula_http3_mesh_isolation_mechanisms.md)** - Multi-tenancy
-- **[NAT Traversal](../architecture/macula_http3_mesh_nat_traversal.md)** - Firewall-friendly transport
-
-### Comparisons
-- **[vs libp2p](../architecture/macula_http3_mesh_vs_libp2p.md)** - Why Macula?
-- **[vs WAMP](../architecture/macula_http3_mesh_vs_wamp.md)** - HTTP/3 mesh advantages
-- **[vs Distributed Erlang](../architecture/macula_http3_mesh_vs_distributed_erlang.md)** - QUIC benefits
+- **[Ecosystem Overview](ecosystem/)** - All related libraries
+- **[Macula TWEANN](ecosystem/TWEANN.md)** - Evolutionary neural networks for distributed AI
+- **[Reckon Architecture](ecosystem/RECKON.md)** - Event sourcing patterns for BEAM applications
 
 ---
 
-## 📦 Release Information
+## Architecture
 
-- **[Changelog](../CHANGELOG.md)** - Version history and breaking changes
-- **[v0.6.0 Release Summary](V0.6.0_RELEASE_SUMMARY.md)** - Latest release details
+Core architecture documentation lives in [`../architecture/`](../architecture/):
 
----
-
-## 📂 Archive & History
-
-- **[Archive](archive/)** - Historical analysis and completed work (~40 documents)
-- **[Sessions](sessions/)** - Development session summaries
+- **[Roadmap](../architecture/ROADMAP.md)** - Implementation roadmap
+- **[C4 Diagrams](../architecture/C4_DIAGRAMS.md)** - Visual architecture overview
+- **[Multi-Tenancy](../architecture/MULTI_TENANCY.md)** - Realm isolation mechanisms
+- **[Module Dependencies](../architecture/MODULE_DEPENDENCIES.md)** - Module relationship map
+- **[Memory Management](../architecture/memory_management/README.md)** - Production hardening
 
 ---
 
-## 🤝 Contributing
+## Project Links
 
-- **[Contributing Guide](../architecture/macula_http3_mesh_contributing.md)** - How to contribute
-- **[Documentation Status](../architecture/DOCUMENTATION_STATUS.md)** - What's complete
-
----
-
-## 📞 Community & Support
-
-- **Issues**: [GitHub Issues](https://github.com/macula-io/macula/issues)
-- **Examples**: [Examples Directory](../examples/)
-- **License**: [Apache 2.0](../LICENSE)
+- **[Main README](../README.md)** - Project overview
+- **[Getting Started](../GETTING_STARTED.md)** - Installation guide
+- **[Changelog](../CHANGELOG.md)** - Version history
+- **[Examples](../examples/)** - Demo applications
+- **[GitHub Issues](https://github.com/macula-io/macula/issues)** - Bug reports and features
 
 ---
 
-**Built with ❤️ for the BEAM community**
+## Archive
+
+Historical and superseded documentation:
+
+- **[Archive Index](archive/)** - Code reviews, migration docs, historical analysis
+- **[Sessions Archive](archive/sessions/)** - Development session summaries
+
+---
+
+**Built for the BEAM community**

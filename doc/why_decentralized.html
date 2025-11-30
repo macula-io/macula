@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.4">
+
+
+    <title>Why Decentralized — macula v0.12.4</title>
+
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-DE2E663F.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.4
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-extra" id="main" data-type="extras">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>Why Decentralized?</h1>
+
+
+      <a href="https://github.com/macula-io/macula/blob/0.12.4/docs/business/WHY_DECENTRALIZED.md#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+<blockquote><p><strong>Audience:</strong> Business Leaders, Strategic Decision-Makers
+<strong>Last Updated:</strong> 2025-11-28</p></blockquote><p>This document explores the fundamental case for decentralized systems - why they matter, when they make sense, and how they change the economics of software.</p><hr class="thin"/><h2 id="the-centralization-problem" class="section-heading"><a href="#the-centralization-problem" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">The Centralization Problem</span></h2><h3 id="how-we-got-here" class="section-heading"><a href="#how-we-got-here" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">How We Got Here</span></h3><p>The past two decades have seen a massive centralization of computing:</p><ol><li><strong>2000s</strong>: On-premise servers in company data centers</li><li><strong>2010s</strong>: Migration to cloud platforms (AWS, Azure, GCP)</li><li><strong>2020s</strong>: Dependency on a handful of hyperscalers for everything</li></ol><p>Today, a handful of companies control the infrastructure that runs the internet. This creates structural problems.</p><h3 id="the-costs-of-centralization" class="section-heading"><a href="#the-costs-of-centralization" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">The Costs of Centralization</span></h3><p><strong>Economic Costs</strong></p><ul><li>Cloud spending grows 20-30% annually for most enterprises</li><li>Vendor lock-in makes switching prohibitively expensive</li><li>Unpredictable pricing - your bill depends on their decisions</li></ul><p><strong>Operational Costs</strong></p><ul><li>Single points of failure (AWS us-east-1 outages affect thousands)</li><li>Latency to distant data centers (50-200ms round trips)</li><li>Bandwidth costs for moving data to/from the cloud</li></ul><p><strong>Strategic Costs</strong></p><ul><li>Loss of data sovereignty</li><li>Compliance complexity (where is your data?)</li><li>Dependency on competitors (AWS runs while competing with you)</li></ul><p><strong>Innovation Costs</strong></p><ul><li>Building within platform constraints</li><li>Locked into vendor roadmaps</li><li>Difficult to differentiate</li></ul><hr class="thin"/><h2 id="the-case-for-decentralization" class="section-heading"><a href="#the-case-for-decentralization" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">The Case for Decentralization</span></h2><p>Decentralization isn't about being anti-cloud. It's about <strong>restoring choice</strong> - the ability to deploy where it makes sense, on infrastructure you control, without artificial constraints.</p><h3 id="core-principles" class="section-heading"><a href="#core-principles" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Core Principles</span></h3><p><strong>1. Data Stays Where It's Created</strong></p><p>In centralized systems, data flows to a central hub:</p><pre><code class="makeup erlang" translate="no"><span class="n">Device</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Internet</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Cloud</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Internet</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Device</span></code></pre><p>In decentralized systems, data stays local:</p><pre><code class="makeup erlang" translate="no"><span class="n">Device</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Local</span><span class="w"> </span><span class="n">Mesh</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Device</span></code></pre><p>This means:</p><ul><li>Lower latency (milliseconds, not hundreds of milliseconds)</li><li>Lower bandwidth costs (no round-trips to the cloud)</li><li>Better privacy (data never leaves your network)</li><li>Offline capability (works without internet)</li></ul><p><strong>2. Control Stays with Owners</strong></p><p>Centralized platforms extract control:</p><ul><li>They own the infrastructure</li><li>They set the rules</li><li>They can change terms unilaterally</li><li>They have access to your data</li></ul><p>Decentralized systems preserve control:</p><ul><li>You own the infrastructure</li><li>You set the rules</li><li>You control your data</li><li>No external parties with access</li></ul><p><strong>3. Networks Self-Organize</strong></p><p>Centralized systems require central coordination:</p><ul><li>Someone must provision servers</li><li>Someone must manage load balancing</li><li>Someone must handle failover</li></ul><p>Decentralized systems organize themselves:</p><ul><li>Nodes discover each other automatically</li><li>Load distributes naturally across the mesh</li><li>Failures are handled locally, transparently</li></ul><hr class="thin"/><h2 id="when-decentralization-makes-sense" class="section-heading"><a href="#when-decentralization-makes-sense" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">When Decentralization Makes Sense</span></h2><p>Decentralization isn't always the right choice. Here's when it shines:</p><h3 id="strong-fit" class="section-heading"><a href="#strong-fit" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Strong Fit</span></h3><table><thead><tr><th style="text-align: left;">Scenario</th><th style="text-align: left;">Why Decentralized Works</th></tr></thead><tbody><tr><td style="text-align: left;"><strong>Multi-party collaboration</strong></td><td style="text-align: left;">No single party should control the platform</td></tr><tr><td style="text-align: left;"><strong>Edge/IoT deployments</strong></td><td style="text-align: left;">Cloud round-trips are too slow or expensive</td></tr><tr><td style="text-align: left;"><strong>Privacy-sensitive data</strong></td><td style="text-align: left;">Data shouldn't leave organizational boundaries</td></tr><tr><td style="text-align: left;"><strong>Offline requirements</strong></td><td style="text-align: left;">Must work without internet connectivity</td></tr><tr><td style="text-align: left;"><strong>Regulatory constraints</strong></td><td style="text-align: left;">Data must stay in specific jurisdictions</td></tr><tr><td style="text-align: left;"><strong>Vendor independence</strong></td><td style="text-align: left;">Strategic need to avoid lock-in</td></tr></tbody></table><h3 id="weaker-fit" class="section-heading"><a href="#weaker-fit" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Weaker Fit</span></h3><table><thead><tr><th style="text-align: left;">Scenario</th><th style="text-align: left;">Why Centralization May Be Better</th></tr></thead><tbody><tr><td style="text-align: left;"><strong>Startup MVP</strong></td><td style="text-align: left;">Speed to market trumps architecture</td></tr><tr><td style="text-align: left;"><strong>Burst compute</strong></td><td style="text-align: left;">Cloud elastic scaling is hard to match</td></tr><tr><td style="text-align: left;"><strong>Simple CRUD apps</strong></td><td style="text-align: left;">Overhead isn't justified</td></tr><tr><td style="text-align: left;"><strong>GPU/ML training</strong></td><td style="text-align: left;">Specialized hardware is expensive to own</td></tr></tbody></table><h3 id="hybrid-approaches" class="section-heading"><a href="#hybrid-approaches" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Hybrid Approaches</span></h3><p>The reality for most organizations is <strong>hybrid</strong> - some workloads centralized, some decentralized:</p><pre><code class="makeup erlang" translate="no"><span class="w">                    </span><span class="n">Cloud</span><span class="w">
+                      </span><span class="err">│</span><span class="w">
+              </span><span class="err">┌</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┴</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┐</span><span class="w">
+              </span><span class="err">│</span><span class="w">  </span><span class="n">Aggregation</span><span class="w">  </span><span class="err">│</span><span class="w">
+              </span><span class="err">│</span><span class="w">  </span><span class="n">Analytics</span><span class="w">    </span><span class="err">│</span><span class="w">
+              </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┬</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┘</span><span class="w">
+                      </span><span class="err">│</span><span class="w">
+    </span><span class="err">┌</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┼</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┐</span><span class="w">
+    </span><span class="err">│</span><span class="w">                 </span><span class="err">│</span><span class="w">                 </span><span class="err">│</span><span class="w">
+</span><span class="err">┌</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┴</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┐</span><span class="w">         </span><span class="err">┌</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┴</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┐</span><span class="w">         </span><span class="err">┌</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┴</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┐</span><span class="w">
+</span><span class="err">│</span><span class="n">Site</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="err">│</span><span class="w">         </span><span class="err">│</span><span class="n">Site</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="err">│</span><span class="w">         </span><span class="err">│</span><span class="n">Site</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="err">│</span><span class="w">
+</span><span class="err">│</span><span class="w"> </span><span class="n">Mesh</span><span class="w">  </span><span class="err">│</span><span class="w">         </span><span class="err">│</span><span class="w"> </span><span class="n">Mesh</span><span class="w">  </span><span class="err">│</span><span class="w">         </span><span class="err">│</span><span class="w"> </span><span class="n">Mesh</span><span class="w">  </span><span class="err">│</span><span class="w">
+</span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┬</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┘</span><span class="w">         </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┬</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┘</span><span class="w">         </span><span class="err">└</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┬</span><span class="err">─</span><span class="err">─</span><span class="err">─</span><span class="err">┘</span><span class="w">
+    </span><span class="err">│</span><span class="w">                 </span><span class="err">│</span><span class="w">                 </span><span class="err">│</span><span class="w">
+ </span><span class="n">Devices</span><span class="w">           </span><span class="n">Devices</span><span class="w">           </span><span class="n">Devices</span></code></pre><ul><li>Real-time operations happen locally in the mesh</li><li>Aggregated data syncs to cloud for analytics</li><li>Each site operates autonomously</li><li>Cloud provides global coordination (when available)</li></ul><hr class="thin"/><h2 id="economic-benefits" class="section-heading"><a href="#economic-benefits" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Economic Benefits</span></h2><h3 id="total-cost-of-ownership" class="section-heading"><a href="#total-cost-of-ownership" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Total Cost of Ownership</span></h3><p>Compare a typical IoT deployment:</p><p><strong>Centralized Approach</strong></p><ul><li>Device → Internet → Cloud → Internet → Device</li><li>Per-message cloud fees</li><li>Bandwidth costs both directions</li><li>Cloud compute costs</li><li>Cloud storage costs</li></ul><p><strong>Decentralized Approach</strong></p><ul><li>Device → Local Gateway → Device</li><li>One-time hardware investment</li><li>Local network only (free)</li><li>Compute on existing hardware</li><li>Local storage (cheap)</li></ul><p>For high-frequency IoT deployments (thousands of messages/second), decentralized can be <strong>10-100x cheaper</strong> over 3 years.</p><h3 id="predictable-costs" class="section-heading"><a href="#predictable-costs" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Predictable Costs</span></h3><table><thead><tr><th style="text-align: left;">Centralized</th><th style="text-align: left;">Decentralized</th></tr></thead><tbody><tr><td style="text-align: left;">Variable monthly bills</td><td style="text-align: left;">Fixed hardware investment</td></tr><tr><td style="text-align: left;">Costs scale with usage</td><td style="text-align: left;">Costs scale with hardware</td></tr><tr><td style="text-align: left;">Pricing changes without notice</td><td style="text-align: left;">You control the economics</td></tr><tr><td style="text-align: left;">Vendor discounts require commitment</td><td style="text-align: left;">No vendor negotiations</td></tr></tbody></table><hr class="thin"/><h2 id="resilience-benefits" class="section-heading"><a href="#resilience-benefits" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Resilience Benefits</span></h2><h3 id="failure-modes" class="section-heading"><a href="#failure-modes" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Failure Modes</span></h3><p><strong>Centralized System Failures</strong></p><ul><li>Cloud outage → Everything stops</li><li>Network partition → Everything stops</li><li>DDoS on cloud → Everything stops</li></ul><p><strong>Decentralized System Failures</strong></p><ul><li>Node failure → Other nodes continue</li><li>Network partition → Partitions work independently</li><li>Internet outage → Local mesh continues</li></ul><h3 id="business-continuity" class="section-heading"><a href="#business-continuity" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Business Continuity</span></h3><p>Decentralized systems provide natural disaster recovery:</p><ul><li>Each site can operate independently</li><li>No single point of failure</li><li>Data replicated across nodes</li><li>Recovery is automatic</li></ul><hr class="thin"/><h2 id="strategic-benefits" class="section-heading"><a href="#strategic-benefits" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Strategic Benefits</span></h2><h3 id="competitive-differentiation" class="section-heading"><a href="#competitive-differentiation" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Competitive Differentiation</span></h3><p>When everyone runs on the same cloud platforms, using the same services, differentiation comes down to application logic. Decentralized architecture enables:</p><ul><li>Unique deployment models (on-premise, hybrid, edge)</li><li>Privacy-first offerings (data never leaves customer premises)</li><li>Offline-capable products (works without internet)</li><li>Lower latency (real-time applications)</li></ul><h3 id="regulatory-compliance" class="section-heading"><a href="#regulatory-compliance" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Regulatory Compliance</span></h3><p>Data sovereignty regulations (GDPR, CCPA, industry-specific rules) are easier with decentralized systems:</p><ul><li>Data stays in jurisdiction by design</li><li>Clear audit trails</li><li>No third-party data processors</li><li>Simplified compliance documentation</li></ul><h3 id="exit-strategy" class="section-heading"><a href="#exit-strategy" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Exit Strategy</span></h3><p>With centralized platforms, switching costs are high:</p><ul><li>Data export is complex</li><li>API differences require rewrites</li><li>Operational knowledge is platform-specific</li></ul><p>With decentralized systems built on open standards:</p><ul><li>Data is on infrastructure you control</li><li>Protocols are standard (HTTP/3)</li><li>Skills are transferable</li></ul><hr class="thin"/><h2 id="the-macula-approach" class="section-heading"><a href="#the-macula-approach" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">The Macula Approach</span></h2><p>Macula provides the infrastructure layer for building decentralized systems:</p><p><strong>What Macula Provides</strong></p><ul><li>P2P mesh networking over HTTP/3/QUIC</li><li>Service discovery without central registry</li><li>Pub/Sub messaging between nodes</li><li>RPC for request/response patterns</li><li>Multi-tenancy for isolation</li><li>NAT traversal for real-world networks</li></ul><p><strong>What You Build</strong></p><ul><li>Your business logic</li><li>Your data models</li><li>Your user interfaces</li><li>Your integration points</li></ul><p>Think of Macula as <strong>HTTP for decentralized applications</strong> - it handles the hard networking problems so you can focus on your domain.</p><hr class="thin"/><h2 id="getting-started" class="section-heading"><a href="#getting-started" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Getting Started</span></h2><p>If decentralization resonates with your needs:</p><ol><li><strong>Evaluate fit</strong>: Does your use case match the strong fit scenarios above?</li><li><strong>Start small</strong>: Pick one workload to decentralize</li><li><strong>Measure</strong>: Compare costs, latency, reliability</li><li><strong>Expand</strong>: Roll out to additional use cases</li></ol><p>The path to decentralization doesn't require a big-bang migration. Start with the workloads where it makes the most sense.</p><hr class="thin"/><h2 id="see-also" class="section-heading"><a href="#see-also" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">See Also</span></h2><ul><li><a href="overview.html">Platform Overview</a> - What Macula enables</li><li><a href="use_cases.html">Use Cases</a> - Specific application scenarios</li><li><a href="glossary.html">Glossary</a> - Terminology reference</li></ul>
+
+</div>
+
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
+
+      <a href="motivation.html" class="bottom-actions-button" rel="prev">
+        <span class="subheader">
+          ← Previous Page
+        </span>
+        <span class="title">
+Why Macula
+        </span>
+      </a>
+
+  </div>
+  <div class="bottom-actions-item">
+
+      <a href="use_cases.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+Use Cases
+        </span>
+      </a>
+
+  </div>
+</div>
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.4" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.4">Hex Preview</a>
+
+              (<a href="https://preview.hex.pm/preview/macula/0.12.4/show/docs/business/WHY_DECENTRALIZED.md">current file</a>)
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

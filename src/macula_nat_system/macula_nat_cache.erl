@@ -63,7 +63,12 @@
     requires_relay := boolean(),
     relay_capable := boolean(),
     detected_at := integer(),
-    ttl_seconds := pos_integer()
+    ttl_seconds := pos_integer(),
+    %% Geo-location fields (optional, from environment variables)
+    %% Set via MACULA_LATITUDE, MACULA_LONGITUDE, MACULA_LOCATION
+    latitude => float(),         % -90.0 to 90.0 (south to north)
+    longitude => float(),        % -180.0 to 180.0 (west to east)
+    location_label => binary()   % Human-readable label e.g. "Amsterdam, NL"
 }.
 
 -export_type([nat_profile/0, mapping_policy/0, filtering_policy/0, allocation_policy/0]).
@@ -200,10 +205,7 @@ handle_call(stats, _From, State) ->
 
     Size = ets:info(Table, size),
     Total = Hits + Misses,
-    HitRate = case Total of
-        0 -> 0.0;
-        _ -> Hits / Total
-    end,
+    HitRate = calculate_hit_rate(Hits, Total),
 
     Stats = #{
         size => Size,
@@ -254,27 +256,11 @@ handle_cast(_Msg, State) ->
 handle_info(cleanup, State) ->
     #state{table = Table, default_ttl = DefaultTTL} = State,
     Now = erlang:system_time(second),
-
-    %% Remove fully expired entries (past stale grace period)
     MaxAge = DefaultTTL + ?STALE_GRACE_SECONDS,
-    ExpiredKeys = ets:foldl(
-        fun({NodeId, _Profile, InsertedAt}, Acc) ->
-            case Now - InsertedAt > MaxAge of
-                true -> [NodeId | Acc];
-                false -> Acc
-            end
-        end,
-        [],
-        Table
-    ),
 
+    ExpiredKeys = collect_expired_keys(Table, Now, MaxAge),
     lists:foreach(fun(Key) -> ets:delete(Table, Key) end, ExpiredKeys),
-
-    case ExpiredKeys of
-        [] -> ok;
-        _ -> ?LOG_DEBUG("NAT cache cleanup: removed ~p expired entries",
-                        [length(ExpiredKeys)])
-    end,
+    log_cleanup_result(ExpiredKeys),
 
     schedule_cleanup(),
     {noreply, State};
@@ -308,33 +294,32 @@ classify_cache_entry(_Age, _TTL, _Profile) ->
 %% @private
 %% @doc Evict oldest entry if at capacity.
 -spec maybe_evict(#state{}) -> #state{}.
-maybe_evict(#state{table = Table, max_entries = MaxEntries, evictions = Evictions} = State) ->
-    case ets:info(Table, size) >= MaxEntries of
-        true ->
-            %% Find and remove oldest entry (simple LRU)
-            case find_oldest_entry(Table) of
-                {ok, OldestKey} ->
-                    ets:delete(Table, OldestKey),
-                    State#state{evictions = Evictions + 1};
-                not_found ->
-                    State
-            end;
-        false ->
-            State
-    end.
+maybe_evict(#state{table = Table, max_entries = MaxEntries} = State) ->
+    do_maybe_evict(ets:info(Table, size) >= MaxEntries, State).
+
+do_maybe_evict(false, State) ->
+    State;
+do_maybe_evict(true, #state{table = Table, evictions = Evictions} = State) ->
+    evict_oldest_if_found(find_oldest_entry(Table), Table, State, Evictions).
+
+evict_oldest_if_found(not_found, _Table, State, _Evictions) ->
+    State;
+evict_oldest_if_found({ok, OldestKey}, Table, State, Evictions) ->
+    ets:delete(Table, OldestKey),
+    State#state{evictions = Evictions + 1}.
 
 %% @private
 %% @doc Find the oldest entry in the cache.
 -spec find_oldest_entry(ets:tid()) -> {ok, binary()} | not_found.
 find_oldest_entry(Table) ->
-    case ets:first(Table) of
-        '$end_of_table' ->
-            not_found;
-        FirstKey ->
-            %% Simple approach: just evict the first key found
-            %% For true LRU, we'd need to track access times
-            {ok, FirstKey}
-    end.
+    ets_first_to_result(ets:first(Table)).
+
+ets_first_to_result('$end_of_table') ->
+    not_found;
+ets_first_to_result(FirstKey) ->
+    %% Simple approach: just evict the first key found
+    %% For true LRU, we'd need to track access times
+    {ok, FirstKey}.
 
 %% @private
 %% @doc Schedule periodic cleanup.
@@ -343,42 +328,75 @@ schedule_cleanup() ->
     erlang:send_after(?CLEANUP_INTERVAL_MS, self(), cleanup).
 
 %% @private
+%% @doc Calculate hit rate with safe division.
+-spec calculate_hit_rate(non_neg_integer(), non_neg_integer()) -> float().
+calculate_hit_rate(_Hits, 0) ->
+    0.0;
+calculate_hit_rate(Hits, Total) ->
+    Hits / Total.
+
+%% @private
+%% @doc Collect keys of expired entries.
+-spec collect_expired_keys(ets:tid(), integer(), integer()) -> [binary()].
+collect_expired_keys(Table, Now, MaxAge) ->
+    ets:foldl(
+        fun({NodeId, _Profile, InsertedAt}, Acc) ->
+            maybe_add_expired_key(NodeId, Now - InsertedAt > MaxAge, Acc)
+        end,
+        [],
+        Table
+    ).
+
+maybe_add_expired_key(NodeId, true, Acc) -> [NodeId | Acc];
+maybe_add_expired_key(_NodeId, false, Acc) -> Acc.
+
+%% @private
+%% @doc Log cleanup result.
+-spec log_cleanup_result([binary()]) -> ok.
+log_cleanup_result([]) ->
+    ok;
+log_cleanup_result(ExpiredKeys) ->
+    ?LOG_DEBUG("NAT cache cleanup: removed ~p expired entries",
+               [length(ExpiredKeys)]).
+
+%% @private
 %% @doc Publish NAT profile to DHT for peer discovery.
-%% Key format: nat.profile.<node_id> (hashed with SHA256).
+%% Key format: nat.profile.{node_id} (hashed with SHA256).
 %% This is best-effort - continues silently if routing server unavailable.
 -spec publish_nat_profile_to_dht(binary(), nat_profile()) -> ok.
 publish_nat_profile_to_dht(NodeId, Profile) ->
-    %% Build DHT key: hash("nat.profile." ++ NodeId)
-    KeyPrefix = <<"nat.profile.">>,
-    DhtKey = crypto:hash(sha256, <<KeyPrefix/binary, NodeId/binary>>),
-
-    %% Prepare value for DHT storage (serializable format)
+    DhtKey = build_nat_dht_key(NodeId),
     DhtValue = prepare_profile_for_dht(Profile),
+    do_publish_to_dht(whereis(macula_routing_server), NodeId, DhtKey, DhtValue).
 
-    %% Try to store in DHT (best effort - don't crash on failure)
-    case whereis(macula_routing_server) of
-        undefined ->
-            ?LOG_DEBUG("NAT cache: routing server not available, skipping DHT publish for ~s",
-                       [NodeId]),
-            ok;
-        Pid ->
-            try
-                macula_routing_server:store(Pid, DhtKey, DhtValue),
-                ?LOG_DEBUG("Published NAT profile to DHT for ~s", [NodeId])
-            catch
-                _:Reason ->
-                    ?LOG_WARNING("Failed to publish NAT profile to DHT for ~s: ~p",
-                                [NodeId, Reason])
-            end,
-            ok
+do_publish_to_dht(undefined, NodeId, _DhtKey, _DhtValue) ->
+    ?LOG_DEBUG("NAT cache: routing server not available, skipping DHT publish for ~s", [NodeId]),
+    ok;
+do_publish_to_dht(Pid, NodeId, DhtKey, DhtValue) ->
+    %% Best effort - silently continue on failure
+    _ = safe_dht_store(Pid, NodeId, DhtKey, DhtValue),
+    ok.
+
+safe_dht_store(Pid, NodeId, DhtKey, DhtValue) ->
+    try
+        macula_routing_server:store(Pid, DhtKey, DhtValue),
+        ?LOG_DEBUG("Published NAT profile to DHT for ~s", [NodeId])
+    catch
+        _:Reason ->
+            ?LOG_WARNING("Failed to publish NAT profile to DHT for ~s: ~p", [NodeId, Reason])
     end.
+
+build_nat_dht_key(NodeId) ->
+    KeyPrefix = <<"nat.profile.">>,
+    crypto:hash(sha256, <<KeyPrefix/binary, NodeId/binary>>).
 
 %% @private
 %% @doc Prepare NAT profile for DHT storage.
 %% Converts atoms to binaries for MessagePack serialization.
+%% Includes optional geo-location fields if present.
 -spec prepare_profile_for_dht(nat_profile()) -> map().
 prepare_profile_for_dht(Profile) ->
-    #{
+    BaseProfile = #{
         <<"node_id">> => maps:get(node_id, Profile),
         <<"mapping_policy">> => atom_to_binary(maps:get(mapping_policy, Profile)),
         <<"filtering_policy">> => atom_to_binary(maps:get(filtering_policy, Profile)),
@@ -388,7 +406,24 @@ prepare_profile_for_dht(Profile) ->
         <<"relay_capable">> => maps:get(relay_capable, Profile, false),
         <<"detected_at">> => maps:get(detected_at, Profile, 0),
         <<"ttl_seconds">> => maps:get(ttl_seconds, Profile, ?DEFAULT_TTL_SECONDS)
-    }.
+    },
+    %% Add geo fields if present
+    add_geo_fields_to_dht_profile(Profile, BaseProfile).
+
+%% @private
+%% @doc Add geo-location fields to DHT profile if present in source profile.
+add_geo_fields_to_dht_profile(Profile, DhtProfile) ->
+    GeoFields = [
+        {latitude, <<"latitude">>},
+        {longitude, <<"longitude">>},
+        {location_label, <<"location_label">>}
+    ],
+    lists:foldl(fun({Key, DhtKey}, Acc) ->
+        case maps:get(Key, Profile, undefined) of
+            undefined -> Acc;
+            Value -> maps:put(DhtKey, Value, Acc)
+        end
+    end, DhtProfile, GeoFields).
 
 %% @private
 %% @doc Look up NAT profile from DHT.
@@ -410,6 +445,12 @@ lookup_nat_profile_from_dht(NodeId) ->
                     %% Cache locally for future lookups
                     ?MODULE:put(NodeId, Profile),
                     {ok, Profile};
+                {ok, []} ->
+                    %% DHT returned empty result - value not found
+                    not_found;
+                {ok, _OtherValue} ->
+                    %% DHT returned unexpected format
+                    not_found;
                 {nodes, _Nodes} ->
                     %% Value not found in DHT
                     not_found;
@@ -420,9 +461,10 @@ lookup_nat_profile_from_dht(NodeId) ->
 
 %% @private
 %% @doc Parse NAT profile from DHT format back to internal format.
+%% Includes optional geo-location fields if present.
 -spec parse_profile_from_dht(map()) -> nat_profile().
 parse_profile_from_dht(DhtValue) ->
-    #{
+    BaseProfile = #{
         node_id => maps:get(<<"node_id">>, DhtValue),
         mapping_policy => binary_to_existing_atom(maps:get(<<"mapping_policy">>, DhtValue, <<"ei">>), utf8),
         filtering_policy => binary_to_existing_atom(maps:get(<<"filtering_policy">>, DhtValue, <<"ei">>), utf8),
@@ -432,4 +474,21 @@ parse_profile_from_dht(DhtValue) ->
         relay_capable => maps:get(<<"relay_capable">>, DhtValue, false),
         detected_at => maps:get(<<"detected_at">>, DhtValue, 0),
         ttl_seconds => maps:get(<<"ttl_seconds">>, DhtValue, ?DEFAULT_TTL_SECONDS)
-    }.
+    },
+    %% Add geo fields if present in DHT value
+    parse_geo_fields_from_dht(DhtValue, BaseProfile).
+
+%% @private
+%% @doc Parse geo-location fields from DHT value if present.
+parse_geo_fields_from_dht(DhtValue, Profile) ->
+    GeoFields = [
+        {<<"latitude">>, latitude},
+        {<<"longitude">>, longitude},
+        {<<"location_label">>, location_label}
+    ],
+    lists:foldl(fun({DhtKey, Key}, Acc) ->
+        case maps:get(DhtKey, DhtValue, undefined) of
+            undefined -> Acc;
+            Value -> maps:put(Key, Value, Acc)
+        end
+    end, Profile, GeoFields).

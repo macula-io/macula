@@ -339,3 +339,133 @@ encode_decode_symmetry_test() ->
         {ok, {DecodedType, _DecodedMsg}} = macula_protocol_decoder:decode(Encoded),
         ?assertEqual(Type, DecodedType)
     end, Messages).
+
+%%%===================================================================
+%%% NAT Traversal Message Roundtrip Tests (v0.12.0)
+%%%===================================================================
+
+%% Sample NAT messages for testing
+sample_nat_probe_msg() ->
+    #{
+        node_id => crypto:strong_rand_bytes(32),
+        local_port => 4433
+    }.
+
+sample_nat_probe_reply_msg() ->
+    #{
+        node_id => crypto:strong_rand_bytes(32),
+        reflexive_ip => <<"192.0.2.1">>,
+        reflexive_port => 54321,
+        server_time => erlang:system_time(millisecond)
+    }.
+
+sample_punch_request_msg() ->
+    #{
+        session_id => crypto:strong_rand_bytes(16),
+        requester_id => crypto:strong_rand_bytes(32),
+        target_id => crypto:strong_rand_bytes(32)
+    }.
+
+sample_punch_coordinate_msg() ->
+    #{
+        session_id => crypto:strong_rand_bytes(16),
+        peer_id => crypto:strong_rand_bytes(32),
+        peer_host => <<"192.0.2.100">>,
+        peer_ports => [4433, 4434, 4435],
+        punch_time => erlang:system_time(millisecond) + 1000,
+        role => initiator
+    }.
+
+sample_punch_result_msg() ->
+    #{
+        session_id => crypto:strong_rand_bytes(16),
+        success => true,
+        connected_port => 4433
+    }.
+
+sample_relay_request_msg() ->
+    #{
+        session_id => crypto:strong_rand_bytes(16),
+        target_id => crypto:strong_rand_bytes(32),
+        reason => nat_symmetric
+    }.
+
+sample_relay_data_msg() ->
+    #{
+        session_id => crypto:strong_rand_bytes(16),
+        payload => <<"Hello via relay">>
+    }.
+
+%% Roundtrip tests for NAT messages
+roundtrip_nat_probe_preserves_data_test() ->
+    OrigMsg = sample_nat_probe_msg(),
+    Encoded = encode_message(nat_probe, OrigMsg),
+    {ok, {nat_probe, Decoded}} = macula_protocol_decoder:decode(Encoded),
+    ?assertEqual(maps:get(node_id, OrigMsg), maps:get(<<"node_id">>, Decoded)),
+    ?assertEqual(maps:get(local_port, OrigMsg), maps:get(<<"local_port">>, Decoded)).
+
+roundtrip_nat_probe_reply_preserves_data_test() ->
+    OrigMsg = sample_nat_probe_reply_msg(),
+    Encoded = encode_message(nat_probe_reply, OrigMsg),
+    {ok, {nat_probe_reply, Decoded}} = macula_protocol_decoder:decode(Encoded),
+    ?assertEqual(maps:get(node_id, OrigMsg), maps:get(<<"node_id">>, Decoded)),
+    ?assertEqual(maps:get(reflexive_ip, OrigMsg), maps:get(<<"reflexive_ip">>, Decoded)),
+    ?assertEqual(maps:get(reflexive_port, OrigMsg), maps:get(<<"reflexive_port">>, Decoded)),
+    ?assertEqual(maps:get(server_time, OrigMsg), maps:get(<<"server_time">>, Decoded)).
+
+roundtrip_punch_request_preserves_data_test() ->
+    OrigMsg = sample_punch_request_msg(),
+    Encoded = encode_message(punch_request, OrigMsg),
+    {ok, {punch_request, Decoded}} = macula_protocol_decoder:decode(Encoded),
+    ?assertEqual(maps:get(session_id, OrigMsg), maps:get(<<"session_id">>, Decoded)),
+    ?assertEqual(maps:get(requester_id, OrigMsg), maps:get(<<"requester_id">>, Decoded)),
+    ?assertEqual(maps:get(target_id, OrigMsg), maps:get(<<"target_id">>, Decoded)).
+
+roundtrip_punch_coordinate_preserves_data_test() ->
+    OrigMsg = sample_punch_coordinate_msg(),
+    Encoded = encode_message(punch_coordinate, OrigMsg),
+    {ok, {punch_coordinate, Decoded}} = macula_protocol_decoder:decode(Encoded),
+    ?assertEqual(maps:get(session_id, OrigMsg), maps:get(<<"session_id">>, Decoded)),
+    ?assertEqual(maps:get(peer_id, OrigMsg), maps:get(<<"peer_id">>, Decoded)),
+    ?assertEqual(maps:get(peer_host, OrigMsg), maps:get(<<"peer_host">>, Decoded)),
+    ?assertEqual(maps:get(peer_ports, OrigMsg), maps:get(<<"peer_ports">>, Decoded)),
+    ?assertEqual(maps:get(punch_time, OrigMsg), maps:get(<<"punch_time">>, Decoded)).
+
+roundtrip_punch_result_preserves_data_test() ->
+    OrigMsg = sample_punch_result_msg(),
+    Encoded = encode_message(punch_result, OrigMsg),
+    {ok, {punch_result, Decoded}} = macula_protocol_decoder:decode(Encoded),
+    ?assertEqual(maps:get(session_id, OrigMsg), maps:get(<<"session_id">>, Decoded)),
+    ?assertEqual(maps:get(success, OrigMsg), maps:get(<<"success">>, Decoded)),
+    ?assertEqual(maps:get(connected_port, OrigMsg), maps:get(<<"connected_port">>, Decoded)).
+
+roundtrip_relay_request_preserves_data_test() ->
+    OrigMsg = sample_relay_request_msg(),
+    Encoded = encode_message(relay_request, OrigMsg),
+    {ok, {relay_request, Decoded}} = macula_protocol_decoder:decode(Encoded),
+    ?assertEqual(maps:get(session_id, OrigMsg), maps:get(<<"session_id">>, Decoded)),
+    ?assertEqual(maps:get(target_id, OrigMsg), maps:get(<<"target_id">>, Decoded)).
+
+roundtrip_relay_data_preserves_data_test() ->
+    OrigMsg = sample_relay_data_msg(),
+    Encoded = encode_message(relay_data, OrigMsg),
+    {ok, {relay_data, Decoded}} = macula_protocol_decoder:decode(Encoded),
+    ?assertEqual(maps:get(session_id, OrigMsg), maps:get(<<"session_id">>, Decoded)),
+    ?assertEqual(maps:get(payload, OrigMsg), maps:get(<<"payload">>, Decoded)).
+
+%% Extended symmetry test including NAT messages
+encode_decode_nat_symmetry_test() ->
+    Messages = [
+        {nat_probe, sample_nat_probe_msg()},
+        {nat_probe_reply, sample_nat_probe_reply_msg()},
+        {punch_request, sample_punch_request_msg()},
+        {punch_coordinate, sample_punch_coordinate_msg()},
+        {punch_result, sample_punch_result_msg()},
+        {relay_request, sample_relay_request_msg()},
+        {relay_data, sample_relay_data_msg()}
+    ],
+    lists:foreach(fun({Type, Msg}) ->
+        Encoded = encode_message(Type, Msg),
+        {ok, {DecodedType, _DecodedMsg}} = macula_protocol_decoder:decode(Encoded),
+        ?assertEqual(Type, DecodedType)
+    end, Messages).

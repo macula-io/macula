@@ -22,6 +22,8 @@
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([start_link/1]).
 -export([get_leader/0, is_leader/0, get_members/0]).
@@ -79,7 +81,7 @@ init(Config) ->
     NodeId = maps:get(node_id, Config),
     Realm = maps:get(realm, Config),
 
-    io:format("[LeaderElection] Initializing for node ~s in realm ~s~n",
+    ?LOG_INFO("Initializing for node ~s in realm ~s",
               [NodeId, Realm]),
 
     %% Create unique server ID for this node
@@ -100,7 +102,7 @@ init(Config) ->
     %% (allows mesh to stabilize)
     erlang:send_after(5000, self(), init_cluster),
 
-    io:format("[LeaderElection] Waiting for mesh to stabilize before initializing Raft cluster~n"),
+    ?LOG_INFO("Waiting for mesh to stabilize before initializing Raft cluster"),
 
     {ok, State}.
 
@@ -128,8 +130,8 @@ handle_call({register_callback, CallbackId, Fun}, _From, State) ->
                 Fun(IsLeader)
             catch
                 Class:Reason:Stacktrace ->
-                    io:format("[LeaderElection] ERROR: Callback ~p failed on registration: ~p:~p~n~p~n",
-                             [CallbackId, Class, Reason, Stacktrace])
+                    ?LOG_ERROR("Callback ~p failed on registration: ~p:~p~n~p",
+                              [CallbackId, Class, Reason, Stacktrace])
             end
     end,
 
@@ -143,7 +145,7 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(init_cluster, State) ->
-    io:format("[LeaderElection] Initializing Raft cluster~n"),
+    ?LOG_INFO("Initializing Raft cluster"),
 
     %% For initial implementation, create a single-node cluster
     %% TODO: Discover peers via DHT and add them to cluster
@@ -153,11 +155,11 @@ handle_info(init_cluster, State) ->
     %% Start ra system if not already started
     case ra:start() of
         ok ->
-            io:format("[LeaderElection] Ra system started~n");
+            ?LOG_INFO("Ra system started");
         {error, {already_started, _}} ->
-            io:format("[LeaderElection] Ra system already running~n");
+            ?LOG_INFO("Ra system already running");
         {error, Reason} ->
-            io:format("[LeaderElection] ERROR: Failed to start ra: ~p~n", [Reason])
+            ?LOG_ERROR("Failed to start ra: ~p", [Reason])
     end,
 
     %% Define the ra server configuration
@@ -179,14 +181,14 @@ handle_info(init_cluster, State) ->
     %% Start the ra server
     case ra:start_server(ServerConfig) of
         ok ->
-            io:format("[LeaderElection] Ra server started: ~p~n", [ServerId]),
+            ?LOG_INFO("Ra server started: ~p", [ServerId]),
 
             %% Trigger election
             case ra:trigger_election(ServerId) of
                 ok ->
-                    io:format("[LeaderElection] Election triggered~n");
+                    ?LOG_INFO("Election triggered");
                 {error, ElectReason} ->
-                    io:format("[LeaderElection] WARN: Election trigger failed: ~p~n", [ElectReason])
+                    ?LOG_WARNING("Election trigger failed: ~p", [ElectReason])
             end,
 
             %% Start checking for leader immediately (Khepri pattern: aggressive polling initially)
@@ -195,13 +197,13 @@ handle_info(init_cluster, State) ->
             {noreply, State#state{members = [ServerId]}};
 
         {error, {already_started, _}} ->
-            io:format("[LeaderElection] Ra server already started~n"),
+            ?LOG_INFO("Ra server already started"),
             %% Start checking immediately
             erlang:send_after(500, self(), check_leader),
             {noreply, State#state{members = [ServerId]}};
 
         {error, StartReason} ->
-            io:format("[LeaderElection] ERROR: Failed to start ra server: ~p~n", [StartReason]),
+            ?LOG_ERROR("Failed to start ra server: ~p", [StartReason]),
             %% Retry after delay
             erlang:send_after(5000, self(), init_cluster),
             {noreply, State}
@@ -213,8 +215,8 @@ handle_info(check_leader, State) ->
     %% Query ra for current leader with timeout (Khepri pattern)
     NewLeader = case ra:members(ServerId, 2000) of
         {ok, Members, Leader} ->
-            io:format("[LeaderElection] Cluster state - Members: ~p, Leader: ~p~n",
-                     [Members, Leader]),
+            ?LOG_DEBUG("Cluster state - Members: ~p, Leader: ~p",
+                      [Members, Leader]),
 
             OldLeader = State#state.leader,
 
@@ -223,13 +225,13 @@ handle_info(check_leader, State) ->
                 {Leader, Leader} ->
                     ok;  % No change
                 {_, undefined} ->
-                    io:format("[LeaderElection] No leader elected yet, retrying...~n");
+                    ?LOG_DEBUG("No leader elected yet, retrying...");
                 {undefined, Leader} when Leader =/= undefined ->
-                    io:format("[LeaderElection] Leader elected: ~p~n", [Leader]),
+                    ?LOG_INFO("Leader elected: ~p", [Leader]),
                     IsLeader = (ServerId =:= Leader),
                     notify_callbacks(IsLeader, State#state.callbacks);
                 {OldLeader, Leader} when OldLeader =/= Leader ->
-                    io:format("[LeaderElection] Leadership changed: ~p -> ~p~n",
+                    ?LOG_INFO("Leadership changed: ~p -> ~p",
                              [OldLeader, Leader]),
                     IsLeader = (ServerId =:= Leader),
                     notify_callbacks(IsLeader, State#state.callbacks)
@@ -238,11 +240,11 @@ handle_info(check_leader, State) ->
             Leader;
 
         {timeout, _} ->
-            io:format("[LeaderElection] Timeout querying ra members, will retry~n"),
+            ?LOG_WARNING("Timeout querying ra members, will retry"),
             State#state.leader;
 
         {error, Reason} ->
-            io:format("[LeaderElection] ERROR: Failed to query ra members: ~p, will retry~n", [Reason]),
+            ?LOG_ERROR("Failed to query ra members: ~p, will retry", [Reason]),
             State#state.leader
     end,
 
@@ -273,8 +275,8 @@ notify_callbacks(IsLeader, Callbacks) ->
                 Fun(IsLeader)
             catch
                 Class:Reason:Stacktrace ->
-                    io:format("[LeaderElection] ERROR: Callback ~p failed: ~p:~p~n~p~n",
-                             [CallbackId, Class, Reason, Stacktrace])
+                    ?LOG_ERROR("Callback ~p failed: ~p:~p~n~p",
+                              [CallbackId, Class, Reason, Stacktrace])
             end
         end,
         Callbacks

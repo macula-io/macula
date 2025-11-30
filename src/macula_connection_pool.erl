@@ -65,14 +65,15 @@ create_connection(Endpoint, NodeId, RealmId, Pool) when is_map(Pool) ->
         {Host, Port} ->
             ?LOG_INFO("Creating connection to endpoint: ~s:~p", [Host, Port]),
 
-            %% Connect via QUIC with proper keep-alive settings
-            QuicOpts = [
+            %% Connect via QUIC with TLS configuration from macula_tls (v0.11.0+)
+            %% Use hostname-aware TLS options for certificate verification
+            TlsOpts = macula_tls:quic_client_opts_with_hostname(Host),
+            QuicOpts = merge_quic_opts([
                 {alpn, ["macula"]},
-                {verify, none},  %% TODO(v0.9.0): Add proper TLS verification - see TODO.md
                 {idle_timeout_ms, 60000},
                 {keep_alive_interval_ms, 20000},
                 {handshake_idle_timeout_ms, 30000}
-            ],
+            ], TlsOpts),
 
             ConnectResult = try
                 macula_quic:connect(Host, Port, QuicOpts, ?DEFAULT_TIMEOUT)
@@ -155,6 +156,18 @@ close_all_connections(Pool) when is_map(Pool) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% @doc Merge QUIC options, with second list taking precedence.
+%% @private
+-spec merge_quic_opts(list(), list()) -> list().
+merge_quic_opts(BaseOpts, OverrideOpts) ->
+    lists:foldl(
+        fun({Key, Value}, Acc) ->
+            lists:keystore(Key, 1, Acc, {Key, Value})
+        end,
+        BaseOpts,
+        OverrideOpts
+    ).
 
 %% @doc Send CONNECT message through a stream.
 -spec send_connect_message(pid(), map()) -> ok | {error, term()}.

@@ -1,0 +1,156 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_nat_cache</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_nat_cache</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+NAT Profile Cache with TTL and Stale-While-Revalidate.
+
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>   
+NAT Profile Cache with TTL and Stale-While-Revalidate.</p>
+  
+   <p>Caches NAT profiles for peers to avoid repeated detection overhead.   
+Implements stale-while-revalidate pattern:   
+- Fresh (0-TTL): Use immediately   
+- Stale (TTL to TTL+60s): Use but trigger background refresh   
+- Expired (&gt;TTL+60s): Must re-detect</p>
+  
+   <p>Based on NATCracker methodology, NAT profiles include:   
+- Mapping policy: EI (Endpoint-Independent), HD (Host-Dependent), PD (Port-Dependent)   
+- Filtering policy: EI, HD, PD   
+- Allocation policy: PP (Port-Preservation), PC (Port-Contiguity), RD (Random)</p>
+  
+   Uses ETS for O(1) lookups with bounded memory via LRU eviction.
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-allocation_policy">allocation_policy()</a></h3>
+<p><code>allocation_policy() = pp | pc | rd</code></p>
+
+
+<h3 class="typedecl"><a name="type-filtering_policy">filtering_policy()</a></h3>
+<p><code>filtering_policy() = ei | hd | pd</code></p>
+
+
+<h3 class="typedecl"><a name="type-mapping_policy">mapping_policy()</a></h3>
+<p><code>mapping_policy() = ei | hd | pd</code></p>
+
+
+<h3 class="typedecl"><a name="type-nat_profile">nat_profile()</a></h3>
+<p><code>nat_profile() = #{node_id := binary(), mapping_policy := <a href="#type-mapping_policy" docgen-rel="seetype" docgen-href="#mapping_policy/0">mapping_policy()</a>, filtering_policy := <a href="#type-filtering_policy" docgen-rel="seetype" docgen-href="#filtering_policy/0">filtering_policy()</a>, allocation_policy := <a href="#type-allocation_policy" docgen-rel="seetype" docgen-href="#allocation_policy/0">allocation_policy()</a>, reflexive_address =&gt; {<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-ip_address" docgen-rel="seetype" docgen-href="kernel:inet#ip_address/0">inet:ip_address()</a>, <a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>}, port_delta =&gt; integer(), can_receive_unsolicited := boolean(), requires_relay := boolean(), relay_capable := boolean(), detected_at := integer(), ttl_seconds := pos_integer(), latitude =&gt; float(), longitude =&gt; float(), location_label =&gt; binary()}</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#clear-0">clear/0</a></td><td>Clear all cached NAT profiles.</td></tr>
+<tr><td valign="top"><a href="#get-1">get/1</a></td><td>Get NAT profile for a node ID from local cache.</td></tr>
+<tr><td valign="top"><a href="#get_from_dht-1">get_from_dht/1</a></td><td>Get NAT profile from DHT (remote lookup).</td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#invalidate-1">invalidate/1</a></td><td>Invalidate NAT profile for a node ID.</td></tr>
+<tr><td valign="top"><a href="#put-2">put/2</a></td><td>Store NAT profile with default TTL.</td></tr>
+<tr><td valign="top"><a href="#put-3">put/3</a></td><td>Store NAT profile with custom TTL.</td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td>Start the NAT cache server.</td></tr>
+<tr><td valign="top"><a href="#stats-0">stats/0</a></td><td>Get cache statistics.</td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="clear-0">clear/0</a></h3>
+<div class="spec">
+<p><code>clear() -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Clear all cached NAT profiles.</p>
+
+<h3 class="function"><a name="get-1">get/1</a></h3>
+<div class="spec">
+<p><code>get(NodeId::binary()) -&gt; {ok, <a href="#type-nat_profile" docgen-rel="seetype" docgen-href="#nat_profile/0">nat_profile()</a>, fresh | stale} | not_found</code><br></p>
+<p> </p>
+</div><p>Get NAT profile for a node ID from local cache.
+  Returns {ok, Profile, Status} where Status is fresh | stale
+  Returns not_found if not in cache or expired.</p>
+
+<h3 class="function"><a name="get_from_dht-1">get_from_dht/1</a></h3>
+<div class="spec">
+<p><code>get_from_dht(NodeId::binary()) -&gt; {ok, <a href="#type-nat_profile" docgen-rel="seetype" docgen-href="#nat_profile/0">nat_profile()</a>} | not_found | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Get NAT profile from DHT (remote lookup).
+  First checks local cache, then falls back to DHT query.
+  Caches result locally if found in DHT.
+  Returns {ok, Profile} | not_found | {error, Reason}.</p>
+
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="invalidate-1">invalidate/1</a></h3>
+<div class="spec">
+<p><code>invalidate(NodeId::binary()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Invalidate NAT profile for a node ID.</p>
+
+<h3 class="function"><a name="put-2">put/2</a></h3>
+<div class="spec">
+<p><code>put(NodeId::binary(), Profile::<a href="#type-nat_profile" docgen-rel="seetype" docgen-href="#nat_profile/0">nat_profile()</a>) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Store NAT profile with default TTL.</p>
+
+<h3 class="function"><a name="put-3">put/3</a></h3>
+<div class="spec">
+<p><code>put(NodeId::binary(), Profile::<a href="#type-nat_profile" docgen-rel="seetype" docgen-href="#nat_profile/0">nat_profile()</a>, TTL::pos_integer()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Store NAT profile with custom TTL.</p>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Opts::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the NAT cache server.</p>
+
+<h3 class="function"><a name="stats-0">stats/0</a></h3>
+<div class="spec">
+<p><code>stats() -&gt; #{size := non_neg_integer(), max_entries := pos_integer(), hits := non_neg_integer(), misses := non_neg_integer(), evictions := non_neg_integer(), hit_rate := float()}</code><br></p>
+<p> </p>
+</div><p>Get cache statistics.</p>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

@@ -20,6 +20,8 @@
 %%%-------------------------------------------------------------------
 -module(macula_gateway_dht).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([
     handle_store/2,
@@ -37,15 +39,14 @@
 %%%===================================================================
 
 %% @doc Handle DHT STORE message.
-%% Forwards to routing server (no reply sent back).
-%% Crashes on routing server failures - this exposes DHT issues immediately.
+%% Forwards to routing server asynchronously (fire-and-forget, no reply needed).
+%% Uses async handler to prevent blocking the gateway on DHT operations.
 -spec handle_store(pid(), map()) -> ok.
 handle_store(_Stream, StoreMsg) ->
-    %% Forward to routing server (let it crash on errors)
-    io:format("[DHT] Processing STORE message, forwarding to routing_server~n"),
-    Reply = macula_routing_server:handle_message(macula_routing_server, StoreMsg),
-    io:format("[DHT] STORE reply from routing_server: ~p~n", [Reply]),
-    %% STORE doesn't require a response to be sent back
+    %% Forward to routing server asynchronously (fire-and-forget)
+    %% STORE doesn't require a response, so we don't wait
+    ?LOG_DEBUG("Processing STORE message, forwarding to routing_server (async)"),
+    macula_routing_server:handle_message_async(macula_routing_server, StoreMsg),
     ok.
 
 %% @doc Handle DHT FIND_VALUE message.
@@ -94,47 +95,41 @@ handle_query(FromPid, _QueryType, QueryData) ->
 %% Returns list of subscribers for the given key.
 -spec lookup_value(binary()) -> {ok, list()} | {error, not_found}.
 lookup_value(Key) ->
-    io:format("[DHT] lookup_value called with key hash: ~p~n", [Key]),
-    case whereis(macula_routing_server) of
-        undefined ->
-            io:format("[DHT] ERROR: routing_server not found!~n"),
-            {error, not_found};
-        RoutingServerPid ->
-            %% K=20 is the standard Kademlia replication factor
-            io:format("[DHT] Calling routing_server:find_value...~n"),
-            Result = macula_routing_server:find_value(RoutingServerPid, Key, 20),
-            io:format("[DHT] find_value result: ~p~n", [Result]),
-            case Result of
-                {ok, []} ->
-                    {error, not_found};
-                {ok, Value} when is_list(Value) ->
-                    {ok, Value};
-                {ok, Value} ->
-                    %% Single value, wrap in list
-                    {ok, [Value]};
-                {error, Reason} ->
-                    {error, Reason}
-            end
-    end.
+    ?LOG_DEBUG("lookup_value called with key hash: ~p", [Key]),
+    do_lookup_value(whereis(macula_routing_server), Key).
+
+do_lookup_value(undefined, _Key) ->
+    ?LOG_ERROR("routing_server not found!"),
+    {error, not_found};
+do_lookup_value(RoutingServerPid, Key) ->
+    %% K=20 is the standard Kademlia replication factor
+    ?LOG_DEBUG("Calling routing_server:find_value..."),
+    Result = macula_routing_server:find_value(RoutingServerPid, Key, 20),
+    ?LOG_DEBUG("find_value result: ~p", [Result]),
+    normalize_find_value_result(Result).
+
+normalize_find_value_result({ok, []}) ->
+    {error, not_found};
+normalize_find_value_result({ok, Value}) when is_list(Value) ->
+    {ok, Value};
+normalize_find_value_result({ok, Value}) ->
+    %% Single value, wrap in list
+    {ok, [Value]};
+normalize_find_value_result({error, Reason}) ->
+    {error, Reason}.
 
 %% @doc Forward a PUBLISH message to the bootstrap gateway for distribution.
 %% The bootstrap has all DHT subscriptions and can distribute to all subscribers.
 %% This avoids the problem of local DHT not having remote peer subscriptions.
 -spec forward_publish_to_bootstrap(map()) -> ok | {error, term()}.
 forward_publish_to_bootstrap(PubMsg) ->
-    %% Find the connection PID (connects to bootstrap)
     Realm = application:get_env(macula, realm, <<"default">>),
-    case gproc:lookup_local_name({connection, Realm}) of
-        undefined ->
-            {error, no_connection};
-        ConnPid ->
-            case macula_connection:send_message(ConnPid, publish, PubMsg) of
-                ok ->
-                    ok;
-                {error, Reason} ->
-                    {error, Reason}
-            end
-    end.
+    do_forward_to_bootstrap(gproc:lookup_local_name({connection, Realm}), PubMsg).
+
+do_forward_to_bootstrap(undefined, _PubMsg) ->
+    {error, no_connection};
+do_forward_to_bootstrap(ConnPid, PubMsg) ->
+    macula_connection:send_message(ConnPid, publish, PubMsg).
 
 %%%===================================================================
 %%% Internal functions
@@ -144,43 +139,46 @@ forward_publish_to_bootstrap(PubMsg) ->
 %% Used for STORE operations that don't need a response.
 -spec send_to_peer(map(), atom(), map()) -> ok | {error, term()}.
 send_to_peer(NodeInfo, MessageType, Message) ->
-    %% Extract endpoint - either from endpoint field or construct from address
-    Endpoint = case maps:get(endpoint, NodeInfo, undefined) of
-        undefined ->
-            %% No endpoint, try to construct from address tuple
-            case maps:get(address, NodeInfo, undefined) of
-                undefined ->
-                    undefined;
-                {Host, Port} when is_integer(Port) ->
-                    %% Construct "host:port" string from address tuple
-                    %% Note: peer_connector expects "host:port" format, NOT URL
-                    HostBin = case Host of
-                        {_, _, _, _} -> list_to_binary(inet:ntoa(Host));  % IPv4
-                        {_, _, _, _, _, _, _, _} -> list_to_binary(inet:ntoa(Host));  % IPv6
-                        _ when is_list(Host) -> list_to_binary(Host);
-                        _ when is_binary(Host) -> Host
-                    end,
-                    PortBin = integer_to_binary(Port),
-                    <<HostBin/binary, ":", PortBin/binary>>;
-                HostPortStr when is_binary(HostPortStr) ->
-                    %% Address is already a "host:port" string
-                    HostPortStr;
-                HostPortStr when is_list(HostPortStr) ->
-                    %% Address is a "host:port" string (as list), convert to binary
-                    list_to_binary(HostPortStr);
-                _Other ->
-                    undefined
-            end;
-        Ep -> Ep
-    end,
+    Endpoint = extract_endpoint(NodeInfo),
+    do_send_to_peer(Endpoint, MessageType, Message).
 
-    case Endpoint of
-        undefined ->
-            {error, no_endpoint};
-        _ ->
-            %% Send directly via peer connector (establishes QUIC connection)
-            macula_peer_connector:send_message(Endpoint, MessageType, Message)
-    end.
+do_send_to_peer(undefined, _MessageType, _Message) ->
+    {error, no_endpoint};
+do_send_to_peer(Endpoint, MessageType, Message) ->
+    %% Send directly via peer connector (establishes QUIC connection)
+    macula_peer_connector:send_message(Endpoint, MessageType, Message).
+
+%% @private
+%% @doc Extract endpoint from node info, constructing from address if needed.
+extract_endpoint(NodeInfo) ->
+    extract_endpoint_from_field(maps:get(endpoint, NodeInfo, undefined), NodeInfo).
+
+extract_endpoint_from_field(undefined, NodeInfo) ->
+    construct_endpoint_from_address(maps:get(address, NodeInfo, undefined));
+extract_endpoint_from_field(Endpoint, _NodeInfo) ->
+    Endpoint.
+
+construct_endpoint_from_address(undefined) ->
+    undefined;
+construct_endpoint_from_address({Host, Port}) when is_integer(Port) ->
+    HostBin = format_host_to_binary(Host),
+    PortBin = integer_to_binary(Port),
+    <<HostBin/binary, ":", PortBin/binary>>;
+construct_endpoint_from_address(HostPortStr) when is_binary(HostPortStr) ->
+    HostPortStr;
+construct_endpoint_from_address(HostPortStr) when is_list(HostPortStr) ->
+    list_to_binary(HostPortStr);
+construct_endpoint_from_address(_Other) ->
+    undefined.
+
+format_host_to_binary({_, _, _, _} = IPv4) ->
+    list_to_binary(inet:ntoa(IPv4));
+format_host_to_binary({_, _, _, _, _, _, _, _} = IPv6) ->
+    list_to_binary(inet:ntoa(IPv6));
+format_host_to_binary(Host) when is_list(Host) ->
+    list_to_binary(Host);
+format_host_to_binary(Host) when is_binary(Host) ->
+    Host.
 
 %% @doc Query remote peer and wait for response.
 %% Used for FIND_NODE and FIND_VALUE operations.

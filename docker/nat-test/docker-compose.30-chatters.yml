@@ -1,0 +1,530 @@
+# 30 Chatter Peers - Mixed NAT Environment
+# Distribution: 10 Full Cone + 10 Restricted + 10 Symmetric
+#
+# Purpose: Test NAT traversal and mesh networking at scale
+# with peers behind different NAT types chatting endlessly.
+
+x-peer-common: &peer-common
+  build:
+    context: ../..
+    dockerfile: docker/nat-test/Dockerfile
+  cap_add:
+    - NET_ADMIN
+
+x-peer-env: &peer-env
+  NODE_TYPE: peer
+  BOOTSTRAP_HOST: 10.100.0.10
+  BOOTSTRAP_PORT: 4433
+  MACULA_QUIC_PORT: 4433
+  GATEWAY_PORT: 4433
+  HEALTH_PORT: 8080
+  MACULA_REALM: com.macula.chatter
+  MACULA_TLS_MODE: development
+  TLS_CERT_FILE: /opt/macula/certs/cert.pem
+  TLS_KEY_FILE: /opt/macula/certs/key.pem
+  MACULA_BOOTSTRAP_PEERS: https://10.100.0.10:4433
+
+services:
+  # ============================================================
+  # PUBLIC BOOTSTRAP/RELAY NODE
+  # ============================================================
+  bootstrap:
+    <<: *peer-common
+    container_name: chatter-bootstrap
+    hostname: bootstrap
+    networks:
+      public:
+        ipv4_address: 10.100.0.10
+    environment:
+      NODE_TYPE: bootstrap
+      NODE_ID: bootstrap
+      QUIC_PORT: 4433
+      HTTP_PORT: 8080
+      RELAY_ENABLED: "true"
+      MACULA_QUIC_PORT: 4433
+      GATEWAY_PORT: 4433
+      HEALTH_PORT: 8080
+      MACULA_REALM: com.macula.chatter
+      MACULA_TLS_MODE: development
+      TLS_CERT_FILE: /opt/macula/certs/cert.pem
+      TLS_KEY_FILE: /opt/macula/certs/key.pem
+      MACULA_HOSTNAME: 10.100.0.10
+    ports:
+      - "18080:8080"
+      - "14433:4433/udp"
+
+  # ============================================================
+  # FULL CONE NAT - 10 Peers (fc01 - fc10)
+  # Easiest NAT type - any external host can connect back
+  # ============================================================
+  router-fullcone:
+    image: alpine:latest
+    container_name: chatter-router-fullcone
+    hostname: router-fullcone
+    networks:
+      public:
+        ipv4_address: 10.100.0.20
+      nat_full_cone:
+        ipv4_address: 172.31.1.2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: >
+      sh -c "
+        apk add --no-cache iptables iproute2 &&
+        PUBLIC_IF=$$(ip -o addr | grep '10.100.0' | awk '{print $$2}') &&
+        INTERNAL_IF=$$(ip -o addr | grep '172.31.1' | awk '{print $$2}') &&
+        iptables -t nat -A POSTROUTING -o $$PUBLIC_IF -j MASQUERADE &&
+        iptables -A FORWARD -i $$INTERNAL_IF -o $$PUBLIC_IF -j ACCEPT &&
+        iptables -A FORWARD -i $$PUBLIC_IF -o $$INTERNAL_IF -j ACCEPT &&
+        echo 'Full Cone NAT router ready' &&
+        tail -f /dev/null
+      "
+
+  fc01:
+    <<: *peer-common
+    container_name: chatter-fc01
+    hostname: fc01
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.10
+    environment:
+      <<: *peer-env
+      NODE_ID: fc01
+    depends_on: [bootstrap, router-fullcone]
+
+  fc02:
+    <<: *peer-common
+    container_name: chatter-fc02
+    hostname: fc02
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.11
+    environment:
+      <<: *peer-env
+      NODE_ID: fc02
+    depends_on: [bootstrap, router-fullcone]
+
+  fc03:
+    <<: *peer-common
+    container_name: chatter-fc03
+    hostname: fc03
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.12
+    environment:
+      <<: *peer-env
+      NODE_ID: fc03
+    depends_on: [bootstrap, router-fullcone]
+
+  fc04:
+    <<: *peer-common
+    container_name: chatter-fc04
+    hostname: fc04
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.13
+    environment:
+      <<: *peer-env
+      NODE_ID: fc04
+    depends_on: [bootstrap, router-fullcone]
+
+  fc05:
+    <<: *peer-common
+    container_name: chatter-fc05
+    hostname: fc05
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.14
+    environment:
+      <<: *peer-env
+      NODE_ID: fc05
+    depends_on: [bootstrap, router-fullcone]
+
+  fc06:
+    <<: *peer-common
+    container_name: chatter-fc06
+    hostname: fc06
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.15
+    environment:
+      <<: *peer-env
+      NODE_ID: fc06
+    depends_on: [bootstrap, router-fullcone]
+
+  fc07:
+    <<: *peer-common
+    container_name: chatter-fc07
+    hostname: fc07
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.16
+    environment:
+      <<: *peer-env
+      NODE_ID: fc07
+    depends_on: [bootstrap, router-fullcone]
+
+  fc08:
+    <<: *peer-common
+    container_name: chatter-fc08
+    hostname: fc08
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.17
+    environment:
+      <<: *peer-env
+      NODE_ID: fc08
+    depends_on: [bootstrap, router-fullcone]
+
+  fc09:
+    <<: *peer-common
+    container_name: chatter-fc09
+    hostname: fc09
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.18
+    environment:
+      <<: *peer-env
+      NODE_ID: fc09
+    depends_on: [bootstrap, router-fullcone]
+
+  fc10:
+    <<: *peer-common
+    container_name: chatter-fc10
+    hostname: fc10
+    networks:
+      nat_full_cone:
+        ipv4_address: 172.31.1.19
+    environment:
+      <<: *peer-env
+      NODE_ID: fc10
+    depends_on: [bootstrap, router-fullcone]
+
+  # ============================================================
+  # RESTRICTED CONE NAT - 10 Peers (rc01 - rc10)
+  # Medium difficulty - must have sent traffic to external IP first
+  # ============================================================
+  router-restricted:
+    image: alpine:latest
+    container_name: chatter-router-restricted
+    hostname: router-restricted
+    networks:
+      public:
+        ipv4_address: 10.100.0.21
+      nat_restricted:
+        ipv4_address: 172.32.1.2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: >
+      sh -c "
+        apk add --no-cache iptables iproute2 &&
+        PUBLIC_IF=$$(ip -o addr | grep '10.100.0' | awk '{print $$2}') &&
+        INTERNAL_IF=$$(ip -o addr | grep '172.32.1' | awk '{print $$2}') &&
+        iptables -t nat -A POSTROUTING -o $$PUBLIC_IF -j MASQUERADE &&
+        iptables -A FORWARD -i $$INTERNAL_IF -o $$PUBLIC_IF -j ACCEPT &&
+        iptables -A FORWARD -i $$PUBLIC_IF -o $$INTERNAL_IF -m state --state ESTABLISHED,RELATED -j ACCEPT &&
+        echo 'Restricted Cone NAT router ready' &&
+        tail -f /dev/null
+      "
+
+  rc01:
+    <<: *peer-common
+    container_name: chatter-rc01
+    hostname: rc01
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.10
+    environment:
+      <<: *peer-env
+      NODE_ID: rc01
+    depends_on: [bootstrap, router-restricted]
+
+  rc02:
+    <<: *peer-common
+    container_name: chatter-rc02
+    hostname: rc02
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.11
+    environment:
+      <<: *peer-env
+      NODE_ID: rc02
+    depends_on: [bootstrap, router-restricted]
+
+  rc03:
+    <<: *peer-common
+    container_name: chatter-rc03
+    hostname: rc03
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.12
+    environment:
+      <<: *peer-env
+      NODE_ID: rc03
+    depends_on: [bootstrap, router-restricted]
+
+  rc04:
+    <<: *peer-common
+    container_name: chatter-rc04
+    hostname: rc04
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.13
+    environment:
+      <<: *peer-env
+      NODE_ID: rc04
+    depends_on: [bootstrap, router-restricted]
+
+  rc05:
+    <<: *peer-common
+    container_name: chatter-rc05
+    hostname: rc05
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.14
+    environment:
+      <<: *peer-env
+      NODE_ID: rc05
+    depends_on: [bootstrap, router-restricted]
+
+  rc06:
+    <<: *peer-common
+    container_name: chatter-rc06
+    hostname: rc06
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.15
+    environment:
+      <<: *peer-env
+      NODE_ID: rc06
+    depends_on: [bootstrap, router-restricted]
+
+  rc07:
+    <<: *peer-common
+    container_name: chatter-rc07
+    hostname: rc07
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.16
+    environment:
+      <<: *peer-env
+      NODE_ID: rc07
+    depends_on: [bootstrap, router-restricted]
+
+  rc08:
+    <<: *peer-common
+    container_name: chatter-rc08
+    hostname: rc08
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.17
+    environment:
+      <<: *peer-env
+      NODE_ID: rc08
+    depends_on: [bootstrap, router-restricted]
+
+  rc09:
+    <<: *peer-common
+    container_name: chatter-rc09
+    hostname: rc09
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.18
+    environment:
+      <<: *peer-env
+      NODE_ID: rc09
+    depends_on: [bootstrap, router-restricted]
+
+  rc10:
+    <<: *peer-common
+    container_name: chatter-rc10
+    hostname: rc10
+    networks:
+      nat_restricted:
+        ipv4_address: 172.32.1.19
+    environment:
+      <<: *peer-env
+      NODE_ID: rc10
+    depends_on: [bootstrap, router-restricted]
+
+  # ============================================================
+  # SYMMETRIC NAT - 10 Peers (sy01 - sy10)
+  # Hardest NAT type - different port mapping for each destination
+  # ============================================================
+  router-symmetric:
+    image: alpine:latest
+    container_name: chatter-router-symmetric
+    hostname: router-symmetric
+    networks:
+      public:
+        ipv4_address: 10.100.0.22
+      nat_symmetric:
+        ipv4_address: 172.33.1.2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    command: >
+      sh -c "
+        apk add --no-cache iptables iproute2 &&
+        PUBLIC_IF=$$(ip -o addr | grep '10.100.0' | awk '{print $$2}') &&
+        INTERNAL_IF=$$(ip -o addr | grep '172.33.1' | awk '{print $$2}') &&
+        iptables -t nat -A POSTROUTING -o $$PUBLIC_IF -j MASQUERADE --random &&
+        iptables -A FORWARD -i $$INTERNAL_IF -o $$PUBLIC_IF -j ACCEPT &&
+        iptables -A FORWARD -i $$PUBLIC_IF -o $$INTERNAL_IF -m state --state ESTABLISHED,RELATED -j ACCEPT &&
+        echo 'Symmetric NAT router ready' &&
+        tail -f /dev/null
+      "
+
+  sy01:
+    <<: *peer-common
+    container_name: chatter-sy01
+    hostname: sy01
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.10
+    environment:
+      <<: *peer-env
+      NODE_ID: sy01
+    depends_on: [bootstrap, router-symmetric]
+
+  sy02:
+    <<: *peer-common
+    container_name: chatter-sy02
+    hostname: sy02
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.11
+    environment:
+      <<: *peer-env
+      NODE_ID: sy02
+    depends_on: [bootstrap, router-symmetric]
+
+  sy03:
+    <<: *peer-common
+    container_name: chatter-sy03
+    hostname: sy03
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.12
+    environment:
+      <<: *peer-env
+      NODE_ID: sy03
+    depends_on: [bootstrap, router-symmetric]
+
+  sy04:
+    <<: *peer-common
+    container_name: chatter-sy04
+    hostname: sy04
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.13
+    environment:
+      <<: *peer-env
+      NODE_ID: sy04
+    depends_on: [bootstrap, router-symmetric]
+
+  sy05:
+    <<: *peer-common
+    container_name: chatter-sy05
+    hostname: sy05
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.14
+    environment:
+      <<: *peer-env
+      NODE_ID: sy05
+    depends_on: [bootstrap, router-symmetric]
+
+  sy06:
+    <<: *peer-common
+    container_name: chatter-sy06
+    hostname: sy06
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.15
+    environment:
+      <<: *peer-env
+      NODE_ID: sy06
+    depends_on: [bootstrap, router-symmetric]
+
+  sy07:
+    <<: *peer-common
+    container_name: chatter-sy07
+    hostname: sy07
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.16
+    environment:
+      <<: *peer-env
+      NODE_ID: sy07
+    depends_on: [bootstrap, router-symmetric]
+
+  sy08:
+    <<: *peer-common
+    container_name: chatter-sy08
+    hostname: sy08
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.17
+    environment:
+      <<: *peer-env
+      NODE_ID: sy08
+    depends_on: [bootstrap, router-symmetric]
+
+  sy09:
+    <<: *peer-common
+    container_name: chatter-sy09
+    hostname: sy09
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.18
+    environment:
+      <<: *peer-env
+      NODE_ID: sy09
+    depends_on: [bootstrap, router-symmetric]
+
+  sy10:
+    <<: *peer-common
+    container_name: chatter-sy10
+    hostname: sy10
+    networks:
+      nat_symmetric:
+        ipv4_address: 172.33.1.19
+    environment:
+      <<: *peer-env
+      NODE_ID: sy10
+    depends_on: [bootstrap, router-symmetric]
+
+networks:
+  # Public network (internet simulation)
+  public:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.100.0.0/24
+
+  # Full Cone NAT network
+  nat_full_cone:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.1.0/24
+
+  # Restricted Cone NAT network
+  nat_restricted:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.32.1.0/24
+
+  # Symmetric NAT network
+  nat_symmetric:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.33.1.0/24

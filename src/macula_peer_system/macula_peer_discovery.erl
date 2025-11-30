@@ -21,6 +21,8 @@
 -module(macula_peer_discovery).
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([start_link/1, register_gateway/0, discover_peers/0]).
 
@@ -67,7 +69,7 @@ init(Config) ->
     Realm = maps:get(realm, Config, <<"default">>),
     DiscoveryInterval = maps:get(discovery_interval, Config, 30000),  % 30s default
 
-    io:format("[PeerDiscovery] Initializing for ~s:~p~n", [Host, Port]),
+    ?LOG_INFO("Initializing for ~s:~p", [Host, Port]),
 
     State = #state{
         node_id = NodeID,
@@ -109,31 +111,14 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(register_self, State) ->
-    case do_register_gateway(State) of
-        ok ->
-            io:format("[PeerDiscovery] Successfully registered gateway in DHT~n");
-        {error, Reason} ->
-            io:format("[PeerDiscovery] Failed to register gateway: ~p~n", [Reason])
-    end,
+    Result = do_register_gateway(State),
+    log_registration_result(Result),
     {noreply, State};
 
 handle_info(discover_and_connect, State) ->
     #state{discovery_interval = Interval} = State,
-
-    %% Discover peers from DHT
-    case do_discover_peers(State) of
-        {ok, Peers} when length(Peers) > 0 ->
-            io:format("[PeerDiscovery] Discovered ~p peer(s)~n", [length(Peers)]),
-            lists:foreach(fun(Peer) ->
-                connect_to_peer(Peer, State)
-            end, Peers);
-        {ok, []} ->
-            ok;  % No peers discovered yet
-        {error, Reason} ->
-            io:format("[PeerDiscovery] Discovery failed: ~p~n", [Reason])
-    end,
-
-    %% Schedule next discovery
+    Result = do_discover_peers(State),
+    handle_discovery_result(Result, State),
     TimerRef = erlang:send_after(Interval, self(), discover_and_connect),
     {noreply, State#state{timer_ref = TimerRef}};
 
@@ -224,8 +209,13 @@ discover_all_gateway_peers(RoutingServer) ->
     end.
 
 %% @private Connect to a discovered peer gateway
+%% PeerInfo can have atom keys (from local DHT) or binary keys (from RPC response)
 connect_to_peer(PeerInfo, State) ->
-    #{node_id := PeerNodeID, host := Host, port := Port, realm := Realm} = PeerInfo,
+    %% Extract fields handling both atom and binary keys
+    PeerNodeID = get_peer_field(PeerInfo, node_id, <<"node_id">>),
+    Host = get_peer_field(PeerInfo, host, <<"host">>),
+    Port = get_peer_field(PeerInfo, port, <<"port">>),
+    Realm = get_peer_field(PeerInfo, realm, <<"realm">>),
     #state{node_id = MyNodeID} = State,
 
     %% Don't connect to ourselves
@@ -241,18 +231,18 @@ connect_to_peer(PeerInfo, State) ->
                 true ->
                     ok;  % Already connected
                 false ->
-                    io:format("[PeerDiscovery] Connecting to peer ~s at ~s~n",
+                    ?LOG_INFO("Connecting to peer ~s at ~s",
                              [binary:encode_hex(PeerNodeID), PeerUrl]),
 
-                    %% Start peer connection
-                    case macula_peers_sup:start_peer(PeerUrl, #{realm => Realm}) of
+                    %% Start peer connection - pass our node_id so gateway stores it correctly
+                    case macula_peers_sup:start_peer(PeerUrl, #{realm => Realm, node_id => MyNodeID}) of
                         {ok, _PeerPid} ->
-                            io:format("[PeerDiscovery] Connected to peer ~s~n",
+                            ?LOG_INFO("Connected to peer ~s",
                                      [binary:encode_hex(PeerNodeID)]);
                         {error, {already_started, _}} ->
                             ok;  % Already connected
                         {error, Reason} ->
-                            io:format("[PeerDiscovery] Failed to connect to ~s: ~p~n",
+                            ?LOG_ERROR("Failed to connect to ~s: ~p",
                                      [binary:encode_hex(PeerNodeID), Reason])
                     end
             end
@@ -286,23 +276,23 @@ discover_peers_via_gateway(State) ->
     %% Find the bootstrap peer connection (first child of macula_peers_sup)
     case whereis(macula_peers_sup) of
         undefined ->
-            io:format("[PeerDiscovery] macula_peers_sup not found~n"),
+            ?LOG_WARNING("macula_peers_sup not found"),
             {error, peers_sup_not_found};
         _ ->
             Children = supervisor:which_children(macula_peers_sup),
             case Children of
                 [] ->
-                    io:format("[PeerDiscovery] No bootstrap peer connection yet~n"),
+                    ?LOG_DEBUG("No bootstrap peer connection yet"),
                     {ok, []};  % No bootstrap peer connected yet
                 [{_Id, BootstrapSupPid, _Type, _Modules} | _] when is_pid(BootstrapSupPid) ->
                     %% Get the rpc_handler child from the peer system supervisor
                     case get_rpc_handler_pid(BootstrapSupPid) of
                         {ok, RpcHandlerPid} ->
                             %% Make RPC call to gateway asking for list of registered gateways
-                            io:format("[PeerDiscovery] Querying gateway DHT via RPC...~n"),
+                            ?LOG_DEBUG("Querying gateway DHT via RPC..."),
                             case macula_rpc_handler:call(RpcHandlerPid, <<"_dht.list_gateways">>, #{}, #{}) of
                                 {ok, #{<<"peers">> := PeersList}} ->
-                                    io:format("[PeerDiscovery] Gateway returned ~p peer(s) from DHT~n",
+                                    ?LOG_INFO("Gateway returned ~p peer(s) from DHT",
                                              [length(PeersList)]),
                                     %% Filter out ourselves
                                     OtherPeers = lists:filter(fun(#{<<"node_id">> := NodeID}) ->
@@ -310,15 +300,15 @@ discover_peers_via_gateway(State) ->
                                     end, PeersList),
                                     {ok, OtherPeers};
                                 {error, Reason} ->
-                                    io:format("[PeerDiscovery] RPC to gateway failed: ~p~n", [Reason]),
+                                    ?LOG_ERROR("RPC to gateway failed: ~p", [Reason]),
                                     {error, Reason}
                             end;
                         {error, Reason} ->
-                            io:format("[PeerDiscovery] Failed to get RPC handler: ~p~n", [Reason]),
+                            ?LOG_ERROR("Failed to get RPC handler: ~p", [Reason]),
                             {error, Reason}
                     end;
                 _ ->
-                    io:format("[PeerDiscovery] Bootstrap peer not ready~n"),
+                    ?LOG_DEBUG("Bootstrap peer not ready"),
                     {ok, []}
             end
     end.
@@ -348,12 +338,12 @@ get_advertisement_manager_pid(PeerSupPid) when is_pid(PeerSupPid) ->
 %% This service queries the local DHT for all registered gateways and returns them.
 %% Only called when we're the gateway (no MACULA_BOOTSTRAP_PEERS).
 register_dht_list_gateways_service() ->
-    io:format("[PeerDiscovery] Registering _dht.list_gateways RPC service~n"),
+    ?LOG_INFO("Registering _dht.list_gateways RPC service"),
 
     %% Find our own RPC handler PID
     case whereis(macula_peers_sup) of
         undefined ->
-            io:format("[PeerDiscovery] ERROR: macula_peers_sup not found, cannot register service~n"),
+            ?LOG_ERROR("macula_peers_sup not found, cannot register service"),
             {error, peers_sup_not_found};
         _ ->
             %% We're the gateway, so we're the first child of macula_peers_sup
@@ -397,7 +387,7 @@ register_dht_list_gateways_service() ->
                                                     end
                                                 end, GatewayKeys),
 
-                                                io:format("[PeerDiscovery] _dht.list_gateways returning ~p gateway(s)~n",
+                                                ?LOG_DEBUG("_dht.list_gateways returning ~p gateway(s)",
                                                          [length(Peers)]),
                                                 {ok, #{<<"peers">> => Peers}};
                                             {error, Reason} ->
@@ -415,21 +405,54 @@ register_dht_list_gateways_service() ->
                                 #{}  %% Empty metadata
                             ) of
                                 ok ->
-                                    io:format("[PeerDiscovery] Successfully advertised _dht.list_gateways to DHT~n"),
+                                    ?LOG_INFO("Successfully advertised _dht.list_gateways to DHT"),
                                     ok;
                                 {error, AdvReason} ->
-                                    io:format("[PeerDiscovery] ERROR: Failed to advertise service: ~p~n", [AdvReason]),
+                                    ?LOG_ERROR("Failed to advertise service: ~p", [AdvReason]),
                                     {error, AdvReason}
                             end;
                         {{error, Reason}, _} ->
-                            io:format("[PeerDiscovery] ERROR: Failed to get RPC handler: ~p~n", [Reason]),
+                            ?LOG_ERROR("Failed to get RPC handler: ~p", [Reason]),
                             {error, Reason};
                         {_, {error, Reason}} ->
-                            io:format("[PeerDiscovery] ERROR: Failed to get advertisement manager: ~p~n", [Reason]),
+                            ?LOG_ERROR("Failed to get advertisement manager: ~p", [Reason]),
                             {error, Reason}
                     end;
                 _ ->
-                    io:format("[PeerDiscovery] ERROR: No peer system supervisor found~n"),
+                    ?LOG_ERROR("No peer system supervisor found"),
                     {error, no_peer_system}
+            end
+    end.
+
+%%%===================================================================
+%%% Helper Functions for Refactored Code
+%%%===================================================================
+
+%% @private Log registration result
+log_registration_result(ok) ->
+    ?LOG_INFO("Successfully registered gateway in DHT");
+log_registration_result({error, Reason}) ->
+    ?LOG_ERROR("Failed to register gateway: ~p", [Reason]).
+
+%% @private Handle discovery result
+handle_discovery_result({ok, Peers}, State) when length(Peers) > 0 ->
+    ?LOG_INFO("Discovered ~p peer(s)", [length(Peers)]),
+    lists:foreach(fun(Peer) ->
+        connect_to_peer(Peer, State)
+    end, Peers);
+handle_discovery_result({ok, []}, _State) ->
+    ok;
+handle_discovery_result({error, Reason}, _State) ->
+    ?LOG_WARNING("Discovery failed: ~p", [Reason]).
+
+%% @private Get a field from PeerInfo map, trying atom key first then binary key
+%% This handles both local DHT results (atom keys) and RPC responses (binary keys)
+get_peer_field(PeerInfo, AtomKey, BinaryKey) ->
+    case maps:find(AtomKey, PeerInfo) of
+        {ok, Value} -> Value;
+        error ->
+            case maps:find(BinaryKey, PeerInfo) of
+                {ok, Value} -> Value;
+                error -> undefined
             end
     end.

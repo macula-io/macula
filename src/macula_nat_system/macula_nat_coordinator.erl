@@ -272,14 +272,15 @@ terminate(_Reason, _State) ->
 %% @doc Fetch NAT profile for a peer (local cache first, then DHT).
 -spec fetch_nat_profile(binary()) -> macula_nat_cache:nat_profile() | undefined.
 fetch_nat_profile(PeerId) ->
-    case whereis(macula_nat_cache) of
-        undefined -> undefined;
-        _Pid ->
-            case macula_nat_cache:get_from_dht(PeerId) of
-                {ok, Profile} -> Profile;
-                _ -> undefined
-            end
-    end.
+    do_fetch_nat_profile(whereis(macula_nat_cache), PeerId).
+
+do_fetch_nat_profile(undefined, _PeerId) ->
+    undefined;
+do_fetch_nat_profile(_Pid, PeerId) ->
+    nat_cache_result_to_profile(macula_nat_cache:get_from_dht(PeerId)).
+
+nat_cache_result_to_profile({ok, Profile}) -> Profile;
+nat_cache_result_to_profile(_) -> undefined.
 
 %% @private
 %% @doc Determine connection strategy based on NAT profiles.
@@ -322,16 +323,13 @@ determine_strategy_with_initiator(_) ->
                                macula_nat_cache:nat_profile()) ->
     connection_strategy().
 determine_strategy_full(InitiatorProfile, TargetProfile) ->
-    %% Check if direct connection is possible
-    case can_connect_direct(InitiatorProfile, TargetProfile) of
-        true -> direct;
-        false ->
-            %% Check if hole punching is feasible
-            case can_hole_punch(InitiatorProfile, TargetProfile) of
-                true -> hole_punch;
-                false -> relay
-            end
-    end.
+    CanDirect = can_connect_direct(InitiatorProfile, TargetProfile),
+    CanPunch = can_hole_punch(InitiatorProfile, TargetProfile),
+    select_strategy(CanDirect, CanPunch).
+
+select_strategy(true, _) -> direct;
+select_strategy(false, true) -> hole_punch;
+select_strategy(false, false) -> relay.
 
 %% @private
 %% @doc Check if direct connection is possible.
@@ -366,11 +364,17 @@ is_punch_feasible(#{mapping_policy := MappingPolicy, allocation_policy := Alloca
     %% Hole punch feasible with:
     %% - EI or HD mapping (predictable external address per destination)
     %% - PP or PC allocation (predictable port assignment)
-    MappingOk = MappingPolicy =:= ei orelse MappingPolicy =:= hd,
-    AllocationOk = AllocationPolicy =:= pp orelse AllocationPolicy =:= pc,
-    MappingOk andalso AllocationOk;
+    is_mapping_predictable(MappingPolicy) andalso is_allocation_predictable(AllocationPolicy);
 is_punch_feasible(_) ->
     true.  % Unknown profile - try optimistically
+
+is_mapping_predictable(ei) -> true;
+is_mapping_predictable(hd) -> true;
+is_mapping_predictable(_) -> false.
+
+is_allocation_predictable(pp) -> true;
+is_allocation_predictable(pc) -> true;
+is_allocation_predictable(_) -> false.
 
 %%%===================================================================
 %%% Internal functions - Hole Punch Coordination
@@ -429,21 +433,19 @@ predict_punch_ports(undefined) ->
 predict_punch_ports(Profile) ->
     NodeId = maps:get(node_id, Profile, <<>>),
     AllocationPolicy = maps:get(allocation_policy, Profile, unknown),
-    BasePort = case maps:get(reflexive_address, Profile, undefined) of
-        {_, Port} -> Port;
-        undefined -> undefined
-    end,
+    BasePort = extract_base_port(maps:get(reflexive_address, Profile, undefined)),
+    do_predict_punch_ports(whereis(macula_port_predictor), Profile, NodeId, AllocationPolicy, BasePort).
 
-    %% Use the port predictor for intelligent prediction
-    case whereis(macula_port_predictor) of
-        undefined ->
-            %% Fallback to simple prediction
-            simple_predict_punch_ports(Profile, BasePort);
-        _Pid ->
-            Prediction = macula_port_predictor:predict(NodeId, AllocationPolicy,
-                                                        #{base_port => BasePort, count => 5}),
-            maps:get(ports, Prediction, [4433, 4434, 4435])
-    end.
+extract_base_port({_, Port}) -> Port;
+extract_base_port(undefined) -> undefined.
+
+do_predict_punch_ports(undefined, Profile, _NodeId, _AllocationPolicy, BasePort) ->
+    %% Fallback to simple prediction
+    simple_predict_punch_ports(Profile, BasePort);
+do_predict_punch_ports(_Pid, _Profile, NodeId, AllocationPolicy, BasePort) ->
+    Prediction = macula_port_predictor:predict(NodeId, AllocationPolicy,
+                                                #{base_port => BasePort, count => 5}),
+    maps:get(ports, Prediction, [4433, 4434, 4435]).
 
 %% @private
 %% @doc Simple port prediction fallback for hole punching.
@@ -460,30 +462,115 @@ simple_predict_punch_ports(_, _) ->
 
 %% @private
 %% @doc Send PUNCH_COORDINATE message to a peer.
+%% First tries direct delivery via QUIC, falls back to DHT storage if unavailable.
 -spec send_punch_coordinate(binary(), map()) -> ok.
 send_punch_coordinate(PeerId, CoordinateInfo) ->
-    %% Route through DHT or gateway
+    %% Try to lookup peer endpoint for direct delivery
+    case lookup_peer_endpoint_for_punch(PeerId) of
+        {ok, Endpoint} ->
+            send_punch_coordinate_direct(PeerId, Endpoint, CoordinateInfo);
+        {error, _Reason} ->
+            %% Fall back to DHT storage (peer must poll)
+            send_punch_coordinate_via_dht(PeerId, CoordinateInfo)
+    end.
+
+%% @private
+%% @doc Send PUNCH_COORDINATE directly via QUIC connection.
+-spec send_punch_coordinate_direct(binary(), binary(), map()) -> ok.
+send_punch_coordinate_direct(PeerId, Endpoint, CoordinateInfo) ->
+    ?LOG_DEBUG("Sending PUNCH_COORDINATE directly to ~s via ~s", [binary:encode_hex(PeerId), Endpoint]),
+
+    %% Send punch_coordinate message via peer connector
+    Result = macula_peer_connector:send_message(Endpoint, punch_coordinate, CoordinateInfo),
+    log_direct_send_result(Result, PeerId, CoordinateInfo).
+
+%% @private Direct send succeeded
+log_direct_send_result(ok, PeerId, _CoordinateInfo) ->
+    ?LOG_DEBUG("PUNCH_COORDINATE sent directly to ~s", [binary:encode_hex(PeerId)]),
+    ok;
+%% @private Direct send failed - fall back to DHT
+log_direct_send_result({error, Reason}, PeerId, CoordinateInfo) ->
+    ?LOG_WARNING("Direct PUNCH_COORDINATE failed (~p), falling back to DHT", [Reason]),
+    send_punch_coordinate_via_dht(PeerId, CoordinateInfo).
+
+%% @private
+%% @doc Store PUNCH_COORDINATE in DHT for peer to poll.
+-spec send_punch_coordinate_via_dht(binary(), map()) -> ok.
+send_punch_coordinate_via_dht(PeerId, CoordinateInfo) ->
     case whereis(macula_routing_server) of
         undefined ->
-            ?LOG_WARNING("Cannot send PUNCH_COORDINATE: routing server unavailable");
+            ?LOG_WARNING("Cannot store PUNCH_COORDINATE: routing server unavailable"),
+            ok;
         Pid ->
-            try
-                %% Build and send the coordination message
-                Message = #{
-                    type => punch_coordinate,
-                    payload => CoordinateInfo
-                },
-                %% Use DHT store to signal the peer (they poll for coordination)
-                SessionId = maps:get(session_id, CoordinateInfo),
-                Key = punch_coordination_key(PeerId, SessionId),
-                macula_routing_server:store(Pid, Key, Message),
-                ?LOG_DEBUG("Sent PUNCH_COORDINATE to ~s", [PeerId])
-            catch
-                _:Reason ->
-                    ?LOG_WARNING("Failed to send PUNCH_COORDINATE to ~s: ~p",
-                                [PeerId, Reason])
+            Message = #{type => punch_coordinate, payload => CoordinateInfo},
+            SessionId = maps:get(session_id, CoordinateInfo),
+            Key = punch_coordination_key(PeerId, SessionId),
+            safe_store_coordinate(Pid, PeerId, Key, Message)
+    end.
+
+%% @private
+%% @doc Lookup peer endpoint for direct punch coordination delivery.
+-spec lookup_peer_endpoint_for_punch(binary()) -> {ok, binary()} | {error, not_found}.
+lookup_peer_endpoint_for_punch(NodeId) ->
+    %% Try NAT cache first (has reflexive address and endpoint)
+    case whereis(macula_nat_cache) of
+        undefined ->
+            lookup_peer_from_dht(NodeId);
+        _Pid ->
+            case macula_nat_cache:get_from_dht(NodeId) of
+                {ok, Profile} ->
+                    %% Extract endpoint from profile if available
+                    case maps:get(endpoint, Profile, undefined) of
+                        undefined ->
+                            build_endpoint_from_profile(Profile);
+                        Endpoint when is_binary(Endpoint) ->
+                            {ok, Endpoint}
+                    end;
+                not_found ->
+                    lookup_peer_from_dht(NodeId);
+                {error, _} ->
+                    lookup_peer_from_dht(NodeId)
             end
-    end,
+    end.
+
+%% @private Build endpoint from NAT profile reflexive address.
+-spec build_endpoint_from_profile(map()) -> {ok, binary()} | {error, not_found}.
+build_endpoint_from_profile(Profile) ->
+    case maps:get(reflexive_address, Profile, undefined) of
+        {IP, Port} when is_tuple(IP), is_integer(Port) ->
+            IPStr = inet:ntoa(IP),
+            Endpoint = iolist_to_binary([IPStr, ":", integer_to_list(Port)]),
+            {ok, Endpoint};
+        _ ->
+            {error, not_found}
+    end.
+
+%% @private Look up peer endpoint from DHT.
+-spec lookup_peer_from_dht(binary()) -> {ok, binary()} | {error, not_found}.
+lookup_peer_from_dht(NodeId) ->
+    case whereis(macula_routing_server) of
+        undefined ->
+            {error, not_found};
+        Pid ->
+            Key = crypto:hash(sha256, <<"peer.endpoint.", NodeId/binary>>),
+            case macula_routing_server:find_value(Pid, Key, 20) of
+                {ok, #{<<"host">> := Host, <<"port">> := Port}} ->
+                    Endpoint = iolist_to_binary([Host, ":", integer_to_list(Port)]),
+                    {ok, Endpoint};
+                _ ->
+                    {error, not_found}
+            end
+    end.
+
+safe_store_coordinate(Pid, PeerId, Key, Message) ->
+    Result = (catch macula_routing_server:store(Pid, Key, Message)),
+    log_coordinate_result(Result, PeerId).
+
+log_coordinate_result({'EXIT', Reason}, PeerId) ->
+    ?LOG_WARNING("Failed to store PUNCH_COORDINATE for ~s: ~p", [binary:encode_hex(PeerId), Reason]),
+    ok;
+log_coordinate_result(_, PeerId) ->
+    ?LOG_DEBUG("Stored PUNCH_COORDINATE for ~s in DHT", [binary:encode_hex(PeerId)]),
     ok.
 
 %% @private
@@ -602,28 +689,41 @@ add_pending_for_peer(PeerId, SessionId, PendingByPeer) ->
 cleanup_stale_sessions(#state{sessions = Sessions} = State) ->
     Now = erlang:system_time(second),
     MaxAge = 300,  % 5 minutes
+    {Kept, Removed} = partition_sessions(Sessions, Now, MaxAge),
+    log_cleanup_result(Removed),
+    State#state{sessions = Kept}.
 
-    {Kept, Removed} = maps:fold(
-        fun(SessionId, #{created_at := CreatedAt, state := SessionState} = Session, {K, R}) ->
-            Age = Now - CreatedAt,
-            IsStale = Age > MaxAge,
-            IsTerminal = SessionState =:= completed orelse SessionState =:= failed,
-
-            case IsStale orelse IsTerminal of
-                true -> {K, [SessionId | R]};
-                false -> {K#{SessionId => Session}, R}
-            end
+partition_sessions(Sessions, Now, MaxAge) ->
+    maps:fold(
+        fun(SessionId, Session, Acc) ->
+            classify_session(SessionId, Session, Now, MaxAge, Acc)
         end,
         {#{}, []},
         Sessions
-    ),
+    ).
 
-    case Removed of
-        [] -> ok;
-        _ -> ?LOG_DEBUG("Cleaned up ~p stale punch sessions", [length(Removed)])
-    end,
+classify_session(SessionId, #{created_at := CreatedAt, state := SessionState} = Session, Now, MaxAge, {Kept, Removed}) ->
+    ShouldRemove = should_remove_session(Now - CreatedAt, MaxAge, SessionState),
+    accumulate_session(ShouldRemove, SessionId, Session, Kept, Removed).
 
-    State#state{sessions = Kept}.
+should_remove_session(Age, MaxAge, _SessionState) when Age > MaxAge ->
+    true;
+should_remove_session(_Age, _MaxAge, completed) ->
+    true;
+should_remove_session(_Age, _MaxAge, failed) ->
+    true;
+should_remove_session(_Age, _MaxAge, _SessionState) ->
+    false.
+
+accumulate_session(true, SessionId, _Session, Kept, Removed) ->
+    {Kept, [SessionId | Removed]};
+accumulate_session(false, SessionId, Session, Kept, Removed) ->
+    {Kept#{SessionId => Session}, Removed}.
+
+log_cleanup_result([]) ->
+    ok;
+log_cleanup_result(Removed) ->
+    ?LOG_DEBUG("Cleaned up ~p stale punch sessions", [length(Removed)]).
 
 %% @private
 %% @doc Schedule periodic cleanup.

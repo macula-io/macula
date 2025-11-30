@@ -28,6 +28,8 @@
 
 -behaviour(supervisor).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([
     start_link/1,
@@ -76,8 +78,8 @@ get_mesh(SupPid) ->
 %%%===================================================================
 
 init(Config) ->
-    io:format("[WorkersSup] Initializing gateway workers supervisor~n"),
-    io:format("[WorkersSup] Config: ~p~n", [Config]),
+    ?LOG_INFO("Initializing gateway workers supervisor"),
+    ?LOG_DEBUG("Config: ~p", [Config]),
 
     %% Supervision strategy: rest_for_one
     %% - If child N crashes, restart N and all children after N
@@ -89,7 +91,7 @@ init(Config) ->
         period => 60
     },
 
-    io:format("[WorkersSup] Building child specifications...~n"),
+    ?LOG_DEBUG("Building child specifications..."),
     %% Child specifications
     Children = [
         %% Clients - tracks connected clients and streams
@@ -163,7 +165,7 @@ init(Config) ->
         }
     ],
 
-    io:format("[WorkersSup] Child specs built, returning from init~n"),
+    ?LOG_DEBUG("Child specs built, returning from init"),
     {ok, {SupFlags, Children}}.
 
 %%%===================================================================

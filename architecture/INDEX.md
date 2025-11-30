@@ -1,45 +1,39 @@
 # Macula Architecture Documentation Index
 
-**Current Version**: v0.8.0
-**Last Updated**: 2025-11-17
+**Current Version**: v0.12.3
+**Last Updated**: 2025-11-30
 
 ---
 
 ## Quick Links
 
-- **Getting Started**: See `../README.md`
+- **Getting Started**: See the main README
 - **API Reference**: See hex docs or `src/` module documentation
-- **Tutorial**: See `TUTORIAL.md` (coming soon)
-- **FAQ**: See `FAQ.md`
-- **Troubleshooting**: See `TROUBLESHOOTING.md`
 
 ---
 
 ## Version-Specific Documentation
 
-### v0.8.0 (Current - Released 2025-11-17)
+### v0.12.x (Current)
 
-**Overview**: Direct P2P with DHT propagation
+**Overview**: NATS-style Async RPC, NAT Traversal, Pull-based Discovery
 
 📋 Core Documents:
-- [`v0.8.0-OVERVIEW.md`](v0.8.0-OVERVIEW.md) - Release overview and key achievements
-- [`v0.8.0-CHANGELOG.md`](v0.8.0-CHANGELOG.md) - Detailed changes from v0.7.x
-- [`v0.8.0-ROADMAP.md`](v0.8.0-ROADMAP.md) - Future plans (v0.9.0 and beyond)
-- [`V0.8.0_COMPLETION_STATUS.md`](V0.8.0_COMPLETION_STATUS.md) - Final implementation status
-- [`V0.8.0_IMPLEMENTATION_ROADMAP.md`](V0.8.0_IMPLEMENTATION_ROADMAP.md) - Original roadmap
+- `v0.8.0-OVERVIEW.md` - Foundation architecture (Direct P2P with DHT propagation)
+- `v0.8.0-CHANGELOG.md` - Changes from v0.7.x
+- `ROADMAP.md` - Current roadmap
 
 🏗️ Architecture:
 - Direct P2P QUIC connections via `macula_peer_connector`
 - DHT propagation to k=20 closest nodes
 - RPC and PubSub via direct connections
 - All node types run QUIC listeners
+- NAT traversal with hole punching and relay fallback
+- Async RPC with NATS-style request/reply
 
-✅ Test Coverage:
-- 21/21 integration tests passing (100%)
-- 11 RPC tests + 10 PubSub tests
+✅ Test Coverage: 70+ NAT tests, 22 async RPC tests
 
-📦 Archived Development Docs:
-- [`archive/v0.8.0-development/`](archive/v0.8.0-development/) - Development session notes, progress tracking
+📦 Archived Development Docs: See `architecture/archive/` for development session notes and progress tracking.
 
 ### v0.7.x (Previous)
 
@@ -64,15 +58,12 @@ See git history for details.
 ### Core Concepts
 
 - **DHT (Distributed Hash Table)**: Kademlia-based routing
-  - See `ALGORITHMS-KADEMLIA.md` (coming soon)
   - Key concepts: XOR distance, k-buckets, replication factor k=20
 
 - **Direct P2P Messaging**: Fire-and-forget QUIC connections
-  - See `TECHNIQUES-DIRECT-P2P.md` (coming soon)
   - Module: `macula_peer_connector`
 
 - **Service Discovery**: DHT-based registration and lookup
-  - See `ALGORITHMS-SERVICE-DISCOVERY.md` (coming soon)
   - Advertisement, TTL, propagation
 
 ### Communication Patterns
@@ -92,10 +83,9 @@ See git history for details.
 ### Network & Infrastructure
 
 #### NAT Traversal
-- **Status**: Planned for v0.9.0
-- **Approach**: Opportunistic hole punching
-- **Design**: [`NAT_TRAVERSAL_ROADMAP.md`](NAT_TRAVERSAL_ROADMAP.md)
-- **Current**: 100% connectivity via relay fallback
+- **Status**: Complete in v0.12.0
+- **Approach**: Hole punching with relay fallback
+- **Current**: 100% connectivity across NAT types (Full Cone, Restricted, Symmetric)
 
 #### Multi-Tenancy
 - **Mechanism**: Realm isolation
@@ -105,7 +95,7 @@ See git history for details.
 #### Deployment Patterns
 - **Docker**: `docker/` directory - Bootstrap, Gateway, Edge nodes
 - **Multi-node**: `docker-compose.multi-mode.yml`
-- **Test Topology**: 1 bootstrap + 1 gateway + 3 edge nodes
+- **NAT Test**: `docker/nat-test/` - 50-peer NAT simulation
 
 ---
 
@@ -142,40 +132,27 @@ See git history for details.
 - **Test Coverage**: Tracked per module
 - **TODO Tracking**: See `TODO.md`
 
-### Gateway Refactoring (Completed)
-- **Plan**: [`gateway_refactoring_plan.md`](gateway_refactoring_plan.md)
-- **Status**: Completed in v0.7.x
-- **Result**: 6 focused modules, supervision tree, comprehensive tests
+### Gateway Refactoring (Completed v0.7.x)
+- 6 focused modules, supervision tree, comprehensive tests
 
-### Memory Management (Completed)
-- **Overview**: [`memory_management/README.md`](memory_management/README.md)
-- **Docs**: [`memory_management/`](memory_management/) directory
-- **Status**: Completed in v0.7.x
-- **Result**: Bounded pools, TTL cleanup, no OOM crashes
+### Memory Management (Completed v0.7.x)
+- Bounded pools, TTL cleanup, no OOM crashes
 
 ---
 
 ## Historical Documentation
 
-### Architecture Evolution
-- [`ARCHITECTURE_EVOLUTION.md`](ARCHITECTURE_EVOLUTION.md) - How we got here
-- [`DOCUMENTATION_STATUS.md`](DOCUMENTATION_STATUS.md) - Doc tracking
-
-### Old Planning (Pre-v0.8.0)
-- [`dht_routed_rpc.md`](dht_routed_rpc.md) - Original DHT RPC plan (superseded)
-- [`dht_routed_pubsub.md`](dht_routed_pubsub.md) - Original DHT PubSub plan (superseded)
-- [`god_module_refactoring_plan.md`](god_module_refactoring_plan.md) - Old refactoring (superseded by v0.7.0 nomenclature)
-
-**Note**: Many of these docs describe approaches that were superseded by v0.8.0's direct P2P architecture. They're kept for historical reference.
+Historical planning documents are archived in `architecture/archive/`. These describe approaches superseded by the current direct P2P architecture.
 
 ---
 
 ## Comparison Documents
 
 ### vs. Other Technologies
-- [`macula_http3_mesh_vs_distributed_erlang.md`](macula_http3_mesh_vs_distributed_erlang.md)
-- [`macula_http3_mesh_vs_libp2p.md`](macula_http3_mesh_vs_libp2p.md)
-- [`macula_http3_mesh_vs_wamp.md`](macula_http3_mesh_vs_wamp.md)
+
+See the comparisons documentation for comprehensive comparisons with:
+- libp2p, Distributed Erlang, Akka Cluster, Kubernetes, WebRTC
+- Business comparison with Kafka, RabbitMQ, NATS, MQTT
 
 ---
 
@@ -196,34 +173,16 @@ See git history for details.
 
 ---
 
-## TODO
-
-Future documentation to create:
-- [ ] `TUTORIAL.md` - Complete tutorial with working examples
-- [ ] `FAQ.md` - Frequently asked questions
-- [ ] `TROUBLESHOOTING.md` - Common issues and solutions
-- [ ] `ALGORITHMS-KADEMLIA.md` - DHT algorithm details
-- [ ] `ALGORITHMS-SERVICE-DISCOVERY.md` - Service discovery flow
-- [ ] `TECHNIQUES-DIRECT-P2P.md` - P2P connection patterns
-- [ ] `v0.8.0-ARCHITECTURE.md` - Detailed architecture diagrams
-- [ ] `v0.8.0-DECISIONS.md` - Architecture Decision Records (ADRs)
-
----
-
 ## Quick Reference
 
 ### Key Files to Read First
-1. [`../README.md`](../README.md) - Project overview
-2. [`v0.8.0-OVERVIEW.md`](v0.8.0-OVERVIEW.md) - Current version overview
-3. [`v0.8.0-CHANGELOG.md`](v0.8.0-CHANGELOG.md) - What changed
-4. [`src/macula_peer.erl`](../src/macula_peer.erl) - High-level API
+1. Main README - Project overview
+2. `v0.8.0-OVERVIEW.md` - Foundation architecture
+3. `NATS_STYLE_ASYNC_RPC.md` - Async RPC design
+4. `src/macula_peer.erl` - High-level API
 
 ### Common Tasks
 - **Add a new feature**: See module @doc comments for API design patterns
 - **Deploy to production**: See Docker files and compose configurations
 - **Debug an issue**: See hex docs and integration test examples
 - **Understand DHT**: See `macula_routing_server.erl` and `macula_routing_table.erl`
-
----
-
-**Navigation**: [Back to Main README](../README.md) | [v0.8.0 Overview](v0.8.0-OVERVIEW.md) | [Changelog](v0.8.0-CHANGELOG.md) | [Roadmap](v0.8.0-ROADMAP.md)

@@ -55,58 +55,59 @@ track_message(MsgId, Topic, Payload, Qos, PendingPubacks) when Qos =:= 1 ->
 -spec handle_timeout(message_id(), connection_manager_pid(), pending_pubacks()) ->
     {retry, pending_pubacks(), map()} | {give_up, pending_pubacks()} | {not_found, pending_pubacks()}.
 handle_timeout(MsgId, _ConnMgrPid, PendingPubacks) ->
-    case maps:get(MsgId, PendingPubacks, undefined) of
-        undefined ->
-            %% Message not found (already acknowledged or removed)
-            {not_found, PendingPubacks};
-        {Topic, Payload, Qos, RetryCount, _OldTimerRef} ->
-            NewRetryCount = RetryCount + 1,
-            case NewRetryCount >= ?PUBACK_MAX_RETRIES of
-                true ->
-                    %% Max retries reached, give up
-                    ?LOG_ERROR("[QoS] PUBACK timeout for message ~p (topic: ~s) after ~p retries - giving up",
-                              [MsgId, Topic, NewRetryCount]),
-                    {give_up, maps:remove(MsgId, PendingPubacks)};
-                false ->
-                    %% Retry sending the message
-                    ?LOG_WARNING("[QoS] PUBACK timeout for message ~p (topic: ~s) - retry ~p/~p",
-                                [MsgId, Topic, NewRetryCount, ?PUBACK_MAX_RETRIES]),
+    PendingInfo = maps:get(MsgId, PendingPubacks, undefined),
+    do_handle_timeout(PendingInfo, MsgId, PendingPubacks).
 
-                    %% Build publish message for retry
-                    PublishMsg = #{
-                        topic => Topic,
-                        payload => Payload,
-                        qos => Qos,
-                        retain => false,
-                        message_id => MsgId
-                    },
+%% @private Message not found (already acknowledged or removed)
+do_handle_timeout(undefined, _MsgId, PendingPubacks) ->
+    {not_found, PendingPubacks};
+%% @private Message found - check retry count
+do_handle_timeout({Topic, Payload, Qos, RetryCount, _OldTimerRef}, MsgId, PendingPubacks) ->
+    NewRetryCount = RetryCount + 1,
+    MaxRetriesReached = NewRetryCount >= ?PUBACK_MAX_RETRIES,
+    handle_timeout_retry(MaxRetriesReached, MsgId, Topic, Payload, Qos, NewRetryCount, PendingPubacks).
 
-                    %% Start new timer
-                    NewTimerRef = erlang:send_after(?PUBACK_TIMEOUT, self(), {puback_timeout, MsgId}),
+%% @private Max retries reached, give up
+handle_timeout_retry(true, MsgId, Topic, _Payload, _Qos, NewRetryCount, PendingPubacks) ->
+    ?LOG_ERROR("[QoS] PUBACK timeout for message ~p (topic: ~s) after ~p retries - giving up",
+              [MsgId, Topic, NewRetryCount]),
+    {give_up, maps:remove(MsgId, PendingPubacks)};
+%% @private Retry sending the message
+handle_timeout_retry(false, MsgId, Topic, Payload, Qos, NewRetryCount, PendingPubacks) ->
+    ?LOG_WARNING("[QoS] PUBACK timeout for message ~p (topic: ~s) - retry ~p/~p",
+                [MsgId, Topic, NewRetryCount, ?PUBACK_MAX_RETRIES]),
 
-                    %% Update pending with new retry count and timer
-                    UpdatedPending = PendingPubacks#{
-                        MsgId => {Topic, Payload, Qos, NewRetryCount, NewTimerRef}
-                    },
+    PublishMsg = #{
+        topic => Topic,
+        payload => Payload,
+        qos => Qos,
+        retain => false,
+        message_id => MsgId
+    },
 
-                    {retry, UpdatedPending, PublishMsg}
-            end
-    end.
+    NewTimerRef = erlang:send_after(?PUBACK_TIMEOUT, self(), {puback_timeout, MsgId}),
+
+    UpdatedPending = PendingPubacks#{
+        MsgId => {Topic, Payload, Qos, NewRetryCount, NewTimerRef}
+    },
+
+    {retry, UpdatedPending, PublishMsg}.
 
 %% @doc Handle acknowledgment for a message.
 %% Cancels timer and removes message from pending map.
 %% Returns updated pending_pubacks map.
 -spec handle_ack(message_id(), pending_pubacks()) -> pending_pubacks().
 handle_ack(MsgId, PendingPubacks) ->
-    case maps:get(MsgId, PendingPubacks, undefined) of
-        undefined ->
-            %% Message not found, return unchanged
-            PendingPubacks;
-        {_Topic, _Payload, _Qos, _RetryCount, TimerRef} ->
-            %% Cancel timer and remove message
-            erlang:cancel_timer(TimerRef),
-            maps:remove(MsgId, PendingPubacks)
-    end.
+    PendingInfo = maps:get(MsgId, PendingPubacks, undefined),
+    do_handle_ack(PendingInfo, MsgId, PendingPubacks).
+
+%% @private Message not found, return unchanged
+do_handle_ack(undefined, _MsgId, PendingPubacks) ->
+    PendingPubacks;
+%% @private Cancel timer and remove message
+do_handle_ack({_Topic, _Payload, _Qos, _RetryCount, TimerRef}, MsgId, PendingPubacks) ->
+    erlang:cancel_timer(TimerRef),
+    maps:remove(MsgId, PendingPubacks).
 
 %% @doc Get list of pending message IDs (for testing/debugging).
 -spec get_pending(pending_pubacks()) -> [message_id()].

@@ -74,30 +74,33 @@ put(#{entries := Entries, max_size := MaxSize} = Cache, Key, Value, Timestamp) -
     NewEntries = [Entry | EntriesWithoutKey],
 
     %% Enforce max size (evict oldest)
-    FinalEntries = case length(NewEntries) > MaxSize of
-        true -> lists:sublist(NewEntries, MaxSize);
-        false -> NewEntries
-    end,
+    FinalEntries = enforce_max_size(NewEntries, MaxSize),
 
     Cache#{entries => FinalEntries}.
+
+%% @private Enforce max size by evicting oldest entries
+enforce_max_size(Entries, MaxSize) when length(Entries) > MaxSize ->
+    lists:sublist(Entries, MaxSize);
+enforce_max_size(Entries, _MaxSize) ->
+    Entries.
 
 %% @doc Get entry from cache.
 %% Returns {ok, Value, UpdatedCache} or not_found.
 %% The updated cache has the entry moved to front (LRU).
 -spec get(cache(), key()) -> {ok, value(), cache()} | not_found.
 get(#{entries := Entries} = Cache, Key) ->
-    case find_entry(Entries, Key) of
-        {found, Entry} ->
-            %% Move to front (most recently used)
-            Value = maps:get(value, Entry),
-            Timestamp = erlang:system_time(millisecond),
-            UpdatedCache = put(Cache, Key, Value, Timestamp),
+    FindResult = find_entry(Entries, Key),
+    do_get(FindResult, Cache, Key).
 
-            {ok, Value, UpdatedCache};
-
-        not_found ->
-            not_found
-    end.
+%% @private Entry found - move to front
+do_get({found, Entry}, Cache, Key) ->
+    Value = maps:get(value, Entry),
+    Timestamp = erlang:system_time(millisecond),
+    UpdatedCache = put(Cache, Key, Value, Timestamp),
+    {ok, Value, UpdatedCache};
+%% @private Entry not found
+do_get(not_found, _Cache, _Key) ->
+    not_found.
 
 %% @doc Remove entry from cache.
 -spec remove(cache(), key()) -> cache().
@@ -136,8 +139,7 @@ keys(#{entries := Entries}) ->
 -spec find_entry([entry()], key()) -> {found, entry()} | not_found.
 find_entry([], _Key) ->
     not_found;
-find_entry([Entry | Rest], Key) ->
-    case maps:get(key, Entry) of
-        Key -> {found, Entry};
-        _ -> find_entry(Rest, Key)
-    end.
+find_entry([#{key := Key} = Entry | _Rest], Key) ->
+    {found, Entry};
+find_entry([_Entry | Rest], Key) ->
+    find_entry(Rest, Key).

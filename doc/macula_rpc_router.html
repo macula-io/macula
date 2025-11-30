@@ -1,564 +1,90 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.10.1">
-
-
-    <title>macula_rpc_router — macula v0.10.1</title>
-
-    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
-
-    <script defer src="dist/sidebar_items-1151EC94.js"></script>
-    <script defer src="docs_config.js"></script>
-    <script defer src="dist/html-DPJLHKSM.js"></script>
-
-  </head>
-  <body>
-    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
-</script>
-
-<div class="body-wrapper">
-
-<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
-  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
-</button>
-
-<nav id="sidebar" class="sidebar">
-
-  <div class="sidebar-header">
-    <div class="sidebar-projectInfo">
-
-        <a href="readme.html" class="sidebar-projectImage">
-          <img src="assets/logo.svg" alt="macula" />
-        </a>
-
-      <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
-macula
-        </a>
-        <div class="sidebar-projectVersion" translate="no">
-          v0.10.1
-        </div>
-      </div>
-    </div>
-    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
-  </div>
-</nav>
-
-<output role="status" id="toast"></output>
-
-<main class="content page-module" id="main" data-type="modules">
-  <div id="content" class="content-inner">
-    <div class="top-search">
-      <div class="search-settings">
-        <form class="search-bar" action="search.html">
-          <label class="search-label">
-            <span class="sr-only">Search documentation of macula</span>
-            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </label>
-          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
-            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
-          </button>
-          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
-            <i class="ri-close-line ri-lg" title="Cancel search"></i>
-          </button>
-        </form>
-        <div class="autocomplete">
-        </div>
-        <button class="icon-settings display-settings">
-          <i class="ri-settings-3-line"></i>
-          <span class="sr-only">Settings</span>
-        </button>
-      </div>
-    </div>
-
-<div id="top-content">
-  <div class="heading-with-actions top-heading">
-    <h1>
-      <span translate="no">macula_rpc_router</span> 
-      <small class="app-vsn" translate="no">(macula v0.10.1)</small>
-
-    </h1>
-
-      <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_rpc_system/macula_rpc_router.erl#L7" title="View Source" class="icon-action" rel="help">
-        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        <span class="sr-only">View Source</span>
-      </a>
-
-  </div>
-
-
-    <section id="moduledoc">
-<p>RPC call routing strategies. Selects which provider to use for a call (local or remote).</p>
-    </section>
-
-</div>
-
-  <section id="summary" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#summary">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Summary</span>
-    </h1>
-<div class="summary-types summary">
-  <h2>
-    <a href="#types">Types</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:provider_info/0" data-no-tooltip="" translate="no">provider_info/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:registration/0" data-no-tooltip="" translate="no">registration/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:router_state/0" data-no-tooltip="" translate="no">router_state/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:strategy/0" data-no-tooltip="" translate="no">strategy/0</a>
-
-      </div>
-
-    </div>
-
-</div>
-<div class="summary-functions summary">
-  <h2>
-    <a href="#functions">Functions</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#new_state/1" data-no-tooltip="" translate="no">new_state(Strategy)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Create new router state.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#select_local/1" data-no-tooltip="" translate="no">select_local(Rest)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Select local handler (returns first one).</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#select_provider/3" data-no-tooltip="" translate="no">select_provider(_, LocalHandlers, RemoteProviders)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Select provider using stateless strategy. For local_first, random, and closest strategies.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#select_provider_closest/3" data-no-tooltip="" translate="no">select_provider_closest(LocalNodeId, LocalHandlers, RemoteProviders)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Select provider using closest strategy (requires local node ID).</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#select_provider_stateful/3" data-no-tooltip="" translate="no">select_provider_stateful(State, LocalHandlers, RemoteProviders)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Select provider using stateful strategy (for round_robin).</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#select_remote_random/1" data-no-tooltip="" translate="no">select_remote_random(Providers)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Select random remote provider.</p></div>
-
-    </div>
-
-</div>
-
-  </section>
-
-
-  <section id="types" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#types">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Types</span>
-    </h1>
-    <div class="types-list">
-<section class="detail" id="t:provider_info/0">
-
-  <div class="detail-header">
-    <a href="#t:provider_info/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">provider_info/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_rpc_system/macula_rpc_router.erl#L22" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> provider_info() :: <a href="macula_rpc_discovery.html#t:provider_info/0">macula_rpc_discovery:provider_info</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:registration/0">
-
-  <div class="detail-header">
-    <a href="#t:registration/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">registration/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_rpc_system/macula_rpc_router.erl#L21" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> registration() :: <a href="macula_rpc_registry.html#t:registration/0">macula_rpc_registry:registration</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:router_state/0">
-
-  <div class="detail-header">
-    <a href="#t:router_state/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">router_state/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_rpc_system/macula_rpc_router.erl#L24" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> router_state() :: #{strategy := <a href="#t:strategy/0">strategy</a>(), round_robin_index := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:strategy/0">
-
-  <div class="detail-header">
-    <a href="#t:strategy/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">strategy/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_rpc_system/macula_rpc_router.erl#L20" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> strategy() :: local_first | round_robin | random | closest.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-
-    </div>
-  </section>
-
-  <section id="functions" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#functions">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Functions</span>
-    </h1>
-    <div class="functions-list">
-<section class="detail" id="new_state/1">
-
-  <div class="detail-header">
-    <a href="#new_state/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">new_state(Strategy)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_rpc_system/macula_rpc_router.erl#L37" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> new_state(<a href="#t:strategy/0">strategy</a>()) -> <a href="#t:router_state/0">router_state</a>().</pre>
-
-      </div>
-
-<p>Create new router state.</p>
-  </section>
-</section>
-<section class="detail" id="select_local/1">
-
-  <div class="detail-header">
-    <a href="#select_local/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">select_local(Rest)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_rpc_system/macula_rpc_router.erl#L110" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> select_local([<a href="#t:registration/0">registration</a>()]) -> {ok, <a href="#t:registration/0">registration</a>()} | not_found.</pre>
-
-      </div>
-
-<p>Select local handler (returns first one).</p>
-  </section>
-</section>
-<section class="detail" id="select_provider/3">
-
-  <div class="detail-header">
-    <a href="#select_provider/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">select_provider(_, LocalHandlers, RemoteProviders)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_rpc_system/macula_rpc_router.erl#L47" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> select_provider(<a href="#t:strategy/0">strategy</a>(), [<a href="#t:registration/0">registration</a>()], [<a href="#t:provider_info/0">provider_info</a>()]) ->
-                         {local, <a href="#t:registration/0">registration</a>()} | {remote, <a href="#t:provider_info/0">provider_info</a>()} | {error, no_provider}.</pre>
-
-      </div>
-
-<p>Select provider using stateless strategy. For local_first, random, and closest strategies.</p>
-  </section>
-</section>
-<section class="detail" id="select_provider_closest/3">
-
-  <div class="detail-header">
-    <a href="#select_provider_closest/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">select_provider_closest(LocalNodeId, LocalHandlers, RemoteProviders)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_rpc_system/macula_rpc_router.erl#L98" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> select_provider_closest(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), [<a href="#t:registration/0">registration</a>()], [<a href="#t:provider_info/0">provider_info</a>()]) ->
-                                 {local, <a href="#t:registration/0">registration</a>()} |
-                                 {remote, <a href="#t:provider_info/0">provider_info</a>()} |
-                                 {error, no_provider}.</pre>
-
-      </div>
-
-<p>Select provider using closest strategy (requires local node ID).</p>
-  </section>
-</section>
-<section class="detail" id="select_provider_stateful/3">
-
-  <div class="detail-header">
-    <a href="#select_provider_stateful/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">select_provider_stateful(State, LocalHandlers, RemoteProviders)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_rpc_system/macula_rpc_router.erl#L74" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> select_provider_stateful(<a href="#t:router_state/0">router_state</a>(), [<a href="#t:registration/0">registration</a>()], [<a href="#t:provider_info/0">provider_info</a>()]) ->
-                                  {{local, <a href="#t:registration/0">registration</a>()} |
-                                   {remote, <a href="#t:provider_info/0">provider_info</a>()} |
-                                   {error, no_provider},
-                                   <a href="#t:router_state/0">router_state</a>()}.</pre>
-
-      </div>
-
-<p>Select provider using stateful strategy (for round_robin).</p>
-  </section>
-</section>
-<section class="detail" id="select_remote_random/1">
-
-  <div class="detail-header">
-    <a href="#select_remote_random/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">select_remote_random(Providers)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_rpc_system/macula_rpc_router.erl#L117" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> select_remote_random([<a href="#t:provider_info/0">provider_info</a>()]) -> {ok, <a href="#t:provider_info/0">provider_info</a>()} | not_found.</pre>
-
-      </div>
-
-<p>Select random remote provider.</p>
-  </section>
-</section>
-
-    </div>
-  </section>
-
-    <footer class="footer">
-      <p>
-
-          <span class="line">
-            <a href="https://hex.pm/packages/macula/0.10.1" class="footer-hex-package">Hex Package</a>
-
-            <a href="https://preview.hex.pm/preview/macula/0.10.1">Hex Preview</a>
-
-          </span>
-
-        <span class="line">
-          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
-            Search HexDocs
-          </button>
-
-            <a href="macula.epub" title="ePub version">
-              Download ePub version
-            </a>
-
-        </span>
-      </p>
-
-      <p class="built-using">
-        Built using
-        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
-
-          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
-
-      </p>
-
-    </footer>
-  </div>
-</main>
-</div>
-
-  </body>
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_rpc_router</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_rpc_router</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+   RPC call routing strategies.
+
+
+<h2><a name="description">Description</a></h2>
+   RPC call routing strategies.
+   Selects which provider to use for a call (local or remote).
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-provider_info">provider_info()</a></h3>
+<p><code>provider_info() = <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_rpc_discovery.html#type-provider_info" docgen-rel="seetype" docgen-href="macula:macula_rpc_discovery#provider_info/0">macula_rpc_discovery:provider_info()</a></code></p>
+
+
+<h3 class="typedecl"><a name="type-registration">registration()</a></h3>
+<p><code>registration() = <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_rpc_registry.html#type-registration" docgen-rel="seetype" docgen-href="macula:macula_rpc_registry#registration/0">macula_rpc_registry:registration()</a></code></p>
+
+
+<h3 class="typedecl"><a name="type-router_state">router_state()</a></h3>
+<p><code>router_state() = #{strategy := <a href="#type-strategy" docgen-rel="seetype" docgen-href="#strategy/0">strategy()</a>, round_robin_index := non_neg_integer()}</code></p>
+
+
+<h3 class="typedecl"><a name="type-strategy">strategy()</a></h3>
+<p><code>strategy() = local_first | round_robin | random | closest</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#new_state-1">new_state/1</a></td><td>Create new router state.</td></tr>
+<tr><td valign="top"><a href="#select_local-1">select_local/1</a></td><td>Select local handler (returns first one).</td></tr>
+<tr><td valign="top"><a href="#select_provider-3">select_provider/3</a></td><td>Select provider using stateless strategy.</td></tr>
+<tr><td valign="top"><a href="#select_provider_closest-3">select_provider_closest/3</a></td><td>Select provider using closest strategy (requires local node ID).</td></tr>
+<tr><td valign="top"><a href="#select_provider_stateful-3">select_provider_stateful/3</a></td><td>Select provider using stateful strategy (for round_robin).</td></tr>
+<tr><td valign="top"><a href="#select_remote_random-1">select_remote_random/1</a></td><td>Select random remote provider.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="new_state-1">new_state/1</a></h3>
+<div class="spec">
+<p><code>new_state(Strategy::<a href="#type-strategy" docgen-rel="seetype" docgen-href="#strategy/0">strategy()</a>) -&gt; <a href="#type-router_state" docgen-rel="seetype" docgen-href="#router_state/0">router_state()</a></code><br></p>
+<p> </p>
+</div><p>Create new router state.</p>
+
+<h3 class="function"><a name="select_local-1">select_local/1</a></h3>
+<div class="spec">
+<p><code>select_local(Rest::[<a href="#type-registration" docgen-rel="seetype" docgen-href="#registration/0">registration()</a>]) -&gt; {ok, <a href="#type-registration" docgen-rel="seetype" docgen-href="#registration/0">registration()</a>} | not_found</code><br></p>
+<p> </p>
+</div><p>Select local handler (returns first one).</p>
+
+<h3 class="function"><a name="select_provider-3">select_provider/3</a></h3>
+<div class="spec">
+<p><code>select_provider(X1::<a href="#type-strategy" docgen-rel="seetype" docgen-href="#strategy/0">strategy()</a>, LocalHandlers::[<a href="#type-registration" docgen-rel="seetype" docgen-href="#registration/0">registration()</a>], RemoteProviders::[<a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>]) -&gt; {local, <a href="#type-registration" docgen-rel="seetype" docgen-href="#registration/0">registration()</a>} | {remote, <a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>} | {error, no_provider}</code><br></p>
+<p> </p>
+</div><p>Select provider using stateless strategy.
+  For local_first, random, and closest strategies.</p>
+
+<h3 class="function"><a name="select_provider_closest-3">select_provider_closest/3</a></h3>
+<div class="spec">
+<p><code>select_provider_closest(LocalNodeId::binary(), LocalHandlers::[<a href="#type-registration" docgen-rel="seetype" docgen-href="#registration/0">registration()</a>], RemoteProviders::[<a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>]) -&gt; {local, <a href="#type-registration" docgen-rel="seetype" docgen-href="#registration/0">registration()</a>} | {remote, <a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>} | {error, no_provider}</code><br></p>
+<p> </p>
+</div><p>Select provider using closest strategy (requires local node ID).</p>
+
+<h3 class="function"><a name="select_provider_stateful-3">select_provider_stateful/3</a></h3>
+<div class="spec">
+<p><code>select_provider_stateful(State::<a href="#type-router_state" docgen-rel="seetype" docgen-href="#router_state/0">router_state()</a>, LocalHandlers::[<a href="#type-registration" docgen-rel="seetype" docgen-href="#registration/0">registration()</a>], RemoteProviders::[<a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>]) -&gt; {{local, <a href="#type-registration" docgen-rel="seetype" docgen-href="#registration/0">registration()</a>} | {remote, <a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>} | {error, no_provider}, <a href="#type-router_state" docgen-rel="seetype" docgen-href="#router_state/0">router_state()</a>}</code><br></p>
+<p> </p>
+</div><p>Select provider using stateful strategy (for round_robin).</p>
+
+<h3 class="function"><a name="select_remote_random-1">select_remote_random/1</a></h3>
+<div class="spec">
+<p><code>select_remote_random(Providers::[<a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>]) -&gt; {ok, <a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>} | not_found</code><br></p>
+<p> </p>
+</div><p>Select random remote provider.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
 </html>

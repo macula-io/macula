@@ -31,6 +31,8 @@
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([
     start_link/1,
@@ -73,7 +75,7 @@ register_procedures(GatewayPid) ->
 init(Opts) ->
     Realm = proplists:get_value(realm, Opts, <<"macula.default">>),
 
-    io:format("Starting diagnostics service for realm: ~s~n", [Realm]),
+    ?LOG_INFO("Starting diagnostics service for realm: ~s", [Realm]),
 
     State = #state{
         gateway_pid = undefined,
@@ -98,7 +100,7 @@ handle_cast({register_procedures, GatewayPid}, State) ->
         GatewayPid ! {register, self(), Procedure}
     end, Procedures),
 
-    io:format("Registered ~p diagnostic procedures~n", [length(Procedures)]),
+    ?LOG_INFO("Registered ~p diagnostic procedures", [length(Procedures)]),
 
     {noreply, State#state{gateway_pid = GatewayPid}};
 
@@ -116,7 +118,7 @@ handle_info({invoke, CallerPid, CallId, Procedure, Args}, State) ->
 
 %% Handle registration confirmations
 handle_info({registered, Procedure}, State) ->
-    io:format("Diagnostic procedure registered: ~s~n", [Procedure]),
+    ?LOG_INFO("Diagnostic procedure registered: ~s", [Procedure]),
     {noreply, State};
 
 handle_info(_Info, State) ->

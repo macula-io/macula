@@ -482,3 +482,129 @@ update_client_when_pool_full_test_() ->
             ?_assertEqual(2, length(Clients))
         ]
      end}.
+
+%%%===================================================================
+%%% Stale Stream Removal Tests (NAT Relay Support)
+%%%===================================================================
+
+%% @doc Test remove_stale_stream is exported
+remove_stale_stream_export_test() ->
+    Exports = macula_gateway_clients:module_info(exports),
+    ?assert(lists:member({remove_stale_stream, 2}, Exports)).
+
+%% @doc Test remove_stale_stream removes a stored stream
+remove_stale_stream_removes_stream_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     fun(Pid) ->
+        NodeId = <<"stale-node-123">>,
+        StreamPid = spawn(fun() -> timer:sleep(5000) end),
+
+        %% Store stream
+        ok = macula_gateway_clients:store_client_stream(Pid, NodeId, StreamPid),
+
+        %% Verify stream exists
+        {ok, _} = macula_gateway_clients:get_client_stream(Pid, NodeId),
+
+        %% Remove stale stream (async cast)
+        ok = macula_gateway_clients:remove_stale_stream(Pid, NodeId),
+        timer:sleep(50), %% Wait for async cast to process
+
+        %% Stream should be removed
+        [?_assertEqual(not_found, macula_gateway_clients:get_client_stream(Pid, NodeId))]
+     end}.
+
+%% @doc Test remove_stale_stream is idempotent (safe to call on non-existent node)
+remove_stale_stream_idempotent_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     fun(Pid) ->
+        %% Calling on non-existent node should not crash
+        ok = macula_gateway_clients:remove_stale_stream(Pid, <<"non-existent-node">>),
+        timer:sleep(50),
+
+        %% Manager should still be alive
+        [?_assert(erlang:is_process_alive(Pid))]
+     end}.
+
+%% @doc Test remove_stale_stream also removes endpoint mapping
+remove_stale_stream_removes_endpoint_mapping_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     fun(Pid) ->
+        NodeId = <<"node-with-endpoint">>,
+        Endpoint = <<"quic://192.168.1.100:4433">>,
+        StreamPid = spawn(fun() -> timer:sleep(5000) end),
+
+        %% Store stream with endpoint
+        ok = macula_gateway_clients:store_client_stream(Pid, NodeId, StreamPid, Endpoint),
+
+        %% Verify both mappings exist
+        {ok, _} = macula_gateway_clients:get_client_stream(Pid, NodeId),
+        {ok, _} = macula_gateway_clients:get_stream_by_endpoint(Pid, Endpoint),
+
+        %% Remove stale stream
+        ok = macula_gateway_clients:remove_stale_stream(Pid, NodeId),
+        timer:sleep(50),
+
+        %% Both mappings should be removed
+        [
+            ?_assertEqual(not_found, macula_gateway_clients:get_client_stream(Pid, NodeId)),
+            ?_assertEqual({error, not_found}, macula_gateway_clients:get_stream_by_endpoint(Pid, Endpoint))
+        ]
+     end}.
+
+%% @doc Test remove_stale_stream allows subsequent reconnection
+remove_stale_stream_allows_reconnection_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     fun(Pid) ->
+        NodeId = <<"reconnecting-node">>,
+        OldStreamPid = spawn(fun() -> timer:sleep(5000) end),
+        NewStreamPid = spawn(fun() -> timer:sleep(5000) end),
+
+        %% Store original stream
+        ok = macula_gateway_clients:store_client_stream(Pid, NodeId, OldStreamPid),
+        {ok, StoredOld} = macula_gateway_clients:get_client_stream(Pid, NodeId),
+
+        %% Remove stale stream (simulating closed connection)
+        ok = macula_gateway_clients:remove_stale_stream(Pid, NodeId),
+        timer:sleep(50),
+
+        %% Store new stream (reconnection)
+        ok = macula_gateway_clients:store_client_stream(Pid, NodeId, NewStreamPid),
+        {ok, StoredNew} = macula_gateway_clients:get_client_stream(Pid, NodeId),
+
+        [
+            ?_assertEqual(OldStreamPid, StoredOld),
+            ?_assertEqual(NewStreamPid, StoredNew),
+            ?_assertNotEqual(OldStreamPid, NewStreamPid)
+        ]
+     end}.
+
+%% @doc Test remove_stale_stream handles concurrent requests
+remove_stale_stream_concurrent_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     fun(Pid) ->
+        %% Create multiple nodes
+        Nodes = [<<"node-", (integer_to_binary(I))/binary>> || I <- lists:seq(1, 5)],
+        Streams = [spawn(fun() -> timer:sleep(5000) end) || _ <- lists:seq(1, 5)],
+
+        %% Store all streams
+        [ok = macula_gateway_clients:store_client_stream(Pid, N, S)
+         || {N, S} <- lists:zip(Nodes, Streams)],
+
+        %% Remove all concurrently (async casts)
+        [ok = macula_gateway_clients:remove_stale_stream(Pid, N) || N <- Nodes],
+        timer:sleep(100), %% Wait for all casts to process
+
+        %% All should be removed
+        Results = [macula_gateway_clients:get_client_stream(Pid, N) || N <- Nodes],
+        [?_assertEqual([not_found, not_found, not_found, not_found, not_found], Results)]
+     end}.

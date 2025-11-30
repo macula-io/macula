@@ -22,16 +22,11 @@
 %%%   -start_epmd false
 %%%   -macula_dist_port 4433
 %%%
-%%% == Architecture ==
-%%%
-%%% The carrier implements the OTP distribution protocol:
-%%%
-%%%   net_kernel <-> macula_dist <-> quicer <-> UDP/QUIC <-> remote node
+%%% Architecture: net_kernel - macula_dist - quicer - UDP/QUIC - remote node
 %%%
 %%% Node naming convention: port@ip (e.g., 4433@192.168.1.100)
 %%%
-%%% @copyright 2025 Macula.io
-%%% @license Apache-2.0
+%%% @copyright 2025 Macula.io Apache-2.0
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_dist).
@@ -376,16 +371,22 @@ do_setup(Node, Type, MyNode, _LongOrShortNames, SetupTime) ->
     end.
 
 %% @private Connect to remote node via QUIC
+%% Uses macula_tls for certificate verification settings (v0.11.0+)
 connect_quic(Host, Port) ->
     {CertFile, KeyFile} = get_tls_certs(),
 
-    ConnOpts = [
+    %% Get TLS verification options from centralized module
+    TlsOpts = macula_tls:quic_client_opts(),
+
+    %% Merge with distribution-specific options
+    BaseOpts = [
         {alpn, [?ALPN]},
         {certfile, CertFile},
         {keyfile, KeyFile},
-        {verify, none},  % TODO: Implement proper certificate verification
         {idle_timeout_ms, 60000}
     ],
+
+    ConnOpts = merge_dist_opts(BaseOpts, TlsOpts),
 
     error_logger:info_msg("macula_dist: connecting to ~s:~p~n", [Host, Port]),
     case quicer:connect(Host, Port, ConnOpts, ?CONNECT_TIMEOUT) of
@@ -536,6 +537,17 @@ quic_getopts({_Conn, _Stream}, _Opts) ->
 %%%===================================================================
 %%% Utility Functions
 %%%===================================================================
+
+%% @private Merge distribution connection options
+%% TLS options from macula_tls take precedence over base options
+merge_dist_opts(BaseOpts, TlsOpts) ->
+    lists:foldl(
+        fun({Key, Value}, Acc) ->
+            lists:keystore(Key, 1, Acc, {Key, Value})
+        end,
+        BaseOpts,
+        TlsOpts
+    ).
 
 %% @private Get distribution port from node name or config
 %% NodeName can be:

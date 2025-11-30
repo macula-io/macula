@@ -1,1353 +1,566 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.10.1">
-
-
-    <title>macula — macula v0.10.1</title>
-
-    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
-
-    <script defer src="dist/sidebar_items-1151EC94.js"></script>
-    <script defer src="docs_config.js"></script>
-    <script defer src="dist/html-DPJLHKSM.js"></script>
-
-  </head>
-  <body>
-    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
-</script>
-
-<div class="body-wrapper">
-
-<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
-  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
-</button>
-
-<nav id="sidebar" class="sidebar">
-
-  <div class="sidebar-header">
-    <div class="sidebar-projectInfo">
-
-        <a href="readme.html" class="sidebar-projectImage">
-          <img src="assets/logo.svg" alt="macula" />
-        </a>
-
-      <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
-macula
-        </a>
-        <div class="sidebar-projectVersion" translate="no">
-          v0.10.1
-        </div>
-      </div>
-    </div>
-    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
-  </div>
-</nav>
-
-<output role="status" id="toast"></output>
-
-<main class="content page-module" id="main" data-type="modules">
-  <div id="content" class="content-inner">
-    <div class="top-search">
-      <div class="search-settings">
-        <form class="search-bar" action="search.html">
-          <label class="search-label">
-            <span class="sr-only">Search documentation of macula</span>
-            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </label>
-          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
-            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
-          </button>
-          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
-            <i class="ri-close-line ri-lg" title="Cancel search"></i>
-          </button>
-        </form>
-        <div class="autocomplete">
-        </div>
-        <button class="icon-settings display-settings">
-          <i class="ri-settings-3-line"></i>
-          <span class="sr-only">Settings</span>
-        </button>
-      </div>
-    </div>
-
-<div id="top-content">
-  <div class="heading-with-actions top-heading">
-    <h1>
-      <span translate="no">macula</span> 
-      <small class="app-vsn" translate="no">(macula v0.10.1)</small>
-
-    </h1>
-
-      <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L45" title="View Source" class="icon-action" rel="help">
-        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        <span class="sr-only">View Source</span>
-      </a>
-
-  </div>
-
-
-    <section id="moduledoc">
-<p>Macula - Main API for distributed workloads on Macula platform.</p><p>This is the ONLY module workload applications should import. It provides a stable, versioned API for all platform operations:</p><p>- Mesh networking (connect, publish, subscribe, RPC) - Platform Layer (leader election, CRDTs, workload registration) - Service discovery (DHT queries, node identity)</p><h3 id="module-quick-start" class="section-heading"><a href="#module-quick-start" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Quick_Start">Quick Start</a></span></h3><p>Connect to local platform and publish events:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="p" data-group-id="3999817313-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Client</span><span class="p" data-group-id="3999817313-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">connect_local</span><span class="p" data-group-id="3999817313-2">(</span><span class="p" data-group-id="3999817313-3">#{</span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="3999817313-3">}</span><span class="p" data-group-id="3999817313-2">)</span><span class="p">,</span><span class="w">
-   </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">publish</span><span class="p" data-group-id="3999817313-4">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.events&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="3999817313-5">#{</span><span class="ss">type</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;test&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="3999817313-5">}</span><span class="p" data-group-id="3999817313-4">)</span><span class="p">.</span></code></pre><h3 id="module-architecture" class="section-heading"><a href="#module-architecture" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Architecture">Architecture</a></span></h3><p>Workload applications run in the same BEAM VM as the Macula platform. Use <code>connect_local/1` to connect via process-to-process communication: ``` Workload App → macula:connect_local/1 → macula_gateway → Mesh (QUIC/HTTP3)</code>''</p><h3 id="module-platform-layer-v0-10-0" class="section-heading"><a href="#module-platform-layer-v0-10-0" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Platform_Layer_(v0.10.0+)">Platform Layer (v0.10.0+)</a></span></h3><p>Register with platform for coordination features:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="p" data-group-id="6356109788-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="6356109788-2">#{</span><span class="ss">leader_node</span><span class="w"> </span><span class="p">:=</span><span class="w"> </span><span class="n">Leader</span><span class="p" data-group-id="6356109788-2">}</span><span class="p" data-group-id="6356109788-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">register_workload</span><span class="p" data-group-id="6356109788-3">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="6356109788-4">#{</span><span class="w">
-       </span><span class="ss">workload_name</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my_app&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="w">
-   </span><span class="p" data-group-id="6356109788-4">}</span><span class="p" data-group-id="6356109788-3">)</span><span class="p">.</span></code></pre><h3 id="module-dht-network-bootstrap" class="section-heading"><a href="#module-dht-network-bootstrap" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="DHT_Network_Bootstrap">DHT Network Bootstrap</a></span></h3><p>The platform handles DHT bootstrapping via <code>MACULA_BOOTSTRAP_PEERS`. Workloads don</code>t need to manage peer discovery.</p>
-    </section>
-
-</div>
-
-  <section id="summary" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#summary">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Summary</span>
-    </h1>
-<div class="summary-types summary">
-  <h2>
-    <a href="#types">Types</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:args/0" data-no-tooltip="" translate="no">args/0</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Arguments for RPC calls.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:client/0" data-no-tooltip="" translate="no">client/0</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Reference to a connected Macula mesh client.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:event_data/0" data-no-tooltip="" translate="no">event_data/0</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Event payload data. Typically a map that will be JSON-encoded.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:options/0" data-no-tooltip="" translate="no">options/0</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Connection or operation options.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:procedure/0" data-no-tooltip="" translate="no">procedure/0</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>RPC procedure name. Example: <code>&quot;my.app.get_user&quot;</code>.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:subscription_ref/0" data-no-tooltip="" translate="no">subscription_ref/0</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Reference to an active subscription for unsubscribe operations.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:topic/0" data-no-tooltip="" translate="no">topic/0</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Topic name for pub/sub operations. Topics should describe event types, not entity IDs. Example: <code>&quot;my.app.user.registered&quot;</code> (good), not <code>&quot;my.app.user.123.registered&quot;</code> (bad - ID belongs in payload).</p></div>
-
-    </div>
-
-</div>
-<div class="summary-functions summary">
-  <h2>
-    <a href="#functions">Functions</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#advertise/3" data-no-tooltip="" translate="no">advertise(Client, Procedure, Handler)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Advertise a service that this client provides.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#advertise/4" data-no-tooltip="" translate="no">advertise(Client, Procedure, Handler, Opts)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Advertise a service with options.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#call/3" data-no-tooltip="" translate="no">call(Client, Procedure, Args)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Make a synchronous RPC call.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#call/4" data-no-tooltip="" translate="no">call(Client, Procedure, Args, Opts)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Make an RPC call with options.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#connect/2" data-no-tooltip="" translate="no">connect(Url, Opts)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Connect to a Macula mesh network.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#connect_local/1" data-no-tooltip="" translate="no">connect_local(Opts)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Connect to the local Macula gateway (for in-VM workloads).</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#disconnect/1" data-no-tooltip="" translate="no">disconnect(Client)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Disconnect from the Macula mesh.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#discover_subscribers/2" data-no-tooltip="" translate="no">discover_subscribers(Client, Topic)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Discover subscribers to a topic via DHT query.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#get_leader/1" data-no-tooltip="" translate="no">get_leader(Client)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Get the current Platform Layer leader node.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#get_node_id/1" data-no-tooltip="" translate="no">get_node_id(Client)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Get the node ID of this client.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#propose_crdt_update/3" data-no-tooltip="" translate="no">propose_crdt_update(Client, Key, Value)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Propose a CRDT update to Platform Layer shared state.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#propose_crdt_update/4" data-no-tooltip="" translate="no">propose_crdt_update(Client, Key, Value, Opts)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Propose a CRDT update with specific CRDT type.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#publish/3" data-no-tooltip="" translate="no">publish(Client, Topic, Data)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Publish an event to a topic.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#publish/4" data-no-tooltip="" translate="no">publish(Client, Topic, Data, Opts)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Publish an event with options.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#read_crdt/2" data-no-tooltip="" translate="no">read_crdt(Client, Key)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Read the current value of a CRDT-managed shared state entry.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#register_workload/2" data-no-tooltip="" translate="no">register_workload(Client, Opts)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Register this workload with the Platform Layer.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#subscribe/3" data-no-tooltip="" translate="no">subscribe(Client, Topic, Callback)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Subscribe to a topic.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#subscribe_leader_changes/2" data-no-tooltip="" translate="no">subscribe_leader_changes(Client, Callback)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Subscribe to Platform Layer leader change notifications.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#unadvertise/2" data-no-tooltip="" translate="no">unadvertise(Client, Procedure)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Stop advertising a service.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#unsubscribe/2" data-no-tooltip="" translate="no">unsubscribe(Client, SubRef)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Unsubscribe from a topic.</p></div>
-
-    </div>
-
-</div>
-
-  </section>
-
-
-  <section id="types" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#types">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Types</span>
-    </h1>
-    <div class="types-list">
-<section class="detail" id="t:args/0">
-
-  <div class="detail-header">
-    <a href="#t:args/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">args/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L107" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> args() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-<p>Arguments for RPC calls.</p>
-  </section>
-</section>
-<section class="detail" id="t:client/0">
-
-  <div class="detail-header">
-    <a href="#t:client/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">client/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L93" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> client() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>().</pre>
-
-      </div>
-
-<p>Reference to a connected Macula mesh client.</p>
-  </section>
-</section>
-<section class="detail" id="t:event_data/0">
-
-  <div class="detail-header">
-    <a href="#t:event_data/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">event_data/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L101" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> event_data() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-<p>Event payload data. Typically a map that will be JSON-encoded.</p>
-  </section>
-</section>
-<section class="detail" id="t:options/0">
-
-  <div class="detail-header">
-    <a href="#t:options/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">options/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L110" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> options() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>().</pre>
-
-      </div>
-
-<p>Connection or operation options.</p>
-  </section>
-</section>
-<section class="detail" id="t:procedure/0">
-
-  <div class="detail-header">
-    <a href="#t:procedure/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">procedure/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L104" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> procedure() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-<p>RPC procedure name. Example: <code>&quot;my.app.get_user&quot;</code>.</p>
-  </section>
-</section>
-<section class="detail" id="t:subscription_ref/0">
-
-  <div class="detail-header">
-    <a href="#t:subscription_ref/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">subscription_ref/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L113" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> subscription_ref() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>().</pre>
-
-      </div>
-
-<p>Reference to an active subscription for unsubscribe operations.</p>
-  </section>
-</section>
-<section class="detail" id="t:topic/0">
-
-  <div class="detail-header">
-    <a href="#t:topic/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">topic/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L96" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> topic() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-<p>Topic name for pub/sub operations. Topics should describe event types, not entity IDs. Example: <code>&quot;my.app.user.registered&quot;</code> (good), not <code>&quot;my.app.user.123.registered&quot;</code> (bad - ID belongs in payload).</p>
-  </section>
-</section>
-
-    </div>
-  </section>
-
-  <section id="functions" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#functions">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Functions</span>
-    </h1>
-    <div class="functions-list">
-<section class="detail" id="advertise/3">
-
-  <div class="detail-header">
-    <a href="#advertise/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">advertise(Client, Procedure, Handler)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L379" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> advertise(Client :: <a href="#t:client/0">client</a>(),
-                Procedure :: <a href="#t:procedure/0">procedure</a>(),
-                Handler :: <a href="macula_service_registry.html#t:handler_fn/0">macula_service_registry:handler_fn</a>()) ->
-                   {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Advertise a service that this client provides.</p><p>Registers a handler function for the specified procedure and advertises it to the DHT so other clients can discover and call it.</p><p>The handler function receives a map of arguments and must return <code>{ok, Result}</code> or <code>{error, Reason}</code>.</p><h3 id="advertise/3-options" class="section-heading"><a href="#advertise/3-options" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Options">Options</a></span></h3><ul><li><code>ttl</code> - Advertisement TTL in seconds (default: 300)</li><li><code>metadata</code> - Custom metadata map (default: #{})</li></ul><h3 id="advertise/3-examples" class="section-heading"><a href="#advertise/3-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Define a handler function</span><span class="w">
-  </span><span class="n">Handler</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">fun</span><span class="p" data-group-id="1622743953-1">(</span><span class="p" data-group-id="1622743953-2">#{</span><span class="ss">user_id</span><span class="w"> </span><span class="p">:=</span><span class="w"> </span><span class="n">UserId</span><span class="p" data-group-id="1622743953-2">}</span><span class="p" data-group-id="1622743953-1">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
-      </span><span class="p" data-group-id="1622743953-3">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="1622743953-4">#{</span><span class="ss">user_id</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">UserId</span><span class="p">,</span><span class="w"> </span><span class="ss">name</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;Alice&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="1622743953-4">}</span><span class="p" data-group-id="1622743953-3">}</span><span class="w">
-  </span><span class="k">end</span><span class="p">.</span><span class="w">
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+Macula - Main API for distributed workloads on Macula platform.
+
+<p><b>Behaviours:</b> <a href="macula_client_behaviour.html"><code>macula_client_behaviour</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>   
+Macula - Main API for distributed workloads on Macula platform.</p>
+  
+   <p>This is the ONLY module workload applications should import. It provides   
+a stable, versioned API for all platform operations:</p>
+  
+   <p>- Mesh networking (connect, publish, subscribe, RPC)   
+- Platform Layer (leader election, CRDTs, workload registration)   
+- Service discovery (DHT queries, node identity)</p>
+  
+   <h3><a name="Quick_Start">Quick Start</a></h3>
+  
+   Connect to local platform and publish events:
+   <pre>   {ok, Client} = macula:connect_local(#{realm =&gt; &amp;lt;&amp;lt;"my.app"&amp;gt;&amp;gt;}),
+   ok = macula:publish(Client, &amp;lt;&amp;lt;"my.events"&amp;gt;&amp;gt;, #{type =&gt; &amp;lt;&amp;lt;"test"&amp;gt;&amp;gt;}).</pre>
+  
+   <h3><a name="Architecture">Architecture</a></h3>
+  
+   <p>Workload applications run in the same BEAM VM as the Macula platform.
+   Use <code>connect_local/1` to connect via process-to-process communication:
+  
+   ```
+   Workload App → macula:connect_local/1 → macula_gateway → Mesh (QUIC/HTTP3)</code>''</p>
+  
+   <h3><a name="Platform_Layer_(v0.10.0+)">Platform Layer (v0.10.0+)</a></h3>
+  
+   Register with platform for coordination features:
+   <pre>   {ok, #{leader_node := Leader}} = macula:register_workload(Client, #{
+       workload_name =&gt; &amp;lt;&amp;lt;"my_app"&amp;gt;&amp;gt;
+   }).</pre>
+  
+   <h3><a name="DHT_Network_Bootstrap">DHT Network Bootstrap</a></h3>
+  
+   The platform handles DHT bootstrapping via <code>MACULA_BOOTSTRAP_PEERS`.
+   Workloads don</code>t need to manage peer discovery.
+  
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-args">args()</a></h3>
+<p><code>args() = map() | list() | binary()</code></p>
+<p>  Arguments for RPC calls.</p>
+
+<h3 class="typedecl"><a name="type-client">client()</a></h3>
+<p><code>client() = pid()</code></p>
+<p>  Reference to a connected Macula mesh client.</p>
+
+<h3 class="typedecl"><a name="type-event_data">event_data()</a></h3>
+<p><code>event_data() = map() | binary()</code></p>
+<p>  Event payload data. Typically a map that will be JSON-encoded.</p>
+
+<h3 class="typedecl"><a name="type-options">options()</a></h3>
+<p><code>options() = map()</code></p>
+<p>  Connection or operation options.</p>
+
+<h3 class="typedecl"><a name="type-procedure">procedure()</a></h3>
+<p><code>procedure() = binary()</code></p>
+<p>  RPC procedure name. Example: <code>"my.app.get_user"</code>.</p>
+
+<h3 class="typedecl"><a name="type-subscription_ref">subscription_ref()</a></h3>
+<p><code>subscription_ref() = reference()</code></p>
+<p>  Reference to an active subscription for unsubscribe operations.</p>
+
+<h3 class="typedecl"><a name="type-topic">topic()</a></h3>
+<p><code>topic() = binary()</code></p>
+<p>  Topic name for pub/sub operations. Topics should describe event types,
+  not entity IDs. Example: <code>"my.app.user.registered"</code> (good),
+  not <code>"my.app.user.123.registered"</code> (bad - ID belongs in payload).</p>
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#advertise-3">advertise/3</a></td><td>Advertise a service that this client provides.</td></tr>
+<tr><td valign="top"><a href="#advertise-4">advertise/4</a></td><td>Advertise a service with options.</td></tr>
+<tr><td valign="top"><a href="#call-3">call/3</a></td><td>Make a synchronous RPC call.</td></tr>
+<tr><td valign="top"><a href="#call-4">call/4</a></td><td>Make an RPC call with options.</td></tr>
+<tr><td valign="top"><a href="#connect-2">connect/2</a></td><td>Connect to a Macula mesh network.</td></tr>
+<tr><td valign="top"><a href="#connect_local-1">connect_local/1</a></td><td>Connect to the local Macula gateway (for in-VM workloads).</td></tr>
+<tr><td valign="top"><a href="#disconnect-1">disconnect/1</a></td><td>Disconnect from the Macula mesh.</td></tr>
+<tr><td valign="top"><a href="#discover_subscribers-2">discover_subscribers/2</a></td><td>Discover subscribers to a topic via DHT query.</td></tr>
+<tr><td valign="top"><a href="#get_leader-1">get_leader/1</a></td><td>Get the current Platform Layer leader node.</td></tr>
+<tr><td valign="top"><a href="#get_node_id-1">get_node_id/1</a></td><td>Get the node ID of this client.</td></tr>
+<tr><td valign="top"><a href="#propose_crdt_update-3">propose_crdt_update/3</a></td><td>Propose a CRDT update to Platform Layer shared state.</td></tr>
+<tr><td valign="top"><a href="#propose_crdt_update-4">propose_crdt_update/4</a></td><td>Propose a CRDT update with specific CRDT type.</td></tr>
+<tr><td valign="top"><a href="#publish-3">publish/3</a></td><td>Publish an event to a topic.</td></tr>
+<tr><td valign="top"><a href="#publish-4">publish/4</a></td><td>Publish an event with options.</td></tr>
+<tr><td valign="top"><a href="#read_crdt-2">read_crdt/2</a></td><td>Read the current value of a CRDT-managed shared state entry.</td></tr>
+<tr><td valign="top"><a href="#register_workload-2">register_workload/2</a></td><td>Register this workload with the Platform Layer.</td></tr>
+<tr><td valign="top"><a href="#subscribe-3">subscribe/3</a></td><td>Subscribe to a topic.</td></tr>
+<tr><td valign="top"><a href="#subscribe_leader_changes-2">subscribe_leader_changes/2</a></td><td>Subscribe to Platform Layer leader change notifications.</td></tr>
+<tr><td valign="top"><a href="#unadvertise-2">unadvertise/2</a></td><td>Stop advertising a service.</td></tr>
+<tr><td valign="top"><a href="#unsubscribe-2">unsubscribe/2</a></td><td>Unsubscribe from a topic.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="advertise-3">advertise/3</a></h3>
+<div class="spec">
+<p><code>advertise(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Procedure::<a href="#type-procedure" docgen-rel="seetype" docgen-href="#procedure/0">procedure()</a>, Handler::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_service_registry.html#type-handler_fn" docgen-rel="seetype" docgen-href="macula:macula_service_registry#handler_fn/0">macula_service_registry:handler_fn()</a>) -&gt; {ok, reference()} | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Advertise a service that this client provides.</p>
  
-  </span><span class="c1">%% Advertise the service</span><span class="w">
-  </span><span class="p" data-group-id="1622743953-5">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Ref</span><span class="p" data-group-id="1622743953-5">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">advertise</span><span class="p" data-group-id="1622743953-6">(</span><span class="w">
-      </span><span class="n">Client</span><span class="p">,</span><span class="w">
-      </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.get_user&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w">
-      </span><span class="n">Handler</span><span class="w">
-  </span><span class="p" data-group-id="1622743953-6">)</span><span class="p">.</span><span class="w">
+  <p>Registers a handler function for the specified procedure and advertises  
+it to the DHT so other clients can discover and call it.</p>
  
-  </span><span class="c1">%% Other clients can now call:</span><span class="w">
-  </span><span class="c1">%% {ok, User} = macula:call(OtherClient, &amp;lt;&amp;lt;&quot;my.app.get_user&quot;&amp;gt;&amp;gt;,</span><span class="w">
-  </span><span class="c1">%%     #{user_id =&gt; &amp;lt;&amp;lt;&quot;user-123&quot;&amp;gt;&amp;gt;}).</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="advertise/4">
-
-  <div class="detail-header">
-    <a href="#advertise/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">advertise(Client, Procedure, Handler, Opts)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L387" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> advertise(Client :: <a href="#t:client/0">client</a>(),
-                Procedure :: <a href="#t:procedure/0">procedure</a>(),
-                Handler :: <a href="macula_service_registry.html#t:handler_fn/0">macula_service_registry:handler_fn</a>(),
-                Opts :: <a href="#t:options/0">options</a>()) ->
-                   {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Advertise a service with options.</p>
-  </section>
-</section>
-<section class="detail" id="call/3">
-
-  <div class="detail-header">
-    <a href="#call/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">call(Client, Procedure, Args)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L332" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> call(Client :: <a href="#t:client/0">client</a>(), Procedure :: <a href="#t:procedure/0">procedure</a>(), Args :: <a href="#t:args/0">args</a>()) ->
-              {ok, Result :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Make a synchronous RPC call.</p><p>Calls a remote procedure and waits for the result.</p><h3 id="call/3-examples" class="section-heading"><a href="#call/3-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Simple RPC call</span><span class="w">
-  </span><span class="p" data-group-id="0849213891-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">User</span><span class="p" data-group-id="0849213891-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">call</span><span class="p" data-group-id="0849213891-2">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.get_user&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="0849213891-3">#{</span><span class="w">
-      </span><span class="ss">user_id</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;user-123&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="w">
-  </span><span class="p" data-group-id="0849213891-3">}</span><span class="p" data-group-id="0849213891-2">)</span><span class="p">.</span><span class="w">
+  <p>The handler function receives a map of arguments and must return
+  <code>{ok, Result}</code> or <code>{error, Reason}</code>.</p>
  
-  </span><span class="c1">%% With timeout</span><span class="w">
-  </span><span class="p" data-group-id="0849213891-4">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Result</span><span class="p" data-group-id="0849213891-4">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">call</span><span class="p" data-group-id="0849213891-5">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.process&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w">
-      </span><span class="p" data-group-id="0849213891-6">#{</span><span class="ss">data</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;large&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="0849213891-6">}</span><span class="p">,</span><span class="w">
-      </span><span class="p" data-group-id="0849213891-7">#{</span><span class="ss">timeout</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">30000</span><span class="p" data-group-id="0849213891-7">}</span><span class="p" data-group-id="0849213891-5">)</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="call/4">
-
-  <div class="detail-header">
-    <a href="#call/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">call(Client, Procedure, Args, Opts)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L339" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> call(Client :: <a href="#t:client/0">client</a>(), Procedure :: <a href="#t:procedure/0">procedure</a>(), Args :: <a href="#t:args/0">args</a>(), Opts :: <a href="#t:options/0">options</a>()) ->
-              {ok, Result :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Make an RPC call with options.</p>
-  </section>
-</section>
-<section class="detail" id="connect/2">
-
-  <div class="detail-header">
-    <a href="#connect/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">connect(Url, Opts)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L149" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> connect(Url :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), Opts :: <a href="#t:options/0">options</a>()) -> {ok, <a href="#t:client/0">client</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Connect to a Macula mesh network.</p><p>Creates a new HTTP/3 (QUIC) connection to the specified mesh endpoint.</p><h3 id="connect/2-options" class="section-heading"><a href="#connect/2-options" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Options">Options</a></span></h3><ul><li><code>realm</code> - Required. Binary realm identifier (e.g., <code>&amp;lt;&amp;lt;&quot;my.app.realm&quot;&amp;gt;&amp;gt;</code>)</li><li><code>auth</code> - Optional. Authentication map with <code>api_key</code> or other auth methods</li><li><code>timeout</code> - Optional. Connection timeout in milliseconds (default: 5000)</li><li><code>node_id</code> - Optional. 32-byte node ID (generated if not provided)</li></ul><h3 id="connect/2-examples" class="section-heading"><a href="#connect/2-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Basic connection</span><span class="w">
-  </span><span class="p" data-group-id="8440701768-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Client</span><span class="p" data-group-id="8440701768-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">connect</span><span class="p" data-group-id="8440701768-2">(</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;https://mesh.local:443&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="8440701768-3">#{</span><span class="w">
-      </span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.realm&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="w">
-  </span><span class="p" data-group-id="8440701768-3">}</span><span class="p" data-group-id="8440701768-2">)</span><span class="p">.</span><span class="w">
+  <h3><a name="Options">Options</a></h3>
  
-  </span><span class="c1">%% With API key authentication</span><span class="w">
-  </span><span class="p" data-group-id="8440701768-4">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Client</span><span class="p" data-group-id="8440701768-4">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">connect</span><span class="p" data-group-id="8440701768-5">(</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;https://mesh.local:443&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="8440701768-6">#{</span><span class="w">
-      </span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.realm&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w">
-      </span><span class="ss">auth</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="8440701768-7">#{</span><span class="ss">api_key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;secret-key&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="8440701768-7">}</span><span class="w">
-  </span><span class="p" data-group-id="8440701768-6">}</span><span class="p" data-group-id="8440701768-5">)</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="connect_local/1">
-
-  <div class="detail-header">
-    <a href="#connect_local/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">connect_local(Opts)</h1>
-
-        <span class="note">(since v0.8.9)</span>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L201" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> connect_local(Opts :: <a href="#t:options/0">options</a>()) -> {ok, <a href="#t:client/0">client</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Connect to the local Macula gateway (for in-VM workloads).</p><p>This function is used by applications running in the same BEAM VM as the Macula platform. Instead of creating a QUIC connection to localhost, it connects directly to the local <code>macula_gateway</code> process via process-to-process communication.</p><h3 id="connect_local/1-architecture" class="section-heading"><a href="#connect_local/1-architecture" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Architecture">Architecture</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="n">Phoenix</span><span class="o">/</span><span class="n">Elixir</span><span class="w"> </span><span class="n">App</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="ss">macula_local_client</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="ss">macula_gateway</span><span class="w">
-                                              </span><span class="err">↓</span><span class="w"> </span><span class="p" data-group-id="3563231626-1">(</span><span class="n">QUIC</span><span class="p" data-group-id="3563231626-1">)</span><span class="w">
-                                         </span><span class="n">Other</span><span class="w"> </span><span class="n">Peers</span></code></pre><h3 id="connect_local/1-when-to-use" class="section-heading"><a href="#connect_local/1-when-to-use" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="When_to_Use">When to Use</a></span></h3><ul><li>✅ Use <a href="#connect_local/1"><code>connect_local/1</code></a> when your application runs in the same VM as Macula</li><li>✅ Phoenix applications deployed with Macula in the same container</li><li>❌ Do NOT use <a href="#connect/2"><code>connect/2</code></a> with localhost URL - it creates unnecessary QUIC overhead</li></ul><h3 id="connect_local/1-options" class="section-heading"><a href="#connect_local/1-options" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Options">Options</a></span></h3><ul><li><code>realm</code> - Required. Binary realm identifier (e.g., <code>&amp;lt;&amp;lt;&quot;my.app.realm&quot;&amp;gt;&amp;gt;</code>)</li><li><code>event_handler</code> - Optional. PID to receive events (default: caller PID)</li></ul><h3 id="connect_local/1-examples" class="section-heading"><a href="#connect_local/1-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Elixir Phoenix application</span><span class="w">
-  </span><span class="p" data-group-id="8930130227-1">{</span><span class="p">:</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="ss">client</span><span class="p" data-group-id="8930130227-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">:</span><span class="ss">macula</span><span class="p">.</span><span class="nf">connect_local</span><span class="p" data-group-id="8930130227-2">(</span><span class="c1">%{</span><span class="w">
-      </span><span class="nc">realm</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;macula.arcade.dev&quot;</span><span class="w">
-  </span><span class="p">}</span><span class="p" data-group-id="8930130227-2">)</span><span class="w">
+  <ul>
+  <li><code>ttl</code> - Advertisement TTL in seconds (default: 300)</li>
+  <li><code>metadata</code> - Custom metadata map (default: #{})</li>
+  </ul>
  
-  </span><span class="c1">%% Erlang application</span><span class="w">
-  </span><span class="p" data-group-id="8930130227-3">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Client</span><span class="p" data-group-id="8930130227-3">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">connect_local</span><span class="p" data-group-id="8930130227-4">(</span><span class="p" data-group-id="8930130227-5">#{</span><span class="w">
-      </span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.realm&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="w">
-  </span><span class="p" data-group-id="8930130227-5">}</span><span class="p" data-group-id="8930130227-4">)</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="disconnect/1">
-
-  <div class="detail-header">
-    <a href="#disconnect/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">disconnect(Client)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L208" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> disconnect(Client :: <a href="#t:client/0">client</a>()) -> ok | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Disconnect from the Macula mesh.</p><p>Cleanly closes the HTTP/3 connection and cleans up all subscriptions.</p>
-  </section>
-</section>
-<section class="detail" id="discover_subscribers/2">
-
-  <div class="detail-header">
-    <a href="#discover_subscribers/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">discover_subscribers(Client, Topic)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L303" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> discover_subscribers(Client :: <a href="#t:client/0">client</a>(), Topic :: <a href="#t:topic/0">topic</a>()) ->
-                              {ok, [#{node_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), endpoint := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()}]} |
-                              {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Discover subscribers to a topic via DHT query.</p><p>Queries the DHT for all nodes subscribed to the given topic. Returns a list of subscriber nodes with their node IDs and endpoints.</p><p>This is used for P2P discovery before sending direct messages.</p>
-  </section>
-</section>
-<section class="detail" id="get_leader/1">
-
-  <div class="detail-header">
-    <a href="#get_leader/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">get_leader(Client)</h1>
-
-        <span class="note">(since v0.10.0)</span>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L475" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> get_leader(Client :: <a href="#t:client/0">client</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()} | {error, no_leader | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Get the current Platform Layer leader node.</p><p>Queries the Platform Layer for the current leader node ID. The leader is elected via Raft consensus and handles coordination tasks.</p><p>Returns <code>{error, no_leader}</code> if leader election is in progress.</p><h3 id="get_leader/1-examples" class="section-heading"><a href="#get_leader/1-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="k">case</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">get_leader</span><span class="p" data-group-id="7781911142-1">(</span><span class="n">Client</span><span class="p" data-group-id="7781911142-1">)</span><span class="w"> </span><span class="k">of</span><span class="w">
-      </span><span class="p" data-group-id="7781911142-2">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">LeaderNodeId</span><span class="p" data-group-id="7781911142-2">}</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
-          </span><span class="c1">%% Check if we&#39;re the leader</span><span class="w">
-          </span><span class="p" data-group-id="7781911142-3">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">OurNodeId</span><span class="p" data-group-id="7781911142-3">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">get_node_id</span><span class="p" data-group-id="7781911142-4">(</span><span class="n">Client</span><span class="p" data-group-id="7781911142-4">)</span><span class="p">,</span><span class="w">
-          </span><span class="k">case</span><span class="w"> </span><span class="n">LeaderNodeId</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">OurNodeId</span><span class="w"> </span><span class="k">of</span><span class="w">
-              </span><span class="ss">true</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nf">coordinate_globally</span><span class="p" data-group-id="7781911142-5">(</span><span class="p" data-group-id="7781911142-5">)</span><span class="p">;</span><span class="w">
-              </span><span class="ss">false</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nf">defer_to_leader</span><span class="p" data-group-id="7781911142-6">(</span><span class="p" data-group-id="7781911142-6">)</span><span class="w">
-          </span><span class="k">end</span><span class="p">;</span><span class="w">
-      </span><span class="p" data-group-id="7781911142-7">{</span><span class="ss">error</span><span class="p">,</span><span class="w"> </span><span class="ss">no_leader</span><span class="p" data-group-id="7781911142-7">}</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
-          </span><span class="nf">wait_for_leader_election</span><span class="p" data-group-id="7781911142-8">(</span><span class="p" data-group-id="7781911142-8">)</span><span class="w">
-  </span><span class="k">end</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="get_node_id/1">
-
-  <div class="detail-header">
-    <a href="#get_node_id/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">get_node_id(Client)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L310" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> get_node_id(Client :: <a href="#t:client/0">client</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Get the node ID of this client.</p><p>Returns the 32-byte node ID assigned to this client.</p>
-  </section>
-</section>
-<section class="detail" id="propose_crdt_update/3">
-
-  <div class="detail-header">
-    <a href="#propose_crdt_update/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">propose_crdt_update(Client, Key, Value)</h1>
-
-        <span class="note">(since v0.10.0)</span>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L532" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> propose_crdt_update(Client :: <a href="#t:client/0">client</a>(), Key :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), Value :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()) ->
-                             ok | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Propose a CRDT update to Platform Layer shared state.</p><p>Updates platform-managed shared state using Conflict-Free Replicated Data Types (CRDTs) for automatic conflict resolution across nodes.</p><p>Default CRDT type is <code>lww_register</code> (Last-Write-Wins Register). See <a href="#propose_crdt_update/4"><code>propose_crdt_update/4</code></a> for other CRDT types.</p><h3 id="propose_crdt_update/3-examples" class="section-heading"><a href="#propose_crdt_update/3-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Store simple value (LWW-Register)</span><span class="w">
-  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">propose_crdt_update</span><span class="p" data-group-id="9171358311-1">(</span><span class="w">
-      </span><span class="n">Client</span><span class="p">,</span><span class="w">
-      </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.config.max_users&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w">
-      </span><span class="mi">1000</span><span class="w">
-  </span><span class="p" data-group-id="9171358311-1">)</span><span class="p">.</span><span class="w">
+  <h3><a name="Examples">Examples</a></h3>
  
-  </span><span class="c1">%% Later read it back</span><span class="w">
-  </span><span class="p" data-group-id="9171358311-2">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="mi">1000</span><span class="p" data-group-id="9171358311-2">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">read_crdt</span><span class="p" data-group-id="9171358311-3">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.config.max_users&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="9171358311-3">)</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="propose_crdt_update/4">
-
-  <div class="detail-header">
-    <a href="#propose_crdt_update/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">propose_crdt_update(Client, Key, Value, Opts)</h1>
-
-        <span class="note">(since v0.10.0)</span>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L583" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> propose_crdt_update(Client :: <a href="#t:client/0">client</a>(), Key :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), Value :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(), Opts :: <a href="#t:options/0">options</a>()) ->
-                             ok | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Propose a CRDT update with specific CRDT type.</p><p>Updates platform-managed shared state using the specified CRDT type for automatic conflict resolution.</p><h3 id="propose_crdt_update/4-crdt-types" class="section-heading"><a href="#propose_crdt_update/4-crdt-types" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="CRDT_Types">CRDT Types</a></span></h3><ul><li><code>lww_register</code> - Last-Write-Wins Register (default)<ul><li>Use for: Configuration values, latest status</li><li>Conflict resolution: Latest timestamp wins</li></ul></li><li><code>g_counter</code> - Grow-Only Counter<ul><li>Use for: Metrics, totals (never decrease)</li><li>Operations: increment only</li></ul></li><li><code>pn_counter</code> - Positive-Negative Counter<ul><li>Use for: Bidirectional counters (can increase/decrease)</li><li>Operations: increment, decrement</li></ul></li><li><code>g_set</code> - Grow-Only Set<ul><li>Use for: Accumulating collections (never remove)</li><li>Operations: add elements only</li></ul></li><li><code>or_set</code> - Observed-Remove Set<ul><li>Use for: Sets with add/remove operations</li><li>Operations: add, remove elements</li></ul></li></ul><h3 id="propose_crdt_update/4-examples" class="section-heading"><a href="#propose_crdt_update/4-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Increment a counter</span><span class="w">
-  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">propose_crdt_update</span><span class="p" data-group-id="4730747360-1">(</span><span class="w">
-      </span><span class="n">Client</span><span class="p">,</span><span class="w">
-      </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.active_games&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w">
-      </span><span class="p" data-group-id="4730747360-2">{</span><span class="ss">increment</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p" data-group-id="4730747360-2">}</span><span class="p">,</span><span class="w">
-      </span><span class="p" data-group-id="4730747360-3">#{</span><span class="ss">crdt_type</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ss">pn_counter</span><span class="p" data-group-id="4730747360-3">}</span><span class="w">
-  </span><span class="p" data-group-id="4730747360-1">)</span><span class="p">.</span><span class="w">
+  <pre>  %% Define a handler function
+  Handler = fun(#{user_id := UserId}) -&gt;
+      {ok, #{user_id =&gt; UserId, name =&gt; &amp;lt;&amp;lt;"Alice"&amp;gt;&amp;gt;}}
+  end.
  
-  </span><span class="c1">%% Add to a set</span><span class="w">
-  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">propose_crdt_update</span><span class="p" data-group-id="4730747360-4">(</span><span class="w">
-      </span><span class="n">Client</span><span class="p">,</span><span class="w">
-      </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.player_ids&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w">
-      </span><span class="p" data-group-id="4730747360-5">{</span><span class="ss">add</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;player123&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="4730747360-5">}</span><span class="p">,</span><span class="w">
-      </span><span class="p" data-group-id="4730747360-6">#{</span><span class="ss">crdt_type</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ss">or_set</span><span class="p" data-group-id="4730747360-6">}</span><span class="w">
-  </span><span class="p" data-group-id="4730747360-4">)</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="publish/3">
-
-  <div class="detail-header">
-    <a href="#publish/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">publish(Client, Topic, Data)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L243" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> publish(Client :: <a href="#t:client/0">client</a>(), Topic :: <a href="#t:topic/0">topic</a>(), Data :: <a href="#t:event_data/0">event_data</a>()) ->
-                 ok | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Publish an event to a topic.</p><p>Publishes data to the specified topic. All subscribers to this topic will receive the event.</p><h3 id="publish/3-topic-design" class="section-heading"><a href="#publish/3-topic-design" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Topic_Design">Topic Design</a></span></h3><p>Topics should describe EVENT TYPES, not entity instances:</p><ul><li>Good: <code>&amp;lt;&amp;lt;&quot;my.app.user.registered&quot;&amp;gt;&amp;gt;</code> (event type)</li><li>Bad: <code>&amp;lt;&amp;lt;&quot;my.app.user.123.registered&quot;&amp;gt;&amp;gt;</code> (entity ID in topic)</li></ul><p>Entity IDs belong in the event payload, not the topic name.</p><h3 id="publish/3-examples" class="section-heading"><a href="#publish/3-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Publish with default options</span><span class="w">
-  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">publish</span><span class="p" data-group-id="4471890904-1">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.events&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4471890904-2">#{</span><span class="w">
-      </span><span class="ss">type</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;user.registered&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w">
-      </span><span class="ss">user_id</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;user-123&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w">
-      </span><span class="ss">email</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;user@example.com&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="w">
-  </span><span class="p" data-group-id="4471890904-2">}</span><span class="p" data-group-id="4471890904-1">)</span><span class="p">.</span><span class="w">
+  %% Advertise the service
+  {ok, Ref} = macula:advertise(
+      Client,
+      &amp;lt;&amp;lt;"my.app.get_user"&amp;gt;&amp;gt;,
+      Handler
+  ).
  
-  </span><span class="c1">%% Publish with options</span><span class="w">
-  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">publish</span><span class="p" data-group-id="4471890904-3">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.events&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4471890904-4">#{</span><span class="w">
-      </span><span class="ss">data</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;important&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="w">
-  </span><span class="p" data-group-id="4471890904-4">}</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4471890904-5">#{</span><span class="ss">acknowledge</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ss">true</span><span class="p" data-group-id="4471890904-5">}</span><span class="p" data-group-id="4471890904-3">)</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="publish/4">
+  %% Other clients can now call:
+  %% {ok, User} = macula:call(OtherClient, &amp;lt;&amp;lt;"my.app.get_user"&amp;gt;&amp;gt;,
+  %%     #{user_id =&gt; &amp;lt;&amp;lt;"user-123"&amp;gt;&amp;gt;}).</pre></p>
 
-  <div class="detail-header">
-    <a href="#publish/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">publish(Client, Topic, Data, Opts)</h1>
+<h3 class="function"><a name="advertise-4">advertise/4</a></h3>
+<div class="spec">
+<p><code>advertise(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Procedure::<a href="#type-procedure" docgen-rel="seetype" docgen-href="#procedure/0">procedure()</a>, Handler::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_service_registry.html#type-handler_fn" docgen-rel="seetype" docgen-href="macula:macula_service_registry#handler_fn/0">macula_service_registry:handler_fn()</a>, Opts::<a href="#type-options" docgen-rel="seetype" docgen-href="#options/0">options()</a>) -&gt; {ok, reference()} | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p>Advertise a service with options.</p>
 
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L254" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> publish(Client :: <a href="#t:client/0">client</a>(), Topic :: <a href="#t:topic/0">topic</a>(), Data :: <a href="#t:event_data/0">event_data</a>(), Opts :: <a href="#t:options/0">options</a>()) ->
-                 ok | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Publish an event with options.</p><p>This is fire-and-forget - returns ok immediately without blocking. Uses gen_server:cast to avoid blocking the caller (prevents LiveView freezes). Both macula_local_client and macula_peer handle {publish_async, ...} casts.</p>
-  </section>
-</section>
-<section class="detail" id="read_crdt/2">
-
-  <div class="detail-header">
-    <a href="#read_crdt/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">read_crdt(Client, Key)</h1>
-
-        <span class="note">(since v0.10.0)</span>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L609" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> read_crdt(Client :: <a href="#t:client/0">client</a>(), Key :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, not_found | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Read the current value of a CRDT-managed shared state entry.</p><p>Reads from the local CRDT replica. The value reflects all converged updates from across the platform cluster.</p><p>Returns <code>{error, not_found}</code> if the key has never been written.</p><h3 id="read_crdt/2-examples" class="section-heading"><a href="#read_crdt/2-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Read LWW-Register value</span><span class="w">
-  </span><span class="p" data-group-id="7111758647-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">MaxUsers</span><span class="p" data-group-id="7111758647-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">read_crdt</span><span class="p" data-group-id="7111758647-2">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.config.max_users&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="7111758647-2">)</span><span class="p">.</span><span class="w">
+<h3 class="function"><a name="call-3">call/3</a></h3>
+<div class="spec">
+<p><code>call(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Procedure::<a href="#type-procedure" docgen-rel="seetype" docgen-href="#procedure/0">procedure()</a>, Args::<a href="#type-args" docgen-rel="seetype" docgen-href="#args/0">args()</a>) -&gt; {ok, Result::term()} | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Make a synchronous RPC call.</p>
  
-  </span><span class="c1">%% Read counter value</span><span class="w">
-  </span><span class="p" data-group-id="7111758647-3">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">GameCount</span><span class="p" data-group-id="7111758647-3">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">read_crdt</span><span class="p" data-group-id="7111758647-4">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.active_games&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="7111758647-4">)</span><span class="p">.</span><span class="w">
+  <p>Calls a remote procedure and waits for the result.</p>
  
-  </span><span class="c1">%% Read set value</span><span class="w">
-  </span><span class="p" data-group-id="7111758647-5">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">PlayerSet</span><span class="p" data-group-id="7111758647-5">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">read_crdt</span><span class="p" data-group-id="7111758647-6">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.player_ids&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="7111758647-6">)</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="register_workload/2">
-
-  <div class="detail-header">
-    <a href="#register_workload/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">register_workload(Client, Opts)</h1>
-
-        <span class="note">(since v0.10.0)</span>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L446" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> register_workload(Client :: <a href="#t:client/0">client</a>(), Opts :: <a href="#t:options/0">options</a>()) ->
-                           {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Register this workload with the Platform Layer.</p><p>Registers the workload application with Macula's Platform Layer and returns information about the current platform cluster state, including the current leader node.</p><h3 id="register_workload/2-options" class="section-heading"><a href="#register_workload/2-options" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Options">Options</a></span></h3><ul><li><code>workload_name</code> - Required. Binary name identifying this workload type (e.g., <code>&amp;lt;&amp;lt;&quot;macula_arcade&quot;&amp;gt;&amp;gt;</code>, <code>&amp;lt;&amp;lt;&quot;my_app&quot;&amp;gt;&amp;gt;</code>)</li><li><code>capabilities</code> - Optional. List of atoms describing workload capabilities (e.g., <code>[coordinator, game_server]</code>)</li></ul><h3 id="register_workload/2-returns" class="section-heading"><a href="#register_workload/2-returns" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Returns">Returns</a></span></h3><ul><li><code>leader_node</code> - Binary node ID of the current Platform Layer leader</li><li><code>cluster_size</code> - Integer count of nodes in the platform cluster</li><li><code>platform_version</code> - Binary version string (e.g., <code>&amp;lt;&amp;lt;&quot;0.10.0&quot;&amp;gt;&amp;gt;</code>)</li></ul><h3 id="register_workload/2-examples" class="section-heading"><a href="#register_workload/2-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="p" data-group-id="1807934400-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Client</span><span class="p" data-group-id="1807934400-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">connect_local</span><span class="p" data-group-id="1807934400-2">(</span><span class="p" data-group-id="1807934400-3">#{</span><span class="ss">realm</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="1807934400-3">}</span><span class="p" data-group-id="1807934400-2">)</span><span class="p">,</span><span class="w">
-  </span><span class="p" data-group-id="1807934400-4">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Info</span><span class="p" data-group-id="1807934400-4">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">register_workload</span><span class="p" data-group-id="1807934400-5">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="1807934400-6">#{</span><span class="w">
-      </span><span class="ss">workload_name</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my_app_coordinator&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w">
-      </span><span class="ss">capabilities</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="1807934400-7">[</span><span class="ss">coordinator</span><span class="p">,</span><span class="w"> </span><span class="ss">matchmaking</span><span class="p" data-group-id="1807934400-7">]</span><span class="w">
-  </span><span class="p" data-group-id="1807934400-6">}</span><span class="p" data-group-id="1807934400-5">)</span><span class="p">,</span><span class="w">
-  </span><span class="p" data-group-id="1807934400-8">#{</span><span class="ss">leader_node</span><span class="w"> </span><span class="p">:=</span><span class="w"> </span><span class="n">Leader</span><span class="p">,</span><span class="w"> </span><span class="ss">cluster_size</span><span class="w"> </span><span class="p">:=</span><span class="w"> </span><span class="n">Size</span><span class="p" data-group-id="1807934400-8">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Info</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="subscribe/3">
-
-  <div class="detail-header">
-    <a href="#subscribe/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">subscribe(Client, Topic, Callback)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L284" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> subscribe(Client :: <a href="#t:client/0">client</a>(), Topic :: <a href="#t:topic/0">topic</a>(), Callback :: fun((<a href="#t:event_data/0">event_data</a>()) -> ok)) ->
-                   {ok, <a href="#t:subscription_ref/0">subscription_ref</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Subscribe to a topic.</p><p>Subscribes to events on the specified topic. The callback function will be invoked for each event received.</p><h3 id="subscribe/3-callback-function" class="section-heading"><a href="#subscribe/3-callback-function" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Callback_Function">Callback Function</a></span></h3><p>The callback receives the event data and should return <code>ok</code>.</p><h3 id="subscribe/3-examples" class="section-heading"><a href="#subscribe/3-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Simple subscription</span><span class="w">
-  </span><span class="p" data-group-id="5948549765-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">SubRef</span><span class="p" data-group-id="5948549765-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">subscribe</span><span class="p" data-group-id="5948549765-2">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.events&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p">,</span><span class="w">
-      </span><span class="nf">fun</span><span class="p" data-group-id="5948549765-3">(</span><span class="n">EventData</span><span class="p" data-group-id="5948549765-3">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
-          </span><span class="nc">io</span><span class="p">:</span><span class="nf">format</span><span class="p" data-group-id="5948549765-4">(</span><span class="s">&quot;Event: </span><span class="si">~p</span><span class="si">~n</span><span class="s">&quot;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="5948549765-5">[</span><span class="n">EventData</span><span class="p" data-group-id="5948549765-5">]</span><span class="p" data-group-id="5948549765-4">)</span><span class="p">,</span><span class="w">
-          </span><span class="ss">ok</span><span class="w">
-      </span><span class="k">end</span><span class="p" data-group-id="5948549765-2">)</span><span class="p">.</span><span class="w">
+  <h3><a name="Examples">Examples</a></h3>
  
-  </span><span class="c1">%% Unsubscribe later</span><span class="w">
-  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">unsubscribe</span><span class="p" data-group-id="5948549765-6">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="n">SubRef</span><span class="p" data-group-id="5948549765-6">)</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="subscribe_leader_changes/2">
+  <pre>  %% Simple RPC call
+  {ok, User} = macula:call(Client, &amp;lt;&amp;lt;"my.app.get_user"&amp;gt;&amp;gt;, #{
+      user_id =&gt; &amp;lt;&amp;lt;"user-123"&amp;gt;&amp;gt;
+  }).
+ 
+  %% With timeout
+  {ok, Result} = macula:call(Client, &amp;lt;&amp;lt;"my.app.process"&amp;gt;&amp;gt;,
+      #{data =&gt; &amp;lt;&amp;lt;"large"&amp;gt;&amp;gt;},
+      #{timeout =&gt; 30000}).</pre></p>
 
-  <div class="detail-header">
-    <a href="#subscribe_leader_changes/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">subscribe_leader_changes(Client, Callback)</h1>
+<h3 class="function"><a name="call-4">call/4</a></h3>
+<div class="spec">
+<p><code>call(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Procedure::<a href="#type-procedure" docgen-rel="seetype" docgen-href="#procedure/0">procedure()</a>, Args::<a href="#type-args" docgen-rel="seetype" docgen-href="#args/0">args()</a>, Opts::<a href="#type-options" docgen-rel="seetype" docgen-href="#options/0">options()</a>) -&gt; {ok, Result::term()} | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p>Make an RPC call with options.</p>
 
-        <span class="note">(since v0.10.0)</span>
+<h3 class="function"><a name="connect-2">connect/2</a></h3>
+<div class="spec">
+<p><code>connect(Url::binary(), Opts::<a href="#type-options" docgen-rel="seetype" docgen-href="#options/0">options()</a>) -&gt; {ok, <a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>} | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Connect to a Macula mesh network.</p>
+ 
+  <p>Creates a new HTTP/3 (QUIC) connection to the specified mesh endpoint.</p>
+ 
+  <h3><a name="Options">Options</a></h3>
+ 
+  <ul>
+  <li><code>realm</code> - Required. Binary realm identifier (e.g., <code>&amp;lt;&amp;lt;"my.app.realm"&amp;gt;&amp;gt;</code>)</li>
+  <li><code>auth</code> - Optional. Authentication map with <code>api_key</code> or other auth methods</li>
+  <li><code>timeout</code> - Optional. Connection timeout in milliseconds (default: 5000)</li>
+  <li><code>node_id</code> - Optional. 32-byte node ID (generated if not provided)</li>
+  </ul>
+ 
+  <h3><a name="Examples">Examples</a></h3>
+ 
+  <pre>  %% Basic connection
+  {ok, Client} = macula:connect(&amp;lt;&amp;lt;"https://mesh.local:443"&amp;gt;&amp;gt;, #{
+      realm =&gt; &amp;lt;&amp;lt;"my.realm"&amp;gt;&amp;gt;
+  }).
+ 
+  %% With API key authentication
+  {ok, Client} = macula:connect(&amp;lt;&amp;lt;"https://mesh.local:443"&amp;gt;&amp;gt;, #{
+      realm =&gt; &amp;lt;&amp;lt;"my.realm"&amp;gt;&amp;gt;,
+      auth =&gt; #{api_key =&gt; &amp;lt;&amp;lt;"secret-key"&amp;gt;&amp;gt;}
+  }).</pre></p>
 
+<h3 class="function"><a name="connect_local-1">connect_local/1</a></h3>
+<div class="spec">
+<p><code>connect_local(Opts::<a href="#type-options" docgen-rel="seetype" docgen-href="#options/0">options()</a>) -&gt; {ok, <a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>} | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Connect to the local Macula gateway (for in-VM workloads).</p>
+ 
+  <p>This function is used by applications running in the same BEAM VM as
+  the Macula platform. Instead of creating a QUIC connection to localhost,
+  it connects directly to the local <code>macula_gateway</code> process via  
+process-to-process communication.</p>
+ 
+  <h3><a name="Architecture">Architecture</a></h3>
+ 
+  <pre>  Phoenix/Elixir App → macula_local_client → macula_gateway
+                                              ↓ (QUIC)
+                                         Other Peers</pre>
+ 
+  <h3><a name="When_to_Use">When to Use</a></h3>
+ 
+  <ul>
+  <li>✅ Use <code>connect_local/1</code> when your application runs in the same VM as Macula</li>
+  <li>✅ Phoenix applications deployed with Macula in the same container</li>
+  <li>❌ Do NOT use <code>connect/2</code> with localhost URL - it creates unnecessary QUIC overhead</li>
+  </ul>
+ 
+  <h3><a name="Options">Options</a></h3>
+ 
+  <ul>
+  <li><code>realm</code> - Required. Binary realm identifier (e.g., <code>&amp;lt;&amp;lt;"my.app.realm"&amp;gt;&amp;gt;</code>)</li>
+  <li><code>event_handler</code> - Optional. PID to receive events (default: caller PID)</li>
+  </ul>
+ 
+  <h3><a name="Examples">Examples</a></h3>
+ 
+  <pre>  %% Elixir Phoenix application
+  {:ok, client} = :macula.connect_local(%{
+      realm: "macula.arcade.dev"
+  })
+ 
+  %% Erlang application
+  {ok, Client} = macula:connect_local(#{
+      realm =&gt; &amp;lt;&amp;lt;"my.app.realm"&amp;gt;&amp;gt;
+  }).</pre>
+ </p>
+<p><b>Introduced in:</b> v0.8.9</p>
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L504" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
+<h3 class="function"><a name="disconnect-1">disconnect/1</a></h3>
+<div class="spec">
+<p><code>disconnect(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>) -&gt; ok | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Disconnect from the Macula mesh.</p>
+ 
+  Cleanly closes the HTTP/3 connection and cleans up all subscriptions.</p>
 
-    </div>
-  </div>
+<h3 class="function"><a name="discover_subscribers-2">discover_subscribers/2</a></h3>
+<div class="spec">
+<p><code>discover_subscribers(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Topic::<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>) -&gt; {ok, [#{node_id := binary(), endpoint := binary()}]} | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Discover subscribers to a topic via DHT query.</p>
+ 
+  <p>Queries the DHT for all nodes subscribed to the given topic.  
+Returns a list of subscriber nodes with their node IDs and endpoints.</p>
+ 
+  This is used for P2P discovery before sending direct messages.</p>
 
-  <section class="docstring">
+<h3 class="function"><a name="get_leader-1">get_leader/1</a></h3>
+<div class="spec">
+<p><code>get_leader(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>) -&gt; {ok, binary()} | {error, no_leader | term()}</code><br></p>
+<p> </p>
+</div><p><p>Get the current Platform Layer leader node.</p>
+ 
+  <p>Queries the Platform Layer for the current leader node ID. The leader  
+is elected via Raft consensus and handles coordination tasks.</p>
+ 
+  <p>Returns <code>{error, no_leader}</code> if leader election is in progress.</p>
+ 
+  <h3><a name="Examples">Examples</a></h3>
+ 
+  <pre>  case macula:get_leader(Client) of
+      {ok, LeaderNodeId} -&gt;
+          %% Check if we're the leader
+          {ok, OurNodeId} = macula:get_node_id(Client),
+          case LeaderNodeId == OurNodeId of
+              true -&gt; coordinate_globally();
+              false -&gt; defer_to_leader()
+          end;
+      {error, no_leader} -&gt;
+          wait_for_leader_election()
+  end.</pre>
+ </p>
+<p><b>Introduced in:</b> v0.10.0</p>
 
-      <div class="specs">
+<h3 class="function"><a name="get_node_id-1">get_node_id/1</a></h3>
+<div class="spec">
+<p><code>get_node_id(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>) -&gt; {ok, binary()} | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Get the node ID of this client.</p>
+ 
+  Returns the 32-byte node ID assigned to this client.</p>
 
-          <pre translate="no"><span class="attribute">-spec</span> subscribe_leader_changes(Client :: <a href="#t:client/0">client</a>(), Callback :: fun((<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok)) ->
-                                  {ok, <a href="#t:subscription_ref/0">subscription_ref</a>()} | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+<h3 class="function"><a name="propose_crdt_update-3">propose_crdt_update/3</a></h3>
+<div class="spec">
+<p><code>propose_crdt_update(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Key::binary(), Value::term()) -&gt; ok | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Propose a CRDT update to Platform Layer shared state.</p>
+ 
+  <p>Updates platform-managed shared state using Conflict-Free Replicated  
+Data Types (CRDTs) for automatic conflict resolution across nodes.</p>
+ 
+  <p>Default CRDT type is <code>lww_register</code> (Last-Write-Wins Register).
+  See <code>propose_crdt_update/4</code> for other CRDT types.</p>
+ 
+  <h3><a name="Examples">Examples</a></h3>
+ 
+  <pre>  %% Store simple value (LWW-Register)
+  ok = macula:propose_crdt_update(
+      Client,
+      &amp;lt;&amp;lt;"my.app.config.max_users"&amp;gt;&amp;gt;,
+      1000
+  ).
+ 
+  %% Later read it back
+  {ok, 1000} = macula:read_crdt(Client, &amp;lt;&amp;lt;"my.app.config.max_users"&amp;gt;&amp;gt;).</pre>
+ </p>
+<p><b>Introduced in:</b> v0.10.0</p>
 
-      </div>
+<h3 class="function"><a name="propose_crdt_update-4">propose_crdt_update/4</a></h3>
+<div class="spec">
+<p><code>propose_crdt_update(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Key::binary(), Value::term(), Opts::<a href="#type-options" docgen-rel="seetype" docgen-href="#options/0">options()</a>) -&gt; ok | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Propose a CRDT update with specific CRDT type.</p>
+ 
+  <p>Updates platform-managed shared state using the specified CRDT type  
+for automatic conflict resolution.</p>
+ 
+  <h3><a name="CRDT_Types">CRDT Types</a></h3>
+ 
+  <ul>
+  <li><code>lww_register</code> - Last-Write-Wins Register (default)
+      <ul><li>Use for: Configuration values, latest status</li>
+      <li>Conflict resolution: Latest timestamp wins</li></ul></li>
+  <li><code>g_counter</code> - Grow-Only Counter
+      <ul><li>Use for: Metrics, totals (never decrease)</li>
+      <li>Operations: increment only</li></ul></li>
+  <li><code>pn_counter</code> - Positive-Negative Counter
+      <ul><li>Use for: Bidirectional counters (can increase/decrease)</li>
+      <li>Operations: increment, decrement</li></ul></li>
+  <li><code>g_set</code> - Grow-Only Set
+      <ul><li>Use for: Accumulating collections (never remove)</li>
+      <li>Operations: add elements only</li></ul></li>
+  <li><code>or_set</code> - Observed-Remove Set
+      <ul><li>Use for: Sets with add/remove operations</li>
+      <li>Operations: add, remove elements</li></ul></li>
+  </ul>
+ 
+  <h3><a name="Examples">Examples</a></h3>
+ 
+  <pre>  %% Increment a counter
+  ok = macula:propose_crdt_update(
+      Client,
+      &amp;lt;&amp;lt;"my.app.active_games"&amp;gt;&amp;gt;,
+      {increment, 1},
+      #{crdt_type =&gt; pn_counter}
+  ).
+ 
+  %% Add to a set
+  ok = macula:propose_crdt_update(
+      Client,
+      &amp;lt;&amp;lt;"my.app.player_ids"&amp;gt;&amp;gt;,
+      {add, &amp;lt;&amp;lt;"player123"&amp;gt;&amp;gt;},
+      #{crdt_type =&gt; or_set}
+  ).</pre>
+ </p>
+<p><b>Introduced in:</b> v0.10.0</p>
 
-<p>Subscribe to Platform Layer leader change notifications.</p><p>Registers a callback function to be invoked whenever the Platform Layer leader changes due to election or node failure.</p><p>The callback receives a map with:</p><ul><li><code>old_leader</code> - Previous leader node ID (may be <code>undefined</code>)</li><li><code>new_leader</code> - New leader node ID</li><li><code>term</code> - Raft term number (monotonically increasing)</li></ul><h3 id="subscribe_leader_changes/2-examples" class="section-heading"><a href="#subscribe_leader_changes/2-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="p" data-group-id="6646525248-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">SubRef</span><span class="p" data-group-id="6646525248-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">subscribe_leader_changes</span><span class="p" data-group-id="6646525248-2">(</span><span class="n">Client</span><span class="p">,</span><span class="w">
-      </span><span class="nf">fun</span><span class="p" data-group-id="6646525248-3">(</span><span class="p" data-group-id="6646525248-4">#{</span><span class="ss">old_leader</span><span class="w"> </span><span class="p">:=</span><span class="w"> </span><span class="n">Old</span><span class="p">,</span><span class="w"> </span><span class="ss">new_leader</span><span class="w"> </span><span class="p">:=</span><span class="w"> </span><span class="n">New</span><span class="p" data-group-id="6646525248-4">}</span><span class="p" data-group-id="6646525248-3">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w">
-          </span><span class="nc">io</span><span class="p">:</span><span class="nf">format</span><span class="p" data-group-id="6646525248-5">(</span><span class="s">&quot;Leader changed: </span><span class="si">~p</span><span class="s"> -&gt; </span><span class="si">~p</span><span class="si">~n</span><span class="s">&quot;</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="6646525248-6">[</span><span class="n">Old</span><span class="p">,</span><span class="w"> </span><span class="n">New</span><span class="p" data-group-id="6646525248-6">]</span><span class="p" data-group-id="6646525248-5">)</span><span class="p">,</span><span class="w">
-          </span><span class="nf">handle_leadership_transition</span><span class="p" data-group-id="6646525248-7">(</span><span class="n">New</span><span class="p" data-group-id="6646525248-7">)</span><span class="p">,</span><span class="w">
-          </span><span class="ss">ok</span><span class="w">
-      </span><span class="k">end</span><span class="p" data-group-id="6646525248-2">)</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="unadvertise/2">
+<h3 class="function"><a name="publish-3">publish/3</a></h3>
+<div class="spec">
+<p><code>publish(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Topic::<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, Data::<a href="#type-event_data" docgen-rel="seetype" docgen-href="#event_data/0">event_data()</a>) -&gt; ok | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Publish an event to a topic.</p>
+ 
+  <p>Publishes data to the specified topic. All subscribers to this topic  
+will receive the event.</p>
+ 
+  <h3><a name="Topic_Design">Topic Design</a></h3>
+ 
+  Topics should describe EVENT TYPES, not entity instances:
+  <ul>
+  <li>Good: <code>&amp;lt;&amp;lt;"my.app.user.registered"&amp;gt;&amp;gt;</code> (event type)</li>
+  <li>Bad: <code>&amp;lt;&amp;lt;"my.app.user.123.registered"&amp;gt;&amp;gt;</code> (entity ID in topic)</li>
+  </ul>
+ 
+  <p>Entity IDs belong in the event payload, not the topic name.</p>
+ 
+  <h3><a name="Examples">Examples</a></h3>
+ 
+  <pre>  %% Publish with default options
+  ok = macula:publish(Client, &amp;lt;&amp;lt;"my.app.events"&amp;gt;&amp;gt;, #{
+      type =&gt; &amp;lt;&amp;lt;"user.registered"&amp;gt;&amp;gt;,
+      user_id =&gt; &amp;lt;&amp;lt;"user-123"&amp;gt;&amp;gt;,
+      email =&gt; &amp;lt;&amp;lt;"user@example.com"&amp;gt;&amp;gt;
+  }).
+ 
+  %% Publish with options
+  ok = macula:publish(Client, &amp;lt;&amp;lt;"my.app.events"&amp;gt;&amp;gt;, #{
+      data =&gt; &amp;lt;&amp;lt;"important"&amp;gt;&amp;gt;
+  }, #{acknowledge =&gt; true}).</pre></p>
 
-  <div class="detail-header">
-    <a href="#unadvertise/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">unadvertise(Client, Procedure)</h1>
+<h3 class="function"><a name="publish-4">publish/4</a></h3>
+<div class="spec">
+<p><code>publish(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Topic::<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, Data::<a href="#type-event_data" docgen-rel="seetype" docgen-href="#event_data/0">event_data()</a>, Opts::<a href="#type-options" docgen-rel="seetype" docgen-href="#options/0">options()</a>) -&gt; ok | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Publish an event with options.</p>
+ 
+  This is fire-and-forget - returns ok immediately without blocking.
+  Uses gen_server:cast to avoid blocking the caller (prevents LiveView freezes).
+  Both macula_local_client and macula_peer handle {publish_async, ...} casts.</p>
 
+<h3 class="function"><a name="read_crdt-2">read_crdt/2</a></h3>
+<div class="spec">
+<p><code>read_crdt(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Key::binary()) -&gt; {ok, term()} | {error, not_found | term()}</code><br></p>
+<p> </p>
+</div><p><p>Read the current value of a CRDT-managed shared state entry.</p>
+ 
+  <p>Reads from the local CRDT replica. The value reflects all converged  
+updates from across the platform cluster.</p>
+ 
+  <p>Returns <code>{error, not_found}</code> if the key has never been written.</p>
+ 
+  <h3><a name="Examples">Examples</a></h3>
+ 
+  <pre>  %% Read LWW-Register value
+  {ok, MaxUsers} = macula:read_crdt(Client, &amp;lt;&amp;lt;"my.app.config.max_users"&amp;gt;&amp;gt;).
+ 
+  %% Read counter value
+  {ok, GameCount} = macula:read_crdt(Client, &amp;lt;&amp;lt;"my.app.active_games"&amp;gt;&amp;gt;).
+ 
+  %% Read set value
+  {ok, PlayerSet} = macula:read_crdt(Client, &amp;lt;&amp;lt;"my.app.player_ids"&amp;gt;&amp;gt;).</pre>
+ </p>
+<p><b>Introduced in:</b> v0.10.0</p>
 
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L402" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
+<h3 class="function"><a name="register_workload-2">register_workload/2</a></h3>
+<div class="spec">
+<p><code>register_workload(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Opts::<a href="#type-options" docgen-rel="seetype" docgen-href="#options/0">options()</a>) -&gt; {ok, map()} | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Register this workload with the Platform Layer.</p>
+ 
+  <p>Registers the workload application with Macula's Platform Layer and  
+returns information about the current platform cluster state, including  
+the current leader node.</p>
+ 
+  <h3><a name="Options">Options</a></h3>
+ 
+  <ul>
+  <li><code>workload_name</code> - Required. Binary name identifying this workload type
+      (e.g., <code>&amp;lt;&amp;lt;"macula_arcade"&amp;gt;&amp;gt;</code>, <code>&amp;lt;&amp;lt;"my_app"&amp;gt;&amp;gt;</code>)</li>
+  <li><code>capabilities</code> - Optional. List of atoms describing workload capabilities
+      (e.g., <code>[coordinator, game_server]</code>)</li>
+  </ul>
+ 
+  <h3><a name="Returns">Returns</a></h3>
+ 
+  <ul>
+  <li><code>leader_node</code> - Binary node ID of the current Platform Layer leader</li>
+  <li><code>cluster_size</code> - Integer count of nodes in the platform cluster</li>
+  <li><code>platform_version</code> - Binary version string (e.g., <code>&amp;lt;&amp;lt;"0.10.0"&amp;gt;&amp;gt;</code>)</li>
+  </ul>
+ 
+  <h3><a name="Examples">Examples</a></h3>
+ 
+  <pre>  {ok, Client} = macula:connect_local(#{realm =&gt; &amp;lt;&amp;lt;"my.app"&amp;gt;&amp;gt;}),
+  {ok, Info} = macula:register_workload(Client, #{
+      workload_name =&gt; &amp;lt;&amp;lt;"my_app_coordinator"&amp;gt;&amp;gt;,
+      capabilities =&gt; [coordinator, matchmaking]
+  }),
+  #{leader_node := Leader, cluster_size := Size} = Info.</pre>
+ </p>
+<p><b>Introduced in:</b> v0.10.0</p>
 
-    </div>
-  </div>
+<h3 class="function"><a name="subscribe-3">subscribe/3</a></h3>
+<div class="spec">
+<p><code>subscribe(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Topic::<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, Callback::fun((<a href="#type-event_data" docgen-rel="seetype" docgen-href="#event_data/0">event_data()</a>) -&gt; ok)) -&gt; {ok, <a href="#type-subscription_ref" docgen-rel="seetype" docgen-href="#subscription_ref/0">subscription_ref()</a>} | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Subscribe to a topic.</p>
+ 
+  <p>Subscribes to events on the specified topic. The callback function  
+will be invoked for each event received.</p>
+ 
+  <h3><a name="Callback_Function">Callback Function</a></h3>
+ 
+  <p>The callback receives the event data and should return <code>ok</code>.</p>
+ 
+  <h3><a name="Examples">Examples</a></h3>
+ 
+  <pre>  %% Simple subscription
+  {ok, SubRef} = macula:subscribe(Client, &amp;lt;&amp;lt;"my.app.events"&amp;gt;&amp;gt;,
+      fun(EventData) -&gt;
+          io:format("Event: ~p~n", [EventData]),
+          ok
+      end).
+ 
+  %% Unsubscribe later
+  ok = macula:unsubscribe(Client, SubRef).</pre></p>
 
-  <section class="docstring">
+<h3 class="function"><a name="subscribe_leader_changes-2">subscribe_leader_changes/2</a></h3>
+<div class="spec">
+<p><code>subscribe_leader_changes(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Callback::fun((map()) -&gt; ok)) -&gt; {ok, <a href="#type-subscription_ref" docgen-rel="seetype" docgen-href="#subscription_ref/0">subscription_ref()</a>} | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Subscribe to Platform Layer leader change notifications.</p>
+ 
+  <p>Registers a callback function to be invoked whenever the Platform Layer  
+leader changes due to election or node failure.</p>
+ 
+  The callback receives a map with:
+  <ul>
+  <li><code>old_leader</code> - Previous leader node ID (may be <code>undefined</code>)</li>
+  <li><code>new_leader</code> - New leader node ID</li>
+  <li><code>term</code> - Raft term number (monotonically increasing)</li>
+  </ul>
+ 
+  <h3><a name="Examples">Examples</a></h3>
+ 
+  <pre>  {ok, SubRef} = macula:subscribe_leader_changes(Client,
+      fun(#{old_leader := Old, new_leader := New}) -&gt;
+          io:format("Leader changed: ~p -&gt; ~p~n", [Old, New]),
+          handle_leadership_transition(New),
+          ok
+      end).</pre>
+ </p>
+<p><b>Introduced in:</b> v0.10.0</p>
 
-      <div class="specs">
+<h3 class="function"><a name="unadvertise-2">unadvertise/2</a></h3>
+<div class="spec">
+<p><code>unadvertise(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, Procedure::<a href="#type-procedure" docgen-rel="seetype" docgen-href="#procedure/0">procedure()</a>) -&gt; ok | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Stop advertising a service.</p>
+ 
+  <p>Removes the local handler and stops advertising to the DHT.</p>
+ 
+  <h3><a name="Examples">Examples</a></h3>
+ 
+  <pre>  ok = macula:unadvertise(Client, &amp;lt;&amp;lt;"my.app.get_user"&amp;gt;&amp;gt;).</pre></p>
 
-          <pre translate="no"><span class="attribute">-spec</span> unadvertise(Client :: <a href="#t:client/0">client</a>(), Procedure :: <a href="#t:procedure/0">procedure</a>()) -> ok | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+<h3 class="function"><a name="unsubscribe-2">unsubscribe/2</a></h3>
+<div class="spec">
+<p><code>unsubscribe(Client::<a href="#type-client" docgen-rel="seetype" docgen-href="#client/0">client()</a>, SubRef::<a href="#type-subscription_ref" docgen-rel="seetype" docgen-href="#subscription_ref/0">subscription_ref()</a>) -&gt; ok | {error, Reason::term()}</code><br></p>
+<p> </p>
+</div><p><p>Unsubscribe from a topic.</p>
+ 
+  Removes the subscription identified by the subscription reference.</p>
+<hr>
 
-      </div>
-
-<p>Stop advertising a service.</p><p>Removes the local handler and stops advertising to the DHT.</p><h3 id="unadvertise/2-examples" class="section-heading"><a href="#unadvertise/2-examples" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text"><a name="Examples">Examples</a></span></h3><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula</span><span class="p">:</span><span class="nf">unadvertise</span><span class="p" data-group-id="8704188090-1">(</span><span class="n">Client</span><span class="p">,</span><span class="w"> </span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">lt</span><span class="p">;</span><span class="s">&quot;my.app.get_user&quot;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="err">&amp;</span><span class="ss">gt</span><span class="p">;</span><span class="p" data-group-id="8704188090-1">)</span><span class="p">.</span></code></pre>
-  </section>
-</section>
-<section class="detail" id="unsubscribe/2">
-
-  <div class="detail-header">
-    <a href="#unsubscribe/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">unsubscribe(Client, SubRef)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula.erl#L292" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> unsubscribe(Client :: <a href="#t:client/0">client</a>(), SubRef :: <a href="#t:subscription_ref/0">subscription_ref</a>()) -> ok | {error, Reason :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Unsubscribe from a topic.</p><p>Removes the subscription identified by the subscription reference.</p>
-  </section>
-</section>
-
-    </div>
-  </section>
-
-    <footer class="footer">
-      <p>
-
-          <span class="line">
-            <a href="https://hex.pm/packages/macula/0.10.1" class="footer-hex-package">Hex Package</a>
-
-            <a href="https://preview.hex.pm/preview/macula/0.10.1">Hex Preview</a>
-
-          </span>
-
-        <span class="line">
-          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
-            Search HexDocs
-          </button>
-
-            <a href="macula.epub" title="ePub version">
-              Download ePub version
-            </a>
-
-        </span>
-      </p>
-
-      <p class="built-using">
-        Built using
-        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
-
-          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
-
-      </p>
-
-    </footer>
-  </div>
-</main>
-</div>
-
-  </body>
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
 </html>

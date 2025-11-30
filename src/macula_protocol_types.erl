@@ -51,6 +51,8 @@
 -define(MSG_REPLY,          16#21).
 -define(MSG_CAST,           16#22).
 -define(MSG_RPC_ROUTE,      16#23).
+-define(MSG_RPC_REQUEST,    16#24).  % NATS-style async RPC request
+-define(MSG_RPC_REPLY,      16#25).  % NATS-style async RPC reply
 
 %% SWIM membership messages
 -define(MSG_SWIM_PING,      16#30).
@@ -81,7 +83,7 @@
 -type message_type() ::
     connect | disconnect | ping | pong |
     publish | subscribe | unsubscribe | pubsub_route |
-    call | reply | cast | rpc_route |
+    call | reply | cast | rpc_route | rpc_request | rpc_reply |
     swim_ping | swim_ack | swim_ping_req |
     find_node | find_node_reply | store | find_value | find_value_reply |
     nat_probe | nat_probe_reply | punch_request | punch_coordinate |
@@ -207,6 +209,8 @@ message_type_id(call) -> ?MSG_CALL;
 message_type_id(reply) -> ?MSG_REPLY;
 message_type_id(cast) -> ?MSG_CAST;
 message_type_id(rpc_route) -> ?MSG_RPC_ROUTE;
+message_type_id(rpc_request) -> ?MSG_RPC_REQUEST;
+message_type_id(rpc_reply) -> ?MSG_RPC_REPLY;
 message_type_id(swim_ping) -> ?MSG_SWIM_PING;
 message_type_id(swim_ack) -> ?MSG_SWIM_ACK;
 message_type_id(swim_ping_req) -> ?MSG_SWIM_PING_REQ;
@@ -238,6 +242,8 @@ message_type_name(?MSG_CALL) -> {ok, call};
 message_type_name(?MSG_REPLY) -> {ok, reply};
 message_type_name(?MSG_CAST) -> {ok, cast};
 message_type_name(?MSG_RPC_ROUTE) -> {ok, rpc_route};
+message_type_name(?MSG_RPC_REQUEST) -> {ok, rpc_request};
+message_type_name(?MSG_RPC_REPLY) -> {ok, rpc_reply};
 message_type_name(?MSG_SWIM_PING) -> {ok, swim_ping};
 message_type_name(?MSG_SWIM_ACK) -> {ok, swim_ack};
 message_type_name(?MSG_SWIM_PING_REQ) -> {ok, swim_ping_req};

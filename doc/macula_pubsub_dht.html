@@ -1,712 +1,120 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.10.1">
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_pubsub_dht</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
 
-
-    <title>macula_pubsub_dht — macula v0.10.1</title>
-
-    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
-
-    <script defer src="dist/sidebar_items-1151EC94.js"></script>
-    <script defer src="docs_config.js"></script>
-    <script defer src="dist/html-DPJLHKSM.js"></script>
-
-  </head>
-  <body>
-    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
-</script>
-
-<div class="body-wrapper">
-
-<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
-  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
-</button>
-
-<nav id="sidebar" class="sidebar">
-
-  <div class="sidebar-header">
-    <div class="sidebar-projectInfo">
-
-        <a href="readme.html" class="sidebar-projectImage">
-          <img src="assets/logo.svg" alt="macula" />
-        </a>
-
-      <div>
-        <a href="readme.html" class="sidebar-projectName" translate="no">
-macula
-        </a>
-        <div class="sidebar-projectVersion" translate="no">
-          v0.10.1
-        </div>
-      </div>
-    </div>
-    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
-  </div>
-</nav>
-
-<output role="status" id="toast"></output>
-
-<main class="content page-module" id="main" data-type="modules">
-  <div id="content" class="content-inner">
-    <div class="top-search">
-      <div class="search-settings">
-        <form class="search-bar" action="search.html">
-          <label class="search-label">
-            <span class="sr-only">Search documentation of macula</span>
-            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </label>
-          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
-            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
-          </button>
-          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
-            <i class="ri-close-line ri-lg" title="Cancel search"></i>
-          </button>
-        </form>
-        <div class="autocomplete">
-        </div>
-        <button class="icon-settings display-settings">
-          <i class="ri-settings-3-line"></i>
-          <span class="sr-only">Settings</span>
-        </button>
-      </div>
-    </div>
-
-<div id="top-content">
-  <div class="heading-with-actions top-heading">
-    <h1>
-      <span translate="no">macula_pubsub_dht</span> 
-      <small class="app-vsn" translate="no">(macula v0.10.1)</small>
-
-    </h1>
-
-      <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L15" title="View Source" class="icon-action" rel="help">
-        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        <span class="sr-only">View Source</span>
-      </a>
-
-  </div>
-
-
-    <section id="moduledoc">
-<p>DHT operations for pub/sub - handles subscription advertisement and discovery.</p><p>Responsibilities: - Advertise subscriptions in DHT with TTL - Schedule re-advertisement timers - Discover remote subscribers via DHT queries - Route messages to remote subscribers - Track pending DHT queries</p><p>Extracted from macula_pubsub_handler.erl (Phase 3)</p>
-    </section>
-
-</div>
-
-  <section id="summary" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#summary">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Summary</span>
-    </h1>
-<div class="summary-types summary">
-  <h2>
-    <a href="#types">Types</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:advertised_subscriptions/0" data-no-tooltip="" translate="no">advertised_subscriptions/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:connection_manager_pid/0" data-no-tooltip="" translate="no">connection_manager_pid/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:node_id/0" data-no-tooltip="" translate="no">node_id/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:payload/0" data-no-tooltip="" translate="no">payload/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:pending_queries/0" data-no-tooltip="" translate="no">pending_queries/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:qos/0" data-no-tooltip="" translate="no">qos/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:subscription_ref/0" data-no-tooltip="" translate="no">subscription_ref/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:topic/0" data-no-tooltip="" translate="no">topic/0</a>
-
-      </div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#t:url/0" data-no-tooltip="" translate="no">url/0</a>
-
-      </div>
-
-    </div>
-
-</div>
-<div class="summary-functions summary">
-  <h2>
-    <a href="#functions">Functions</a>
-  </h2>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#advertise_subscription/5" data-no-tooltip="" translate="no">advertise_subscription(Topic, SubRef, NodeId, Url, ConnMgrPid)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Advertise a subscription in the DHT. Sends STORE message to DHT and schedules re-advertisement. Returns {ok, SubInfo}.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#cancel_advertisement/2" data-no-tooltip="" translate="no">cancel_advertisement(Topic, AdvertisedSubscriptions)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Cancel advertisement for a topic. Cancels the re-advertisement timer. Returns updated advertised_subscriptions map.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#discover_subscribers/6" data-no-tooltip="" translate="no">discover_subscribers(Topic, Payload, Qos, ConnMgrPid, ServiceRegistry, MsgIdCounter)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Discover remote subscribers for a topic. Checks cache first, queries DHT on cache miss. Returns {cached, Subscribers, Registry} | {query_sent, Pending, MsgId, Registry}.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#handle_discovery_response/3" data-no-tooltip="" translate="no">handle_discovery_response(MsgId, Subscribers, PendingQueries)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Handle DHT discovery response. Routes messages to discovered subscribers. Returns updated pending queries map.</p></div>
-
-    </div>
-
-    <div class="summary-row">
-      <div class="summary-signature">
-        <a href="#route_to_subscribers/5" data-no-tooltip="" translate="no">route_to_subscribers(Topic, Payload, Qos, Subscribers, NodeId)</a>
-
-      </div>
-
-        <div class="summary-synopsis"><p>Route message to remote subscribers via direct P2P connections (v0.8.0+). Wraps publish in pubsub_route envelope and sends directly to each subscriber. Uses macula_peer_connector for direct QUIC connections to subscriber endpoints.</p></div>
-
-    </div>
-
-</div>
-
-  </section>
-
-
-  <section id="types" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#types">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Types</span>
-    </h1>
-    <div class="types-list">
-<section class="detail" id="t:advertised_subscriptions/0">
-
-  <div class="detail-header">
-    <a href="#t:advertised_subscriptions/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">advertised_subscriptions/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L32" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> advertised_subscriptions() ::
-          #{<a href="#t:topic/0">topic</a>() => #{sub_ref := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>(), ttl := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>(), timer_ref := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>()}}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:connection_manager_pid/0">
-
-  <div class="detail-header">
-    <a href="#t:connection_manager_pid/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">connection_manager_pid/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L27" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> connection_manager_pid() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:node_id/0">
-
-  <div class="detail-header">
-    <a href="#t:node_id/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">node_id/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L25" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> node_id() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:payload/0">
-
-  <div class="detail-header">
-    <a href="#t:payload/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">payload/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L29" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> payload() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:pending_queries/0">
-
-  <div class="detail-header">
-    <a href="#t:pending_queries/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">pending_queries/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L38" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> pending_queries() :: #{<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() => {<a href="#t:topic/0">topic</a>(), <a href="#t:payload/0">payload</a>(), <a href="#t:qos/0">qos</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()}}.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:qos/0">
-
-  <div class="detail-header">
-    <a href="#t:qos/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">qos/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L30" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> qos() :: 0 | 1.</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:subscription_ref/0">
-
-  <div class="detail-header">
-    <a href="#t:subscription_ref/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">subscription_ref/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L28" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> subscription_ref() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:topic/0">
-
-  <div class="detail-header">
-    <a href="#t:topic/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">topic/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L24" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> topic() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-<section class="detail" id="t:url/0">
-
-  <div class="detail-header">
-    <a href="#t:url/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">url/0</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L26" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-type</span> url() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
-
-      </div>
-
-
-  </section>
-</section>
-
-    </div>
-  </section>
-
-  <section id="functions" class="details-list">
-    <h1 class="section-heading">
-      <a class="hover-link" href="#functions">
-        <i class="ri-link-m" aria-hidden="true"></i>
-      </a>
-      <span class="text">Functions</span>
-    </h1>
-    <div class="functions-list">
-<section class="detail" id="advertise_subscription/5">
-
-  <div class="detail-header">
-    <a href="#advertise_subscription/5" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">advertise_subscription(Topic, SubRef, NodeId, Url, ConnMgrPid)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L51" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> advertise_subscription(<a href="#t:topic/0">topic</a>(), <a href="#t:subscription_ref/0">subscription_ref</a>(), <a href="#t:node_id/0">node_id</a>(), <a href="#t:url/0">url</a>(), <a href="#t:connection_manager_pid/0">connection_manager_pid</a>()) ->
-                                {ok,
-                                 #{sub_ref := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>(),
-                                   ttl := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>(),
-                                   timer_ref := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>()}} |
-                                {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Advertise a subscription in the DHT. Sends STORE message to DHT and schedules re-advertisement. Returns {ok, SubInfo}.</p>
-  </section>
-</section>
-<section class="detail" id="cancel_advertisement/2">
-
-  <div class="detail-header">
-    <a href="#cancel_advertisement/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">cancel_advertisement(Topic, AdvertisedSubscriptions)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L104" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> cancel_advertisement(<a href="#t:topic/0">topic</a>(), <a href="#t:advertised_subscriptions/0">advertised_subscriptions</a>()) -> <a href="#t:advertised_subscriptions/0">advertised_subscriptions</a>().</pre>
-
-      </div>
-
-<p>Cancel advertisement for a topic. Cancels the re-advertisement timer. Returns updated advertised_subscriptions map.</p>
-  </section>
-</section>
-<section class="detail" id="discover_subscribers/6">
-
-  <div class="detail-header">
-    <a href="#discover_subscribers/6" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">discover_subscribers(Topic, Payload, Qos, ConnMgrPid, ServiceRegistry, MsgIdCounter)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L121" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> discover_subscribers(<a href="#t:topic/0">topic</a>(),
-                           <a href="#t:payload/0">payload</a>(),
-                           <a href="#t:qos/0">qos</a>(),
-                           <a href="#t:connection_manager_pid/0">connection_manager_pid</a>(),
-                           <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
-                           <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()) ->
-                              {cached, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} |
-                              {query_sent, <a href="#t:pending_queries/0">pending_queries</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
-
-      </div>
-
-<p>Discover remote subscribers for a topic. Checks cache first, queries DHT on cache miss. Returns {cached, Subscribers, Registry} | {query_sent, Pending, MsgId, Registry}.</p>
-  </section>
-</section>
-<section class="detail" id="handle_discovery_response/3">
-
-  <div class="detail-header">
-    <a href="#handle_discovery_response/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">handle_discovery_response(MsgId, Subscribers, PendingQueries)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L145" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> handle_discovery_response(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>(), <a href="#t:pending_queries/0">pending_queries</a>()) ->
-                                   {ok, <a href="#t:pending_queries/0">pending_queries</a>()} | {not_found, <a href="#t:pending_queries/0">pending_queries</a>()}.</pre>
-
-      </div>
-
-<p>Handle DHT discovery response. Routes messages to discovered subscribers. Returns updated pending queries map.</p>
-  </section>
-</section>
-<section class="detail" id="route_to_subscribers/5">
-
-  <div class="detail-header">
-    <a href="#route_to_subscribers/5" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
-      <i class="ri-link-m" aria-hidden="true"></i>
-    </a>
-    <div class="heading-with-actions">
-      <h1 class="signature" translate="no">route_to_subscribers(Topic, Payload, Qos, Subscribers, NodeId)</h1>
-
-
-        <a href="https://github.com/macula-io/macula/blob/0.10.1/src/macula_pubsub_system/macula_pubsub_dht.erl#L160" class="icon-action" rel="help" aria-label="View Source">
-          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
-        </a>
-
-    </div>
-  </div>
-
-  <section class="docstring">
-
-      <div class="specs">
-
-          <pre translate="no"><span class="attribute">-spec</span> route_to_subscribers(<a href="#t:topic/0">topic</a>(), <a href="#t:payload/0">payload</a>(), <a href="#t:qos/0">qos</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>(), <a href="#t:node_id/0">node_id</a>()) -> ok.</pre>
-
-      </div>
-
-<p>Route message to remote subscribers via direct P2P connections (v0.8.0+). Wraps publish in pubsub_route envelope and sends directly to each subscriber. Uses macula_peer_connector for direct QUIC connections to subscriber endpoints.</p>
-  </section>
-</section>
-
-    </div>
-  </section>
-
-    <footer class="footer">
-      <p>
-
-          <span class="line">
-            <a href="https://hex.pm/packages/macula/0.10.1" class="footer-hex-package">Hex Package</a>
-
-            <a href="https://preview.hex.pm/preview/macula/0.10.1">Hex Preview</a>
-
-          </span>
-
-        <span class="line">
-          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
-            Search HexDocs
-          </button>
-
-            <a href="macula.epub" title="ePub version">
-              Download ePub version
-            </a>
-
-        </span>
-      </p>
-
-      <p class="built-using">
-        Built using
-        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
-
-          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
-
-      </p>
-
-    </footer>
-  </div>
-</main>
-</div>
-
-  </body>
+<h1>Module macula_pubsub_dht</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+DHT operations for pub/sub - handles subscription advertisement and discovery.
+
+
+<h2><a name="description">Description</a></h2><p>   
+DHT operations for pub/sub - handles subscription advertisement and discovery.</p>
+  
+   <p>Responsibilities:   
+- Advertise subscriptions in DHT with TTL   
+- Schedule re-advertisement timers   
+- Discover remote subscribers via DHT queries   
+- Route messages to remote subscribers   
+- Track pending DHT queries</p>
+  
+   Extracted from macula_pubsub_handler.erl (Phase 3)
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-advertised_subscriptions">advertised_subscriptions()</a></h3>
+<p><code>advertised_subscriptions() = #{<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a> =&gt; #{sub_ref := reference(), ttl := pos_integer(), timer_ref := reference()}}</code></p>
+
+
+<h3 class="typedecl"><a name="type-connection_manager_pid">connection_manager_pid()</a></h3>
+<p><code>connection_manager_pid() = pid()</code></p>
+
+
+<h3 class="typedecl"><a name="type-node_id">node_id()</a></h3>
+<p><code>node_id() = binary()</code></p>
+
+
+<h3 class="typedecl"><a name="type-payload">payload()</a></h3>
+<p><code>payload() = binary()</code></p>
+
+
+<h3 class="typedecl"><a name="type-pending_queries">pending_queries()</a></h3>
+<p><code>pending_queries() = #{binary() =&gt; {<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, <a href="#type-payload" docgen-rel="seetype" docgen-href="#payload/0">payload()</a>, <a href="#type-qos" docgen-rel="seetype" docgen-href="#qos/0">qos()</a>, map()}}</code></p>
+
+
+<h3 class="typedecl"><a name="type-qos">qos()</a></h3>
+<p><code>qos() = 0 | 1</code></p>
+
+
+<h3 class="typedecl"><a name="type-subscription_ref">subscription_ref()</a></h3>
+<p><code>subscription_ref() = reference()</code></p>
+
+
+<h3 class="typedecl"><a name="type-topic">topic()</a></h3>
+<p><code>topic() = binary()</code></p>
+
+
+<h3 class="typedecl"><a name="type-url">url()</a></h3>
+<p><code>url() = binary()</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#advertise_subscription-5">advertise_subscription/5</a></td><td>Advertise a subscription in the DHT.</td></tr>
+<tr><td valign="top"><a href="#cancel_advertisement-2">cancel_advertisement/2</a></td><td>Cancel advertisement for a topic.</td></tr>
+<tr><td valign="top"><a href="#discover_subscribers-6">discover_subscribers/6</a></td><td>Discover remote subscribers for a topic.</td></tr>
+<tr><td valign="top"><a href="#handle_discovery_response-3">handle_discovery_response/3</a></td><td>Handle DHT discovery response.</td></tr>
+<tr><td valign="top"><a href="#route_to_subscribers-5">route_to_subscribers/5</a></td><td>Route message to remote subscribers via direct P2P connections (v0.8.0+).</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="advertise_subscription-5">advertise_subscription/5</a></h3>
+<div class="spec">
+<p><code>advertise_subscription(Topic::<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, SubRef::<a href="#type-subscription_ref" docgen-rel="seetype" docgen-href="#subscription_ref/0">subscription_ref()</a>, NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, Url::<a href="#type-url" docgen-rel="seetype" docgen-href="#url/0">url()</a>, ConnMgrPid::<a href="#type-connection_manager_pid" docgen-rel="seetype" docgen-href="#connection_manager_pid/0">connection_manager_pid()</a>) -&gt; {ok, #{sub_ref := reference(), ttl := pos_integer(), timer_ref := reference()}} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Advertise a subscription in the DHT.
+  Sends STORE message to DHT and schedules re-advertisement.
+  Returns {ok, SubInfo}.</p>
+
+<h3 class="function"><a name="cancel_advertisement-2">cancel_advertisement/2</a></h3>
+<div class="spec">
+<p><code>cancel_advertisement(Topic::<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, AdvertisedSubscriptions::<a href="#type-advertised_subscriptions" docgen-rel="seetype" docgen-href="#advertised_subscriptions/0">advertised_subscriptions()</a>) -&gt; <a href="#type-advertised_subscriptions" docgen-rel="seetype" docgen-href="#advertised_subscriptions/0">advertised_subscriptions()</a></code><br></p>
+<p> </p>
+</div><p>Cancel advertisement for a topic.
+  Cancels the re-advertisement timer.
+  Returns updated advertised_subscriptions map.</p>
+
+<h3 class="function"><a name="discover_subscribers-6">discover_subscribers/6</a></h3>
+<div class="spec">
+<p><code>discover_subscribers(Topic::<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, Payload::<a href="#type-payload" docgen-rel="seetype" docgen-href="#payload/0">payload()</a>, Qos::<a href="#type-qos" docgen-rel="seetype" docgen-href="#qos/0">qos()</a>, ConnMgrPid::<a href="#type-connection_manager_pid" docgen-rel="seetype" docgen-href="#connection_manager_pid/0">connection_manager_pid()</a>, ServiceRegistry::term(), MsgIdCounter::non_neg_integer()) -&gt; {cached, list(), term()} | {query_sent, <a href="#type-pending_queries" docgen-rel="seetype" docgen-href="#pending_queries/0">pending_queries()</a>, binary(), term()}</code><br></p>
+<p> </p>
+</div><p>Discover remote subscribers for a topic.
+  Checks cache first, queries DHT on cache miss.
+  Returns {cached, Subscribers, Registry} | {query_sent, Pending, MsgId, Registry}.</p>
+
+<h3 class="function"><a name="handle_discovery_response-3">handle_discovery_response/3</a></h3>
+<div class="spec">
+<p><code>handle_discovery_response(MsgId::binary(), Subscribers::list(), PendingQueries::<a href="#type-pending_queries" docgen-rel="seetype" docgen-href="#pending_queries/0">pending_queries()</a>) -&gt; {ok, <a href="#type-pending_queries" docgen-rel="seetype" docgen-href="#pending_queries/0">pending_queries()</a>} | {not_found, <a href="#type-pending_queries" docgen-rel="seetype" docgen-href="#pending_queries/0">pending_queries()</a>}</code><br></p>
+<p> </p>
+</div><p>Handle DHT discovery response.
+  Routes messages to discovered subscribers.
+  Returns updated pending queries map.</p>
+
+<h3 class="function"><a name="route_to_subscribers-5">route_to_subscribers/5</a></h3>
+<div class="spec">
+<p><code>route_to_subscribers(Topic::<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, Payload::<a href="#type-payload" docgen-rel="seetype" docgen-href="#payload/0">payload()</a>, Qos::<a href="#type-qos" docgen-rel="seetype" docgen-href="#qos/0">qos()</a>, Subscribers::list(), NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Route message to remote subscribers via direct P2P connections (v0.8.0+).
+  Wraps publish in pubsub_route envelope and sends directly to each subscriber.
+  Uses macula_peer_connector for direct QUIC connections to subscriber endpoints.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
 </html>

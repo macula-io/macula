@@ -41,6 +41,8 @@
 
 -behaviour(supervisor).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([start_link/1]).
 
@@ -82,16 +84,16 @@ init(Opts) when is_map(Opts) ->
 %% @doc Initialize the supervisor with extracted configuration.
 init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile) ->
 
-    io:format("[GatewaySup] Initializing gateway supervisor for realm ~s on port ~p~n",
+    ?LOG_INFO("Initializing gateway supervisor for realm ~s on port ~p",
               [Realm, Port]),
-    io:format("[GatewaySup] Certificate file: ~p~n", [CertFile]),
-    io:format("[GatewaySup] Key file: ~p~n", [KeyFile]),
+    ?LOG_INFO("Certificate file: ~p", [CertFile]),
+    ?LOG_INFO("Key file: ~p", [KeyFile]),
 
     %% Compute node_id and url early so workers can use them
     NodeId = get_node_id(Realm, Port),
     Url = get_url(Port),
-    io:format("[GatewaySup] NodeId: ~s~n", [binary:encode_hex(NodeId)]),
-    io:format("[GatewaySup] Endpoint URL: ~s~n", [Url]),
+    ?LOG_INFO("NodeId: ~s", [binary:encode_hex(NodeId)]),
+    ?LOG_INFO("Endpoint URL: ~s", [Url]),
 
     %% Supervision strategy: rest_for_one
     %% - health fails → restart health, diagnostics, quic_server, gateway, workers_sup
@@ -217,18 +219,18 @@ get_node_id(Realm, Port) ->
                 false ->
                     %% No HOSTNAME either, use {Realm, Port} as last resort
                     %% Note: This WILL collide if multiple nodes share same realm+port
-                    io:format("[GatewaySup] WARNING: No HOSTNAME or NODE_NAME set, using realm+port only~n"),
-                    io:format("[GatewaySup] This may cause node_id collisions in Docker!~n"),
+                    ?LOG_WARNING("No HOSTNAME or NODE_NAME set, using realm+port only"),
+                    ?LOG_WARNING("This may cause node_id collisions in Docker!"),
                     crypto:hash(sha256, term_to_binary({Realm, Port}));
                 Hostname when is_list(Hostname) ->
                     %% Use HOSTNAME from Docker - unique per container
-                    io:format("[GatewaySup] Using HOSTNAME-based node ID: ~s, Realm=~s, Port=~p~n",
+                    ?LOG_INFO("Using HOSTNAME-based node ID: ~s, Realm=~s, Port=~p",
                              [Hostname, Realm, Port]),
                     crypto:hash(sha256, term_to_binary({Realm, list_to_binary(Hostname), Port}))
             end;
         NodeName when is_list(NodeName) ->
             %% Use NODE_NAME from environment - hash it to get 32-byte binary
-            io:format("[GatewaySup] Using NODE_NAME from environment: ~s~n", [NodeName]),
+            ?LOG_INFO("Using NODE_NAME from environment: ~s", [NodeName]),
             crypto:hash(sha256, list_to_binary(NodeName))
     end.
 

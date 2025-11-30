@@ -41,46 +41,46 @@
 %% @doc Create a new bucket with capacity k.
 -spec new(pos_integer()) -> bucket().
 new(Capacity) ->
-    #{
-        capacity => Capacity,
-        nodes => []
-    }.
+    #{capacity => Capacity, nodes => []}.
 
 %% @doc Add a node to the bucket.
 %% If node exists, move to tail (most recent).
 %% If bucket full, return {error, bucket_full}.
 -spec add_node(bucket(), node_info()) -> bucket() | {error, bucket_full}.
-add_node(#{capacity := Capacity, nodes := Nodes} = Bucket, NodeInfo) ->
-    NodeId = maps:get(node_id, NodeInfo),
+add_node(Bucket, NodeInfo) ->
+    NodeWithTimestamp = ensure_timestamp(NodeInfo),
+    NodeId = maps:get(node_id, NodeWithTimestamp),
+    do_add_node(Bucket, NodeId, NodeWithTimestamp).
 
-    %% Add timestamp if not present
-    NodeWithTimestamp = case maps:is_key(last_seen, NodeInfo) of
-        true -> NodeInfo;
-        false -> NodeInfo#{last_seen => erlang:system_time(millisecond)}
-    end,
-
-    case find_node_in_list(Nodes, NodeId) of
-        {found, _ExistingNode} ->
-            %% Node exists, move to tail (remove and re-add)
-            NodesWithoutNode = remove_node_from_list(Nodes, NodeId),
-            Bucket#{nodes => NodesWithoutNode ++ [NodeWithTimestamp]};
-
-        not_found ->
-            %% New node
-            case length(Nodes) < Capacity of
-                true ->
-                    %% Space available, add to tail
-                    Bucket#{nodes => Nodes ++ [NodeWithTimestamp]};
-                false ->
-                    %% Bucket full
-                    {error, bucket_full}
-            end
+%% Node already exists - move to tail
+do_add_node(#{nodes := Nodes} = Bucket, NodeId, NodeInfo) when is_list(Nodes) ->
+    case lists:keymember(NodeId, 1, nodes_to_tuples(Nodes)) of
+        true ->
+            UpdatedNodes = remove_by_id(Nodes, NodeId) ++ [NodeInfo],
+            Bucket#{nodes => UpdatedNodes};
+        false ->
+            add_new_node(Bucket, NodeInfo)
     end.
+
+%% Bucket has space - add new node
+add_new_node(#{capacity := Capacity, nodes := Nodes} = Bucket, NodeInfo)
+  when length(Nodes) < Capacity ->
+    Bucket#{nodes => Nodes ++ [NodeInfo]};
+%% Bucket full
+add_new_node(#{capacity := Capacity, nodes := Nodes}, _NodeInfo)
+  when length(Nodes) >= Capacity ->
+    {error, bucket_full}.
+
+%% Add timestamp if not present
+ensure_timestamp(#{last_seen := _} = NodeInfo) ->
+    NodeInfo;
+ensure_timestamp(NodeInfo) ->
+    NodeInfo#{last_seen => erlang:system_time(millisecond)}.
 
 %% @doc Remove a node from the bucket.
 -spec remove_node(bucket(), binary()) -> bucket().
 remove_node(#{nodes := Nodes} = Bucket, NodeId) ->
-    Bucket#{nodes => remove_node_from_list(Nodes, NodeId)}.
+    Bucket#{nodes => remove_by_id(Nodes, NodeId)}.
 
 %% @doc Get all nodes in the bucket (ordered: oldest first).
 -spec get_nodes(bucket()) -> [node_info()].
@@ -90,44 +90,32 @@ get_nodes(#{nodes := Nodes}) ->
 %% @doc Find a node by ID.
 -spec find_node(bucket(), binary()) -> {ok, node_info()} | not_found.
 find_node(#{nodes := Nodes}, NodeId) ->
-    case find_node_in_list(Nodes, NodeId) of
-        {found, Node} -> {ok, Node};
-        not_found -> not_found
-    end.
+    find_by_id(Nodes, NodeId).
 
 %% @doc Find n closest nodes to target (sorted by XOR distance).
 -spec find_closest(bucket(), binary(), pos_integer()) -> [node_info()].
 find_closest(#{nodes := Nodes}, Target, N) ->
-    %% Sort nodes by distance to target
-    Sorted = lists:sort(
-        fun(A, B) ->
-            DistA = macula_routing_nodeid:distance(Target, maps:get(node_id, A)),
-            DistB = macula_routing_nodeid:distance(Target, maps:get(node_id, B)),
-            DistA =< DistB
-        end,
-        Nodes
-    ),
-    lists:sublist(Sorted, N).
+    WithDistance = [{distance_to(Target, Node), Node} || Node <- Nodes],
+    Sorted = lists:keysort(1, WithDistance),
+    [Node || {_Dist, Node} <- lists:sublist(Sorted, N)].
 
 %% @doc Check if bucket contains node.
 -spec has_node(bucket(), binary()) -> boolean().
 has_node(#{nodes := Nodes}, NodeId) ->
-    case find_node_in_list(Nodes, NodeId) of
-        {found, _} -> true;
-        not_found -> false
-    end.
+    lists:keymember(NodeId, 1, nodes_to_tuples(Nodes)).
 
 %% @doc Update node's last_seen timestamp (moves to tail).
 -spec update_timestamp(bucket(), binary()) -> bucket().
 update_timestamp(#{nodes := Nodes} = Bucket, NodeId) ->
-    case find_node_in_list(Nodes, NodeId) of
-        {found, Node} ->
-            %% Remove and re-add with updated timestamp
-            NodesWithoutNode = remove_node_from_list(Nodes, NodeId),
+    do_update_timestamp(Bucket, Nodes, NodeId).
+
+do_update_timestamp(Bucket, Nodes, NodeId) ->
+    case find_by_id(Nodes, NodeId) of
+        {ok, Node} ->
             UpdatedNode = Node#{last_seen => erlang:system_time(millisecond)},
-            Bucket#{nodes => NodesWithoutNode ++ [UpdatedNode]};
+            Bucket#{nodes => remove_by_id(Nodes, NodeId) ++ [UpdatedNode]};
         not_found ->
-            Bucket  % No change
+            Bucket
     end.
 
 %% @doc Get number of nodes in bucket.
@@ -144,22 +132,24 @@ capacity(#{capacity := Capacity}) ->
 %%% Internal Functions
 %%%===================================================================
 
-%% @doc Find node in list by ID.
--spec find_node_in_list([node_info()], binary()) -> {found, node_info()} | not_found.
-find_node_in_list([], _NodeId) ->
-    not_found;
-find_node_in_list([Node | Rest], NodeId) ->
-    case maps:get(node_id, Node) of
-        NodeId -> {found, Node};
-        _ -> find_node_in_list(Rest, NodeId)
+%% @doc Convert nodes to tuples for efficient key-based lookups.
+nodes_to_tuples(Nodes) ->
+    [{maps:get(node_id, N), N} || N <- Nodes].
+
+%% @doc Find node by ID using list comprehension.
+-spec find_by_id([node_info()], binary()) -> {ok, node_info()} | not_found.
+find_by_id(Nodes, NodeId) ->
+    case [N || #{node_id := Id} = N <- Nodes, Id =:= NodeId] of
+        [Node | _] -> {ok, Node};
+        [] -> not_found
     end.
 
-%% @doc Remove node from list by ID.
--spec remove_node_from_list([node_info()], binary()) -> [node_info()].
-remove_node_from_list(Nodes, NodeId) ->
-    lists:filter(
-        fun(Node) ->
-            maps:get(node_id, Node) =/= NodeId
-        end,
-        Nodes
-    ).
+%% @doc Remove node by ID using list comprehension.
+-spec remove_by_id([node_info()], binary()) -> [node_info()].
+remove_by_id(Nodes, NodeId) ->
+    [N || #{node_id := Id} = N <- Nodes, Id =/= NodeId].
+
+%% @doc Calculate XOR distance between target and node.
+-spec distance_to(binary(), node_info()) -> non_neg_integer().
+distance_to(Target, #{node_id := NodeId}) ->
+    macula_routing_nodeid:distance(Target, NodeId).

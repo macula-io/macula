@@ -1,0 +1,119 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_chatter</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_chatter</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>Macula Chatter - P2P PubSub Demo for NAT Traversal Testing.
+
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>Macula Chatter - P2P PubSub Demo for NAT Traversal Testing</p>
+  
+   <p>A pub/sub chat application that demonstrates broadcast messaging   
+across NAT boundaries using Macula's pub/sub capabilities.</p>
+  
+   <p>Each chatter node:   
+- Subscribes to "chat.room.global" topic   
+- Periodically broadcasts numbered messages to all peers   
+- Tracks delivery metrics per peer (by NAT type)   
+- Reports delivery rates at shutdown</p>
+  
+   PubSub Delivery Metrics:
+   - Each broadcast includes a sequence number
+   - Receivers track which sequence numbers they've seen per sender
+   - Gaps in sequence numbers indicate missed messages
+   - Delivery rate = received / expected (based on max seq seen)
+  
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#get_stats-0">get_stats/0</a></td><td>Get statistics about messages sent/received.</td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#send_direct-2">send_direct/2</a></td><td>Send a direct message to a specific peer via RPC.</td></tr>
+<tr><td valign="top"><a href="#send_message-1">send_message/1</a></td><td>Send a message to all peers via pubsub.</td></tr>
+<tr><td valign="top"><a href="#start_link-0">start_link/0</a></td><td>Start the chatter with default settings.</td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td>Start the chatter with options
+  Options:
+    - interval: milliseconds between broadcasts (default: 5000)
+    - node_id: custom node identifier (default: hostname).</td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="get_stats-0">get_stats/0</a></h3>
+<div class="spec">
+<p><code>get_stats() -&gt; map()</code><br></p>
+<p> </p>
+</div><p>Get statistics about messages sent/received</p>
+
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="send_direct-2">send_direct/2</a></h3>
+<div class="spec">
+<p><code>send_direct(PeerId::binary(), Message::binary()) -&gt; ok | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Send a direct message to a specific peer via RPC</p>
+
+<h3 class="function"><a name="send_message-1">send_message/1</a></h3>
+<div class="spec">
+<p><code>send_message(Message::binary()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Send a message to all peers via pubsub</p>
+
+<h3 class="function"><a name="start_link-0">start_link/0</a></h3>
+<div class="spec">
+<p><code>start_link() -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the chatter with default settings</p>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Opts::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the chatter with options
+  Options:
+    - interval: milliseconds between broadcasts (default: 5000)
+    - node_id: custom node identifier (default: hostname)</p>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

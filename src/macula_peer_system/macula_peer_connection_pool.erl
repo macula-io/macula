@@ -131,28 +131,12 @@ init(Opts) ->
     }}.
 
 handle_call({get_connection, Endpoint}, _From, State) ->
-    case lookup_connection(Endpoint) of
-        {ok, Conn, Stream} ->
-            %% Pool hit - update last_used timestamp
-            update_last_used(Endpoint),
-            {reply, {ok, Conn, Stream}, State#state{hits = State#state.hits + 1}};
-        not_found ->
-            %% Pool miss - create new connection
-            case create_connection(Endpoint) of
-                {ok, Conn, Stream} ->
-                    %% Don't store in pool yet - caller will return it after use
-                    {reply, {ok, Conn, Stream}, State#state{misses = State#state.misses + 1}};
-                {error, Reason} ->
-                    {reply, {error, Reason}, State#state{misses = State#state.misses + 1}}
-            end
-    end;
+    LookupResult = lookup_connection(Endpoint),
+    do_get_connection(LookupResult, Endpoint, State);
 
 handle_call(stats, _From, #state{hits = Hits, misses = Misses, evictions = Evictions} = State) ->
     Total = Hits + Misses,
-    HitRate = case Total of
-        0 -> 0.0;
-        _ -> Hits / Total * 100
-    end,
+    HitRate = calculate_hit_rate(Hits, Total),
     PoolSize = ets:info(?TABLE, size),
     Stats = #{
         hits => Hits,
@@ -168,39 +152,14 @@ handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
 handle_cast({return_connection, Endpoint, Connection, Stream}, State) ->
-    %% Check pool size limit
     CurrentSize = ets:info(?TABLE, size),
-    NewState = case CurrentSize >= State#state.max_connections of
-        true ->
-            %% Pool full - evict oldest connection
-            evict_oldest_connection(),
-            State#state{evictions = State#state.evictions + 1};
-        false ->
-            State
-    end,
-
-    %% Store connection in pool
-    Now = erlang:system_time(millisecond),
-    PooledConn = #pooled_conn{
-        endpoint = Endpoint,
-        connection = Connection,
-        stream = Stream,
-        last_used = Now,
-        created = Now
-    },
-    ets:insert(?TABLE, PooledConn),
-
+    NewState = maybe_evict_for_space(CurrentSize, State),
+    store_connection(Endpoint, Connection, Stream),
     {noreply, NewState};
 
 handle_cast({invalidate, Endpoint}, State) ->
-    case ets:lookup(?TABLE, Endpoint) of
-        [#pooled_conn{connection = Conn, stream = Stream}] ->
-            %% Close connection and stream
-            close_connection(Conn, Stream),
-            ets:delete(?TABLE, Endpoint);
-        [] ->
-            ok
-    end,
+    LookupResult = ets:lookup(?TABLE, Endpoint),
+    do_invalidate(LookupResult, Endpoint),
     {noreply, State};
 
 handle_cast(_Msg, State) ->
@@ -246,20 +205,27 @@ terminate(_Reason, _State) ->
 %% @private
 %% @doc Look up a connection in the pool.
 lookup_connection(Endpoint) ->
-    case ets:lookup(?TABLE, Endpoint) of
-        [#pooled_conn{connection = Conn, stream = Stream}] ->
-            %% Check if connection is still alive
-            case is_connection_alive(Conn) of
-                true ->
-                    {ok, Conn, Stream};
-                false ->
-                    %% Connection died - remove from pool
-                    ets:delete(?TABLE, Endpoint),
-                    not_found
-            end;
-        [] ->
-            not_found
-    end.
+    LookupResult = ets:lookup(?TABLE, Endpoint),
+    do_lookup(LookupResult, Endpoint).
+
+%% @private Connection found - check if alive
+do_lookup([#pooled_conn{connection = Conn, stream = Stream}], Endpoint) ->
+    check_connection_alive(Conn, Stream, Endpoint);
+%% @private No connection in pool
+do_lookup([], _Endpoint) ->
+    not_found.
+
+%% @private Check if connection is alive and return appropriately
+check_connection_alive(Conn, Stream, Endpoint) ->
+    check_alive_result(is_connection_alive(Conn), Conn, Stream, Endpoint).
+
+%% @private Connection is alive - return it
+check_alive_result(true, Conn, Stream, _Endpoint) ->
+    {ok, Conn, Stream};
+%% @private Connection died - remove from pool
+check_alive_result(false, _Conn, _Stream, Endpoint) ->
+    ets:delete(?TABLE, Endpoint),
+    not_found.
 
 %% @private
 %% @doc Update last_used timestamp for a connection.
@@ -270,50 +236,72 @@ update_last_used(Endpoint) ->
 %% @private
 %% @doc Create a new QUIC connection to an endpoint.
 create_connection(Endpoint) ->
-    case parse_endpoint(Endpoint) of
-        {ok, Host, Port} ->
-            ConnectOpts = [
-                {alpn, ["macula"]},
-                {verify, none},
-                {idle_timeout_ms, 60000},
-                {keep_alive_interval_ms, 20000},
-                {handshake_idle_timeout_ms, 30000}
-            ],
+    ParseResult = parse_endpoint(Endpoint),
+    do_create_connection(ParseResult).
 
-            case macula_quic:connect(Host, Port, ConnectOpts, 5000) of
-                {ok, Conn} ->
-                    case macula_quic:open_stream(Conn) of
-                        {ok, Stream} ->
-                            {ok, Conn, Stream};
-                        {error, Reason} ->
-                            quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
-                            {error, {stream_failed, Reason}}
-                    end;
-                {error, transport_down, _Details} ->
-                    {error, {connect_failed, transport_down}};
-                {error, Reason} ->
-                    {error, {connect_failed, Reason}}
-            end;
-        {error, Reason} ->
-            {error, {invalid_endpoint, Reason}}
-    end.
+%% @private Endpoint parsed - attempt connection
+do_create_connection({ok, Host, Port}) ->
+    ConnectOpts = [
+        {alpn, ["macula"]},
+        {verify, none},
+        {idle_timeout_ms, 60000},
+        {keep_alive_interval_ms, 20000},
+        {handshake_idle_timeout_ms, 30000}
+    ],
+    ConnResult = macula_quic:connect(Host, Port, ConnectOpts, 5000),
+    do_create_stream(ConnResult);
+%% @private Invalid endpoint
+do_create_connection({error, Reason}) ->
+    {error, {invalid_endpoint, Reason}}.
+
+%% @private Connection established - open stream
+do_create_stream({ok, Conn}) ->
+    StreamResult = macula_quic:open_stream(Conn),
+    handle_stream_result(StreamResult, Conn);
+%% @private Transport down
+do_create_stream({error, transport_down, _Details}) ->
+    {error, {connect_failed, transport_down}};
+%% @private Connection failed
+do_create_stream({error, Reason}) ->
+    {error, {connect_failed, Reason}}.
+
+%% @private Stream opened successfully
+handle_stream_result({ok, Stream}, Conn) ->
+    {ok, Conn, Stream};
+%% @private Stream open failed
+handle_stream_result({error, Reason}, Conn) ->
+    quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+    {error, {stream_failed, Reason}}.
 
 %% @private
 %% @doc Parse endpoint string into host and port.
+%% Supports formats: "host:port", "https://host:port", "http://host:port"
 parse_endpoint(Endpoint) when is_binary(Endpoint) ->
     parse_endpoint(binary_to_list(Endpoint));
 parse_endpoint(Endpoint) when is_list(Endpoint) ->
-    case string:split(Endpoint, ":") of
-        [Host, PortStr] ->
-            try
-                Port = list_to_integer(PortStr),
-                {ok, Host, Port}
-            catch
-                _:_ -> {error, invalid_port}
-            end;
-        _ ->
-            {error, invalid_format}
+    %% Strip protocol prefix if present
+    Stripped = strip_protocol(Endpoint),
+    %% Split from the end to handle IPv6 addresses correctly
+    case string:split(Stripped, ":", trailing) of
+        [Host, PortStr] -> parse_port(Host, PortStr);
+        _ -> {error, invalid_format}
     end.
+
+%% @private Strip protocol prefix (https://, http://) from endpoint
+strip_protocol("https://" ++ Rest) -> Rest;
+strip_protocol("http://" ++ Rest) -> Rest;
+strip_protocol(Endpoint) -> Endpoint.
+
+%% @private Parse port string to integer
+parse_port(Host, PortStr) ->
+    parse_port_result(Host, catch list_to_integer(PortStr)).
+
+%% @private Port parsed successfully
+parse_port_result(Host, Port) when is_integer(Port), Port > 0, Port < 65536 ->
+    {ok, Host, Port};
+%% @private Invalid port value or parse error
+parse_port_result(_Host, _) ->
+    {error, invalid_port}.
 
 %% @private
 %% @doc Check if a QUIC connection is still alive.
@@ -327,32 +315,95 @@ is_connection_alive(Conn) ->
 %% @private
 %% @doc Evict the oldest (LRU) connection from the pool.
 evict_oldest_connection() ->
-    %% Find oldest connection by last_used timestamp
-    case ets:first(?TABLE) of
-        '$end_of_table' ->
-            ok;
-        _ ->
-            %% Find connection with minimum last_used
-            Oldest = ets:foldl(fun(#pooled_conn{endpoint = E, last_used = LU} = PC, Acc) ->
-                case Acc of
-                    none -> {E, LU, PC};
-                    {_E, MinLU, _PC} when LU < MinLU -> {E, LU, PC};
-                    _ -> Acc
-                end
-            end, none, ?TABLE),
+    FirstKey = ets:first(?TABLE),
+    do_evict(FirstKey).
 
-            case Oldest of
-                none ->
-                    ok;
-                {Endpoint, _, #pooled_conn{connection = Conn, stream = Stream}} ->
-                    close_connection(Conn, Stream),
-                    ets:delete(?TABLE, Endpoint)
-            end
-    end.
+%% @private Empty table - nothing to evict
+do_evict('$end_of_table') ->
+    ok;
+%% @private Table has entries - find oldest
+do_evict(_) ->
+    Oldest = find_oldest_connection(),
+    evict_connection(Oldest).
+
+%% @private Find connection with minimum last_used timestamp
+find_oldest_connection() ->
+    ets:foldl(fun compare_connection_age/2, none, ?TABLE).
+
+%% @private Compare and keep older connection
+compare_connection_age(#pooled_conn{endpoint = E, last_used = LU} = PC, none) ->
+    {E, LU, PC};
+compare_connection_age(#pooled_conn{endpoint = E, last_used = LU} = PC, {_E, MinLU, _PC}) when LU < MinLU ->
+    {E, LU, PC};
+compare_connection_age(_PC, Acc) ->
+    Acc.
+
+%% @private No oldest found (shouldn't happen)
+evict_connection(none) ->
+    ok;
+%% @private Evict the oldest connection
+evict_connection({Endpoint, _, #pooled_conn{connection = Conn, stream = Stream}}) ->
+    close_connection(Conn, Stream),
+    ets:delete(?TABLE, Endpoint).
 
 %% @private
 %% @doc Close a QUIC connection and stream gracefully.
 close_connection(Conn, Stream) ->
     catch quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0),
     catch quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+    ok.
+
+%%%===================================================================
+%%% Helper Functions for Refactored Code
+%%%===================================================================
+
+%% @private Pool hit - return connection
+do_get_connection({ok, Conn, Stream}, Endpoint, State) ->
+    update_last_used(Endpoint),
+    {reply, {ok, Conn, Stream}, State#state{hits = State#state.hits + 1}};
+%% @private Pool miss - create new connection
+do_get_connection(not_found, Endpoint, State) ->
+    CreateResult = create_connection(Endpoint),
+    do_get_create_connection(CreateResult, State).
+
+%% @private Connection created successfully
+do_get_create_connection({ok, Conn, Stream}, State) ->
+    {reply, {ok, Conn, Stream}, State#state{misses = State#state.misses + 1}};
+%% @private Connection creation failed
+do_get_create_connection({error, Reason}, State) ->
+    {reply, {error, Reason}, State#state{misses = State#state.misses + 1}}.
+
+%% @private Calculate hit rate percentage
+calculate_hit_rate(_Hits, 0) ->
+    0.0;
+calculate_hit_rate(Hits, Total) ->
+    Hits / Total * 100.
+
+%% @private Pool full - evict oldest
+maybe_evict_for_space(CurrentSize, #state{max_connections = Max, evictions = Evictions} = State)
+  when CurrentSize >= Max ->
+    evict_oldest_connection(),
+    State#state{evictions = Evictions + 1};
+%% @private Pool has space
+maybe_evict_for_space(_CurrentSize, State) ->
+    State.
+
+%% @private Store connection in pool
+store_connection(Endpoint, Connection, Stream) ->
+    Now = erlang:system_time(millisecond),
+    PooledConn = #pooled_conn{
+        endpoint = Endpoint,
+        connection = Connection,
+        stream = Stream,
+        last_used = Now,
+        created = Now
+    },
+    ets:insert(?TABLE, PooledConn).
+
+%% @private Connection found - close and delete
+do_invalidate([#pooled_conn{connection = Conn, stream = Stream}], Endpoint) ->
+    close_connection(Conn, Stream),
+    ets:delete(?TABLE, Endpoint);
+%% @private No connection found
+do_invalidate([], _Endpoint) ->
     ok.

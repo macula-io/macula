@@ -9,6 +9,8 @@
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([start_link/2]).
 
@@ -41,39 +43,39 @@ start_link(GatewayPid, Conn) ->
 %%%===================================================================
 
 init([GatewayPid, Conn]) ->
-    io:format("[StreamAcceptor] Starting for connection ~p~n", [Conn]),
-    io:format("[StreamAcceptor] Gateway PID: ~p~n", [GatewayPid]),
+    ?LOG_INFO("Starting for connection ~p", [Conn]),
+    ?LOG_DEBUG("Gateway PID: ~p", [GatewayPid]),
 
     %% Register for stream events with active mode
     StreamOpts = #{active => true},
     case quicer:async_accept_stream(Conn, StreamOpts) of
         {ok, Conn} ->
-            io:format("[StreamAcceptor] Registered for streams (active mode)~n"),
+            ?LOG_DEBUG("Registered for streams (active mode)"),
             {ok, #state{
                 gateway_pid = GatewayPid,
                 conn = Conn,
                 accepting = true
             }};
         {error, Reason} ->
-            io:format("[StreamAcceptor] ERROR: Failed to register: ~p~n", [Reason]),
+            ?LOG_ERROR("Failed to register: ~p", [Reason]),
             {stop, Reason}
     end.
 
 handle_call(Request, _From, State) ->
-    io:format("[StreamAcceptor] Unexpected call: ~p~n", [Request]),
+    ?LOG_WARNING("Unexpected call: ~p", [Request]),
     {reply, {error, unknown_call}, State}.
 
 handle_cast(Msg, State) ->
-    io:format("[StreamAcceptor] Unexpected cast: ~p~n", [Msg]),
+    ?LOG_WARNING("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
 %% @doc Handle new stream from peer - THIS IS THE KEY MESSAGE!
 handle_info({quic, new_stream, Stream, Props}, #state{gateway_pid = GatewayPid, conn = Conn} = State) ->
-    io:format("[StreamAcceptor] ========================================~n"),
-    io:format("[StreamAcceptor] NEW STREAM RECEIVED!~n"),
-    io:format("[StreamAcceptor] Stream: ~p~n", [Stream]),
-    io:format("[StreamAcceptor] Props: ~p~n", [Props]),
-    io:format("[StreamAcceptor] ========================================~n"),
+    ?LOG_DEBUG("========================================"),
+    ?LOG_INFO("NEW STREAM RECEIVED!"),
+    ?LOG_DEBUG("Stream: ~p", [Stream]),
+    ?LOG_DEBUG("Props: ~p", [Props]),
+    ?LOG_DEBUG("========================================"),
 
     %% Forward stream to gateway
     GatewayPid ! {quic_stream, Stream, Props},
@@ -82,16 +84,16 @@ handle_info({quic, new_stream, Stream, Props}, #state{gateway_pid = GatewayPid, 
     StreamOpts = #{active => true},
     case quicer:async_accept_stream(Conn, StreamOpts) of
         {ok, Conn} ->
-            io:format("[StreamAcceptor] Re-registered for next stream~n"),
+            ?LOG_DEBUG("Re-registered for next stream"),
             {noreply, State};
         {error, Reason} ->
-            io:format("[StreamAcceptor] ERROR: Failed to re-register: ~p~n", [Reason]),
+            ?LOG_ERROR("Failed to re-register: ~p", [Reason]),
             {stop, {re_register_failed, Reason}, State}
     end;
 
 %% Handle stream data (if stream is in active mode)
 handle_info({quic, Data, Stream, Flags}, #state{gateway_pid = GatewayPid} = State) when is_binary(Data) ->
-    io:format("[StreamAcceptor] Stream data: Stream=~p, Size=~p bytes~n",
+    ?LOG_DEBUG("Stream data: Stream=~p, Size=~p bytes",
               [Stream, byte_size(Data)]),
     %% Forward to gateway
     GatewayPid ! {quic_stream_data, Stream, Data, Flags},
@@ -99,18 +101,18 @@ handle_info({quic, Data, Stream, Flags}, #state{gateway_pid = GatewayPid} = Stat
 
 %% Handle stream closed
 handle_info({quic, stream_closed, Stream, Flags}, State) ->
-    io:format("[StreamAcceptor] Stream closed: ~p, Flags: ~p~n", [Stream, Flags]),
+    ?LOG_INFO("Stream closed: ~p, Flags: ~p", [Stream, Flags]),
     {noreply, State};
 
 %% Handle connection closed
 handle_info({quic, closed, Conn, _Flags}, #state{conn = Conn} = State) ->
-    io:format("[StreamAcceptor] Connection closed: ~p~n", [Conn]),
+    ?LOG_INFO("Connection closed: ~p", [Conn]),
     {stop, normal, State};
 
 handle_info(Info, State) ->
-    io:format("[StreamAcceptor] Unhandled message: ~p~n", [Info]),
+    ?LOG_WARNING("Unhandled message: ~p", [Info]),
     {noreply, State}.
 
 terminate(Reason, #state{conn = Conn}) ->
-    io:format("[StreamAcceptor] Terminating: ~p (Conn: ~p)~n", [Reason, Conn]),
+    ?LOG_INFO("Terminating: ~p (Conn: ~p)", [Reason, Conn]),
     ok.

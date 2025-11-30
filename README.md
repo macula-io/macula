@@ -29,7 +29,7 @@
 - 🏗️ **[Architecture Guide](ARCHITECTURE.md)** - Visual guide with C4 diagrams, deployment topologies
 - 📄 **[Changelog](CHANGELOG.md)** - Version history and migration guides
 - 🧪 **[Development Guide](docs/DEVELOPMENT.md)** - Contributing and testing
-- 🌐 **[Kademlia DHT](docs/KADEMLIA_DHT_ARCHITECTURE.md)** - DHT implementation details
+- 🌐 **[DHT Guide](docs/guides/DHT_GUIDE.md)** - Kademlia DHT architecture
 
 ---
 

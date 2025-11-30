@@ -1,0 +1,133 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_realm_trust</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_realm_trust</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>Realm Trust Management for Hybrid Trust Model.
+
+
+<h2><a name="description">Description</a></h2><p>Realm Trust Management for Hybrid Trust Model</p>
+  
+   <p>Implements the Hybrid Trust Model (ADR-001) with three trust levels:   
+- Level 1: Realm Authentication (API key/token validation)   
+- Level 2: Certificate Trust (TOFU within authenticated realm)   
+- Level 3: Optional CA-signed certificates for seed nodes</p>
+  
+   This module manages:
+   - Realm authentication via API keys
+   - Certificate fingerprint registration and verification
+   - Trust On First Use (TOFU) pattern
+   - Fingerprint change detection
+   - Trust revocation
+  
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-fingerprint">fingerprint()</a></h3>
+<p><code>fingerprint() = binary()</code></p>
+
+
+<h3 class="typedecl"><a name="type-node_id">node_id()</a></h3>
+<p><code>node_id() = binary()</code></p>
+
+
+<h3 class="typedecl"><a name="type-realm">realm()</a></h3>
+<p><code>realm() = binary()</code></p>
+
+
+<h3 class="typedecl"><a name="type-session">session()</a></h3>
+<p><code>session() = #{realm := <a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, session_token := binary(), authenticated_at := integer()}</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#authenticate-2">authenticate/2</a></td><td>Authenticate to a realm using API key
+  Returns a session map on success, error tuple on failure
+  Implements rate limiting per realm.</td></tr>
+<tr><td valign="top"><a href="#extract_fingerprint-1">extract_fingerprint/1</a></td><td>Extract SHA-256 fingerprint from certificate PEM.</td></tr>
+<tr><td valign="top"><a href="#get_auth_attempt_count-1">get_auth_attempt_count/1</a></td><td>Get the current auth attempt count for a realm.</td></tr>
+<tr><td valign="top"><a href="#get_fingerprint_info-2">get_fingerprint_info/2</a></td><td>Get fingerprint info for a node in a realm.</td></tr>
+<tr><td valign="top"><a href="#get_trusted_peers-1">get_trusted_peers/1</a></td><td>Get all trusted peers in a realm.</td></tr>
+<tr><td valign="top"><a href="#init_rate_limiter-0">init_rate_limiter/0</a></td><td>Initialize the rate limiter ETS table.</td></tr>
+<tr><td valign="top"><a href="#register_fingerprint-3">register_fingerprint/3</a></td><td>Register a certificate fingerprint for a node in a realm.</td></tr>
+<tr><td valign="top"><a href="#reset_rate_limit-1">reset_rate_limit/1</a></td><td>Reset the rate limit for a realm.</td></tr>
+<tr><td valign="top"><a href="#revoke_trust-2">revoke_trust/2</a></td><td>Revoke trust for a node in a realm.</td></tr>
+<tr><td valign="top"><a href="#verify_fingerprint-3">verify_fingerprint/3</a></td><td>Verify a certificate fingerprint for a node in a realm
+  Implements Trust On First Use (TOFU) - first connection is automatically trusted.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="authenticate-2">authenticate/2</a></h3>
+<div class="spec">
+<p><code>authenticate(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, ApiKey::binary()) -&gt; {ok, <a href="#type-session" docgen-rel="seetype" docgen-href="#session/0">session()</a>} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Authenticate to a realm using API key
+  Returns a session map on success, error tuple on failure
+  Implements rate limiting per realm</p>
+
+<h3 class="function"><a name="extract_fingerprint-1">extract_fingerprint/1</a></h3>
+<div class="spec">
+<p><code>extract_fingerprint(CertPEM::binary()) -&gt; {ok, <a href="#type-fingerprint" docgen-rel="seetype" docgen-href="#fingerprint/0">fingerprint()</a>} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Extract SHA-256 fingerprint from certificate PEM</p>
+
+<h3 class="function"><a name="get_auth_attempt_count-1">get_auth_attempt_count/1</a></h3>
+<div class="spec">
+<p><code>get_auth_attempt_count(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>) -&gt; {ok, non_neg_integer()}</code><br></p>
+<p> </p>
+</div><p>Get the current auth attempt count for a realm</p>
+
+<h3 class="function"><a name="get_fingerprint_info-2">get_fingerprint_info/2</a></h3>
+<div class="spec">
+<p><code>get_fingerprint_info(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>) -&gt; {ok, map()} | {error, not_found}</code><br></p>
+<p> </p>
+</div><p>Get fingerprint info for a node in a realm</p>
+
+<h3 class="function"><a name="get_trusted_peers-1">get_trusted_peers/1</a></h3>
+<div class="spec">
+<p><code>get_trusted_peers(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>) -&gt; {ok, [map()]}</code><br></p>
+<p> </p>
+</div><p>Get all trusted peers in a realm</p>
+
+<h3 class="function"><a name="init_rate_limiter-0">init_rate_limiter/0</a></h3>
+<div class="spec">
+<p><code>init_rate_limiter() -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Initialize the rate limiter ETS table</p>
+
+<h3 class="function"><a name="register_fingerprint-3">register_fingerprint/3</a></h3>
+<div class="spec">
+<p><code>register_fingerprint(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, Fingerprint::<a href="#type-fingerprint" docgen-rel="seetype" docgen-href="#fingerprint/0">fingerprint()</a>) -&gt; {ok, registered}</code><br></p>
+<p> </p>
+</div><p>Register a certificate fingerprint for a node in a realm</p>
+
+<h3 class="function"><a name="reset_rate_limit-1">reset_rate_limit/1</a></h3>
+<div class="spec">
+<p><code>reset_rate_limit(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Reset the rate limit for a realm</p>
+
+<h3 class="function"><a name="revoke_trust-2">revoke_trust/2</a></h3>
+<div class="spec">
+<p><code>revoke_trust(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>) -&gt; {ok, revoked | not_found}</code><br></p>
+<p> </p>
+</div><p>Revoke trust for a node in a realm</p>
+
+<h3 class="function"><a name="verify_fingerprint-3">verify_fingerprint/3</a></h3>
+<div class="spec">
+<p><code>verify_fingerprint(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, Fingerprint::<a href="#type-fingerprint" docgen-rel="seetype" docgen-href="#fingerprint/0">fingerprint()</a>) -&gt; {ok, trusted | trusted_first_use} | {error, {fingerprint_mismatch, #{expected := <a href="#type-fingerprint" docgen-rel="seetype" docgen-href="#fingerprint/0">fingerprint()</a>, received := <a href="#type-fingerprint" docgen-rel="seetype" docgen-href="#fingerprint/0">fingerprint()</a>}}}</code><br></p>
+<p> </p>
+</div><p>Verify a certificate fingerprint for a node in a realm
+  Implements Trust On First Use (TOFU) - first connection is automatically trusted</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

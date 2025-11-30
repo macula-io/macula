@@ -6,6 +6,8 @@
 %%%-------------------------------------------------------------------
 -module(macula_quic).
 
+-include_lib("kernel/include/logger.hrl").
+
 -export([
     listen/2,
     connect/4,
@@ -65,7 +67,7 @@ listen(Port, Opts) ->
 
     %% Start QUIC listener
     %% The calling process becomes the owner and will receive connection messages
-    io:format("[QUIC] Starting listener on port ~p with idle_timeout=~pms, keep_alive=~pms~n",
+    ?LOG_INFO("Starting listener on port ~p with idle_timeout=~pms, keep_alive=~pms",
               [Port, IdleTimeoutMs, KeepAliveIntervalMs]),
     quicer:listen(Port, ListenerOpts).
 
@@ -100,7 +102,7 @@ connect(Host, Port, Opts, Timeout) ->
     ],
 
     %% Connect
-    io:format("[QUIC] Connecting to ~s:~p with idle_timeout=~pms, keep_alive=~pms~n",
+    ?LOG_INFO("Connecting to ~s:~p with idle_timeout=~pms, keep_alive=~pms",
               [Host, Port, IdleTimeoutMs, KeepAliveIntervalMs]),
     quicer:connect(Host, Port, QuicerOpts, Timeout).
 

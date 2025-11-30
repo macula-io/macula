@@ -25,6 +25,8 @@
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([
     start_link/1,
@@ -39,7 +41,8 @@
     get_client_stream/2,
     get_stream_by_endpoint/2,
     get_all_node_ids/1,
-    broadcast/2
+    broadcast/2,
+    remove_stale_stream/2
 ]).
 
 %% gen_server callbacks
@@ -132,15 +135,23 @@ get_all_node_ids(Pid) ->
 broadcast(Pid, EncodedMsg) ->
     gen_server:cast(Pid, {broadcast, EncodedMsg}).
 
+%% @doc Remove a stale stream for a node when send fails with 'closed'.
+%% This is called by the gateway when quicer:send returns {error, closed}
+%% to clean up the invalid stream reference from our maps.
+%% Uses async cast to avoid blocking the gateway during send operations.
+-spec remove_stale_stream(pid(), binary()) -> ok.
+remove_stale_stream(Pid, NodeId) ->
+    gen_server:cast(Pid, {remove_stale_stream, NodeId}).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 init(Opts) ->
-    io:format("[Clients] Initializing client manager~n"),
+    ?LOG_INFO("Initializing client manager"),
     %% Get max clients from opts or use default (10,000)
     MaxClients = maps:get(max_clients, Opts, 10000),
-    io:format("[Clients] Max clients: ~p~n", [MaxClients]),
+    ?LOG_INFO("Max clients: ~p", [MaxClients]),
 
     State = #state{
         opts = Opts,
@@ -150,38 +161,12 @@ init(Opts) ->
         client_streams = #{},
         endpoint_to_stream = #{}
     },
-    io:format("[Clients] Client manager initialized~n"),
+    ?LOG_INFO("Client manager initialized"),
     {ok, State}.
 
-handle_call({client_connected, ClientPid, ClientInfo}, _From,
-            #state{clients = Clients, max_clients = MaxClients} = State) ->
-    %% Check if client already connected (update case)
-    case maps:is_key(ClientPid, Clients) of
-        true ->
-            %% Update existing client info (allowed even when pool is full)
-            NewClients = maps:put(ClientPid, ClientInfo, Clients),
-            NewState = State#state{clients = NewClients},
-            {reply, ok, NewState};
-        false ->
-            %% New client - check if pool is full
-            case maps:size(Clients) >= MaxClients of
-                true ->
-                    %% Pool full - reject new client (backpressure)
-                    io:format("[ClientManager] Client pool full (~p clients), rejecting new client~n",
-                             [MaxClients]),
-                    {reply, {error, max_clients_reached}, State};
-                false ->
-                    %% Pool has space - monitor and store new client
-                    MonitorRef = erlang:monitor(process, ClientPid),
-                    NewClients = maps:put(ClientPid, ClientInfo, Clients),
-                    NewMonitors = maps:put(MonitorRef, ClientPid, State#state.monitors),
-                    NewState = State#state{
-                        clients = NewClients,
-                        monitors = NewMonitors
-                    },
-                    {reply, ok, NewState}
-            end
-    end;
+handle_call({client_connected, ClientPid, ClientInfo}, _From, State) ->
+    IsExisting = maps:is_key(ClientPid, State#state.clients),
+    handle_client_connected(IsExisting, ClientPid, ClientInfo, State);
 
 handle_call({client_disconnected, ClientPid}, _From, State) ->
     NewState = remove_client(ClientPid, State),
@@ -213,7 +198,7 @@ handle_call({store_client_stream, NodeId, StreamPid, Endpoint}, _From, State) wh
         client_streams = ClientStreams,
         endpoint_to_stream = EndpointToStream
     },
-    io:format("[ClientManager] Tracking endpoint → stream: ~s → ~p~n", [Endpoint, StreamPid]),
+    ?LOG_DEBUG("Tracking endpoint → stream: ~s → ~p", [Endpoint, StreamPid]),
     {reply, ok, NewState};
 
 handle_call({get_client_stream, NodeId}, _From, State) ->
@@ -244,12 +229,35 @@ handle_cast({broadcast, EncodedMsg}, State) ->
         case macula_quic:send(Stream, EncodedMsg) of
             ok -> Acc + 1;
             {error, Reason} ->
-                io:format("[Clients] Broadcast send failed: ~p~n", [Reason]),
+                ?LOG_WARNING("Broadcast send failed: ~p", [Reason]),
                 Acc
         end
     end, 0, Streams),
-    io:format("[Clients] Broadcast sent to ~p client(s)~n", [Count]),
+    ?LOG_INFO("Broadcast sent to ~p client(s)", [Count]),
     {noreply, State};
+
+%% @doc Remove a stale stream from client_streams map when send fails.
+%% This prevents repeated attempts to send to closed streams and enables
+%% clients to reconnect with fresh streams.
+handle_cast({remove_stale_stream, NodeId}, State) ->
+    case maps:is_key(NodeId, State#state.client_streams) of
+        true ->
+            ?LOG_WARNING("[ClientManager] Removing stale stream for node ~s",
+                        [binary:encode_hex(NodeId)]),
+            NewClientStreams = maps:remove(NodeId, State#state.client_streams),
+            %% Also try to remove from endpoint_to_stream if we can find it
+            %% (reverse lookup by stream PID)
+            OldStreamPid = maps:get(NodeId, State#state.client_streams),
+            NewEndpointToStream = remove_stream_from_endpoint_map(
+                OldStreamPid, State#state.endpoint_to_stream),
+            {noreply, State#state{
+                client_streams = NewClientStreams,
+                endpoint_to_stream = NewEndpointToStream
+            }};
+        false ->
+            %% Stream already removed (possibly by reconnection)
+            {noreply, State}
+    end;
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -279,32 +287,65 @@ terminate(_Reason, _State) ->
 %% Also removes associated client stream from client_streams and endpoint_to_stream maps.
 -spec remove_client(pid(), #state{}) -> #state{}.
 remove_client(ClientPid, State) ->
-    %% Get client info to extract node_id and endpoint before removing
-    case maps:get(ClientPid, State#state.clients, undefined) of
-        undefined ->
-            %% Client not found, just return state
-            State;
-        ClientInfo ->
-            %% Extract node_id and remove from client_streams
-            NodeId = maps:get(node_id, ClientInfo),
-            NewClientStreams = maps:remove(NodeId, State#state.client_streams),
+    ClientInfo = maps:get(ClientPid, State#state.clients, undefined),
+    do_remove_client(ClientInfo, ClientPid, State).
 
-            %% Extract endpoint (if present) and remove from endpoint_to_stream
-            Endpoint = maps:get(endpoint, ClientInfo, undefined),
-            NewEndpointToStream = case Endpoint of
-                undefined -> State#state.endpoint_to_stream;
-                <<>> -> State#state.endpoint_to_stream;
-                _ ->
-                    io:format("[ClientManager] Cleaning up endpoint mapping: ~s~n", [Endpoint]),
-                    maps:remove(Endpoint, State#state.endpoint_to_stream)
-            end,
+%%%===================================================================
+%%% Client connected helpers
+%%%===================================================================
 
-            %% Remove from clients map
-            NewClients = maps:remove(ClientPid, State#state.clients),
+%% @private Update existing client info (allowed even when pool is full)
+handle_client_connected(true, ClientPid, ClientInfo, State) ->
+    NewClients = maps:put(ClientPid, ClientInfo, State#state.clients),
+    NewState = State#state{clients = NewClients},
+    {reply, ok, NewState};
+%% @private New client - check pool capacity
+handle_client_connected(false, ClientPid, ClientInfo, #state{clients = Clients, max_clients = MaxClients} = State) ->
+    IsFull = maps:size(Clients) >= MaxClients,
+    handle_new_client(IsFull, ClientPid, ClientInfo, State).
 
-            State#state{
-                clients = NewClients,
-                client_streams = NewClientStreams,
-                endpoint_to_stream = NewEndpointToStream
-            }
-    end.
+%% @private Pool full - reject new client (backpressure)
+handle_new_client(true, _ClientPid, _ClientInfo, #state{max_clients = MaxClients} = State) ->
+    ?LOG_WARNING("Client pool full (~p clients), rejecting new client", [MaxClients]),
+    {reply, {error, max_clients_reached}, State};
+%% @private Pool has space - monitor and store new client
+handle_new_client(false, ClientPid, ClientInfo, State) ->
+    MonitorRef = erlang:monitor(process, ClientPid),
+    NewClients = maps:put(ClientPid, ClientInfo, State#state.clients),
+    NewMonitors = maps:put(MonitorRef, ClientPid, State#state.monitors),
+    NewState = State#state{clients = NewClients, monitors = NewMonitors},
+    {reply, ok, NewState}.
+
+%%%===================================================================
+%%% Client removal helpers
+%%%===================================================================
+
+%% @private Client not found - return state unchanged
+do_remove_client(undefined, _ClientPid, State) ->
+    State;
+%% @private Remove client and associated streams
+do_remove_client(ClientInfo, ClientPid, State) ->
+    NodeId = maps:get(node_id, ClientInfo),
+    Endpoint = maps:get(endpoint, ClientInfo, undefined),
+    NewClientStreams = maps:remove(NodeId, State#state.client_streams),
+    NewEndpointToStream = cleanup_endpoint_mapping(Endpoint, State#state.endpoint_to_stream),
+    NewClients = maps:remove(ClientPid, State#state.clients),
+    State#state{
+        clients = NewClients,
+        client_streams = NewClientStreams,
+        endpoint_to_stream = NewEndpointToStream
+    }.
+
+cleanup_endpoint_mapping(undefined, EndpointToStream) ->
+    EndpointToStream;
+cleanup_endpoint_mapping(<<>>, EndpointToStream) ->
+    EndpointToStream;
+cleanup_endpoint_mapping(Endpoint, EndpointToStream) ->
+    ?LOG_DEBUG("Cleaning up endpoint mapping: ~s", [Endpoint]),
+    maps:remove(Endpoint, EndpointToStream).
+
+%% @private Remove stream from endpoint_to_stream map by stream PID (reverse lookup).
+%% Used when we know the stream is stale but don't have the endpoint key.
+remove_stream_from_endpoint_map(StreamPid, EndpointToStream) ->
+    %% Find endpoints that map to this stream PID and remove them
+    maps:filter(fun(_Endpoint, Pid) -> Pid =/= StreamPid end, EndpointToStream).

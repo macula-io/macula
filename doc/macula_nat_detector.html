@@ -1,0 +1,146 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_nat_detector</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_nat_detector</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
+NAT Type Detector using NATCracker Methodology.
+
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>   
+NAT Type Detector using NATCracker Methodology.</p>
+  
+   <p>Detects the local peer's NAT characteristics by probing external   
+observers (gateways/peers with public IPs) and analyzing reflexive   
+addresses. Classification follows NATCracker's 27 NAT type model.</p>
+  
+   <p>NAT Policy Detection:   
+1. Mapping Policy (m): How NAT maps internal to external addresses      
+- EI (Endpoint-Independent): Same external addr for all destinations      
+- HD (Host-Dependent): Different external addr per destination host      
+- PD (Port-Dependent): Different external addr per destination host:port</p>
+  
+   <p>2. Filtering Policy (f): What incoming packets NAT accepts      
+- EI: Accepts from any source      
+- HD: Accepts from hosts we've contacted      
+- PD: Accepts from host:port we've contacted</p>
+  
+   <p>3. Allocation Policy (a): How NAT chooses external ports      
+- PP (Port-Preservation): external_port = local_port      
+- PC (Port-Contiguity): external_port = last_port + delta      
+- RD (Random): No predictable pattern</p>
+  
+   <p>Detection Algorithm (Fast - 200-400ms):   
+1. Send NAT_PROBE to primary observer (100ms RTT)   
+2. Send NAT_PROBE to secondary observer (parallel, 100ms RTT)   
+3. Compare reflexive addresses to classify NAT type</p>
+  
+   Most Common NAT Types (per NATCracker):
+   - (EI, PD, PP): 37% of consumer NATs
+   - (EI, EI, PP): 15% (Full Cone)
+   - (PD, PD, RD): 12% (Symmetric)
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_observation-2">add_observation/2</a></td><td>Add an observation from an external observer.</td></tr>
+<tr><td valign="top"><a href="#detect-0">detect/0</a></td><td>Detect local NAT type (async, returns immediately).</td></tr>
+<tr><td valign="top"><a href="#detect-1">detect/1</a></td><td>Detect NAT type using specific observer endpoint.</td></tr>
+<tr><td valign="top"><a href="#get_local_profile-0">get_local_profile/0</a></td><td>Get the cached local NAT profile.</td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_probe_reply-1">handle_probe_reply/1</a></td><td>Handle NAT_PROBE_REPLY message from an observer.</td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#refresh-0">refresh/0</a></td><td>Trigger NAT type refresh (re-detection).</td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td>Start the NAT detector server.</td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="add_observation-2">add_observation/2</a></h3>
+<div class="spec">
+<p><code>add_observation(ObserverId::binary(), ReflexiveAddress::{<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-ip_address" docgen-rel="seetype" docgen-href="kernel:inet#ip_address/0">inet:ip_address()</a>, <a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>}) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Add an observation from an external observer.
+  Called when we receive a NAT_PROBE_REPLY with our reflexive address.</p>
+
+<h3 class="function"><a name="detect-0">detect/0</a></h3>
+<div class="spec">
+<p><code>detect() -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Detect local NAT type (async, returns immediately).
+  Results are cached and available via get_local_profile/0.</p>
+
+<h3 class="function"><a name="detect-1">detect/1</a></h3>
+<div class="spec">
+<p><code>detect(ObserverEndpoint::binary()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Detect NAT type using specific observer endpoint.</p>
+
+<h3 class="function"><a name="get_local_profile-0">get_local_profile/0</a></h3>
+<div class="spec">
+<p><code>get_local_profile() -&gt; {ok, <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_nat_cache.html#type-nat_profile" docgen-rel="seetype" docgen-href="macula:macula_nat_cache#nat_profile/0">macula_nat_cache:nat_profile()</a>} | not_detected</code><br></p>
+<p> </p>
+</div><p>Get the cached local NAT profile.</p>
+
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_probe_reply-1">handle_probe_reply/1</a></h3>
+<div class="spec">
+<p><code>handle_probe_reply(ReplyMsg::map()) -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Handle NAT_PROBE_REPLY message from an observer.
+  Called when we receive a reply containing our reflexive address.</p>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="refresh-0">refresh/0</a></h3>
+<div class="spec">
+<p><code>refresh() -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Trigger NAT type refresh (re-detection).</p>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Opts::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start the NAT detector server.</p>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

@@ -305,12 +305,12 @@ handle_call(_Request, _From, State) ->
 
 %% @private
 %% Async publish - fire-and-forget semantics
+%% Handle both {publish, ...} (from macula_peer:publish/4) and
+%% {publish_async, ...} (from macula:publish/4 facade)
 handle_cast({publish, Topic, Data, Opts}, State) ->
-    ?LOG_INFO("[Peer] handle_cast publish received: topic=~s, pubsub_pid=~p",
-              [Topic, State#state.pubsub_handler_pid]),
-    %% Delegate to pubsub_handler (which is also async now)
-    macula_pubsub_handler:publish(State#state.pubsub_handler_pid, Topic, Data, Opts),
-    {noreply, State};
+    do_publish(Topic, Data, Opts, State);
+handle_cast({publish_async, Topic, Data, Opts}, State) ->
+    do_publish(Topic, Data, Opts, State);
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -352,6 +352,15 @@ normalize_realm(Realm) when is_list(Realm) ->
     list_to_binary(Realm);
 normalize_realm(Realm) when is_atom(Realm) ->
     atom_to_binary(Realm).
+
+%% @doc Execute publish operation - shared by both {publish, ...} and {publish_async, ...}
+-spec do_publish(binary(), map() | binary(), map(), #state{}) -> {noreply, #state{}}.
+do_publish(Topic, Data, Opts, State) ->
+    ?LOG_INFO("[Peer] publish received: topic=~s, pubsub_pid=~p",
+              [Topic, State#state.pubsub_handler_pid]),
+    %% Delegate to pubsub_handler (which is also async)
+    macula_pubsub_handler:publish(State#state.pubsub_handler_pid, Topic, Data, Opts),
+    {noreply, State}.
 
 %% @doc Find child PID from supervisor children list.
 -spec find_child_pid(list(), atom()) -> pid().

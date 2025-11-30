@@ -33,6 +33,8 @@
 
 -behaviour(supervisor).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([
     start_link/0,
@@ -153,7 +155,7 @@ count_peers() ->
 %% @end
 %%------------------------------------------------------------------------------
 init([]) ->
-    io:format("Starting Peers Supervisor (simple_one_for_one)~n"),
+    ?LOG_INFO("Starting Peers Supervisor (simple_one_for_one)"),
 
     SupFlags = #{
         strategy => simple_one_for_one,

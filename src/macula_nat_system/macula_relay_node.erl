@@ -151,7 +151,13 @@ init(Opts) ->
     MaxSessions = maps:get(max_relay_sessions, Opts, ?DEFAULT_MAX_SESSIONS),
     BandwidthLimit = maps:get(bandwidth_limit, Opts, ?DEFAULT_BANDWIDTH_LIMIT),
     SessionTimeout = maps:get(session_timeout_ms, Opts, ?DEFAULT_SESSION_TIMEOUT_MS),
-    AutoEnable = maps:get(relay_auto_enable, Opts, false),
+    %% Check opts first, then fall back to RELAY_ENABLED env var
+    AutoEnable = get_auto_enable(Opts),
+
+    %% Debug: Log what we're reading from environment
+    ?LOG_WARNING("[RELAY] Init: AutoEnable=~p, RELAY_ENABLED=~p, HOSTNAME=~p, MACULA_HOSTNAME=~p, MACULA_QUIC_PORT=~p",
+                 [AutoEnable, os:getenv("RELAY_ENABLED"), os:getenv("HOSTNAME"),
+                  os:getenv("MACULA_HOSTNAME"), os:getenv("MACULA_QUIC_PORT")]),
 
     %% Schedule session cleanup
     schedule_session_check(),
@@ -168,17 +174,19 @@ init(Opts) ->
         local_endpoint = undefined
     },
 
-    %% Auto-enable if configured
+    %% Auto-enable if configured or RELAY_ENABLED=true in env
     FinalState = case AutoEnable of
         true ->
-            NodeId = maps:get(node_id, Opts, undefined),
-            Endpoint = maps:get(endpoint, Opts, undefined),
+            NodeId = get_node_id_for_relay(Opts),
+            Endpoint = get_endpoint_for_relay(Opts),
+            ?LOG_WARNING("[RELAY] Auto-enable: NodeId=~p, Endpoint=~p", [NodeId, Endpoint]),
             do_enable(State, NodeId, Endpoint, MaxSessions);
         false ->
+            ?LOG_WARNING("[RELAY] Auto-enable disabled"),
             State
     end,
 
-    ?LOG_INFO("Relay node started (max_sessions=~p, enabled=~p)",
+    ?LOG_WARNING("[RELAY] Node started (max_sessions=~p, enabled=~p)",
               [MaxSessions, FinalState#state.enabled]),
 
     {ok, FinalState}.
@@ -268,19 +276,23 @@ do_enable(State, undefined, _Endpoint, _Capacity) ->
     State;
 do_enable(State, NodeId, Endpoint, Capacity) ->
     %% Register with relay registry
-    case Endpoint of
+    RegResult = case Endpoint of
         undefined ->
-            ?LOG_WARNING("Cannot register relay: endpoint not provided");
+            ?LOG_WARNING("Cannot register relay: endpoint not provided"),
+            {error, no_endpoint};
         _ ->
             case whereis(macula_relay_registry) of
                 undefined ->
-                    ?LOG_WARNING("Cannot register relay: registry not available");
+                    ?LOG_WARNING("Cannot register relay: registry not available"),
+                    {error, registry_unavailable};
                 _Pid ->
-                    macula_relay_registry:register(NodeId, Endpoint, #{capacity => Capacity})
+                    Result = macula_relay_registry:register(NodeId, Endpoint, #{capacity => Capacity}),
+                    ?LOG_WARNING("[RELAY] Registration result: ~p", [Result]),
+                    Result
             end
     end,
 
-    ?LOG_INFO("Relay enabled for node ~s", [NodeId]),
+    ?LOG_WARNING("[RELAY] Relay enabled for node ~s (reg_result=~p)", [NodeId, RegResult]),
     State#state{
         enabled = true,
         local_node_id = NodeId,
@@ -473,3 +485,71 @@ schedule_session_check() ->
 -spec generate_session_id() -> binary().
 generate_session_id() ->
     base64:encode(crypto:strong_rand_bytes(16)).
+
+%% @private
+%% @doc Get auto-enable setting from opts or environment variable.
+-spec get_auto_enable(map()) -> boolean().
+get_auto_enable(Opts) ->
+    case maps:get(relay_auto_enable, Opts, undefined) of
+        true -> true;
+        false -> false;
+        undefined ->
+            %% Fall back to RELAY_ENABLED environment variable
+            case os:getenv("RELAY_ENABLED") of
+                "true" -> true;
+                "1" -> true;
+                _ -> false
+            end
+    end.
+
+%% @private
+%% @doc Get node ID for relay from opts or environment.
+%% Tries NODE_NAME first, then falls back to HOSTNAME (common in Docker).
+-spec get_node_id_for_relay(map()) -> binary() | undefined.
+get_node_id_for_relay(Opts) ->
+    case maps:get(node_id, Opts, undefined) of
+        undefined ->
+            %% Try NODE_NAME first, then HOSTNAME (Docker sets HOSTNAME)
+            case os:getenv("NODE_NAME") of
+                false ->
+                    case os:getenv("HOSTNAME") of
+                        false -> undefined;
+                        Host -> list_to_binary(Host)
+                    end;
+                Name -> list_to_binary(Name)
+            end;
+        NodeId ->
+            NodeId
+    end.
+
+%% @private
+%% @doc Get endpoint for relay from opts or environment.
+%% Uses MACULA_HOSTNAME (IP address) for the network-reachable endpoint.
+-spec get_endpoint_for_relay(map()) -> {binary(), inet:port_number()} | undefined.
+get_endpoint_for_relay(Opts) ->
+    case maps:get(endpoint, Opts, undefined) of
+        undefined ->
+            %% Try to construct from MACULA_HOSTNAME (or HOSTNAME) and MACULA_QUIC_PORT
+            Host = case os:getenv("MACULA_HOSTNAME") of
+                false -> os:getenv("HOSTNAME");
+                H -> H
+            end,
+            Port = os:getenv("MACULA_QUIC_PORT"),
+            build_endpoint(Host, Port);
+        Endpoint ->
+            Endpoint
+    end.
+
+%% @private
+%% @doc Build endpoint tuple from host and port strings.
+-spec build_endpoint(string() | false, string() | false) ->
+    {binary(), inet:port_number()} | undefined.
+build_endpoint(false, _) -> undefined;
+build_endpoint(_, false) -> undefined;
+build_endpoint(Host, PortStr) ->
+    try
+        Port = list_to_integer(PortStr),
+        {list_to_binary(Host), Port}
+    catch
+        _:_ -> undefined
+    end.

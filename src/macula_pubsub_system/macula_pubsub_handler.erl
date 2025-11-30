@@ -109,10 +109,12 @@ init(Opts) ->
     NodeId = maps:get(node_id, Opts, generate_node_id()),
     Url = maps:get(url, Opts, <<"unknown">>),
     Realm = maps:get(realm, Opts, <<"default">>),
+    PeerId = maps:get(peer_id, Opts, erlang:unique_integer([monotonic, positive])),
 
     %% Register in gproc for incoming publish message routing
-    true = gproc:reg({n, l, {pubsub_handler, Realm}}),
-    ?LOG_INFO("PubSub handler registered in gproc for realm ~s", [Realm]),
+    %% Use {Realm, PeerId} to support multiple peer connections per realm
+    true = gproc:reg({n, l, {pubsub_handler, Realm, PeerId}}),
+    ?LOG_INFO("PubSub handler registered in gproc for realm ~s, peer_id ~p", [Realm, PeerId]),
 
     %% connection_manager_pid will be set via cast message after init
     ConnMgrPid = undefined,
@@ -203,42 +205,7 @@ handle_call({unsubscribe, SubRef}, _From, State) ->
 
 handle_call({publish, Topic, Data, Opts}, _From, State) ->
     %% Check if we have a connection manager and are connected
-    case State#state.connection_manager_pid of
-        undefined ->
-            %% No connection manager - cannot publish
-            {reply, {error, not_connected}, State};
-        ConnMgrPid ->
-            %% Check connection status
-            case macula_connection:get_status(ConnMgrPid) of
-                connected ->
-                    %% Build publish message
-                    Qos = maps:get(qos, Opts, 0),
-                    Retain = maps:get(retain, Opts, false),
-
-                    {MsgId, State2} = next_message_id(State),
-                    BinaryTopic = ensure_binary(Topic),
-
-                    %% Encode data to binary if it's a map or list
-                    Payload = encode_payload(Data),
-
-                    PublishMsg = #{
-                        topic => BinaryTopic,
-                        payload => Payload,
-                        qos => Qos,
-                        retain => Retain,
-                        message_id => MsgId
-                    },
-
-                    %% Send publish message asynchronously using cast to self
-                    %% This avoids blocking the caller on QUIC send operations
-                    gen_server:cast(self(), {do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}),
-
-                    {reply, ok, State2};
-                _Status ->
-                    %% Not connected (connecting, disconnected, or error)
-                    {reply, {error, not_connected}, State}
-            end
-    end;
+    do_sync_publish(State#state.connection_manager_pid, Topic, Data, Opts, State);
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
@@ -255,39 +222,7 @@ handle_cast({set_connection_manager_pid, Pid}, State) ->
 %% This handles the {publish_async, ...} cast from the publish/4 API function
 handle_cast({publish_async, Topic, Data, Opts}, State) ->
     ?LOG_INFO("[PubSubHandler] publish_async received: topic=~p", [Topic]),
-    %% Check if we have a connection manager and are connected
-    case State#state.connection_manager_pid of
-        undefined ->
-            %% No connection manager - silently drop (fire-and-forget semantics)
-            ?LOG_WARNING("[PubSubHandler] Publish dropped - no connection manager"),
-            {noreply, State};
-        _ConnMgrPid ->
-            %% Skip status check for async publish - just send it
-            %% The connection module will handle the send or drop silently
-            Qos = maps:get(qos, Opts, 0),
-            Retain = maps:get(retain, Opts, false),
-
-            {MsgId, State2} = next_message_id(State),
-            BinaryTopic = ensure_binary(Topic),
-
-            %% Encode data to binary if it's a map or list
-            Payload = encode_payload(Data),
-
-            PublishMsg = #{
-                topic => BinaryTopic,
-                payload => Payload,
-                qos => Qos,
-                retain => Retain,
-                message_id => MsgId
-            },
-
-            ?LOG_INFO("[PubSubHandler] Sending to do_publish: topic=~s", [BinaryTopic]),
-
-            %% Send publish message asynchronously using cast to self
-            gen_server:cast(self(), {do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}),
-
-            {noreply, State2}
-    end;
+    do_async_publish(State#state.connection_manager_pid, Topic, Data, Opts, State);
 
 handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, State) ->
     %% HYBRID: Send to gateway for routing AND discover via DHT
@@ -302,18 +237,7 @@ handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, St
     State2 = State#state{pending_pubacks = UpdatedPendingPubacks},
 
     %% Send publish to gateway for routing to connected subscribers
-    %% This is essential for gateway-centric topologies where peers can't reach each other
-    %% Use async send to prevent blocking on QUIC operations
-    case State#state.connection_manager_pid of
-        undefined ->
-            ?LOG_ERROR("[PubSubHandler] No connection manager for publish!");
-        ConnMgrPid ->
-            %% Send publish message via the gateway connection ASYNC (fire-and-forget)
-            ?LOG_INFO("[PubSubHandler] Calling send_message_async: pid=~p, topic=~s",
-                      [ConnMgrPid, BinaryTopic]),
-            macula_connection:send_message_async(ConnMgrPid, publish, PublishMsg),
-            ?LOG_INFO("[PubSubHandler] send_message_async returned")
-    end,
+    send_publish_to_gateway(State#state.connection_manager_pid, PublishMsg, BinaryTopic),
 
     %% Also discover subscribers via DHT for pure P2P routing (if available)
     gen_server:cast(self(), {discover_subscribers, BinaryTopic, Payload, Qos, Opts}),
@@ -393,46 +317,13 @@ handle_cast(_Msg, State) ->
 %%%===================================================================
 
 handle_info({resubscribe, Topic}, State) ->
-    case maps:get(Topic, State#state.advertised_subscriptions, undefined) of
-        undefined ->
-            %% Subscription was removed, don't re-advertise
-            ?LOG_DEBUG("[~s] Skipping re-subscription for ~s (no longer subscribed)",
-                      [State#state.node_id, Topic]),
-            {noreply, State};
-        SubInfo ->
-            %% Cancel old timer
-            OldTimerRef = maps:get(timer_ref, SubInfo),
-            erlang:cancel_timer(OldTimerRef),
-
-            %% Re-advertise (delegate to DHT module)
-            SubRef = maps:get(sub_ref, SubInfo),
-            {ok, UpdatedSubInfo} = macula_pubsub_dht:advertise_subscription(
-                Topic, SubRef, State#state.node_id, State#state.url,
-                State#state.connection_manager_pid
-            ),
-
-            %% Update advertised subscriptions map
-            UpdatedAdvertised = (State#state.advertised_subscriptions)#{Topic => UpdatedSubInfo},
-            State2 = State#state{advertised_subscriptions = UpdatedAdvertised},
-
-            ?LOG_DEBUG("[~s] Re-advertised subscription for topic ~s",
-                      [State#state.node_id, Topic]),
-            {noreply, State2}
-    end;
+    SubInfo = maps:get(Topic, State#state.advertised_subscriptions, undefined),
+    do_resubscribe(SubInfo, Topic, State);
 
 handle_info({puback_timeout, MsgId}, State) ->
     %% Delegate QoS timeout handling to QoS module
-    case macula_pubsub_qos:handle_timeout(MsgId, State#state.connection_manager_pid, State#state.pending_pubacks) of
-        {retry, UpdatedPending, PublishMsg} ->
-            %% Send retry message ASYNC (fire-and-forget)
-            %% If it fails, we'll retry again on next timeout
-            macula_connection:send_message_async(State#state.connection_manager_pid, publish, PublishMsg),
-            {noreply, State#state{pending_pubacks = UpdatedPending}};
-        {give_up, UpdatedPending} ->
-            {noreply, State#state{pending_pubacks = UpdatedPending}};
-        {not_found, UpdatedPending} ->
-            {noreply, State#state{pending_pubacks = UpdatedPending}}
-    end;
+    TimeoutResult = macula_pubsub_qos:handle_timeout(MsgId, State#state.connection_manager_pid, State#state.pending_pubacks),
+    handle_puback_timeout_result(TimeoutResult, State);
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -478,18 +369,130 @@ encode_payload(Data) when is_list(Data) -> list_to_binary(Data).
 %% @doc Extract topic from message, supporting both atom and binary keys.
 %% MessagePack decoding may use either key format.
 -spec extract_topic(map()) -> binary().
-extract_topic(Msg) ->
-    case maps:get(topic, Msg, undefined) of
-        undefined -> maps:get(<<"topic">>, Msg);
-        Topic -> Topic
-    end.
+extract_topic(#{topic := Topic}) -> Topic;
+extract_topic(#{<<"topic">> := Topic}) -> Topic.
 
 %% @doc Extract payload from message, supporting both atom and binary keys.
 %% MessagePack decoding may use either key format.
 -spec extract_payload(map()) -> binary().
-extract_payload(Msg) ->
-    case maps:get(payload, Msg, undefined) of
-        undefined -> maps:get(<<"payload">>, Msg);
-        Payload -> Payload
-    end.
+extract_payload(#{payload := Payload}) -> Payload;
+extract_payload(#{<<"payload">> := Payload}) -> Payload.
+
+%%%===================================================================
+%%% Publish helpers
+%%%===================================================================
+
+%% @private No connection manager - cannot publish
+do_sync_publish(undefined, _Topic, _Data, _Opts, State) ->
+    {reply, {error, not_connected}, State};
+%% @private Connection manager available - check status
+do_sync_publish(ConnMgrPid, Topic, Data, Opts, State) ->
+    Status = macula_connection:get_status(ConnMgrPid),
+    do_sync_publish_with_status(Status, Topic, Data, Opts, State).
+
+%% @private Not connected
+do_sync_publish_with_status(Status, _Topic, _Data, _Opts, State) when Status =/= connected ->
+    {reply, {error, not_connected}, State};
+%% @private Connected - build and send publish message
+do_sync_publish_with_status(connected, Topic, Data, Opts, State) ->
+    Qos = maps:get(qos, Opts, 0),
+    Retain = maps:get(retain, Opts, false),
+
+    {MsgId, State2} = next_message_id(State),
+    BinaryTopic = ensure_binary(Topic),
+    Payload = encode_payload(Data),
+
+    PublishMsg = #{
+        topic => BinaryTopic,
+        payload => Payload,
+        qos => Qos,
+        retain => Retain,
+        message_id => MsgId
+    },
+
+    %% Send publish message asynchronously using cast to self
+    gen_server:cast(self(), {do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}),
+
+    {reply, ok, State2}.
+
+%% @private No connection manager - silently drop (fire-and-forget semantics)
+do_async_publish(undefined, _Topic, _Data, _Opts, State) ->
+    ?LOG_WARNING("[PubSubHandler] Publish dropped - no connection manager"),
+    {noreply, State};
+%% @private Connection manager available - send async
+do_async_publish(_ConnMgrPid, Topic, Data, Opts, State) ->
+    Qos = maps:get(qos, Opts, 0),
+    Retain = maps:get(retain, Opts, false),
+
+    {MsgId, State2} = next_message_id(State),
+    BinaryTopic = ensure_binary(Topic),
+    Payload = encode_payload(Data),
+
+    PublishMsg = #{
+        topic => BinaryTopic,
+        payload => Payload,
+        qos => Qos,
+        retain => Retain,
+        message_id => MsgId
+    },
+
+    ?LOG_INFO("[PubSubHandler] Sending to do_publish: topic=~s", [BinaryTopic]),
+    gen_server:cast(self(), {do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}),
+
+    {noreply, State2}.
+
+%% @private No connection manager - log error
+send_publish_to_gateway(undefined, _PublishMsg, _BinaryTopic) ->
+    ?LOG_ERROR("[PubSubHandler] No connection manager for publish!");
+%% @private Send publish message via the gateway connection ASYNC (fire-and-forget)
+send_publish_to_gateway(ConnMgrPid, PublishMsg, BinaryTopic) ->
+    ?LOG_INFO("[PubSubHandler] Calling send_message_async: pid=~p, topic=~s",
+              [ConnMgrPid, BinaryTopic]),
+    macula_connection:send_message_async(ConnMgrPid, publish, PublishMsg),
+    ?LOG_INFO("[PubSubHandler] send_message_async returned").
+
+%%%===================================================================
+%%% Resubscription helpers
+%%%===================================================================
+
+%% @private Subscription was removed, don't re-advertise
+do_resubscribe(undefined, Topic, State) ->
+    ?LOG_DEBUG("[~s] Skipping re-subscription for ~s (no longer subscribed)",
+              [State#state.node_id, Topic]),
+    {noreply, State};
+%% @private Re-advertise subscription
+do_resubscribe(SubInfo, Topic, State) ->
+    %% Cancel old timer
+    OldTimerRef = maps:get(timer_ref, SubInfo),
+    erlang:cancel_timer(OldTimerRef),
+
+    %% Re-advertise (delegate to DHT module)
+    SubRef = maps:get(sub_ref, SubInfo),
+    {ok, UpdatedSubInfo} = macula_pubsub_dht:advertise_subscription(
+        Topic, SubRef, State#state.node_id, State#state.url,
+        State#state.connection_manager_pid
+    ),
+
+    %% Update advertised subscriptions map
+    UpdatedAdvertised = (State#state.advertised_subscriptions)#{Topic => UpdatedSubInfo},
+    State2 = State#state{advertised_subscriptions = UpdatedAdvertised},
+
+    ?LOG_DEBUG("[~s] Re-advertised subscription for topic ~s",
+              [State#state.node_id, Topic]),
+    {noreply, State2}.
+
+%%%===================================================================
+%%% QoS timeout helpers
+%%%===================================================================
+
+%% @private Handle retry case - send retry message ASYNC
+handle_puback_timeout_result({retry, UpdatedPending, PublishMsg}, State) ->
+    macula_connection:send_message_async(State#state.connection_manager_pid, publish, PublishMsg),
+    {noreply, State#state{pending_pubacks = UpdatedPending}};
+%% @private Handle give up case
+handle_puback_timeout_result({give_up, UpdatedPending}, State) ->
+    {noreply, State#state{pending_pubacks = UpdatedPending}};
+%% @private Handle not found case
+handle_puback_timeout_result({not_found, UpdatedPending}, State) ->
+    {noreply, State#state{pending_pubacks = UpdatedPending}}.
 

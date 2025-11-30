@@ -15,6 +15,8 @@
 -behaviour(gen_server).
 -behaviour(macula_client_behaviour).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API - Connection management
 -export([connect/2, connect_local/1, disconnect/1]).
 %% API - Pub/Sub
@@ -200,23 +202,26 @@ init(Opts) ->
     Realm = maps:get(realm, Opts, <<"default">>),
     EventHandler = maps:get(event_handler, Opts, self()),
 
-    io:format("[LocalClient] Initializing local client for realm ~s~n", [Realm]),
+    ?LOG_INFO("Initializing local client for realm ~s", [Realm]),
 
-    %% Find the local gateway process
-    case find_gateway() of
-        {ok, GatewayPid} ->
-            io:format("[LocalClient] Connected to local gateway: ~p~n", [GatewayPid]),
-            monitor(process, GatewayPid),
-            State = #state{
-                realm = Realm,
-                gateway_pid = GatewayPid,
-                event_handler = EventHandler
-            },
-            {ok, State};
-        {error, Reason} ->
-            io:format("[LocalClient] Failed to find gateway: ~p~n", [Reason]),
-            {stop, {gateway_not_found, Reason}}
-    end.
+    %% Find and connect to the local gateway process
+    GatewayResult = find_gateway(),
+    init_with_gateway(GatewayResult, Realm, EventHandler).
+
+%% @private Gateway found - initialize state
+init_with_gateway({ok, GatewayPid}, Realm, EventHandler) ->
+    ?LOG_INFO("Connected to local gateway: ~p", [GatewayPid]),
+    monitor(process, GatewayPid),
+    State = #state{
+        realm = Realm,
+        gateway_pid = GatewayPid,
+        event_handler = EventHandler
+    },
+    {ok, State};
+%% @private Gateway not found - stop with error
+init_with_gateway({error, Reason}, _Realm, _EventHandler) ->
+    ?LOG_ERROR("Failed to find gateway: ~p", [Reason]),
+    {stop, {gateway_not_found, Reason}}.
 
 handle_call({publish, Topic, Payload, Opts}, _From, State) ->
     #state{gateway_pid = Gateway, realm = Realm} = State,
@@ -333,7 +338,7 @@ handle_call({register_workload, Opts}, _From, State) ->
     WorkloadName = maps:get(workload_name, Opts, <<"unknown">>),
     Capabilities = maps:get(capabilities, Opts, []),
 
-    io:format("[LocalClient] Registered workload ~s with capabilities ~p~n",
+    ?LOG_INFO("Registered workload ~s with capabilities ~p",
               [WorkloadName, Capabilities]),
 
     %% Return platform info
@@ -346,12 +351,9 @@ handle_call({register_workload, Opts}, _From, State) ->
 
 handle_call(get_leader, _From, State) ->
     %% Query current Raft leader from Platform Layer
-    case macula_leader_election:get_leader() of
-        undefined ->
-            {reply, {error, no_leader}, State};
-        Leader ->
-            {reply, {ok, Leader}, State}
-    end;
+    Leader = macula_leader_election:get_leader(),
+    Reply = get_leader_reply(Leader),
+    {reply, Reply, State};
 
 handle_call({subscribe_leader_changes, Callback}, _From, State) ->
     %% Subscribe to leader change events from Platform Layer
@@ -382,50 +384,12 @@ handle_call({subscribe_leader_changes, Callback}, _From, State) ->
 
 handle_call({propose_crdt_update, Key, Value, Opts}, _From, State) ->
     CrdtType = maps:get(crdt_type, Opts, lww_register),
-
-    %% Propose update to CRDT system
-    %% For v0.10.0, store in ETS table (simple implementation)
-    %% TODO: Proper CRDT replication in future version
-    case CrdtType of
-        lww_register ->
-            %% LWW-Register: store value with timestamp
-            Timestamp = erlang:system_time(millisecond),
-            TableName = macula_crdt_storage,
-
-            %% Ensure table exists
-            case ets:whereis(TableName) of
-                undefined ->
-                    try
-                        ets:new(TableName, [named_table, public, set])
-                    catch
-                        error:badarg -> ok  % Table already exists (race condition)
-                    end;
-                _ -> ok
-            end,
-
-            %% Store or update value
-            ets:insert(TableName, {Key, {Value, Timestamp}}),
-            {reply, ok, State};
-        _ ->
-            %% Other CRDT types can be added later
-            {reply, {error, {unsupported_crdt_type, CrdtType}}, State}
-    end;
+    Reply = do_propose_crdt_update(CrdtType, Key, Value),
+    {reply, Reply, State};
 
 handle_call({read_crdt, Key}, _From, State) ->
-    %% Read current value from CRDT system
-    TableName = macula_crdt_storage,
-
-    case ets:whereis(TableName) of
-        undefined ->
-            {reply, {error, not_found}, State};
-        _ ->
-            case ets:lookup(TableName, Key) of
-                [{Key, {Value, _Timestamp}}] ->
-                    {reply, {ok, Value}, State};
-                [] ->
-                    {reply, {error, not_found}, State}
-            end
-    end.
+    Reply = do_read_crdt(Key),
+    {reply, Reply, State}.
 
 %% Async publish - fire-and-forget from caller's perspective
 handle_cast({publish_async, Topic, Payload, Opts}, State) ->
@@ -445,50 +409,42 @@ handle_cast(_Msg, State) ->
 handle_info({publish, Topic, Payload}, State) ->
     #state{subscriptions = Subs} = State,
 
-    io:format("[LocalClient] Received publish message for topic ~s~n", [Topic]),
-    io:format("[LocalClient] Current subscriptions: ~p~n", [Subs]),
+    ?LOG_DEBUG("Received publish message for topic ~s", [Topic]),
+    ?LOG_DEBUG("Current subscriptions: ~p", [Subs]),
 
     %% Find all callbacks for subscriptions matching this topic
     %% (since we store SubRef -> {Topic, Callback})
     MatchCount = maps:fold(fun(SubRef, {SubTopic, Callback}, Acc) ->
-        io:format("[LocalClient] Checking SubRef=~p, SubTopic=~p against Topic=~p~n",
-                  [SubRef, SubTopic, Topic]),
+        ?LOG_DEBUG("Checking SubRef=~p, SubTopic=~p against Topic=~p",
+                   [SubRef, SubTopic, Topic]),
         case SubTopic of
             Topic ->
                 %% Topic matches exactly, invoke callback
-                io:format("[LocalClient] MATCH FOUND! Invoking callback for topic ~s~n", [Topic]),
+                ?LOG_DEBUG("Match found, invoking callback for topic ~s", [Topic]),
                 try
                     Callback(Payload),
-                    io:format("[LocalClient] Callback completed successfully for topic ~s~n", [Topic])
+                    ?LOG_DEBUG("Callback completed successfully for topic ~s", [Topic])
                 catch
                     Class:Reason:Stacktrace ->
-                        io:format("[LocalClient] Callback error for topic ~s: ~p:~p~n~p~n",
-                                  [Topic, Class, Reason, Stacktrace])
+                        ?LOG_ERROR("Callback error for topic ~s: ~p:~p~nStacktrace: ~p",
+                                   [Topic, Class, Reason, Stacktrace])
                 end,
                 Acc + 1;
             _ ->
                 %% Different topic, skip
-                io:format("[LocalClient] No match: ~p =/= ~p~n", [SubTopic, Topic]),
+                ?LOG_DEBUG("No match: ~p =/= ~p", [SubTopic, Topic]),
                 Acc
         end
     end, 0, Subs),
 
-    io:format("[LocalClient] Total callbacks invoked for topic ~s: ~p~n", [Topic, MatchCount]),
+    ?LOG_DEBUG("Total callbacks invoked for topic ~s: ~p", [Topic, MatchCount]),
 
     {noreply, State};
 
 handle_info({'DOWN', _Ref, process, GatewayPid, Reason}, #state{gateway_pid = GatewayPid} = State) ->
-    io:format("[LocalClient] Gateway down: ~p. Attempting reconnect...~n", [Reason]),
-    %% Try to reconnect to gateway
-    case find_gateway() of
-        {ok, NewGateway} ->
-            io:format("[LocalClient] Reconnected to gateway: ~p~n", [NewGateway]),
-            monitor(process, NewGateway),
-            {noreply, State#state{gateway_pid = NewGateway}};
-        {error, _} ->
-            io:format("[LocalClient] Gateway not available, stopping~n"),
-            {stop, gateway_unavailable, State}
-    end;
+    ?LOG_WARNING("Gateway down: ~p. Attempting reconnect...", [Reason]),
+    GatewayResult = find_gateway(),
+    handle_gateway_reconnect(GatewayResult, State);
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -513,9 +469,77 @@ terminate(_Reason, #state{subscriptions = Subs, registrations = Regs, gateway_pi
 %% @doc Find the local gateway process via whereis
 -spec find_gateway() -> {ok, pid()} | {error, not_found}.
 find_gateway() ->
-    case whereis(macula_gateway) of
-        Pid when is_pid(Pid) ->
-            {ok, Pid};
-        undefined ->
-            {error, not_found}
-    end.
+    GatewayPid = whereis(macula_gateway),
+    gateway_lookup_result(GatewayPid).
+
+%% @private Gateway process found
+gateway_lookup_result(Pid) when is_pid(Pid) ->
+    {ok, Pid};
+%% @private Gateway not registered
+gateway_lookup_result(undefined) ->
+    {error, not_found}.
+
+%% @private No leader available
+get_leader_reply(undefined) ->
+    {error, no_leader};
+%% @private Leader found
+get_leader_reply(Leader) ->
+    {ok, Leader}.
+
+%% @private Gateway reconnect succeeded
+handle_gateway_reconnect({ok, NewGateway}, State) ->
+    ?LOG_INFO("Reconnected to gateway: ~p", [NewGateway]),
+    monitor(process, NewGateway),
+    {noreply, State#state{gateway_pid = NewGateway}};
+%% @private Gateway reconnect failed
+handle_gateway_reconnect({error, _}, State) ->
+    ?LOG_ERROR("Gateway not available, stopping"),
+    {stop, gateway_unavailable, State}.
+
+%% @private LWW-Register CRDT update
+do_propose_crdt_update(lww_register, Key, Value) ->
+    Timestamp = erlang:system_time(millisecond),
+    TableName = macula_crdt_storage,
+    ensure_crdt_table_exists(TableName),
+    ets:insert(TableName, {Key, {Value, Timestamp}}),
+    ok;
+%% @private Unsupported CRDT type
+do_propose_crdt_update(CrdtType, _Key, _Value) ->
+    {error, {unsupported_crdt_type, CrdtType}}.
+
+%% @private Ensure ETS table exists (handles race condition)
+ensure_crdt_table_exists(TableName) ->
+    TableRef = ets:whereis(TableName),
+    do_ensure_table(TableRef, TableName).
+
+%% @private Table doesn't exist - create it
+do_ensure_table(undefined, TableName) ->
+    try
+        ets:new(TableName, [named_table, public, set])
+    catch
+        error:badarg -> ok  % Table already exists (race condition)
+    end;
+%% @private Table exists - nothing to do
+do_ensure_table(_TableRef, _TableName) ->
+    ok.
+
+%% @private Read from CRDT storage
+do_read_crdt(Key) ->
+    TableName = macula_crdt_storage,
+    TableRef = ets:whereis(TableName),
+    do_crdt_lookup(TableRef, TableName, Key).
+
+%% @private Table doesn't exist
+do_crdt_lookup(undefined, _TableName, _Key) ->
+    {error, not_found};
+%% @private Table exists - perform lookup
+do_crdt_lookup(_TableRef, TableName, Key) ->
+    LookupResult = ets:lookup(TableName, Key),
+    crdt_lookup_result(LookupResult).
+
+%% @private Key found in CRDT table
+crdt_lookup_result([{_Key, {Value, _Timestamp}}]) ->
+    {ok, Value};
+%% @private Key not found
+crdt_lookup_result([]) ->
+    {error, not_found}.

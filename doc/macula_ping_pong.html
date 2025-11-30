@@ -1,0 +1,136 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module macula_ping_pong</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module macula_ping_pong</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>Macula Ping/Pong - Direct P2P Async RPC Demo.
+
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>Macula Ping/Pong - Direct P2P Async RPC Demo</p>
+  
+   <p>A peer-to-peer communication module that demonstrates bidirectional   
+messaging across NAT boundaries using Macula's async RPC with   
+direct P2P delivery (NATS-style request/reply).</p>
+  
+   <p>Each node:   
+- Registers local "ping.handler" RPC handler   
+- Periodically sends PING RPCs to random peers (direct P2P)   
+- Receives PONGs via callback   
+- Measures Round-Trip Time (RTT) for each exchange   
+- Tracks statistics per peer and per NAT type</p>
+  
+   <p>Architecture:   
+- Bootstrap: DHT only (no pub/sub routing)   
+- Communication: Direct P2P via QUIC   
+- Discovery: DHT for service registration</p>
+  
+   Flow:
+   1. fc01 registers local "ping.handler" (handles incoming PINGs)
+   2. fc01 calls macula_rpc_handler:request_to/5 to ping rc05 directly
+   3. Request goes directly to rc05 via QUIC (NAT-aware, no DHT lookup)
+   4. rc05's "ping.handler" executes, returns PONG
+   5. fc01 receives PONG via callback, measures RTT
+  
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#get_peer_stats-1">get_peer_stats/1</a></td><td>Get statistics for a specific peer.</td></tr>
+<tr><td valign="top"><a href="#get_stats-0">get_stats/0</a></td><td>Get all statistics.</td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#ping-1">ping/1</a></td><td>Send a PING to a specific peer.</td></tr>
+<tr><td valign="top"><a href="#reset_stats-0">reset_stats/0</a></td><td>Reset all statistics.</td></tr>
+<tr><td valign="top"><a href="#start_link-0">start_link/0</a></td><td>Start with default settings.</td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td>Start with options
+  Options:
+    - interval: milliseconds between PINGs (default: 5000)
+    - timeout: milliseconds to wait for PONG (default: 3000)
+    - node_id: custom node identifier (default: NODE_ID env var).</td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="get_peer_stats-1">get_peer_stats/1</a></h3>
+<div class="spec">
+<p><code>get_peer_stats(PeerId::binary()) -&gt; map() | not_found</code><br></p>
+<p> </p>
+</div><p>Get statistics for a specific peer</p>
+
+<h3 class="function"><a name="get_stats-0">get_stats/0</a></h3>
+<div class="spec">
+<p><code>get_stats() -&gt; map()</code><br></p>
+<p> </p>
+</div><p>Get all statistics</p>
+
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="ping-1">ping/1</a></h3>
+<div class="spec">
+<p><code>ping(PeerId::binary()) -&gt; {ok, integer()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Send a PING to a specific peer</p>
+
+<h3 class="function"><a name="reset_stats-0">reset_stats/0</a></h3>
+<div class="spec">
+<p><code>reset_stats() -&gt; ok</code><br></p>
+<p> </p>
+</div><p>Reset all statistics</p>
+
+<h3 class="function"><a name="start_link-0">start_link/0</a></h3>
+<div class="spec">
+<p><code>start_link() -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start with default settings</p>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Opts::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
+<p> </p>
+</div><p>Start with options
+  Options:
+    - interval: milliseconds between PINGs (default: 5000)
+    - timeout: milliseconds to wait for PONG (default: 3000)
+    - node_id: custom node identifier (default: NODE_ID env var)</p>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>
