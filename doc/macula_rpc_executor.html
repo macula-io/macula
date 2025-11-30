@@ -1,68 +1,443 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_rpc_executor</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_rpc_executor</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   RPC call execution with timeout handling.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.6">
 
 
-<h2><a name="description">Description</a></h2>
-   RPC call execution with timeout handling.
-   Executes local handlers and remote calls via QUIC.
-<h2><a name="types">Data Types</a></h2>
+    <title>macula_rpc_executor — macula v0.12.6</title>
 
-<h3 class="typedecl"><a name="type-address">address()</a></h3>
-<p><code>address() = <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_rpc_discovery.html#type-address" docgen-rel="seetype" docgen-href="macula:macula_rpc_discovery#address/0">macula_rpc_discovery:address()</a></code></p>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.6
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_rpc_executor</span> 
+      <small class="app-vsn" translate="no">(macula v0.12.6)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_rpc_system/macula_rpc_executor.erl#L7" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
 
 
-<h3 class="typedecl"><a name="type-handler_fn">handler_fn()</a></h3>
-<p><code>handler_fn() = <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_rpc_registry.html#type-handler_fn" docgen-rel="seetype" docgen-href="macula:macula_rpc_registry#handler_fn/0">macula_rpc_registry:handler_fn()</a></code></p>
+    <section id="moduledoc">
+<p>RPC call execution with timeout handling. Executes local handlers and remote calls via QUIC.</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:address/0" data-no-tooltip="" translate="no">address/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:handler_fn/0" data-no-tooltip="" translate="no">handler_fn/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:provider_info/0" data-no-tooltip="" translate="no">provider_info/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:send_fun/0" data-no-tooltip="" translate="no">send_fun/0</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#execute_local/3" data-no-tooltip="" translate="no">execute_local(Handler, Args, Timeout)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Execute local handler with timeout.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#execute_remote/5" data-no-tooltip="" translate="no">execute_remote(Uri, Args, Provider, SendFun, Timeout)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Execute remote call via QUIC with timeout.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#generate_call_id/0" data-no-tooltip="" translate="no">generate_call_id()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Generate unique call ID (16-byte UUID).</p></div>
+
+    </div>
+
+</div>
+
+  </section>
 
 
-<h3 class="typedecl"><a name="type-provider_info">provider_info()</a></h3>
-<p><code>provider_info() = <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_rpc_discovery.html#type-provider_info" docgen-rel="seetype" docgen-href="macula:macula_rpc_discovery#provider_info/0">macula_rpc_discovery:provider_info()</a></code></p>
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:address/0">
+
+  <div class="detail-header">
+    <a href="#t:address/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">address/0</h1>
 
 
-<h3 class="typedecl"><a name="type-send_fun">send_fun()</a></h3>
-<p><code>send_fun() = fun((binary(), map(), <a href="#type-address" docgen-rel="seetype" docgen-href="#address/0">address()</a>, pos_integer()) -&gt; {ok, term()} | {error, term()})</code></p>
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_rpc_system/macula_rpc_executor.erl#L19" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> address() :: <a href="macula_rpc_dht.html#t:address/0">macula_rpc_dht:address</a>().</pre>
+
+      </div>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#execute_local-3">execute_local/3</a></td><td>Execute local handler with timeout.</td></tr>
-<tr><td valign="top"><a href="#execute_remote-5">execute_remote/5</a></td><td>Execute remote call via QUIC with timeout.</td></tr>
-<tr><td valign="top"><a href="#generate_call_id-0">generate_call_id/0</a></td><td>Generate unique call ID (16-byte UUID).</td></tr>
-</table>
+  </section>
+</section>
+<section class="detail" id="t:handler_fn/0">
 
-<h2><a name="functions">Function Details</a></h2>
+  <div class="detail-header">
+    <a href="#t:handler_fn/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handler_fn/0</h1>
 
-<h3 class="function"><a name="execute_local-3">execute_local/3</a></h3>
-<div class="spec">
-<p><code>execute_local(Handler::<a href="#type-handler_fn" docgen-rel="seetype" docgen-href="#handler_fn/0">handler_fn()</a>, Args::map(), Timeout::pos_integer()) -&gt; {ok, term()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Execute local handler with timeout.</p>
 
-<h3 class="function"><a name="execute_remote-5">execute_remote/5</a></h3>
-<div class="spec">
-<p><code>execute_remote(Uri::binary(), Args::map(), Provider::<a href="#type-provider_info" docgen-rel="seetype" docgen-href="#provider_info/0">provider_info()</a>, SendFun::<a href="#type-send_fun" docgen-rel="seetype" docgen-href="#send_fun/0">send_fun()</a>, Timeout::pos_integer()) -&gt; {ok, term()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Execute remote call via QUIC with timeout.</p>
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_rpc_system/macula_rpc_executor.erl#L17" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
 
-<h3 class="function"><a name="generate_call_id-0">generate_call_id/0</a></h3>
-<div class="spec">
-<p><code>generate_call_id() -&gt; binary()</code><br></p>
-<p> </p>
-</div><p>Generate unique call ID (16-byte UUID).</p>
-<hr>
+    </div>
+  </div>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> handler_fn() :: <a href="macula_rpc_registry.html#t:handler_fn/0">macula_rpc_registry:handler_fn</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:provider_info/0">
+
+  <div class="detail-header">
+    <a href="#t:provider_info/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">provider_info/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_rpc_system/macula_rpc_executor.erl#L18" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> provider_info() :: <a href="macula_rpc_dht.html#t:provider_info/0">macula_rpc_dht:provider_info</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:send_fun/0">
+
+  <div class="detail-header">
+    <a href="#t:send_fun/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">send_fun/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_rpc_system/macula_rpc_executor.erl#L21" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> send_fun() :: fun((<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(), <a href="#t:address/0">address</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}).</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="execute_local/3">
+
+  <div class="detail-header">
+    <a href="#execute_local/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">execute_local(Handler, Args, Timeout)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_rpc_system/macula_rpc_executor.erl#L32" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> execute_local(<a href="#t:handler_fn/0">handler_fn</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Execute local handler with timeout.</p>
+  </section>
+</section>
+<section class="detail" id="execute_remote/5">
+
+  <div class="detail-header">
+    <a href="#execute_remote/5" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">execute_remote(Uri, Args, Provider, SendFun, Timeout)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_rpc_system/macula_rpc_executor.erl#L60" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> execute_remote(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(), <a href="#t:provider_info/0">provider_info</a>(), <a href="#t:send_fun/0">send_fun</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) ->
+                        {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Execute remote call via QUIC with timeout.</p>
+  </section>
+</section>
+<section class="detail" id="generate_call_id/0">
+
+  <div class="detail-header">
+    <a href="#generate_call_id/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">generate_call_id()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_rpc_system/macula_rpc_executor.erl#L68" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> generate_call_id() -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+<p>Generate unique call ID (16-byte UUID).</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

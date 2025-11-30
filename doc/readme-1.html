@@ -5,14 +5,14 @@
     <meta http-equiv="x-ua-compatible" content="ie=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="ExDoc v0.38.2">
-    <meta name="project" content="macula v0.12.4">
+    <meta name="project" content="macula v0.12.6">
 
 
-    <title>Overview — macula v0.12.4</title>
+    <title>Overview — macula v0.12.6</title>
 
     <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-    <script defer src="dist/sidebar_items-DE2E663F.js"></script>
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
     <script defer src="docs_config.js"></script>
     <script defer src="dist/html-DPJLHKSM.js"></script>
 
@@ -41,7 +41,7 @@
 macula
         </a>
         <div class="sidebar-projectVersion" translate="no">
-          v0.12.4
+          v0.12.6
         </div>
       </div>
     </div>
@@ -81,7 +81,7 @@ macula
     <h1>Overview</h1>
 
 
-      <a href="https://github.com/macula-io/macula/blob/0.12.4/README.md#L1" title="View Source" class="icon-action" rel="help">
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/README.md#L1" title="View Source" class="icon-action" rel="help">
         <i class="ri-code-s-slash-line" aria-hidden="true"></i>
         <span class="sr-only">View Source</span>
       </a>
@@ -98,7 +98,7 @@ macula
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"/></a>
     <a href="https://www.erlang.org"><img src="https://img.shields.io/badge/Erlang%2FOTP-26+-brightgreen" alt="Erlang/OTP"/></a>
     <a href="https://hex.pm/packages/macula"><img src="https://img.shields.io/hexpm/v/macula.svg" alt="Hex.pm"/></a>
-  </p></div><hr class="thin"/><div align="center">  <img src="assets/macula-architecture-overview.svg" alt="Macula Architecture Overview" width="800"/></div><div align="center">  <p><strong>BEAM-Native • HTTP/3 (QUIC) • Kademlia DHT • Direct P2P • Multi-Tenant • 50% Faster (v0.8.0)</strong></p></div><hr class="thin"/><h2 id="documentation" class="section-heading"><a href="#documentation" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Documentation</span></h2><ul><li>🚀 <strong><a href="getting_started.html">Getting Started</a></strong> - Installation, quick start, code examples</li><li>🏗️ <strong><a href="architecture.html">Architecture Guide</a></strong> - Visual guide with C4 diagrams, deployment topologies</li><li>📄 <strong><a href="changelog.html">Changelog</a></strong> - Version history and migration guides</li><li>🧪 <strong><a href="development.html">Development Guide</a></strong> - Contributing and testing</li><li>🌐 <strong><a href="dht_guide.html">DHT Guide</a></strong> - Kademlia DHT architecture</li></ul><hr class="thin"/><h2 id="latest-release-v0-10-1-2025-11-26" class="section-heading"><a href="#latest-release-v0-10-1-2025-11-26" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Latest Release: v0.10.1 (2025-11-26)</span></h2><p><strong>Performance Optimizations &amp; Documentation:</strong></p><ul><li>✅ Subscriber caching with TTL-based expiration (50-200x publish speedup)</li><li>✅ Direct routing table for known endpoints (10-50x latency reduction)</li><li>✅ Rate-limited DHT discovery (prevents discovery storms)</li><li>✅ Comprehensive performance documentation with ASCII diagrams</li></ul><p><strong>Platform Features (v0.9.0+):</strong></p><ul><li>✅ Ra/Raft consensus for distributed coordination</li><li>✅ LWW-Register CRDT for eventually-consistent state</li><li>✅ Leader election and workload registration APIs</li></ul><hr class="thin"/><h2 id="community" class="section-heading"><a href="#community" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Community</span></h2><ul><li><strong>Hex</strong>: <a href="https://hex.pm/packages/macula">hex.pm/packages/macula</a></li><li><strong>GitHub</strong>: <a href="https://github.com/macula-io/macula">github.com/macula-io/macula</a></li><li><strong>Issues</strong>: <a href="https://github.com/macula-io/macula/issues">github.com/macula-io/macula/issues</a></li></ul><hr class="thin"/><p><strong>Built with ❤️ for the BEAM community</strong></p>
+  </p></div><hr class="thin"/><div align="center">  <img src="assets/macula-architecture-overview.svg" alt="Macula Architecture Overview" width="800"/></div><div align="center">  <p><strong>BEAM-Native • HTTP/3 (QUIC) • Kademlia DHT • NAT Traversal • Multi-Tenant • Platform Layer</strong></p></div><hr class="thin"/><h2 id="documentation" class="section-heading"><a href="#documentation" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Documentation</span></h2><ul><li>🚀 <strong><a href="getting_started.html">Getting Started</a></strong> - Installation, quick start, code examples</li><li>🏗️ <strong><a href="architecture.html">Architecture Guide</a></strong> - Visual guide with C4 diagrams, deployment topologies</li><li>📄 <strong><a href="changelog.html">Changelog</a></strong> - Version history and migration guides</li><li>🧪 <strong><a href="development.html">Development Guide</a></strong> - Contributing and testing</li><li>🌐 <strong><a href="dht_guide.html">DHT Guide</a></strong> - Kademlia DHT architecture</li></ul><hr class="thin"/><h2 id="latest-release-v0-12-5-2025-11-30" class="section-heading"><a href="#latest-release-v0-12-5-2025-11-30" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Latest Release: v0.12.5 (2025-11-30)</span></h2><p><strong>NAT Traversal &amp; Connectivity:</strong></p><ul><li>✅ Complete NAT traversal with hole-punching and relay fallback</li><li>✅ Connection pooling with 94.5% hit rate</li><li>✅ Docker NAT simulation for testing (Full Cone, Restricted, Symmetric)</li></ul><p><strong>NATS-style Async RPC:</strong></p><ul><li>✅ Fire-and-forget request pattern with inbox callbacks</li><li>✅ Direct P2P delivery (not routed through Bootstrap)</li><li>✅ Pull-based service discovery with prefetch on startup</li></ul><p><strong>PubSub Delivery Metrics:</strong></p><ul><li>✅ Sequence numbers and per-peer delivery tracking</li><li>✅ Colored console output for demos (ANSI colors)</li><li>✅ Delivery rate calculations per sender</li></ul><p><strong>Platform Features (v0.9.0+):</strong></p><ul><li>✅ Ra/Raft consensus for distributed coordination</li><li>✅ LWW-Register CRDT for eventually-consistent state</li><li>✅ Leader election and workload registration APIs</li></ul><hr class="thin"/><h2 id="community" class="section-heading"><a href="#community" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Community</span></h2><ul><li><strong>Hex</strong>: <a href="https://hex.pm/packages/macula">hex.pm/packages/macula</a></li><li><strong>GitHub</strong>: <a href="https://github.com/macula-io/macula">github.com/macula-io/macula</a></li><li><strong>Issues</strong>: <a href="https://github.com/macula-io/macula/issues">github.com/macula-io/macula/issues</a></li></ul><hr class="thin"/><p><strong>Built with ❤️ for the BEAM community</strong></p>
 
 </div>
 
@@ -123,11 +123,11 @@ Getting Started
       <p>
 
           <span class="line">
-            <a href="https://hex.pm/packages/macula/0.12.4" class="footer-hex-package">Hex Package</a>
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
 
-            <a href="https://preview.hex.pm/preview/macula/0.12.4">Hex Preview</a>
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
 
-              (<a href="https://preview.hex.pm/preview/macula/0.12.4/show/README.md">current file</a>)
+              (<a href="https://preview.hex.pm/preview/macula/0.12.6/show/README.md">current file</a>)
 
           </span>
 

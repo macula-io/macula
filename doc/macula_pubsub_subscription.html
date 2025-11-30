@@ -1,94 +1,556 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_pubsub_subscription</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_pubsub_subscription</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
-Subscription management for pub/sub.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.6">
 
 
-<h2><a name="description">Description</a></h2><p>   
-Subscription management for pub/sub.</p>
-  
-   <p>Responsibilities:   
-- Store and retrieve subscriptions   
-- Pattern matching with wildcards (*, **)   
-- Find matching subscriptions for a topic   
-- Invoke subscriber callbacks</p>
-  
-   Extracted from macula_pubsub_handler.erl (Phase 4)
-<h2><a name="types">Data Types</a></h2>
+    <title>macula_pubsub_subscription — macula v0.12.6</title>
 
-<h3 class="typedecl"><a name="type-callback">callback()</a></h3>
-<p><code>callback() = fun((map()) -&gt; ok)</code></p>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.6
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_pubsub_subscription</span> 
+      <small class="app-vsn" translate="no">(macula v0.12.6)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_pubsub_system/macula_pubsub_subscription.erl#L14" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
 
 
-<h3 class="typedecl"><a name="type-node_id">node_id()</a></h3>
-<p><code>node_id() = binary()</code></p>
+    <section id="moduledoc">
+<p>Subscription management for pub/sub.</p><p>Responsibilities: - Store and retrieve subscriptions - Pattern matching with wildcards (*, **) - Find matching subscriptions for a topic - Invoke subscriber callbacks</p><p>Extracted from macula_pubsub_handler.erl (Phase 4)</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:callback/0" data-no-tooltip="" translate="no">callback/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:node_id/0" data-no-tooltip="" translate="no">node_id/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:payload/0" data-no-tooltip="" translate="no">payload/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:subscription_ref/0" data-no-tooltip="" translate="no">subscription_ref/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:subscriptions/0" data-no-tooltip="" translate="no">subscriptions/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:topic/0" data-no-tooltip="" translate="no">topic/0</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#add_subscription/4" data-no-tooltip="" translate="no">add_subscription(Topic, Callback, Subscriptions, SubRef)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Add a subscription. Returns {ok, UpdatedSubscriptions, SubRef}.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_matches/3" data-no-tooltip="" translate="no">find_matches(Topic, Subscriptions, Config)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find matching subscriptions for a topic. Returns list of {SubRef, {Pattern, Callback}} tuples.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#invoke_callbacks/4" data-no-tooltip="" translate="no">invoke_callbacks(Matches, Topic, Payload, NodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Invoke callbacks for matching subscriptions. Spawns async tasks to invoke each callback.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#remove_subscription/2" data-no-tooltip="" translate="no">remove_subscription(SubRef, Subscriptions)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Remove a subscription. Returns {ok, UpdatedSubscriptions, Topic} | {error, not_found}.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
 
 
-<h3 class="typedecl"><a name="type-payload">payload()</a></h3>
-<p><code>payload() = binary()</code></p>
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:callback/0">
+
+  <div class="detail-header">
+    <a href="#t:callback/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">callback/0</h1>
 
 
-<h3 class="typedecl"><a name="type-subscription_ref">subscription_ref()</a></h3>
-<p><code>subscription_ref() = reference()</code></p>
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_pubsub_system/macula_pubsub_subscription.erl#L23" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> callback() :: fun((<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok).</pre>
+
+      </div>
 
 
-<h3 class="typedecl"><a name="type-subscriptions">subscriptions()</a></h3>
-<p><code>subscriptions() = #{<a href="#type-subscription_ref" docgen-rel="seetype" docgen-href="#subscription_ref/0">subscription_ref()</a> =&gt; {<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, <a href="#type-callback" docgen-rel="seetype" docgen-href="#callback/0">callback()</a>}}</code></p>
+  </section>
+</section>
+<section class="detail" id="t:node_id/0">
+
+  <div class="detail-header">
+    <a href="#t:node_id/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">node_id/0</h1>
 
 
-<h3 class="typedecl"><a name="type-topic">topic()</a></h3>
-<p><code>topic() = binary()</code></p>
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_pubsub_system/macula_pubsub_subscription.erl#L25" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> node_id() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_subscription-4">add_subscription/4</a></td><td>Add a subscription.</td></tr>
-<tr><td valign="top"><a href="#find_matches-3">find_matches/3</a></td><td>Find matching subscriptions for a topic.</td></tr>
-<tr><td valign="top"><a href="#invoke_callbacks-4">invoke_callbacks/4</a></td><td>Invoke callbacks for matching subscriptions.</td></tr>
-<tr><td valign="top"><a href="#remove_subscription-2">remove_subscription/2</a></td><td>Remove a subscription.</td></tr>
-</table>
+  </section>
+</section>
+<section class="detail" id="t:payload/0">
 
-<h2><a name="functions">Function Details</a></h2>
+  <div class="detail-header">
+    <a href="#t:payload/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">payload/0</h1>
 
-<h3 class="function"><a name="add_subscription-4">add_subscription/4</a></h3>
-<div class="spec">
-<p><code>add_subscription(Topic::<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, Callback::<a href="#type-callback" docgen-rel="seetype" docgen-href="#callback/0">callback()</a>, Subscriptions::<a href="#type-subscriptions" docgen-rel="seetype" docgen-href="#subscriptions/0">subscriptions()</a>, SubRef::<a href="#type-subscription_ref" docgen-rel="seetype" docgen-href="#subscription_ref/0">subscription_ref()</a>) -&gt; {ok, <a href="#type-subscriptions" docgen-rel="seetype" docgen-href="#subscriptions/0">subscriptions()</a>, <a href="#type-subscription_ref" docgen-rel="seetype" docgen-href="#subscription_ref/0">subscription_ref()</a>}</code><br></p>
-<p> </p>
-</div><p>Add a subscription.
-  Returns {ok, UpdatedSubscriptions, SubRef}.</p>
 
-<h3 class="function"><a name="find_matches-3">find_matches/3</a></h3>
-<div class="spec">
-<p><code>find_matches(Topic::<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, Subscriptions::<a href="#type-subscriptions" docgen-rel="seetype" docgen-href="#subscriptions/0">subscriptions()</a>, Config::#{atom() =&gt; binary()}) -&gt; [{<a href="#type-subscription_ref" docgen-rel="seetype" docgen-href="#subscription_ref/0">subscription_ref()</a>, {<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, <a href="#type-callback" docgen-rel="seetype" docgen-href="#callback/0">callback()</a>}}]</code><br></p>
-<p> </p>
-</div><p>Find matching subscriptions for a topic.
-  Returns list of {SubRef, {Pattern, Callback}} tuples.</p>
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_pubsub_system/macula_pubsub_subscription.erl#L26" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
 
-<h3 class="function"><a name="invoke_callbacks-4">invoke_callbacks/4</a></h3>
-<div class="spec">
-<p><code>invoke_callbacks(Matches::[{<a href="#type-subscription_ref" docgen-rel="seetype" docgen-href="#subscription_ref/0">subscription_ref()</a>, {<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, <a href="#type-callback" docgen-rel="seetype" docgen-href="#callback/0">callback()</a>}}], Topic::<a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>, Payload::<a href="#type-payload" docgen-rel="seetype" docgen-href="#payload/0">payload()</a>, NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Invoke callbacks for matching subscriptions.
-  Spawns async tasks to invoke each callback.</p>
+    </div>
+  </div>
 
-<h3 class="function"><a name="remove_subscription-2">remove_subscription/2</a></h3>
-<div class="spec">
-<p><code>remove_subscription(SubRef::<a href="#type-subscription_ref" docgen-rel="seetype" docgen-href="#subscription_ref/0">subscription_ref()</a>, Subscriptions::<a href="#type-subscriptions" docgen-rel="seetype" docgen-href="#subscriptions/0">subscriptions()</a>) -&gt; {ok, <a href="#type-subscriptions" docgen-rel="seetype" docgen-href="#subscriptions/0">subscriptions()</a>, <a href="#type-topic" docgen-rel="seetype" docgen-href="#topic/0">topic()</a>} | {error, not_found}</code><br></p>
-<p> </p>
-</div><p>Remove a subscription.
-  Returns {ok, UpdatedSubscriptions, Topic} | {error, not_found}.</p>
-<hr>
+  <section class="docstring">
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> payload() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:subscription_ref/0">
+
+  <div class="detail-header">
+    <a href="#t:subscription_ref/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">subscription_ref/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_pubsub_system/macula_pubsub_subscription.erl#L24" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> subscription_ref() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:subscriptions/0">
+
+  <div class="detail-header">
+    <a href="#t:subscriptions/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">subscriptions/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_pubsub_system/macula_pubsub_subscription.erl#L28" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> subscriptions() :: #{<a href="#t:subscription_ref/0">subscription_ref</a>() => {<a href="#t:topic/0">topic</a>(), <a href="#t:callback/0">callback</a>()}}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:topic/0">
+
+  <div class="detail-header">
+    <a href="#t:topic/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">topic/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_pubsub_system/macula_pubsub_subscription.erl#L22" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> topic() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="add_subscription/4">
+
+  <div class="detail-header">
+    <a href="#add_subscription/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">add_subscription(Topic, Callback, Subscriptions, SubRef)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_pubsub_system/macula_pubsub_subscription.erl#L40" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> add_subscription(<a href="#t:topic/0">topic</a>(), <a href="#t:callback/0">callback</a>(), <a href="#t:subscriptions/0">subscriptions</a>(), <a href="#t:subscription_ref/0">subscription_ref</a>()) ->
+                          {ok, <a href="#t:subscriptions/0">subscriptions</a>(), <a href="#t:subscription_ref/0">subscription_ref</a>()}.</pre>
+
+      </div>
+
+<p>Add a subscription. Returns {ok, UpdatedSubscriptions, SubRef}.</p>
+  </section>
+</section>
+<section class="detail" id="find_matches/3">
+
+  <div class="detail-header">
+    <a href="#find_matches/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">find_matches(Topic, Subscriptions, Config)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_pubsub_system/macula_pubsub_subscription.erl#L64" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> find_matches(<a href="#t:topic/0">topic</a>(), <a href="#t:subscriptions/0">subscriptions</a>(), #{<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>() => <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()}) ->
+                      [{<a href="#t:subscription_ref/0">subscription_ref</a>(), {<a href="#t:topic/0">topic</a>(), <a href="#t:callback/0">callback</a>()}}].</pre>
+
+      </div>
+
+<p>Find matching subscriptions for a topic. Returns list of {SubRef, {Pattern, Callback}} tuples.</p>
+  </section>
+</section>
+<section class="detail" id="invoke_callbacks/4">
+
+  <div class="detail-header">
+    <a href="#invoke_callbacks/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">invoke_callbacks(Matches, Topic, Payload, NodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_pubsub_system/macula_pubsub_subscription.erl#L79" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> invoke_callbacks([{<a href="#t:subscription_ref/0">subscription_ref</a>(), {<a href="#t:topic/0">topic</a>(), <a href="#t:callback/0">callback</a>()}}], <a href="#t:topic/0">topic</a>(), <a href="#t:payload/0">payload</a>(), <a href="#t:node_id/0">node_id</a>()) ->
+                          ok.</pre>
+
+      </div>
+
+<p>Invoke callbacks for matching subscriptions. Spawns async tasks to invoke each callback.</p>
+  </section>
+</section>
+<section class="detail" id="remove_subscription/2">
+
+  <div class="detail-header">
+    <a href="#remove_subscription/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">remove_subscription(SubRef, Subscriptions)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_pubsub_system/macula_pubsub_subscription.erl#L48" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> remove_subscription(<a href="#t:subscription_ref/0">subscription_ref</a>(), <a href="#t:subscriptions/0">subscriptions</a>()) ->
+                             {ok, <a href="#t:subscriptions/0">subscriptions</a>(), <a href="#t:topic/0">topic</a>()} | {error, not_found}.</pre>
+
+      </div>
+
+<p>Remove a subscription. Returns {ok, UpdatedSubscriptions, Topic} | {error, not_found}.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

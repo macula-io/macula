@@ -30,7 +30,7 @@
 -type config() :: #{
     routing_strategy => macula_rpc_router:strategy(),
     cache_enabled => boolean(),
-    dht_lookup_fun => macula_rpc_discovery:dht_lookup_fun(),
+    dht_lookup_fun => macula_rpc_dht:dht_lookup_fun(),
     send_fun => macula_rpc_executor:send_fun()
 }.
 
@@ -281,11 +281,11 @@ execute_call_no_cache(Uri, Args, Timeout, LocalNodeId, Registry, Cache, RouterSt
 -spec route_call(
     macula_rpc_router:strategy(),
     [macula_rpc_registry:registration()],
-    [macula_rpc_discovery:provider_info()],
+    [macula_rpc_dht:provider_info()],
     macula_rpc_router:router_state()
 ) -> {
     {local, macula_rpc_registry:registration()} |
-    {remote, macula_rpc_discovery:provider_info()} |
+    {remote, macula_rpc_dht:provider_info()} |
     {error, no_provider},
     macula_rpc_router:router_state()
 }.
@@ -329,12 +329,12 @@ unwrap_providers({ok, Providers}) -> Providers;
 unwrap_providers({error, _}) -> [].
 
 %% @doc Default DHT lookup (returns empty list - for testing).
--spec default_dht_lookup(binary()) -> {ok, [macula_rpc_discovery:provider_info()]}.
+-spec default_dht_lookup(binary()) -> {ok, [macula_rpc_dht:provider_info()]}.
 default_dht_lookup(_Uri) ->
     {ok, []}.
 
 %% @doc Default send function (returns error - for testing).
--spec default_send(binary(), map(), macula_rpc_discovery:address(), pos_integer()) ->
+-spec default_send(binary(), map(), macula_rpc_dht:address(), pos_integer()) ->
     {ok, term()} | {error, term()}.
 default_send(_Uri, _Args, _Address, _Timeout) ->
     {error, no_transport}.

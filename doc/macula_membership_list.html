@@ -1,115 +1,639 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_membership_list</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_membership_list</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   Membership list for SWIM protocol.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.6">
 
 
-<h2><a name="description">Description</a></h2>
-   Membership list for SWIM protocol.
-   Maintains cluster membership view with fast concurrent access.
-   Uses map-based storage (could be ETS in production).
-<h2><a name="types">Data Types</a></h2>
+    <title>macula_membership_list — macula v0.12.6</title>
 
-<h3 class="typedecl"><a name="type-member_list">member_list()</a></h3>
-<p><code>member_list() = #{members := #{binary() =&gt; <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-member" docgen-rel="seetype" docgen-href="macula:macula_membership_member#member/0">macula_membership_member:member()</a>}}</code></p>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.6
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_membership_list</span> 
+      <small class="app-vsn" translate="no">(macula v0.12.6)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L8" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_member-2">add_member/2</a></td><td>Add a new member to the list.</td></tr>
-<tr><td valign="top"><a href="#get_alive_members-1">get_alive_members/1</a></td><td>Get all alive members.</td></tr>
-<tr><td valign="top"><a href="#get_all_members-1">get_all_members/1</a></td><td>Get all members.</td></tr>
-<tr><td valign="top"><a href="#get_member-2">get_member/2</a></td><td>Get a member by node ID.</td></tr>
-<tr><td valign="top"><a href="#get_random_members-2">get_random_members/2</a></td><td>Get N random members from the list.</td></tr>
-<tr><td valign="top"><a href="#get_random_members-3">get_random_members/3</a></td><td>Get N random members excluding specified node ID.</td></tr>
-<tr><td valign="top"><a href="#get_suspect_members-1">get_suspect_members/1</a></td><td>Get all suspect members.</td></tr>
-<tr><td valign="top"><a href="#new-1">new/1</a></td><td>Create a new membership list with the local node.</td></tr>
-<tr><td valign="top"><a href="#remove_member-2">remove_member/2</a></td><td>Remove a member from the list.</td></tr>
-<tr><td valign="top"><a href="#size-1">size/1</a></td><td>Get the number of members in the list.</td></tr>
-<tr><td valign="top"><a href="#update_member-2">update_member/2</a></td><td>Update an existing member (or add if not present).</td></tr>
-</table>
+    <section id="moduledoc">
+<p>Membership list for SWIM protocol. Maintains cluster membership view with fast concurrent access. Uses map-based storage (could be ETS in production).</p>
+    </section>
 
-<h2><a name="functions">Function Details</a></h2>
+</div>
 
-<h3 class="function"><a name="add_member-2">add_member/2</a></h3>
-<div class="spec">
-<p><code>add_member(List::<a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a>, Member::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-member" docgen-rel="seetype" docgen-href="macula:macula_membership_member#member/0">macula_membership_member:member()</a>) -&gt; <a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a></code><br></p>
-<p> </p>
-</div><p>Add a new member to the list.
-  If member already exists, this is a no-op (use update_member instead).</p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
 
-<h3 class="function"><a name="get_alive_members-1">get_alive_members/1</a></h3>
-<div class="spec">
-<p><code>get_alive_members(X1::<a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a>) -&gt; [<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-member" docgen-rel="seetype" docgen-href="macula:macula_membership_member#member/0">macula_membership_member:member()</a>]</code><br></p>
-<p> </p>
-</div><p>Get all alive members.</p>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:member_list/0" data-no-tooltip="" translate="no">member_list/0</a>
 
-<h3 class="function"><a name="get_all_members-1">get_all_members/1</a></h3>
-<div class="spec">
-<p><code>get_all_members(X1::<a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a>) -&gt; [<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-member" docgen-rel="seetype" docgen-href="macula:macula_membership_member#member/0">macula_membership_member:member()</a>]</code><br></p>
-<p> </p>
-</div><p>Get all members.</p>
+      </div>
 
-<h3 class="function"><a name="get_member-2">get_member/2</a></h3>
-<div class="spec">
-<p><code>get_member(X1::<a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a>, NodeId::binary()) -&gt; {ok, <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-member" docgen-rel="seetype" docgen-href="macula:macula_membership_member#member/0">macula_membership_member:member()</a>} | not_found</code><br></p>
-<p> </p>
-</div><p>Get a member by node ID.</p>
+    </div>
 
-<h3 class="function"><a name="get_random_members-2">get_random_members/2</a></h3>
-<div class="spec">
-<p><code>get_random_members(List::<a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a>, N::pos_integer()) -&gt; [<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-member" docgen-rel="seetype" docgen-href="macula:macula_membership_member#member/0">macula_membership_member:member()</a>]</code><br></p>
-<p> </p>
-</div><p>Get N random members from the list.</p>
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
 
-<h3 class="function"><a name="get_random_members-3">get_random_members/3</a></h3>
-<div class="spec">
-<p><code>get_random_members(X1::<a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a>, N::pos_integer(), ExcludeNodeId::binary() | undefined) -&gt; [<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-member" docgen-rel="seetype" docgen-href="macula:macula_membership_member#member/0">macula_membership_member:member()</a>]</code><br></p>
-<p> </p>
-</div><p>Get N random members excluding specified node ID.</p>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#add_member/2" data-no-tooltip="" translate="no">add_member(List, Member)</a>
 
-<h3 class="function"><a name="get_suspect_members-1">get_suspect_members/1</a></h3>
-<div class="spec">
-<p><code>get_suspect_members(X1::<a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a>) -&gt; [<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-member" docgen-rel="seetype" docgen-href="macula:macula_membership_member#member/0">macula_membership_member:member()</a>]</code><br></p>
-<p> </p>
-</div><p>Get all suspect members.</p>
+      </div>
 
-<h3 class="function"><a name="new-1">new/1</a></h3>
-<div class="spec">
-<p><code>new(LocalMember::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-member" docgen-rel="seetype" docgen-href="macula:macula_membership_member#member/0">macula_membership_member:member()</a>) -&gt; <a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a></code><br></p>
-<p> </p>
-</div><p>Create a new membership list with the local node.</p>
+        <div class="summary-synopsis"><p>Add a new member to the list. If member already exists, this is a no-op (use update_member instead).</p></div>
 
-<h3 class="function"><a name="remove_member-2">remove_member/2</a></h3>
-<div class="spec">
-<p><code>remove_member(List::<a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a>, NodeId::binary()) -&gt; <a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a></code><br></p>
-<p> </p>
-</div><p>Remove a member from the list.</p>
+    </div>
 
-<h3 class="function"><a name="size-1">size/1</a></h3>
-<div class="spec">
-<p><code>size(X1::<a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a>) -&gt; non_neg_integer()</code><br></p>
-<p> </p>
-</div><p>Get the number of members in the list.</p>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_alive_members/1" data-no-tooltip="" translate="no">get_alive_members(_)</a>
 
-<h3 class="function"><a name="update_member-2">update_member/2</a></h3>
-<div class="spec">
-<p><code>update_member(List::<a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a>, NewMember::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_membership_member.html#type-member" docgen-rel="seetype" docgen-href="macula:macula_membership_member#member/0">macula_membership_member:member()</a>) -&gt; <a href="#type-member_list" docgen-rel="seetype" docgen-href="#member_list/0">member_list()</a></code><br></p>
-<p> </p>
-</div><p>Update an existing member (or add if not present).
-  Uses merge semantics to resolve conflicts.</p>
-<hr>
+      </div>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+        <div class="summary-synopsis"><p>Get all alive members.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_all_members/1" data-no-tooltip="" translate="no">get_all_members(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get all members.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_member/2" data-no-tooltip="" translate="no">get_member(_, NodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get a member by node ID.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_random_members/2" data-no-tooltip="" translate="no">get_random_members(List, N)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get N random members from the list.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_random_members/3" data-no-tooltip="" translate="no">get_random_members(_, N, ExcludeNodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get N random members excluding specified node ID.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_suspect_members/1" data-no-tooltip="" translate="no">get_suspect_members(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get all suspect members.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#new/1" data-no-tooltip="" translate="no">new(LocalMember)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Create a new membership list with the local node.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#remove_member/2" data-no-tooltip="" translate="no">remove_member(List, NodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Remove a member from the list.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#size/1" data-no-tooltip="" translate="no">size(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get the number of members in the list.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#update_member/2" data-no-tooltip="" translate="no">update_member(List, NewMember)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Update an existing member (or add if not present). Uses merge semantics to resolve conflicts.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:member_list/0">
+
+  <div class="detail-header">
+    <a href="#t:member_list/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">member_list/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L26" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> member_list() :: #{members := #{<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() => <a href="macula_membership_member.html#t:member/0">macula_membership_member:member</a>()}}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="add_member/2">
+
+  <div class="detail-header">
+    <a href="#add_member/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">add_member(List, Member)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L47" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> add_member(<a href="#t:member_list/0">member_list</a>(), <a href="macula_membership_member.html#t:member/0">macula_membership_member:member</a>()) -> <a href="#t:member_list/0">member_list</a>().</pre>
+
+      </div>
+
+<p>Add a new member to the list. If member already exists, this is a no-op (use update_member instead).</p>
+  </section>
+</section>
+<section class="detail" id="get_alive_members/1">
+
+  <div class="detail-header">
+    <a href="#get_alive_members/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_alive_members(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L89" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_alive_members(<a href="#t:member_list/0">member_list</a>()) -> [<a href="macula_membership_member.html#t:member/0">macula_membership_member:member</a>()].</pre>
+
+      </div>
+
+<p>Get all alive members.</p>
+  </section>
+</section>
+<section class="detail" id="get_all_members/1">
+
+  <div class="detail-header">
+    <a href="#get_all_members/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_all_members(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L120" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_all_members(<a href="#t:member_list/0">member_list</a>()) -> [<a href="macula_membership_member.html#t:member/0">macula_membership_member:member</a>()].</pre>
+
+      </div>
+
+<p>Get all members.</p>
+  </section>
+</section>
+<section class="detail" id="get_member/2">
+
+  <div class="detail-header">
+    <a href="#get_member/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_member(_, NodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L80" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_member(<a href="#t:member_list/0">member_list</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="macula_membership_member.html#t:member/0">macula_membership_member:member</a>()} | not_found.</pre>
+
+      </div>
+
+<p>Get a member by node ID.</p>
+  </section>
+</section>
+<section class="detail" id="get_random_members/2">
+
+  <div class="detail-header">
+    <a href="#get_random_members/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_random_members(List, N)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L99" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_random_members(<a href="#t:member_list/0">member_list</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) -> [<a href="macula_membership_member.html#t:member/0">macula_membership_member:member</a>()].</pre>
+
+      </div>
+
+<p>Get N random members from the list.</p>
+  </section>
+</section>
+<section class="detail" id="get_random_members/3">
+
+  <div class="detail-header">
+    <a href="#get_random_members/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_random_members(_, N, ExcludeNodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L105" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_random_members(<a href="#t:member_list/0">member_list</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | undefined) ->
+                            [<a href="macula_membership_member.html#t:member/0">macula_membership_member:member</a>()].</pre>
+
+      </div>
+
+<p>Get N random members excluding specified node ID.</p>
+  </section>
+</section>
+<section class="detail" id="get_suspect_members/1">
+
+  <div class="detail-header">
+    <a href="#get_suspect_members/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_suspect_members(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L94" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_suspect_members(<a href="#t:member_list/0">member_list</a>()) -> [<a href="macula_membership_member.html#t:member/0">macula_membership_member:member</a>()].</pre>
+
+      </div>
+
+<p>Get all suspect members.</p>
+  </section>
+</section>
+<section class="detail" id="new/1">
+
+  <div class="detail-header">
+    <a href="#new/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">new(LocalMember)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L38" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> new(<a href="macula_membership_member.html#t:member/0">macula_membership_member:member</a>()) -> <a href="#t:member_list/0">member_list</a>().</pre>
+
+      </div>
+
+<p>Create a new membership list with the local node.</p>
+  </section>
+</section>
+<section class="detail" id="remove_member/2">
+
+  <div class="detail-header">
+    <a href="#remove_member/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">remove_member(List, NodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L75" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> remove_member(<a href="#t:member_list/0">member_list</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> <a href="#t:member_list/0">member_list</a>().</pre>
+
+      </div>
+
+<p>Remove a member from the list.</p>
+  </section>
+</section>
+<section class="detail" id="size/1">
+
+  <div class="detail-header">
+    <a href="#size/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">size(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L125" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> size(<a href="#t:member_list/0">member_list</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>().</pre>
+
+      </div>
+
+<p>Get the number of members in the list.</p>
+  </section>
+</section>
+<section class="detail" id="update_member/2">
+
+  <div class="detail-header">
+    <a href="#update_member/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">update_member(List, NewMember)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_membership_system/macula_membership_list.erl#L60" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> update_member(<a href="#t:member_list/0">member_list</a>(), <a href="macula_membership_member.html#t:member/0">macula_membership_member:member</a>()) -> <a href="#t:member_list/0">member_list</a>().</pre>
+
+      </div>
+
+<p>Update an existing member (or add if not present). Uses merge semantics to resolve conflicts.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

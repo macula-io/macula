@@ -1,115 +1,470 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_gateway_dht</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_gateway_dht</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
-DHT Query Handler Module - handles DHT message forwarding to routing server.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.6">
 
 
-<h2><a name="description">Description</a></h2><p>   
-DHT Query Handler Module - handles DHT message forwarding to routing server.</p>
-  
-   <p>Responsibilities:   
-- Forward DHT STORE messages to routing server   
-- Forward DHT FIND_VALUE messages to routing server, send encoded replies   
-- Forward DHT FIND_NODE messages to routing server, send encoded replies   
-- Handle DHT queries from process messages   
-- Encode replies using protocol encoder   
-- Handle errors gracefully</p>
-  
-   <p>Pattern: Stateless delegation module   
-- No GenServer (no state to manage)   
-- Pure functions forwarding to routing server   
-- Consistent error handling ({ok, Result} | {error, Reason})</p>
-  
-   Extracted from macula_gateway.erl (Phase 10)
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#forward_publish_to_bootstrap-1">forward_publish_to_bootstrap/1</a></td><td>Forward a PUBLISH message to the bootstrap gateway for distribution.</td></tr>
-<tr><td valign="top"><a href="#handle_find_node-2">handle_find_node/2</a></td><td>Handle DHT FIND_NODE message.</td></tr>
-<tr><td valign="top"><a href="#handle_find_value-2">handle_find_value/2</a></td><td>Handle DHT FIND_VALUE message.</td></tr>
-<tr><td valign="top"><a href="#handle_query-3">handle_query/3</a></td><td>Handle DHT query from process message.</td></tr>
-<tr><td valign="top"><a href="#handle_store-2">handle_store/2</a></td><td>Handle DHT STORE message.</td></tr>
-<tr><td valign="top"><a href="#lookup_value-1">lookup_value/1</a></td><td>Look up a value from the DHT by key.</td></tr>
-<tr><td valign="top"><a href="#query_peer-3">query_peer/3</a></td><td>Query remote peer and wait for response.</td></tr>
-<tr><td valign="top"><a href="#send_to_peer-3">send_to_peer/3</a></td><td>Send DHT message to remote peer (fire-and-forget).</td></tr>
-</table>
+    <title>macula_gateway_dht — macula v0.12.6</title>
 
-<h2><a name="functions">Function Details</a></h2>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-<h3 class="function"><a name="forward_publish_to_bootstrap-1">forward_publish_to_bootstrap/1</a></h3>
-<div class="spec">
-<p><code>forward_publish_to_bootstrap(PubMsg::map()) -&gt; ok | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Forward a PUBLISH message to the bootstrap gateway for distribution.
-  The bootstrap has all DHT subscriptions and can distribute to all subscribers.
-  This avoids the problem of local DHT not having remote peer subscriptions.</p>
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
 
-<h3 class="function"><a name="handle_find_node-2">handle_find_node/2</a></h3>
-<div class="spec">
-<p><code>handle_find_node(Stream::pid(), FindNodeMsg::map()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Handle DHT FIND_NODE message.
-  Forwards to routing server and sends encoded reply over stream.
-  Crashes on routing server or encoding failures - exposes DHT/protocol bugs.</p>
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
 
-<h3 class="function"><a name="handle_find_value-2">handle_find_value/2</a></h3>
-<div class="spec">
-<p><code>handle_find_value(Stream::pid(), FindValueMsg::map()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Handle DHT FIND_VALUE message.
-  Forwards to routing server and sends encoded reply over stream.
-  Crashes on routing server or encoding failures - exposes DHT/protocol bugs.</p>
+<div class="body-wrapper">
 
-<h3 class="function"><a name="handle_query-3">handle_query/3</a></h3>
-<div class="spec">
-<p><code>handle_query(FromPid::pid(), QueryType::atom(), QueryData::binary()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Handle DHT query from process message.
-  Decodes query, forwards to routing server, encodes reply, sends to requesting process.
-  Crashes on decode or routing failures - exposes protocol/DHT bugs.</p>
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
 
-<h3 class="function"><a name="handle_store-2">handle_store/2</a></h3>
-<div class="spec">
-<p><code>handle_store(Stream::pid(), StoreMsg::map()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Handle DHT STORE message.
-  Forwards to routing server asynchronously (fire-and-forget, no reply needed).
-  Uses async handler to prevent blocking the gateway on DHT operations.</p>
+<nav id="sidebar" class="sidebar">
 
-<h3 class="function"><a name="lookup_value-1">lookup_value/1</a></h3>
-<div class="spec">
-<p><code>lookup_value(Key::binary()) -&gt; {ok, list()} | {error, not_found}</code><br></p>
-<p> </p>
-</div><p>Look up a value from the DHT by key.
-  Synchronous lookup from local DHT storage.
-  NOTE: For pubsub, use forward_publish_to_bootstrap/2 instead of looking up
-  subscribers locally - the bootstrap has the complete subscriber list.
-  Returns list of subscribers for the given key.</p>
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
 
-<h3 class="function"><a name="query_peer-3">query_peer/3</a></h3>
-<div class="spec">
-<p><code>query_peer(NodeInfo::map(), MessageType::atom(), Message::map()) -&gt; {ok, term()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Query remote peer and wait for response.
-  Used for FIND_NODE and FIND_VALUE operations.</p>
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
 
-<h3 class="function"><a name="send_to_peer-3">send_to_peer/3</a></h3>
-<div class="spec">
-<p><code>send_to_peer(NodeInfo::map(), MessageType::atom(), Message::map()) -&gt; ok | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Send DHT message to remote peer (fire-and-forget).
-  Used for STORE operations that don't need a response.</p>
-<hr>
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.6
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_gateway_dht</span> 
+      <small class="app-vsn" translate="no">(macula v0.12.6)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_gateway_system/macula_gateway_dht.erl#L21" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+    <section id="moduledoc">
+<p>DHT Query Handler Module - handles DHT message forwarding to routing server.</p><p>Responsibilities: - Forward DHT STORE messages to routing server - Forward DHT FIND_VALUE messages to routing server, send encoded replies - Forward DHT FIND_NODE messages to routing server, send encoded replies - Handle DHT queries from process messages - Encode replies using protocol encoder - Handle errors gracefully</p><p>Pattern: Stateless delegation module - No GenServer (no state to manage) - Pure functions forwarding to routing server - Consistent error handling ({ok, Result} | {error, Reason})</p><p>Extracted from macula_gateway.erl (Phase 10)</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#forward_publish_to_bootstrap/1" data-no-tooltip="" translate="no">forward_publish_to_bootstrap(PubMsg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Forward a PUBLISH message to the bootstrap gateway for distribution. The bootstrap has all DHT subscriptions and can distribute to all subscribers. This avoids the problem of local DHT not having remote peer subscriptions.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_find_node/2" data-no-tooltip="" translate="no">handle_find_node(Stream, FindNodeMsg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Handle DHT FIND_NODE message. Forwards to routing server and sends encoded reply over stream. Crashes on routing server or encoding failures - exposes DHT/protocol bugs.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_find_value/2" data-no-tooltip="" translate="no">handle_find_value(Stream, FindValueMsg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Handle DHT FIND_VALUE message. Forwards to routing server and sends encoded reply over stream. Crashes on routing server or encoding failures - exposes DHT/protocol bugs.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_query/3" data-no-tooltip="" translate="no">handle_query(FromPid, QueryType, QueryData)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Handle DHT query from process message. Decodes query, forwards to routing server, encodes reply, sends to requesting process. Crashes on decode or routing failures - exposes protocol/DHT bugs.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_store/2" data-no-tooltip="" translate="no">handle_store(Stream, StoreMsg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Handle DHT STORE message. Forwards to routing server asynchronously (fire-and-forget, no reply needed). Uses async handler to prevent blocking the gateway on DHT operations.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#lookup_value/1" data-no-tooltip="" translate="no">lookup_value(Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Look up a value from the DHT by key. Synchronous lookup from local DHT storage. NOTE: For pubsub, use forward_publish_to_bootstrap/2 instead of looking up subscribers locally - the bootstrap has the complete subscriber list. Returns list of subscribers for the given key.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#query_peer/3" data-no-tooltip="" translate="no">query_peer(NodeInfo, MessageType, Message)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Query remote peer and wait for response. Used for FIND_NODE and FIND_VALUE operations.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#send_to_peer/3" data-no-tooltip="" translate="no">send_to_peer(NodeInfo, MessageType, Message)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Send DHT message to remote peer (fire-and-forget). Used for STORE operations that don't need a response.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="forward_publish_to_bootstrap/1">
+
+  <div class="detail-header">
+    <a href="#forward_publish_to_bootstrap/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">forward_publish_to_bootstrap(PubMsg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_gateway_system/macula_gateway_dht.erl#L125" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> forward_publish_to_bootstrap(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Forward a PUBLISH message to the bootstrap gateway for distribution. The bootstrap has all DHT subscriptions and can distribute to all subscribers. This avoids the problem of local DHT not having remote peer subscriptions.</p>
+  </section>
+</section>
+<section class="detail" id="handle_find_node/2">
+
+  <div class="detail-header">
+    <a href="#handle_find_node/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_find_node(Stream, FindNodeMsg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_gateway_system/macula_gateway_dht.erl#L68" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> handle_find_node(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Handle DHT FIND_NODE message. Forwards to routing server and sends encoded reply over stream. Crashes on routing server or encoding failures - exposes DHT/protocol bugs.</p>
+  </section>
+</section>
+<section class="detail" id="handle_find_value/2">
+
+  <div class="detail-header">
+    <a href="#handle_find_value/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_find_value(Stream, FindValueMsg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_gateway_system/macula_gateway_dht.erl#L56" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> handle_find_value(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Handle DHT FIND_VALUE message. Forwards to routing server and sends encoded reply over stream. Crashes on routing server or encoding failures - exposes DHT/protocol bugs.</p>
+  </section>
+</section>
+<section class="detail" id="handle_query/3">
+
+  <div class="detail-header">
+    <a href="#handle_query/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_query(FromPid, QueryType, QueryData)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_gateway_system/macula_gateway_dht.erl#L80" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> handle_query(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Handle DHT query from process message. Decodes query, forwards to routing server, encodes reply, sends to requesting process. Crashes on decode or routing failures - exposes protocol/DHT bugs.</p>
+  </section>
+</section>
+<section class="detail" id="handle_store/2">
+
+  <div class="detail-header">
+    <a href="#handle_store/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_store(Stream, StoreMsg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_gateway_system/macula_gateway_dht.erl#L45" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> handle_store(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Handle DHT STORE message. Forwards to routing server asynchronously (fire-and-forget, no reply needed). Uses async handler to prevent blocking the gateway on DHT operations.</p>
+  </section>
+</section>
+<section class="detail" id="lookup_value/1">
+
+  <div class="detail-header">
+    <a href="#lookup_value/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">lookup_value(Key)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_gateway_system/macula_gateway_dht.erl#L97" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> lookup_value(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>()} | {error, not_found}.</pre>
+
+      </div>
+
+<p>Look up a value from the DHT by key. Synchronous lookup from local DHT storage. NOTE: For pubsub, use forward_publish_to_bootstrap/2 instead of looking up subscribers locally - the bootstrap has the complete subscriber list. Returns list of subscribers for the given key.</p>
+  </section>
+</section>
+<section class="detail" id="query_peer/3">
+
+  <div class="detail-header">
+    <a href="#query_peer/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">query_peer(NodeInfo, MessageType, Message)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_gateway_system/macula_gateway_dht.erl#L186" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> query_peer(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Query remote peer and wait for response. Used for FIND_NODE and FIND_VALUE operations.</p>
+  </section>
+</section>
+<section class="detail" id="send_to_peer/3">
+
+  <div class="detail-header">
+    <a href="#send_to_peer/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">send_to_peer(NodeInfo, MessageType, Message)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_gateway_system/macula_gateway_dht.erl#L141" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> send_to_peer(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Send DHT message to remote peer (fire-and-forget). Used for STORE operations that don't need a response.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

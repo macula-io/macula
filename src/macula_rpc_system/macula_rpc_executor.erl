@@ -15,8 +15,8 @@
 
 %% Types
 -type handler_fn() :: macula_rpc_registry:handler_fn().
--type provider_info() :: macula_rpc_discovery:provider_info().
--type address() :: macula_rpc_discovery:address().
+-type provider_info() :: macula_rpc_dht:provider_info().
+-type address() :: macula_rpc_dht:address().
 
 -type send_fun() :: fun((binary(), map(), address(), pos_integer()) ->
     {ok, term()} | {error, term()}).

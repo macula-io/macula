@@ -1,130 +1,672 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_console</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_console</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>Macula Console Formatter - Beautiful colored terminal output.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.6">
 
 
-<h2><a name="description">Description</a></h2><p>Macula Console Formatter - Beautiful colored terminal output.</p>
-  
-   <p>Provides ANSI-colored output for ping-pong demo and general logging.   
-Makes demo output visually appealing and easy to read.</p>
-  
-   Example output:
-   <pre>
-   --&gt; fc01 -&gt; rc05 [full_cone -&gt; restricted]
-   &lt;-- fc01 &lt;- rc05 42ms [restricted]
-   [!!] fc01 -&gt; sy07 TIMEOUT [symmetric]
-   </pre>
-  
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#banner-1">banner/1</a></td><td>Display a startup banner for the node.</td></tr>
-<tr><td valign="top"><a href="#error-2">error/2</a></td><td>Output an error message: [!!] Error message.</td></tr>
-<tr><td valign="top"><a href="#info-2">info/2</a></td><td>Output an info message: [i] Info message.</td></tr>
-<tr><td valign="top"><a href="#node_connected-2">node_connected/2</a></td><td>Output a node connected event: [*] Node fc01 connected (full_cone).</td></tr>
-<tr><td valign="top"><a href="#node_disconnected-2">node_disconnected/2</a></td><td>Output a node disconnected event: [*] Node fc01 disconnected.</td></tr>
-<tr><td valign="top"><a href="#ping-4">ping/4</a></td><td>Output a PING message showing source to target with NAT types.</td></tr>
-<tr><td valign="top"><a href="#pong-4">pong/4</a></td><td>Output a PONG message with RTT.</td></tr>
-<tr><td valign="top"><a href="#pubsub_recv-5">pubsub_recv/5</a></td><td>Output a PubSub receive message with delivery rate.</td></tr>
-<tr><td valign="top"><a href="#pubsub_send-3">pubsub_send/3</a></td><td>Output a PubSub broadcast message with sequence number.</td></tr>
-<tr><td valign="top"><a href="#stats-2">stats/2</a></td><td>Output statistics for a node
-  StatsMap should contain: pings_sent, pongs_received, timeouts, avg_rtt_ms.</td></tr>
-<tr><td valign="top"><a href="#success-2">success/2</a></td><td>Output a success message: [ok] Success message.</td></tr>
-<tr><td valign="top"><a href="#timeout-3">timeout/3</a></td><td>Output a TIMEOUT message for a failed ping.</td></tr>
-<tr><td valign="top"><a href="#warning-2">warning/2</a></td><td>Output a warning message: [!] Warning message.</td></tr>
-</table>
+    <title>macula_console — macula v0.12.6</title>
 
-<h2><a name="functions">Function Details</a></h2>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-<h3 class="function"><a name="banner-1">banner/1</a></h3>
-<div class="spec">
-<p><code>banner(Config::map()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Display a startup banner for the node</p>
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
 
-<h3 class="function"><a name="error-2">error/2</a></h3>
-<div class="spec">
-<p><code>error(Prefix::binary() | string(), Msg::binary() | string()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output an error message: [!!] Error message</p>
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
 
-<h3 class="function"><a name="info-2">info/2</a></h3>
-<div class="spec">
-<p><code>info(Prefix::binary() | string(), Msg::binary() | string()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output an info message: [i] Info message</p>
+<div class="body-wrapper">
 
-<h3 class="function"><a name="node_connected-2">node_connected/2</a></h3>
-<div class="spec">
-<p><code>node_connected(NodeId::binary() | string(), NatType::binary() | string() | atom()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output a node connected event: [*] Node fc01 connected (full_cone)</p>
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
 
-<h3 class="function"><a name="node_disconnected-2">node_disconnected/2</a></h3>
-<div class="spec">
-<p><code>node_disconnected(NodeId::binary() | string(), Reason::binary() | string()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output a node disconnected event: [*] Node fc01 disconnected</p>
+<nav id="sidebar" class="sidebar">
 
-<h3 class="function"><a name="ping-4">ping/4</a></h3>
-<div class="spec">
-<p><code>ping(FromNode::binary() | string(), ToNode::binary() | string(), FromNat::binary() | string() | atom(), ToNat::binary() | string() | atom()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output a PING message showing source to target with NAT types</p>
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
 
-<h3 class="function"><a name="pong-4">pong/4</a></h3>
-<div class="spec">
-<p><code>pong(FromNode::binary() | string(), ToNode::binary() | string(), RTT::integer(), NatType::binary() | string() | atom()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output a PONG message with RTT</p>
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
 
-<h3 class="function"><a name="pubsub_recv-5">pubsub_recv/5</a></h3>
-<div class="spec">
-<p><code>pubsub_recv(ToNode::binary() | string(), FromNode::binary() | string(), SeqNum::integer(), SenderNat::binary() | string() | atom(), DeliveryRate::float()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output a PubSub receive message with delivery rate</p>
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.6
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
 
-<h3 class="function"><a name="pubsub_send-3">pubsub_send/3</a></h3>
-<div class="spec">
-<p><code>pubsub_send(FromNode::binary() | string(), SeqNum::integer(), NatType::binary() | string() | atom()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output a PubSub broadcast message with sequence number</p>
+<output role="status" id="toast"></output>
 
-<h3 class="function"><a name="stats-2">stats/2</a></h3>
-<div class="spec">
-<p><code>stats(NodeId::binary() | string(), StatsMap::map()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output statistics for a node
-  StatsMap should contain: pings_sent, pongs_received, timeouts, avg_rtt_ms</p>
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
 
-<h3 class="function"><a name="success-2">success/2</a></h3>
-<div class="spec">
-<p><code>success(Prefix::binary() | string(), Msg::binary() | string()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output a success message: [ok] Success message</p>
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_console</span> 
+      <small class="app-vsn" translate="no">(macula v0.12.6)</small>
 
-<h3 class="function"><a name="timeout-3">timeout/3</a></h3>
-<div class="spec">
-<p><code>timeout(FromNode::binary() | string(), ToNode::binary() | string(), NatInfo::binary() | string() | atom()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output a TIMEOUT message for a failed ping</p>
+    </h1>
 
-<h3 class="function"><a name="warning-2">warning/2</a></h3>
-<div class="spec">
-<p><code>warning(Prefix::binary() | string(), Msg::binary() | string()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Output a warning message: [!] Warning message</p>
-<hr>
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L16" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  </div>
+
+
+    <section id="moduledoc">
+<p>Macula Console Formatter - Beautiful colored terminal output.</p><p>Provides ANSI-colored output for ping-pong demo and general logging. Makes demo output visually appealing and easy to read.</p><p>Example output:</p><pre><code class="makeup erlang" translate="no"><span class="w">   </span><span class="o">--</span><span class="o">&gt;</span><span class="w"> </span><span class="ss">fc01</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="ss">rc05</span><span class="w"> </span><span class="p" data-group-id="1769475523-1">[</span><span class="ss">full_cone</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="ss">restricted</span><span class="p" data-group-id="1769475523-1">]</span><span class="w">
+   </span><span class="o">&lt;-</span><span class="o">-</span><span class="w"> </span><span class="ss">fc01</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="ss">rc05</span><span class="w"> </span><span class="mi">42</span><span class="ss">ms</span><span class="w"> </span><span class="p" data-group-id="1769475523-2">[</span><span class="ss">restricted</span><span class="p" data-group-id="1769475523-2">]</span><span class="w">
+   </span><span class="p" data-group-id="1769475523-3">[</span><span class="o">!</span><span class="o">!</span><span class="p" data-group-id="1769475523-3">]</span><span class="w"> </span><span class="ss">fc01</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="ss">sy07</span><span class="w"> </span><span class="n">TIMEOUT</span><span class="w"> </span><span class="p" data-group-id="1769475523-4">[</span><span class="ss">symmetric</span><span class="p" data-group-id="1769475523-4">]</span><span class="w">
+   </span></code></pre>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#banner/1" data-no-tooltip="" translate="no">banner(Config)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Display a startup banner for the node</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#error/2" data-no-tooltip="" translate="no">error(Prefix, Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output an error message: [!!] Error message</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#info/2" data-no-tooltip="" translate="no">info(Prefix, Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output an info message: [i] Info message</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#node_connected/2" data-no-tooltip="" translate="no">node_connected(NodeId, NatType)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output a node connected event: [*] Node fc01 connected (full_cone)</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#node_disconnected/2" data-no-tooltip="" translate="no">node_disconnected(NodeId, Reason)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output a node disconnected event: [*] Node fc01 disconnected</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#ping/4" data-no-tooltip="" translate="no">ping(FromNode, ToNode, FromNat, ToNat)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output a PING message showing source to target with NAT types</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#pong/4" data-no-tooltip="" translate="no">pong(FromNode, ToNode, RTT, NatType)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output a PONG message with RTT</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#pubsub_recv/5" data-no-tooltip="" translate="no">pubsub_recv(ToNode, FromNode, SeqNum, SenderNat, DeliveryRate)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output a PubSub receive message with delivery rate</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#pubsub_send/3" data-no-tooltip="" translate="no">pubsub_send(FromNode, SeqNum, NatType)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output a PubSub broadcast message with sequence number</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#stats/2" data-no-tooltip="" translate="no">stats(NodeId, StatsMap)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output statistics for a node StatsMap should contain: pings_sent, pongs_received, timeouts, avg_rtt_ms</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#success/2" data-no-tooltip="" translate="no">success(Prefix, Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output a success message: [ok] Success message</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#timeout/3" data-no-tooltip="" translate="no">timeout(FromNode, ToNode, NatInfo)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output a TIMEOUT message for a failed ping</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#warning/2" data-no-tooltip="" translate="no">warning(Prefix, Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Output a warning message: [!] Warning message</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="banner/1">
+
+  <div class="detail-header">
+    <a href="#banner/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">banner(Config)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L223" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> banner(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Display a startup banner for the node</p>
+  </section>
+</section>
+<section class="detail" id="error/2">
+
+  <div class="detail-header">
+    <a href="#error/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">error(Prefix, Msg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L154" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> error(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Output an error message: [!!] Error message</p>
+  </section>
+</section>
+<section class="detail" id="info/2">
+
+  <div class="detail-header">
+    <a href="#info/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">info(Prefix, Msg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L160" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> info(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Output an info message: [i] Info message</p>
+  </section>
+</section>
+<section class="detail" id="node_connected/2">
+
+  <div class="detail-header">
+    <a href="#node_connected/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">node_connected(NodeId, NatType)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L203" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> node_connected(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Output a node connected event: [*] Node fc01 connected (full_cone)</p>
+  </section>
+</section>
+<section class="detail" id="node_disconnected/2">
+
+  <div class="detail-header">
+    <a href="#node_disconnected/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">node_disconnected(NodeId, Reason)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L211" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> node_disconnected(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Output a node disconnected event: [*] Node fc01 disconnected</p>
+  </section>
+</section>
+<section class="detail" id="ping/4">
+
+  <div class="detail-header">
+    <a href="#ping/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">ping(FromNode, ToNode, FromNat, ToNat)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L92" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> ping(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(),
+           <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(),
+           <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(),
+           <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>()) ->
+              ok.</pre>
+
+      </div>
+
+<p>Output a PING message showing source to target with NAT types</p>
+  </section>
+</section>
+<section class="detail" id="pong/4">
+
+  <div class="detail-header">
+    <a href="#pong/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">pong(FromNode, ToNode, RTT, NatType)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L102" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> pong(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Output a PONG message with RTT</p>
+  </section>
+</section>
+<section class="detail" id="pubsub_recv/5">
+
+  <div class="detail-header">
+    <a href="#pubsub_recv/5" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">pubsub_recv(ToNode, FromNode, SeqNum, SenderNat, DeliveryRate)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L138" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> pubsub_recv(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(),
+                  <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(),
+                  <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>(),
+                  <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(),
+                  <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:float/0">float</a>()) ->
+                     ok.</pre>
+
+      </div>
+
+<p>Output a PubSub receive message with delivery rate</p>
+  </section>
+</section>
+<section class="detail" id="pubsub_send/3">
+
+  <div class="detail-header">
+    <a href="#pubsub_send/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">pubsub_send(FromNode, SeqNum, NatType)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L128" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> pubsub_send(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Output a PubSub broadcast message with sequence number</p>
+  </section>
+</section>
+<section class="detail" id="stats/2">
+
+  <div class="detail-header">
+    <a href="#stats/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">stats(NodeId, StatsMap)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L183" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> stats(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Output statistics for a node StatsMap should contain: pings_sent, pongs_received, timeouts, avg_rtt_ms</p>
+  </section>
+</section>
+<section class="detail" id="success/2">
+
+  <div class="detail-header">
+    <a href="#success/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">success(Prefix, Msg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L166" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> success(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Output a success message: [ok] Success message</p>
+  </section>
+</section>
+<section class="detail" id="timeout/3">
+
+  <div class="detail-header">
+    <a href="#timeout/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">timeout(FromNode, ToNode, NatInfo)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L114" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> timeout(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Output a TIMEOUT message for a failed ping</p>
+  </section>
+</section>
+<section class="detail" id="warning/2">
+
+  <div class="detail-header">
+    <a href="#warning/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">warning(Prefix, Msg)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_console.erl#L172" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> warning(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Output a warning message: [!] Warning message</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

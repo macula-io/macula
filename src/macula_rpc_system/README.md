@@ -6,7 +6,7 @@ This directory contains all modules related to the rpc subsystem.
 
 ```
 - macula_rpc_cache.erl
-- macula_rpc_discovery.erl
+- macula_rpc_dht.erl
 - macula_rpc_executor.erl
 - macula_rpc_handler.erl
 - macula_rpc_names.erl

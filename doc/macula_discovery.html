@@ -1,95 +1,594 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_discovery</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_discovery</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   Generic DHT-based service discovery.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.6">
 
 
-<h2><a name="description">Description</a></h2>
-   Generic DHT-based service discovery.
-   Provides cache-integrated lookup and announcement operations.
-   Used by both pub/sub and RPC discovery layers.
-<h2><a name="types">Data Types</a></h2>
+    <title>macula_discovery — macula v0.12.6</title>
 
-<h3 class="typedecl"><a name="type-key">key()</a></h3>
-<p><code>key() = binary()</code></p>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.6
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_discovery</span> 
+      <small class="app-vsn" translate="no">(macula v0.12.6)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L8" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
 
 
-<h3 class="typedecl"><a name="type-lookup_fun">lookup_fun()</a></h3>
-<p><code>lookup_fun() = fun((<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>) -&gt; {ok, [<a href="#type-value" docgen-rel="seetype" docgen-href="#value/0">value()</a>]} | {error, term()})</code></p>
+    <section id="moduledoc">
+<p>Generic DHT-based service discovery. Provides cache-integrated lookup and announcement operations. Used by both pub/sub and RPC discovery layers.</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:key/0" data-no-tooltip="" translate="no">key/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:lookup_fun/0" data-no-tooltip="" translate="no">lookup_fun/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:publish_fun/0" data-no-tooltip="" translate="no">publish_fun/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:unpublish_fun/0" data-no-tooltip="" translate="no">unpublish_fun/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:value/0" data-no-tooltip="" translate="no">value/0</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#announce/2" data-no-tooltip="" translate="no">announce(Key, PublishFun)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Announce value to DHT.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#filter_by_age/3" data-no-tooltip="" translate="no">filter_by_age(Items, TTL, TimestampField)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Filter items by age based on last_seen timestamp and TTL. Items must have #{last_seen := integer()} in their structure.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find/2" data-no-tooltip="" translate="no">find(Key, LookupFun)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find values for a key via DHT lookup.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_with_cache/3" data-no-tooltip="" translate="no">find_with_cache(Key, Cache, LookupFun)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find values with cache (default TTL: 300 seconds).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_with_cache/4" data-no-tooltip="" translate="no">find_with_cache(Key, Cache, LookupFun, TTL)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find values with cache and custom TTL.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#unannounce/2" data-no-tooltip="" translate="no">unannounce(Key, UnpublishFun)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Remove value from DHT.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
 
 
-<h3 class="typedecl"><a name="type-publish_fun">publish_fun()</a></h3>
-<p><code>publish_fun() = fun((<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>, <a href="#type-value" docgen-rel="seetype" docgen-href="#value/0">value()</a>) -&gt; ok | {error, term()})</code></p>
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:key/0">
+
+  <div class="detail-header">
+    <a href="#t:key/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">key/0</h1>
 
 
-<h3 class="typedecl"><a name="type-unpublish_fun">unpublish_fun()</a></h3>
-<p><code>unpublish_fun() = fun((<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>) -&gt; ok | {error, term()})</code></p>
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L21" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> key() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
 
 
-<h3 class="typedecl"><a name="type-value">value()</a></h3>
-<p><code>value() = term()</code></p>
+  </section>
+</section>
+<section class="detail" id="t:lookup_fun/0">
+
+  <div class="detail-header">
+    <a href="#t:lookup_fun/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">lookup_fun/0</h1>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#announce-2">announce/2</a></td><td>Announce value to DHT.</td></tr>
-<tr><td valign="top"><a href="#filter_by_age-3">filter_by_age/3</a></td><td>Filter items by age based on last_seen timestamp and TTL.</td></tr>
-<tr><td valign="top"><a href="#find-2">find/2</a></td><td>Find values for a key via DHT lookup.</td></tr>
-<tr><td valign="top"><a href="#find_with_cache-3">find_with_cache/3</a></td><td>Find values with cache (default TTL: 300 seconds).</td></tr>
-<tr><td valign="top"><a href="#find_with_cache-4">find_with_cache/4</a></td><td>Find values with cache and custom TTL.</td></tr>
-<tr><td valign="top"><a href="#unannounce-2">unannounce/2</a></td><td>Remove value from DHT.</td></tr>
-</table>
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L23" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
 
-<h2><a name="functions">Function Details</a></h2>
+    </div>
+  </div>
 
-<h3 class="function"><a name="announce-2">announce/2</a></h3>
-<div class="spec">
-<p><code>announce(Key::<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>, PublishFun::<a href="#type-publish_fun" docgen-rel="seetype" docgen-href="#publish_fun/0">publish_fun()</a>) -&gt; ok | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Announce value to DHT.</p>
+  <section class="docstring">
 
-<h3 class="function"><a name="filter_by_age-3">filter_by_age/3</a></h3>
-<div class="spec">
-<p><code>filter_by_age(Items::[map()], TTL::pos_integer(), TimestampField::atom()) -&gt; [map()]</code><br></p>
-<p> </p>
-</div><p>Filter items by age based on last_seen timestamp and TTL.
-  Items must have #{last_seen := integer()} in their structure.</p>
+      <div class="specs">
 
-<h3 class="function"><a name="find-2">find/2</a></h3>
-<div class="spec">
-<p><code>find(Key::<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>, LookupFun::<a href="#type-lookup_fun" docgen-rel="seetype" docgen-href="#lookup_fun/0">lookup_fun()</a>) -&gt; {ok, [<a href="#type-value" docgen-rel="seetype" docgen-href="#value/0">value()</a>]} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Find values for a key via DHT lookup.</p>
+          <pre translate="no"><span class="attribute">-type</span> lookup_fun() :: fun((<a href="#t:key/0">key</a>()) -> {ok, [<a href="#t:value/0">value</a>()]} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}).</pre>
 
-<h3 class="function"><a name="find_with_cache-3">find_with_cache/3</a></h3>
-<div class="spec">
-<p><code>find_with_cache(Key::<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>, Cache::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>, LookupFun::<a href="#type-lookup_fun" docgen-rel="seetype" docgen-href="#lookup_fun/0">lookup_fun()</a>) -&gt; {ok, [<a href="#type-value" docgen-rel="seetype" docgen-href="#value/0">value()</a>], <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>} | {error, term(), <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>}</code><br></p>
-<p> </p>
-</div><p>Find values with cache (default TTL: 300 seconds).</p>
+      </div>
 
-<h3 class="function"><a name="find_with_cache-4">find_with_cache/4</a></h3>
-<div class="spec">
-<p><code>find_with_cache(Key::<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>, Cache::<a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>, LookupFun::<a href="#type-lookup_fun" docgen-rel="seetype" docgen-href="#lookup_fun/0">lookup_fun()</a>, TTL::pos_integer()) -&gt; {ok, [<a href="#type-value" docgen-rel="seetype" docgen-href="#value/0">value()</a>], <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>} | {error, term(), <a href="/home/rl/work/github.com/macula-io/macula/doc/macula_cache.html#type-cache" docgen-rel="seetype" docgen-href="macula:macula_cache#cache/0">macula_cache:cache()</a>}</code><br></p>
-<p> </p>
-</div><p>Find values with cache and custom TTL.</p>
 
-<h3 class="function"><a name="unannounce-2">unannounce/2</a></h3>
-<div class="spec">
-<p><code>unannounce(Key::<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>, UnpublishFun::<a href="#type-unpublish_fun" docgen-rel="seetype" docgen-href="#unpublish_fun/0">unpublish_fun()</a>) -&gt; ok | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Remove value from DHT.</p>
-<hr>
+  </section>
+</section>
+<section class="detail" id="t:publish_fun/0">
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  <div class="detail-header">
+    <a href="#t:publish_fun/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">publish_fun/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L24" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> publish_fun() :: fun((<a href="#t:key/0">key</a>(), <a href="#t:value/0">value</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}).</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:unpublish_fun/0">
+
+  <div class="detail-header">
+    <a href="#t:unpublish_fun/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">unpublish_fun/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L25" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> unpublish_fun() :: fun((<a href="#t:key/0">key</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}).</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:value/0">
+
+  <div class="detail-header">
+    <a href="#t:value/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">value/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L22" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> value() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="announce/2">
+
+  <div class="detail-header">
+    <a href="#announce/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">announce(Key, PublishFun)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L74" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> announce(<a href="#t:key/0">key</a>(), <a href="#t:publish_fun/0">publish_fun</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Announce value to DHT.</p>
+  </section>
+</section>
+<section class="detail" id="filter_by_age/3">
+
+  <div class="detail-header">
+    <a href="#filter_by_age/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">filter_by_age(Items, TTL, TimestampField)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L85" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> filter_by_age([<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()], <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>()) -> [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()].</pre>
+
+      </div>
+
+<p>Filter items by age based on last_seen timestamp and TTL. Items must have #{last_seen := integer()} in their structure.</p>
+  </section>
+</section>
+<section class="detail" id="find/2">
+
+  <div class="detail-header">
+    <a href="#find/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">find(Key, LookupFun)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L41" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> find(<a href="#t:key/0">key</a>(), <a href="#t:lookup_fun/0">lookup_fun</a>()) -> {ok, [<a href="#t:value/0">value</a>()]} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Find values for a key via DHT lookup.</p>
+  </section>
+</section>
+<section class="detail" id="find_with_cache/3">
+
+  <div class="detail-header">
+    <a href="#find_with_cache/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">find_with_cache(Key, Cache, LookupFun)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L47" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> find_with_cache(<a href="#t:key/0">key</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>(), <a href="#t:lookup_fun/0">lookup_fun</a>()) ->
+                         {ok, [<a href="#t:value/0">value</a>()], <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()}.</pre>
+
+      </div>
+
+<p>Find values with cache (default TTL: 300 seconds).</p>
+  </section>
+</section>
+<section class="detail" id="find_with_cache/4">
+
+  <div class="detail-header">
+    <a href="#find_with_cache/4" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">find_with_cache(Key, Cache, LookupFun, TTL)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L53" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> find_with_cache(<a href="#t:key/0">key</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>(), <a href="#t:lookup_fun/0">lookup_fun</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>()) ->
+                         {ok, [<a href="#t:value/0">value</a>()], <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(), <a href="macula_cache.html#t:cache/0">macula_cache:cache</a>()}.</pre>
+
+      </div>
+
+<p>Find values with cache and custom TTL.</p>
+  </section>
+</section>
+<section class="detail" id="unannounce/2">
+
+  <div class="detail-header">
+    <a href="#unannounce/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">unannounce(Key, UnpublishFun)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_discovery.erl#L79" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> unannounce(<a href="#t:key/0">key</a>(), <a href="#t:unpublish_fun/0">unpublish_fun</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Remove value from DHT.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

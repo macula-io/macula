@@ -1,86 +1,520 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_uri</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_uri</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   Macula URI parsing and construction.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.6">
 
 
-<h2><a name="description">Description</a></h2>
-   Macula URI parsing and construction.
-   Format: macula://realm/node_id
-   Example: macula://org.example.mesh/0123456789abcdef...
-<h2><a name="types">Data Types</a></h2>
+    <title>macula_uri — macula v0.12.6</title>
 
-<h3 class="typedecl"><a name="type-node_id">node_id()</a></h3>
-<p><code>node_id() = binary()</code></p>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.6
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_uri</span> 
+      <small class="app-vsn" translate="no">(macula v0.12.6)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_uri.erl#L8" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
 
 
-<h3 class="typedecl"><a name="type-realm">realm()</a></h3>
-<p><code>realm() = binary()</code></p>
+    <section id="moduledoc">
+<p>Macula URI parsing and construction. Format: macula://realm/node_id Example: macula://org.example.mesh/0123456789abcdef...</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:node_id/0" data-no-tooltip="" translate="no">node_id/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:realm/0" data-no-tooltip="" translate="no">realm/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:uri/0" data-no-tooltip="" translate="no">uri/0</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#equals/2" data-no-tooltip="" translate="no">equals(Uri1, Uri2)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if two URIs are equal.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_node_id/1" data-no-tooltip="" translate="no">get_node_id(Uri)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Extract node ID from URI.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_realm/1" data-no-tooltip="" translate="no">get_realm(Uri)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Extract realm from URI.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#is_valid/1" data-no-tooltip="" translate="no">is_valid(Uri)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if URI is valid.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#new/2" data-no-tooltip="" translate="no">new(Realm, NodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Construct Macula URI from realm and node ID.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#parse/1" data-no-tooltip="" translate="no">parse(Uri)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Parse Macula URI to extract realm and node ID.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
 
 
-<h3 class="typedecl"><a name="type-uri">uri()</a></h3>
-<p><code>uri() = binary()</code></p>
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:node_id/0">
+
+  <div class="detail-header">
+    <a href="#t:node_id/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">node_id/0</h1>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#equals-2">equals/2</a></td><td>Check if two URIs are equal.</td></tr>
-<tr><td valign="top"><a href="#get_node_id-1">get_node_id/1</a></td><td>Extract node ID from URI.</td></tr>
-<tr><td valign="top"><a href="#get_realm-1">get_realm/1</a></td><td>Extract realm from URI.</td></tr>
-<tr><td valign="top"><a href="#is_valid-1">is_valid/1</a></td><td>Check if URI is valid.</td></tr>
-<tr><td valign="top"><a href="#new-2">new/2</a></td><td>Construct Macula URI from realm and node ID.</td></tr>
-<tr><td valign="top"><a href="#parse-1">parse/1</a></td><td>Parse Macula URI to extract realm and node ID.</td></tr>
-</table>
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_uri.erl#L23" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
 
-<h2><a name="functions">Function Details</a></h2>
+    </div>
+  </div>
 
-<h3 class="function"><a name="equals-2">equals/2</a></h3>
-<div class="spec">
-<p><code>equals(Uri1::<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>, Uri2::<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>) -&gt; boolean()</code><br></p>
-<p> </p>
-</div><p>Check if two URIs are equal.</p>
+  <section class="docstring">
 
-<h3 class="function"><a name="get_node_id-1">get_node_id/1</a></h3>
-<div class="spec">
-<p><code>get_node_id(Uri::<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>) -&gt; {ok, <a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>} | {error, invalid_uri}</code><br></p>
-<p> </p>
-</div><p>Extract node ID from URI.</p>
+      <div class="specs">
 
-<h3 class="function"><a name="get_realm-1">get_realm/1</a></h3>
-<div class="spec">
-<p><code>get_realm(Uri::<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>) -&gt; {ok, <a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>} | {error, invalid_uri}</code><br></p>
-<p> </p>
-</div><p>Extract realm from URI.</p>
+          <pre translate="no"><span class="attribute">-type</span> node_id() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
 
-<h3 class="function"><a name="is_valid-1">is_valid/1</a></h3>
-<div class="spec">
-<p><code>is_valid(Uri::<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>) -&gt; boolean()</code><br></p>
-<p> </p>
-</div><p>Check if URI is valid.</p>
+      </div>
 
-<h3 class="function"><a name="new-2">new/2</a></h3>
-<div class="spec">
-<p><code>new(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>) -&gt; <a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a></code><br></p>
-<p> </p>
-</div><p>Construct Macula URI from realm and node ID.</p>
 
-<h3 class="function"><a name="parse-1">parse/1</a></h3>
-<div class="spec">
-<p><code>parse(Uri::<a href="#type-uri" docgen-rel="seetype" docgen-href="#uri/0">uri()</a>) -&gt; {ok, <a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, <a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>} | {error, invalid_uri}</code><br></p>
-<p> </p>
-</div><p>Parse Macula URI to extract realm and node ID.</p>
-<hr>
+  </section>
+</section>
+<section class="detail" id="t:realm/0">
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  <div class="detail-header">
+    <a href="#t:realm/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">realm/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_uri.erl#L22" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> realm() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:uri/0">
+
+  <div class="detail-header">
+    <a href="#t:uri/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">uri/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_uri.erl#L21" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> uri() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="equals/2">
+
+  <div class="detail-header">
+    <a href="#equals/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">equals(Uri1, Uri2)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_uri.erl#L114" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> equals(<a href="#t:uri/0">uri</a>(), <a href="#t:uri/0">uri</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+
+      </div>
+
+<p>Check if two URIs are equal.</p>
+  </section>
+</section>
+<section class="detail" id="get_node_id/1">
+
+  <div class="detail-header">
+    <a href="#get_node_id/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_node_id(Uri)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_uri.erl#L88" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_node_id(<a href="#t:uri/0">uri</a>()) -> {ok, <a href="#t:node_id/0">node_id</a>()} | {error, invalid_uri}.</pre>
+
+      </div>
+
+<p>Extract node ID from URI.</p>
+  </section>
+</section>
+<section class="detail" id="get_realm/1">
+
+  <div class="detail-header">
+    <a href="#get_realm/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_realm(Uri)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_uri.erl#L75" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_realm(<a href="#t:uri/0">uri</a>()) -> {ok, <a href="#t:realm/0">realm</a>()} | {error, invalid_uri}.</pre>
+
+      </div>
+
+<p>Extract realm from URI.</p>
+  </section>
+</section>
+<section class="detail" id="is_valid/1">
+
+  <div class="detail-header">
+    <a href="#is_valid/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">is_valid(Uri)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_uri.erl#L101" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> is_valid(<a href="#t:uri/0">uri</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+
+      </div>
+
+<p>Check if URI is valid.</p>
+  </section>
+</section>
+<section class="detail" id="new/2">
+
+  <div class="detail-header">
+    <a href="#new/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">new(Realm, NodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_uri.erl#L35" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> new(<a href="#t:realm/0">realm</a>(), <a href="#t:node_id/0">node_id</a>()) -> <a href="#t:uri/0">uri</a>().</pre>
+
+      </div>
+
+<p>Construct Macula URI from realm and node ID.</p>
+  </section>
+</section>
+<section class="detail" id="parse/1">
+
+  <div class="detail-header">
+    <a href="#parse/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">parse(Uri)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_uri.erl#L42" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> parse(<a href="#t:uri/0">uri</a>()) -> {ok, <a href="#t:realm/0">realm</a>(), <a href="#t:node_id/0">node_id</a>()} | {error, invalid_uri}.</pre>
+
+      </div>
+
+<p>Parse Macula URI to extract realm and node ID.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

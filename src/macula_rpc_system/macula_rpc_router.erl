@@ -19,7 +19,7 @@
 %% Types
 -type strategy() :: local_first | round_robin | random | closest.
 -type registration() :: macula_rpc_registry:registration().
--type provider_info() :: macula_rpc_discovery:provider_info().
+-type provider_info() :: macula_rpc_dht:provider_info().
 
 -type router_state() :: #{
     strategy := strategy(),

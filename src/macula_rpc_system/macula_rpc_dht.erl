@@ -5,7 +5,7 @@
 %%% Wraps macula_discovery with RPC-specific types.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_rpc_discovery).
+-module(macula_rpc_dht).
 
 %% API
 -export([

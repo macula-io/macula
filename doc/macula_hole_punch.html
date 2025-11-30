@@ -1,146 +1,642 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_hole_punch</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_hole_punch</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
-QUIC Hole Punch Executor with Cancellation and Adaptive Timing.
-
-<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
-
-<h2><a name="description">Description</a></h2><p>   
-QUIC Hole Punch Executor with Cancellation and Adaptive Timing.</p>
-  
-   <p>Implements the simultaneous open (SYN-SYN) pattern for QUIC   
-to establish direct connections through NAT devices.</p>
-  
-   <p>Features:   
-- Proper cancellation of in-progress punch attempts   
-- Adaptive timing based on NAT type and previous attempts   
-- Tracks active punches via gen_server state   
-- Supports both sync and async execution</p>
-  
-   <p>QUIC Hole Punching Approach:   
-Unlike TCP's explicit SYN packets, QUIC uses encrypted handshakes.   
-The hole punching strategy is:</p>
-  
-   <p>1. Both peers start QUIC connect() at the same coordinated time   
-2. Initial packets "punch" holes in both NATs   
-3. One peer's connection will succeed (race condition)   
-4. The other peer retries connecting through the opened hole</p>
-  
-   <p>NAT Behavior Considerations:   
-- EI mapping: External address is consistent - easy hole punch   
-- HD mapping: Must target specific host - coordinate addresses   
-- PP allocation: Same port - single target port   
-- PC allocation: Sequential ports - try predicted range   
-- RD allocation: Random ports - harder to predict, try range</p>
-  
-   Adaptive Timing:
-   - Symmetric NAT: Longer timeouts, more port attempts
-   - Restricted NAT: Standard timeouts
-   - Full Cone: Fast timeouts, single port
-  
-<h2><a name="types">Data Types</a></h2>
-
-<h3 class="typedecl"><a name="type-nat_type">nat_type()</a></h3>
-<p><code>nat_type() = full_cone | restricted | port_restricted | symmetric | unknown</code></p>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.6">
 
 
-<h3 class="typedecl"><a name="type-punch_opts">punch_opts()</a></h3>
-<p><code>punch_opts() = #{target_host := binary() | string(), target_ports := [<a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>], local_port =&gt; <a href="/home/rl/work/github.com/macula-io/kernel/doc/inet.html#type-port_number" docgen-rel="seetype" docgen-href="kernel:inet#port_number/0">inet:port_number()</a>, session_id := binary(), punch_time =&gt; integer(), role =&gt; initiator | target, local_nat_type =&gt; <a href="#type-nat_type" docgen-rel="seetype" docgen-href="#nat_type/0">nat_type()</a>, remote_nat_type =&gt; <a href="#type-nat_type" docgen-rel="seetype" docgen-href="#nat_type/0">nat_type()</a>}</code></p>
+    <title>macula_hole_punch — macula v0.12.6</title>
+
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.6
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_hole_punch</span> 
+      <small class="app-vsn" translate="no">(macula v0.12.6)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L37" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
 
 
-<h3 class="typedecl"><a name="type-punch_result">punch_result()</a></h3>
-<p><code>punch_result() = {ok, <a href="/home/rl/work/github.com/macula-io/quicer/doc/quicer.html#type-connection_handle" docgen-rel="seetype" docgen-href="quicer:quicer#connection_handle/0">quicer:connection_handle()</a>} | {error, timeout | unreachable | all_ports_failed | cancelled}</code></p>
+    <section id="moduledoc">
+<p>QUIC Hole Punch Executor with Cancellation and Adaptive Timing.</p><p>Implements the simultaneous open (SYN-SYN) pattern for QUIC to establish direct connections through NAT devices.</p><p>Features: - Proper cancellation of in-progress punch attempts - Adaptive timing based on NAT type and previous attempts - Tracks active punches via gen_server state - Supports both sync and async execution</p><p>QUIC Hole Punching Approach: Unlike TCP's explicit SYN packets, QUIC uses encrypted handshakes. The hole punching strategy is:</p><p>1. Both peers start QUIC connect() at the same coordinated time 2. Initial packets &quot;punch&quot; holes in both NATs 3. One peer's connection will succeed (race condition) 4. The other peer retries connecting through the opened hole</p><p>NAT Behavior Considerations: - EI mapping: External address is consistent - easy hole punch - HD mapping: Must target specific host - coordinate addresses - PP allocation: Same port - single target port - PC allocation: Sequential ports - try predicted range - RD allocation: Random ports - harder to predict, try range</p><p>Adaptive Timing: - Symmetric NAT: Longer timeouts, more port attempts - Restricted NAT: Standard timeouts - Full Cone: Fast timeouts, single port</p>
+    </section>
 
-
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#cancel-1">cancel/1</a></td><td>Cancel an ongoing hole punch attempt.</td></tr>
-<tr><td valign="top"><a href="#execute-3">execute/3</a></td><td>Execute a hole punch attempt synchronously.</td></tr>
-<tr><td valign="top"><a href="#execute_async-3">execute_async/3</a></td><td>Execute hole punch asynchronously.</td></tr>
-<tr><td valign="top"><a href="#get_active_punches-0">get_active_punches/0</a></td><td>Get list of active punch attempts (for debugging/monitoring).</td></tr>
-<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#start_link-0">start_link/0</a></td><td>Start the hole punch executor.</td></tr>
-<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
-</table>
-
-<h2><a name="functions">Function Details</a></h2>
-
-<h3 class="function"><a name="cancel-1">cancel/1</a></h3>
-<div class="spec">
-<p><code>cancel(Ref::reference()) -&gt; ok | {error, not_found}</code><br></p>
-<p> </p>
-</div><p>Cancel an ongoing hole punch attempt.</p>
-
-<h3 class="function"><a name="execute-3">execute/3</a></h3>
-<div class="spec">
-<p><code>execute(TargetNodeId::binary(), Opts::<a href="#type-punch_opts" docgen-rel="seetype" docgen-href="#punch_opts/0">punch_opts()</a>, Timeout::timeout()) -&gt; <a href="#type-punch_result" docgen-rel="seetype" docgen-href="#punch_result/0">punch_result()</a></code><br></p>
-<p> </p>
-</div><p>Execute a hole punch attempt synchronously.
-  Blocks until connection established or timeout.</p>
-
-<h3 class="function"><a name="execute_async-3">execute_async/3</a></h3>
-<div class="spec">
-<p><code>execute_async(TargetNodeId::binary(), Opts::<a href="#type-punch_opts" docgen-rel="seetype" docgen-href="#punch_opts/0">punch_opts()</a>, ReplyTo::pid()) -&gt; reference()</code><br></p>
-<p> </p>
-</div><p>Execute hole punch asynchronously.
-  Returns immediately, caller receives result via message.</p>
-
-<h3 class="function"><a name="get_active_punches-0">get_active_punches/0</a></h3>
-<div class="spec">
-<p><code>get_active_punches() -&gt; [{reference(), map()}]</code><br></p>
-<p> </p>
-</div><p>Get list of active punch attempts (for debugging/monitoring).</p>
-
-<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
-<div class="spec">
-<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
-<p> </p>
 </div>
 
-<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
-<div class="spec">
-<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
-<p> </p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:nat_type/0" data-no-tooltip="" translate="no">nat_type/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:punch_opts/0" data-no-tooltip="" translate="no">punch_opts/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:punch_result/0" data-no-tooltip="" translate="no">punch_result/0</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#cancel/1" data-no-tooltip="" translate="no">cancel(Ref)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Cancel an ongoing hole punch attempt.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#execute/3" data-no-tooltip="" translate="no">execute(TargetNodeId, Opts, Timeout)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Execute a hole punch attempt synchronously. Blocks until connection established or timeout.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#execute_async/3" data-no-tooltip="" translate="no">execute_async(TargetNodeId, Opts, ReplyTo)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Execute hole punch asynchronously. Returns immediately, caller receives result via message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_active_punches/0" data-no-tooltip="" translate="no">get_active_punches()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get list of active punch attempts (for debugging/monitoring).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_call/3" data-no-tooltip="" translate="no">handle_call(Request, From, State)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_cast/2" data-no-tooltip="" translate="no">handle_cast(Msg, State)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_info/2" data-no-tooltip="" translate="no">handle_info(Info, State)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#init/1" data-no-tooltip="" translate="no">init(_)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start_link/0" data-no-tooltip="" translate="no">start_link()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Start the hole punch executor.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#terminate/2" data-no-tooltip="" translate="no">terminate(Reason, State)</a>
+
+      </div>
+
+    </div>
+
 </div>
 
-<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
-<div class="spec">
-<p><code>handle_info(Info, State) -&gt; any()</code></p>
-<p> </p>
+  </section>
+
+
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:nat_type/0">
+
+  <div class="detail-header">
+    <a href="#t:nat_type/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">nat_type/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L74" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> nat_type() :: full_cone | restricted | port_restricted | symmetric | unknown.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:punch_opts/0">
+
+  <div class="detail-header">
+    <a href="#t:punch_opts/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">punch_opts/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L76" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> punch_opts() ::
+          #{target_host := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>(),
+            target_ports := [<a href="https://www.erlang.org/doc/apps/kernel/inet.html#t:port_number/0">inet:port_number</a>()],
+            local_port => <a href="https://www.erlang.org/doc/apps/kernel/inet.html#t:port_number/0">inet:port_number</a>(),
+            session_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
+            punch_time => <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>(),
+            role => initiator | target,
+            local_nat_type => <a href="#t:nat_type/0">nat_type</a>(),
+            remote_nat_type => <a href="#t:nat_type/0">nat_type</a>()}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:punch_result/0">
+
+  <div class="detail-header">
+    <a href="#t:punch_result/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">punch_result/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L87" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> punch_result() ::
+          {ok, <a href="https://hexdocs.pm/quicer/quicer.html#t:connection_handle/0">quicer:connection_handle</a>()} |
+          {error, timeout | unreachable | all_ports_failed | cancelled}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="cancel/1">
+
+  <div class="detail-header">
+    <a href="#cancel/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">cancel(Ref)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L121" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> cancel(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>()) -> ok | {error, not_found}.</pre>
+
+      </div>
+
+<p>Cancel an ongoing hole punch attempt.</p>
+  </section>
+</section>
+<section class="detail" id="execute/3">
+
+  <div class="detail-header">
+    <a href="#execute/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">execute(TargetNodeId, Opts, Timeout)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L110" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> execute(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="#t:punch_opts/0">punch_opts</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:timeout/0">timeout</a>()) -> <a href="#t:punch_result/0">punch_result</a>().</pre>
+
+      </div>
+
+<p>Execute a hole punch attempt synchronously. Blocks until connection established or timeout.</p>
+  </section>
+</section>
+<section class="detail" id="execute_async/3">
+
+  <div class="detail-header">
+    <a href="#execute_async/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">execute_async(TargetNodeId, Opts, ReplyTo)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L116" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> execute_async(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="#t:punch_opts/0">punch_opts</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>().</pre>
+
+      </div>
+
+<p>Execute hole punch asynchronously. Returns immediately, caller receives result via message.</p>
+  </section>
+</section>
+<section class="detail" id="get_active_punches/0">
+
+  <div class="detail-header">
+    <a href="#get_active_punches/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_active_punches()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L126" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_active_punches() -> [{<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:reference/0">reference</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()}].</pre>
+
+      </div>
+
+<p>Get list of active punch attempts (for debugging/monitoring).</p>
+  </section>
+</section>
+<section class="detail" id="handle_call/3">
+
+  <div class="detail-header">
+    <a href="#handle_call/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_call(Request, From, State)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L138" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="handle_cast/2">
+
+  <div class="detail-header">
+    <a href="#handle_cast/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_cast(Msg, State)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L208" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="handle_info/2">
+
+  <div class="detail-header">
+    <a href="#handle_info/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_info(Info, State)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L223" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="init/1">
+
+  <div class="detail-header">
+    <a href="#init/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">init(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L133" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="start_link/0">
+
+  <div class="detail-header">
+    <a href="#start_link/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">start_link()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L104" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> start_link() -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Start the hole punch executor.</p>
+  </section>
+</section>
+<section class="detail" id="terminate/2">
+
+  <div class="detail-header">
+    <a href="#terminate/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">terminate(Reason, State)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_hole_punch.erl#L248" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
 </div>
 
-<h3 class="function"><a name="init-1">init/1</a></h3>
-<div class="spec">
-<p><code>init(X1) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="start_link-0">start_link/0</a></h3>
-<div class="spec">
-<p><code>start_link() -&gt; {ok, pid()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Start the hole punch executor.</p>
-
-<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
-<div class="spec">
-<p><code>terminate(Reason, State) -&gt; any()</code></p>
-<p> </p>
-</div>
-<hr>
-
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  </body>
 </html>

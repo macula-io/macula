@@ -1,133 +1,712 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_realm_trust</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_realm_trust</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>Realm Trust Management for Hybrid Trust Model.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.6">
 
 
-<h2><a name="description">Description</a></h2><p>Realm Trust Management for Hybrid Trust Model</p>
-  
-   <p>Implements the Hybrid Trust Model (ADR-001) with three trust levels:   
-- Level 1: Realm Authentication (API key/token validation)   
-- Level 2: Certificate Trust (TOFU within authenticated realm)   
-- Level 3: Optional CA-signed certificates for seed nodes</p>
-  
-   This module manages:
-   - Realm authentication via API keys
-   - Certificate fingerprint registration and verification
-   - Trust On First Use (TOFU) pattern
-   - Fingerprint change detection
-   - Trust revocation
-  
-<h2><a name="types">Data Types</a></h2>
+    <title>macula_realm_trust — macula v0.12.6</title>
 
-<h3 class="typedecl"><a name="type-fingerprint">fingerprint()</a></h3>
-<p><code>fingerprint() = binary()</code></p>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.6
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_realm_trust</span> 
+      <small class="app-vsn" translate="no">(macula v0.12.6)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L18" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
 
 
-<h3 class="typedecl"><a name="type-node_id">node_id()</a></h3>
-<p><code>node_id() = binary()</code></p>
+    <section id="moduledoc">
+<p>Realm Trust Management for Hybrid Trust Model</p><p>Implements the Hybrid Trust Model (ADR-001) with three trust levels: - Level 1: Realm Authentication (API key/token validation) - Level 2: Certificate Trust (TOFU within authenticated realm) - Level 3: Optional CA-signed certificates for seed nodes</p><p>This module manages: - Realm authentication via API keys - Certificate fingerprint registration and verification - Trust On First Use (TOFU) pattern - Fingerprint change detection - Trust revocation</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:fingerprint/0" data-no-tooltip="" translate="no">fingerprint/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:node_id/0" data-no-tooltip="" translate="no">node_id/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:realm/0" data-no-tooltip="" translate="no">realm/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:session/0" data-no-tooltip="" translate="no">session/0</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#authenticate/2" data-no-tooltip="" translate="no">authenticate(Realm, ApiKey)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Authenticate to a realm using API key Returns a session map on success, error tuple on failure Implements rate limiting per realm</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#extract_fingerprint/1" data-no-tooltip="" translate="no">extract_fingerprint(CertPEM)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Extract SHA-256 fingerprint from certificate PEM</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_auth_attempt_count/1" data-no-tooltip="" translate="no">get_auth_attempt_count(Realm)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get the current auth attempt count for a realm</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_fingerprint_info/2" data-no-tooltip="" translate="no">get_fingerprint_info(Realm, NodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get fingerprint info for a node in a realm</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_trusted_peers/1" data-no-tooltip="" translate="no">get_trusted_peers(Realm)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get all trusted peers in a realm</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#init_rate_limiter/0" data-no-tooltip="" translate="no">init_rate_limiter()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Initialize the rate limiter ETS table</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#register_fingerprint/3" data-no-tooltip="" translate="no">register_fingerprint(Realm, NodeId, Fingerprint)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Register a certificate fingerprint for a node in a realm</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#reset_rate_limit/1" data-no-tooltip="" translate="no">reset_rate_limit(Realm)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Reset the rate limit for a realm</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#revoke_trust/2" data-no-tooltip="" translate="no">revoke_trust(Realm, NodeId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Revoke trust for a node in a realm</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#verify_fingerprint/3" data-no-tooltip="" translate="no">verify_fingerprint(Realm, NodeId, Fingerprint)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Verify a certificate fingerprint for a node in a realm Implements Trust On First Use (TOFU) - first connection is automatically trusted</p></div>
+
+    </div>
+
+</div>
+
+  </section>
 
 
-<h3 class="typedecl"><a name="type-realm">realm()</a></h3>
-<p><code>realm() = binary()</code></p>
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:fingerprint/0">
+
+  <div class="detail-header">
+    <a href="#t:fingerprint/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">fingerprint/0</h1>
 
 
-<h3 class="typedecl"><a name="type-session">session()</a></h3>
-<p><code>session() = #{realm := <a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, session_token := binary(), authenticated_at := integer()}</code></p>
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L52" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> fingerprint() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#authenticate-2">authenticate/2</a></td><td>Authenticate to a realm using API key
-  Returns a session map on success, error tuple on failure
-  Implements rate limiting per realm.</td></tr>
-<tr><td valign="top"><a href="#extract_fingerprint-1">extract_fingerprint/1</a></td><td>Extract SHA-256 fingerprint from certificate PEM.</td></tr>
-<tr><td valign="top"><a href="#get_auth_attempt_count-1">get_auth_attempt_count/1</a></td><td>Get the current auth attempt count for a realm.</td></tr>
-<tr><td valign="top"><a href="#get_fingerprint_info-2">get_fingerprint_info/2</a></td><td>Get fingerprint info for a node in a realm.</td></tr>
-<tr><td valign="top"><a href="#get_trusted_peers-1">get_trusted_peers/1</a></td><td>Get all trusted peers in a realm.</td></tr>
-<tr><td valign="top"><a href="#init_rate_limiter-0">init_rate_limiter/0</a></td><td>Initialize the rate limiter ETS table.</td></tr>
-<tr><td valign="top"><a href="#register_fingerprint-3">register_fingerprint/3</a></td><td>Register a certificate fingerprint for a node in a realm.</td></tr>
-<tr><td valign="top"><a href="#reset_rate_limit-1">reset_rate_limit/1</a></td><td>Reset the rate limit for a realm.</td></tr>
-<tr><td valign="top"><a href="#revoke_trust-2">revoke_trust/2</a></td><td>Revoke trust for a node in a realm.</td></tr>
-<tr><td valign="top"><a href="#verify_fingerprint-3">verify_fingerprint/3</a></td><td>Verify a certificate fingerprint for a node in a realm
-  Implements Trust On First Use (TOFU) - first connection is automatically trusted.</td></tr>
-</table>
+  </section>
+</section>
+<section class="detail" id="t:node_id/0">
 
-<h2><a name="functions">Function Details</a></h2>
+  <div class="detail-header">
+    <a href="#t:node_id/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">node_id/0</h1>
 
-<h3 class="function"><a name="authenticate-2">authenticate/2</a></h3>
-<div class="spec">
-<p><code>authenticate(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, ApiKey::binary()) -&gt; {ok, <a href="#type-session" docgen-rel="seetype" docgen-href="#session/0">session()</a>} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Authenticate to a realm using API key
-  Returns a session map on success, error tuple on failure
-  Implements rate limiting per realm</p>
 
-<h3 class="function"><a name="extract_fingerprint-1">extract_fingerprint/1</a></h3>
-<div class="spec">
-<p><code>extract_fingerprint(CertPEM::binary()) -&gt; {ok, <a href="#type-fingerprint" docgen-rel="seetype" docgen-href="#fingerprint/0">fingerprint()</a>} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Extract SHA-256 fingerprint from certificate PEM</p>
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L51" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
 
-<h3 class="function"><a name="get_auth_attempt_count-1">get_auth_attempt_count/1</a></h3>
-<div class="spec">
-<p><code>get_auth_attempt_count(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>) -&gt; {ok, non_neg_integer()}</code><br></p>
-<p> </p>
-</div><p>Get the current auth attempt count for a realm</p>
+    </div>
+  </div>
 
-<h3 class="function"><a name="get_fingerprint_info-2">get_fingerprint_info/2</a></h3>
-<div class="spec">
-<p><code>get_fingerprint_info(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>) -&gt; {ok, map()} | {error, not_found}</code><br></p>
-<p> </p>
-</div><p>Get fingerprint info for a node in a realm</p>
+  <section class="docstring">
 
-<h3 class="function"><a name="get_trusted_peers-1">get_trusted_peers/1</a></h3>
-<div class="spec">
-<p><code>get_trusted_peers(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>) -&gt; {ok, [map()]}</code><br></p>
-<p> </p>
-</div><p>Get all trusted peers in a realm</p>
+      <div class="specs">
 
-<h3 class="function"><a name="init_rate_limiter-0">init_rate_limiter/0</a></h3>
-<div class="spec">
-<p><code>init_rate_limiter() -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Initialize the rate limiter ETS table</p>
+          <pre translate="no"><span class="attribute">-type</span> node_id() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
 
-<h3 class="function"><a name="register_fingerprint-3">register_fingerprint/3</a></h3>
-<div class="spec">
-<p><code>register_fingerprint(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, Fingerprint::<a href="#type-fingerprint" docgen-rel="seetype" docgen-href="#fingerprint/0">fingerprint()</a>) -&gt; {ok, registered}</code><br></p>
-<p> </p>
-</div><p>Register a certificate fingerprint for a node in a realm</p>
+      </div>
 
-<h3 class="function"><a name="reset_rate_limit-1">reset_rate_limit/1</a></h3>
-<div class="spec">
-<p><code>reset_rate_limit(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Reset the rate limit for a realm</p>
 
-<h3 class="function"><a name="revoke_trust-2">revoke_trust/2</a></h3>
-<div class="spec">
-<p><code>revoke_trust(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>) -&gt; {ok, revoked | not_found}</code><br></p>
-<p> </p>
-</div><p>Revoke trust for a node in a realm</p>
+  </section>
+</section>
+<section class="detail" id="t:realm/0">
 
-<h3 class="function"><a name="verify_fingerprint-3">verify_fingerprint/3</a></h3>
-<div class="spec">
-<p><code>verify_fingerprint(Realm::<a href="#type-realm" docgen-rel="seetype" docgen-href="#realm/0">realm()</a>, NodeId::<a href="#type-node_id" docgen-rel="seetype" docgen-href="#node_id/0">node_id()</a>, Fingerprint::<a href="#type-fingerprint" docgen-rel="seetype" docgen-href="#fingerprint/0">fingerprint()</a>) -&gt; {ok, trusted | trusted_first_use} | {error, {fingerprint_mismatch, #{expected := <a href="#type-fingerprint" docgen-rel="seetype" docgen-href="#fingerprint/0">fingerprint()</a>, received := <a href="#type-fingerprint" docgen-rel="seetype" docgen-href="#fingerprint/0">fingerprint()</a>}}}</code><br></p>
-<p> </p>
-</div><p>Verify a certificate fingerprint for a node in a realm
-  Implements Trust On First Use (TOFU) - first connection is automatically trusted</p>
-<hr>
+  <div class="detail-header">
+    <a href="#t:realm/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">realm/0</h1>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L50" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> realm() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:session/0">
+
+  <div class="detail-header">
+    <a href="#t:session/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">session/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L53" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> session() :: #{realm := <a href="#t:realm/0">realm</a>(), session_token := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), authenticated_at := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>()}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="authenticate/2">
+
+  <div class="detail-header">
+    <a href="#authenticate/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">authenticate(Realm, ApiKey)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L69" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> authenticate(<a href="#t:realm/0">realm</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="#t:session/0">session</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Authenticate to a realm using API key Returns a session map on success, error tuple on failure Implements rate limiting per realm</p>
+  </section>
+</section>
+<section class="detail" id="extract_fingerprint/1">
+
+  <div class="detail-header">
+    <a href="#extract_fingerprint/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">extract_fingerprint(CertPEM)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L392" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> extract_fingerprint(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="#t:fingerprint/0">fingerprint</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Extract SHA-256 fingerprint from certificate PEM</p>
+  </section>
+</section>
+<section class="detail" id="get_auth_attempt_count/1">
+
+  <div class="detail-header">
+    <a href="#get_auth_attempt_count/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_auth_attempt_count(Realm)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L425" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_auth_attempt_count(<a href="#t:realm/0">realm</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()}.</pre>
+
+      </div>
+
+<p>Get the current auth attempt count for a realm</p>
+  </section>
+</section>
+<section class="detail" id="get_fingerprint_info/2">
+
+  <div class="detail-header">
+    <a href="#get_fingerprint_info/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_fingerprint_info(Realm, NodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L256" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_fingerprint_info(<a href="#t:realm/0">realm</a>(), <a href="#t:node_id/0">node_id</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()} | {error, not_found}.</pre>
+
+      </div>
+
+<p>Get fingerprint info for a node in a realm</p>
+  </section>
+</section>
+<section class="detail" id="get_trusted_peers/1">
+
+  <div class="detail-header">
+    <a href="#get_trusted_peers/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_trusted_peers(Realm)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L284" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_trusted_peers(<a href="#t:realm/0">realm</a>()) -> {ok, [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()]}.</pre>
+
+      </div>
+
+<p>Get all trusted peers in a realm</p>
+  </section>
+</section>
+<section class="detail" id="init_rate_limiter/0">
+
+  <div class="detail-header">
+    <a href="#init_rate_limiter/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">init_rate_limiter()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L414" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> init_rate_limiter() -> ok.</pre>
+
+      </div>
+
+<p>Initialize the rate limiter ETS table</p>
+  </section>
+</section>
+<section class="detail" id="register_fingerprint/3">
+
+  <div class="detail-header">
+    <a href="#register_fingerprint/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">register_fingerprint(Realm, NodeId, Fingerprint)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L139" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> register_fingerprint(<a href="#t:realm/0">realm</a>(), <a href="#t:node_id/0">node_id</a>(), <a href="#t:fingerprint/0">fingerprint</a>()) -> {ok, registered}.</pre>
+
+      </div>
+
+<p>Register a certificate fingerprint for a node in a realm</p>
+  </section>
+</section>
+<section class="detail" id="reset_rate_limit/1">
+
+  <div class="detail-header">
+    <a href="#reset_rate_limit/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">reset_rate_limit(Realm)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L438" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> reset_rate_limit(<a href="#t:realm/0">realm</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Reset the rate limit for a realm</p>
+  </section>
+</section>
+<section class="detail" id="revoke_trust/2">
+
+  <div class="detail-header">
+    <a href="#revoke_trust/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">revoke_trust(Realm, NodeId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L349" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> revoke_trust(<a href="#t:realm/0">realm</a>(), <a href="#t:node_id/0">node_id</a>()) -> {ok, revoked | not_found}.</pre>
+
+      </div>
+
+<p>Revoke trust for a node in a realm</p>
+  </section>
+</section>
+<section class="detail" id="verify_fingerprint/3">
+
+  <div class="detail-header">
+    <a href="#verify_fingerprint/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">verify_fingerprint(Realm, NodeId, Fingerprint)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_realm_trust.erl#L189" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> verify_fingerprint(<a href="#t:realm/0">realm</a>(), <a href="#t:node_id/0">node_id</a>(), <a href="#t:fingerprint/0">fingerprint</a>()) ->
+                            {ok, trusted | trusted_first_use} |
+                            {error,
+                             {fingerprint_mismatch,
+                              #{expected := <a href="#t:fingerprint/0">fingerprint</a>(), received := <a href="#t:fingerprint/0">fingerprint</a>()}}}.</pre>
+
+      </div>
+
+<p>Verify a certificate fingerprint for a node in a realm Implements Trust On First Use (TOFU) - first connection is automatically trusted</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

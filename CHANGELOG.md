@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.12.5] - 2025-11-30
+
+### 📊 PubSub Delivery Metrics & Bug Fixes
+
+This release adds comprehensive PubSub delivery tracking and fixes several runtime bugs discovered in the 50-peer NAT traversal demo.
+
+### Added
+
+#### PubSub Delivery Metrics (`macula_chatter.erl`)
+- **Sequence numbers** - Each broadcast gets unique monotonic sequence number
+- **Per-peer tracking** - Track received count, max sequence, first/last seen times
+- **Delivery rate calculation** - Calculate percentage of messages received from each sender
+- **Shutdown summary** - Print delivery statistics when chatter terminates
+
+#### Console Colored Output (`macula_console.erl`)
+- **`pubsub_send/3`** - Magenta `[>>]` prefix for broadcast messages
+- **`pubsub_recv/5`** - Blue `[<<]` prefix with delivery rate percentage
+- **Color-coded delivery rates** - Green (>95%), Yellow (60-95%), Red (<60%)
+
+### Fixed
+
+#### gproc Registration Conflict (`macula_rpc_handler.erl`)
+- **Problem**: When peer reconnects, new RPC handler tried to register same gproc key
+- **Fix**: Check if key exists with `gproc:where/1`, return `ignore` if already registered
+- **Impact**: Eliminates `badarg` crashes on peer reconnection
+
+#### QUIC 3-tuple Error Handling (`macula_nat_connector.erl`)
+- **Problem**: quicer returns 3-tuple errors like `{error, transport_down, #{...}}`
+- **Fix**: Added `normalize_quic_result/1` to convert 3-tuples to standard 2-tuples
+- **Impact**: Eliminates `function_clause` crashes on QUIC connection failures
+
+#### Stats Grouping (`macula_ping_pong.erl`)
+- **Problem**: `group_by_nat/1` mixed records with maps causing `badrecord` error
+- **Fix**: Store merged records first, format to maps at the end with `maps:map/2`
+- **Impact**: NAT statistics display works correctly
+
+#### edoc XML Parsing (`macula_console.erl`)
+- **Problem**: `<--` and `->` in doc comments interpreted as XML tags
+- **Fix**: Replaced example output with plain text descriptions
+- **Impact**: `rebar3 edoc` generates documentation without warnings
+
+### Documentation
+
+- **Archived outdated docs** - Moved v0.8.0 docs to `architecture/archive/v0.8.0-development/`
+- **Updated ex_doc extras** - Removed references to archived docs
+- **Updated README.md** - v0.12.5 release notes with new features
+
+---
+
 ## [0.12.4] - 2025-11-30
 
 ### 📚 Documentation Fixes

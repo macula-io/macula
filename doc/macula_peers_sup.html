@@ -1,136 +1,399 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_peers_sup</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.6">
 
-<h1>Module macula_peers_sup</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>Macula Peers Supervisor.
 
-<p><b>Behaviours:</b> <a href="supervisor.html"><code>supervisor</code></a>.</p>
+    <title>macula_peers_sup — macula v0.12.6</title>
 
-<h2><a name="description">Description</a></h2><p>Macula Peers Supervisor.</p>
- 
-  <p>This supervisor manages dynamic peer connections using a  
-simple_one_for_one strategy. Each peer connection gets its own  
-macula_peer_system supervisor with dedicated handlers.</p>
- 
-  <p>Architecture (v0.8.5):  
-- One macula_peers_sup instance per Macula node  
-- Dynamically adds/removes macula_peer_system children  
-- Each child = one peer connection  
-- simple_one_for_one strategy for efficient scaling</p>
- 
-  Usage:
-  <pre>
-  %% Start new peer connection
-  {ok, PeerPid} = macula_peers_sup:start_peer(Url, Opts).
- 
-  %% List all active peers
-  Peers = macula_peers_sup:list_peers().
- 
-  %% Count active peers
-  Count = macula_peers_sup:count_peers().
- 
-  %% Stop peer connection
-  ok = macula_peers_sup:stop_peer(PeerPid).
-  </pre>
- 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#count_peers-0">count_peers/0</a></td><td>Count active peer connections.</td></tr>
-<tr><td valign="top"><a href="#init-1">init/1</a></td><td>Initialize the peers supervisor.</td></tr>
-<tr><td valign="top"><a href="#list_peers-0">list_peers/0</a></td><td>List all active peer connections.</td></tr>
-<tr><td valign="top"><a href="#start_link-0">start_link/0</a></td><td>Start the peers supervisor.</td></tr>
-<tr><td valign="top"><a href="#start_peer-2">start_peer/2</a></td><td>Start a new peer connection.</td></tr>
-<tr><td valign="top"><a href="#stop_peer-1">stop_peer/1</a></td><td>Stop a peer connection.</td></tr>
-</table>
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
 
-<h2><a name="functions">Function Details</a></h2>
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
 
-<h3 class="function"><a name="count_peers-0">count_peers/0</a></h3>
-<div class="spec">
-<p><code>count_peers() -&gt; non_neg_integer()</code><br></p>
-<p> </p>
-<p>returns: non_neg_integer()</p>
-</div><p><p>Count active peer connections.</p>
- 
-  Returns the number of currently running macula_peer_system supervisors.
- </p>
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
 
-<h3 class="function"><a name="init-1">init/1</a></h3>
-<div class="spec">
-<p><code>init(X1) -&gt; any()</code></p>
-<p> </p>
-</div><p><p>Initialize the peers supervisor.</p>
- 
-  <p>Sets up a simple_one_for_one supervisor for macula_peer_system children.  
-Each child will be started with dynamic arguments (Url, Opts).</p>
- 
-  <p>Strategy: simple_one_for_one  
-- Efficient for managing many similar children  
-- Children started/stopped dynamically  
-- All children use same child spec template</p>
- 
-  Restart Strategy: temporary
-  - Peer connections don't auto-restart on crash
-  - Application decides when to reconnect
-  - Prevents reconnection storms
- </p>
+<div class="body-wrapper">
 
-<h3 class="function"><a name="list_peers-0">list_peers/0</a></h3>
-<div class="spec">
-<p><code>list_peers() -&gt; [pid()]</code><br></p>
-<p> </p>
-<p>returns: [pid()]</p>
-</div><p><p>List all active peer connections.</p>
- 
-  Returns a list of PIDs for all currently running macula_peer_system
-  supervisors.
- </p>
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
 
-<h3 class="function"><a name="start_link-0">start_link/0</a></h3>
-<div class="spec">
-<p><code>start_link() -&gt; {ok, pid()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p><p>Start the peers supervisor.</p>
- 
-  Called by macula_root during application startup.
-  Registers the supervisor with the local name macula_peers_sup.
- </p>
+<nav id="sidebar" class="sidebar">
 
-<h3 class="function"><a name="start_peer-2">start_peer/2</a></h3>
-<div class="spec">
-<p><code>start_peer(Url::binary(), Opts::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
-<p><code>Url</code>: Peer URL (e.g., "https://peer.example.com:4433")<br>
-<code>Opts</code>: Connection options (realm, etc.)<br>
-</p>
-<p>returns: {ok, PeerPid} | {error, Reason}</p>
-</div><p><p>Start a new peer connection.</p>
- 
-  Creates a new macula_peer_system supervisor for the peer at the given URL.
-  The peer system will manage the connection lifecycle and all peer-specific
-  handlers (pubsub, rpc, advertisements).
- </p>
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
 
-<h3 class="function"><a name="stop_peer-1">stop_peer/1</a></h3>
-<div class="spec">
-<p><code>stop_peer(PeerPid::pid()) -&gt; ok | {error, term()}</code><br></p>
-<p><code>PeerPid</code>: PID of the peer system supervisor to stop<br>
-</p>
-<p>returns: ok | {error, not_found}</p>
-</div><p><p>Stop a peer connection.</p>
- 
-  Gracefully terminates the macula_peer_system supervisor for the given peer.
-  This will clean up all peer handlers and close the connection.
- </p>
-<hr>
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.6
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_peers_sup</span> 
+      <small class="app-vsn" translate="no">(macula v0.12.6)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_peers_sup.erl#L32" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
+
+
+    <section id="moduledoc">
+<p>Macula Peers Supervisor.</p><p>This supervisor manages dynamic peer connections using a simple_one_for_one strategy. Each peer connection gets its own macula_peer_system supervisor with dedicated handlers.</p><p>Architecture (v0.8.5): - One macula_peers_sup instance per Macula node - Dynamically adds/removes macula_peer_system children - Each child = one peer connection - simple_one_for_one strategy for efficient scaling</p><p>Usage:</p><pre><code class="makeup erlang" translate="no"><span class="w">  </span><span class="c1">%% Start new peer connection</span><span class="w">
+  </span><span class="p" data-group-id="1767968234-1">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">PeerPid</span><span class="p" data-group-id="1767968234-1">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">start_peer</span><span class="p" data-group-id="1767968234-2">(</span><span class="n">Url</span><span class="p">,</span><span class="w"> </span><span class="n">Opts</span><span class="p" data-group-id="1767968234-2">)</span><span class="p">.</span><span class="w">
+ 
+  </span><span class="c1">%% List all active peers</span><span class="w">
+  </span><span class="n">Peers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">list_peers</span><span class="p" data-group-id="1767968234-3">(</span><span class="p" data-group-id="1767968234-3">)</span><span class="p">.</span><span class="w">
+ 
+  </span><span class="c1">%% Count active peers</span><span class="w">
+  </span><span class="n">Count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">count_peers</span><span class="p" data-group-id="1767968234-4">(</span><span class="p" data-group-id="1767968234-4">)</span><span class="p">.</span><span class="w">
+ 
+  </span><span class="c1">%% Stop peer connection</span><span class="w">
+  </span><span class="ss">ok</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nc">macula_peers_sup</span><span class="p">:</span><span class="nf">stop_peer</span><span class="p" data-group-id="1767968234-5">(</span><span class="n">PeerPid</span><span class="p" data-group-id="1767968234-5">)</span><span class="p">.</span><span class="w">
+  </span></code></pre>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#count_peers/0" data-no-tooltip="" translate="no">count_peers()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Count active peer connections.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#init/1" data-no-tooltip="" translate="no">init(_)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Initialize the peers supervisor.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#list_peers/0" data-no-tooltip="" translate="no">list_peers()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>List all active peer connections.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start_link/0" data-no-tooltip="" translate="no">start_link()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Start the peers supervisor.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start_peer/2" data-no-tooltip="" translate="no">start_peer(Url, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Start a new peer connection.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#stop_peer/1" data-no-tooltip="" translate="no">stop_peer(PeerPid)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Stop a peer connection.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="count_peers/0">
+
+  <div class="detail-header">
+    <a href="#count_peers/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">count_peers()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_peers_sup.erl#L132" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> count_peers() -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>().</pre>
+
+      </div>
+
+<p>Count active peer connections.</p><p>Returns the number of currently running macula_peer_system supervisors.</p>
+  </section>
+</section>
+<section class="detail" id="init/1">
+
+  <div class="detail-header">
+    <a href="#init/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">init(_)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_peers_sup.erl#L157" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+<p>Initialize the peers supervisor.</p><p>Sets up a simple_one_for_one supervisor for macula_peer_system children. Each child will be started with dynamic arguments (Url, Opts).</p><p>Strategy: simple_one_for_one - Efficient for managing many similar children - Children started/stopped dynamically - All children use same child spec template</p><p>Restart Strategy: temporary - Peer connections don't auto-restart on crash - Application decides when to reconnect - Prevents reconnection storms</p>
+  </section>
+</section>
+<section class="detail" id="list_peers/0">
+
+  <div class="detail-header">
+    <a href="#list_peers/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">list_peers()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_peers_sup.erl#L118" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> list_peers() -> [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()].</pre>
+
+      </div>
+
+<p>List all active peer connections.</p><p>Returns a list of PIDs for all currently running macula_peer_system supervisors.</p>
+  </section>
+</section>
+<section class="detail" id="start_link/0">
+
+  <div class="detail-header">
+    <a href="#start_link/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">start_link()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_peers_sup.erl#L66" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> start_link() -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Start the peers supervisor.</p><p>Called by macula_root during application startup. Registers the supervisor with the local name macula_peers_sup.</p>
+  </section>
+</section>
+<section class="detail" id="start_peer/2">
+
+  <div class="detail-header">
+    <a href="#start_peer/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">start_peer(Url, Opts)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_peers_sup.erl#L83" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> start_peer(Url :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), Opts :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Start a new peer connection.</p><p>Creates a new macula_peer_system supervisor for the peer at the given URL. The peer system will manage the connection lifecycle and all peer-specific handlers (pubsub, rpc, advertisements).</p>
+  </section>
+</section>
+<section class="detail" id="stop_peer/1">
+
+  <div class="detail-header">
+    <a href="#stop_peer/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">stop_peer(PeerPid)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_peers_sup.erl#L100" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> stop_peer(PeerPid :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Stop a peer connection.</p><p>Gracefully terminates the macula_peer_system supervisor for the given peer. This will clean up all peer handlers and close the connection.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

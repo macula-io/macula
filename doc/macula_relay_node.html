@@ -1,163 +1,761 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module macula_relay_node</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module macula_relay_node</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>   
-Peer Relay Node.
-
-<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>.</p>
-
-<h2><a name="description">Description</a></h2><p>   
-Peer Relay Node.</p>
-  
-   <p>Provides relay functionality for peers that cannot establish   
-direct connections due to NAT restrictions. A relay node:</p>
-  
-   <p>- Accepts connections from peers behind restrictive NATs   
-- Forwards traffic between connected peers   
-- Manages relay sessions with bandwidth limits   
-- Auto-registers with relay registry when capable</p>
-  
-   <p>Relay Protocol:   
-1. Peer A connects to relay with RELAY_REQUEST(target_id)   
-2. Relay checks if target is reachable and accepts   
-3. Relay establishes/reuses connection to target   
-4. Relay forwards bidirectional traffic   
-5. Either peer can close the relay session</p>
-  
-   Resource Limits:
-   - Max concurrent relay sessions (default: 100)
-   - Per-session bandwidth limit (default: 1 MB/s)
-   - Session timeout (default: 30 minutes)
-  
-<h2><a name="types">Data Types</a></h2>
-
-<h3 class="typedecl"><a name="type-relay_session">relay_session()</a></h3>
-<p><code>relay_session() = #{session_id := binary(), initiator_id := binary(), target_id := binary(), initiator_conn =&gt; term(), target_conn =&gt; term(), started_at := integer(), bytes_relayed := non_neg_integer(), last_activity := integer()}</code></p>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.38.2">
+    <meta name="project" content="macula v0.12.6">
 
 
-<h3 class="typedecl"><a name="type-relay_stats">relay_stats()</a></h3>
-<p><code>relay_stats() = #{enabled := boolean(), max_sessions := pos_integer(), active_sessions := non_neg_integer(), total_bytes_relayed := non_neg_integer(), total_sessions_created := non_neg_integer()}</code></p>
+    <title>macula_relay_node — macula v0.12.6</title>
+
+    <link rel="stylesheet" href="dist/html-erlang-DQDXQC7W.css" />
+
+    <script defer src="dist/sidebar_items-969EFB48.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-DPJLHKSM.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="overview.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="macula" />
+        </a>
+
+      <div>
+        <a href="overview.html" class="sidebar-projectName" translate="no">
+macula
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.12.6
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras=""></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-module" id="main" data-type="modules">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of macula</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search" tabindex="-1">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>
+      <span translate="no">macula_relay_node</span> 
+      <small class="app-vsn" translate="no">(macula v0.12.6)</small>
+
+    </h1>
+
+      <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L27" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+  </div>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#close_relay-1">close_relay/1</a></td><td>Close a relay session.</td></tr>
-<tr><td valign="top"><a href="#disable-0">disable/0</a></td><td>Disable relay functionality.</td></tr>
-<tr><td valign="top"><a href="#enable-0">enable/0</a></td><td>Enable relay functionality on this node.</td></tr>
-<tr><td valign="top"><a href="#enable-1">enable/1</a></td><td>Enable relay with options.</td></tr>
-<tr><td valign="top"><a href="#get_sessions-0">get_sessions/0</a></td><td>Get active relay sessions.</td></tr>
-<tr><td valign="top"><a href="#get_stats-0">get_stats/0</a></td><td>Get relay statistics.</td></tr>
-<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#is_enabled-0">is_enabled/0</a></td><td>Check if relay is enabled.</td></tr>
-<tr><td valign="top"><a href="#request_relay-2">request_relay/2</a></td><td>Request a relay session to target.</td></tr>
-<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td>Start the relay node server.</td></tr>
-<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
-</table>
+    <section id="moduledoc">
+<p>Peer Relay Node.</p><p>Provides relay functionality for peers that cannot establish direct connections due to NAT restrictions. A relay node:</p><p>- Accepts connections from peers behind restrictive NATs - Forwards traffic between connected peers - Manages relay sessions with bandwidth limits - Auto-registers with relay registry when capable</p><p>Relay Protocol: 1. Peer A connects to relay with RELAY_REQUEST(target_id) 2. Relay checks if target is reachable and accepts 3. Relay establishes/reuses connection to target 4. Relay forwards bidirectional traffic 5. Either peer can close the relay session</p><p>Resource Limits: - Max concurrent relay sessions (default: 100) - Per-session bandwidth limit (default: 1 MB/s) - Session timeout (default: 30 minutes)</p>
+    </section>
 
-<h2><a name="functions">Function Details</a></h2>
-
-<h3 class="function"><a name="close_relay-1">close_relay/1</a></h3>
-<div class="spec">
-<p><code>close_relay(SessionId::binary()) -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Close a relay session.</p>
-
-<h3 class="function"><a name="disable-0">disable/0</a></h3>
-<div class="spec">
-<p><code>disable() -&gt; ok</code><br></p>
-<p> </p>
-</div><p>Disable relay functionality.</p>
-
-<h3 class="function"><a name="enable-0">enable/0</a></h3>
-<div class="spec">
-<p><code>enable() -&gt; ok | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Enable relay functionality on this node.</p>
-
-<h3 class="function"><a name="enable-1">enable/1</a></h3>
-<div class="spec">
-<p><code>enable(Opts::map()) -&gt; ok | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Enable relay with options.
-  Options:
-    node_id - This node's ID
-    endpoint - This node's endpoint for relay registry
-    capacity - Max concurrent sessions</p>
-
-<h3 class="function"><a name="get_sessions-0">get_sessions/0</a></h3>
-<div class="spec">
-<p><code>get_sessions() -&gt; [<a href="#type-relay_session" docgen-rel="seetype" docgen-href="#relay_session/0">relay_session()</a>]</code><br></p>
-<p> </p>
-</div><p>Get active relay sessions.</p>
-
-<h3 class="function"><a name="get_stats-0">get_stats/0</a></h3>
-<div class="spec">
-<p><code>get_stats() -&gt; <a href="#type-relay_stats" docgen-rel="seetype" docgen-href="#relay_stats/0">relay_stats()</a></code><br></p>
-<p> </p>
-</div><p>Get relay statistics.</p>
-
-<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
-<div class="spec">
-<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
-<p> </p>
 </div>
 
-<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
-<div class="spec">
-<p><code>handle_cast(Msg, State) -&gt; any()</code></p>
-<p> </p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:relay_session/0" data-no-tooltip="" translate="no">relay_session/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:relay_stats/0" data-no-tooltip="" translate="no">relay_stats/0</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#close_relay/1" data-no-tooltip="" translate="no">close_relay(SessionId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Close a relay session.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#disable/0" data-no-tooltip="" translate="no">disable()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Disable relay functionality.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#enable/0" data-no-tooltip="" translate="no">enable()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Enable relay functionality on this node.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#enable/1" data-no-tooltip="" translate="no">enable(Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Enable relay with options. Options: node_id - This node's ID endpoint - This node's endpoint for relay registry capacity - Max concurrent sessions</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_sessions/0" data-no-tooltip="" translate="no">get_sessions()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get active relay sessions.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_stats/0" data-no-tooltip="" translate="no">get_stats()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get relay statistics.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_call/3" data-no-tooltip="" translate="no">handle_call(Request, From, State)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_cast/2" data-no-tooltip="" translate="no">handle_cast(Msg, State)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_info/2" data-no-tooltip="" translate="no">handle_info(Info, State)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#init/1" data-no-tooltip="" translate="no">init(Opts)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#is_enabled/0" data-no-tooltip="" translate="no">is_enabled()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if relay is enabled.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#request_relay/2" data-no-tooltip="" translate="no">request_relay(InitiatorId, TargetId)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Request a relay session to target. Returns session ID on success.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start_link/1" data-no-tooltip="" translate="no">start_link(Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Start the relay node server.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#terminate/2" data-no-tooltip="" translate="no">terminate(Reason, State)</a>
+
+      </div>
+
+    </div>
+
 </div>
 
-<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
-<div class="spec">
-<p><code>handle_info(Info, State) -&gt; any()</code></p>
-<p> </p>
+  </section>
+
+
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:relay_session/0">
+
+  <div class="detail-header">
+    <a href="#t:relay_session/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">relay_session/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L59" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> relay_session() ::
+          #{session_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
+            initiator_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
+            target_id := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
+            initiator_conn => <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
+            target_conn => <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
+            started_at := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>(),
+            bytes_relayed := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>(),
+            last_activity := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:integer/0">integer</a>()}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:relay_stats/0">
+
+  <div class="detail-header">
+    <a href="#t:relay_stats/0" class="detail-link" data-no-tooltip="" aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">relay_stats/0</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L70" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> relay_stats() ::
+          #{enabled := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>(),
+            max_sessions := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pos_integer/0">pos_integer</a>(),
+            active_sessions := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>(),
+            total_bytes_relayed := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>(),
+            total_sessions_created := <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:non_neg_integer/0">non_neg_integer</a>()}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="close_relay/1">
+
+  <div class="detail-header">
+    <a href="#close_relay/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">close_relay(SessionId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L133" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> close_relay(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> ok.</pre>
+
+      </div>
+
+<p>Close a relay session.</p>
+  </section>
+</section>
+<section class="detail" id="disable/0">
+
+  <div class="detail-header">
+    <a href="#disable/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">disable()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L117" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> disable() -> ok.</pre>
+
+      </div>
+
+<p>Disable relay functionality.</p>
+  </section>
+</section>
+<section class="detail" id="enable/0">
+
+  <div class="detail-header">
+    <a href="#enable/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">enable()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L103" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> enable() -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Enable relay functionality on this node.</p>
+  </section>
+</section>
+<section class="detail" id="enable/1">
+
+  <div class="detail-header">
+    <a href="#enable/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">enable(Opts)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L112" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> enable(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Enable relay with options. Options: node_id - This node's ID endpoint - This node's endpoint for relay registry capacity - Max concurrent sessions</p>
+  </section>
+</section>
+<section class="detail" id="get_sessions/0">
+
+  <div class="detail-header">
+    <a href="#get_sessions/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_sessions()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L143" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_sessions() -> [<a href="#t:relay_session/0">relay_session</a>()].</pre>
+
+      </div>
+
+<p>Get active relay sessions.</p>
+  </section>
+</section>
+<section class="detail" id="get_stats/0">
+
+  <div class="detail-header">
+    <a href="#get_stats/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">get_stats()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L138" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> get_stats() -> <a href="#t:relay_stats/0">relay_stats</a>().</pre>
+
+      </div>
+
+<p>Get relay statistics.</p>
+  </section>
+</section>
+<section class="detail" id="handle_call/3">
+
+  <div class="detail-header">
+    <a href="#handle_call/3" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_call(Request, From, State)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L194" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="handle_cast/2">
+
+  <div class="detail-header">
+    <a href="#handle_cast/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_cast(Msg, State)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L240" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="handle_info/2">
+
+  <div class="detail-header">
+    <a href="#handle_info/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">handle_info(Info, State)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L251" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="init/1">
+
+  <div class="detail-header">
+    <a href="#init/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">init(Opts)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L150" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="is_enabled/0">
+
+  <div class="detail-header">
+    <a href="#is_enabled/0" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">is_enabled()</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L122" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> is_enabled() -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>().</pre>
+
+      </div>
+
+<p>Check if relay is enabled.</p>
+  </section>
+</section>
+<section class="detail" id="request_relay/2">
+
+  <div class="detail-header">
+    <a href="#request_relay/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">request_relay(InitiatorId, TargetId)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L128" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> request_relay(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Request a relay session to target. Returns session ID on success.</p>
+  </section>
+</section>
+<section class="detail" id="start_link/1">
+
+  <div class="detail-header">
+    <a href="#start_link/1" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">start_link(Opts)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L98" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> start_link(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>()) -> {ok, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:pid/0">pid</a>()} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Start the relay node server.</p>
+  </section>
+</section>
+<section class="detail" id="terminate/2">
+
+  <div class="detail-header">
+    <a href="#terminate/2" class="detail-link" data-no-tooltip="" aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <div class="heading-with-actions">
+      <h1 class="signature" translate="no">terminate(Reason, State)</h1>
+
+
+        <a href="https://github.com/macula-io/macula/blob/0.12.6/src/macula_nat_system/macula_relay_node.erl#L259" class="icon-action" rel="help" aria-label="View Source">
+          <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        </a>
+
+    </div>
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/macula/0.12.6" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/macula/0.12.6">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="macula.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.38.2) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
 </div>
 
-<h3 class="function"><a name="init-1">init/1</a></h3>
-<div class="spec">
-<p><code>init(Opts) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="is_enabled-0">is_enabled/0</a></h3>
-<div class="spec">
-<p><code>is_enabled() -&gt; boolean()</code><br></p>
-<p> </p>
-</div><p>Check if relay is enabled.</p>
-
-<h3 class="function"><a name="request_relay-2">request_relay/2</a></h3>
-<div class="spec">
-<p><code>request_relay(InitiatorId::binary(), TargetId::binary()) -&gt; {ok, binary()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Request a relay session to target.
-  Returns session ID on success.</p>
-
-<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
-<div class="spec">
-<p><code>start_link(Opts::map()) -&gt; {ok, pid()} | {error, term()}</code><br></p>
-<p> </p>
-</div><p>Start the relay node server.</p>
-
-<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
-<div class="spec">
-<p><code>terminate(Reason, State) -&gt; any()</code></p>
-<p> </p>
-</div>
-<hr>
-
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  </body>
 </html>

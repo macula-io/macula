@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v0.12.5 (November 2025)
+**Current Version**: v0.12.6 (November 2025)
 
 ## Version History
 
@@ -21,6 +21,7 @@
 | v0.12.3 | Nov 2025 | Pull-based Service Discovery - Prefetch on startup (22 tests) |
 | v0.12.4 | Nov 2025 | Documentation fixes - Fixed 77 broken links in hexdocs (0 warnings) |
 | v0.12.5 | Nov 2025 | PubSub delivery metrics, console colored output, bug fixes (gproc, quic errors) |
+| v0.12.6 | Nov 2025 | Test coverage expansion - 174 new tests for NAT, PubSub, Peer, Discovery modules |
 
 ---
 

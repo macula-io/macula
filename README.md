@@ -18,7 +18,7 @@
 </div>
 
 <div align="center">
-  <p><strong>BEAM-Native • HTTP/3 (QUIC) • Kademlia DHT • Direct P2P • Multi-Tenant • 50% Faster (v0.8.0)</strong></p>
+  <p><strong>BEAM-Native • HTTP/3 (QUIC) • Kademlia DHT • NAT Traversal • Multi-Tenant • Platform Layer</strong></p>
 </div>
 
 ---
@@ -33,13 +33,22 @@
 
 ---
 
-## Latest Release: v0.10.1 (2025-11-26)
+## Latest Release: v0.12.5 (2025-11-30)
 
-**Performance Optimizations & Documentation:**
-- ✅ Subscriber caching with TTL-based expiration (50-200x publish speedup)
-- ✅ Direct routing table for known endpoints (10-50x latency reduction)
-- ✅ Rate-limited DHT discovery (prevents discovery storms)
-- ✅ Comprehensive performance documentation with ASCII diagrams
+**NAT Traversal & Connectivity:**
+- ✅ Complete NAT traversal with hole-punching and relay fallback
+- ✅ Connection pooling with 94.5% hit rate
+- ✅ Docker NAT simulation for testing (Full Cone, Restricted, Symmetric)
+
+**NATS-style Async RPC:**
+- ✅ Fire-and-forget request pattern with inbox callbacks
+- ✅ Direct P2P delivery (not routed through Bootstrap)
+- ✅ Pull-based service discovery with prefetch on startup
+
+**PubSub Delivery Metrics:**
+- ✅ Sequence numbers and per-peer delivery tracking
+- ✅ Colored console output for demos (ANSI colors)
+- ✅ Delivery rate calculations per sender
 
 **Platform Features (v0.9.0+):**
 - ✅ Ra/Raft consensus for distributed coordination
