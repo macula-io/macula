@@ -7,6 +7,150 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.14.0] - 2025-12-01
+
+### 🔄 Ra/Raft Removal - Masterless CRDT Architecture
+
+This release removes Ra/Raft consensus in favor of a **fully masterless architecture** using CRDTs for state management. This simplifies operations and aligns with Macula's eventual consistency model.
+
+### Breaking Changes
+
+#### Ra/Raft Removal
+- **Removed**: `macula_leader_election.erl` - No longer needed in masterless architecture
+- **Removed**: `macula_leader_machine.erl` - Ra state machine removed
+- **Removed**: `ra` dependency from `rebar.config` and `macula.app.src`
+- **Changed**: `macula_platform_system.erl` - Now masterless (supervisor starts with no children)
+- **Changed**: `macula_local_client.erl` - Platform Layer API updated for masterless operation
+
+### Added
+
+#### CRDT Expansion (`macula_crdt.erl`)
+
+Three new CRDT types for distributed state management:
+
+| CRDT | Purpose | Tests |
+|------|---------|-------|
+| **OR-Set** | Add/remove set with tombstones | 17 |
+| **G-Counter** | Grow-only counter | 9 |
+| **PN-Counter** | Positive-negative counter | 8 |
+
+**OR-Set (Observed-Remove Set):**
+```erlang
+%% Create empty set
+Set0 = macula_crdt:or_set_new(),
+
+%% Add elements (with unique tag)
+Set1 = macula_crdt:or_set_add(Set0, <<"element">>, node()),
+
+%% Remove elements (marks with tombstone)
+Set2 = macula_crdt:or_set_remove(Set1, <<"element">>),
+
+%% Merge concurrent updates
+Merged = macula_crdt:or_set_merge(SetA, SetB),
+
+%% Get current elements
+Elements = macula_crdt:or_set_value(Merged).
+```
+
+**G-Counter (Grow-Only Counter):**
+```erlang
+%% Create counter
+Counter0 = macula_crdt:g_counter_new(),
+
+%% Increment (per-node tracking)
+Counter1 = macula_crdt:g_counter_increment(Counter0, node()),
+
+%% Merge from multiple nodes
+Merged = macula_crdt:g_counter_merge(CounterA, CounterB),
+
+%% Get total value
+Total = macula_crdt:g_counter_value(Merged).
+```
+
+**PN-Counter (Positive-Negative Counter):**
+```erlang
+%% Create counter
+Counter0 = macula_crdt:pn_counter_new(),
+
+%% Increment and decrement
+Counter1 = macula_crdt:pn_counter_increment(Counter0, node()),
+Counter2 = macula_crdt:pn_counter_decrement(Counter1, node()),
+
+%% Merge from multiple nodes
+Merged = macula_crdt:pn_counter_merge(CounterA, CounterB),
+
+%% Get net value (increments - decrements)
+Value = macula_crdt:pn_counter_value(Merged).
+```
+
+### Architecture Decision
+
+Per `architecture/ROADMAP.md`:
+
+> Raft adds operational complexity for consistency guarantees Macula doesn't need.
+> - No quorum management
+> - No leader election
+> - State converges eventually (CRDTs + Gossip)
+
+**Why Masterless?**
+- Macula operates in eventually-consistent mode (AP in CAP theorem)
+- Nodes can operate autonomously during network partitions
+- CRDTs provide conflict-free convergence without coordination
+- Simpler deployment and operations (no leader election complexity)
+
+### Tests
+
+**Total CRDT Tests:** 48 tests passing
+
+| CRDT Type | Tests | Description |
+|-----------|-------|-------------|
+| LWW-Register | 14 | Basic ops, merge, conflict resolution |
+| OR-Set | 17 | Add/remove, tombstones, merge, concurrent ops |
+| G-Counter | 9 | Increment, merge, multi-node |
+| PN-Counter | 8 | Increment/decrement, merge, multi-node |
+
+### Migration from v0.13.0
+
+**If you were NOT using Platform Layer APIs:**
+- No changes required - drop-in replacement
+
+**If you were using `macula_leader_election`:**
+- Remove leader election calls
+- Migrate to CRDT-based coordination:
+  - Use OR-Set for distributed membership
+  - Use G-Counter/PN-Counter for distributed counters
+  - Use LWW-Register for distributed configuration
+
+```erlang
+%% Before (v0.13.0 - Ra/Raft)
+case macula_leader_election:is_leader() of
+    true -> run_coordinator_logic();
+    false -> wait_for_leader()
+end.
+
+%% After (v0.14.0 - Masterless CRDT)
+%% All nodes participate equally
+%% Use CRDTs for shared state instead of leader coordination
+State = macula_crdt:or_set_add(State0, MyContribution, node()),
+MergedState = macula_crdt:or_set_merge(State, RemoteState).
+```
+
+### Docker Integration
+
+Verified Ra removal works in multi-node Docker deployment:
+- Registry starts without Ra dependency
+- Applications list: `[crypto,asn1,public_key,ssl,quicer,msgpack,gproc,macula]`
+- All providers connect and advertise services
+- Client connects and discovers services
+
+### Future (v0.14.1+)
+
+- Gossip protocol for CRDT state synchronization
+- DHT-integrated CRDT replication
+- CRDT persistence layer
+
+---
+
 ## [0.13.0] - 2025-12-01
 
 ### 🌉 Hierarchical DHT with Bridge System

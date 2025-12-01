@@ -33,27 +33,23 @@
 
 ---
 
-## Latest Release: v0.12.5 (2025-11-30)
+## Latest Release: v0.14.0 (2025-12-01)
 
-**NAT Traversal & Connectivity:**
+**Masterless CRDT Architecture (v0.14.0):**
+- ✅ Ra/Raft consensus **removed** - fully masterless operation
+- ✅ OR-Set CRDT for distributed membership
+- ✅ G-Counter and PN-Counter CRDTs for distributed counters
+- ✅ LWW-Register CRDT for eventually-consistent state
+
+**Hierarchical DHT with Bridge System (v0.13.0):**
+- ✅ Fractal mesh hierarchy (Cluster → Street → City → Region)
+- ✅ Query escalation to parent levels on local cache miss
+- ✅ TTL-based caching with LRU eviction
+
+**NAT Traversal & Connectivity (v0.12.x):**
 - ✅ Complete NAT traversal with hole-punching and relay fallback
 - ✅ Connection pooling with 94.5% hit rate
-- ✅ Docker NAT simulation for testing (Full Cone, Restricted, Symmetric)
-
-**NATS-style Async RPC:**
-- ✅ Fire-and-forget request pattern with inbox callbacks
-- ✅ Direct P2P delivery (not routed through Bootstrap)
-- ✅ Pull-based service discovery with prefetch on startup
-
-**PubSub Delivery Metrics:**
-- ✅ Sequence numbers and per-peer delivery tracking
-- ✅ Colored console output for demos (ANSI colors)
-- ✅ Delivery rate calculations per sender
-
-**Platform Features (v0.9.0+):**
-- ✅ Ra/Raft consensus for distributed coordination
-- ✅ LWW-Register CRDT for eventually-consistent state
-- ✅ Leader election and workload registration APIs
+- ✅ NATS-style async RPC with direct P2P delivery
 
 ---
 
