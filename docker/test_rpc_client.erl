@@ -28,7 +28,7 @@ main(_) ->
         node_id => <<"client">>
     },
 
-    {ok, Conn} = macula_connection:start_link(RegistryUrl, ConnOpts),
+    {ok, Conn} = macula:connect(RegistryUrl, ConnOpts),
     io:format("    Connected!~n"),
 
     %% Wait for providers to advertise
@@ -43,7 +43,7 @@ main(_) ->
             io:format("Call #~p:~n", [N]),
             Args = #{x => N},
 
-            case macula_connection:call(Conn, <<"test.calculator">>, Args, #{timeout => 5000}) of
+            case macula:call(Conn, <<"test.calculator">>, Args, #{timeout => 5000}) of
                 {ok, Result} ->
                     Provider = maps:get(<<"provider">>, Result, <<"unknown">>),
                     Value = maps:get(<<"result">>, Result, 0),

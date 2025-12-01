@@ -66,7 +66,7 @@ case "$NODE_TYPE" in
           node_id => <<\"$NODE_NAME\">>
         },
 
-        case macula_client:connect(<<\"$REGISTRY_ENDPOINT\">>, ConnOpts) of
+        case macula:connect(<<\"$REGISTRY_ENDPOINT\">>, ConnOpts) of
           {ok, Pid} ->
             io:format(\"[~s] Connected to registry~n\", [\"$NODE_NAME\"]),
 
@@ -83,7 +83,7 @@ case "$NODE_TYPE" in
 
             %% Advertise with own endpoint for peer-to-peer connections
             ProviderEndpoint = <<\"https://${NODE_HOST}:9443\">>,
-            case macula_client:advertise(Pid, <<\"test.calculator\">>, Handler, #{
+            case macula:advertise(Pid, <<\"test.calculator\">>, Handler, #{
               ttl => 300,
               advertise_endpoint => ProviderEndpoint
             }) of
@@ -191,7 +191,7 @@ case "$NODE_TYPE" in
                     [calendar:system_time_to_rfc3339(erlang:system_time(second)),
                      Counter, Msg]),
 
-          case macula_client:publish(Client, Topic, Msg) of
+          case macula:publish(Client, Topic, Msg) of
             ok ->
               io:format(\"  -> Published successfully~n\");
             {error, Reason} ->
@@ -202,7 +202,7 @@ case "$NODE_TYPE" in
           Self(Self, Client, Topic, Counter + 1)
         end,
 
-        case macula_client:connect(<<\"$REGISTRY_ENDPOINT\">>, ConnOpts) of
+        case macula:connect(<<\"$REGISTRY_ENDPOINT\">>, ConnOpts) of
           {ok, Pid} ->
             io:format(\"[~s] Connected to registry~n\", [\"$NODE_NAME\"]),
 
@@ -244,7 +244,7 @@ case "$NODE_TYPE" in
           node_id => <<\"$NODE_NAME\">>
         },
 
-        case macula_client:connect(<<\"$REGISTRY_ENDPOINT\">>, ConnOpts) of
+        case macula:connect(<<\"$REGISTRY_ENDPOINT\">>, ConnOpts) of
           {ok, Pid} ->
             io:format(\"[~s] Connected to registry~n\", [\"$NODE_NAME\"]),
 
@@ -257,7 +257,7 @@ case "$NODE_TYPE" in
               ok
             end,
 
-            case macula_client:subscribe(Pid, Topic, Callback) of
+            case macula:subscribe(Pid, Topic, Callback) of
               {ok, SubRef} ->
                 io:format(\"[~s] Subscribed to topic: ~s (ref: ~p)~n\",
                           [\"$NODE_NAME\", Topic, SubRef]),
