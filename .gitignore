@@ -16,4 +16,8 @@ deps
 _build/
 _checkouts/
 
+# Generated documentation
+doc/
+
+# Archives
 *.gz
