@@ -19,21 +19,30 @@ This document outlines the actual Erlang/Elixir libraries, applications, and pro
 
 ```
 macula/
-├── apps/
-│   ├── macula_core/           # Core protocols and types
-│   ├── macula_quic/           # QUIC transport layer
-│   ├── macula_protocol/       # Wire protocol (framing, encoding)
-│   ├── macula_membership/     # SWIM membership
-│   ├── macula_routing/        # Kademlia DHT routing
-│   ├── macula_topology/       # Mesh topology management
-│   ├── macula_pubsub/         # Pub/sub implementation
-│   ├── macula_rpc/            # RPC implementation
-│   ├── macula_gateway/        # Cross-realm gateway
-│   ├── macula_discovery/      # Node discovery
-│   ├── macula_security/       # Auth, ACLs, certificates
-│   └── macula/                # Main application (umbrella)
-├── rebar.config               # Rebar3 umbrella config
-├── mix.exs                    # Mix umbrella config (if supporting Elixir)
+├── src/
+│   ├── macula_bootstrap_system/  # DHT bootstrap and discovery
+│   ├── macula_bridge_system/     # Hierarchical DHT bridge (v0.13.0)
+│   │   ├── macula_bridge_system.erl   # Supervisor
+│   │   ├── macula_bridge_node.erl     # Parent mesh connection
+│   │   ├── macula_bridge_mesh.erl     # Peer bridge mesh
+│   │   └── macula_bridge_cache.erl    # Query result caching
+│   ├── macula_dist_system/       # Distributed Erlang over QUIC
+│   ├── macula_gateway_system/    # QUIC message routing
+│   ├── macula_membership_system/ # SWIM membership protocol
+│   ├── macula_nat_system/        # NAT traversal (v0.12.0)
+│   ├── macula_peer_system/       # Peer connection management
+│   ├── macula_platform_system/   # Ra/Raft consensus (v0.9.0)
+│   ├── macula_pubsub_system/     # Pub/sub implementation
+│   ├── macula_routing_system/    # Kademlia DHT routing
+│   ├── macula_rpc_system/        # RPC and async request/reply
+│   ├── macula_security_system/   # TLS, realm auth (v0.11.0)
+│   └── macula_*.erl              # Core modules
+├── test/
+│   ├── macula_bridge_system/     # Bridge system tests (40 tests)
+│   ├── macula_nat_system/        # NAT traversal tests
+│   └── ...                       # Other subsystem tests
+├── rebar.config                  # Rebar3 config
+├── CLAUDE.md                     # Project guidelines
 └── README.md
 ```
 

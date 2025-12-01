@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.0] - 2025-12-01
+
+### 🌉 Hierarchical DHT with Bridge System
+
+This release implements a **hierarchical DHT architecture** enabling fractal mesh organization with query escalation through parent levels.
+
+### Added
+
+#### Bridge System (`src/macula_bridge_system/`)
+
+- **`macula_bridge_system.erl`** - Supervisor for bridge subsystem with one_for_one strategy
+  - Starts bridge_node, bridge_mesh, and bridge_cache as children when enabled
+  - Configurable via environment variables
+
+- **`macula_bridge_node.erl`** - Manages connection to parent mesh level
+  - Escalates DHT queries to parent when local lookup fails
+  - Tracks connection state and statistics
+  - Supports multiple parent bridges for redundancy
+
+- **`macula_bridge_mesh.erl`** - Peer-to-peer mesh between bridges at same level
+  - Add/remove peer bridges dynamically
+  - Support for static, mDNS, and DNS-SRV discovery methods
+  - Graceful connection handling with mock fallback for testing
+
+- **`macula_bridge_cache.erl`** - TTL-based caching for escalated query results
+  - Level-specific TTLs (Cluster: 5min, Street: 10min, City: 30min, etc.)
+  - LRU eviction when cache is full (~10% eviction)
+  - Hit/miss statistics tracking
+
+#### Routing Integration
+
+- **`macula_routing_server.erl`** - Extended with `find_value_with_escalation/5`
+  - Tries local DHT lookup first
+  - Falls back to bridge escalation when enabled
+  - Results automatically cached at bridge level
+
+#### Supervision Tree
+
+- **`macula_root.erl`** - Updated to include bridge_system as child #5
+  - Bridge configuration from environment variables
+  - Escalation enabled when bridge is enabled AND parent bridges configured
+
+### Configuration
+
+New environment variables:
+- `MACULA_BRIDGE_ENABLED` - Enable/disable bridge system (default: false)
+- `MACULA_MESH_LEVEL` - Hierarchy level: cluster|street|neighborhood|city|...
+- `MACULA_PARENT_BRIDGES` - Comma-separated parent bridge endpoints
+- `MACULA_BRIDGE_DISCOVERY` - Discovery method: static|mdns|dns_srv
+- `MACULA_BRIDGE_CACHE_TTL` - Cache TTL override in seconds
+- `MACULA_BRIDGE_CACHE_SIZE` - Maximum cache entries
+
+### Tests
+
+Added 40 new tests for the bridge system:
+- `macula_bridge_system_tests` - 9 tests (supervisor, children, mesh levels)
+- `macula_bridge_node_tests` - 10 tests (connection, escalation, stats)
+- `macula_bridge_mesh_tests` - 9 tests (peers, discovery, mesh levels)
+- `macula_bridge_cache_tests` - 12 tests (TTL, eviction, stats)
+
+### Fixed
+
+- **Cache expiration logic** - Changed `<` to `=<` for TTL check (entry expires when TTL has passed)
+- **Peer ID extraction** - Fixed to use `node_id` field from peer info maps
+- **Connection handling** - Graceful fallback when QUIC connection unavailable
+
+---
+
 ## [0.12.5] - 2025-11-30
 
 ### 📊 PubSub Delivery Metrics & Bug Fixes

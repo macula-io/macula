@@ -2,19 +2,20 @@
 
 **Definitive terminology reference for Macula platform**
 
-**Last Updated:** 2025-11-28
-**Applies to:** Macula v0.8.5+ (Always-On Architecture)
+**Last Updated:** 2025-12-01
+**Applies to:** Macula v0.13.0+ (SuperMesh Architecture)
 
 ---
 
-## Important: v0.8.5+ Architecture Change
+## Important: SuperMesh Architecture (v0.13.0+)
 
-Since v0.8.5, Macula uses an **always-on architecture** where every node has all capabilities:
-- Every node runs the **Gateway System** (QUIC message routing)
-- Every node runs the **Bootstrap System** (DHT and peer discovery)
-- Every node runs the **Peer System** (connection management)
+The December 2025 architecture refinement introduces:
+- **Macula Cluster** - Deployment-agnostic logical grouping of nodes
+- **Bridge Nodes** - Cross-Cluster federation for SuperMesh
+- **CRDTs + Gossip** - Replaces Raft consensus for coordination
+- **Federated Registry** - Secure application distribution
 
-**There is no mode selection** - all nodes are identical. The distinction between "gateway node" and "peer node" no longer exists.
+Every node within a Cluster has all capabilities (Gateway, Bootstrap, Peer systems).
 
 ---
 
@@ -22,8 +23,11 @@ Since v0.8.5, Macula uses an **always-on architecture** where every node has all
 
 | Term | One-Line Definition |
 |------|---------------------|
-| [Node](#node) | A Macula instance with all capabilities (v0.8.5+) |
-| [Seed Node](#seed-node) | A well-known node address for initial mesh discovery |
+| [Macula Cluster](#macula-cluster) | Logical group of cooperating nodes forming a local mesh |
+| [Seed Node](#seed-node) | DHT entry point for new peers joining a Cluster |
+| [Bridge Node](#bridge-node) | Connects multiple Clusters, routes cross-Cluster traffic |
+| [SuperMesh](#supermesh) | Federation of Clusters connected via Bridge Nodes |
+| [Node](#node) | A Macula instance with all capabilities |
 | [Peer](#peer) | Any connected node in the mesh |
 | [Gateway System](#gateway-system) | Subsystem for QUIC message routing (in every node) |
 | [Bootstrap System](#bootstrap-system) | Subsystem for DHT operations (in every node) |
@@ -31,19 +35,319 @@ Since v0.8.5, Macula uses an **always-on architecture** where every node has all
 | [DHT](#dht) | Distributed Hash Table for decentralized discovery |
 | [Topic](#topic) | Named channel for pub/sub message routing |
 | [Procedure](#procedure) | Named endpoint for RPC calls |
+| [Registry](#registry) | Package repository for application distribution |
+| [Cluster Controller](#cluster-controller) | Deploys apps from registry to Cluster |
 
 ---
 
-## Architecture Terms
+## SuperMesh Architecture Terms
+
+### Macula Cluster
+
+A **Macula Cluster** is a small, local deployment of cooperating Macula nodes. Think of it as a "black box" at a specific location. Nodes within a Cluster form their own **intra-cluster mesh**.
+
+**Scale examples:**
+- A home server (1-3 nodes)
+- A Raspberry Pi or Nerves device (single node)
+- A small office rack (3-10 nodes)
+- An edge deployment at a cell tower
+
+**Key characteristics:**
+- **Local scope** - Nodes are co-located (same home, office, device)
+- **Intra-cluster mesh** - Nodes form a fully-connected mesh within the Cluster
+- **Deployment-agnostic** - Can run on Kubernetes, Docker, systemd, Nerves, or single process
+- **Common DHT** - Peers discover each other via local DHT
+- **Direct P2P** - Nodes communicate directly within Cluster (low latency)
+- **Typical size** - 1-10 nodes
+
+**Intra-cluster communication:**
+- Currently: Erlang distributed mesh (`node@host` connections)
+- Future: QUIC Distribution when operational (see v1.1.0+ roadmap)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              CLUSTER (e.g., Home Server)                        │
+│                                                                  │
+│   ┌─────┐◄────────────►┌─────┐◄────────────►┌─────┐            │
+│   │Node │              │Node │              │Node │            │
+│   │  1  │◄────────────►│  2  │◄────────────►│  3  │            │
+│   └──┬──┘              └──┬──┘              └──┬──┘            │
+│      │    Intra-cluster   │                    │               │
+│      │    Erlang mesh     │                    │               │
+│      └────────────────────┴────────────────────┘               │
+│                           │                                     │
+│              Local DHT + CRDT State                             │
+│                           │                                     │
+│                    Bridge Node ──► To Street Mesh               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Minimum viable Cluster:** Single Macula node running all subsystems. It's a Cluster of one.
+
+**Configuration:**
+```erlang
+%% Cluster ID determined by priority:
+%% 1. MACULA_CLUSTER environment variable
+%% 2. Config file cluster_id setting
+%% 3. Derive from Seed Node's Cluster
+```
+
+**Note:** Replaces the earlier "MuC" (Macula Micro Center) concept.
+
+---
+
+### Bridge Node
+
+A **Bridge Node** is a Macula node that connects its Cluster to the next level of the mesh hierarchy. Bridge Nodes at each level **form their own mesh** with a shared DHT.
+
+**Key insight:** Bridge Nodes mesh among themselves at each level:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    STREET MESH (Bridge Layer)                   │
+│                                                                  │
+│   ┌────────┐◄──────────►┌────────┐◄──────────►┌────────┐       │
+│   │Bridge  │            │Bridge  │            │Bridge  │       │
+│   │(Home 1)│◄──────────►│(Home 2)│◄──────────►│(Home 3)│       │
+│   └───┬────┘            └───┬────┘            └───┬────┘       │
+│       │                     │                     │            │
+│       │  Bridges form mesh + shared DHT at this level          │
+│       │                                           │            │
+└───────┼─────────────────────┼─────────────────────┼────────────┘
+        ▼                     ▼                     ▼
+   ┌─────────┐           ┌─────────┐           ┌─────────┐
+   │ Cluster │           │ Cluster │           │ Cluster │
+   │ (Home 1)│           │ (Home 2)│           │ (Home 3)│
+   └─────────┘           └─────────┘           └─────────┘
+```
+
+**Responsibilities:**
+- Form mesh with other Bridge Nodes at the same level
+- Maintain DHT at that level (street DHT, city DHT, etc.)
+- Forward DHT queries that can't be resolved locally
+- Route cross-Cluster RPC/PubSub messages
+- Enforce federation policies (what's exposed, what's blocked)
+
+**DHT query escalation (locality-first):**
+```
+1. Query local Cluster DHT
+2. If miss → query Street Mesh DHT (via Bridge)
+3. If miss → query Neighborhood Mesh DHT
+4. If miss → query City Mesh DHT
+5. ... escalate until found or top level reached
+6. Cache result at lower levels to avoid re-escalation
+```
+
+**Configuration:**
+```erlang
+%% Bridge discovery (priority order):
+%% 1. MACULA_BRIDGES env var (explicit)
+%% 2. DNS SRV lookup (_macula._udp.example.com)
+%% 3. boot.macula.io directory (fallback)
+
+%% Federation policy
+{bridge_policy, [
+    {allow, <<"services/*">>},
+    {deny, <<"internal/*">>}
+]}.
+```
+
+**What it is NOT:**
+- NOT a Seed Node (different role)
+- NOT required for intra-Cluster communication
+- NOT a consensus participant
+
+---
+
+### SuperMesh
+
+A **SuperMesh** is a federation of Clusters (or other SuperMeshes) connected via Bridge Nodes. SuperMeshes are **hierarchical and fractal** - they nest at any scale.
+
+**Hierarchy example:**
+```
+Cluster (Home)
+    └─► Street Mesh (neighbors)
+            └─► Neighborhood Mesh
+                    └─► City Mesh
+                            └─► Province/State Mesh
+                                    └─► Country Mesh
+                                            └─► Region Mesh (EU, NA, APAC)
+                                                    └─► Global Mesh
+```
+
+**Each level is a SuperMesh** - the term applies at any scale above Cluster:
+- Street Mesh = SuperMesh of home Clusters on a street
+- City Mesh = SuperMesh of neighborhood meshes
+- Global Mesh = SuperMesh of regional meshes
+
+**What it enables:**
+- **Locality-first** - Most traffic stays local (street/neighborhood)
+- **Hierarchical routing** - Queries escalate up only when needed
+- **Organic growth** - Start with Cluster, naturally expand to street, city, etc.
+- **Administrative boundaries** - Each level can have its own policies
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      CITY MESH: Amsterdam                       │
+│  ┌─────────────────────────┐  ┌─────────────────────────┐      │
+│  │  NEIGHBORHOOD: Centrum   │  │  NEIGHBORHOOD: Zuid      │      │
+│  │  ┌───────┐  ┌───────┐   │  │  ┌───────┐  ┌───────┐   │      │
+│  │  │Street │  │Street │   │  │  │Street │  │Street │   │      │
+│  │  │ Mesh  │  │ Mesh  │   │  │  │ Mesh  │  │ Mesh  │   │      │
+│  │  └───┬───┘  └───┬───┘   │  │  └───┬───┘  └───┬───┘   │      │
+│  │      └──────────┘       │  │      └──────────┘       │      │
+│  └────────────┬────────────┘  └────────────┬────────────┘      │
+│               └────────────────────────────┘                    │
+│                       Bridge Nodes                              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Trust Model:**
+- Each organization maintains their own realm
+- Bridge Nodes negotiate federation agreements at each level
+- Cross-realm traffic is explicitly routed through bridges
+- Federation is opt-in per service
+
+---
+
+### Registry
+
+A **Registry** is a package repository for distributing Macula applications. Features:
+
+- **Federated model** - Organizations run their own registries
+- **Package signing** - Cryptographic verification
+- **Capability declarations** - Apps declare what they need
+- **Security scanning** - Static analysis before publishing
+
+**Configuration:**
+```erlang
+{registries, [
+    #{name => <<"internal">>,
+      url => <<"https://registry.myorg.com">>,
+      trust => full,
+      pubkey => <<...>>},
+    #{name => <<"macula-public">>,
+      url => <<"https://boot.macula.io/registry">>,
+      trust => verified,
+      pubkey => <<...>>}
+]}.
+```
+
+**Public registry:** boot.macula.io (one option among many)
+
+---
+
+### Cluster Controller
+
+A **Cluster Controller** manages application deployment within a Cluster:
+
+- Watches configured registries for updates
+- Verifies package signatures before deployment
+- Enforces local deployment policy
+- Manages app lifecycle (deploy, upgrade, remove)
+
+**Deployment policy:**
+```erlang
+{deployment_policy, [
+    {allow_nifs, false},           % No native code from external
+    {require_capabilities, true},  % Must declare what it needs
+    {max_memory_mb, 512},          % Resource limits
+    {allowed_ports, [80, 443]}     % Network restrictions
+]}.
+```
+
+---
+
+### Gossip Protocol
+
+The **Gossip Protocol** synchronizes CRDT state across nodes in a Cluster using epidemic propagation.
+
+**Parameters:**
+- Push interval: 1 second (hot path)
+- Anti-entropy: 30 seconds (consistency maintenance)
+- Fanout: 3 peers per round
+
+**Benefits:**
+- No leader election needed
+- Partition tolerant (AP in CAP)
+- State converges eventually
+
+---
+
+## Core Architecture Terms
 
 ### Realm
 
-A **realm** is an isolated namespace within Macula that provides multi-tenancy. Each realm has:
-- Separate topic and procedure namespaces
-- Independent access control
-- Cryptographic isolation from other realms
+A **Realm** is a virtual namespace that defines identity and resource boundaries in Macula - analogous to a DNS domain. Realms are **orthogonal to Clusters**: they represent organizational/application boundaries, not infrastructure boundaries.
 
-**Example:** `<<"com.mycompany.production">>` and `<<"com.mycompany.staging">>` are separate realms that cannot see each other's messages.
+**Key characteristics:**
+- **Virtual concept** - Not tied to physical deployment
+- **Spans Clusters** - Same realm can exist across multiple Clusters (geo-distribution)
+- **Identity boundary** - Defines "who you are" in the mesh
+- **Namespace isolation** - Topics, procedures, subscriptions are realm-scoped
+- **Multi-tenancy** - Multiple realms can coexist on a single Cluster
+
+**Realm vs Cluster vs SuperMesh:**
+
+| Aspect | Cluster | SuperMesh | Realm |
+|--------|---------|-----------|-------|
+| Nature | Physical deployment | Hierarchical federation | Logical/virtual |
+| Scope | Local (home, office, device) | Any scale above Cluster | Organization/application |
+| Scale | 1-10 nodes typically | Fractal: street → city → country → global | Spans entire hierarchy |
+| Purpose | Node coordination | Geographic distribution | Identity & namespace |
+
+**Scale hierarchy (fractal):**
+```
+Cluster (Home)           ←── Smallest unit
+    └─► Street Mesh
+            └─► Neighborhood Mesh
+                    └─► City Mesh
+                            └─► Province Mesh
+                                    └─► Country Mesh
+                                            └─► Region Mesh
+                                                    └─► Global Mesh
+```
+
+**Realm spans the entire hierarchy:**
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     REALM: com.acme.iot                              │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │               COUNTRY MESH: Netherlands                     │     │
+│  │  ┌────────────────────────┐  ┌────────────────────────┐    │     │
+│  │  │   CITY: Amsterdam       │  │   CITY: Rotterdam       │    │     │
+│  │  │  ┌────────┐ ┌────────┐ │  │  ┌────────┐            │    │     │
+│  │  │  │Cluster │ │Cluster │ │  │  │Cluster │            │    │     │
+│  │  │  │(Home 1)│ │(Home 2)│ │  │  │(Office)│            │    │     │
+│  │  │  └────────┘ └────────┘ │  │  └────────┘            │    │     │
+│  │  └────────────────────────┘  └────────────────────────┘    │     │
+│  └────────────────────────────────────────────────────────────┘     │
+│                              ▲                                       │
+│                              │ Cross-Country Bridge                  │
+│                              ▼                                       │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │               COUNTRY MESH: Germany                         │     │
+│  │  ┌────────────────────────┐                                 │     │
+│  │  │   CITY: Berlin          │                                 │     │
+│  │  │  ┌────────┐            │                                 │     │
+│  │  │  │Cluster │            │                                 │     │
+│  │  │  │(Home 3)│            │                                 │     │
+│  │  │  └────────┘            │                                 │     │
+│  │  └────────────────────────┘                                 │     │
+│  └────────────────────────────────────────────────────────────┘     │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Relationships:**
+- A **Cluster** is the smallest unit (home, edge device, office)
+- **SuperMesh** is any federation level above Cluster (street, city, country, global)
+- A **Realm** spans across the entire hierarchy (virtual namespace)
+- **Bridge Nodes** connect meshes at each level of the hierarchy
+- **Cross-realm** communication requires explicit federation agreements
+
+**Example:** `<<"com.mycompany.production">>` and `<<"com.mycompany.staging">>` are separate realms that cannot see each other's messages, even if running on the same Cluster.
 
 **In code:**
 ```erlang
@@ -529,10 +833,14 @@ Key environment variables for Macula:
 
 ## Deprecated Terminology
 
-The following terms are **outdated** (pre-v0.8.5) and should not be used in new documentation:
+The following terms are **outdated** and should not be used in new documentation:
 
 | Deprecated Term | Current Term | Notes |
 |-----------------|--------------|-------|
+| "MuC" (Macula Micro Center) | **Macula Cluster** | Cluster is deployment-agnostic, not K8s-specific |
+| "Macula Cell" | **Macula Cluster** | Cluster better conveys "group of nodes" semantics |
+| "BSN" (Bootstrap Replica Node) | **Seed Node** | Seeds are just discoverable peers, no Raft |
+| "Gateway to SuperMesh" | **Bridge Node** | Separate role from bootstrap |
 | "Gateway mode" | N/A | All nodes have Gateway System (v0.8.5+) |
 | "Edge peer mode" | N/A | All nodes are identical (v0.8.5+) |
 | "Start gateway" | N/A | Gateway System always starts |
@@ -540,19 +848,20 @@ The following terms are **outdated** (pre-v0.8.5) and should not be used in new 
 | "The gateway" (as a special node) | Seed Node | If referring to the initial entry point |
 | "Bootstrap node" (as special node) | Seed Node | Seed node is preferred to avoid confusion |
 | `MACULA_START_GATEWAY` | N/A | Environment variable no longer needed |
+| "reckon_db integration" | **CRDTs + Gossip** | No external event store dependency |
+| "Raft consensus" (for coordination) | **CRDTs** | No consensus needed for coordination state |
 
 ### Historical Context
 
-Before v0.8.5, Macula had two deployment modes:
-- **Gateway mode**: Central connection point with QUIC listener
-- **Edge peer mode**: Lightweight clients connecting via gateway
+**Pre-v0.8.5:** Macula had two deployment modes (Gateway mode vs Edge peer mode). Removed in v0.8.5 for always-on architecture.
 
-This was removed in v0.8.5 in favor of the **always-on architecture** where all nodes are equal participants in the mesh. Every node now runs all subsystems.
+**Pre-v0.13.0:** Architecture planned to use reckon_db (event store) for Platform Layer. Replaced in December 2025 with CRDTs + Gossip approach - simpler, no external dependencies.
 
-**Migration from pre-v0.8.5:**
-- Remove `MACULA_START_GATEWAY` environment variable
-- All nodes now have identical configuration
-- Use `MACULA_BOOTSTRAP_PEERS` to specify seed nodes for initial discovery
+**Migration to v0.13.0+:**
+- MuC → Macula Cluster (terminology)
+- BSN → Seed Node (no Raft, just discoverable peer)
+- Add Bridge Nodes for cross-Cluster federation
+- ETS registries → CRDT-backed with gossip sync
 
 ---
 

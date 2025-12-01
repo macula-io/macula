@@ -130,7 +130,7 @@ See git history for details.
 ### Code Quality
 - **Style Guide**: Idiomatic Erlang (see CLAUDE.md)
 - **Test Coverage**: Tracked per module
-- **TODO Tracking**: See `TODO.md`
+- **Roadmap**: See `architecture/ROADMAP.md`
 
 ### Gateway Refactoring (Completed v0.7.x)
 - 6 focused modules, supervision tree, comprehensive tests

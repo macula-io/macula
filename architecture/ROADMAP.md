@@ -1,365 +1,548 @@
 # Macula Roadmap
 
-> **Last Updated:** 2025-11-28
-> **Current Version:** v0.11.2
-> **Status:** This is a realistic roadmap based on source code analysis
+> **Last Updated:** 2025-12-01
+> **Current Version:** v0.13.0
+> **Status:** Revised roadmap with SuperMesh architecture refinements
 
 ---
 
 ## Executive Summary
 
-This roadmap is based on an honest assessment of the codebase as of November 2025. It prioritizes completing partially-implemented features before adding new ones.
+This roadmap reflects a significant architectural refinement (December 2025) that introduces:
 
-**Key Finding:** The documentation claims features that are only partially implemented. This roadmap focuses on completing what exists before expanding scope.
+1. **Macula Cluster** - Deployment-agnostic logical grouping (replaces "MuC")
+2. **CRDTs + Gossip** - Replaces Raft consensus for coordination
+3. **Bridge Nodes** - Cross-Cluster federation for SuperMesh
+4. **Federated Registry** - Secure application distribution
+5. **Protocol Gateway** - HTTP/3 API for non-BEAM clients
 
----
-
-## Current State (v0.10.1)
-
-### What Actually Works
-
-| Component | Status | Evidence |
-|-----------|--------|----------|
-| QUIC Transport | **Working** | `macula_connection.erl` - Full gen_server, QUIC via quicer |
-| PubSub (local) | **Working** | 11 files in `macula_pubsub_system/` |
-| RPC (local) | **Working** | 9 files in `macula_rpc_system/` |
-| DHT Kademlia | **Working** | 6 files in `macula_routing_system/`, k-bucket routing |
-| Gateway System | **Working** | 13 files in `macula_gateway_system/` |
-| Bootstrap System | **Working** | 4 files in `macula_bootstrap_system/` |
-| Memory Management | **Working** | Bounded pools, TTL cleanup |
-| Performance Cache | **Working** | Subscriber cache, direct routing |
-| TLS Configuration | **Working** | Two-mode system: production/development |
-| Hybrid Trust Model | **Working** | Realm auth + TOFU + rate limit + audit (37 tests) |
-
-### What Is Incomplete
-
-| Component | Claimed Status | Actual Status |
-|-----------|----------------|---------------|
-| Platform Layer | "Raft consensus" | **Single-node only** - Line 177 in `macula_leader_election.erl`: `initial_members => [ServerId], % Single node for now` |
-| CRDTs | "LWW, G-Counter, PN-Counter, etc." | **Only LWW-Register** - Others are `%% Future:` comments |
-| Distributed CRDTs | "Eventually consistent" | **Local ETS only** - No replication across nodes |
-| TLS Verification | **COMPLETED** | Two-mode system: production (strict verification) / development (self-signed) |
-| NAT Traversal | "Hole punching" | **Incomplete** - TODOs in detector, only relay works |
-| QUIC Distribution | "31 tests passing" | **Not integrated** - Standalone module, not used by mesh |
+**Key Change:** The reckon_db dependency is removed. CRDTs provide distributed state without external event store.
 
 ---
 
-## Architectural Decision: reckon_db as Platform Service (Future)
+## Architecture Overview
 
-> **Decision Date:** 2025-11-28
-> **Status:** Planned for v0.14.0+
-> **Prerequisite:** reckon_db (pure Erlang event store) must be developed first
+### Fractal Mesh Hierarchy
 
-### Problem
-
-The current Platform Layer uses Ra directly for leader election and local ETS for CRDT storage.
-If workloads also use an event store (which uses Khepri/Ra), there would be:
-- Two competing Ra clusters on the same BEAM node
-- Resource contention (disk I/O, memory, consensus traffic)
-- Potential data directory collisions
-- Redundant consensus mechanisms
-
-### Solution (Deferred)
-
-Integrate **reckon_db** (pure Erlang rewrite of ex_esdb) as the Platform Layer's storage backend.
-
-**Why reckon_db instead of ex_esdb?**
-- Macula is pure Erlang - avoid Elixir dependency
-- reckon_db will be a clean, focused implementation
-- Ecosystem alignment: reckon_db_gater, reckon_db_commanded adapters
+SuperMesh is **fractal** - it nests at any geographic scale:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                   Workload Application                       │
-├─────────────────────────────────────────────────────────────┤
-│           Macula Platform Layer (API Facade)                 │
-│  ┌─────────────┬──────────────┬────────────────────────┐    │
-│  │   Leader    │    CRDT      │    Service             │    │
-│  │  Election   │    State     │    Registry            │    │
-│  └──────┬──────┴───────┬──────┴───────────┬────────────┘    │
-│         │              │                  │                  │
-│         ▼              ▼                  ▼                  │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              reckon_db (Platform Service)             │   │
-│  │  Event Streams:                                       │   │
-│  │  - $platform.leader_elections                         │   │
-│  │  - $platform.crdt_updates                             │   │
-│  │  - $platform.node_membership                          │   │
-│  │                        │                              │   │
-│  │                    Khepri/Ra                          │   │
-│  │              (Single Consensus Layer)                 │   │
-│  └──────────────────────────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────────┤
-│                  Macula Mesh (Transport)                     │
-│         QUIC/HTTP3  │  DHT  │  PubSub  │  RPC               │
-└─────────────────────────────────────────────────────────────┘
+Cluster (Home)           ←── Smallest unit (1-10 nodes)
+    └─► Street Mesh          ←── Neighbors
+            └─► Neighborhood Mesh
+                    └─► City Mesh
+                            └─► Province Mesh
+                                    └─► Country Mesh
+                                            └─► Region Mesh (EU, NA, APAC)
+                                                    └─► Global Mesh
 ```
 
-### Benefits (When Implemented)
+### Example: City-Level View
 
-| Benefit | Description |
-|---------|-------------|
-| Single Consensus | One Ra cluster (via Khepri) for all coordination |
-| Event Sourced Platform | Leader elections, CRDTs become auditable events |
-| Replay & Recovery | Platform state can be rebuilt from event log |
-| Pure Erlang | No Elixir dependency in Macula core |
-| Ecosystem Parity | reckon_db_gater, reckon_db_commanded alignment |
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      CITY MESH: Amsterdam                       │
+│  ┌─────────────────────────┐  ┌─────────────────────────┐      │
+│  │  NEIGHBORHOOD: Centrum   │  │  NEIGHBORHOOD: Zuid      │      │
+│  │  ┌───────┐  ┌───────┐   │  │  ┌───────┐  ┌───────┐   │      │
+│  │  │Street │  │Street │   │  │  │Street │  │Street │   │      │
+│  │  │ Mesh  │  │ Mesh  │   │  │  │ Mesh  │  │ Mesh  │   │      │
+│  │  └───┬───┘  └───┬───┘   │  │  └───┬───┘  └───┬───┘   │      │
+│  │      └──────────┘       │  │      └──────────┘       │      │
+│  └────────────┬────────────┘  └────────────┬────────────┘      │
+│               └────────────────────────────┘                    │
+│                       Bridge Nodes                              │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-### Prerequisites
+### Single Cluster (Smallest Unit)
 
-Before Platform Layer integration (v0.14.0+):
-1. **reckon_db** - Pure Erlang event store (rewrite of ex_esdb)
-2. **reckon_db_gater** - Gateway/proxy for reckon_db
-3. **reckon_db_commanded** - Commanded adapter (optional, Elixir workloads)
+Nodes within a Cluster form their own **intra-cluster mesh** (Erlang distribution, or QUIC distribution in future).
 
-### Current State (v0.10.1)
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              CLUSTER (e.g., Home Server)                        │
+│                                                                  │
+│   ┌─────┐◄────────────►┌─────┐◄────────────►┌─────┐            │
+│   │Node │              │Node │              │Node │            │
+│   │  1  │◄────────────►│  2  │◄────────────►│  3  │            │
+│   └─────┘              └─────┘              └─────┘            │
+│          Intra-cluster: Erlang distributed mesh                 │
+│              Local DHT (Kademlia) + CRDT State                  │
+│                           │                                     │
+│                    Bridge Node ──► Inter-cluster: QUIC/HTTP3    │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-Platform Layer works for **single-node demos**:
-- Leader election: Single-node Ra cluster (functional but not distributed)
-- CRDTs: Local ETS storage (not replicated)
-- Sufficient for development and testing
+**Two transport layers:**
+- **Intra-cluster:** Erlang distribution (or QUIC distribution when ready)
+- **Inter-cluster:** Macula QUIC/HTTP3 via Bridge Nodes
 
-**No changes needed until reckon_db is ready.**
+### Terminology
 
----
+| Term | Definition |
+|------|------------|
+| **Macula Cluster** | Smallest unit: local deployment (home, office, edge). 1-10 nodes. |
+| **Seed Node** | DHT entry point for new peers. No special software - just well-known address. |
+| **Bridge Node** | Connects to next mesh level. Bridges form their own mesh + DHT at each level. |
+| **SuperMesh** | Any federation level above Cluster (street, city, country, global). Fractal. |
+| **Realm** | Virtual namespace spanning the entire hierarchy (like DNS domain). |
 
-## Priority 1: Security First
+### Hierarchical DHT
 
-### v0.11.0 - Security Hardening
+Each level of the mesh has its own DHT. Bridge Nodes form meshes at each level:
 
-**Goal:** Fix critical security gaps before any production use.
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CITY MESH (Bridge Layer)                     │
+│   Bridge◄──►Bridge◄──►Bridge    ← City-level DHT               │
+└───────┬─────────┬─────────┬─────────────────────────────────────┘
+        │         │         │
+┌───────▼───┐ ┌───▼───┐ ┌───▼───┐
+│NEIGHBORHOOD│ │NEIGHB.│ │NEIGHB.│  ← Neighborhood-level DHTs
+│Bridge mesh │ │ mesh  │ │ mesh  │
+└───────┬────┘ └───┬───┘ └───┬───┘
+        │          │         │
+┌───────▼───┐ ┌────▼──┐ ┌────▼──┐
+│STREET mesh│ │STREET │ │STREET │  ← Street-level DHTs
+│(Bridges)  │ │ mesh  │ │ mesh  │
+└───────┬───┘ └───┬───┘ └───┬───┘
+        │         │         │
+     Clusters  Clusters  Clusters   ← Cluster-level DHTs
+```
 
-**Rationale:** TLS verification is more urgent than Platform Layer distribution.
-The current Platform Layer works for demos; insecure TLS does not work for anything.
-
-#### P1.1 TLS Certificate Verification (COMPLETED - Nov 2025)
-
-**Status:** Complete
-
-**Implementation:**
-- Created `macula_tls.erl` - centralized TLS configuration module
-- Two TLS modes: `production` (strict verification) and `development` (self-signed)
-- Environment variable configuration: `MACULA_TLS_MODE`, `MACULA_TLS_CACERTFILE`, etc.
-
-**Completed:**
-- [x] Add CA bundle configuration option
-- [x] Implement certificate chain verification
-- [x] Add hostname verification
-- [x] Provide self-signed cert generation for development (`scripts/setup-dev-tls.sh`)
-- [x] Document TLS configuration in operator guide (`docs/operator/TLS_CONFIGURATION.md`)
-
-**Files Modified:**
-- `src/macula_tls.erl` (new - centralized TLS config)
-- `src/macula_connection.erl` (uses macula_tls)
-- `src/macula_connection_pool.erl` (uses macula_tls)
-- `src/macula_dist.erl` (uses macula_tls)
-- `config/sys.config` (TLS options)
-- `scripts/setup-dev-tls.sh` (new - cert generation)
-- `docs/operator/TLS_CONFIGURATION.md` (new - documentation)
-- `test/macula_tls_tests.erl` (29 tests passing)
-
-**Acceptance Criteria Met:**
-- Production mode rejects invalid certificates
-- Development mode allows self-signed with explicit opt-in
-- Hostname verification validates CN/SAN against connection hostname
-
-#### P1.2 Hybrid Trust Model (COMPLETED - Nov 2025)
-
-**Status:** Complete (Core Implementation)
-
-**Problem Solved:** TLS certificates required on every node creates friction for plug-and-play mesh.
-
-**Solution:** Hybrid Trust Model with three levels:
-- **Level 1**: Realm Authentication (API key validation)
-- **Level 2**: Certificate Trust (TOFU within authenticated realm)
-- **Level 3**: Optional CA-signed certificates for seed nodes
-
-**Implementation:**
-- Created `macula_realm_trust.erl` - realm-scoped trust management
-- TOFU (Trust On First Use) pattern for certificate fingerprints
-- Fingerprint storage with realm scoping
-- Trust revocation support
-- 24 tests passing
-
-**Completed:**
-- [x] Architecture Decision Record (`architecture/decisions/ADR-001-HYBRID_TRUST_MODEL.md`)
-- [x] Realm authentication API (`authenticate/2`)
-- [x] Fingerprint registration (`register_fingerprint/3`)
-- [x] TOFU verification (`verify_fingerprint/3`)
-- [x] Trusted peers query (`get_trusted_peers/1`)
-- [x] Trust revocation (`revoke_trust/2`)
-- [x] Certificate fingerprint extraction (`extract_fingerprint/1`)
-
-**Files Added:**
-- `src/macula_realm_trust.erl` (new - 200+ LOC)
-- `test/macula_realm_trust_tests.erl` (new - 24 tests)
-- `architecture/decisions/ADR-001-HYBRID_TRUST_MODEL.md` (new - ADR)
-
-**Completed (v0.11.2):**
-- [x] Rate limiting per realm (`init_rate_limiter/0`, `reset_rate_limit/1`)
-- [x] Audit logging for authentication events (auth_success, auth_failure, tofu_trust, fingerprint_mismatch, trust_revoked)
-- [x] 37 tests passing (13 new tests for DHT, rate limiting, audit logging)
-
-**Remaining (Future):**
-- [ ] DHT integration for fingerprint storage (currently mock ETS - production uses bootstrap_registry)
-- [ ] macula_tls integration for automatic TOFU verification
+**DHT query escalation (locality-first):**
+1. Query local Cluster DHT
+2. If miss → escalate to Street Mesh DHT
+3. If miss → escalate to Neighborhood Mesh DHT
+4. Continue until found or top level reached
+5. Cache results at lower levels
 
 ---
 
-## Priority 2: Core Improvements
+## Current State (v0.12.6)
 
-### v0.12.0 - DHT Improvements
+### Completed Features
 
-#### P2.1 DHT Request/Response Pattern
+| Component | Status | Notes |
+|-----------|--------|-------|
+| QUIC Transport | **Complete** | Full gen_server, quicer integration |
+| PubSub (local) | **Complete** | Topic-based, wildcard support |
+| RPC (local) | **Complete** | NATS-style async, direct P2P |
+| DHT Kademlia | **Complete** | k-bucket routing, service discovery |
+| Gateway System | **Complete** | Message routing, client management |
+| Bootstrap System | **Complete** | DHT bootstrap, service registry |
+| TLS Security | **Complete** | Two-mode (production/development) |
+| Hybrid Trust | **Complete** | Realm auth + TOFU + rate limiting |
+| NAT Traversal | **Complete** | Hole punching, connection pooling, relay |
+| Memory Management | **Complete** | Bounded pools, TTL cleanup |
 
-**Current:** `macula_gateway_dht.erl` uses fire-and-forget.
+### What's Incomplete (Being Replaced)
 
-**Required:**
-- [ ] Add correlation IDs to DHT queries
-- [ ] Implement timeout and retry logic
-- [ ] Add response tracking for observability
-
-**Files Affected:**
-- `src/macula_gateway_system/macula_gateway_dht.erl`
-
-#### P2.2 K-Bucket Splitting
-
-**Current:** `macula_routing_table.erl` - buckets have max capacity but don't split.
-
-**Required:**
-- [ ] Implement bucket splitting when full
-- [ ] Maintain routing table invariants
-- [ ] Add routing table health metrics
-
-**Files Affected:**
-- `src/macula_routing_system/macula_routing_table.erl`
-
----
-
-### v0.13.0 - NAT Traversal (Optional)
-
-**Note:** Only implement if targeting edge deployment. Gateway relay works for cloud deployments.
-
-#### P3.1 Complete NAT Detection
-
-**Current:** `macula_nat_detector.erl` has TODO stubs.
-
-**Required:**
-- [ ] Implement NAT_PROBE message handling
-- [ ] Detect NAT type (EI, HD, PP, PC, RD)
-- [ ] Cache NAT type per connection
-
-#### P3.2 STUN/TURN Support
-
-**Required:**
-- [ ] Add STUN client for address discovery
-- [ ] Integrate TURN relay as fallback
-- [ ] Hole punch coordination protocol
-
-**Acceptance Criteria:**
-- 80%+ success rate for EI/PP NAT types
-- Automatic fallback to relay for restrictive NAT
+| Component | Old Plan | New Approach |
+|-----------|----------|--------------|
+| Platform Layer (Raft) | reckon_db integration | **CRDTs + Gossip** (no Raft) |
+| Distributed CRDTs | Local ETS only | **Gossip-replicated CRDTs** |
+| Cross-realm | Not planned | **Bridge Nodes + Federation** |
+| App distribution | Not planned | **Federated Registry** |
+| Non-BEAM clients | Not planned | **Protocol Gateway (HTTP/3 API)** |
 
 ---
 
-## Priority 3: Ecosystem Contributions
+## Revised Version Plan
 
-### v1.0.0 - Production Ready
+| Version | Focus | Status |
+|---------|-------|--------|
+| v0.13.0 | **Bridge System** | ✅ COMPLETED - Hierarchical DHT, Bridge Nodes, Cache |
+| v0.14.0 | **CRDT Foundation** | NEXT - OR-Set, LWW-Register, Gossip protocol |
+| v0.15.0 | **Registry System** | Package signing, Cluster Controller, security scanning |
+| v0.16.0 | **Protocol Gateway** | HTTP/3 API, WebTransport, OpenAPI spec |
+| v1.0.0 | **Production Ready** | Full Cluster + Bridge + Registry |
+| v1.1.0+ | **Ecosystem** | QUIC Distribution, macula_crdt hex package |
 
-**Goal:** Complete feature set for production use.
+### v0.13.0 - Bridge System (COMPLETED)
 
-#### Checklist
-- [ ] All P1 and P2 items complete
-- [ ] E2E test suite with multi-node scenarios
+Implemented hierarchical DHT with Bridge mesh support:
+
+- ✅ `macula_bridge_system.erl` - Supervisor for bridge subsystem
+- ✅ `macula_bridge_node.erl` - Parent mesh connection and query escalation
+- ✅ `macula_bridge_mesh.erl` - Peer-to-peer mesh between bridges
+- ✅ `macula_bridge_cache.erl` - TTL-based caching with LRU eviction
+- ✅ Routing integration with `find_value_with_escalation/5`
+- ✅ 40 tests for bridge system
+
+---
+
+## v0.14.0 - CRDT Foundation (Next)
+
+**Goal:** Replace ETS-based registries with CRDT-backed versions using gossip replication.
+
+**Also includes:** Remove deprecated Ra/Raft code (`macula_leader_election.erl`, `ra` dependency).
+
+### Deliverables
+
+#### 1. Core CRDT Module
+
+```erlang
+%% apps/macula_crdt/src/macula_crdt.erl
+-type or_set() :: #{
+    adds => #{element() => vector_clock()},
+    removes => #{element() => vector_clock()}
+}.
+
+-type lww_register() :: #{
+    value => term(),
+    timestamp => integer(),
+    node_id => node_id()
+}.
+```
+
+**Operations:**
+- `or_set_add/2`, `or_set_remove/2`, `or_set_merge/2`, `or_set_value/1`
+- `lww_register_set/2`, `lww_register_merge/2`, `lww_register_value/1`
+
+#### 2. Gossip Protocol
+
+```erlang
+%% apps/macula_crdt/src/macula_gossip.erl
+-spec start_gossip(cell_id()) -> ok.
+-spec push_state(node_id()) -> ok.   %% Push local state to peer
+-spec pull_state(node_id()) -> ok.   %% Request state from peer
+-spec anti_entropy() -> ok.          %% Periodic full state sync
+```
+
+**Parameters:**
+- Push interval: 1 second
+- Anti-entropy: 30 seconds
+- Fanout: 3 peers per round
+
+#### 3. CRDT-backed Registry
+
+Wrap existing `macula_bootstrap_registry` with CRDT frontend:
+- Service registrations use OR-Set
+- Node metadata uses LWW-Register
+- Gossip syncs state across Cluster
+
+### Files to Create
+
+```
+apps/macula_crdt/
+├── src/
+│   ├── macula_crdt.erl           # Core types and operations
+│   ├── macula_crdt_orset.erl     # OR-Set implementation
+│   ├── macula_crdt_lww.erl       # LWW-Register implementation
+│   └── macula_gossip.erl         # Gossip protocol
+├── test/
+│   ├── macula_crdt_tests.erl
+│   └── macula_gossip_tests.erl
+└── rebar.config
+```
+
+### Acceptance Criteria
+
+- [ ] OR-Set correctly handles concurrent add/remove
+- [ ] LWW-Register resolves conflicts by timestamp
+- [ ] Gossip achieves convergence within 5 seconds (3-node Cluster)
+- [ ] Existing tests pass with CRDT backend
+- [ ] 50+ new tests for CRDT operations
+
+---
+
+## Bridge Nodes - COMPLETED in v0.13.0
+
+> **Note:** The Bridge Node functionality was implemented in v0.13.0 (December 2025).
+> See "v0.13.0 - Bridge System (COMPLETED)" section above.
+
+**What was delivered:**
+- ✅ `macula_bridge_system.erl` - Supervisor
+- ✅ `macula_bridge_node.erl` - Parent mesh connection
+- ✅ `macula_bridge_mesh.erl` - Peer-to-peer mesh
+- ✅ `macula_bridge_cache.erl` - TTL-based caching
+- ✅ DHT query escalation via `find_value_with_escalation/5`
+- ✅ 40 tests
+
+**Future enhancements (v0.15.0+):**
+- [ ] Federation policy enforcement
+- [ ] DNS SRV bridge discovery
+- [ ] boot.macula.io directory integration
+
+---
+
+## v0.15.0 - Registry System
+
+**Goal:** Secure application distribution with federated registries.
+
+### Deliverables
+
+#### 1. Registry Server
+
+```erlang
+%% apps/macula_registry/src/macula_registry.erl
+-spec publish_package(package(), signature()) -> {ok, pkg_id()} | {error, term()}.
+-spec fetch_package(pkg_id()) -> {ok, package()} | {error, not_found}.
+-spec verify_package(package(), pubkey()) -> ok | {error, invalid_signature}.
+```
+
+#### 2. Package Manifest
+
+```erlang
+%% myapp.macula.manifest
+#{
+    name => <<"myapp">>,
+    version => <<"1.0.0">>,
+    capabilities => [
+        {network, [{connect, <<"*.example.com:443">>}]},
+        {pubsub, [{publish, <<"myapp.*">>}]},
+        {rpc, [{register, <<"myapp.api.*">>}]}
+    ],
+    nifs => [],
+    otp_release => <<"27">>
+}.
+```
+
+#### 3. Cluster Controller
+
+- Watches configured registries
+- Verifies signatures before deploy
+- Manages app lifecycle (deploy, upgrade, remove)
+- Enforces local deployment policy
+
+#### 4. Security Scanning (Basic)
+
+Layer 1 - Static Analysis:
+- Scan for dangerous BIFs (os:cmd, open_port)
+- Audit NIF dependencies
+- Flag undeclared capabilities
+
+Layer 2 - Runtime Monitor:
+- Memory limits
+- Message queue limits
+- Crash rate detection
+- Throttle → Kill → Quarantine
+
+### Files to Create
+
+```
+apps/macula_registry/
+├── src/
+│   ├── macula_registry.erl           # Registry server
+│   ├── macula_registry_pkg.erl       # Package management
+│   ├── macula_registry_verify.erl    # Signature verification
+│   ├── macula_registry_scan.erl      # Static analysis
+│   ├── macula_cell_controller.erl    # Deployment controller
+│   └── macula_app_monitor.erl        # Runtime defense
+└── test/
+```
+
+### Acceptance Criteria
+
+- [ ] Package signing and verification
+- [ ] Cluster Controller deploys from registry
+- [ ] Static analysis detects dangerous BIFs
+- [ ] Runtime monitor kills runaway apps
+- [ ] 50+ tests for registry system
+
+---
+
+## v0.16.0 - Protocol Gateway
+
+**Goal:** HTTP/3 API for non-BEAM clients.
+
+### Deliverables
+
+#### 1. HTTP/3 Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/v1/session` | Establish session |
+| `POST` | `/v1/rpc/{realm}/{procedure}` | Call RPC |
+| `POST` | `/v1/publish/{realm}/{topic}` | Publish event |
+| `GET` | `/v1/subscribe/{realm}/{topic}` | Subscribe (SSE) |
+| `GET` | `/v1/discover/{realm}/{pattern}` | Find services |
+
+#### 2. Message Encoding
+
+- Primary: MessagePack
+- Fallback: JSON
+- Content negotiation via Accept header
+
+#### 3. WebTransport Support
+
+- Browser-to-mesh direct communication
+- Bidirectional streams
+- WebSocket fallback for older browsers
+
+#### 4. Protocol Documentation
+
+- `docs/PROTOCOL.md` - Wire protocol spec
+- `docs/AUTH.md` - Authentication flows
+- `docs/ERRORS.md` - Error taxonomy
+- `docs/openapi.yaml` - OpenAPI spec
+
+### Files to Create
+
+```
+apps/macula_protocol/
+├── src/
+│   ├── macula_protocol_http3.erl    # HTTP/3 handler
+│   ├── macula_protocol_codec.erl    # MessagePack/JSON
+│   └── macula_protocol_auth.erl     # Session management
+└── test/
+```
+
+### Acceptance Criteria
+
+- [ ] curl can call RPC endpoints
+- [ ] SSE subscription works
+- [ ] MessagePack encoding/decoding
+- [ ] OpenAPI spec validates
+- [ ] 30+ tests for protocol
+
+---
+
+## v1.0.0 - Production Ready
+
+**Goal:** Complete Cluster + Bridge + Registry for production use.
+
+### Checklist
+
+- [ ] All v0.13-v0.16 items complete
+- [ ] E2E test suite with multi-Cluster scenarios
 - [ ] Production deployment guide
 - [ ] Monitoring and alerting documentation
-- [ ] Performance benchmarks documented
+- [ ] Performance benchmarks (target: 10k msg/sec/Cluster)
+- [ ] Security audit of registry and federation
+
+### Documentation
+
+- `docs/ARCHITECTURE.md` - Updated conceptual model
+- `docs/GLOSSARY.md` - Cluster, Seed, Bridge, SuperMesh
+- `docs/FEDERATION.md` - How to federate Clusters
+- `docs/REGISTRY.md` - Registry operation
+- `docs/DEPLOYMENT.md` - Production guide
 
 ---
 
-### v1.1.0+ - QUIC Distribution (Ecosystem Contribution)
+## v1.1.0+ - Ecosystem Contributions
 
-**Note:** This is a BEAM ecosystem contribution, not core Macula functionality. Only pursue after v1.0.0 is proven in production.
+### QUIC Distribution
 
-**Current State:** `macula_dist.erl` exists but is standalone.
+- Integrate with Erlang distribution
+- libcluster strategy
+- Test with Horde, Mnesia, :pg
+- Publish as separate hex package
 
-**Why Defer:**
-1. Macula mesh works fine over HTTP/3 without this
-2. Requires TLS verification to be complete first
-3. Integration with Ra cluster requires multi-node Platform Layer
-4. Better to contribute after proving the core works
+### macula_crdt Hex Package
 
-**When Ready:**
-- [ ] Integrate with existing Macula discovery
-- [ ] Add libcluster strategy
-- [ ] Test with Horde, Mnesia, :pg
-- [ ] Publish as separate hex package
-- [ ] Submit to OTP for consideration
+- Extract CRDT module as standalone library
+- Publish to hex.pm
+- Community contribution
 
 ---
 
-## Technical Debt
+## Design Decisions
 
-### Code Cleanup
+### 1. No Raft Consensus
 
-| Issue | Priority | Location |
-|-------|----------|----------|
-| Remove TODO comments | Low | Various |
-| Fix test harness instability | Medium | Tests cancel unexpectedly |
-| Update documentation to match reality | High | GETTING_STARTED.md done, others pending |
+**Rationale:** Raft adds operational complexity for consistency guarantees Macula doesn't need.
 
-### Testing
+**Impact:**
+- No quorum management
+- No leader election
+- Nodes operate during partitions (AP in CAP)
+- State converges eventually
 
-| Area | Current | Target |
-|------|---------|--------|
-| Unit tests | 44 passing (unstable) | 100+ stable |
-| Integration tests | Minimal | Multi-node scenarios |
-| E2E tests | None | Full workflow tests |
+### 2. CRDT Selection
+
+| State Type | CRDT | Rationale |
+|------------|------|-----------|
+| Service Registry | OR-Set | Concurrent add/remove |
+| Peer Membership | OR-Set | Peers join/leave |
+| Node Metadata | LWW-Register | Last update wins |
+| Subscriptions | OR-Set per topic | Topic subscribers |
+
+### 3. Hierarchical DHT
+
+- Local DHT per Cluster
+- Bridge Nodes forward cross-Cluster queries
+- No global DHT state
+- Locality-first (most queries resolve locally)
+
+### 4. Federated Registries
+
+- Organizations control their own registry
+- boot.macula.io is one option among many
+- Trust is configurable per Cluster
+- Capability-based security model
+
+### 5. Protocol-First Multi-Language
+
+- Define HTTP/3 protocol thoroughly
+- Let community build SDKs
+- BEAM-native remains first-class
+- Non-BEAM via Protocol Gateway
 
 ---
 
-## Version Timeline
+## Gap Analysis
 
-| Version | Focus | Prerequisites |
-|---------|-------|---------------|
-| v0.11.0 | Security Hardening (TLS) | None |
-| v0.12.0 | DHT Improvements | v0.11.0 |
-| v0.13.0 | NAT Traversal (optional) | v0.11.0 |
-| v0.14.0 | Platform Layer + reckon_db | reckon_db ready |
-| v1.0.0 | Production Ready | v0.11.0, v0.12.0 |
-| v1.1.0+ | QUIC Distribution | v1.0.0 proven |
+### Resolved
 
-### External Dependencies
+| Gap | Resolution |
+|-----|------------|
+| Cluster membership | Config overrides discovery |
+| Bridge discovery | Layered (env → DNS → directory) |
+| Capability enforcement | Layered defense model |
 
-| Component | Status | Repository |
-|-----------|--------|------------|
-| **reckon_db** | Planned | Pure Erlang event store (rewrite of ex_esdb) |
-| **reckon_db_gater** | Planned | Gateway/proxy for reckon_db |
-| **reckon_db_commanded** | Planned | Commanded adapter (Elixir workloads) |
+### Deferred to v1.1+
 
-**Note:** Platform Layer integration (v0.14.0) is blocked until reckon_db ecosystem is ready.
+| Gap | Notes |
+|-----|-------|
+| CRDT garbage collection | Merkle tree + compaction |
+| Federation PKI | Manual key exchange for v1.0 |
+| Cross-Cluster addressing format | TBD |
 
 ---
 
-## Archived Documents
+## Risk Analysis
 
-Previous planning documents are preserved in `architecture/archive/planning-2025-11/`:
-- `ROADMAP.md` - Original 107KB roadmap
-- `v0.8.0-ROADMAP.md` - v0.8.0 planning
-- `v1.0.0-ROADMAP.md` - v1.0.0 planning
-- `PLATFORM_VISION.md` - Platform vision document
-- `v0.11.0-QUIC_DISTRIBUTION.md` - QUIC distribution vision
-- Others...
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| CRDT divergence | Medium | High | Anti-entropy protocol |
+| Gossip storms | Low | High | Adaptive fanout |
+| Bridge bottleneck | Medium | Medium | Multiple Bridges per Cluster |
+| Security scan false negatives | High | High | Runtime defense layer |
+| Scope creep | High | High | Strict phase gating |
+
+---
+
+## Opportunity Analysis
+
+| Opportunity | Potential | Notes |
+|-------------|-----------|-------|
+| Edge-first federation | High | Unique differentiator |
+| GitOps without K8s | High | Registry + Cluster Controller |
+| Nerves integration | High | Cluster on embedded |
+| Hosted registry (SaaS) | High | boot.macula.io revenue |
+| Enterprise Bridge | High | Managed federation |
+
+---
+
+## Archived Plans
+
+Previous planning documents preserved in `architecture/archive/`:
+- `ROADMAP-pre-supermesh.md` - Previous roadmap (pre-December 2025)
+- `reckon_db-integration.md` - Superseded by CRDT approach
 
 ---
 
 ## References
 
-- Source code analysis: 102 `.erl` files, 52 test files
-- TODOs found: ~10 critical, ~20 minor
-- Test status: 44 passing (harness unstable)
+- Plan document: `~/.claude/plans/snuggly-finding-simon.md` (session artifact)
+- Source analysis: 102 `.erl` files, 52 test files
+- Current tests: 200+ passing
 
 ---
 
-**Document Version:** 2.0 (Reality-based)
-**Author:** Source code analysis, November 2025
+**Document Version:** 3.0 (SuperMesh Architecture)
+**Last Updated:** 2025-12-01

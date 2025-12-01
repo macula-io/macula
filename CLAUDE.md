@@ -1,6 +1,40 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v0.12.6 (November 2025)
+**Current Version**: v0.14.0 (December 2025)
+
+---
+
+## ⚠️ CRITICAL USER SENSITIVITIES
+
+These are non-negotiable requirements. Violations will result in rejection:
+
+### 1. NO TODO STUBS - Code Must Be Functional
+- **NEVER** leave TODO comments with stub implementations
+- **NEVER** write placeholder code that "will be implemented later"
+- If a feature cannot be fully implemented, either:
+  - Implement it completely, OR
+  - Don't add the code at all - discuss with user first
+- Every exported function MUST work as documented
+
+### 2. Documentation Diagrams Must Be Proper
+- **NEVER** use ASCII art diagrams in edoc comments (they break XML parsing)
+- **ALWAYS** create proper SVG diagrams and link them from documentation
+- Store SVG diagrams in `doc/diagrams/` directory
+- Use `@image` edoc tag or HTML `<img>` tags to embed
+
+### 3. Verify ALL Links Recursively
+- Before any documentation commit, verify ALL links work
+- Check internal links (to other modules, files, sections)
+- Check external links (hex docs, external sites)
+- Use automated tools: `rebar3 edoc` must pass with 0 warnings
+- Broken links are unacceptable - they waste user time
+
+### 4. No Half-Measures
+- Features are either complete or not present
+- No "partial implementations" or "basic support"
+- Every commit should leave codebase in working state
+
+---
 
 ## Version History
 
@@ -8,8 +42,8 @@
 |---------|------|--------------|
 | v0.7.0 | Nov 2025 | Nomenclature refactoring (macula_peer/macula_connection) |
 | v0.8.0 | Nov 2025 | Direct P2P via macula_peer_connector, DHT propagation |
-| v0.9.0 | Nov 2025 | Platform Layer (Ra/Raft consensus, leader election) |
-| v0.9.1 | Nov 2025 | LWW-Register CRDT foundation |
+| v0.9.0 | Nov 2025 | Platform Layer foundation (⚠️ Ra/Raft deprecated Dec 2025) |
+| v0.9.1 | Nov 2025 | LWW-Register CRDT foundation (kept - basis for v0.14.0) |
 | v0.10.0 | Nov 2025 | Production hardening, stream caching, performance fixes |
 | v0.11.0 | Nov 2025 | Security Hardening - TLS Certificate Verification (COMPLETED) |
 | v0.11.1 | Nov 2025 | Hybrid Trust Model - Realm auth + TOFU fingerprints (24 tests) |
@@ -22,6 +56,8 @@
 | v0.12.4 | Nov 2025 | Documentation fixes - Fixed 77 broken links in hexdocs (0 warnings) |
 | v0.12.5 | Nov 2025 | PubSub delivery metrics, console colored output, bug fixes (gproc, quic errors) |
 | v0.12.6 | Nov 2025 | Test coverage expansion - 174 new tests for NAT, PubSub, Peer, Discovery modules |
+| v0.13.0 | Dec 2025 | Hierarchical DHT with Bridge System - Fractal mesh hierarchy (40 tests) |
+| v0.14.0 | Dec 2025 | **Ra/Raft Removal** - Masterless CRDT architecture (OR-Set, G-Counter, PN-Counter - 48 tests) |
 
 ---
 
@@ -319,28 +355,185 @@ Async RPC integrates with v0.12.0 NAT traversal:
 - Falls back to relay when direct connection fails
 - Hole-punched connections preferred for low latency
 
-## ✅ v0.9.0 Platform Layer (COMPLETED - Nov 2025)
+## ✅ v0.13.0 Hierarchical DHT with Bridge System (COMPLETED - Dec 2025)
 
-**COMPLETED**: v0.9.0 added distributed coordination primitives for workload applications.
+**STATUS**: ✅ COMPLETE (v0.13.0)
+**Tests**: 40 unit tests passing
 
-📋 **See `architecture/PLATFORM_VISION.md`** for complete Platform Layer vision
-📋 **See `architecture/v0.8.0-ROADMAP.md`** for roadmap (file name is historical)
+### Overview
 
-**Problem Solved**: Workload applications had no way to:
-- Elect a single coordinator across peers
-- Share state in eventually-consistent manner
-- Coordinate distributed operations
+v0.13.0 implements a **hierarchical DHT architecture** where Bridge Nodes at each mesh level form their own mesh with a shared DHT. This enables fractal mesh organization:
 
-**Platform Layer Features (v0.9.0+)**:
-- **Ra/Raft Consensus** - Leader election via `macula_platform_ra`
-- **LWW-Register CRDT** - Eventually-consistent state sharing (v0.9.1)
-- **Workload Registration** - `macula_client:register_workload/2`
-- **Leader Queries** - `macula_client:get_leader/1`
+```
+Cluster < Street < Neighborhood < City < Province < Country < Region < Global
+```
 
-**Key Modules**:
-- `macula_platform_system/` - Platform layer subsystem
-- `macula_platform_ra.erl` - Ra/Raft cluster integration
-- `macula_platform_api.erl` - Client-facing API
+When a DHT query fails locally, it **escalates to parent levels**, with results cached at lower levels to avoid repeated escalation.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CITY MESH (Bridge Layer)                     │
+│   CityBridge◄──►CityBridge◄──►CityBridge                       │
+└────────┬────────────────┬────────────────┬─────────────────────┘
+         │                │                │
+┌────────▼────────┐┌──────▼──────┐┌────────▼────────┐
+│  STREET MESH    ││ STREET MESH ││  STREET MESH    │
+│ StrBridge◄─►... ││    ...      ││    ...          │
+└────────┬────────┘└─────────────┘└─────────────────┘
+         │
+    ┌────▼────┐
+    │ CLUSTER │  ← Smallest unit (home/office)
+    │  Mesh   │
+    └─────────┘
+```
+
+### Key Modules
+
+**Bridge System** (`src/macula_bridge_system/`):
+
+| Module | Purpose | Tests |
+|--------|---------|-------|
+| `macula_bridge_system.erl` | Supervisor for bridge subsystem | 9 |
+| `macula_bridge_node.erl` | Manages connection to parent mesh level | 10 |
+| `macula_bridge_mesh.erl` | Peer-to-peer mesh between bridges at same level | 9 |
+| `macula_bridge_cache.erl` | TTL-based caching for escalated query results | 12 |
+
+### Query Escalation Flow
+
+```
+1. Local DHT query → Not found
+2. Check bridge cache → Cache miss
+3. Escalate to parent via macula_bridge_node
+4. Parent DHT query → Found
+5. Cache result in bridge_cache (TTL varies by level)
+6. Return result to caller
+```
+
+### TTL Configuration by Mesh Level
+
+| Level | Default TTL | Rationale |
+|-------|-------------|-----------|
+| Cluster | 5 minutes | Local, changes frequently |
+| Street | 10 minutes | Relatively stable |
+| Neighborhood | 15 minutes | More stable |
+| City | 30 minutes | Regional stability |
+| Province+ | 60 minutes | Wide-area stability |
+
+### Configuration
+
+```erlang
+%% Environment variables for bridge configuration
+MACULA_BRIDGE_ENABLED=true
+MACULA_MESH_LEVEL=cluster           % cluster|street|neighborhood|city|...
+MACULA_PARENT_BRIDGES=quic://parent1:9443,quic://parent2:9443
+MACULA_BRIDGE_DISCOVERY=static      % static|mdns|dns_srv
+MACULA_BRIDGE_CACHE_TTL=300         % seconds (optional, uses level default)
+MACULA_BRIDGE_CACHE_SIZE=10000      % max entries (optional)
+```
+
+### API Usage
+
+**Check escalation status:**
+```erlang
+%% Via macula_bridge_system
+{ok, Stats} = macula_bridge_system:get_stats().
+%% => #{mesh_level => cluster, bridge_connected => true, cache_hits => 42, ...}
+
+%% Check if bridge is enabled and connected
+true = macula_bridge_system:is_bridge_enabled().
+```
+
+**Get component PIDs:**
+```erlang
+%% Get Bridge Node PID (manages parent connection)
+{ok, BridgePid} = macula_bridge_system:get_bridge_pid().
+
+%% Get Bridge Mesh PID (manages peer bridges)
+{ok, MeshPid} = macula_bridge_system:get_mesh_pid().
+
+%% Cache is accessed via registered name macula_bridge_cache
+{ok, Value} = macula_bridge_cache:get(macula_bridge_cache, Key).
+ok = macula_bridge_cache:put(macula_bridge_cache, Key, Value).
+```
+
+### Integration with Routing
+
+The `macula_routing_server` module was extended with `find_value_with_escalation/5` which:
+1. Tries local DHT lookup first
+2. On failure, checks if bridge escalation is enabled
+3. Escalates through `macula_bridge_node:escalate_query/2`
+4. Results are automatically cached by the bridge system
+
+### Key Files
+
+- `src/macula_bridge_system/macula_bridge_system.erl` - Supervisor
+- `src/macula_bridge_system/macula_bridge_node.erl` - Parent connection manager
+- `src/macula_bridge_system/macula_bridge_mesh.erl` - Peer mesh formation
+- `src/macula_bridge_system/macula_bridge_cache.erl` - Result caching with LRU eviction
+- `src/macula_routing_system/macula_routing_server.erl` - Extended with escalation
+- `src/macula_root.erl` - Updated supervision tree
+
+### Test Coverage
+
+| Test Module | Tests | Description |
+|-------------|-------|-------------|
+| `macula_bridge_system_tests` | 9 | Supervisor, child processes, mesh levels |
+| `macula_bridge_node_tests` | 10 | Connection state, escalation, parent bridges |
+| `macula_bridge_mesh_tests` | 9 | Add/remove peers, discovery, mesh levels |
+| `macula_bridge_cache_tests` | 12 | Put/get, TTL, expiration, LRU eviction, stats |
+
+**Total:** 40 tests
+
+## ✅ v0.14.0 CRDT Foundation (COMPLETED - Dec 2025)
+
+**STATUS:** ✅ Ra/Raft **REMOVED**, CRDT Foundation **IMPLEMENTED**
+
+📋 **See `architecture/ROADMAP.md`** for current architecture (SuperMesh v3.0)
+
+### Architecture Decision: No Raft ✅
+
+Per ROADMAP.md (December 2025):
+> Raft adds operational complexity for consistency guarantees Macula doesn't need.
+> - No quorum management
+> - No leader election
+> - State converges eventually (CRDTs + Gossip)
+
+### What Was Changed (v0.14.0)
+
+| Component | Status | Action Taken |
+|-----------|--------|--------------|
+| `macula_leader_election.erl` | ✅ **REMOVED** | Deleted |
+| `macula_leader_machine.erl` | ✅ **REMOVED** | Deleted |
+| `ra` dependency | ✅ **REMOVED** | Removed from rebar.config |
+| `macula_crdt.erl` | ✅ **EXPANDED** | OR-Set, G-Counter, PN-Counter (48 tests) |
+| `macula_platform_system.erl` | ✅ **UPDATED** | Now masterless (no children) |
+| `macula_local_client.erl` | ✅ **UPDATED** | Platform Layer now masterless |
+
+### Why the Change?
+
+Macula operates in eventually-consistent mode (AP in CAP theorem):
+- Nodes operate during partitions
+- No need for strong consensus
+- CRDTs provide conflict-free convergence
+- Simpler operational model
+
+### CRDTs Implemented (v0.14.0)
+
+| CRDT | Purpose | Tests |
+|------|---------|-------|
+| LWW-Register | Single value with timestamp | 14 |
+| OR-Set | Add/remove set with tombstones | 17 |
+| G-Counter | Grow-only counter | 9 |
+| PN-Counter | Increment/decrement counter | 8 |
+
+**Total CRDT Tests:** 48
+
+### Future (v0.14.1+)
+
+- Gossip protocol for CRDT state synchronization
+- DHT-integrated CRDT replication
 
 ---
 
