@@ -50,7 +50,20 @@ setup() ->
     }.
 
 cleanup(#{routing_pid := RoutingPid, sup_pid := SupPid}) ->
-    catch exit(SupPid, shutdown),
+    %% Use proper cleanup pattern to avoid "unexpected termination of test process"
+    %% Unlink to prevent EXIT signal from affecting test process
+    case is_process_alive(SupPid) of
+        true ->
+            catch unlink(SupPid),
+            Ref = monitor(process, SupPid),
+            exit(SupPid, shutdown),
+            receive
+                {'DOWN', Ref, process, SupPid, _} -> ok
+            after 1000 -> ok
+            end;
+        false ->
+            ok
+    end,
     catch gen_server:stop(RoutingPid),
     ok.
 

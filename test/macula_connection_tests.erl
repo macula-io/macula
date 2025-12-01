@@ -508,7 +508,9 @@ parse_url_ipv4_address_test() ->
     {ok, Pid} = macula_connection:start_link(Url, Opts),
     ?assert(is_process_alive(Pid)),
 
-    gen_server:stop(Pid).
+    %% Use exit/2 instead of gen_server:stop/1 since the process may be
+    %% busy connecting/retrying and would timeout on stop
+    exit(Pid, kill).
 
 parse_url_localhost_custom_port_test() ->
     Url = <<"https://localhost:4433">>,
@@ -517,7 +519,9 @@ parse_url_localhost_custom_port_test() ->
     {ok, Pid} = macula_connection:start_link(Url, Opts),
     ?assert(is_process_alive(Pid)),
 
-    gen_server:stop(Pid).
+    %% Use exit/2 instead of gen_server:stop/1 since the process may be
+    %% busy connecting/retrying and would timeout on stop
+    exit(Pid, kill).
 
 %%%===================================================================
 %%% Realm Normalization Edge Cases (TDD for v0.7.0)
