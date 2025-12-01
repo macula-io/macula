@@ -58,8 +58,8 @@
 
 %% @doc Connect to remote gateway (not supported for local client)
 %% For compatibility with macula_client_behaviour
--spec connect(map(), pid()) -> {error, not_supported}.
-connect(_Opts, _EventHandler) ->
+-spec connect(binary() | string(), map()) -> {error, not_supported}.
+connect(_Url, _Opts) ->
     {error, not_supported}.
 
 %% @doc Create a local client connection to the gateway
@@ -327,60 +327,36 @@ handle_call(get_node_id, _From, State) ->
     {reply, Result, State};
 
 %%------------------------------------------------------------------------------
-%% Platform Layer Handlers (v0.10.0+)
+%% Platform Layer Handlers (v0.14.0+ - Masterless/CRDT-based)
 %%------------------------------------------------------------------------------
 
 handle_call({register_workload, Opts}, _From, State) ->
-    %% Query Platform Layer for current state
-    Leader = macula_leader_election:get_leader(),
-    {ok, Members} = macula_leader_election:get_members(),
-
+    %% v0.14.0: Masterless architecture - no leader election
+    %% Workloads register locally; state is CRDT-replicated
     WorkloadName = maps:get(workload_name, Opts, <<"unknown">>),
     Capabilities = maps:get(capabilities, Opts, []),
 
-    ?LOG_INFO("Registered workload ~s with capabilities ~p",
+    ?LOG_INFO("Registered workload ~s with capabilities ~p (masterless mode)",
               [WorkloadName, Capabilities]),
 
-    %% Return platform info
+    %% Return platform info (no leader in masterless design)
     Info = #{
-        leader_node => Leader,
-        cluster_size => length(Members),
-        platform_version => <<"0.10.0">>
+        leader_node => undefined,  % No leader - masterless design
+        cluster_size => 0,         % Cluster size via DHT peer count
+        platform_version => <<"0.14.0">>,
+        architecture => masterless
     },
     {reply, {ok, Info}, State};
 
-handle_call(get_leader, _From, State) ->
-    %% Query current Raft leader from Platform Layer
-    Leader = macula_leader_election:get_leader(),
-    Reply = get_leader_reply(Leader),
-    {reply, Reply, State};
+handle_call(get_leader, _From, _State) ->
+    %% v0.14.0: No leader in masterless design
+    %% Return undefined - applications should use CRDTs for coordination
+    {reply, {ok, undefined}, _State};
 
-handle_call({subscribe_leader_changes, Callback}, _From, State) ->
-    %% Subscribe to leader change events from Platform Layer
-    %% Generate unique callback ID
-    CallbackId = make_ref(),
-
-    %% Create wrapper that transforms boolean to map format
-    Wrapper = fun(IsLeader) ->
-        Leader = macula_leader_election:get_leader(),
-        OldLeader = case IsLeader of
-            true -> undefined;
-            false -> Leader
-        end,
-        NewLeader = case IsLeader of
-            true -> Leader;
-            false -> undefined
-        end,
-        Change = #{
-            old_leader => OldLeader,
-            new_leader => NewLeader
-        },
-        Callback(Change)
-    end,
-
-    %% Register callback with leader election
-    ok = macula_leader_election:register_callback(CallbackId, Wrapper),
-    {reply, {ok, CallbackId}, State};
+handle_call({subscribe_leader_changes, _Callback}, _From, State) ->
+    %% v0.14.0: No leader changes in masterless design
+    %% Return error - applications should use CRDT-based state instead
+    {reply, {error, not_supported_in_masterless_architecture}, State};
 
 handle_call({propose_crdt_update, Key, Value, Opts}, _From, State) ->
     CrdtType = maps:get(crdt_type, Opts, lww_register),
@@ -479,12 +455,8 @@ gateway_lookup_result(Pid) when is_pid(Pid) ->
 gateway_lookup_result(undefined) ->
     {error, not_found}.
 
-%% @private No leader available
-get_leader_reply(undefined) ->
-    {error, no_leader};
-%% @private Leader found
-get_leader_reply(Leader) ->
-    {ok, Leader}.
+%% NOTE: get_leader_reply/1 removed in v0.14.0 (masterless architecture)
+%% Leader election is no longer used - applications use CRDTs for coordination
 
 %% @private Gateway reconnect succeeded
 handle_gateway_reconnect({ok, NewGateway}, State) ->
