@@ -27,7 +27,9 @@
     reply_msg/0,
     cast_msg/0,
     rpc_route_msg/0,
-    pubsub_route_msg/0
+    pubsub_route_msg/0,
+    bridge_rpc_msg/0,
+    bridge_data_msg/0
 ]).
 
 %%%===================================================================
@@ -76,6 +78,10 @@
 -define(MSG_RELAY_REQUEST,      16#56).
 -define(MSG_RELAY_DATA,         16#57).
 
+%% Bridge System messages (0x60-0x6F range)
+-define(MSG_BRIDGE_RPC,         16#60).
+-define(MSG_BRIDGE_DATA,        16#61).
+
 %%%===================================================================
 %%% Type Definitions
 %%%===================================================================
@@ -87,7 +93,8 @@
     swim_ping | swim_ack | swim_ping_req |
     find_node | find_node_reply | store | find_value | find_value_reply |
     nat_probe | nat_probe_reply | punch_request | punch_coordinate |
-    punch_execute | punch_result | relay_request | relay_data.
+    punch_execute | punch_result | relay_request | relay_data |
+    bridge_rpc | bridge_data.
 
 -type message() ::
     {connect, connect_msg()} |
@@ -171,24 +178,34 @@
 
 %% RPC Routing Message (for multi-hop DHT routing)
 
+%% Note: Binary keys (<<"key">>) are used because MsgPack decoder returns binary keys.
 -type rpc_route_msg() :: #{
-    destination_node_id := binary(),  % 32-byte destination node ID
-    source_node_id := binary(),       % 32-byte source node ID
-    hop_count := non_neg_integer(),   % Current hop count (for debugging/metrics)
-    max_hops := pos_integer(),        % Max hops allowed (TTL protection, default: 10)
-    payload_type := call | reply,     % Type of wrapped message
-    payload := call_msg() | reply_msg()  % The actual RPC message
+    binary() => term()                % Binary keys: destination_node_id, source_node_id,
+                                      % hop_count, max_hops, payload_type, payload
 }.
 
 %% Pub/Sub Routing Message (for multi-hop DHT routing)
 
+%% Note: Binary keys (<<"key">>) are used because MsgPack decoder returns binary keys.
 -type pubsub_route_msg() :: #{
-    destination_node_id := binary(),  % 32-byte subscriber node ID
-    source_node_id := binary(),       % 32-byte publisher node ID
-    hop_count := non_neg_integer(),   % Current hop count (for debugging/metrics)
-    max_hops := pos_integer(),        % Max hops allowed (TTL protection, default: 10)
-    topic := binary(),                % Pub/sub topic
-    payload := publish_msg()          % The actual PUBLISH message
+    binary() => term()                % Binary keys: destination_node_id, source_node_id,
+                                      % hop_count, max_hops, topic, payload
+}.
+
+%% Bridge System Messages (for hierarchical DHT)
+
+-type bridge_rpc_msg() :: #{
+    procedure := binary(),            % Internal procedure name (e.g., "_dht.find_value")
+    args := map(),                    % Procedure arguments
+    call_id := binary(),              % Unique call ID for correlation
+    source_level := atom(),           % Source mesh level (cluster, street, etc.)
+    timeout => integer()              % Optional timeout in milliseconds
+}.
+
+-type bridge_data_msg() :: #{
+    payload := term(),                % Arbitrary payload data
+    source_node_id => binary(),       % Optional source node ID
+    metadata => map()                 % Optional metadata
 }.
 
 %%%===================================================================
@@ -226,7 +243,9 @@ message_type_id(punch_coordinate) -> ?MSG_PUNCH_COORDINATE;
 message_type_id(punch_execute) -> ?MSG_PUNCH_EXECUTE;
 message_type_id(punch_result) -> ?MSG_PUNCH_RESULT;
 message_type_id(relay_request) -> ?MSG_RELAY_REQUEST;
-message_type_id(relay_data) -> ?MSG_RELAY_DATA.
+message_type_id(relay_data) -> ?MSG_RELAY_DATA;
+message_type_id(bridge_rpc) -> ?MSG_BRIDGE_RPC;
+message_type_id(bridge_data) -> ?MSG_BRIDGE_DATA.
 
 %% @doc Get message type name from numeric ID.
 -spec message_type_name(byte()) -> {ok, message_type()} | {error, unknown_type}.
@@ -260,4 +279,6 @@ message_type_name(?MSG_PUNCH_EXECUTE) -> {ok, punch_execute};
 message_type_name(?MSG_PUNCH_RESULT) -> {ok, punch_result};
 message_type_name(?MSG_RELAY_REQUEST) -> {ok, relay_request};
 message_type_name(?MSG_RELAY_DATA) -> {ok, relay_data};
+message_type_name(?MSG_BRIDGE_RPC) -> {ok, bridge_rpc};
+message_type_name(?MSG_BRIDGE_DATA) -> {ok, bridge_data};
 message_type_name(_) -> {error, unknown_type}.

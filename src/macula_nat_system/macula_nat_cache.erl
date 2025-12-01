@@ -26,6 +26,7 @@
 -export([
     start_link/1,
     get/1,
+    get_local/0,
     get_from_dht/1,
     put/2,
     put/3,
@@ -97,6 +98,17 @@ start_link(Opts) ->
 -spec get(binary()) -> {ok, nat_profile(), fresh | stale} | not_found.
 get(NodeId) when is_binary(NodeId) ->
     gen_server:call(?SERVER, {get, NodeId}).
+
+%% @doc Get NAT profile for the local node.
+%% Uses macula_names:local_node_id/0 to get the local node ID.
+%% Returns {ok, Profile} or not_found.
+-spec get_local() -> {ok, nat_profile()} | not_found.
+get_local() ->
+    LocalNodeId = macula_names:local_node_id(),
+    case ?MODULE:get(LocalNodeId) of
+        {ok, Profile, _Status} -> {ok, Profile};
+        not_found -> not_found
+    end.
 
 %% @doc Get NAT profile from DHT (remote lookup).
 %% First checks local cache, then falls back to DHT query.

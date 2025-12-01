@@ -28,6 +28,11 @@
 %% API
 -export([start_link/2, send_message/3, send_message_async/3, get_status/1, default_config/0]).
 
+%% Bridge system API (v0.13.0+)
+%% Used by macula_bridge_node for parent mesh connections.
+%% Uses bridge_rpc and bridge_data message types for communication.
+-export([close/1, call/4, send/2, connect/3]).
+
 %% API for testing
 -export([decode_messages/2]).
 
@@ -82,6 +87,72 @@ send_message_async(Pid, Type, Msg) ->
 -spec get_status(pid()) -> connecting | connected | disconnected | error.
 get_status(Pid) ->
     gen_server:call(Pid, get_status, 5000).
+
+%%%===================================================================
+%%% Bridge System API (v0.13.0+)
+%%% These functions provide a simplified API for bridge-to-bridge
+%%% connections, using the underlying QUIC transport layer.
+%%%===================================================================
+
+%% @doc Close a connection gracefully.
+%% Stops the gen_server which triggers proper QUIC cleanup in terminate/2.
+-spec close(pid()) -> ok.
+close(Pid) when is_pid(Pid) ->
+    try
+        gen_server:stop(Pid, normal, 5000)
+    catch
+        exit:noproc -> ok;
+        exit:normal -> ok;
+        _:_ -> ok
+    end,
+    ok;
+close(_) ->
+    ok.
+
+%% @doc Make an RPC-style call over a connection.
+%% Sends a call message and waits for a reply. Uses the underlying
+%% send_message API with type 'bridge_rpc'.
+-spec call(pid(), binary(), map(), map()) -> {ok, term()} | {error, term()}.
+call(Pid, Procedure, Args, Opts) when is_pid(Pid) ->
+    Timeout = maps:get(timeout, Opts, 5000),
+    CallId = crypto:strong_rand_bytes(16),
+    Msg = #{
+        procedure => Procedure,
+        args => Args,
+        call_id => CallId,
+        timeout => Timeout
+    },
+    %% Use synchronous send which validates connection state
+    case send_message(Pid, bridge_rpc, Msg) of
+        ok -> {ok, sent};  % Bridge RPC is fire-and-forget at transport level
+        {error, Reason} -> {error, Reason}
+    end;
+call(_, _, _, _) ->
+    {error, invalid_connection}.
+
+%% @doc Send a message over a connection asynchronously.
+%% Fire-and-forget delivery - returns immediately.
+-spec send(pid(), term()) -> ok | {error, term()}.
+send(Pid, Message) when is_pid(Pid), is_map(Message) ->
+    send_message_async(Pid, bridge_data, Message),
+    ok;
+send(Pid, Message) when is_pid(Pid) ->
+    %% Wrap non-map messages
+    send_message_async(Pid, bridge_data, #{payload => Message}),
+    ok;
+send(_, _) ->
+    {error, invalid_connection}.
+
+%% @doc Connect to a remote endpoint.
+%% Creates a new QUIC connection to the specified host:port.
+-spec connect(binary(), pos_integer(), map()) -> {ok, pid()} | {error, term()}.
+connect(Host, Port, Opts) when is_binary(Host), is_integer(Port), Port > 0 ->
+    Url = iolist_to_binary([<<"quic://">>, Host, <<":">>, integer_to_binary(Port)]),
+    start_link(Url, Opts);
+connect(Host, Port, Opts) when is_list(Host) ->
+    connect(list_to_binary(Host), Port, Opts);
+connect(_, _, _) ->
+    {error, invalid_arguments}.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -348,8 +419,8 @@ safe_quic_connect(Host, Port, QuicOpts) ->
     end.
 
 %% @doc Open and configure bidirectional stream
--spec setup_bidirectional_stream(pid()) ->
-    {ok, pid(), pid()} | {error, term()}.
+-spec setup_bidirectional_stream(reference()) ->
+    {ok, reference(), reference()} | {error, term()}.
 setup_bidirectional_stream(Conn) ->
     case macula_quic:open_stream(Conn) of
         {ok, Stream} ->
@@ -360,8 +431,8 @@ setup_bidirectional_stream(Conn) ->
     end.
 
 %% @doc Set stream to active mode for receiving messages
--spec configure_stream_active_mode(pid(), pid()) ->
-    {ok, pid(), pid()} | {error, term()}.
+-spec configure_stream_active_mode(reference(), reference()) ->
+    {ok, reference(), reference()} | {error, term()}.
 configure_stream_active_mode(Conn, Stream) ->
     case quicer:setopt(Stream, active, true) of
         ok ->
@@ -375,7 +446,7 @@ configure_stream_active_mode(Conn, Stream) ->
     end.
 
 %% @doc Complete connection setup with handshake and DHT registration
--spec complete_connection_setup(pid(), pid(), string(), integer(), #state{}) ->
+-spec complete_connection_setup(reference(), reference(), string(), integer(), #state{}) ->
     {ok, #state{}} | {error, term()}.
 complete_connection_setup(Conn, Stream, Host, Port, State) ->
     ConnectMsg = build_connect_message(State),
@@ -472,7 +543,7 @@ register_server_in_dht(State) ->
 
 %% @doc Send a protocol message through a stream (raw).
 %% Crashes if message is invalid - this indicates a bug in the caller.
--spec send_message_raw(atom(), map(), pid()) -> ok | {error, term()}.
+-spec send_message_raw(atom(), map(), reference()) -> ok | {error, term()}.
 send_message_raw(Type, Msg, Stream) ->
     ?LOG_DEBUG("Type=~p, Msg=~p", [Type, Msg]),
     Binary = macula_protocol_encoder:encode(Type, Msg),

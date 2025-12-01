@@ -478,14 +478,17 @@ ensure_local_cache() ->
 maybe_announce_mdns(_NodeName, _Port, #state{discovery_type = dht}) ->
     ok;
 maybe_announce_mdns(NodeName, Port, _State) ->
-    %% Try to use mDNS if available
-    case whereis(mdns) of
+    %% Try to use mDNS if available (shortishly/mdns library)
+    case whereis(mdns_advertise_sup) of
         undefined ->
             ok;
         _Pid ->
             try
-                ServiceName = make_mdns_service_name(NodeName),
-                mdns:advertise(ServiceName, '_macula-dist._udp', Port)
+                %% Register instance info for the advertiser
+                macula_dist_mdns_advertiser:register(NodeName, Port),
+                %% Start the advertiser child
+                mdns_advertise_sup:start_child(macula_dist_mdns_advertiser),
+                ok
             catch
                 _:_ -> ok
             end
@@ -494,24 +497,21 @@ maybe_announce_mdns(NodeName, Port, _State) ->
 %% @private Maybe unannounce via mDNS
 maybe_unannounce_mdns(_NodeName, #state{discovery_type = dht}) ->
     ok;
-maybe_unannounce_mdns(NodeName, _State) ->
-    case whereis(mdns) of
+maybe_unannounce_mdns(_NodeName, _State) ->
+    case whereis(mdns_advertise_sup) of
         undefined ->
             ok;
         _Pid ->
             try
-                ServiceName = make_mdns_service_name(NodeName),
-                mdns:stop_advertise(ServiceName)
+                %% Stop the advertiser (sends TTL=0 announcement)
+                mdns_advertise:stop(macula_dist_mdns_advertiser),
+                %% Unregister instance info
+                macula_dist_mdns_advertiser:unregister(),
+                ok
             catch
                 _:_ -> ok
             end
     end.
-
-%% @private Make mDNS service name
-make_mdns_service_name(NodeName) when is_atom(NodeName) ->
-    atom_to_list(NodeName);
-make_mdns_service_name(NodeName) when is_list(NodeName) ->
-    NodeName.
 
 %%%===================================================================
 %%% Internal Functions - DHT Subscription

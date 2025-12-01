@@ -26,7 +26,7 @@
 -include("macula_config.hrl").
 
 %% API
--export([start_link/1, call/4, register_handler/2, unregister_handler/1, register_local_procedure/3, handle_incoming_reply/2, handle_find_value_reply/2]).
+-export([start_link/1, call/3, call/4, register_handler/2, unregister_handler/1, register_local_procedure/3, handle_incoming_reply/2, handle_find_value_reply/2]).
 
 %% Async RPC API (NATS-style)
 -export([request/4, request_to/5, handle_async_reply/2]).
@@ -107,6 +107,12 @@ start_link(Opts) ->
     %% No local registration - allows multiple connection instances
     gen_server:start_link(?MODULE, Opts, []).
 
+%% @doc Make an RPC call with default options.
+-spec call(pid(), binary() | list() | atom(), term()) -> {ok, term()} | {error, term()}.
+call(Pid, Procedure, Args) ->
+    call(Pid, Procedure, Args, #{}).
+
+%% @doc Make an RPC call with options.
 -spec call(pid(), binary() | list() | atom(), term(), map()) -> {ok, term()} | {error, term()}.
 call(Pid, Procedure, Args, Opts) ->
     Timeout = maps:get(timeout, Opts, ?DEFAULT_CALL_TIMEOUT),

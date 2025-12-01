@@ -18,10 +18,14 @@
 %% │   ├── macula_gateway_quic_server
 %% │   ├── macula_gateway
 %% │   └── macula_gateway_workers_sup
+%% ├── macula_bridge_system (hierarchical mesh bridging - optional)
+%% │   ├── macula_bridge_node (parent mesh connection)
+%% │   ├── macula_bridge_mesh (peer bridge mesh)
+%% │   └── macula_bridge_cache (parent query results cache)
 %% ├── macula_peers_sup (dynamic peer connections - always on)
 %% └── macula_platform_system (platform layer - always on)
-%%     ├── macula_leader_election (Raft consensus)
-%%     └── macula_shared_state (CRDT state - TODO)
+%%     ├── macula_leader_election (deprecated - scheduled for removal v0.14.0)
+%%     └── macula_crdt (LWW-Register, OR-Set in v0.14.0)
 %% </pre>
 %%
 %% Architecture Philosophy (v0.8.5):
@@ -108,6 +112,10 @@ init([]) ->
         period => 5
     },
 
+    %% Check if bridge system is enabled (for hierarchical mesh)
+    BridgeConfig = get_bridge_config(),
+    BridgeEnabled = maps:get(bridge_enabled, BridgeConfig, false),
+
     ChildSpecs = [
         %% 1. Core DHT routing (always on)
         get_routing_server_spec(NodeID),
@@ -121,24 +129,35 @@ init([]) ->
         %% 4. Gateway system (always on)
         get_gateway_system_spec(Port, Realm, HealthPort),
 
-        %% 5. Peer connections supervisor (always on)
+        %% 5. Bridge system (hierarchical mesh - optional)
+        get_bridge_system_spec(BridgeConfig),
+
+        %% 6. Peer connections supervisor (always on)
         get_peers_sup_spec(),
 
-        %% 6. Peer discovery (DHT-based P2P mesh formation)
+        %% 7. Peer discovery (DHT-based P2P mesh formation)
         get_peer_discovery_spec(NodeID, Port, Realm),
 
-        %% 7. Platform system (distributed coordination - always on)
+        %% 8. Platform system (distributed coordination - always on)
         get_platform_system_spec(NodeID, Realm)
     ],
 
     ?LOG_INFO("Starting subsystems:"),
-    ?LOG_INFO("  [1/7] Core DHT Routing"),
-    ?LOG_INFO("  [2/7] NAT System (Detection + Hole Punch + Relay)"),
-    ?LOG_INFO("  [3/7] Bootstrap System"),
-    ?LOG_INFO("  [4/7] Gateway System"),
-    ?LOG_INFO("  [5/7] Peers Supervisor"),
-    ?LOG_INFO("  [6/7] Peer Discovery (P2P Mesh)"),
-    ?LOG_INFO("  [7/7] Platform System (Leader Election + Shared State)"),
+    ?LOG_INFO("  [1/8] Core DHT Routing"),
+    ?LOG_INFO("  [2/8] NAT System (Detection + Hole Punch + Relay)"),
+    ?LOG_INFO("  [3/8] Bootstrap System"),
+    ?LOG_INFO("  [4/8] Gateway System"),
+    case BridgeEnabled of
+        true ->
+            ParentBridges = maps:get(parent_bridges, BridgeConfig, []),
+            MeshLevel = maps:get(mesh_level, BridgeConfig, cluster),
+            ?LOG_INFO("  [5/8] Bridge System (level: ~p, parents: ~p)", [MeshLevel, length(ParentBridges)]);
+        false ->
+            ?LOG_INFO("  [5/8] Bridge System (disabled)")
+    end,
+    ?LOG_INFO("  [6/8] Peers Supervisor"),
+    ?LOG_INFO("  [7/8] Peer Discovery (P2P Mesh)"),
+    ?LOG_INFO("  [8/8] Platform System (Leader Election + Shared State)"),
     ?LOG_INFO(""),
 
     %% Schedule bootstrap peer connections after supervision tree is up
@@ -346,6 +365,120 @@ get_platform_system_spec(NodeID, Realm) ->
         type => supervisor,
         modules => [macula_platform_system]
     }.
+
+%% @private
+%% @doc Get bridge system child spec (hierarchical mesh bridging).
+%% The bridge system enables nodes to participate in a hierarchical mesh:
+%% Cluster -&gt; Street -&gt; Neighborhood -&gt; City -&gt; Province -&gt; Country -&gt; Region -&gt; Global
+%%
+%% When enabled, DHT queries that fail locally are escalated to parent mesh levels.
+%% Results are cached at each level to reduce parent query load.
+get_bridge_system_spec(Config) ->
+    #{
+        id => macula_bridge_system,
+        start => {macula_bridge_system, start_link, [Config]},
+        restart => permanent,
+        shutdown => infinity,  % supervisor shutdown
+        type => supervisor,
+        modules => [macula_bridge_system]
+    }.
+
+%% @private
+%% @doc Get bridge system configuration from environment variables.
+%% Environment variables:
+%%   MACULA_BRIDGE_ENABLED - "true" to enable bridge functionality
+%%   MACULA_MESH_LEVEL - Mesh level: cluster, street, neighborhood, city, etc.
+%%   MACULA_PARENT_BRIDGES - Comma-separated parent bridge endpoints
+%%   MACULA_BRIDGE_DISCOVERY - Discovery method: static, mdns, dns_srv
+%%   MACULA_BRIDGE_CACHE_TTL - Cache TTL in seconds (default varies by level)
+%%   MACULA_BRIDGE_CACHE_SIZE - Maximum cache entries (default 10000)
+-spec get_bridge_config() -> map().
+get_bridge_config() ->
+    BridgeEnabled = get_bridge_enabled(),
+    MeshLevel = get_mesh_level(),
+    ParentBridges = get_parent_bridges_config(),
+    DiscoveryMethod = get_bridge_discovery_method(),
+    CacheTTL = get_bridge_cache_ttl(),
+    CacheSize = get_bridge_cache_size(),
+
+    #{
+        bridge_enabled => BridgeEnabled,
+        mesh_level => MeshLevel,
+        parent_bridges => ParentBridges,
+        discovery_method => DiscoveryMethod,
+        cache_ttl => CacheTTL,
+        cache_max_size => CacheSize,
+        escalation_enabled => BridgeEnabled andalso ParentBridges =/= []
+    }.
+
+%% @private
+%% @doc Check if bridge functionality is enabled.
+-spec get_bridge_enabled() -> boolean().
+get_bridge_enabled() ->
+    case os:getenv("MACULA_BRIDGE_ENABLED") of
+        "true" -> true;
+        "1" -> true;
+        _ -> application:get_env(macula, bridge_enabled, false)
+    end.
+
+%% @private
+%% @doc Get the mesh level for this node.
+%% Valid levels: cluster, street, neighborhood, city, province, country, region, global
+-spec get_mesh_level() -> atom().
+get_mesh_level() ->
+    case os:getenv("MACULA_MESH_LEVEL") of
+        false ->
+            application:get_env(macula, mesh_level, cluster);
+        LevelStr ->
+            list_to_existing_atom(LevelStr)
+    end.
+
+%% @private
+%% @doc Get parent bridge endpoints from environment or config.
+%% Format: "quic://host1:port1,quic://host2:port2"
+-spec get_parent_bridges_config() -> [binary()].
+get_parent_bridges_config() ->
+    case os:getenv("MACULA_PARENT_BRIDGES") of
+        false ->
+            application:get_env(macula, parent_bridges, []);
+        BridgesStr ->
+            Urls = string:tokens(BridgesStr, ","),
+            [list_to_binary(string:trim(Url)) || Url <- Urls]
+    end.
+
+%% @private
+%% @doc Get bridge discovery method.
+%% Valid methods: static, mdns, dns_srv
+-spec get_bridge_discovery_method() -> atom().
+get_bridge_discovery_method() ->
+    case os:getenv("MACULA_BRIDGE_DISCOVERY") of
+        false ->
+            application:get_env(macula, bridge_discovery, static);
+        MethodStr ->
+            list_to_existing_atom(MethodStr)
+    end.
+
+%% @private
+%% @doc Get cache TTL (0 means use level-based default).
+-spec get_bridge_cache_ttl() -> non_neg_integer().
+get_bridge_cache_ttl() ->
+    case os:getenv("MACULA_BRIDGE_CACHE_TTL") of
+        false ->
+            application:get_env(macula, bridge_cache_ttl, 0);
+        TTLStr ->
+            list_to_integer(TTLStr)
+    end.
+
+%% @private
+%% @doc Get maximum cache size.
+-spec get_bridge_cache_size() -> pos_integer().
+get_bridge_cache_size() ->
+    case os:getenv("MACULA_BRIDGE_CACHE_SIZE") of
+        false ->
+            application:get_env(macula, bridge_cache_size, 10000);
+        SizeStr ->
+            list_to_integer(SizeStr)
+    end.
 
 %% @private
 %% @doc Connect to bootstrap peers to join their DHT network.

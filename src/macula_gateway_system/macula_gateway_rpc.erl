@@ -24,6 +24,7 @@
     register_handler/3,
     unregister_handler/2,
     call/4,
+    invoke_handler/3,
     get_handler/2,
     list_handlers/1
 ]).
@@ -77,6 +78,13 @@ get_handler(Pid, Procedure) ->
 list_handlers(Pid) ->
     gen_server:call(Pid, list_handlers).
 
+%% @doc Invoke a handler directly for local calls.
+%% If handler is a function, invokes it directly.
+%% If handler is a PID, sends rpc_call message and waits for response.
+-spec invoke_handler(pid(), binary(), map()) -> {ok, term()} | {error, term()}.
+invoke_handler(Pid, Procedure, Args) ->
+    gen_server:call(Pid, {invoke_handler, Procedure, Args}, 5000).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -117,6 +125,32 @@ handle_call({call, Procedure, Args, _Opts}, From, State) when is_binary(Procedur
             {noreply, State}
     end;
 
+handle_call({invoke_handler, Procedure, Args}, _From, State) when is_binary(Procedure) ->
+    case maps:get(Procedure, State#state.registrations, undefined) of
+        undefined ->
+            {reply, {error, no_handler}, State};
+        Handler when is_function(Handler) ->
+            %% Direct function call
+            try
+                Result = Handler(Args),
+                {reply, {ok, Result}, State}
+            catch
+                _:Reason ->
+                    {reply, {error, Reason}, State}
+            end;
+        Handler when is_pid(Handler) ->
+            %% Synchronous call to handler process
+            try
+                Result = gen_server:call(Handler, {invoke, Procedure, Args}, 5000),
+                {reply, Result, State}
+            catch
+                exit:{timeout, _} ->
+                    {reply, {error, timeout}, State};
+                _:Reason ->
+                    {reply, {error, Reason}, State}
+            end
+    end;
+
 handle_call({get_handler, Procedure}, _From, State) when is_binary(Procedure) ->
     Result = case maps:get(Procedure, State#state.registrations, undefined) of
         undefined -> not_found;
@@ -155,7 +189,8 @@ get_timeout(Opts) ->
     maps:get(timeout, Opts, 5000).
 
 %% @doc Find monitor reference for a handler and procedure.
--spec find_monitor_ref(pid(), binary(), #{reference() => binary()}) -> reference() | undefined.
+%% First argument is ignored (kept for API compatibility).
+-spec find_monitor_ref(term(), binary(), #{reference() => binary()}) -> reference() | undefined.
 find_monitor_ref(_Handler, Procedure, Monitors) ->
     %% This is a bit inefficient but works for now
     %% We need to find the monitor ref that corresponds to this handler

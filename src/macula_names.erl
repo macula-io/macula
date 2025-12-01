@@ -13,7 +13,9 @@
     validate/2,
     normalize/1,
     namespace/1,
-    segment_count/1
+    segment_count/1,
+    %% Node identity
+    local_node_id/0
 ]).
 
 %% Types
@@ -81,6 +83,22 @@ segment_count(<<>>) ->
 segment_count(Name) ->
     Segments = binary:split(Name, <<".">>, [global]),
     length(Segments).
+
+%% @doc Get the local node ID.
+%% Returns the node ID stored in persistent_term, or generates one if not set.
+%% This is used for NAT detection to identify the local node.
+-spec local_node_id() -> binary().
+local_node_id() ->
+    case persistent_term:get({macula, local_node_id}, undefined) of
+        undefined ->
+            %% Generate a node ID based on the Erlang node name
+            NodeBin = atom_to_binary(node(), utf8),
+            NodeId = crypto:hash(sha256, NodeBin),
+            persistent_term:put({macula, local_node_id}, NodeId),
+            NodeId;
+        NodeId ->
+            NodeId
+    end.
 
 %%%===================================================================
 %%% Internal Functions

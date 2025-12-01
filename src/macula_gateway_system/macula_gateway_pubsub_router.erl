@@ -288,7 +288,7 @@ send_to_resolved_endpoint(DestNodeId, {_Source, EndpointUrl}, PubSubRouteMsg, Me
 
 %% @private
 %% @doc Send PUBLISH message directly to connected client stream.
--spec send_to_client_stream(quicer:stream_handle(), map()) -> ok.
+-spec send_to_client_stream(reference(), map()) -> ok.
 send_to_client_stream(Stream, PublishMsg) ->
     PubBinary = macula_protocol_encoder:encode(publish, PublishMsg),
     _ = macula_quic:send(Stream, PubBinary),
@@ -299,7 +299,7 @@ send_to_client_stream(Stream, PublishMsg) ->
 %% NOTE: We DON'T close streams here - the stream stays open for the
 %% QUIC connection's lifetime. Closing a stream doesn't close the connection,
 %% and quicer handles stream cleanup on connection close.
--spec send_route_message(quicer:stream_handle(), map()) -> ok.
+-spec send_route_message(reference(), map()) -> ok.
 send_route_message(Stream, PubSubRouteMsg) ->
     RouteMsg = macula_protocol_encoder:encode(pubsub_route, PubSubRouteMsg),
     _ = macula_quic:send(Stream, RouteMsg),

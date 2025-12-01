@@ -35,7 +35,7 @@
 %%   {idle_timeout_ms, N} - Connection idle timeout in milliseconds
 %%   {keep_alive_interval_ms, N} - Keep-alive PING interval in milliseconds
 %% @end
--spec listen(inet:port_number(), list()) -> {ok, pid()} | {error, term()}.
+-spec listen(inet:port_number(), list()) -> {ok, reference()} | {error, term()}.
 listen(Port, Opts) ->
     %% Extract certificate files
     CertFile = proplists:get_value(cert, Opts),
@@ -79,7 +79,7 @@ listen(Port, Opts) ->
 %%   {keep_alive_interval_ms, N} - Keep-alive PING interval in milliseconds
 %% @end
 -spec connect(string() | inet:ip_address(), inet:port_number(), list(), timeout()) ->
-    {ok, pid()} | {error, term()}.
+    {ok, reference()} | {error, term()}.
 connect(Host, Port, Opts, Timeout) ->
     %% Extract options
     AlpnProtocols = proplists:get_value(alpn, Opts, ["macula"]),
@@ -108,7 +108,7 @@ connect(Host, Port, Opts, Timeout) ->
 
 %% @doc Accept an incoming connection on a listener.
 %% After accepting, the connection needs handshake to complete.
--spec accept(pid(), timeout()) -> {ok, pid()} | {error, term()}.
+-spec accept(reference(), timeout()) -> {ok, reference()} | {error, term()}.
 accept(ListenerPid, Timeout) ->
     case quicer:accept(ListenerPid, [], Timeout) of
         {ok, Conn} ->
@@ -122,18 +122,18 @@ accept(ListenerPid, Timeout) ->
     end.
 
 %% @doc Accept an incoming stream on a connection.
--spec accept_stream(pid(), timeout()) -> {ok, pid()} | {error, term()}.
+-spec accept_stream(reference(), timeout()) -> {ok, reference()} | {error, term()}.
 accept_stream(ConnPid, _Timeout) ->
     %% accept_stream/2 doesn't take timeout, it returns immediately
     quicer:accept_stream(ConnPid, []).
 
 %% @doc Open a new bidirectional stream on a connection.
--spec open_stream(pid()) -> {ok, pid()} | {error, term()}.
+-spec open_stream(reference()) -> {ok, reference()} | {error, term()}.
 open_stream(ConnPid) ->
     quicer:start_stream(ConnPid, []).
 
 %% @doc Send data on a stream (blocking).
--spec send(pid(), binary()) -> ok | {error, term()}.
+-spec send(reference(), iodata()) -> ok | {error, term()}.
 send(StreamPid, Data) ->
     case quicer:send(StreamPid, Data) of
         {ok, _BytesSent} -> ok;
@@ -142,7 +142,7 @@ send(StreamPid, Data) ->
 
 %% @doc Send data on a stream asynchronously (non-blocking).
 %% This returns immediately without waiting for QUIC flow control.
--spec async_send(pid(), binary()) -> ok | {error, term()}.
+-spec async_send(reference(), iodata()) -> ok | {error, term()}.
 async_send(StreamPid, Data) ->
     case quicer:async_send(StreamPid, Data) of
         {ok, _BytesSent} -> ok;
@@ -150,7 +150,7 @@ async_send(StreamPid, Data) ->
     end.
 
 %% @doc Receive data from a stream (blocking).
--spec recv(pid(), timeout()) -> {ok, binary()} | {error, term()}.
+-spec recv(reference(), timeout()) -> {ok, binary()} | {error, term()}.
 recv(StreamPid, Timeout) ->
     %% quicer sends data as messages, so we need to receive from mailbox
     receive
@@ -161,7 +161,7 @@ recv(StreamPid, Timeout) ->
     end.
 
 %% @doc Close a listener, connection, or stream.
--spec close(pid()) -> ok.
+-spec close(reference()) -> ok.
 close(Pid) ->
     %% quicer uses different close functions based on resource type
     %% For simplicity, we try to close as stream first, then connection

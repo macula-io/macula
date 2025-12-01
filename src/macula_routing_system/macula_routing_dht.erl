@@ -7,13 +7,23 @@
 %%%-------------------------------------------------------------------
 -module(macula_routing_dht).
 
-%% API
+%% API - Core DHT algorithms
 -export([
     iterative_find_node/4,
     store_value/6,
     find_value/4,
     update_closest/4,
     select_alpha/3
+]).
+
+%% API - Simple key-value interface (used by macula_dist_discovery)
+-export([
+    store/2,
+    delete/1,
+    find/1,
+    subscribe/2,
+    notify_store/2,
+    notify_delete/1
 ]).
 
 %% Types
@@ -259,4 +269,136 @@ dedupe_node(#{node_id := Id} = Node, {Seen, Acc}) ->
     case maps:is_key(Id, Seen) of
         true -> {Seen, Acc};
         false -> {Seen#{Id => true}, [Node | Acc]}
+    end.
+
+%%%===================================================================
+%%% Simple Key-Value Interface
+%%% Used by macula_dist_discovery for QUIC distribution (deferred v1.1.0+)
+%%%===================================================================
+
+%% @doc Store a key-value pair in the DHT.
+%% Delegates to macula_routing_server if running.
+-spec store(binary(), binary()) -> ok | {error, term()}.
+store(Key, Value) ->
+    case whereis(macula_routing_server) of
+        undefined ->
+            {error, not_started};
+        Pid ->
+            try
+                macula_routing_server:store(Pid, Key, Value)
+            catch
+                exit:{noproc, _} -> {error, not_started};
+                _:Reason -> {error, Reason}
+            end
+    end.
+
+%% @doc Delete a key from the DHT.
+%% Delegates to macula_routing_server if running.
+-spec delete(binary()) -> ok | {error, term()}.
+delete(Key) ->
+    case whereis(macula_routing_server) of
+        undefined ->
+            {error, not_started};
+        Pid ->
+            try
+                macula_routing_server:delete_local(Pid, Key, user_requested),
+                ok
+            catch
+                exit:{noproc, _} -> {error, not_started};
+                _:Reason -> {error, Reason}
+            end
+    end.
+
+%% @doc Find a value in the DHT.
+%% Delegates to macula_routing_server if running.
+-spec find(binary()) -> {ok, binary()} | {error, not_found | term()}.
+find(Key) ->
+    case whereis(macula_routing_server) of
+        undefined ->
+            {error, not_started};
+        Pid ->
+            try
+                case macula_routing_server:find_value(Pid, Key, #{}) of
+                    {ok, Value} -> {ok, Value};
+                    {error, not_found} -> {error, not_found};
+                    Other -> Other
+                end
+            catch
+                exit:{noproc, _} -> {error, not_started};
+                _:Reason -> {error, Reason}
+            end
+    end.
+
+%% @doc Subscribe to DHT events matching a key prefix.
+%% Subscribes the given Pid to receive events when keys with the given prefix
+%% are stored or deleted. Uses gproc property-based subscriptions.
+%%
+%% Events sent to the subscriber:
+%%   {dht_stored, Key, Value} - When a key is stored
+%%   {dht_deleted, Key} - When a key is deleted
+%%
+%% To unsubscribe, the subscriber process should call:
+%%   gproc:unreg({p, l, {dht_prefix_subscription, Prefix}})
+-spec subscribe(binary(), pid()) -> ok.
+subscribe(Prefix, Pid) when is_binary(Prefix), is_pid(Pid) ->
+    %% Register subscription via gproc property
+    %% The macula_routing_server will notify subscribers when keys change
+    Key = {p, l, {dht_prefix_subscription, Prefix}},
+    try
+        %% If the caller is subscribing itself, use gproc:reg
+        %% If subscribing another process, we need to send a message to that process
+        case Pid =:= self() of
+            true ->
+                gproc:reg(Key),
+                ok;
+            false ->
+                %% For remote subscription, send a message to the target pid
+                %% asking it to register. The target process must handle this.
+                Pid ! {subscribe_dht_prefix, Prefix},
+                ok
+        end
+    catch
+        error:badarg ->
+            %% Already registered - this is fine
+            ok;
+        _:_ ->
+            ok
+    end;
+subscribe(_, _) ->
+    ok.
+
+%% @doc Notify subscribers about a DHT store event.
+%% Called by macula_routing_server when a key is stored.
+-spec notify_store(binary(), term()) -> ok.
+notify_store(Key, Value) ->
+    notify_prefix_subscribers(Key, {dht_stored, Key, Value}).
+
+%% @doc Notify subscribers about a DHT delete event.
+%% Called by macula_routing_server when a key is deleted.
+-spec notify_delete(binary()) -> ok.
+notify_delete(Key) ->
+    notify_prefix_subscribers(Key, {dht_deleted, Key}).
+
+%% @doc Send notification to all subscribers whose prefix matches the key.
+-spec notify_prefix_subscribers(binary(), term()) -> ok.
+notify_prefix_subscribers(Key, Message) ->
+    %% Find all prefix subscriptions and check if they match
+    %% This iterates over all subscriptions - for production use with many
+    %% subscriptions, consider a more efficient data structure
+    try
+        Matches = gproc:select({l, p}, [{{{'_', '_', {dht_prefix_subscription, '$1'}}, '_', '_'},
+                                          [], ['$1']}]),
+        lists:foreach(fun(Prefix) ->
+            case binary:match(Key, Prefix) of
+                {0, _} ->
+                    %% Key starts with this prefix - notify subscribers
+                    gproc:send({p, l, {dht_prefix_subscription, Prefix}}, Message);
+                _ ->
+                    ok
+            end
+        end, Matches)
+    catch
+        _:_ ->
+            %% gproc not available or no subscribers - ignore
+            ok
     end.

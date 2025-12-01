@@ -11,7 +11,8 @@
 -module(macula_client_behaviour).
 
 %% Connection management callbacks
--callback connect(Opts :: map(), EventHandler :: pid()) ->
+%% connect/2 takes URL (binary or list) and options map
+-callback connect(Url :: binary() | string(), Opts :: map()) ->
     {ok, pid()} | {error, term()}.
 
 -callback connect_local(Opts :: map()) ->
@@ -27,7 +28,8 @@
 -callback publish(Client :: pid(), Topic :: binary(), Payload :: map(), Opts :: map()) ->
     ok | {error, term()}.
 
--callback subscribe(Client :: pid(), Topic :: binary(), Handler :: pid()) ->
+%% subscribe/3 can take either a pid or a callback function as handler
+-callback subscribe(Client :: pid(), Topic :: binary(), Handler :: pid() | fun((map()) -> ok)) ->
     {ok, reference()} | {error, term()}.
 
 -callback unsubscribe(Client :: pid(), SubRef :: reference()) ->

@@ -150,6 +150,7 @@ remove_by_id(Nodes, NodeId) ->
     [N || #{node_id := Id} = N <- Nodes, Id =/= NodeId].
 
 %% @doc Calculate XOR distance between target and node.
--spec distance_to(binary(), node_info()) -> non_neg_integer().
+%% Returns raw XOR binary (32 bytes) for Kademlia comparison.
+-spec distance_to(binary(), node_info()) -> binary().
 distance_to(Target, #{node_id := NodeId}) ->
     macula_routing_nodeid:distance(Target, NodeId).

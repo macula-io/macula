@@ -21,7 +21,7 @@
 -type key() :: binary().
 -type value() :: term().
 -type lookup_fun() :: fun((key()) -> {ok, [value()]} | {error, term()}).
--type publish_fun() :: fun((key(), value()) -> ok | {error, term()}).
+-type publish_fun() :: fun((key()) -> ok | {error, term()}).
 -type unpublish_fun() :: fun((key()) -> ok | {error, term()}).
 
 -export_type([

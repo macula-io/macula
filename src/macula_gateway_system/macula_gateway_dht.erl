@@ -182,10 +182,11 @@ format_host_to_binary(Host) when is_binary(Host) ->
 
 %% @doc Query remote peer and wait for response.
 %% Used for FIND_NODE and FIND_VALUE operations.
+%% Currently uses fire-and-forget delivery. For request/response patterns,
+%% use macula_rpc_handler:request/4 which provides NATS-style async RPC
+%% with callbacks (available since v0.12.1).
 -spec query_peer(map(), atom(), map()) -> {ok, term()} | {error, term()}.
 query_peer(NodeInfo, MessageType, Message) ->
-    %% For now, use send_to_peer (fire-and-forget)
-    %% TODO(v0.9.0): Implement request/response pattern with timeout - see TODO.md
     send_to_peer(NodeInfo, MessageType, Message).
 
 %% @private

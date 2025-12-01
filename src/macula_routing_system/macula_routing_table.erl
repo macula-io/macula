@@ -59,7 +59,8 @@ do_add_node(#{k := K, buckets := Buckets} = Table, BucketIndex, NodeInfo) ->
     Bucket = maps:get(BucketIndex, Buckets, macula_routing_bucket:new(K)),
     add_to_bucket(Table, Buckets, BucketIndex, Bucket, NodeInfo).
 
-%% Bucket full - ignore (TODO: implement bucket splitting)
+%% Add node to bucket. If bucket is full, the node is ignored.
+%% Standard Kademlia behavior - full buckets indicate well-known nodes.
 add_to_bucket(Table, _Buckets, _BucketIndex, Bucket, NodeInfo) ->
     case macula_routing_bucket:add_node(Bucket, NodeInfo) of
         {error, bucket_full} -> Table;

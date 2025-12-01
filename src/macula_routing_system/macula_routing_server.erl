@@ -42,7 +42,9 @@
     storage :: #{binary() => term()},  % Local key-value storage
     config :: #{
         k => pos_integer(),
-        alpha => pos_integer()
+        alpha => pos_integer(),
+        escalation_enabled => boolean(),
+        escalation_timeout => pos_integer()
     }
 }).
 
@@ -127,6 +129,8 @@ handle_message_async(Pid, Message) ->
 init({LocalNodeId, Config}) ->
     K = maps:get(k, Config, 20),
     Alpha = maps:get(alpha, Config, 3),
+    EscalationEnabled = maps:get(escalation_enabled, Config, true),
+    EscalationTimeout = maps:get(escalation_timeout, Config, 5000),
 
     State = #state{
         local_node_id = LocalNodeId,
@@ -134,7 +138,9 @@ init({LocalNodeId, Config}) ->
         storage = #{},
         config = #{
             k => K,
-            alpha => Alpha
+            alpha => Alpha,
+            escalation_enabled => EscalationEnabled,
+            escalation_timeout => EscalationTimeout
         }
     },
 
@@ -190,10 +196,11 @@ handle_call({delete_local, Key, NodeId}, _From, #state{storage = Storage} = Stat
     NewStorage = delete_provider_from_storage(Key, NodeId, Storage),
     {reply, ok, State#state{storage = NewStorage}};
 
-handle_call({find_value, Key, K}, _From, #state{routing_table = Table, storage = Storage} = State) ->
+handle_call({find_value, Key, K}, _From, #state{routing_table = Table, storage = Storage,
+                                              config = Config} = State) ->
     ?LOG_DEBUG("find_value: key=~p, storage_size=~p", [Key, maps:size(Storage)]),
     ?LOG_DEBUG("find_value: storage keys=~p", [maps:keys(Storage)]),
-    Reply = find_value_in_storage(Key, K, Storage, Table),
+    Reply = find_value_with_escalation(Key, K, Storage, Table, Config),
     {reply, Reply, State};
 
 handle_call({handle_message, Message}, _From, State) ->
@@ -363,14 +370,43 @@ delete_provider_by_node_id(Key, NodeId, Providers, Storage) ->
 update_or_remove_key(Key, [], Storage) -> maps:remove(Key, Storage);
 update_or_remove_key(Key, Providers, Storage) -> Storage#{Key => Providers}.
 
-%% @doc Find value in local storage or DHT.
--spec find_value_in_storage(binary(), pos_integer(), map(), macula_routing_table:routing_table()) ->
+%% @doc Find value with escalation support.
+%% First checks local storage, then DHT, then escalates to parent bridge if enabled.
+-spec find_value_with_escalation(binary(), pos_integer(), map(),
+                                  macula_routing_table:routing_table(), map()) ->
     {ok, term()} | {error, term()}.
-find_value_in_storage(Key, K, Storage, Table) ->
-    case maps:get(Key, Storage, undefined) of
-        undefined -> find_value_via_dht(Key, K, Table);
-        Value when is_list(Value) -> {ok, Value};
-        Value -> {ok, [Value]}
+find_value_with_escalation(Key, K, Storage, Table, Config) ->
+    %% 1. Check bridge cache first (fastest)
+    case check_bridge_cache(Key) of
+        {ok, CachedValue} ->
+            ?LOG_DEBUG("find_value: cache hit for key ~p", [Key]),
+            {ok, CachedValue};
+        not_found ->
+            %% 2. Check local storage
+            case maps:get(Key, Storage, undefined) of
+                undefined ->
+                    %% 3. Try local DHT
+                    find_value_local_then_escalate(Key, K, Table, Config);
+                Value when is_list(Value) ->
+                    {ok, Value};
+                Value ->
+                    {ok, [Value]}
+            end
+    end.
+
+%% @doc Find value in local DHT, then escalate if not found.
+-spec find_value_local_then_escalate(binary(), pos_integer(),
+                                      macula_routing_table:routing_table(), map()) ->
+    {ok, term()} | {error, term()}.
+find_value_local_then_escalate(Key, K, Table, Config) ->
+    case find_value_via_dht(Key, K, Table) of
+        {ok, []} ->
+            %% Local DHT miss - try escalation
+            maybe_escalate_query(Key, Config);
+        {ok, Value} ->
+            {ok, Value};
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 find_value_via_dht(Key, K, Table) ->
@@ -379,6 +415,53 @@ find_value_via_dht(Key, K, Table) ->
         {ok, Value} -> {ok, Value};
         {nodes, _Nodes} -> {ok, []};
         {error, Reason} -> {error, Reason}
+    end.
+
+%% @doc Check bridge cache for value.
+-spec check_bridge_cache(binary()) -> {ok, term()} | not_found.
+check_bridge_cache(Key) ->
+    case whereis(macula_bridge_cache) of
+        undefined -> not_found;
+        CachePid ->
+            case macula_bridge_cache:get(CachePid, Key) of
+                {ok, Value} -> {ok, Value};
+                _ -> not_found
+            end
+    end.
+
+%% @doc Escalate query to parent bridge if enabled.
+-spec maybe_escalate_query(binary(), map()) -> {ok, term()} | {error, term()}.
+maybe_escalate_query(Key, Config) ->
+    EscalationEnabled = maps:get(escalation_enabled, Config, true),
+    case EscalationEnabled of
+        false ->
+            {ok, []};
+        true ->
+            escalate_to_bridge(Key, Config)
+    end.
+
+%% @doc Escalate query to parent bridge.
+-spec escalate_to_bridge(binary(), map()) -> {ok, term()} | {error, term()}.
+escalate_to_bridge(Key, Config) ->
+    case whereis(macula_bridge_node) of
+        undefined ->
+            ?LOG_DEBUG("find_value: no bridge node available for escalation"),
+            {ok, []};
+        BridgePid ->
+            Timeout = maps:get(escalation_timeout, Config, 5000),
+            Query = #{type => find_value, key => Key},
+            ?LOG_DEBUG("find_value: escalating query for key ~p to bridge", [Key]),
+            case macula_bridge_node:escalate_query(BridgePid, Query, Timeout) of
+                {ok, Value} ->
+                    ?LOG_DEBUG("find_value: escalation successful, got value"),
+                    {ok, Value};
+                {error, not_connected} ->
+                    ?LOG_DEBUG("find_value: bridge not connected to parent"),
+                    {ok, []};
+                {error, Reason} ->
+                    ?LOG_WARNING("find_value: escalation failed: ~p", [Reason]),
+                    {ok, []}
+            end
     end.
 
 %% @doc Process incoming DHT message and generate reply.

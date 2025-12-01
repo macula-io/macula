@@ -28,7 +28,10 @@
     get_connection/1,
     return_connection/2,
     invalidate/1,
-    stats/0
+    stats/0,
+    %% NAT system API
+    put/2,
+    get_connected_peers/0
 ]).
 
 %% gen_server callbacks
@@ -102,6 +105,23 @@ invalidate(Endpoint) ->
 stats() ->
     gen_server:call(?SERVER, stats).
 
+%% @doc Put a connection directly into the pool (NAT system API).
+%% Used by connection upgrade to store successfully upgraded direct connections.
+-spec put(binary(), term()) -> ok.
+put(PeerId, Connection) ->
+    gen_server:cast(?SERVER, {put_direct, PeerId, Connection}).
+
+%% @doc Get list of peer IDs with active connections.
+%% Returns list of peer IDs that have pooled connections.
+-spec get_connected_peers() -> [binary()].
+get_connected_peers() ->
+    try
+        Pattern = #pooled_conn{endpoint = '$1', _ = '_'},
+        ets:match(?TABLE, Pattern)
+    catch
+        _:_ -> []
+    end.
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -161,6 +181,22 @@ handle_cast({invalidate, Endpoint}, State) ->
     LookupResult = ets:lookup(?TABLE, Endpoint),
     do_invalidate(LookupResult, Endpoint),
     {noreply, State};
+
+handle_cast({put_direct, PeerId, Connection}, State) ->
+    %% Store a direct connection (from NAT traversal upgrade)
+    %% Connection here is typically just the connection handle, no stream yet
+    CurrentSize = ets:info(?TABLE, size),
+    NewState = maybe_evict_for_space(CurrentSize, State),
+    Now = erlang:system_time(millisecond),
+    PooledConn = #pooled_conn{
+        endpoint = PeerId,
+        connection = Connection,
+        stream = undefined,  % No stream yet for direct connections
+        last_used = Now,
+        created = Now
+    },
+    ets:insert(?TABLE, PooledConn),
+    {noreply, NewState};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
