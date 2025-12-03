@@ -261,14 +261,19 @@ terminate(_Reason, _State) ->
 -spec propagate_store_to_peers(list(), map(), binary(), term()) -> ok.
 propagate_store_to_peers([], _StoreMsg, Key, Value) ->
     %% No nodes in routing table - forward to bootstrap gateway via RPC
+    ?LOG_INFO("[DHT] No peers in routing table, forwarding store to bootstrap"),
     forward_store_to_bootstrap(Key, Value);
 propagate_store_to_peers(ClosestNodes, StoreMsg, _Key, _Value) ->
+    ?LOG_INFO("[DHT] Propagating store to ~p peer(s)", [length(ClosestNodes)]),
     lists:foreach(fun(NodeInfo) ->
         %% Best effort - don't fail if send fails
         try
-            _ = macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg)
+            ?LOG_DEBUG("[DHT] Sending store to peer ~p", [NodeInfo]),
+            Result = macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg),
+            ?LOG_DEBUG("[DHT] Store send result: ~p", [Result])
         catch
-            _:_Error -> ok
+            Class:Error ->
+                ?LOG_WARNING("[DHT] Store send failed: ~p:~p", [Class, Error])
         end
     end, ClosestNodes),
     ok.
@@ -371,7 +376,8 @@ update_or_remove_key(Key, [], Storage) -> maps:remove(Key, Storage);
 update_or_remove_key(Key, Providers, Storage) -> Storage#{Key => Providers}.
 
 %% @doc Find value with escalation support.
-%% First checks local storage, then DHT, then escalates to parent bridge if enabled.
+%% For pub/sub scenarios, we need ALL subscribers (local + remote).
+%% Queries both local storage AND DHT network, then merges results.
 -spec find_value_with_escalation(binary(), pos_integer(), map(),
                                   macula_routing_table:routing_table(), map()) ->
     {ok, term()} | {error, term()}.
@@ -382,40 +388,130 @@ find_value_with_escalation(Key, K, Storage, Table, Config) ->
             ?LOG_DEBUG("find_value: cache hit for key ~p", [Key]),
             {ok, CachedValue};
         not_found ->
-            %% 2. Check local storage
-            case maps:get(Key, Storage, undefined) of
-                undefined ->
-                    %% 3. Try local DHT
-                    find_value_local_then_escalate(Key, K, Table, Config);
-                Value when is_list(Value) ->
-                    {ok, Value};
-                Value ->
-                    {ok, [Value]}
+            %% 2. Get local values (if any)
+            LocalValues = case maps:get(Key, Storage, undefined) of
+                undefined -> [];
+                Value when is_list(Value) -> Value;
+                Value -> [Value]
+            end,
+            %% 3. ALWAYS query DHT network for remote values (critical for pub/sub)
+            %% This ensures we get subscribers from ALL nodes, not just local
+            NetworkValues = case find_value_via_dht(Key, K, Table) of
+                {ok, RemoteList} when is_list(RemoteList) -> RemoteList;
+                {ok, RemoteSingle} -> [RemoteSingle];
+                _ -> []
+            end,
+            %% 4. Merge and deduplicate by node_id
+            AllValues = merge_providers(LocalValues, NetworkValues),
+            ?LOG_INFO("[DHT] find_value: local=~p, network=~p, merged=~p",
+                       [length(LocalValues), length(NetworkValues), length(AllValues)]),
+            case AllValues of
+                [] ->
+                    %% 5. Try escalation if nothing found
+                    maybe_escalate_query(Key, Config);
+                _ ->
+                    {ok, AllValues}
             end
     end.
 
-%% @doc Find value in local DHT, then escalate if not found.
--spec find_value_local_then_escalate(binary(), pos_integer(),
-                                      macula_routing_table:routing_table(), map()) ->
-    {ok, term()} | {error, term()}.
-find_value_local_then_escalate(Key, K, Table, Config) ->
-    case find_value_via_dht(Key, K, Table) of
-        {ok, []} ->
-            %% Local DHT miss - try escalation
-            maybe_escalate_query(Key, Config);
+%% @doc Merge two lists of providers, deduplicating by node_id.
+%% Prefers the entry from the second list (network) over the first (local).
+-spec merge_providers(list(), list()) -> list().
+merge_providers(LocalProviders, NetworkProviders) ->
+    %% Build a map keyed by node_id for deduplication
+    LocalMap = lists:foldl(fun(P, Acc) ->
+        NodeId = get_node_id_from_value(P),
+        Acc#{NodeId => P}
+    end, #{}, LocalProviders),
+    MergedMap = lists:foldl(fun(P, Acc) ->
+        NodeId = get_node_id_from_value(P),
+        Acc#{NodeId => P}
+    end, LocalMap, NetworkProviders),
+    maps:values(MergedMap).
+
+find_value_via_dht(Key, K, Table) ->
+    %% Log routing table state for debugging
+    InitialClosest = macula_routing_table:find_closest(Table, Key, K),
+    ?LOG_INFO("[DHT] find_value_via_dht: routing_table has ~p nodes for key lookup", [length(InitialClosest)]),
+    lists:foreach(fun(NodeInfo) ->
+        ?LOG_INFO("[DHT] find_value_via_dht: will query node ~p at ~p",
+                  [maps:get(node_id, NodeInfo, unknown), get_node_endpoint(NodeInfo)])
+    end, InitialClosest),
+
+    QueryFn = fun(NodeInfo, QueryKey) -> network_query_find_value(NodeInfo, QueryKey) end,
+    case macula_routing_dht:find_value(Table, Key, K, QueryFn) of
         {ok, Value} ->
+            ?LOG_INFO("[DHT] find_value_via_dht: found ~p subscriber(s)", [length(Value)]),
             {ok, Value};
+        {nodes, Nodes} ->
+            ?LOG_INFO("[DHT] find_value_via_dht: not found, got ~p nodes", [length(Nodes)]),
+            {ok, []};
         {error, Reason} ->
+            ?LOG_WARNING("[DHT] find_value_via_dht: error ~p", [Reason]),
             {error, Reason}
     end.
 
-find_value_via_dht(Key, K, Table) ->
-    QueryFn = fun(_NodeInfo, _QueryKey) -> {nodes, [_NodeInfo]} end,
-    case macula_routing_dht:find_value(Table, Key, K, QueryFn) of
-        {ok, Value} -> {ok, Value};
-        {nodes, _Nodes} -> {ok, []};
-        {error, Reason} -> {error, Reason}
+%% @private Network query function for FIND_VALUE.
+%% Sends FIND_VALUE request to a peer and waits for response.
+%% Returns {value, Value} if peer has the value, {nodes, []} otherwise.
+-spec network_query_find_value(map(), binary()) -> {value, term()} | {nodes, list()}.
+network_query_find_value(NodeInfo, Key) ->
+    Endpoint = get_node_endpoint(NodeInfo),
+    do_network_query_find_value(Endpoint, NodeInfo, Key).
+
+do_network_query_find_value(undefined, NodeInfo, _Key) ->
+    ?LOG_WARNING("[DHT] network_query_find_value: no endpoint for node ~p", [NodeInfo]),
+    {nodes, []};
+do_network_query_find_value(Endpoint, _NodeInfo, Key) ->
+    %% Build FIND_VALUE message (the protocol expects raw Key, not encoded)
+    FindValueMsg = #{<<"key">> => Key},
+    ?LOG_INFO("[DHT] network_query_find_value: querying ~s for key", [Endpoint]),
+
+    %% Send request and wait for response (synchronous with 5s timeout)
+    case macula_peer_connector:send_message_and_wait(Endpoint, find_value, FindValueMsg, 5000) of
+        {ok, {find_value_reply, Response}} ->
+            Result = decode_find_value_response(Response),
+            ?LOG_INFO("[DHT] network_query_find_value: got reply from ~s: ~p", [Endpoint, Result]),
+            Result;
+        {ok, {OtherType, _Response}} ->
+            ?LOG_WARNING("[DHT] network_query_find_value: unexpected reply type ~p from ~s", [OtherType, Endpoint]),
+            {nodes, []};
+        {error, timeout} ->
+            ?LOG_WARNING("[DHT] network_query_find_value: timeout querying ~s", [Endpoint]),
+            {nodes, []};
+        {error, Reason} ->
+            ?LOG_WARNING("[DHT] network_query_find_value: error ~p querying ~s", [Reason, Endpoint]),
+            {nodes, []}
     end.
+
+%% @private Decode FIND_VALUE reply content.
+decode_find_value_response(Response) ->
+    case macula_routing_protocol:decode_find_value_reply(Response) of
+        {ok, {value, Value}} ->
+            {value, Value};
+        {ok, {nodes, Nodes}} ->
+            {nodes, Nodes};
+        {error, _Reason} ->
+            {nodes, []}
+    end.
+
+%% @private Extract endpoint from node info.
+get_node_endpoint(#{endpoint := Endpoint}) when is_binary(Endpoint) ->
+    Endpoint;
+get_node_endpoint(#{address := {Host, Port}}) when is_integer(Port) ->
+    iolist_to_binary([format_host(Host), <<":">>, integer_to_binary(Port)]);
+get_node_endpoint(#{<<"endpoint">> := Endpoint}) when is_binary(Endpoint) ->
+    Endpoint;
+get_node_endpoint(_) ->
+    undefined.
+
+%% @private Format host for URL.
+format_host({A, B, C, D}) when is_integer(A) ->
+    io_lib:format("~B.~B.~B.~B", [A, B, C, D]);
+format_host(Host) when is_list(Host) ->
+    Host;
+format_host(Host) when is_binary(Host) ->
+    binary_to_list(Host).
 
 %% @doc Check bridge cache for value.
 -spec check_bridge_cache(binary()) -> {ok, term()} | not_found.
@@ -515,6 +611,8 @@ handle_find_node(Message, #state{routing_table = Table, config = Config} = State
 -spec handle_store(map(), #state{}) -> {map(), #state{}}.
 handle_store(Message, #state{storage = Storage} = State) ->
     {ok, Key, Value} = macula_routing_protocol:decode_store(Message),
+    ?LOG_INFO("[RoutingServer] STORE received: key_prefix=~p, value_node_id=~p",
+             [binary:part(Key, 0, min(8, byte_size(Key))), maps:get(node_id, Value, maps:get(<<"node_id">>, Value, unknown))]),
     ?LOG_DEBUG("STORE: key=~p, value=~p", [Key, Value]),
     ExistingProviders = maps:get(Key, Storage, []),
     ProviderList = ensure_provider_list(ExistingProviders),
@@ -532,6 +630,8 @@ handle_find_value(Message, #state{storage = Storage, routing_table = Table, conf
     {ok, Key} = macula_routing_protocol:decode_find_value(Message),
     StorageValue = maps:get(Key, Storage, undefined),
     K = maps:get(k, Config, 20),
+    ?LOG_INFO("[RoutingServer] FIND_VALUE: key_prefix=~p, storage_size=~p, found=~p",
+             [binary:part(Key, 0, min(8, byte_size(Key))), maps:size(Storage), StorageValue =/= undefined]),
     Reply = encode_find_value_result(StorageValue, Key, K, Table),
     {Reply, State}.
 

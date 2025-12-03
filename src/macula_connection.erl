@@ -521,25 +521,47 @@ get_hostname_from_env([EnvVar | Rest]) ->
         Value -> list_to_binary(Value)
     end.
 
-%% @doc Register connected server in DHT routing table (best effort).
-%% If DHT is not running, logs warning but continues.
-%% Unexpected errors (bad URL, crypto failure) will crash - this is intentional.
--spec register_server_in_dht(#state{}) -> ok.
-register_server_in_dht(State) ->
+%% @doc Register connected server in DHT routing table using info from PONG response.
+%% Called when PONG message contains server's real node_id and endpoint.
+%% If PONG doesn't contain node_id (keep-alive pong), does nothing.
+-spec maybe_register_server_in_dht(map(), #state{}) -> ok.
+maybe_register_server_in_dht(PongMsg, State) ->
+    %% Check for node_id in PONG (binary key from msgpack decoding)
+    ServerNodeId = maps:get(<<"node_id">>, PongMsg, undefined),
+    ServerEndpoint = maps:get(<<"endpoint">>, PongMsg, undefined),
+    do_register_server_in_dht(ServerNodeId, ServerEndpoint, State).
+
+%% @private Only register if we have the server's real node_id
+do_register_server_in_dht(undefined, _Endpoint, _State) ->
+    %% Keep-alive PONG - no server info to register
+    ok;
+do_register_server_in_dht(ServerNodeId, ServerEndpoint, State) when is_binary(ServerNodeId) ->
+    %% First PONG after CONNECT - contains real server info
     ServerAddress = parse_server_endpoint(State#state.url),
     ServerNodeInfo = #{
-        node_id => crypto:strong_rand_bytes(32),
-        address => ServerAddress
+        node_id => ServerNodeId,
+        address => ServerAddress,
+        endpoint => ServerEndpoint
     },
+    ?LOG_INFO("[Connection] Registering server in DHT: node_id=~s, endpoint=~s",
+              [binary:encode_hex(ServerNodeId), ServerEndpoint]),
 
     case macula_routing_server:add_node(macula_routing_server, ServerNodeInfo) of
         ok ->
-            ?LOG_DEBUG("Added server node to DHT routing table with address: ~p", [ServerAddress]),
-            ok;
+            ?LOG_INFO("[Connection] Added server to DHT routing table: ~s",
+                     [binary:encode_hex(ServerNodeId)]);
         {error, Reason} ->
-            ?LOG_WARNING("DHT registration failed (expected if DHT not running): ~p", [Reason]),
-            ok
-    end.
+            ?LOG_WARNING("DHT registration failed (expected if DHT not running): ~p", [Reason])
+    end,
+    ok.
+
+%% @doc Legacy function - replaced by maybe_register_server_in_dht/2.
+%% Called during connect but now just logs - real registration happens in PONG handler.
+-spec register_server_in_dht(#state{}) -> ok.
+register_server_in_dht(_State) ->
+    %% Server registration now happens when we receive PONG with node_id
+    ?LOG_DEBUG("Server will be registered in DHT when PONG arrives with node_id"),
+    ok.
 
 %% @doc Send a protocol message through a stream (raw).
 %% Crashes if message is invalid - this indicates a bug in the caller.
@@ -639,9 +661,12 @@ process_message({ping, Msg}, #state{stream = Stream} = State) ->
     _ = send_message_raw(pong, PongMsg, Stream),
     State;
 
-%% Handle PONG message - keep-alive acknowledgment
-process_message({pong, _Msg}, State) ->
+%% Handle PONG message - keep-alive acknowledgment and server DHT registration
+%% The first PONG after CONNECT contains server's node_id and endpoint for DHT routing
+process_message({pong, PongMsg}, State) ->
     ?LOG_DEBUG("Received PONG - connection alive"),
+    %% Check if PONG contains server's node_id (set by gateway on first response)
+    maybe_register_server_in_dht(PongMsg, State),
     State;
 
 %% Handle FIND_VALUE_REPLY message - route to RPC handler for DHT query results

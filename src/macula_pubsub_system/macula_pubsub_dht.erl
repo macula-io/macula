@@ -208,17 +208,18 @@ route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId) ->
 next_message_id(Counter) ->
     macula_utils:next_message_id(Counter).
 
-%% @doc Query DHT for subscribers synchronously (v0.8.0+).
-%% Directly queries local routing server instead of sending message to connection manager.
+%% @doc Query DHT for subscribers and route message to them (v0.8.0+).
+%% Directly queries local routing server and routes message to discovered subscribers.
+%% NOTE: Despite the "async" name (kept for compatibility), this now performs
+%% synchronous DHT lookup AND routing in one call.
 -spec query_dht_async(topic(), payload(), qos(), binary(), connection_manager_pid()) -> ok.
-query_dht_async(Topic, _Payload, _Qos, _MsgId, _ConnMgrPid) ->
+query_dht_async(Topic, Payload, Qos, _MsgId, _ConnMgrPid) ->
     %% Create DHT key from topic
     TopicKey = crypto:hash(sha256, Topic),
 
     ?LOG_DEBUG("Querying DHT for remote subscribers to topic: ~s", [Topic]),
 
     %% Query local routing server directly (v0.8.0+)
-    %% This is actually synchronous now, but we keep the function name for compatibility
     try
         case whereis(macula_routing_server) of
             undefined ->
@@ -227,10 +228,19 @@ query_dht_async(Topic, _Payload, _Qos, _MsgId, _ConnMgrPid) ->
                 %% K=20 is standard Kademlia replication factor
                 case macula_routing_server:find_value(RoutingServerPid, TopicKey, 20) of
                     {ok, Subscribers} when is_list(Subscribers), length(Subscribers) > 0 ->
-                        ?LOG_DEBUG("Found ~p subscriber(s) for topic ~s in DHT",
-                                  [length(Subscribers), Topic]);
+                        ?LOG_INFO("Found ~p subscriber(s) for topic ~s in DHT, routing message",
+                                  [length(Subscribers), Topic]),
+                        %% Get our node ID for routing
+                        SourceNodeId = get_local_node_id(),
+                        %% Route message to discovered subscribers
+                        route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId);
                     {ok, []} ->
                         ?LOG_DEBUG("No subscribers found for topic ~s in DHT", [Topic]);
+                    {ok, SingleSub} when is_map(SingleSub) ->
+                        %% Single subscriber returned as map (not list)
+                        ?LOG_INFO("Found 1 subscriber for topic ~s in DHT, routing message", [Topic]),
+                        SourceNodeId = get_local_node_id(),
+                        route_to_subscribers(Topic, Payload, Qos, [SingleSub], SourceNodeId);
                     {error, not_found} ->
                         ?LOG_DEBUG("No subscribers found for topic ~s in DHT", [Topic]);
                     {error, QueryError} ->
@@ -244,6 +254,23 @@ query_dht_async(Topic, _Payload, _Qos, _MsgId, _ConnMgrPid) ->
                         [Topic, Error, Stack])
     end,
     ok.
+
+%% @private Get local node ID for routing.
+-spec get_local_node_id() -> node_id().
+get_local_node_id() ->
+    case whereis(macula_gateway) of
+        undefined ->
+            %% Fallback: generate a temporary node ID
+            crypto:strong_rand_bytes(32);
+        GatewayPid ->
+            try
+                {ok, NodeId} = gen_server:call(GatewayPid, get_node_id, 1000),
+                NodeId
+            catch
+                _:_ ->
+                    crypto:strong_rand_bytes(32)
+            end
+    end.
 
 %% @doc Send message to subscriber with NAT-aware fallback (v0.12.0+).
 %% Tries direct connection first, then falls back to NAT-aware routing.

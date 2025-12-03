@@ -168,9 +168,10 @@ message_type_name_zero_test() ->
 
 message_type_name_unassigned_ids_test() ->
     %% Test unassigned IDs in each range
+    %% Note: 0x13 is pubsub_route, 0x24/0x25 are rpc_request/rpc_reply
     ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#05)),  % After control
-    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#13)),  % After pub/sub
-    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#24)),  % After RPC (0x23 is rpc_route)
+    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#14)),  % After pub/sub (0x13 is pubsub_route)
+    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#26)),  % After RPC (0x25 is rpc_reply)
     ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#33)),  % After SWIM
     ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#45)).  % After Kademlia
 

@@ -65,9 +65,10 @@
 %% Options:
 %%   - cert_file: Path to TLS certificate
 %%   - key_file: Path to TLS private key
+%% Registers as 'macula_gateway_mesh' for discovery by pubsub module.
 -spec start_link(map()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) ->
-    gen_server:start_link(?MODULE, Opts, []).
+    gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
 
 %% @doc Stop the mesh connection manager.
 -spec stop(pid()) -> ok.

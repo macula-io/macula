@@ -69,9 +69,10 @@
 %%%===================================================================
 
 %% @doc Start the client manager with options.
+%% Registers as 'macula_gateway_clients' for discovery by pubsub module.
 -spec start_link(map()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) ->
-    gen_server:start_link(?MODULE, Opts, []).
+    gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
 
 %% @doc Stop the client manager.
 -spec stop(pid()) -> ok.

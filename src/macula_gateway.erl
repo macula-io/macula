@@ -386,6 +386,26 @@ get_node_id(Realm, Port) ->
             crypto:hash(sha256, list_to_binary(NodeName))
     end.
 
+%% @doc Build endpoint URL for this gateway.
+%% Uses MACULA_HOSTNAME env var (set in Docker), falls back to HOSTNAME.
+-spec build_gateway_endpoint(#state{}) -> binary().
+build_gateway_endpoint(#state{port = Port}) ->
+    Host = get_gateway_hostname(),
+    iolist_to_binary([<<"https://">>, Host, <<":">>, integer_to_binary(Port)]).
+
+%% @doc Get hostname for gateway endpoint.
+%% Priority: MACULA_HOSTNAME > HOSTNAME > "localhost"
+-spec get_gateway_hostname() -> binary().
+get_gateway_hostname() ->
+    case os:getenv("MACULA_HOSTNAME") of
+        false ->
+            case os:getenv("HOSTNAME") of
+                false -> <<"localhost">>;
+                Hostname -> list_to_binary(Hostname)
+            end;
+        MaculaHostname -> list_to_binary(MaculaHostname)
+    end.
+
 
 handle_call(get_stats, _From, State) ->
     ClientMgr = State#state.client_manager,
@@ -561,6 +581,7 @@ handle_cast({distribute_publish, Topic, Payload}, State) ->
     },
 
     %% Distribute to local + remote subscribers (runs in cast, so it's async)
+    %% DHT-based routing handles delivery to all subscribers (local + remote)
     macula_gateway_pubsub_router:distribute(
         LocalSubscribers,
         PubMsg,
@@ -569,9 +590,8 @@ handle_cast({distribute_publish, Topic, Payload}, State) ->
         State#state.client_manager
     ),
 
-    %% Also relay to mesh peers (bootstrap and connected clients)
-    %% This ensures local publishes reach remote subscribers via bootstrap
-    relay_to_mesh_peers(State, Topic, Payload),
+    %% NOTE: relay_to_mesh_peers REMOVED (v0.14.1)
+    %% See handle_publish for explanation - causes exponential amplification
 
     {noreply, State};
 
@@ -737,11 +757,17 @@ handle_connect_realm(true, Stream, ConnectMsg, State) ->
             ?LOG_DEBUG("Peer added to routing table")
     end,
 
-    %% Send PONG acknowledgment back to keep stream alive for bidirectional communication
+    %% Send PONG acknowledgment back with gateway's node_id and endpoint
+    %% This allows the client to correctly add the gateway to its DHT routing table
+    GatewayEndpoint = build_gateway_endpoint(State),
     PongMsg = #{
         timestamp => erlang:system_time(millisecond),
-        server_time => erlang:system_time(millisecond)
+        server_time => erlang:system_time(millisecond),
+        <<"node_id">> => State#state.node_id,
+        <<"endpoint">> => GatewayEndpoint
     },
+    ?LOG_INFO("[Gateway] Sending PONG with node_id=~s, endpoint=~s",
+              [binary:encode_hex(State#state.node_id), GatewayEndpoint]),
     PongBinary = macula_protocol_encoder:encode(pong, PongMsg),
     case macula_quic:send(Stream, PongBinary) of
         ok ->
@@ -795,16 +821,19 @@ handle_rpc_reply_routed(ReplyMsg, RpcRouteMsg, State) ->
     {noreply, State}.
 
 %% @doc Handle routed PUBLISH message delivered locally.
-%% Deliver to local pub/sub subscribers.
+%% Deliver to local pub/sub subscribers ONLY - no remote routing.
+%% This prevents message amplification loops (A→B→A→B...).
 handle_pubsub_route_deliver(PublishMsg, State) ->
     %% Extract topic from publish message
     Topic = maps:get(<<"topic">>, PublishMsg),
     Payload = maps:get(<<"payload">>, PublishMsg),
 
-    ?LOG_DEBUG("Delivering routed PUBLISH to topic ~p", [Topic]),
+    ?LOG_DEBUG("Delivering routed PUBLISH to LOCAL subscribers only, topic ~p", [Topic]),
 
-    %% Publish to local subscribers (delegate to pubsub module)
-    macula_gateway_pubsub:publish(State#state.pubsub, Topic, Payload),
+    %% CRITICAL: Use deliver_local, NOT publish!
+    %% publish() would re-route to remote subscribers, causing infinite amplification.
+    %% deliver_local() only delivers to streams on THIS node.
+    macula_gateway_pubsub:deliver_local(State#state.pubsub, Topic, Payload),
     {noreply, State}.
 
 %% @doc Forward pubsub_route message to next hop through mesh.
@@ -827,84 +856,8 @@ forward_pubsub_route(NextHopNodeInfo, PubSubRouteMsg, MeshPid) ->
              [binary:encode_hex(NextHopNodeId)]),
     ok.
 
-%% @doc Relay pub/sub event to all connected mesh peers.
-%% This enables cross-peer event propagation for distributed applications.
-relay_to_mesh_peers(State, Topic, Payload) ->
-    %% Strategy: Relay via TWO mechanisms to form a mesh:
-    %% 1. Broadcast to connected CLIENTS (applications/gateways connected TO this gateway)
-    %% 2. Forward to connected BOOTSTRAP PEERS (gateways this gateway connected TO)
-
-    %% 1. Broadcast to connected clients (existing implementation)
-    PublishMsg = #{
-        <<"topic">> => Topic,
-        <<"payload">> => Payload,
-        <<"qos">> => 0,
-        <<"retain">> => false,
-        <<"message_id">> => erlang:unique_integer([positive])
-    },
-
-    case macula_protocol_encoder:encode(publish, PublishMsg) of
-        {error, Reason} ->
-            ?LOG_ERROR("Failed to encode publish message: ~p", [Reason]),
-            ok;
-        EncodedMsg ->
-            %% Broadcast to all connected clients (applications/child gateways)
-            ClientManager = State#state.client_manager,
-            macula_gateway_clients:broadcast(ClientManager, EncodedMsg),
-            ?LOG_DEBUG("Broadcasted ~s to all clients", [Topic]),
-            ok
-    end,
-
-    %% 2. Forward to bootstrap peers (parent gateways)
-    %% Get peer system supervisors
-    PeerSystems = macula_peers_sup:list_peers(),
-    ?LOG_DEBUG("Peer systems: ~p", [PeerSystems]),
-
-    %% Extract connection PIDs from each peer system supervisor
-    ConnectionPids = lists:filtermap(fun(PeerSup) ->
-        case supervisor:which_children(PeerSup) of
-            Children when is_list(Children) ->
-                %% Find the connection_manager PID (macula_connection)
-                case lists:keyfind(connection_manager, 1, Children) of
-                    {connection_manager, ConnPid, _Type, _Modules} when is_pid(ConnPid) ->
-                        {true, ConnPid};
-                    _ ->
-                        false
-                end;
-            _ ->
-                false
-        end
-    end, PeerSystems),
-
-    ?LOG_DEBUG("Bootstrap connection PIDs: ~p", [ConnectionPids]),
-
-    case ConnectionPids of
-        [] ->
-            ?LOG_DEBUG("No bootstrap peers to forward to"),
-            ok;
-        Connections ->
-            %% Build publish message for forwarding
-            ForwardMsg = #{
-                <<"topic">> => Topic,
-                <<"payload">> => Payload,
-                <<"qos">> => 0,
-                <<"retain">> => false,
-                <<"message_id">> => erlang:unique_integer([positive])
-            },
-
-            %% Forward to each bootstrap peer via macula_connection:send_message
-            lists:foreach(fun(ConnPid) ->
-                case macula_connection:send_message(ConnPid, publish, ForwardMsg) of
-                    ok ->
-                        ?LOG_DEBUG("Forwarded ~s to bootstrap peer ~p", [Topic, ConnPid]);
-                    {error, PeerReason} ->
-                        ?LOG_WARNING("Failed to forward ~s to peer ~p: ~p",
-                                 [Topic, ConnPid, PeerReason])
-                end
-            end, Connections),
-            ?LOG_DEBUG("Forwarded ~s to ~p bootstrap peer(s)", [Topic, length(Connections)])
-    end,
-    ok.
+%% NOTE: relay_to_mesh_peers/3 was removed in v0.14.1 - it caused exponential message amplification.
+%% See handle_publish/3 and macula_gateway_pubsub_router for current pub/sub distribution.
 
 
 %% @doc Handle RPC call message (legacy direct handling).
@@ -1387,13 +1340,13 @@ handle_decoded_message({ok, {connect, ConnectMsg}}, Stream, State) ->
 
 %% Handle decoded STORE message.
 handle_decoded_message({ok, {store, StoreMsg}}, Stream, State) ->
-    ?LOG_DEBUG("Received STORE message"),
+    ?LOG_INFO("[Gateway] Received STORE message from peer"),
     ?LOG_DEBUG("STORE message: ~p", [StoreMsg]),
     handle_dht_store(Stream, StoreMsg, State);
 
 %% Handle decoded FIND_VALUE message.
 handle_decoded_message({ok, {find_value, FindValueMsg}}, Stream, State) ->
-    ?LOG_DEBUG("Received FIND_VALUE message"),
+    ?LOG_INFO("[Gateway] Received FIND_VALUE message from peer"),
     ?LOG_DEBUG("FIND_VALUE message: ~p", [FindValueMsg]),
     handle_dht_find_value(Stream, FindValueMsg, State);
 
@@ -1592,7 +1545,7 @@ handle_unsubscribe(Stream, UnsubMsg, State) ->
 %% Delegates to macula_gateway_pubsub_router for distribution logic.
 handle_publish(_PublisherStream, PubMsg, State) ->
     Topic = maps:get(<<"topic">>, PubMsg),
-    Payload = maps:get(<<"payload">>, PubMsg),
+    _Payload = maps:get(<<"payload">>, PubMsg),
     ?LOG_DEBUG("Routing publish to topic: ~s", [Topic]),
 
     %% Get local subscribers for this topic
@@ -1600,6 +1553,7 @@ handle_publish(_PublisherStream, PubMsg, State) ->
     ?LOG_DEBUG("Found ~p local subscriber(s) for topic ~s", [length(LocalSubscribers), Topic]),
 
     %% Distribute to local and remote subscribers via the router
+    %% DHT-based routing handles delivery to all subscribers (local + remote)
     macula_gateway_pubsub_router:distribute(
         LocalSubscribers,
         PubMsg,
@@ -1608,8 +1562,13 @@ handle_publish(_PublisherStream, PubMsg, State) ->
         State#state.client_manager
     ),
 
-    %% Relay to mesh peers (both clients and bootstrap peers)
-    relay_to_mesh_peers(State, Topic, Payload),
+    %% NOTE: relay_to_mesh_peers REMOVED (v0.14.1)
+    %% The DHT-based routing above already handles delivery to all subscribers.
+    %% relay_to_mesh_peers was causing exponential message amplification:
+    %% - Publisher sends to bootstrap
+    %% - Bootstrap routes via DHT AND relays to all clients
+    %% - Each client receiving relay would re-route AND re-relay
+    %% Result: N nodes = N^2 messages per publish (severe lag)
 
     {noreply, State}.
 

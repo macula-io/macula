@@ -109,6 +109,7 @@ send_message_and_wait(Endpoint, MessageType, Message, Timeout) ->
 
 %% @private Send message and wait for reply using direct QUIC connection.
 send_and_wait_quic(Host, Port, MessageBinary, Timeout) ->
+    ?LOG_INFO("[PeerConnector] send_and_wait to ~s:~p (~p bytes)", [Host, Port, byte_size(MessageBinary)]),
     ConnectOpts = [
         {alpn, ["macula"]},
         {verify, none},
@@ -154,29 +155,42 @@ send_and_wait_reply(Conn, Stream, MessageBinary, Timeout) ->
             {error, {send_failed, Reason}}
     end.
 
-%% @private Wait for binary data reply, ignoring QUIC control messages.
+%% @private Wait for binary data reply, ignoring QUIC control messages and stale stream data.
+%% NOTE: Data may arrive on OTHER streams (from previous/concurrent connections).
+%% We ignore data on other streams and keep waiting for data on OUR stream.
 wait_for_data_reply(Conn, Stream, Timeout, StartTime) ->
     RemainingTime = max(0, Timeout - (erlang:monotonic_time(millisecond) - StartTime)),
     receive
         {quic, Data, Stream, _Flags} when is_binary(Data) ->
+            ?LOG_INFO("[PeerConnector] Received reply: ~p bytes", [byte_size(Data)]),
             ReplyResult = macula_protocol_decoder:decode(Data),
+            ?LOG_INFO("[PeerConnector] Decoded reply: ~p", [ReplyResult]),
             quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0),
             quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
             ReplyResult;
-        {quic, Data, _OtherStream, _Flags} when is_binary(Data) ->
-            %% Data on different stream - unexpected
-            quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0),
-            quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
-            {error, stream_mismatch};
+        {quic, Data, OtherStream, _Flags} when is_binary(Data) ->
+            %% Data on different stream - ignore and keep waiting for OUR stream
+            %% This happens with concurrent connections or stale streams
+            ?LOG_DEBUG("[PeerConnector] Ignoring data on other stream ~p (waiting for ~p)",
+                       [OtherStream, Stream]),
+            wait_for_data_reply(Conn, Stream, Timeout, StartTime);
         %% Ignore QUIC control messages and continue waiting
         {quic, streams_available, _ConnRef, _Info} ->
             wait_for_data_reply(Conn, Stream, Timeout, StartTime);
         {quic, peer_needs_streams, _ConnRef, _Info} ->
             wait_for_data_reply(Conn, Stream, Timeout, StartTime);
-        {quic, shutdown, _Handle, _Reason} ->
+        {quic, shutdown, Stream, _Reason} ->
+            %% Only treat shutdown of OUR stream as error
             {error, connection_shutdown};
-        {quic, closed, _Handle, _Reason} ->
-            {error, connection_closed}
+        {quic, shutdown, _OtherHandle, _Reason} ->
+            %% Shutdown of other streams - ignore
+            wait_for_data_reply(Conn, Stream, Timeout, StartTime);
+        {quic, closed, Stream, _Reason} ->
+            %% Only treat closure of OUR stream as error
+            {error, connection_closed};
+        {quic, closed, _OtherHandle, _Reason} ->
+            %% Closure of other streams - ignore
+            wait_for_data_reply(Conn, Stream, Timeout, StartTime)
     after RemainingTime ->
         quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0),
         quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),

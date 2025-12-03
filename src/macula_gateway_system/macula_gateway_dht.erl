@@ -50,16 +50,47 @@ handle_store(_Stream, StoreMsg) ->
     ok.
 
 %% @doc Handle DHT FIND_VALUE message.
-%% Forwards to routing server and sends encoded reply over stream.
-%% Crashes on routing server or encoding failures - exposes DHT/protocol bugs.
+%% Extracts the key and performs local storage lookup, returning result over stream.
+%% The message format from protocol decoder is #{<<"key">> => Key} (binary key).
 -spec handle_find_value(pid(), map()) -> ok.
 handle_find_value(Stream, FindValueMsg) ->
-    %% Forward to routing server (let it crash on errors)
-    Reply = macula_routing_server:handle_message(macula_routing_server, FindValueMsg),
-    %% Send reply back over stream (let it crash on errors)
+    %% Extract key from message - supports both <<"key">> (protocol) and key (atom)
+    Key = maps:get(<<"key">>, FindValueMsg, maps:get(key, FindValueMsg, undefined)),
+    ?LOG_INFO("[Gateway DHT] FIND_VALUE request for key_prefix=~p",
+              [case Key of
+                   undefined -> undefined;
+                   K when is_binary(K) -> binary:part(K, 0, min(8, byte_size(K)));
+                   _ -> Key
+               end]),
+    Reply = do_handle_find_value(Key),
     ReplyBinary = macula_protocol_encoder:encode(find_value_reply, Reply),
     macula_quic:send(Stream, ReplyBinary),
     ok.
+
+%% @private Handle FIND_VALUE with undefined key
+do_handle_find_value(undefined) ->
+    ?LOG_WARNING("[Gateway DHT] FIND_VALUE with undefined key"),
+    #{type => error, reason => missing_key};
+%% @private Handle FIND_VALUE with valid key
+do_handle_find_value(Key) when is_binary(Key) ->
+    %% Use routing server's find_value API with k=20
+    case macula_routing_server:find_value(macula_routing_server, Key, 20) of
+        {ok, Values} when is_list(Values), Values =/= [] ->
+            ?LOG_INFO("[Gateway DHT] FIND_VALUE found ~p value(s)", [length(Values)]),
+            macula_routing_protocol:encode_find_value_reply({value, Values});
+        {ok, []} ->
+            ?LOG_DEBUG("[Gateway DHT] FIND_VALUE: no values found"),
+            macula_routing_protocol:encode_find_value_reply({nodes, []});
+        {error, not_found} ->
+            ?LOG_DEBUG("[Gateway DHT] FIND_VALUE: not found"),
+            macula_routing_protocol:encode_find_value_reply({nodes, []});
+        {error, Reason} ->
+            ?LOG_WARNING("[Gateway DHT] FIND_VALUE error: ~p", [Reason]),
+            #{type => error, reason => Reason}
+    end;
+do_handle_find_value(Key) ->
+    ?LOG_WARNING("[Gateway DHT] FIND_VALUE with non-binary key: ~p", [Key]),
+    #{type => error, reason => invalid_key}.
 
 %% @doc Handle DHT FIND_NODE message.
 %% Forwards to routing server and sends encoded reply over stream.
@@ -90,8 +121,8 @@ handle_query(FromPid, _QueryType, QueryData) ->
 
 %% @doc Look up a value from the DHT by key.
 %% Synchronous lookup from local DHT storage.
-%% NOTE: For pubsub, use forward_publish_to_bootstrap/2 instead of looking up
-%% subscribers locally - the bootstrap has the complete subscriber list.
+%% Subscriptions are replicated via DHT propagation to k closest nodes,
+%% so local lookup returns subscribers from the replicated DHT data.
 %% Returns list of subscribers for the given key.
 -spec lookup_value(binary()) -> {ok, list()} | {error, not_found}.
 lookup_value(Key) ->
@@ -119,8 +150,9 @@ normalize_find_value_result({error, Reason}) ->
     {error, Reason}.
 
 %% @doc Forward a PUBLISH message to the bootstrap gateway for distribution.
-%% The bootstrap has all DHT subscriptions and can distribute to all subscribers.
-%% This avoids the problem of local DHT not having remote peer subscriptions.
+%% @deprecated v0.14.0+ uses direct P2P routing via local DHT lookup.
+%% Bootstrap is NOT a broker - use route_via_local_dht in pubsub_router instead.
+%% This function remains for backwards compatibility but should not be used.
 -spec forward_publish_to_bootstrap(map()) -> ok | {error, term()}.
 forward_publish_to_bootstrap(PubMsg) ->
     Realm = application:get_env(macula, realm, <<"default">>),
@@ -140,13 +172,18 @@ do_forward_to_bootstrap(ConnPid, PubMsg) ->
 -spec send_to_peer(map(), atom(), map()) -> ok | {error, term()}.
 send_to_peer(NodeInfo, MessageType, Message) ->
     Endpoint = extract_endpoint(NodeInfo),
+    ?LOG_INFO("[DHT] send_to_peer: NodeInfo=~p, Endpoint=~p, Type=~p",
+              [maps:get(node_id, NodeInfo, unknown), Endpoint, MessageType]),
     do_send_to_peer(Endpoint, MessageType, Message).
 
-do_send_to_peer(undefined, _MessageType, _Message) ->
+do_send_to_peer(undefined, MessageType, _Message) ->
+    ?LOG_WARNING("[DHT] send_to_peer: no endpoint for message type ~p", [MessageType]),
     {error, no_endpoint};
 do_send_to_peer(Endpoint, MessageType, Message) ->
     %% Send directly via peer connector (establishes QUIC connection)
-    macula_peer_connector:send_message(Endpoint, MessageType, Message).
+    Result = macula_peer_connector:send_message(Endpoint, MessageType, Message),
+    ?LOG_INFO("[DHT] send_to_peer result to ~s: ~p", [Endpoint, Result]),
+    Result.
 
 %% @private
 %% @doc Extract endpoint from node info, constructing from address if needed.

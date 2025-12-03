@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.14.1] - 2025-12-02
+
+### 🔧 Pub/Sub Routing Fixes
+
+This release fixes message amplification issues in DHT-routed pub/sub and improves routing reliability.
+
+### Fixed
+
+#### Message Amplification Bug (`macula_gateway.erl`)
+- **Removed**: `relay_to_mesh_peers/4` function - caused exponential message amplification
+  - Bug: When gateway received a message, it would relay to ALL mesh peers
+  - This caused each peer to relay again, creating exponential message flood
+  - Impact: Network congestion, duplicate messages, performance degradation
+- **Added**: `build_gateway_endpoint/1` for proper PONG response endpoint construction
+
+#### Protocol Types Test (`macula_protocol_types_tests.erl`)
+- **Fixed**: Test expected 0x13 to be unassigned, but it's now `pubsub_route`
+- **Fixed**: Test expected 0x24 to be unassigned, but it's now `rpc_request`
+- Updated unassigned ID tests to use 0x14 and 0x26 instead
+
+### Changed
+
+#### DHT Routing (`macula_pubsub_dht.erl`)
+- Enhanced DHT routing for topic subscriptions
+- Improved topic subscription handling
+
+### Test Results
+
+- 20 test failures remain (all infrastructure-related - require QUIC/TLS services)
+- 1 test bug fixed (protocol types)
+- No regressions in unit tests
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `src/macula_gateway_system/macula_gateway.erl` | Removed relay_to_mesh_peers, added build_gateway_endpoint |
+| `src/macula_pubsub_system/macula_pubsub_dht.erl` | DHT routing enhancements |
+| `test/macula_protocol_types_tests.erl` | Fixed unassigned ID tests |
+
+---
+
 ## [0.14.0] - 2025-12-01
 
 ### 🔄 Ra/Raft Removal - Masterless CRDT Architecture

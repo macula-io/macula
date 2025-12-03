@@ -25,6 +25,7 @@
     subscribe/3,
     unsubscribe/3,
     publish/3,
+    deliver_local/3,
     get_subscribers/2,
     get_stream_topics/2
 ]).
@@ -72,6 +73,14 @@ unsubscribe(Pid, Stream, Topic) ->
 -spec publish(pid(), binary(), map()) -> ok.
 publish(Pid, Topic, Payload) ->
     gen_server:call(Pid, {publish, Topic, Payload}).
+
+%% @doc Deliver a message to LOCAL subscribers only (no remote routing).
+%% Used by pubsub_route delivery to prevent message amplification.
+%% When a message arrives from another node via pubsub_route, it should
+%% only be delivered to local subscribers, NOT re-routed to remote subscribers.
+-spec deliver_local(pid(), binary(), map()) -> ok.
+deliver_local(Pid, Topic, Payload) ->
+    gen_server:call(Pid, {deliver_local, Topic, Payload}).
 
 %% @doc Get all subscribers for a topic (exact and wildcard matches).
 -spec get_subscribers(pid(), binary()) -> {ok, [pid()]}.
@@ -150,9 +159,25 @@ handle_call({publish, Topic, Payload}, _From, State) when is_binary(Topic) ->
     ?LOG_DEBUG("Publishing to topic ~s: found ~p local subscribers",
              [Topic, length(LocalStreams)]),
     LocalNodeId = maps:get(node_id, State#state.opts, <<"unknown">>),
-    PubMsg = #{<<"topic">> => Topic, <<"payload">> => Payload},
-    do_publish(whereis(macula_gateway_mesh), whereis(macula_gateway_client_manager),
+    %% Full publish message with all required fields for protocol encoding
+    PubMsg = #{
+        <<"topic">> => Topic,
+        <<"payload">> => Payload,
+        <<"qos">> => 0,
+        <<"retain">> => false,
+        <<"message_id">> => crypto:strong_rand_bytes(16)
+    },
+    do_publish(whereis(macula_gateway_mesh), whereis(macula_gateway_clients),
                LocalStreams, PubMsg, LocalNodeId, Topic, Payload),
+    {reply, ok, State};
+
+%% @doc Deliver to LOCAL subscribers only - no remote routing.
+%% Used for pubsub_route messages to prevent amplification loops.
+handle_call({deliver_local, Topic, Payload}, _From, State) when is_binary(Topic) ->
+    LocalStreams = find_matching_subscribers(Topic, State),
+    ?LOG_DEBUG("Delivering locally to topic ~s: found ~p local subscribers",
+             [Topic, length(LocalStreams)]),
+    deliver_to_local_streams(LocalStreams, Topic, Payload),
     {reply, ok, State};
 
 handle_call({get_subscribers, Topic}, _From, State) when is_binary(Topic) ->
@@ -357,7 +382,7 @@ do_publish(undefined, _, LocalStreams, _PubMsg, _LocalNodeId, Topic, Payload) ->
     deliver_to_local_streams(LocalStreams, Topic, Payload);
 %% @private Clients not running - deliver locally only
 do_publish(_, undefined, LocalStreams, _PubMsg, _LocalNodeId, Topic, Payload) ->
-    ?LOG_WARNING("macula_gateway_client_manager not running, cannot route remotely"),
+    ?LOG_WARNING("macula_gateway_clients not running, cannot route remotely"),
     deliver_to_local_streams(LocalStreams, Topic, Payload);
 %% @private Full routing via pubsub_router
 do_publish(MeshPid, ClientsPid, LocalStreams, PubMsg, LocalNodeId, _Topic, _Payload) ->

@@ -176,7 +176,7 @@ handle_info({quic, new_stream, Stream, StreamProps}, State) ->
 %% Pattern matches on binary data, uses buffer for partial messages.
 %% Uses stored stream->peer_addr mapping (populated in new_stream handler).
 handle_info({quic, Data, Stream, Flags}, State) when is_binary(Data) ->
-    ?LOG_DEBUG("[Gateway QUIC] Received ~p bytes, Flags=~p", [byte_size(Data), Flags]),
+    ?LOG_INFO("[Gateway QUIC] Received ~p bytes, Flags=~p", [byte_size(Data), Flags]),
 
     %% Look up peer address from stored mapping (v0.12.0 fix)
     %% This was populated in new_stream handler when we associated stream with connection
@@ -331,7 +331,8 @@ register_next_connection(Listener) ->
 
 %% Pattern 1: Successfully decoded message - route to gateway with peer address
 route_to_gateway({ok, {MessageType, Message}}, Stream, PeerAddr, State) when State#state.gateway =/= undefined ->
-    ?LOG_DEBUG("[Gateway QUIC] Routing message type=~p to gateway", [MessageType]),
+    ?LOG_INFO("[Gateway QUIC] Routing message type=~p to gateway, msg_keys=~p",
+              [MessageType, maps:keys(Message)]),
     Gateway = State#state.gateway,
 
     %% Route to gateway via gen_server:cast (async) to prevent blocking

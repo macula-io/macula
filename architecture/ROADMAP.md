@@ -1,8 +1,8 @@
 # Macula Roadmap
 
-> **Last Updated:** 2025-12-01
-> **Current Version:** v0.13.0
-> **Status:** Revised roadmap with SuperMesh architecture refinements
+> **Last Updated:** 2025-12-02
+> **Current Version:** v0.14.0
+> **Status:** Ra/Raft removed, CRDT foundation complete. Preparing v0.14.1 with pub/sub fixes.
 
 ---
 
@@ -154,7 +154,8 @@ Each level of the mesh has its own DHT. Bridge Nodes form meshes at each level:
 | Version | Focus | Status |
 |---------|-------|--------|
 | v0.13.0 | **Bridge System** | ✅ COMPLETED - Hierarchical DHT, Bridge Nodes, Cache |
-| v0.14.0 | **CRDT Foundation** | NEXT - OR-Set, LWW-Register, Gossip protocol |
+| v0.14.0 | **CRDT Foundation** | ✅ COMPLETED - Ra/Raft removed, OR-Set, G-Counter, PN-Counter |
+| v0.14.1 | **Pub/Sub Fixes** | IN PROGRESS - Remove message amplification, DHT routing fixes |
 | v0.15.0 | **Registry System** | Package signing, Cluster Controller, security scanning |
 | v0.16.0 | **Protocol Gateway** | HTTP/3 API, WebTransport, OpenAPI spec |
 | v1.0.0 | **Production Ready** | Full Cluster + Bridge + Registry |
@@ -173,11 +174,22 @@ Implemented hierarchical DHT with Bridge mesh support:
 
 ---
 
-## v0.14.0 - CRDT Foundation (Next)
+## v0.14.0 - CRDT Foundation (COMPLETED - December 2025)
 
 **Goal:** Replace ETS-based registries with CRDT-backed versions using gossip replication.
 
-**Also includes:** Remove deprecated Ra/Raft code (`macula_leader_election.erl`, `ra` dependency).
+**Status:** ✅ Ra/Raft **REMOVED**, CRDT Foundation **IMPLEMENTED** (48 tests)
+
+**What was delivered:**
+- ✅ `macula_crdt.erl` - Core types and operations
+- ✅ `macula_crdt_orset.erl` - OR-Set implementation (17 tests)
+- ✅ `macula_crdt_lww.erl` - LWW-Register implementation (14 tests)
+- ✅ `macula_crdt_gcounter.erl` - G-Counter implementation (9 tests)
+- ✅ `macula_crdt_pncounter.erl` - PN-Counter implementation (8 tests)
+- ✅ Removed `macula_leader_election.erl` (deleted)
+- ✅ Removed `macula_leader_machine.erl` (deleted)
+- ✅ Removed `ra` dependency from rebar.config
+- ✅ Updated `macula_platform_system.erl` (now masterless)
 
 ### Deliverables
 
@@ -240,11 +252,47 @@ apps/macula_crdt/
 
 ### Acceptance Criteria
 
-- [ ] OR-Set correctly handles concurrent add/remove
-- [ ] LWW-Register resolves conflicts by timestamp
-- [ ] Gossip achieves convergence within 5 seconds (3-node Cluster)
-- [ ] Existing tests pass with CRDT backend
-- [ ] 50+ new tests for CRDT operations
+- [x] OR-Set correctly handles concurrent add/remove (17 tests)
+- [x] LWW-Register resolves conflicts by timestamp (14 tests)
+- [ ] Gossip achieves convergence within 5 seconds (3-node Cluster) - **Deferred to v0.14.1+**
+- [x] Existing tests pass with CRDT backend
+- [x] 48 new tests for CRDT operations (originally targeted 50+)
+
+---
+
+## v0.14.1 - Pub/Sub Routing Fixes (IN PROGRESS)
+
+**Goal:** Fix message amplification issues in DHT-routed pub/sub and improve routing reliability.
+
+**Status:** IN PROGRESS (December 2025)
+
+### Changes
+
+**Bug Fixes:**
+- ✅ Removed `relay_to_mesh_peers/4` from `macula_gateway.erl` - caused exponential message amplification
+- ✅ Added `build_gateway_endpoint/1` for proper PONG response endpoint construction
+- ✅ Fixed `macula_protocol_types_tests.erl` - updated for new pubsub_route (0x13) message type
+
+**DHT Routing Improvements:**
+- ✅ Enhanced DHT routing in `macula_pubsub_dht.erl`
+- ✅ Improved topic subscription handling
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `src/macula_gateway_system/macula_gateway.erl` | Removed relay_to_mesh_peers, added build_gateway_endpoint |
+| `src/macula_pubsub_system/macula_pubsub_dht.erl` | DHT routing enhancements |
+| `test/macula_protocol_types_tests.erl` | Fixed unassigned ID tests (0x13→0x14, 0x24→0x26) |
+
+### Acceptance Criteria
+
+- [x] No message amplification in pub/sub routing
+- [x] Protocol type tests pass (0x13 is pubsub_route, not unassigned)
+- [x] Version bumped to v0.14.1
+- [x] Documentation updated (CHANGELOG.md, CLAUDE.md, ROADMAP.md)
+- [ ] All unit tests pass (20 infrastructure-related failures remain - require QUIC/TLS services)
+- [ ] Published to hex.pm (requires manual `rebar3 hex publish`)
 
 ---
 

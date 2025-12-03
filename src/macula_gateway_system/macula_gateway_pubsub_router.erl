@@ -17,6 +17,8 @@
 %%%-------------------------------------------------------------------
 -module(macula_gateway_pubsub_router).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([
     distribute/5
@@ -94,42 +96,41 @@ send_to_local_stream(Stream, Binary) ->
 %%%===================================================================
 
 %% @private
-%% @doc Route message to remote subscribers via bootstrap gateway.
-%% Instead of querying local DHT (which doesn't have remote subscriptions),
-%% we forward the PUBLISH to the bootstrap which has all subscriptions.
+%% @doc Route message to remote subscribers via direct P2P (v0.14.0+).
+%% Each node queries its own local DHT for subscribers and sends directly.
+%% DHT propagation ensures subscriptions are replicated to k closest nodes.
+%% Bootstrap is NOT a broker - it's just a seed node for DHT.
 -spec route_to_remote_subscribers(binary(), map(), binary(), pid(), pid()) -> ok.
 route_to_remote_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
-    %% Forward the PUBLISH to the bootstrap gateway
-    %% The bootstrap has the complete DHT with all subscriptions from all peers
-    %% It will look up subscribers and distribute the message
-    case macula_gateway_dht:forward_publish_to_bootstrap(PubMsg) of
-        ok ->
-            ok;
-        {error, no_connection} ->
-            %% We're probably the bootstrap node - try local DHT lookup
-            route_via_local_dht(Topic, PubMsg, LocalNodeId, Mesh, Clients);
-        {error, _Reason} ->
-            ok
-    end.
+    %% Query LOCAL DHT for subscribers and route directly to them (P2P)
+    %% Subscriptions are replicated via DHT propagation to k closest nodes
+    route_via_local_dht(Topic, PubMsg, LocalNodeId, Mesh, Clients).
 
 %% @private
-%% @doc Fallback: route via local DHT lookup (used by bootstrap node).
+%% @doc Route via local DHT lookup - primary P2P routing path (v0.14.0+).
+%% All nodes use this - subscriptions replicate via DHT to k closest nodes.
 %% Uses subscriber cache for 5-10x latency improvement on hot topics.
 -spec route_via_local_dht(binary(), map(), binary(), pid(), pid()) -> ok.
 route_via_local_dht(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     %% Try cache first for O(1) lookup
-    case macula_subscriber_cache:lookup(Topic) of
-        {ok, []} ->
-            %% Cache hit but empty - retry DHT (subscriptions may have arrived)
-            macula_subscriber_cache:invalidate(Topic),
-            lookup_and_cache_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients);
-        {ok, CachedSubscribers} ->
-            %% Cache hit with subscribers - use cached subscribers
-            route_to_each_subscriber(CachedSubscribers, Topic, PubMsg, LocalNodeId, Mesh, Clients);
-        {miss, _TopicKey} ->
-            %% Cache miss - do DHT lookup and cache result
-            lookup_and_cache_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients)
-    end.
+    CacheResult = macula_subscriber_cache:lookup(Topic),
+    ?LOG_INFO("[PubSubRouter] Cache lookup for ~s: ~p", [Topic, CacheResult]),
+    handle_cache_result(CacheResult, Topic, PubMsg, LocalNodeId, Mesh, Clients).
+
+%% @private Handle cache lookup result
+handle_cache_result({ok, []}, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
+    %% Cache hit but empty - retry DHT (subscriptions may have arrived)
+    ?LOG_INFO("[PubSubRouter] Cache empty for ~s, invalidating and retrying DHT", [Topic]),
+    macula_subscriber_cache:invalidate(Topic),
+    lookup_and_cache_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients);
+handle_cache_result({ok, CachedSubscribers}, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
+    %% Cache hit with subscribers - use cached subscribers
+    ?LOG_INFO("[PubSubRouter] Cache hit for ~s with ~p subscribers", [Topic, length(CachedSubscribers)]),
+    route_to_each_subscriber(CachedSubscribers, Topic, PubMsg, LocalNodeId, Mesh, Clients);
+handle_cache_result({miss, _TopicKey}, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
+    %% Cache miss - do DHT lookup and cache result
+    ?LOG_INFO("[PubSubRouter] Cache miss for ~s, querying DHT", [Topic]),
+    lookup_and_cache_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients).
 
 %% @private
 %% @doc Lookup subscribers from DHT and cache the result.
@@ -140,6 +141,7 @@ lookup_and_cache_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     case macula_subscriber_cache:should_query_dht(Topic) of
         false ->
             %% Rate-limited - skip DHT query to prevent discovery storms
+            ?LOG_WARNING("[PubSubRouter] DHT query rate-limited for ~s", [Topic]),
             ok;
         true ->
             %% Allowed to query - perform DHT lookup
@@ -153,8 +155,10 @@ do_dht_lookup(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     TopicKey = crypto:hash(sha256, Topic),
     %% Record that we're doing a DHT query (for rate-limiting)
     macula_subscriber_cache:record_dht_query(Topic),
+    ?LOG_INFO("[PubSubRouter] DHT lookup for ~s", [Topic]),
     case macula_gateway_dht:lookup_value(TopicKey) of
         {ok, RemoteSubscribers} ->
+            ?LOG_INFO("[PubSubRouter] DHT found ~p subscriber(s) for ~s", [length(RemoteSubscribers), Topic]),
             %% Cache for future lookups
             macula_subscriber_cache:store(Topic, RemoteSubscribers),
             %% Store subscriber endpoints in direct routing table for future direct P2P
@@ -162,6 +166,7 @@ do_dht_lookup(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
             route_to_each_subscriber(RemoteSubscribers, Topic, PubMsg, LocalNodeId, Mesh, Clients);
         {error, not_found} ->
             %% DO NOT cache empty results - subscriptions may arrive later (timing issue)
+            ?LOG_WARNING("[PubSubRouter] DHT returned not_found for ~s", [Topic]),
             ok
     end.
 
@@ -180,6 +185,16 @@ store_subscriber_routes([Subscriber | Rest]) ->
 route_to_each_subscriber([], _Topic, _PubMsg, _LocalNodeId, _Mesh, _Clients) ->
     ok;
 route_to_each_subscriber([Subscriber | Rest], Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
+    %% Log subscriber info for debugging node_id mismatch
+    SubNodeId = case maps:find(node_id, Subscriber) of
+        {ok, N} -> N;
+        error -> case maps:find(<<"node_id">>, Subscriber) of
+            {ok, N2} -> N2;
+            error -> <<"unknown">>
+        end
+    end,
+    ?LOG_INFO("[PubSubRouter] Routing to subscriber node_id=~s, local_node_id=~s, topic=~s",
+             [binary:encode_hex(SubNodeId), binary:encode_hex(LocalNodeId), Topic]),
     route_to_single_subscriber(Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients),
     route_to_each_subscriber(Rest, Topic, PubMsg, LocalNodeId, Mesh, Clients).
 
