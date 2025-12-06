@@ -14,7 +14,7 @@
 ---
 
 <div align="center">
-  <img src="assets/macula-architecture-overview.svg" alt="Macula Architecture Overview" width="800"/>
+  <img src="artwork/macula-architecture-overview.svg" alt="Macula Architecture Overview" width="800"/>
 </div>
 
 <div align="center">
