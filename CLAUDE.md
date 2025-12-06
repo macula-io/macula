@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v0.14.1 (December 2025)
+**Current Version**: v0.14.2 (December 2025)
 
 ---
 
@@ -59,6 +59,7 @@ These are non-negotiable requirements. Violations will result in rejection:
 | v0.13.0 | Dec 2025 | Hierarchical DHT with Bridge System - Fractal mesh hierarchy (40 tests) |
 | v0.14.0 | Dec 2025 | **Ra/Raft Removal** - Masterless CRDT architecture (OR-Set, G-Counter, PN-Counter - 48 tests) |
 | v0.14.1 | Dec 2025 | **Pub/Sub Fixes** - Remove message amplification, DHT routing improvements |
+| v0.14.2 | Dec 2025 | **Package Maintenance** - Version sync, publishing scripts, documentation |
 
 ---
 

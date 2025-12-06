@@ -51,7 +51,7 @@ handle_store(_Stream, StoreMsg) ->
 
 %% @doc Handle DHT FIND_VALUE message.
 %% Extracts the key and performs local storage lookup, returning result over stream.
-%% The message format from protocol decoder is #{<<"key">> => Key} (binary key).
+%% The message format from protocol decoder contains a binary key field.
 -spec handle_find_value(pid(), map()) -> ok.
 handle_find_value(Stream, FindValueMsg) ->
     %% Extract key from message - supports both <<"key">> (protocol) and key (atom)

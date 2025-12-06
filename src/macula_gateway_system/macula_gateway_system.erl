@@ -185,7 +185,10 @@ init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile) ->
 %% Falls back to TLS_CERT_FILE environment variable when not provided in opts.
 get_cert_file(undefined) ->
     case os:getenv("TLS_CERT_FILE") of
-        false -> "/opt/macula/certs/cert.pem";  % Default fallback
+        false ->
+            %% Use macula_tls default path (auto-generated if missing)
+            {CertPath, _KeyPath} = macula_tls:get_cert_paths(),
+            CertPath;
         CertFile -> CertFile
     end;
 get_cert_file(CertFile) when is_list(CertFile) ->
@@ -196,7 +199,10 @@ get_cert_file(CertFile) when is_list(CertFile) ->
 %% Falls back to TLS_KEY_FILE environment variable when not provided in opts.
 get_key_file(undefined) ->
     case os:getenv("TLS_KEY_FILE") of
-        false -> "/opt/macula/certs/key.pem";  % Default fallback
+        false ->
+            %% Use macula_tls default path (auto-generated if missing)
+            {_CertPath, KeyPath} = macula_tls:get_cert_paths(),
+            KeyPath;
         KeyFile -> KeyFile
     end;
 get_key_file(KeyFile) when is_list(KeyFile) ->

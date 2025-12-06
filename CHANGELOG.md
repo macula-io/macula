@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.14.2] - 2025-12-06
+
+### 📦 Package Maintenance Release
+
+This release ensures version consistency and updated documentation for hex.pm publishing.
+
+### Changed
+
+- **Version sync**: Aligned `rebar.config` relx version with `macula.app.src` (was 0.14.0, now 0.14.2)
+- **Documentation**: Updated CLAUDE.md version history
+- **Publishing**: Added comprehensive `scripts/publish-hex.sh` script
+
+### Dependencies
+
+- `quicer` 0.2.15 (unchanged)
+- `msgpack` 0.8.1 (unchanged)
+- `gproc` 0.9.1 (unchanged)
+
+---
+
 ## [0.14.1] - 2025-12-02
 
 ### 🔧 Pub/Sub Routing Fixes

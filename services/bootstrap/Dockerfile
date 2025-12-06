@@ -78,13 +78,13 @@ WORKDIR /opt/macula
 # Copy release from builder
 COPY --from=builder /tmp/bootstrap/_build/prod/rel/macula_bootstrap ./
 
-# Create directories
-RUN mkdir -p log certs
+# Create directories for logs and TLS certificates
+RUN mkdir -p log /var/lib/macula
 
 # Run as non-root user
 RUN addgroup -g 1000 macula && \
     adduser -D -u 1000 -G macula macula && \
-    chown -R macula:macula /opt/macula
+    chown -R macula:macula /opt/macula /var/lib/macula
 
 USER macula
 
