@@ -25,15 +25,12 @@ advertise_subscription_success_test() ->
     {ok, SubInfo} = macula_pubsub_dht:advertise_subscription(Topic, SubRef, NodeId, Url, MockConnMgr),
 
     %% THEN: Should return subscription info with timer
+    %% Note: Actual DHT STORE goes directly to macula_routing_server (v0.8.0+),
+    %% not through connection manager. The key behavior is proper return value
+    %% and timer scheduling.
     ?assertMatch(#{sub_ref := SubRef, ttl := 300, timer_ref := _}, SubInfo),
     #{timer_ref := TimerRef} = SubInfo,
     ?assert(is_reference(TimerRef)),
-
-    %% THEN: STORE message should be sent
-    timer:sleep(50),
-    Messages = macula_test_helpers:get_mock_messages(MockConnMgr),
-    StoreMessages = lists:filter(fun(#{type := Type}) -> Type =:= store end, Messages),
-    ?assert(length(StoreMessages) >= 1),
 
     %% Cleanup
     erlang:cancel_timer(TimerRef),
@@ -132,18 +129,15 @@ discover_subscribers_cache_miss_test() ->
         Topic, <<"data">>, 1, MockConnMgr, ServiceRegistry, 0
     ),
 
-    %% THEN: Should send DHT query
+    %% THEN: Should return query_sent with pending query tracking
+    %% Note: Actual DHT query goes directly to macula_routing_server (v0.8.0+),
+    %% not through connection manager. The key behavior is that the query
+    %% is tracked in pending queries for later response handling.
     ?assertMatch({query_sent, _Pending, _MsgId, _Registry}, Result),
     {query_sent, Pending, MsgId, _Registry} = Result,
 
-    %% THEN: Query should be tracked
+    %% THEN: Query should be tracked with correct metadata
     ?assertMatch(#{MsgId := {Topic, <<"data">>, 1, _}}, Pending),
-
-    %% THEN: FIND_VALUE message should be sent
-    timer:sleep(100),
-    Messages = macula_test_helpers:get_mock_messages(MockConnMgr),
-    FindMessages = lists:filter(fun(#{type := Type}) -> Type =:= find_value end, Messages),
-    ?assert(length(FindMessages) >= 1),
 
     %% Cleanup
     macula_test_helpers:stop_mock_connection_manager(MockConnMgr).

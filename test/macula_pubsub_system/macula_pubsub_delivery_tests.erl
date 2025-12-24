@@ -44,6 +44,9 @@ deliver_local_empty_registry_test() ->
     ?assertEqual([], Results).
 
 deliver_local_single_subscriber_test() ->
+    %% Drain any spurious messages from previous tests
+    drain_mailbox(),
+
     %% GIVEN: Registry with one matching subscriber
     Registry0 = macula_pubsub_registry:new(),
     Registry1 = macula_pubsub_registry:subscribe(Registry0, <<"sub1">>, <<"topic.a">>, self()),
@@ -56,12 +59,18 @@ deliver_local_single_subscriber_test() ->
     ?assertEqual(1, length(Results)),
     ?assertMatch([{ok, <<"sub1">>}], Results),
 
-    %% Verify message was received
+    %% Verify message was received (use selective receive to match message structure)
     receive
-        Msg ->
-            ?assertEqual(Message, Msg)
+        #{topic := Topic, payload := Payload} ->
+            ?assertEqual(maps:get(topic, Message), Topic),
+            ?assertEqual(maps:get(payload, Message), Payload)
     after 100 ->
         ?assert(false)
+    end.
+
+drain_mailbox() ->
+    receive _ -> drain_mailbox()
+    after 0 -> ok
     end.
 
 deliver_local_multiple_subscribers_test() ->

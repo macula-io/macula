@@ -16,6 +16,56 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%%===================================================================
+%%% Test Setup
+%%%===================================================================
+
+pubsub_handler_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     [
+      %% Lifecycle Tests
+      {"handler starts successfully", fun handler_starts_successfully_test/0},
+      {"handler accepts custom topic config", fun handler_accepts_custom_topic_config_test/0},
+      {"handler can be stopped", fun handler_can_be_stopped_test/0},
+      %% Connection Manager PID Tests
+      {"handler starts without connection manager pid", fun handler_starts_without_connection_manager_pid_test/0},
+      {"handler accepts connection manager pid", fun handler_accepts_connection_manager_pid_test/0},
+      %% Subscribe Tests
+      {"subscribe returns reference", fun subscribe_returns_reference_test/0},
+      {"subscribe with binary topic", fun subscribe_with_binary_topic_test/0},
+      {"subscribe with string topic", fun subscribe_with_string_topic_test/0},
+      {"subscribe with atom topic", fun subscribe_with_atom_topic_test/0},
+      {"multiple subscriptions", fun multiple_subscriptions_test/0},
+      %% Unsubscribe Tests
+      {"unsubscribe removes subscription", fun unsubscribe_removes_subscription_test/0},
+      {"unsubscribe invalid ref returns error", fun unsubscribe_invalid_ref_returns_error_test/0},
+      {"unsubscribe twice returns error", fun unsubscribe_twice_returns_error_test/0},
+      %% Publish Tests
+      {"publish without connection manager", fun publish_without_connection_manager_test/0},
+      {"publish with binary data", fun publish_with_binary_data_test/0},
+      {"publish with map data", fun publish_with_map_data_test/0},
+      {"publish with qos 0", fun publish_with_qos_0_test/0},
+      {"publish with qos 1", fun publish_with_qos_1_test/0},
+      {"publish with retain flag", fun publish_with_retain_flag_test/0},
+      %% Incoming Publish Tests
+      {"handle incoming publish with binary topic", fun handle_incoming_publish_with_binary_topic_test/0},
+      {"handle incoming publish no matching subscription", fun handle_incoming_publish_no_matching_subscription_test/0},
+      %% State Management Tests
+      {"handler tracks multiple subscriptions", fun handler_tracks_multiple_subscriptions_test/0},
+      {"handler survives invalid publish data", fun handler_survives_invalid_publish_data_test/0},
+      {"handler handles callback exception", fun handler_handles_callback_exception_test/0}
+     ]}.
+
+setup() ->
+    %% Start required applications
+    application:ensure_all_started(gproc),
+    ok.
+
+cleanup(_) ->
+    ok.
+
+%%%===================================================================
 %%% Lifecycle Tests
 %%%===================================================================
 
@@ -406,9 +456,12 @@ handle_incoming_publish_with_binary_topic_test() ->
     ok = macula_pubsub_handler:handle_incoming_publish(Pid, IncomingMsg),
 
     %% Wait for callback
+    %% Callback receives message with matched_pattern added
     receive
         {received, ReceivedRef, Msg} ->
-            ?assertEqual(IncomingMsg, Msg)
+            ?assertEqual(<<"test.topic">>, maps:get(topic, Msg)),
+            ?assertEqual(<<"test payload">>, maps:get(payload, Msg)),
+            ?assertEqual(<<"test.topic">>, maps:get(matched_pattern, Msg))
     after 500 ->
         ?assert(false, "Callback not invoked")
     end,

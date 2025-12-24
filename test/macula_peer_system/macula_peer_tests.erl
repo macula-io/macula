@@ -80,9 +80,9 @@ client_requires_realm_test() ->
     Opts = #{},
 
     %% WHEN: Attempting to start client
-    %% THEN: Should crash with missing realm
-    ?assertError({missing_required_option, realm},
-                 macula_connection:start_link(Url, Opts)).
+    %% THEN: Should return error (gen_server catches init exception)
+    Result = macula_connection:start_link(Url, Opts),
+    ?assertMatch({error, {{missing_required_option, realm}, _}}, Result).
 
 %%%===================================================================
 %%% Unit Tests - Message Encoding/Decoding
