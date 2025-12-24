@@ -82,6 +82,13 @@
 -define(MSG_BRIDGE_RPC,         16#60).
 -define(MSG_BRIDGE_DATA,        16#61).
 
+%% Gossip Protocol messages (0x70-0x7F range)
+-define(MSG_GOSSIP_PUSH,        16#70).  % Push local CRDT state to peer
+-define(MSG_GOSSIP_PULL,        16#71).  % Request CRDT state from peer
+-define(MSG_GOSSIP_PULL_REPLY,  16#72).  % Reply with CRDT state
+-define(MSG_GOSSIP_SYNC,        16#73).  % Full anti-entropy sync request
+-define(MSG_GOSSIP_SYNC_REPLY,  16#74).  % Full anti-entropy sync response
+
 %%%===================================================================
 %%% Type Definitions
 %%%===================================================================
@@ -94,7 +101,8 @@
     find_node | find_node_reply | store | find_value | find_value_reply |
     nat_probe | nat_probe_reply | punch_request | punch_coordinate |
     punch_execute | punch_result | relay_request | relay_data |
-    bridge_rpc | bridge_data.
+    bridge_rpc | bridge_data |
+    gossip_push | gossip_pull | gossip_pull_reply | gossip_sync | gossip_sync_reply.
 
 -type message() ::
     {connect, connect_msg()} |
@@ -208,6 +216,55 @@
     metadata => map()                 % Optional metadata
 }.
 
+%% Gossip Protocol Messages
+
+-type gossip_push_msg() :: #{
+    node_id := binary(),              % Sender node ID
+    state_type := atom(),             % Type of CRDT (or_set, lww_register, etc.)
+    state_key := binary(),            % Key identifying this state
+    state := term(),                  % Serialized CRDT state
+    vector_clock := map()             % Vector clock for causal ordering
+}.
+
+-type gossip_pull_msg() :: #{
+    node_id := binary(),              % Requester node ID
+    state_keys := [binary()]          % Keys to request state for (empty = all)
+}.
+
+-type gossip_pull_reply_msg() :: #{
+    node_id := binary(),              % Responder node ID
+    states := [#{                     % List of state entries
+        key := binary(),
+        type := atom(),
+        state := term(),
+        vector_clock := map()
+    }]
+}.
+
+-type gossip_sync_msg() :: #{
+    node_id := binary(),              % Sender node ID
+    digest := map()                   % Map of key -> {type, vector_clock} for local state
+}.
+
+-type gossip_sync_reply_msg() :: #{
+    node_id := binary(),              % Responder node ID
+    states := [#{                     % States that need to be synced
+        key := binary(),
+        type := atom(),
+        state := term(),
+        vector_clock := map()
+    }],
+    missing := [binary()]             % Keys we don't have that sender has
+}.
+
+-export_type([
+    gossip_push_msg/0,
+    gossip_pull_msg/0,
+    gossip_pull_reply_msg/0,
+    gossip_sync_msg/0,
+    gossip_sync_reply_msg/0
+]).
+
 %%%===================================================================
 %%% API Functions
 %%%===================================================================
@@ -245,7 +302,12 @@ message_type_id(punch_result) -> ?MSG_PUNCH_RESULT;
 message_type_id(relay_request) -> ?MSG_RELAY_REQUEST;
 message_type_id(relay_data) -> ?MSG_RELAY_DATA;
 message_type_id(bridge_rpc) -> ?MSG_BRIDGE_RPC;
-message_type_id(bridge_data) -> ?MSG_BRIDGE_DATA.
+message_type_id(bridge_data) -> ?MSG_BRIDGE_DATA;
+message_type_id(gossip_push) -> ?MSG_GOSSIP_PUSH;
+message_type_id(gossip_pull) -> ?MSG_GOSSIP_PULL;
+message_type_id(gossip_pull_reply) -> ?MSG_GOSSIP_PULL_REPLY;
+message_type_id(gossip_sync) -> ?MSG_GOSSIP_SYNC;
+message_type_id(gossip_sync_reply) -> ?MSG_GOSSIP_SYNC_REPLY.
 
 %% @doc Get message type name from numeric ID.
 -spec message_type_name(byte()) -> {ok, message_type()} | {error, unknown_type}.
@@ -281,4 +343,9 @@ message_type_name(?MSG_RELAY_REQUEST) -> {ok, relay_request};
 message_type_name(?MSG_RELAY_DATA) -> {ok, relay_data};
 message_type_name(?MSG_BRIDGE_RPC) -> {ok, bridge_rpc};
 message_type_name(?MSG_BRIDGE_DATA) -> {ok, bridge_data};
+message_type_name(?MSG_GOSSIP_PUSH) -> {ok, gossip_push};
+message_type_name(?MSG_GOSSIP_PULL) -> {ok, gossip_pull};
+message_type_name(?MSG_GOSSIP_PULL_REPLY) -> {ok, gossip_pull_reply};
+message_type_name(?MSG_GOSSIP_SYNC) -> {ok, gossip_sync};
+message_type_name(?MSG_GOSSIP_SYNC_REPLY) -> {ok, gossip_sync_reply};
 message_type_name(_) -> {error, unknown_type}.

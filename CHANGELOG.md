@@ -7,6 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.15.0] - 2025-12-24
+
+### 🚀 Gossip Protocol for CRDT Replication
+
+This release implements the gossip protocol for eventually-consistent CRDT state synchronization across nodes, completing the masterless architecture introduced in v0.14.0.
+
+### Added
+
+#### Gossip Protocol (`macula_gossip`)
+
+**New module `macula_gossip.erl`** - Complete gossip-based state replication:
+
+- **Push-pull-push anti-entropy** for eventual consistency
+- **Configurable intervals**: push (1s default), anti-entropy (30s default)
+- **Fanout parameter**: Number of peers per gossip round (3 default)
+- **CRDT-aware merging**: Automatic conflict resolution for all CRDT types
+
+**Key API:**
+```erlang
+%% Store CRDT state
+macula_gossip:put(Pid, Key, Type, Value).
+macula_gossip:get(Pid, Key).
+macula_gossip:delete(Pid, Key).
+
+%% Explicit gossip operations
+macula_gossip:push_state(Pid, PeerNodeId).
+macula_gossip:pull_state(Pid, PeerNodeId).
+macula_gossip:anti_entropy(Pid).
+
+%% Peer management
+macula_gossip:add_peer(Pid, PeerNodeId).
+macula_gossip:remove_peer(Pid, PeerNodeId).
+```
+
+**Configuration options:**
+- `gossip_enabled`: Enable/disable (default: true, or `MACULA_GOSSIP_ENABLED` env var)
+- `gossip_push_interval`: Push interval in ms (default: 1000)
+- `gossip_anti_entropy_interval`: Anti-entropy interval in ms (default: 30000)
+- `gossip_fanout`: Peers per round (default: 3)
+- `gossip_peers`: Initial peer list
+
+#### Protocol Message Types (0x70-0x7F range)
+
+New gossip protocol messages added to `macula_protocol_types`:
+
+| Type | ID | Purpose |
+|------|-----|---------|
+| `gossip_push` | 0x70 | Push local CRDT state to peer |
+| `gossip_pull` | 0x71 | Request CRDT state from peer |
+| `gossip_pull_reply` | 0x72 | Reply with CRDT state |
+| `gossip_sync` | 0x73 | Full anti-entropy sync request |
+| `gossip_sync_reply` | 0x74 | Full anti-entropy sync response |
+
+#### Platform System Updates
+
+- **`macula_platform_system`**: Now starts `macula_gossip` as a supervised child
+- New API: `macula_platform_system:get_gossip_pid/0`, `is_gossip_enabled/0`
+- Gossip is enabled by default (disable via config or `MACULA_GOSSIP_ENABLED=false`)
+
+### Fixed
+
+#### Test Fixes
+- **`macula_dist_tests`**: Fixed select function tests - `select/1` returns boolean, not `ok`
+- **`macula_gateway_mesh_tests`**: Added `ensure_stopped/0` helper for gproc cleanup between tests
+
+#### Dialyzer Spec Corrections
+- **`macula_gateway_dht`**: Fixed type specs for QUIC stream parameters
+
+### Documentation
+
+- **`CONTRIBUTING.md`**: Development guidelines, coding standards, PR process
+- **`CODE_OF_CONDUCT.md`**: Contributor Covenant 2.0
+- **`docs/operator/MDNS_SETUP.md`**: Comprehensive mDNS setup guide
+
+### Test Results
+
+- **Passed**: 1,567 tests (+29 gossip tests from v0.15.0-pre)
+- **Failed**: 6 (integration tests requiring QUIC infrastructure)
+- **New test file**: `macula_gossip_tests.erl` (29 tests)
+
+### Test Infrastructure Improvements
+
+- **`macula_gateway_mesh_tests`**: Added safe mock unload/reload for QUIC mocking
+- **`macula_gateway_quic_server_tests`**: Skip tests when TLS infrastructure unavailable
+- **`macula_pubsub_handler_tests`**: Added gproc setup fixture
+- **`macula_pubsub_dht_tests`**: Fixed for v0.8.0+ routing server integration
+- **`macula_pubsub_delivery_tests`**: Added mailbox drain and selective receive
+- **`macula_gateway_dht_tests`**: Updated assertions for lenient handlers
+- **`macula_peer_tests`**: Fixed error assertion format for gen_server errors
+
+### Technical Notes
+
+**Gossip Protocol Implementation:**
+- Uses vector clocks for causal ordering
+- Automatic CRDT merging for concurrent updates
+- Statistics tracking (push/pull/merge/conflict counts)
+- Graceful handling of type mismatches (last-write-wins at type level)
+
+**mDNS Integration Status:**
+- mDNS code exists and is functional
+- Requires manual setup via `_checkouts` (shortishly/mdns is erlang.mk, not on hex.pm)
+- Code gracefully falls back when mDNS is unavailable
+
+---
+
 ## [0.14.2] - 2025-12-06
 
 ### 📦 Package Maintenance Release

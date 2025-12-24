@@ -1,6 +1,6 @@
 {application, macula, [
     {description, "Macula HTTP/3 Mesh Platform - Complete distributed application framework"},
-    {vsn, "0.14.3"},
+    {vsn, "0.15.0"},
     {registered, []},
     {mod, {macula_app, []}},
     {applications, [
@@ -13,6 +13,8 @@
         msgpack,
         gproc
     ]},
+    %% mdns is optional - macula works without it using DHT discovery
+    {optional_applications, [mdns]},
     {env, []},
     {modules, []},
     {licenses, ["Apache-2.0"]},
