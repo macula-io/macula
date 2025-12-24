@@ -84,6 +84,70 @@ Since v0.8.5, Macula uses an **always-on architecture** where every node has all
 
 ---
 
+## Architecture: `*_system` Module Convention
+
+**CRITICAL PATTERN**: All `*_system` modules are **supervisors only**.
+
+A `*_system` module is the top-level supervisor for a subsystem. It contains:
+- Supervisor behaviour implementation
+- Child specifications
+- Supervision strategy (one_for_one, rest_for_one, etc.)
+
+A `*_system` module does **NOT** contain:
+- Business logic
+- Message handling
+- State management
+- Protocol implementation
+
+### Current Subsystem Supervisors
+
+| Module | Children | Strategy |
+|--------|----------|----------|
+| `macula_peer_system` | connection, pubsub_handler, rpc_handler, advertisement_manager | rest_for_one |
+| `macula_gateway_system` | client_manager, pubsub, rpc, mesh, dht, rpc_router | one_for_all |
+| `macula_nat_system` | nat_detector, hole_punch, relay_registry, connection_upgrade | one_for_one |
+| `macula_routing_system` | routing_server, routing_table, routing_bucket | one_for_one |
+| `macula_pubsub_system` | pubsub_handler, pubsub_registry, pubsub_delivery | one_for_one |
+| `macula_rpc_system` | rpc_handler, service_registry | one_for_one |
+| `macula_bridge_system` | bridge_node, bridge_mesh, bridge_cache | one_for_one |
+| `macula_bootstrap_system` | bootstrap_server, health_monitor | one_for_one |
+| `macula_membership_system` | membership_server, gossip, detector | one_for_one |
+| `macula_dist_system` | dist_discovery, cluster_strategy | one_for_one |
+| `macula_platform_system` | (masterless - no children after Ra removal) | one_for_one |
+
+### Example: Correct vs Incorrect
+
+```erlang
+%% ✅ CORRECT: macula_peer_system is ONLY a supervisor
+-module(macula_peer_system).
+-behaviour(supervisor).
+
+init({Url, Opts}) ->
+    ChildSpecs = [
+        #{id => macula_connection, start => {macula_connection, start_link, [Url, Opts]}},
+        #{id => macula_pubsub_handler, start => {macula_pubsub_handler, start_link, [Opts]}},
+        ...
+    ],
+    {ok, {#{strategy => rest_for_one}, ChildSpecs}}.
+
+%% ❌ INCORRECT: Don't put business logic in *_system modules
+-module(macula_peer_system).
+-behaviour(gen_server).  % WRONG - should be supervisor
+
+handle_call({publish, Topic, Msg}, _From, State) ->  % WRONG - belongs in child
+    ...
+```
+
+### Why This Matters
+
+1. **Clear Responsibility**: Supervisors supervise, workers work
+2. **Fault Isolation**: Child crashes don't affect sibling logic
+3. **Testability**: Business logic in children is easier to unit test
+4. **OTP Compliance**: Follows standard OTP design patterns
+5. **Naming Clarity**: `*_system` = supervisor, always
+
+---
+
 ## ✅ v0.7.0 Nomenclature Refactoring (COMPLETED - Nov 2025)
 
 **COMPLETED**: Macula v0.7.0 introduces clearer nomenclature following industry standards (libp2p, IPFS, BitTorrent):
