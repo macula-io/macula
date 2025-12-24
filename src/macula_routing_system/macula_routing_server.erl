@@ -502,6 +502,12 @@ get_node_endpoint(#{address := {Host, Port}}) when is_integer(Port) ->
     iolist_to_binary([format_host(Host), <<":">>, integer_to_binary(Port)]);
 get_node_endpoint(#{<<"endpoint">> := Endpoint}) when is_binary(Endpoint) ->
     Endpoint;
+get_node_endpoint(#{address := Address}) when is_binary(Address) ->
+    %% Address is already a full URL (e.g., <<"https://host:port">>)
+    Address;
+get_node_endpoint(#{<<"address">> := Address}) when is_binary(Address) ->
+    %% Address is already a full URL (binary key version)
+    Address;
 get_node_endpoint(_) ->
     undefined.
 

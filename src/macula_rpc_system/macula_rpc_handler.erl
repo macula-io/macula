@@ -768,7 +768,9 @@ dispatch_single_async_request(TargetNodeId, RequestId, Args, Opts, Callback, Sta
 -spec do_remote_call(binary(), term(), map(), term(), list(), #state{}) ->
     {noreply, #state{}} | {reply, {error, term()}, #state{}}.
 do_remote_call(Procedure, Args, Opts, From, Providers, State) ->
-    do_remote_call_with_failover(Procedure, Args, Opts, From, Providers, [], 1, State).
+    %% Normalize providers (convert binary keys to atom keys if needed)
+    NormalizedProviders = [normalize_provider(P) || P <- Providers],
+    do_remote_call_with_failover(Procedure, Args, Opts, From, NormalizedProviders, [], 1, State).
 
 %% @doc Make RPC call with failover support
 -spec do_remote_call_with_failover(binary(), term(), map(), term(), list(), list(), pos_integer(), #state{}) ->
@@ -1474,3 +1476,22 @@ send_prefetch_find_value(ServiceKey, ServiceName, State) ->
                         [State#state.node_id, ServiceName, Reason]),
             State
     end.
+
+%% @doc Normalize a provider map by converting binary keys to atom keys.
+%% DHT returns providers with binary keys (<<"node_id">>, <<"endpoint">>),
+%% but internal code expects atom keys (node_id, endpoint).
+-spec normalize_provider(map()) -> map().
+normalize_provider(Provider) when is_map(Provider) ->
+    maps:fold(fun(K, V, Acc) ->
+        AtomKey = binary_to_atom_key(K),
+        Acc#{AtomKey => V}
+    end, #{}, Provider).
+
+%% @doc Convert binary key to atom key if needed
+-spec binary_to_atom_key(atom() | binary()) -> atom().
+binary_to_atom_key(K) when is_atom(K) -> K;
+binary_to_atom_key(<<"node_id">>) -> node_id;
+binary_to_atom_key(<<"endpoint">>) -> endpoint;
+binary_to_atom_key(<<"metadata">>) -> metadata;
+binary_to_atom_key(<<"ttl">>) -> ttl;
+binary_to_atom_key(K) when is_binary(K) -> binary_to_atom(K, utf8).
