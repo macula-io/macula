@@ -75,6 +75,11 @@ close_test_() ->
 
 select_test_() ->
     {"Select function tests", [
-        ?_assertEqual(ok, macula_dist:select(undefined)),
-        ?_assertEqual(ok, macula_dist:select(any_handle))
+        %% select/1 returns true if node name is valid port@host format
+        ?_assertEqual(true, macula_dist:select('4433@localhost')),
+        ?_assertEqual(true, macula_dist:select('8080@192.168.1.100')),
+        %% Invalid node names should return false
+        ?_assertEqual(false, macula_dist:select(undefined)),
+        ?_assertEqual(false, macula_dist:select(any_handle)),
+        ?_assertEqual(false, macula_dist:select('invalid_node'))
     ]}.

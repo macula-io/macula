@@ -41,7 +41,7 @@
 %% @doc Handle DHT STORE message.
 %% Forwards to routing server asynchronously (fire-and-forget, no reply needed).
 %% Uses async handler to prevent blocking the gateway on DHT operations.
--spec handle_store(pid(), map()) -> ok.
+-spec handle_store(reference(), map()) -> ok.
 handle_store(_Stream, StoreMsg) ->
     %% Forward to routing server asynchronously (fire-and-forget)
     %% STORE doesn't require a response, so we don't wait
@@ -52,7 +52,7 @@ handle_store(_Stream, StoreMsg) ->
 %% @doc Handle DHT FIND_VALUE message.
 %% Extracts the key and performs local storage lookup, returning result over stream.
 %% The message format from protocol decoder contains a binary key field.
--spec handle_find_value(pid(), map()) -> ok.
+-spec handle_find_value(reference(), map()) -> ok.
 handle_find_value(Stream, FindValueMsg) ->
     %% Extract key from message - supports both <<"key">> (protocol) and key (atom)
     Key = maps:get(<<"key">>, FindValueMsg, maps:get(key, FindValueMsg, undefined)),
@@ -95,7 +95,7 @@ do_handle_find_value(Key) ->
 %% @doc Handle DHT FIND_NODE message.
 %% Forwards to routing server and sends encoded reply over stream.
 %% Crashes on routing server or encoding failures - exposes DHT/protocol bugs.
--spec handle_find_node(pid(), map()) -> ok.
+-spec handle_find_node(reference(), map()) -> ok.
 handle_find_node(Stream, FindNodeMsg) ->
     %% Forward to routing server (let it crash on errors)
     Reply = macula_routing_server:handle_message(macula_routing_server, FindNodeMsg),

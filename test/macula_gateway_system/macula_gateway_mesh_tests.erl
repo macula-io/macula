@@ -26,6 +26,8 @@
 %%%===================================================================
 
 setup() ->
+    %% Ensure any existing instance is stopped before starting fresh
+    ensure_stopped(),
     %% Start with TLS cert paths in opts
     Opts = #{
         cert_file => "/opt/macula/certs/cert.pem",
@@ -68,15 +70,26 @@ gen_server_callbacks_test() ->
 %%%===================================================================
 
 start_link_test() ->
+    ensure_stopped(),
     {ok, Pid} = macula_gateway_mesh:start_link(#{}),
     ?assert(erlang:is_process_alive(Pid)),
     macula_gateway_mesh:stop(Pid).
 
 stop_test() ->
+    ensure_stopped(),
     {ok, Pid} = macula_gateway_mesh:start_link(#{}),
     ok = macula_gateway_mesh:stop(Pid),
     timer:sleep(50),
     ?assertNot(erlang:is_process_alive(Pid)).
+
+%% Helper to ensure any existing instance is stopped
+ensure_stopped() ->
+    case whereis(macula_gateway_mesh) of
+        undefined -> ok;
+        Pid ->
+            catch macula_gateway_mesh:stop(Pid),
+            timer:sleep(10)
+    end.
 
 %%%===================================================================
 %%% Connection Creation Tests
@@ -405,6 +418,7 @@ connection_with_undefined_placeholder_test_() ->
 connection_pool_max_limit_test_() ->
     {setup,
      fun() ->
+        ensure_stopped(),
         %% Setup with small max_connections for testing
         Opts = #{
             max_mesh_connections => 3,
@@ -458,6 +472,7 @@ connection_pool_max_limit_test_() ->
 connection_pool_lru_eviction_test_() ->
     {setup,
      fun() ->
+        ensure_stopped(),
         %% Setup with small max_connections for testing
         Opts = #{
             max_mesh_connections => 2,
