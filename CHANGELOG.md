@@ -7,6 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.16.0] - 2025-12-25
+
+### 🔐 Registry System - Secure Package Distribution
+
+This release implements a complete registry system for secure application distribution with Ed25519 signatures, static security analysis, and runtime defense.
+
+### Added
+
+#### Registry System (`src/macula_registry_system/`)
+
+**8 new modules** implementing secure package distribution:
+
+| Module | Purpose |
+|--------|---------|
+| `macula_registry_system.erl` | Supervisor (one_for_one strategy) |
+| `macula_registry_server.erl` | Package publish/fetch API with DHT integration |
+| `macula_registry_store.erl` | ETS + disk storage with TTL-based cleanup |
+| `macula_registry_verify.erl` | Ed25519 digital signature operations |
+| `macula_registry_manifest.erl` | SemVer manifest parsing and validation |
+| `macula_security_scanner.erl` | Static analysis for dangerous BIFs |
+| `macula_app_monitor.erl` | Runtime defense (memory, queue, crash monitoring) |
+| `macula_cluster_controller.erl` | Application lifecycle management |
+
+#### Ed25519 Package Signing
+
+```erlang
+%% Generate keypair
+{PubKey, PrivKey} = macula_registry_verify:generate_keypair().
+
+%% Sign package
+{ok, Signature} = macula_registry_verify:sign_package(ManifestBin, BeamArchive, PrivKey).
+
+%% Verify package
+ok = macula_registry_verify:verify_package(ManifestBin, BeamArchive, Signature, PubKey).
+```
+
+#### Security Scanning
+
+- Detects dangerous BIFs: `os:cmd`, `erlang:open_port`, `erlang:load_nif`, `file:delete`, etc.
+- Audits NIF usage in packages
+- Flags undeclared capabilities
+- Calculates security score (0-100)
+
+#### Runtime Defense (`macula_app_monitor`)
+
+- Memory limit enforcement per application
+- Message queue monitoring with configurable limits
+- Crash rate detection with sliding window
+- Automatic escalation: throttle → kill → quarantine
+
+#### Cluster Controller (`macula_cluster_controller`)
+
+- Deploy applications from registry
+- Upgrade to newer versions with rollback support
+- Stop and remove applications
+- Auto-update policies: `always`, `major`, `minor`, `never`
+- Signature verification before deployment
+
+#### Protocol Message Types (0x80-0x89)
+
+| Type | ID | Purpose |
+|------|-----|---------|
+| `registry_publish` | 0x80 | Publish package to registry |
+| `registry_publish_ack` | 0x81 | Publish confirmation |
+| `registry_fetch` | 0x82 | Fetch package from registry |
+| `registry_fetch_reply` | 0x83 | Package data response |
+| `registry_query` | 0x84 | Query package metadata |
+| `registry_query_reply` | 0x85 | Metadata response |
+| `registry_verify` | 0x86 | Verify package signature |
+| `registry_verify_reply` | 0x87 | Verification result |
+| `registry_sync` | 0x88 | Sync registry index |
+| `registry_sync_reply` | 0x89 | Index sync response |
+
+### Changed
+
+- **`macula_root.erl`**: Added `macula_registry_system` as 9th child in supervision tree
+- **`macula_protocol_types.erl`**: Added registry message types (0x80-0x89)
+
+### Test Results
+
+- **Total**: 1,627 tests (60 new registry tests)
+- **Passed**: 1,621
+- **Failed**: 6 (infrastructure tests requiring QUIC services)
+
+### New Test File
+
+- `test/macula_registry_tests.erl` - 60 comprehensive tests covering:
+  - Ed25519 keypair generation, signing, verification (10 tests)
+  - Manifest validation and SemVer comparison (8 tests)
+  - Package storage and retrieval (8 tests)
+  - Security scanner and score calculation (8 tests)
+  - App monitor lifecycle and limits (6 tests)
+  - Cluster controller operations (10 tests)
+  - Registry system supervisor (6 tests)
+  - Protocol message types (4 tests)
+
+---
+
 ## [0.15.0] - 2025-12-24
 
 ### 🚀 Gossip Protocol for CRDT Replication
