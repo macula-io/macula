@@ -1,8 +1,8 @@
 # Macula Roadmap
 
-> **Last Updated:** 2025-12-02
-> **Current Version:** v0.14.0
-> **Status:** Ra/Raft removed, CRDT foundation complete. Preparing v0.14.1 with pub/sub fixes.
+> **Last Updated:** 2025-12-25
+> **Current Version:** v0.15.1
+> **Status:** Cross-gateway pub/sub validated on physical hardware (beam cluster). Published to hex.pm.
 
 ---
 
@@ -157,6 +157,7 @@ Each level of the mesh has its own DHT. Bridge Nodes form meshes at each level:
 | v0.14.0 | **CRDT Foundation** | ✅ COMPLETED - Ra/Raft removed, OR-Set, G-Counter, PN-Counter |
 | v0.14.1 | **Pub/Sub Fixes** | ✅ COMPLETED - Remove message amplification, DHT routing fixes |
 | v0.15.0 | **Gossip Protocol** | ✅ COMPLETED - CRDT state replication, push-pull-push anti-entropy |
+| v0.15.1 | **Cross-Gateway Pub/Sub** | ✅ COMPLETED - Physical node validation, race condition fixes |
 | v0.16.0 | **Registry System** | Package signing, Cluster Controller, security scanning |
 | v0.17.0 | **Protocol Gateway** | HTTP/3 API, WebTransport, OpenAPI spec |
 | v1.0.0 | **Production Ready** | Full Cluster + Bridge + Registry |
@@ -314,6 +315,60 @@ macula_gossip:remove_peer(Pid, PeerNodeId).
 - [x] Vector clocks track causal ordering
 - [x] CRDT merging handles concurrent updates
 - [x] 29 new tests for gossip operations
+
+---
+
+## v0.15.1 - Cross-Gateway Pub/Sub (COMPLETED - December 2025)
+
+**Goal:** Validate and fix cross-gateway message routing for production use.
+
+**Status:** ✅ COMPLETE - Validated on physical beam cluster (beam00-03)
+
+**What was delivered:**
+- ✅ Fixed PUBLISH message validation (missing qos, retain, message_id fields)
+- ✅ Fixed race condition in `macula_peer` where subscribe called before QUIC connected
+- ✅ Fixed duplicate message delivery by removing HYBRID routing mode
+- ✅ Fixed realm mismatch in gateway_subscriber/gateway_publisher node types
+- ✅ Added `wait_for_connection/2` to ensure QUIC ready before returning from connect
+- ✅ Fixed edoc XML parse error in `macula_rpc_handler`
+
+### Physical Validation
+
+Tested on beam cluster (4 Intel Celeron J4105 nodes):
+- **beam00** (192.168.1.10): Registry/Seed node
+- **beam01** (192.168.1.11): Subscriber gateway
+- **beam02** (192.168.1.12): Publisher gateway
+- **beam03** (192.168.1.13): Observer gateway (additional subscriber)
+
+**Results:**
+- 800+ messages delivered successfully over 1+ hour
+- No message loss or duplication
+- Multicast to multiple subscribers working
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `docker/docker-compose.cross-gateway-pubsub.yml` | Integration test topology |
+| `scripts/deploy-beam-cluster.sh` | Beam cluster deployment script |
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `src/macula_peer.erl` | Added `wait_for_connection/2` |
+| `src/macula_pubsub_system/macula_pubsub_handler.erl` | Removed HYBRID routing mode |
+| `src/macula_gateway_system/macula_gateway_pubsub.erl` | Fixed PUBLISH message fields |
+| `docker/entrypoint.sh` | Added gateway_subscriber/gateway_publisher types, fixed realm |
+
+### Acceptance Criteria
+
+- [x] Cross-gateway pub/sub works in Docker (3-node test)
+- [x] Cross-gateway pub/sub works on physical hardware (4-node beam cluster)
+- [x] No duplicate message delivery
+- [x] Multiple subscribers receive same messages
+- [x] Stable operation for 1+ hour
+- [x] Published to hex.pm
 
 ---
 
@@ -649,5 +704,5 @@ Previous planning documents preserved in `architecture/archive/`:
 
 ---
 
-**Document Version:** 3.0 (SuperMesh Architecture)
-**Last Updated:** 2025-12-01
+**Document Version:** 3.1 (Cross-Gateway Validation)
+**Last Updated:** 2025-12-25
