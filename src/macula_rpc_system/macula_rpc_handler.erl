@@ -1478,8 +1478,7 @@ send_prefetch_find_value(ServiceKey, ServiceName, State) ->
     end.
 
 %% @doc Normalize a provider map by converting binary keys to atom keys.
-%% DHT returns providers with binary keys (<<"node_id">>, <<"endpoint">>),
-%% but internal code expects atom keys (node_id, endpoint).
+%% DHT returns providers with binary keys, but internal code expects atom keys.
 -spec normalize_provider(map()) -> map().
 normalize_provider(Provider) when is_map(Provider) ->
     maps:fold(fun(K, V, Acc) ->

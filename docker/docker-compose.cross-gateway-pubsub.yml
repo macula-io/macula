@@ -1,0 +1,105 @@
+# Cross-Gateway Pub/Sub Integration Test
+#
+# This tests the CORE SELLING POINT of macula:
+# - Publisher on Gateway1
+# - Subscriber on Gateway2
+# - Messages must route through DHT discovery across gateways
+#
+# Topology:
+#   [Gateway1/Registry]        [Gateway2]           [Gateway3]
+#        |                         |                    |
+#   (DHT Seed)  <-- mesh -->  (Subscriber)  <-- mesh --> (Publisher)
+#
+# Flow:
+# 1. Subscriber on Gateway2 subscribes to "cross.gateway.events"
+# 2. Subscription advertised to DHT (propagates to Gateway1)
+# 3. Publisher on Gateway3 publishes to "cross.gateway.events"
+# 4. Gateway3 does DHT lookup, finds Gateway2 has subscriber
+# 5. Message routed to Gateway2, delivered to subscriber
+#
+# This is TRUE distributed pub/sub - not just local delivery!
+
+networks:
+  macula_mesh:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+services:
+  # Gateway1 - Registry/Seed Node
+  # First node in the mesh, acts as DHT bootstrap
+  gateway1:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: macula:test
+    container_name: macula-gateway1
+    hostname: gateway1.macula.test
+    networks:
+      macula_mesh:
+        ipv4_address: 172.30.0.2
+    environment:
+      - NODE_TYPE=registry
+      - NODE_NAME=gateway1
+      - NODE_HOST=gateway1.macula.test
+      - COOKIE=macula_mesh_test
+      - GATEWAY_PORT=9443
+      - REALM_ID=mesh.integration.test
+    extra_hosts:
+      - "gateway1.macula.test:172.30.0.2"
+      - "gateway2.macula.test:172.30.0.3"
+      - "gateway3.macula.test:172.30.0.4"
+
+  # Gateway2 - Full gateway with local subscriber
+  # Runs its own QUIC server and has a subscriber connected locally
+  gateway2:
+    image: macula:test
+    container_name: macula-gateway2
+    hostname: gateway2.macula.test
+    networks:
+      macula_mesh:
+        ipv4_address: 172.30.0.3
+    environment:
+      - NODE_TYPE=gateway_subscriber
+      - NODE_NAME=gateway2
+      - NODE_HOST=gateway2.macula.test
+      - COOKIE=macula_mesh_test
+      - REGISTRY_ENDPOINT=https://gateway1.macula.test:9443
+      - REGISTRY_URL=https://gateway1.macula.test:9443
+      - GATEWAY_PORT=9443
+      - REALM_ID=mesh.integration.test
+      - SUBSCRIBE_TOPIC=cross.gateway.events
+    extra_hosts:
+      - "gateway1.macula.test:172.30.0.2"
+      - "gateway2.macula.test:172.30.0.3"
+      - "gateway3.macula.test:172.30.0.4"
+    depends_on:
+      - gateway1
+
+  # Gateway3 - Full gateway with local publisher
+  # Runs its own QUIC server and has a publisher connected locally
+  gateway3:
+    image: macula:test
+    container_name: macula-gateway3
+    hostname: gateway3.macula.test
+    networks:
+      macula_mesh:
+        ipv4_address: 172.30.0.4
+    environment:
+      - NODE_TYPE=gateway_publisher
+      - NODE_NAME=gateway3
+      - NODE_HOST=gateway3.macula.test
+      - COOKIE=macula_mesh_test
+      - REGISTRY_ENDPOINT=https://gateway1.macula.test:9443
+      - REGISTRY_URL=https://gateway1.macula.test:9443
+      - GATEWAY_PORT=9443
+      - REALM_ID=mesh.integration.test
+      - PUBLISH_TOPIC=cross.gateway.events
+    extra_hosts:
+      - "gateway1.macula.test:172.30.0.2"
+      - "gateway2.macula.test:172.30.0.3"
+      - "gateway3.macula.test:172.30.0.4"
+    depends_on:
+      - gateway1
+      - gateway2

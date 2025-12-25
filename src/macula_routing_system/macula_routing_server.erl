@@ -376,8 +376,9 @@ update_or_remove_key(Key, [], Storage) -> maps:remove(Key, Storage);
 update_or_remove_key(Key, Providers, Storage) -> Storage#{Key => Providers}.
 
 %% @doc Find value with escalation support.
-%% For pub/sub scenarios, we need ALL subscribers (local + remote).
-%% Queries both local storage AND DHT network, then merges results.
+%% Local-first lookup: returns local values immediately if found.
+%% Only queries DHT network if no local values (for RPC provider discovery).
+%% For pub/sub, bootstrap stores all subscriptions locally - no network query needed.
 -spec find_value_with_escalation(binary(), pos_integer(), map(),
                                   macula_routing_table:routing_table(), map()) ->
     {ok, term()} | {error, term()}.
@@ -394,41 +395,31 @@ find_value_with_escalation(Key, K, Storage, Table, Config) ->
                 Value when is_list(Value) -> Value;
                 Value -> [Value]
             end,
-            %% 3. ALWAYS query DHT network for remote values (critical for pub/sub)
-            %% This ensures we get subscribers from ALL nodes, not just local
-            NetworkValues = case find_value_via_dht(Key, K, Table) of
-                {ok, RemoteList} when is_list(RemoteList) -> RemoteList;
-                {ok, RemoteSingle} -> [RemoteSingle];
-                _ -> []
-            end,
-            %% 4. Merge and deduplicate by node_id
-            AllValues = merge_providers(LocalValues, NetworkValues),
-            ?LOG_INFO("[DHT] find_value: local=~p, network=~p, merged=~p",
-                       [length(LocalValues), length(NetworkValues), length(AllValues)]),
-            case AllValues of
-                [] ->
-                    %% 5. Try escalation if nothing found
-                    maybe_escalate_query(Key, Config);
-                _ ->
-                    {ok, AllValues}
-            end
+            %% 3. If local values found, return immediately (local-first)
+            %% For pub/sub with bootstrap pattern, all subscriptions are local
+            find_value_with_local(LocalValues, Key, K, Table, Config)
     end.
 
-%% @doc Merge two lists of providers, deduplicating by node_id.
-%% Prefers the entry from the second list (network) over the first (local).
--spec merge_providers(list(), list()) -> list().
-merge_providers(LocalProviders, NetworkProviders) ->
-    %% Build a map keyed by node_id for deduplication
-    LocalMap = lists:foldl(fun(P, Acc) ->
-        NodeId = get_node_id_from_value(P),
-        Acc#{NodeId => P}
-    end, #{}, LocalProviders),
-    MergedMap = lists:foldl(fun(P, Acc) ->
-        NodeId = get_node_id_from_value(P),
-        Acc#{NodeId => P}
-    end, LocalMap, NetworkProviders),
-    maps:values(MergedMap).
-
+%% @private Return local values immediately if found, else query network
+find_value_with_local(LocalValues, _Key, _K, _Table, _Config) when LocalValues =/= [] ->
+    ?LOG_INFO("[DHT] find_value: returning ~p local value(s)", [length(LocalValues)]),
+    {ok, LocalValues};
+find_value_with_local([], Key, K, Table, Config) ->
+    %% No local values - query network for remote providers (RPC discovery)
+    ?LOG_DEBUG("[DHT] find_value: no local values, querying network"),
+    NetworkValues = case find_value_via_dht(Key, K, Table) of
+        {ok, RemoteList} when is_list(RemoteList) -> RemoteList;
+        {ok, RemoteSingle} -> [RemoteSingle];
+        _ -> []
+    end,
+    ?LOG_INFO("[DHT] find_value: network returned ~p value(s)", [length(NetworkValues)]),
+    case NetworkValues of
+        [] ->
+            %% Try escalation if nothing found
+            maybe_escalate_query(Key, Config);
+        _ ->
+            {ok, NetworkValues}
+    end.
 find_value_via_dht(Key, K, Table) ->
     %% Log routing table state for debugging
     InitialClosest = macula_routing_table:find_closest(Table, Key, K),

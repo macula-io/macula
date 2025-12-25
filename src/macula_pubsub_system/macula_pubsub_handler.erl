@@ -224,9 +224,9 @@ handle_cast({publish_async, Topic, Data, Opts}, State) ->
     ?LOG_INFO("[PubSubHandler] publish_async received: topic=~p", [Topic]),
     do_async_publish(State#state.connection_manager_pid, Topic, Data, Opts, State);
 
-handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, State) ->
-    %% HYBRID: Send to gateway for routing AND discover via DHT
-    %% This enables both gateway-centric and pure P2P topologies
+handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, _Opts, MsgId}, State) ->
+    %% Send publish to gateway for routing - gateway handles DHT lookup and subscriber delivery
+    %% This avoids duplicate delivery (previously HYBRID mode sent via BOTH paths)
     ?LOG_INFO("[PubSubHandler] do_publish: topic=~s, ConnMgr=~p",
               [BinaryTopic, State#state.connection_manager_pid]),
 
@@ -237,10 +237,8 @@ handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, St
     State2 = State#state{pending_pubacks = UpdatedPendingPubacks},
 
     %% Send publish to gateway for routing to connected subscribers
+    %% Gateway will lookup subscribers via DHT and route messages accordingly
     send_publish_to_gateway(State#state.connection_manager_pid, PublishMsg, BinaryTopic),
-
-    %% Also discover subscribers via DHT for pure P2P routing (if available)
-    gen_server:cast(self(), {discover_subscribers, BinaryTopic, Payload, Qos, Opts}),
 
     {noreply, State2};
 

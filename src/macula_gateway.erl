@@ -599,7 +599,7 @@ handle_cast({distribute_publish, Topic, Payload}, State) ->
 %% Routes decoded QUIC messages to appropriate business logic handlers.
 %% PeerAddr is captured at receive time for NAT detection (stream may be closed by now).
 handle_cast({route_message, MessageType, Message, Stream, PeerAddr}, State) ->
-    ?LOG_DEBUG("Routing message type ~p from QUIC server (async)", [MessageType]),
+    ?LOG_DEBUG("[Gateway] route_message: type=~p, stream=~p", [MessageType, Stream]),
     %% Store peer address in process dictionary for NAT probe handling
     %% This allows handle_nat_probe to use the address even if stream is closed
     put(current_peer_addr, PeerAddr),
@@ -1423,8 +1423,8 @@ handle_decoded_message({ok, {call, CallMsg}}, Stream, State) ->
 
 %% Handle SUBSCRIBE message.
 handle_decoded_message({ok, {subscribe, SubMsg}}, Stream, State) ->
-    ?LOG_DEBUG("Received SUBSCRIBE message"),
-    ?LOG_DEBUG("Subscribe message: ~p", [SubMsg]),
+    ?LOG_DEBUG("[Gateway] Received SUBSCRIBE message from stream ~p", [Stream]),
+    ?LOG_DEBUG("[Gateway] Subscribe message: ~p", [SubMsg]),
     handle_subscribe(Stream, SubMsg, State);
 
 %% Handle UNSUBSCRIBE message.
@@ -1515,12 +1515,14 @@ handle_decoded_message({error, DecodeErr}, _Stream, State) ->
 %% @doc Handle subscription to topics - delegate to pubsub module.
 handle_subscribe(Stream, SubMsg, State) ->
     Topics = maps:get(<<"topics">>, SubMsg, []),
-    ?LOG_DEBUG("Stream ~p subscribing to topics: ~p (delegating to pubsub)", [Stream, Topics]),
+    ?LOG_DEBUG("[Gateway] handle_subscribe: stream=~p, topics=~p, pubsub=~p",
+               [Stream, Topics, State#state.pubsub]),
 
     PubSub = State#state.pubsub,
 
     %% Subscribe to each topic via pubsub module
     lists:foreach(fun(Topic) ->
+        ?LOG_DEBUG("[Gateway] Subscribing stream ~p to topic ~s", [Stream, Topic]),
         macula_gateway_pubsub:subscribe(PubSub, Stream, Topic)
     end, Topics),
 
@@ -1543,6 +1545,13 @@ handle_unsubscribe(Stream, UnsubMsg, State) ->
 %% @doc Handle publish message - distribute to all topic subscribers via DHT routing.
 %% Uses multi-hop Kademlia routing for remote subscribers (v0.7.8+).
 %% Delegates to macula_gateway_pubsub_router for distribution logic.
+%% Guards: Skip if gateway not fully wired yet (race condition on startup)
+handle_publish(_PublisherStream, _PubMsg, #state{pubsub = undefined} = State) ->
+    ?LOG_WARNING("Publish received before gateway wired - dropping"),
+    {noreply, State};
+handle_publish(_PublisherStream, _PubMsg, #state{mesh = undefined} = State) ->
+    ?LOG_WARNING("Publish received before gateway wired - dropping"),
+    {noreply, State};
 handle_publish(_PublisherStream, PubMsg, State) ->
     Topic = maps:get(<<"topic">>, PubMsg),
     _Payload = maps:get(<<"payload">>, PubMsg),

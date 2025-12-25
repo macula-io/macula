@@ -306,10 +306,150 @@ case "$NODE_TYPE" in
     exec /macula/docker/test_subscriber_wildcard.erl "$SUBSCRIBE_TOPIC" "multi-wildcard"
     ;;
 
+  # Cross-gateway pub/sub test node types
+  # These run FULL GATEWAYS with local pub/sub clients
+  gateway_subscriber)
+    echo "==> Starting gateway node with local subscriber..."
+    echo "    Registry: $REGISTRY_ENDPOINT"
+    echo "    Gateway endpoint: https://${NODE_HOST}:${GATEWAY_PORT:-9443}"
+    echo "    Subscribe topic: ${SUBSCRIBE_TOPIC:-cross.gateway.events}"
+
+    # Wait for registry to be ready
+    sleep 8
+
+    exec erl \
+      -pa _build/default/lib/*/ebin \
+      -name "${NODE_NAME}@${NODE_HOST}" \
+      -setcookie "$COOKIE" \
+      -noshell \
+      -eval "
+        io:format(\"Starting gateway with subscriber: ~s~n\", [\"$NODE_NAME\"]),
+
+        %% Start full macula with gateway enabled
+        application:set_env(macula, start_gateway, true),
+        application:set_env(macula, gateway_port, ${GATEWAY_PORT:-9443}),
+        application:ensure_all_started(macula),
+
+        %% Wait for gateway to initialize
+        timer:sleep(3000),
+
+        %% Connect to seed/registry to join DHT mesh
+        ConnOpts = #{
+          realm => <<\"com.example.realm\">>,
+          node_id => <<\"$NODE_NAME\">>
+        },
+
+        case macula:connect(<<\"$REGISTRY_ENDPOINT\">>, ConnOpts) of
+          {ok, Pid} ->
+            io:format(\"[~s] Connected to mesh via registry~n\", [\"$NODE_NAME\"]),
+
+            %% Subscribe to topic - this advertises to DHT
+            Topic = <<\"${SUBSCRIBE_TOPIC:-cross.gateway.events}\">>,
+            Callback = fun(Msg) ->
+              io:format(\"~n========================================~n\"),
+              io:format(\"[~s] [~s] CROSS-GATEWAY MESSAGE RECEIVED!~n\",
+                        [calendar:system_time_to_rfc3339(erlang:system_time(second)),
+                         \"$NODE_NAME\"]),
+              io:format(\"Topic: ~s~n\", [Topic]),
+              io:format(\"Payload: ~p~n\", [Msg]),
+              io:format(\"========================================~n~n\"),
+              ok
+            end,
+
+            case macula:subscribe(Pid, Topic, Callback) of
+              {ok, SubRef} ->
+                io:format(\"[~s] Subscribed to: ~s (ref: ~p)~n\", [\"$NODE_NAME\", Topic, SubRef]),
+                io:format(\"[~s] Waiting for cross-gateway messages...~n\", [\"$NODE_NAME\"]),
+                receive after infinity -> ok end;
+              {error, SubReason} ->
+                io:format(\"[~s] Subscribe failed: ~p~n\", [\"$NODE_NAME\", SubReason]),
+                halt(1)
+            end;
+          {error, ConnReason} ->
+            io:format(\"[~s] Connection to registry failed: ~p~n\", [\"$NODE_NAME\", ConnReason]),
+            halt(1)
+        end
+      "
+    ;;
+
+  gateway_publisher)
+    echo "==> Starting gateway node with local publisher..."
+    echo "    Registry: $REGISTRY_ENDPOINT"
+    echo "    Gateway endpoint: https://${NODE_HOST}:${GATEWAY_PORT:-9443}"
+    echo "    Publish topic: ${PUBLISH_TOPIC:-cross.gateway.events}"
+
+    # Wait for registry and subscriber gateway to be ready
+    sleep 15
+
+    exec erl \
+      -pa _build/default/lib/*/ebin \
+      -name "${NODE_NAME}@${NODE_HOST}" \
+      -setcookie "$COOKIE" \
+      -noshell \
+      -eval "
+        io:format(\"Starting gateway with publisher: ~s~n\", [\"$NODE_NAME\"]),
+
+        %% Start full macula with gateway enabled
+        application:set_env(macula, start_gateway, true),
+        application:set_env(macula, gateway_port, ${GATEWAY_PORT:-9443}),
+        application:ensure_all_started(macula),
+
+        %% Wait for gateway to initialize
+        timer:sleep(3000),
+
+        %% Connect to seed/registry to join DHT mesh
+        ConnOpts = #{
+          realm => <<\"com.example.realm\">>,
+          node_id => <<\"$NODE_NAME\">>
+        },
+
+        %% Publish loop
+        PublishLoop = fun(Self, Client, Topic, Counter) ->
+          Msg = #{
+            source_gateway => <<\"$NODE_NAME\">>,
+            event => <<\"cross_gateway_test\">>,
+            sequence => Counter,
+            timestamp => erlang:system_time(second)
+          },
+
+          io:format(\"[~s] Publishing message #~p to ~s~n\",
+                    [calendar:system_time_to_rfc3339(erlang:system_time(second)),
+                     Counter, Topic]),
+
+          case macula:publish(Client, Topic, Msg) of
+            ok ->
+              io:format(\"  -> Published (should route to subscriber gateway via DHT)~n\");
+            {error, Reason} ->
+              io:format(\"  -> ERROR: ~p~n\", [Reason])
+          end,
+
+          timer:sleep(5000),
+          Self(Self, Client, Topic, Counter + 1)
+        end,
+
+        case macula:connect(<<\"$REGISTRY_ENDPOINT\">>, ConnOpts) of
+          {ok, Pid} ->
+            io:format(\"[~s] Connected to mesh via registry~n\", [\"$NODE_NAME\"]),
+
+            %% Wait a bit for DHT to propagate subscription info
+            io:format(\"[~s] Waiting for DHT propagation...~n\", [\"$NODE_NAME\"]),
+            timer:sleep(5000),
+
+            Topic = <<\"${PUBLISH_TOPIC:-cross.gateway.events}\">>,
+            io:format(\"[~s] Starting publish loop to topic: ~s~n\", [\"$NODE_NAME\", Topic]),
+            PublishLoop(PublishLoop, Pid, Topic, 1);
+          {error, ConnReason} ->
+            io:format(\"[~s] Connection to registry failed: ~p~n\", [\"$NODE_NAME\", ConnReason]),
+            halt(1)
+        end
+      "
+    ;;
+
   *)
     echo "ERROR: Unknown NODE_TYPE: $NODE_TYPE"
     echo "Valid types: registry, provider, client, publisher, subscriber,"
-    echo "             publisher_wildcard, subscriber_exact, subscriber_single_wildcard, subscriber_multi_wildcard"
+    echo "             publisher_wildcard, subscriber_exact, subscriber_single_wildcard, subscriber_multi_wildcard,"
+    echo "             gateway_subscriber, gateway_publisher"
     exit 1
     ;;
 esac

@@ -155,10 +155,11 @@ do_dht_lookup(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     TopicKey = crypto:hash(sha256, Topic),
     %% Record that we're doing a DHT query (for rate-limiting)
     macula_subscriber_cache:record_dht_query(Topic),
-    ?LOG_INFO("[PubSubRouter] DHT lookup for ~s", [Topic]),
+    ?LOG_DEBUG("[PubSubRouter] DHT lookup for ~s", [Topic]),
     case macula_gateway_dht:lookup_value(TopicKey) of
         {ok, RemoteSubscribers} ->
-            ?LOG_INFO("[PubSubRouter] DHT found ~p subscriber(s) for ~s", [length(RemoteSubscribers), Topic]),
+            ?LOG_DEBUG("[PubSubRouter] DHT found ~p subscriber(s) for ~s: ~p",
+                       [length(RemoteSubscribers), Topic, RemoteSubscribers]),
             %% Cache for future lookups
             macula_subscriber_cache:store(Topic, RemoteSubscribers),
             %% Store subscriber endpoints in direct routing table for future direct P2P
@@ -166,7 +167,7 @@ do_dht_lookup(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
             route_to_each_subscriber(RemoteSubscribers, Topic, PubMsg, LocalNodeId, Mesh, Clients);
         {error, not_found} ->
             %% DO NOT cache empty results - subscriptions may arrive later (timing issue)
-            ?LOG_WARNING("[PubSubRouter] DHT returned not_found for ~s", [Topic]),
+            ?LOG_DEBUG("[PubSubRouter] DHT returned not_found for ~s", [Topic]),
             ok
     end.
 
@@ -235,11 +236,17 @@ route_to_subscriber_impl(DestNodeId, Subscriber, EndpointKey, Topic, PubMsg, Loc
     },
 
     %% Check if this is a connected client (has existing bidirectional stream)
+    ?LOG_DEBUG("[PubSubRouter] Checking if node ~s is connected client",
+               [binary:encode_hex(DestNodeId)]),
     case macula_gateway_clients:get_client_stream(Clients, DestNodeId) of
         {ok, Stream} ->
             %% Subscriber is a connected client - send directly via their stream
+            ?LOG_DEBUG("[PubSubRouter] SENDING to connected client ~s via stream ~p",
+                       [binary:encode_hex(DestNodeId), Stream]),
             send_to_client_stream(Stream, PublishMsg);
         not_found ->
+            ?LOG_DEBUG("[PubSubRouter] Node ~s NOT found as connected client",
+                       [binary:encode_hex(DestNodeId)]),
             %% Not a connected client - must be remote gateway, use mesh connection
             %% Get endpoint using same key type as node_id (atom or binary)
             EndpointUrl = case EndpointKey of

@@ -120,7 +120,7 @@ init(Opts) ->
 
 %% Subscribe is async (cast) to prevent blocking callers when PubSub is busy
 handle_cast({subscribe, Stream, Topic}, State) when (is_pid(Stream) orelse is_reference(Stream)), is_binary(Topic) ->
-    ?LOG_DEBUG("SUBSCRIBE called: Stream=~p, Topic=~s", [Stream, Topic]),
+    ?LOG_DEBUG("[PubSub] SUBSCRIBE cast received: Stream=~p, Topic=~s", [Stream, Topic]),
     CurrentTopics = maps:get(Stream, State#state.stream_subscriptions, []),
     NewState = do_subscribe(lists:member(Topic, CurrentTopics), Stream, Topic, CurrentTopics, State),
     {noreply, NewState};
@@ -391,16 +391,37 @@ do_publish(MeshPid, ClientsPid, LocalStreams, PubMsg, LocalNodeId, _Topic, _Payl
     macula_gateway_pubsub_router:distribute(LocalStreams, PubMsg, LocalNodeId, MeshPid, ClientsPid).
 
 %% @private Deliver to local streams
+%% Handles both PID handlers and QUIC stream references
 deliver_to_local_streams([], _Topic, _Payload) ->
     ok;
 deliver_to_local_streams([Stream | Rest], Topic, Payload) ->
-    deliver_to_stream_if_alive(erlang:is_process_alive(Stream), Stream, Topic, Payload),
+    deliver_to_stream(Stream, Topic, Payload),
     deliver_to_local_streams(Rest, Topic, Payload).
 
-deliver_to_stream_if_alive(true, Stream, Topic, Payload) ->
-    ?LOG_DEBUG("Sending to local stream ~p", [Stream]),
-    Stream ! {publish, Topic, Payload};
-deliver_to_stream_if_alive(false, _Stream, _Topic, _Payload) ->
+%% @private Deliver to PID handler (send Erlang message)
+deliver_to_stream(Stream, Topic, Payload) when is_pid(Stream) ->
+    case erlang:is_process_alive(Stream) of
+        true ->
+            ?LOG_DEBUG("Sending to local handler ~p", [Stream]),
+            Stream ! {publish, Topic, Payload};
+        false ->
+            ok
+    end;
+%% @private Deliver to QUIC stream (send encoded message)
+deliver_to_stream(Stream, Topic, Payload) when is_reference(Stream) ->
+    ?LOG_DEBUG("Sending to QUIC stream ~p", [Stream]),
+    %% Build complete PUBLISH message with all required protocol fields
+    PubMsg = #{
+        <<"topic">> => Topic,
+        <<"payload">> => Payload,
+        <<"qos">> => 0,
+        <<"retain">> => false,
+        <<"message_id">> => crypto:strong_rand_bytes(16)
+    },
+    Binary = macula_protocol_encoder:encode(publish, PubMsg),
+    _ = macula_quic:send(Stream, Binary),
+    ok;
+deliver_to_stream(_Stream, _Topic, _Payload) ->
     ok.
 
 %%%===================================================================

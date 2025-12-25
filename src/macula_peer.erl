@@ -221,6 +221,11 @@ init({Url, Opts}) ->
     ?LOG_INFO("[Connection Facade] Supervision tree started - ConnMgr: ~p, PubSub: ~p, RPC: ~p, AdvMgr: ~p",
               [ConnMgrPid, PubSubPid, RpcPid, AdvMgrPid]),
 
+    %% Wait for QUIC connection to be established before returning
+    %% This prevents race conditions where subscribe is called before connection is ready
+    wait_for_connection(ConnMgrPid, 10000),
+    ?LOG_INFO("[Connection Facade] QUIC connection ready"),
+
     %% Send connection_manager_pid to children that need it
     gen_server:cast(PubSubPid, {set_connection_manager_pid, ConnMgrPid}),
     gen_server:cast(RpcPid, {set_connection_manager_pid, ConnMgrPid}),
@@ -373,3 +378,25 @@ extract_child_pid({_, undefined, _Type, _Modules}, ChildId) ->
     error({child_not_started, ChildId});
 extract_child_pid(false, ChildId) ->
     error({child_not_found, ChildId}).
+
+%% @doc Wait for connection manager to reach connected status.
+%% Polls the connection status at 100ms intervals until connected or timeout.
+%% Returns ok even on timeout to not block callers - messages may be queued.
+-spec wait_for_connection(pid(), pos_integer()) -> ok.
+wait_for_connection(ConnMgrPid, Timeout) when Timeout > 0 ->
+    try macula_connection:get_status(ConnMgrPid) of
+        connected ->
+            ok;
+        _Other ->
+            timer:sleep(100),
+            wait_for_connection(ConnMgrPid, Timeout - 100)
+    catch
+        _:_ ->
+            %% Process might not exist or crashed - just continue
+            timer:sleep(100),
+            wait_for_connection(ConnMgrPid, Timeout - 100)
+    end;
+wait_for_connection(_ConnMgrPid, _Timeout) ->
+    %% Timeout reached - continue anyway, messages will be queued or dropped
+    ?LOG_WARNING("[Connection Facade] Connection wait timed out, continuing anyway"),
+    ok.
