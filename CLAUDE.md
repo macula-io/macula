@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v0.14.2 (December 2025)
+**Current Version**: v0.16.0 (December 2025)
 
 ---
 
@@ -60,6 +60,9 @@ These are non-negotiable requirements. Violations will result in rejection:
 | v0.14.0 | Dec 2025 | **Ra/Raft Removal** - Masterless CRDT architecture (OR-Set, G-Counter, PN-Counter - 48 tests) |
 | v0.14.1 | Dec 2025 | **Pub/Sub Fixes** - Remove message amplification, DHT routing improvements |
 | v0.14.2 | Dec 2025 | **Package Maintenance** - Version sync, publishing scripts, documentation |
+| v0.15.0 | Dec 2025 | **Gossip Protocol** - CRDT state replication, push-pull-push anti-entropy (29 tests) |
+| v0.15.1 | Dec 2025 | **Cross-Gateway Pub/Sub** - Physical node validation on beam cluster, race condition fixes |
+| v0.16.0 | Dec 2025 | **Registry System** - Ed25519 signing, Cluster Controller, security scanning (60 tests) |
 
 ---
 
@@ -114,6 +117,7 @@ A `*_system` module does **NOT** contain:
 | `macula_membership_system` | membership_server, gossip, detector | one_for_one |
 | `macula_dist_system` | dist_discovery, cluster_strategy | one_for_one |
 | `macula_platform_system` | (masterless - no children after Ra removal) | one_for_one |
+| `macula_registry_system` | registry_store, registry_server, cluster_controller, app_monitor | one_for_one |
 
 ### Example: Correct vs Incorrect
 
@@ -600,6 +604,77 @@ Macula operates in eventually-consistent mode (AP in CAP theorem):
 
 - Gossip protocol for CRDT state synchronization
 - DHT-integrated CRDT replication
+
+---
+
+## ✅ v0.16.0 Registry System (COMPLETED - Dec 2025)
+
+**STATUS:** ✅ COMPLETE (60 tests)
+
+📋 **See `architecture/ROADMAP.md`** for detailed implementation
+
+### What Was Delivered
+
+Secure package distribution system with Ed25519 signatures and runtime defense:
+
+| Module | Purpose |
+|--------|---------|
+| `macula_registry_system.erl` | Supervisor (one_for_one) |
+| `macula_registry_server.erl` | Package API (gen_server) |
+| `macula_registry_store.erl` | ETS + disk storage with TTL cleanup |
+| `macula_registry_verify.erl` | Ed25519 digital signatures |
+| `macula_registry_manifest.erl` | SemVer manifest parsing |
+| `macula_security_scanner.erl` | Static analysis for dangerous BIFs |
+| `macula_app_monitor.erl` | Runtime defense (memory, queue, crash) |
+| `macula_cluster_controller.erl` | Deploy/upgrade/stop lifecycle |
+
+### Protocol Messages (0x80-0x89)
+
+| Type | ID | Purpose |
+|------|-----|---------|
+| `registry_publish` | 0x80 | Publish package |
+| `registry_fetch` | 0x82 | Fetch package |
+| `registry_query` | 0x84 | Query metadata |
+| `registry_verify` | 0x86 | Verify signature |
+| `registry_sync` | 0x88 | Sync index |
+
+### Key Features
+
+**Ed25519 Signing:**
+```erlang
+{PubKey, PrivKey} = macula_registry_verify:generate_keypair().
+{ok, Sig} = macula_registry_verify:sign_package(ManifestBin, Archive, PrivKey).
+ok = macula_registry_verify:verify_package(ManifestBin, Archive, Sig, PubKey).
+```
+
+**Static Analysis:**
+- Detects dangerous BIFs: `os:cmd`, `erlang:open_port`, `erlang:load_nif`, `file:delete`
+- Audits NIF usage
+- Calculates security score (0-100)
+
+**Runtime Defense:**
+- Memory limit enforcement
+- Message queue monitoring
+- Crash rate detection
+- Automatic throttle → kill → quarantine escalation
+
+**Cluster Controller:**
+- Deploy/upgrade/stop/remove applications
+- Auto-update policy per app (always, major, minor, never)
+- Signature verification before deploy
+
+### Test Coverage (60 tests)
+
+| Category | Tests |
+|----------|-------|
+| Ed25519 verify | 10 |
+| Manifest | 8 |
+| Store | 8 |
+| Security scanner | 8 |
+| App monitor | 6 |
+| Cluster controller | 10 |
+| Registry system | 6 |
+| Protocol types | 4 |
 
 ---
 

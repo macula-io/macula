@@ -1,8 +1,8 @@
 # Macula Roadmap
 
 > **Last Updated:** 2025-12-25
-> **Current Version:** v0.15.1
-> **Status:** Cross-gateway pub/sub validated on physical hardware (beam cluster). Published to hex.pm.
+> **Current Version:** v0.16.0
+> **Status:** Registry System complete with Ed25519 signing, security scanning, and Cluster Controller. 60 tests passing.
 
 ---
 
@@ -158,7 +158,7 @@ Each level of the mesh has its own DHT. Bridge Nodes form meshes at each level:
 | v0.14.1 | **Pub/Sub Fixes** | ✅ COMPLETED - Remove message amplification, DHT routing fixes |
 | v0.15.0 | **Gossip Protocol** | ✅ COMPLETED - CRDT state replication, push-pull-push anti-entropy |
 | v0.15.1 | **Cross-Gateway Pub/Sub** | ✅ COMPLETED - Physical node validation, race condition fixes |
-| v0.16.0 | **Registry System** | Package signing, Cluster Controller, security scanning |
+| v0.16.0 | **Registry System** | ✅ COMPLETED - Ed25519 signing, Cluster Controller, security scanning (60 tests) |
 | v0.17.0 | **Protocol Gateway** | HTTP/3 API, WebTransport, OpenAPI spec |
 | v1.0.0 | **Production Ready** | Full Cluster + Bridge + Registry |
 | v1.1.0+ | **Ecosystem** | QUIC Distribution, macula_crdt hex package |
@@ -428,83 +428,106 @@ Tested on beam cluster (4 Intel Celeron J4105 nodes):
 
 ---
 
-## v0.15.0 - Registry System
+## v0.16.0 - Registry System (COMPLETED - December 2025)
 
 **Goal:** Secure application distribution with federated registries.
 
-### Deliverables
+**Status:** ✅ COMPLETE (60 tests)
 
-#### 1. Registry Server
+**What was delivered:**
+- ✅ `macula_registry_system.erl` - Supervisor for registry subsystem
+- ✅ `macula_registry_server.erl` - Publish/fetch API with DHT integration
+- ✅ `macula_registry_store.erl` - ETS + disk storage with TTL cleanup
+- ✅ `macula_registry_verify.erl` - Ed25519 digital signatures
+- ✅ `macula_registry_manifest.erl` - SemVer manifest parsing/validation
+- ✅ `macula_security_scanner.erl` - Static analysis for dangerous BIFs
+- ✅ `macula_app_monitor.erl` - Runtime defense (memory, queue, crash monitoring)
+- ✅ `macula_cluster_controller.erl` - Deploy/upgrade/stop app lifecycle
+- ✅ Protocol messages 0x80-0x89 for registry operations
+- ✅ Integrated into `macula_root.erl` supervision tree
 
+### Module Structure
+
+```
+src/macula_registry_system/
+├── macula_registry_system.erl       # Supervisor (one_for_one)
+├── macula_registry_server.erl       # Package API (gen_server)
+├── macula_registry_store.erl        # Local storage (gen_server)
+├── macula_registry_verify.erl       # Ed25519 signatures (stateless)
+├── macula_registry_manifest.erl     # Manifest parsing (stateless)
+├── macula_cluster_controller.erl    # App lifecycle (gen_server)
+├── macula_security_scanner.erl      # Static analysis (stateless)
+└── macula_app_monitor.erl           # Runtime defense (gen_server)
+```
+
+### Protocol Messages (0x80-0x89)
+
+| Type | ID | Purpose |
+|------|-----|---------|
+| `registry_publish` | 0x80 | Publish package |
+| `registry_publish_ack` | 0x81 | Publish confirmation |
+| `registry_fetch` | 0x82 | Fetch package |
+| `registry_fetch_reply` | 0x83 | Package data |
+| `registry_query` | 0x84 | Query metadata |
+| `registry_query_reply` | 0x85 | Metadata response |
+| `registry_verify` | 0x86 | Verify signature |
+| `registry_verify_reply` | 0x87 | Verification result |
+| `registry_sync` | 0x88 | Sync index |
+| `registry_sync_reply` | 0x89 | Index response |
+
+### Key Features
+
+**Ed25519 Signing:**
 ```erlang
-%% apps/macula_registry/src/macula_registry.erl
--spec publish_package(package(), signature()) -> {ok, pkg_id()} | {error, term()}.
--spec fetch_package(pkg_id()) -> {ok, package()} | {error, not_found}.
--spec verify_package(package(), pubkey()) -> ok | {error, invalid_signature}.
+{PubKey, PrivKey} = macula_registry_verify:generate_keypair().
+{ok, Signature} = macula_registry_verify:sign_package(ManifestBin, BeamArchive, PrivKey).
+ok = macula_registry_verify:verify_package(ManifestBin, BeamArchive, Signature, PubKey).
 ```
 
-#### 2. Package Manifest
+**Static Analysis:**
+- Detects dangerous BIFs: `os:cmd`, `erlang:open_port`, `erlang:load_nif`, `file:delete`, etc.
+- Audits NIF usage
+- Flags undeclared capabilities
+- Calculates security score (0-100)
 
-```erlang
-%% myapp.macula.manifest
-#{
-    name => <<"myapp">>,
-    version => <<"1.0.0">>,
-    capabilities => [
-        {network, [{connect, <<"*.example.com:443">>}]},
-        {pubsub, [{publish, <<"myapp.*">>}]},
-        {rpc, [{register, <<"myapp.api.*">>}]}
-    ],
-    nifs => [],
-    otp_release => <<"27">>
-}.
-```
+**Runtime Defense:**
+- Memory limit enforcement
+- Message queue monitoring
+- Crash rate detection with sliding window
+- Automatic throttle → kill → quarantine escalation
 
-#### 3. Cluster Controller
+**Cluster Controller:**
+- Deploy/upgrade/stop/remove applications
+- Auto-update policy per app (always, major, minor, never)
+- Signature verification before deploy
+- Supervisor monitoring with automatic status updates
 
-- Watches configured registries
-- Verifies signatures before deploy
-- Manages app lifecycle (deploy, upgrade, remove)
-- Enforces local deployment policy
+### Test Coverage (60 tests)
 
-#### 4. Security Scanning (Basic)
-
-Layer 1 - Static Analysis:
-- Scan for dangerous BIFs (os:cmd, open_port)
-- Audit NIF dependencies
-- Flag undeclared capabilities
-
-Layer 2 - Runtime Monitor:
-- Memory limits
-- Message queue limits
-- Crash rate detection
-- Throttle → Kill → Quarantine
-
-### Files to Create
-
-```
-apps/macula_registry/
-├── src/
-│   ├── macula_registry.erl           # Registry server
-│   ├── macula_registry_pkg.erl       # Package management
-│   ├── macula_registry_verify.erl    # Signature verification
-│   ├── macula_registry_scan.erl      # Static analysis
-│   ├── macula_cell_controller.erl    # Deployment controller
-│   └── macula_app_monitor.erl        # Runtime defense
-└── test/
-```
+| Module | Tests | Description |
+|--------|-------|-------------|
+| `macula_registry_verify_tests` | 10 | Ed25519 keypair, signing, verification |
+| `macula_registry_manifest_tests` | 8 | Validation, SemVer comparison, serialization |
+| `macula_registry_store_tests` | 8 | Storage, retrieval, version management |
+| `macula_security_scanner_tests` | 8 | Dangerous BIF detection, score calculation |
+| `macula_app_monitor_tests` | 6 | Start/stop, limits, quarantine |
+| `macula_cluster_controller_tests` | 10 | Deploy, upgrade, policies |
+| `macula_registry_system_tests` | 6 | Supervisor, child processes |
+| `macula_protocol_types_tests` | 4 | Message IDs 0x80-0x89 |
 
 ### Acceptance Criteria
 
-- [ ] Package signing and verification
-- [ ] Cluster Controller deploys from registry
-- [ ] Static analysis detects dangerous BIFs
-- [ ] Runtime monitor kills runaway apps
-- [ ] 50+ tests for registry system
+- [x] Package signing with Ed25519
+- [x] Package verification before deployment
+- [x] Cluster Controller deploys from registry
+- [x] Static analysis detects dangerous BIFs
+- [x] Runtime monitor enforces limits
+- [x] 60 tests passing (target was 50+)
+- [x] Integrated into supervision tree
 
 ---
 
-## v0.16.0 - Protocol Gateway
+## v0.17.0 - Protocol Gateway
 
 **Goal:** HTTP/3 API for non-BEAM clients.
 

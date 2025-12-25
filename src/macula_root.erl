@@ -4,10 +4,15 @@
 %% This is the top-level supervisor for the Macula application.
 %% It manages all Macula subsystems in an always-on architecture.
 %%
-%% Supervision Hierarchy (v0.8.5+):
+%% Supervision Hierarchy (v0.16.0+):
 %% <pre>
 %% macula_root (this module - application root)
 %% ├── macula_routing_server (core DHT infrastructure - always on)
+%% ├── macula_nat_system (NAT traversal - always on)
+%% │   ├── macula_nat_detector
+%% │   ├── macula_hole_punch
+%% │   ├── macula_relay_registry
+%% │   └── macula_connection_upgrade
 %% ├── macula_bootstrap_system (bootstrap services - always on)
 %% │   ├── macula_bootstrap_server
 %% │   ├── macula_bootstrap_registry
@@ -23,9 +28,14 @@
 %% │   ├── macula_bridge_mesh (peer bridge mesh)
 %% │   └── macula_bridge_cache (parent query results cache)
 %% ├── macula_peers_sup (dynamic peer connections - always on)
-%% └── macula_platform_system (platform layer - always on)
-%%     ├── macula_leader_election (deprecated - scheduled for removal v0.14.0)
-%%     └── macula_crdt (LWW-Register, OR-Set in v0.14.0)
+%% ├── macula_peer_discovery (DHT-based P2P mesh - always on)
+%% ├── macula_platform_system (distributed coordination - always on)
+%% │   └── macula_crdt (LWW-Register, OR-Set, G-Counter, PN-Counter)
+%% └── macula_registry_system (package distribution - always on)
+%%     ├── macula_registry_store (ETS + disk storage)
+%%     ├── macula_registry_server (publish/fetch API)
+%%     ├── macula_cluster_controller (app lifecycle)
+%%     └── macula_app_monitor (runtime defense)
 %% </pre>
 %%
 %% Architecture Philosophy (v0.8.5):
@@ -139,25 +149,29 @@ init([]) ->
         get_peer_discovery_spec(NodeID, Port, Realm),
 
         %% 8. Platform system (distributed coordination - always on)
-        get_platform_system_spec(NodeID, Realm)
+        get_platform_system_spec(NodeID, Realm),
+
+        %% 9. Registry system (package distribution - always on)
+        get_registry_system_spec(NodeID, Realm)
     ],
 
     ?LOG_INFO("Starting subsystems:"),
-    ?LOG_INFO("  [1/8] Core DHT Routing"),
-    ?LOG_INFO("  [2/8] NAT System (Detection + Hole Punch + Relay)"),
-    ?LOG_INFO("  [3/8] Bootstrap System"),
-    ?LOG_INFO("  [4/8] Gateway System"),
+    ?LOG_INFO("  [1/9] Core DHT Routing"),
+    ?LOG_INFO("  [2/9] NAT System (Detection + Hole Punch + Relay)"),
+    ?LOG_INFO("  [3/9] Bootstrap System"),
+    ?LOG_INFO("  [4/9] Gateway System"),
     case BridgeEnabled of
         true ->
             ParentBridges = maps:get(parent_bridges, BridgeConfig, []),
             MeshLevel = maps:get(mesh_level, BridgeConfig, cluster),
-            ?LOG_INFO("  [5/8] Bridge System (level: ~p, parents: ~p)", [MeshLevel, length(ParentBridges)]);
+            ?LOG_INFO("  [5/9] Bridge System (level: ~p, parents: ~p)", [MeshLevel, length(ParentBridges)]);
         false ->
-            ?LOG_INFO("  [5/8] Bridge System (disabled)")
+            ?LOG_INFO("  [5/9] Bridge System (disabled)")
     end,
-    ?LOG_INFO("  [6/8] Peers Supervisor"),
-    ?LOG_INFO("  [7/8] Peer Discovery (P2P Mesh)"),
-    ?LOG_INFO("  [8/8] Platform System (Leader Election + Shared State)"),
+    ?LOG_INFO("  [6/9] Peers Supervisor"),
+    ?LOG_INFO("  [7/9] Peer Discovery (P2P Mesh)"),
+    ?LOG_INFO("  [8/9] Platform System (Masterless CRDT)"),
+    ?LOG_INFO("  [9/9] Registry System (Package Distribution)"),
     ?LOG_INFO(""),
 
     %% Schedule bootstrap peer connections after supervision tree is up
@@ -364,6 +378,27 @@ get_platform_system_spec(NodeID, Realm) ->
         shutdown => infinity,  % supervisor shutdown
         type => supervisor,
         modules => [macula_platform_system]
+    }.
+
+%% @private
+%% @doc Get registry system child spec (package distribution).
+%% The registry system provides:
+%% - Package publishing with Ed25519 signatures
+%% - Package fetching with integrity verification
+%% - Static security scanning before deployment
+%% - Runtime monitoring with memory/queue limits
+%% - Application lifecycle management (deploy/upgrade/stop)
+get_registry_system_spec(NodeID, Realm) ->
+    #{
+        id => macula_registry_system,
+        start => {macula_registry_system, start_link, [#{
+            node_id => NodeID,
+            realm => Realm
+        }]},
+        restart => permanent,
+        shutdown => infinity,  % supervisor shutdown
+        type => supervisor,
+        modules => [macula_registry_system]
     }.
 
 %% @private

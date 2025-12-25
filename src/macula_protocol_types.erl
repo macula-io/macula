@@ -89,6 +89,18 @@
 -define(MSG_GOSSIP_SYNC,        16#73).  % Full anti-entropy sync request
 -define(MSG_GOSSIP_SYNC_REPLY,  16#74).  % Full anti-entropy sync response
 
+%% Registry System messages (0x80-0x8F range)
+-define(MSG_REGISTRY_PUBLISH,       16#80).  % Publish package to registry
+-define(MSG_REGISTRY_PUBLISH_ACK,   16#81).  % Acknowledge publish success
+-define(MSG_REGISTRY_FETCH,         16#82).  % Fetch package from registry
+-define(MSG_REGISTRY_FETCH_REPLY,   16#83).  % Package data response
+-define(MSG_REGISTRY_QUERY,         16#84).  % Query package metadata
+-define(MSG_REGISTRY_QUERY_REPLY,   16#85).  % Package metadata response
+-define(MSG_REGISTRY_VERIFY,        16#86).  % Verify package signature
+-define(MSG_REGISTRY_VERIFY_REPLY,  16#87).  % Verification result
+-define(MSG_REGISTRY_SYNC,          16#88).  % Sync registry index with peer
+-define(MSG_REGISTRY_SYNC_REPLY,    16#89).  % Registry index response
+
 %%%===================================================================
 %%% Type Definitions
 %%%===================================================================
@@ -102,7 +114,10 @@
     nat_probe | nat_probe_reply | punch_request | punch_coordinate |
     punch_execute | punch_result | relay_request | relay_data |
     bridge_rpc | bridge_data |
-    gossip_push | gossip_pull | gossip_pull_reply | gossip_sync | gossip_sync_reply.
+    gossip_push | gossip_pull | gossip_pull_reply | gossip_sync | gossip_sync_reply |
+    registry_publish | registry_publish_ack | registry_fetch | registry_fetch_reply |
+    registry_query | registry_query_reply | registry_verify | registry_verify_reply |
+    registry_sync | registry_sync_reply.
 
 -type message() ::
     {connect, connect_msg()} |
@@ -265,6 +280,101 @@
     gossip_sync_reply_msg/0
 ]).
 
+%% Registry System Messages
+
+-type registry_publish_msg() :: #{
+    package_name := binary(),         % Package name (e.g., <<"my_app">>)
+    version := binary(),              % SemVer version (e.g., <<"1.0.0">>)
+    manifest := map(),                % Parsed manifest
+    beam_archive := binary(),         % Gzipped BEAM files
+    signature := binary(),            % Ed25519 signature
+    public_key := binary()            % Publisher's public key
+}.
+
+-type registry_publish_ack_msg() :: #{
+    package_name := binary(),
+    version := binary(),
+    checksum := binary(),             % SHA-256 of beam_archive
+    published_at := integer()         % Unix timestamp
+}.
+
+-type registry_fetch_msg() :: #{
+    package_name := binary(),
+    version => binary(),              % Optional: specific version (latest if omitted)
+    include_deps => boolean()         % Whether to include dependencies
+}.
+
+-type registry_fetch_reply_msg() :: #{
+    package_name := binary(),
+    version := binary(),
+    manifest := map(),
+    beam_archive := binary(),
+    signature := binary(),
+    public_key := binary(),
+    dependencies => [map()]           % Optional dependency packages
+}.
+
+-type registry_query_msg() :: #{
+    package_name := binary(),
+    pattern => binary()               % Optional: search pattern
+}.
+
+-type registry_query_reply_msg() :: #{
+    packages := [#{
+        name := binary(),
+        versions := [binary()],
+        latest := binary(),
+        description => binary()
+    }]
+}.
+
+-type registry_verify_msg() :: #{
+    package_name := binary(),
+    version := binary(),
+    checksum := binary()              % SHA-256 to verify
+}.
+
+-type registry_verify_reply_msg() :: #{
+    package_name := binary(),
+    version := binary(),
+    valid := boolean(),
+    reason => binary()                % Only if valid=false
+}.
+
+-type registry_sync_msg() :: #{
+    node_id := binary(),
+    package_index := [#{              % List of known packages
+        name := binary(),
+        version := binary(),
+        checksum := binary()
+    }]
+}.
+
+-type registry_sync_reply_msg() :: #{
+    node_id := binary(),
+    missing := [#{                    % Packages we don't have
+        name := binary(),
+        version := binary()
+    }],
+    updates := [#{                    % Packages with newer versions
+        name := binary(),
+        version := binary()
+    }]
+}.
+
+-export_type([
+    registry_publish_msg/0,
+    registry_publish_ack_msg/0,
+    registry_fetch_msg/0,
+    registry_fetch_reply_msg/0,
+    registry_query_msg/0,
+    registry_query_reply_msg/0,
+    registry_verify_msg/0,
+    registry_verify_reply_msg/0,
+    registry_sync_msg/0,
+    registry_sync_reply_msg/0
+]).
+
 %%%===================================================================
 %%% API Functions
 %%%===================================================================
@@ -307,7 +417,17 @@ message_type_id(gossip_push) -> ?MSG_GOSSIP_PUSH;
 message_type_id(gossip_pull) -> ?MSG_GOSSIP_PULL;
 message_type_id(gossip_pull_reply) -> ?MSG_GOSSIP_PULL_REPLY;
 message_type_id(gossip_sync) -> ?MSG_GOSSIP_SYNC;
-message_type_id(gossip_sync_reply) -> ?MSG_GOSSIP_SYNC_REPLY.
+message_type_id(gossip_sync_reply) -> ?MSG_GOSSIP_SYNC_REPLY;
+message_type_id(registry_publish) -> ?MSG_REGISTRY_PUBLISH;
+message_type_id(registry_publish_ack) -> ?MSG_REGISTRY_PUBLISH_ACK;
+message_type_id(registry_fetch) -> ?MSG_REGISTRY_FETCH;
+message_type_id(registry_fetch_reply) -> ?MSG_REGISTRY_FETCH_REPLY;
+message_type_id(registry_query) -> ?MSG_REGISTRY_QUERY;
+message_type_id(registry_query_reply) -> ?MSG_REGISTRY_QUERY_REPLY;
+message_type_id(registry_verify) -> ?MSG_REGISTRY_VERIFY;
+message_type_id(registry_verify_reply) -> ?MSG_REGISTRY_VERIFY_REPLY;
+message_type_id(registry_sync) -> ?MSG_REGISTRY_SYNC;
+message_type_id(registry_sync_reply) -> ?MSG_REGISTRY_SYNC_REPLY.
 
 %% @doc Get message type name from numeric ID.
 -spec message_type_name(byte()) -> {ok, message_type()} | {error, unknown_type}.
@@ -348,4 +468,14 @@ message_type_name(?MSG_GOSSIP_PULL) -> {ok, gossip_pull};
 message_type_name(?MSG_GOSSIP_PULL_REPLY) -> {ok, gossip_pull_reply};
 message_type_name(?MSG_GOSSIP_SYNC) -> {ok, gossip_sync};
 message_type_name(?MSG_GOSSIP_SYNC_REPLY) -> {ok, gossip_sync_reply};
+message_type_name(?MSG_REGISTRY_PUBLISH) -> {ok, registry_publish};
+message_type_name(?MSG_REGISTRY_PUBLISH_ACK) -> {ok, registry_publish_ack};
+message_type_name(?MSG_REGISTRY_FETCH) -> {ok, registry_fetch};
+message_type_name(?MSG_REGISTRY_FETCH_REPLY) -> {ok, registry_fetch_reply};
+message_type_name(?MSG_REGISTRY_QUERY) -> {ok, registry_query};
+message_type_name(?MSG_REGISTRY_QUERY_REPLY) -> {ok, registry_query_reply};
+message_type_name(?MSG_REGISTRY_VERIFY) -> {ok, registry_verify};
+message_type_name(?MSG_REGISTRY_VERIFY_REPLY) -> {ok, registry_verify_reply};
+message_type_name(?MSG_REGISTRY_SYNC) -> {ok, registry_sync};
+message_type_name(?MSG_REGISTRY_SYNC_REPLY) -> {ok, registry_sync_reply};
 message_type_name(_) -> {error, unknown_type}.
