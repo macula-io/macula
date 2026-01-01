@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.16.2] - 2026-01-01
+
+### 🐛 Bug Fix - Environment Variable Naming Consistency
+
+This patch fixes environment variable naming to be consistent with `macula_tls.erl`.
+
+### Fixed
+
+- **Environment variable names in `macula_gateway_mesh.erl`**: Changed from `TLS_CERT_FILE`/`TLS_KEY_FILE` to `MACULA_TLS_CERTFILE`/`MACULA_TLS_KEYFILE` for consistency with the rest of the codebase.
+
+### Upgrade Notes
+
+If you were using `TLS_CERT_FILE` and `TLS_KEY_FILE` environment variables, change them to `MACULA_TLS_CERTFILE` and `MACULA_TLS_KEYFILE`.
+
+---
+
 ## [0.16.1] - 2026-01-01
 
 ### 🐛 Bug Fix - TLS Certificate Path Consistency

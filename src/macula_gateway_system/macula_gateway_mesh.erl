@@ -508,8 +508,9 @@ get_tls_certificates(Opts) when is_map(Opts) ->
     end.
 
 %% @private
+%% Check environment variables (consistent with macula_tls.erl naming)
 get_tls_certificates_from_env() ->
-    case {os:getenv("TLS_CERT_FILE"), os:getenv("TLS_KEY_FILE")} of
+    case {os:getenv("MACULA_TLS_CERTFILE"), os:getenv("MACULA_TLS_KEYFILE")} of
         {false, false} ->
             %% No env vars, use macula_tls defaults (auto-generated if missing)
             macula_tls:get_cert_paths();
