@@ -498,27 +498,27 @@ get_tls_certificates(Opts) when is_map(Opts) ->
     %% Check opts first
     case {maps:get(cert_file, Opts, undefined), maps:get(key_file, Opts, undefined)} of
         {undefined, undefined} ->
-            %% Fall back to environment variables
+            %% Fall back to environment variables, then macula_tls defaults
             get_tls_certificates_from_env();
         {CertFile, KeyFile} when CertFile =/= undefined, KeyFile =/= undefined ->
             {CertFile, KeyFile};
         _ ->
-            %% Partial config in opts, use defaults
-            {"/opt/macula/certs/cert.pem", "/opt/macula/certs/key.pem"}
+            %% Partial config in opts, use macula_tls defaults
+            macula_tls:get_cert_paths()
     end.
 
 %% @private
 get_tls_certificates_from_env() ->
     case {os:getenv("TLS_CERT_FILE"), os:getenv("TLS_KEY_FILE")} of
         {false, false} ->
-            %% No env vars, use pre-generated certs
-            {"/opt/macula/certs/cert.pem", "/opt/macula/certs/key.pem"};
+            %% No env vars, use macula_tls defaults (auto-generated if missing)
+            macula_tls:get_cert_paths();
         {CertEnv, KeyEnv} when CertEnv =/= false, KeyEnv =/= false ->
             %% Use mounted certificates (production)
             {CertEnv, KeyEnv};
         _ ->
-            %% Partial configuration, use defaults
-            {"/opt/macula/certs/cert.pem", "/opt/macula/certs/key.pem"}
+            %% Partial configuration, use macula_tls defaults
+            macula_tls:get_cert_paths()
     end.
 
 %%%===================================================================

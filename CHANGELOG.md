@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.16.1] - 2026-01-01
+
+### 🐛 Bug Fix - TLS Certificate Path Consistency
+
+This patch release fixes a certificate path mismatch that caused the gateway mesh to fail in containerized environments.
+
+### Fixed
+
+- **Certificate path mismatch in `macula_gateway_mesh.erl`**: The module was using hardcoded paths (`/opt/macula/certs/`) instead of calling `macula_tls:get_cert_paths()`. This caused failures in Docker containers where certificates are auto-generated at `/var/lib/macula/`.
+
+### Changed
+
+- **`macula_gateway_mesh.erl`**: Replaced hardcoded certificate paths with calls to `macula_tls:get_cert_paths()` in `get_tls_certificates/1` and `get_tls_certificates_from_env/0` functions. The module now properly uses the centralized TLS configuration introduced in v0.11.0.
+
+### Upgrade Notes
+
+No breaking changes. Simply update the dependency version to benefit from consistent certificate path handling across all environments.
+
+---
+
 ## [0.16.0] - 2025-12-25
 
 ### 🔐 Registry System - Secure Package Distribution

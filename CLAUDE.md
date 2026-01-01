@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v0.16.0 (December 2025)
+**Current Version**: v0.16.1 (January 2026)
 
 ---
 
@@ -63,6 +63,7 @@ These are non-negotiable requirements. Violations will result in rejection:
 | v0.15.0 | Dec 2025 | **Gossip Protocol** - CRDT state replication, push-pull-push anti-entropy (29 tests) |
 | v0.15.1 | Dec 2025 | **Cross-Gateway Pub/Sub** - Physical node validation on beam cluster, race condition fixes |
 | v0.16.0 | Dec 2025 | **Registry System** - Ed25519 signing, Cluster Controller, security scanning (60 tests) |
+| v0.16.1 | Jan 2026 | **Bug Fix** - Certificate path consistency in macula_gateway_mesh |
 
 ---
 
