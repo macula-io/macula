@@ -111,8 +111,10 @@ connect(Host, Port, Opts, Timeout) ->
 
     %% Log connection attempt with TLS mode info
     VerifyMode = proplists:get_value(verify, Opts, none),
-    ?LOG_INFO("Connecting to ~s:~p with idle_timeout=~pms, keep_alive=~pms, verify=~p",
-              [Host, Port, IdleTimeoutMs, KeepAliveIntervalMs, VerifyMode]),
+    CACertFile = proplists:get_value(cacertfile, Opts, undefined),
+    ?LOG_INFO("Connecting to ~s:~p with idle_timeout=~pms, keep_alive=~pms, verify=~p, cacertfile=~p",
+              [Host, Port, IdleTimeoutMs, KeepAliveIntervalMs, VerifyMode, CACertFile]),
+    ?LOG_DEBUG("Full QuicerOpts: ~p", [QuicerOpts]),
     quicer:connect(Host, Port, QuicerOpts, Timeout).
 
 %% @doc Safely get a value from proplist, returning {ok, Value} or error.

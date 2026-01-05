@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.16.5] - 2026-01-05
+
+### 🔧 Debug - Enhanced TLS Logging
+
+Added detailed logging for TLS options being passed to quicer to help diagnose certificate verification issues.
+
+### Changed
+
+- **`macula_quic.erl:connect/4`**: Now logs `cacertfile` path and full `QuicerOpts` for debugging
+
+---
+
 ## [0.16.4] - 2026-01-05
 
 ### 🐛 Bug Fix - quicer Client TLS verify Option
