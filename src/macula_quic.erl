@@ -75,15 +75,17 @@ listen(Port, Opts) ->
 %% Options:
 %%   {alpn, [Protocol]} - List of ALPN protocols
 %%   {verify, none | verify_peer} - Certificate verification mode
+%%   {cacertfile, Path} - CA certificate bundle for verification (v0.16.3+)
+%%   {depth, N} - Max certificate chain depth (v0.16.3+)
+%%   {server_name_indication, Host} - SNI hostname (v0.16.3+)
 %%   {idle_timeout_ms, N} - Connection idle timeout in milliseconds
 %%   {keep_alive_interval_ms, N} - Keep-alive PING interval in milliseconds
 %% @end
 -spec connect(string() | inet:ip_address(), inet:port_number(), list(), timeout()) ->
     {ok, reference()} | {error, term()}.
 connect(Host, Port, Opts, Timeout) ->
-    %% Extract options
+    %% Extract QUIC-specific options with defaults
     AlpnProtocols = proplists:get_value(alpn, Opts, ["macula"]),
-    Verify = proplists:get_value(verify, Opts, none),
 
     %% Timeout and keep-alive configuration for mesh stability
     %% CRITICAL: Both endpoints negotiate idle timeout - the SMALLER value wins
@@ -92,19 +94,35 @@ connect(Host, Port, Opts, Timeout) ->
     KeepAliveIntervalMs = proplists:get_value(keep_alive_interval_ms, Opts, 20000),
     HandshakeIdleTimeoutMs = proplists:get_value(handshake_idle_timeout_ms, Opts, 30000),
 
-    %% Build quicer options
-    QuicerOpts = [
+    %% Build base quicer options
+    BaseOpts = [
         {alpn, AlpnProtocols},
-        {verify, Verify},
         {idle_timeout_ms, IdleTimeoutMs},
         {keep_alive_interval_ms, KeepAliveIntervalMs},
         {handshake_idle_timeout_ms, HandshakeIdleTimeoutMs}
     ],
 
-    %% Connect
-    ?LOG_INFO("Connecting to ~s:~p with idle_timeout=~pms, keep_alive=~pms",
-              [Host, Port, IdleTimeoutMs, KeepAliveIntervalMs]),
+    %% Pass through ALL TLS options from macula_tls (v0.16.3+)
+    %% This includes: verify, cacertfile, depth, server_name_indication, verify_fun
+    TlsOptKeys = [verify, cacertfile, depth, server_name_indication, verify_fun, certfile, keyfile],
+    TlsOpts = [{K, V} || K <- TlsOptKeys, {ok, V} <- [safe_get_value(K, Opts)]],
+
+    QuicerOpts = BaseOpts ++ TlsOpts,
+
+    %% Log connection attempt with TLS mode info
+    VerifyMode = proplists:get_value(verify, Opts, none),
+    ?LOG_INFO("Connecting to ~s:~p with idle_timeout=~pms, keep_alive=~pms, verify=~p",
+              [Host, Port, IdleTimeoutMs, KeepAliveIntervalMs, VerifyMode]),
     quicer:connect(Host, Port, QuicerOpts, Timeout).
+
+%% @doc Safely get a value from proplist, returning {ok, Value} or error.
+%% @private
+-spec safe_get_value(atom(), list()) -> {ok, term()} | error.
+safe_get_value(Key, Opts) ->
+    case proplists:get_value(Key, Opts) of
+        undefined -> error;
+        Value -> {ok, Value}
+    end.
 
 %% @doc Accept an incoming connection on a listener.
 %% After accepting, the connection needs handshake to complete.
