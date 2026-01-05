@@ -478,8 +478,10 @@ build_client_opts(production) ->
             error({tls_config_error, {cacertfile_not_found, CACertFile}})
     end,
 
+    %% NOTE: quicer conn_opts accepts 'peer' (not 'verify_peer')
+    %% quicer listen_opts accepts 'verify_peer' but conn_opts only accepts 'peer'
     Opts = [
-        {verify, verify_peer},
+        {verify, peer},
         {cacertfile, CACertFile},
         {depth, 3}  % Max certificate chain depth
     ],

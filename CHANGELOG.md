@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.16.4] - 2026-01-05
+
+### 🐛 Bug Fix - quicer Client TLS verify Option
+
+This patch fixes a critical bug where the `verify` option was using the wrong value for quicer client connections.
+
+### Fixed
+
+- **Wrong `verify` value in `macula_tls.erl`**: The `build_client_opts/1` function was using `{verify, verify_peer}` but quicer's `conn_opts()` type only accepts `none | peer` for client connections (not `verify_peer`). The `verify_peer` value is only valid for `listen_opts()`. This caused `cert_untrusted_root` errors even when the CA bundle was correctly specified.
+
+### Changed
+
+- **`macula_tls.erl:build_client_opts/1`**: Changed from `{verify, verify_peer}` to `{verify, peer}` to match quicer's `conn_opts()` type specification.
+
+### Upgrade Notes
+
+No breaking changes. This fixes TLS certificate verification for client connections when using `MACULA_TLS_MODE=production`.
+
+---
+
 ## [0.16.3] - 2026-01-05
 
 ### 🐛 Bug Fix - TLS Options Passthrough to quicer
