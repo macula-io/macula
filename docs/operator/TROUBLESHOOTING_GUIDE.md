@@ -16,8 +16,9 @@
 5. [Memory Issues](#memory-issues)
 6. [DHT Problems](#dht-problems)
 7. [Performance Issues](#performance-issues)
-8. [Gateway Issues](#gateway-issues)
-9. [Debug Tools](#debug-tools)
+8. [TLS/Certificate Issues](#tlscertificate-issues)
+9. [Gateway Issues](#gateway-issues)
+10. [Debug Tools](#debug-tools)
 
 ---
 
@@ -483,6 +484,79 @@ scheduler:utilization(1000).
 2. **Batch messages** - Send in groups
 3. **Reduce DHT queries** - Increase cache TTL
 4. **Profile handlers** - Find bottlenecks
+
+---
+
+## TLS/Certificate Issues
+
+### Problem: ECDSA Certificate Not Supported
+
+**Symptoms:**
+- Gateway fails to start with `config_error tls_error`
+- Log shows certificate loading errors
+- Works with self-signed certs but fails with Let's Encrypt
+
+**Root Cause:**
+MsQuic (the QUIC implementation used by Macula) does **NOT** support ECDSA certificates.
+Let's Encrypt switched to ECDSA by default in late 2024.
+
+**Diagnostic Steps:**
+
+```bash
+# Check certificate key type
+openssl x509 -in /path/to/cert.pem -noout -text | grep "Public Key Algorithm"
+
+# If it shows "id-ecPublicKey" - that's the problem!
+# Must show "rsaEncryption"
+```
+
+**Solution:**
+
+Re-issue the certificate with RSA:
+
+```bash
+# For Let's Encrypt
+certbot certonly --standalone -d your-domain.com \
+  --key-type rsa --rsa-key-size 2048 --force-renewal
+
+# Then restart the service
+docker restart your-macula-container
+```
+
+**Prevention:**
+Always specify `--key-type rsa` when using certbot with Macula nodes.
+
+---
+
+### Problem: Certificate Permission Denied
+
+**Symptoms:**
+- Gateway fails to start with `config_error tls_error`
+- Certificate files exist but container can't read them
+
+**Root Cause:**
+Certbot's `/archive/` directory often has 700 permissions (root only).
+If your container runs as non-root, it can't read the certs through symlinks.
+
+**Diagnostic Steps:**
+
+```bash
+# Check archive directory permissions
+ls -la /etc/letsencrypt/archive/
+
+# If permissions are drwx------ (700), non-root can't read
+```
+
+**Solution:**
+
+```bash
+# Fix archive directory permissions
+chmod 755 /etc/letsencrypt/archive/
+chmod 755 /etc/letsencrypt/archive/your-domain.com/
+
+# Restart container
+docker restart your-macula-container
+```
 
 ---
 

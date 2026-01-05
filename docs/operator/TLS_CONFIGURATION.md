@@ -132,8 +132,27 @@ For production, obtain certificates from a trusted CA:
 
 1. **Let's Encrypt** (recommended for public-facing nodes)
    ```bash
-   certbot certonly --standalone -d your-node.example.com
+   # IMPORTANT: Use --key-type rsa (ECDSA not supported by MsQuic)
+   certbot certonly --standalone -d your-node.example.com \
+     --key-type rsa --rsa-key-size 2048
    ```
+
+   > ⚠️ **CRITICAL: RSA Keys Required**
+   >
+   > MsQuic (the QUIC implementation used by Macula) does **NOT** support ECDSA certificates.
+   > Let's Encrypt switched to ECDSA by default in late 2024.
+   >
+   > If you see `config_error tls_error` on startup, check your certificate key type:
+   > ```bash
+   > openssl x509 -in /path/to/cert.pem -noout -text | grep "Public Key Algorithm"
+   > # Must show: rsaEncryption (NOT id-ecPublicKey)
+   > ```
+   >
+   > To re-issue with RSA:
+   > ```bash
+   > certbot certonly --standalone -d your-node.example.com \
+   >   --key-type rsa --rsa-key-size 2048 --force-renewal
+   > ```
 
 2. **Internal CA** (for private mesh networks)
    Generate certificates with your organization's CA
@@ -144,7 +163,7 @@ For production, obtain certificates from a trusted CA:
 ### Certificate Requirements
 
 - **Format**: PEM-encoded
-- **Key Type**: RSA 2048+ or ECDSA P-256+
+- **Key Type**: **RSA 2048+ ONLY** (ECDSA not supported - see warning below)
 - **Extensions**:
   - Key Usage: digitalSignature, keyEncipherment
   - Extended Key Usage: serverAuth, clientAuth (for mTLS)
@@ -266,7 +285,7 @@ Never use development mode in production. It provides no protection against MITM
 ### Production Best Practices
 
 1. **Always enable hostname verification** in production
-2. **Use strong key sizes**: RSA 2048+ or ECDSA P-256+
+2. **Use RSA keys**: RSA 2048+ (ECDSA not supported by MsQuic/QUIC)
 3. **Rotate certificates regularly**: Annual rotation recommended
 4. **Protect private keys**: Use file permissions 600
 5. **Monitor certificate expiry**: Set up alerts before expiration

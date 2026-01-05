@@ -52,9 +52,15 @@ QUIC (RFC 9000) requires TLS 1.3 with specific certificate requirements:
 
 ### Certificate Generation
 
+> ⚠️ **CRITICAL: RSA Keys Required**
+>
+> MsQuic (the QUIC implementation used by Macula) does **NOT** support ECDSA certificates.
+> Always use RSA keys. Let's Encrypt switched to ECDSA by default in late 2024, so you
+> must explicitly request RSA when using certbot.
+
 #### For Development/Testing
 ```bash
-# Generate private key
+# Generate RSA private key (NOT ECDSA)
 openssl genrsa -out server-key.pem 2048
 
 # Generate self-signed certificate with SAN
@@ -66,7 +72,19 @@ openssl req -new -x509 -key server-key.pem \
 ```
 
 #### For Production
-Use certificates from a trusted CA (Let's Encrypt, etc.) with proper SAN configuration.
+Use certificates from a trusted CA with **RSA keys** and proper SAN configuration.
+
+**Let's Encrypt (with RSA):**
+```bash
+certbot certonly --standalone -d your-node.example.com \
+  --key-type rsa --rsa-key-size 2048
+```
+
+**Verify certificate is RSA:**
+```bash
+openssl x509 -in /path/to/cert.pem -noout -text | grep "Public Key Algorithm"
+# Must show: rsaEncryption (NOT id-ecPublicKey)
+```
 
 ## Configuration Pattern (Elixir/Phoenix)
 
