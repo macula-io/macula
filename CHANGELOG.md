@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.16.3] - 2026-01-05
+
+### 🐛 Bug Fix - TLS Options Passthrough to quicer
+
+This patch fixes a critical bug where TLS options (cacertfile, depth, SNI, etc.) were not being passed to the quicer library, causing certificate verification to fail when `MACULA_TLS_MODE=production`.
+
+### Fixed
+
+- **TLS options dropped in `macula_quic.erl`**: The `connect/4` function was only extracting `{verify, ...}` from the options list and building its own `QuicerOpts`, completely ignoring `cacertfile`, `depth`, `server_name_indication`, and `verify_fun` options from `macula_tls.erl`. This caused `cert_untrusted_root` errors when connecting to production servers with `verify_peer` enabled because the CA certificate bundle was never passed to quicer.
+
+### Changed
+
+- **`macula_quic.erl:connect/4`**: Now passes through all TLS-related options to quicer:
+  - `verify` - Certificate verification mode
+  - `cacertfile` - CA certificate bundle path (critical for production mode)
+  - `depth` - Maximum certificate chain depth
+  - `server_name_indication` - SNI hostname for TLS
+  - `verify_fun` - Custom verification callback
+  - `certfile`/`keyfile` - Client certificates for mTLS
+
+### Upgrade Notes
+
+No breaking changes. Simply update the dependency version to fix TLS certificate verification when using `MACULA_TLS_MODE=production`.
+
+---
+
 ## [0.16.2] - 2026-01-01
 
 ### 🐛 Bug Fix - Environment Variable Naming Consistency
