@@ -182,9 +182,10 @@ init_supervisor(Port, Realm, HealthPort, CertFile, KeyFile) ->
 
 %% @private
 %% @doc Get certificate file path from opts or OS environment variable.
-%% Falls back to TLS_CERT_FILE environment variable when not provided in opts.
+%% Falls back to MACULA_TLS_CERTFILE environment variable when not provided in opts.
+%% Note: v0.16.6 changed from TLS_CERT_FILE to MACULA_TLS_CERTFILE for consistency.
 get_cert_file(undefined) ->
-    case os:getenv("TLS_CERT_FILE") of
+    case os:getenv("MACULA_TLS_CERTFILE") of
         false ->
             %% Use macula_tls default path (auto-generated if missing)
             {CertPath, _KeyPath} = macula_tls:get_cert_paths(),
@@ -196,9 +197,10 @@ get_cert_file(CertFile) when is_list(CertFile) ->
 
 %% @private
 %% @doc Get key file path from opts or OS environment variable.
-%% Falls back to TLS_KEY_FILE environment variable when not provided in opts.
+%% Falls back to MACULA_TLS_KEYFILE environment variable when not provided in opts.
+%% Note: v0.16.6 changed from TLS_KEY_FILE to MACULA_TLS_KEYFILE for consistency.
 get_key_file(undefined) ->
-    case os:getenv("TLS_KEY_FILE") of
+    case os:getenv("MACULA_TLS_KEYFILE") of
         false ->
             %% Use macula_tls default path (auto-generated if missing)
             {_CertPath, KeyPath} = macula_tls:get_cert_paths(),

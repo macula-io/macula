@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.16.6] - 2026-01-05
+
+### 🐛 Bug Fix - Complete Environment Variable Naming Consistency
+
+This patch completes the environment variable naming consistency fix started in v0.16.2.
+
+### Fixed
+
+- **Environment variable names in `macula_gateway_system.erl`**: Changed from `TLS_CERT_FILE`/`TLS_KEY_FILE` to `MACULA_TLS_CERTFILE`/`MACULA_TLS_KEYFILE`. This was missed in v0.16.2 which only updated `macula_gateway_mesh.erl`. The inconsistency caused the QUIC server to use default self-signed certificates instead of mounted Let's Encrypt certificates in production.
+
+### Upgrade Notes
+
+If you were using `TLS_CERT_FILE` and `TLS_KEY_FILE` environment variables for the gateway system, change them to `MACULA_TLS_CERTFILE` and `MACULA_TLS_KEYFILE`.
+
+---
+
 ## [0.16.5] - 2026-01-05
 
 ### 🔧 Debug - Enhanced TLS Logging
