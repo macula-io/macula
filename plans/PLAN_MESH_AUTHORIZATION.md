@@ -625,14 +625,67 @@ Certificate:
 
 ---
 
+### Decision 2: Hybrid UCAN (connection default + per-message override) ✅ DECIDED
+
+**Choice:** Option C - Default UCAN at connection level, with per-message override capability.
+
+**Rationale:**
+- Long-lived service connections benefit from cached connection-level UCAN (low overhead)
+- Multi-tenant proxies and privilege escalation need per-message flexibility
+- Best of both worlds with minimal complexity
+
+**Connection-Level Default:**
+```
+CONNECT:
+  - DID: did:macula:io.macula.rgfabers_doctor (from cert)
+  - default_ucan: <token granting io.macula.rgfaber.get_patient_data>
+
+All subsequent calls use this UCAN unless overridden.
+```
+
+**Per-Message Override:**
+```
+CALL io.macula.ibm.special_api:
+  - ucan_token: <different token for IBM namespace>
+
+This call uses the override, others still use connection default.
+```
+
+**Protocol Extension:**
+```erlang
+%% CONNECT message (extended)
+-type connect_msg() :: #{
+    realm := binary(),
+    node_id := binary(),
+    %% Authorization (v0.17+)
+    default_ucan => binary()  % Optional: default UCAN for session
+}.
+
+%% CALL message (extended)
+-type call_msg() :: #{
+    procedure := binary(),
+    args := binary(),
+    call_id := binary(),
+    %% Authorization (v0.17+)
+    ucan_token => binary()  % Optional: overrides connection default
+}.
+```
+
+**UCAN Lifetime Guidelines:**
+- Short operations (API calls): 1-24 hours
+- Treatment periods (doctor access): days to weeks (e.g., 38 days)
+- Long-term relationships: months (with narrow scope)
+- Sensitive operations: always short-lived regardless
+
+**Revocation becomes critical for long-lived tokens** - see Decision 4.
+
+---
+
 ## Open Questions
 
 1. ~~**How is caller DID established during CONNECT?**~~ → **DECIDED: Embedded in TLS cert**
 
-2. **Should UCAN be required in message or connection-level?**
-   - Option A: Per-message (more flexible, higher overhead)
-   - Option B: Per-connection (cached, lower overhead)
-   - Option C: Hybrid (cached but can override per-message)
+2. ~~**Should UCAN be required in message or connection-level?**~~ → **DECIDED: Hybrid (Option C)**
 
 3. **How to handle UCAN refresh/renewal?**
    - Short-lived tokens need renewal mechanism
