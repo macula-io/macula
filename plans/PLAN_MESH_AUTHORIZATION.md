@@ -1,8 +1,8 @@
 # Plan: Mesh Topic Authorization with UCAN/DID
 
-**Status:** Planning
+**Status:** Planning Complete - Ready for Implementation
 **Created:** 2026-01-07
-**Updated:** 2026-01-07
+**Updated:** 2026-01-08
 
 ## Overview
 
@@ -265,7 +265,7 @@ check_rpc_call(CallerDID, Procedure, UcanToken, Opts) ->
     end.
 
 %% Extract namespace from topic/procedure
-extract_namespace(<<"io.macula.rgfaber.orders.create">>) ->
+extract_namespace(<<"io.macula.rgfaber.place_order">>) ->
     <<"io.macula.rgfaber">>;  % First 3 segments
 extract_namespace(Topic) ->
     Parts = binary:split(Topic, <<".">>, [global]),
@@ -645,7 +645,7 @@ All subsequent calls use this UCAN unless overridden.
 
 **Per-Message Override:**
 ```
-CALL io.macula.ibm.special_api:
+CALL io.macula.ibm.query_watson:
   - ucan_token: <different token for IBM namespace>
 
 This call uses the override, others still use connection default.
@@ -708,7 +708,77 @@ Sensitive operations             → always short, re-request as needed
 
 ---
 
+### Decision 4: Revocation via System PubSub ✅ DECIDED
+
+**Choice:** Option A - Use existing PubSub infrastructure with system topic.
+
+**Rationale:**
+- Reuses existing infrastructure (no new subsystem)
+- Push-based (nodes learn immediately)
+- Revocations are rare (low volume, not performance critical)
+- Simpler to debug than epidemic gossip
+
+**System Topic:**
+```
+io.macula.system.ucan_revoked
+```
+
+**Revocation Message Format:**
+```erlang
+#{
+    issuer_did => <<"did:macula:io.macula.rgfaber">>,
+    ucan_cid => <<"bafyrei...">>,        % SHA-256 hash of revoked UCAN
+    revoked_at => 1704672000,            % Unix timestamp
+    reason => <<"relationship_ended">>,  % Optional human-readable
+    signature => <<...>>                 % Issuer signs this message
+}
+```
+
+**Safeguards:**
+
+| Safeguard | Implementation |
+|-----------|----------------|
+| **Only issuer can revoke** | Signature validated against issuer DID public key |
+| **Rate limiting** | Max 10 revocations per issuer per minute |
+| **Auto-expire cache** | Revocation cached until original UCAN `exp`, then purged |
+| **Startup subscription** | Nodes subscribe to system topic on boot |
+
+**Flow:**
+```
+1. Issuer publishes revocation to io.macula.system.ucan_revoked
+2. All mesh nodes receive via PubSub
+3. Each node validates signature (is issuer the UCAN creator?)
+4. Valid → store in local revocation cache (ETS with TTL)
+5. Invalid → drop silently
+6. Authorization checks consult cache: if CID in cache → deny
+```
+
+**Revocation Cache Structure:**
+```erlang
+%% ETS table: macula_revocation_cache
+%% Key: {issuer_did, ucan_cid}
+%% Value: {revoked_at, expires_at}  % expires_at = original UCAN exp
+
+ets:insert(macula_revocation_cache, {
+    {<<"did:macula:io.macula.rgfaber">>, <<"bafyrei...">>},
+    {1704672000, 1707350400}  % revoked_at, original_exp
+}).
+```
+
+**Authorization Check:**
+```erlang
+is_revoked(IssuerDID, UcanCID) ->
+    case ets:lookup(macula_revocation_cache, {IssuerDID, UcanCID}) of
+        [{_, {_RevokedAt, _ExpiresAt}}] -> true;
+        [] -> false
+    end.
+```
+
+---
+
 ## Open Questions
+
+**All questions resolved!**
 
 1. ~~**How is caller DID established during CONNECT?**~~ → **DECIDED: Embedded in TLS cert**
 
@@ -716,9 +786,7 @@ Sensitive operations             → always short, re-request as needed
 
 3. ~~**How to handle UCAN refresh/renewal?**~~ → **DECIDED: No formal refresh (Option A)**
 
-4. **Revocation gossip protocol?**
-   - Use existing PubSub? Special system topic?
-   - How to prevent revocation spam?
+4. ~~**Revocation gossip protocol?**~~ → **DECIDED: System PubSub (Option A)**
 
 ---
 
