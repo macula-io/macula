@@ -590,12 +590,44 @@ log_denied(Operation, CallerDID, Resource, Reason) ->
 
 ---
 
+## Design Decisions
+
+### Decision 1: DID embedded in TLS certificate ✅ DECIDED
+
+**Choice:** DID is embedded in Portal-issued TLS certificate (SAN URI field).
+
+**Rationale:**
+- Zero extra protocol messages - identity established during TLS handshake
+- Cryptographically bound - can't claim DID without matching private key
+- Human-readable - `did:macula:io.macula.rgfaber` not `did:key:z6Mk...`
+- Portal already issues certs - just add DID field to SAN
+
+**Certificate Structure:**
+```
+Certificate:
+  Subject: CN=io.macula.rgfaber.my-service
+  SAN: URI:did:macula:io.macula.rgfaber
+  Public Key: Ed25519 (same key as DID uses)
+```
+
+**Connection Flow:**
+```
+1. Client connects with TLS (presents cert)
+2. Server extracts DID from cert SAN URI
+3. TLS verifies cert signature (proves key ownership)
+4. Identity established - no extra messages
+5. All subsequent operations use this identity
+```
+
+**Portal Changes Required:**
+- Add SAN URI field with DID when issuing app certificates
+- DID format: `did:macula:{org_identity}` (e.g., `did:macula:io.macula.rgfaber`)
+
+---
+
 ## Open Questions
 
-1. **How is caller DID established during CONNECT?**
-   - Option A: DID in CONNECT message, verified against TLS cert
-   - Option B: DID derived from TLS certificate fingerprint
-   - Option C: Separate DID authentication handshake
+1. ~~**How is caller DID established during CONNECT?**~~ → **DECIDED: Embedded in TLS cert**
 
 2. **Should UCAN be required in message or connection-level?**
    - Option A: Per-message (more flexible, higher overhead)
