@@ -681,15 +681,40 @@ This call uses the override, others still use connection default.
 
 ---
 
+### Decision 3: No formal refresh mechanism ✅ DECIDED
+
+**Choice:** Option A - Issue tokens for desired lifetime, rely on revocation for early termination.
+
+**Rationale:**
+- Simplest approach - no extra infrastructure
+- Decentralized - no refresh server needed
+- Flexible - issuer chooses appropriate lifetime at grant time
+- Revocation handles edge cases (relationship ends early)
+
+**Lifetime Strategy:**
+```
+Short operations (API calls)     → 1-24 hour tokens
+Treatment periods (medical)      → days/weeks tokens (e.g., 38 days)
+Long-term partnerships           → months/year tokens (narrow scope)
+Sensitive operations             → always short, re-request as needed
+```
+
+**If token expires and access still needed:**
+- Grantee requests new UCAN from issuer via normal mesh RPC
+- No special "refresh" protocol - just a new grant
+- Issuer decides whether to re-grant
+
+**No refresh token complexity** - keeps the system simple and decentralized.
+
+---
+
 ## Open Questions
 
 1. ~~**How is caller DID established during CONNECT?**~~ → **DECIDED: Embedded in TLS cert**
 
 2. ~~**Should UCAN be required in message or connection-level?**~~ → **DECIDED: Hybrid (Option C)**
 
-3. **How to handle UCAN refresh/renewal?**
-   - Short-lived tokens need renewal mechanism
-   - Could use mesh RPC to request new UCAN from issuer
+3. ~~**How to handle UCAN refresh/renewal?**~~ → **DECIDED: No formal refresh (Option A)**
 
 4. **Revocation gossip protocol?**
    - Use existing PubSub? Special system topic?
