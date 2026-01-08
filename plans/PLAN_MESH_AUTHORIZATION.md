@@ -1,6 +1,6 @@
 # Plan: Mesh Topic Authorization with UCAN/DID
 
-**Status:** Phase 2 Complete - Hook Integration
+**Status:** Phase 3 Complete - Protocol Extension
 **Created:** 2026-01-07
 **Updated:** 2026-01-08
 
@@ -395,7 +395,7 @@ route_to_single_subscriber(Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients
 
 ---
 
-### Phase 3: Protocol Message Extension
+### Phase 3: Protocol Message Extension ✅ COMPLETE
 
 **Extend message types to carry authorization data:**
 
@@ -426,9 +426,19 @@ route_to_single_subscriber(Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients
 }.
 ```
 
-**Files to modify:**
-- [ ] `src/macula_protocol_system/macula_protocol_types.erl` - Add new types
-- [ ] `src/macula_protocol_system/macula_protocol_codec.erl` - Encode/decode new fields
+**Files modified:**
+- [x] `src/macula_protocol_types.erl` - Extended message types with authorization fields
+
+**Types Extended (all with optional `ucan_token` field):**
+- `connect_msg` - Added `default_ucan` for session-wide grants
+- `call_msg` - Added `caller_did`, `ucan_token`
+- `cast_msg` - Added `caller_did`, `ucan_token`
+- `publish_msg` - Added `publisher_did`, `ucan_token`
+- `subscribe_msg` - Added `subscriber_did`, `ucan_token`
+
+**No encoder/decoder changes needed:**
+- MessagePack handles optional fields transparently
+- Backward compatible - old clients work without auth fields
 
 ---
 
@@ -565,10 +575,10 @@ log_denied(Operation, CallerDID, Resource, Reason) ->
 - [x] Publish to others' namespace requires UCAN
 - [x] Subscribe delivery respects authorization
 
-### Phase 3 (Protocol Extension)
-- [ ] Messages carry caller_did field
-- [ ] Messages carry ucan_token field (optional)
-- [ ] Backward compatible (old clients still work)
+### Phase 3 (Protocol Extension) ✅ COMPLETE
+- [x] Messages carry caller_did field
+- [x] Messages carry ucan_token field (optional)
+- [x] Backward compatible (old clients still work)
 
 ### Phase 4+ (Production Hardening)
 - [ ] DID cache improves performance

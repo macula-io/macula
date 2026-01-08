@@ -140,7 +140,9 @@
     node_id := binary(),           % 32-byte node ID
     realm_id := binary(),          % 32-byte realm ID
     capabilities := [atom()],      % List of supported features
-    endpoint => binary()           % Optional: "https://host:port" for peer connections
+    endpoint => binary(),          % Optional: "https://host:port" for peer connections
+    %% Authorization fields (v0.17.0+)
+    default_ucan => binary()       % Optional: default UCAN for session-wide grants
 }.
 
 -type disconnect_msg() :: #{
@@ -164,12 +166,18 @@
     payload := binary(),           % Message payload
     qos := 0 | 1 | 2,             % Quality of service
     retain := boolean(),           % Retain flag
-    message_id := binary()         % 16-byte unique message ID
+    message_id := binary(),        % 16-byte unique message ID
+    %% Authorization fields (v0.17.0+)
+    publisher_did => binary(),     % Optional: publisher's DID
+    ucan_token => binary()         % Optional: UCAN for cross-namespace publish
 }.
 
 -type subscribe_msg() :: #{
     topics := [binary()],          % List of topic patterns
-    qos := 0 | 1 | 2              % Requested QoS level
+    qos := 0 | 1 | 2,             % Requested QoS level
+    %% Authorization fields (v0.17.0+)
+    subscriber_did => binary(),    % Optional: subscriber's DID
+    ucan_token => binary()         % Optional: UCAN for cross-namespace subscribe
 }.
 
 -type unsubscribe_msg() :: #{
@@ -182,7 +190,10 @@
     procedure := binary(),         % Procedure name (e.g., "my.app.get_user")
     args := binary(),              % JSON-encoded arguments
     call_id := binary(),           % 16-byte unique call ID
-    timeout => integer()           % Optional timeout in milliseconds
+    timeout => integer(),          % Optional timeout in milliseconds
+    %% Authorization fields (v0.17.0+)
+    caller_did => binary(),        % Optional: caller's DID
+    ucan_token => binary()         % Optional: UCAN for cross-namespace call
 }.
 
 -type reply_msg() :: #{
@@ -196,7 +207,10 @@
 
 -type cast_msg() :: #{
     procedure := binary(),         % Procedure name
-    args := binary()               % JSON-encoded arguments (no reply expected)
+    args := binary(),              % JSON-encoded arguments (no reply expected)
+    %% Authorization fields (v0.17.0+)
+    caller_did => binary(),        % Optional: caller's DID
+    ucan_token => binary()         % Optional: UCAN for cross-namespace cast
 }.
 
 %% RPC Routing Message (for multi-hop DHT routing)
