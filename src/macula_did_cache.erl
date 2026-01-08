@@ -6,23 +6,19 @@
 %%
 %% == Usage ==
 %%
-%% ```
-%% %% Parse and cache a DID (or get from cache)
-%% {ok, Parsed} = macula_did_cache:get_or_parse(<<"did:macula:io.macula.rgfaber">>).
-%% %% => {ok, #{<<"method">> => <<"macula">>,
-%% %%           <<"identity">> => <<"io.macula.rgfaber">>,
-%% %%           <<"parts">> => [<<"io">>, <<"macula">>, <<"rgfaber">>],
-%% %%           <<"depth">> => 3}}
+%% Parse and cache a DID (or get from cache):
 %%
-%% %% Subsequent calls return cached result (no re-parsing)
-%% {ok, Parsed} = macula_did_cache:get_or_parse(<<"did:macula:io.macula.rgfaber">>).
+%% `{ok, Parsed} = macula_did_cache:get_or_parse(DID).'
 %%
-%% %% Invalidate a specific DID from cache
-%% ok = macula_did_cache:invalidate(<<"did:macula:io.macula.rgfaber">>).
+%% Returns a map with method, identity, parts, and depth.
 %%
-%% %% Clear entire cache
-%% ok = macula_did_cache:clear().
-%% '''
+%% Invalidate a specific DID from cache:
+%%
+%% `ok = macula_did_cache:invalidate(DID).'
+%%
+%% Clear entire cache:
+%%
+%% `ok = macula_did_cache:clear().'
 %%
 %% == Performance ==
 %%

@@ -15,9 +15,8 @@
 %% == System Topic ==
 %%
 %% All revocations are published to:
-%% ```
-%% io.macula.system.ucan_revoked
-%% ```
+%%
+%% `io.macula.system.ucan_revoked'
 %%
 %% == Rate Limiting ==
 %%

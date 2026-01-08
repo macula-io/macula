@@ -23,20 +23,21 @@
 %%
 %% == Usage ==
 %%
-%% ```
-%% %% Log an authorized operation
-%% macula_authorization_audit:log_authorized(call, CallerDID, Procedure).
+%% Log an authorized operation:
 %%
-%% %% Log a denied operation
-%% macula_authorization_audit:log_denied(publish, CallerDID, Topic, unauthorized).
+%% `macula_authorization_audit:log_authorized(call, CallerDID, Procedure).'
 %%
-%% %% Query recent audit entries (for debugging)
-%% Entries = macula_authorization_audit:get_recent(100).
-%% ```
+%% Log a denied operation:
+%%
+%% `macula_authorization_audit:log_denied(publish, CallerDID, Topic, unauthorized).'
+%%
+%% Query recent audit entries (for debugging):
+%%
+%% `Entries = macula_authorization_audit:get_recent(100).'
 %%
 %% == Performance ==
 %%
-%% Designed for <1ms overhead:
+%% Designed for sub-millisecond overhead:
 %% - Telemetry events are synchronous but fast
 %% - ETS writes are non-blocking
 %% - Periodic cleanup prevents unbounded growth
