@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="900" height="600">
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3B82F6"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10B981"/>
+    </marker>
+    <linearGradient id="nodeGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3B82F6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1D4ED8;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="bucketGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#8B5CF6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#6D28D9;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="targetGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#F59E0B;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#D97706;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="600" fill="#F9FAFB"/>
+
+  <!-- Title -->
+  <text x="450" y="30" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="600" fill="#111827">Kademlia DHT in Macula</text>
+  <text x="450" y="50" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#6B7280">XOR-based distributed hash table for O(log N) peer discovery</text>
+
+  <!-- Left Panel: XOR Distance -->
+  <rect x="20" y="70" width="280" height="200" rx="8" fill="white" stroke="#E5E7EB" stroke-width="1"/>
+  <text x="160" y="95" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="600" fill="#111827">XOR Distance Metric</text>
+
+  <!-- Binary example -->
+  <text x="40" y="125" font-family="monospace" font-size="11" fill="#374151">Node A:  <tspan fill="#3B82F6">1011</tspan><tspan fill="#6B7280">0101</tspan></text>
+  <text x="40" y="145" font-family="monospace" font-size="11" fill="#374151">Node B:  <tspan fill="#10B981">1101</tspan><tspan fill="#6B7280">0011</tspan></text>
+  <line x1="40" y1="152" x2="180" y2="152" stroke="#D1D5DB" stroke-width="1"/>
+  <text x="40" y="168" font-family="monospace" font-size="11" fill="#374151">XOR:     <tspan fill="#EF4444">0110</tspan><tspan fill="#6B7280">0110</tspan></text>
+  <text x="190" y="168" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">= 102</text>
+
+  <!-- Distance formula -->
+  <rect x="40" y="185" width="240" height="35" rx="4" fill="#F3F4F6"/>
+  <text x="160" y="207" text-anchor="middle" font-family="monospace" font-size="12" fill="#374151">distance(A, B) = A XOR B</text>
+
+  <!-- Properties -->
+  <text x="40" y="240" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#059669">&#x2713; Symmetric: d(A,B) = d(B,A)</text>
+  <text x="40" y="255" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#059669">&#x2713; Network-aware routing</text>
+
+  <!-- Middle Panel: K-Buckets -->
+  <rect x="310" y="70" width="280" height="200" rx="8" fill="white" stroke="#E5E7EB" stroke-width="1"/>
+  <text x="450" y="95" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="600" fill="#111827">K-Buckets (Routing Table)</text>
+
+  <!-- Bucket visualization -->
+  <text x="330" y="120" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">Distance</text>
+  <text x="430" y="120" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">Bucket (max k=20 nodes)</text>
+
+  <!-- Bucket 0 -->
+  <rect x="330" y="128" width="50" height="18" rx="3" fill="url(#bucketGrad)"/>
+  <text x="355" y="141" text-anchor="middle" font-family="monospace" font-size="9" fill="white">2^0</text>
+  <rect x="390" y="128" width="180" height="18" rx="3" fill="#DDD6FE" stroke="#8B5CF6" stroke-width="1"/>
+  <circle cx="405" cy="137" r="5" fill="#8B5CF6"/>
+  <circle cx="420" cy="137" r="5" fill="#8B5CF6"/>
+  <circle cx="435" cy="137" r="5" fill="#8B5CF6"/>
+  <text x="455" y="141" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">... closest</text>
+
+  <!-- Bucket 1 -->
+  <rect x="330" y="150" width="50" height="18" rx="3" fill="url(#bucketGrad)" opacity="0.9"/>
+  <text x="355" y="163" text-anchor="middle" font-family="monospace" font-size="9" fill="white">2^1</text>
+  <rect x="390" y="150" width="180" height="18" rx="3" fill="#DDD6FE" stroke="#8B5CF6" stroke-width="1" opacity="0.9"/>
+  <circle cx="405" cy="159" r="5" fill="#8B5CF6" opacity="0.9"/>
+  <circle cx="420" cy="159" r="5" fill="#8B5CF6" opacity="0.9"/>
+
+  <!-- Bucket 2 -->
+  <rect x="330" y="172" width="50" height="18" rx="3" fill="url(#bucketGrad)" opacity="0.8"/>
+  <text x="355" y="185" text-anchor="middle" font-family="monospace" font-size="9" fill="white">2^2</text>
+  <rect x="390" y="172" width="180" height="18" rx="3" fill="#DDD6FE" stroke="#8B5CF6" stroke-width="1" opacity="0.8"/>
+  <circle cx="405" cy="181" r="5" fill="#8B5CF6" opacity="0.8"/>
+
+  <!-- ... -->
+  <text x="450" y="205" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#9CA3AF">...</text>
+
+  <!-- Bucket 159 -->
+  <rect x="330" y="215" width="50" height="18" rx="3" fill="url(#bucketGrad)" opacity="0.5"/>
+  <text x="355" y="228" text-anchor="middle" font-family="monospace" font-size="9" fill="white">2^159</text>
+  <rect x="390" y="215" width="180" height="18" rx="3" fill="#DDD6FE" stroke="#8B5CF6" stroke-width="1" opacity="0.5"/>
+  <text x="480" y="228" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">furthest</text>
+
+  <text x="450" y="255" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">160 buckets total (SHA-1 = 160 bits)</text>
+
+  <!-- Right Panel: Lookup -->
+  <rect x="600" y="70" width="280" height="200" rx="8" fill="white" stroke="#E5E7EB" stroke-width="1"/>
+  <text x="740" y="95" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="600" fill="#111827">Iterative Lookup</text>
+
+  <!-- Lookup diagram -->
+  <!-- Me node -->
+  <circle cx="640" cy="140" r="18" fill="url(#nodeGrad)"/>
+  <text x="640" y="144" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" font-weight="600" fill="white">Me</text>
+
+  <!-- Hop 1 nodes -->
+  <circle cx="700" cy="120" r="12" fill="url(#nodeGrad)" opacity="0.8"/>
+  <circle cx="700" cy="160" r="12" fill="url(#nodeGrad)" opacity="0.8"/>
+
+  <!-- Hop 2 nodes -->
+  <circle cx="760" cy="130" r="12" fill="url(#nodeGrad)" opacity="0.6"/>
+  <circle cx="760" cy="170" r="12" fill="url(#nodeGrad)" opacity="0.6"/>
+
+  <!-- Target -->
+  <circle cx="830" cy="150" r="18" fill="url(#targetGrad)"/>
+  <text x="830" y="154" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" font-weight="600" fill="white">Key</text>
+
+  <!-- Arrows -->
+  <line x1="658" y1="135" x2="685" y2="122" stroke="#3B82F6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="658" y1="145" x2="685" y2="158" stroke="#3B82F6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="712" y1="125" x2="745" y2="132" stroke="#3B82F6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="712" y1="155" x2="745" y2="165" stroke="#3B82F6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="772" y1="140" x2="808" y2="148" stroke="#10B981" stroke-width="2" marker-end="url(#arrowGreen)"/>
+
+  <!-- Hop labels -->
+  <text x="680" y="180" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">hop 1</text>
+  <text x="745" y="195" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">hop 2</text>
+  <text x="800" y="180" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#10B981">found!</text>
+
+  <!-- Complexity -->
+  <rect x="620" y="210" width="240" height="45" rx="4" fill="#ECFDF5" stroke="#10B981" stroke-width="1"/>
+  <text x="740" y="230" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#059669">O(log N) Lookup Complexity</text>
+  <text x="740" y="247" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">1M nodes = ~20 hops max</text>
+
+  <!-- Bottom Panel: DHT Operations -->
+  <rect x="20" y="285" width="860" height="140" rx="8" fill="white" stroke="#E5E7EB" stroke-width="1"/>
+  <text x="450" y="310" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="600" fill="#111827">Kademlia DHT Operations in Macula</text>
+
+  <!-- PING -->
+  <rect x="40" y="325" width="195" height="85" rx="6" fill="#F0F9FF" stroke="#0EA5E9" stroke-width="1"/>
+  <text x="137" y="345" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="#0369A1">PING</text>
+  <text x="50" y="365" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Check node liveness</text>
+  <text x="50" y="380" font-family="monospace" font-size="9" fill="#6B7280">{ping, NodeID} -&gt; pong</text>
+  <text x="50" y="400" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">Routing table maintenance</text>
+
+  <!-- STORE -->
+  <rect x="245" y="325" width="195" height="85" rx="6" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="342" y="345" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="#B45309">STORE</text>
+  <text x="255" y="365" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Store key-value pair</text>
+  <text x="255" y="380" font-family="monospace" font-size="9" fill="#6B7280">{store, Key, Value, TTL}</text>
+  <text x="255" y="400" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">Service/subscriber ads</text>
+
+  <!-- FIND_NODE -->
+  <rect x="450" y="325" width="195" height="85" rx="6" fill="#ECFDF5" stroke="#10B981" stroke-width="1"/>
+  <text x="547" y="345" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="#047857">FIND_NODE</text>
+  <text x="460" y="365" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Find k closest nodes to ID</text>
+  <text x="460" y="380" font-family="monospace" font-size="9" fill="#6B7280">{find_node, TargetID}</text>
+  <text x="460" y="400" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">Returns up to k=20 nodes</text>
+
+  <!-- FIND_VALUE -->
+  <rect x="655" y="325" width="205" height="85" rx="6" fill="#EDE9FE" stroke="#8B5CF6" stroke-width="1"/>
+  <text x="757" y="345" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="#6D28D9">FIND_VALUE</text>
+  <text x="665" y="365" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Lookup value by key</text>
+  <text x="665" y="380" font-family="monospace" font-size="9" fill="#6B7280">{find_value, Key}</text>
+  <text x="665" y="400" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">Service discovery, pubsub</text>
+
+  <!-- Bottom: Macula Integration -->
+  <rect x="20" y="440" width="860" height="145" rx="8" fill="white" stroke="#E5E7EB" stroke-width="1"/>
+  <text x="450" y="465" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="600" fill="#111827">DHT Integration in Macula Mesh</text>
+
+  <!-- Service Registration -->
+  <rect x="40" y="480" width="260" height="90" rx="6" fill="#F0FDF4" stroke="#22C55E" stroke-width="1"/>
+  <text x="170" y="500" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#15803D">Service Registration</text>
+  <text x="50" y="520" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">RPC providers advertise via STORE</text>
+  <text x="50" y="537" font-family="monospace" font-size="9" fill="#6B7280">Key: "io.macula.alice.api"</text>
+  <text x="50" y="554" font-family="monospace" font-size="9" fill="#6B7280">Value: {node_id, endpoint}</text>
+
+  <!-- Subscriber Tracking -->
+  <rect x="320" y="480" width="260" height="90" rx="6" fill="#FDF4FF" stroke="#D946EF" stroke-width="1"/>
+  <text x="450" y="500" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#A21CAF">PubSub Subscriber Tracking</text>
+  <text x="330" y="520" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Subscribers advertise via STORE</text>
+  <text x="330" y="537" font-family="monospace" font-size="9" fill="#6B7280">Key: "events.order_placed"</text>
+  <text x="330" y="554" font-family="monospace" font-size="9" fill="#6B7280">Value: [{sub1, ep1}, {sub2, ep2}]</text>
+
+  <!-- Lookup Flow -->
+  <rect x="600" y="480" width="260" height="90" rx="6" fill="#FFF7ED" stroke="#F97316" stroke-width="1"/>
+  <text x="730" y="500" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#C2410C">Service Discovery</text>
+  <text x="610" y="520" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Client finds providers via FIND_VALUE</text>
+  <text x="610" y="537" font-family="monospace" font-size="9" fill="#6B7280">1. Lookup procedure in DHT</text>
+  <text x="610" y="554" font-family="monospace" font-size="9" fill="#6B7280">2. Direct P2P call to provider</text>
+
+  <!-- Reference -->
+  <text x="450" y="595" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#9CA3AF">Reference: Maymounkov &amp; Mazieres, "Kademlia: A Peer-to-peer Information System Based on the XOR Metric" (2002)</text>
+</svg>

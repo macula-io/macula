@@ -2,23 +2,13 @@
 
 Understanding NAT (Network Address Translation) types is essential for building P2P applications that work across different network environments. This guide explains the NAT classification model used in Macula based on the NATCracker methodology.
 
+![NAT Types Overview](artwork/nat_types.svg)
+
 ---
 
 ## Why NAT Matters for P2P
 
-When two peers behind NAT want to communicate directly:
-
-```
-Peer A (192.168.1.10)                    Peer B (192.168.2.20)
-       |                                        |
-   [NAT A]                                  [NAT B]
-       |                                        |
-  203.0.113.5:40000                      198.51.100.8:50000
-       |                                        |
-       +------------  Internet  ----------------+
-```
-
-The challenge: Neither peer can initiate a connection to the other because NATs block unsolicited incoming traffic.
+The challenge with P2P: Neither peer can initiate a connection to the other because NATs block unsolicited incoming traffic. Macula solves this by detecting NAT characteristics and choosing optimal traversal strategies.
 
 ---
 
@@ -100,42 +90,15 @@ Based on NATCracker research across millions of NATs:
 
 ### Full Cone NAT (EI, EI, PP) - Best Case
 
-```
-                   Internet
-                      |
-                 [Full Cone NAT]
-                      |
-             203.0.113.5:5000
-                      |
-Any external host can send to this address
-after ANY outbound packet from local peer
-
-Direct P2P: YES - Any peer can connect directly
-```
+Any external host can send to this address after ANY outbound packet from local peer. **Direct P2P: YES** - Any peer can connect directly.
 
 ### Restricted Cone NAT (EI, HD, PP) - Good
 
-```
-Local sends to Host A
-  -> External: 203.0.113.5:5000
-
-Now Host A (any port) can send back
-Host B cannot send (never contacted)
-
-Direct P2P: YES with hole punching
-```
+Only hosts we've contacted can send back (but from any port). **Direct P2P: YES** with hole punching.
 
 ### Symmetric NAT (PD, PD, RD) - Worst Case
 
-```
-Local sends to Host A:Port1 -> NAT: 203.0.113.5:40000
-Local sends to Host B:Port2 -> NAT: 203.0.113.5:40001 (different!)
-
-Each destination gets different external address
-External port is random and unpredictable
-
-Direct P2P: NO - must use relay
-```
+Each destination gets different external address. External port is random and unpredictable. **Direct P2P: NO** - must use relay.
 
 ---
 
@@ -175,29 +138,14 @@ Macula detects NAT type automatically using `macula_nat_detector`:
 
 ## Connection Strategy Decision Tree
 
-Macula's `macula_nat_coordinator` uses this decision tree:
+The diagram at the top of this document shows the connection strategy matrix. Macula's `macula_nat_coordinator` follows this logic:
 
-```
-Start: Want to connect Peer A <-> Peer B
-  |
-  v
-Either has public IP?
-  |-- YES -> Direct connection to public peer
-  |-- NO  -> Check NAT profiles
-              |
-              v
-         Both have EI mapping?
-           |-- YES -> Hole punching possible
-           |          |
-           |          v
-           |     Any has EI filtering?
-           |       |-- YES -> Simple hole punch
-           |       |-- NO  -> Coordinated hole punch
-           |
-           |-- NO  -> Either has PD+PD+RD (symmetric)?
-                        |-- YES -> Must use relay
-                        |-- NO  -> Try hole punch with prediction
-```
+1. **Either has public IP?** → Direct connection to public peer
+2. **Both have EI mapping?** → Hole punching possible
+   - EI filtering → Simple hole punch
+   - PD filtering → Coordinated hole punch
+3. **Either has PD+PD+RD (symmetric)?** → Must use relay
+4. **Otherwise** → Try hole punch with port prediction
 
 ---
 
@@ -205,20 +153,12 @@ Either has public IP?
 
 Hole punching creates NAT mappings that allow peers to communicate:
 
-```
-Time T0: Peer A and B have no mappings to each other
-
-Time T1: Coordinator tells both peers to send packet
-         Peer A sends to Peer B's predicted external addr
-         Peer B sends to Peer A's predicted external addr
-
-Time T2: Packets arrive at NATs
-         NAT A: Creates mapping for B's address (outbound packet)
-         NAT B: Creates mapping for A's address (outbound packet)
-
-Time T3: Subsequent packets pass through created mappings
-         Direct communication established!
-```
+| Time | Event | Result |
+|------|-------|--------|
+| T0 | Initial state | Peer A and B have no mappings to each other |
+| T1 | Coordinator signal | Both peers simultaneously send packets to each other's predicted external address |
+| T2 | NAT processing | Both NATs create outbound mappings for the other peer's address |
+| T3 | Connection established | Subsequent packets pass through created mappings |
 
 **Requirements for successful hole punch:**
 - Both NATs have EI or HD mapping (predictable external address)
@@ -231,19 +171,12 @@ Time T3: Subsequent packets pass through created mappings
 
 ISPs increasingly use CGNAT, adding another NAT layer:
 
-```
-Your Device (192.168.1.10)
-       |
-   [Home Router NAT]
-       |
-   10.0.0.50 (ISP private)
-       |
-   [CGNAT]
-       |
-   203.0.113.5 (public)
-       |
-   Internet
-```
+| Layer | Address | Role |
+|-------|---------|------|
+| Your Device | 192.168.1.10 | Local network address |
+| Home Router NAT | → 10.0.0.50 | ISP private address (RFC 1918) |
+| CGNAT | → 203.0.113.5 | Public address (shared with other customers) |
+| Internet | | Global routing |
 
 CGNAT complications:
 - Multiple customers share same public IP

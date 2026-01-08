@@ -2,6 +2,8 @@
 
 **Complete guide to decentralized publish/subscribe with DHT-based subscriber discovery**
 
+![Pub/Sub Architecture](artwork/pubsub_flow.svg)
+
 **Status**: COMPLETE
 **Last Updated**: 2025-11-28
 
@@ -37,53 +39,13 @@ Macula provides **fully decentralized pub/sub** without requiring any central me
 
 ### How It Works
 
-```
-+-------------------------------------------------------------+
-| Subscriber (Node A)                                          |
-|                                                              |
-|  subscribe("sensor.temperature", callback_fn)               |
-|     |                                                        |
-|  1. Store callback locally                                  |
-|  2. Advertise to DHT at key=SHA256("sensor.temperature")   |
-|     -> {node_id, endpoint, topic}                           |
-+-------------------------------------------------------------+
-                          |
-                  [Kademlia DHT]
-                  (distributed)
-                          |
-+-------------------------------------------------------------+
-| Publisher (Node B)                                           |
-|                                                              |
-|  publish("sensor.temperature", #{value => 21.5})           |
-|     |                                                        |
-|  1. Query DHT for subscribers                               |
-|  2. Cache subscriber list (60s TTL)                         |
-|  3. For each subscriber:                                    |
-|     -> Send MSG_PUBLISH via HTTP/3 QUIC                    |
-|     |                                                        |
-|  Subscriber receives event via callback                     |
-+-------------------------------------------------------------+
-```
+The diagram above illustrates the complete pub/sub flow:
 
-### Message Flow
-
-```
-Publisher                          DHT                         Subscriber
-    |                               |                               |
-    |  1. Query subscribers         |                               |
-    |------------------------------>|                               |
-    |                               |  Returns: [NodeA, NodeC]      |
-    |<------------------------------|                               |
-    |                               |                               |
-    |  2. Direct QUIC to NodeA      |                               |
-    |------------------------------------------------------>|
-    |   MSG_PUBLISH: sensor.temperature, {value: 21.5}      |
-    |                               |                               |
-    |                               |  3. callback({macula_event,   |
-    |                               |     "sensor.temperature",     |
-    |                               |     #{value => 21.5}})        |
-    |                               |                               |
-```
+1. **Subscription Registration** - Subscribers advertise to DHT
+2. **Publishing Process** - Publishers query DHT and fanout to subscribers
+3. **Message Delivery** - Direct QUIC streams to all matching subscribers
+4. **Module Architecture** - Layered design from API to transport
+5. **Wildcard Matching** - Single-level (`*`) and multi-level (`#`) patterns
 
 ---
 

@@ -2,6 +2,8 @@
 
 This guide covers the Macula NAT traversal system API, code examples in both Erlang and Elixir, and integration patterns.
 
+![NAT Traversal Flow](artwork/nat_traversal_flow.svg)
+
 ---
 
 ## Overview

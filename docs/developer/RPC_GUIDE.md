@@ -2,6 +2,8 @@
 
 **Complete guide to decentralized RPC with DHT-based service discovery**
 
+![RPC Architecture](artwork/rpc_flow.svg)
+
 **Status**: ✅ COMPLETE
 **Last Updated**: 2025-01-10
 
@@ -38,36 +40,12 @@ Macula provides **fully decentralized RPC** without requiring any central regist
 
 ### How It Works
 
-```
-┌─────────────────────────────────────────────────────────┐
-│ Service Provider (Node A)                                │
-│                                                          │
-│  advertise("energy.home.get", handler_fn, metadata)     │
-│     ↓                                                    │
-│  1. Store handler locally                               │
-│  2. Publish to DHT at key=SHA256("energy.home.get")    │
-│     → {node_id, endpoint, metadata, ttl}                │
-└─────────────────────────────────────────────────────────┘
-                          ↓
-                  [Kademlia DHT]
-                  (distributed)
-                          ↓
-┌─────────────────────────────────────────────────────────┐
-│ Service Consumer (Node B)                                │
-│                                                          │
-│  call("energy.home.get", args)                          │
-│     ↓                                                    │
-│  1. Check local handler (local-first)                   │
-│  2. Check cache (60s TTL)                               │
-│  3. Query DHT for providers                             │
-│  4. Cache result                                        │
-│  5. Pick provider → Send MSG_CALL via HTTP/3 QUIC      │
-│     ↓                                                    │
-│  Provider executes handler → MSG_REPLY                  │
-│     ↓                                                    │
-│  {:ok, result}                                           │
-└─────────────────────────────────────────────────────────┘
-```
+The diagram above illustrates the complete RPC flow:
+
+1. **Discovery Hierarchy** - 4-tier fallback: Local → Cache → DHT → Direct
+2. **Service Advertisement** - Providers register to local registry and DHT
+3. **RPC Call Flow** - Consumer discovers provider, sends MSG_CALL, receives MSG_REPLY
+4. **Multi-Provider Load Balancing** - Round-robin selection with automatic failover
 
 ### Discovery Hierarchy
 

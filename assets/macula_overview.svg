@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 550">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+    </marker>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#6366f1;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="nodeGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f8fafc;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#e2e8f0;stop-opacity:1"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="3" dy="3" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="550" fill="#f8fafc"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="900" height="55" fill="url(#headerGrad)"/>
+  <text x="450" y="35" text-anchor="middle" fill="white" font-family="system-ui" font-size="20" font-weight="bold">Macula HTTP/3 Mesh Platform</text>
+
+  <!-- Central mesh visualization -->
+  <ellipse cx="450" cy="270" rx="280" ry="160" fill="none" stroke="#e2e8f0" stroke-width="2" stroke-dasharray="8,4"/>
+  <text x="450" y="445" text-anchor="middle" font-family="system-ui" font-size="12" fill="#94a3b8">Decentralized Mesh Network</text>
+
+  <!-- Node 1 (top left) -->
+  <g transform="translate(200, 150)">
+    <rect x="-60" y="-35" width="120" height="70" rx="8" fill="url(#nodeGrad)" stroke="#6366f1" stroke-width="2" filter="url(#shadow)"/>
+    <circle cx="0" cy="-15" r="15" fill="#ddd6fe" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="0" y="-10" text-anchor="middle" font-family="system-ui" font-size="14">🖥️</text>
+    <text x="0" y="8" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#4b5563">Node A</text>
+    <text x="0" y="22" text-anchor="middle" font-family="system-ui" font-size="9" fill="#9ca3af">Peer</text>
+  </g>
+
+  <!-- Node 2 (top right) -->
+  <g transform="translate(700, 150)">
+    <rect x="-60" y="-35" width="120" height="70" rx="8" fill="url(#nodeGrad)" stroke="#6366f1" stroke-width="2" filter="url(#shadow)"/>
+    <circle cx="0" cy="-15" r="15" fill="#ddd6fe" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="0" y="-10" text-anchor="middle" font-family="system-ui" font-size="14">🖥️</text>
+    <text x="0" y="8" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#4b5563">Node B</text>
+    <text x="0" y="22" text-anchor="middle" font-family="system-ui" font-size="9" fill="#9ca3af">Peer</text>
+  </g>
+
+  <!-- Node 3 (bottom left) -->
+  <g transform="translate(200, 380)">
+    <rect x="-60" y="-35" width="120" height="70" rx="8" fill="url(#nodeGrad)" stroke="#6366f1" stroke-width="2" filter="url(#shadow)"/>
+    <circle cx="0" cy="-15" r="15" fill="#ddd6fe" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="0" y="-10" text-anchor="middle" font-family="system-ui" font-size="14">📱</text>
+    <text x="0" y="8" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#4b5563">Node C</text>
+    <text x="0" y="22" text-anchor="middle" font-family="system-ui" font-size="9" fill="#9ca3af">Mobile</text>
+  </g>
+
+  <!-- Node 4 (bottom right) -->
+  <g transform="translate(700, 380)">
+    <rect x="-60" y="-35" width="120" height="70" rx="8" fill="url(#nodeGrad)" stroke="#6366f1" stroke-width="2" filter="url(#shadow)"/>
+    <circle cx="0" cy="-15" r="15" fill="#ddd6fe" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="0" y="-10" text-anchor="middle" font-family="system-ui" font-size="14">🌐</text>
+    <text x="0" y="8" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#4b5563">Node D</text>
+    <text x="0" y="22" text-anchor="middle" font-family="system-ui" font-size="9" fill="#9ca3af">Edge</text>
+  </g>
+
+  <!-- DHT in center -->
+  <ellipse cx="450" cy="270" rx="70" ry="45" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="450" y="263" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#6d28d9">Kademlia</text>
+  <text x="450" y="280" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#6d28d9">DHT</text>
+
+  <!-- Connection lines -->
+  <line x1="260" y1="155" x2="380" y2="240" stroke="#6366f1" stroke-width="2" opacity="0.6"/>
+  <line x1="640" y1="155" x2="520" y2="240" stroke="#6366f1" stroke-width="2" opacity="0.6"/>
+  <line x1="260" y1="375" x2="380" y2="300" stroke="#6366f1" stroke-width="2" opacity="0.6"/>
+  <line x1="640" y1="375" x2="520" y2="300" stroke="#6366f1" stroke-width="2" opacity="0.6"/>
+
+  <!-- Cross connections -->
+  <line x1="260" y1="150" x2="640" y2="150" stroke="#a5b4fc" stroke-width="1.5" stroke-dasharray="6,3" opacity="0.5"/>
+  <line x1="260" y1="380" x2="640" y2="380" stroke="#a5b4fc" stroke-width="1.5" stroke-dasharray="6,3" opacity="0.5"/>
+  <line x1="200" y1="190" x2="200" y2="340" stroke="#a5b4fc" stroke-width="1.5" stroke-dasharray="6,3" opacity="0.5"/>
+  <line x1="700" y1="190" x2="700" y2="340" stroke="#a5b4fc" stroke-width="1.5" stroke-dasharray="6,3" opacity="0.5"/>
+
+  <!-- Feature boxes -->
+  <!-- Pub/Sub -->
+  <rect x="20" y="80" width="140" height="65" rx="6" fill="white" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
+  <text x="90" y="103" text-anchor="middle" font-family="system-ui" font-size="18">📢</text>
+  <text x="90" y="122" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#047857">Pub/Sub</text>
+  <text x="90" y="136" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Topic-based messaging</text>
+
+  <!-- RPC -->
+  <rect x="20" y="155" width="140" height="65" rx="6" fill="white" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="90" y="178" text-anchor="middle" font-family="system-ui" font-size="18">⚡</text>
+  <text x="90" y="197" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#1d4ed8">Async RPC</text>
+  <text x="90" y="211" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Service discovery</text>
+
+  <!-- NAT Traversal -->
+  <rect x="740" y="80" width="140" height="65" rx="6" fill="white" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="810" y="103" text-anchor="middle" font-family="system-ui" font-size="18">🔓</text>
+  <text x="810" y="122" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#b45309">NAT Traversal</text>
+  <text x="810" y="136" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Hole punch + relay</text>
+
+  <!-- Bridge Mesh -->
+  <rect x="740" y="155" width="140" height="65" rx="6" fill="white" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="810" y="178" text-anchor="middle" font-family="system-ui" font-size="18">🌉</text>
+  <text x="810" y="197" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#6d28d9">Bridge Mesh</text>
+  <text x="810" y="211" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Fractal hierarchy</text>
+
+  <!-- Key benefits at bottom -->
+  <rect x="50" y="475" width="800" height="55" rx="8" fill="white" stroke="#e5e7eb" filter="url(#shadow)"/>
+  <text x="450" y="495" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#374151">Key Benefits</text>
+
+  <!-- Benefit items -->
+  <g transform="translate(110, 518)">
+    <circle cx="0" cy="0" r="5" fill="#10b981"/>
+    <text x="12" y="4" font-family="system-ui" font-size="10" fill="#4b5563">No central broker</text>
+  </g>
+
+  <g transform="translate(260, 518)">
+    <circle cx="0" cy="0" r="5" fill="#3b82f6"/>
+    <text x="12" y="4" font-family="system-ui" font-size="10" fill="#4b5563">HTTP/3 QUIC transport</text>
+  </g>
+
+  <g transform="translate(430, 518)">
+    <circle cx="0" cy="0" r="5" fill="#f59e0b"/>
+    <text x="12" y="4" font-family="system-ui" font-size="10" fill="#4b5563">NAT-friendly</text>
+  </g>
+
+  <g transform="translate(550, 518)">
+    <circle cx="0" cy="0" r="5" fill="#8b5cf6"/>
+    <text x="12" y="4" font-family="system-ui" font-size="10" fill="#4b5563">Self-organizing</text>
+  </g>
+
+  <g transform="translate(700, 518)">
+    <circle cx="0" cy="0" r="5" fill="#ec4899"/>
+    <text x="12" y="4" font-family="system-ui" font-size="10" fill="#4b5563">O(log N) lookups</text>
+  </g>
+</svg>

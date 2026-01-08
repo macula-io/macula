@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 750">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#4b5563"/>
+    </marker>
+    <marker id="arrowhead-pub" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrowhead-sub" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+    <marker id="arrowhead-dht" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#8b5cf6"/>
+    </marker>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#10b981;stop-opacity:1"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="2" dy="2" stdDeviation="2" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="750" fill="#f8fafc"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="900" height="50" fill="url(#headerGrad)"/>
+  <text x="450" y="32" text-anchor="middle" fill="white" font-family="system-ui" font-size="18" font-weight="bold">Decentralized Pub/Sub with DHT Discovery</text>
+
+  <!-- Legend -->
+  <rect x="670" y="60" width="210" height="80" rx="6" fill="white" stroke="#e5e7eb" filter="url(#shadow)"/>
+  <text x="680" y="80" font-family="system-ui" font-size="11" font-weight="600" fill="#374151">Legend</text>
+  <line x1="680" y1="97" x2="710" y2="97" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrowhead-pub)"/>
+  <text x="720" y="101" font-family="system-ui" font-size="10" fill="#6b7280">Publish flow</text>
+  <line x1="680" y1="117" x2="710" y2="117" stroke="#10b981" stroke-width="2" marker-end="url(#arrowhead-sub)"/>
+  <text x="720" y="121" font-family="system-ui" font-size="10" fill="#6b7280">Subscribe flow</text>
+  <line x1="680" y1="137" x2="710" y2="137" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arrowhead-dht)"/>
+  <text x="720" y="141" font-family="system-ui" font-size="10" fill="#6b7280">DHT operation</text>
+
+  <!-- Section 1: Subscription Registration -->
+  <rect x="20" y="60" width="320" height="180" rx="8" fill="#ecfdf5" stroke="#86efac" stroke-width="1.5"/>
+  <text x="35" y="85" font-family="system-ui" font-size="14" font-weight="600" fill="#047857">1. Subscription Registration</text>
+
+  <!-- Subscriber node -->
+  <rect x="40" y="105" width="120" height="50" rx="6" fill="white" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
+  <text x="100" y="125" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="500" fill="#047857">Subscriber</text>
+  <text x="100" y="142" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Node A</text>
+
+  <!-- Local callback storage -->
+  <rect x="40" y="175" width="120" height="40" rx="4" fill="#d1fae5" stroke="#6ee7b7"/>
+  <text x="100" y="193" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="500" fill="#047857">Local Callbacks</text>
+  <text x="100" y="207" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">ETS: topic → fn</text>
+
+  <!-- Arrow from subscriber to local -->
+  <line x1="100" y1="155" x2="100" y2="172" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowhead-sub)"/>
+  <text x="115" y="165" font-family="system-ui" font-size="8" fill="#6b7280">store</text>
+
+  <!-- DHT cloud -->
+  <ellipse cx="260" cy="145" rx="50" ry="35" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="260" y="142" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#6d28d9">Kademlia</text>
+  <text x="260" y="155" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#6d28d9">DHT</text>
+
+  <!-- Arrow from subscriber to DHT -->
+  <line x1="160" y1="130" x2="205" y2="140" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowhead-dht)"/>
+  <text x="180" y="125" font-family="system-ui" font-size="8" fill="#7c3aed">advertise</text>
+
+  <!-- DHT key explanation -->
+  <rect x="195" y="185" width="130" height="45" rx="4" fill="white" stroke="#c4b5fd"/>
+  <text x="260" y="202" text-anchor="middle" font-family="system-ui" font-size="8" font-weight="500" fill="#6d28d9">DHT Entry</text>
+  <text x="260" y="216" text-anchor="middle" font-family="system-ui" font-size="7" fill="#7c3aed">key: SHA256(topic)</text>
+  <text x="260" y="226" text-anchor="middle" font-family="system-ui" font-size="7" fill="#7c3aed">val: {node_id, endpoint}</text>
+
+  <!-- Section 2: Publishing Process -->
+  <rect x="360" y="60" width="520" height="180" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+  <text x="375" y="85" font-family="system-ui" font-size="14" font-weight="600" fill="#1e40af">2. Publishing Process</text>
+
+  <!-- Publisher node -->
+  <rect x="380" y="105" width="120" height="50" rx="6" fill="white" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="440" y="125" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="500" fill="#1d4ed8">Publisher</text>
+  <text x="440" y="142" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Node B</text>
+
+  <!-- Subscriber cache -->
+  <rect x="380" y="175" width="120" height="40" rx="4" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="440" y="193" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="500" fill="#1e40af">Subscriber Cache</text>
+  <text x="440" y="207" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">TTL: 60 seconds</text>
+
+  <!-- DHT cloud (publishing side) -->
+  <ellipse cx="560" cy="145" rx="45" ry="30" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="560" y="148" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="500" fill="#6d28d9">DHT</text>
+
+  <!-- Arrow from publisher to DHT -->
+  <line x1="500" y1="130" x2="512" y2="140" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowhead-dht)"/>
+  <text x="505" y="125" font-family="system-ui" font-size="8" fill="#7c3aed">query</text>
+
+  <!-- Arrow from DHT back to publisher cache -->
+  <path d="M560 175 Q560 195 500 195" fill="none" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowhead-dht)"/>
+  <text x="540" y="205" font-family="system-ui" font-size="8" fill="#7c3aed">subscribers</text>
+
+  <!-- Fanout arrows -->
+  <rect x="630" y="100" width="100" height="35" rx="4" fill="white" stroke="#10b981" stroke-width="1.5"/>
+  <text x="680" y="122" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#047857">Node A</text>
+
+  <rect x="630" y="145" width="100" height="35" rx="4" fill="white" stroke="#10b981" stroke-width="1.5"/>
+  <text x="680" y="167" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#047857">Node C</text>
+
+  <rect x="630" y="190" width="100" height="35" rx="4" fill="white" stroke="#10b981" stroke-width="1.5"/>
+  <text x="680" y="212" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#047857">Node D</text>
+
+  <!-- Fanout label -->
+  <text x="755" y="165" font-family="system-ui" font-size="10" font-weight="500" fill="#374151">Fanout</text>
+  <text x="755" y="178" font-family="system-ui" font-size="9" fill="#6b7280">QUIC</text>
+
+  <!-- Arrows to fanout -->
+  <line x1="605" y1="130" x2="627" y2="118" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowhead-pub)"/>
+  <line x1="605" y1="145" x2="627" y2="162" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowhead-pub)"/>
+  <line x1="605" y1="160" x2="627" y2="205" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowhead-pub)"/>
+
+  <!-- Section 3: Message Delivery -->
+  <rect x="20" y="260" width="860" height="200" rx="8" fill="white" stroke="#e5e7eb" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="40" y="285" font-family="system-ui" font-size="14" font-weight="600" fill="#374151">3. Message Delivery Flow</text>
+
+  <!-- Timeline -->
+  <line x1="60" y1="350" x2="850" y2="350" stroke="#d1d5db" stroke-width="1"/>
+
+  <!-- Publisher -->
+  <rect x="70" y="310" width="80" height="30" rx="4" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="110" y="330" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#1d4ed8">Publisher</text>
+  <line x1="110" y1="340" x2="110" y2="440" stroke="#3b82f6" stroke-width="1" stroke-dasharray="4,2"/>
+
+  <!-- DHT -->
+  <rect x="250" y="310" width="80" height="30" rx="4" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="290" y="330" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#6d28d9">DHT</text>
+  <line x1="290" y1="340" x2="290" y2="440" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="4,2"/>
+
+  <!-- Subscribers -->
+  <rect x="450" y="310" width="80" height="30" rx="4" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="490" y="330" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#047857">Sub A</text>
+  <line x1="490" y1="340" x2="490" y2="440" stroke="#10b981" stroke-width="1" stroke-dasharray="4,2"/>
+
+  <rect x="560" y="310" width="80" height="30" rx="4" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="600" y="330" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#047857">Sub B</text>
+  <line x1="600" y1="340" x2="600" y2="440" stroke="#10b981" stroke-width="1" stroke-dasharray="4,2"/>
+
+  <rect x="670" y="310" width="80" height="30" rx="4" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="710" y="330" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#047857">Sub C</text>
+  <line x1="710" y1="340" x2="710" y2="440" stroke="#10b981" stroke-width="1" stroke-dasharray="4,2"/>
+
+  <!-- Sequence arrows -->
+  <line x1="115" y1="360" x2="285" y2="360" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowhead-dht)"/>
+  <text x="200" y="355" text-anchor="middle" font-family="system-ui" font-size="9" fill="#7c3aed">1. find_subscribers(topic)</text>
+
+  <line x1="285" y1="375" x2="115" y2="375" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowhead-dht)"/>
+  <text x="200" y="388" text-anchor="middle" font-family="system-ui" font-size="9" fill="#7c3aed">2. [Sub A, Sub B, Sub C]</text>
+
+  <line x1="115" y1="405" x2="485" y2="405" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowhead-pub)"/>
+  <line x1="115" y1="420" x2="595" y2="420" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowhead-pub)"/>
+  <line x1="115" y1="435" x2="705" y2="435" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowhead-pub)"/>
+  <text x="350" y="400" font-family="system-ui" font-size="9" fill="#1d4ed8">3. MSG_PUBLISH (parallel QUIC streams)</text>
+
+  <!-- Latency indicator -->
+  <rect x="790" y="355" width="70" height="70" rx="4" fill="#f3f4f6" stroke="#d1d5db"/>
+  <text x="825" y="375" text-anchor="middle" font-family="system-ui" font-size="8" font-weight="500" fill="#4b5563">Typical</text>
+  <text x="825" y="388" text-anchor="middle" font-family="system-ui" font-size="8" font-weight="500" fill="#4b5563">Latency</text>
+  <text x="825" y="405" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">DHT: 50ms</text>
+  <text x="825" y="418" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Deliver: 20ms</text>
+
+  <!-- Section 4: Module Architecture -->
+  <rect x="20" y="480" width="400" height="250" rx="8" fill="#fefce8" stroke="#fde047" stroke-width="1.5"/>
+  <text x="40" y="505" font-family="system-ui" font-size="14" font-weight="600" fill="#a16207">Module Architecture</text>
+
+  <!-- Layers -->
+  <rect x="40" y="525" width="360" height="35" rx="4" fill="#fef9c3" stroke="#facc15" stroke-width="1.5"/>
+  <text x="220" y="547" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="500" fill="#a16207">Application Layer: macula (Public API)</text>
+
+  <rect x="40" y="570" width="175" height="55" rx="4" fill="white" stroke="#e5e7eb"/>
+  <text x="127" y="590" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#374151">macula_pubsub_handler</text>
+  <text x="127" y="605" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">Local subscriptions</text>
+  <text x="127" y="618" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">Callback invocation</text>
+
+  <rect x="225" y="570" width="175" height="55" rx="4" fill="white" stroke="#e5e7eb"/>
+  <text x="312" y="590" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#374151">macula_gateway_pubsub</text>
+  <text x="312" y="605" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">Wildcard matching</text>
+  <text x="312" y="618" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">Message routing</text>
+
+  <rect x="40" y="635" width="360" height="35" rx="4" fill="#ede9fe" stroke="#a78bfa"/>
+  <text x="220" y="657" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="500" fill="#6d28d9">DHT Layer: macula_pubsub_dht</text>
+
+  <rect x="40" y="680" width="360" height="35" rx="4" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="220" y="702" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="500" fill="#1e40af">Transport Layer: HTTP/3 QUIC</text>
+
+  <!-- Arrows between layers -->
+  <line x1="220" y1="560" x2="220" y2="567" stroke="#4b5563" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <line x1="220" y1="625" x2="220" y2="632" stroke="#4b5563" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <line x1="220" y1="670" x2="220" y2="677" stroke="#4b5563" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- Section 5: Wildcard Matching -->
+  <rect x="440" y="480" width="440" height="250" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+  <text x="460" y="505" font-family="system-ui" font-size="14" font-weight="600" fill="#047857">Wildcard Pattern Matching</text>
+
+  <!-- Pattern examples -->
+  <rect x="460" y="520" width="200" height="90" rx="4" fill="white" stroke="#e5e7eb"/>
+  <text x="480" y="540" font-family="system-ui" font-size="10" font-weight="600" fill="#374151">Single-level (*)</text>
+  <text x="480" y="558" font-family="system-ui" font-size="9" fill="#10b981">sensor.*</text>
+  <text x="480" y="573" font-family="system-ui" font-size="8" fill="#6b7280">✓ sensor.temperature</text>
+  <text x="480" y="586" font-family="system-ui" font-size="8" fill="#6b7280">✓ sensor.humidity</text>
+  <text x="480" y="599" font-family="system-ui" font-size="8" fill="#dc2626">✗ sensor.room1.temp</text>
+
+  <rect x="670" y="520" width="200" height="90" rx="4" fill="white" stroke="#e5e7eb"/>
+  <text x="690" y="540" font-family="system-ui" font-size="10" font-weight="600" fill="#374151">Multi-level (#)</text>
+  <text x="690" y="558" font-family="system-ui" font-size="9" fill="#10b981">sensor.#</text>
+  <text x="690" y="573" font-family="system-ui" font-size="8" fill="#6b7280">✓ sensor.temperature</text>
+  <text x="690" y="586" font-family="system-ui" font-size="8" fill="#6b7280">✓ sensor.room1.temp</text>
+  <text x="690" y="599" font-family="system-ui" font-size="8" fill="#6b7280">✓ sensor.bldg.floor.rm</text>
+
+  <!-- Topic design tips -->
+  <rect x="460" y="620" width="410" height="100" rx="4" fill="white" stroke="#d1d5db"/>
+  <text x="480" y="642" font-family="system-ui" font-size="10" font-weight="600" fill="#374151">Topic Design Best Practices</text>
+  <text x="480" y="660" font-family="system-ui" font-size="9" fill="#10b981">✓ Use hierarchical names: myapp.sensor.temperature</text>
+  <text x="480" y="676" font-family="system-ui" font-size="9" fill="#10b981">✓ Put entity IDs in payload, not topic</text>
+  <text x="480" y="692" font-family="system-ui" font-size="9" fill="#dc2626">✗ Avoid: sensor.{sensor_id}.temp (topic explosion)</text>
+  <text x="480" y="708" font-family="system-ui" font-size="9" fill="#dc2626">✗ Avoid: underscores/dashes (use dots)</text>
+
+  <!-- Key metrics box -->
+  <rect x="770" y="60" width="110" height="60" rx="4" fill="white" stroke="#d1d5db" filter="url(#shadow)"/>
+  <text x="780" y="78" font-family="system-ui" font-size="9" font-weight="600" fill="#374151">Key Metrics</text>
+  <text x="780" y="94" font-family="system-ui" font-size="8" fill="#6b7280">Cache hit: ~98%</text>
+  <text x="780" y="106" font-family="system-ui" font-size="8" fill="#6b7280">Cache TTL: 60s</text>
+  <text x="780" y="118" font-family="system-ui" font-size="8" fill="#6b7280">Max pool: 1,000</text>
+</svg>

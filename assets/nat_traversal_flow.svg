@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#4b5563"/>
+    </marker>
+    <marker id="arrowhead-success" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+    <marker id="arrowhead-fallback" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f59e0b"/>
+    </marker>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#6366f1;stop-opacity:1"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="2" dy="2" stdDeviation="2" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="700" fill="#f8fafc"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="900" height="50" fill="url(#headerGrad)"/>
+  <text x="450" y="32" text-anchor="middle" fill="white" font-family="system-ui" font-size="18" font-weight="bold">NAT Traversal Connection Flow</text>
+
+  <!-- Legend -->
+  <rect x="670" y="60" width="210" height="100" rx="6" fill="white" stroke="#e5e7eb" filter="url(#shadow)"/>
+  <text x="680" y="80" font-family="system-ui" font-size="11" font-weight="600" fill="#374151">Legend</text>
+  <line x1="680" y1="95" x2="710" y2="95" stroke="#10b981" stroke-width="2" marker-end="url(#arrowhead-success)"/>
+  <text x="720" y="99" font-family="system-ui" font-size="10" fill="#6b7280">Success path</text>
+  <line x1="680" y1="115" x2="710" y2="115" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrowhead-fallback)"/>
+  <text x="720" y="119" font-family="system-ui" font-size="10" fill="#6b7280">Fallback path</text>
+  <line x1="680" y1="135" x2="710" y2="135" stroke="#4b5563" stroke-width="2" stroke-dasharray="4,2" marker-end="url(#arrowhead)"/>
+  <text x="720" y="139" font-family="system-ui" font-size="10" fill="#6b7280">Optional/async</text>
+  <rect x="680" y="148" width="12" height="12" rx="2" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="698" y="158" font-family="system-ui" font-size="10" fill="#6b7280">Decision</text>
+
+  <!-- Start Node -->
+  <ellipse cx="100" cy="100" rx="50" ry="25" fill="#3b82f6" filter="url(#shadow)"/>
+  <text x="100" y="105" text-anchor="middle" fill="white" font-family="system-ui" font-size="12" font-weight="500">connect()</text>
+
+  <!-- Flow Arrow 1 -->
+  <line x1="150" y1="100" x2="195" y2="100" stroke="#4b5563" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- NAT Cache Check -->
+  <rect x="200" y="75" width="140" height="50" rx="6" fill="white" stroke="#6366f1" stroke-width="2" filter="url(#shadow)"/>
+  <text x="270" y="95" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="500" fill="#4b5563">Check NAT Cache</text>
+  <text x="270" y="110" text-anchor="middle" font-family="system-ui" font-size="9" fill="#9ca3af">macula_nat_cache</text>
+
+  <!-- Arrow to decision -->
+  <line x1="340" y1="100" x2="385" y2="100" stroke="#4b5563" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Decision: Profile Available? -->
+  <polygon points="450,70 515,100 450,130 385,100" fill="#ecfdf5" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
+  <text x="450" y="98" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#065f46">Profile?</text>
+  <text x="450" y="109" text-anchor="middle" font-family="system-ui" font-size="9" fill="#059669">cached</text>
+
+  <!-- No path - go to DHT -->
+  <line x1="450" y1="130" x2="450" y2="165" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrowhead-fallback)"/>
+  <text x="458" y="150" font-family="system-ui" font-size="9" fill="#d97706">miss</text>
+
+  <!-- DHT Fetch -->
+  <rect x="380" y="170" width="140" height="50" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="450" y="190" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="500" fill="#92400e">Fetch from DHT</text>
+  <text x="450" y="205" text-anchor="middle" font-family="system-ui" font-size="9" fill="#b45309">get_from_dht()</text>
+
+  <!-- Yes path - to strategy selection -->
+  <line x1="515" y1="100" x2="560" y2="100" stroke="#10b981" stroke-width="2" marker-end="url(#arrowhead-success)"/>
+  <text x="535" y="92" font-family="system-ui" font-size="9" fill="#059669">hit</text>
+
+  <!-- DHT back to flow -->
+  <path d="M520 195 L560 195 L560 100" fill="none" stroke="#f59e0b" stroke-width="2"/>
+
+  <!-- Strategy Selection Box -->
+  <rect x="565" y="65" width="100" height="70" rx="6" fill="white" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="615" y="85" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="600" fill="#6d28d9">Select</text>
+  <text x="615" y="97" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="600" fill="#6d28d9">Strategy</text>
+  <text x="615" y="115" text-anchor="middle" font-family="system-ui" font-size="9" fill="#7c3aed">Based on</text>
+  <text x="615" y="127" text-anchor="middle" font-family="system-ui" font-size="9" fill="#7c3aed">NAT types</text>
+
+  <!-- Three Strategy Paths -->
+
+  <!-- Strategy 1: Direct Connection -->
+  <line x1="615" y1="135" x2="615" y2="185" stroke="#4b5563" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="625" y="165" font-family="system-ui" font-size="9" fill="#6b7280">direct</text>
+
+  <!-- Direct box -->
+  <rect x="20" y="250" width="180" height="70" rx="6" fill="white" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
+  <text x="110" y="275" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#047857">1. Direct Connection</text>
+  <text x="110" y="292" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Target has public IP</text>
+  <text x="110" y="306" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">or Full Cone NAT</text>
+
+  <!-- Strategy 2: Hole Punch -->
+  <rect x="220" y="250" width="180" height="70" rx="6" fill="white" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="310" y="275" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#1d4ed8">2. Hole Punching</text>
+  <text x="310" y="292" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Both behind NAT</text>
+  <text x="310" y="306" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Predictable ports</text>
+
+  <!-- Strategy 3: Relay -->
+  <rect x="420" y="250" width="180" height="70" rx="6" fill="white" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="510" y="275" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#b45309">3. Relay Fallback</text>
+  <text x="510" y="292" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Symmetric NAT</text>
+  <text x="510" y="306" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">or punch failed</text>
+
+  <!-- Connect from strategy to boxes -->
+  <path d="M615 190 L615 230 L110 230 L110 250" fill="none" stroke="#4b5563" stroke-width="1.5"/>
+  <path d="M615 190 L615 230 L310 230 L310 250" fill="none" stroke="#4b5563" stroke-width="1.5"/>
+  <path d="M615 190 L615 230 L510 230 L510 250" fill="none" stroke="#4b5563" stroke-width="1.5"/>
+
+  <!-- Priority labels -->
+  <circle cx="25" cy="250" r="10" fill="#10b981"/>
+  <text x="25" y="254" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="bold" fill="white">1</text>
+  <circle cx="225" cy="250" r="10" fill="#3b82f6"/>
+  <text x="225" y="254" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="bold" fill="white">2</text>
+  <circle cx="425" cy="250" r="10" fill="#f59e0b"/>
+  <text x="425" y="254" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="bold" fill="white">3</text>
+
+  <!-- Hole Punch Detail Section -->
+  <rect x="20" y="350" width="580" height="150" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+  <text x="35" y="375" font-family="system-ui" font-size="12" font-weight="600" fill="#1e40af">Hole Punching Coordination</text>
+
+  <!-- Peer A -->
+  <rect x="40" y="390" width="100" height="40" rx="4" fill="white" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="90" y="415" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#1d4ed8">Peer A</text>
+
+  <!-- Coordinator -->
+  <rect x="200" y="390" width="120" height="40" rx="4" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="260" y="408" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="500" fill="#1e40af">NAT Coordinator</text>
+  <text x="260" y="422" text-anchor="middle" font-family="system-ui" font-size="8" fill="#3b82f6">(Gateway)</text>
+
+  <!-- Peer B -->
+  <rect x="380" y="390" width="100" height="40" rx="4" fill="white" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="430" y="415" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#1d4ed8">Peer B</text>
+
+  <!-- Coordination arrows -->
+  <line x1="140" y1="400" x2="195" y2="400" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <text x="167" y="395" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">1. request</text>
+
+  <line x1="320" y1="400" x2="375" y2="400" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <text x="348" y="395" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">2. notify</text>
+
+  <line x1="195" y1="420" x2="140" y2="420" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowhead-success)"/>
+  <text x="167" y="436" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">3. timing</text>
+
+  <line x1="375" y1="420" x2="320" y2="420" stroke="#10b981" stroke-width="1.5"/>
+  <text x="348" y="436" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">3. timing</text>
+
+  <!-- Simultaneous punch -->
+  <text x="245" y="460" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">4. Simultaneous UDP packets at predicted ports</text>
+  <path d="M90 445 Q 245 480 430 445" fill="none" stroke="#10b981" stroke-width="2" stroke-dasharray="5,3"/>
+  <path d="M430 445 Q 245 480 90 445" fill="none" stroke="#10b981" stroke-width="2" stroke-dasharray="5,3"/>
+
+  <!-- Timing explanation -->
+  <rect x="500" y="380" width="90" height="55" rx="4" fill="white" stroke="#e5e7eb"/>
+  <text x="545" y="398" text-anchor="middle" font-family="system-ui" font-size="8" font-weight="500" fill="#4b5563">Adaptive</text>
+  <text x="545" y="410" text-anchor="middle" font-family="system-ui" font-size="8" font-weight="500" fill="#4b5563">Timing</text>
+  <text x="545" y="424" text-anchor="middle" font-family="system-ui" font-size="7" fill="#9ca3af">50-200ms delay</text>
+  <text x="545" y="434" text-anchor="middle" font-family="system-ui" font-size="7" fill="#9ca3af">by NAT type</text>
+
+  <!-- Relay Detail Section -->
+  <rect x="620" y="250" width="260" height="200" rx="8" fill="#fffbeb" stroke="#fcd34d" stroke-width="1.5"/>
+  <text x="635" y="275" font-family="system-ui" font-size="12" font-weight="600" fill="#92400e">Relay Architecture</text>
+
+  <!-- Relay Registry -->
+  <rect x="640" y="290" width="110" height="40" rx="4" fill="white" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="695" y="308" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="500" fill="#b45309">Relay Registry</text>
+  <text x="695" y="322" text-anchor="middle" font-family="system-ui" font-size="8" fill="#d97706">(DHT-based)</text>
+
+  <!-- Relay Selection Criteria -->
+  <rect x="640" y="340" width="220" height="55" rx="4" fill="white" stroke="#e5e7eb"/>
+  <text x="650" y="357" font-family="system-ui" font-size="9" font-weight="500" fill="#4b5563">Selection Criteria:</text>
+  <text x="650" y="372" font-family="system-ui" font-size="8" fill="#6b7280">• Lowest latency to both peers</text>
+  <text x="650" y="385" font-family="system-ui" font-size="8" fill="#6b7280">• Current load &lt; threshold</text>
+
+  <!-- Relay Node -->
+  <rect x="700" y="405" width="90" height="35" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="745" y="427" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="500" fill="#92400e">Relay Node</text>
+
+  <!-- Relay data flow -->
+  <text x="640" y="420" font-family="system-ui" font-size="8" fill="#6b7280">A</text>
+  <line x1="655" y1="422" x2="695" y2="422" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrowhead-fallback)"/>
+  <line x1="790" y1="422" x2="830" y2="422" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrowhead-fallback)"/>
+  <text x="845" y="425" font-family="system-ui" font-size="8" fill="#6b7280">B</text>
+
+  <!-- Result Section -->
+  <rect x="20" y="520" width="860" height="80" rx="8" fill="white" stroke="#e5e7eb" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="40" y="545" font-family="system-ui" font-size="12" font-weight="600" fill="#374151">Connection Result</text>
+
+  <!-- Result types -->
+  <rect x="40" y="555" width="130" height="35" rx="4" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="105" y="577" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#047857">{ok, direct, Conn}</text>
+
+  <rect x="190" y="555" width="140" height="35" rx="4" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="260" y="577" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#1d4ed8">{ok, punched, Conn}</text>
+
+  <rect x="350" y="555" width="140" height="35" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="420" y="577" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#b45309">{ok, relayed, Conn}</text>
+
+  <rect x="510" y="555" width="130" height="35" rx="4" fill="#fef2f2" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="575" y="577" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="500" fill="#b91c1c">{error, Reason}</text>
+
+  <!-- Performance note -->
+  <rect x="660" y="555" width="200" height="35" rx="4" fill="#f3f4f6" stroke="#d1d5db"/>
+  <text x="760" y="570" text-anchor="middle" font-family="system-ui" font-size="8" fill="#4b5563">Typical establishment time:</text>
+  <text x="760" y="583" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">Direct: 50ms | Punch: 300ms | Relay: 100ms</text>
+
+  <!-- Upgrade path note -->
+  <rect x="20" y="620" width="400" height="60" rx="6" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="40" y="645" font-family="system-ui" font-size="10" font-weight="500" fill="#166534">Connection Upgrade (macula_connection_upgrade)</text>
+  <text x="40" y="660" font-family="system-ui" font-size="9" fill="#6b7280">Relayed connections can upgrade to direct after successful</text>
+  <text x="40" y="673" font-family="system-ui" font-size="9" fill="#6b7280">hole punch, reducing latency and load on relay nodes.</text>
+
+  <!-- Pool note -->
+  <rect x="440" y="620" width="400" height="60" rx="6" fill="#eef2ff" stroke="#a5b4fc"/>
+  <text x="460" y="645" font-family="system-ui" font-size="10" font-weight="500" fill="#4338ca">Connection Pooling (macula_peer_connection_pool)</text>
+  <text x="460" y="660" font-family="system-ui" font-size="9" fill="#6b7280">All established connections are pooled for reuse.</text>
+  <text x="460" y="673" font-family="system-ui" font-size="9" fill="#6b7280">94.5% cache hit rate with LRU eviction (max 1000 conns).</text>
+</svg>
