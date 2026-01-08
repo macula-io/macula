@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" width="800" height="450">
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3B82F6"/>
+    </marker>
+    <linearGradient id="authGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3B82F6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1D4ED8;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="telemetryGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#10B981;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#059669;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="etsGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#F59E0B;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#D97706;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="450" fill="#F9FAFB"/>
+
+  <!-- Title -->
+  <text x="400" y="35" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="600" fill="#111827">Authorization Audit System</text>
+  <text x="400" y="55" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#6B7280">Telemetry-based observability with optional ETS storage</text>
+
+  <!-- Authorization Module -->
+  <rect x="50" y="80" width="180" height="90" rx="8" fill="url(#authGrad)"/>
+  <text x="140" y="115" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="13" font-weight="600" fill="white">macula_authorization</text>
+  <text x="140" y="138" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#BFDBFE">check_rpc_call/4</text>
+  <text x="140" y="153" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#BFDBFE">check_publish/4</text>
+
+  <!-- Arrow to audit -->
+  <line x1="230" y1="125" x2="290" y2="125" stroke="#3B82F6" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <text x="260" y="115" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#3B82F6">audit_result/4</text>
+
+  <!-- Audit Module -->
+  <rect x="300" y="80" width="200" height="90" rx="8" fill="white" stroke="#3B82F6" stroke-width="2"/>
+  <text x="400" y="105" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="#1D4ED8">macula_authorization_audit</text>
+  <text x="400" y="125" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">gen_server behavior</text>
+  <text x="400" y="145" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">log_authorized/3</text>
+  <text x="400" y="160" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">log_denied/4</text>
+
+  <!-- Two output paths -->
+  <!-- Telemetry path -->
+  <line x1="400" y1="170" x2="400" y2="200" stroke="#10B981" stroke-width="2"/>
+  <line x1="400" y1="200" x2="200" y2="200" stroke="#10B981" stroke-width="2"/>
+  <line x1="200" y1="200" x2="200" y2="230" stroke="#10B981" stroke-width="2" marker-end="url(#arrowBlue)"/>
+
+  <!-- ETS path -->
+  <line x1="400" y1="200" x2="600" y2="200" stroke="#F59E0B" stroke-width="2"/>
+  <line x1="600" y1="200" x2="600" y2="230" stroke="#F59E0B" stroke-width="2" marker-end="url(#arrowBlue)"/>
+
+  <!-- Telemetry Box -->
+  <rect x="80" y="240" width="240" height="120" rx="8" fill="url(#telemetryGrad)"/>
+  <text x="200" y="270" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="13" font-weight="600" fill="white">Telemetry Events</text>
+  <text x="200" y="295" text-anchor="middle" font-family="monospace" font-size="10" fill="#D1FAE5">[macula, authorization, allowed]</text>
+  <text x="200" y="312" text-anchor="middle" font-family="monospace" font-size="10" fill="#D1FAE5">[macula, authorization, denied]</text>
+  <text x="200" y="329" text-anchor="middle" font-family="monospace" font-size="10" fill="#D1FAE5">[macula, authorization, error]</text>
+  <text x="200" y="350" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#FEF3C7">Always emitted (real-time)</text>
+
+  <!-- ETS Box -->
+  <rect x="480" y="240" width="240" height="120" rx="8" fill="url(#etsGrad)"/>
+  <text x="600" y="270" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="13" font-weight="600" fill="white">ETS Storage</text>
+  <text x="600" y="295" text-anchor="middle" font-family="monospace" font-size="10" fill="#FEF3C7">macula_authorization_audit_log</text>
+  <text x="600" y="315" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#FEF3C7">Optional (configurable)</text>
+  <text x="600" y="335" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#FEF3C7">enable() / disable()</text>
+  <text x="600" y="350" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="white">TTL + LRU eviction</text>
+
+  <!-- Telemetry destinations -->
+  <rect x="50" y="380" width="100" height="50" rx="6" fill="#ECFDF5" stroke="#10B981" stroke-width="1"/>
+  <text x="100" y="405" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="500" fill="#059669">Prometheus</text>
+  <text x="100" y="420" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">Metrics</text>
+
+  <rect x="165" y="380" width="100" height="50" rx="6" fill="#ECFDF5" stroke="#10B981" stroke-width="1"/>
+  <text x="215" y="405" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="500" fill="#059669">Grafana</text>
+  <text x="215" y="420" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">Dashboards</text>
+
+  <rect x="280" y="380" width="100" height="50" rx="6" fill="#ECFDF5" stroke="#10B981" stroke-width="1"/>
+  <text x="330" y="405" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="500" fill="#059669">Custom</text>
+  <text x="330" y="420" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">Handlers</text>
+
+  <!-- Arrows to destinations -->
+  <line x1="200" y1="360" x2="100" y2="375" stroke="#10B981" stroke-width="1"/>
+  <line x1="200" y1="360" x2="215" y2="375" stroke="#10B981" stroke-width="1"/>
+  <line x1="200" y1="360" x2="330" y2="375" stroke="#10B981" stroke-width="1"/>
+
+  <!-- Query API box -->
+  <rect x="430" y="380" width="140" height="60" rx="6" fill="#FFFBEB" stroke="#F59E0B" stroke-width="1"/>
+  <text x="500" y="402" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="500" fill="#D97706">Query API</text>
+  <text x="500" y="418" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">get_recent/1</text>
+  <text x="500" y="432" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">get_by_caller/2</text>
+
+  <line x1="600" y1="360" x2="530" y2="375" stroke="#F59E0B" stroke-width="1"/>
+
+  <!-- Stats box -->
+  <rect x="590" y="380" width="140" height="60" rx="6" fill="#FFFBEB" stroke="#F59E0B" stroke-width="1"/>
+  <text x="660" y="402" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="500" fill="#D97706">Statistics</text>
+  <text x="660" y="418" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">allowed_count</text>
+  <text x="660" y="432" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">denied_count</text>
+
+  <line x1="600" y1="360" x2="660" y2="375" stroke="#F59E0B" stroke-width="1"/>
+
+  <!-- Legend -->
+  <rect x="530" y="80" width="220" height="80" rx="6" fill="white" stroke="#E5E7EB" stroke-width="1"/>
+  <text x="640" y="100" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#374151">Audit Entry Fields</text>
+
+  <text x="545" y="118" font-family="monospace" font-size="9" fill="#6B7280">id, timestamp, operation,</text>
+  <text x="545" y="132" font-family="monospace" font-size="9" fill="#6B7280">caller, resource, result,</text>
+  <text x="545" y="146" font-family="monospace" font-size="9" fill="#6B7280">reason (if denied)</text>
+</svg>

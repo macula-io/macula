@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" width="800" height="500">
+  <defs>
+    <linearGradient id="rootGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#7C3AED;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#5B21B6;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="orgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3B82F6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1D4ED8;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="leafGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#10B981;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#059669;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="500" fill="#F9FAFB"/>
+
+  <!-- Title -->
+  <text x="400" y="35" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="600" fill="#111827">DID to Namespace Ownership Hierarchy</text>
+  <text x="400" y="55" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#6B7280">Parent DIDs can access all child namespaces</text>
+
+  <!-- Root Level: io.macula (Realm) -->
+  <rect x="300" y="80" width="200" height="55" rx="8" fill="url(#rootGrad)"/>
+  <text x="400" y="103" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="white">did:macula:io.macula</text>
+  <text x="400" y="120" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#DDD6FE">owns: io.macula.*</text>
+
+  <!-- Lines to org level -->
+  <line x1="400" y1="135" x2="400" y2="155" stroke="#9CA3AF" stroke-width="2"/>
+  <line x1="400" y1="155" x2="150" y2="155" stroke="#9CA3AF" stroke-width="2"/>
+  <line x1="400" y1="155" x2="650" y2="155" stroke="#9CA3AF" stroke-width="2"/>
+  <line x1="150" y1="155" x2="150" y2="180" stroke="#9CA3AF" stroke-width="2"/>
+  <line x1="400" y1="155" x2="400" y2="180" stroke="#9CA3AF" stroke-width="2"/>
+  <line x1="650" y1="155" x2="650" y2="180" stroke="#9CA3AF" stroke-width="2"/>
+
+  <!-- Org Level: rgfaber -->
+  <rect x="50" y="180" width="200" height="55" rx="8" fill="url(#orgGrad)"/>
+  <text x="150" y="203" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="white">did:macula:io.macula.rgfaber</text>
+  <text x="150" y="220" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#BFDBFE">owns: io.macula.rgfaber.*</text>
+
+  <!-- Org Level: ibm -->
+  <rect x="300" y="180" width="200" height="55" rx="8" fill="url(#orgGrad)"/>
+  <text x="400" y="203" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="white">did:macula:io.macula.ibm</text>
+  <text x="400" y="220" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#BFDBFE">owns: io.macula.ibm.*</text>
+
+  <!-- Org Level: azure -->
+  <rect x="550" y="180" width="200" height="55" rx="8" fill="url(#orgGrad)"/>
+  <text x="650" y="203" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="white">did:macula:io.macula.azure</text>
+  <text x="650" y="220" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#BFDBFE">owns: io.macula.azure.*</text>
+
+  <!-- Lines to leaf level -->
+  <line x1="400" y1="235" x2="400" y2="260" stroke="#9CA3AF" stroke-width="2"/>
+  <line x1="400" y1="260" x2="300" y2="260" stroke="#9CA3AF" stroke-width="2"/>
+  <line x1="400" y1="260" x2="500" y2="260" stroke="#9CA3AF" stroke-width="2"/>
+  <line x1="300" y1="260" x2="300" y2="285" stroke="#9CA3AF" stroke-width="2"/>
+  <line x1="500" y1="260" x2="500" y2="285" stroke="#9CA3AF" stroke-width="2"/>
+
+  <!-- Leaf: watson -->
+  <rect x="200" y="285" width="200" height="55" rx="8" fill="url(#leafGrad)"/>
+  <text x="300" y="308" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="600" fill="white">did:macula:io.macula.ibm.watson</text>
+  <text x="300" y="324" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#D1FAE5">owns: io.macula.ibm.watson.*</text>
+
+  <!-- Leaf: db2 -->
+  <rect x="400" y="285" width="200" height="55" rx="8" fill="url(#leafGrad)"/>
+  <text x="500" y="308" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="600" fill="white">did:macula:io.macula.ibm.db2</text>
+  <text x="500" y="324" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#D1FAE5">owns: io.macula.ibm.db2.*</text>
+
+  <!-- Access Matrix -->
+  <rect x="50" y="365" width="700" height="125" rx="8" fill="white" stroke="#E5E7EB" stroke-width="1"/>
+  <text x="400" y="390" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="13" font-weight="600" fill="#111827">Access Rules</text>
+
+  <!-- Rule 1 -->
+  <circle cx="80" cy="415" r="8" fill="#10B981"/>
+  <text x="95" y="419" font-family="Inter, system-ui, sans-serif" font-size="11" fill="#374151">
+    <tspan font-weight="600">Parent → Child:</tspan>
+    <tspan fill="#6B7280"> io.macula.ibm can access io.macula.ibm.watson.* (hierarchical)</tspan>
+  </text>
+
+  <!-- Rule 2 -->
+  <circle cx="80" cy="440" r="8" fill="#EF4444"/>
+  <text x="95" y="444" font-family="Inter, system-ui, sans-serif" font-size="11" fill="#374151">
+    <tspan font-weight="600">Child → Parent:</tspan>
+    <tspan fill="#6B7280"> io.macula.ibm.watson CANNOT access io.macula.ibm.* (blocked)</tspan>
+  </text>
+
+  <!-- Rule 3 -->
+  <circle cx="80" cy="465" r="8" fill="#EF4444"/>
+  <text x="95" y="469" font-family="Inter, system-ui, sans-serif" font-size="11" fill="#374151">
+    <tspan font-weight="600">Sibling → Sibling:</tspan>
+    <tspan fill="#6B7280"> io.macula.rgfaber CANNOT access io.macula.ibm.* (isolated)</tspan>
+  </text>
+
+  <!-- Legend -->
+  <rect x="580" y="80" width="170" height="85" rx="6" fill="white" stroke="#E5E7EB" stroke-width="1"/>
+  <text x="665" y="100" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#374151">Hierarchy Levels</text>
+
+  <rect x="595" y="112" width="14" height="14" rx="3" fill="#7C3AED"/>
+  <text x="615" y="123" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">Realm Root</text>
+
+  <rect x="595" y="132" width="14" height="14" rx="3" fill="#3B82F6"/>
+  <text x="615" y="143" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">Organization</text>
+
+  <rect x="595" y="152" width="14" height="14" rx="3" fill="#10B981"/>
+  <text x="615" y="163" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">Service/App</text>
+</svg>

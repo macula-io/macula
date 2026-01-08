@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#374151"/>
+    </marker>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3B82F6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1D4ED8;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="successGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#10B981;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#059669;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="failGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#EF4444;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#DC2626;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="600" fill="#F9FAFB"/>
+
+  <!-- Title -->
+  <text x="400" y="35" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="600" fill="#111827">Macula Authorization Flow</text>
+
+  <!-- Incoming Request -->
+  <rect x="50" y="70" width="160" height="60" rx="8" fill="url(#headerGrad)"/>
+  <text x="130" y="100" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="500" fill="white">Incoming Request</text>
+  <text x="130" y="118" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#BFDBFE">RPC/Publish/Subscribe</text>
+
+  <!-- Arrow 1 -->
+  <line x1="210" y1="100" x2="270" y2="100" stroke="#374151" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Extract DID -->
+  <rect x="280" y="70" width="160" height="60" rx="8" fill="#F3F4F6" stroke="#D1D5DB" stroke-width="2"/>
+  <text x="360" y="95" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="500" fill="#374151">Extract Caller DID</text>
+  <text x="360" y="112" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">from TLS cert or message</text>
+
+  <!-- Arrow 2 -->
+  <line x1="360" y1="130" x2="360" y2="170" stroke="#374151" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Extract Namespace -->
+  <rect x="280" y="180" width="160" height="60" rx="8" fill="#F3F4F6" stroke="#D1D5DB" stroke-width="2"/>
+  <text x="360" y="205" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="500" fill="#374151">Extract Namespace</text>
+  <text x="360" y="222" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">io.macula.rgfaber.proc</text>
+  <text x="360" y="234" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">→ io.macula.rgfaber</text>
+
+  <!-- Arrow 3 -->
+  <line x1="360" y1="240" x2="360" y2="280" stroke="#374151" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Decision: Owner? -->
+  <polygon points="360,290 440,340 360,390 280,340" fill="#FEF3C7" stroke="#F59E0B" stroke-width="2"/>
+  <text x="360" y="335" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="500" fill="#92400E">Caller owns</text>
+  <text x="360" y="350" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="500" fill="#92400E">namespace?</text>
+
+  <!-- Yes branch - Owner -->
+  <line x1="440" y1="340" x2="520" y2="340" stroke="#10B981" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="480" y="330" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#10B981" font-weight="500">YES</text>
+
+  <!-- Authorized (Owner) -->
+  <rect x="530" y="310" width="120" height="60" rx="8" fill="url(#successGrad)"/>
+  <text x="590" y="340" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="white">AUTHORIZED</text>
+  <text x="590" y="356" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#D1FAE5">(Owner Access)</text>
+
+  <!-- No branch - Check Ancestor -->
+  <line x1="360" y1="390" x2="360" y2="420" stroke="#374151" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="375" y="410" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">NO</text>
+
+  <!-- Decision: Ancestor? -->
+  <polygon points="360,430 430,470 360,510 290,470" fill="#FEF3C7" stroke="#F59E0B" stroke-width="2"/>
+  <text x="360" y="465" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="500" fill="#92400E">Parent DID?</text>
+  <text x="360" y="480" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="500" fill="#92400E">(Ancestor)</text>
+
+  <!-- Yes branch - Ancestor -->
+  <line x1="430" y1="470" x2="530" y2="400" stroke="#10B981" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="480" y="428" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#10B981" font-weight="500">YES</text>
+
+  <!-- No branch - Check UCAN -->
+  <line x1="290" y1="470" x2="200" y2="470" stroke="#374151" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="245" y="460" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">NO</text>
+
+  <!-- Check UCAN Token -->
+  <rect x="50" y="440" width="140" height="60" rx="8" fill="#F3F4F6" stroke="#D1D5DB" stroke-width="2"/>
+  <text x="120" y="465" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="500" fill="#374151">Validate UCAN</text>
+  <text x="120" y="482" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#6B7280">Token provided?</text>
+
+  <!-- Arrow to UCAN Decision -->
+  <line x1="120" y1="500" x2="120" y2="530" stroke="#374151" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Decision: Valid UCAN? -->
+  <polygon points="120,540 180,570 120,600 60,570" fill="#FEF3C7" stroke="#F59E0B" stroke-width="2"/>
+  <text x="120" y="568" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="500" fill="#92400E">Valid?</text>
+
+  <!-- UCAN Valid - Authorized -->
+  <line x1="180" y1="570" x2="280" y2="570" stroke="#10B981" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="230" y="560" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#10B981" font-weight="500">YES</text>
+
+  <rect x="290" y="540" width="120" height="50" rx="8" fill="url(#successGrad)"/>
+  <text x="350" y="565" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="white">AUTHORIZED</text>
+  <text x="350" y="578" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#D1FAE5">(UCAN Grant)</text>
+
+  <!-- UCAN Invalid - Denied -->
+  <line x1="60" y1="570" x2="20" y2="570" stroke="#EF4444" stroke-width="2"/>
+  <line x1="20" y1="570" x2="20" y2="520" stroke="#EF4444" stroke-width="2"/>
+  <line x1="20" y1="520" x2="700" y2="520" stroke="#EF4444" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="35" y="545" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#EF4444" font-weight="500">NO</text>
+
+  <rect x="660" y="490" width="120" height="50" rx="8" fill="url(#failGrad)"/>
+  <text x="720" y="515" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="white">DENIED</text>
+  <text x="720" y="528" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#FECACA">(Unauthorized)</text>
+
+  <!-- Legend -->
+  <rect x="530" y="180" width="250" height="110" rx="6" fill="white" stroke="#E5E7EB" stroke-width="1"/>
+  <text x="545" y="200" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#374151">Authorization Checks</text>
+
+  <circle cx="555" cy="220" r="6" fill="#3B82F6"/>
+  <text x="570" y="224" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">1. Namespace ownership</text>
+
+  <circle cx="555" cy="240" r="6" fill="#F59E0B"/>
+  <text x="570" y="244" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">2. Ancestor (parent) access</text>
+
+  <circle cx="555" cy="260" r="6" fill="#8B5CF6"/>
+  <text x="570" y="264" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">3. UCAN capability grant</text>
+
+  <circle cx="555" cy="280" r="6" fill="#10B981"/>
+  <text x="570" y="284" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6B7280">4. Public topic (.public.)</text>
+</svg>

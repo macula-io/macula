@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 550" width="800" height="550">
+  <defs>
+    <linearGradient id="headerGradBlue" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3B82F6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1D4ED8;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="payloadGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#8B5CF6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#6D28D9;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="sigGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#10B981;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#059669;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="550" fill="#F9FAFB"/>
+
+  <!-- Title -->
+  <text x="400" y="35" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="600" fill="#111827">UCAN Token Structure</text>
+  <text x="400" y="55" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#6B7280">User Controlled Authorization Networks - JWT-based capability tokens</text>
+
+  <!-- JWT Structure Overview -->
+  <rect x="50" y="80" width="700" height="50" rx="8" fill="#F3F4F6" stroke="#D1D5DB" stroke-width="1"/>
+
+  <!-- Header part -->
+  <rect x="55" y="85" width="140" height="40" rx="6" fill="url(#headerGradBlue)"/>
+  <text x="125" y="108" text-anchor="middle" font-family="monospace" font-size="11" font-weight="600" fill="white">HEADER</text>
+
+  <!-- Dot 1 -->
+  <text x="200" y="112" font-family="monospace" font-size="20" font-weight="bold" fill="#374151">.</text>
+
+  <!-- Payload part -->
+  <rect x="215" y="85" width="340" height="40" rx="6" fill="url(#payloadGrad)"/>
+  <text x="385" y="108" text-anchor="middle" font-family="monospace" font-size="11" font-weight="600" fill="white">PAYLOAD (Claims)</text>
+
+  <!-- Dot 2 -->
+  <text x="560" y="112" font-family="monospace" font-size="20" font-weight="bold" fill="#374151">.</text>
+
+  <!-- Signature part -->
+  <rect x="575" y="85" width="170" height="40" rx="6" fill="url(#sigGrad)"/>
+  <text x="660" y="108" text-anchor="middle" font-family="monospace" font-size="11" font-weight="600" fill="white">SIGNATURE</text>
+
+  <!-- Header Details -->
+  <rect x="50" y="150" width="220" height="120" rx="8" fill="white" stroke="#3B82F6" stroke-width="2"/>
+  <rect x="50" y="150" width="220" height="30" rx="8" fill="#3B82F6"/>
+  <text x="160" y="170" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="white">Header</text>
+
+  <text x="65" y="200" font-family="monospace" font-size="10" fill="#374151">{</text>
+  <text x="75" y="218" font-family="monospace" font-size="10" fill="#374151">"alg": "EdDSA",</text>
+  <text x="75" y="236" font-family="monospace" font-size="10" fill="#374151">"typ": "JWT",</text>
+  <text x="75" y="254" font-family="monospace" font-size="10" fill="#374151">"ucv": "0.10.0"</text>
+  <text x="65" y="268" font-family="monospace" font-size="10" fill="#374151">}</text>
+
+  <!-- Payload Details -->
+  <rect x="290" y="150" width="270" height="230" rx="8" fill="white" stroke="#8B5CF6" stroke-width="2"/>
+  <rect x="290" y="150" width="270" height="30" rx="8" fill="#8B5CF6"/>
+  <text x="425" y="170" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="white">Payload (Claims)</text>
+
+  <text x="305" y="200" font-family="monospace" font-size="10" fill="#374151">{</text>
+  <text x="315" y="218" font-family="monospace" font-size="10" fill="#3B82F6">"iss"</text>
+  <text x="345" y="218" font-family="monospace" font-size="10" fill="#374151">: "did:macula:io.macula.rgfaber",</text>
+  <text x="315" y="236" font-family="monospace" font-size="10" fill="#3B82F6">"aud"</text>
+  <text x="345" y="236" font-family="monospace" font-size="10" fill="#374151">: "did:macula:io.macula.doctor",</text>
+  <text x="315" y="254" font-family="monospace" font-size="10" fill="#3B82F6">"exp"</text>
+  <text x="345" y="254" font-family="monospace" font-size="10" fill="#374151">: 1738368000,</text>
+  <text x="315" y="272" font-family="monospace" font-size="10" fill="#3B82F6">"nbf"</text>
+  <text x="345" y="272" font-family="monospace" font-size="10" fill="#374151">: 1735776000,</text>
+  <text x="315" y="295" font-family="monospace" font-size="10" fill="#8B5CF6">"cap"</text>
+  <text x="345" y="295" font-family="monospace" font-size="10" fill="#374151">: [</text>
+  <text x="325" y="313" font-family="monospace" font-size="10" fill="#374151">{</text>
+  <text x="335" y="328" font-family="monospace" font-size="10" fill="#10B981">"with"</text>
+  <text x="375" y="328" font-family="monospace" font-size="10" fill="#374151">: "io.macula.rgfaber.*",</text>
+  <text x="335" y="343" font-family="monospace" font-size="10" fill="#10B981">"can"</text>
+  <text x="370" y="343" font-family="monospace" font-size="10" fill="#374151">: "mesh:call"</text>
+  <text x="325" y="358" font-family="monospace" font-size="10" fill="#374151">}</text>
+  <text x="315" y="373" font-family="monospace" font-size="10" fill="#374151">]</text>
+  <text x="305" y="388" font-family="monospace" font-size="10" fill="#374151">}</text>
+
+  <!-- Signature Details -->
+  <rect x="580" y="150" width="170" height="120" rx="8" fill="white" stroke="#10B981" stroke-width="2"/>
+  <rect x="580" y="150" width="170" height="30" rx="8" fill="#10B981"/>
+  <text x="665" y="170" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="white">Signature</text>
+
+  <text x="595" y="200" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151" font-weight="500">Ed25519 over:</text>
+  <text x="595" y="218" font-family="monospace" font-size="9" fill="#6B7280">base64url(header) + "."</text>
+  <text x="595" y="233" font-family="monospace" font-size="9" fill="#6B7280">+ base64url(payload)</text>
+  <text x="595" y="255" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151" font-weight="500">64 bytes</text>
+
+  <!-- Field Explanations -->
+  <rect x="50" y="400" width="700" height="140" rx="8" fill="white" stroke="#E5E7EB" stroke-width="1"/>
+  <text x="400" y="425" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="13" font-weight="600" fill="#111827">UCAN Claim Fields</text>
+
+  <!-- iss -->
+  <rect x="70" y="440" width="50" height="22" rx="4" fill="#DBEAFE"/>
+  <text x="95" y="455" text-anchor="middle" font-family="monospace" font-size="10" font-weight="600" fill="#1D4ED8">iss</text>
+  <text x="130" y="455" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Issuer DID - who created and signed this token</text>
+
+  <!-- aud -->
+  <rect x="70" y="468" width="50" height="22" rx="4" fill="#DBEAFE"/>
+  <text x="95" y="483" text-anchor="middle" font-family="monospace" font-size="10" font-weight="600" fill="#1D4ED8">aud</text>
+  <text x="130" y="483" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Audience DID - who this token is granted to</text>
+
+  <!-- exp -->
+  <rect x="70" y="496" width="50" height="22" rx="4" fill="#DBEAFE"/>
+  <text x="95" y="511" text-anchor="middle" font-family="monospace" font-size="10" font-weight="600" fill="#1D4ED8">exp</text>
+  <text x="130" y="511" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Expiration time (Unix timestamp) - when the token expires</text>
+
+  <!-- cap -->
+  <rect x="400" y="440" width="50" height="22" rx="4" fill="#F3E8FF"/>
+  <text x="425" y="455" text-anchor="middle" font-family="monospace" font-size="10" font-weight="600" fill="#7C3AED">cap</text>
+  <text x="460" y="455" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Capabilities - array of {with, can} permission grants</text>
+
+  <!-- with -->
+  <rect x="400" y="468" width="50" height="22" rx="4" fill="#D1FAE5"/>
+  <text x="425" y="483" text-anchor="middle" font-family="monospace" font-size="10" font-weight="600" fill="#059669">with</text>
+  <text x="460" y="483" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Resource pattern - what can be accessed (supports *)</text>
+
+  <!-- can -->
+  <rect x="400" y="496" width="50" height="22" rx="4" fill="#D1FAE5"/>
+  <text x="425" y="511" text-anchor="middle" font-family="monospace" font-size="10" font-weight="600" fill="#059669">can</text>
+  <text x="460" y="511" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#374151">Operation - mesh:call, mesh:publish, mesh:subscribe, mesh:*</text>
+</svg>

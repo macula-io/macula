@@ -7,6 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.17.0] - 2026-01-08
+
+### ✨ New Feature - Mesh Authorization (UCAN/DID)
+
+This release introduces **decentralized authorization** for the Macula mesh using industry-standard cryptographic primitives. Unlike traditional client-server authorization, Macula's authorization is fully decentralized and offline-capable.
+
+### Added
+
+**Core Authorization Module (`macula_authorization.erl` - ~600 LOC)**
+- `check_rpc_call/4` - Authorize RPC procedure invocations
+- `check_publish/4` - Authorize topic publishing
+- `check_subscribe/3,4` - Authorize topic subscriptions
+- `check_announce/3` - Authorize service announcements
+- Namespace extraction from topics/procedures
+- Hierarchical namespace ownership checks (owner, ancestor, not_owner)
+- Public topic detection (`.public.` segment)
+- UCAN capability matching with wildcards
+
+**DID Cache (`macula_did_cache.erl` - ~177 LOC)**
+- High-performance DID parsing using `persistent_term`
+- O(1) lookups with zero GC impact
+- `get_or_parse/1`, `invalidate/1`, `clear/0`, `cache_size/0`
+
+**UCAN Revocation (`macula_ucan_revocation.erl` - ~509 LOC)**
+- gen_server with ETS-based revocation cache
+- `revoke/3,4` - Revoke UCAN by issuer DID + token
+- `is_revoked/2,3` - O(1) cache lookup
+- Rate limiting: 10 revocations per issuer per minute
+- Ed25519 signature validation (64-byte format)
+- Auto-expiry with periodic cleanup every 60 seconds
+- CID computation: SHA-256 → base64url
+
+**Authorization Audit (`macula_authorization_audit.erl` - ~575 LOC)**
+- gen_server with ETS-based storage
+- Telemetry events: `[macula, authorization, allowed/denied/error]`
+- Query API: `get_recent/1`, `get_by_caller/2`, `get_by_resource/2`
+- Configurable retention (TTL) and max entries (LRU eviction)
+- Enable/disable toggle for ETS storage
+- Statistics: `allowed_count`, `denied_count`, `error_count`
+
+**Protocol Extensions**
+- `connect_msg` - Added `default_ucan` for session-wide grants
+- `call_msg`, `cast_msg` - Added `caller_did`, `ucan_token`
+- `publish_msg` - Added `publisher_did`, `ucan_token`
+- `subscribe_msg` - Added `subscriber_did`, `ucan_token`
+
+**Hook Integration**
+- `macula_rpc_handler:do_call` - Check auth before service discovery
+- `macula_gateway_rpc_router:handle_routed_call` - Check auth for routed calls
+- `macula_pubsub_handler:do_async_publish` - Check auth before publish
+- `macula_gateway_pubsub_router:route_to_subscriber_impl` - Check auth before delivery
+
+**Comprehensive Documentation**
+- `docs/guides/AUTHORIZATION_GUIDE.md` - Educational guide with academic references
+- 6 professional SVG diagrams in `assets/`:
+  - `authorization_flow.svg` - Complete authorization decision flow
+  - `namespace_hierarchy.svg` - DID to namespace mapping
+  - `ucan_token_structure.svg` - JWT structure with claims
+  - `did_structure.svg` - DID format breakdown
+  - `revocation_flow.svg` - UCAN revocation process
+  - `lru_eviction.svg` - LRU cache eviction algorithm
+- References to W3C DID Core, UCAN spec, RFC 7519, RFC 8032
+
+### Tests
+
+- `macula_authorization_tests.erl` - 47 unit tests
+- `macula_did_cache_tests.erl` - 12 unit tests
+- `macula_ucan_revocation_tests.erl` - 15 unit tests
+- `macula_authorization_audit_tests.erl` - 16 unit tests
+
+**Total new tests:** 90
+
+### Technical Notes
+
+- **Pure Erlang implementation** - No external NIF dependencies for hex.pm compatibility
+- DID parsing via `binary:split/3`
+- UCAN decoding via `base64url` + OTP 27 `json` module
+- Designed for offline-first operation (all validation happens locally)
+- Backward compatible protocol extensions (MessagePack handles optional fields)
+
+### References
+
+- [W3C DID Core 1.0](https://www.w3.org/TR/did-core/)
+- [UCAN Specification](https://ucan.xyz/)
+- [RFC 7519 - JWT](https://www.rfc-editor.org/rfc/rfc7519)
+- [RFC 8032 - Ed25519](https://www.rfc-editor.org/rfc/rfc8032)
+
+---
+
 ## [0.16.6] - 2026-01-05
 
 ### 🐛 Bug Fix - Complete Environment Variable Naming Consistency
