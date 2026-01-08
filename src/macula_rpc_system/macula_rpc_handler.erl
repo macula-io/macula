@@ -454,11 +454,21 @@ do_call({ok, Handler}, _BinaryProcedure, Args, _Opts, From, State) ->
         end
     end),
     {noreply, State};
-%% @private No local handler - try service discovery via DHT
+%% @private No local handler - check authorization then try service discovery via DHT
 do_call(not_found, BinaryProcedure, Args, Opts, From, State) ->
-    Registry = State#state.service_registry,
-    DiscoveryResult = macula_service_registry:discover_service(Registry, BinaryProcedure),
-    do_call_discovery(DiscoveryResult, BinaryProcedure, Args, Opts, From, State).
+    %% Authorization check (v0.17.0+)
+    CallerDID = get_caller_did(State, Opts),
+    UcanToken = maps:get(ucan_token, Opts, undefined),
+    case macula_authorization:check_rpc_call(CallerDID, BinaryProcedure, UcanToken, Opts) of
+        {ok, authorized} ->
+            Registry = State#state.service_registry,
+            DiscoveryResult = macula_service_registry:discover_service(Registry, BinaryProcedure),
+            do_call_discovery(DiscoveryResult, BinaryProcedure, Args, Opts, From, State);
+        {error, Reason} ->
+            ?LOG_WARNING("[~s] RPC call to ~s denied: ~p (caller: ~s)",
+                        [State#state.node_id, BinaryProcedure, Reason, CallerDID]),
+            {reply, {error, {unauthorized, Reason}}, State}
+    end.
 
 %% @private Cache hit with providers - make remote call
 do_call_discovery({ok, Providers, Registry2}, BinaryProcedure, Args, Opts, From, State)
@@ -1494,3 +1504,21 @@ binary_to_atom_key(<<"endpoint">>) -> endpoint;
 binary_to_atom_key(<<"metadata">>) -> metadata;
 binary_to_atom_key(<<"ttl">>) -> ttl;
 binary_to_atom_key(K) when is_binary(K) -> binary_to_atom(K, utf8).
+
+%%%===================================================================
+%%% Internal functions - Authorization (v0.17.0+)
+%%%===================================================================
+
+%% @doc Get caller DID from options or derive from local identity.
+%% The caller_did can be provided explicitly in Opts (from TLS cert extraction),
+%% or we fall back to the local node's realm identity.
+-spec get_caller_did(#state{}, map()) -> binary().
+get_caller_did(State, Opts) ->
+    case maps:get(caller_did, Opts, undefined) of
+        undefined ->
+            %% Fallback: derive DID from realm (e.g., "did:macula:io.macula.default")
+            Realm = State#state.realm,
+            <<"did:macula:", Realm/binary>>;
+        CallerDID when is_binary(CallerDID) ->
+            CallerDID
+    end.

@@ -223,6 +223,22 @@ route_to_subscriber_impl(DestNodeId, _Subscriber, _EndpointKey, _Topic, _PubMsg,
     %% SKIP: This is our own node_id - already delivered locally
     ok;
 route_to_subscriber_impl(DestNodeId, Subscriber, EndpointKey, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
+    %% Authorization check (v0.17.0+) - verify subscriber can receive on this topic
+    SubscriberDID = get_subscriber_did(DestNodeId, Subscriber),
+    UcanToken = maps:get(<<"ucan_token">>, Subscriber, undefined),
+    case macula_authorization:check_subscribe(SubscriberDID, Topic, UcanToken, #{}) of
+        {ok, authorized} ->
+            do_route_to_subscriber(DestNodeId, Subscriber, EndpointKey, Topic, PubMsg, LocalNodeId, Mesh, Clients);
+        {error, Reason} ->
+            ?LOG_WARNING("[PubSubRouter] Delivery to ~s denied for topic ~s: ~p",
+                        [binary:encode_hex(DestNodeId), Topic, Reason]),
+            ok
+    end.
+
+%% @private
+%% @doc Actually route message to subscriber after authorization.
+-spec do_route_to_subscriber(binary(), map(), atom() | binary(), binary(), map(), binary(), pid(), pid()) -> ok.
+do_route_to_subscriber(DestNodeId, Subscriber, EndpointKey, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     Payload = maps:get(<<"payload">>, PubMsg),
     Qos = maps:get(<<"qos">>, PubMsg, 0),
 
@@ -366,3 +382,26 @@ parse_endpoint_host(Host, Port) when is_list(Host) ->
     end;
 parse_endpoint_host(Host, Port) when is_binary(Host) ->
     parse_endpoint_host(binary_to_list(Host), Port).
+
+%%%===================================================================
+%%% Authorization Helpers (v0.17.0+)
+%%%===================================================================
+
+%% @private
+%% @doc Get subscriber DID from node ID or subscriber info.
+%% Priority: subscriber_did from Subscriber > derive from DestNodeId
+-spec get_subscriber_did(binary(), map()) -> binary().
+get_subscriber_did(DestNodeId, Subscriber) ->
+    case maps:get(<<"subscriber_did">>, Subscriber, undefined) of
+        undefined ->
+            case maps:get(subscriber_did, Subscriber, undefined) of
+                undefined ->
+                    %% Derive from node ID
+                    <<NodeIdHex:64/binary, _/binary>> = binary:encode_hex(DestNodeId),
+                    <<"did:macula:", NodeIdHex/binary>>;
+                DID ->
+                    DID
+            end;
+        DID ->
+            DID
+    end.

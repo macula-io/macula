@@ -67,10 +67,12 @@ handle_routed_call_with_handler_found_test_() ->
         NodeId = crypto:strong_rand_bytes(32),
 
         %% Create routed CALL message
+        %% Include caller_did that owns the "test" namespace for authorization (v0.17.0+)
         CallMsg = #{
             <<"procedure">> => <<"test.echo">>,
             <<"args">> => <<"[{\"message\":\"hello\"}]">>,
-            <<"call_id">> => <<"call_123">>
+            <<"call_id">> => <<"call_123">>,
+            <<"caller_did">> => <<"did:macula:test">>
         },
 
         %% Create rpc_route envelope
@@ -114,10 +116,12 @@ handle_routed_call_with_handler_not_found_test_() ->
         NodeId = crypto:strong_rand_bytes(32),
 
         %% Create routed CALL message
+        %% Include caller_did that owns the "test" namespace for authorization (v0.17.0+)
         CallMsg = #{
             <<"procedure">> => <<"test.unknown">>,
             <<"args">> => <<"[]">>,
-            <<"call_id">> => <<"call_456">>
+            <<"call_id">> => <<"call_456">>,
+            <<"caller_did">> => <<"did:macula:test">>
         },
 
         %% Create rpc_route envelope
@@ -161,10 +165,12 @@ handle_routed_call_with_handler_error_test_() ->
         NodeId = crypto:strong_rand_bytes(32),
 
         %% Create routed CALL message
+        %% Include caller_did that owns the "test" namespace for authorization (v0.17.0+)
         CallMsg = #{
             <<"procedure">> => <<"test.crash">>,
             <<"args">> => <<"[]">>,
-            <<"call_id">> => <<"call_789">>
+            <<"call_id">> => <<"call_789">>,
+            <<"caller_did">> => <<"did:macula:test">>
         },
 
         %% Create rpc_route envelope
@@ -208,10 +214,12 @@ handle_routed_call_with_invalid_args_test_() ->
         NodeId = crypto:strong_rand_bytes(32),
 
         %% Create routed CALL with invalid JSON args
+        %% Include caller_did that owns the "test" namespace for authorization (v0.17.0+)
         CallMsg = #{
             <<"procedure">> => <<"test.echo">>,
             <<"args">> => <<"invalid json">>,
-            <<"call_id">> => <<"call_999">>
+            <<"call_id">> => <<"call_999">>,
+            <<"caller_did">> => <<"did:macula:test">>
         },
 
         %% Create rpc_route envelope

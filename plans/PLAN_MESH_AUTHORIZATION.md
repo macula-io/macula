@@ -1,6 +1,6 @@
 # Plan: Mesh Topic Authorization with UCAN/DID
 
-**Status:** Phase 1 Complete - Core Authorization Module
+**Status:** Phase 2 Complete - Hook Integration
 **Created:** 2026-01-07
 **Updated:** 2026-01-08
 
@@ -305,7 +305,7 @@ The module uses **inline Erlang implementations** for DID/UCAN parsing to avoid 
 
 ---
 
-### Phase 2: Hook Integration
+### Phase 2: Hook Integration ✅ COMPLETE
 
 **Modify existing handlers to call authorization:**
 
@@ -384,11 +384,14 @@ route_to_single_subscriber(Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients
     end.
 ```
 
-**Files to modify:**
-- [ ] `src/macula_rpc_system/macula_rpc_handler.erl` - Add Hook 1
-- [ ] `src/macula_gateway_system/macula_gateway_rpc_router.erl` - Add Hook 2
-- [ ] `src/macula_pubsub_system/macula_pubsub_handler.erl` - Add Hook 3
-- [ ] `src/macula_gateway_system/macula_gateway_pubsub_router.erl` - Add Hook 4
+**Files modified:**
+- [x] `src/macula_rpc_system/macula_rpc_handler.erl` - Add Hook 1 ✅
+- [x] `src/macula_gateway_system/macula_gateway_rpc_router.erl` - Add Hook 2 ✅
+- [x] `src/macula_pubsub_system/macula_pubsub_handler.erl` - Add Hook 3 ✅
+- [x] `src/macula_gateway_system/macula_gateway_pubsub_router.erl` - Add Hook 4 ✅
+
+**Tests updated:**
+- [x] `test/macula_gateway_system/macula_gateway_rpc_router_tests.erl` - Added `caller_did` for authorization
 
 ---
 
@@ -554,13 +557,13 @@ log_denied(Operation, CallerDID, Resource, Reason) ->
 - [x] Public topic detection works
 - [x] 47 unit tests passing (exceeded 20+ goal)
 
-### Phase 2 (Hook Integration)
-- [ ] RPC calls to own namespace succeed without UCAN
-- [ ] RPC calls to others' namespace fail without UCAN
-- [ ] RPC calls to others' namespace succeed with valid UCAN
-- [ ] Publish to own namespace succeeds
-- [ ] Publish to others' namespace requires UCAN
-- [ ] Subscribe delivery respects authorization
+### Phase 2 (Hook Integration) ✅ COMPLETE
+- [x] RPC calls to own namespace succeed without UCAN
+- [x] RPC calls to others' namespace fail without UCAN
+- [x] RPC calls to others' namespace succeed with valid UCAN
+- [x] Publish to own namespace succeeds
+- [x] Publish to others' namespace requires UCAN
+- [x] Subscribe delivery respects authorization
 
 ### Phase 3 (Protocol Extension)
 - [ ] Messages carry caller_did field

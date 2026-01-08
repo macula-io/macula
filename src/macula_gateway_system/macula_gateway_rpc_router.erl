@@ -35,6 +35,7 @@
 
 %% @doc Handle routed CALL message delivered locally.
 %% Looks up RPC handler, invokes it, sends reply via routing path.
+%% Authorization check added in v0.17.0.
 -spec handle_routed_call(map(), map(), binary(), pid(), pid()) ->
     ok | {error, term()}.
 handle_routed_call(CallMsg, RpcRouteMsg, NodeId, RpcPid, MeshPid) ->
@@ -48,21 +49,37 @@ handle_routed_call(CallMsg, RpcRouteMsg, NodeId, RpcPid, MeshPid) ->
       <<"args">> := ArgsJson,
       <<"call_id">> := CallId} = CallMsg,
 
-    %% Look up handler via macula_gateway_rpc
-    case macula_gateway_rpc:get_handler(RpcPid, Procedure) of
-        not_found ->
-            ?LOG_WARNING("No handler for procedure: ~p", [Procedure]),
+    %% Authorization check (v0.17.0+)
+    CallerDID = extract_caller_did(RpcRouteMsg, CallMsg),
+    UcanToken = maps:get(<<"ucan_token">>, CallMsg, undefined),
+    case macula_authorization:check_rpc_call(CallerDID, Procedure, UcanToken, #{}) of
+        {ok, authorized} ->
+            %% Authorized - look up handler
+            case macula_gateway_rpc:get_handler(RpcPid, Procedure) of
+                not_found ->
+                    ?LOG_WARNING("No handler for procedure: ~p", [Procedure]),
+                    ErrorReply = #{
+                        call_id => CallId,
+                        error => #{
+                            code => <<"no_handler">>,
+                            message => <<"No handler registered for ", Procedure/binary>>
+                        }
+                    },
+                    send_reply_via_routing(ErrorReply, SourceNodeId, NodeId, MeshPid);
+
+                {ok, Handler} ->
+                    invoke_handler_and_reply(Handler, ArgsJson, CallId, SourceNodeId, NodeId, MeshPid)
+            end;
+        {error, Reason} ->
+            ?LOG_WARNING("RPC call to ~s denied: ~p (caller: ~s)", [Procedure, Reason, CallerDID]),
             ErrorReply = #{
                 call_id => CallId,
                 error => #{
-                    code => <<"no_handler">>,
-                    message => <<"No handler registered for ", Procedure/binary>>
+                    code => <<"unauthorized">>,
+                    message => iolist_to_binary(io_lib:format("~p", [Reason]))
                 }
             },
-            send_reply_via_routing(ErrorReply, SourceNodeId, NodeId, MeshPid);
-
-        {ok, Handler} ->
-            invoke_handler_and_reply(Handler, ArgsJson, CallId, SourceNodeId, NodeId, MeshPid)
+            send_reply_via_routing(ErrorReply, SourceNodeId, NodeId, MeshPid)
     end.
 
 %% @doc Handle routed REPLY message delivered locally.
@@ -236,3 +253,26 @@ send_to_client_stream(StreamPid, RpcRouteMsg, _ConnectionId) ->
     macula_quic:send(StreamPid, RpcRouteBinary),
     ?LOG_DEBUG("Delivered reply to remote client"),
     ok.
+
+%%%===================================================================
+%%% Authorization Helpers (v0.17.0+)
+%%%===================================================================
+
+%% @private
+%% @doc Extract caller DID from rpc_route envelope or call message.
+%% Priority: caller_did from CallMsg > from RpcRouteMsg > derive from source_node
+-spec extract_caller_did(map(), map()) -> binary().
+extract_caller_did(RpcRouteMsg, CallMsg) ->
+    case maps:get(<<"caller_did">>, CallMsg, undefined) of
+        undefined ->
+            case maps:get(<<"caller_did">>, RpcRouteMsg, undefined) of
+                undefined ->
+                    %% Fallback: derive from source node ID (temporary until TLS cert extraction)
+                    SourceNodeId = maps:get(<<"source_node_id">>, RpcRouteMsg, <<"unknown">>),
+                    <<"did:macula:", SourceNodeId/binary>>;
+                CallerDID ->
+                    CallerDID
+            end;
+        CallerDID ->
+            CallerDID
+    end.

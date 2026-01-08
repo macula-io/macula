@@ -417,27 +417,38 @@ do_sync_publish_with_status(connected, Topic, Data, Opts, State) ->
 do_async_publish(undefined, _Topic, _Data, _Opts, State) ->
     ?LOG_WARNING("[PubSubHandler] Publish dropped - no connection manager"),
     {noreply, State};
-%% @private Connection manager available - send async
+%% @private Connection manager available - check authorization then send async
 do_async_publish(_ConnMgrPid, Topic, Data, Opts, State) ->
-    Qos = maps:get(qos, Opts, 0),
-    Retain = maps:get(retain, Opts, false),
-
-    {MsgId, State2} = next_message_id(State),
     BinaryTopic = ensure_binary(Topic),
-    Payload = encode_payload(Data),
 
-    PublishMsg = #{
-        topic => BinaryTopic,
-        payload => Payload,
-        qos => Qos,
-        retain => Retain,
-        message_id => MsgId
-    },
+    %% Authorization check (v0.17.0+)
+    CallerDID = get_caller_did(State, Opts),
+    UcanToken = maps:get(ucan_token, Opts, undefined),
+    case macula_authorization:check_publish(CallerDID, BinaryTopic, UcanToken, Opts) of
+        {ok, authorized} ->
+            Qos = maps:get(qos, Opts, 0),
+            Retain = maps:get(retain, Opts, false),
 
-    ?LOG_INFO("[PubSubHandler] Sending to do_publish: topic=~s", [BinaryTopic]),
-    gen_server:cast(self(), {do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}),
+            {MsgId, State2} = next_message_id(State),
+            Payload = encode_payload(Data),
 
-    {noreply, State2}.
+            PublishMsg = #{
+                topic => BinaryTopic,
+                payload => Payload,
+                qos => Qos,
+                retain => Retain,
+                message_id => MsgId
+            },
+
+            ?LOG_INFO("[PubSubHandler] Sending to do_publish: topic=~s", [BinaryTopic]),
+            gen_server:cast(self(), {do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}),
+
+            {noreply, State2};
+        {error, Reason} ->
+            ?LOG_WARNING("[~s] Publish to ~s denied: ~p (caller: ~s)",
+                        [State#state.node_id, BinaryTopic, Reason, CallerDID]),
+            {noreply, State}
+    end.
 
 %% @private No connection manager - log error
 send_publish_to_gateway(undefined, _PublishMsg, _BinaryTopic) ->
@@ -493,4 +504,22 @@ handle_puback_timeout_result({give_up, UpdatedPending}, State) ->
 %% @private Handle not found case
 handle_puback_timeout_result({not_found, UpdatedPending}, State) ->
     {noreply, State#state{pending_pubacks = UpdatedPending}}.
+
+%%%===================================================================
+%%% Authorization Helpers (v0.17.0+)
+%%%===================================================================
+
+%% @doc Get caller DID from options or derive from local identity.
+%% The caller_did can be provided explicitly in Opts (from TLS cert extraction),
+%% or we fall back to the local node's realm identity.
+-spec get_caller_did(#state{}, map()) -> binary().
+get_caller_did(State, Opts) ->
+    case maps:get(caller_did, Opts, undefined) of
+        undefined ->
+            %% Fallback: derive DID from realm (e.g., "did:macula:io.macula.default")
+            Realm = State#state.realm,
+            <<"did:macula:", Realm/binary>>;
+        CallerDID when is_binary(CallerDID) ->
+            CallerDID
+    end.
 
