@@ -95,8 +95,10 @@
     auth_result().
 check_rpc_call(CallerDID, Procedure, UcanToken, _Opts) ->
     Namespace = extract_namespace(Procedure),
-    check_with_ucan_fallback(CallerDID, Namespace, Procedure,
-                             UcanToken, <<"mesh:call">>).
+    Result = check_with_ucan_fallback(CallerDID, Namespace, Procedure,
+                                       UcanToken, <<"mesh:call">>),
+    audit_result(call, CallerDID, Procedure, Result),
+    Result.
 
 %% @doc Check if caller is authorized to publish to a topic.
 %%
@@ -107,8 +109,10 @@ check_rpc_call(CallerDID, Procedure, UcanToken, _Opts) ->
     auth_result().
 check_publish(CallerDID, Topic, UcanToken, _Opts) ->
     Namespace = extract_namespace(Topic),
-    check_with_ucan_fallback(CallerDID, Namespace, Topic,
-                             UcanToken, <<"mesh:publish">>).
+    Result = check_with_ucan_fallback(CallerDID, Namespace, Topic,
+                                       UcanToken, <<"mesh:publish">>),
+    audit_result(publish, CallerDID, Topic, Result),
+    Result.
 
 %% @doc Check if caller is authorized to subscribe to a topic.
 %%
@@ -120,8 +124,8 @@ check_publish(CallerDID, Topic, UcanToken, _Opts) ->
 -spec check_subscribe(CallerDID :: did(), Topic :: topic(),
                       Opts :: auth_opts()) ->
     auth_result().
-check_subscribe(_CallerDID, Topic, _Opts) when is_binary(Topic) ->
-    case is_public_topic(Topic) of
+check_subscribe(CallerDID, Topic, _Opts) when is_binary(Topic) ->
+    Result = case is_public_topic(Topic) of
         true ->
             {ok, authorized};
         false ->
@@ -129,7 +133,9 @@ check_subscribe(_CallerDID, Topic, _Opts) when is_binary(Topic) ->
             %% Note: UCAN check requires token which isn't in this signature
             %% Subscriptions to non-public topics require ownership
             {error, unauthorized}
-    end.
+    end,
+    audit_result(subscribe, CallerDID, Topic, Result),
+    Result.
 
 %% @doc Check if caller is authorized to subscribe with UCAN support.
 %% Full version with UCAN token parameter.
@@ -137,14 +143,16 @@ check_subscribe(_CallerDID, Topic, _Opts) when is_binary(Topic) ->
                       UcanToken :: ucan_token(), Opts :: auth_opts()) ->
     auth_result().
 check_subscribe(CallerDID, Topic, UcanToken, _Opts) ->
-    case is_public_topic(Topic) of
+    Result = case is_public_topic(Topic) of
         true ->
             {ok, authorized};
         false ->
             Namespace = extract_namespace(Topic),
             check_with_ucan_fallback(CallerDID, Namespace, Topic,
                                      UcanToken, <<"mesh:subscribe">>)
-    end.
+    end,
+    audit_result(subscribe, CallerDID, Topic, Result),
+    Result.
 
 %% @doc Check if caller is authorized to announce/declare a procedure.
 %%
@@ -155,11 +163,13 @@ check_subscribe(CallerDID, Topic, UcanToken, _Opts) ->
     auth_result().
 check_announce(CallerDID, Procedure, _Opts) ->
     Namespace = extract_namespace(Procedure),
-    case check_namespace_ownership(CallerDID, Namespace) of
+    Result = case check_namespace_ownership(CallerDID, Namespace) of
         {ok, owner} -> {ok, authorized};
         {ok, ancestor} -> {ok, authorized};
         {error, not_owner} -> {error, unauthorized}
-    end.
+    end,
+    audit_result(announce, CallerDID, Procedure, Result),
+    Result.
 
 %%====================================================================
 %% Namespace Operations
@@ -421,6 +431,27 @@ check_with_ucan_fallback(CallerDID, Namespace, Resource, UcanToken, Operation) -
         {error, not_owner} ->
             %% Try UCAN validation
             validate_ucan_for_operation(UcanToken, CallerDID, Resource, Operation)
+    end.
+
+%% @private Log authorization result to audit system.
+%% This is a fire-and-forget operation that should not affect authorization.
+-spec audit_result(Operation :: atom(), CallerDID :: did(),
+                   Resource :: binary(), Result :: auth_result()) -> ok.
+audit_result(Operation, CallerDID, Resource, {ok, authorized}) ->
+    %% Only log if audit server is running (optional component)
+    try
+        macula_authorization_audit:log_authorized(Operation, CallerDID, Resource)
+    catch
+        exit:{noproc, _} -> ok;
+        error:undef -> ok
+    end;
+audit_result(Operation, CallerDID, Resource, {error, Reason}) ->
+    %% Only log if audit server is running (optional component)
+    try
+        macula_authorization_audit:log_denied(Operation, CallerDID, Resource, Reason)
+    catch
+        exit:{noproc, _} -> ok;
+        error:undef -> ok
     end.
 
 %%====================================================================

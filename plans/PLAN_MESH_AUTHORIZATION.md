@@ -1,6 +1,6 @@
 # Plan: Mesh Topic Authorization with UCAN/DID
 
-**Status:** Phase 5 Complete - UCAN Revocation
+**Status:** Phase 6 Complete - Audit Logging
 **Created:** 2026-01-07
 **Updated:** 2026-01-08
 
@@ -538,37 +538,67 @@ get_or_parse(DID) ->
 
 ---
 
-### Phase 6: Audit Logging
+### Phase 6: Audit Logging ✅ COMPLETE
 
-**Log all authorization decisions:**
+**Created:** `src/macula_authorization_audit.erl`
 
 ```erlang
 -module(macula_authorization_audit).
+-behaviour(gen_server).
 
+%% Audit logging
 -export([
     log_authorized/3,
     log_denied/4,
-    get_audit_log/1
+    log_error/4
 ]).
 
-%% Telemetry integration
-log_authorized(Operation, CallerDID, Resource) ->
-    telemetry:execute(
-        [macula, authorization, allowed],
-        #{count => 1},
-        #{operation => Operation, caller => CallerDID, resource => Resource}
-    ).
+%% Query API
+-export([
+    get_recent/1,
+    get_by_caller/2,
+    get_by_resource/2,
+    get_stats/0,
+    clear/0
+]).
 
-log_denied(Operation, CallerDID, Resource, Reason) ->
-    telemetry:execute(
-        [macula, authorization, denied],
-        #{count => 1},
-        #{operation => Operation, caller => CallerDID, resource => Resource, reason => Reason}
-    ).
+%% Configuration
+-export([
+    set_retention/1,
+    set_max_entries/1,
+    enable/0, disable/0
+]).
 ```
 
-**Files to create:**
-- [ ] `src/macula_authorization_audit.erl` - Audit logging
+**Key Features:**
+
+| Feature | Implementation |
+|---------|----------------|
+| **Telemetry Events** | `[macula, authorization, allowed/denied/error]` |
+| **ETS Storage** | Optional storage for debugging/analysis |
+| **Query API** | get_recent, get_by_caller, get_by_resource |
+| **Retention** | Configurable TTL with auto-cleanup |
+| **Max Entries** | Configurable limit with LRU eviction |
+| **Enable/Disable** | Runtime toggle for ETS storage |
+| **Statistics** | allowed_count, denied_count, error_count |
+
+**Telemetry Events:**
+- `[macula, authorization, allowed]` - Authorization succeeded
+- `[macula, authorization, denied]` - Authorization denied
+- `[macula, authorization, error]` - Authorization check error
+
+**Integration with macula_authorization.erl:**
+- Added `audit_result/4` helper function
+- All check functions (check_rpc_call, check_publish, check_subscribe, check_announce) log results
+- Gracefully handles missing audit server (optional component)
+
+**Files created:**
+- [x] `src/macula_authorization_audit.erl` - Audit logging (~575 LOC)
+- [x] `test/macula_authorization_audit_tests.erl` - 16 unit tests
+
+**Files modified:**
+- [x] `src/macula_authorization.erl` - Added audit logging integration
+- [x] `rebar.config` - Added telemetry dependency
 
 ---
 
@@ -584,7 +614,8 @@ log_denied(Operation, CallerDID, Resource, Reason) ->
 | `test/macula_did_cache_tests.erl` | DID cache tests (12 tests) | 4 | ✅ |
 | `src/macula_ucan_revocation.erl` | Revocation handling (~480 LOC) | 5 | ✅ |
 | `test/macula_ucan_revocation_tests.erl` | Revocation tests (15 tests) | 5 | ✅ |
-| `src/macula_authorization_audit.erl` | Audit logging | 6 | ⏳ |
+| `src/macula_authorization_audit.erl` | Audit logging (~575 LOC) | 6 | ✅ |
+| `test/macula_authorization_audit_tests.erl` | Audit tests (16 tests) | 6 | ✅ |
 
 ### Modified Files
 
@@ -597,6 +628,8 @@ log_denied(Operation, CallerDID, Resource, Reason) ->
 | `src/macula_protocol_system/macula_protocol_types.erl` | Extended message types | 3 |
 | `src/macula_protocol_system/macula_protocol_codec.erl` | Encode/decode auth fields | 3 |
 | `src/macula_authorization.erl` | Add revocation check | 5 |
+| `src/macula_authorization.erl` | Add audit logging | 6 |
+| `rebar.config` | Add telemetry dependency | 6 |
 
 ---
 
@@ -636,9 +669,18 @@ log_denied(Operation, CallerDID, Resource, Reason) ->
 - [x] Integration with macula_authorization.erl
 - [x] 15 unit tests passing
 
-### Phase 6+ (Production Hardening)
-- [ ] Audit logs capture all decisions
-- [ ] <1ms overhead for authorization checks
+### Phase 6 (Audit Logging) ✅ COMPLETE
+- [x] Audit module with telemetry events
+- [x] ETS-based storage with TTL and max entries
+- [x] Query API (get_recent, get_by_caller, get_by_resource)
+- [x] Integration with all authorization check functions
+- [x] Graceful degradation when audit server not running
+- [x] 16 unit tests passing
+
+### Production Readiness
+- [x] All phases complete (1-6)
+- [x] 90 total tests passing (47 + 12 + 15 + 16)
+- [ ] Performance benchmarking (<1ms overhead verified)
 
 ---
 
