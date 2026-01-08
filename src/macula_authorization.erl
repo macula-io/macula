@@ -73,6 +73,7 @@
 -type auth_error() :: unauthorized
                     | invalid_ucan
                     | expired_ucan
+                    | revoked_ucan
                     | insufficient_capability
                     | invalid_did
                     | namespace_mismatch.
@@ -248,6 +249,7 @@ is_public_topic(Topic) when is_binary(Topic) ->
 %% 1. Token is well-formed and not expired
 %% 2. Audience matches caller DID
 %% 3. Token has required capability for operation
+%% 4. Token is not revoked
 -spec validate_ucan_for_operation(UcanToken :: ucan_token(),
                                    CallerDID :: did(),
                                    Resource :: binary(),
@@ -262,8 +264,8 @@ validate_ucan_for_operation(UcanToken, CallerDID, Resource, Operation) ->
             %% Check audience matches caller
             case maps:get(<<"aud">>, Payload, undefined) of
                 CallerDID ->
-                    %% Check capabilities
-                    validate_ucan_capabilities(Payload, Resource, Operation);
+                    %% Check capabilities and revocation
+                    validate_ucan_capabilities(Payload, UcanToken, Resource, Operation);
                 _ ->
                     {error, unauthorized}
             end;
@@ -271,11 +273,11 @@ validate_ucan_for_operation(UcanToken, CallerDID, Resource, Operation) ->
             {error, invalid_ucan}
     end.
 
-%% @private Validate UCAN capabilities
--spec validate_ucan_capabilities(Payload :: map(), Resource :: binary(),
-                                  Operation :: operation()) ->
+%% @private Validate UCAN capabilities and check revocation.
+-spec validate_ucan_capabilities(Payload :: map(), UcanToken :: binary(),
+                                  Resource :: binary(), Operation :: operation()) ->
     auth_result().
-validate_ucan_capabilities(Payload, Resource, Operation) ->
+validate_ucan_capabilities(Payload, UcanToken, Resource, Operation) ->
     %% Check expiration
     case is_ucan_expired(Payload) of
         true ->
@@ -284,8 +286,31 @@ validate_ucan_capabilities(Payload, Resource, Operation) ->
             %% Check capabilities
             Capabilities = maps:get(<<"cap">>, Payload, []),
             case check_capability_list(Capabilities, Resource, Operation) of
-                true -> {ok, authorized};
-                false -> {error, insufficient_capability}
+                true ->
+                    %% Check if UCAN is revoked
+                    check_ucan_not_revoked(Payload, UcanToken);
+                false ->
+                    {error, insufficient_capability}
+            end
+    end.
+
+%% @private Check if a UCAN has been revoked.
+-spec check_ucan_not_revoked(Payload :: map(), UcanToken :: binary()) ->
+    auth_result().
+check_ucan_not_revoked(Payload, UcanToken) ->
+    IssuerDID = maps:get(<<"iss">>, Payload, undefined),
+    case IssuerDID of
+        undefined ->
+            %% No issuer - can't check revocation, allow
+            {ok, authorized};
+        _ ->
+            %% Compute CID and check revocation
+            CID = macula_ucan_revocation:compute_ucan_cid(UcanToken),
+            case macula_ucan_revocation:is_revoked(IssuerDID, CID) of
+                true ->
+                    {error, revoked_ucan};
+                false ->
+                    {ok, authorized}
             end
     end.
 
