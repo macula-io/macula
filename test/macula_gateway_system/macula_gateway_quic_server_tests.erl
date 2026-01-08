@@ -85,3 +85,35 @@ resolve_host_test() ->
     {IP2, Port2} = macula_gateway_quic_server:resolve_host(<<"127.0.0.1">>, 9000),
     ?assertEqual({127,0,0,1}, IP2),
     ?assertEqual(9000, Port2).
+
+%% Test that get_node_id/2 handles both binary and charlist realm
+get_node_id_charlist_realm_test() ->
+    %% Clear any existing env vars to ensure consistent test
+    os:unsetenv("NODE_NAME"),
+    os:unsetenv("HOSTNAME"),
+
+    %% Binary realm
+    BinaryResult = macula_gateway_quic_server:get_node_id(<<"io.macula">>, 9443),
+    ?assert(is_binary(BinaryResult)),
+    ?assertEqual(32, byte_size(BinaryResult)),
+
+    %% Charlist realm should produce identical result
+    CharlistResult = macula_gateway_quic_server:get_node_id("io.macula", 9443),
+    ?assertEqual(BinaryResult, CharlistResult).
+
+%% Test get_node_id/2 with HOSTNAME env var and charlist realm
+get_node_id_with_hostname_test() ->
+    %% Set HOSTNAME, clear NODE_NAME
+    os:unsetenv("NODE_NAME"),
+    os:putenv("HOSTNAME", "test-container-123"),
+
+    %% Binary realm
+    BinaryResult = macula_gateway_quic_server:get_node_id(<<"io.macula">>, 9443),
+    ?assert(is_binary(BinaryResult)),
+
+    %% Charlist realm should produce identical result
+    CharlistResult = macula_gateway_quic_server:get_node_id("io.macula", 9443),
+    ?assertEqual(BinaryResult, CharlistResult),
+
+    %% Cleanup
+    os:unsetenv("HOSTNAME").

@@ -33,7 +33,7 @@
 %% Helper functions (exported for testing)
 -ifdef(TEST).
 -export([parse_endpoint/1, resolve_host/2, complete_handshake/1,
-         accept_streams/1, register_next_connection/1]).
+         accept_streams/1, register_next_connection/1, get_node_id/2]).
 -endif.
 
 -record(state, {
@@ -253,6 +253,9 @@ terminate(_Reason, _State) ->
 %% 1. NODE_NAME env var (explicit, highest priority)
 %% 2. HOSTNAME env var (Docker sets this to container hostname - unique per container)
 %% 3. Fallback to {Realm, Port} only (NO MAC - MAC is shared across Docker containers)
+get_node_id(Realm, Port) when is_list(Realm), is_integer(Port) ->
+    %% Handle charlist realm by converting to binary
+    get_node_id(list_to_binary(Realm), Port);
 get_node_id(Realm, Port) when is_binary(Realm), is_integer(Port) ->
     case os:getenv("NODE_NAME") of
         false ->

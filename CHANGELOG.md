@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.17.3] - 2026-01-08
+
+### Fixed
+
+- **Gateway charlist realm handling**: Fixed `macula_gateway_quic_server:get_node_id/2` to accept charlist realm (e.g., `"io.macula"`) in addition to binary realm (e.g., `<<"io.macula">>`). Previously, charlist realm caused a `FunctionClauseError` because the function guard only matched binary realm.
+- Added 2 new unit tests for charlist realm handling.
+
+---
+
 ## [0.17.1] - 2026-01-08
 
 ### Fixed
