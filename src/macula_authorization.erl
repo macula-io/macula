@@ -352,20 +352,24 @@ match_operation(_, _) ->
 %% @doc Resolve and validate a caller DID.
 %%
 %% Parses the DID and returns the parsed components if valid.
+%% Uses `macula_did_cache' for performance.
 -spec resolve_caller_did(CallerDID :: did()) ->
     {ok, Components :: map()} | {error, invalid_did}.
 resolve_caller_did(CallerDID) when is_binary(CallerDID) ->
-    parse_did(CallerDID);
+    macula_did_cache:get_or_parse(CallerDID);
 resolve_caller_did(_) ->
     {error, invalid_did}.
 
 %% @doc Extract the identity portion from a DID.
 %%
 %% `did:macula:io.macula.rgfaber' → `io.macula.rgfaber'
+%%
+%% Uses `macula_did_cache' for performance - repeated lookups for the same
+%% DID return cached results without re-parsing.
 -spec extract_identity_from_did(DID :: did()) ->
     {ok, Identity :: binary()} | {error, invalid_did}.
 extract_identity_from_did(DID) when is_binary(DID) ->
-    case parse_did(DID) of
+    case macula_did_cache:get_or_parse(DID) of
         {ok, #{<<"identity">> := Identity}} ->
             {ok, Identity};
         _ ->
@@ -395,28 +399,11 @@ check_with_ucan_fallback(CallerDID, Namespace, Resource, UcanToken, Operation) -
     end.
 
 %%====================================================================
-%% Inline DID Parsing (no external dependency)
+%% DID Parsing (delegated to macula_did_cache)
 %%====================================================================
 
-%% @private Parse a DID string and extract its components.
-%% Returns a map with method, identity, parts, and depth.
--spec parse_did(DID :: binary()) ->
-    {ok, Components :: map()} | {error, invalid_did}.
-parse_did(DID) when is_binary(DID) ->
-    case binary:split(DID, <<":">>, [global]) of
-        [<<"did">>, <<"macula">>, Identity] ->
-            Parts = binary:split(Identity, <<".">>, [global]),
-            {ok, #{
-                <<"method">> => <<"macula">>,
-                <<"identity">> => Identity,
-                <<"parts">> => Parts,
-                <<"depth">> => length(Parts)
-            }};
-        _ ->
-            {error, invalid_did}
-    end;
-parse_did(_) ->
-    {error, invalid_did}.
+%% DID parsing is now handled by macula_did_cache for performance.
+%% See macula_did_cache:get_or_parse/1 for cached DID parsing.
 
 %%====================================================================
 %% Inline UCAN Decoding (no external dependency)

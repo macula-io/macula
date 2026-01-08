@@ -1,6 +1,6 @@
 # Plan: Mesh Topic Authorization with UCAN/DID
 
-**Status:** Phase 3 Complete - Protocol Extension
+**Status:** Phase 4 Complete - DID Caching
 **Created:** 2026-01-07
 **Updated:** 2026-01-08
 
@@ -442,26 +442,27 @@ route_to_single_subscriber(Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients
 
 ---
 
-### Phase 4: DID Resolution & Caching
+### Phase 4: DID Resolution & Caching ✅ COMPLETE
 
-**Add DID caching to avoid repeated parsing:**
+**Created:** `src/macula_did_cache.erl`
 
 ```erlang
 -module(macula_did_cache).
 
-%% Cache DID → parsed info for performance
+%% Cache DID → parsed info for performance using persistent_term
 -export([
-    get_or_parse/1,
-    invalidate/1,
-    clear/0
+    get_or_parse/1,   %% Parse DID or get from cache
+    invalidate/1,     %% Remove DID from cache
+    clear/0,          %% Clear entire cache
+    cache_size/0      %% Get number of cached DIDs
 ]).
 
-%% Uses persistent_term for fast reads
+%% Uses persistent_term for O(1) lookups with zero GC impact
 get_or_parse(DID) ->
     Key = {macula_did_cache, DID},
     case persistent_term:get(Key, undefined) of
         undefined ->
-            {ok, Parsed} = macula_did_nif:parse_did(DID),
+            {ok, Parsed} = parse_did(DID),  %% Inline parsing
             persistent_term:put(Key, Parsed),
             {ok, Parsed};
         Cached ->
@@ -469,8 +470,18 @@ get_or_parse(DID) ->
     end.
 ```
 
-**Files to create:**
-- [ ] `src/macula_did_cache.erl` - DID parsing cache
+**Integration:** Updated `macula_authorization.erl` to use cache:
+- `resolve_caller_did/1` - Now delegates to `macula_did_cache:get_or_parse/1`
+- `extract_identity_from_did/1` - Now uses cached parsing
+
+**Files created:**
+- [x] `src/macula_did_cache.erl` - DID parsing cache (~150 LOC)
+- [x] `test/macula_did_cache_tests.erl` - 12 unit tests
+
+**Files modified:**
+- [x] `src/macula_authorization.erl` - Updated to use cache
+
+**Performance:** 10,000 cached lookups in <5ms (verified by test)
 
 ---
 
@@ -540,7 +551,8 @@ log_denied(Operation, CallerDID, Resource, Reason) ->
 |------|---------|-------|--------|
 | `src/macula_authorization.erl` | Core authorization logic | 1 | ✅ |
 | `test/macula_authorization_tests.erl` | Unit tests (47 tests) | 1 | ✅ |
-| `src/macula_did_cache.erl` | DID parsing cache | 4 | ⏳ |
+| `src/macula_did_cache.erl` | DID parsing cache | 4 | ✅ |
+| `test/macula_did_cache_tests.erl` | DID cache tests (12 tests) | 4 | ✅ |
 | `src/macula_ucan_revocation.erl` | Revocation handling | 5 | ⏳ |
 | `src/macula_authorization_audit.erl` | Audit logging | 6 | ⏳ |
 
@@ -580,8 +592,12 @@ log_denied(Operation, CallerDID, Resource, Reason) ->
 - [x] Messages carry ucan_token field (optional)
 - [x] Backward compatible (old clients still work)
 
-### Phase 4+ (Production Hardening)
-- [ ] DID cache improves performance
+### Phase 4 (DID Caching) ✅ COMPLETE
+- [x] DID cache improves performance (10k lookups in <5ms)
+- [x] Authorization uses cached DID parsing
+- [x] 12 unit tests passing
+
+### Phase 5+ (Production Hardening)
 - [ ] Revocation propagates via mesh gossip
 - [ ] Audit logs capture all decisions
 - [ ] <1ms overhead for authorization checks
