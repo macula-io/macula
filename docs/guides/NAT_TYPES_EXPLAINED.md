@@ -2,7 +2,7 @@
 
 Understanding NAT (Network Address Translation) types is essential for building P2P applications that work across different network environments. This guide explains the NAT classification model used in Macula based on the NATCracker methodology.
 
-![NAT Types Overview](artwork/nat_types.svg)
+![NAT Types Overview](assets/nat_types.svg)
 
 ---
 

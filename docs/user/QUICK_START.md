@@ -2,7 +2,7 @@
 
 **Get a 3-node mesh running in 15 minutes**
 
-![Macula Overview](artwork/macula_overview.svg)
+![Macula Overview](assets/macula_overview.svg)
 
 ---
 

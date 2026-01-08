@@ -2,7 +2,7 @@
 
 **Complete guide to decentralized publish/subscribe with DHT-based subscriber discovery**
 
-![Pub/Sub Architecture](artwork/pubsub_flow.svg)
+![Pub/Sub Architecture](assets/pubsub_flow.svg)
 
 **Status**: COMPLETE
 **Last Updated**: 2025-11-28

@@ -6,7 +6,7 @@ Macula uses a **Kademlia Distributed Hash Table (DHT)** for decentralized servic
 
 **Key Reference:** [Kademlia: A Peer-to-peer Information System Based on the XOR Metric](http://www.scs.stanford.edu/~dm/home/papers/kpos.pdf) (Maymounkov & Mazières, 2002)
 
-![Kademlia DHT Overview](artwork/kademlia_dht.svg)
+![Kademlia DHT Overview](assets/kademlia_dht.svg)
 
 ## Why Kademlia?
 

@@ -2,7 +2,7 @@
 
 **Complete guide to decentralized RPC with DHT-based service discovery**
 
-![RPC Architecture](artwork/rpc_flow.svg)
+![RPC Architecture](assets/rpc_flow.svg)
 
 **Status**: ✅ COMPLETE
 **Last Updated**: 2025-01-10

@@ -11,7 +11,7 @@ Macula implements **decentralized authorization** using industry-standard crypto
 - **Capability-based**: Fine-grained permissions via UCAN tokens
 - **Offline-capable**: All validation happens locally
 
-![Authorization Flow](artwork/authorization_flow.svg)
+![Authorization Flow](assets/authorization_flow.svg)
 
 ## Core Concepts
 
@@ -19,7 +19,7 @@ Macula implements **decentralized authorization** using industry-standard crypto
 
 A **DID** (Decentralized Identifier) is a globally unique identifier that enables verifiable, decentralized digital identity. DIDs are defined by the [W3C DID Core Specification](https://www.w3.org/TR/did-core/).
 
-![DID Structure](artwork/did_structure.svg)
+![DID Structure](assets/did_structure.svg)
 
 #### Macula DID Format
 
@@ -71,7 +71,7 @@ The `macula_did_cache` module provides high-performance caching using Erlang's `
 
 **UCAN** (User Controlled Authorization Networks) is a capability-based authorization system built on JWT (JSON Web Tokens). UCANs enable **delegation chains** where permissions can be granted and re-delegated without involving a central authority.
 
-![UCAN Token Structure](artwork/ucan_token_structure.svg)
+![UCAN Token Structure](assets/ucan_token_structure.svg)
 
 #### UCAN Token Structure
 
@@ -138,7 +138,7 @@ Alice (owns io.macula.alice.*)
 
 Macula uses a **hierarchical namespace ownership model** where DIDs map directly to namespaces they control:
 
-![Namespace Hierarchy](artwork/namespace_hierarchy.svg)
+![Namespace Hierarchy](assets/namespace_hierarchy.svg)
 
 #### DID to Namespace Mapping
 
@@ -224,7 +224,7 @@ io.macula.public.news                    → Anyone can subscribe
 
 UCANs can be revoked before expiration using the revocation system:
 
-![Revocation Flow](artwork/revocation_flow.svg)
+![Revocation Flow](assets/revocation_flow.svg)
 
 ### Revocation Process
 
@@ -259,7 +259,7 @@ true = macula_ucan_revocation:is_revoked(IssuerDID, CID).
 
 All authorization decisions are logged via the audit system:
 
-![Audit System](artwork/audit_system.svg)
+![Audit System](assets/audit_system.svg)
 
 ### Telemetry Events
 
@@ -307,7 +307,7 @@ Stats = macula_authorization_audit:get_stats().
 
 The audit log uses **Least Recently Used (LRU)** eviction to bound memory:
 
-![LRU Eviction](artwork/lru_eviction.svg)
+![LRU Eviction](assets/lru_eviction.svg)
 
 When the log exceeds `max_entries`, the oldest entries (by timestamp) are evicted. This ensures bounded memory usage while retaining the most recent authorization decisions for debugging.
 
