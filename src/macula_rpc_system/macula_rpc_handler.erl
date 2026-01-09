@@ -26,7 +26,7 @@
 -include("macula_config.hrl").
 
 %% API
--export([start_link/1, call/3, call/4, register_handler/2, unregister_handler/1, register_local_procedure/3, handle_incoming_reply/2, handle_find_value_reply/2]).
+-export([start_link/1, call/3, call/4, call_to/5, register_handler/2, unregister_handler/1, register_local_procedure/3, handle_incoming_reply/2, handle_find_value_reply/2]).
 
 %% Async RPC API (NATS-style)
 -export([request/4, request_to/5, handle_async_reply/2]).
@@ -117,6 +117,20 @@ call(Pid, Procedure, Args) ->
 call(Pid, Procedure, Args, Opts) ->
     Timeout = maps:get(timeout, Opts, ?DEFAULT_CALL_TIMEOUT),
     gen_server:call(Pid, {call, Procedure, Args, Opts}, Timeout + 1000).
+
+%% @doc Make a synchronous RPC call to a specific target node.
+%%
+%% Unlike `call/4' which discovers providers via DHT, this function
+%% sends the RPC directly to the specified target node. The message
+%% is still routed via DHT infrastructure (for NAT traversal and relay),
+%% but targets a specific node rather than discovering one.
+%%
+%% Use this when you already know the target node's ID (e.g., from a
+%% previous DHT discovery, artifact publisher node, or direct advertisement).
+-spec call_to(pid(), binary(), binary() | list() | atom(), term(), map()) -> {ok, term()} | {error, term()}.
+call_to(Pid, TargetNodeId, Procedure, Args, Opts) ->
+    Timeout = maps:get(timeout, Opts, ?DEFAULT_CALL_TIMEOUT),
+    gen_server:call(Pid, {call_to, TargetNodeId, Procedure, Args, Opts}, Timeout + 1000).
 
 -spec register_handler(binary() | list() | atom(), fun((term()) -> {ok, term()} | {error, term()})) ->
     {ok, reference()} | {error, term()}.
@@ -240,6 +254,11 @@ handle_call({call, Procedure, Args, Opts}, From, State) ->
     LocalResult = macula_service_registry:get_local_handler(Registry, BinaryProcedure),
     %% If not local, check if it's a gateway-direct procedure (_dht.*)
     do_call_maybe_direct(LocalResult, BinaryProcedure, Args, Opts, From, State);
+
+%% Synchronous RPC call to specific target node (no DHT discovery)
+handle_call({call_to, TargetNodeId, Procedure, Args, Opts}, From, State) ->
+    BinaryProcedure = ensure_binary(Procedure),
+    do_call_to_target(TargetNodeId, BinaryProcedure, Args, Opts, From, State);
 
 %% Async RPC request with DHT discovery (NATS-style)
 handle_call({async_request, Procedure, Args, Opts}, From, State) ->
@@ -378,6 +397,80 @@ handle_async_reply(Pid, Msg) ->
 
 %%%===================================================================
 %%% Internal functions - RPC Call Logic
+%%%===================================================================
+
+%%%===================================================================
+%%% Internal functions - Targeted RPC Call (call_to)
+%%%===================================================================
+
+%% @doc Execute synchronous RPC call to a specific target node.
+%% Skips DHT discovery and sends directly to the target node.
+%% Still uses DHT routing infrastructure for NAT traversal and relay.
+-spec do_call_to_target(binary(), binary(), term(), map(), term(), #state{}) ->
+    {noreply, #state{}} | {reply, {error, term()}, #state{}}.
+do_call_to_target(_TargetNodeId, _Procedure, _Args, _Opts, _From,
+                  #state{connection_manager_pid = undefined} = State) ->
+    {reply, {error, connection_not_ready}, State};
+do_call_to_target(TargetNodeId, Procedure, Args, Opts, From, State) ->
+    %% Generate call ID
+    {CallId, State2} = next_message_id(State),
+
+    %% Encode args
+    EncodedArgs = encode_call_args(Args),
+
+    %% Build call message
+    CallMsg = #{
+        call_id => CallId,
+        procedure => Procedure,
+        args => EncodedArgs,
+        realm => State#state.realm
+    },
+
+    %% Wrap call in DHT routing envelope targeting the specific node
+    LocalNodeId = State#state.node_id,
+    RpcRouteMsg = macula_rpc_routing:wrap_call(LocalNodeId, TargetNodeId, CallMsg, 10),
+
+    %% Send DHT-routed call message via connection manager
+    ConnMgrPid = State2#state.connection_manager_pid,
+    case macula_connection:send_message(ConnMgrPid, rpc_route, RpcRouteMsg) of
+        ok ->
+            %% Set up timeout timer
+            Timeout = maps:get(timeout, Opts, ?DEFAULT_CALL_TIMEOUT),
+            Timer = erlang:send_after(Timeout, self(), {call_timeout, CallId}),
+
+            %% Monitor caller process for automatic cleanup
+            {CallerPid, _Tag} = From,
+            MonitorRef = erlang:monitor(process, CallerPid),
+
+            %% Minimal failover context (no provider discovery - just procedure info)
+            FailoverContext = #{
+                procedure => Procedure,
+                args => Args,
+                opts => Opts,
+                target_node => TargetNodeId
+            },
+
+            %% Store pending call
+            PendingCalls = State2#state.pending_calls,
+            PendingCalls2 = PendingCalls#{CallId => {From, Timer, MonitorRef, FailoverContext}},
+
+            %% Track monitor
+            CallerMonitors = maps:put(MonitorRef, {call, CallId}, State2#state.caller_monitors),
+
+            ?LOG_DEBUG("[~s] call_to sent: call_id=~s, procedure=~s, target=~s",
+                      [State2#state.node_id, binary:encode_hex(CallId), Procedure,
+                       binary:encode_hex(TargetNodeId)]),
+
+            {noreply, State2#state{pending_calls = PendingCalls2, caller_monitors = CallerMonitors}};
+
+        {error, SendError} ->
+            ?LOG_ERROR("[~s] Failed to send call_to for ~s to ~s: ~p",
+                      [State2#state.node_id, Procedure, binary:encode_hex(TargetNodeId), SendError]),
+            {reply, {error, {send_failed, SendError}}, State2}
+    end.
+
+%%%===================================================================
+%%% Internal functions - RPC Call Logic (DHT discovery)
 %%%===================================================================
 
 %% @private Local handler found - execute directly

@@ -72,6 +72,7 @@
     discover_subscribers/2,
     call/3,
     call/4,
+    call_to/5,
     advertise/4,
     unadvertise/2,
     get_node_id/1
@@ -165,6 +166,16 @@ call(Client, Procedure, Args) ->
 call(Client, Procedure, Args, Opts) ->
     Timeout = maps:get(timeout, Opts, ?CALL_TIMEOUT),
     gen_server:call(Client, {call, Procedure, Args, Opts}, Timeout + 1000).
+
+%% @doc Make an RPC call to a specific target node.
+%%
+%% Unlike `call/4' which discovers any provider via DHT, this function
+%% sends the RPC directly to the specified target node.
+-spec call_to(pid(), binary(), binary(), map() | list(), map()) ->
+    {ok, term()} | {error, term()}.
+call_to(Client, TargetNodeId, Procedure, Args, Opts) ->
+    Timeout = maps:get(timeout, Opts, ?CALL_TIMEOUT),
+    gen_server:call(Client, {call_to, TargetNodeId, Procedure, Args, Opts}, Timeout + 1000).
 
 %% @doc Advertise a service handler for a procedure.
 %%
@@ -293,6 +304,11 @@ handle_call(get_node_id, _From, State) ->
 %% Delegate to rpc_handler
 handle_call({call, Procedure, Args, Opts}, _From, State) ->
     Result = macula_rpc_handler:call(State#state.rpc_handler_pid, Procedure, Args, Opts),
+    {reply, Result, State};
+
+%% Delegate to rpc_handler (targeted call)
+handle_call({call_to, TargetNodeId, Procedure, Args, Opts}, _From, State) ->
+    Result = macula_rpc_handler:call_to(State#state.rpc_handler_pid, TargetNodeId, Procedure, Args, Opts),
     {reply, Result, State};
 
 %% Delegate to advertisement_manager

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.17.4] - 2026-01-09
+
+### Added
+
+- **Targeted RPC calls (`call_to/4,5`)**: New API for making synchronous RPC calls to a specific target node by node_id. Unlike `call/4` which discovers any provider via DHT, `call_to` routes directly to the specified node while still using DHT infrastructure for NAT traversal and relay.
+  - `macula:call_to/4,5` - Public API
+  - `macula_peer:call_to/5` - Facade delegation
+  - `macula_rpc_handler:call_to/5` - Implementation with RPC routing
+- Added 7 unit tests for `call_to` API
+
+---
+
 ## [0.17.3] - 2026-01-08
 
 ### Fixed

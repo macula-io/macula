@@ -19,10 +19,20 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%%===================================================================
+%%% Test Setup Helper
+%%%===================================================================
+
+%% @doc Ensure gproc is started before running tests.
+ensure_gproc() ->
+    application:ensure_all_started(gproc),
+    ok.
+
+%%%===================================================================
 %%% Lifecycle Tests
 %%%===================================================================
 
 handler_starts_successfully_test() ->
+    ensure_gproc(),
     Opts = #{
         node_id => <<"test_node_123">>,
         realm => <<"test.realm">>,
@@ -620,3 +630,187 @@ caller_death_cleanup_query_test() ->
     ?assertEqual(0, PendingQueriesFinal),
 
     gen_server:stop(HandlerPid).
+
+%%%===================================================================
+%%% Targeted RPC Call Tests (call_to/5)
+%%%===================================================================
+
+%% @doc Test call_to API with binary procedure - targets specific node.
+call_to_accepts_binary_procedure_test() ->
+    ensure_gproc(),
+    Opts = #{
+        node_id => <<"test_node">>,
+        realm => <<"test.realm">>,
+        url => <<"http://localhost:5025">>
+    },
+
+    {ok, Pid} = macula_rpc_handler:start_link(Opts),
+
+    TargetNodeId = <<"target_node_123">>,
+    Procedure = <<"test.procedure">>,
+    Args = #{arg1 => <<"value1">>},
+    CallOpts = #{timeout => 100},
+
+    %% Spawn to avoid blocking test (will timeout since no connection manager)
+    spawn(fun() ->
+        _Result = macula_rpc_handler:call_to(Pid, TargetNodeId, Procedure, Args, CallOpts)
+    end),
+
+    timer:sleep(50),
+    ?assert(is_process_alive(Pid)),
+
+    gen_server:stop(Pid).
+
+%% @doc Test call_to API with string procedure.
+call_to_accepts_string_procedure_test() ->
+    ensure_gproc(),
+    Opts = #{
+        node_id => <<"test_node">>,
+        realm => <<"test.realm">>,
+        url => <<"http://localhost:5026">>
+    },
+
+    {ok, Pid} = macula_rpc_handler:start_link(Opts),
+
+    TargetNodeId = <<"target_node_456">>,
+    Procedure = "test.string.procedure",
+    Args = #{arg1 => <<"value1">>},
+    CallOpts = #{timeout => 100},
+
+    spawn(fun() ->
+        _Result = macula_rpc_handler:call_to(Pid, TargetNodeId, Procedure, Args, CallOpts)
+    end),
+
+    timer:sleep(50),
+    ?assert(is_process_alive(Pid)),
+
+    gen_server:stop(Pid).
+
+%% @doc Test call_to API with atom procedure.
+call_to_accepts_atom_procedure_test() ->
+    ensure_gproc(),
+    Opts = #{
+        node_id => <<"test_node">>,
+        realm => <<"test.realm">>,
+        url => <<"http://localhost:5027">>
+    },
+
+    {ok, Pid} = macula_rpc_handler:start_link(Opts),
+
+    TargetNodeId = <<"target_node_789">>,
+    Procedure = test_atom_procedure,
+    Args = #{arg1 => <<"value1">>},
+    CallOpts = #{timeout => 100},
+
+    spawn(fun() ->
+        _Result = macula_rpc_handler:call_to(Pid, TargetNodeId, Procedure, Args, CallOpts)
+    end),
+
+    timer:sleep(50),
+    ?assert(is_process_alive(Pid)),
+
+    gen_server:stop(Pid).
+
+%% @doc Test call_to with map arguments.
+call_to_with_map_args_test() ->
+    ensure_gproc(),
+    Opts = #{
+        node_id => <<"test_node">>,
+        realm => <<"test.realm">>,
+        url => <<"http://localhost:5028">>
+    },
+
+    {ok, Pid} = macula_rpc_handler:start_link(Opts),
+
+    TargetNodeId = <<"target_node_map">>,
+    Procedure = <<"test.procedure">>,
+    Args = #{key1 => <<"value1">>, key2 => 123},
+    CallOpts = #{timeout => 100},
+
+    spawn(fun() ->
+        _Result = macula_rpc_handler:call_to(Pid, TargetNodeId, Procedure, Args, CallOpts)
+    end),
+
+    timer:sleep(50),
+    ?assert(is_process_alive(Pid)),
+
+    gen_server:stop(Pid).
+
+%% @doc Test call_to with list arguments.
+call_to_with_list_args_test() ->
+    ensure_gproc(),
+    Opts = #{
+        node_id => <<"test_node">>,
+        realm => <<"test.realm">>,
+        url => <<"http://localhost:5029">>
+    },
+
+    {ok, Pid} = macula_rpc_handler:start_link(Opts),
+
+    TargetNodeId = <<"target_node_list">>,
+    Procedure = <<"test.procedure">>,
+    Args = [<<"item1">>, <<"item2">>, 123],
+    CallOpts = #{timeout => 100},
+
+    spawn(fun() ->
+        _Result = macula_rpc_handler:call_to(Pid, TargetNodeId, Procedure, Args, CallOpts)
+    end),
+
+    timer:sleep(50),
+    ?assert(is_process_alive(Pid)),
+
+    gen_server:stop(Pid).
+
+%% @doc Test call_to returns error when connection not ready.
+call_to_connection_not_ready_test() ->
+    ensure_gproc(),
+    Opts = #{
+        node_id => <<"test_node">>,
+        realm => <<"test.realm">>,
+        url => <<"http://localhost:5030">>
+    },
+
+    {ok, Pid} = macula_rpc_handler:start_link(Opts),
+
+    %% No connection manager set, so call should fail with connection_not_ready
+    TargetNodeId = <<"target_node">>,
+    Procedure = <<"test.procedure">>,
+    Args = #{},
+    CallOpts = #{timeout => 500},
+
+    Result = macula_rpc_handler:call_to(Pid, TargetNodeId, Procedure, Args, CallOpts),
+
+    ?assertEqual({error, connection_not_ready}, Result),
+    ?assert(is_process_alive(Pid)),
+
+    gen_server:stop(Pid).
+
+%% @doc Test call_to with custom timeout.
+call_to_with_custom_timeout_test() ->
+    ensure_gproc(),
+    Opts = #{
+        node_id => <<"test_node">>,
+        realm => <<"test.realm">>,
+        url => <<"http://localhost:5031">>
+    },
+
+    {ok, Pid} = macula_rpc_handler:start_link(Opts),
+
+    TargetNodeId = <<"target_node_timeout">>,
+    Procedure = <<"test.procedure">>,
+    Args = #{},
+    CallOpts = #{timeout => 2000},  % Custom timeout
+
+    spawn(fun() ->
+        _Result = macula_rpc_handler:call_to(Pid, TargetNodeId, Procedure, Args, CallOpts)
+    end),
+
+    timer:sleep(50),
+    ?assert(is_process_alive(Pid)),
+
+    gen_server:stop(Pid).
+
+%% NOTE: call_to_caller_death_cleanup test is not included because it requires
+%% full integration with authorization. The caller_death_cleanup_immediate_test
+%% already tests this pattern for the call/4 API, and call_to uses the same
+%% pending_calls mechanism with caller process monitoring.

@@ -59,6 +59,8 @@
     discover_subscribers/2,
     call/3,
     call/4,
+    call_to/4,
+    call_to/5,
     advertise/3,
     advertise/4,
     unadvertise/2,
@@ -338,6 +340,43 @@ call(Client, Procedure, Args) when is_pid(Client), is_binary(Procedure) ->
     {ok, Result :: term()} | {error, Reason :: term()}.
 call(Client, Procedure, Args, Opts) when is_pid(Client), is_binary(Procedure), is_map(Opts) ->
     macula_peer:call(Client, Procedure, Args, Opts).
+
+%% @doc Make an RPC call to a specific target node.
+%%
+%% Unlike `call/4' which discovers any provider via DHT, this function
+%% sends the RPC directly to the specified target node. Use this when you
+%% already know which node provides the service (e.g., from a previous
+%% DHT discovery, a specific publisher node, or direct node advertisement).
+%%
+%% The message is still routed via DHT infrastructure (for NAT traversal,
+%% relay fallback, etc.), but it targets a specific node rather than
+%% discovering one.
+%%
+%% == Examples ==
+%%
+%% ```
+%% %% Call a specific node (e.g., publisher node for package pull)
+%% PublisherNodeId = &lt;&lt;...32 bytes...&gt;&gt;,
+%% {ok, Manifest} = macula:call_to(Client, PublisherNodeId,
+%%     &lt;&lt;"packages.manifest.fetch"&gt;&gt;,
+%%     #{image_ref => &lt;&lt;"my.app:1.0.0"&gt;&gt;}).
+%%
+%% %% With timeout
+%% {ok, Result} = macula:call_to(Client, TargetNodeId,
+%%     &lt;&lt;"my.procedure"&gt;&gt;, Args,
+%%     #{timeout => 30000}).
+%% '''
+-spec call_to(Client :: client(), TargetNodeId :: binary(), Procedure :: procedure(), Args :: args()) ->
+    {ok, Result :: term()} | {error, Reason :: term()}.
+call_to(Client, TargetNodeId, Procedure, Args) when is_pid(Client), is_binary(TargetNodeId), is_binary(Procedure) ->
+    call_to(Client, TargetNodeId, Procedure, Args, #{}).
+
+%% @doc Make an RPC call to a specific target node with options.
+-spec call_to(Client :: client(), TargetNodeId :: binary(), Procedure :: procedure(), Args :: args(),
+              Opts :: options()) ->
+    {ok, Result :: term()} | {error, Reason :: term()}.
+call_to(Client, TargetNodeId, Procedure, Args, Opts) when is_pid(Client), is_binary(TargetNodeId), is_binary(Procedure), is_map(Opts) ->
+    macula_peer:call_to(Client, TargetNodeId, Procedure, Args, Opts).
 
 %% @doc Advertise a service that this client provides.
 %%
