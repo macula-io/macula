@@ -8,6 +8,7 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"/></a>
     <a href="https://www.erlang.org"><img src="https://img.shields.io/badge/Erlang%2FOTP-26+-brightgreen" alt="Erlang/OTP"/></a>
     <a href="https://hex.pm/packages/macula"><img src="https://img.shields.io/hexpm/v/macula.svg" alt="Hex.pm"/></a>
+    <a href="https://buymeacoffee.com/beamologist"><img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow.svg" alt="Buy Me A Coffee"/></a>
   </p>
 </div>
 
