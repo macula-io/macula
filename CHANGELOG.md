@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.18.0] - 2026-01-13
+
+### Added
+
+- **Cluster API for bc_gitops integration**: New module `macula_cluster.erl` provides cluster infrastructure functions that other applications (like bc_gitops) can delegate to when running on the Macula platform.
+  - `macula:ensure_distributed/0` - Ensure node is running in distributed mode
+  - `macula:get_cookie/0` - Get the Erlang cookie (from app env, env vars, or ~/.erlang.cookie)
+  - `macula:set_cookie/1` - Set and persist the Erlang cookie
+  - `macula:monitor_nodes/0` - Subscribe to nodeup/nodedown events
+  - `macula:unmonitor_nodes/0` - Unsubscribe from node events
+- Added 19 unit tests for cluster API
+- Added `guides/cluster_api.md` - Developer guide for cluster integration
+
+### Changed
+
+- When bc_gitops runs on the Macula platform, it detects these exports and delegates clustering operations to macula. This allows Macula to own cluster infrastructure while bc_gitops remains usable standalone.
+
+---
+
 ## [0.17.4] - 2026-01-09
 
 ### Added

@@ -77,6 +77,15 @@
     read_crdt/2
 ]).
 
+%% Cluster API (v0.16.3+) - For bc_gitops integration
+-export([
+    ensure_distributed/0,
+    get_cookie/0,
+    set_cookie/1,
+    monitor_nodes/0,
+    unmonitor_nodes/0
+]).
+
 %% Type exports
 -export_type([
     client/0,
@@ -647,6 +656,95 @@ propose_crdt_update(Client, Key, Value, Opts) when is_pid(Client), is_binary(Key
     {ok, term()} | {error, not_found | term()}.
 read_crdt(Client, Key) when is_pid(Client), is_binary(Key) ->
     macula_local_client:read_crdt(Client, Key).
+
+%%%===================================================================
+%%% Cluster API (v0.16.3+)
+%%%===================================================================
+
+%% @doc Ensure this node is running in distributed mode.
+%%
+%% If the node is already distributed, returns `ok' immediately.
+%% Otherwise, starts distribution with a generated node name.
+%%
+%% This function is used by bc_gitops to delegate cluster setup
+%% to the Macula platform when available.
+%%
+%% Examples:
+%% ```
+%% ok = macula:ensure_distributed().
+%% '''
+%%
+%% @since v0.16.3
+-spec ensure_distributed() -> ok | {error, term()}.
+ensure_distributed() ->
+    macula_cluster:ensure_distributed().
+
+%% @doc Get the Erlang cookie for the cluster.
+%%
+%% Resolves the cookie from various sources in priority order:
+%% 1. Application env: `{macula, [{cookie, CookieValue}]}'
+%% 2. Environment variable: `MACULA_COOKIE' or `RELEASE_COOKIE'
+%% 3. User's ~/.erlang.cookie file
+%% 4. Auto-generated (persisted to ~/.erlang.cookie)
+%%
+%% Examples:
+%% ```
+%% Cookie = macula:get_cookie().
+%% '''
+%%
+%% @since v0.16.3
+-spec get_cookie() -> atom().
+get_cookie() ->
+    macula_cluster:get_cookie().
+
+%% @doc Set the Erlang cookie for this node and persist it.
+%%
+%% Sets the cookie for the current node and attempts to persist
+%% it to ~/.erlang.cookie for future sessions.
+%%
+%% Examples:
+%% ```
+%% ok = macula:set_cookie(my_secret_cookie).
+%% '''
+%%
+%% @since v0.16.3
+-spec set_cookie(atom() | binary()) -> ok.
+set_cookie(Cookie) ->
+    macula_cluster:set_cookie(Cookie).
+
+%% @doc Subscribe to node up/down events.
+%%
+%% After calling this function, the calling process will receive
+%% `{nodeup, Node}' and `{nodedown, Node}' messages when nodes
+%% join or leave the cluster.
+%%
+%% Examples:
+%% ```
+%% ok = macula:monitor_nodes().
+%% receive
+%%     {nodeup, Node} -> handle_node_up(Node);
+%%     {nodedown, Node} -> handle_node_down(Node)
+%% end.
+%% '''
+%%
+%% @since v0.16.3
+-spec monitor_nodes() -> ok.
+monitor_nodes() ->
+    macula_cluster:monitor_nodes().
+
+%% @doc Unsubscribe from node up/down events.
+%%
+%% Stops the calling process from receiving nodeup/nodedown messages.
+%%
+%% Examples:
+%% ```
+%% ok = macula:unmonitor_nodes().
+%% '''
+%%
+%% @since v0.16.3
+-spec unmonitor_nodes() -> ok.
+unmonitor_nodes() ->
+    macula_cluster:unmonitor_nodes().
 
 %%%===================================================================
 %%% Internal functions

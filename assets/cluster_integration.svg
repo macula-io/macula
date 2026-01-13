@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+    </marker>
+    <marker id="arrowhead-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#9ca3af"/>
+    </marker>
+    <linearGradient id="macula-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6"/>
+      <stop offset="100%" style="stop-color:#6366f1"/>
+    </linearGradient>
+    <linearGradient id="gitops-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#10b981"/>
+      <stop offset="100%" style="stop-color:#059669"/>
+    </linearGradient>
+    <linearGradient id="guest-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b"/>
+      <stop offset="100%" style="stop-color:#d97706"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="500" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="400" y="35" text-anchor="middle" font-size="20" font-weight="600" fill="#1e293b">
+    Macula Cluster API Integration
+  </text>
+
+  <!-- Host VM Box -->
+  <rect x="50" y="60" width="700" height="280" rx="12" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="70" y="85" font-size="14" font-weight="600" fill="#64748b">HOST VM</text>
+
+  <!-- bc_gitops Box -->
+  <rect x="80" y="100" width="200" height="120" rx="8" fill="url(#gitops-grad)" opacity="0.9"/>
+  <text x="180" y="130" text-anchor="middle" font-size="16" font-weight="600" fill="white">bc_gitops</text>
+  <text x="180" y="155" text-anchor="middle" font-size="11" fill="rgba(255,255,255,0.9)">bc_gitops_cluster.erl</text>
+  <text x="180" y="175" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.8)">ensure_distributed()</text>
+  <text x="180" y="190" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.8)">get_cookie()</text>
+  <text x="180" y="205" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.8)">monitor_nodes()</text>
+
+  <!-- Macula Box -->
+  <rect x="380" y="100" width="200" height="120" rx="8" fill="url(#macula-grad)" opacity="0.9"/>
+  <text x="480" y="130" text-anchor="middle" font-size="16" font-weight="600" fill="white">macula</text>
+  <text x="480" y="155" text-anchor="middle" font-size="11" fill="rgba(255,255,255,0.9)">macula_cluster.erl</text>
+  <text x="480" y="175" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.8)">ensure_distributed()</text>
+  <text x="480" y="190" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.8)">get_cookie()</text>
+  <text x="480" y="205" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.8)">monitor_nodes()</text>
+
+  <!-- Delegation Arrow -->
+  <path d="M 280 160 L 370 160" stroke="#6366f1" stroke-width="2" fill="none" marker-end="url(#arrowhead)"/>
+  <text x="325" y="150" text-anchor="middle" font-size="10" fill="#6366f1">delegates</text>
+
+  <!-- Detection Check -->
+  <rect x="290" y="175" width="80" height="25" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+  <text x="330" y="192" text-anchor="middle" font-size="9" fill="#92400e">macula loaded?</text>
+
+  <!-- Fallback Arrow -->
+  <path d="M 180 220 L 180 260 L 180 290" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="4,3" fill="none" marker-end="url(#arrowhead-gray)"/>
+  <text x="195" y="265" font-size="9" fill="#6b7280">fallback</text>
+
+  <!-- Local Implementation Box -->
+  <rect x="100" y="290" width="160" height="40" rx="6" fill="#e5e7eb" stroke="#9ca3af" stroke-width="1"/>
+  <text x="180" y="315" text-anchor="middle" font-size="10" fill="#4b5563">Local Implementation</text>
+
+  <!-- Guest VM 1 -->
+  <rect x="400" y="250" width="140" height="80" rx="8" fill="url(#guest-grad)" opacity="0.9"/>
+  <text x="470" y="280" text-anchor="middle" font-size="13" font-weight="600" fill="white">Guest VM 1</text>
+  <text x="470" y="300" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.9)">demo_uptime@host</text>
+  <text x="470" y="315" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.8)">isolation: vm</text>
+
+  <!-- Guest VM 2 -->
+  <rect x="560" y="250" width="140" height="80" rx="8" fill="url(#guest-grad)" opacity="0.9"/>
+  <text x="630" y="280" text-anchor="middle" font-size="13" font-weight="600" fill="white">Guest VM 2</text>
+  <text x="630" y="300" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.9)">demo_app@host</text>
+  <text x="630" y="315" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.8)">isolation: vm</text>
+
+  <!-- Connection from Macula to Guests -->
+  <path d="M 480 220 L 480 240" stroke="#6366f1" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+  <text x="510" y="235" font-size="9" fill="#6366f1">spawns</text>
+
+  <!-- Cookie Flow -->
+  <rect x="600" y="100" width="130" height="70" rx="6" fill="#ecfdf5" stroke="#10b981" stroke-width="1"/>
+  <text x="665" y="120" text-anchor="middle" font-size="11" font-weight="500" fill="#065f46">Cookie Sources</text>
+  <text x="665" y="138" text-anchor="middle" font-size="9" fill="#047857">1. app env</text>
+  <text x="665" y="151" text-anchor="middle" font-size="9" fill="#047857">2. MACULA_COOKIE</text>
+  <text x="665" y="164" text-anchor="middle" font-size="9" fill="#047857">3. ~/.erlang.cookie</text>
+
+  <!-- Arrow from cookie to macula -->
+  <path d="M 600 135 L 585 135" stroke="#10b981" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>
+
+  <!-- Legend Box -->
+  <rect x="50" y="360" width="700" height="120" rx="8" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="70" y="385" font-size="14" font-weight="600" fill="#1e293b">Integration Flow</text>
+
+  <!-- Legend Items -->
+  <circle cx="80" cy="410" r="6" fill="#10b981"/>
+  <text x="95" y="414" font-size="11" fill="#475569">bc_gitops checks if macula module is loaded</text>
+
+  <circle cx="80" cy="435" r="6" fill="#8b5cf6"/>
+  <text x="95" y="439" font-size="11" fill="#475569">If loaded: delegates clustering operations to macula</text>
+
+  <circle cx="80" cy="460" r="6" fill="#9ca3af"/>
+  <text x="95" y="464" font-size="11" fill="#475569">If not loaded: uses local implementation (standalone mode)</text>
+
+  <!-- Benefits Section -->
+  <text x="450" y="385" font-size="14" font-weight="600" fill="#1e293b">Benefits</text>
+  <text x="450" y="410" font-size="10" fill="#475569">Single source of truth for cluster configuration</text>
+  <text x="450" y="430" font-size="10" fill="#475569">Consistent cookie management across all apps</text>
+  <text x="450" y="450" font-size="10" fill="#475569">Centralized node event handling</text>
+  <text x="450" y="470" font-size="10" fill="#475569">bc_gitops works standalone without macula</text>
+</svg>

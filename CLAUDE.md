@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v0.16.2 (January 2026)
+**Current Version**: v0.18.0 (January 2026)
 
 ---
 
@@ -65,6 +65,7 @@ These are non-negotiable requirements. Violations will result in rejection:
 | v0.16.0 | Dec 2025 | **Registry System** - Ed25519 signing, Cluster Controller, security scanning (60 tests) |
 | v0.16.1 | Jan 2026 | **Bug Fix** - Certificate path consistency in macula_gateway_mesh |
 | v0.16.2 | Jan 2026 | **Bug Fix** - Environment variable naming consistency (MACULA_TLS_*) |
+| v0.18.0 | Jan 2026 | **Cluster API** - bc_gitops integration (ensure_distributed, cookie mgmt, node monitoring - 19 tests) |
 
 ---
 
