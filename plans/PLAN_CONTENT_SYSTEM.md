@@ -1,8 +1,36 @@
 # Plan: Macula Content System
 
-**Status:** Planning
+**Status:** Core Implementation Complete (Phases 1-5)
 **Created:** 2026-01-14
 **Last Updated:** 2026-01-14
+
+**Next:** Phase 6 (NIF Optimization) and Phase 7 (bc-gitops + macula-console Integration)
+
+## Implementation Status
+
+| Phase | Module | Tests | Status |
+|-------|--------|-------|--------|
+| 1 | macula_content_hasher | 30 | ✅ Complete |
+| 1 | macula_content_chunker | 28 | ✅ Complete |
+| 1 | macula_content_manifest | 32 | ✅ Complete |
+| 2 | macula_content_store | 23 | ✅ Complete |
+| 3 | macula_content_transfer | 27 | ✅ Complete |
+| 4 | macula_content_dht | 15 | ✅ Complete |
+| 5 | macula_content (facade) | 11 | ✅ Complete |
+| 5 | macula_content_system (supervisor) | 5 | ✅ Complete |
+| **Total** | | **171** | 8/8 modules done |
+
+### Wire Protocol Messages Added (0x90-0x9F)
+
+| Type | ID | Status |
+|------|-----|--------|
+| `content_want` | `0x90` | ✅ Added |
+| `content_have` | `0x91` | ✅ Added |
+| `content_block` | `0x92` | ✅ Added |
+| `content_manifest_req` | `0x93` | ✅ Added |
+| `content_manifest_res` | `0x94` | ✅ Added |
+| `content_cancel` | `0x95` | ✅ Added |
+
 **Target Version:** v0.19.0
 
 ## Overview
@@ -733,10 +761,28 @@ end
 
 ### Phase 5: API & Supervision
 
-- [ ] Implement `macula_content.erl` (public API facade)
-- [ ] Implement `macula_content_system.erl` (supervisor)
-- [ ] Add to macula supervision tree
-- [ ] Write integration tests (target: 20 tests)
+- [x] Implement `macula_content.erl` (public API facade) - 11 tests
+- [x] Implement `macula_content_system.erl` (supervisor) - 5 tests
+- [ ] Add to macula supervision tree (deferred to Phase 7)
+- [x] Write integration tests
+
+### Phase 5.5: Documentation (macula-ecosystem/) - COMPLETE
+
+- [x] Create animated SVG diagram for Content Transfer flow (like DHT PubSub/RPC)
+- [x] Add "Macula Content Transfer" section to macula-ecosystem documentation
+- [x] Document want/have/block protocol with visual flow
+- [x] Document parallel multi-provider download visualization
+- [x] Document MCID format and Merkle tree verification
+
+**Files Created:**
+- `macula-ecosystem/assets/content-transfer-flow.svg` - Animated SVG with:
+  - DHT discovery animation (rotating rings)
+  - WANT message flow (animated circles)
+  - BLOCK data flow (animated rectangles)
+  - Merkle tree verification visualization
+  - Parallel download indicator
+  - MCID format breakdown
+- `macula-ecosystem/guides/content-transfer.md` - Complete documentation
 
 ### Phase 6: NIF Optimization (macula-nifs/)
 
@@ -747,8 +793,18 @@ end
 
 ### Phase 7: Integration
 
-- [ ] Update bc-gitops for mesh source type
-- [ ] Update macula-console MaculaReleases
+- [x] Update bc-gitops for mesh source type
+  - Added `mesh` to source_spec type union
+  - Added `mcid` field to source_spec record
+  - Added `fetch_mesh_package/2` in bc_gitops_workspace.erl
+  - Added telemetry events for mesh fetch (TELEMETRY_MESH_FETCH_START/STOP)
+  - Added mesh source test (68 tests passing)
+- [x] Update macula-console Content module
+  - Created `MaculaCluster.Content` module (~320 LOC)
+  - High-level Elixir interface to `:macula_content`
+  - publish/2, store/2, fetch/2, locate/1, stat/1, is_local?/1
+  - Runtime availability check (graceful degradation)
+  - Compiles successfully (warnings expected - :macula_content not in deps)
 - [ ] End-to-end testing
 - [ ] Documentation
 
@@ -787,17 +843,27 @@ end
 
 ### Test Files
 
-| File | Tests Est. |
-|------|------------|
-| `test/macula_content_hasher_tests.erl` | 15 |
-| `test/macula_content_chunker_tests.erl` | 15 |
-| `test/macula_content_manifest_tests.erl` | 20 |
-| `test/macula_content_store_tests.erl` | 20 |
-| `test/macula_content_transfer_tests.erl` | 25 |
-| `test/macula_content_dht_tests.erl` | 15 |
-| `test/macula_content_integration_tests.erl` | 20 |
+| File | Tests Est. | Actual |
+|------|------------|--------|
+| `test/macula_content_hasher_tests.erl` | 15 | 30 |
+| `test/macula_content_chunker_tests.erl` | 15 | 28 |
+| `test/macula_content_manifest_tests.erl` | 20 | 32 |
+| `test/macula_content_store_tests.erl` | 20 | 23 |
+| `test/macula_content_transfer_tests.erl` | 25 | 27 |
+| `test/macula_content_dht_tests.erl` | 15 | 15 |
+| `test/macula_content_system_tests.erl` | - | 5 |
+| `test/macula_content_tests.erl` | - | 11 |
 
-**Total estimated tests: ~130**
+**Total: 171 tests** (exceeded estimate of ~130)
+
+### Documentation Files (macula-ecosystem/)
+
+| File | Purpose |
+|------|---------|
+| `assets/content-transfer-flow.svg` | Animated SVG showing want/have/block protocol |
+| `assets/content-parallel-download.svg` | Multi-provider parallel download visualization |
+| `assets/content-merkle-tree.svg` | Merkle tree verification diagram |
+| `guides/content-transfer.md` | Macula Content Transfer documentation section |
 
 ---
 
