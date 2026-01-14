@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.19.2] - 2026-01-14
+
+### Changed
+
+- Complete README.md rework with feature sections and SVG diagrams
+- Added logo.svg and mesh-architecture.svg from macula-ecosystem
+
+---
+
 ## [0.19.1] - 2026-01-14
 
 ### Added

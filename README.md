@@ -169,7 +169,7 @@ Add to your `rebar.config`:
 
 ```erlang
 {deps, [
-    {macula, "0.19.1"}
+    {macula, "0.19.2"}
 ]}.
 ```
 
@@ -178,7 +178,7 @@ Or in Elixir `mix.exs`:
 ```elixir
 defp deps do
   [
-    {:macula, "~> 0.19.1"}
+    {:macula, "~> 0.19.2"}
   ]
 end
 ```
@@ -250,6 +250,7 @@ end).
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.19.2** | Jan 2026 | README rework with feature sections and SVGs |
 | **v0.19.1** | Jan 2026 | Gossip clustering, static strategy (34 tests) |
 | **v0.19.0** | Jan 2026 | Content transfer system, MCID, Want/Have/Block (171 tests) |
 | **v0.18.0** | Jan 2026 | Cluster API for bc_gitops integration (19 tests) |
