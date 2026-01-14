@@ -1,0 +1,328 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 780" width="900" height="780">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0C1929"/>
+      <stop offset="100%" style="stop-color:#1a2744"/>
+    </linearGradient>
+    <linearGradient id="nodeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0EA5E9"/>
+      <stop offset="100%" style="stop-color:#0284C7"/>
+    </linearGradient>
+    <linearGradient id="hubGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#F97316"/>
+      <stop offset="100%" style="stop-color:#EA580C"/>
+    </linearGradient>
+    <linearGradient id="securityGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#10B981"/>
+      <stop offset="100%" style="stop-color:#059669"/>
+    </linearGradient>
+
+    <!-- Glow filters -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Arrow markers -->
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#0EA5E9"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#F97316"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10B981"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="780" fill="url(#bgGrad)"/>
+
+  <!-- Title -->
+  <text x="450" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="22" font-weight="bold" fill="#fff">
+    Macula Mesh: Decentralized Service Architecture
+  </text>
+  <text x="450" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#64748B">
+    Edge nodes forming a realm with RPC, PubSub, and DHT discovery
+  </text>
+
+  <!-- Realm boundary (animated pulse) -->
+  <ellipse cx="450" cy="320" rx="380" ry="220" fill="none" stroke="#0EA5E9" stroke-width="2" opacity="0.2" stroke-dasharray="10,5">
+    <animate attributeName="opacity" values="0.1;0.3;0.1" dur="4s" repeatCount="indefinite"/>
+  </ellipse>
+  <text x="820" y="320" text-anchor="end" font-family="system-ui, sans-serif" font-size="14" fill="#0EA5E9" opacity="0.8">
+    Realm: io.macula
+  </text>
+
+  <!-- DHT Ring visualization (center) -->
+  <g id="dht-ring" transform="translate(450, 320)">
+    <circle cx="0" cy="0" r="60" fill="none" stroke="#F97316" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.5">
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="30s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="0" cy="0" r="45" fill="none" stroke="#F97316" stroke-width="1" stroke-dasharray="2,3" opacity="0.3">
+      <animateTransform attributeName="transform" type="rotate" from="360" to="0" dur="20s" repeatCount="indefinite"/>
+    </circle>
+    <text x="0" y="5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#F97316" font-weight="bold">DHT</text>
+    <text x="0" y="18" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8" fill="#F97316" opacity="0.8">Kademlia</text>
+  </g>
+
+  <!-- Edge Node Clusters -->
+
+  <!-- Cluster 1: Service Provider (top-left) -->
+  <g id="cluster1" transform="translate(150, 180)">
+    <rect x="-60" y="-50" width="120" height="100" rx="10" fill="#0C1929" stroke="#0EA5E9" stroke-width="2" opacity="0.8"/>
+    <text x="0" y="-60" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#64748B">Edge Cluster A</text>
+
+    <!-- Nodes in cluster -->
+    <circle cx="-25" cy="-15" r="12" fill="#0C1929" stroke="#0EA5E9" stroke-width="2"/>
+    <circle cx="25" cy="-15" r="12" fill="#0C1929" stroke="#0EA5E9" stroke-width="2"/>
+    <circle cx="0" cy="25" r="14" fill="#0C1929" stroke="url(#hubGrad)" stroke-width="2.5" filter="url(#softGlow)"/>
+    <circle cx="0" cy="25" r="6" fill="#F97316"/>
+
+    <!-- Service label (provider/responder) -->
+    <rect x="-55" y="48" width="110" height="18" rx="4" fill="#8B5CF6" opacity="0.2"/>
+    <text x="0" y="60" text-anchor="middle" font-family="monospace" font-size="8" fill="#8B5CF6">
+      respond:place_order
+    </text>
+
+    <!-- "Advertise" animation -->
+    <circle cx="0" cy="25" r="14" fill="none" stroke="#F97316" stroke-width="1" opacity="0">
+      <animate attributeName="r" values="14;35;50" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.8;0.3;0" dur="2s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Cluster 2: Service Consumer (top-right) -->
+  <g id="cluster2" transform="translate(750, 180)">
+    <rect x="-60" y="-50" width="120" height="100" rx="10" fill="#0C1929" stroke="#0EA5E9" stroke-width="2" opacity="0.8"/>
+    <text x="0" y="-60" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#64748B">Edge Cluster B</text>
+
+    <!-- Nodes in cluster -->
+    <circle cx="-25" cy="-15" r="12" fill="#0C1929" stroke="#0EA5E9" stroke-width="2"/>
+    <circle cx="25" cy="-15" r="12" fill="#0C1929" stroke="#0EA5E9" stroke-width="2"/>
+    <circle cx="0" cy="25" r="14" fill="#0C1929" stroke="#0EA5E9" stroke-width="2.5"/>
+    <circle cx="0" cy="25" r="6" fill="#0EA5E9"/>
+
+    <!-- Consumer label (caller/requester) -->
+    <rect x="-55" y="48" width="110" height="18" rx="4" fill="#0EA5E9" opacity="0.2"/>
+    <text x="0" y="60" text-anchor="middle" font-family="monospace" font-size="8" fill="#0EA5E9">
+      request:place_order
+    </text>
+  </g>
+
+  <!-- Cluster 3: PubSub Publisher (bottom-left) -->
+  <g id="cluster3" transform="translate(150, 450)">
+    <rect x="-60" y="-50" width="120" height="100" rx="10" fill="#0C1929" stroke="#0EA5E9" stroke-width="2" opacity="0.8"/>
+    <text x="0" y="-60" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#64748B">Edge Cluster C</text>
+
+    <!-- Nodes in cluster -->
+    <circle cx="-25" cy="-15" r="12" fill="#0C1929" stroke="#0EA5E9" stroke-width="2"/>
+    <circle cx="25" cy="0" r="14" fill="#0C1929" stroke="#10B981" stroke-width="2.5" filter="url(#softGlow)"/>
+    <circle cx="25" cy="0" r="6" fill="#10B981"/>
+    <circle cx="-25" cy="25" r="12" fill="#0C1929" stroke="#0EA5E9" stroke-width="2"/>
+
+    <!-- Publisher label -->
+    <rect x="-45" y="48" width="90" height="18" rx="4" fill="#10B981" opacity="0.2"/>
+    <text x="0" y="60" text-anchor="middle" font-family="monospace" font-size="9" fill="#10B981">
+      events.order_placed
+    </text>
+  </g>
+
+  <!-- Cluster 4: PubSub Subscriber (bottom-right) -->
+  <g id="cluster4" transform="translate(750, 450)">
+    <rect x="-60" y="-50" width="120" height="100" rx="10" fill="#0C1929" stroke="#0EA5E9" stroke-width="2" opacity="0.8"/>
+    <text x="0" y="-60" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#64748B">Edge Cluster D</text>
+
+    <!-- Nodes in cluster -->
+    <circle cx="0" cy="-15" r="12" fill="#0C1929" stroke="#0EA5E9" stroke-width="2"/>
+    <circle cx="-25" cy="20" r="12" fill="#0C1929" stroke="#0EA5E9" stroke-width="2"/>
+    <circle cx="25" cy="20" r="12" fill="#0C1929" stroke="#10B981" stroke-width="2"/>
+    <circle cx="25" cy="20" r="5" fill="#10B981"/>
+
+    <!-- Subscriber label -->
+    <rect x="-45" y="48" width="90" height="18" rx="4" fill="#10B981" opacity="0.2"/>
+    <text x="0" y="60" text-anchor="middle" font-family="monospace" font-size="9" fill="#10B981">
+      analytics.listener
+    </text>
+  </g>
+
+  <!-- Cluster 5: PubSub Subscriber 2 (bottom-center) - Shows broadcast nature -->
+  <g id="cluster5" transform="translate(450, 520)">
+    <rect x="-60" y="-50" width="120" height="100" rx="10" fill="#0C1929" stroke="#0EA5E9" stroke-width="2" opacity="0.8"/>
+    <text x="0" y="-60" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#64748B">Edge Cluster E</text>
+
+    <!-- Nodes in cluster -->
+    <circle cx="-25" cy="-10" r="12" fill="#0C1929" stroke="#0EA5E9" stroke-width="2"/>
+    <circle cx="25" cy="-10" r="12" fill="#0C1929" stroke="#10B981" stroke-width="2"/>
+    <circle cx="25" cy="-10" r="5" fill="#10B981"/>
+    <circle cx="0" cy="25" r="12" fill="#0C1929" stroke="#0EA5E9" stroke-width="2"/>
+
+    <!-- Subscriber label -->
+    <rect x="-45" y="48" width="90" height="18" rx="4" fill="#10B981" opacity="0.2"/>
+    <text x="0" y="60" text-anchor="middle" font-family="monospace" font-size="9" fill="#10B981">
+      billing.listener
+    </text>
+  </g>
+
+  <!-- Connection lines (mesh topology) -->
+  <g id="mesh-connections" stroke="#0EA5E9" stroke-width="1" fill="none" opacity="0.4">
+    <line x1="210" y1="180" x2="390" y2="280"/>
+    <line x1="690" y1="180" x2="510" y2="280"/>
+    <line x1="210" y1="450" x2="390" y2="360"/>
+    <line x1="690" y1="450" x2="510" y2="360"/>
+    <line x1="150" y1="280" x2="150" y2="350"/>
+    <line x1="750" y1="280" x2="750" y2="350"/>
+    <!-- New connections for Cluster E -->
+    <line x1="450" y1="380" x2="450" y2="470"/>
+    <line x1="210" y1="450" x2="390" y2="520"/>
+    <line x1="690" y1="450" x2="510" y2="520"/>
+  </g>
+
+  <!-- RPC Flow Animation (Cluster B to A - Request, A responds) -->
+  <g id="rpc-flow">
+    <!-- DHT Lookup path -->
+    <path d="M 750 205 Q 600 250 450 320" fill="none" stroke="#F97316" stroke-width="2" stroke-dasharray="5,5" opacity="0.6"/>
+    <path d="M 450 320 Q 300 250 150 205" fill="none" stroke="#F97316" stroke-width="2" stroke-dasharray="5,5" opacity="0.6"/>
+
+    <!-- RPC Request path (B calls A) -->
+    <path id="rpc-request-path" d="M 750 205 C 600 150 300 150 150 205" fill="none" stroke="#0EA5E9" stroke-width="2" opacity="0"/>
+    <path d="M 750 205 C 600 150 300 150 150 205" fill="none" stroke="#0EA5E9" stroke-width="2" stroke-dasharray="8,4" opacity="0.7" marker-end="url(#arrowBlue)"/>
+
+    <!-- RPC Response path (A responds to B) -->
+    <path id="rpc-response-path" d="M 150 205 C 300 260 600 260 750 205" fill="none" stroke="#8B5CF6" stroke-width="2" opacity="0"/>
+    <path d="M 150 205 C 300 260 600 260 750 205" fill="none" stroke="#8B5CF6" stroke-width="2" stroke-dasharray="4,4" opacity="0.5"/>
+
+    <!-- Animated RPC Request packet (B to A) -->
+    <circle r="6" fill="#0EA5E9" filter="url(#glow)">
+      <animateMotion dur="2s" repeatCount="indefinite" begin="0s">
+        <mpath href="#rpc-request-path"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="0;1;1;0" dur="2s" repeatCount="indefinite" begin="0s"/>
+    </circle>
+
+    <!-- Animated RPC Response packet (A to B) -->
+    <circle r="6" fill="#8B5CF6" filter="url(#glow)">
+      <animateMotion dur="2s" repeatCount="indefinite" begin="2.5s">
+        <mpath href="#rpc-response-path"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="0;1;1;0" dur="2s" repeatCount="indefinite" begin="2.5s"/>
+    </circle>
+
+    <!-- RPC labels -->
+    <rect x="380" y="118" width="70" height="18" rx="4" fill="#0EA5E9" opacity="0.2"/>
+    <text x="415" y="130" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#0EA5E9" font-weight="bold">Request</text>
+
+    <rect x="450" y="118" width="70" height="18" rx="4" fill="#8B5CF6" opacity="0.2"/>
+    <text x="485" y="130" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#8B5CF6" font-weight="bold">Response</text>
+  </g>
+
+  <!-- PubSub Flow Animation (Cluster C broadcasts to D and E) -->
+  <g id="pubsub-flow">
+    <!-- Broadcast path to Cluster D -->
+    <path id="pubsub-path-1" d="M 175 450 C 300 420 600 420 775 470" fill="none" stroke="#10B981" stroke-width="2" stroke-dasharray="6,3" opacity="0.7"/>
+
+    <!-- Broadcast path to Cluster E (shows fan-out pattern) -->
+    <path id="pubsub-path-2" d="M 175 450 C 250 500 350 540 450 520" fill="none" stroke="#10B981" stroke-width="2" stroke-dasharray="6,3" opacity="0.7"/>
+
+    <!-- Animated pub packet to Cluster D -->
+    <circle r="5" fill="#10B981" filter="url(#glow)">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="0.5s">
+        <mpath href="#pubsub-path-1"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="0;1;1;0" dur="3s" repeatCount="indefinite" begin="0.5s"/>
+    </circle>
+    <circle r="5" fill="#10B981" filter="url(#glow)">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="2.5s">
+        <mpath href="#pubsub-path-1"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="0;1;1;0" dur="3s" repeatCount="indefinite" begin="2.5s"/>
+    </circle>
+
+    <!-- Animated pub packet to Cluster E (simultaneous broadcast) -->
+    <circle r="5" fill="#10B981" filter="url(#glow)">
+      <animateMotion dur="2s" repeatCount="indefinite" begin="0.5s">
+        <mpath href="#pubsub-path-2"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="0;1;1;0" dur="2s" repeatCount="indefinite" begin="0.5s"/>
+    </circle>
+    <circle r="5" fill="#10B981" filter="url(#glow)">
+      <animateMotion dur="2s" repeatCount="indefinite" begin="2.5s">
+        <mpath href="#pubsub-path-2"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="0;1;1;0" dur="2s" repeatCount="indefinite" begin="2.5s"/>
+    </circle>
+
+    <!-- PubSub broadcast label - centered between C and E, above broadcast paths -->
+    <rect x="300" y="400" width="120" height="22" rx="4" fill="#10B981" opacity="0.2"/>
+    <text x="360" y="415" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#10B981" font-weight="bold">PubSub Broadcast</text>
+  </g>
+
+  <!-- Security Layer (UCAN/DID) -->
+  <g id="security" transform="translate(450, 320)">
+    <!-- Security shield around DHT -->
+    <circle cx="0" cy="0" r="80" fill="none" stroke="#10B981" stroke-width="1.5" stroke-dasharray="2,4" opacity="0.4">
+      <animate attributeName="stroke-dashoffset" values="0;12" dur="2s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Legend -->
+  <g id="legend" transform="translate(30, 650)">
+    <rect x="0" y="0" width="180" height="120" rx="8" fill="#0C1929" stroke="#334155" stroke-width="1" opacity="0.9"/>
+    <text x="15" y="20" font-family="system-ui, sans-serif" font-size="11" fill="#94A3B8" font-weight="bold">Legend</text>
+
+    <!-- RPC -->
+    <line x1="15" y1="38" x2="45" y2="38" stroke="#0EA5E9" stroke-width="2" stroke-dasharray="8,4"/>
+    <circle cx="30" cy="38" r="4" fill="#0EA5E9"/>
+    <text x="55" y="42" font-family="system-ui, sans-serif" font-size="10" fill="#0EA5E9">RPC (Request/Response)</text>
+
+    <!-- PubSub -->
+    <line x1="15" y1="58" x2="45" y2="58" stroke="#10B981" stroke-width="2" stroke-dasharray="6,3"/>
+    <circle cx="30" cy="58" r="4" fill="#10B981"/>
+    <text x="55" y="62" font-family="system-ui, sans-serif" font-size="10" fill="#10B981">PubSub (Broadcast)</text>
+
+    <!-- DHT -->
+    <circle cx="30" cy="78" r="8" fill="none" stroke="#F97316" stroke-width="1.5" stroke-dasharray="3,2"/>
+    <text x="55" y="82" font-family="system-ui, sans-serif" font-size="10" fill="#F97316">DHT Discovery</text>
+
+    <!-- Hub node -->
+    <circle cx="30" cy="100" r="6" fill="#0C1929" stroke="#F97316" stroke-width="2"/>
+    <circle cx="30" cy="100" r="3" fill="#F97316"/>
+    <text x="55" y="104" font-family="system-ui, sans-serif" font-size="10" fill="#94A3B8">Service Provider</text>
+  </g>
+
+  <!-- Security info box -->
+  <g id="security-info" transform="translate(690, 650)">
+    <rect x="0" y="0" width="180" height="120" rx="8" fill="#0C1929" stroke="#10B981" stroke-width="1" opacity="0.9"/>
+    <text x="15" y="20" font-family="system-ui, sans-serif" font-size="11" fill="#10B981" font-weight="bold">Security</text>
+
+    <text x="15" y="42" font-family="system-ui, sans-serif" font-size="9" fill="#94A3B8">• DID identity per node</text>
+    <text x="15" y="58" font-family="system-ui, sans-serif" font-size="9" fill="#94A3B8">• UCAN capability tokens</text>
+    <text x="15" y="74" font-family="system-ui, sans-serif" font-size="9" fill="#94A3B8">• Ed25519 signatures</text>
+    <text x="15" y="90" font-family="system-ui, sans-serif" font-size="9" fill="#94A3B8">• No central authority</text>
+    <text x="15" y="106" font-family="system-ui, sans-serif" font-size="9" fill="#94A3B8">• Cryptographic proof</text>
+  </g>
+
+  <!-- Flow description -->
+  <g id="flow-desc" transform="translate(250, 650)">
+    <rect x="0" y="0" width="400" height="120" rx="8" fill="#0C1929" stroke="#334155" stroke-width="1" opacity="0.9"/>
+    <text x="15" y="20" font-family="system-ui, sans-serif" font-size="11" fill="#94A3B8" font-weight="bold">How it works</text>
+
+    <text x="15" y="42" font-family="system-ui, sans-serif" font-size="9" fill="#94A3B8">1. Provider advertises service to DHT</text>
+    <text x="15" y="58" font-family="system-ui, sans-serif" font-size="9" fill="#94A3B8">2. Consumer discovers provider via DHT lookup</text>
+    <text x="15" y="74" font-family="system-ui, sans-serif" font-size="9" fill="#94A3B8">3. Direct QUIC connection established (NAT-friendly)</text>
+    <text x="15" y="90" font-family="system-ui, sans-serif" font-size="9" fill="#94A3B8">4. RPC: Request/Response with UCAN authorization</text>
+    <text x="15" y="106" font-family="system-ui, sans-serif" font-size="9" fill="#94A3B8">5. PubSub: Events broadcast to all subscribers</text>
+  </g>
+</svg>
