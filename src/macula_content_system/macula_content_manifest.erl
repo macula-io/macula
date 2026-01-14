@@ -20,12 +20,12 @@
 %%% ```
 %%% %% Create manifest from binary data
 %%% {ok, Manifest} = macula_content_manifest:create(Data, #{
-%%%     name => <<"my_app-1.0.0.tar.gz">>,
+%%%     name => <<"my_app-1.0.0.tar.gz"/utf8>>,
 %%%     chunk_size => 262144
-%%% }),
+%%% }).
 %%%
 %%% %% Get MCID as string
-%%% MCIDString = macula_content_manifest:mcid_to_string(maps:get(mcid, Manifest)),
+%%% MCIDString = macula_content_manifest:mcid_to_string(maps:get(mcid, Manifest)).
 %%%
 %%% %% Verify data matches manifest
 %%% ok = macula_content_manifest:verify(Manifest, Data).
@@ -80,10 +80,13 @@ version() ->
     ?VERSION.
 
 %% @doc Create a manifest from binary data.
+%%
 %% Options:
-%% - name: binary() - Content name (default: <<"unnamed">>)
-%% - chunk_size: pos_integer() - Chunk size (default: 262144)
-%% - hash_algorithm: blake3 | sha256 - Hash algorithm (default: blake3)
+%% <ul>
+%% <li>`name' - binary() - Content name (default: "unnamed")</li>
+%% <li>`chunk_size' - pos_integer() - Chunk size (default: 262144)</li>
+%% <li>`hash_algorithm' - blake3 | sha256 - Hash algorithm (default: blake3)</li>
+%% </ul>
 -spec create(binary(), map()) -> {ok, manifest()}.
 create(Data, Opts) ->
     Name = maps:get(name, Opts, <<"unnamed">>),

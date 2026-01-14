@@ -9,10 +9,10 @@
 %%% == Example Usage ==
 %%% ```
 %%% %% Hash binary data
-%%% Hash = macula_content_hasher:hash(blake3, <<"Hello, World!">>),
+%%% Hash = macula_content_hasher:hash(blake3, Data).
 %%%
 %%% %% Verify hash
-%%% true = macula_content_hasher:verify(blake3, Data, Hash),
+%%% true = macula_content_hasher:verify(blake3, Data, Hash).
 %%%
 %%% %% Stream hash multiple chunks
 %%% Hash = macula_content_hasher:hash_streaming(sha256, [Chunk1, Chunk2]).
