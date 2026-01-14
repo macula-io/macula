@@ -61,10 +61,13 @@ hash_streaming(sha256, Chunks) ->
     ),
     crypto:hash_final(Context1);
 hash_streaming(blake3, Chunks) ->
-    %% BLAKE3 streaming via concatenation (pure Erlang)
-    %% Can be optimized with NIF for incremental hashing
-    Combined = iolist_to_binary(Chunks),
-    blake3_hash(Combined).
+    %% Use NIF streaming hash if available (avoids concatenation)
+    case is_nif_available() of
+        true -> macula_blake3_nif:hash_streaming(Chunks);
+        false ->
+            Combined = iolist_to_binary(Chunks),
+            blake3_pure(Combined)
+    end.
 
 %% @doc Verify that data matches the expected hash.
 -spec verify(algorithm(), binary(), hash()) -> boolean().
@@ -103,30 +106,41 @@ hex_decode(Hex) ->
 %%%===================================================================
 
 %% @private
-%% Pure Erlang BLAKE3 implementation.
-%% This is a simplified version for correctness; production should use NIF.
+%% BLAKE3 hash with NIF acceleration when available.
 %%
-%% BLAKE3 is based on the Bao tree hashing construction with ChaCha-like
-%% compression. For simplicity, we implement the single-threaded version.
+%% Tries to use macula_blake3_nif (from macula-nifs package) which provides
+%% a Rust NIF implementation that is 10-20x faster than pure Erlang.
+%% Falls back to pure Erlang implementation if NIFs are not available.
 -spec blake3_hash(binary()) -> hash().
 blake3_hash(Data) ->
-    %% Try NIF first if available
-    case try_nif_blake3(Data) of
-        {ok, Hash} -> Hash;
-        not_available -> blake3_pure(Data)
+    case is_nif_available() of
+        true -> macula_blake3_nif:hash(Data);
+        false -> blake3_pure(Data)
     end.
 
 %% @private
-%% Try to use NIF implementation if macula_nifs is available.
-try_nif_blake3(Data) ->
-    case code:is_loaded(macula_nifs) of
-        {file, _} ->
-            case erlang:function_exported(macula_nifs, blake3_hash, 1) of
-                true -> {ok, macula_nifs:blake3_hash(Data)};
-                false -> not_available
+%% Check if BLAKE3 NIF is available.
+%% Caches result in process dictionary for performance.
+is_nif_available() ->
+    case get(macula_blake3_nif_available) of
+        undefined ->
+            Available = check_nif_available(),
+            put(macula_blake3_nif_available, Available),
+            Available;
+        Cached ->
+            Cached
+    end.
+
+%% @private
+check_nif_available() ->
+    case code:ensure_loaded(macula_blake3_nif) of
+        {module, macula_blake3_nif} ->
+            case erlang:function_exported(macula_blake3_nif, is_nif_loaded, 0) of
+                true -> macula_blake3_nif:is_nif_loaded();
+                false -> false
             end;
-        false ->
-            not_available
+        _ ->
+            false
     end.
 
 %% @private
