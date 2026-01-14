@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v0.18.0 (January 2026)
+**Current Version**: v0.19.1 (January 2026)
 
 ---
 
@@ -66,6 +66,8 @@ These are non-negotiable requirements. Violations will result in rejection:
 | v0.16.1 | Jan 2026 | **Bug Fix** - Certificate path consistency in macula_gateway_mesh |
 | v0.16.2 | Jan 2026 | **Bug Fix** - Environment variable naming consistency (MACULA_TLS_*) |
 | v0.18.0 | Jan 2026 | **Cluster API** - bc_gitops integration (ensure_distributed, cookie mgmt, node monitoring - 19 tests) |
+| v0.19.0 | Jan 2026 | **Content Transfer** - P2P artifact distribution via MCID (171 tests) |
+| v0.19.1 | Jan 2026 | **Gossip Clustering** - UDP multicast zero-config discovery (34 tests) |
 
 ---
 
@@ -678,6 +680,56 @@ ok = macula_registry_verify:verify_package(ManifestBin, Archive, Sig, PubKey).
 | Cluster controller | 10 |
 | Registry system | 6 |
 | Protocol types | 4 |
+
+---
+
+## ✅ v0.19.1 Gossip Clustering (COMPLETED - Jan 2026)
+
+**STATUS:** ✅ COMPLETE (34 tests)
+
+📋 **See `docs/guides/GOSSIP_CLUSTERING_GUIDE.md`** for detailed documentation
+
+### What Was Delivered
+
+Zero-configuration cluster formation using UDP multicast gossip, replacing libcluster dependency:
+
+| Module | Purpose |
+|--------|---------|
+| `macula_cluster_gossip.erl` | UDP multicast heartbeats and discovery |
+| `macula_cluster.erl` | Cluster API with `start_cluster/1` |
+
+### Key Features
+
+- **Zero-config discovery**: Nodes auto-discover via UDP multicast (230.1.1.251:45892)
+- **HMAC authentication**: Optional shared secret for cluster isolation
+- **Erlang-native**: No libcluster dependency required
+- **Docker-ready**: Works with host networking
+
+### Configuration
+
+```erlang
+%% Start gossip clustering
+ok = macula_cluster:start_cluster(#{
+    strategy => gossip,
+    secret => <<"my_cluster_secret">>  %% Optional
+}).
+```
+
+Environment variables:
+- `CLUSTER_STRATEGY=gossip` - Select gossip strategy
+- `CLUSTER_SECRET=...` - Shared secret for HMAC authentication
+- `MACULA_GOSSIP_PORT=45892` - UDP port (default)
+- `MACULA_GOSSIP_ADDR=230.1.1.251` - Multicast address (default)
+
+### Test Coverage (15 tests)
+
+| Category | Tests |
+|----------|-------|
+| Packet encoding/decoding | 4 |
+| HMAC authentication | 3 |
+| Node discovery | 4 |
+| Configuration | 2 |
+| Lifecycle | 2 |
 
 ---
 

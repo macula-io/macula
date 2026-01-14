@@ -77,9 +77,10 @@ start_link() ->
 %%                  type => worker(),       % optional
 %%                  modules => modules()}   % optional
 init([]) ->
+    Version = get_app_version(),
     ?LOG_INFO(""),
     ?LOG_INFO("═══════════════════════════════════════════════════════════════"),
-    ?LOG_INFO("  Starting Macula v0.8.5 (Always-On Architecture)"),
+    ?LOG_INFO("  Starting Macula ~s (Always-On Architecture)", [Version]),
     ?LOG_INFO("  All capabilities enabled: Bootstrap + Gateway + Peer"),
     ?LOG_INFO("═══════════════════════════════════════════════════════════════"),
     ?LOG_INFO(""),
@@ -273,6 +274,16 @@ get_peer_discovery_spec(NodeID, Port, Realm) ->
         type => worker,
         modules => [macula_peer_discovery]
     }.
+
+%% @private
+%% @doc Get application version from .app.src metadata.
+%% Returns the version string (e.g., "v0.19.0") for startup banner.
+-spec get_app_version() -> string().
+get_app_version() ->
+    case application:get_key(macula, vsn) of
+        {ok, Vsn} -> "v" ++ Vsn;
+        undefined -> "v0.0.0"
+    end.
 
 %% @private
 %% @doc Get QUIC port from environment variable or config.

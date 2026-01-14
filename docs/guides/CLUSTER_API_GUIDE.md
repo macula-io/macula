@@ -6,11 +6,24 @@ This guide explains the Macula Cluster API, which provides cluster infrastructur
 
 The Cluster API (`macula_cluster.erl`) provides a standardized interface for:
 
+- **Cluster Formation** - Starting clusters with various discovery strategies
 - **Distribution Management** - Starting and verifying Erlang distribution
 - **Cookie Management** - Resolving, setting, and persisting cluster cookies
 - **Node Monitoring** - Subscribing to node join/leave events
 
 ![Cluster API Integration](../../assets/cluster_integration.svg)
+
+## Cluster Strategies
+
+Macula supports multiple cluster formation strategies:
+
+| Strategy | Description | Configuration |
+|----------|-------------|---------------|
+| `gossip` | UDP multicast discovery (default) | Zero-config for LAN |
+| `static` | Explicit node list | Known node names |
+| `mdns` | mDNS/Bonjour discovery | Zero-config for LAN |
+
+See [Gossip Clustering Guide](./GOSSIP_CLUSTERING_GUIDE.md) for detailed gossip configuration.
 
 ## Why This API Exists
 
@@ -22,6 +35,38 @@ When applications like [bc_gitops](https://github.com/beam-campus/bc-gitops) run
 4. **Standalone Fallback** - Applications work without Macula by using their own implementations
 
 ## API Reference
+
+### Cluster Formation
+
+#### `macula_cluster:start_cluster/1`
+
+Starts cluster formation with the specified strategy.
+
+```erlang
+%% Start with gossip strategy (default)
+ok = macula_cluster:start_cluster(#{strategy => gossip}).
+
+%% Start with gossip and shared secret
+ok = macula_cluster:start_cluster(#{
+    strategy => gossip,
+    secret => <<"my_cluster_secret">>
+}).
+
+%% Start with static node list
+ok = macula_cluster:start_cluster(#{
+    strategy => static,
+    nodes => ['node1@host1', 'node2@host2']
+}).
+```
+
+**Options:**
+- `strategy` - Atom: `gossip` (default), `static`, or `mdns`
+- `secret` - Binary: Shared secret for gossip authentication
+- `nodes` - List: Node names for static strategy
+
+**Returns:**
+- `ok` - Cluster strategy started successfully
+- `{error, Reason}` - Failed to start strategy
 
 ### Distribution
 
@@ -268,6 +313,6 @@ Tests cover:
 
 ## Related Documentation
 
+- [Gossip Clustering Guide](./GOSSIP_CLUSTERING_GUIDE.md) - UDP multicast discovery
 - [bc_gitops Isolated VM Deployment](https://github.com/beam-campus/bc-gitops/blob/main/guides/isolated_vm_deployment.md)
-- [Macula Distribution System](../developer/distribution.md)
 - [Erlang Distribution Protocol](https://www.erlang.org/doc/reference_manual/distributed.html)

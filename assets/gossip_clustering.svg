@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 550" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+    <marker id="arrowhead-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f59e0b"/>
+    </marker>
+    <linearGradient id="node-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6"/>
+      <stop offset="100%" style="stop-color:#6366f1"/>
+    </linearGradient>
+    <linearGradient id="multicast-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#10b981"/>
+      <stop offset="100%" style="stop-color:#059669"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="850" height="550" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="425" y="35" text-anchor="middle" font-size="20" font-weight="600" fill="#1e293b">
+    Macula Gossip Clustering - UDP Multicast Discovery
+  </text>
+
+  <!-- Network Cloud -->
+  <ellipse cx="425" cy="200" rx="180" ry="80" fill="#ecfdf5" stroke="#10b981" stroke-width="2" stroke-dasharray="5,3"/>
+  <text x="425" y="200" text-anchor="middle" font-size="14" font-weight="500" fill="#065f46">UDP Multicast Group</text>
+  <text x="425" y="220" text-anchor="middle" font-size="11" fill="#047857">230.1.1.251:45892</text>
+
+  <!-- Node 1 -->
+  <rect x="80" y="300" width="160" height="100" rx="10" fill="url(#node-grad)" opacity="0.95"/>
+  <text x="160" y="330" text-anchor="middle" font-size="14" font-weight="600" fill="white">Node 1</text>
+  <text x="160" y="350" text-anchor="middle" font-size="11" fill="rgba(255,255,255,0.9)">demo1@localhost</text>
+  <text x="160" y="370" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.8)">Port: 4001</text>
+  <text x="160" y="385" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.7)">macula_cluster_gossip</text>
+
+  <!-- Node 2 -->
+  <rect x="345" y="420" width="160" height="100" rx="10" fill="url(#node-grad)" opacity="0.95"/>
+  <text x="425" y="450" text-anchor="middle" font-size="14" font-weight="600" fill="white">Node 2</text>
+  <text x="425" y="470" text-anchor="middle" font-size="11" fill="rgba(255,255,255,0.9)">demo2@localhost</text>
+  <text x="425" y="490" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.8)">Port: 4002</text>
+  <text x="425" y="505" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.7)">macula_cluster_gossip</text>
+
+  <!-- Node 3 -->
+  <rect x="610" y="300" width="160" height="100" rx="10" fill="url(#node-grad)" opacity="0.95"/>
+  <text x="690" y="330" text-anchor="middle" font-size="14" font-weight="600" fill="white">Node 3</text>
+  <text x="690" y="350" text-anchor="middle" font-size="11" fill="rgba(255,255,255,0.9)">demo3@localhost</text>
+  <text x="690" y="370" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.8)">Port: 4003</text>
+  <text x="690" y="385" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.7)">macula_cluster_gossip</text>
+
+  <!-- Broadcast arrows to multicast cloud -->
+  <path d="M 160 300 L 350 240" stroke="#10b981" stroke-width="2" fill="none" marker-end="url(#arrowhead-green)"/>
+  <path d="M 690 300 L 500 240" stroke="#10b981" stroke-width="2" fill="none" marker-end="url(#arrowhead-green)"/>
+  <path d="M 425 420 L 425 280" stroke="#10b981" stroke-width="2" fill="none" marker-end="url(#arrowhead-green)"/>
+
+  <!-- Broadcast labels -->
+  <rect x="200" y="250" width="80" height="22" rx="4" fill="#d1fae5"/>
+  <text x="240" y="265" text-anchor="middle" font-size="9" fill="#065f46">heartbeat</text>
+  <rect x="570" y="250" width="80" height="22" rx="4" fill="#d1fae5"/>
+  <text x="610" y="265" text-anchor="middle" font-size="9" fill="#065f46">heartbeat</text>
+  <rect x="430" y="320" width="80" height="22" rx="4" fill="#d1fae5"/>
+  <text x="470" y="335" text-anchor="middle" font-size="9" fill="#065f46">heartbeat</text>
+
+  <!-- Erlang Distribution connections -->
+  <path d="M 240 350 L 345 450" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5,3" fill="none" marker-end="url(#arrowhead-orange)"/>
+  <path d="M 610 350 L 505 450" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5,3" fill="none" marker-end="url(#arrowhead-orange)"/>
+  <path d="M 240 380 L 610 380" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5,3" fill="none" marker-end="url(#arrowhead-orange)"/>
+
+  <!-- Connection labels -->
+  <rect x="270" y="395" width="90" height="20" rx="4" fill="#fef3c7"/>
+  <text x="315" y="408" text-anchor="middle" font-size="8" fill="#92400e">net_kernel:connect</text>
+
+  <!-- Packet Format -->
+  <rect x="50" y="60" width="220" height="100" rx="8" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="160" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#1e293b">Gossip Packet Format</text>
+  <text x="70" y="105" font-size="10" fill="#475569">MACULA_GOSSIP:node_name|HMAC</text>
+  <rect x="60" y="115" width="200" height="35" rx="4" fill="#f1f5f9"/>
+  <text x="70" y="132" font-size="9" fill="#64748b">Prefix: "MACULA_GOSSIP:"</text>
+  <text x="70" y="145" font-size="9" fill="#64748b">HMAC: SHA256(secret, payload)</text>
+
+  <!-- Configuration -->
+  <rect x="580" y="60" width="220" height="100" rx="8" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="690" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#1e293b">Configuration</text>
+  <text x="600" y="105" font-size="10" fill="#475569">multicast_addr: 230.1.1.251</text>
+  <text x="600" y="120" font-size="10" fill="#475569">port: 45892</text>
+  <text x="600" y="135" font-size="10" fill="#475569">broadcast_interval: 1500ms</text>
+  <text x="600" y="150" font-size="10" fill="#475569">secret: cluster_secret (optional)</text>
+
+  <!-- Legend -->
+  <rect x="300" y="60" width="240" height="100" rx="8" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="420" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#1e293b">How It Works</text>
+  <circle cx="320" cy="100" r="5" fill="#10b981"/>
+  <text x="335" y="104" font-size="10" fill="#475569">UDP multicast heartbeats</text>
+  <circle cx="320" cy="120" r="5" fill="#f59e0b"/>
+  <text x="335" y="124" font-size="10" fill="#475569">Erlang distribution connect</text>
+  <circle cx="320" cy="140" r="5" fill="#8b5cf6"/>
+  <text x="335" y="144" font-size="10" fill="#475569">Full mesh cluster formed</text>
+</svg>

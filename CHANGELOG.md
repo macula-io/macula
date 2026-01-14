@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.19.1] - 2026-01-14
+
+### Added
+
+- **Gossip Clustering** - Zero-configuration cluster formation using UDP multicast
+  - `macula_cluster_gossip.erl` - UDP multicast heartbeats and peer discovery
+  - `macula_cluster_static.erl` - Static node list clustering strategy
+  - `macula_cluster:start_cluster/1` - API for starting cluster with strategy selection
+  - Supports `gossip`, `static`, and `mdns` strategies
+  - HMAC-SHA256 authentication with optional shared secret
+  - Auto-discovery on LAN via multicast group `230.1.1.251:45892`
+  - Dynamic version display in startup banner
+  - Added 34 unit tests for gossip and static clustering
+  - Added `docs/guides/GOSSIP_CLUSTERING_GUIDE.md` - Comprehensive operator guide
+  - Added `assets/gossip_clustering.svg` - Visual architecture diagram
+
+---
+
 ## [0.19.0] - 2026-01-14
 
 ### Added
