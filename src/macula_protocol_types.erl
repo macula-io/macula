@@ -101,6 +101,14 @@
 -define(MSG_REGISTRY_SYNC,          16#88).  % Sync registry index with peer
 -define(MSG_REGISTRY_SYNC_REPLY,    16#89).  % Registry index response
 
+%% Content System messages (0x90-0x9F range)
+-define(MSG_CONTENT_WANT,           16#90).  % Request blocks by MCID
+-define(MSG_CONTENT_HAVE,           16#91).  % Announce available blocks
+-define(MSG_CONTENT_BLOCK,          16#92).  % Block data transfer
+-define(MSG_CONTENT_MANIFEST_REQ,   16#93).  % Request manifest by MCID
+-define(MSG_CONTENT_MANIFEST_RES,   16#94).  % Manifest data response
+-define(MSG_CONTENT_CANCEL,         16#95).  % Cancel pending wants
+
 %%%===================================================================
 %%% Type Definitions
 %%%===================================================================
@@ -117,7 +125,9 @@
     gossip_push | gossip_pull | gossip_pull_reply | gossip_sync | gossip_sync_reply |
     registry_publish | registry_publish_ack | registry_fetch | registry_fetch_reply |
     registry_query | registry_query_reply | registry_verify | registry_verify_reply |
-    registry_sync | registry_sync_reply.
+    registry_sync | registry_sync_reply |
+    content_want | content_have | content_block |
+    content_manifest_req | content_manifest_res | content_cancel.
 
 -type message() ::
     {connect, connect_msg()} |
@@ -389,6 +399,58 @@
     registry_sync_reply_msg/0
 ]).
 
+%% Content System Messages
+
+-type content_want_msg() :: #{
+    request_id := binary(),           % Unique request ID
+    wants := [#{
+        mcid := binary(),             % Block MCID to request
+        priority => 1..255            % Higher = more urgent (default: 128)
+    }],
+    max_blocks => pos_integer(),      % Flow control: max blocks in response
+    from_node := binary()             % Requester node ID
+}.
+
+-type content_have_msg() :: #{
+    haves := [binary()],              % List of MCIDs we have
+    manifest_mcid => binary(),        % Optional: we have all chunks of this manifest
+    from_node := binary()
+}.
+
+-type content_block_msg() :: #{
+    request_id := binary(),           % Correlates with want request
+    mcid := binary(),                 % Block MCID
+    data := binary(),                 % Raw block data
+    from_node := binary()
+}.
+
+-type content_manifest_req_msg() :: #{
+    request_id := binary(),
+    mcid := binary(),                 % Manifest MCID
+    from_node := binary()
+}.
+
+-type content_manifest_res_msg() :: #{
+    request_id := binary(),
+    mcid := binary(),
+    manifest := binary(),             % MessagePack-encoded manifest
+    from_node := binary()
+}.
+
+-type content_cancel_msg() :: #{
+    request_id := binary(),           % Request to cancel
+    from_node := binary()
+}.
+
+-export_type([
+    content_want_msg/0,
+    content_have_msg/0,
+    content_block_msg/0,
+    content_manifest_req_msg/0,
+    content_manifest_res_msg/0,
+    content_cancel_msg/0
+]).
+
 %%%===================================================================
 %%% API Functions
 %%%===================================================================
@@ -441,7 +503,13 @@ message_type_id(registry_query_reply) -> ?MSG_REGISTRY_QUERY_REPLY;
 message_type_id(registry_verify) -> ?MSG_REGISTRY_VERIFY;
 message_type_id(registry_verify_reply) -> ?MSG_REGISTRY_VERIFY_REPLY;
 message_type_id(registry_sync) -> ?MSG_REGISTRY_SYNC;
-message_type_id(registry_sync_reply) -> ?MSG_REGISTRY_SYNC_REPLY.
+message_type_id(registry_sync_reply) -> ?MSG_REGISTRY_SYNC_REPLY;
+message_type_id(content_want) -> ?MSG_CONTENT_WANT;
+message_type_id(content_have) -> ?MSG_CONTENT_HAVE;
+message_type_id(content_block) -> ?MSG_CONTENT_BLOCK;
+message_type_id(content_manifest_req) -> ?MSG_CONTENT_MANIFEST_REQ;
+message_type_id(content_manifest_res) -> ?MSG_CONTENT_MANIFEST_RES;
+message_type_id(content_cancel) -> ?MSG_CONTENT_CANCEL.
 
 %% @doc Get message type name from numeric ID.
 -spec message_type_name(byte()) -> {ok, message_type()} | {error, unknown_type}.
@@ -492,4 +560,10 @@ message_type_name(?MSG_REGISTRY_VERIFY) -> {ok, registry_verify};
 message_type_name(?MSG_REGISTRY_VERIFY_REPLY) -> {ok, registry_verify_reply};
 message_type_name(?MSG_REGISTRY_SYNC) -> {ok, registry_sync};
 message_type_name(?MSG_REGISTRY_SYNC_REPLY) -> {ok, registry_sync_reply};
+message_type_name(?MSG_CONTENT_WANT) -> {ok, content_want};
+message_type_name(?MSG_CONTENT_HAVE) -> {ok, content_have};
+message_type_name(?MSG_CONTENT_BLOCK) -> {ok, content_block};
+message_type_name(?MSG_CONTENT_MANIFEST_REQ) -> {ok, content_manifest_req};
+message_type_name(?MSG_CONTENT_MANIFEST_RES) -> {ok, content_manifest_res};
+message_type_name(?MSG_CONTENT_CANCEL) -> {ok, content_cancel};
 message_type_name(_) -> {error, unknown_type}.

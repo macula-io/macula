@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.19.0] - 2026-01-14
+
+### Added
+
+- **Content Transfer System** - P2P artifact distribution via Macula mesh (MCID-based)
+  - Content-addressed storage using MCID (Macula Content Identifier)
+  - BLAKE3 and SHA256 hash algorithms supported
+  - Merkle tree verification for chunk-level integrity
+  - Want/Have/Block protocol for efficient P2P exchange
+  - DHT integration for provider discovery and announcements
+
+- **New modules** (`src/macula_content_system/`):
+  - `macula_content.erl` - High-level API facade
+  - `macula_content_hasher.erl` - BLAKE3/SHA256 hashing with NIF acceleration
+  - `macula_content_chunker.erl` - File chunking (256KB default)
+  - `macula_content_manifest.erl` - Manifest creation and parsing
+  - `macula_content_store.erl` - Local content storage with TTL
+  - `macula_content_transfer.erl` - P2P transfer coordination
+  - `macula_content_dht.erl` - DHT integration for provider discovery
+  - `macula_content_system.erl` - Supervisor for content subsystem
+
+- **Protocol message types** (0x90-0x95):
+  - `content_want` (0x90) - Request chunks
+  - `content_have` (0x91) - Advertise available chunks
+  - `content_block` (0x92) - Transfer chunk data
+  - `content_manifest_req` (0x93) - Request manifest
+  - `content_manifest_res` (0x94) - Return manifest
+  - `content_cancel` (0x95) - Cancel pending requests
+
+- **API functions**:
+  - `macula_content:publish/1,2` - Publish file to content system
+  - `macula_content:store/1,2` - Store binary data directly
+  - `macula_content:fetch/1,2` - Fetch content by MCID
+  - `macula_content:locate/1` - Find providers in DHT
+  - `macula_content:stat/1` - Get manifest info
+  - `macula_content:is_local/1` - Check local availability
+  - `macula_content:list_local/0` - List locally stored MCIDs
+  - `macula_content:unpublish/1` - Remove from local store
+  - `macula_content:mcid_to_string/1` - Format MCID as string
+  - `macula_content:mcid_from_string/1` - Parse MCID from string
+
+- Added 171 unit tests for content system
+
+---
+
+## [0.18.1] - 2026-01-13
+
+### Fixed
+
+- Version sync after v0.18.0 release
+
+---
+
 ## [0.18.0] - 2026-01-13
 
 ### Added
