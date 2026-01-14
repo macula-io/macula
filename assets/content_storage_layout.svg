@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 450">
+  <defs>
+    <style>
+      .title { font: bold 14px sans-serif; fill: #333; }
+      .dir { font: 12px monospace; fill: #1976d2; }
+      .file { font: 11px monospace; fill: #666; }
+      .comment { font: 10px sans-serif; fill: #888; font-style: italic; }
+      .folder { fill: #fff3e0; stroke: #f57c00; stroke-width: 2; }
+      .filebox { fill: #e8f5e9; stroke: #66bb6a; stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="350" y="25" text-anchor="middle" class="title">Content Store Directory Layout</text>
+
+  <!-- Root -->
+  <rect x="50" y="50" width="280" height="30" class="folder" rx="4"/>
+  <text x="60" y="70" class="dir">/var/lib/macula/content/</text>
+  <text x="340" y="70" class="comment">Base directory (on /bulk drives)</text>
+
+  <!-- blocks/ -->
+  <line x1="70" y1="80" x2="70" y2="100" stroke="#f57c00" stroke-width="2"/>
+  <line x1="70" y1="100" x2="90" y2="100" stroke="#f57c00" stroke-width="2"/>
+  <rect x="90" y="90" width="120" height="25" class="folder" rx="4"/>
+  <text x="100" y="107" class="dir">blocks/</text>
+  <text x="220" y="107" class="comment">Block storage by hash prefix</text>
+
+  <!-- blocks/5d/ -->
+  <line x1="110" y1="115" x2="110" y2="135" stroke="#f57c00" stroke-width="1.5"/>
+  <line x1="110" y1="135" x2="130" y2="135" stroke="#f57c00" stroke-width="1.5"/>
+  <rect x="130" y="125" width="80" height="22" class="folder" rx="4"/>
+  <text x="140" y="140" class="dir">5d/</text>
+  <text x="220" y="140" class="comment">First 2 hex chars of hash</text>
+
+  <!-- block file -->
+  <line x1="150" y1="147" x2="150" y2="165" stroke="#66bb6a" stroke-width="1"/>
+  <line x1="150" y1="165" x2="170" y2="165" stroke="#66bb6a" stroke-width="1"/>
+  <rect x="170" y="155" width="320" height="22" class="filebox" rx="3"/>
+  <text x="180" y="170" class="file">5d41402abc4b2a76b9719d911017c592.blk</text>
+
+  <!-- blocks/a1/ -->
+  <line x1="110" y1="147" x2="110" y2="200" stroke="#f57c00" stroke-width="1.5"/>
+  <line x1="110" y1="200" x2="130" y2="200" stroke="#f57c00" stroke-width="1.5"/>
+  <rect x="130" y="190" width="80" height="22" class="folder" rx="4"/>
+  <text x="140" y="205" class="dir">a1/</text>
+
+  <line x1="150" y1="212" x2="150" y2="230" stroke="#66bb6a" stroke-width="1"/>
+  <line x1="150" y1="230" x2="170" y2="230" stroke="#66bb6a" stroke-width="1"/>
+  <rect x="170" y="220" width="320" height="22" class="filebox" rx="3"/>
+  <text x="180" y="235" class="file">a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6.blk</text>
+
+  <!-- manifests/ -->
+  <line x1="70" y1="100" x2="70" y2="275" stroke="#f57c00" stroke-width="2"/>
+  <line x1="70" y1="275" x2="90" y2="275" stroke="#f57c00" stroke-width="2"/>
+  <rect x="90" y="265" width="120" height="25" class="folder" rx="4"/>
+  <text x="100" y="282" class="dir">manifests/</text>
+  <text x="220" y="282" class="comment">Manifest files by MCID</text>
+
+  <!-- manifest file -->
+  <line x1="110" y1="290" x2="110" y2="310" stroke="#66bb6a" stroke-width="1"/>
+  <line x1="110" y1="310" x2="130" y2="310" stroke="#66bb6a" stroke-width="1"/>
+  <rect x="130" y="300" width="360" height="22" class="filebox" rx="3"/>
+  <text x="140" y="315" class="file">7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677.man</text>
+
+  <!-- temp/ -->
+  <line x1="70" y1="275" x2="70" y2="355" stroke="#f57c00" stroke-width="2"/>
+  <line x1="70" y1="355" x2="90" y2="355" stroke="#f57c00" stroke-width="2"/>
+  <rect x="90" y="345" width="120" height="25" class="folder" rx="4"/>
+  <text x="100" y="362" class="dir">temp/</text>
+  <text x="220" y="362" class="comment">In-progress downloads</text>
+
+  <!-- temp/{request_id}/ -->
+  <line x1="110" y1="370" x2="110" y2="390" stroke="#f57c00" stroke-width="1.5"/>
+  <line x1="110" y1="390" x2="130" y2="390" stroke="#f57c00" stroke-width="1.5"/>
+  <rect x="130" y="380" width="140" height="22" class="folder" rx="4"/>
+  <text x="140" y="395" class="dir">{request_id}/</text>
+
+  <!-- index.dets -->
+  <line x1="70" y1="355" x2="70" y2="430" stroke="#f57c00" stroke-width="2"/>
+  <line x1="70" y1="430" x2="90" y2="430" stroke="#f57c00" stroke-width="2"/>
+  <rect x="90" y="420" width="120" height="22" class="filebox" rx="3"/>
+  <text x="100" y="435" class="file">index.dets</text>
+  <text x="220" y="435" class="comment">Block → manifest mapping, stats</text>
+</svg>

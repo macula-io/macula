@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1976d2"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#388e3c"/>
+    </marker>
+    <style>
+      .title { font: bold 14px sans-serif; fill: #333; }
+      .node { font: bold 12px sans-serif; fill: #333; }
+      .step { font: 11px sans-serif; fill: #666; }
+      .msg { font: 11px monospace; fill: #1976d2; }
+      .action { font: 10px sans-serif; fill: #888; font-style: italic; }
+      .box { fill: #f8f9fa; stroke: #dee2e6; stroke-width: 2; rx: 8; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="400" y="25" text-anchor="middle" class="title">Content Transfer Flow (Single Provider)</text>
+
+  <!-- Nodes -->
+  <rect x="80" y="50" width="120" height="40" class="box" fill="#e3f2fd" stroke="#1976d2"/>
+  <text x="140" y="75" text-anchor="middle" class="node">Requester</text>
+
+  <rect x="600" y="50" width="120" height="40" class="box" fill="#e8f5e9" stroke="#388e3c"/>
+  <text x="660" y="75" text-anchor="middle" class="node">Provider</text>
+
+  <!-- Lifelines -->
+  <line x1="140" y1="90" x2="140" y2="580" stroke="#999" stroke-dasharray="4"/>
+  <line x1="660" y1="90" x2="660" y2="580" stroke="#999" stroke-dasharray="4"/>
+
+  <!-- Step 1: Manifest Request -->
+  <text x="20" y="125" class="step">1.</text>
+  <line x1="145" y1="120" x2="655" y2="120" stroke="#1976d2" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="400" y="115" text-anchor="middle" class="msg">CONTENT_MANIFEST_REQ(mcid=X)</text>
+
+  <!-- Step 2: Manifest Response -->
+  <text x="20" y="165" class="step">2.</text>
+  <line x1="655" y1="160" x2="145" y2="160" stroke="#388e3c" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="400" y="155" text-anchor="middle" class="msg">CONTENT_MANIFEST_RES(manifest=...)</text>
+
+  <!-- Local actions -->
+  <rect x="50" y="180" width="180" height="50" fill="#fff8e1" stroke="#ffc107" rx="4"/>
+  <text x="140" y="200" text-anchor="middle" class="action">Verify signature (if present)</text>
+  <text x="140" y="215" text-anchor="middle" class="action">Check local store for chunks</text>
+  <text x="140" y="228" text-anchor="middle" class="action">Build want list for missing</text>
+
+  <!-- Step 3: Want -->
+  <text x="20" y="265" class="step">3.</text>
+  <line x1="145" y1="260" x2="655" y2="260" stroke="#1976d2" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="400" y="255" text-anchor="middle" class="msg">CONTENT_WANT(wants=[c1, c2, c3, ...])</text>
+
+  <!-- Step 4: Block 1 -->
+  <text x="20" y="305" class="step">4.</text>
+  <line x1="655" y1="300" x2="145" y2="300" stroke="#388e3c" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="400" y="295" text-anchor="middle" class="msg">CONTENT_BLOCK(mcid=c1, data=...)</text>
+
+  <rect x="50" y="310" width="180" height="30" fill="#e8f5e9" stroke="#a5d6a7" rx="4"/>
+  <text x="140" y="330" text-anchor="middle" class="action">Verify hash, store block</text>
+
+  <!-- Step 5: Block 2 -->
+  <text x="20" y="375" class="step">5.</text>
+  <line x1="655" y1="370" x2="145" y2="370" stroke="#388e3c" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="400" y="365" text-anchor="middle" class="msg">CONTENT_BLOCK(mcid=c2, data=...)</text>
+
+  <rect x="50" y="380" width="180" height="30" fill="#e8f5e9" stroke="#a5d6a7" rx="4"/>
+  <text x="140" y="400" text-anchor="middle" class="action">Verify hash, store block</text>
+
+  <!-- Continuation dots -->
+  <text x="400" y="440" text-anchor="middle" class="step">... continue until all chunks received ...</text>
+
+  <!-- Final verification -->
+  <rect x="50" y="470" width="180" height="50" fill="#e3f2fd" stroke="#90caf9" rx="4"/>
+  <text x="140" y="490" text-anchor="middle" class="action">Verify Merkle root</text>
+  <text x="140" y="505" text-anchor="middle" class="action">Reassemble file</text>
+
+  <!-- Success indicator -->
+  <rect x="50" y="540" width="180" height="30" fill="#c8e6c9" stroke="#66bb6a" rx="4"/>
+  <text x="140" y="560" text-anchor="middle" class="node" fill="#2e7d32">Transfer Complete</text>
+</svg>

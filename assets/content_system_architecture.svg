@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+    <style>
+      .title { font: bold 16px sans-serif; fill: #333; }
+      .module { font: 12px monospace; fill: #333; }
+      .label { font: 11px sans-serif; fill: #666; }
+      .box { fill: #f8f9fa; stroke: #dee2e6; stroke-width: 2; rx: 8; }
+      .supervisor { fill: #e3f2fd; stroke: #1976d2; stroke-width: 2; rx: 8; }
+      .genserver { fill: #fff3e0; stroke: #f57c00; stroke-width: 2; rx: 8; }
+      .api { fill: #e8f5e9; stroke: #388e3c; stroke-width: 2; rx: 8; }
+      .external { fill: #fce4ec; stroke: #c2185b; stroke-width: 2; rx: 8; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="400" y="30" text-anchor="middle" class="title">Macula Content System Architecture</text>
+
+  <!-- Main container -->
+  <rect x="50" y="50" width="700" height="430" class="box" fill="#fafafa"/>
+  <text x="70" y="75" class="module">macula_content_system (supervisor)</text>
+
+  <!-- Public API -->
+  <rect x="280" y="90" width="240" height="60" class="api"/>
+  <text x="400" y="115" text-anchor="middle" class="module">macula_content.erl</text>
+  <text x="400" y="135" text-anchor="middle" class="label">Public API Facade</text>
+
+  <!-- GenServers row -->
+  <rect x="80" y="180" width="180" height="80" class="genserver"/>
+  <text x="170" y="210" text-anchor="middle" class="module">macula_content_store</text>
+  <text x="170" y="230" text-anchor="middle" class="label">Block Storage</text>
+  <text x="170" y="245" text-anchor="middle" class="label">(ETS + Disk)</text>
+
+  <rect x="310" y="180" width="180" height="80" class="genserver"/>
+  <text x="400" y="210" text-anchor="middle" class="module">macula_content_transfer</text>
+  <text x="400" y="230" text-anchor="middle" class="label">Want/Have/Block</text>
+  <text x="400" y="245" text-anchor="middle" class="label">Protocol Handler</text>
+
+  <rect x="540" y="180" width="180" height="80" class="genserver"/>
+  <text x="630" y="210" text-anchor="middle" class="module">macula_content_dht</text>
+  <text x="630" y="230" text-anchor="middle" class="label">DHT Announce</text>
+  <text x="630" y="245" text-anchor="middle" class="label">and Locate</text>
+
+  <!-- Pure modules row -->
+  <rect x="80" y="300" width="140" height="60" class="box"/>
+  <text x="150" y="325" text-anchor="middle" class="module">content_chunker</text>
+  <text x="150" y="345" text-anchor="middle" class="label">Chunk/Reassemble</text>
+
+  <rect x="250" y="300" width="140" height="60" class="box"/>
+  <text x="320" y="325" text-anchor="middle" class="module">content_hasher</text>
+  <text x="320" y="345" text-anchor="middle" class="label">BLAKE3/SHA256</text>
+
+  <rect x="420" y="300" width="140" height="60" class="box"/>
+  <text x="490" y="325" text-anchor="middle" class="module">content_manifest</text>
+  <text x="490" y="345" text-anchor="middle" class="label">Create/Parse/Verify</text>
+
+  <!-- External dependencies -->
+  <rect x="80" y="400" width="140" height="50" class="external"/>
+  <text x="150" y="425" text-anchor="middle" class="module">macula_gateway</text>
+  <text x="150" y="440" text-anchor="middle" class="label">Message Routing</text>
+
+  <rect x="250" y="400" width="140" height="50" class="external"/>
+  <text x="320" y="425" text-anchor="middle" class="module">macula_nifs</text>
+  <text x="320" y="440" text-anchor="middle" class="label">BLAKE3 NIF</text>
+
+  <rect x="420" y="400" width="140" height="50" class="external"/>
+  <text x="490" y="425" text-anchor="middle" class="module">macula_routing</text>
+  <text x="490" y="440" text-anchor="middle" class="label">DHT Queries</text>
+
+  <!-- Arrows from API to GenServers -->
+  <line x1="320" y1="150" x2="170" y2="180" stroke="#666" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <line x1="400" y1="150" x2="400" y2="180" stroke="#666" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <line x1="480" y1="150" x2="630" y2="180" stroke="#666" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- Arrows from GenServers to pure modules -->
+  <line x1="170" y1="260" x2="150" y2="300" stroke="#666" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <line x1="170" y1="260" x2="320" y2="300" stroke="#666" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <line x1="400" y1="260" x2="490" y2="300" stroke="#666" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+  <!-- Legend -->
+  <rect x="600" y="380" width="120" height="90" fill="white" stroke="#ccc" rx="4"/>
+  <text x="660" y="398" text-anchor="middle" class="label" font-weight="bold">Legend</text>
+  <rect x="610" y="405" width="12" height="12" class="api"/>
+  <text x="630" y="415" class="label">API</text>
+  <rect x="610" y="422" width="12" height="12" class="genserver"/>
+  <text x="630" y="432" class="label">GenServer</text>
+  <rect x="610" y="439" width="12" height="12" class="box"/>
+  <text x="630" y="449" class="label">Pure Module</text>
+  <rect x="610" y="456" width="12" height="12" class="external"/>
+  <text x="630" y="466" class="label">External</text>
+</svg>

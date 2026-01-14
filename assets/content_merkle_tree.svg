@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 400">
+  <defs>
+    <style>
+      .title { font: bold 14px sans-serif; fill: #333; }
+      .hash { font: 10px monospace; fill: #1976d2; }
+      .label { font: 11px sans-serif; fill: #666; }
+      .chunk { font: 10px sans-serif; fill: #333; }
+      .node { fill: #e3f2fd; stroke: #1976d2; stroke-width: 2; }
+      .leaf { fill: #fff3e0; stroke: #f57c00; stroke-width: 2; }
+      .data { fill: #e8f5e9; stroke: #388e3c; stroke-width: 2; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="375" y="25" text-anchor="middle" class="title">Merkle Tree Verification (BEP-52 Inspired)</text>
+
+  <!-- Root -->
+  <rect x="310" y="50" width="130" height="45" class="node" rx="6"/>
+  <text x="375" y="70" text-anchor="middle" class="label">Root Hash</text>
+  <text x="375" y="85" text-anchor="middle" class="hash">a1b2c3d4...</text>
+
+  <!-- Level 1 -->
+  <rect x="150" y="130" width="120" height="45" class="node" rx="6"/>
+  <text x="210" y="150" text-anchor="middle" class="label">Hash01</text>
+  <text x="210" y="165" text-anchor="middle" class="hash">e5f6g7h8...</text>
+
+  <rect x="480" y="130" width="120" height="45" class="node" rx="6"/>
+  <text x="540" y="150" text-anchor="middle" class="label">Hash23</text>
+  <text x="540" y="165" text-anchor="middle" class="hash">i9j0k1l2...</text>
+
+  <!-- Level 2 (leaf hashes) -->
+  <rect x="60" y="210" width="100" height="45" class="leaf" rx="6"/>
+  <text x="110" y="230" text-anchor="middle" class="label">Hash0</text>
+  <text x="110" y="245" text-anchor="middle" class="hash">m3n4o5...</text>
+
+  <rect x="200" y="210" width="100" height="45" class="leaf" rx="6"/>
+  <text x="250" y="230" text-anchor="middle" class="label">Hash1</text>
+  <text x="250" y="245" text-anchor="middle" class="hash">p6q7r8...</text>
+
+  <rect x="450" y="210" width="100" height="45" class="leaf" rx="6"/>
+  <text x="500" y="230" text-anchor="middle" class="label">Hash2</text>
+  <text x="500" y="245" text-anchor="middle" class="hash">s9t0u1...</text>
+
+  <rect x="590" y="210" width="100" height="45" class="leaf" rx="6"/>
+  <text x="640" y="230" text-anchor="middle" class="label">Hash3</text>
+  <text x="640" y="245" text-anchor="middle" class="hash">v2w3x4...</text>
+
+  <!-- Data chunks -->
+  <rect x="60" y="290" width="100" height="40" class="data" rx="6"/>
+  <text x="110" y="315" text-anchor="middle" class="chunk">Chunk 0</text>
+  <text x="110" y="325" text-anchor="middle" class="hash">256KB</text>
+
+  <rect x="200" y="290" width="100" height="40" class="data" rx="6"/>
+  <text x="250" y="315" text-anchor="middle" class="chunk">Chunk 1</text>
+  <text x="250" y="325" text-anchor="middle" class="hash">256KB</text>
+
+  <rect x="450" y="290" width="100" height="40" class="data" rx="6"/>
+  <text x="500" y="315" text-anchor="middle" class="chunk">Chunk 2</text>
+  <text x="500" y="325" text-anchor="middle" class="hash">256KB</text>
+
+  <rect x="590" y="290" width="100" height="40" class="data" rx="6"/>
+  <text x="640" y="315" text-anchor="middle" class="chunk">Chunk 3</text>
+  <text x="640" y="325" text-anchor="middle" class="hash">128KB</text>
+
+  <!-- Connecting lines -->
+  <line x1="375" y1="95" x2="210" y2="130" stroke="#999" stroke-width="1.5"/>
+  <line x1="375" y1="95" x2="540" y2="130" stroke="#999" stroke-width="1.5"/>
+
+  <line x1="210" y1="175" x2="110" y2="210" stroke="#999" stroke-width="1.5"/>
+  <line x1="210" y1="175" x2="250" y2="210" stroke="#999" stroke-width="1.5"/>
+
+  <line x1="540" y1="175" x2="500" y2="210" stroke="#999" stroke-width="1.5"/>
+  <line x1="540" y1="175" x2="640" y2="210" stroke="#999" stroke-width="1.5"/>
+
+  <line x1="110" y1="255" x2="110" y2="290" stroke="#999" stroke-width="1.5"/>
+  <line x1="250" y1="255" x2="250" y2="290" stroke="#999" stroke-width="1.5"/>
+  <line x1="500" y1="255" x2="500" y2="290" stroke="#999" stroke-width="1.5"/>
+  <line x1="640" y1="255" x2="640" y2="290" stroke="#999" stroke-width="1.5"/>
+
+  <!-- Verification note -->
+  <rect x="50" y="350" width="650" height="40" fill="#fff8e1" stroke="#ffc107" rx="4"/>
+  <text x="375" y="368" text-anchor="middle" class="label">Verification: Hash each chunk, build tree bottom-up, compare root with manifest</text>
+  <text x="375" y="383" text-anchor="middle" class="label">Any tampered chunk will produce different root hash</text>
+</svg>
