@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 650" width="900" height="650">
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#a855f7"/>
+    </marker>
+    <linearGradient id="portalGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#7c3aed"/>
+      <stop offset="100%" style="stop-color:#a855f7"/>
+    </linearGradient>
+    <linearGradient id="consoleGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0891b2"/>
+      <stop offset="100%" style="stop-color:#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="appGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#059669"/>
+      <stop offset="100%" style="stop-color:#10b981"/>
+    </linearGradient>
+    <linearGradient id="gatekeeperGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#dc2626"/>
+      <stop offset="100%" style="stop-color:#f87171"/>
+    </linearGradient>
+    <linearGradient id="meshGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1e40af"/>
+      <stop offset="100%" style="stop-color:#3b82f6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="650" fill="#0f172a"/>
+
+  <!-- Title -->
+  <text x="450" y="40" fill="#f1f5f9" font-family="system-ui, sans-serif" font-size="24" font-weight="bold" text-anchor="middle">Gatekeeper Security Architecture</text>
+  <text x="450" y="65" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="14" text-anchor="middle">Hierarchical PKI with per-operation capability enforcement</text>
+
+  <!-- Portal (Root CA) -->
+  <rect x="350" y="90" width="200" height="80" rx="10" fill="url(#portalGrad)" stroke="#c084fc" stroke-width="2"/>
+  <text x="450" y="120" fill="#fff" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Macula Portal</text>
+  <text x="450" y="145" fill="#e9d5ff" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">Root Certificate Authority</text>
+
+  <!-- Cert issuance arrows -->
+  <line x1="350" y1="150" x2="180" y2="220" stroke="#a855f7" stroke-width="2" marker-end="url(#arrowPurple)"/>
+  <text x="240" y="180" fill="#c4b5fd" font-family="system-ui, sans-serif" font-size="10" transform="rotate(-25, 240, 180)">Issue cert</text>
+
+  <line x1="550" y1="150" x2="720" y2="220" stroke="#a855f7" stroke-width="2" marker-end="url(#arrowPurple)"/>
+  <text x="650" y="180" fill="#c4b5fd" font-family="system-ui, sans-serif" font-size="10" transform="rotate(25, 650, 180)">Issue cert</text>
+
+  <!-- Console 1 -->
+  <rect x="60" y="230" width="180" height="100" rx="10" fill="url(#consoleGrad)" stroke="#67e8f9" stroke-width="2"/>
+  <text x="150" y="260" fill="#fff" font-family="system-ui, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Console A</text>
+  <text x="150" y="280" fill="#cffafe" font-family="system-ui, sans-serif" font-size="11" text-anchor="middle">io.macula.alice</text>
+  <text x="150" y="300" fill="#a5f3fc" font-family="system-ui, sans-serif" font-size="10" text-anchor="middle">Street Node CA</text>
+
+  <!-- Console 2 -->
+  <rect x="660" y="230" width="180" height="100" rx="10" fill="url(#consoleGrad)" stroke="#67e8f9" stroke-width="2"/>
+  <text x="750" y="260" fill="#fff" font-family="system-ui, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Console B</text>
+  <text x="750" y="280" fill="#cffafe" font-family="system-ui, sans-serif" font-size="11" text-anchor="middle">io.macula.bob</text>
+  <text x="750" y="300" fill="#a5f3fc" font-family="system-ui, sans-serif" font-size="10" text-anchor="middle">Street Node CA</text>
+
+  <!-- Gatekeeper boxes -->
+  <rect x="60" y="350" width="180" height="70" rx="8" fill="url(#gatekeeperGrad)" stroke="#fca5a5" stroke-width="2"/>
+  <text x="150" y="380" fill="#fff" font-family="system-ui, sans-serif" font-size="13" font-weight="bold" text-anchor="middle">macula_gatekeeper</text>
+  <text x="150" y="400" fill="#fecaca" font-family="system-ui, sans-serif" font-size="10" text-anchor="middle">verify_certificate/2</text>
+
+  <rect x="660" y="350" width="180" height="70" rx="8" fill="url(#gatekeeperGrad)" stroke="#fca5a5" stroke-width="2"/>
+  <text x="750" y="380" fill="#fff" font-family="system-ui, sans-serif" font-size="13" font-weight="bold" text-anchor="middle">macula_gatekeeper</text>
+  <text x="750" y="400" fill="#fecaca" font-family="system-ui, sans-serif" font-size="10" text-anchor="middle">validate_operation/3</text>
+
+  <!-- Apps connected to Console 1 -->
+  <rect x="30" y="460" width="100" height="60" rx="6" fill="url(#appGrad)" stroke="#34d399" stroke-width="1"/>
+  <text x="80" y="485" fill="#fff" font-family="monospace" font-size="10" text-anchor="middle">App 1</text>
+  <text x="80" y="505" fill="#d1fae5" font-family="monospace" font-size="8" text-anchor="middle">[pub, sub]</text>
+
+  <rect x="150" y="460" width="100" height="60" rx="6" fill="url(#appGrad)" stroke="#34d399" stroke-width="1"/>
+  <text x="200" y="485" fill="#fff" font-family="monospace" font-size="10" text-anchor="middle">App 2</text>
+  <text x="200" y="505" fill="#d1fae5" font-family="monospace" font-size="8" text-anchor="middle">[call, reg]</text>
+
+  <!-- Apps connected to Console 2 -->
+  <rect x="650" y="460" width="100" height="60" rx="6" fill="url(#appGrad)" stroke="#34d399" stroke-width="1"/>
+  <text x="700" y="485" fill="#fff" font-family="monospace" font-size="10" text-anchor="middle">App 3</text>
+  <text x="700" y="505" fill="#d1fae5" font-family="monospace" font-size="8" text-anchor="middle">[provide]</text>
+
+  <rect x="770" y="460" width="100" height="60" rx="6" fill="url(#appGrad)" stroke="#34d399" stroke-width="1"/>
+  <text x="820" y="485" fill="#fff" font-family="monospace" font-size="10" text-anchor="middle">App 4</text>
+  <text x="820" y="505" fill="#d1fae5" font-family="monospace" font-size="8" text-anchor="middle">[consume]</text>
+
+  <!-- Connection lines from gatekeeper to apps -->
+  <line x1="100" y1="420" x2="80" y2="460" stroke="#f87171" stroke-width="1.5"/>
+  <line x1="150" y1="420" x2="200" y2="460" stroke="#f87171" stroke-width="1.5"/>
+  <line x1="700" y1="420" x2="700" y2="460" stroke="#f87171" stroke-width="1.5"/>
+  <line x1="800" y1="420" x2="820" y2="460" stroke="#f87171" stroke-width="1.5"/>
+
+  <!-- Connection from console to gatekeeper -->
+  <line x1="150" y1="330" x2="150" y2="350" stroke="#22d3ee" stroke-width="2"/>
+  <line x1="750" y1="330" x2="750" y2="350" stroke="#22d3ee" stroke-width="2"/>
+
+  <!-- Mesh Cloud -->
+  <ellipse cx="450" cy="390" rx="150" ry="50" fill="url(#meshGrad)" fill-opacity="0.3" stroke="#3b82f6" stroke-width="2" stroke-dasharray="5,3"/>
+  <text x="450" y="395" fill="#93c5fd" font-family="system-ui, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Macula Mesh</text>
+
+  <!-- Mesh connections -->
+  <line x1="240" y1="385" x2="300" y2="385" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <line x1="600" y1="385" x2="660" y2="385" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrowBlue)"/>
+
+  <!-- Security Checks Box -->
+  <rect x="310" y="480" width="280" height="150" rx="10" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+  <text x="450" y="505" fill="#f1f5f9" font-family="system-ui, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Per-Operation Enforcement</text>
+
+  <text x="330" y="535" fill="#22d3ee" font-family="monospace" font-size="11">publish</text>
+  <text x="430" y="535" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10">topic broadcasting</text>
+
+  <text x="330" y="555" fill="#22d3ee" font-family="monospace" font-size="11">subscribe</text>
+  <text x="430" y="555" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10">topic listening</text>
+
+  <text x="330" y="575" fill="#22d3ee" font-family="monospace" font-size="11">call</text>
+  <text x="430" y="575" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10">RPC invocation</text>
+
+  <text x="330" y="595" fill="#22d3ee" font-family="monospace" font-size="11">register</text>
+  <text x="430" y="595" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10">service advertisement</text>
+
+  <text x="330" y="615" fill="#fbbf24" font-family="monospace" font-size="11">provide/consume</text>
+  <text x="470" y="615" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10">content transfer</text>
+</svg>
