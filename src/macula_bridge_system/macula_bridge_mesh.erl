@@ -533,18 +533,20 @@ discover_peers(_Static, State) ->
 setup_mdns_subscription(mdns) ->
     %% Subscribe to mDNS advertisement events via gproc
     %% The mdns library sends {SenderPid, {mdns, advertisement}, Details} messages
-    try
-        mdns:subscribe(advertisement),
-        ?LOG_INFO("[BridgeMesh] Subscribed to mDNS advertisement events")
-    catch
-        error:undef ->
-            ?LOG_WARNING("[BridgeMesh] mdns application not available, mDNS discovery disabled");
-        _:Reason ->
-            ?LOG_WARNING("[BridgeMesh] Failed to subscribe to mDNS events: ~p", [Reason])
-    end,
+    handle_mdns_subscribe_result(catch mdns:subscribe(advertisement)),
     ok;
 setup_mdns_subscription(_Other) ->
     ok.
+
+%% @private Handle mDNS subscribe result
+handle_mdns_subscribe_result({'EXIT', {undef, _}}) ->
+    ?LOG_WARNING("[BridgeMesh] mdns application not available, mDNS discovery disabled");
+handle_mdns_subscribe_result({'EXIT', Reason}) ->
+    ?LOG_WARNING("[BridgeMesh] Failed to subscribe to mDNS events: ~p", [Reason]);
+handle_mdns_subscribe_result(ok) ->
+    ?LOG_INFO("[BridgeMesh] Subscribed to mDNS advertisement events");
+handle_mdns_subscribe_result(_) ->
+    ?LOG_INFO("[BridgeMesh] Subscribed to mDNS advertisement events").
 
 %% @doc Handle an mDNS advertisement event.
 %% Converts the mdns library's advertisement format to our peer info format.

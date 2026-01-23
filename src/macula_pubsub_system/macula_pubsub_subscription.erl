@@ -86,26 +86,7 @@ invoke_callbacks(Matches, Topic, Payload, NodeId) ->
     lists:foreach(
         fun({_SubRef, {SubTopic, Callback}}) ->
             spawn(fun() ->
-                try
-                    %% Decode payload if it's JSON
-                    DecodedPayload = try
-                        macula_utils:decode_json(Payload)
-                    catch
-                        _:_ -> Payload
-                    end,
-
-                    PublishData = #{
-                        topic => Topic,
-                        matched_pattern => SubTopic,
-                        payload => DecodedPayload
-                    },
-                    Callback(PublishData),
-                    ?LOG_DEBUG("[~s] Invoked callback for topic ~s", [NodeId, Topic])
-                catch
-                    Error:Reason:Stack ->
-                        ?LOG_ERROR("[~s] Callback error for topic ~s: ~p:~p~nStack: ~p",
-                                  [NodeId, Topic, Error, Reason, Stack])
-                end
+                invoke_single_callback(Callback, Topic, SubTopic, Payload, NodeId)
             end)
         end,
         Matches
@@ -115,4 +96,33 @@ invoke_callbacks(Matches, Topic, Payload, NodeId) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% @private Invoke a single callback with payload decoding
+invoke_single_callback(Callback, Topic, SubTopic, Payload, NodeId) ->
+    DecodedPayload = safe_decode_json(Payload),
+    PublishData = #{
+        topic => Topic,
+        matched_pattern => SubTopic,
+        payload => DecodedPayload
+    },
+    handle_callback_invocation(catch Callback(PublishData), Topic, NodeId).
+
+%% @private Safely decode JSON payload
+safe_decode_json(Payload) ->
+    handle_decode_result(catch macula_utils:decode_json(Payload), Payload).
+
+%% @private Handle JSON decode result
+handle_decode_result({'EXIT', _}, Original) ->
+    Original;
+handle_decode_result(Decoded, _Original) ->
+    Decoded.
+
+%% @private Handle callback invocation result
+handle_callback_invocation({'EXIT', {Reason, Stacktrace}}, Topic, NodeId) ->
+    ?LOG_ERROR("[~s] Callback error for topic ~s: ~p~nStack: ~p",
+               [NodeId, Topic, Reason, Stacktrace]);
+handle_callback_invocation({'EXIT', Reason}, Topic, NodeId) ->
+    ?LOG_ERROR("[~s] Callback error for topic ~s: ~p", [NodeId, Topic, Reason]);
+handle_callback_invocation(_Result, Topic, NodeId) ->
+    ?LOG_DEBUG("[~s] Invoked callback for topic ~s", [NodeId, Topic]).
 

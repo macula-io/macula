@@ -131,24 +131,10 @@ handle_call({invoke_handler, Procedure, Args}, _From, State) when is_binary(Proc
             {reply, {error, no_handler}, State};
         Handler when is_function(Handler) ->
             %% Direct function call
-            try
-                Result = Handler(Args),
-                {reply, {ok, Result}, State}
-            catch
-                _:Reason ->
-                    {reply, {error, Reason}, State}
-            end;
+            {reply, invoke_function_handler(Handler, Args), State};
         Handler when is_pid(Handler) ->
             %% Synchronous call to handler process
-            try
-                Result = gen_server:call(Handler, {invoke, Procedure, Args}, 5000),
-                {reply, Result, State}
-            catch
-                exit:{timeout, _} ->
-                    {reply, {error, timeout}, State};
-                _:Reason ->
-                    {reply, {error, Reason}, State}
-            end
+            {reply, invoke_pid_handler(Handler, Procedure, Args), State}
     end;
 
 handle_call({get_handler, Procedure}, _From, State) when is_binary(Procedure) ->
@@ -182,6 +168,28 @@ terminate(_Reason, _State) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% @private Invoke function handler safely
+invoke_function_handler(Handler, Args) ->
+    handle_function_invoke_result(catch Handler(Args)).
+
+%% @private Handle function invoke result
+handle_function_invoke_result({'EXIT', Reason}) ->
+    {error, Reason};
+handle_function_invoke_result(Result) ->
+    {ok, Result}.
+
+%% @private Invoke pid handler with timeout handling
+invoke_pid_handler(Handler, Procedure, Args) ->
+    handle_pid_invoke_result(catch gen_server:call(Handler, {invoke, Procedure, Args}, 5000)).
+
+%% @private Handle pid invoke result
+handle_pid_invoke_result({'EXIT', {timeout, _}}) ->
+    {error, timeout};
+handle_pid_invoke_result({'EXIT', Reason}) ->
+    {error, Reason};
+handle_pid_invoke_result(Result) ->
+    Result.
 
 %% @doc Get timeout from options (default 5000ms).
 -spec get_timeout(map()) -> non_neg_integer().

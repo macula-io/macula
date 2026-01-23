@@ -491,16 +491,23 @@ resolve_port(Opts) ->
 %% @private Parse port from env var
 -spec parse_env_port() -> inet:port_number().
 parse_env_port() ->
-    case os:getenv("MACULA_GOSSIP_PORT") of
-        false ->
-            ?DEFAULT_PORT;
-        "" ->
-            ?DEFAULT_PORT;
-        PortStr ->
-            try list_to_integer(PortStr)
-            catch _:_ -> ?DEFAULT_PORT
-            end
-    end.
+    parse_port_from_env(os:getenv("MACULA_GOSSIP_PORT")).
+
+%% @private Parse port from env value
+parse_port_from_env(false) ->
+    ?DEFAULT_PORT;
+parse_port_from_env("") ->
+    ?DEFAULT_PORT;
+parse_port_from_env(PortStr) ->
+    handle_port_int_parse(catch list_to_integer(PortStr)).
+
+%% @private Handle port parse result
+handle_port_int_parse({'EXIT', _}) ->
+    ?DEFAULT_PORT;
+handle_port_int_parse(Port) when is_integer(Port) ->
+    Port;
+handle_port_int_parse(_) ->
+    ?DEFAULT_PORT.
 
 %% @private Resolve secret from options or env
 -spec resolve_secret(map()) -> binary() | undefined.
@@ -548,9 +555,5 @@ notify_callback(Pid, Event, Node) when is_pid(Pid) ->
     Pid ! {macula_cluster, Event, Node},
     ok;
 notify_callback({Module, Function}, Event, Node) ->
-    try
-        Module:Function(Event, Node)
-    catch
-        _:_ -> ok
-    end,
+    _ = catch Module:Function(Event, Node),
     ok.

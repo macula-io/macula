@@ -392,9 +392,5 @@ notify_callback(Pid, Event, Node) when is_pid(Pid) ->
     Pid ! {macula_cluster, Event, Node},
     ok;
 notify_callback({Module, Function}, Event, Node) ->
-    try
-        Module:Function(Event, Node)
-    catch
-        _:_ -> ok
-    end,
+    _ = catch Module:Function(Event, Node),
     ok.

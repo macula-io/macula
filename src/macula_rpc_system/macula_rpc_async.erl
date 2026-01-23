@@ -62,18 +62,22 @@ get_callback(Opts, CallerPid) ->
 -spec invoke_callback(callback(), binary(), term()) -> ok.
 invoke_callback({fun_cb, Fun}, _RequestId, Result) ->
     %% Spawn to avoid blocking the gen_server
-    spawn(fun() ->
-        try
-            Fun(Result)
-        catch
-            Class:Error:Stacktrace ->
-                ?LOG_ERROR("Async callback crashed: ~p:~p~n~p",
-                          [Class, Error, Stacktrace])
-        end
-    end),
+    spawn(fun() -> invoke_fun_callback_safe(Fun, Result) end),
     ok;
 invoke_callback({pid_cb, Pid}, RequestId, Result) ->
     Pid ! {rpc_reply, RequestId, Result},
+    ok.
+
+%% @private Invoke function callback safely
+invoke_fun_callback_safe(Fun, Result) ->
+    handle_fun_callback_result(catch Fun(Result)).
+
+%% @private Handle function callback result
+handle_fun_callback_result({'EXIT', {Error, Stacktrace}}) ->
+    ?LOG_ERROR("Async callback crashed: error:~p~n~p", [Error, Stacktrace]);
+handle_fun_callback_result({'EXIT', Error}) ->
+    ?LOG_ERROR("Async callback crashed: ~p", [Error]);
+handle_fun_callback_result(_) ->
     ok.
 
 %%%===================================================================
@@ -119,13 +123,19 @@ extract_result(Msg) ->
             {error, Error};
         Value ->
             %% Try to decode JSON result
-            DecodedValue = try
-                macula_utils:decode_json(Value)
-            catch
-                _:_ -> Value
-            end,
+            DecodedValue = safe_decode_json(Value),
             {ok, DecodedValue}
     end.
+
+%% @private Safely decode JSON, returning original on failure
+safe_decode_json(Value) ->
+    handle_decode_result(catch macula_utils:decode_json(Value), Value).
+
+%% @private Handle decode result
+handle_decode_result({'EXIT', _}, Original) ->
+    Original;
+handle_decode_result(Decoded, _Original) ->
+    Decoded.
 
 %% @doc Calculate RTT from sent_at timestamp.
 -spec calculate_rtt(integer()) -> non_neg_integer().

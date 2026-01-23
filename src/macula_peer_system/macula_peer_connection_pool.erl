@@ -115,12 +115,15 @@ put(PeerId, Connection) ->
 %% Returns list of peer IDs that have pooled connections.
 -spec get_connected_peers() -> [binary()].
 get_connected_peers() ->
-    try
-        Pattern = #pooled_conn{endpoint = '$1', _ = '_'},
-        ets:match(?TABLE, Pattern)
-    catch
-        _:_ -> []
-    end.
+    get_connected_peers_from_ets(ets:whereis(?TABLE)).
+
+%% @private ETS table doesn't exist
+get_connected_peers_from_ets(undefined) ->
+    [];
+%% @private ETS table exists - query it
+get_connected_peers_from_ets(_Tid) ->
+    Pattern = #pooled_conn{endpoint = '$1', _ = '_'},
+    ets:match(?TABLE, Pattern).
 
 %%%===================================================================
 %%% gen_server callbacks

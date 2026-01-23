@@ -304,13 +304,18 @@ publish_to_dht(Name, Version, Checksum, State) ->
                 node_id => State#state.node_id,
                 published_at => erlang:system_time(millisecond)
             },
-            try
-                macula_routing_server:store_local(RoutingPid, Key, Value)
-            catch
-                _:_ ->
-                    ?LOG_WARNING("[RegistryServer] Failed to publish ~s v~s to DHT", [Name, Version])
-            end
+            do_publish_to_dht(RoutingPid, Key, Value, Name, Version)
     end.
+
+%% @private Attempt DHT publish
+do_publish_to_dht(RoutingPid, Key, Value, Name, Version) ->
+    handle_dht_publish_result(catch macula_routing_server:store_local(RoutingPid, Key, Value), Name, Version).
+
+%% @private Handle DHT publish result
+handle_dht_publish_result({'EXIT', _}, Name, Version) ->
+    ?LOG_WARNING("[RegistryServer] Failed to publish ~s v~s to DHT", [Name, Version]);
+handle_dht_publish_result(_, _Name, _Version) ->
+    ok.
 
 %% @private Generate DHT key for package
 package_dht_key(Name, Version) ->

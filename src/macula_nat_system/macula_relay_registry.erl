@@ -319,21 +319,27 @@ select_best_relay(Relays) ->
 %% @doc Publish relay registration to DHT.
 -spec publish_relay_to_dht(binary(), relay_info()) -> ok.
 publish_relay_to_dht(NodeId, RelayInfo) ->
-    case whereis(macula_routing_server) of
-        undefined ->
-            ok;
-        Pid ->
-            DhtKey = relay_dht_key(NodeId),
-            DhtValue = prepare_relay_for_dht(RelayInfo),
-            try
-                macula_routing_server:store(Pid, DhtKey, DhtValue),
-                ?LOG_DEBUG("Published relay to DHT: ~s", [NodeId])
-            catch
-                _:Reason ->
-                    ?LOG_WARNING("Failed to publish relay to DHT: ~p", [Reason])
-            end,
-            ok
-    end.
+    do_publish_relay_to_dht(whereis(macula_routing_server), NodeId, RelayInfo).
+
+%% @private Routing server not available
+do_publish_relay_to_dht(undefined, _NodeId, _RelayInfo) ->
+    ok;
+%% @private Publish to DHT
+do_publish_relay_to_dht(Pid, NodeId, RelayInfo) ->
+    DhtKey = relay_dht_key(NodeId),
+    DhtValue = prepare_relay_for_dht(RelayInfo),
+    handle_relay_dht_store(catch macula_routing_server:store(Pid, DhtKey, DhtValue), NodeId),
+    ok.
+
+%% @private Handle DHT store result
+handle_relay_dht_store({'EXIT', Reason}, _NodeId) ->
+    ?LOG_WARNING("Failed to publish relay to DHT: ~p", [Reason]);
+handle_relay_dht_store(ok, NodeId) ->
+    ?LOG_DEBUG("Published relay to DHT: ~s", [NodeId]);
+handle_relay_dht_store({error, Reason}, _NodeId) ->
+    ?LOG_WARNING("Failed to publish relay to DHT: ~p", [Reason]);
+handle_relay_dht_store(_, _NodeId) ->
+    ok.
 
 %% @private
 %% @doc Lookup relays from DHT.

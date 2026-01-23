@@ -371,60 +371,40 @@ code_change(_OldVsn, State, _Extra) ->
 %% @private Store node info in DHT
 store_in_dht(NodeName, NodeInfo) ->
     Key = make_dht_key(NodeName),
-
-    %% Try to use Macula's DHT if available
     case whereis(macula_routing_dht) of
         undefined ->
-            %% Fallback: store in local ETS for testing
             store_in_local_cache(NodeName, NodeInfo);
         _Pid ->
-            %% Use Macula DHT
-            try
-                macula_routing_dht:store(Key, term_to_binary(NodeInfo)),
-                ok
-            catch
-                _:_ ->
-                    store_in_local_cache(NodeName, NodeInfo)
-            end
+            macula_routing_dht:store(Key, term_to_binary(NodeInfo)),
+            ok
     end.
 
 %% @private Remove node info from DHT
 remove_from_dht(NodeName) ->
     Key = make_dht_key(NodeName),
-
     case whereis(macula_routing_dht) of
         undefined ->
             remove_from_local_cache(NodeName);
         _Pid ->
-            try
-                macula_routing_dht:delete(Key),
-                ok
-            catch
-                _:_ ->
-                    remove_from_local_cache(NodeName)
-            end
+            macula_routing_dht:delete(Key),
+            ok
     end.
 
 %% @private Look up node info in DHT
 lookup_in_dht(NodeName) ->
     Key = make_dht_key(NodeName),
-
     case whereis(macula_routing_dht) of
         undefined ->
             lookup_in_local_cache(NodeName);
         _Pid ->
-            try
-                case macula_routing_dht:find(Key) of
-                    {ok, BinInfo} ->
-                        {ok, binary_to_term(BinInfo)};
-                    {error, not_found} ->
-                        lookup_in_local_cache(NodeName)
-                end
-            catch
-                _:_ ->
-                    lookup_in_local_cache(NodeName)
-            end
+            lookup_in_dht_result(macula_routing_dht:find(Key), NodeName)
     end.
+
+%% @private Handle DHT lookup result
+lookup_in_dht_result({ok, BinInfo}, _NodeName) ->
+    {ok, binary_to_term(BinInfo)};
+lookup_in_dht_result({error, not_found}, NodeName) ->
+    lookup_in_local_cache(NodeName).
 
 %% @private Make DHT key for node
 make_dht_key(NodeName) when is_atom(NodeName) ->
@@ -478,20 +458,13 @@ ensure_local_cache() ->
 maybe_announce_mdns(_NodeName, _Port, #state{discovery_type = dht}) ->
     ok;
 maybe_announce_mdns(NodeName, Port, _State) ->
-    %% Try to use mDNS if available (shortishly/mdns library)
     case whereis(mdns_advertise_sup) of
         undefined ->
             ok;
         _Pid ->
-            try
-                %% Register instance info for the advertiser
-                macula_dist_mdns_advertiser:register(NodeName, Port),
-                %% Start the advertiser child
-                mdns_advertise_sup:start_child(macula_dist_mdns_advertiser),
-                ok
-            catch
-                _:_ -> ok
-            end
+            macula_dist_mdns_advertiser:register(NodeName, Port),
+            mdns_advertise_sup:start_child(macula_dist_mdns_advertiser),
+            ok
     end.
 
 %% @private Maybe unannounce via mDNS
@@ -502,15 +475,9 @@ maybe_unannounce_mdns(_NodeName, _State) ->
         undefined ->
             ok;
         _Pid ->
-            try
-                %% Stop the advertiser (sends TTL=0 announcement)
-                mdns_advertise:stop(macula_dist_mdns_advertiser),
-                %% Unregister instance info
-                macula_dist_mdns_advertiser:unregister(),
-                ok
-            catch
-                _:_ -> ok
-            end
+            mdns_advertise:stop(macula_dist_mdns_advertiser),
+            macula_dist_mdns_advertiser:unregister(),
+            ok
     end.
 
 %%%===================================================================
@@ -523,12 +490,7 @@ maybe_subscribe_to_dht() ->
         undefined ->
             ok;
         _Pid ->
-            try
-                %% Subscribe to nodes with _dist.node. prefix
-                macula_routing_dht:subscribe(?DHT_PREFIX, self())
-            catch
-                _:_ -> ok
-            end
+            macula_routing_dht:subscribe(?DHT_PREFIX, self())
     end.
 
 %%%===================================================================

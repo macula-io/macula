@@ -266,17 +266,22 @@ propagate_store_to_peers([], _StoreMsg, Key, Value) ->
 propagate_store_to_peers(ClosestNodes, StoreMsg, _Key, _Value) ->
     ?LOG_INFO("[DHT] Propagating store to ~p peer(s)", [length(ClosestNodes)]),
     lists:foreach(fun(NodeInfo) ->
-        %% Best effort - don't fail if send fails
-        try
-            ?LOG_DEBUG("[DHT] Sending store to peer ~p", [NodeInfo]),
-            Result = macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg),
-            ?LOG_DEBUG("[DHT] Store send result: ~p", [Result])
-        catch
-            Class:Error ->
-                ?LOG_WARNING("[DHT] Store send failed: ~p:~p", [Class, Error])
-        end
+        send_store_to_peer(NodeInfo, StoreMsg)
     end, ClosestNodes),
     ok.
+
+%% @private Send store message to a peer (best effort)
+send_store_to_peer(NodeInfo, StoreMsg) ->
+    ?LOG_DEBUG("[DHT] Sending store to peer ~p", [NodeInfo]),
+    handle_peer_send_result(catch macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg), NodeInfo).
+
+%% @private Handle peer send result
+handle_peer_send_result({'EXIT', {Error, _Stacktrace}}, NodeInfo) ->
+    ?LOG_WARNING("[DHT] Store send failed to ~p: ~p", [NodeInfo, Error]);
+handle_peer_send_result({'EXIT', Error}, NodeInfo) ->
+    ?LOG_WARNING("[DHT] Store send failed to ~p: ~p", [NodeInfo, Error]);
+handle_peer_send_result(Result, _NodeInfo) ->
+    ?LOG_DEBUG("[DHT] Store send result: ~p", [Result]).
 
 %% @doc Forward DHT STORE to bootstrap gateway via RPC when routing table is empty.
 %% This allows embedded gateways to propagate subscriptions to the central bootstrap DHT.
@@ -284,34 +289,40 @@ propagate_store_to_peers(ClosestNodes, StoreMsg, _Key, _Value) ->
 forward_store_to_bootstrap(Key, Value) ->
     %% Call the _dht.store RPC procedure on the bootstrap gateway
     %% This is a fire-and-forget operation - we don't wait for response
-    case whereis(macula_rpc_handler) of
-        undefined ->
-            ok;
-        _RpcHandler ->
-            %% Call _dht.store(Key, Value) on the bootstrap gateway
-            %% Using cast (fire-and-forget) since we don't need the response
-            try
-                Procedure = <<"_dht.store">>,
-                Args = #{
-                    <<"key">> => Key,
-                    <<"value">> => Value
-                },
-                %% Use macula module's call function which handles bootstrap routing
-                spawn(fun() ->
-                    case whereis(macula_local_client) of
-                        undefined ->
-                            ok;
-                        LocalClient ->
-                            _ = macula:call(LocalClient, Procedure, Args, #{timeout => 5000}),
-                            ok
-                    end
-                end),
-                ok
-            catch
-                _:_Error ->
-                    ok
-            end
-    end.
+    RpcHandler = whereis(macula_rpc_handler),
+    do_forward_store(RpcHandler, Key, Value).
+
+%% @private RPC handler not available
+do_forward_store(undefined, _Key, _Value) ->
+    ok;
+%% @private RPC handler available - spawn and forward
+do_forward_store(_RpcHandler, Key, Value) ->
+    Procedure = <<"_dht.store">>,
+    Args = #{
+        <<"key">> => Key,
+        <<"value">> => Value
+    },
+    %% Spawn fire-and-forget call to bootstrap
+    spawn(fun() -> forward_store_via_local_client(Procedure, Args) end),
+    ok.
+
+%% @private Forward store via local client (spawned process)
+forward_store_via_local_client(Procedure, Args) ->
+    LocalClient = whereis(macula_local_client),
+    do_forward_via_client(LocalClient, Procedure, Args).
+
+%% @private Local client not available
+do_forward_via_client(undefined, _Procedure, _Args) ->
+    ok;
+%% @private Local client available - make call
+do_forward_via_client(LocalClient, Procedure, Args) ->
+    handle_forward_result(catch macula:call(LocalClient, Procedure, Args, #{timeout => 5000})).
+
+%% @private Handle forward result (fire-and-forget, ignore errors)
+handle_forward_result({'EXIT', _}) ->
+    ok;
+handle_forward_result(_Result) ->
+    ok.
 
 %% @doc Extract node_id from value map, handling both atom and binary keys.
 -spec get_node_id_from_value(map()) -> binary() | undefined.

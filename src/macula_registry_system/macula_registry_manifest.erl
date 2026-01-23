@@ -330,22 +330,30 @@ run_validations([Fun | Rest], Manifest) ->
 parse_semver(Version) when is_binary(Version) ->
     case binary:split(Version, <<".">>, [global]) of
         [MajorBin, MinorBin, PatchBin] ->
-            try
-                Major = binary_to_integer(MajorBin),
-                Minor = binary_to_integer(MinorBin),
-                %% Handle pre-release suffix (e.g., "1.0.0-alpha")
-                PatchStr = case binary:split(PatchBin, <<"-">>) of
-                    [P | _] -> P;
-                    _ -> PatchBin
-                end,
-                Patch = binary_to_integer(PatchStr),
-                {ok, Major, Minor, Patch}
-            catch
-                _:_ -> error
-            end;
+            parse_semver_parts(MajorBin, MinorBin, PatchBin);
         _ -> error
     end;
 parse_semver(_) ->
+    error.
+
+%% @private Parse semver major.minor.patch parts
+parse_semver_parts(MajorBin, MinorBin, PatchBin) ->
+    %% Handle pre-release suffix (e.g., "1.0.0-alpha")
+    PatchStr = case binary:split(PatchBin, <<"-">>) of
+        [P | _] -> P;
+        _ -> PatchBin
+    end,
+    parse_semver_integers(
+        catch binary_to_integer(MajorBin),
+        catch binary_to_integer(MinorBin),
+        catch binary_to_integer(PatchStr)
+    ).
+
+%% @private Validate parsed integers
+parse_semver_integers(Major, Minor, Patch)
+  when is_integer(Major), is_integer(Minor), is_integer(Patch) ->
+    {ok, Major, Minor, Patch};
+parse_semver_integers(_, _, _) ->
     error.
 
 %% @private Compare version tuples

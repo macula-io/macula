@@ -293,11 +293,8 @@ ensure_atom(Value) when is_binary(Value) -> binary_to_atom(Value, utf8).
 notify_callback(#state{callback_module = undefined}, _Event) ->
     ok;
 notify_callback(#state{callback_module = Mod, topology = Topology}, Event) ->
-    try
-        Mod:handle_event(Topology, Event)
-    catch
-        _:_ -> ok
-    end.
+    _ = catch Mod:handle_event(Topology, Event),
+    ok.
 
 %% @private Cancel timer if defined
 cancel_timer(undefined) -> ok;

@@ -64,11 +64,15 @@ parse_path(_) ->
 
 %% @private Convert hex to node ID (external URIs may have invalid hex)
 convert_node_id(NodeIdHex, Realm) ->
-    try macula_id:from_hex(NodeIdHex) of
-        NodeId -> {ok, Realm, NodeId}
-    catch
-        _:_ -> {error, invalid_uri}
-    end.
+    handle_hex_conversion(catch macula_id:from_hex(NodeIdHex), Realm).
+
+%% @private Handle hex conversion result
+handle_hex_conversion({'EXIT', _}, _Realm) ->
+    {error, invalid_uri};
+handle_hex_conversion(NodeId, Realm) when is_binary(NodeId) ->
+    {ok, Realm, NodeId};
+handle_hex_conversion(_, _) ->
+    {error, invalid_uri}.
 
 %% @doc Extract realm from URI.
 -spec get_realm(uri()) -> {ok, realm()} | {error, invalid_uri}.

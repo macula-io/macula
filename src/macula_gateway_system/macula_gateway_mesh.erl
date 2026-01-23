@@ -534,16 +534,21 @@ is_connection_alive(undefined) ->
     false;
 is_connection_alive(Conn) when is_reference(Conn) ->
     %% QUIC connection reference - use sockname as liveness probe
-    try quicer:sockname(Conn) of
-        {ok, _} -> true;
-        {error, _} -> false
-    catch
-        _:_ -> false
-    end;
+    check_quic_connection(catch quicer:sockname(Conn));
 is_connection_alive(Conn) when is_pid(Conn) ->
     %% Erlang process - use is_process_alive
     erlang:is_process_alive(Conn);
 is_connection_alive(_Other) ->
+    false.
+
+%% @private Check QUIC connection liveness result
+check_quic_connection({'EXIT', _}) ->
+    false;
+check_quic_connection({ok, _}) ->
+    true;
+check_quic_connection({error, _}) ->
+    false;
+check_quic_connection(_) ->
     false.
 
 %%%===================================================================

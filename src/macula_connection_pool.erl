@@ -172,16 +172,12 @@ merge_quic_opts(BaseOpts, OverrideOpts) ->
 %% @doc Send CONNECT message through a stream.
 -spec send_connect_message(pid(), map()) -> ok | {error, term()}.
 send_connect_message(Stream, ConnectMsg) ->
-    try
-        %% Encode message using protocol encoder
-        Binary = macula_protocol_encoder:encode(connect, ConnectMsg),
+    encode_and_send(catch macula_protocol_encoder:encode(connect, ConnectMsg), Stream).
 
-        %% Send via QUIC stream
-        case macula_quic:send(Stream, Binary) of
-            ok -> ok;
-            {error, Reason} -> {error, Reason}
-        end
-    catch
-        _:Error ->
-            {error, Error}
-    end.
+%% @private Handle encoding result and send
+encode_and_send({'EXIT', Error}, _Stream) ->
+    {error, Error};
+encode_and_send(Binary, Stream) when is_binary(Binary) ->
+    macula_quic:send(Stream, Binary);
+encode_and_send(Other, _Stream) ->
+    {error, {invalid_encoding, Other}}.

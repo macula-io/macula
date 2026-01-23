@@ -390,13 +390,17 @@ do_publish_to_dht(Pid, NodeId, DhtKey, DhtValue) ->
     ok.
 
 safe_dht_store(Pid, NodeId, DhtKey, DhtValue) ->
-    try
-        macula_routing_server:store(Pid, DhtKey, DhtValue),
-        ?LOG_DEBUG("Published NAT profile to DHT for ~s", [NodeId])
-    catch
-        _:Reason ->
-            ?LOG_WARNING("Failed to publish NAT profile to DHT for ~s: ~p", [NodeId, Reason])
-    end.
+    handle_dht_store_result(catch macula_routing_server:store(Pid, DhtKey, DhtValue), NodeId).
+
+%% @private Handle DHT store result
+handle_dht_store_result({'EXIT', Reason}, NodeId) ->
+    ?LOG_WARNING("Failed to publish NAT profile to DHT for ~s: ~p", [NodeId, Reason]);
+handle_dht_store_result(ok, NodeId) ->
+    ?LOG_DEBUG("Published NAT profile to DHT for ~s", [NodeId]);
+handle_dht_store_result({error, Reason}, NodeId) ->
+    ?LOG_WARNING("Failed to publish NAT profile to DHT for ~s: ~p", [NodeId, Reason]);
+handle_dht_store_result(_, _NodeId) ->
+    ok.
 
 build_nat_dht_key(NodeId) ->
     KeyPrefix = <<"nat.profile.">>,

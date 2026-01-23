@@ -261,14 +261,14 @@ get_recent(Limit) ->
 %% @doc Get recent audit entries from specific server.
 -spec get_recent(pid() | atom(), pos_integer()) -> [audit_entry()].
 get_recent(_ServerRef, Limit) ->
-    try
-        All = [Entry || {_Id, Entry} <- ets:tab2list(?AUDIT_TABLE)],
-        Sorted = lists:sort(fun(A, B) ->
-            maps:get(timestamp, A) > maps:get(timestamp, B)
-        end, All),
-        lists:sublist(Sorted, Limit)
-    catch
-        error:badarg -> []
+    case ets:whereis(?AUDIT_TABLE) of
+        undefined -> [];
+        _Tid ->
+            All = [Entry || {_Id, Entry} <- ets:tab2list(?AUDIT_TABLE)],
+            Sorted = lists:sort(fun(A, B) ->
+                maps:get(timestamp, A) > maps:get(timestamp, B)
+            end, All),
+            lists:sublist(Sorted, Limit)
     end.
 
 %% @doc Get audit entries for a specific caller.
@@ -279,15 +279,15 @@ get_by_caller(CallerDID, Limit) ->
 %% @doc Get audit entries for a specific caller from specific server.
 -spec get_by_caller(pid() | atom(), did(), pos_integer()) -> [audit_entry()].
 get_by_caller(_ServerRef, CallerDID, Limit) ->
-    try
-        All = [Entry || {_Id, Entry} <- ets:tab2list(?AUDIT_TABLE)],
-        Matching = [E || E <- All, maps:get(caller, E) =:= CallerDID],
-        Sorted = lists:sort(fun(A, B) ->
-            maps:get(timestamp, A) > maps:get(timestamp, B)
-        end, Matching),
-        lists:sublist(Sorted, Limit)
-    catch
-        error:badarg -> []
+    case ets:whereis(?AUDIT_TABLE) of
+        undefined -> [];
+        _Tid ->
+            All = [Entry || {_Id, Entry} <- ets:tab2list(?AUDIT_TABLE)],
+            Matching = [E || E <- All, maps:get(caller, E) =:= CallerDID],
+            Sorted = lists:sort(fun(A, B) ->
+                maps:get(timestamp, A) > maps:get(timestamp, B)
+            end, Matching),
+            lists:sublist(Sorted, Limit)
     end.
 
 %% @doc Get audit entries for a specific resource.
@@ -298,15 +298,15 @@ get_by_resource(Resource, Limit) ->
 %% @doc Get audit entries for a specific resource from specific server.
 -spec get_by_resource(pid() | atom(), resource(), pos_integer()) -> [audit_entry()].
 get_by_resource(_ServerRef, Resource, Limit) ->
-    try
-        All = [Entry || {_Id, Entry} <- ets:tab2list(?AUDIT_TABLE)],
-        Matching = [E || E <- All, maps:get(resource, E) =:= Resource],
-        Sorted = lists:sort(fun(A, B) ->
-            maps:get(timestamp, A) > maps:get(timestamp, B)
-        end, Matching),
-        lists:sublist(Sorted, Limit)
-    catch
-        error:badarg -> []
+    case ets:whereis(?AUDIT_TABLE) of
+        undefined -> [];
+        _Tid ->
+            All = [Entry || {_Id, Entry} <- ets:tab2list(?AUDIT_TABLE)],
+            Matching = [E || E <- All, maps:get(resource, E) =:= Resource],
+            Sorted = lists:sort(fun(A, B) ->
+                maps:get(timestamp, A) > maps:get(timestamp, B)
+            end, Matching),
+            lists:sublist(Sorted, Limit)
     end.
 
 %% @doc Get audit statistics.
@@ -419,13 +419,12 @@ init(Opts) ->
 
 %% @private
 handle_call(get_stats, _From, State = #state{stats = Stats}) ->
-    TableInfo = try
-        #{
+    TableInfo = case ets:whereis(?AUDIT_TABLE) of
+        undefined -> #{table_size => 0, memory_bytes => 0};
+        _Tid -> #{
             table_size => ets:info(?AUDIT_TABLE, size),
             memory_bytes => ets:info(?AUDIT_TABLE, memory) * erlang:system_info(wordsize)
         }
-    catch
-        error:badarg -> #{table_size => 0, memory_bytes => 0}
     end,
     FullStats = maps:merge(Stats, TableInfo),
     FullStats2 = FullStats#{
@@ -436,7 +435,10 @@ handle_call(get_stats, _From, State = #state{stats = Stats}) ->
     {reply, FullStats2, State};
 
 handle_call(clear, _From, State) ->
-    try ets:delete_all_objects(?AUDIT_TABLE) catch error:badarg -> ok end,
+    case ets:whereis(?AUDIT_TABLE) of
+        undefined -> ok;
+        _Tid -> ets:delete_all_objects(?AUDIT_TABLE)
+    end,
     NewStats = #{
         allowed_count => 0,
         denied_count => 0,
@@ -486,17 +488,16 @@ handle_cast({log, Result, Operation, CallerDID, Resource, Reason, Metadata, Time
     },
 
     %% Store in ETS as {Id, Entry} tuple
-    try
-        ets:insert(?AUDIT_TABLE, {EntryId, Entry}),
-
-        %% Check if we need to evict old entries
-        CurrentSize = ets:info(?AUDIT_TABLE, size),
-        case CurrentSize > MaxEntries of
-            true -> evict_oldest(CurrentSize - MaxEntries);
-            false -> ok
-        end
-    catch
-        error:badarg -> ok
+    case ets:whereis(?AUDIT_TABLE) of
+        undefined -> ok;
+        _Tid ->
+            ets:insert(?AUDIT_TABLE, {EntryId, Entry}),
+            %% Check if we need to evict old entries
+            CurrentSize = ets:info(?AUDIT_TABLE, size),
+            case CurrentSize > MaxEntries of
+                true -> evict_oldest(CurrentSize - MaxEntries);
+                false -> ok
+            end
     end,
 
     NewStats = update_stats(Result, State#state.stats),
@@ -517,7 +518,10 @@ handle_info(_Info, State) ->
 
 %% @private
 terminate(_Reason, _State) ->
-    try ets:delete(?AUDIT_TABLE) catch error:badarg -> ok end,
+    case ets:whereis(?AUDIT_TABLE) of
+        undefined -> ok;
+        _Tid -> ets:delete(?AUDIT_TABLE)
+    end,
     ok.
 
 %%====================================================================
@@ -548,14 +552,14 @@ schedule_cleanup(Interval) ->
 %% @private Remove expired entries
 -spec cleanup_expired(pos_integer()) -> non_neg_integer().
 cleanup_expired(RetentionSeconds) ->
-    try
-        Cutoff = erlang:system_time(second) - RetentionSeconds,
-        All = ets:tab2list(?AUDIT_TABLE),
-        Expired = [Id || {Id, Entry} <- All, maps:get(timestamp, Entry) < Cutoff],
-        lists:foreach(fun(Id) -> ets:delete(?AUDIT_TABLE, Id) end, Expired),
-        length(Expired)
-    catch
-        error:badarg -> 0
+    case ets:whereis(?AUDIT_TABLE) of
+        undefined -> 0;
+        _Tid ->
+            Cutoff = erlang:system_time(second) - RetentionSeconds,
+            All = ets:tab2list(?AUDIT_TABLE),
+            Expired = [Id || {Id, Entry} <- All, maps:get(timestamp, Entry) < Cutoff],
+            lists:foreach(fun(Id) -> ets:delete(?AUDIT_TABLE, Id) end, Expired),
+            length(Expired)
     end.
 
 %% @private Evict oldest entries when over capacity
@@ -563,14 +567,14 @@ cleanup_expired(RetentionSeconds) ->
 evict_oldest(Count) when Count =< 0 ->
     ok;
 evict_oldest(Count) ->
-    try
-        All = ets:tab2list(?AUDIT_TABLE),
-        Sorted = lists:sort(fun({_IdA, A}, {_IdB, B}) ->
-            maps:get(timestamp, A) < maps:get(timestamp, B)
-        end, All),
-        ToDelete = lists:sublist(Sorted, Count),
-        lists:foreach(fun({Id, _Entry}) -> ets:delete(?AUDIT_TABLE, Id) end, ToDelete),
-        ok
-    catch
-        error:badarg -> ok
+    case ets:whereis(?AUDIT_TABLE) of
+        undefined -> ok;
+        _Tid ->
+            All = ets:tab2list(?AUDIT_TABLE),
+            Sorted = lists:sort(fun({_IdA, A}, {_IdB, B}) ->
+                maps:get(timestamp, A) < maps:get(timestamp, B)
+            end, All),
+            ToDelete = lists:sublist(Sorted, Count),
+            lists:foreach(fun({Id, _Entry}) -> ets:delete(?AUDIT_TABLE, Id) end, ToDelete),
+            ok
     end.

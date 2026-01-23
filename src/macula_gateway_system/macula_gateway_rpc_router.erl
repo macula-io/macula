@@ -138,36 +138,42 @@ forward_rpc_route(NextHopNodeInfo, RpcRouteMsg, MeshPid) ->
 %% @private
 %% @doc Invoke RPC handler and send reply.
 invoke_handler_and_reply(Handler, ArgsJson, CallId, SourceNodeId, NodeId, MeshPid) ->
-    try
-        %% Decode JSON args
-        Args = json:decode(ArgsJson),
+    ExecutionResult = catch execute_rpc_handler(Handler, ArgsJson),
+    handle_rpc_execution_result(ExecutionResult, CallId, SourceNodeId, NodeId, MeshPid).
 
-        %% Invoke handler
-        Result = Handler(Args),
+%% @private Execute RPC handler with decoded args
+execute_rpc_handler(Handler, ArgsJson) ->
+    Args = json:decode(ArgsJson),
+    Handler(Args).
 
-        %% Create success reply
-        Reply = #{
-            call_id => CallId,
-            result => encode_json(Result)
-        },
-
-        ?LOG_DEBUG("Handler invoked successfully"),
-        send_reply_via_routing(Reply, SourceNodeId, NodeId, MeshPid)
-    catch
-        Class:Reason:Stacktrace ->
-            ?LOG_ERROR("Handler error: ~p:~p~n~p", [Class, Reason, Stacktrace]),
-
-            %% Create error reply
-            ErrorReply = #{
-                call_id => CallId,
-                error => #{
-                    code => <<"handler_error">>,
-                    message => format_error(Class, Reason)
-                }
-            },
-
-            send_reply_via_routing(ErrorReply, SourceNodeId, NodeId, MeshPid)
-    end.
+%% @private Handle RPC execution result
+handle_rpc_execution_result({'EXIT', {Reason, _Stack}}, CallId, SourceNodeId, NodeId, MeshPid) ->
+    ?LOG_ERROR("Handler error: ~p", [Reason]),
+    ErrorReply = #{
+        call_id => CallId,
+        error => #{
+            code => <<"handler_error">>,
+            message => format_error(error, Reason)
+        }
+    },
+    send_reply_via_routing(ErrorReply, SourceNodeId, NodeId, MeshPid);
+handle_rpc_execution_result({'EXIT', Reason}, CallId, SourceNodeId, NodeId, MeshPid) ->
+    ?LOG_ERROR("Handler error: ~p", [Reason]),
+    ErrorReply = #{
+        call_id => CallId,
+        error => #{
+            code => <<"handler_error">>,
+            message => format_error(error, Reason)
+        }
+    },
+    send_reply_via_routing(ErrorReply, SourceNodeId, NodeId, MeshPid);
+handle_rpc_execution_result(Result, CallId, SourceNodeId, NodeId, MeshPid) ->
+    Reply = #{
+        call_id => CallId,
+        result => encode_json(Result)
+    },
+    ?LOG_DEBUG("Handler invoked successfully"),
+    send_reply_via_routing(Reply, SourceNodeId, NodeId, MeshPid).
 
 %% @private
 %% @doc Deliver reply to local connection via gproc.

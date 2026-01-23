@@ -64,24 +64,7 @@ advertise_subscription(Topic, SubRef, NodeId, Url, _ConnMgrPid) ->
 
     %% Store subscription in DHT with propagation to k closest nodes (v0.8.0+)
     ?LOG_INFO("[~s] Advertising subscription to topic ~s in DHT", [NodeId, Topic]),
-    try
-        case whereis(macula_routing_server) of
-            undefined ->
-                ?LOG_WARNING("[~s] Routing server not running, cannot advertise subscription", [NodeId]);
-            RoutingServerPid ->
-                case macula_routing_server:store(RoutingServerPid, TopicKey, SubscriberValue) of
-                    ok ->
-                        ?LOG_DEBUG("[~s] Successfully stored subscription for ~s in DHT", [NodeId, Topic]);
-                    {error, StoreError} ->
-                        ?LOG_WARNING("[~s] Failed to store subscription ~s: ~p",
-                                    [NodeId, Topic, StoreError])
-                end
-        end
-    catch
-        _:DhtError ->
-            ?LOG_WARNING("[~s] Failed to advertise subscription ~s in DHT: ~p (continuing)",
-                        [NodeId, Topic, DhtError])
-    end,
+    store_subscription_in_dht(NodeId, Topic, TopicKey, SubscriberValue),
 
     %% Schedule re-advertisement (TTL - 60 seconds, minimum 10 seconds)
     ResubInterval = max(10, TTL - 60) * 1000,  % milliseconds
@@ -203,6 +186,24 @@ route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId) ->
 %%% Internal functions
 %%%===================================================================
 
+%% @private Store subscription in DHT
+store_subscription_in_dht(NodeId, Topic, TopicKey, SubscriberValue) ->
+    case whereis(macula_routing_server) of
+        undefined ->
+            ?LOG_WARNING("[~s] Routing server not running, cannot advertise subscription", [NodeId]);
+        RoutingServerPid ->
+            handle_store_result(
+                macula_routing_server:store(RoutingServerPid, TopicKey, SubscriberValue),
+                NodeId, Topic
+            )
+    end.
+
+%% @private Handle DHT store result
+handle_store_result(ok, NodeId, Topic) ->
+    ?LOG_DEBUG("[~s] Successfully stored subscription for ~s in DHT", [NodeId, Topic]);
+handle_store_result({error, StoreError}, NodeId, Topic) ->
+    ?LOG_WARNING("[~s] Failed to store subscription ~s: ~p", [NodeId, Topic, StoreError]).
+
 %% @doc Generate next message ID
 -spec next_message_id(non_neg_integer()) -> {binary(), non_neg_integer()}.
 next_message_id(Counter) ->
@@ -214,63 +215,53 @@ next_message_id(Counter) ->
 %% synchronous DHT lookup AND routing in one call.
 -spec query_dht_async(topic(), payload(), qos(), binary(), connection_manager_pid()) -> ok.
 query_dht_async(Topic, Payload, Qos, _MsgId, _ConnMgrPid) ->
-    %% Create DHT key from topic
     TopicKey = crypto:hash(sha256, Topic),
-
     ?LOG_DEBUG("Querying DHT for remote subscribers to topic: ~s", [Topic]),
-
-    %% Query local routing server directly (v0.8.0+)
-    try
-        case whereis(macula_routing_server) of
-            undefined ->
-                ?LOG_WARNING("Routing server not running, cannot query for subscribers to ~s", [Topic]);
-            RoutingServerPid ->
-                %% K=20 is standard Kademlia replication factor
-                case macula_routing_server:find_value(RoutingServerPid, TopicKey, 20) of
-                    {ok, Subscribers} when is_list(Subscribers), length(Subscribers) > 0 ->
-                        ?LOG_INFO("Found ~p subscriber(s) for topic ~s in DHT, routing message",
-                                  [length(Subscribers), Topic]),
-                        %% Get our node ID for routing
-                        SourceNodeId = get_local_node_id(),
-                        %% Route message to discovered subscribers
-                        route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId);
-                    {ok, []} ->
-                        ?LOG_DEBUG("No subscribers found for topic ~s in DHT", [Topic]);
-                    {ok, SingleSub} when is_map(SingleSub) ->
-                        %% Single subscriber returned as map (not list)
-                        ?LOG_INFO("Found 1 subscriber for topic ~s in DHT, routing message", [Topic]),
-                        SourceNodeId = get_local_node_id(),
-                        route_to_subscribers(Topic, Payload, Qos, [SingleSub], SourceNodeId);
-                    {error, not_found} ->
-                        ?LOG_DEBUG("No subscribers found for topic ~s in DHT", [Topic]);
-                    {error, QueryError} ->
-                        ?LOG_WARNING("Failed to query DHT for topic ~s: ~p",
-                                    [Topic, QueryError])
-                end
-        end
-    catch
-        _:Error:Stack ->
-            ?LOG_WARNING("Failed to query DHT for topic ~s: ~p~nStack: ~p",
-                        [Topic, Error, Stack])
-    end,
+    query_routing_server_for_subscribers(Topic, Payload, Qos, TopicKey),
     ok.
+
+%% @private Query routing server for subscribers
+query_routing_server_for_subscribers(Topic, Payload, Qos, TopicKey) ->
+    case whereis(macula_routing_server) of
+        undefined ->
+            ?LOG_WARNING("Routing server not running, cannot query for subscribers to ~s", [Topic]);
+        RoutingServerPid ->
+            handle_dht_query_result(
+                macula_routing_server:find_value(RoutingServerPid, TopicKey, 20),
+                Topic, Payload, Qos
+            )
+    end.
+
+%% @private Handle DHT query result
+handle_dht_query_result({ok, Subscribers}, Topic, Payload, Qos) when is_list(Subscribers), length(Subscribers) > 0 ->
+    ?LOG_INFO("Found ~p subscriber(s) for topic ~s in DHT, routing message",
+              [length(Subscribers), Topic]),
+    SourceNodeId = get_local_node_id(),
+    route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId);
+handle_dht_query_result({ok, []}, Topic, _Payload, _Qos) ->
+    ?LOG_DEBUG("No subscribers found for topic ~s in DHT", [Topic]);
+handle_dht_query_result({ok, SingleSub}, Topic, Payload, Qos) when is_map(SingleSub) ->
+    ?LOG_INFO("Found 1 subscriber for topic ~s in DHT, routing message", [Topic]),
+    SourceNodeId = get_local_node_id(),
+    route_to_subscribers(Topic, Payload, Qos, [SingleSub], SourceNodeId);
+handle_dht_query_result({error, not_found}, Topic, _Payload, _Qos) ->
+    ?LOG_DEBUG("No subscribers found for topic ~s in DHT", [Topic]);
+handle_dht_query_result({error, QueryError}, Topic, _Payload, _Qos) ->
+    ?LOG_WARNING("Failed to query DHT for topic ~s: ~p", [Topic, QueryError]).
 
 %% @private Get local node ID for routing.
 -spec get_local_node_id() -> node_id().
 get_local_node_id() ->
     case whereis(macula_gateway) of
         undefined ->
-            %% Fallback: generate a temporary node ID
             crypto:strong_rand_bytes(32);
         GatewayPid ->
-            try
-                {ok, NodeId} = gen_server:call(GatewayPid, get_node_id, 1000),
-                NodeId
-            catch
-                _:_ ->
-                    crypto:strong_rand_bytes(32)
-            end
+            get_node_id_from_gateway(gen_server:call(GatewayPid, get_node_id, 1000))
     end.
+
+%% @private Extract node ID from gateway response
+get_node_id_from_gateway({ok, NodeId}) -> NodeId;
+get_node_id_from_gateway(_) -> crypto:strong_rand_bytes(32).
 
 %% @doc Send message to subscriber with NAT-aware fallback (v0.12.0+).
 %% Tries direct connection first, then falls back to NAT-aware routing.

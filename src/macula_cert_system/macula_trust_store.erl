@@ -231,24 +231,32 @@ do_add_trusted(RealmDID, Cert, Notes) ->
 %% @private Load persisted trust entries from disk
 -spec load_persisted_entries(Opts :: map()) -> ok.
 load_persisted_entries(Opts) ->
-    case maps:get(persist_path, Opts, undefined) of
-        undefined ->
-            ok;
-        Path ->
-            case file:read_file(Path) of
-                {ok, Binary} ->
-                    try
-                        Entries = binary_to_term(Binary, [safe]),
-                        lists:foreach(
-                            fun({DID, Entry}) ->
-                                ets:insert(?TABLE, {DID, Entry})
-                            end,
-                            Entries
-                        )
-                    catch
-                        _:_ -> ok
-                    end;
-                {error, _} ->
-                    ok
-            end
-    end.
+    load_from_path(maps:get(persist_path, Opts, undefined)).
+
+%% @private No persist path configured
+load_from_path(undefined) ->
+    ok;
+%% @private Load entries from file
+load_from_path(Path) ->
+    handle_file_read(file:read_file(Path)).
+
+%% @private File read failed
+handle_file_read({error, _}) ->
+    ok;
+%% @private File read succeeded - decode entries
+handle_file_read({ok, Binary}) ->
+    insert_decoded_entries(catch binary_to_term(Binary, [safe])).
+
+%% @private Decoding failed
+insert_decoded_entries({'EXIT', _}) ->
+    ok;
+%% @private Insert entries into ETS
+insert_decoded_entries(Entries) when is_list(Entries) ->
+    lists:foreach(
+        fun({DID, Entry}) ->
+            ets:insert(?TABLE, {DID, Entry})
+        end,
+        Entries
+    );
+insert_decoded_entries(_) ->
+    ok.

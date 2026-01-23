@@ -538,13 +538,7 @@ do_gateway_direct_call(Procedure, Args, Opts, From, State) ->
 %% @private Local handler found - execute directly
 do_call({ok, Handler}, _BinaryProcedure, Args, _Opts, From, State) ->
     spawn(fun() ->
-        try
-            Result = Handler(Args),
-            gen_server:reply(From, Result)
-        catch
-            _:Error ->
-                gen_server:reply(From, {error, Error})
-        end
+        execute_local_handler_and_reply(Handler, Args, From)
     end),
     {noreply, State};
 %% @private No local handler - check authorization then try service discovery via DHT
@@ -1029,11 +1023,7 @@ send_reply_to_caller(From, Msg, State) ->
             gen_server:reply(From, {error, Error});
         Result ->
             %% Success response
-            DecodedResult = try
-                decode_json(Result)
-            catch
-                _:_ -> Result
-            end,
+            DecodedResult = safe_decode_json(Result),
             ?LOG_DEBUG("[~s] RPC success response received", [State#state.node_id]),
             gen_server:reply(From, {ok, DecodedResult})
     end.
@@ -1065,11 +1055,7 @@ do_async_request_local(Procedure, Args, Opts, {CallerPid, _}, Handler, State) ->
 
     %% Execute handler in spawned process and invoke callback
     spawn(fun() ->
-        Result = try
-            Handler(Args)
-        catch
-            _:Error -> {error, Error}
-        end,
+        Result = execute_local_handler_safe(Handler, Args),
         invoke_async_callback(Callback, RequestId, Result)
     end),
 
@@ -1615,3 +1601,32 @@ get_caller_did(State, Opts) ->
         CallerDID when is_binary(CallerDID) ->
             CallerDID
     end.
+
+%%%===================================================================
+%%% Internal functions - Handler Execution Helpers
+%%%===================================================================
+
+%% @private Execute local handler and reply to caller (spawned process)
+execute_local_handler_and_reply(Handler, Args, From) ->
+    Result = execute_local_handler_safe(Handler, Args),
+    gen_server:reply(From, Result).
+
+%% @private Execute handler safely using catch expression
+execute_local_handler_safe(Handler, Args) ->
+    handle_handler_result(catch Handler(Args)).
+
+%% @private Handler executed successfully
+handle_handler_result({'EXIT', Error}) ->
+    {error, Error};
+handle_handler_result(Result) ->
+    Result.
+
+%% @private Safely decode JSON, returning original on failure
+safe_decode_json(Value) ->
+    handle_decode_result(catch decode_json(Value), Value).
+
+%% @private Decode succeeded
+handle_decode_result({'EXIT', _}, Original) ->
+    Original;
+handle_decode_result(Decoded, _Original) ->
+    Decoded.

@@ -322,23 +322,24 @@ filter_realm_peers(Realm, Keys) ->
     ).
 
 filter_and_lookup_peer(Realm, BinaryKey) ->
-    try
-        case binary_to_term(BinaryKey) of
-            {realm_fingerprint, Realm, NodeId} ->
-                %% Match - lookup the info
-                case macula_bootstrap_registry:lookup(BinaryKey) of
-                    {ok, Info} ->
-                        {true, #{node_id => NodeId, fingerprint => maps:get(fingerprint, Info)}};
-                    _ ->
-                        false
-                end;
-            _ ->
-                false
-        end
-    catch
-        _:_ ->
-            false
-    end.
+    handle_binary_term_conversion(catch binary_to_term(BinaryKey), Realm, BinaryKey).
+
+%% @private Conversion failed
+handle_binary_term_conversion({'EXIT', _}, _Realm, _BinaryKey) ->
+    false;
+%% @private Conversion succeeded - check for realm match
+handle_binary_term_conversion({realm_fingerprint, Realm, NodeId}, Realm, BinaryKey) ->
+    lookup_peer_info(macula_bootstrap_registry:lookup(BinaryKey), NodeId);
+%% @private Key doesn't match expected pattern or realm
+handle_binary_term_conversion(_, _Realm, _BinaryKey) ->
+    false.
+
+%% @private Lookup succeeded
+lookup_peer_info({ok, Info}, NodeId) ->
+    {true, #{node_id => NodeId, fingerprint => maps:get(fingerprint, Info)}};
+%% @private Lookup failed
+lookup_peer_info(_, _NodeId) ->
+    false.
 
 %%%=============================================================================
 %%% Trust Revocation

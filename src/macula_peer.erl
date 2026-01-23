@@ -400,19 +400,24 @@ extract_child_pid(false, ChildId) ->
 %% Returns ok even on timeout to not block callers - messages may be queued.
 -spec wait_for_connection(pid(), pos_integer()) -> ok.
 wait_for_connection(ConnMgrPid, Timeout) when Timeout > 0 ->
-    try macula_connection:get_status(ConnMgrPid) of
-        connected ->
-            ok;
-        _Other ->
-            timer:sleep(100),
-            wait_for_connection(ConnMgrPid, Timeout - 100)
-    catch
-        _:_ ->
-            %% Process might not exist or crashed - just continue
-            timer:sleep(100),
-            wait_for_connection(ConnMgrPid, Timeout - 100)
-    end;
+    wait_for_connection_status(is_process_alive(ConnMgrPid), ConnMgrPid, Timeout);
 wait_for_connection(_ConnMgrPid, _Timeout) ->
     %% Timeout reached - continue anyway, messages will be queued or dropped
     ?LOG_WARNING("[Connection Facade] Connection wait timed out, continuing anyway"),
     ok.
+
+%% @private Process not alive - sleep and retry
+wait_for_connection_status(false, ConnMgrPid, Timeout) ->
+    timer:sleep(100),
+    wait_for_connection(ConnMgrPid, Timeout - 100);
+%% @private Process alive - check status
+wait_for_connection_status(true, ConnMgrPid, Timeout) ->
+    handle_connection_status(macula_connection:get_status(ConnMgrPid), ConnMgrPid, Timeout).
+
+%% @private Connected - done
+handle_connection_status(connected, _ConnMgrPid, _Timeout) ->
+    ok;
+%% @private Not connected - sleep and retry
+handle_connection_status(_Other, ConnMgrPid, Timeout) ->
+    timer:sleep(100),
+    wait_for_connection(ConnMgrPid, Timeout - 100).

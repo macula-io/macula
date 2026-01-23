@@ -284,12 +284,15 @@ encode(Cert) ->
 %% @doc Decode certificate from binary format
 -spec decode(Binary :: binary()) -> {ok, macula_cert()} | {error, term()}.
 decode(Binary) ->
-    try
-        Map = binary_to_term(Binary, [safe]),
-        from_map(Map)
-    catch
-        _:_ -> {error, invalid_certificate_format}
-    end.
+    handle_binary_decode(catch binary_to_term(Binary, [safe])).
+
+%% @private Handle binary decode result
+handle_binary_decode({'EXIT', _}) ->
+    {error, invalid_certificate_format};
+handle_binary_decode(Map) when is_map(Map) ->
+    from_map(Map);
+handle_binary_decode(_) ->
+    {error, invalid_certificate_format}.
 
 %% @doc Convert certificate record to map
 -spec to_map(Cert :: macula_cert()) -> map().
@@ -311,26 +314,31 @@ to_map(#macula_cert{} = Cert) ->
 %% @doc Convert map to certificate record
 -spec from_map(Map :: map()) -> {ok, macula_cert()} | {error, term()}.
 from_map(Map) when is_map(Map) ->
-    try
-        Cert = #macula_cert{
-            version = maps:get(version, Map, 1),
-            serial = maps:get(serial, Map),
-            subject_did = maps:get(subject_did, Map),
-            subject_cn = maps:get(subject_cn, Map),
-            issuer_did = maps:get(issuer_did, Map),
-            issuer_cn = maps:get(issuer_cn, Map),
-            not_before = maps:get(not_before, Map),
-            not_after = maps:get(not_after, Map),
-            public_key = maps:get(public_key, Map),
-            signature = maps:get(signature, Map),
-            extensions = maps:get(extensions, Map, #{})
-        },
-        {ok, Cert}
-    catch
-        _:_ -> {error, missing_required_fields}
-    end;
+    build_cert_from_map(catch build_cert_record(Map));
 from_map(_) ->
     {error, invalid_map}.
+
+%% @private Build certificate record from map (may throw on missing keys)
+build_cert_record(Map) ->
+    #macula_cert{
+        version = maps:get(version, Map, 1),
+        serial = maps:get(serial, Map),
+        subject_did = maps:get(subject_did, Map),
+        subject_cn = maps:get(subject_cn, Map),
+        issuer_did = maps:get(issuer_did, Map),
+        issuer_cn = maps:get(issuer_cn, Map),
+        not_before = maps:get(not_before, Map),
+        not_after = maps:get(not_after, Map),
+        public_key = maps:get(public_key, Map),
+        signature = maps:get(signature, Map),
+        extensions = maps:get(extensions, Map, #{})
+    }.
+
+%% @private Handle certificate build result
+build_cert_from_map({'EXIT', _}) ->
+    {error, missing_required_fields};
+build_cert_from_map(#macula_cert{} = Cert) ->
+    {ok, Cert}.
 
 %% @doc Generate canonical form for signing/verification
 %% The canonical form excludes the signature field and is deterministic.

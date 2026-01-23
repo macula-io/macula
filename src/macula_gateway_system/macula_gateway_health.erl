@@ -61,10 +61,9 @@ stop() ->
 %% @doc Check if the gateway is healthy.
 -spec is_healthy() -> boolean().
 is_healthy() ->
-    try
-        gen_server:call(?MODULE, is_healthy, 1000)
-    catch
-        _:_ -> false
+    case whereis(?MODULE) of
+        undefined -> false;
+        _Pid -> gen_server:call(?MODULE, is_healthy, 1000)
     end.
 
 %% @doc Set the readiness state.
@@ -193,35 +192,34 @@ strip_query_string(_) -> <<"/">>.
 
 %% @private
 health_response() ->
-    try
-        State = gen_server:call(?MODULE, get_state, 1000),
-        Uptime = erlang:system_time(second) - State#state.started_at,
-
-        Body = iolist_to_binary(io_lib:format(
-            "{\"status\":\"healthy\",\"ready\":~s,\"uptime\":~p}",
-            [atom_to_list(State#state.ready), Uptime]
-        )),
-
-        http_response(200, "OK", "application/json", Body)
-    catch
-        _:_ ->
-            http_response(503, "Service Unavailable", "text/plain", <<"Service unavailable">>)
+    case whereis(?MODULE) of
+        undefined ->
+            http_response(503, "Service Unavailable", "text/plain", <<"Service unavailable">>);
+        _Pid ->
+            State = gen_server:call(?MODULE, get_state, 1000),
+            Uptime = erlang:system_time(second) - State#state.started_at,
+            Body = iolist_to_binary(io_lib:format(
+                "{\"status\":\"healthy\",\"ready\":~s,\"uptime\":~p}",
+                [atom_to_list(State#state.ready), Uptime]
+            )),
+            http_response(200, "OK", "application/json", Body)
     end.
 
 %% @private
 ready_response() ->
-    try
-        State = gen_server:call(?MODULE, get_state, 1000),
-        case State#state.ready of
-            true ->
-                http_response(200, "OK", "text/plain", <<"Ready">>);
-            false ->
-                http_response(503, "Service Unavailable", "text/plain", <<"Not ready">>)
-        end
-    catch
-        _:_ ->
-            http_response(503, "Service Unavailable", "text/plain", <<"Service unavailable">>)
+    case whereis(?MODULE) of
+        undefined ->
+            http_response(503, "Service Unavailable", "text/plain", <<"Service unavailable">>);
+        _Pid ->
+            State = gen_server:call(?MODULE, get_state, 1000),
+            ready_response_for_state(State#state.ready)
     end.
+
+%% @private
+ready_response_for_state(true) ->
+    http_response(200, "OK", "text/plain", <<"Ready">>);
+ready_response_for_state(false) ->
+    http_response(503, "Service Unavailable", "text/plain", <<"Not ready">>).
 
 %% @private
 live_response() ->
@@ -230,104 +228,86 @@ live_response() ->
 
 %% @private
 metrics_response() ->
-    try
-        State = gen_server:call(?MODULE, get_state, 1000),
-        Uptime = erlang:system_time(second) - State#state.started_at,
-
-        %% Get diagnostics info
-        DiagInfo = get_diagnostics_metrics(),
-
-        %% Get gateway stats (if available)
-        GatewayStats = get_gateway_stats(),
-
-        %% Build Prometheus-formatted metrics
-        Body = iolist_to_binary([
-            %% Health server metrics
-            "# HELP macula_gateway_uptime_seconds Gateway uptime in seconds\n",
-            "# TYPE macula_gateway_uptime_seconds gauge\n",
-            io_lib:format("macula_gateway_uptime_seconds ~p~n", [Uptime]),
-
-            "# HELP macula_gateway_ready Gateway ready status (1=ready, 0=not ready)\n",
-            "# TYPE macula_gateway_ready gauge\n",
-            io_lib:format("macula_gateway_ready ~p~n", [case State#state.ready of true -> 1; false -> 0 end]),
-
-            %% System metrics from diagnostics
-            "# HELP macula_gateway_process_count Number of Erlang processes\n",
-            "# TYPE macula_gateway_process_count gauge\n",
-            io_lib:format("macula_gateway_process_count ~p~n", [maps:get(process_count, DiagInfo, 0)]),
-
-            "# HELP macula_gateway_memory_bytes Total memory used by the VM in bytes\n",
-            "# TYPE macula_gateway_memory_bytes gauge\n",
-            io_lib:format("macula_gateway_memory_bytes ~p~n", [maps:get(memory_bytes, DiagInfo, 0)]),
-
-            "# HELP macula_gateway_process_memory_bytes Memory used by Erlang processes in bytes\n",
-            "# TYPE macula_gateway_process_memory_bytes gauge\n",
-            io_lib:format("macula_gateway_process_memory_bytes ~p~n", [maps:get(process_memory_bytes, DiagInfo, 0)]),
-
-            %% Diagnostics service availability
-            "# HELP macula_gateway_diagnostics_available Diagnostics service availability (1=available, 0=unavailable)\n",
-            "# TYPE macula_gateway_diagnostics_available gauge\n",
-            io_lib:format("macula_gateway_diagnostics_available ~p~n", [maps:get(diagnostics_available, DiagInfo, 0)]),
-
-            %% Gateway connection metrics
-            "# HELP macula_gateway_clients_total Number of connected clients\n",
-            "# TYPE macula_gateway_clients_total gauge\n",
-            io_lib:format("macula_gateway_clients_total ~p~n", [maps:get(clients, GatewayStats, 0)]),
-
-            "# HELP macula_gateway_subscriptions_total Number of active subscriptions\n",
-            "# TYPE macula_gateway_subscriptions_total gauge\n",
-            io_lib:format("macula_gateway_subscriptions_total ~p~n", [maps:get(subscriptions, GatewayStats, 0)]),
-
-            "# HELP macula_gateway_registrations_total Number of registered procedures\n",
-            "# TYPE macula_gateway_registrations_total gauge\n",
-            io_lib:format("macula_gateway_registrations_total ~p~n", [maps:get(registrations, GatewayStats, 0)])
-        ]),
-
-        http_response(200, "OK", "text/plain; version=0.0.4", Body)
-    catch
-        _:_ ->
-            http_response(503, "Service Unavailable", "text/plain", <<"Service unavailable">>)
+    case whereis(?MODULE) of
+        undefined ->
+            http_response(503, "Service Unavailable", "text/plain", <<"Service unavailable">>);
+        _Pid ->
+            build_metrics_response()
     end.
+
+%% @private
+build_metrics_response() ->
+    State = gen_server:call(?MODULE, get_state, 1000),
+    Uptime = erlang:system_time(second) - State#state.started_at,
+    DiagInfo = get_diagnostics_metrics(),
+    GatewayStats = get_gateway_stats(),
+    ReadyInt = ready_to_int(State#state.ready),
+    Body = iolist_to_binary([
+        "# HELP macula_gateway_uptime_seconds Gateway uptime in seconds\n",
+        "# TYPE macula_gateway_uptime_seconds gauge\n",
+        io_lib:format("macula_gateway_uptime_seconds ~p~n", [Uptime]),
+        "# HELP macula_gateway_ready Gateway ready status (1=ready, 0=not ready)\n",
+        "# TYPE macula_gateway_ready gauge\n",
+        io_lib:format("macula_gateway_ready ~p~n", [ReadyInt]),
+        "# HELP macula_gateway_process_count Number of Erlang processes\n",
+        "# TYPE macula_gateway_process_count gauge\n",
+        io_lib:format("macula_gateway_process_count ~p~n", [maps:get(process_count, DiagInfo, 0)]),
+        "# HELP macula_gateway_memory_bytes Total memory used by the VM in bytes\n",
+        "# TYPE macula_gateway_memory_bytes gauge\n",
+        io_lib:format("macula_gateway_memory_bytes ~p~n", [maps:get(memory_bytes, DiagInfo, 0)]),
+        "# HELP macula_gateway_process_memory_bytes Memory used by Erlang processes in bytes\n",
+        "# TYPE macula_gateway_process_memory_bytes gauge\n",
+        io_lib:format("macula_gateway_process_memory_bytes ~p~n", [maps:get(process_memory_bytes, DiagInfo, 0)]),
+        "# HELP macula_gateway_diagnostics_available Diagnostics service availability (1=available, 0=unavailable)\n",
+        "# TYPE macula_gateway_diagnostics_available gauge\n",
+        io_lib:format("macula_gateway_diagnostics_available ~p~n", [maps:get(diagnostics_available, DiagInfo, 0)]),
+        "# HELP macula_gateway_clients_total Number of connected clients\n",
+        "# TYPE macula_gateway_clients_total gauge\n",
+        io_lib:format("macula_gateway_clients_total ~p~n", [maps:get(clients, GatewayStats, 0)]),
+        "# HELP macula_gateway_subscriptions_total Number of active subscriptions\n",
+        "# TYPE macula_gateway_subscriptions_total gauge\n",
+        io_lib:format("macula_gateway_subscriptions_total ~p~n", [maps:get(subscriptions, GatewayStats, 0)]),
+        "# HELP macula_gateway_registrations_total Number of registered procedures\n",
+        "# TYPE macula_gateway_registrations_total gauge\n",
+        io_lib:format("macula_gateway_registrations_total ~p~n", [maps:get(registrations, GatewayStats, 0)])
+    ]),
+    http_response(200, "OK", "text/plain; version=0.0.4", Body).
+
+%% @private
+ready_to_int(true) -> 1;
+ready_to_int(false) -> 0.
 
 %% @private
 %% @doc Get diagnostics metrics from the diagnostics service
 get_diagnostics_metrics() ->
-    try
-        %% Try to get info from diagnostics service
-        case whereis(macula_gateway_diagnostics) of
-            undefined ->
-                #{diagnostics_available => 0};
-            _Pid ->
-                %% Get system info directly
-                MemoryInfo = erlang:memory(),
-                #{
-                    diagnostics_available => 1,
-                    process_count => erlang:system_info(process_count),
-                    memory_bytes => proplists:get_value(total, MemoryInfo, 0),
-                    process_memory_bytes => proplists:get_value(processes, MemoryInfo, 0)
-                }
-        end
-    catch
-        _:_ ->
-            #{diagnostics_available => 0}
+    case whereis(macula_gateway_diagnostics) of
+        undefined ->
+            #{diagnostics_available => 0};
+        _Pid ->
+            MemoryInfo = erlang:memory(),
+            #{
+                diagnostics_available => 1,
+                process_count => erlang:system_info(process_count),
+                memory_bytes => proplists:get_value(total, MemoryInfo, 0),
+                process_memory_bytes => proplists:get_value(processes, MemoryInfo, 0)
+            }
     end.
 
 %% @private
 %% @doc Get gateway statistics
 get_gateway_stats() ->
-    try
-        case whereis(macula_gateway) of
-            undefined ->
-                #{clients => 0, subscriptions => 0, registrations => 0};
-            Pid ->
-                case catch macula_gateway:get_stats(Pid) of
-                    Stats when is_map(Stats) -> Stats;
-                    _ -> #{clients => 0, subscriptions => 0, registrations => 0}
-                end
-        end
-    catch
-        _:_ ->
-            #{clients => 0, subscriptions => 0, registrations => 0}
+    case whereis(macula_gateway) of
+        undefined ->
+            #{clients => 0, subscriptions => 0, registrations => 0};
+        Pid ->
+            get_gateway_stats_from_pid(Pid)
+    end.
+
+%% @private
+get_gateway_stats_from_pid(Pid) ->
+    case macula_gateway:get_stats(Pid) of
+        Stats when is_map(Stats) -> Stats;
+        _ -> #{clients => 0, subscriptions => 0, registrations => 0}
     end.
 
 %% @private

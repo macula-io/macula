@@ -547,9 +547,12 @@ get_endpoint_for_relay(Opts) ->
 build_endpoint(false, _) -> undefined;
 build_endpoint(_, false) -> undefined;
 build_endpoint(Host, PortStr) ->
-    try
-        Port = list_to_integer(PortStr),
-        {list_to_binary(Host), Port}
-    catch
-        _:_ -> undefined
-    end.
+    handle_endpoint_port_parse(catch list_to_integer(PortStr), Host).
+
+%% @private Handle port parsing result
+handle_endpoint_port_parse({'EXIT', _}, _Host) ->
+    undefined;
+handle_endpoint_port_parse(Port, Host) when is_integer(Port) ->
+    {list_to_binary(Host), Port};
+handle_endpoint_port_parse(_, _Host) ->
+    undefined.

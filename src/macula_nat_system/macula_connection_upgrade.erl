@@ -191,25 +191,31 @@ verify_relay(ProvidedConn, RegisteredConn) ->
 %% 4. Close relay connection gracefully
 -spec do_upgrade(binary(), #relay_info{}, term()) -> ok | {error, term()}.
 do_upgrade(PeerId, RelayInfo, DirectConn) ->
-    try
-        %% Step 1: Mark relay as upgrading (stop accepting new messages)
-        mark_relay_upgrading(RelayInfo),
+    handle_upgrade_result(catch execute_upgrade_steps(PeerId, RelayInfo, DirectConn)).
 
-        %% Step 2: Short drain period for in-flight messages
-        timer:sleep(?DRAIN_TIMEOUT_MS),
+%% @private Execute upgrade steps in sequence
+execute_upgrade_steps(PeerId, RelayInfo, DirectConn) ->
+    %% Step 1: Mark relay as upgrading (stop accepting new messages)
+    mark_relay_upgrading(RelayInfo),
+    %% Step 2: Short drain period for in-flight messages
+    timer:sleep(?DRAIN_TIMEOUT_MS),
+    %% Step 3: Update routing to use direct connection
+    update_routing(PeerId, DirectConn),
+    %% Step 4: Close relay connection gracefully
+    close_relay_gracefully(RelayInfo),
+    ok.
 
-        %% Step 3: Update routing to use direct connection
-        update_routing(PeerId, DirectConn),
-
-        %% Step 4: Close relay connection gracefully
-        close_relay_gracefully(RelayInfo),
-
-        ok
-    catch
-        Class:Reason:Stack ->
-            ?LOG_ERROR("Upgrade failed: ~p:~p~n~p", [Class, Reason, Stack]),
-            {error, {Class, Reason}}
-    end.
+%% @private Handle upgrade result
+handle_upgrade_result({'EXIT', {Reason, Stack}}) ->
+    ?LOG_ERROR("Upgrade failed: ~p~n~p", [Reason, Stack]),
+    {error, Reason};
+handle_upgrade_result({'EXIT', Reason}) ->
+    ?LOG_ERROR("Upgrade failed: ~p", [Reason]),
+    {error, Reason};
+handle_upgrade_result(ok) ->
+    ok;
+handle_upgrade_result({error, _Reason} = Error) ->
+    Error.
 
 %% @private
 %% @doc Mark relay connection as upgrading (no new messages).

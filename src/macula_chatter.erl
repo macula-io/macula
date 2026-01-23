@@ -271,16 +271,10 @@ setup_pubsub(NodeId) ->
         end
     end,
 
-    %% Find the bootstrap connection handlers
     case get_peer_handlers() of
         {ok, #{pubsub := PubSubPid}} ->
-            try
-                macula_pubsub_handler:subscribe(PubSubPid, ?CHAT_TOPIC, Handler),
-                ok
-            catch
-                _:Reason ->
-                    {error, Reason}
-            end;
+            macula_pubsub_handler:subscribe(PubSubPid, ?CHAT_TOPIC, Handler),
+            ok;
         {error, Reason} ->
             {error, Reason}
     end.
@@ -301,16 +295,10 @@ setup_rpc(NodeId) ->
         {ok, #{<<"status">> => <<"delivered">>, <<"to">> => NodeId}}
     end,
 
-    %% Find the bootstrap connection to register with
     case get_peer_handlers() of
         {ok, #{rpc := RpcPid}} ->
-            try
-                macula_rpc_handler:register_local_procedure(RpcPid, ?CHAT_RPC, Handler),
-                ok
-            catch
-                _:Reason ->
-                    {error, Reason}
-            end;
+            macula_rpc_handler:register_local_procedure(RpcPid, ?CHAT_RPC, Handler),
+            ok;
         {error, Reason} ->
             {error, Reason}
     end.
@@ -323,17 +311,9 @@ do_broadcast(SeqNum, State) ->
 
     case get_peer_handlers() of
         {ok, #{pubsub := PubSubPid}} ->
-            try
-                macula_pubsub_handler:publish(PubSubPid, ?CHAT_TOPIC, Payload, #{}),
-                macula_console:pubsub_send(NodeId, SeqNum, NatType),
-                State#state{messages_sent = SeqNum}
-            catch
-                _:Reason ->
-                    macula_console:error(NodeId, iolist_to_binary([
-                        <<"Broadcast FAILED: ">>, io_lib:format("~p", [Reason])
-                    ])),
-                    State
-            end;
+            macula_pubsub_handler:publish(PubSubPid, ?CHAT_TOPIC, Payload, #{}),
+            macula_console:pubsub_send(NodeId, SeqNum, NatType),
+            State#state{messages_sent = SeqNum};
         {error, Reason} ->
             macula_console:warning(NodeId, iolist_to_binary([
                 <<"No peer connection: ">>, io_lib:format("~p", [Reason])
@@ -351,12 +331,7 @@ do_send_direct(_PeerId, Message, State) ->
 
     case get_peer_handlers() of
         {ok, #{rpc := RpcPid}} ->
-            try
-                macula_rpc_handler:call(RpcPid, ?CHAT_RPC, Args)
-            catch
-                _:Reason ->
-                    {error, Reason}
-            end;
+            macula_rpc_handler:call(RpcPid, ?CHAT_RPC, Args);
         {error, Reason} ->
             {error, Reason}
     end.

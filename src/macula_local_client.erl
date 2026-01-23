@@ -397,14 +397,7 @@ handle_info({publish, Topic, Payload}, State) ->
             Topic ->
                 %% Topic matches exactly, invoke callback
                 ?LOG_DEBUG("Match found, invoking callback for topic ~s", [Topic]),
-                try
-                    Callback(Payload),
-                    ?LOG_DEBUG("Callback completed successfully for topic ~s", [Topic])
-                catch
-                    Class:Reason:Stacktrace ->
-                        ?LOG_ERROR("Callback error for topic ~s: ~p:~p~nStacktrace: ~p",
-                                   [Topic, Class, Reason, Stacktrace])
-                end,
+                invoke_callback_safe(Callback, Payload, Topic),
                 Acc + 1;
             _ ->
                 %% Different topic, skip
@@ -486,11 +479,7 @@ ensure_crdt_table_exists(TableName) ->
 
 %% @private Table doesn't exist - create it
 do_ensure_table(undefined, TableName) ->
-    try
-        ets:new(TableName, [named_table, public, set])
-    catch
-        error:badarg -> ok  % Table already exists (race condition)
-    end;
+    handle_table_creation(catch ets:new(TableName, [named_table, public, set]));
 %% @private Table exists - nothing to do
 do_ensure_table(_TableRef, _TableName) ->
     ok.
@@ -515,3 +504,22 @@ crdt_lookup_result([{_Key, {Value, _Timestamp}}]) ->
 %% @private Key not found
 crdt_lookup_result([]) ->
     {error, not_found}.
+
+%% @private Handle ETS table creation result
+handle_table_creation({'EXIT', {badarg, _}}) ->
+    ok;  %% Table already exists (race condition)
+handle_table_creation(_TableRef) ->
+    ok.
+
+%% @private Invoke callback safely with catch expression
+invoke_callback_safe(Callback, Payload, Topic) ->
+    handle_callback_result(catch Callback(Payload), Topic).
+
+%% @private Handle callback result
+handle_callback_result({'EXIT', {Reason, Stacktrace}}, Topic) ->
+    ?LOG_ERROR("Callback error for topic ~s: ~p~nStacktrace: ~p",
+               [Topic, Reason, Stacktrace]);
+handle_callback_result({'EXIT', Reason}, Topic) ->
+    ?LOG_ERROR("Callback error for topic ~s: ~p", [Topic, Reason]);
+handle_callback_result(_Result, Topic) ->
+    ?LOG_DEBUG("Callback completed successfully for topic ~s", [Topic]).

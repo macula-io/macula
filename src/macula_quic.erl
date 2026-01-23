@@ -181,21 +181,25 @@ recv(StreamPid, Timeout) ->
     end.
 
 %% @doc Close a listener, connection, or stream.
+%% Tries stream, then connection, then listener close in sequence.
 -spec close(reference()) -> ok.
 close(Pid) ->
     %% quicer uses different close functions based on resource type
-    %% For simplicity, we try to close as stream first, then connection
-    try
-        quicer:close_stream(Pid)
-    catch
-        _:_ ->
-            try
-                quicer:close_connection(Pid)
-            catch
-                _:_ ->
-                    quicer:close_listener(Pid)
-            end
-    end,
+    close_as_stream(catch quicer:close_stream(Pid), Pid).
+
+%% @private Stream close succeeded
+close_as_stream(ok, _Pid) ->
+    ok;
+%% @private Stream close failed - try as connection
+close_as_stream(_, Pid) ->
+    close_as_connection(catch quicer:close_connection(Pid), Pid).
+
+%% @private Connection close succeeded
+close_as_connection(ok, _Pid) ->
+    ok;
+%% @private Connection close failed - try as listener
+close_as_connection(_, Pid) ->
+    _ = catch quicer:close_listener(Pid),
     ok.
 
 %% @doc Get the peer's address from a stream or connection handle.

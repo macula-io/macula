@@ -110,17 +110,23 @@ encode_public_key(PublicKey) ->
 %% @doc Decode hex-encoded public key back to binary
 -spec decode_public_key(HexKey :: binary()) -> {ok, binary()} | {error, invalid_format}.
 decode_public_key(HexKey) when is_binary(HexKey) ->
-    try
-        Decoded = binary:decode_hex(HexKey),
-        case validate_public_key(Decoded) of
-            ok -> {ok, Decoded};
-            Error -> Error
-        end
-    catch
-        _:_ -> {error, invalid_format}
-    end;
+    handle_hex_decode(catch binary:decode_hex(HexKey));
 decode_public_key(_) ->
     {error, invalid_format}.
+
+%% @private Handle hex decode result
+handle_hex_decode({'EXIT', _}) ->
+    {error, invalid_format};
+handle_hex_decode(Decoded) when is_binary(Decoded) ->
+    validate_decoded_key(validate_public_key(Decoded), Decoded);
+handle_hex_decode(_) ->
+    {error, invalid_format}.
+
+%% @private Validate decoded key
+validate_decoded_key(ok, Decoded) ->
+    {ok, Decoded};
+validate_decoded_key(Error, _Decoded) ->
+    Error.
 
 %% @doc Compute SHA-256 checksum of data
 -spec compute_checksum(Data :: binary()) -> binary().

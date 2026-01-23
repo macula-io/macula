@@ -96,15 +96,10 @@ get_status(Pid) ->
 
 %% @doc Close a connection gracefully.
 %% Stops the gen_server which triggers proper QUIC cleanup in terminate/2.
+%% Uses catch expression to handle race conditions where process may already be dead.
 -spec close(pid()) -> ok.
 close(Pid) when is_pid(Pid) ->
-    try
-        gen_server:stop(Pid, normal, 5000)
-    catch
-        exit:noproc -> ok;
-        exit:normal -> ok;
-        _:_ -> ok
-    end,
+    _ = (catch gen_server:stop(Pid, normal, 5000)),
     ok;
 close(_) ->
     ok.
@@ -411,12 +406,17 @@ attempt_quic_connection(Host, Port, QuicOpts) ->
 -spec safe_quic_connect(string(), integer(), list()) ->
     {ok, pid()} | {error, term()}.
 safe_quic_connect(Host, Port, QuicOpts) ->
-    try
-        macula_quic:connect(Host, Port, QuicOpts, ?DEFAULT_TIMEOUT)
-    catch
-        _:Error ->
-            {error, {connection_failed, Error}}
-    end.
+    handle_quic_connect_result(catch macula_quic:connect(Host, Port, QuicOpts, ?DEFAULT_TIMEOUT)).
+
+%% @private Handle QUIC connect result, converting exceptions to error tuples.
+handle_quic_connect_result({'EXIT', Error}) ->
+    {error, {connection_failed, Error}};
+handle_quic_connect_result({ok, _Conn} = Result) ->
+    Result;
+handle_quic_connect_result({error, _Reason} = Result) ->
+    Result;
+handle_quic_connect_result(Other) ->
+    {error, {unexpected_connect_result, Other}}.
 
 %% @doc Open and configure bidirectional stream
 -spec setup_bidirectional_stream(reference()) ->
@@ -894,13 +894,27 @@ find_handler_in_registries([RpcPid | Rest], Procedure, Args) ->
 -spec execute_handler(fun((map()) -> {ok, term()} | {error, term()}), binary() | map()) ->
     {ok, term()} | {error, binary()}.
 execute_handler(Handler, Args) ->
-    try
-        DecodedArgs = try macula_utils:decode_json(Args) catch _:_ -> Args end,
-        HandlerResult = Handler(DecodedArgs),
-        ?LOG_WARNING("[Connection] Handler executed, result=~p", [HandlerResult]),
-        HandlerResult
-    catch
-        _:Error ->
-            ?LOG_WARNING("[Connection] Handler THREW error: ~p", [Error]),
-            {error, iolist_to_binary(io_lib:format("~p", [Error]))}
+    DecodedArgs = safe_decode_json(Args),
+    safe_execute_handler(Handler, DecodedArgs).
+
+%% @private Safely decode JSON, falling back to original args on decode failure.
+-spec safe_decode_json(binary() | map()) -> term().
+safe_decode_json(Args) ->
+    case catch macula_utils:decode_json(Args) of
+        {'EXIT', _} -> Args;
+        Decoded -> Decoded
     end.
+
+%% @private Safely execute handler, returning error tuple on exception.
+-spec safe_execute_handler(fun((map()) -> {ok, term()} | {error, term()}), term()) ->
+    {ok, term()} | {error, binary()}.
+safe_execute_handler(Handler, Args) ->
+    handle_execution_result(catch Handler(Args)).
+
+%% @private Handle handler execution result
+handle_execution_result({'EXIT', Error}) ->
+    ?LOG_WARNING("[Connection] Handler THREW error: ~p", [Error]),
+    {error, iolist_to_binary(io_lib:format("~p", [Error]))};
+handle_execution_result(HandlerResult) ->
+    ?LOG_WARNING("[Connection] Handler executed, result=~p", [HandlerResult]),
+    HandlerResult.

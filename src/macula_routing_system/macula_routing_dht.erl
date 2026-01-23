@@ -284,12 +284,7 @@ store(Key, Value) ->
         undefined ->
             {error, not_started};
         Pid ->
-            try
-                macula_routing_server:store(Pid, Key, Value)
-            catch
-                exit:{noproc, _} -> {error, not_started};
-                _:Reason -> {error, Reason}
-            end
+            macula_routing_server:store(Pid, Key, Value)
     end.
 
 %% @doc Delete a key from the DHT.
@@ -300,13 +295,8 @@ delete(Key) ->
         undefined ->
             {error, not_started};
         Pid ->
-            try
-                macula_routing_server:delete_local(Pid, Key, user_requested),
-                ok
-            catch
-                exit:{noproc, _} -> {error, not_started};
-                _:Reason -> {error, Reason}
-            end
+            macula_routing_server:delete_local(Pid, Key, user_requested),
+            ok
     end.
 
 %% @doc Find a value in the DHT.
@@ -317,17 +307,13 @@ find(Key) ->
         undefined ->
             {error, not_started};
         Pid ->
-            try
-                case macula_routing_server:find_value(Pid, Key, #{}) of
-                    {ok, Value} -> {ok, Value};
-                    {error, not_found} -> {error, not_found};
-                    Other -> Other
-                end
-            catch
-                exit:{noproc, _} -> {error, not_started};
-                _:Reason -> {error, Reason}
-            end
+            find_value_result(macula_routing_server:find_value(Pid, Key, #{}))
     end.
+
+%% @private
+find_value_result({ok, Value}) -> {ok, Value};
+find_value_result({error, not_found}) -> {error, not_found};
+find_value_result(Other) -> Other.
 
 %% @doc Subscribe to DHT events matching a key prefix.
 %% Subscribes the given Pid to receive events when keys with the given prefix
@@ -341,31 +327,27 @@ find(Key) ->
 %%   gproc:unreg({p, l, {dht_prefix_subscription, Prefix}})
 -spec subscribe(binary(), pid()) -> ok.
 subscribe(Prefix, Pid) when is_binary(Prefix), is_pid(Pid) ->
-    %% Register subscription via gproc property
-    %% The macula_routing_server will notify subscribers when keys change
     Key = {p, l, {dht_prefix_subscription, Prefix}},
-    try
-        %% If the caller is subscribing itself, use gproc:reg
-        %% If subscribing another process, we need to send a message to that process
-        case Pid =:= self() of
-            true ->
-                gproc:reg(Key),
-                ok;
-            false ->
-                %% For remote subscription, send a message to the target pid
-                %% asking it to register. The target process must handle this.
-                Pid ! {subscribe_dht_prefix, Prefix},
-                ok
-        end
-    catch
-        error:badarg ->
-            %% Already registered - this is fine
-            ok;
-        _:_ ->
-            ok
-    end;
+    subscribe_impl(Pid, Prefix, Key);
 subscribe(_, _) ->
     ok.
+
+%% @private
+subscribe_impl(Pid, _Prefix, Key) when Pid =:= self() ->
+    subscribe_self(Key);
+subscribe_impl(Pid, Prefix, _Key) ->
+    Pid ! {subscribe_dht_prefix, Prefix},
+    ok.
+
+%% @private
+subscribe_self(Key) ->
+    case gproc:where(Key) of
+        undefined ->
+            gproc:reg(Key),
+            ok;
+        _Pid ->
+            ok
+    end.
 
 %% @doc Notify subscribers about a DHT store event.
 %% Called by macula_routing_server when a key is stored.
@@ -382,23 +364,24 @@ notify_delete(Key) ->
 %% @doc Send notification to all subscribers whose prefix matches the key.
 -spec notify_prefix_subscribers(binary(), term()) -> ok.
 notify_prefix_subscribers(Key, Message) ->
-    %% Find all prefix subscriptions and check if they match
-    %% This iterates over all subscriptions - for production use with many
-    %% subscriptions, consider a more efficient data structure
-    try
-        Matches = gproc:select({l, p}, [{{{'_', '_', {dht_prefix_subscription, '$1'}}, '_', '_'},
-                                          [], ['$1']}]),
-        lists:foreach(fun(Prefix) ->
-            case binary:match(Key, Prefix) of
-                {0, _} ->
-                    %% Key starts with this prefix - notify subscribers
-                    gproc:send({p, l, {dht_prefix_subscription, Prefix}}, Message);
-                _ ->
-                    ok
-            end
-        end, Matches)
-    catch
-        _:_ ->
-            %% gproc not available or no subscribers - ignore
+    case whereis(gproc) of
+        undefined ->
+            ok;
+        _Pid ->
+            do_notify_prefix_subscribers(Key, Message)
+    end.
+
+%% @private
+do_notify_prefix_subscribers(Key, Message) ->
+    Matches = gproc:select({l, p}, [{{{'_', '_', {dht_prefix_subscription, '$1'}}, '_', '_'},
+                                      [], ['$1']}]),
+    lists:foreach(fun(Prefix) -> notify_if_prefix_matches(Key, Prefix, Message) end, Matches).
+
+%% @private
+notify_if_prefix_matches(Key, Prefix, Message) ->
+    case binary:match(Key, Prefix) of
+        {0, _} ->
+            gproc:send({p, l, {dht_prefix_subscription, Prefix}}, Message);
+        _ ->
             ok
     end.

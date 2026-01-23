@@ -438,20 +438,22 @@ check_with_ucan_fallback(CallerDID, Namespace, Resource, UcanToken, Operation) -
 -spec audit_result(Operation :: atom(), CallerDID :: did(),
                    Resource :: binary(), Result :: auth_result()) -> ok.
 audit_result(Operation, CallerDID, Resource, {ok, authorized}) ->
-    %% Only log if audit server is running (optional component)
-    try
-        macula_authorization_audit:log_authorized(Operation, CallerDID, Resource)
-    catch
-        exit:{noproc, _} -> ok;
-        error:undef -> ok
-    end;
+    maybe_log_authorized(Operation, CallerDID, Resource);
 audit_result(Operation, CallerDID, Resource, {error, Reason}) ->
-    %% Only log if audit server is running (optional component)
-    try
-        macula_authorization_audit:log_denied(Operation, CallerDID, Resource, Reason)
-    catch
-        exit:{noproc, _} -> ok;
-        error:undef -> ok
+    maybe_log_denied(Operation, CallerDID, Resource, Reason).
+
+%% @private Log authorized if audit server is running
+maybe_log_authorized(Operation, CallerDID, Resource) ->
+    case whereis(macula_authorization_audit) of
+        undefined -> ok;
+        _Pid -> macula_authorization_audit:log_authorized(Operation, CallerDID, Resource)
+    end.
+
+%% @private Log denied if audit server is running
+maybe_log_denied(Operation, CallerDID, Resource, Reason) ->
+    case whereis(macula_authorization_audit) of
+        undefined -> ok;
+        _Pid -> macula_authorization_audit:log_denied(Operation, CallerDID, Resource, Reason)
     end.
 
 %%====================================================================

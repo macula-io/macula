@@ -224,13 +224,15 @@ is_local(MCID) ->
 %% @doc Get content system status.
 -spec status() -> map().
 status() ->
-    try
-        Stats = macula_content_store:stats(),
-        Stats#{enabled => true}
-    catch
-        _:_ ->
-            #{enabled => false, error => store_unavailable}
-    end.
+    handle_status_result(catch macula_content_store:stats()).
+
+%% @private Handle status result
+handle_status_result({'EXIT', _}) ->
+    #{enabled => false, error => store_unavailable};
+handle_status_result(Stats) when is_map(Stats) ->
+    Stats#{enabled => true};
+handle_status_result(_) ->
+    #{enabled => false, error => store_unavailable}.
 
 %%%===================================================================
 %%% Internal Functions

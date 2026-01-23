@@ -677,19 +677,29 @@ parse_float_env(EnvVar) ->
     end.
 
 parse_float_safe(Value) ->
-    try
-        case string:to_float(Value) of
-            {Float, _Rest} when is_float(Float) -> Float;
-            {error, no_float} ->
-                %% Try as integer
-                case string:to_integer(Value) of
-                    {Int, _} when is_integer(Int) -> float(Int);
-                    _ -> undefined
-                end
-        end
-    catch
-        _:_ -> undefined
-    end.
+    handle_float_parse(catch string:to_float(Value), Value).
+
+%% @private Handle float parsing result
+handle_float_parse({'EXIT', _}, _Value) ->
+    undefined;
+handle_float_parse({Float, _Rest}, _Value) when is_float(Float) ->
+    Float;
+handle_float_parse({error, no_float}, Value) ->
+    try_parse_as_integer(Value);
+handle_float_parse(_, _Value) ->
+    undefined.
+
+%% @private Try parsing as integer and convert to float
+try_parse_as_integer(Value) ->
+    handle_int_parse(catch string:to_integer(Value)).
+
+%% @private Handle integer parsing result
+handle_int_parse({'EXIT', _}) ->
+    undefined;
+handle_int_parse({Int, _}) when is_integer(Int) ->
+    float(Int);
+handle_int_parse(_) ->
+    undefined.
 
 %% @private
 %% @doc Get a binary value from environment variable.

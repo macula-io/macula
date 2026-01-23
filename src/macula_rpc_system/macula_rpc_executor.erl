@@ -35,13 +35,7 @@ execute_local(Handler, Args, Timeout) ->
 
     %% Spawn worker process
     WorkerPid = spawn(fun() ->
-        try
-            Result = Handler(Args),
-            Parent ! {Ref, Result}
-        catch
-            Class:Reason:Stacktrace ->
-                Parent ! {Ref, {error, {exception, Class, Reason, Stacktrace}}}
-        end
+        execute_handler_and_send_result(Handler, Args, Parent, Ref)
     end),
 
     %% Wait for result or timeout
@@ -53,6 +47,23 @@ execute_local(Handler, Args, Timeout) ->
         exit(WorkerPid, kill),
         {error, timeout}
     end.
+
+%% @private Execute handler and send result to parent
+execute_handler_and_send_result(Handler, Args, Parent, Ref) ->
+    Result = execute_handler_safe(Handler, Args),
+    Parent ! {Ref, Result}.
+
+%% @private Execute handler using catch expression
+execute_handler_safe(Handler, Args) ->
+    handle_execution_result(catch Handler(Args)).
+
+%% @private Handle execution result
+handle_execution_result({'EXIT', {Reason, Stacktrace}}) ->
+    {error, {exception, error, Reason, Stacktrace}};
+handle_execution_result({'EXIT', Reason}) ->
+    {error, {exception, error, Reason, []}};
+handle_execution_result(Result) ->
+    Result.
 
 %% @doc Execute remote call via QUIC with timeout.
 -spec execute_remote(binary(), map(), provider_info(), send_fun(), pos_integer()) ->

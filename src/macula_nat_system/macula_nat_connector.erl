@@ -351,19 +351,26 @@ parse_bootstrap_for_relay(BootstrapPeers) ->
     %% Parse host:port
     case string:split(WithoutScheme, ":") of
         [Host, PortStr] ->
-            try
-                Port = list_to_integer(string:trim(PortStr)),
-                ?LOG_WARNING("[NAT_CONNECTOR] Using bootstrap as relay: ~s:~p", [Host, Port]),
-                {ok, list_to_binary(Host), Port}
-            catch
-                _:_ ->
-                    ?LOG_WARNING("[NAT_CONNECTOR] Invalid bootstrap port: ~s", [PortStr]),
-                    {error, invalid_bootstrap_port}
-            end;
+            parse_bootstrap_port(Host, PortStr);
         _ ->
             ?LOG_WARNING("[NAT_CONNECTOR] Invalid bootstrap format: ~s", [Stripped]),
             {error, invalid_bootstrap_format}
     end.
+
+%% @private Parse bootstrap port string
+parse_bootstrap_port(Host, PortStr) ->
+    handle_port_parse(catch list_to_integer(string:trim(PortStr)), Host, PortStr).
+
+%% @private Handle port parsing result
+handle_port_parse({'EXIT', _}, _Host, PortStr) ->
+    ?LOG_WARNING("[NAT_CONNECTOR] Invalid bootstrap port: ~s", [PortStr]),
+    {error, invalid_bootstrap_port};
+handle_port_parse(Port, Host, _PortStr) when is_integer(Port) ->
+    ?LOG_WARNING("[NAT_CONNECTOR] Using bootstrap as relay: ~s:~p", [Host, Port]),
+    {ok, list_to_binary(Host), Port};
+handle_port_parse(_, _Host, PortStr) ->
+    ?LOG_WARNING("[NAT_CONNECTOR] Invalid bootstrap port: ~s", [PortStr]),
+    {error, invalid_bootstrap_port}.
 
 %% @private
 %% @doc Attempt QUIC connection.

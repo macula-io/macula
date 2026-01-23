@@ -41,26 +41,24 @@ new() ->
     gossip_state().
 add_update(#{updates := Updates} = State, NodeId, Status, Incarnation) ->
     Timestamp = erlang:system_time(millisecond),
-
-    NewUpdate = case maps:get(NodeId, Updates, undefined) of
-        undefined ->
-            %% New update
-            {Status, Incarnation, 0, Timestamp};
-        {OldStatus, OldInc, TransmitCount, _OldTimestamp} ->
-            if
-                Incarnation > OldInc ->
-                    %% Higher incarnation, replace
-                    {Status, Incarnation, 0, Timestamp};
-                Incarnation =:= OldInc andalso Status =/= OldStatus ->
-                    %% Same incarnation, different status (suspect > alive)
-                    {Status, Incarnation, 0, Timestamp};
-                true ->
-                    %% Same or older, keep existing
-                    {OldStatus, OldInc, TransmitCount, _OldTimestamp}
-            end
-    end,
-
+    Existing = maps:get(NodeId, Updates, undefined),
+    NewUpdate = merge_update(Existing, Status, Incarnation, Timestamp),
     State#{updates => Updates#{NodeId => NewUpdate}}.
+
+%% @private New update (no existing entry)
+merge_update(undefined, Status, Incarnation, Timestamp) ->
+    {Status, Incarnation, 0, Timestamp};
+%% @private Higher incarnation always wins
+merge_update({_OldStatus, OldInc, _TransmitCount, _OldTimestamp}, Status, Incarnation, Timestamp)
+  when Incarnation > OldInc ->
+    {Status, Incarnation, 0, Timestamp};
+%% @private Same incarnation, different status - update (suspect > alive)
+merge_update({OldStatus, OldInc, _TransmitCount, _OldTimestamp}, Status, Incarnation, Timestamp)
+  when Incarnation =:= OldInc, Status =/= OldStatus ->
+    {Status, Incarnation, 0, Timestamp};
+%% @private Same or older incarnation, keep existing
+merge_update({OldStatus, OldInc, TransmitCount, OldTimestamp}, _Status, _Incarnation, _Timestamp) ->
+    {OldStatus, OldInc, TransmitCount, OldTimestamp}.
 
 %% @doc Get updates to piggyback on messages.
 %% Returns most recent updates first, limited by max_updates.
