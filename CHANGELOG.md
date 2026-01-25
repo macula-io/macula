@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.0] - 2026-01-25
+
+### Added
+
+- **MRI (Macula Resource Identifier) System** - Hierarchical resource naming and graph storage
+  - Unified addressing scheme: `mri:{type}:{realm}/{path}`
+  - 22 built-in types: realm, org, user, app, service, artifact, license, cert, key, topic, proc, content, device, cluster, location, zone, network, model, dataset, config, class, taxonomy
+  - Custom type registration with realm scoping
+  - Graph relationships for resource connections
+
+- **New modules** (`src/`):
+  - `macula_mri.erl` - Core parsing, validation, formatting, hierarchy operations
+  - `macula_mri_registry.erl` - Type registry with built-in and custom types
+  - `macula_mri_store.erl` - Storage behaviour with adapter pattern
+  - `macula_mri_graph.erl` - Graph behaviour for relationship storage
+  - `macula_mri_ets.erl` - ETS-based adapter implementing both behaviours
+
+- **MRI Features**:
+  - Parse/format MRI strings: `macula_mri:parse/1`, `macula_mri:format/1`
+  - Hierarchy traversal: `parent/1`, `ancestors/1`, `is_ancestor/2`, `depth/1`
+  - Path manipulation: `append_segment/2`, `join_path/1`, `split_path/1`
+  - Khepri integration: `to_khepri_path/1`, `from_khepri_path/1`
+  - Constructors: `new_realm/1`, `new_org/2`, `new_user/3`, `new_app/3`, `new_service/4`
+
+- **MRI Store API**:
+  - CRUD: `register/2`, `lookup/1`, `update/2`, `delete/1`, `exists/1`
+  - Hierarchy queries: `list_children/1`, `list_descendants/1`
+  - Index queries: `list_by_type/2`, `list_by_realm/1`
+  - Bulk operations: `import/1`, `export/0`
+
+- **MRI Graph API**:
+  - Relationships: `create_relationship/3,4`, `delete_relationship/3`, `get_relationship/3`
+  - Queries: `related_to/2`, `related_from/2`, `all_related/1`
+  - Transitive traversal: `traverse_transitive/3`
+  - Taxonomy: `instances_of/1`, `instances_of_transitive/1`, `classes_of/1`, `subclasses/1`, `superclasses/1`
+  - Built-in predicates: located_at, contains, member_of, manages, depends_on, instance_of, subclass_of, and more
+  - Predicate utilities: `is_builtin_predicate/1`, `inverse_predicate/1`
+
+- Added 120 unit tests for MRI system (macula_mri, registry, store, graph, ets)
+
+---
+
 ## [0.19.2] - 2026-01-14
 
 ### Changed

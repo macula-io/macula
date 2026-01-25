@@ -128,6 +128,12 @@ init([]) ->
     BridgeEnabled = maps:get(bridge_enabled, BridgeConfig, false),
 
     ChildSpecs = [
+        %% 0a. MRI Type Registry (type validation, custom type registration)
+        get_mri_registry_spec(),
+
+        %% 0b. MRI ETS Storage (in-memory store/graph adapter)
+        get_mri_ets_spec(),
+
         %% 1. Core DHT routing (always on)
         get_routing_server_spec(NodeID),
 
@@ -157,22 +163,23 @@ init([]) ->
     ],
 
     ?LOG_INFO("Starting subsystems:"),
-    ?LOG_INFO("  [1/9] Core DHT Routing"),
-    ?LOG_INFO("  [2/9] NAT System (Detection + Hole Punch + Relay)"),
-    ?LOG_INFO("  [3/9] Bootstrap System"),
-    ?LOG_INFO("  [4/9] Gateway System"),
+    ?LOG_INFO("  [0/11] MRI Registry + ETS Storage"),
+    ?LOG_INFO("  [1/11] Core DHT Routing"),
+    ?LOG_INFO("  [2/11] NAT System (Detection + Hole Punch + Relay)"),
+    ?LOG_INFO("  [3/11] Bootstrap System"),
+    ?LOG_INFO("  [4/11] Gateway System"),
     case BridgeEnabled of
         true ->
             ParentBridges = maps:get(parent_bridges, BridgeConfig, []),
             MeshLevel = maps:get(mesh_level, BridgeConfig, cluster),
-            ?LOG_INFO("  [5/9] Bridge System (level: ~p, parents: ~p)", [MeshLevel, length(ParentBridges)]);
+            ?LOG_INFO("  [5/11] Bridge System (level: ~p, parents: ~p)", [MeshLevel, length(ParentBridges)]);
         false ->
-            ?LOG_INFO("  [5/9] Bridge System (disabled)")
+            ?LOG_INFO("  [5/11] Bridge System (disabled)")
     end,
-    ?LOG_INFO("  [6/9] Peers Supervisor"),
-    ?LOG_INFO("  [7/9] Peer Discovery (P2P Mesh)"),
-    ?LOG_INFO("  [8/9] Platform System (Masterless CRDT)"),
-    ?LOG_INFO("  [9/9] Registry System (Package Distribution)"),
+    ?LOG_INFO("  [6/11] Peers Supervisor"),
+    ?LOG_INFO("  [7/11] Peer Discovery (P2P Mesh)"),
+    ?LOG_INFO("  [8/11] Platform System (Masterless CRDT)"),
+    ?LOG_INFO("  [9/11] Registry System (Package Distribution)"),
     ?LOG_INFO(""),
 
     %% Schedule bootstrap peer connections after supervision tree is up
@@ -525,6 +532,32 @@ get_bridge_cache_size() ->
         SizeStr ->
             list_to_integer(SizeStr)
     end.
+
+%% @private
+%% @doc Get MRI type registry child spec.
+%% The registry manages valid MRI types (built-in and custom).
+get_mri_registry_spec() ->
+    #{
+        id => macula_mri_registry,
+        start => {macula_mri_registry, start_link, [[]]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [macula_mri_registry]
+    }.
+
+%% @private
+%% @doc Get MRI ETS storage adapter child spec.
+%% Provides in-memory storage for MRIs and relationships.
+get_mri_ets_spec() ->
+    #{
+        id => macula_mri_ets,
+        start => {macula_mri_ets, start_link, [[]]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [macula_mri_ets]
+    }.
 
 %% @private
 %% @doc Connect to bootstrap peers to join their DHT network.
