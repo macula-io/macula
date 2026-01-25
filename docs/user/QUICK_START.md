@@ -385,26 +385,26 @@ In Node 3's console:
 
 ```erlang
 % Erlang
-Subscriber = spawn(fun() ->
-  receive
-    {event, Topic, Msg} ->
-      io:format("Received on ~s: ~p~n", [Topic, Msg])
-  end
-end).
+{ok, Client} = macula:connect_local(#{}),
 
-macula_pubsub:subscribe(<<"hello.world">>, Subscriber).
+Callback = fun(Event) ->
+    #{topic := Topic, payload := Msg} = Event,
+    io:format("Received on ~s: ~p~n", [Topic, Msg])
+end,
+
+{ok, _Ref} = macula:subscribe(Client, <<"hello.world">>, Callback).
 ```
 
 ```elixir
 # Elixir
-pid = spawn(fn ->
-  receive do
-    {:event, topic, msg} ->
-      IO.puts("Received on #{topic}: #{inspect(msg)}")
-  end
-end)
+{:ok, client} = :macula.connect_local(%{})
 
-Macula.PubSub.subscribe("hello.world", pid)
+callback = fn event ->
+  %{topic: topic, payload: msg} = event
+  IO.puts("Received on #{topic}: #{inspect(msg)}")
+end
+
+{:ok, _ref} = :macula.subscribe(client, "hello.world", callback)
 ```
 
 **Expected output**:
@@ -419,7 +419,9 @@ In Node 1's console:
 
 ```erlang
 % Erlang
-macula_pubsub:publish(<<"hello.world">>, #{
+{ok, Client} = macula:connect_local(#{}),
+
+macula:publish(Client, <<"hello.world">>, #{
   message => <<"Hello from Node 1!">>,
   timestamp => erlang:system_time(millisecond)
 }).
@@ -427,7 +429,9 @@ macula_pubsub:publish(<<"hello.world">>, #{
 
 ```elixir
 # Elixir
-Macula.PubSub.publish("hello.world", %{
+{:ok, client} = :macula.connect_local(%{})
+
+:macula.publish(client, "hello.world", %{
   message: "Hello from Node 1!",
   timestamp: System.system_time(:millisecond)
 })
@@ -460,20 +464,24 @@ In Node 2's console:
 
 ```erlang
 % Erlang
+{ok, Client} = macula:connect_local(#{}),
+
 EchoHandler = fun(Args) ->
   {ok, #{echo => Args, node => node()}}
-end.
+end,
 
-macula_rpc:register(<<"echo_service">>, EchoHandler).
+{ok, _Ref} = macula:advertise(Client, <<"echo_service">>, EchoHandler).
 ```
 
 ```elixir
 # Elixir
+{:ok, client} = :macula.connect_local(%{})
+
 echo_handler = fn args ->
   {:ok, %{echo: args, node: Node.self()}}
 end
 
-Macula.RPC.register("echo_service", echo_handler)
+{:ok, _ref} = :macula.advertise(client, "echo_service", echo_handler)
 ```
 
 **Expected output**:
@@ -488,18 +496,22 @@ In Node 1's console:
 
 ```erlang
 % Erlang
-macula_rpc:call(<<"echo_service">>, #{
+{ok, Client} = macula:connect_local(#{}),
+
+macula:call(Client, <<"echo_service">>, #{
   test => <<"Hello RPC!">>,
   value => 42
-}, 5000).  % 5 second timeout
+}, #{timeout => 5000}).
 ```
 
 ```elixir
 # Elixir
-Macula.RPC.call("echo_service", %{
+{:ok, client} = :macula.connect_local(%{})
+
+:macula.call(client, "echo_service", %{
   test: "Hello RPC!",
   value: 42
-}, 5000)
+}, %{timeout: 5000})
 ```
 
 **Expected output on Node 1**:
@@ -604,7 +616,8 @@ macula:stats().
 
 ```erlang
 % Erlang - Subscribe to all topics starting with "sensor."
-macula_pubsub:subscribe(<<"sensor.*">>, Pid, #{match => prefix}).
+{ok, Client} = macula:connect_local(#{}),
+{ok, _Ref} = macula:subscribe(Client, <<"sensor.*">>, Callback).
 
 % Matches: sensor.temperature, sensor.humidity, etc.
 ```
@@ -612,10 +625,10 @@ macula_pubsub:subscribe(<<"sensor.*">>, Pid, #{match => prefix}).
 ### Publish with Options
 
 ```erlang
-% Erlang - Publish with acknowledgment
-macula_pubsub:publish(<<"important.event">>, Data, #{
-  acknowledge => true,  % Wait for delivery confirmation
-  retain => true        % Store for late subscribers
+% Erlang - Publish with options
+{ok, Client} = macula:connect_local(#{}),
+macula:publish(Client, <<"important.event">>, Data, #{
+  exclude_self => true  % Don't deliver to self
 }).
 ```
 

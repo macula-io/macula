@@ -77,7 +77,7 @@ Payload = #{
 Subscribers filter in their callback (application-level concern):
 
 ```erlang
-macula:subscribe(Peer, <<"com.ibm.weather.wind_measured">>, fun(Msg) ->
+macula:subscribe(Client, <<"com.ibm.weather.wind_measured">>, fun(Msg) ->
     %% Filter for Manchester events
     case maps:get(<<"location">>, Msg, #{}) of
         #{<<"city">> := <<"manchester">>} ->
@@ -212,7 +212,7 @@ Callback = fun(Event) ->
 end,
 
 {ok, Ref} = macula:subscribe(
-    Peer,
+    Client,
     <<"sensor.temperature">>,
     Callback
 ).
@@ -260,7 +260,7 @@ Send events to a process instead of callback:
 ```erlang
 %% Subscribe with process pid
 {ok, Ref} = macula:subscribe(
-    Peer,
+    Client,
     <<"sensor.temperature">>,
     self()  % Events sent as messages
 ).
@@ -292,7 +292,7 @@ ok = macula:unsubscribe(Client, <<"sensor.temperature">>).
 ```erlang
 %% Erlang
 ok = macula:publish(
-    Peer,
+    Client,
     <<"sensor.temperature">>,
     #{
         value => 21.5,
@@ -326,7 +326,7 @@ Publishing is **asynchronous** by default:
 
 ```erlang
 ok = macula:publish(
-    Peer,
+    Client,
     <<"sensor.temperature">>,
     Payload,
     #{
@@ -354,7 +354,7 @@ Macula supports two wildcard patterns:
 ```erlang
 %% Subscribe to all sensors (one level)
 {ok, _} = macula:subscribe(
-    Peer,
+    Client,
     <<"sensor.*">>,
     fun(#{topic := Topic, payload := Payload}) ->
         io:format("Sensor event on ~s: ~p~n", [Topic, Payload])
@@ -375,7 +375,7 @@ macula:publish(Client, <<"device.sensor">>, #{value => 10}).
 ```erlang
 %% Subscribe to all sensor events (any depth)
 {ok, _} = macula:subscribe(
-    Peer,
+    Client,
     <<"sensor.#">>,
     fun(#{topic := Topic, payload := Payload}) ->
         io:format("Sensor event on ~s: ~p~n", [Topic, Payload])
@@ -650,7 +650,7 @@ init([Endpoint]) ->
 
     %% Subscribe to all temperature sensors
     {ok, _} = macula:subscribe(
-        Peer,
+        Client,
         <<"sensor.*.temperature">>,
         self()
     ),
@@ -801,7 +801,7 @@ start(Gateway) ->
 
     %% Subscribe to all sensors
     {ok, _} = macula:subscribe(
-        Peer,
+        Client,
         <<"sensor.#">>,
         fun(Event) ->
             #{payload := #{sensor_id := Id, value := V}} = Event,

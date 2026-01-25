@@ -199,7 +199,7 @@ Handler = fun(Args) ->
 end,
 
 {ok, Ref} = macula:advertise(
-    Peer,
+    Client,
     <<"myapp.user.get">>,
     Handler
 ).
@@ -226,7 +226,7 @@ end
 
 ```erlang
 {ok, Ref} = macula:advertise(
-    Peer,
+    Client,
     <<"myapp.user.get">>,
     Handler,
     #{
@@ -332,7 +332,7 @@ Skip cache and force DHT query:
 
 ```erlang
 {ok, Result} = macula:call(
-    Peer,
+    Client,
     <<"myapp.user.get">>,
     #{user_id => <<"user-123">>},
     #{force_refresh => true}
@@ -364,7 +364,7 @@ Registry2 = macula_service_registry:clear_cache(Registry).
 ```erlang
 %% Erlang
 {ok, User} = macula:call(
-    Peer,
+    Client,
     <<"myapp.user.get">>,
     #{user_id => <<"user-123">>}
 ).
@@ -383,7 +383,7 @@ Registry2 = macula_service_registry:clear_cache(Registry).
 
 ```erlang
 {ok, Result} = macula:call(
-    Peer,
+    Client,
     <<"slow.operation">>,
     #{data => SomeData},
     #{timeout => 30000}  % 30 seconds
@@ -722,7 +722,7 @@ start(Client) ->
     end,
 
     macula:advertise(
-        Peer,
+        Client,
         <<"calculator.compute">>,
         Handler,
         #{metadata => #{version => <<"1.0.0">>}}
@@ -734,7 +734,7 @@ start(Client) ->
 
 %% Make calls
 {ok, #{result := 15}} = macula:call(
-    Peer, <<"calculator.compute">>,
+    Client, <<"calculator.compute">>,
     #{operation => <<"add">>, a => 10, b => 5}
 ).
 ```
@@ -752,7 +752,7 @@ start(Client) ->
     end,
 
     macula:advertise(
-        Peer,
+        Client,
         <<"users.manage">>,
         Handler,
         #{

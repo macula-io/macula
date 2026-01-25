@@ -23,8 +23,10 @@ Traditional DHTs (like Chord) use numeric distance metrics that don't align well
 ### 1. Node IDs and XOR Metric
 
 Every node in the Macula mesh has a 160-bit **Node ID** derived from:
-- Gateway mode: Hash of (realm + IP + port)
-- Edge peer mode: Randomly generated on startup
+- Hash of (realm + peer_id) for deterministic addressing
+- Or randomly generated via `crypto:strong_rand_bytes(32)` on startup
+
+> **Note:** Since v0.8.5, all nodes have identical capabilities. The terms "Gateway mode" and "Edge peer mode" are deprecated.
 
 **XOR Distance Formula:**
 ```
@@ -224,21 +226,23 @@ NodeID_B = sha1("macula.energy" ++ "192.168.1.10" ++ "4433")
 %% Same IP/port, different realms → different DHT partitions
 ```
 
-### 2. Gateway Bootstrap Nodes
+### 2. Seed Nodes (Bootstrap)
 
-Traditional Kademlia requires **bootstrap nodes** to join the network. Macula handles this differently:
+Traditional Kademlia requires **bootstrap nodes** to join the network. Macula uses **seed nodes**:
 
-**Gateway Mode:**
-- Gateways act as well-known bootstrap nodes
-- Published at predictable URLs (e.g., `https://gateway.example.com:4433`)
-- Maintain authoritative registry for their realm
+**All Nodes Are Equal (v0.8.5+):**
+- Any node can serve as a seed node for new peers
+- Seed nodes are configured via `MACULA_BOOTSTRAP_REGISTRY` env var
+- Published at predictable URLs (e.g., `https://seed.example.com:4433`)
 
-**Edge Peer Mode:**
-- Peers connect to gateway via `MACULA_BOOTSTRAP_REGISTRY` env var
-- Gateway returns `α` closest nodes to peer's ID
+**Joining Process:**
+- New peer connects to seed node
+- Seed returns `α` closest nodes to peer's ID
 - Peer populates routing table via `FIND_NODE` requests
 
-**No Hardcoded Bootstrap IPs:** Unlike BitTorrent DHT, Macula uses DNS/HTTPS URLs for gateway discovery, making it firewall-friendly.
+**No Hardcoded Bootstrap IPs:** Unlike BitTorrent DHT, Macula uses DNS/HTTPS URLs for seed discovery, making it firewall-friendly.
+
+> **Note:** The terms "Gateway mode" and "Edge peer mode" are deprecated since v0.8.5. All nodes have identical capabilities.
 
 ### 3. Service Advertisement TTL
 
@@ -376,6 +380,6 @@ refresh_bucket(Bucket, State) ->
 
 ---
 
-**Last Updated:** 2025-11-15
-**Macula Version:** 0.6.0
+**Last Updated:** 2026-01-25
+**Macula Version:** 0.20.2+
 **Status:** ✅ Production-ready DHT implementation
