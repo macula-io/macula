@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.3] - 2026-01-25
+
+### Fixed
+
+- **Documentation Consistency** - Comprehensive audit and fixes across all guides
+  - Standardized variable naming: `Peer` → `Client` in code samples (PUBSUB_GUIDE, RPC_GUIDE)
+  - Updated QUICK_START to use public API (`macula:subscribe/3`, `macula:advertise/3`, `macula:call/4`)
+  - Fixed deprecated terminology in DHT_GUIDE: "Gateway mode"/"Edge peer mode" → "Seed nodes"
+  - Updated DHT_GUIDE version references from 0.6.0 to 0.20.2+
+
+---
+
 ## [0.20.2] - 2026-01-25
 
 ### Added
