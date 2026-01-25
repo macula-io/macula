@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.1] - 2026-01-25
+
+### Added
+
+- **MRI Guide** - Comprehensive documentation for MRI system added to hexdocs
+  - `docs/guides/MRI_GUIDE.md` - Full guide covering format, types, API, relationships
+
+### Changed
+
+- Updated hexdocs logo to use the standard macula logo (`artwork/logo.svg`)
+
+---
+
 ## [0.20.0] - 2026-01-25
 
 ### Added
