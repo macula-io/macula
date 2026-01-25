@@ -15,7 +15,7 @@
 %%% - Data: trained_on, derived_from, source_of, version_of
 %%% - Taxonomic: instance_of, has_instance, subclass_of, superclass_of
 %%%
-%%% Custom predicates use the format: {custom, <<"predicate_name">>}
+%%% Custom predicates use the format: {custom, Binary} where Binary is the predicate name
 %%%
 %%% @end
 %%%-------------------------------------------------------------------

@@ -18,29 +18,12 @@
 %%
 %% == Implementation ==
 %%
-%% BEAM apps implement this as a behaviour:
-%% ```
-%% -module(my_app_mesh).
-%% -behaviour(macula_protocol).
-%%
-%% -export([mesh_identity/0, mesh_capabilities/0, mesh_api/0,
-%%          handle_mesh_event/2, mesh_health/0]).
-%%
-%% mesh_identity() -> <<"io.macula.myorg.my-app">>.
-%%
-%% mesh_capabilities() -> [publish, subscribe].
-%%
-%% mesh_api() -> #{
-%%     topics => [<<"my-app.events.*">>],
-%%     procedures => []
-%% }.
-%%
-%% handle_mesh_event(Topic, Payload) ->
-%%     logger:info("Received ~p on ~p", [Payload, Topic]),
-%%     ok.
-%%
-%% mesh_health() -> ok.
-%% ```
+%% BEAM apps implement this as a behaviour. The implementation must export:
+%% - mesh_identity/0 - Returns the app's identity binary
+%% - mesh_capabilities/0 - Returns list of capabilities
+%% - mesh_api/0 - Returns map of topics, procedures, content_types
+%% - handle_mesh_event/2 - Handles incoming events
+%% - mesh_health/0 - Returns ok or error tuple
 %%
 %% Non-BEAM apps implement equivalent gRPC or HTTP endpoints that the gatekeeper
 %% can probe.
@@ -62,7 +45,7 @@
 %%====================================================================
 
 -type identity() :: binary().
-%% App identity, e.g., <<"io.macula.rgfaber.my-app">>
+%% App identity, e.g., "io.macula.rgfaber.my-app"
 
 -type capability() ::
     publish |           % Can publish messages to topics
@@ -76,7 +59,7 @@
 -type api_spec() :: #{
     topics => [binary()],          % PubSub topics provided
     procedures => [binary()],      % RPC procedures provided
-    content_types => [binary()]    % Content types provided (e.g., <<"application/wasm">>)
+    content_types => [binary()]    % Content types provided (e.g., "application/wasm")
 }.
 %% API declaration: topics, procedures, and content types this app provides
 
@@ -87,104 +70,33 @@
 %% Behaviour Callbacks
 %%====================================================================
 
-%% @doc Returns the app's mesh identity.
-%%
-%% This identity must match the certificate's subject. It follows the format:
-%% `{realm}.{organization}.{app-name}', e.g., `io.macula.rgfaber.weather-service'.
-%%
-%% The gatekeeper verifies that:
-%% 1. The identity is well-formed
-%% 2. The identity matches the presented certificate
-%% 3. The certificate is valid and not revoked
+%% Returns the app's mesh identity.
+%% Must match the certificate's subject: {realm}.{organization}.{app-name}
 -callback mesh_identity() -> identity().
 
-%% @doc Returns the capabilities this app requires.
-%%
-%% Capabilities declare what operations the app needs:
-%% - `publish' - Can publish messages to topics
-%% - `subscribe' - Can subscribe to topics
-%% - `call' - Can make RPC calls
-%% - `register' - Can register RPC handlers
-%%
-%% These capabilities are validated against the app's license at operation time.
-%% An app declaring `[publish, subscribe]' that attempts `call' will be blocked.
+%% Returns the capabilities this app requires.
+%% Capabilities: publish, subscribe, call, register, provide_content, consume_content
 -callback mesh_capabilities() -> [capability()].
 
-%% @doc Returns the API specification for this app.
-%%
-%% Providers declare what topics and procedures they offer:
-%% ```
-%% mesh_api() -> #{
-%%     topics => [<<"weather.updates">>, <<"weather.alerts">>],
-%%     procedures => [<<"weather.getForecast/2">>, <<"weather.getHistory/3">>]
-%% }.
-%% ```
-%%
-%% Consumers may return empty maps if they only consume:
-%% ```
-%% mesh_api() -> #{topics => [], procedures => []}.
-%% ```
-%%
-%% This information is used for:
-%% - Service discovery (what's available on the mesh)
-%% - License validation (what can be consumed)
-%% - Documentation generation
+%% Returns the API specification (topics, procedures, content_types).
 -callback mesh_api() -> api_spec().
 
-%% @doc Handles incoming pub/sub events.
-%%
-%% Called when the app receives a published message on a subscribed topic.
-%% The app must handle the event and return `ok'.
-%%
-%% Returning `{error, Reason}' logs the error but doesn't terminate the session.
-%% Repeated errors may trigger health check failures.
+%% Handles incoming pub/sub events.
 -callback handle_mesh_event(Topic :: binary(), Payload :: term()) -> ok | {error, term()}.
 
-%% @doc Handles incoming RPC calls.
-%%
-%% Called when the app receives an RPC call for a procedure it registered.
-%% Must return a response or error.
-%%
-%% Example:
-%% ```
-%% handle_rpc_call(<<"weather.getForecast">>, [Lat, Lon]) ->
-%%     Forecast = fetch_forecast(Lat, Lon),
-%%     {ok, Forecast};
-%% handle_rpc_call(<<"weather.getHistory">>, _Args) ->
-%%     {error, not_implemented}.
-%% ```
+%% Handles incoming RPC calls.
 -callback handle_rpc_call(Procedure :: binary(), Args :: list()) ->
     {ok, term()} | {error, term()}.
 
-%% @doc Provides content (file/artifact) by content ID.
-%%
-%% Called when another app requests content this app provides.
-%% Return the content binary or an error.
-%%
-%% Content IDs follow the MCID format (Macula Content ID).
-%% Apps that don't provide content can return `{error, not_a_provider}'.
+%% Provides content by content ID.
 -callback provide_content(ContentId :: binary()) ->
     {ok, binary()} | {error, term()}.
 
-%% @doc Called when content has been received.
-%%
-%% Notifies the app that requested content is available.
-%% Apps that don't consume content can return `ok' immediately.
+%% Called when content has been received.
 -callback content_received(ContentId :: binary(), Content :: binary()) ->
     ok | {error, term()}.
 
-%% @doc Health check callback.
-%%
-%% Called periodically by the gatekeeper to verify the app is healthy.
-%% Return `ok' if healthy, `{error, Reason}' if unhealthy.
-%%
-%% Unhealthy apps may have their sessions degraded or terminated after
-%% repeated failures.
-%%
-%% Typical health checks:
-%% - Verify internal state is consistent
-%% - Check connections to dependencies
-%% - Ensure message queues aren't overflowing
+%% Health check callback. Return ok or {error, Reason}.
 -callback mesh_health() -> health_status().
 
 %%====================================================================

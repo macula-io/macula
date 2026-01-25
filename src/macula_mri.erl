@@ -5,12 +5,10 @@
 %%% MRI format: `mri:{type}:{realm}/{path}'
 %%%
 %%% Example:
-%%% ```
-%%% {ok, Parsed} = macula_mri:parse(<<"mri:app:io.macula/acme/counter">>),
-%%% app = macula_mri:type(Parsed),
-%%% <<"io.macula">> = macula_mri:realm(Parsed),
-%%% [<<"acme">>, <<"counter">>] = macula_mri:path(Parsed).
-%%% '''
+%%%   {ok, Parsed} = macula_mri:parse(MRI),
+%%%   app = macula_mri:type(Parsed),
+%%%   Realm = macula_mri:realm(Parsed),
+%%%   Path = macula_mri:path(Parsed).
 %%%
 %%% @end
 %%%-------------------------------------------------------------------

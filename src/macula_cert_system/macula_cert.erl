@@ -9,27 +9,17 @@
 %%% - Instance certificates are signed by the realm certificate
 %%%
 %%% Example usage:
-%%% ```
-%%% %% Generate realm keypair and certificate
-%%% {PubKey, PrivKey} = macula_cert:generate_keypair(),
-%%% {ok, RealmCert} = macula_cert:generate_realm_cert(
-%%%     <<"did:macula:io.example">>,
-%%%     PubKey,
-%%%     PrivKey
-%%% ),
 %%%
-%%% %% Generate instance certificate signed by realm
-%%% {InstPub, InstPriv} = macula_cert:generate_keypair(),
-%%% {ok, InstCert} = macula_cert:generate_instance_cert(
-%%%     <<"did:macula:io.example.app.node01">>,
-%%%     InstPub,
-%%%     RealmCert,
-%%%     PrivKey
-%%% ),
+%%% Generate realm keypair and certificate:
+%%%   {PubKey, PrivKey} = macula_cert:generate_keypair(),
+%%%   {ok, RealmCert} = macula_cert:generate_realm_cert(DID, PubKey, PrivKey).
 %%%
-%%% %% Verify certificate chain
-%%% ok = macula_cert:verify_cert(InstCert, RealmCert).
-%%% '''
+%%% Generate instance certificate signed by realm:
+%%%   {InstPub, InstPriv} = macula_cert:generate_keypair(),
+%%%   {ok, InstCert} = macula_cert:generate_instance_cert(InstanceDID, InstPub, RealmCert, PrivKey).
+%%%
+%%% Verify certificate chain:
+%%%   ok = macula_cert:verify_cert(InstCert, RealmCert).
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -366,7 +356,7 @@ canonical_form(#macula_cert{} = Cert) ->
 %%%===================================================================
 
 %% @doc Convert DID to common name format
-%% Example: <<"did:macula:io.example.app">> -> <<"app.io.example">>
+%% Example: "did:macula:io.example.app" becomes "app.io.example"
 -spec did_to_cn(DID :: binary()) -> binary().
 did_to_cn(<<"did:macula:", Identity/binary>>) ->
     %% Reverse the dot-separated parts for CN format
@@ -378,7 +368,7 @@ did_to_cn(DID) ->
     DID.
 
 %% @doc Convert common name to DID format
-%% Example: <<"app.io.example">> -> <<"did:macula:io.example.app">>
+%% Example: "app.io.example" becomes "did:macula:io.example.app"
 -spec cn_to_did(CN :: binary()) -> binary().
 cn_to_did(CN) ->
     Parts = binary:split(CN, <<".">>, [global]),
@@ -392,7 +382,7 @@ generate_serial() ->
     crypto:strong_rand_bytes(?CERT_SERIAL_SIZE).
 
 %% @doc Extract realm DID from an instance DID
-%% Example: <<"did:macula:io.example.app.node01">> -> <<"did:macula:io.example">>
+%% Example: "did:macula:io.example.app.node01" becomes "did:macula:io.example"
 -spec extract_realm_did(InstanceDID :: binary()) -> binary().
 extract_realm_did(<<"did:macula:", Identity/binary>>) ->
     Parts = binary:split(Identity, <<".">>, [global]),
