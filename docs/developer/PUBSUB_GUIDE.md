@@ -24,6 +24,74 @@
 
 ---
 
+## Core Design Principle: Event Types in Topics, IDs in Payloads
+
+> **This is a non-negotiable architectural principle for scalable pub/sub.**
+
+### The Rule
+
+```
+Topic  = WHAT happened (event type)
+Payload = WHO/WHERE/WHEN it happened (entity details)
+```
+
+### Why This Matters
+
+| Approach | 1 Million Instances | Topics Created | Result |
+|----------|---------------------|----------------|--------|
+| ID in topic | 1M sensors | 1M topics | 💥 DHT explosion, memory exhaustion |
+| ID in payload | 1M sensors | 1 topic | ✅ Scalable, efficient routing |
+
+### Example: Weather Service
+
+**Scenario**: IBM runs weather stations globally. A station in Manchester, Main Street publishes `wind_measured` events.
+
+**❌ WRONG (causes topic explosion)**:
+```erlang
+%% Don't do this - creates millions of topics
+Topic = <<"com.ibm.weather.manchester.main-street.wind_measured">>,
+Topic = <<"com.ibm.weather.instance-12345.wind_measured">>.
+```
+
+**✅ CORRECT (scalable)**:
+```erlang
+%% Event TYPE in topic
+Topic = <<"com.ibm.weather.wind_measured">>,
+
+%% Instance details in payload
+Payload = #{
+    <<"location">> => #{
+        <<"city">> => <<"manchester">>,
+        <<"street">> => <<"main-street">>,
+        <<"coordinates">> => #{<<"lat">> => 53.4808, <<"lon">> => -2.2426}
+    },
+    <<"instance_id">> => <<"ibm-weather-manchester-001">>,
+    <<"wind_speed_ms">> => 12.5,
+    <<"direction_deg">> => 270,
+    <<"measured_at">> => <<"2026-01-25T20:45:00Z">>
+}.
+```
+
+### Subscriber Filtering
+
+Subscribers filter in their callback (application-level concern):
+
+```erlang
+macula:subscribe(Peer, <<"com.ibm.weather.wind_measured">>, fun(Msg) ->
+    %% Filter for Manchester events
+    case maps:get(<<"location">>, Msg, #{}) of
+        #{<<"city">> := <<"manchester">>} ->
+            handle_manchester_wind(Msg);
+        _ ->
+            ok  %% Ignore other locations
+    end
+end).
+```
+
+**Note**: Content-based filtering at the mesh level is not implemented. Filtering is an application-level responsibility.
+
+---
+
 ## Overview
 
 Macula provides **fully decentralized pub/sub** without requiring any central message broker. Subscribers advertise their interest to a **Kademlia DHT** (Distributed Hash Table), and publishers discover subscribers by querying the DHT.

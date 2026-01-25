@@ -558,10 +558,35 @@ A **Distributed Hash Table** is a decentralized system that provides key-value l
 
 A **topic** is a named channel for pub/sub messaging. Publishers send messages to topics; subscribers receive messages from topics they've subscribed to.
 
-**Topic design principles:**
-- Topics describe **event types**, not entity IDs
-- Good: `<<"sensor.temperature.measured">>`
-- Bad: `<<"sensor.device123.temperature">>` (ID in topic)
+**Core Design Principle: Event Types in Topics, IDs in Payloads**
+
+> This is a non-negotiable architectural principle for scalable pub/sub.
+
+```
+Topic   = WHAT happened (event type)
+Payload = WHO/WHERE/WHEN it happened (entity details)
+```
+
+| Approach | 1M Instances | Topics | Result |
+|----------|--------------|--------|--------|
+| ID in topic | 1M sensors | 1M topics | 💥 DHT explosion |
+| ID in payload | 1M sensors | 1 topic | ✅ Scalable |
+
+**Example - Weather Service:**
+```erlang
+%% ❌ WRONG: ID in topic (causes topic explosion)
+Topic = <<"com.ibm.weather.manchester.main-street.wind_measured">>.
+
+%% ✅ CORRECT: Event type in topic, details in payload
+Topic = <<"com.ibm.weather.wind_measured">>,
+Payload = #{
+    <<"location">> => #{<<"city">> => <<"manchester">>, <<"street">> => <<"main-street">>},
+    <<"instance_id">> => <<"ibm-weather-manchester-001">>,
+    <<"wind_speed_ms">> => 12.5
+}.
+```
+
+**Subscriber filtering** is an application-level concern - filter in your callback.
 
 **Wildcards:**
 - `*` - Matches one segment: `<<"sensor.*.measured">>`
