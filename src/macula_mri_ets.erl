@@ -12,6 +12,8 @@
 -module(macula_mri_ets).
 
 -behaviour(gen_server).
+-behaviour(macula_mri_store).
+-behaviour(macula_mri_graph).
 
 -compile({no_auto_import, [register/2]}).
 
