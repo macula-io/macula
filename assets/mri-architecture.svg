@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 650" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="coreGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#0ea5e9"/>
+      <stop offset="100%" style="stop-color:#38bdf8"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="650" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="450" y="35" text-anchor="middle" font-size="24" font-weight="bold" fill="#1e293b">Macula Resource Identifier (MRI)</text>
+  <text x="450" y="55" text-anchor="middle" font-size="12" fill="#64748b">Typed, hierarchical, queryable resource identification</text>
+
+  <!-- MRI Format Box -->
+  <rect x="50" y="75" width="800" height="70" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1" filter="url(#shadow)"/>
+  <text x="450" y="100" text-anchor="middle" font-size="14" font-weight="600" fill="#92400e">MRI Format</text>
+  <text x="450" y="125" text-anchor="middle" font-size="18" font-family="monospace" fill="#78350f">mri:{type}:{realm}/{path}</text>
+
+  <!-- Core macula/ -->
+  <g transform="translate(50, 165)">
+    <rect width="800" height="140" rx="8" fill="url(#coreGrad)" filter="url(#shadow)"/>
+    <text x="400" y="25" text-anchor="middle" font-size="14" font-weight="bold" fill="white">macula/ Core Library</text>
+    <text x="400" y="42" text-anchor="middle" font-size="10" fill="rgba(255,255,255,0.8)">Pure functions, no storage dependencies</text>
+
+    <!-- Modules -->
+    <rect x="20" y="55" width="180" height="70" rx="6" fill="white" fill-opacity="0.95"/>
+    <text x="110" y="75" text-anchor="middle" font-size="11" font-weight="600" fill="#0369a1">macula_mri</text>
+    <text x="110" y="90" text-anchor="middle" font-size="9" fill="#64748b">Parse / Validate / Format</text>
+    <text x="30" y="108" font-size="8" fill="#475569">parse/1, validate/1, format/1</text>
+    <text x="30" y="118" font-size="8" fill="#475569">type/1, realm/1, path/1, parent/1</text>
+
+    <rect x="220" y="55" width="180" height="70" rx="6" fill="white" fill-opacity="0.95"/>
+    <text x="310" y="75" text-anchor="middle" font-size="11" font-weight="600" fill="#0369a1">macula_mri_registry</text>
+    <text x="310" y="90" text-anchor="middle" font-size="9" fill="#64748b">Type Schemas</text>
+    <text x="230" y="108" font-size="8" fill="#475569">is_valid_type/1, path_schema/1</text>
+    <text x="230" y="118" font-size="8" fill="#475569">register_type/2, validate_path/2</text>
+
+    <rect x="420" y="55" width="180" height="70" rx="6" fill="white" fill-opacity="0.95"/>
+    <text x="510" y="75" text-anchor="middle" font-size="11" font-weight="600" fill="#0369a1">macula_mri_store</text>
+    <text x="510" y="90" text-anchor="middle" font-size="9" fill="#64748b">Behaviour (Interface)</text>
+    <text x="430" y="108" font-size="8" fill="#475569">register/2, lookup/1, delete/1</text>
+    <text x="430" y="118" font-size="8" fill="#475569">list_children/1, list_by_type/2</text>
+
+    <rect x="620" y="55" width="160" height="70" rx="6" fill="white" fill-opacity="0.95"/>
+    <text x="700" y="75" text-anchor="middle" font-size="11" font-weight="600" fill="#0369a1">macula_mri_graph</text>
+    <text x="700" y="90" text-anchor="middle" font-size="9" fill="#64748b">Behaviour (Interface)</text>
+    <text x="630" y="108" font-size="8" fill="#475569">relate/3, related_to/2</text>
+    <text x="630" y="118" font-size="8" fill="#475569">traverse_transitive/3</text>
+  </g>
+
+  <!-- Type Registry -->
+  <g transform="translate(50, 325)">
+    <rect width="800" height="130" rx="8" fill="#faf5ff" stroke="#a855f7" stroke-width="1" filter="url(#shadow)"/>
+    <text x="400" y="22" text-anchor="middle" font-size="12" font-weight="600" fill="#7e22ce">Type Registry</text>
+
+    <!-- Type columns -->
+    <g transform="translate(25, 40)">
+      <text font-size="9" font-weight="600" fill="#6b21a8">Logical</text>
+      <text y="14" font-size="8" fill="#7c3aed">realm, org, user</text>
+      <text y="26" font-size="8" fill="#7c3aed">app, service</text>
+    </g>
+    <g transform="translate(130, 40)">
+      <text font-size="9" font-weight="600" fill="#6b21a8">Artifacts</text>
+      <text y="14" font-size="8" fill="#7c3aed">artifact, license</text>
+      <text y="26" font-size="8" fill="#7c3aed">cert, key</text>
+    </g>
+    <g transform="translate(235, 40)">
+      <text font-size="9" font-weight="600" fill="#6b21a8">Messaging</text>
+      <text y="14" font-size="8" fill="#7c3aed">topic, proc</text>
+      <text y="26" font-size="8" fill="#7c3aed">content</text>
+    </g>
+    <g transform="translate(340, 40)">
+      <text font-size="9" font-weight="600" fill="#6b21a8">Physical</text>
+      <text y="14" font-size="8" fill="#7c3aed">device, cluster</text>
+      <text y="26" font-size="8" fill="#7c3aed">location, zone, network</text>
+    </g>
+    <g transform="translate(480, 40)">
+      <text font-size="9" font-weight="600" fill="#6b21a8">AI/ML</text>
+      <text y="14" font-size="8" fill="#7c3aed">model, dataset</text>
+      <text y="26" font-size="8" fill="#7c3aed">config</text>
+    </g>
+    <g transform="translate(580, 40)">
+      <text font-size="9" font-weight="600" fill="#6b21a8">Taxonomy</text>
+      <text y="14" font-size="8" fill="#7c3aed">class, taxonomy</text>
+      <text y="26" font-size="8" fill="#7c3aed">{custom, Binary}</text>
+    </g>
+    <g transform="translate(700, 40)">
+      <text font-size="9" font-weight="600" fill="#6b21a8">Extensible</text>
+      <text y="14" font-size="8" fill="#7c3aed">Runtime type</text>
+      <text y="26" font-size="8" fill="#7c3aed">registration</text>
+    </g>
+
+    <!-- Examples -->
+    <rect x="20" y="75" width="760" height="45" rx="4" fill="white" fill-opacity="0.7"/>
+    <text x="30" y="92" font-size="9" font-weight="600" fill="#581c87">Examples:</text>
+    <text x="95" y="92" font-size="8" font-family="monospace" fill="#6b21a8">mri:realm:io.macula</text>
+    <text x="240" y="92" font-size="8" font-family="monospace" fill="#6b21a8">mri:app:io.macula/acme/counter</text>
+    <text x="460" y="92" font-size="8" font-family="monospace" fill="#6b21a8">mri:device:io.macula/citypower/cabinet-001</text>
+    <text x="30" y="110" font-size="9" font-weight="600" fill="#581c87">Relationships:</text>
+    <text x="115" y="110" font-size="8" fill="#7c3aed">located_at, depends_on, instance_of, subclass_of, member_of, owns, connects_to, trained_on, ...</text>
+  </g>
+
+  <!-- Adapters -->
+  <g transform="translate(50, 475)">
+    <rect width="800" height="80" rx="8" fill="#f0fdf4" stroke="#22c55e" stroke-width="1" filter="url(#shadow)"/>
+    <text x="400" y="22" text-anchor="middle" font-size="12" font-weight="600" fill="#166534">Storage Adapters (Separate Packages)</text>
+
+    <rect x="20" y="38" width="150" height="32" rx="4" fill="#dcfce7"/>
+    <text x="95" y="58" text-anchor="middle" font-size="10" font-weight="600" fill="#166534">macula_mri_ets</text>
+    <text x="95" y="68" text-anchor="middle" font-size="7" fill="#15803d">Bundled (dev/test)</text>
+
+    <rect x="190" y="38" width="180" height="32" rx="4" fill="#bbf7d0"/>
+    <text x="280" y="58" text-anchor="middle" font-size="10" font-weight="600" fill="#166534">macula_mri_khepri</text>
+    <text x="280" y="68" text-anchor="middle" font-size="7" fill="#15803d">Distributed Raft (production)</text>
+
+    <rect x="390" y="38" width="150" height="32" rx="4" fill="#dcfce7"/>
+    <text x="465" y="58" text-anchor="middle" font-size="10" font-weight="600" fill="#166534">macula_mri_pg</text>
+    <text x="465" y="68" text-anchor="middle" font-size="7" fill="#15803d">PostgreSQL (future)</text>
+
+    <rect x="560" y="38" width="150" height="32" rx="4" fill="#dcfce7"/>
+    <text x="635" y="58" text-anchor="middle" font-size="10" font-weight="600" fill="#166534">Custom Adapter</text>
+    <text x="635" y="68" text-anchor="middle" font-size="7" fill="#15803d">Implement behaviours</text>
+  </g>
+
+  <!-- Hierarchy Example -->
+  <g transform="translate(50, 575)">
+    <rect width="800" height="60" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1" filter="url(#shadow)"/>
+    <text x="20" y="22" font-size="10" font-weight="600" fill="#1e40af">Hierarchy Example:</text>
+    <text x="20" y="42" font-size="9" font-family="monospace" fill="#1d4ed8">mri:realm:io.macula</text>
+    <text x="160" y="42" font-size="9" fill="#64748b">→</text>
+    <text x="180" y="42" font-size="9" font-family="monospace" fill="#1d4ed8">mri:org:io.macula/acme</text>
+    <text x="360" y="42" font-size="9" fill="#64748b">→</text>
+    <text x="380" y="42" font-size="9" font-family="monospace" fill="#1d4ed8">mri:app:io.macula/acme/counter</text>
+    <text x="605" y="42" font-size="9" fill="#64748b">→</text>
+    <text x="625" y="42" font-size="9" font-family="monospace" fill="#1d4ed8">mri:service:io.macula/acme/counter/api</text>
+  </g>
+</svg>
