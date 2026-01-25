@@ -32,9 +32,6 @@
 %% Path manipulation
 -export([append_segment/2, join_path/1, split_path/1]).
 
-%% Utilities
--export([to_khepri_path/1, from_khepri_path/1]).
-
 %% Types
 -export_type([mri/0, mri_map/0, mri_type/0, realm/0, path_segment/0]).
 
@@ -290,26 +287,6 @@ split_path(<<>>) ->
     [];
 split_path(PathBin) ->
     binary:split(PathBin, <<"/">>, [global]).
-
-%%===================================================================
-%% Utilities
-%%===================================================================
-
-%% @doc Convert an MRI to a Khepri-compatible path.
-%% Result: [mri, Type, Realm, Seg1, Seg2, ...]
--spec to_khepri_path(mri() | mri_map()) -> [atom() | binary()].
-to_khepri_path(#{type := Type, realm := Realm, path := Path}) ->
-    [mri, Type, Realm | Path];
-to_khepri_path(MRI) when is_binary(MRI) ->
-    {ok, Parsed} = parse(MRI),
-    to_khepri_path(Parsed).
-
-%% @doc Convert a Khepri path back to an MRI.
--spec from_khepri_path([atom() | binary()]) -> {ok, mri()} | {error, term()}.
-from_khepri_path([mri, Type, Realm | Path]) ->
-    {ok, format(#{type => Type, realm => Realm, path => Path})};
-from_khepri_path(_) ->
-    {error, invalid_khepri_path}.
 
 %%===================================================================
 %% Internal Functions

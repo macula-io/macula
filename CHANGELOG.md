@@ -28,7 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Parse/format MRI strings: `macula_mri:parse/1`, `macula_mri:format/1`
   - Hierarchy traversal: `parent/1`, `ancestors/1`, `is_ancestor/2`, `depth/1`
   - Path manipulation: `append_segment/2`, `join_path/1`, `split_path/1`
-  - Khepri integration: `to_khepri_path/1`, `from_khepri_path/1`
   - Constructors: `new_realm/1`, `new_org/2`, `new_user/3`, `new_app/3`, `new_service/4`
 
 - **MRI Store API**:
@@ -45,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Built-in predicates: located_at, contains, member_of, manages, depends_on, instance_of, subclass_of, and more
   - Predicate utilities: `is_builtin_predicate/1`, `inverse_predicate/1`
 
-- Added 120 unit tests for MRI system (macula_mri, registry, store, graph, ets)
+- Added 114 unit tests for MRI system (macula_mri, registry, store, graph, ets)
 
 ---
 

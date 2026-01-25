@@ -71,14 +71,7 @@ mri_test_() ->
         %% Path Manipulation Tests
         fun append_segment/0,
         fun join_path/0,
-        fun split_path/0,
-        %% Khepri Path Tests
-        fun to_khepri_path_realm/0,
-        fun to_khepri_path_org/0,
-        fun to_khepri_path_service/0,
-        fun from_khepri_path_realm/0,
-        fun from_khepri_path_org/0,
-        fun khepri_path_roundtrip/0
+        fun split_path/0
      ]}.
 
 %%===================================================================
@@ -300,33 +293,3 @@ split_path() ->
     ?assertEqual([], macula_mri:split_path(<<>>)),
     ?assertEqual([<<"acme">>], macula_mri:split_path(<<"acme">>)),
     ?assertEqual([<<"acme">>, <<"alice">>], macula_mri:split_path(<<"acme/alice">>)).
-
-%%===================================================================
-%% Khepri Path Conversion Tests
-%%===================================================================
-
-to_khepri_path_realm() ->
-    ?assertEqual([mri, realm, <<"io.macula">>],
-                 macula_mri:to_khepri_path(<<"mri:realm:io.macula">>)).
-
-to_khepri_path_org() ->
-    ?assertEqual([mri, org, <<"io.macula">>, <<"acme">>],
-                 macula_mri:to_khepri_path(<<"mri:org:io.macula/acme">>)).
-
-to_khepri_path_service() ->
-    Path = macula_mri:to_khepri_path(<<"mri:service:io.macula/acme/myapp/api">>),
-    ?assertEqual([mri, service, <<"io.macula">>, <<"acme">>, <<"myapp">>, <<"api">>], Path).
-
-from_khepri_path_realm() ->
-    {ok, MRI} = macula_mri:from_khepri_path([mri, realm, <<"io.macula">>]),
-    ?assertEqual(<<"mri:realm:io.macula">>, MRI).
-
-from_khepri_path_org() ->
-    {ok, MRI} = macula_mri:from_khepri_path([mri, org, <<"io.macula">>, <<"acme">>]),
-    ?assertEqual(<<"mri:org:io.macula/acme">>, MRI).
-
-khepri_path_roundtrip() ->
-    MRI = <<"mri:service:io.macula/acme/myapp/api">>,
-    Path = macula_mri:to_khepri_path(MRI),
-    {ok, Restored} = macula_mri:from_khepri_path(Path),
-    ?assertEqual(MRI, Restored).
