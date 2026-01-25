@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.2] - 2026-01-25
+
+### Added
+
+- **Core Design Principle: Event Types in Topics, IDs in Payloads**
+  - Elevated to non-negotiable architectural rule in `PUBSUB_GUIDE.md`
+  - Weather service example with correct/incorrect patterns
+  - Content-based filtering noted as application-level concern
+  - Updated `GLOSSARY.md` Topic entry with same principle
+
+---
+
 ## [0.20.1] - 2026-01-25
 
 ### Added
