@@ -29,7 +29,7 @@
 %% Built-in types that are always valid
 -define(BUILTIN_TYPES, [
     realm, org, user, app, service,
-    artifact, license, cert, key,
+    artifact, instance, license, cert, key,
     topic, proc, content,
     device, cluster, location, zone, network,
     model, dataset, config,
@@ -207,6 +207,7 @@ is_builtin_type_bin(<<"user">>) -> true;
 is_builtin_type_bin(<<"app">>) -> true;
 is_builtin_type_bin(<<"service">>) -> true;
 is_builtin_type_bin(<<"artifact">>) -> true;
+is_builtin_type_bin(<<"instance">>) -> true;
 is_builtin_type_bin(<<"license">>) -> true;
 is_builtin_type_bin(<<"cert">>) -> true;
 is_builtin_type_bin(<<"key">>) -> true;
@@ -283,6 +284,8 @@ builtin_schema(service) ->
     #{name => service, description => <<"Service within application">>, path_schema => [org, app, service]};
 builtin_schema(artifact) ->
     #{name => artifact, description => <<"Published artifact">>, path_schema => [org, artifact_id]};
+builtin_schema(instance) ->
+    #{name => instance, description => <<"Running application instance">>, path_schema => [org, device, instance_name]};
 builtin_schema(license) ->
     #{name => license, description => <<"License grant">>, path_schema => [org, app, license_id]};
 builtin_schema(cert) ->

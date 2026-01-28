@@ -57,8 +57,9 @@ path    = segment *("/" segment)
 <<"mri:location:io.macula/citypower/nl/amsterdam/centrum">>
 <<"mri:cluster:io.macula/citypower/amsterdam-grid">>
 
-%% Artifacts and security
+%% Artifacts and installations
 <<"mri:artifact:io.macula/acme/counter-v1.2.0">>
+<<"mri:instance:io.macula/acme/edge-01/counter.prod">>
 <<"mri:license:io.macula/acme/counter/lic-001">>
 <<"mri:cert:io.macula/acme/cert-2026-001">>
 
@@ -82,11 +83,12 @@ path    = segment *("/" segment)
 | `app` | `{org}/{app}` | `mri:app:io.macula/acme/counter` |
 | `service` | `{org}/{app}/{svc}` | `mri:service:io.macula/acme/counter/api` |
 
-### Artifacts & Security
+### Artifacts & Installations
 
 | Type | Path Schema | Example |
 |------|-------------|---------|
 | `artifact` | `{org}/{id}` | `mri:artifact:io.macula/acme/counter-v1.2.0` |
+| `instance` | `{org}/{device}/{name}` | `mri:instance:io.macula/acme/edge-01/counter.prod` |
 | `license` | `{org}/{app}/{id}` | `mri:license:io.macula/acme/counter/lic-001` |
 | `cert` | `{org}/{id}` | `mri:cert:io.macula/acme/cert-2026-001` |
 | `key` | `{org}/{id}` | `mri:key:io.macula/acme/signing-key-001` |
@@ -348,5 +350,6 @@ macula_mri_registry:register_type(<<"turbine">>, #{
 
 ## Related
 
+- [MRI Resource Lifecycle](mri_resource_lifecycle.md) - Publications, installations, licensing, and DHT integration
 - [Storage: macula_mri_khepri](https://github.com/macula-io/macula-mri-khepri)
 - [Design Document](https://github.com/macula-io/macula-console/blob/main/plans/DESIGN_MACULA_RESOURCE_IDENTIFIERS.md)

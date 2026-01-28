@@ -71,7 +71,16 @@ mri_test_() ->
         %% Path Manipulation Tests
         fun append_segment/0,
         fun join_path/0,
-        fun split_path/0
+        fun split_path/0,
+        %% Instance Constructor Tests
+        fun parse_valid_instance/0,
+        fun new_instance/0,
+        fun new_instance_qualified/0,
+        %% DHT Derivation Tests
+        fun derive_topic/0,
+        fun derive_procedure/0,
+        fun to_topic_prefix/0,
+        fun to_topic_prefix_realm_only/0
      ]}.
 
 %%===================================================================
@@ -293,3 +302,62 @@ split_path() ->
     ?assertEqual([], macula_mri:split_path(<<>>)),
     ?assertEqual([<<"acme">>], macula_mri:split_path(<<"acme">>)),
     ?assertEqual([<<"acme">>, <<"alice">>], macula_mri:split_path(<<"acme/alice">>)).
+
+%%===================================================================
+%% Instance Constructor Tests
+%%===================================================================
+
+parse_valid_instance() ->
+    MRI = <<"mri:instance:io.macula/acme/edge-01/counter.prod">>,
+    {ok, Result} = macula_mri:parse(MRI),
+    ?assertEqual(instance, maps:get(type, Result)),
+    ?assertEqual(<<"io.macula">>, maps:get(realm, Result)),
+    ?assertEqual([<<"acme">>, <<"edge-01">>, <<"counter.prod">>], maps:get(path, Result)).
+
+new_instance() ->
+    Expected = <<"mri:instance:io.macula/acme/edge-01/counter">>,
+    ?assertEqual(Expected,
+                 macula_mri:new_instance(<<"io.macula">>, <<"acme">>, <<"edge-01">>, <<"counter">>)).
+
+new_instance_qualified() ->
+    %% With environment qualifier
+    Expected1 = <<"mri:instance:io.macula/acme/edge-01/counter.prod">>,
+    ?assertEqual(Expected1,
+                 macula_mri:new_instance_qualified(<<"io.macula">>, <<"acme">>, <<"edge-01">>, <<"counter">>, <<"prod">>)),
+    %% With replica index
+    Expected2 = <<"mri:instance:io.macula/citypower/cabinet-42/meter.0">>,
+    ?assertEqual(Expected2,
+                 macula_mri:new_instance_qualified(<<"io.macula">>, <<"citypower">>, <<"cabinet-42">>, <<"meter">>, <<"0">>)).
+
+%%===================================================================
+%% DHT Derivation Tests
+%%===================================================================
+
+derive_topic() ->
+    InstanceMRI = <<"mri:instance:io.macula/acme/edge-01/counter.prod">>,
+    %% Simple topic
+    ?assertEqual(<<"io.macula/acme/edge-01/counter.prod.orders.created">>,
+                 macula_mri:derive_topic(InstanceMRI, <<"orders.created">>)),
+    %% Single word topic
+    ?assertEqual(<<"io.macula/acme/edge-01/counter.prod.heartbeat">>,
+                 macula_mri:derive_topic(InstanceMRI, <<"heartbeat">>)).
+
+derive_procedure() ->
+    InstanceMRI = <<"mri:instance:io.macula/acme/edge-01/counter.prod">>,
+    %% Simple procedure
+    ?assertEqual(<<"io.macula/acme/edge-01/counter.prod.place_order">>,
+                 macula_mri:derive_procedure(InstanceMRI, <<"place_order">>)),
+    %% Namespaced procedure
+    ?assertEqual(<<"io.macula/acme/edge-01/counter.prod.api.v2.get_status">>,
+                 macula_mri:derive_procedure(InstanceMRI, <<"api.v2.get_status">>)).
+
+to_topic_prefix() ->
+    InstanceMRI = <<"mri:instance:io.macula/acme/edge-01/counter.prod">>,
+    ?assertEqual(<<"io.macula/acme/edge-01/counter.prod">>,
+                 macula_mri:to_topic_prefix(InstanceMRI)).
+
+to_topic_prefix_realm_only() ->
+    %% Realm-only MRI should produce realm with empty path
+    RealmMRI = <<"mri:realm:io.macula">>,
+    ?assertEqual(<<"io.macula/">>,
+                 macula_mri:to_topic_prefix(RealmMRI)).

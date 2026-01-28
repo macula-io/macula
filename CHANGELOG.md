@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.4] - 2026-01-28
+
+### Added
+
+- **MRI Instance Type** - New built-in `instance` type for running application instances
+  - Distinguishes publications (artifacts) from installations (instances)
+  - Path schema: `[org, device, instance_name]`
+  - Example: `mri:instance:io.macula/acme/edge-01/counter.prod`
+
+- **Instance MRI Constructors**:
+  - `macula_mri:new_instance/4` - Create instance MRI with device
+  - `macula_mri:new_instance_qualified/5` - Create instance MRI with artifact name and qualifier
+
+- **DHT Topic/Procedure Derivation**:
+  - `macula_mri:derive_topic/2` - Derive DHT topic from instance MRI and declared topic
+  - `macula_mri:derive_procedure/2` - Derive DHT procedure from instance MRI and declared procedure
+  - `macula_mri:to_topic_prefix/1` - Convert MRI to topic/procedure prefix
+
+- **MRI Resource Lifecycle Guide** - Comprehensive documentation covering:
+  - Publications vs Installations distinction
+  - Licensing model (license grants permission, instance activates)
+  - Instance naming conventions (environment qualifiers, replica indices)
+  - DHT integration patterns
+
+- Added 7 new unit tests for instance type and DHT derivation (47 total MRI tests)
+
+---
+
 ## [0.20.3] - 2026-01-25
 
 ### Fixed

@@ -26,9 +26,13 @@
 %% Construction
 -export([new/1, new/3]).
 -export([new_realm/1, new_org/2, new_user/3, new_app/3, new_service/4]).
+-export([new_instance/4, new_instance_qualified/5]).
 
 %% Path manipulation
 -export([append_segment/2, join_path/1, split_path/1]).
+
+%% DHT topic/procedure derivation (for instances)
+-export([derive_topic/2, derive_procedure/2, to_topic_prefix/1]).
 
 %% Types
 -export_type([mri/0, mri_map/0, mri_type/0, realm/0, path_segment/0]).
@@ -252,6 +256,20 @@ new_app(Realm, Org, App) ->
 new_service(Realm, Org, App, Service) ->
     format(#{type => service, realm => Realm, path => [Org, App, Service]}).
 
+%% @doc Create an instance MRI (running installation of an artifact).
+%% Instance path: {org}/{device}/{instance_name}
+%% Example: mri:instance:io.macula/acme/edge-01/counter
+-spec new_instance(realm(), binary(), binary(), binary()) -> mri().
+new_instance(Realm, Org, Device, InstanceName) ->
+    format(#{type => instance, realm => Realm, path => [Org, Device, InstanceName]}).
+
+%% @doc Create an instance MRI with qualifier (environment or replica index).
+%% Example: mri:instance:io.macula/acme/edge-01/counter.prod
+-spec new_instance_qualified(realm(), binary(), binary(), binary(), binary()) -> mri().
+new_instance_qualified(Realm, Org, Device, ArtifactName, Qualifier) ->
+    InstanceName = <<ArtifactName/binary, ".", Qualifier/binary>>,
+    format(#{type => instance, realm => Realm, path => [Org, Device, InstanceName]}).
+
 %%===================================================================
 %% Path Manipulation
 %%===================================================================
@@ -287,6 +305,37 @@ split_path(PathBin) ->
     binary:split(PathBin, <<"/">>, [global]).
 
 %%===================================================================
+%% DHT Topic/Procedure Derivation (for instances)
+%%===================================================================
+
+%% @doc Derive a DHT topic from an instance MRI and a declared topic name.
+%% Example: derive_topic(<<"mri:instance:io.macula/acme/edge-01/counter.prod">>,
+%%                       <<"orders.created">>)
+%%          => <<"io.macula/acme/edge-01/counter.prod.orders.created">>
+-spec derive_topic(mri(), binary()) -> binary().
+derive_topic(InstanceMRI, DeclaredTopic) ->
+    InstancePath = to_topic_prefix(InstanceMRI),
+    <<InstancePath/binary, ".", DeclaredTopic/binary>>.
+
+%% @doc Derive a DHT procedure from an instance MRI and a declared procedure name.
+%% Example: derive_procedure(<<"mri:instance:io.macula/acme/edge-01/counter.prod">>,
+%%                           <<"place_order">>)
+%%          => <<"io.macula/acme/edge-01/counter.prod.place_order">>
+-spec derive_procedure(mri(), binary()) -> binary().
+derive_procedure(InstanceMRI, DeclaredProcedure) ->
+    InstancePath = to_topic_prefix(InstanceMRI),
+    <<InstancePath/binary, ".", DeclaredProcedure/binary>>.
+
+%% @doc Convert an MRI to a topic/procedure prefix (realm/path segments).
+%% Example: to_topic_prefix(<<"mri:instance:io.macula/acme/edge-01/counter.prod">>)
+%%          => <<"io.macula/acme/edge-01/counter.prod">>
+-spec to_topic_prefix(mri()) -> binary().
+to_topic_prefix(MRI) ->
+    {ok, #{realm := Realm, path := Path}} = parse(MRI),
+    PathBin = join_path(Path),
+    <<Realm/binary, "/", PathBin/binary>>.
+
+%%===================================================================
 %% Internal Functions
 %%===================================================================
 
@@ -314,6 +363,7 @@ binary_to_type(<<"user">>) -> {ok, user};
 binary_to_type(<<"app">>) -> {ok, app};
 binary_to_type(<<"service">>) -> {ok, service};
 binary_to_type(<<"artifact">>) -> {ok, artifact};
+binary_to_type(<<"instance">>) -> {ok, instance};
 binary_to_type(<<"license">>) -> {ok, license};
 binary_to_type(<<"cert">>) -> {ok, cert};
 binary_to_type(<<"key">>) -> {ok, key};
@@ -343,6 +393,7 @@ type_to_binary(user) -> <<"user">>;
 type_to_binary(app) -> <<"app">>;
 type_to_binary(service) -> <<"service">>;
 type_to_binary(artifact) -> <<"artifact">>;
+type_to_binary(instance) -> <<"instance">>;
 type_to_binary(license) -> <<"license">>;
 type_to_binary(cert) -> <<"cert">>;
 type_to_binary(key) -> <<"key">>;
