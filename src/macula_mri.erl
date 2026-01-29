@@ -309,26 +309,41 @@ split_path(PathBin) ->
 %%===================================================================
 
 %% @doc Derive a DHT topic from an instance MRI and a declared topic name.
-%% Example: derive_topic(<<"mri:instance:io.macula/acme/edge-01/counter.prod">>,
-%%                       <<"orders.created">>)
-%%          => <<"io.macula/acme/edge-01/counter.prod.orders.created">>
+%%
+%% Takes an instance MRI and a declared topic name, returns the full DHT topic.
+%% The instance path becomes a prefix: realm/org/device/instance.declared_topic
+%%
+%% Example: InstanceMRI = "mri:instance:io.macula/acme/edge-01/counter.prod"
+%%          DeclaredTopic = "orders.created"
+%%          Result = "io.macula/acme/edge-01/counter.prod.orders.created"
+%% @end
 -spec derive_topic(mri(), binary()) -> binary().
 derive_topic(InstanceMRI, DeclaredTopic) ->
     InstancePath = to_topic_prefix(InstanceMRI),
     <<InstancePath/binary, ".", DeclaredTopic/binary>>.
 
 %% @doc Derive a DHT procedure from an instance MRI and a declared procedure name.
-%% Example: derive_procedure(<<"mri:instance:io.macula/acme/edge-01/counter.prod">>,
-%%                           <<"place_order">>)
-%%          => <<"io.macula/acme/edge-01/counter.prod.place_order">>
+%%
+%% Takes an instance MRI and a declared procedure name, returns the full DHT procedure.
+%% The instance path becomes a prefix: realm/org/device/instance.declared_procedure
+%%
+%% Example: InstanceMRI = "mri:instance:io.macula/acme/edge-01/counter.prod"
+%%          DeclaredProcedure = "place_order"
+%%          Result = "io.macula/acme/edge-01/counter.prod.place_order"
+%% @end
 -spec derive_procedure(mri(), binary()) -> binary().
 derive_procedure(InstanceMRI, DeclaredProcedure) ->
     InstancePath = to_topic_prefix(InstanceMRI),
     <<InstancePath/binary, ".", DeclaredProcedure/binary>>.
 
 %% @doc Convert an MRI to a topic/procedure prefix (realm/path segments).
-%% Example: to_topic_prefix(<<"mri:instance:io.macula/acme/edge-01/counter.prod">>)
-%%          => <<"io.macula/acme/edge-01/counter.prod">>
+%%
+%% Takes any MRI and extracts the realm and path as a topic-compatible prefix.
+%% Format: realm/path_segment1/path_segment2/...
+%%
+%% Example: MRI = "mri:instance:io.macula/acme/edge-01/counter.prod"
+%%          Result = "io.macula/acme/edge-01/counter.prod"
+%% @end
 -spec to_topic_prefix(mri()) -> binary().
 to_topic_prefix(MRI) ->
     {ok, #{realm := Realm, path := Path}} = parse(MRI),
