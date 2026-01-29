@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.5] - 2026-01-29
+
+### Fixed
+
+- **EDoc XML parsing errors** - Fixed doc comments in DHT derivation functions
+  (`derive_topic/2`, `derive_procedure/2`, `to_topic_prefix/1`) that caused
+  ex_doc build failures due to binary syntax being parsed as XML tags
+
+---
+
 ## [0.20.4] - 2026-01-28
 
 ### Added
