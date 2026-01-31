@@ -1439,3 +1439,12 @@ Before publishing a release:
 5. Update ROADMAP.md: Mark feature complete, update version
 6. Commit with version in message
 ```
+
+---
+
+## Support
+
+If you find this project valuable, consider supporting its development:
+
+**☕ Buy Me a Coffee:** https://buymeacoffee.com/rlefever
+
