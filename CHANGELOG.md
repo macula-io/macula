@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamps. Rate limiter ETS tables are now named (`macula_gateway_ip_rate_limit`,
   `macula_gateway_global_rate_limit`) and public for external read access. A new
   `macula_gateway_recent_connections` ordered_set table tracks the last 100 connection
-  attempts for the Mesh Shield visualization dashboard.
+  attempts for the Macula Shield visualization dashboard.
 
 ---
 
