@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.10] - 2026-03-16
+
+### Added
+
+- **QUIC connection rate limiting** - The gateway QUIC server now enforces per-IP and
+  global connection rate limits before completing TLS handshakes. Internet scanners
+  flooding public UDP ports caused resource exhaustion and `connection_refused` for
+  legitimate peers. Connections exceeding the rate limit are closed immediately before
+  the expensive TLS handshake. Defaults: 5 connections per IP per 10 seconds, 50
+  connections per second globally. Configurable via application environment:
+  `quic_max_conn_per_ip`, `quic_ip_window_ms`, `quic_max_conn_global_per_sec`.
+  Stale rate limit entries are cleaned up every 30 seconds.
+
+---
+
 ## [0.20.9] - 2026-03-16
 
 ### Fixed

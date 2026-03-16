@@ -33,8 +33,16 @@
 %% Helper functions (exported for testing)
 -ifdef(TEST).
 -export([parse_endpoint/1, resolve_host/2, complete_handshake/1,
-         accept_streams/1, register_next_connection/1, get_node_id/2]).
+         accept_streams/1, register_next_connection/1, get_node_id/2,
+         check_rate_limit/3, cleanup_stale_rate_entries/1]).
 -endif.
+
+%% Rate limiting defaults
+-define(DEFAULT_MAX_CONN_PER_IP, 5).
+-define(DEFAULT_IP_WINDOW_MS, 10000).
+-define(DEFAULT_MAX_CONN_GLOBAL_PER_SEC, 50).
+-define(RATE_CLEANUP_INTERVAL_MS, 30000).
+-define(RATE_LOG_SUPPRESS_MS, 10000).
 
 -record(state, {
     listener :: pid() | undefined,
@@ -42,7 +50,12 @@
     node_id :: binary(),
     port :: inet:port_number(),
     realm :: binary(),
-    buffer = <<>> :: binary()
+    buffer = <<>> :: binary(),
+    ip_rate_table :: ets:tid() | undefined,
+    global_rate_table :: ets:tid() | undefined,
+    max_conn_per_ip :: pos_integer(),
+    ip_window_ms :: pos_integer(),
+    max_conn_global_per_sec :: pos_integer()
 }).
 
 %%%===================================================================
@@ -84,9 +97,19 @@ init(Opts) ->
         {peer_bidi_stream_count, 100}
     ],
 
+    %% Rate limiting configuration
+    MaxPerIp = application:get_env(macula, quic_max_conn_per_ip, ?DEFAULT_MAX_CONN_PER_IP),
+    IpWindowMs = application:get_env(macula, quic_ip_window_ms, ?DEFAULT_IP_WINDOW_MS),
+    MaxGlobalPerSec = application:get_env(macula, quic_max_conn_global_per_sec, ?DEFAULT_MAX_CONN_GLOBAL_PER_SEC),
+
+    %% Create rate limiting ETS tables
+    IpRateTable = ets:new(macula_quic_conn_rate_ip, [set, {write_concurrency, true}]),
+    GlobalRateTable = ets:new(macula_quic_conn_rate_global, [set, {write_concurrency, true}]),
+
     case macula_quic:listen(Port, ListenOpts) of
         {ok, Listener} ->
-            ?LOG_INFO("QUIC listener started on port ~p", [Port]),
+            ?LOG_INFO("QUIC listener started on port ~p (rate limit: ~p/ip/~pms, ~p/s global)",
+                       [Port, MaxPerIp, IpWindowMs, MaxGlobalPerSec]),
 
             %% Start async accept to receive connections
             case quicer:async_accept(Listener, #{}) of
@@ -98,12 +121,20 @@ init(Opts) ->
                     ok
             end,
 
+            %% Schedule periodic rate limit cleanup
+            erlang:send_after(?RATE_CLEANUP_INTERVAL_MS, self(), cleanup_rate_limits),
+
             State = #state{
                 listener = Listener,
                 port = Port,
                 realm = Realm,
                 node_id = NodeId,
-                gateway = GatewayPid
+                gateway = GatewayPid,
+                ip_rate_table = IpRateTable,
+                global_rate_table = GlobalRateTable,
+                max_conn_per_ip = MaxPerIp,
+                ip_window_ms = IpWindowMs,
+                max_conn_global_per_sec = MaxGlobalPerSec
             },
 
             {ok, State};
@@ -195,26 +226,33 @@ handle_info({quic, Data, Stream, Flags}, State) when is_binary(Data) ->
     route_to_gateway(DecodeResult, Stream, PeerAddr, State);
 
 %% @doc Handle QUIC event: new_conn (connection established).
+%% Rate limits by source IP and global connection rate before completing handshake.
 handle_info({quic, new_conn, Conn, ConnInfo}, State) ->
-    %% Try to get peer address from CONNECTION handle (not stream)
     PeerAddrResult = quicer:peername(Conn),
     ?LOG_DEBUG("[Gateway QUIC] New connection: ~p, info=~p, peer=~p",
               [Conn, ConnInfo, PeerAddrResult]),
 
-    %% Store the connection->peer_addr mapping in process dictionary
-    %% (We'll use this to look up peer addr when we get streams)
-    case PeerAddrResult of
-        {ok, PeerAddr} ->
-            %% Store connection ref as key, peer addr as value
-            put({conn_peer_addr, Conn}, PeerAddr);
-        _ ->
-            ok
+    %% Extract IP for rate limiting (strip port)
+    IP = case PeerAddrResult of
+        {ok, {Addr, _Port}} -> Addr;
+        _ -> undefined
     end,
 
-    %% Use helper functions to complete handshake
-    complete_handshake(Conn),
-    register_next_connection(State#state.listener),
+    case check_rate_limit(IP, erlang:system_time(millisecond), State) of
+        allowed ->
+            %% Store conn->peer_addr mapping for stream lookup
+            case PeerAddrResult of
+                {ok, PeerAddr} -> put({conn_peer_addr, Conn}, PeerAddr);
+                _ -> ok
+            end,
+            complete_handshake(Conn);
+        rejected ->
+            maybe_log_rate_limited(IP),
+            catch quicer:close_connection(Conn)
+    end,
 
+    %% MUST always re-register for next connection
+    register_next_connection(State#state.listener),
     {noreply, State};
 
 %% @doc Handle QUIC event: peer_needs_streams (peer wants to open more streams).
@@ -230,6 +268,12 @@ handle_info({quic, shutdown, Conn, Reason}, State) ->
 %% @doc Handle QUIC event: transport_shutdown (transport layer shutting down).
 handle_info({quic, transport_shutdown, Conn, Reason}, State) ->
     ?LOG_INFO("QUIC transport_shutdown: Conn=~p, Reason=~p", [Conn, Reason]),
+    {noreply, State};
+
+%% @doc Periodic cleanup of stale rate limit entries.
+handle_info(cleanup_rate_limits, State) ->
+    cleanup_stale_rate_entries(State),
+    erlang:send_after(?RATE_CLEANUP_INTERVAL_MS, self(), cleanup_rate_limits),
     {noreply, State};
 
 %% @doc Handle unknown messages.
@@ -355,6 +399,88 @@ route_to_gateway({ok, {MessageType, _Message}}, _Stream, _PeerAddr, State) ->
 route_to_gateway({error, Reason}, _Stream, _PeerAddr, State) ->
     ?LOG_ERROR("Decode error: ~p", [Reason]),
     {noreply, State}.
+
+%%%===================================================================
+%%% Rate Limiting Functions
+%%%===================================================================
+
+%% @doc Check if a connection from IP should be allowed.
+%% Checks global rate first, then per-IP rate.
+%% Returns `allowed` or `rejected`.
+-spec check_rate_limit(IP, Now, State) -> allowed | rejected
+    when IP :: inet:ip_address() | undefined,
+         Now :: integer(),
+         State :: #state{}.
+check_rate_limit(_IP, _Now, #state{ip_rate_table = undefined}) ->
+    allowed;
+check_rate_limit(IP, Now, State) ->
+    case check_global_rate(Now, State) of
+        rejected -> rejected;
+        allowed -> check_ip_rate(IP, Now, State)
+    end.
+
+%% @doc Check global connections-per-second limit.
+check_global_rate(Now, #state{global_rate_table = Tab, max_conn_global_per_sec = Max}) ->
+    Second = Now div 1000,
+    case ets:lookup(Tab, global) of
+        [{global, Count, Second}] when Count >= Max ->
+            rejected;
+        [{global, _Count, Second}] ->
+            ets:update_counter(Tab, global, {2, 1}),
+            allowed;
+        _ ->
+            %% New second or no entry — reset
+            ets:insert(Tab, {global, 1, Second}),
+            allowed
+    end.
+
+%% @doc Check per-IP connection rate within sliding window.
+%% Undefined IP (peername failed) — skip IP check, global rate still applies.
+check_ip_rate(undefined, _Now, _State) ->
+    allowed;
+check_ip_rate(IP, Now, #state{ip_rate_table = Tab, max_conn_per_ip = Max, ip_window_ms = WindowMs}) ->
+    case ets:lookup(Tab, IP) of
+        [{IP, Count, WindowStart}] when Now - WindowStart < WindowMs, Count >= Max ->
+            rejected;
+        [{IP, _Count, WindowStart}] when Now - WindowStart < WindowMs ->
+            ets:update_counter(Tab, IP, {2, 1}),
+            allowed;
+        _ ->
+            %% Window expired or no entry — reset
+            ets:insert(Tab, {IP, 1, Now}),
+            allowed
+    end.
+
+%% @doc Log rate-limited IP (suppressed to once per window per IP).
+maybe_log_rate_limited(undefined) ->
+    ok;
+maybe_log_rate_limited(IP) ->
+    Now = erlang:system_time(millisecond),
+    Key = {rate_limit_logged, IP},
+    case get(Key) of
+        undefined ->
+            ?LOG_WARNING("[Gateway QUIC] Rate limiting connections from ~p", [IP]),
+            put(Key, Now);
+        LastLogged when Now - LastLogged >= ?RATE_LOG_SUPPRESS_MS ->
+            ?LOG_WARNING("[Gateway QUIC] Rate limiting connections from ~p", [IP]),
+            put(Key, Now);
+        _ ->
+            ok
+    end.
+
+%% @doc Remove stale entries from rate limit tables.
+cleanup_stale_rate_entries(#state{ip_rate_table = undefined}) ->
+    ok;
+cleanup_stale_rate_entries(#state{ip_rate_table = IpTab, global_rate_table = GlobalTab,
+                                  ip_window_ms = WindowMs}) ->
+    Now = erlang:system_time(millisecond),
+    Cutoff = Now - (2 * WindowMs),
+    %% Delete IP entries whose window started before cutoff
+    ets:select_delete(IpTab, [{{'_', '_', '$1'}, [{'<', '$1', Cutoff}], [true]}]),
+    %% Delete global entry if older than 5 seconds
+    GlobalCutoff = (Now div 1000) - 5,
+    ets:select_delete(GlobalTab, [{{global, '_', '$1'}, [{'<', '$1', GlobalCutoff}], [true]}]),
+    ok.
 
 %%%===================================================================
 %%% Endpoint Parsing Functions
