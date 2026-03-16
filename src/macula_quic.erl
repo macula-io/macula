@@ -65,11 +65,13 @@ listen(Port, Opts) ->
         {handshake_idle_timeout_ms, HandshakeIdleTimeoutMs}
     ],
 
-    %% Start QUIC listener
-    %% The calling process becomes the owner and will receive connection messages
-    ?LOG_INFO("Starting listener on port ~p with idle_timeout=~pms, keep_alive=~pms",
-              [Port, IdleTimeoutMs, KeepAliveIntervalMs]),
-    quicer:listen(Port, ListenerOpts).
+    %% Start QUIC listener on all IPv4 interfaces
+    %% MsQuic defaults to IPv6 (::) which doesn't receive IPv4 traffic in Docker
+    %% bridge networks. Bind explicitly to 0.0.0.0 for IPv4 compatibility.
+    ListenOn = "0.0.0.0:" ++ integer_to_list(Port),
+    ?LOG_INFO("Starting listener on ~s with idle_timeout=~pms, keep_alive=~pms",
+              [ListenOn, IdleTimeoutMs, KeepAliveIntervalMs]),
+    quicer:listen(ListenOn, ListenerOpts).
 
 %% @doc Connect to a QUIC server.
 %% Options:

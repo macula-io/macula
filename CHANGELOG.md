@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.9] - 2026-03-16
+
+### Fixed
+
+- **QUIC listener binds to IPv4 (0.0.0.0)** - MsQuic defaults to IPv6 (`::`) when
+  only a port number is passed to `quicer:listen/2`. In Docker bridge networks, IPv4
+  traffic forwarded via port mapping doesn't reach IPv6-only listeners. This caused
+  all client connections to time out — the server reported "QUIC listener started"
+  but no UDP socket was bound on IPv4. Now passes `"0.0.0.0:PORT"` explicitly.
+
+---
+
 ## [0.20.8] - 2026-03-16
 
 ### Fixed
