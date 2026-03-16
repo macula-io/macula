@@ -388,10 +388,23 @@ get_node_id(Realm, Port) ->
 
 %% @doc Build endpoint URL for this gateway.
 %% Uses MACULA_HOSTNAME env var (set in Docker), falls back to HOSTNAME.
+%% Uses MACULA_ADVERTISE_PORT if set (for Docker port mapping where
+%% the external/host port differs from the internal/container port).
 -spec build_gateway_endpoint(#state{}) -> binary().
 build_gateway_endpoint(#state{port = Port}) ->
     Host = get_gateway_hostname(),
-    iolist_to_binary([<<"https://">>, Host, <<":">>, integer_to_binary(Port)]).
+    AdvertisePort = get_advertise_port(Port),
+    iolist_to_binary([<<"https://">>, Host, <<":">>, integer_to_binary(AdvertisePort)]).
+
+%% @doc Get the port to advertise in DHT endpoint.
+%% MACULA_ADVERTISE_PORT overrides the listen port for Docker port mapping
+%% (e.g., container listens on 4433 but host exposes on 443).
+-spec get_advertise_port(inet:port_number()) -> inet:port_number().
+get_advertise_port(ListenPort) ->
+    case os:getenv("MACULA_ADVERTISE_PORT") of
+        false -> ListenPort;
+        PortStr -> list_to_integer(PortStr)
+    end.
 
 %% @doc Get hostname for gateway endpoint.
 %% Priority: MACULA_HOSTNAME > HOSTNAME > "localhost"
