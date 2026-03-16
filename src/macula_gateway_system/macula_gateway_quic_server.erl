@@ -25,7 +25,7 @@
 -compile({nowarn_unused_function, [parse_endpoint/1, resolve_host/2]}).
 
 %% API
--export([start_link/1, set_gateway/2]).
+-export([start_link/1, set_gateway/2, shield_metrics/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -34,7 +34,8 @@
 -ifdef(TEST).
 -export([parse_endpoint/1, resolve_host/2, complete_handshake/1,
          accept_streams/1, register_next_connection/1, get_node_id/2,
-         check_rate_limit/3, cleanup_stale_rate_entries/1]).
+         check_rate_limit/3, cleanup_stale_rate_entries/1,
+         record_recent_connection/3, collect_shield_metrics/0]).
 -endif.
 
 %% Rate limiting defaults
@@ -43,6 +44,7 @@
 -define(DEFAULT_MAX_CONN_GLOBAL_PER_SEC, 50).
 -define(RATE_CLEANUP_INTERVAL_MS, 30000).
 -define(RATE_LOG_SUPPRESS_MS, 10000).
+-define(MAX_RECENT_CONNECTIONS, 100).
 
 -record(state, {
     listener :: pid() | undefined,
@@ -73,6 +75,16 @@ start_link(Opts) ->
 set_gateway(QuicServerPid, GatewayPid) when is_pid(QuicServerPid), is_pid(GatewayPid) ->
     gen_server:call(QuicServerPid, {set_gateway, GatewayPid}).
 
+%% @doc Returns shield metrics: recent connections with IPs, timestamps, and status.
+%% Reads directly from named ETS tables. No gen_server call needed.
+%% Returns empty metrics if the QUIC server has not started yet.
+-spec shield_metrics() -> map().
+shield_metrics() ->
+    case ets:whereis(macula_gateway_ip_rate_limit) of
+        undefined -> empty_shield_metrics();
+        _ -> collect_shield_metrics()
+    end.
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -102,9 +114,11 @@ init(Opts) ->
     IpWindowMs = application:get_env(macula, quic_ip_window_ms, ?DEFAULT_IP_WINDOW_MS),
     MaxGlobalPerSec = application:get_env(macula, quic_max_conn_global_per_sec, ?DEFAULT_MAX_CONN_GLOBAL_PER_SEC),
 
-    %% Create rate limiting ETS tables
-    IpRateTable = ets:new(macula_quic_conn_rate_ip, [set, {write_concurrency, true}]),
-    GlobalRateTable = ets:new(macula_quic_conn_rate_global, [set, {write_concurrency, true}]),
+    %% Create rate limiting ETS tables (named_table + public for shield_metrics access)
+    IpRateTable = ets:new(macula_gateway_ip_rate_limit, [named_table, set, public, {write_concurrency, true}]),
+    GlobalRateTable = ets:new(macula_gateway_global_rate_limit, [named_table, set, public, {write_concurrency, true}]),
+    %% Recent connections table for shield metrics (ordered_set for timestamp ordering)
+    ets:new(macula_gateway_recent_connections, [named_table, ordered_set, public, {write_concurrency, true}]),
 
     case macula_quic:listen(Port, ListenOpts) of
         {ok, Listener} ->
@@ -238,8 +252,10 @@ handle_info({quic, new_conn, Conn, ConnInfo}, State) ->
         _ -> undefined
     end,
 
-    case check_rate_limit(IP, erlang:system_time(millisecond), State) of
+    Now = erlang:system_time(millisecond),
+    case check_rate_limit(IP, Now, State) of
         allowed ->
+            record_recent_connection(IP, Now, accepted),
             %% Store conn->peer_addr mapping for stream lookup
             case PeerAddrResult of
                 {ok, PeerAddr} -> put({conn_peer_addr, Conn}, PeerAddr);
@@ -247,6 +263,7 @@ handle_info({quic, new_conn, Conn, ConnInfo}, State) ->
             end,
             complete_handshake(Conn);
         rejected ->
+            record_recent_connection(IP, Now, rejected),
             maybe_log_rate_limited(IP),
             catch quicer:close_connection(Conn)
     end,
@@ -481,6 +498,80 @@ cleanup_stale_rate_entries(#state{ip_rate_table = IpTab, global_rate_table = Glo
     GlobalCutoff = (Now div 1000) - 5,
     ets:select_delete(GlobalTab, [{{global, '_', '$1'}, [{'<', '$1', GlobalCutoff}], [true]}]),
     ok.
+
+%%%===================================================================
+%%% Shield Metrics Functions
+%%%===================================================================
+
+%% @doc Record a connection attempt in the recent connections ETS table.
+%% Uses {Timestamp, UniqueRef} as key for ordered_set ordering.
+%% Trims entries beyond MAX_RECENT_CONNECTIONS.
+record_recent_connection(undefined, _Now, _Status) ->
+    ok;
+record_recent_connection(IP, Now, Status) ->
+    Key = {Now, make_ref()},
+    ets:insert(macula_gateway_recent_connections, {Key, IP, Status}),
+    trim_recent_connections().
+
+%% @doc Keep only the most recent MAX_RECENT_CONNECTIONS entries.
+trim_recent_connections() ->
+    Size = ets:info(macula_gateway_recent_connections, size),
+    trim_oldest(Size - ?MAX_RECENT_CONNECTIONS).
+
+trim_oldest(N) when N =< 0 ->
+    ok;
+trim_oldest(N) ->
+    case ets:first(macula_gateway_recent_connections) of
+        '$end_of_table' -> ok;
+        Key ->
+            ets:delete(macula_gateway_recent_connections, Key),
+            trim_oldest(N - 1)
+    end.
+
+%% @doc Collect shield metrics from ETS tables.
+%% Computes stats over a 10-second window and returns the last 100 connections.
+collect_shield_metrics() ->
+    Now = erlang:system_time(millisecond),
+    WindowMs = 10000,
+    Cutoff = Now - WindowMs,
+    All = ets:tab2list(macula_gateway_recent_connections),
+    Parsed = [{IP, Ts, St} || {{Ts, _Ref}, IP, St} <- All],
+    InWindow = [{IP, Ts, St} || {IP, Ts, St} <- Parsed, Ts >= Cutoff],
+    Accepted = length([ok || {_, _, accepted} <- InWindow]),
+    Rejected = length([ok || {_, _, rejected} <- InWindow]),
+    Total = Accepted + Rejected,
+    Cps = Total * 1000.0 / WindowMs,
+    Entries = [#{
+        ip => format_ip(IP),
+        status => St,
+        timestamp => Ts
+    } || {IP, Ts, St} <- Parsed],
+    #{
+        window_seconds => WindowMs div 1000,
+        total_accepted => Accepted,
+        total_rejected => Rejected,
+        connections_per_second => Cps,
+        recent => lists:reverse(Entries)
+    }.
+
+%% @doc Return empty shield metrics when QUIC server is not running.
+empty_shield_metrics() ->
+    #{
+        window_seconds => 10,
+        total_accepted => 0,
+        total_rejected => 0,
+        connections_per_second => 0.0,
+        recent => []
+    }.
+
+%% @doc Format an IP address tuple as a binary string.
+format_ip({A, B, C, D}) ->
+    list_to_binary(io_lib:format("~B.~B.~B.~B", [A, B, C, D]));
+format_ip({A, B, C, D, E, F, G, H}) ->
+    list_to_binary(io_lib:format("~.16B:~.16B:~.16B:~.16B:~.16B:~.16B:~.16B:~.16B",
+                                  [A, B, C, D, E, F, G, H]));
+format_ip(IP) ->
+    list_to_binary(io_lib:format("~p", [IP])).
 
 %%%===================================================================
 %%% Endpoint Parsing Functions

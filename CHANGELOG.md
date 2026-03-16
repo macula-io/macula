@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.11] - 2026-03-16
+
+### Added
+
+- **Shield metrics API** - `macula_gateway_quic_server:shield_metrics/0` returns real-time
+  connection attempt data including per-IP accept/reject status, connection rates, and
+  timestamps. Rate limiter ETS tables are now named (`macula_gateway_ip_rate_limit`,
+  `macula_gateway_global_rate_limit`) and public for external read access. A new
+  `macula_gateway_recent_connections` ordered_set table tracks the last 100 connection
+  attempts for the Mesh Shield visualization dashboard.
+
+---
+
 ## [0.20.10] - 2026-03-16
 
 ### Added
