@@ -21,3 +21,6 @@ doc/
 
 # Archives
 *.gz
+
+# Lock files (rebuilt from deps)
+rebar.lock
