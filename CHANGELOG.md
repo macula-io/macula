@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.6] - 2026-03-16
+
+### Added
+
+- **MACULA_ADVERTISE_PORT** - New environment variable for Docker port mapping.
+  When the container's QUIC listen port differs from the host-exposed port
+  (e.g., `docker -p 443:4433/udp`), the gateway was advertising the internal
+  port (4433) in the DHT endpoint, causing clients to connect to an unreachable
+  port. Setting `MACULA_ADVERTISE_PORT=443` overrides the port in the advertised
+  endpoint URL without changing the actual listen port. Falls back to the listen
+  port if unset (no behavior change for existing deployments).
+
+---
+
 ## [0.20.5] - 2026-01-29
 
 ### Fixed

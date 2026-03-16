@@ -133,6 +133,36 @@ MACULA_TLS_KEYFILE=/opt/macula/certs/key.pem
 # MACULA_BOOTSTRAP_PEERS=quic://other-seed:4433
 ```
 
+#### Docker Port Mapping (v0.20.6+)
+
+When the container's QUIC listen port differs from the host-exposed port,
+set `MACULA_ADVERTISE_PORT` so the gateway advertises the correct
+externally-reachable port in the DHT. Without this, clients discover the
+internal container port and fail to connect.
+
+```bash
+# Container listens on 4433, host exposes on 443
+MACULA_QUIC_PORT=4433
+MACULA_ADVERTISE_PORT=443
+MACULA_HOSTNAME=boot.example.com
+```
+
+```yaml
+# docker-compose.yml
+services:
+  boot:
+    environment:
+      MACULA_QUIC_PORT: "4433"
+      MACULA_ADVERTISE_PORT: "443"    # Advertise the host port, not the container port
+      MACULA_HOSTNAME: boot.example.com
+    ports:
+      - "443:4433/udp"                # Host 443 -> Container 4433
+```
+
+If `MACULA_ADVERTISE_PORT` is not set, the listen port (`MACULA_QUIC_PORT`)
+is used — no behavior change for deployments where host port equals
+container port.
+
 #### Regular Node (v0.8.5+)
 ```bash
 MACULA_BOOTSTRAP_PEERS=quic://seed-hostname:4433
