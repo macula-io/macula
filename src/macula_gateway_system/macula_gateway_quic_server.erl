@@ -406,7 +406,7 @@ route_to_gateway({error, Reason}, _Stream, _PeerAddr, State) ->
 
 %% @doc Check if a connection from IP should be allowed.
 %% Checks global rate first, then per-IP rate.
-%% Returns `allowed` or `rejected`.
+%% Returns allowed or rejected.
 -spec check_rate_limit(IP, Now, State) -> allowed | rejected
     when IP :: inet:ip_address() | undefined,
          Now :: integer(),
