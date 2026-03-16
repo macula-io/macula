@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.8] - 2026-03-16
+
+### Fixed
+
+- **QUIC connect timeout increased to 30 seconds** - The QUIC connect call used
+  `DEFAULT_TIMEOUT` (5 seconds), which is far too short for internet QUIC handshakes
+  (UDP + TLS 1.3). MsQuic returned `{error, transport_down, #{status => connection_timeout}}`
+  because the handshake couldn't complete in 5 seconds. Now uses `CONNECTION_TIMEOUT_MS`
+  (30 seconds), matching `handshake_idle_timeout_ms`. Fixed in both `macula_connection`
+  and `macula_connection_pool`.
+
+- **Handle quicer 3-tuple error responses** - `handle_quic_connect_result` only matched
+  2-tuple `{error, Reason}` but quicer returns 3-tuples like
+  `{error, transport_down, #{status => connection_timeout}}`. Added explicit clause for
+  `{error, Type, Details}` so these errors are properly categorized instead of wrapped
+  as `unexpected_connect_result`.
+
+---
+
+## [0.20.7] - 2026-03-16
+
+### Fixed
+
+- **Non-blocking QUIC connection** - `macula_connection` gen_server no longer
+  blocks during QUIC handshake. Previously, `handle_info(connect, ...)` called
+  `do_connect/1` synchronously, which could block for up to 30 seconds during
+  the QUIC/TLS handshake. This prevented the gen_server from responding to
+  `get_status` calls, causing `macula_peer:wait_for_connection` to timeout and
+  crash. The connection attempt now runs in a spawned process, sending results
+  back via `{connect_result, Result}` messages.
+
+---
+
 ## [0.20.6] - 2026-03-16
 
 ### Added

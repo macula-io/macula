@@ -76,7 +76,7 @@ create_connection(Endpoint, NodeId, RealmId, Pool) when is_map(Pool) ->
             ], TlsOpts),
 
             ConnectResult = try
-                macula_quic:connect(Host, Port, QuicOpts, ?DEFAULT_TIMEOUT)
+                macula_quic:connect(Host, Port, QuicOpts, ?CONNECTION_TIMEOUT_MS)
             catch
                 _:Error ->
                     {error, Error}

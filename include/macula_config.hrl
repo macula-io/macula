@@ -26,8 +26,8 @@
 %% QoS acknowledgment timeout
 -define(PUBACK_TIMEOUT_MS, 5000).         % 5 seconds - QoS 1 acknowledgment
 
-%% Connection timeout
--define(CONNECTION_TIMEOUT_MS, 10000).    % 10 seconds - initial connection
+%% Connection timeout (QUIC handshake over internet needs ample time)
+-define(CONNECTION_TIMEOUT_MS, 30000).    % 30 seconds - QUIC handshake timeout
 
 %%%===================================================================
 %%% Retry Configuration

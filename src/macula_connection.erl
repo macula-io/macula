@@ -222,17 +222,28 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(connect, State) ->
-    ?LOG_DEBUG("[Connection] Attempting connect to ~s", [State#state.url]),
-    case do_connect(State) of
+    ?LOG_DEBUG("[Connection] Attempting async connect to ~s", [State#state.url]),
+    spawn_connect(State),
+    {noreply, State};
+
+handle_info({connect_result, {ok, Conn, Stream}}, State) ->
+    #{host := Host, port := Port} = State#state.opts,
+    case complete_connection_setup(Conn, Stream, Host, Port, State) of
         {ok, State2} ->
             ?LOG_INFO("[Connection] Successfully connected to ~s", [State#state.url]),
             {noreply, State2};
         {error, Reason} ->
-            ?LOG_ERROR("[Connection] Failed to connect to ~s: ~p, retrying in ~p ms",
+            ?LOG_ERROR("[Connection] Connection setup failed for ~s: ~p, retrying in ~p ms",
                       [State#state.url, Reason, ?CONNECT_RETRY_DELAY]),
             erlang:send_after(?CONNECT_RETRY_DELAY, self(), connect),
             {noreply, State#state{status = error}}
     end;
+
+handle_info({connect_result, {error, Reason}}, State) ->
+    ?LOG_ERROR("[Connection] Failed to connect to ~s: ~p, retrying in ~p ms",
+              [State#state.url, Reason, ?CONNECT_RETRY_DELAY]),
+    erlang:send_after(?CONNECT_RETRY_DELAY, self(), connect),
+    {noreply, State#state{status = error}};
 
 handle_info({quic, Data, Stream, _Props}, State) when is_binary(Data) ->
     %% Received data from QUIC stream
@@ -345,18 +356,21 @@ trigger_reconnect(#state{stream = Stream, connection = Conn, keepalive_timer = T
     },
     {noreply, NewState}.
 
-%% @doc Establish QUIC connection and perform handshake.
--spec do_connect(#state{}) -> {ok, #state{}} | {error, term()}.
-do_connect(State) ->
+%% @doc Spawn async QUIC connection attempt so the gen_server remains responsive
+%% to calls (e.g., get_status) while the QUIC handshake is in progress.
+-spec spawn_connect(#state{}) -> pid().
+spawn_connect(State) ->
+    Self = self(),
     #{host := Host, port := Port} = State#state.opts,
     QuicOpts = build_quic_opts(Host),
-
-    case attempt_quic_connection(Host, Port, QuicOpts) of
-        {ok, Conn, Stream} ->
-            complete_connection_setup(Conn, Stream, Host, Port, State);
-        {error, _Reason} = Error ->
-            Error
-    end.
+    spawn(fun() ->
+        Result = try
+            attempt_quic_connection(Host, Port, QuicOpts)
+        catch
+            _:Reason -> {error, {crashed, Reason}}
+        end,
+        Self ! {connect_result, Result}
+    end).
 
 %% @doc Build QUIC connection options with TLS configuration.
 %% Uses macula_tls module for centralized TLS settings (v0.11.0+).
@@ -406,7 +420,7 @@ attempt_quic_connection(Host, Port, QuicOpts) ->
 -spec safe_quic_connect(string(), integer(), list()) ->
     {ok, pid()} | {error, term()}.
 safe_quic_connect(Host, Port, QuicOpts) ->
-    handle_quic_connect_result(catch macula_quic:connect(Host, Port, QuicOpts, ?DEFAULT_TIMEOUT)).
+    handle_quic_connect_result(catch macula_quic:connect(Host, Port, QuicOpts, ?CONNECTION_TIMEOUT_MS)).
 
 %% @private Handle QUIC connect result, converting exceptions to error tuples.
 handle_quic_connect_result({'EXIT', Error}) ->
@@ -415,6 +429,8 @@ handle_quic_connect_result({ok, _Conn} = Result) ->
     Result;
 handle_quic_connect_result({error, _Reason} = Result) ->
     Result;
+handle_quic_connect_result({error, Type, Details}) ->
+    {error, {quic_transport_error, Type, Details}};
 handle_quic_connect_result(Other) ->
     {error, {unexpected_connect_result, Other}}.
 
