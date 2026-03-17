@@ -230,12 +230,19 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 %% @private Get storage path from config
+%% Priority: Config map > application env > env var > $HOME/.macula/registry
 get_storage_path(Config) ->
     case maps:get(storage_path, Config, undefined) of
         undefined ->
-            case os:getenv("MACULA_REGISTRY_STORAGE_PATH") of
-                false -> "/var/lib/macula/registry";
-                Path -> Path
+            case application:get_env(macula, registry_storage_path) of
+                {ok, AppPath} -> AppPath;
+                undefined ->
+                    case os:getenv("MACULA_REGISTRY_STORAGE_PATH") of
+                        false ->
+                            Home = os:getenv("HOME", "/tmp"),
+                            filename:join([Home, ".macula", "registry"]);
+                        EnvPath -> EnvPath
+                    end
             end;
         Path -> Path
     end.

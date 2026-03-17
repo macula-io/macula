@@ -89,7 +89,7 @@ handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
 handle_cast({register_procedures, GatewayPid}, State) ->
-    %% Register diagnostic procedures
+    DiagPid = self(),
     Procedures = [
         <<"com.macula.diagnostics.hello">>,
         <<"com.macula.diagnostics.echo">>,
@@ -97,7 +97,16 @@ handle_cast({register_procedures, GatewayPid}, State) ->
     ],
 
     lists:foreach(fun(Procedure) ->
-        GatewayPid ! {register, self(), Procedure}
+        Handler = fun(Args) ->
+            CallId = erlang:unique_integer([positive]),
+            DiagPid ! {invoke, self(), CallId, Procedure, Args},
+            receive
+                {call_result, CallId, Result} -> Result
+            after 5000 ->
+                {error, timeout}
+            end
+        end,
+        gen_server:call(GatewayPid, {register_handler, Procedure, Handler})
     end, Procedures),
 
     ?LOG_INFO("Registered ~p diagnostic procedures", [length(Procedures)]),
