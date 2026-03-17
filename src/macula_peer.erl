@@ -234,8 +234,9 @@ init({Url, Opts}) ->
 
     %% Wait for QUIC connection to be established before returning
     %% This prevents race conditions where subscribe is called before connection is ready
+    %% Note: wait_for_connection returns ok even on timeout - connection will establish
+    %% asynchronously via macula_connection's exponential backoff retry loop
     wait_for_connection(ConnMgrPid, 10000),
-    ?LOG_INFO("[Connection Facade] QUIC connection ready"),
 
     %% Send connection_manager_pid to children that need it
     gen_server:cast(PubSubPid, {set_connection_manager_pid, ConnMgrPid}),

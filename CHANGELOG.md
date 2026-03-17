@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.18] - 2026-03-17
+
+### Fixed
+
+- **QUIC stream ownership race condition** - v0.20.17 moved `controlling_process` to the
+  gen_server, but the spawned process could terminate before the gen_server processed the
+  `{connect_result, ...}` message. When quicer detects its controlling process has died,
+  it closes the stream/connection immediately — so by the time the gen_server called
+  `controlling_process`, the handles were already invalid.
+
+  Fix: The spawned process now transfers ownership to the gen_server via
+  `quicer:controlling_process/2` **before** sending the result message and exiting.
+  This eliminates the race entirely — the gen_server is the owner before the spawned
+  process can terminate.
+
+---
+
+## [0.20.17] - 2026-03-17
+
+### Fixed
+
+- **QUIC stream ownership bug** - The `spawn_connect` helper created the QUIC connection
+  and stream in a temporary spawned process, then set `active` mode on the stream (making
+  the spawned process the stream owner). When the spawned process terminated after sending
+  `{connect_result, {ok, Conn, Stream}}` back to the gen_server, quicer closed the stream
+  because its controlling process died. This caused every `send_message_raw(connect, ...)`
+  to fail with `{error, closed}`, making the connection never succeed.
+
+  Fix: The gen_server now takes ownership of the connection and stream via
+  `quicer:controlling_process/2` and sets `active` mode itself, before attempting the
+  application-level handshake.
+
+---
+
+## [0.20.16] - 2026-03-17
+
+### Fixed
+
+- **Remove misleading "QUIC connection ready" log** - `macula_peer` no longer logs
+  "QUIC connection ready" when the connection wait times out. The `wait_for_connection`
+  function returns ok on timeout (connection establishes asynchronously via
+  `macula_connection`'s retry loop), but the log message was misleading since the
+  connection was not actually established yet.
+
+---
+
+## [0.20.15] - 2026-03-17
+
+### Fixed
+
+- **Connection pool seeding** - `macula_connection` now seeds `macula_peer_connection_pool`
+  with the main QUIC connection on successful connect. DHT operations (STORE, FIND_VALUE)
+  reuse this connection instead of opening new ones that trigger rate limiting.
+
+- **Pool invalidation race fix** - Removed active pool invalidation from `trigger_reconnect`
+  and `terminate`. When multiple `macula_connection` instances target the same endpoint,
+  one instance's reconnect was removing another instance's valid pool entry. The pool's own
+  `is_connection_alive` check now handles dead connection cleanup automatically.
+
+- **Stream guard for control messages** - QUIC control messages (peer_send_shutdown, closed,
+  etc.) on temporary DHT streams no longer trigger full reconnection. Only control messages
+  on the main stream trigger reconnect, preventing false disconnections.
+
+- **Temp stream handling in peer connector** - `macula_peer_connector` now handles pool
+  entries with `stream = undefined` (seeded connections) by opening a temporary stream,
+  sending the message, and closing the stream. Falls back to direct connection on failure.
+
+---
+
+## [0.20.13] - 2026-03-17
+
+### Fixed
+
+- **Connection retry storm** - `macula_connection` now uses exponential backoff (2s → 4s →
+  8s → ... → 120s cap) instead of a fixed 5-second retry interval. Added guards to prevent
+  duplicate connect attempts when already connecting or already connected. Resets backoff to
+  initial delay on successful connection or when reconnecting after a working connection drops.
+  This prevents overwhelming boot servers with rapid retry attempts that trigger rate limiting.
+
+---
+
 ## [0.20.11] - 2026-03-16
 
 ### Added

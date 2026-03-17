@@ -243,6 +243,11 @@ send_via_pool(Endpoint, MessageBinary) ->
     ConnResult = macula_peer_connection_pool:get_connection(Endpoint),
     do_pool_send(ConnResult, Endpoint, MessageBinary).
 
+%% @private Pool connection with no stream (seeded from macula_connection) —
+%% open a fresh stream on the existing QUIC connection, send, close stream.
+do_pool_send({ok, Conn, undefined}, Endpoint, MessageBinary) ->
+    ?LOG_DEBUG("[PeerConnector] Pool hit (seeded conn, no stream) for ~s, opening temp stream", [Endpoint]),
+    do_pool_send_temp_stream(macula_quic:open_stream(Conn), Conn, Endpoint, MessageBinary);
 %% @private Pool connection acquired - attempt send
 do_pool_send({ok, Conn, Stream}, Endpoint, MessageBinary) ->
     SendResult = macula_quic:send(Stream, MessageBinary),
@@ -250,6 +255,23 @@ do_pool_send({ok, Conn, Stream}, Endpoint, MessageBinary) ->
 %% @private Pool connection failed - fall back to direct
 do_pool_send({error, Reason}, Endpoint, MessageBinary) ->
     ?LOG_DEBUG("Pool connection failed: ~p, using direct", [Reason]),
+    send_via_direct_connection(Endpoint, MessageBinary).
+
+%% @private Temp stream opened on seeded connection — send and close
+do_pool_send_temp_stream({ok, TempStream}, _Conn, _Endpoint, MessageBinary) ->
+    SendResult = macula_quic:send(TempStream, MessageBinary),
+    %% Brief delay then close the temp stream (don't interfere with main stream)
+    timer:sleep(50),
+    catch quicer:async_shutdown_stream(TempStream, ?QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0),
+    case SendResult of
+        ok -> ok;
+        {error, Reason} ->
+            ?LOG_WARNING("[PeerConnector] Temp stream send failed: ~p", [Reason]),
+            {error, {send_failed, Reason}}
+    end;
+%% @private Temp stream open failed — fall back to direct
+do_pool_send_temp_stream({error, Reason}, _Conn, Endpoint, MessageBinary) ->
+    ?LOG_WARNING("[PeerConnector] Failed to open temp stream on seeded conn: ~p, using direct", [Reason]),
     send_via_direct_connection(Endpoint, MessageBinary).
 
 %% @private Send succeeded - return connection to pool

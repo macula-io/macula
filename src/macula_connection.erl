@@ -43,7 +43,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(SERVER, ?MODULE).
--define(CONNECT_RETRY_DELAY, 5000).
+-define(INITIAL_RETRY_DELAY_MS, 2000).
+-define(MAX_RETRY_DELAY_MS, 120000).
 
 -record(state, {
     url :: binary(),
@@ -55,7 +56,9 @@
     stream :: pid() | undefined,
     status = connecting :: connecting | connected | disconnected | error,
     recv_buffer = <<>> :: binary(),
-    keepalive_timer :: reference() | undefined
+    keepalive_timer :: reference() | undefined,
+    connect_in_flight = false :: boolean(),
+    retry_delay_ms = ?INITIAL_RETRY_DELAY_MS :: pos_integer()
 }).
 
 %%%===================================================================
@@ -221,29 +224,44 @@ handle_cast({send_message_async, Type, _Msg}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+%% Already connecting — ignore duplicate connect messages
+handle_info(connect, #state{connect_in_flight = true} = State) ->
+    {noreply, State};
+%% Already connected — ignore
+handle_info(connect, #state{status = connected} = State) ->
+    {noreply, State};
+%% Not connected, not in flight — attempt connection
 handle_info(connect, State) ->
     ?LOG_DEBUG("[Connection] Attempting async connect to ~s", [State#state.url]),
     spawn_connect(State),
-    {noreply, State};
+    {noreply, State#state{connect_in_flight = true}};
 
 handle_info({connect_result, {ok, Conn, Stream}}, State) ->
+    %% Ownership was already transferred by the spawned process before it exited.
+    %% Now set active mode so we receive {quic, ...} messages.
+    quicer:setopt(Stream, active, true),
     #{host := Host, port := Port} = State#state.opts,
     case complete_connection_setup(Conn, Stream, Host, Port, State) of
         {ok, State2} ->
             ?LOG_INFO("[Connection] Successfully connected to ~s", [State#state.url]),
-            {noreply, State2};
+            {noreply, State2#state{connect_in_flight = false,
+                                    retry_delay_ms = ?INITIAL_RETRY_DELAY_MS}};
         {error, Reason} ->
-            ?LOG_ERROR("[Connection] Connection setup failed for ~s: ~p, retrying in ~p ms",
-                      [State#state.url, Reason, ?CONNECT_RETRY_DELAY]),
-            erlang:send_after(?CONNECT_RETRY_DELAY, self(), connect),
-            {noreply, State#state{status = error}}
+            NextDelay = State#state.retry_delay_ms,
+            ?LOG_ERROR("[Connection] Connection setup failed for ~s: ~p, retrying in ~.1fs",
+                      [State#state.url, Reason, NextDelay / 1000]),
+            erlang:send_after(NextDelay, self(), connect),
+            {noreply, State#state{status = error, connect_in_flight = false,
+                                   retry_delay_ms = min(NextDelay * 2, ?MAX_RETRY_DELAY_MS)}}
     end;
 
 handle_info({connect_result, {error, Reason}}, State) ->
-    ?LOG_ERROR("[Connection] Failed to connect to ~s: ~p, retrying in ~p ms",
-              [State#state.url, Reason, ?CONNECT_RETRY_DELAY]),
-    erlang:send_after(?CONNECT_RETRY_DELAY, self(), connect),
-    {noreply, State#state{status = error}};
+    NextDelay = State#state.retry_delay_ms,
+    ?LOG_ERROR("[Connection] Connection setup failed for ~s: ~p, retrying in ~.1fs",
+              [State#state.url, Reason, NextDelay / 1000]),
+    erlang:send_after(NextDelay, self(), connect),
+    {noreply, State#state{status = error, connect_in_flight = false,
+                           retry_delay_ms = min(NextDelay * 2, ?MAX_RETRY_DELAY_MS)}};
 
 handle_info({quic, Data, Stream, _Props}, State) when is_binary(Data) ->
     %% Received data from QUIC stream
@@ -252,10 +270,13 @@ handle_info({quic, Data, Stream, _Props}, State) when is_binary(Data) ->
                  [byte_size(Data), Stream, MainStream, Stream =:= MainStream]),
     handle_stream_data(Stream =:= MainStream, Data, Stream, State);
 
-%% Handle QUIC control messages (non-binary Data)
-handle_info({quic, ControlMsg, Stream, _Props}, State) when is_atom(ControlMsg) ->
-    %% QUIC control message - check if it indicates closure
+%% Handle QUIC control messages on the MAIN stream — trigger reconnect
+handle_info({quic, ControlMsg, Stream, _Props}, #state{stream = Stream} = State) when is_atom(ControlMsg) ->
     handle_quic_control_message(ControlMsg, Stream, State);
+%% Handle QUIC control messages on OTHER streams (temp DHT streams) — ignore
+handle_info({quic, ControlMsg, OtherStream, _Props}, State) when is_atom(ControlMsg) ->
+    ?LOG_DEBUG("[Connection] Ignoring control message ~p on non-main stream ~p", [ControlMsg, OtherStream]),
+    {noreply, State};
 
 %% Handle keep-alive tick - send PING message
 handle_info(keepalive_tick, #state{status = connected, stream = Stream} = State) ->
@@ -284,6 +305,7 @@ handle_info(_Info, State) ->
 
 terminate(_Reason, #state{stream = Stream, connection = Conn}) ->
     ?LOG_INFO("Connection manager terminating"),
+    %% Do NOT invalidate pool — pool detects dead connections via is_connection_alive.
     %% Clean up QUIC resources
     catch macula_quic:close(Stream),
     catch macula_quic:close(Conn),
@@ -339,12 +361,16 @@ trigger_reconnect(#state{stream = Stream, connection = Conn, keepalive_timer = T
         _ -> erlang:cancel_timer(Timer)
     end,
 
+    %% Do NOT invalidate pool here — another macula_connection instance may
+    %% have seeded the pool with ITS connection. The pool's is_connection_alive
+    %% check will detect dead connections on the next get_connection call.
+
     %% Clean up old connection resources
     catch macula_quic:close(Stream),
     catch macula_quic:close(Conn),
 
-    %% Schedule reconnect after delay
-    erlang:send_after(?CONNECT_RETRY_DELAY, self(), connect),
+    %% Schedule reconnect with backoff (reset to initial since this was a working connection)
+    erlang:send_after(?INITIAL_RETRY_DELAY_MS, self(), connect),
 
     %% Update state to disconnected
     NewState = State#state{
@@ -352,7 +378,9 @@ trigger_reconnect(#state{stream = Stream, connection = Conn, keepalive_timer = T
         stream = undefined,
         status = disconnected,
         recv_buffer = <<>>,
-        keepalive_timer = undefined
+        keepalive_timer = undefined,
+        connect_in_flight = false,
+        retry_delay_ms = ?INITIAL_RETRY_DELAY_MS
     },
     {noreply, NewState}.
 
@@ -365,7 +393,17 @@ spawn_connect(State) ->
     QuicOpts = build_quic_opts(Host),
     spawn(fun() ->
         Result = try
-            attempt_quic_connection(Host, Port, QuicOpts)
+            case attempt_quic_connection(Host, Port, QuicOpts) of
+                {ok, Conn, Stream} ->
+                    %% Transfer ownership to gen_server BEFORE this process exits.
+                    %% If we don't, quicer closes the stream/connection when this
+                    %% spawned process terminates (it's the controlling process).
+                    ok = quicer:controlling_process(Conn, Self),
+                    ok = quicer:controlling_process(Stream, Self),
+                    {ok, Conn, Stream};
+                Other ->
+                    Other
+            end
         catch
             _:Reason -> {error, {crashed, Reason}}
         end,
@@ -446,20 +484,15 @@ setup_bidirectional_stream(Conn) ->
             {error, {stream_open_failed, Reason}}
     end.
 
-%% @doc Set stream to active mode for receiving messages
+%% @doc Verify stream is usable after opening.
+%% NOTE: active mode is NOT set here because this runs in a spawned process.
+%% The gen_server takes ownership and sets active mode in handle_info({connect_result, ...}).
+%% Setting active here would make the spawned process the stream owner, and when it
+%% terminates, quicer closes the stream — causing {error, closed} on subsequent sends.
 -spec configure_stream_active_mode(reference(), reference()) ->
     {ok, reference(), reference()} | {error, term()}.
 configure_stream_active_mode(Conn, Stream) ->
-    case quicer:setopt(Stream, active, true) of
-        ok ->
-            ?LOG_DEBUG("Stream set to active mode"),
-            {ok, Conn, Stream};
-        {error, SetOptErr} ->
-            ?LOG_WARNING("Failed to set stream active: ~p", [SetOptErr]),
-            macula_quic:close(Stream),
-            macula_quic:close(Conn),
-            {error, {stream_setopt_failed, SetOptErr}}
-    end.
+    {ok, Conn, Stream}.
 
 %% @doc Complete connection setup with handshake and DHT registration
 -spec complete_connection_setup(reference(), reference(), string(), integer(), #state{}) ->
@@ -471,6 +504,9 @@ complete_connection_setup(Conn, Stream, Host, Port, State) ->
         ok ->
             ?LOG_INFO("Connected to Macula mesh: ~s:~p", [Host, Port]),
             register_server_in_dht(State),
+
+            %% Seed connection pool so DHT reuses this QUIC connection
+            seed_connection_pool(Host, Port, Conn),
 
             %% Start keep-alive timer if enabled
             ConnectedState = State#state{
@@ -934,3 +970,29 @@ handle_execution_result({'EXIT', Error}) ->
 handle_execution_result(HandlerResult) ->
     ?LOG_WARNING("[Connection] Handler executed, result=~p", [HandlerResult]),
     HandlerResult.
+
+%%%===================================================================
+%%% Connection Pool Seeding
+%%%===================================================================
+
+%% @doc Seed the peer connection pool with the main QUIC connection.
+%% This allows DHT operations (STORE, FIND_VALUE) to reuse the existing
+%% connection instead of opening new ones that trigger rate limiting.
+-spec seed_connection_pool(string(), integer(), pid()) -> ok.
+seed_connection_pool(Host, Port, Conn) ->
+    PoolKey = pool_key(Host, Port),
+    case whereis(macula_peer_connection_pool) of
+        undefined ->
+            ?LOG_DEBUG("[Connection] Pool not running, skipping seed for ~s", [PoolKey]),
+            ok;
+        _Pid ->
+            ?LOG_INFO("[Connection] Seeding connection pool: ~s", [PoolKey]),
+            macula_peer_connection_pool:put(PoolKey, Conn),
+            ok
+    end.
+
+%% @doc Build pool key matching the format used by DHT/peer_connector.
+%% Returns a bare "host:port" binary with no scheme prefix.
+-spec pool_key(string(), integer()) -> binary().
+pool_key(Host, Port) ->
+    iolist_to_binary([Host, ":", integer_to_list(Port)]).
