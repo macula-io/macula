@@ -42,6 +42,11 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
+%% Test exports for bootstrap lookup helpers
+-ifdef(TEST).
+-export([extract_peer_info/2, make_peer_info/3, get_map_field/3, get_map_field/4]).
+-endif.
+
 -define(SERVER, ?MODULE).
 -define(INITIAL_RETRY_DELAY_MS, 2000).
 -define(MAX_RETRY_DELAY_MS, 120000).
@@ -298,6 +303,31 @@ handle_info(keepalive_tick, #state{status = connected, stream = Stream} = State)
 handle_info(keepalive_tick, State) ->
     {noreply, State};
 
+%% Kademlia bootstrap: FIND_NODE for our own node_id to discover peers
+handle_info({bootstrap_lookup, NodeId}, #state{status = connected, stream = Stream} = State) ->
+    ?LOG_INFO("[Connection] Bootstrap lookup: FIND_NODE for self (~s)",
+              [binary:encode_hex(NodeId)]),
+    FindNodeMsg = #{
+        <<"target">> => NodeId,
+        <<"sender_id">> => NodeId
+    },
+    case macula_protocol_encoder:encode(find_node, FindNodeMsg) of
+        EncodedMsg when is_binary(EncodedMsg) ->
+            case macula_quic:send(Stream, EncodedMsg) of
+                ok ->
+                    ?LOG_INFO("[Connection] Sent bootstrap FIND_NODE query");
+                {error, SendErr} ->
+                    ?LOG_WARNING("[Connection] Failed to send bootstrap FIND_NODE: ~p", [SendErr])
+            end;
+        _ ->
+            ?LOG_WARNING("[Connection] Failed to encode bootstrap FIND_NODE")
+    end,
+    {noreply, State};
+handle_info({bootstrap_lookup, _NodeId}, State) ->
+    %% Not connected yet — retry later
+    erlang:send_after(5000, self(), {bootstrap_lookup, _NodeId}),
+    {noreply, State};
+
 handle_info(_Info, State) ->
     %% Ignore unexpected messages
     ?LOG_DEBUG("Unhandled handle_info message: ~p", [_Info]),
@@ -516,6 +546,10 @@ complete_connection_setup(Conn, Stream, Host, Port, State) ->
             },
             StateWithKeepalive = start_keepalive_timer(ConnectedState),
 
+            %% Kademlia bootstrap: FIND_NODE for our own node_id
+            %% This populates our routing table with peers the gateway knows about
+            schedule_bootstrap_lookup(StateWithKeepalive),
+
             {ok, StateWithKeepalive};
         {error, Reason} ->
             macula_quic:close(Stream),
@@ -605,6 +639,61 @@ do_register_server_in_dht(ServerNodeId, ServerEndpoint, State) when is_binary(Se
         {error, Reason} ->
             ?LOG_WARNING("DHT registration failed (expected if DHT not running): ~p", [Reason])
     end,
+    ok.
+
+%% @doc Add discovered peers from a FIND_NODE reply to our routing table.
+-spec add_discovered_peers([map()], binary()) -> ok.
+add_discovered_peers(Nodes, MyNodeId) ->
+    add_discovered_peers(whereis(macula_routing_server), Nodes, MyNodeId).
+
+add_discovered_peers(undefined, _Nodes, _MyNodeId) ->
+    ?LOG_WARNING("[Connection] No routing server — cannot add discovered peers"),
+    ok;
+add_discovered_peers(RoutingServer, Nodes, MyNodeId) ->
+    ValidPeers = lists:filtermap(fun(NodeInfo) -> extract_peer_info(NodeInfo, MyNodeId) end, Nodes),
+    lists:foreach(fun(Info) ->
+        ?LOG_INFO("[Connection] Adding discovered peer ~s", [binary:encode_hex(maps:get(node_id, Info))]),
+        macula_routing_server:add_node(RoutingServer, Info)
+    end, ValidPeers),
+    ok.
+
+%% @doc Extract peer info from a FIND_NODE reply node entry, skipping ourselves.
+-spec extract_peer_info(map(), binary()) -> {true, map()} | false.
+extract_peer_info(NodeInfo, MyNodeId) when is_map(NodeInfo) ->
+    NodeId = get_map_field(NodeInfo, node_id, <<"node_id">>),
+    Endpoint = get_map_field(NodeInfo, endpoint, <<"endpoint">>,
+                  get_map_field(NodeInfo, address, <<"address">>)),
+    make_peer_info(NodeId, Endpoint, MyNodeId);
+extract_peer_info(_, _) ->
+    false.
+
+make_peer_info(undefined, _, _) -> false;
+make_peer_info(MyId, _, MyId) -> false;  %% Skip ourselves
+make_peer_info(NodeId, Endpoint, _) ->
+    {true, #{node_id => NodeId, address => Endpoint, endpoint => Endpoint}}.
+
+%% @doc Get a field from a map trying atom key first, then binary key.
+-spec get_map_field(map(), atom(), binary()) -> term().
+get_map_field(Map, AtomKey, BinKey) ->
+    maps:get(AtomKey, Map, maps:get(BinKey, Map, undefined)).
+
+-spec get_map_field(map(), atom(), binary(), term()) -> term().
+get_map_field(Map, AtomKey, BinKey, Default) ->
+    case maps:get(AtomKey, Map, maps:get(BinKey, Map, undefined)) of
+        undefined -> Default;
+        Value -> Value
+    end.
+
+%% @doc Schedule a Kademlia bootstrap lookup after connecting.
+%% In Kademlia, a joining node sends FIND_NODE for its own ID to the bootstrap.
+%% The bootstrap responds with the k-closest nodes it knows (other connected peers).
+%% This populates our routing table with peers, enabling P2P discovery.
+-spec schedule_bootstrap_lookup(#state{}) -> ok.
+schedule_bootstrap_lookup(#state{stream = Stream, node_id = NodeId}) when is_reference(Stream) ->
+    %% Delay slightly to ensure PONG is received and gateway has our info
+    erlang:send_after(2000, self(), {bootstrap_lookup, NodeId}),
+    ok;
+schedule_bootstrap_lookup(_State) ->
     ok.
 
 %% @doc Legacy function - replaced by maybe_register_server_in_dht/2.
@@ -820,6 +909,13 @@ process_message({rpc_reply, Msg}, State) ->
     end;
 
 %% Handle unknown message types
+%% Handle FIND_NODE reply — add discovered peers to our routing table
+process_message({find_node_reply, Msg}, State) ->
+    Nodes = maps:get(<<"nodes">>, Msg, maps:get(nodes, Msg, [])),
+    ?LOG_INFO("[Connection] FIND_NODE reply with ~p node(s)", [length(Nodes)]),
+    add_discovered_peers(Nodes, State#state.node_id),
+    State;
+
 process_message({Type, _Msg}, State) ->
     ?LOG_INFO("Connection manager routing message type: ~p", [Type]),
     ?LOG_WARNING("Unknown message type: ~p", [Type]),

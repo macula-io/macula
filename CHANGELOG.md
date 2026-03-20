@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.19] - 2026-03-20
+
+### Added
+
+- **Kademlia bootstrap lookup** — After connecting to a gateway, peers now send a
+  `FIND_NODE` query for their own `node_id`. The gateway responds with the k-closest
+  nodes it knows (other connected peers). This populates the peer's routing table
+  with other mesh participants, enabling peer-to-peer discovery.
+
+  Previously, peers only knew about the bootstrap gateway. Other peers were invisible
+  because the standard Kademlia join procedure (self-lookup) was never performed.
+
+- **FIND_NODE reply handling** — `macula_connection` now processes `find_node_reply`
+  messages from the gateway and adds discovered peers to the local routing table.
+  Peers are filtered (skip self, skip undefined node_ids) before insertion.
+
+- **15 new tests** for bootstrap lookup helpers: `extract_peer_info/2`,
+  `make_peer_info/3`, `get_map_field/3,4`.
+
+### Fixed
+
+- **Peer discovery gap** (Issue #5) — Multiple nodes connecting to the same bootstrap
+  gateway could not discover each other. Each node's peer list only contained the
+  bootstrap server. Root cause: the Kademlia bootstrap self-lookup was never implemented.
+
+---
+
 ## [0.20.18] - 2026-03-17
 
 ### Fixed
