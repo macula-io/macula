@@ -13,6 +13,7 @@
 -export([
     start_link/2,
     add_node/2,
+    remove_node/2,
     find_closest/3,
     store_local/3,
     store/3,
@@ -61,6 +62,11 @@ start_link(LocalNodeId, Config) ->
 -spec add_node(pid(), macula_routing_bucket:node_info()) -> ok.
 add_node(Pid, NodeInfo) ->
     gen_server:cast(Pid, {add_node, NodeInfo}).
+
+%% @doc Remove node from routing table (async - does not block caller).
+-spec remove_node(pid(), binary()) -> ok.
+remove_node(Pid, NodeId) ->
+    gen_server:cast(Pid, {remove_node, NodeId}).
 
 %% @doc Find k closest nodes to target.
 -spec find_closest(pid(), binary(), pos_integer()) -> [macula_routing_bucket:node_info()].
@@ -221,6 +227,14 @@ handle_cast({add_node, NodeInfo}, #state{routing_table = Table} = State) ->
               [case NodeId of B when is_binary(B), byte_size(B) =:= 32 -> binary:encode_hex(B);
                               B when is_binary(B) -> B; _ -> <<"?">> end,
                OldSize, NewSize]),
+    {noreply, State#state{routing_table = NewTable}};
+
+handle_cast({remove_node, NodeId}, #state{routing_table = Table} = State) ->
+    OldSize = macula_routing_table:size(Table),
+    NewTable = macula_routing_table:remove_node(Table, NodeId),
+    NewSize = macula_routing_table:size(NewTable),
+    ?LOG_INFO("[RoutingServer] remove_node: node_id=~s, table_size: ~p -> ~p",
+              [binary:encode_hex(NodeId), OldSize, NewSize]),
     {noreply, State#state{routing_table = NewTable}};
 
 %% @private

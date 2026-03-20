@@ -681,6 +681,9 @@ handle_info({'DOWN', _Ref, process, ClientPid, _Reason}, State) ->
     PubSub = State#state.pubsub,
     Rpc = State#state.rpc,
 
+    %% Get node_id BEFORE removing client (needed for routing table eviction)
+    evict_peer_from_routing_table(ClientMgr, ClientPid),
+
     %% Clients module handles client removal
     macula_gateway_clients:client_disconnected(ClientMgr, ClientPid),
 
@@ -1832,4 +1835,27 @@ find_rpc_handler_in_children([{rpc_handler, RpcPid, worker, _} | _]) when is_pid
     {ok, RpcPid};
 find_rpc_handler_in_children([_ | Rest]) ->
     find_rpc_handler_in_children(Rest).
+
+%% @private Remove disconnected peer from DHT routing table.
+%% Must be called BEFORE client_disconnected (which removes the client info).
+-spec evict_peer_from_routing_table(pid(), pid()) -> ok.
+evict_peer_from_routing_table(ClientMgr, ClientPid) ->
+    case macula_gateway_clients:get_client_info(ClientMgr, ClientPid) of
+        {ok, #{node_id := NodeId}} ->
+            do_evict_from_routing_table(NodeId);
+        _ ->
+            ok
+    end.
+
+do_evict_from_routing_table(NodeId) when is_binary(NodeId) ->
+    case whereis(macula_routing_server) of
+        undefined ->
+            ok;
+        RoutingServer ->
+            ?LOG_INFO("[Gateway] Evicting disconnected peer ~s from routing table",
+                      [binary:encode_hex(NodeId)]),
+            macula_routing_server:remove_node(RoutingServer, NodeId)
+    end;
+do_evict_from_routing_table(_) ->
+    ok.
 
