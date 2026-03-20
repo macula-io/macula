@@ -305,8 +305,8 @@ handle_info(keepalive_tick, State) ->
 
 %% Mesh peer lifecycle events (from gateway pub/sub via _mesh.peer.* topics)
 handle_info({mesh_peer_connected, PeerInfo}, State) ->
-    ?LOG_INFO("[Connection] Peer connected: ~s",
-              [binary:encode_hex(maps:get(node_id, PeerInfo, <<>>))]),
+    PeerNodeId = maps:get(<<"node_id">>, PeerInfo, maps:get(node_id, PeerInfo, <<>>)),
+    ?LOG_INFO("[Connection] Peer connected: ~s", [PeerNodeId]),
     add_discovered_peers([PeerInfo], State#state.node_id),
     {noreply, State};
 

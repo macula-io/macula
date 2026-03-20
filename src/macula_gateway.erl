@@ -1921,13 +1921,5 @@ publish_mesh_lifecycle_event(_Topic, _Payload, undefined) ->
     ok;
 publish_mesh_lifecycle_event(Topic, Payload, PubSub) when is_pid(PubSub) ->
     ?LOG_INFO("[Gateway] Publishing ~s via pub/sub", [Topic]),
-    Msg = #{
-        <<"topic">> => Topic,
-        <<"payload">> => Payload,
-        <<"qos">> => 0,
-        <<"retain">> => false,
-        <<"message_id">> => integer_to_binary(erlang:unique_integer([positive]))
-    },
-    EncodedMsg = macula_protocol_encoder:encode(publish, Msg),
-    macula_gateway_pubsub:distribute(PubSub, Topic, EncodedMsg).
+    macula_gateway_pubsub:publish(PubSub, Topic, Payload).
 
