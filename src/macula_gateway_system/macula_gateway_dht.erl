@@ -93,16 +93,22 @@ do_handle_find_value(Key) ->
     #{type => error, reason => invalid_key}.
 
 %% @doc Handle DHT FIND_NODE message.
-%% Forwards to routing server and sends encoded reply over stream.
-%% Crashes on routing server or encoding failures - exposes DHT/protocol bugs.
+%% The message is already decoded by the gateway — it's the payload without the type field.
+%% We extract the target and query the routing table directly instead of going through
+%% handle_message (which re-classifies and fails because the type field is stripped).
 -spec handle_find_node(reference(), map()) -> ok.
 handle_find_node(Stream, FindNodeMsg) ->
-    %% Forward to routing server (let it crash on errors)
-    Reply = macula_routing_server:handle_message(macula_routing_server, FindNodeMsg),
-    %% Send reply back over stream (let it crash on errors)
+    Target = maps:get(<<"target">>, FindNodeMsg, maps:get(target, FindNodeMsg, undefined)),
+    Closest = find_closest_nodes(Target),
+    Reply = macula_routing_protocol:encode_find_node_reply(Closest),
     ReplyBinary = macula_protocol_encoder:encode(find_node_reply, Reply),
     macula_quic:send(Stream, ReplyBinary),
     ok.
+
+find_closest_nodes(undefined) ->
+    [];
+find_closest_nodes(Target) ->
+    macula_routing_server:find_closest(macula_routing_server, Target, 20).
 
 %% @doc Handle DHT query from process message.
 %% Decodes query, forwards to routing server, encodes reply, sends to requesting process.
