@@ -645,9 +645,14 @@ handle_cast({connection_closed, NodeId}, State) ->
     ?LOG_INFO("[Gateway] Connection closed for peer ~s, evicting and notifying",
               [binary:encode_hex(NodeId)]),
     do_evict_from_routing_table(NodeId),
-    %% Publish peer.disconnected event to remaining peers (hex-encode for serialization)
+    %% Publish peer.disconnected — spawned so it can crash independently
     HexNodeId = binary:encode_hex(NodeId),
-    publish_mesh_lifecycle_event(<<"_mesh.peer.disconnected">>, #{<<"node_id">> => HexNodeId}, State),
+    PubSub = State#state.pubsub,
+    spawn(fun() ->
+        publish_mesh_lifecycle_event(<<"_mesh.peer.disconnected">>,
+                                     #{<<"node_id">> => HexNodeId},
+                                     PubSub)
+    end),
     %% Clean up client stream mapping
     ClientMgr = State#state.client_manager,
     case ClientMgr of
@@ -790,11 +795,6 @@ handle_connect_realm(true, Stream, ConnectMsg, State) ->
             ?LOG_DEBUG("Peer added to routing table")
     end,
 
-    %% Publish peer.connected event to all connected peers (hex-encode node_id for serialization)
-    HexNodeId = binary:encode_hex(NodeId),
-    PeerConnectedPayload = #{<<"node_id">> => HexNodeId, <<"endpoint">> => Endpoint},
-    publish_mesh_lifecycle_event(<<"_mesh.peer.connected">>, PeerConnectedPayload, State),
-
     %% Build peers list from routing table for PONG response (initial state)
     KnownPeers = get_known_peers_for_pong(NodeId),
 
@@ -817,6 +817,15 @@ handle_connect_realm(true, Stream, ConnectMsg, State) ->
         {error, PongErr} ->
             ?LOG_WARNING("Failed to send PONG: ~p", [PongErr])
     end,
+
+    %% Publish peer.connected AFTER PONG — spawned so it can crash independently
+    HexNodeId = binary:encode_hex(NodeId),
+    PubSub = NewState#state.pubsub,
+    spawn(fun() ->
+        publish_mesh_lifecycle_event(<<"_mesh.peer.connected">>,
+                                     #{<<"node_id">> => HexNodeId, <<"endpoint">> => Endpoint},
+                                     PubSub)
+    end),
 
     {noreply, NewState};
 handle_connect_realm(false, Stream, ConnectMsg, State) ->
@@ -1908,10 +1917,9 @@ format_peer_for_pong(_) -> #{}.
 
 %% @private Publish a mesh lifecycle event to all connected peers via pub/sub.
 %% Uses the gateway's internal pub/sub to broadcast to all client streams.
-publish_mesh_lifecycle_event(Topic, _Payload, #state{pubsub = undefined}) ->
-    ?LOG_DEBUG("[Gateway] No pubsub available for ~s", [Topic]),
+publish_mesh_lifecycle_event(_Topic, _Payload, undefined) ->
     ok;
-publish_mesh_lifecycle_event(Topic, Payload, #state{pubsub = PubSub}) ->
+publish_mesh_lifecycle_event(Topic, Payload, PubSub) when is_pid(PubSub) ->
     ?LOG_INFO("[Gateway] Publishing ~s via pub/sub", [Topic]),
     Msg = #{
         <<"topic">> => Topic,
