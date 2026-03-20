@@ -311,10 +311,11 @@ handle_info({mesh_peer_connected, PeerInfo}, State) ->
     {noreply, State};
 
 handle_info({mesh_peer_disconnected, PeerInfo}, State) ->
-    NodeId = maps:get(node_id, PeerInfo, undefined),
+    NodeId = maps:get(<<"node_id">>, PeerInfo, maps:get(node_id, PeerInfo, undefined)),
+    RawNodeId = normalize_peer_node_id(NodeId),
     ?LOG_INFO("[Connection] Peer disconnected: ~s",
-              [binary:encode_hex(NodeId)]),
-    remove_peer_from_routing_table(NodeId),
+              [binary:encode_hex(RawNodeId)]),
+    remove_peer_from_routing_table(RawNodeId),
     {noreply, State};
 
 handle_info(_Info, State) ->
@@ -652,9 +653,19 @@ extract_peer_info(_, _) ->
     false.
 
 make_peer_info(undefined, _, _) -> false;
-make_peer_info(MyId, _, MyId) -> false;  %% Skip ourselves
-make_peer_info(NodeId, Endpoint, _) ->
-    {true, #{node_id => NodeId, address => Endpoint, endpoint => Endpoint}}.
+make_peer_info(MyId, _, MyId) -> false;
+make_peer_info(NodeId, Endpoint, MyId) ->
+    %% Normalize: hex-encoded (64 bytes) → raw binary (32 bytes)
+    RawNodeId = normalize_peer_node_id(NodeId),
+    skip_if_self(RawNodeId, MyId, Endpoint).
+
+skip_if_self(MyId, MyId, _) -> false;
+skip_if_self(RawNodeId, _, Endpoint) ->
+    {true, #{node_id => RawNodeId, address => Endpoint, endpoint => Endpoint}}.
+
+normalize_peer_node_id(Bin) when byte_size(Bin) =:= 32 -> Bin;
+normalize_peer_node_id(Hex) when byte_size(Hex) =:= 64 -> binary:decode_hex(Hex);
+normalize_peer_node_id(Other) -> Other.
 
 %% @doc Get a field from a map trying atom key first, then binary key.
 -spec get_map_field(map(), atom(), binary()) -> term().
