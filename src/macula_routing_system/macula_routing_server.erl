@@ -213,7 +213,14 @@ handle_call(_Request, _From, State) ->
 %% @private
 %% Add node to routing table (async operation)
 handle_cast({add_node, NodeInfo}, #state{routing_table = Table} = State) ->
+    OldSize = macula_routing_table:size(Table),
     NewTable = macula_routing_table:add_node(Table, NodeInfo),
+    NewSize = macula_routing_table:size(NewTable),
+    NodeId = maps:get(node_id, NodeInfo, undefined),
+    ?LOG_INFO("[RoutingServer] add_node: node_id=~s, table_size: ~p -> ~p",
+              [case NodeId of B when is_binary(B), byte_size(B) =:= 32 -> binary:encode_hex(B);
+                              B when is_binary(B) -> B; _ -> <<"?">> end,
+               OldSize, NewSize]),
     {noreply, State#state{routing_table = NewTable}};
 
 %% @private
@@ -608,7 +615,10 @@ handle_find_node(Message, #state{routing_table = Table, config = Config} = State
     K = maps:get(k, Config, 20),
 
     %% Find k closest nodes
+    TableSize = macula_routing_table:size(Table),
     Closest = macula_routing_table:find_closest(Table, Target, K),
+    ?LOG_INFO("[RoutingServer] FIND_NODE: target=~s, table_size=~p, found=~p",
+              [binary:encode_hex(Target), TableSize, length(Closest)]),
 
     %% Encode reply
     Reply = macula_routing_protocol:encode_find_node_reply(Closest),

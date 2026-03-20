@@ -322,10 +322,12 @@ handle_info({bootstrap_lookup, NodeId}, #state{status = connected, stream = Stre
         _ ->
             ?LOG_WARNING("[Connection] Failed to encode bootstrap FIND_NODE")
     end,
+    %% Repeat periodically to discover peers that connected after us
+    erlang:send_after(30000, self(), {bootstrap_lookup, NodeId}),
     {noreply, State};
-handle_info({bootstrap_lookup, _NodeId}, State) ->
+handle_info({bootstrap_lookup, NodeId}, State) ->
     %% Not connected yet — retry later
-    erlang:send_after(5000, self(), {bootstrap_lookup, _NodeId}),
+    erlang:send_after(5000, self(), {bootstrap_lookup, NodeId}),
     {noreply, State};
 
 handle_info(_Info, State) ->
