@@ -308,6 +308,7 @@ handle_info({mesh_peer_connected, PeerInfo}, State) ->
     PeerNodeId = maps:get(<<"node_id">>, PeerInfo, maps:get(node_id, PeerInfo, <<>>)),
     ?LOG_INFO("[Connection] Peer connected: ~s", [PeerNodeId]),
     add_discovered_peers([PeerInfo], State#state.node_id),
+    notify_mesh_lifecycle_observers(mesh_peer_connected, PeerInfo),
     {noreply, State};
 
 handle_info({mesh_peer_disconnected, PeerInfo}, State) ->
@@ -316,6 +317,7 @@ handle_info({mesh_peer_disconnected, PeerInfo}, State) ->
     ?LOG_INFO("[Connection] Peer disconnected: ~s",
               [binary:encode_hex(RawNodeId)]),
     remove_peer_from_routing_table(RawNodeId),
+    notify_mesh_lifecycle_observers(mesh_peer_disconnected, PeerInfo),
     {noreply, State};
 
 handle_info(_Info, State) ->
@@ -701,8 +703,16 @@ maybe_populate_peers_from_pong(PongMsg, #state{node_id = MyNodeId}) ->
 populate_peers(undefined, _) -> ok;
 populate_peers(Peers, MyNodeId) when is_list(Peers), length(Peers) > 0 ->
     ?LOG_INFO("[Connection] PONG contains ~p peer(s), populating routing table", [length(Peers)]),
-    add_discovered_peers(Peers, MyNodeId);
+    add_discovered_peers(Peers, MyNodeId),
+    notify_mesh_lifecycle_observers(mesh_peers_initial, #{peers => Peers});
 populate_peers(_, _) -> ok.
+
+%% @doc Notify external observers of mesh peer lifecycle events via pg group.
+%% Any process can join the macula_mesh_lifecycle pg group to receive these.
+notify_mesh_lifecycle_observers(EventType, PeerInfo) ->
+    Members = pg:get_members(pg, macula_mesh_lifecycle),
+    [Pid ! {macula_mesh_event, EventType, PeerInfo} || Pid <- Members],
+    ok.
 
 %% @doc Remove a peer from the local routing table on disconnect notification.
 remove_peer_from_routing_table(undefined) -> ok;
