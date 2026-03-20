@@ -768,8 +768,9 @@ handle_connect_realm(true, Stream, ConnectMsg, State) ->
     %% HTTP/3 streams are bidirectional - we can send messages back on the same stream
     %% Store the client's incoming stream in CLIENT MANAGER for routing (enables client-only mode)
     ok = macula_gateway_clients:store_client_stream(State#state.client_manager, NodeId, Stream, Endpoint),
-    ?LOG_WARNING("[Gateway] STORED client stream for node_id=~s (raw: ~p)",
-                [binary:encode_hex(NodeId), NodeId]),
+
+    %% Auto-subscribe peer to mesh lifecycle topics
+    auto_subscribe_lifecycle_topics(State#state.pubsub, Stream),
 
     %% Connection management now handled by macula_gateway_mesh module
     NewState = State,
@@ -1883,6 +1884,12 @@ do_evict_from_routing_table(NodeId) when is_binary(NodeId) ->
 do_evict_from_routing_table(_) ->
     ok.
 
+%% @private Auto-subscribe a connecting peer to mesh lifecycle topics.
+auto_subscribe_lifecycle_topics(undefined, _Stream) -> ok;
+auto_subscribe_lifecycle_topics(PubSub, Stream) ->
+    macula_gateway_pubsub:subscribe(PubSub, Stream, <<"_mesh.peer.connected">>),
+    macula_gateway_pubsub:subscribe(PubSub, Stream, <<"_mesh.peer.disconnected">>).
+
 %% @private Get known peers from routing table for PONG response (excluding the connecting peer).
 get_known_peers_for_pong(ConnectingNodeId) ->
     case whereis(macula_routing_server) of
@@ -1905,7 +1912,7 @@ publish_mesh_lifecycle_event(Topic, _Payload, #state{pubsub = undefined}) ->
     ?LOG_DEBUG("[Gateway] No pubsub available for ~s", [Topic]),
     ok;
 publish_mesh_lifecycle_event(Topic, Payload, #state{pubsub = PubSub}) ->
-    ?LOG_INFO("[Gateway] Publishing ~s", [Topic]),
+    ?LOG_INFO("[Gateway] Publishing ~s via pub/sub", [Topic]),
     Msg = #{
         <<"topic">> => Topic,
         <<"payload">> => Payload,
