@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.21] - 2026-03-20
+
+### Fixed
+
+- **Node ID format bug (root cause of Issue #5)** — `macula_tls:derive_node_id/1`
+  returned a 64-byte hex string instead of raw 32-byte binary. The routing table
+  used this hex string as `local_node_id`, which got double-hashed by `normalize/1`
+  in XOR distance calculations. Peers were stored in wrong k-buckets, and
+  `find_closest` returned empty. This is why the gateway's FIND_NODE reply
+  always had 0 nodes — the routing table was effectively broken.
+
+- **NODE_ID env handling** — Added `normalize_node_id/1` to handle hex strings
+  (64 bytes → decode), raw binary (32 bytes → pass through), and arbitrary
+  strings (hash to 32 bytes).
+
+- **Display logging** — All log lines now hex-encode node IDs for display.
+
+---
+
 ## [0.20.20] - 2026-03-20
 
 ### Added

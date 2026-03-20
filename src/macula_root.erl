@@ -95,7 +95,7 @@ init([]) ->
 
     ?LOG_INFO("✓ TLS Certificate: ~s", [CertPath]),
     ?LOG_INFO("✓ Private Key: ~s", [KeyPath]),
-    ?LOG_INFO("✓ Node ID: ~s (source: ~s)", [NodeID, case os:getenv("NODE_ID") of false -> "TLS"; _ -> "NODE_ID env" end]),
+    ?LOG_INFO("✓ Node ID: ~s (source: ~s)", [binary:encode_hex(NodeID), case os:getenv("NODE_ID") of false -> "TLS"; _ -> "NODE_ID env" end]),
     ?LOG_INFO(""),
 
     %% Get configuration
@@ -380,8 +380,14 @@ get_node_id_from_env_or_tls(TlsNodeId) ->
         false ->
             TlsNodeId;
         NodeIdStr ->
-            list_to_binary(NodeIdStr)
+            normalize_node_id(list_to_binary(NodeIdStr))
     end.
+
+%% @private Ensure node ID is raw 32-byte binary.
+%% If given a 64-char hex string, decode it. Otherwise hash to 32 bytes.
+normalize_node_id(Bin) when byte_size(Bin) =:= 32 -> Bin;
+normalize_node_id(Hex) when byte_size(Hex) =:= 64 -> binary:decode_hex(Hex);
+normalize_node_id(Other) -> crypto:hash(sha256, Other).
 
 %% @private
 %% @doc Get platform system child spec (distributed coordination).
@@ -569,7 +575,7 @@ connect_to_bootstrap_peers(Peers, Realm, NodeID) ->
     timer:sleep(2000),
 
     ?LOG_INFO("[DHT Bootstrap] Connecting to ~p bootstrap peers with node_id: ~s...",
-              [length(Peers), NodeID]),
+              [length(Peers), binary:encode_hex(NodeID)]),
 
     lists:foreach(fun(PeerUrl) ->
         ?LOG_INFO("[DHT Bootstrap] Connecting to: ~s", [PeerUrl]),
@@ -579,7 +585,7 @@ connect_to_bootstrap_peers(Peers, Realm, NodeID) ->
         case macula_peers_sup:start_peer(PeerUrl, #{realm => Realm, node_id => NodeID}) of
             {ok, PeerPid} ->
                 ?LOG_INFO("[DHT Bootstrap] Successfully connected to ~s (PID: ~p, node_id: ~s)",
-                         [PeerUrl, PeerPid, NodeID]),
+                         [PeerUrl, PeerPid, binary:encode_hex(NodeID)]),
 
                 %% Add bootstrap peer to routing table for DHT routing
                 add_bootstrap_to_routing_table(PeerUrl);

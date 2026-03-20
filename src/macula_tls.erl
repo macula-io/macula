@@ -201,7 +201,7 @@ generate_self_signed_cert(_Opts) ->
 %% SHA-256 hash to create a stable, cryptographically-derived Node ID.
 %%
 %% @param CertPEM PEM-encoded certificate binary
-%% @returns NodeID Binary (32-byte SHA-256 hash, hex-encoded)
+%% @returns NodeID Binary (32-byte SHA-256 hash, raw binary)
 %% @end
 %%------------------------------------------------------------------------------
 -spec derive_node_id(CertPEM :: binary()) -> NodeID :: binary().
@@ -230,11 +230,10 @@ derive_node_id(CertPEM) when is_binary(CertPEM) ->
         Bin when is_binary(Bin) -> Bin  %% Older format: just binary
     end,
 
-    %% Compute SHA-256 hash
-    Hash = crypto:hash(sha256, PublicKeyDER),
-
-    %% Return hex-encoded hash
-    binary:encode_hex(Hash, lowercase).
+    %% Compute SHA-256 hash — return raw 32-byte binary (not hex)
+    %% The routing table, bucket_index, and XOR distance all expect 32-byte raw binaries.
+    %% Hex encoding is done at display time (logging, API responses), not at the identity level.
+    crypto:hash(sha256, PublicKeyDER).
 
 %%------------------------------------------------------------------------------
 %% @doc Get default certificate paths from application environment.
@@ -292,7 +291,7 @@ generate_and_save_cert(CertPath, KeyPath) ->
                                 ok ->
                                     NodeID = derive_node_id(CertPEM),
                                     logger:info("TLS certificate generated successfully. Node ID: ~s",
-                                               [NodeID]),
+                                               [binary:encode_hex(NodeID)]),
                                     {ok, NodeID};
                                 {error, Reason} ->
                                     logger:error("Failed to set key permissions: ~p", [Reason]),

@@ -185,11 +185,8 @@ test_node_id_format() ->
 
     NodeID = macula_tls:derive_node_id(CertPEM),
 
-    %% Verify hex-encoded SHA-256 (64 characters)
-    ?assertEqual(64, byte_size(NodeID)),
-
-    %% Verify all characters are hex (0-9, a-f)
-    ?assert(is_hex_string(NodeID)).
+    %% Verify raw 32-byte SHA-256 binary (not hex-encoded)
+    ?assertEqual(32, byte_size(NodeID)).
 
 test_node_id_uniqueness() ->
     %% Generate two different certificates
@@ -343,13 +340,7 @@ test_custom_paths() ->
 %%%=============================================================================
 
 %% Check if binary is a hex string
-is_hex_string(Bin) when is_binary(Bin) ->
-    lists:all(fun is_hex_char/1, binary_to_list(Bin)).
-
-is_hex_char(C) when C >= $0, C =< $9 -> true;
-is_hex_char(C) when C >= $a, C =< $f -> true;
-is_hex_char(C) when C >= $A, C =< $F -> true;
-is_hex_char(_) -> false.
+%% Hex helpers removed — node_id is now raw 32-byte binary, not hex-encoded.
 
 %%%=============================================================================
 %%% TLS Mode Detection Tests (v0.11.0+)
