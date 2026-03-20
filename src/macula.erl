@@ -64,7 +64,8 @@
     advertise/3,
     advertise/4,
     unadvertise/2,
-    get_node_id/1
+    get_node_id/1,
+    get_known_peers/1
 ]).
 
 %% Platform Layer API (v0.10.0+)
@@ -320,6 +321,57 @@ discover_subscribers(Client, Topic) when is_pid(Client), is_binary(Topic) ->
 -spec get_node_id(Client :: client()) -> {ok, binary()} | {error, Reason :: term()}.
 get_node_id(Client) when is_pid(Client) ->
     macula_peer:get_node_id(Client).
+
+%% @doc Get known peers from the DHT routing table.
+%%
+%% Returns peers discovered via Kademlia bootstrap lookup (FIND_NODE).
+%% These are addresses the node knows about — not necessarily active connections.
+%%
+%% == Examples ==
+%%
+%% ```
+%% {ok, Peers} = macula:get_known_peers(Client).
+%% %% Peers = [#{node_id => <<...>>, endpoint => <<"10.0.0.1:9443">>}, ...]
+%% '''
+%% @end
+-spec get_known_peers(Client :: client()) -> {ok, [map()]} | {error, Reason :: term()}.
+get_known_peers(Client) when is_pid(Client) ->
+    get_known_peers_from_routing_table(Client).
+
+get_known_peers_from_routing_table(Client) ->
+    case macula:get_node_id(Client) of
+        {ok, NodeId} ->
+            get_known_peers_with_node_id(NodeId);
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+get_known_peers_with_node_id(NodeId) ->
+    case whereis(macula_routing_server) of
+        undefined ->
+            {ok, []};
+        RoutingServer ->
+            Nodes = macula_routing_server:find_closest(RoutingServer, NodeId, 100),
+            Peers = lists:filtermap(fun(N) -> format_peer_node(N, NodeId) end, Nodes),
+            {ok, Peers}
+    end.
+
+format_peer_node(NodeInfo, MyNodeId) when is_map(NodeInfo) ->
+    PeerNodeId = maps:get(node_id, NodeInfo, undefined),
+    format_peer_node_id(PeerNodeId, MyNodeId, NodeInfo);
+format_peer_node(_, _) ->
+    false.
+
+format_peer_node_id(undefined, _, _) -> false;
+format_peer_node_id(MyId, MyId, _) -> false;
+format_peer_node_id(PeerNodeId, _, NodeInfo) ->
+    Endpoint = maps:get(endpoint, NodeInfo, maps:get(address, NodeInfo, undefined)),
+    HexId = case PeerNodeId of
+        B when is_binary(B), byte_size(B) =:= 32 -> binary:encode_hex(B);
+        B when is_binary(B) -> B;
+        _ -> null
+    end,
+    {true, #{node_id => HexId, endpoint => Endpoint}}.
 
 %% @doc Make a synchronous RPC call.
 %%

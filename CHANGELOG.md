@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.20.20] - 2026-03-20
+
+### Added
+
+- **`macula:get_known_peers/1`** — Public API to list known peers from the DHT
+  routing table. Returns `[#{node_id => HexBinary, endpoint => Binary}]`.
+  Applications should use this instead of reaching into internal modules.
+
+---
+
 ## [0.20.19] - 2026-03-20
 
 ### Added
