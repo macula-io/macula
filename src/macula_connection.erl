@@ -303,31 +303,18 @@ handle_info(keepalive_tick, #state{status = connected, stream = Stream} = State)
 handle_info(keepalive_tick, State) ->
     {noreply, State};
 
-%% Kademlia bootstrap: FIND_NODE for our own node_id to discover peers
-handle_info({bootstrap_lookup, NodeId}, #state{status = connected, stream = Stream} = State) ->
-    ?LOG_INFO("[Connection] Bootstrap lookup: FIND_NODE for self (~s)",
-              [binary:encode_hex(NodeId)]),
-    FindNodeMsg = #{
-        <<"target">> => NodeId,
-        <<"sender_id">> => NodeId
-    },
-    case macula_protocol_encoder:encode(find_node, FindNodeMsg) of
-        EncodedMsg when is_binary(EncodedMsg) ->
-            case macula_quic:send(Stream, EncodedMsg) of
-                ok ->
-                    ?LOG_INFO("[Connection] Sent bootstrap FIND_NODE query");
-                {error, SendErr} ->
-                    ?LOG_WARNING("[Connection] Failed to send bootstrap FIND_NODE: ~p", [SendErr])
-            end;
-        _ ->
-            ?LOG_WARNING("[Connection] Failed to encode bootstrap FIND_NODE")
-    end,
-    %% Repeat periodically to discover peers that connected after us
-    erlang:send_after(30000, self(), {bootstrap_lookup, NodeId}),
+%% Mesh peer lifecycle events (from gateway pub/sub via _mesh.peer.* topics)
+handle_info({mesh_peer_connected, PeerInfo}, State) ->
+    ?LOG_INFO("[Connection] Peer connected: ~s",
+              [binary:encode_hex(maps:get(node_id, PeerInfo, <<>>))]),
+    add_discovered_peers([PeerInfo], State#state.node_id),
     {noreply, State};
-handle_info({bootstrap_lookup, NodeId}, State) ->
-    %% Not connected yet — retry later
-    erlang:send_after(5000, self(), {bootstrap_lookup, NodeId}),
+
+handle_info({mesh_peer_disconnected, PeerInfo}, State) ->
+    NodeId = maps:get(node_id, PeerInfo, undefined),
+    ?LOG_INFO("[Connection] Peer disconnected: ~s",
+              [binary:encode_hex(NodeId)]),
+    remove_peer_from_routing_table(NodeId),
     {noreply, State};
 
 handle_info(_Info, State) ->
@@ -548,10 +535,6 @@ complete_connection_setup(Conn, Stream, Host, Port, State) ->
             },
             StateWithKeepalive = start_keepalive_timer(ConnectedState),
 
-            %% Kademlia bootstrap: FIND_NODE for our own node_id
-            %% This populates our routing table with peers the gateway knows about
-            schedule_bootstrap_lookup(StateWithKeepalive),
-
             {ok, StateWithKeepalive};
         {error, Reason} ->
             macula_quic:close(Stream),
@@ -654,7 +637,6 @@ add_discovered_peers(undefined, _Nodes, _MyNodeId) ->
 add_discovered_peers(RoutingServer, Nodes, MyNodeId) ->
     ValidPeers = lists:filtermap(fun(NodeInfo) -> extract_peer_info(NodeInfo, MyNodeId) end, Nodes),
     lists:foreach(fun(Info) ->
-        ?LOG_INFO("[Connection] Adding discovered peer ~s", [binary:encode_hex(maps:get(node_id, Info))]),
         macula_routing_server:add_node(RoutingServer, Info)
     end, ValidPeers),
     ok.
@@ -686,17 +668,38 @@ get_map_field(Map, AtomKey, BinKey, Default) ->
         Value -> Value
     end.
 
-%% @doc Schedule a Kademlia bootstrap lookup after connecting.
-%% In Kademlia, a joining node sends FIND_NODE for its own ID to the bootstrap.
-%% The bootstrap responds with the k-closest nodes it knows (other connected peers).
-%% This populates our routing table with peers, enabling P2P discovery.
--spec schedule_bootstrap_lookup(#state{}) -> ok.
-schedule_bootstrap_lookup(#state{stream = Stream, node_id = NodeId}) when is_reference(Stream) ->
-    %% Delay slightly to ensure PONG is received and gateway has our info
-    erlang:send_after(2000, self(), {bootstrap_lookup, NodeId}),
-    ok;
-schedule_bootstrap_lookup(_State) ->
-    ok.
+%% @doc Handle internal mesh lifecycle pub/sub events.
+%% Intercepts _mesh.peer.connected and _mesh.peer.disconnected before
+%% passing other publish messages to the application-level pubsub handler.
+handle_mesh_lifecycle_publish(<<"_mesh.peer.connected">>, Msg) ->
+    Payload = maps:get(<<"payload">>, Msg, Msg),
+    self() ! {mesh_peer_connected, Payload},
+    handled;
+handle_mesh_lifecycle_publish(<<"_mesh.peer.disconnected">>, Msg) ->
+    Payload = maps:get(<<"payload">>, Msg, Msg),
+    self() ! {mesh_peer_disconnected, Payload},
+    handled;
+handle_mesh_lifecycle_publish(_, _) ->
+    passthrough.
+
+%% @doc Populate routing table from peers list in PONG (initial state on connect).
+maybe_populate_peers_from_pong(PongMsg, #state{node_id = MyNodeId}) ->
+    Peers = maps:get(<<"peers">>, PongMsg, maps:get(peers, PongMsg, undefined)),
+    populate_peers(Peers, MyNodeId).
+
+populate_peers(undefined, _) -> ok;
+populate_peers(Peers, MyNodeId) when is_list(Peers), length(Peers) > 0 ->
+    ?LOG_INFO("[Connection] PONG contains ~p peer(s), populating routing table", [length(Peers)]),
+    add_discovered_peers(Peers, MyNodeId);
+populate_peers(_, _) -> ok.
+
+%% @doc Remove a peer from the local routing table on disconnect notification.
+remove_peer_from_routing_table(undefined) -> ok;
+remove_peer_from_routing_table(NodeId) when is_binary(NodeId) ->
+    case whereis(macula_routing_server) of
+        undefined -> ok;
+        RoutingServer -> macula_routing_server:remove_node(RoutingServer, NodeId)
+    end.
 
 %% @doc Legacy function - replaced by maybe_register_server_in_dht/2.
 %% Called during connect but now just logs - real registration happens in PONG handler.
@@ -764,16 +767,21 @@ decode_messages(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
 
 %% Route PUBLISH messages to pub/sub handler
 process_message({publish, Msg}, State) ->
-    ?LOG_INFO("Connection manager routing message type: ~p", [publish]),
-    %% Look up the pubsub handler PID via gproc (using peer_id for uniqueness)
-    case gproc:lookup_local_name({pubsub_handler, State#state.realm, State#state.peer_id}) of
-        undefined ->
-            ?LOG_WARNING("PubSub handler not found for realm ~s, peer_id ~p", [State#state.realm, State#state.peer_id]),
-            State;
-        PubSubPid ->
-            macula_pubsub_handler:handle_incoming_publish(PubSubPid, Msg),
-            ?LOG_DEBUG("Routed PUBLISH to pubsub_handler"),
-            State
+    Topic = maps:get(<<"topic">>, Msg, maps:get(topic, Msg, <<>>)),
+    %% Intercept internal mesh lifecycle events
+    case handle_mesh_lifecycle_publish(Topic, Msg) of
+        handled -> State;
+        passthrough ->
+            %% Route to pubsub handler for application-level subscribers
+            case gproc:lookup_local_name({pubsub_handler, State#state.realm, State#state.peer_id}) of
+                undefined ->
+                    ?LOG_WARNING("PubSub handler not found for realm ~s, peer_id ~p",
+                                [State#state.realm, State#state.peer_id]),
+                    State;
+                PubSubPid ->
+                    macula_pubsub_handler:handle_incoming_publish(PubSubPid, Msg),
+                    State
+            end
     end;
 
 %% Route REPLY messages to RPC handler
@@ -810,6 +818,8 @@ process_message({pong, PongMsg}, State) ->
     ?LOG_DEBUG("Received PONG - connection alive"),
     %% Check if PONG contains server's node_id (set by gateway on first response)
     maybe_register_server_in_dht(PongMsg, State),
+    %% Check if PONG contains peers list (initial state on connect)
+    maybe_populate_peers_from_pong(PongMsg, State),
     State;
 
 %% Handle FIND_VALUE_REPLY message - route to RPC handler for DHT query results

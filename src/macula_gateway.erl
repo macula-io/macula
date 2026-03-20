@@ -640,12 +640,14 @@ handle_cast({local_publish_async, _Realm, Topic, Payload}, State) ->
     gen_server:cast(self(), {distribute_publish, Topic, Payload}),
     {noreply, State};
 
-%% QUIC connection closed — evict peer from routing table
+%% QUIC connection closed — evict peer and notify others
 handle_cast({connection_closed, NodeId}, State) ->
-    ?LOG_INFO("[Gateway] Connection closed for peer ~s, evicting from routing table",
+    ?LOG_INFO("[Gateway] Connection closed for peer ~s, evicting and notifying",
               [binary:encode_hex(NodeId)]),
     do_evict_from_routing_table(NodeId),
-    %% Also clean up client stream mapping
+    %% Publish peer.disconnected event to remaining peers
+    publish_mesh_lifecycle_event(<<"_mesh.peer.disconnected">>, #{<<"node_id">> => NodeId}, State),
+    %% Clean up client stream mapping
     ClientMgr = State#state.client_manager,
     case ClientMgr of
         undefined -> ok;
@@ -786,14 +788,21 @@ handle_connect_realm(true, Stream, ConnectMsg, State) ->
             ?LOG_DEBUG("Peer added to routing table")
     end,
 
-    %% Send PONG acknowledgment back with gateway's node_id and endpoint
-    %% This allows the client to correctly add the gateway to its DHT routing table
+    %% Publish peer.connected event to all connected peers
+    PeerConnectedPayload = #{<<"node_id">> => NodeId, <<"endpoint">> => Endpoint},
+    publish_mesh_lifecycle_event(<<"_mesh.peer.connected">>, PeerConnectedPayload, State),
+
+    %% Build peers list from routing table for PONG response (initial state)
+    KnownPeers = get_known_peers_for_pong(NodeId),
+
+    %% Send PONG acknowledgment back with gateway's node_id, endpoint, and peers
     GatewayEndpoint = build_gateway_endpoint(State),
     PongMsg = #{
         timestamp => erlang:system_time(millisecond),
         server_time => erlang:system_time(millisecond),
         <<"node_id">> => State#state.node_id,
-        <<"endpoint">> => GatewayEndpoint
+        <<"endpoint">> => GatewayEndpoint,
+        <<"peers">> => KnownPeers
     },
     ?LOG_INFO("[Gateway] Sending PONG with node_id=~s, endpoint=~s",
               [binary:encode_hex(State#state.node_id), GatewayEndpoint]),
@@ -1871,4 +1880,33 @@ do_evict_from_routing_table(NodeId) when is_binary(NodeId) ->
     end;
 do_evict_from_routing_table(_) ->
     ok.
+
+%% @private Get known peers from routing table for PONG response (excluding the connecting peer).
+get_known_peers_for_pong(ConnectingNodeId) ->
+    case whereis(macula_routing_server) of
+        undefined -> [];
+        RoutingServer ->
+            AllNodes = macula_routing_server:find_closest(RoutingServer, ConnectingNodeId, 100),
+            [format_peer_for_pong(N) || N <- AllNodes,
+                maps:get(node_id, N, undefined) =/= ConnectingNodeId]
+    end.
+
+format_peer_for_pong(#{node_id := NodeId} = NodeInfo) ->
+    Endpoint = maps:get(endpoint, NodeInfo, maps:get(address, NodeInfo, undefined)),
+    #{<<"node_id">> => NodeId, <<"endpoint">> => Endpoint};
+format_peer_for_pong(_) -> #{}.
+
+%% @private Publish a mesh lifecycle event to all connected peers via pub/sub.
+%% Uses the gateway's internal pub/sub to broadcast to all client streams.
+publish_mesh_lifecycle_event(Topic, _Payload, #state{pubsub = undefined}) ->
+    ?LOG_DEBUG("[Gateway] No pubsub available for ~s", [Topic]),
+    ok;
+publish_mesh_lifecycle_event(Topic, Payload, #state{pubsub = PubSub}) ->
+    ?LOG_INFO("[Gateway] Publishing ~s", [Topic]),
+    EncodedMsg = macula_protocol_encoder:encode(publish, #{
+        <<"topic">> => Topic,
+        <<"payload">> => Payload
+    }),
+    %% Distribute to all subscribers of this internal topic
+    macula_gateway_pubsub:distribute(PubSub, Topic, EncodedMsg).
 
