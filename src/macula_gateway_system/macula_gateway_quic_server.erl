@@ -280,11 +280,13 @@ handle_info({quic, peer_needs_streams, _Conn, _StreamType}, State) ->
 %% @doc Handle QUIC event: shutdown (connection shutting down).
 handle_info({quic, shutdown, Conn, Reason}, State) ->
     ?LOG_INFO("QUIC shutdown: Conn=~p, Reason=~p", [Conn, Reason]),
+    notify_gateway_conn_closed(Conn, State),
     {noreply, State};
 
 %% @doc Handle QUIC event: transport_shutdown (transport layer shutting down).
 handle_info({quic, transport_shutdown, Conn, Reason}, State) ->
     ?LOG_INFO("QUIC transport_shutdown: Conn=~p, Reason=~p", [Conn, Reason]),
+    notify_gateway_conn_closed(Conn, State),
     {noreply, State};
 
 %% @doc Periodic cleanup of stale rate limit entries.
@@ -399,9 +401,10 @@ route_to_gateway({ok, {MessageType, Message}}, Stream, PeerAddr, State) when Sta
               [MessageType, maps:keys(Message)]),
     Gateway = State#state.gateway,
 
+    %% Track Conn→NodeId for CONNECT messages (used for eviction on disconnect)
+    maybe_track_conn_node_id(MessageType, Message, Stream),
+
     %% Route to gateway via gen_server:cast (async) to prevent blocking
-    %% This avoids timeout issues when gateway is busy processing other messages
-    %% Include PeerAddr for NAT detection (v0.12.0+)
     gen_server:cast(Gateway, {route_message, MessageType, Message, Stream, PeerAddr}),
     ?LOG_DEBUG("Message routed (async)", []),
     {noreply, State};
@@ -608,3 +611,40 @@ resolve_host(Host, Port) when is_binary(Host), is_integer(Port) ->
                      [Host, Reason]),
             {{127,0,0,1}, Port}
     end.
+
+%%% ===================================================================
+%%% Connection lifecycle tracking (for peer eviction on disconnect)
+%%% ===================================================================
+
+%% @private Track Conn→NodeId when a CONNECT message is routed.
+%% Stores in process dict so we can look up node_id on connection shutdown.
+maybe_track_conn_node_id(connect, Message, _Stream) ->
+    NodeId = maps:get(<<"node_id">>, Message, undefined),
+    Conn = get(pending_stream_conn),
+    store_conn_node_id(Conn, NodeId);
+maybe_track_conn_node_id(_, _, _) ->
+    ok.
+
+store_conn_node_id(undefined, _) -> ok;
+store_conn_node_id(_, undefined) -> ok;
+store_conn_node_id(Conn, NodeId) ->
+    put({conn_node_id, Conn}, NodeId),
+    ok.
+
+%% @private Notify gateway that a connection closed, so it can evict the peer.
+notify_gateway_conn_closed(_Conn, #state{gateway = undefined}) ->
+    ok;
+notify_gateway_conn_closed(Conn, #state{gateway = Gateway}) ->
+    NodeId = get({conn_node_id, Conn}),
+    notify_gateway_with_node_id(Gateway, NodeId, Conn).
+
+notify_gateway_with_node_id(_, undefined, _) ->
+    ok;
+notify_gateway_with_node_id(Gateway, NodeId, Conn) ->
+    ?LOG_INFO("[Gateway QUIC] Connection closed for node ~s, notifying gateway",
+              [binary:encode_hex(NodeId)]),
+    gen_server:cast(Gateway, {connection_closed, NodeId}),
+    %% Clean up process dict
+    erase({conn_node_id, Conn}),
+    erase({conn_peer_addr, Conn}),
+    ok.

@@ -640,6 +640,19 @@ handle_cast({local_publish_async, _Realm, Topic, Payload}, State) ->
     gen_server:cast(self(), {distribute_publish, Topic, Payload}),
     {noreply, State};
 
+%% QUIC connection closed — evict peer from routing table
+handle_cast({connection_closed, NodeId}, State) ->
+    ?LOG_INFO("[Gateway] Connection closed for peer ~s, evicting from routing table",
+              [binary:encode_hex(NodeId)]),
+    do_evict_from_routing_table(NodeId),
+    %% Also clean up client stream mapping
+    ClientMgr = State#state.client_manager,
+    case ClientMgr of
+        undefined -> ok;
+        _ -> macula_gateway_clients:remove_stale_stream(ClientMgr, NodeId)
+    end,
+    {noreply, State};
+
 handle_cast(_Request, State) ->
     {noreply, State}.
 
