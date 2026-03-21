@@ -567,13 +567,26 @@ get_advertise_endpoint() ->
             construct_default_endpoint()
     end.
 
-%% @doc Construct default endpoint from MACULA_HOSTNAME environment variable.
-%% Also uses MACULA_QUIC_PORT if set, otherwise defaults to 9443.
+%% @doc Construct default endpoint from environment and application config.
+%% Port resolution order: MACULA_QUIC_PORT env var, application:get_env(macula, quic_port), 9443.
 -spec construct_default_endpoint() -> binary().
 construct_default_endpoint() ->
     NodeHost = get_hostname_from_env(),
-    Port = list_to_binary(os:getenv("MACULA_QUIC_PORT", "9443")),
+    Port = get_quic_port_binary(),
     <<"https://", NodeHost/binary, ":", Port/binary>>.
+
+%% @doc Resolve QUIC port: env var first, then app config, then default 9443.
+-spec get_quic_port_binary() -> binary().
+get_quic_port_binary() ->
+    case os:getenv("MACULA_QUIC_PORT") of
+        false ->
+            case application:get_env(macula, quic_port) of
+                {ok, P} when is_integer(P) -> integer_to_binary(P);
+                {ok, P} when is_list(P) -> list_to_binary(P);
+                _ -> <<"9443">>
+            end;
+        EnvPort -> list_to_binary(EnvPort)
+    end.
 
 %% @doc Get hostname from environment variables.
 %% Checks MACULA_HOSTNAME first (Docker), then NODE_HOST, then HOSTNAME, fallback to localhost.

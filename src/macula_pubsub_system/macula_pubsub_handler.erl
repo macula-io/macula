@@ -224,9 +224,10 @@ handle_cast({publish_async, Topic, Data, Opts}, State) ->
     ?LOG_INFO("[PubSubHandler] publish_async received: topic=~p", [Topic]),
     do_async_publish(State#state.connection_manager_pid, Topic, Data, Opts, State);
 
-handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, _Opts, MsgId}, State) ->
-    %% Send publish to gateway for routing - gateway handles DHT lookup and subscriber delivery
-    %% This avoids duplicate delivery (previously HYBRID mode sent via BOTH paths)
+handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, State) ->
+    %% Publish routing: P2P first, gateway as fallback.
+    %% 1. Discover subscribers via local DHT — deliver directly to known peers
+    %% 2. Gateway relay only for peers we can't reach directly
     ?LOG_INFO("[PubSubHandler] do_publish: topic=~s, ConnMgr=~p",
               [BinaryTopic, State#state.connection_manager_pid]),
 
@@ -236,8 +237,11 @@ handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, _Opts, MsgId}, S
     ),
     State2 = State#state{pending_pubacks = UpdatedPendingPubacks},
 
-    %% Send publish to gateway for routing to connected subscribers
-    %% Gateway will lookup subscribers via DHT and route messages accordingly
+    %% P2P: discover subscribers via local DHT and route directly
+    gen_server:cast(self(), {discover_subscribers, BinaryTopic, Payload, Qos, Opts}),
+
+    %% Gateway: send to bootstrap (currently doesn't relay to clients,
+    %% but needed for gateway-side features like retention and logging)
     send_publish_to_gateway(State#state.connection_manager_pid, PublishMsg, BinaryTopic),
 
     {noreply, State2};
