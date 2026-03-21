@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.1] - 2026-03-21
+
+### Fixed
+
+- **PubSub P2P delivery** — Publish now discovers subscribers via local DHT and
+  routes directly to known peers (P2P). Previously, publish only sent to the
+  gateway which doesn't relay messages between clients. Two peers on the same
+  LAN couldn't receive each other's pubsub messages.
+- **QUIC port configuration** — Port resolution now checks `MACULA_QUIC_PORT`
+  env var, then `application:get_env(macula, quic_port)`, then defaults to 9443.
+
 ## [0.20.21] - 2026-03-20
 
 ### Fixed
