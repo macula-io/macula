@@ -218,7 +218,11 @@ handle_call(_Request, _From, State) ->
 
 %% @private
 %% Add node to routing table (async operation)
-handle_cast({add_node, NodeInfo}, #state{routing_table = Table} = State) ->
+%% When a new node actually joins, replicate relevant STORE values to it.
+%% This is standard Kademlia: new neighbors receive stored values they are
+%% now among the k-closest nodes for.
+handle_cast({add_node, NodeInfo}, #state{routing_table = Table, storage = Storage,
+                                         config = Config} = State) ->
     OldSize = macula_routing_table:size(Table),
     NewTable = macula_routing_table:add_node(Table, NodeInfo),
     NewSize = macula_routing_table:size(NewTable),
@@ -227,6 +231,13 @@ handle_cast({add_node, NodeInfo}, #state{routing_table = Table} = State) ->
               [case NodeId of B when is_binary(B), byte_size(B) =:= 32 -> binary:encode_hex(B);
                               B when is_binary(B) -> B; _ -> <<"?">> end,
                OldSize, NewSize]),
+    %% Replicate stored values to the new peer if it actually joined
+    case NewSize > OldSize of
+        true ->
+            spawn(fun() -> replicate_to_new_peer(NodeInfo, Storage, NewTable, Config) end);
+        false ->
+            ok
+    end,
     {noreply, State#state{routing_table = NewTable}};
 
 handle_cast({remove_node, NodeId}, #state{routing_table = Table} = State) ->
@@ -276,6 +287,44 @@ terminate(_Reason, _State) ->
 %%%===================================================================
 %%% Internal Functions
 %%%===================================================================
+
+%% @doc Replicate stored values to a newly joined peer (called in spawned process).
+%% Standard Kademlia behavior: when a new node joins the routing table,
+%% send it any stored values for which it is now among the k-closest nodes.
+-spec replicate_to_new_peer(map(), map(), macula_routing_table:routing_table(), map()) -> ok.
+replicate_to_new_peer(NewNodeInfo, Storage, Table, Config) ->
+    K = maps:get(k, Config, 20),
+    NewNodeId = maps:get(node_id, NewNodeInfo, undefined),
+    Replicated = maps:fold(fun(Key, Providers, Acc) ->
+        ClosestNodes = macula_routing_table:find_closest(Table, Key, K),
+        ClosestIds = [maps:get(node_id, N, undefined) || N <- ClosestNodes],
+        case lists:member(NewNodeId, ClosestIds) of
+            true ->
+                ProviderList = ensure_provider_list(Providers),
+                lists:foreach(fun(Provider) ->
+                    StoreMsg = macula_routing_protocol:encode_store(Key, Provider),
+                    send_store_to_peer(NewNodeInfo, StoreMsg)
+                end, ProviderList),
+                Acc + length(ProviderList);
+            false ->
+                Acc
+        end
+    end, 0, Storage),
+    case Replicated > 0 of
+        true ->
+            ?LOG_INFO("[RoutingServer] Replicated ~p stored value(s) to new peer ~s",
+                      [Replicated, format_node_id(NewNodeId)]);
+        false ->
+            ok
+    end,
+    ok.
+
+%% @doc Format node_id for logging.
+-spec format_node_id(binary() | undefined) -> binary().
+format_node_id(undefined) -> <<"?">>;
+format_node_id(B) when is_binary(B), byte_size(B) =:= 32 -> binary:encode_hex(B);
+format_node_id(B) when is_binary(B) -> B;
+format_node_id(_) -> <<"?">>.
 
 %% @doc Propagate STORE message to peers (called in spawned process).
 %% Non-blocking: network I/O happens in separate process, won't block routing server.
