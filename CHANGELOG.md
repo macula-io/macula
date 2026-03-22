@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.9] - 2026-03-22
+
+### Fixed
+
+- **P2P endpoint hostname** — When no `MACULA_HOSTNAME` env var is set, the
+  advertised endpoint now derives the hostname from `node()` (e.g.
+  `hecate@beam00.lab` → `beam00.lab`) instead of falling back to `localhost`.
+  This was the root cause of P2P pub/sub delivery failures: peers couldn't
+  connect back because the subscription endpoint was `https://localhost:9444`.
+
+---
+
 ## [0.22.8] - 2026-03-22
 
 ### Added

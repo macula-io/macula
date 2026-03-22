@@ -598,14 +598,25 @@ get_hostname_from_env() ->
         "HOSTNAME"          %% Standard shell variable
     ]).
 
-%% @doc Try environment variables in order, return first non-false value.
+%% @doc Try environment variables in order, then node name, then localhost.
 -spec get_hostname_from_env([string()]) -> binary().
 get_hostname_from_env([]) ->
-    <<"localhost">>;
+    hostname_from_node();
 get_hostname_from_env([EnvVar | Rest]) ->
     case os:getenv(EnvVar) of
         false -> get_hostname_from_env(Rest);
         Value -> list_to_binary(Value)
+    end.
+
+%% @private Extract hostname from Erlang node name (e.g. hecate@beam00.lab -> beam00.lab).
+hostname_from_node() ->
+    case atom_to_list(node()) of
+        "nonode@nohost" -> <<"localhost">>;
+        NodeStr ->
+            case string:split(NodeStr, "@") of
+                [_, Host] -> list_to_binary(Host);
+                _ -> <<"localhost">>
+            end
     end.
 
 %% @doc Register connected server in DHT routing table using info from PONG response.
