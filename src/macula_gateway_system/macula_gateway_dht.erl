@@ -178,7 +178,7 @@ do_forward_to_bootstrap(ConnPid, PubMsg) ->
 -spec send_to_peer(map(), atom(), map()) -> ok | {error, term()}.
 send_to_peer(NodeInfo, MessageType, Message) ->
     Endpoint = extract_endpoint(NodeInfo),
-    ?LOG_INFO("[DHT] send_to_peer: NodeInfo=~p, Endpoint=~p, Type=~p",
+    ?LOG_DEBUG("[DHT] send_to_peer: NodeInfo=~p, Endpoint=~p, Type=~p",
               [maps:get(node_id, NodeInfo, unknown), Endpoint, MessageType]),
     do_send_to_peer(Endpoint, MessageType, Message).
 
@@ -188,7 +188,7 @@ do_send_to_peer(undefined, MessageType, _Message) ->
 do_send_to_peer(Endpoint, MessageType, Message) ->
     %% Send directly via peer connector (establishes QUIC connection)
     Result = macula_peer_connector:send_message(Endpoint, MessageType, Message),
-    ?LOG_INFO("[DHT] send_to_peer result to ~s: ~p", [Endpoint, Result]),
+    ?LOG_DEBUG("[DHT] send_to_peer result to ~s: ~p", [Endpoint, Result]),
     Result.
 
 %% @private

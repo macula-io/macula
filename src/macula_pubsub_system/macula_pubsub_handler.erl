@@ -221,14 +221,14 @@ handle_cast({set_connection_manager_pid, Pid}, State) ->
 %% Async publish (fire-and-forget from caller's perspective)
 %% This handles the {publish_async, ...} cast from the publish/4 API function
 handle_cast({publish_async, Topic, Data, Opts}, State) ->
-    ?LOG_INFO("[PubSubHandler] publish_async received: topic=~p", [Topic]),
+    ?LOG_DEBUG("[PubSubHandler] publish_async received: topic=~p", [Topic]),
     do_async_publish(State#state.connection_manager_pid, Topic, Data, Opts, State);
 
 handle_cast({do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}, State) ->
     %% Publish routing: P2P first, gateway as fallback.
     %% 1. Discover subscribers via local DHT — deliver directly to known peers
     %% 2. Gateway relay only for peers we can't reach directly
-    ?LOG_INFO("[PubSubHandler] do_publish: topic=~s, ConnMgr=~p",
+    ?LOG_DEBUG("[PubSubHandler] do_publish: topic=~s, ConnMgr=~p",
               [BinaryTopic, State#state.connection_manager_pid]),
 
     %% Handle QoS 1 (at-least-once delivery) - delegate to QoS module
@@ -444,7 +444,7 @@ do_async_publish(_ConnMgrPid, Topic, Data, Opts, State) ->
                 message_id => MsgId
             },
 
-            ?LOG_INFO("[PubSubHandler] Sending to do_publish: topic=~s", [BinaryTopic]),
+            ?LOG_DEBUG("[PubSubHandler] Sending to do_publish: topic=~s", [BinaryTopic]),
             gen_server:cast(self(), {do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}),
 
             {noreply, State2};
@@ -459,10 +459,10 @@ send_publish_to_gateway(undefined, _PublishMsg, _BinaryTopic) ->
     ?LOG_ERROR("[PubSubHandler] No connection manager for publish!");
 %% @private Send publish message via the gateway connection ASYNC (fire-and-forget)
 send_publish_to_gateway(ConnMgrPid, PublishMsg, BinaryTopic) ->
-    ?LOG_INFO("[PubSubHandler] Calling send_message_async: pid=~p, topic=~s",
+    ?LOG_DEBUG("[PubSubHandler] Calling send_message_async: pid=~p, topic=~s",
               [ConnMgrPid, BinaryTopic]),
     macula_connection:send_message_async(ConnMgrPid, publish, PublishMsg),
-    ?LOG_INFO("[PubSubHandler] send_message_async returned").
+    ?LOG_DEBUG("[PubSubHandler] send_message_async returned").
 
 %%%===================================================================
 %%% Resubscription helpers

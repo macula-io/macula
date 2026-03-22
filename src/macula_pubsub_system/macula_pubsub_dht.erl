@@ -234,14 +234,14 @@ query_routing_server_for_subscribers(Topic, Payload, Qos, TopicKey) ->
 
 %% @private Handle DHT query result
 handle_dht_query_result({ok, Subscribers}, Topic, Payload, Qos) when is_list(Subscribers), length(Subscribers) > 0 ->
-    ?LOG_INFO("Found ~p subscriber(s) for topic ~s in DHT, routing message",
+    ?LOG_DEBUG("Found ~p subscriber(s) for topic ~s in DHT, routing message",
               [length(Subscribers), Topic]),
     SourceNodeId = get_local_node_id(),
     route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId);
 handle_dht_query_result({ok, []}, Topic, _Payload, _Qos) ->
     ?LOG_DEBUG("No subscribers found for topic ~s in DHT", [Topic]);
 handle_dht_query_result({ok, SingleSub}, Topic, Payload, Qos) when is_map(SingleSub) ->
-    ?LOG_INFO("Found 1 subscriber for topic ~s in DHT, routing message", [Topic]),
+    ?LOG_DEBUG("Found 1 subscriber for topic ~s in DHT, routing message", [Topic]),
     SourceNodeId = get_local_node_id(),
     route_to_subscribers(Topic, Payload, Qos, [SingleSub], SourceNodeId);
 handle_dht_query_result({error, not_found}, Topic, _Payload, _Qos) ->

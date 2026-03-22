@@ -215,7 +215,7 @@ handle_call({find_value, Key, K}, From, #state{routing_table = Table, storage = 
             end),
             {noreply, State};
         Value when is_list(Value) ->
-            ?LOG_INFO("[DHT] find_value: returning ~p local value(s)", [length(Value)]),
+            ?LOG_DEBUG("[DHT] find_value: returning ~p local value(s)", [length(Value)]),
             {reply, {ok, Value}, State};
         Value ->
             {reply, {ok, [Value]}, State}
@@ -239,7 +239,7 @@ handle_cast({add_node, NodeInfo}, #state{routing_table = Table, storage = Storag
     NewTable = macula_routing_table:add_node(Table, NodeInfo),
     NewSize = macula_routing_table:size(NewTable),
     NodeId = maps:get(node_id, NodeInfo, undefined),
-    ?LOG_INFO("[RoutingServer] add_node: node_id=~s, table_size: ~p -> ~p",
+    ?LOG_DEBUG("[RoutingServer] add_node: node_id=~s, table_size: ~p -> ~p",
               [case NodeId of B when is_binary(B), byte_size(B) =:= 32 -> binary:encode_hex(B);
                               B when is_binary(B) -> B; _ -> <<"?">> end,
                OldSize, NewSize]),
@@ -256,7 +256,7 @@ handle_cast({remove_node, NodeId}, #state{routing_table = Table} = State) ->
     OldSize = macula_routing_table:size(Table),
     NewTable = macula_routing_table:remove_node(Table, NodeId),
     NewSize = macula_routing_table:size(NewTable),
-    ?LOG_INFO("[RoutingServer] remove_node: node_id=~s, table_size: ~p -> ~p",
+    ?LOG_DEBUG("[RoutingServer] remove_node: node_id=~s, table_size: ~p -> ~p",
               [binary:encode_hex(NodeId), OldSize, NewSize]),
     {noreply, State#state{routing_table = NewTable}};
 
@@ -324,7 +324,7 @@ replicate_to_new_peer(NewNodeInfo, Storage, Table, Config) ->
     end, 0, Storage),
     case Replicated > 0 of
         true ->
-            ?LOG_INFO("[RoutingServer] Replicated ~p stored value(s) to new peer ~s",
+            ?LOG_DEBUG("[RoutingServer] Replicated ~p stored value(s) to new peer ~s",
                       [Replicated, format_node_id(NewNodeId)]);
         false ->
             ok
@@ -343,10 +343,10 @@ format_node_id(_) -> <<"?">>.
 -spec propagate_store_to_peers(list(), map(), binary(), term()) -> ok.
 propagate_store_to_peers([], _StoreMsg, Key, Value) ->
     %% No nodes in routing table - forward to bootstrap gateway via RPC
-    ?LOG_INFO("[DHT] No peers in routing table, forwarding store to bootstrap"),
+    ?LOG_DEBUG("[DHT] No peers in routing table, forwarding store to bootstrap"),
     forward_store_to_bootstrap(Key, Value);
 propagate_store_to_peers(ClosestNodes, StoreMsg, _Key, _Value) ->
-    ?LOG_INFO("[DHT] Propagating store to ~p peer(s)", [length(ClosestNodes)]),
+    ?LOG_DEBUG("[DHT] Propagating store to ~p peer(s)", [length(ClosestNodes)]),
     lists:foreach(fun(NodeInfo) ->
         send_store_to_peer(NodeInfo, StoreMsg)
     end, ClosestNodes),
@@ -495,7 +495,7 @@ find_value_with_escalation(Key, K, Storage, Table, Config) ->
 
 %% @private Return local values immediately if found, else query network
 find_value_with_local(LocalValues, _Key, _K, _Table, _Config) when LocalValues =/= [] ->
-    ?LOG_INFO("[DHT] find_value: returning ~p local value(s)", [length(LocalValues)]),
+    ?LOG_DEBUG("[DHT] find_value: returning ~p local value(s)", [length(LocalValues)]),
     {ok, LocalValues};
 find_value_with_local([], Key, K, Table, Config) ->
     %% No local values - query network for remote providers (RPC discovery)
@@ -505,7 +505,7 @@ find_value_with_local([], Key, K, Table, Config) ->
         {ok, RemoteSingle} -> [RemoteSingle];
         _ -> []
     end,
-    ?LOG_INFO("[DHT] find_value: network returned ~p value(s)", [length(NetworkValues)]),
+    ?LOG_DEBUG("[DHT] find_value: network returned ~p value(s)", [length(NetworkValues)]),
     case NetworkValues of
         [] ->
             %% Try escalation if nothing found
@@ -516,19 +516,19 @@ find_value_with_local([], Key, K, Table, Config) ->
 find_value_via_dht(Key, K, Table) ->
     %% Log routing table state for debugging
     InitialClosest = macula_routing_table:find_closest(Table, Key, K),
-    ?LOG_INFO("[DHT] find_value_via_dht: routing_table has ~p nodes for key lookup", [length(InitialClosest)]),
+    ?LOG_DEBUG("[DHT] find_value_via_dht: routing_table has ~p nodes for key lookup", [length(InitialClosest)]),
     lists:foreach(fun(NodeInfo) ->
-        ?LOG_INFO("[DHT] find_value_via_dht: will query node ~p at ~p",
+        ?LOG_DEBUG("[DHT] find_value_via_dht: will query node ~p at ~p",
                   [maps:get(node_id, NodeInfo, unknown), get_node_endpoint(NodeInfo)])
     end, InitialClosest),
 
     QueryFn = fun(NodeInfo, QueryKey) -> network_query_find_value(NodeInfo, QueryKey) end,
     case macula_routing_dht:find_value(Table, Key, K, QueryFn) of
         {ok, Value} ->
-            ?LOG_INFO("[DHT] find_value_via_dht: found ~p subscriber(s)", [length(Value)]),
+            ?LOG_DEBUG("[DHT] find_value_via_dht: found ~p subscriber(s)", [length(Value)]),
             {ok, Value};
         {nodes, Nodes} ->
-            ?LOG_INFO("[DHT] find_value_via_dht: not found, got ~p nodes", [length(Nodes)]),
+            ?LOG_DEBUG("[DHT] find_value_via_dht: not found, got ~p nodes", [length(Nodes)]),
             {ok, []};
         {error, Reason} ->
             ?LOG_WARNING("[DHT] find_value_via_dht: error ~p", [Reason]),
@@ -549,13 +549,13 @@ do_network_query_find_value(undefined, NodeInfo, _Key) ->
 do_network_query_find_value(Endpoint, _NodeInfo, Key) ->
     %% Build FIND_VALUE message (the protocol expects raw Key, not encoded)
     FindValueMsg = #{<<"key">> => Key},
-    ?LOG_INFO("[DHT] network_query_find_value: querying ~s for key", [Endpoint]),
+    ?LOG_DEBUG("[DHT] network_query_find_value: querying ~s for key", [Endpoint]),
 
     %% Send request and wait for response (synchronous with 5s timeout)
     case macula_peer_connector:send_message_and_wait(Endpoint, find_value, FindValueMsg, 5000) of
         {ok, {find_value_reply, Response}} ->
             Result = decode_find_value_response(Response),
-            ?LOG_INFO("[DHT] network_query_find_value: got reply from ~s: ~p", [Endpoint, Result]),
+            ?LOG_DEBUG("[DHT] network_query_find_value: got reply from ~s: ~p", [Endpoint, Result]),
             Result;
         {ok, {OtherType, _Response}} ->
             ?LOG_WARNING("[DHT] network_query_find_value: unexpected reply type ~p from ~s", [OtherType, Endpoint]),
@@ -692,7 +692,7 @@ handle_find_node(Message, #state{routing_table = Table, config = Config} = State
     %% Find k closest nodes
     TableSize = macula_routing_table:size(Table),
     Closest = macula_routing_table:find_closest(Table, Target, K),
-    ?LOG_INFO("[RoutingServer] FIND_NODE: target=~s, table_size=~p, found=~p",
+    ?LOG_DEBUG("[RoutingServer] FIND_NODE: target=~s, table_size=~p, found=~p",
               [binary:encode_hex(Target), TableSize, length(Closest)]),
 
     %% Encode reply
@@ -704,7 +704,7 @@ handle_find_node(Message, #state{routing_table = Table, config = Config} = State
 -spec handle_store(map(), #state{}) -> {map(), #state{}}.
 handle_store(Message, #state{storage = Storage} = State) ->
     {ok, Key, Value} = macula_routing_protocol:decode_store(Message),
-    ?LOG_INFO("[RoutingServer] STORE received: key_prefix=~p, value_node_id=~p",
+    ?LOG_DEBUG("[RoutingServer] STORE received: key_prefix=~p, value_node_id=~p",
              [binary:part(Key, 0, min(8, byte_size(Key))), maps:get(node_id, Value, maps:get(<<"node_id">>, Value, unknown))]),
     ?LOG_DEBUG("STORE: key=~p, value=~p", [Key, Value]),
     ExistingProviders = maps:get(Key, Storage, []),
@@ -723,7 +723,7 @@ handle_find_value(Message, #state{storage = Storage, routing_table = Table, conf
     {ok, Key} = macula_routing_protocol:decode_find_value(Message),
     StorageValue = maps:get(Key, Storage, undefined),
     K = maps:get(k, Config, 20),
-    ?LOG_INFO("[RoutingServer] FIND_VALUE: key_prefix=~p, storage_size=~p, found=~p",
+    ?LOG_DEBUG("[RoutingServer] FIND_VALUE: key_prefix=~p, storage_size=~p, found=~p",
              [binary:part(Key, 0, min(8, byte_size(Key))), maps:size(Storage), StorageValue =/= undefined]),
     Reply = encode_find_value_result(StorageValue, Key, K, Table),
     {Reply, State}.

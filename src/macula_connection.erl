@@ -271,7 +271,7 @@ handle_info({connect_result, {error, Reason}}, State) ->
 handle_info({quic, Data, Stream, _Props}, State) when is_binary(Data) ->
     %% Received data from QUIC stream
     MainStream = State#state.stream,
-    ?LOG_WARNING("[Connection] QUIC data received: ~p bytes, from_stream=~p, main_stream=~p, match=~p",
+    ?LOG_DEBUG("[Connection] QUIC data received: ~p bytes, from_stream=~p, main_stream=~p, match=~p",
                  [byte_size(Data), Stream, MainStream, Stream =:= MainStream]),
     handle_stream_data(Stream =:= MainStream, Data, Stream, State);
 
@@ -339,7 +339,7 @@ terminate(_Reason, #state{stream = Stream, connection = Conn}) ->
 
 %% @doc Dispatch stream data based on validity (pattern matching on boolean).
 handle_stream_data(true, Data, _Stream, State) ->
-    ?LOG_WARNING("[Connection] handle_stream_data(true) ENTRY: ~p bytes", [byte_size(Data)]),
+    ?LOG_DEBUG("[Connection] handle_stream_data(true) ENTRY: ~p bytes", [byte_size(Data)]),
     handle_received_data(Data, State);
 handle_stream_data(false, _Data, Stream, State) ->
     ?LOG_WARNING("Received data from unknown stream: ~p", [Stream]),
@@ -630,12 +630,12 @@ do_register_server_in_dht(ServerNodeId, ServerEndpoint, State) when is_binary(Se
         address => ServerAddress,
         endpoint => ServerEndpoint
     },
-    ?LOG_INFO("[Connection] Registering server in DHT: node_id=~s, endpoint=~s",
+    ?LOG_DEBUG("[Connection] Registering server in DHT: node_id=~s, endpoint=~s",
               [binary:encode_hex(ServerNodeId), ServerEndpoint]),
 
     case macula_routing_server:add_node(macula_routing_server, ServerNodeInfo) of
         ok ->
-            ?LOG_INFO("[Connection] Added server to DHT routing table: ~s",
+            ?LOG_DEBUG("[Connection] Added server to DHT routing table: ~s",
                      [binary:encode_hex(ServerNodeId)]);
         {error, Reason} ->
             ?LOG_WARNING("DHT registration failed (expected if DHT not running): ~p", [Reason])
@@ -715,7 +715,7 @@ maybe_populate_peers_from_pong(PongMsg, #state{node_id = MyNodeId}) ->
 
 populate_peers(undefined, _) -> ok;
 populate_peers(Peers, MyNodeId) when is_list(Peers), length(Peers) > 0 ->
-    ?LOG_INFO("[Connection] PONG contains ~p peer(s), populating routing table", [length(Peers)]),
+    ?LOG_DEBUG("[Connection] PONG contains ~p peer(s), populating routing table", [length(Peers)]),
     add_discovered_peers(Peers, MyNodeId),
     notify_mesh_lifecycle_observers(mesh_peers_initial, #{peers => Peers});
 populate_peers(_, _) -> ok.
@@ -756,11 +756,11 @@ send_message_raw(Type, Msg, Stream) ->
 handle_received_data(Data, State) ->
     %% Append to receive buffer
     Buffer = <<(State#state.recv_buffer)/binary, Data/binary>>,
-    ?LOG_WARNING("[Connection] handle_received_data ENTRY: data=~p bytes, buffer=~p bytes", [byte_size(Data), byte_size(Buffer)]),
+    ?LOG_DEBUG("[Connection] handle_received_data ENTRY: data=~p bytes, buffer=~p bytes", [byte_size(Data), byte_size(Buffer)]),
 
     %% Try to decode messages
     {Messages, RemainingBuffer} = decode_messages(Buffer, []),
-    ?LOG_WARNING("[Connection] decode_messages returned: ~p messages, remaining=~p bytes", [length(Messages), byte_size(RemainingBuffer)]),
+    ?LOG_DEBUG("[Connection] decode_messages returned: ~p messages, remaining=~p bytes", [length(Messages), byte_size(RemainingBuffer)]),
 
     %% Process each message
     State2 = lists:foldl(fun process_message/2, State, Messages),
@@ -777,11 +777,11 @@ decode_messages(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
     case byte_size(Rest) of
         ActualLen when ActualLen >= PayloadLen ->
             %% We have a complete message
-            ?LOG_WARNING("[Connection] DECODING message: buffer=~p bytes, payload_len=~p", [byte_size(Buffer), PayloadLen]),
+            ?LOG_DEBUG("[Connection] DECODING message: buffer=~p bytes, payload_len=~p", [byte_size(Buffer), PayloadLen]),
             case macula_protocol_decoder:decode(Buffer) of
                 {ok, {Type, Msg}} ->
                     %% Skip this message and continue
-                    ?LOG_WARNING("[Connection] DECODED OK: type=~p", [Type]),
+                    ?LOG_DEBUG("[Connection] DECODED OK: type=~p", [Type]),
                     <<_:8/binary, _Payload:PayloadLen/binary, Remaining/binary>> = Buffer,
                     decode_messages(Remaining, [{Type, Msg} | Acc]);
                 {error, Reason} ->
@@ -858,7 +858,7 @@ process_message({pong, PongMsg}, State) ->
 
 %% Handle FIND_VALUE_REPLY message - route to RPC handler for DHT query results
 process_message({find_value_reply, Msg}, State) ->
-    ?LOG_INFO("Connection manager routing message type: ~p", [find_value_reply]),
+    ?LOG_DEBUG("Connection manager routing message type: ~p", [find_value_reply]),
     %% Look up the RPC handler by node_id (not peer_id) so replies arriving on ANY
     %% connection belonging to this node route to the correct handler
     case gproc:lookup_local_name({rpc_handler, State#state.realm, State#state.node_id}) of

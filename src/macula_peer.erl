@@ -378,7 +378,7 @@ normalize_realm(Realm) when is_atom(Realm) ->
 %% @doc Execute publish operation - shared by both {publish, ...} and {publish_async, ...}
 -spec do_publish(binary(), map() | binary(), map(), #state{}) -> {noreply, #state{}}.
 do_publish(Topic, Data, Opts, State) ->
-    ?LOG_INFO("[Peer] publish received: topic=~s, pubsub_pid=~p",
+    ?LOG_DEBUG("[Peer] publish received: topic=~s, pubsub_pid=~p",
               [Topic, State#state.pubsub_handler_pid]),
     %% Delegate to pubsub_handler (which is also async)
     macula_pubsub_handler:publish(State#state.pubsub_handler_pid, Topic, Data, Opts),

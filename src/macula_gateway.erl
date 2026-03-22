@@ -807,7 +807,7 @@ handle_connect_realm(true, Stream, ConnectMsg, State) ->
         <<"endpoint">> => GatewayEndpoint,
         <<"peers">> => KnownPeers
     },
-    ?LOG_INFO("[Gateway] Sending PONG with node_id=~s, endpoint=~s",
+    ?LOG_DEBUG("[Gateway] Sending PONG with node_id=~s, endpoint=~s",
               [binary:encode_hex(State#state.node_id), GatewayEndpoint]),
     PongBinary = macula_protocol_encoder:encode(pong, PongMsg),
     case macula_quic:send(Stream, PongBinary) of

@@ -114,22 +114,22 @@ route_to_remote_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
 route_via_local_dht(Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     %% Try cache first for O(1) lookup
     CacheResult = macula_subscriber_cache:lookup(Topic),
-    ?LOG_INFO("[PubSubRouter] Cache lookup for ~s: ~p", [Topic, CacheResult]),
+    ?LOG_DEBUG("[PubSubRouter] Cache lookup for ~s: ~p", [Topic, CacheResult]),
     handle_cache_result(CacheResult, Topic, PubMsg, LocalNodeId, Mesh, Clients).
 
 %% @private Handle cache lookup result
 handle_cache_result({ok, []}, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     %% Cache hit but empty - retry DHT (subscriptions may have arrived)
-    ?LOG_INFO("[PubSubRouter] Cache empty for ~s, invalidating and retrying DHT", [Topic]),
+    ?LOG_DEBUG("[PubSubRouter] Cache empty for ~s, invalidating and retrying DHT", [Topic]),
     macula_subscriber_cache:invalidate(Topic),
     lookup_and_cache_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients);
 handle_cache_result({ok, CachedSubscribers}, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     %% Cache hit with subscribers - use cached subscribers
-    ?LOG_INFO("[PubSubRouter] Cache hit for ~s with ~p subscribers", [Topic, length(CachedSubscribers)]),
+    ?LOG_DEBUG("[PubSubRouter] Cache hit for ~s with ~p subscribers", [Topic, length(CachedSubscribers)]),
     route_to_each_subscriber(CachedSubscribers, Topic, PubMsg, LocalNodeId, Mesh, Clients);
 handle_cache_result({miss, _TopicKey}, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
     %% Cache miss - do DHT lookup and cache result
-    ?LOG_INFO("[PubSubRouter] Cache miss for ~s, querying DHT", [Topic]),
+    ?LOG_DEBUG("[PubSubRouter] Cache miss for ~s, querying DHT", [Topic]),
     lookup_and_cache_subscribers(Topic, PubMsg, LocalNodeId, Mesh, Clients).
 
 %% @private
@@ -194,7 +194,7 @@ route_to_each_subscriber([Subscriber | Rest], Topic, PubMsg, LocalNodeId, Mesh, 
             error -> <<"unknown">>
         end
     end,
-    ?LOG_INFO("[PubSubRouter] Routing to subscriber node_id=~s, local_node_id=~s, topic=~s",
+    ?LOG_DEBUG("[PubSubRouter] Routing to subscriber node_id=~s, local_node_id=~s, topic=~s",
              [binary:encode_hex(SubNodeId), binary:encode_hex(LocalNodeId), Topic]),
     route_to_single_subscriber(Subscriber, Topic, PubMsg, LocalNodeId, Mesh, Clients),
     route_to_each_subscriber(Rest, Topic, PubMsg, LocalNodeId, Mesh, Clients).
