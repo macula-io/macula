@@ -244,10 +244,29 @@ get_node_id(Realm, Port) ->
 
 %% @private
 %% @doc Get endpoint URL for this gateway.
-%% Constructs "https://hostname:port" using HOSTNAME env var or "localhost".
+%% Constructs "https://hostname:port" using the same hostname resolution
+%% as macula_gateway:build_gateway_endpoint/1.
+%% Priority: MACULA_HOSTNAME > HOSTNAME > net_adm:localhost() > "localhost".
+%% Also respects MACULA_ADVERTISE_PORT for Docker port mapping.
 get_url(Port) ->
-    Hostname = case os:getenv("HOSTNAME") of
-        false -> "localhost";
-        Host when is_list(Host) -> Host
+    Hostname = get_reachable_hostname(),
+    AdvertisePort = case os:getenv("MACULA_ADVERTISE_PORT") of
+        false -> Port;
+        PortStr -> list_to_integer(PortStr)
     end,
-    iolist_to_binary([<<"https://">>, list_to_binary(Hostname), <<":">>, integer_to_binary(Port)]).
+    iolist_to_binary([<<"https://">>, Hostname, <<":">>, integer_to_binary(AdvertisePort)]).
+
+%% @private
+%% @doc Get a network-reachable hostname for this node.
+get_reachable_hostname() ->
+    case os:getenv("MACULA_HOSTNAME") of
+        false ->
+            case os:getenv("HOSTNAME") of
+                false ->
+                    list_to_binary(net_adm:localhost());
+                Host ->
+                    list_to_binary(Host)
+            end;
+        MaculaHostname ->
+            list_to_binary(MaculaHostname)
+    end.
