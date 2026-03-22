@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.7] - 2026-03-22
+
+### Fixed
+
+- **Logging noise** — Demoted per-packet and per-message log chatter from
+  info/warning to debug across all mesh subsystems. QUIC data traces, DHT
+  routing table operations, PubSub handler steps, and per-connection logs
+  no longer flood the console at default log level. Meaningful state changes
+  (peer connected/disconnected, connection errors) remain at info/warning.
+
+---
+
 ## [0.22.1] - 2026-03-21
 
 ### Fixed
