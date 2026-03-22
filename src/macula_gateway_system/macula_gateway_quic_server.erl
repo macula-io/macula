@@ -325,8 +325,8 @@ get_node_id(Realm, Port) when is_binary(Realm), is_integer(Port) ->
             %% No NODE_NAME, try HOSTNAME (Docker sets this to container hostname)
             case os:getenv("HOSTNAME") of
                 false ->
-                    %% No HOSTNAME either, use {Realm, Port} as last resort
-                    crypto:hash(sha256, term_to_binary({Realm, Port}));
+                    Host = macula_connection:hostname_from_node(),
+                    crypto:hash(sha256, term_to_binary({Realm, Host, Port}));
                 Hostname when is_list(Hostname) ->
                     %% Use HOSTNAME from Docker - unique per container
                     crypto:hash(sha256, term_to_binary({Realm, list_to_binary(Hostname), Port}))

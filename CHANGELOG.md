@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.11] - 2026-03-22
+
+### Fixed
+
+- **hostname_from_node fallback in all modules** — The `localhost` fallback
+  existed in three more places: `macula_gateway`, `macula_gateway_system`, and
+  `macula_gateway_quic_server`. All now use `macula_connection:hostname_from_node/0`
+  to derive hostname from `node()`. Exported the function for cross-module use.
+
+---
+
 ## [0.22.10] - 2026-03-22
 
 ### Fixed

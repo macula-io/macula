@@ -369,11 +369,10 @@ get_node_id(Realm, Port) ->
             %% No NODE_NAME, try HOSTNAME (Docker sets this to container hostname)
             case os:getenv("HOSTNAME") of
                 false ->
-                    %% No HOSTNAME either, use {Realm, Port} as last resort
-                    %% Note: This WILL collide if multiple nodes share same realm+port
-                    ?LOG_WARNING("No HOSTNAME or NODE_NAME set, using realm+port only"),
-                    ?LOG_WARNING("This may cause node_id collisions in Docker!"),
-                    crypto:hash(sha256, term_to_binary({Realm, Port}));
+                    %% Derive from Erlang node name
+                    Host = macula_connection:hostname_from_node(),
+                    ?LOG_INFO("Using node()-derived hostname for node ID: ~s", [Host]),
+                    crypto:hash(sha256, term_to_binary({Realm, Host, Port}));
                 Hostname when is_list(Hostname) ->
                     %% Use HOSTNAME from Docker - unique per container
                     ?LOG_INFO("Using HOSTNAME-based node ID: ~s, Realm=~s, Port=~p",
