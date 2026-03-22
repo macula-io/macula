@@ -210,18 +210,16 @@ next_message_id(Counter) ->
     macula_utils:next_message_id(Counter).
 
 %% @doc Query DHT for subscribers and route message to them (v0.8.0+).
-%% Directly queries local routing server and routes message to discovered subscribers.
-%% NOTE: Despite the "async" name (kept for compatibility), this now performs
-%% synchronous DHT lookup AND routing in one call.
+%% Spawns the DHT lookup + routing to avoid blocking the pubsub handler.
+%% The routing server's find_value can do network I/O (QUIC) which may be slow.
 -spec query_dht_async(topic(), payload(), qos(), binary(), connection_manager_pid()) -> ok.
 query_dht_async(Topic, Payload, Qos, _MsgId, _ConnMgrPid) ->
     TopicKey = crypto:hash(sha256, Topic),
-    ?LOG_DEBUG("Querying DHT for remote subscribers to topic: ~s", [Topic]),
-    query_routing_server_for_subscribers(Topic, Payload, Qos, TopicKey),
+    spawn(fun() -> do_query_and_route(Topic, Payload, Qos, TopicKey) end),
     ok.
 
-%% @private Query routing server for subscribers
-query_routing_server_for_subscribers(Topic, Payload, Qos, TopicKey) ->
+%% @private Query routing server and route to discovered subscribers.
+do_query_and_route(Topic, Payload, Qos, TopicKey) ->
     case whereis(macula_routing_server) of
         undefined ->
             ?LOG_WARNING("Routing server not running, cannot query for subscribers to ~s", [Topic]);

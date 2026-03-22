@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.10] - 2026-03-22
+
+### Fixed
+
+- **Non-blocking DHT subscriber lookup** — `query_dht_async` now actually runs
+  async (spawned process). The `find_value` call to the routing server can block
+  on network I/O (QUIC find_value_via_dht), which crashed the pubsub handler
+  with a 10s timeout. Now the handler never blocks on DHT queries.
+
+---
+
 ## [0.22.9] - 2026-03-22
 
 ### Fixed
