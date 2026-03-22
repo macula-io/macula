@@ -173,8 +173,9 @@ do_discover_peers(State) ->
                     {error, routing_server_not_found};
                 RoutingServer ->
                     AllPeers = discover_all_gateway_peers(RoutingServer),
-                    OtherPeers = lists:filter(fun(#{node_id := NodeID}) ->
-                        NodeID =/= MyNodeID
+                    OtherPeers = lists:filter(fun(Peer) ->
+                        PeerNodeId = maps:get(node_id, Peer, maps:get(<<"node_id">>, Peer, undefined)),
+                        PeerNodeId =/= MyNodeID
                     end, AllPeers),
                     {ok, OtherPeers}
             end;
