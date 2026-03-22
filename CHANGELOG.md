@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.22.8] - 2026-03-22
+
+### Added
+
+- **`_peer.health` RPC** — Every mesh node auto-advertises `_peer.health` on
+  connect. Returns node_id, node_name, uptime, OTP release, and macula version.
+  Enables mesh-native node discovery without TCP probes.
+
+---
+
 ## [0.22.7] - 2026-03-22
 
 ### Fixed
