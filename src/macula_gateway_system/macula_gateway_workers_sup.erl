@@ -162,6 +162,16 @@ init(Config) ->
             shutdown => 5000,
             type => worker,
             modules => [macula_peer_connection_pool]
+        },
+
+        %% mDNS Discovery - discovers LAN peers and populates direct routing table
+        #{
+            id => macula_gateway_mdns_discovery,
+            start => {macula_gateway_mdns_discovery, start_link, [Config]},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [macula_gateway_mdns_discovery]
         }
     ],
 
