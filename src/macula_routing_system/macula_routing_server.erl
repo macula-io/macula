@@ -202,12 +202,24 @@ handle_call({delete_local, Key, NodeId}, _From, #state{storage = Storage} = Stat
     NewStorage = delete_provider_from_storage(Key, NodeId, Storage),
     {reply, ok, State#state{storage = NewStorage}};
 
-handle_call({find_value, Key, K}, _From, #state{routing_table = Table, storage = Storage,
+handle_call({find_value, Key, K}, From, #state{routing_table = Table, storage = Storage,
                                               config = Config} = State) ->
     ?LOG_DEBUG("find_value: key=~p, storage_size=~p", [Key, maps:size(Storage)]),
-    ?LOG_DEBUG("find_value: storage keys=~p", [maps:keys(Storage)]),
-    Reply = find_value_with_escalation(Key, K, Storage, Table, Config),
-    {reply, Reply, State};
+    %% Check local storage first (fast path, no blocking)
+    case maps:get(Key, Storage, undefined) of
+        undefined ->
+            %% No local values — spawn async DHT query to avoid blocking routing server
+            spawn(fun() ->
+                Reply = find_value_with_escalation(Key, K, Storage, Table, Config),
+                gen_server:reply(From, Reply)
+            end),
+            {noreply, State};
+        Value when is_list(Value) ->
+            ?LOG_INFO("[DHT] find_value: returning ~p local value(s)", [length(Value)]),
+            {reply, {ok, Value}, State};
+        Value ->
+            {reply, {ok, [Value]}, State}
+    end;
 
 handle_call({handle_message, Message}, _From, State) ->
     {Reply, NewState} = process_dht_message(Message, State),
