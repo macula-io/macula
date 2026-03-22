@@ -254,7 +254,38 @@ init({Url, Opts}) ->
         advertisement_manager_pid = AdvMgrPid
     },
 
+    %% Auto-advertise _peer.health — every mesh node is discoverable
+    advertise_node_health(AdvMgrPid, NodeId),
+
     {ok, State}.
+
+%% @private Advertise the built-in _peer.health RPC procedure.
+%% Returns node identity, uptime, and version. Used by LAN scanners
+%% and mesh-level health monitoring.
+advertise_node_health(AdvMgrPid, NodeId) ->
+    StartTime = erlang:system_time(second),
+    Handler = fun(_Args) ->
+        {ok, #{
+            node_id => binary:encode_hex(NodeId),
+            node_name => atom_to_binary(node()),
+            uptime_s => erlang:system_time(second) - StartTime,
+            otp_release => list_to_binary(erlang:system_info(otp_release)),
+            version => app_version(macula)
+        }}
+    end,
+    case macula_advertisement_manager:advertise_service(AdvMgrPid, <<"_peer.health">>, Handler, #{}) of
+        {ok, _Ref} ->
+            ?LOG_INFO("[Peer] Advertised _peer.health");
+        {error, Reason} ->
+            ?LOG_WARNING("[Peer] Failed to advertise _peer.health: ~p", [Reason])
+    end.
+
+%% @private Get application version from .app.src at runtime.
+app_version(App) ->
+    case application:get_key(App, vsn) of
+        {ok, Vsn} -> list_to_binary(Vsn);
+        _ -> <<"unknown">>
+    end.
 
 %% @private
 %% NOTE: publish is now handled via handle_cast (fire-and-forget semantics)
