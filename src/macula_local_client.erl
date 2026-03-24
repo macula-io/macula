@@ -97,9 +97,9 @@ publish(Pid, Topic, Payload, Opts) ->
     gen_server:call(Pid, {publish, Topic, Payload, Opts}).
 
 %% @doc Subscribe to a topic
--spec subscribe(pid(), binary(), pid()) -> {ok, reference()} | {error, term()}.
-subscribe(Pid, Topic, HandlerPid) ->
-    gen_server:call(Pid, {subscribe, Topic, HandlerPid}).
+-spec subscribe(pid(), binary(), fun((map()) -> ok)) -> {ok, reference()} | {error, term()}.
+subscribe(Pid, Topic, Callback) ->
+    gen_server:call(Pid, {subscribe, Topic, Callback}).
 
 %% @doc Unsubscribe from a topic
 -spec unsubscribe(pid(), reference()) -> ok | {error, term()}.
