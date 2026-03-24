@@ -29,6 +29,8 @@
     handle_find_node/2,
     handle_query/3,
     lookup_value/1,
+    safe_find_value/1,
+    do_handle_find_value/1,
     forward_publish_to_bootstrap/1,
     send_to_peer/3,
     query_peer/3
@@ -71,10 +73,10 @@ handle_find_value(Stream, FindValueMsg) ->
 do_handle_find_value(undefined) ->
     ?LOG_WARNING("[Gateway DHT] FIND_VALUE with undefined key"),
     #{type => error, reason => missing_key};
-%% @private Handle FIND_VALUE with valid key
+%% @private Handle FIND_VALUE with valid key.
+%% Catches gen_server timeout to prevent crashing the gateway process.
 do_handle_find_value(Key) when is_binary(Key) ->
-    %% Use routing server's find_value API with k=20
-    case macula_routing_server:find_value(macula_routing_server, Key, 20) of
+    case safe_find_value(Key) of
         {ok, Values} when is_list(Values), Values =/= [] ->
             ?LOG_INFO("[Gateway DHT] FIND_VALUE found ~p value(s)", [length(Values)]),
             macula_routing_protocol:encode_find_value_reply({value, Values});
@@ -83,6 +85,9 @@ do_handle_find_value(Key) when is_binary(Key) ->
             macula_routing_protocol:encode_find_value_reply({nodes, []});
         {error, not_found} ->
             ?LOG_DEBUG("[Gateway DHT] FIND_VALUE: not found"),
+            macula_routing_protocol:encode_find_value_reply({nodes, []});
+        {error, timeout} ->
+            ?LOG_WARNING("[Gateway DHT] FIND_VALUE timed out"),
             macula_routing_protocol:encode_find_value_reply({nodes, []});
         {error, Reason} ->
             ?LOG_WARNING("[Gateway DHT] FIND_VALUE error: ~p", [Reason]),
@@ -138,10 +143,9 @@ lookup_value(Key) ->
 do_lookup_value(undefined, _Key) ->
     ?LOG_ERROR("routing_server not found!"),
     {error, not_found};
-do_lookup_value(RoutingServerPid, Key) ->
-    %% K=20 is the standard Kademlia replication factor
+do_lookup_value(_RoutingServerPid, Key) ->
     ?LOG_DEBUG("Calling routing_server:find_value..."),
-    Result = macula_routing_server:find_value(RoutingServerPid, Key, 20),
+    Result = safe_find_value(Key),
     ?LOG_DEBUG("find_value result: ~p", [Result]),
     normalize_find_value_result(Result).
 
@@ -172,6 +176,28 @@ do_forward_to_bootstrap(ConnPid, PubMsg) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% @private Safely call routing_server:find_value, catching gen_server timeouts.
+%% The routing server's find_value uses a 10s gen_server:call which can exit
+%% with {timeout, ...} if the routing server is overloaded (e.g., during boot
+%% when multiple QUIC connections flood it with DHT queries). Without this
+%% catch, the exit propagates and crashes the gateway gen_server.
+-spec safe_find_value(binary()) -> {ok, list()} | {error, term()}.
+safe_find_value(Key) ->
+    case whereis(macula_routing_server) of
+        undefined ->
+            {error, routing_server_not_running};
+        Pid ->
+            try macula_routing_server:find_value(Pid, Key, 20)
+            catch
+                exit:{timeout, _} ->
+                    ?LOG_WARNING("[DHT] find_value timed out for key_prefix=~p",
+                                [binary:part(Key, 0, min(8, byte_size(Key)))]),
+                    {error, timeout};
+                exit:{noproc, _} ->
+                    {error, routing_server_not_running}
+            end
+    end.
 
 %% @doc Send DHT message to remote peer (fire-and-forget).
 %% Used for STORE operations that don't need a response.

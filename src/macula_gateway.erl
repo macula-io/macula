@@ -540,22 +540,24 @@ handle_call({local_unadvertise, Procedure}, _From, State) ->
 
 handle_call({local_discover_subscribers, _Realm, Topic}, _From, State) ->
     ?LOG_DEBUG("Local discover subscribers for topic: ~s", [Topic]),
-    %% Hash the topic to create DHT key
     TopicKey = crypto:hash(sha256, Topic),
-
-    %% Query the routing server (DHT) for subscribers
     Result = case whereis(macula_routing_server) of
         undefined ->
-            ?LOG_DEBUG("Routing server not running"),
             {error, routing_server_not_running};
-        RoutingServerPid ->
-            case macula_routing_server:find_value(RoutingServerPid, TopicKey, 20) of
+        Pid ->
+            try macula_routing_server:find_value(Pid, TopicKey, 20) of
                 {ok, Subscribers} when is_list(Subscribers) ->
                     {ok, Subscribers};
                 {ok, _Other} ->
                     {ok, []};
                 {error, Reason} ->
                     {error, Reason}
+            catch
+                exit:{timeout, _} ->
+                    ?LOG_WARNING("Discover subscribers timed out for ~s", [Topic]),
+                    {error, timeout};
+                exit:{noproc, _} ->
+                    {error, routing_server_not_running}
             end
     end,
     {reply, Result, State};

@@ -300,33 +300,12 @@ handle_call({unsubscribe, SubRef}, _From, State) ->
     Result = macula_pubsub_handler:unsubscribe(State#state.pubsub_handler_pid, SubRef),
     {reply, Result, State};
 
-%% Discover subscribers via DHT
-%% NOTE: This queries the local routing server which only has local subscriptions.
-%% For full DHT discovery, peers should query the gateway via RPC.
+%% Discover subscribers via DHT.
+%% Queries routing server with find_value (local + network lookup).
+%% Catches gen_server timeout to prevent crashing the peer process.
 handle_call({discover_subscribers, Topic}, _From, State) ->
     TopicKey = crypto:hash(sha256, Topic),
-
-    Result = case whereis(macula_routing_server) of
-        undefined ->
-            logger:warning("[~s] Routing server not running, cannot discover subscribers",
-                          [State#state.node_id]),
-            {error, routing_server_not_running};
-        RoutingServerPid ->
-            case macula_routing_server:find_value(RoutingServerPid, TopicKey, 20) of
-                {ok, Subscribers} when is_list(Subscribers) ->
-                    logger:debug("[~s] Found ~p subscriber(s) for topic ~s in local DHT",
-                                [State#state.node_id, length(Subscribers), Topic]),
-                    {ok, Subscribers};
-                {error, not_found} ->
-                    logger:debug("[~s] No subscribers found for topic ~s in local DHT",
-                                [State#state.node_id, Topic]),
-                    {ok, []};
-                {error, Reason} ->
-                    logger:warning("[~s] Failed to discover subscribers for ~s: ~p",
-                                  [State#state.node_id, Topic, Reason]),
-                    {error, Reason}
-            end
-    end,
+    Result = safe_discover(TopicKey, Topic, State#state.node_id),
     {reply, Result, State};
 
 %% Get node ID
@@ -391,6 +370,35 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% @private Safely discover subscribers, catching gen_server timeouts.
+-spec safe_discover(binary(), binary(), binary()) -> {ok, list()} | {error, term()}.
+safe_discover(TopicKey, Topic, NodeId) ->
+    case whereis(macula_routing_server) of
+        undefined ->
+            logger:warning("[~s] Routing server not running, cannot discover subscribers",
+                          [NodeId]),
+            {error, routing_server_not_running};
+        Pid ->
+            try macula_routing_server:find_value(Pid, TopicKey, 20) of
+                {ok, Subscribers} when is_list(Subscribers) ->
+                    logger:debug("[~s] Found ~p subscriber(s) for topic ~s",
+                                [NodeId, length(Subscribers), Topic]),
+                    {ok, Subscribers};
+                {error, not_found} ->
+                    {ok, []};
+                {error, Reason} ->
+                    logger:warning("[~s] Failed to discover subscribers for ~s: ~p",
+                                  [NodeId, Topic, Reason]),
+                    {error, Reason}
+            catch
+                exit:{timeout, _} ->
+                    logger:warning("[~s] Discover subscribers timed out for ~s", [NodeId, Topic]),
+                    {error, timeout};
+                exit:{noproc, _} ->
+                    {error, routing_server_not_running}
+            end
+    end.
 
 %% @doc Extract and normalize realm from options (pattern matching on type).
 -spec get_realm_from_opts(map()) -> binary().
