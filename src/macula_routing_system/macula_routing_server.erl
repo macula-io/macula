@@ -36,6 +36,11 @@
     terminate/2
 ]).
 
+%% Stale peer eviction interval (60 seconds)
+-define(EVICT_INTERVAL_MS, 60000).
+%% Peers not seen in 5 minutes are considered stale
+-define(STALE_THRESHOLD_MS, 300000).
+
 %% State
 -record(state, {
     local_node_id :: binary(),
@@ -149,6 +154,9 @@ init({LocalNodeId, Config}) ->
             escalation_timeout => EscalationTimeout
         }
     },
+
+    %% Start periodic stale peer eviction
+    erlang:send_after(?EVICT_INTERVAL_MS, self(), evict_stale_peers),
 
     {ok, State}.
 
@@ -289,6 +297,19 @@ handle_cast(_Request, State) ->
     {noreply, State}.
 
 %% @private
+handle_info(evict_stale_peers, #state{routing_table = Table} = State) ->
+    StaleThreshold = erlang:system_time(millisecond) - ?STALE_THRESHOLD_MS,
+    OldSize = macula_routing_table:size(Table),
+    NewTable = macula_routing_table:evict_stale(Table, StaleThreshold),
+    NewSize = macula_routing_table:size(NewTable),
+    case OldSize - NewSize of
+        0 -> ok;
+        Evicted ->
+            ?LOG_INFO("[RoutingServer] Evicted ~p stale peer(s) (table: ~p -> ~p)",
+                      [Evicted, OldSize, NewSize])
+    end,
+    erlang:send_after(?EVICT_INTERVAL_MS, self(), evict_stale_peers),
+    {noreply, State#state{routing_table = NewTable}};
 handle_info(_Info, State) ->
     {noreply, State}.
 

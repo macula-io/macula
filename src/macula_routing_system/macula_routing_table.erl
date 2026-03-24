@@ -11,6 +11,8 @@
     new/2,
     add_node/2,
     remove_node/2,
+    remove_by_endpoint/2,
+    evict_stale/2,
     find_closest/3,
     get_bucket/2,
     bucket_size/2,
@@ -44,12 +46,16 @@ new(LocalNodeId, K) ->
     }.
 
 %% @doc Add a node to the routing table.
-%% Calculates bucket index and adds to appropriate bucket.
+%% Removes any ghost entries (same endpoint, different node_id) across ALL buckets
+%% before adding, since a restarted node may land in a different bucket.
 -spec add_node(routing_table(), macula_routing_bucket:node_info()) -> routing_table().
 add_node(#{local_node_id := LocalNodeId} = Table, NodeInfo) ->
     NodeId = maps:get(node_id, NodeInfo),
+    Endpoint = macula_routing_bucket:get_endpoint(NodeInfo),
+    %% Remove ghosts from all buckets (endpoint with different node_id)
+    CleanTable = remove_ghosts_by_endpoint(Table, Endpoint, NodeId),
     BucketIndex = macula_routing_nodeid:bucket_index(LocalNodeId, NodeId),
-    do_add_node(Table, BucketIndex, NodeInfo).
+    do_add_node(CleanTable, BucketIndex, NodeInfo).
 
 %% Self node (bucket index 256) - ignore
 do_add_node(Table, 256, _NodeInfo) ->
@@ -84,6 +90,22 @@ do_remove_node(#{buckets := Buckets} = Table, BucketIndex, NodeId) ->
         error ->
             Table
     end.
+
+%% @doc Remove all nodes matching an endpoint from all buckets.
+-spec remove_by_endpoint(routing_table(), binary()) -> routing_table().
+remove_by_endpoint(#{buckets := Buckets} = Table, Endpoint) ->
+    NewBuckets = maps:map(fun(_Idx, Bucket) ->
+        macula_routing_bucket:remove_by_endpoint(Bucket, Endpoint)
+    end, Buckets),
+    Table#{buckets => NewBuckets}.
+
+%% @doc Remove nodes not seen since StaleThreshold (millisecond timestamp) from all buckets.
+-spec evict_stale(routing_table(), integer()) -> routing_table().
+evict_stale(#{buckets := Buckets} = Table, StaleThreshold) ->
+    NewBuckets = maps:map(fun(_Idx, Bucket) ->
+        macula_routing_bucket:evict_stale(Bucket, StaleThreshold)
+    end, Buckets),
+    Table#{buckets => NewBuckets}.
 
 %% @doc Find k closest nodes to target.
 -spec find_closest(routing_table(), binary(), pos_integer()) -> [macula_routing_bucket:node_info()].
@@ -155,6 +177,17 @@ k(#{k := K}) ->
 %%%===================================================================
 %%% Internal Functions
 %%%===================================================================
+
+%% @doc Remove ghost entries: nodes with matching endpoint but different node_id.
+%% Scans all buckets since a restarted node may generate a node_id in a different bucket.
+-spec remove_ghosts_by_endpoint(routing_table(), binary() | undefined, binary()) -> routing_table().
+remove_ghosts_by_endpoint(Table, undefined, _NodeId) ->
+    Table;
+remove_ghosts_by_endpoint(#{buckets := Buckets} = Table, Endpoint, NodeId) ->
+    NewBuckets = maps:map(fun(_Idx, Bucket) ->
+        macula_routing_bucket:remove_ghost_by_endpoint(Bucket, Endpoint, NodeId)
+    end, Buckets),
+    Table#{buckets => NewBuckets}.
 
 %% @doc Collect nodes from buckets near target bucket (expanding outward).
 -spec collect_nodes_near_bucket(#{0..255 => macula_routing_bucket:bucket()}, 0..256) -> [macula_routing_bucket:node_info()].

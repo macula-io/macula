@@ -11,11 +11,15 @@
     new/1,
     add_node/2,
     remove_node/2,
+    remove_by_endpoint/2,
+    remove_ghost_by_endpoint/3,
+    evict_stale/2,
     get_nodes/1,
     find_node/2,
     find_closest/3,
     has_node/2,
     update_timestamp/2,
+    get_endpoint/1,
     size/1,
     capacity/1
 ]).
@@ -44,13 +48,17 @@ new(Capacity) ->
     #{capacity => Capacity, nodes => []}.
 
 %% @doc Add a node to the bucket.
-%% If node exists, move to tail (most recent).
-%% If bucket full, return {error, bucket_full}.
+%% If node exists (same node_id), move to tail (most recent).
+%% If endpoint exists with different node_id, replace the stale entry.
+%% If bucket full, replace oldest stale entry or return {error, bucket_full}.
 -spec add_node(bucket(), node_info()) -> bucket() | {error, bucket_full}.
 add_node(Bucket, NodeInfo) ->
     NodeWithTimestamp = ensure_timestamp(NodeInfo),
     NodeId = maps:get(node_id, NodeWithTimestamp),
-    do_add_node(Bucket, NodeId, NodeWithTimestamp).
+    Endpoint = get_endpoint(NodeWithTimestamp),
+    %% First, remove any entry with the same endpoint but different node_id (ghost cleanup)
+    CleanBucket = remove_ghost_by_endpoint(Bucket, Endpoint, NodeId),
+    do_add_node(CleanBucket, NodeId, NodeWithTimestamp).
 
 %% Node already exists - move to tail
 do_add_node(#{nodes := Nodes} = Bucket, NodeId, NodeInfo) when is_list(Nodes) ->
@@ -66,9 +74,16 @@ do_add_node(#{nodes := Nodes} = Bucket, NodeId, NodeInfo) when is_list(Nodes) ->
 add_new_node(#{capacity := Capacity, nodes := Nodes} = Bucket, NodeInfo)
   when length(Nodes) < Capacity ->
     Bucket#{nodes => Nodes ++ [NodeInfo]};
-%% Bucket full
-add_new_node(#{capacity := Capacity, nodes := Nodes}, _NodeInfo)
-  when length(Nodes) >= Capacity ->
+%% Bucket full - try replacing oldest stale entry (not seen in 5 min)
+add_new_node(#{nodes := [Oldest | Rest]} = Bucket, NodeInfo) ->
+    StaleThreshold = erlang:system_time(millisecond) - 300000,
+    OldestSeen = maps:get(last_seen, Oldest, 0),
+    replace_if_stale(OldestSeen, StaleThreshold, Bucket, Rest, NodeInfo).
+
+replace_if_stale(OldestSeen, StaleThreshold, Bucket, Rest, NodeInfo)
+  when OldestSeen < StaleThreshold ->
+    Bucket#{nodes => Rest ++ [NodeInfo]};
+replace_if_stale(_OldestSeen, _StaleThreshold, _Bucket, _Rest, _NodeInfo) ->
     {error, bucket_full}.
 
 %% Add timestamp if not present
@@ -81,6 +96,18 @@ ensure_timestamp(NodeInfo) ->
 -spec remove_node(bucket(), binary()) -> bucket().
 remove_node(#{nodes := Nodes} = Bucket, NodeId) ->
     Bucket#{nodes => remove_by_id(Nodes, NodeId)}.
+
+%% @doc Remove all nodes matching an endpoint (regardless of node_id).
+-spec remove_by_endpoint(bucket(), binary() | undefined) -> bucket().
+remove_by_endpoint(Bucket, undefined) ->
+    Bucket;
+remove_by_endpoint(#{nodes := Nodes} = Bucket, Endpoint) ->
+    Bucket#{nodes => [N || N <- Nodes, get_endpoint(N) =/= Endpoint]}.
+
+%% @doc Remove nodes not seen since StaleThreshold (millisecond timestamp).
+-spec evict_stale(bucket(), integer()) -> bucket().
+evict_stale(#{nodes := Nodes} = Bucket, StaleThreshold) ->
+    Bucket#{nodes => [N || N <- Nodes, maps:get(last_seen, N, 0) >= StaleThreshold]}.
 
 %% @doc Get all nodes in the bucket (ordered: oldest first).
 -spec get_nodes(bucket()) -> [node_info()].
@@ -154,3 +181,20 @@ remove_by_id(Nodes, NodeId) ->
 -spec distance_to(binary(), node_info()) -> binary().
 distance_to(Target, #{node_id := NodeId}) ->
     macula_routing_nodeid:distance(Target, NodeId).
+
+%% @doc Extract endpoint from node info (handles multiple key formats).
+-spec get_endpoint(node_info()) -> binary() | undefined.
+get_endpoint(#{endpoint := Endpoint}) when is_binary(Endpoint) -> Endpoint;
+get_endpoint(#{<<"endpoint">> := Endpoint}) when is_binary(Endpoint) -> Endpoint;
+get_endpoint(#{address := Address}) when is_binary(Address) -> Address;
+get_endpoint(#{<<"address">> := Address}) when is_binary(Address) -> Address;
+get_endpoint(_) -> undefined.
+
+%% @doc Remove entries with matching endpoint but different node_id (ghost cleanup).
+-spec remove_ghost_by_endpoint(bucket(), binary() | undefined, binary()) -> bucket().
+remove_ghost_by_endpoint(Bucket, undefined, _NodeId) ->
+    Bucket;
+remove_ghost_by_endpoint(#{nodes := Nodes} = Bucket, Endpoint, NodeId) ->
+    Bucket#{nodes => [N || N <- Nodes,
+                      not (get_endpoint(N) =:= Endpoint andalso
+                           maps:get(node_id, N) =/= NodeId)]}.
