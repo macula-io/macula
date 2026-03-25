@@ -66,13 +66,13 @@ test_store_lookup_service(_Fixture) ->
     %% Lookup the service
     {ok, Result} = macula_bootstrap_registry:lookup_service(ServiceKey),
 
-    %% DHT stores as list, so we need to handle that
-    case Result of
-        [Value] when is_map(Value) ->
-            ?assertEqual(ServiceValue, Value);
-        Value when is_map(Value) ->
-            ?assertEqual(ServiceValue, Value)
-    end.
+    %% DHT stores as list and adds stored_at timestamp, so check expected keys
+    Value = case Result of
+        [V] when is_map(V) -> V;
+        V when is_map(V) -> V
+    end,
+    ?assertEqual(maps:get(node_id, ServiceValue), maps:get(node_id, Value)),
+    ?assertEqual(maps:get(endpoint, ServiceValue), maps:get(endpoint, Value)).
 
 test_store_lookup_topic(_Fixture) ->
     %% Store a topic subscription
@@ -87,13 +87,13 @@ test_store_lookup_topic(_Fixture) ->
     %% Lookup the topic
     {ok, Result} = macula_bootstrap_registry:lookup_topic(Topic),
 
-    %% DHT stores as list
-    case Result of
-        [Value] when is_map(Value) ->
-            ?assertEqual(Subscriber, Value);
-        Value when is_map(Value) ->
-            ?assertEqual(Subscriber, Value)
-    end.
+    %% DHT stores as list and adds stored_at timestamp
+    Value = case Result of
+        [V] when is_map(V) -> V;
+        V when is_map(V) -> V
+    end,
+    ?assertEqual(maps:get(node_id, Subscriber), maps:get(node_id, Value)),
+    ?assertEqual(maps:get(endpoint, Subscriber), maps:get(endpoint, Value)).
 
 test_lookup_not_found(_Fixture) ->
     %% Lookup non-existent key
@@ -112,13 +112,12 @@ test_generic_api(_Fixture) ->
 
     {ok, Result} = macula_bootstrap_registry:lookup(Key),
 
-    %% DHT stores as list
-    case Result of
-        [V] when is_map(V) ->
-            ?assertEqual(Value, V);
-        V when is_map(V) ->
-            ?assertEqual(Value, V)
-    end.
+    %% DHT stores as list and adds stored_at timestamp
+    V = case Result of
+        [R] when is_map(R) -> R;
+        R when is_map(R) -> R
+    end,
+    ?assertEqual(maps:get(data, Value), maps:get(data, V)).
 
 test_requires_routing_server(_Fixture) ->
     %% Stop routing server

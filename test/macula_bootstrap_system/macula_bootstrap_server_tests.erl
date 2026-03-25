@@ -85,12 +85,12 @@ test_find_value(_Fixture) ->
     %% Find the value
     Result = macula_bootstrap_server:handle_dht_query(find_value, Key),
 
-    %% Should return the value (DHT returns as list)
+    %% Should return the value (DHT returns as list, with stored_at added)
     case Result of
         {ok, [V]} when is_map(V) ->
-            ?assertEqual(Value, V);
+            ?assertEqual(maps:get(node_id, Value), maps:get(node_id, V));
         {ok, V} when is_map(V) ->
-            ?assertEqual(Value, V);
+            ?assertEqual(maps:get(node_id, Value), maps:get(node_id, V));
         Other ->
             ?debugFmt("Unexpected result: ~p", [Other]),
             ?assert(false)

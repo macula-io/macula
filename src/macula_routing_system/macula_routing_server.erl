@@ -41,6 +41,10 @@
 -define(EVICT_INTERVAL_MS, 60000).
 %% Peers not seen in 5 minutes are considered stale
 -define(STALE_THRESHOLD_MS, 300000).
+%% DHT value expiry interval (30 seconds)
+-define(VALUE_EXPIRY_INTERVAL_MS, 30000).
+%% DHT values with TTL older than this are expired (default 5 minutes + 60s grace)
+-define(VALUE_MAX_AGE_MS, 360000).
 
 %% State
 -record(state, {
@@ -176,6 +180,8 @@ init({LocalNodeId, Config}) ->
 
     %% Start periodic stale peer eviction
     erlang:send_after(?EVICT_INTERVAL_MS, self(), evict_stale_peers),
+    %% Start periodic DHT value expiry (removes zombie subscriptions)
+    erlang:send_after(?VALUE_EXPIRY_INTERVAL_MS, self(), expire_stale_values),
 
     {ok, State}.
 
@@ -355,8 +361,52 @@ handle_info(evict_stale_peers, #state{routing_table = Table} = State) ->
     end,
     erlang:send_after(?EVICT_INTERVAL_MS, self(), evict_stale_peers),
     {noreply, State#state{routing_table = NewTable}};
+handle_info(expire_stale_values, #state{storage = Storage, config = Config} = State) ->
+    Now = erlang:system_time(millisecond),
+    {NewStorage, Expired} = maps:fold(fun(Key, Providers, {StorageAcc, ExpiredCount}) ->
+        Fresh = [P || P <- Providers, not is_provider_expired(P, Now)],
+        case {Fresh, length(Providers) - length(Fresh)} of
+            {[], Removed} ->
+                {maps:remove(Key, StorageAcc), ExpiredCount + Removed};
+            {Kept, 0} ->
+                {StorageAcc#{Key => Kept}, ExpiredCount};
+            {Kept, Removed} ->
+                {StorageAcc#{Key => Kept}, ExpiredCount + Removed}
+        end
+    end, {Storage, 0}, Storage),
+    case Expired of
+        0 -> ok;
+        N -> ?LOG_INFO("[RoutingServer] Expired ~p stale DHT value(s)", [N])
+    end,
+    %% Mirror to ETS
+    case Expired > 0 of
+        true ->
+            case maps:get(storage_ets, Config, undefined) of
+                undefined -> ok;
+                Ets ->
+                    ets:delete_all_objects(Ets),
+                    maps:foreach(fun(K, V) -> ets:insert(Ets, {K, V}) end, NewStorage)
+            end;
+        false -> ok
+    end,
+    erlang:send_after(?VALUE_EXPIRY_INTERVAL_MS, self(), expire_stale_values),
+    {noreply, State#state{storage = NewStorage}};
+
 handle_info(_Info, State) ->
     {noreply, State}.
+
+%% @private Check if a provider entry is expired based on its stored_at timestamp.
+%% Providers without stored_at are considered expired if they have a ttl field
+%% (indicating they're subscription entries that should have been timestamped).
+-spec is_provider_expired(map(), integer()) -> boolean().
+is_provider_expired(#{stored_at := StoredAt}, Now) ->
+    (Now - StoredAt) > ?VALUE_MAX_AGE_MS;
+is_provider_expired(#{ttl := _TTL}, _Now) ->
+    %% Has TTL but no stored_at — legacy entry, expire it
+    true;
+is_provider_expired(_Provider, _Now) ->
+    %% No TTL, no stored_at — service entry, keep it
+    false.
 
 %% @private
 terminate(_Reason, _State) ->
@@ -505,11 +555,13 @@ ensure_provider_list(List) when is_list(List) -> List;
 ensure_provider_list(Value) -> [Value].
 
 %% @doc Insert or update a provider in the list.
+%% Stamps every entry with stored_at for expiry tracking.
 -spec upsert_provider(binary() | undefined, map(), [map()]) -> [map()].
 upsert_provider(undefined, Value, ProviderList) ->
-    [Value | ProviderList];
+    [Value#{stored_at => erlang:system_time(millisecond)} | ProviderList];
 upsert_provider(NodeId, Value, ProviderList) ->
-    upsert_by_index(find_provider_index(NodeId, ProviderList), Value, ProviderList).
+    Stamped = Value#{stored_at => erlang:system_time(millisecond)},
+    upsert_by_index(find_provider_index(NodeId, ProviderList), Stamped, ProviderList).
 
 upsert_by_index(not_found, Value, ProviderList) ->
     [Value | ProviderList];
