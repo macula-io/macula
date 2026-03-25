@@ -21,6 +21,7 @@
     get_all_keys/1,
     delete_local/3,
     find_value/3,
+    find_value_local/2,
     get_routing_table/1,
     size/1,
     handle_message/2,
@@ -104,23 +105,24 @@ get_all_keys(Pid) ->
 delete_local(Pid, Key, NodeId) ->
     gen_server:call(Pid, {delete_local, Key, NodeId}).
 
-%% @doc Find value in DHT using iterative lookup.
-%% First tries direct ETS read (no gen_server, no blocking).
-%% Falls back to gen_server call for escalation if not found locally.
+%% @doc Find value in DHT — goes through gen_server for full iterative lookup.
+%% For local-only reads (answering peer queries), use find_value_local/2.
 -spec find_value(pid(), binary(), pos_integer()) ->
     {ok, term()} | {nodes, [macula_routing_bucket:node_info()]} | {error, term()}.
 find_value(Pid, Key, K) ->
-    %% Fast path: direct ETS read (bypasses gen_server mailbox entirely)
+    gen_server:call(Pid, {find_value, Key, K}, 10000).
+
+%% @doc Fast local-only lookup via ETS — for answering incoming FIND_VALUE from peers.
+%% Does NOT query the network. Returns only locally stored values.
+-spec find_value_local(binary(), pos_integer()) ->
+    {ok, term()} | {error, not_found}.
+find_value_local(Key, _K) ->
     case ets:info(macula_dht_storage) of
-        undefined ->
-            gen_server:call(Pid, {find_value, Key, K}, 10000);
+        undefined -> {error, not_found};
         _ ->
             case ets:lookup(macula_dht_storage, Key) of
-                [{_, Values}] when is_list(Values), Values =/= [] ->
-                    {ok, Values};
-                _ ->
-                    %% Not in local storage — fall back to gen_server for escalation
-                    gen_server:call(Pid, {find_value, Key, K}, 10000)
+                [{_, Values}] when is_list(Values), Values =/= [] -> {ok, Values};
+                _ -> {error, not_found}
             end
     end.
 

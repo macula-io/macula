@@ -74,28 +74,23 @@ do_handle_find_value(undefined) ->
     ?LOG_WARNING("[Gateway DHT] FIND_VALUE with undefined key"),
     #{type => error, reason => missing_key};
 %% @private Handle FIND_VALUE with valid key.
-%% Catches gen_server timeout to prevent crashing the gateway process.
+%% Uses fast ETS local-only lookup (no gen_server, no network query).
 do_handle_find_value(Key) when is_binary(Key) ->
-    case safe_find_value(Key) of
-        {ok, Values} when is_list(Values), Values =/= [] ->
-            ?LOG_INFO("[Gateway DHT] FIND_VALUE found ~p value(s)", [length(Values)]),
-            macula_routing_protocol:encode_find_value_reply({value, Values});
-        {ok, []} ->
-            ?LOG_DEBUG("[Gateway DHT] FIND_VALUE: no values found"),
-            macula_routing_protocol:encode_find_value_reply({nodes, []});
-        {error, not_found} ->
-            ?LOG_DEBUG("[Gateway DHT] FIND_VALUE: not found"),
-            macula_routing_protocol:encode_find_value_reply({nodes, []});
-        {error, timeout} ->
-            ?LOG_WARNING("[Gateway DHT] FIND_VALUE timed out"),
-            macula_routing_protocol:encode_find_value_reply({nodes, []});
-        {error, Reason} ->
-            ?LOG_WARNING("[Gateway DHT] FIND_VALUE error: ~p", [Reason]),
-            #{type => error, reason => Reason}
+    case macula_routing_server:find_value_local(Key, 20) of
+        {error, not_found} -> macula_routing_protocol:encode_find_value_reply({nodes, []});
+        Result -> do_handle_find_value_result(Result)
     end;
 do_handle_find_value(Key) ->
     ?LOG_WARNING("[Gateway DHT] FIND_VALUE with non-binary key: ~p", [Key]),
     #{type => error, reason => invalid_key}.
+
+do_handle_find_value_result({ok, Values}) when is_list(Values), Values =/= [] ->
+    ?LOG_INFO("[Gateway DHT] FIND_VALUE found ~p value(s)", [length(Values)]),
+    macula_routing_protocol:encode_find_value_reply({value, Values});
+do_handle_find_value_result({ok, []}) ->
+    macula_routing_protocol:encode_find_value_reply({nodes, []});
+do_handle_find_value_result({error, _}) ->
+    macula_routing_protocol:encode_find_value_reply({nodes, []}).
 
 %% @doc Handle DHT FIND_NODE message.
 %% The message is already decoded by the gateway — it's the payload without the type field.
