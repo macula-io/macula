@@ -246,21 +246,28 @@ handle_call({delete_local, Key, NodeId}, _From, #state{storage = Storage, config
 handle_call({find_value, Key, K}, From, #state{routing_table = Table, storage = Storage,
                                               config = Config} = State) ->
     ?LOG_DEBUG("find_value: key=~p, storage_size=~p", [Key, maps:size(Storage)]),
-    %% Check local storage first (fast path, no blocking)
-    case maps:get(Key, Storage, undefined) of
-        undefined ->
-            %% No local values — spawn async DHT query to avoid blocking routing server
-            spawn(fun() ->
-                Reply = find_value_with_escalation(Key, K, Storage, Table, Config),
-                gen_server:reply(From, Reply)
-            end),
-            {noreply, State};
-        Value when is_list(Value) ->
-            ?LOG_DEBUG("[DHT] find_value: returning ~p local value(s)", [length(Value)]),
-            {reply, {ok, Value}, State};
-        Value ->
-            {reply, {ok, [Value]}, State}
-    end;
+    LocalValues = case maps:get(Key, Storage, undefined) of
+        undefined -> [];
+        V when is_list(V) -> V;
+        V -> [V]
+    end,
+    %% Always query the network — local values may be incomplete (e.g. pubsub subscribers).
+    %% Spawn to avoid blocking the routing server.
+    spawn(fun() ->
+        RemoteResult = find_value_with_escalation(Key, K, Storage, Table, Config),
+        RemoteValues = case RemoteResult of
+            {ok, R} when is_list(R) -> R;
+            _ -> []
+        end,
+        %% Merge local + remote, deduplicate by node_id
+        AllValues = deduplicate_providers(LocalValues ++ RemoteValues),
+        Reply = case AllValues of
+            [] -> {error, not_found};
+            _ -> {ok, AllValues}
+        end,
+        gen_server:reply(From, Reply)
+    end),
+    {noreply, State};
 
 handle_call({handle_message, Message}, _From, State) ->
     {Reply, NewState} = process_dht_message(Message, State),
@@ -502,6 +509,16 @@ upsert_by_index(not_found, Value, ProviderList) ->
     [Value | ProviderList];
 upsert_by_index(Index, Value, ProviderList) ->
     lists:sublist(ProviderList, Index - 1) ++ [Value] ++ lists:nthtail(Index, ProviderList).
+
+%% @doc Deduplicate providers by node_id — keeps first occurrence.
+deduplicate_providers(Providers) ->
+    lists:foldl(fun(P, Acc) ->
+        NId = get_node_id_from_value(P),
+        case lists:any(fun(A) -> get_node_id_from_value(A) =:= NId end, Acc) of
+            true -> Acc;
+            false -> [P | Acc]
+        end
+    end, [], Providers).
 
 %% @doc Format storage value for get_local response.
 -spec format_storage_value(undefined | term()) -> not_found | {ok, [term()]}.
