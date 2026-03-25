@@ -398,15 +398,20 @@ extract_monitor_ref(false) -> undefined.
 %%   - List string like `"host:port"'
 create_mesh_connection(Address, State) ->
     {Host, Port} = parse_address(Address),
-    %% Get TLS certificates from opts or environment
-    {CertFile, KeyFile} = get_tls_certificates(State#state.opts),
 
     %% Connection options with proper keep-alive settings
-    ConnOpts = [
-        {cert, CertFile},
-        {key, KeyFile},
+    %% Client certs are optional — only include if files exist
+    CertOpts = case get_tls_certificates(State#state.opts) of
+        {CertFile, KeyFile} when CertFile =/= undefined, KeyFile =/= undefined ->
+            case {filelib:is_regular(CertFile), filelib:is_regular(KeyFile)} of
+                {true, true} -> [{cert, CertFile}, {key, KeyFile}];
+                _ -> []
+            end;
+        _ -> []
+    end,
+    ConnOpts = CertOpts ++ [
         {alpn, ["macula"]},
-        {verify, none},  % For now, accept any certificate
+        {verify, none},
         {peer_unidi_stream_count, 3},
         {idle_timeout_ms, 60000},
         {keep_alive_interval_ms, 20000},
@@ -566,11 +571,17 @@ async_send_worker(_MeshPid, NodeId, Address, EncodedMessage, Opts) ->
 
     %% Parse address and create connection
     {Host, Port} = parse_address(Address),
-    {CertFile, KeyFile} = get_tls_certificates(Opts),
 
-    ConnOpts = [
-        {cert, CertFile},
-        {key, KeyFile},
+    %% Client certs are optional — only include if files exist
+    CertOpts = case get_tls_certificates(Opts) of
+        {CF, KF} when CF =/= undefined, KF =/= undefined ->
+            case {filelib:is_regular(CF), filelib:is_regular(KF)} of
+                {true, true} -> [{cert, CF}, {key, KF}];
+                _ -> []
+            end;
+        _ -> []
+    end,
+    ConnOpts = CertOpts ++ [
         {alpn, ["macula"]},
         {verify, none},
         {peer_unidi_stream_count, 3},
