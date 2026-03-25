@@ -223,9 +223,8 @@ route_to_subscriber_impl(DestNodeId, _Subscriber, _EndpointKey, _Topic, _PubMsg,
     %% SKIP: This is our own node_id - already delivered locally
     ok;
 route_to_subscriber_impl(DestNodeId, Subscriber, EndpointKey, Topic, PubMsg, LocalNodeId, Mesh, Clients) ->
-    %% Deliver directly — authorization was checked at subscribe time.
-    %% Re-checking at delivery is wrong: subscriber DID rarely matches the
-    %% publisher's topic namespace, causing false denials for all cross-agent pubsub.
+    ?LOG_INFO("[PubSubRouter] route_to ~s endpoint_key=~p subscriber_keys=~p",
+             [binary:encode_hex(DestNodeId), EndpointKey, maps:keys(Subscriber)]),
     do_route_to_subscriber(DestNodeId, Subscriber, EndpointKey, Topic, PubMsg, LocalNodeId, Mesh, Clients).
 
 %% @private
@@ -302,7 +301,9 @@ resolve_provided_endpoint(_) ->
 %% @private
 %% @doc Send to resolved endpoint.
 -spec send_to_resolved_endpoint(binary(), {direct | provided, binary()} | not_found, map(), pid()) -> ok.
-send_to_resolved_endpoint(_DestNodeId, not_found, _PubSubRouteMsg, _Mesh) ->
+send_to_resolved_endpoint(DestNodeId, not_found, _PubSubRouteMsg, _Mesh) ->
+    ?LOG_WARNING("[PubSubRouter] No endpoint for subscriber ~s — dropping",
+                [binary:encode_hex(DestNodeId)]),
     ok;
 send_to_resolved_endpoint(DestNodeId, {_Source, EndpointUrl}, PubSubRouteMsg, Mesh) ->
     case parse_endpoint(EndpointUrl) of
