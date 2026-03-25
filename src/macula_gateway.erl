@@ -842,15 +842,15 @@ handle_dht_store(Stream, StoreMsg, State) ->
     {noreply, State}.
 
 %% @doc Handle DHT FIND_VALUE message.
+%% Spawned to avoid blocking the gateway — routing_server calls can take seconds.
 handle_dht_find_value(Stream, FindValueMsg, State) ->
-    %% Delegate to DHT module
-    _Result = macula_gateway_dht:handle_find_value(Stream, FindValueMsg),
+    spawn(fun() -> macula_gateway_dht:handle_find_value(Stream, FindValueMsg) end),
     {noreply, State}.
 
 %% @doc Handle DHT FIND_NODE message.
+%% Spawned to avoid blocking the gateway — routing_server calls can take seconds.
 handle_dht_find_node(Stream, FindNodeMsg, State) ->
-    %% Delegate to DHT module
-    _Result = macula_gateway_dht:handle_find_node(Stream, FindNodeMsg),
+    spawn(fun() -> macula_gateway_dht:handle_find_node(Stream, FindNodeMsg) end),
     {noreply, State}.
 
 %% @doc Handle RPC call message received via DHT routing.
