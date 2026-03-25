@@ -422,6 +422,7 @@ create_mesh_connection(Address, State) ->
     FormattedAddress = format_address(Host),
 
     %% Connect to peer
+    ?LOG_WARNING("[gateway_mesh] P2P connect to ~s:~p (opts=~p)", [FormattedAddress, Port, ConnOpts]),
     case macula_quic:connect(FormattedAddress, Port, ConnOpts, 5000) of
         {ok, Conn} ->
             case macula_quic:open_stream(Conn) of

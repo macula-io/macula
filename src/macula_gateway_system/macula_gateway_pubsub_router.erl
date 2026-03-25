@@ -307,10 +307,14 @@ send_to_resolved_endpoint(_DestNodeId, not_found, _PubSubRouteMsg, _Mesh) ->
 send_to_resolved_endpoint(DestNodeId, {_Source, EndpointUrl}, PubSubRouteMsg, Mesh) ->
     case parse_endpoint(EndpointUrl) of
         {ok, {Address, Port}} ->
+            ?LOG_WARNING("[PubSubRouter] Sending to ~s (~s) via ~s:~p",
+                        [binary:encode_hex(DestNodeId), EndpointUrl, Address, Port]),
             case macula_gateway_mesh:get_or_create_connection(Mesh, DestNodeId, {Address, Port}) of
                 {ok, Stream} ->
+                    ?LOG_WARNING("[PubSubRouter] Connected! Sending pubsub_route to ~s", [EndpointUrl]),
                     send_route_message(Stream, PubSubRouteMsg);
-                {error, _Reason} ->
+                {error, Reason} ->
+                    ?LOG_WARNING("[PubSubRouter] Connection failed to ~s: ~p", [EndpointUrl, Reason]),
                     ok
             end;
         {error, _ParseReason} ->

@@ -38,10 +38,11 @@
          record_recent_connection/3, collect_shield_metrics/0]).
 -endif.
 
-%% Rate limiting defaults
--define(DEFAULT_MAX_CONN_PER_IP, 5).
+%% Rate limiting defaults — must be high enough for mesh peers creating
+%% concurrent connections (DHT queries, pubsub, RPC). 5/IP blocks LAN clusters.
+-define(DEFAULT_MAX_CONN_PER_IP, 50).
 -define(DEFAULT_IP_WINDOW_MS, 10000).
--define(DEFAULT_MAX_CONN_GLOBAL_PER_SEC, 50).
+-define(DEFAULT_MAX_CONN_GLOBAL_PER_SEC, 200).
 -define(RATE_CLEANUP_INTERVAL_MS, 30000).
 -define(RATE_LOG_SUPPRESS_MS, 10000).
 -define(MAX_RECENT_CONNECTIONS, 100).
