@@ -255,6 +255,11 @@ do_pool_send_stream({ok, Stream}, _Conn, _Endpoint, MessageBinary) ->
 do_pool_send_stream({error, Reason}, _Conn, Endpoint, MessageBinary) ->
     ?LOG_WARNING("[PeerConnector] Stream open failed on pooled conn: ~p, using direct", [Reason]),
     macula_peer_connection_pool:invalidate(Endpoint),
+    send_via_direct_connection(Endpoint, MessageBinary);
+%% @private quicer returns 3-tuple errors (e.g., {error, stm_open_error, invalid_state})
+do_pool_send_stream({error, Reason1, Reason2}, _Conn, Endpoint, MessageBinary) ->
+    ?LOG_WARNING("[PeerConnector] Stream open failed on pooled conn: ~p:~p, using direct", [Reason1, Reason2]),
+    macula_peer_connection_pool:invalidate(Endpoint),
     send_via_direct_connection(Endpoint, MessageBinary).
 
 %% @private
