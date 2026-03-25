@@ -254,8 +254,8 @@ init({Url, Opts}) ->
         advertisement_manager_pid = AdvMgrPid
     },
 
-    %% Auto-advertise _peer.health — every mesh node is discoverable
-    advertise_node_health(AdvMgrPid, NodeId),
+    %% Defer health advertisement — gateway may be busy at boot
+    self() ! {deferred_advertise_health, AdvMgrPid, NodeId},
 
     {ok, State}.
 
@@ -348,6 +348,10 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 %% @private
+handle_info({deferred_advertise_health, AdvMgrPid, NodeId}, State) ->
+    spawn(fun() -> advertise_node_health(AdvMgrPid, NodeId) end),
+    {noreply, State};
+
 handle_info(_Info, State) ->
     {noreply, State}.
 
