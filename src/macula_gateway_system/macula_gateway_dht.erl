@@ -29,7 +29,6 @@
     handle_find_node/2,
     handle_query/3,
     lookup_value/1,
-    safe_find_value/1,
     do_handle_find_value/1,
     forward_publish_to_bootstrap/1,
     send_to_peer/3,
@@ -125,34 +124,51 @@ handle_query(FromPid, _QueryType, QueryData) ->
     FromPid ! {dht_reply, ReplyData},
     ok.
 
-%% @doc Look up a value from the DHT by key.
-%% Synchronous lookup from local DHT storage.
-%% Subscriptions are replicated via DHT propagation to k closest nodes,
-%% so local lookup returns subscribers from the replicated DHT data.
-%% Returns list of subscribers for the given key.
+%% @doc Look up ALL providers for a key — merges local + network results.
+%% Used by pubsub discovery where we need ALL subscribers, not just the first.
 -spec lookup_value(binary()) -> {ok, list()} | {error, not_found}.
 lookup_value(Key) ->
-    ?LOG_DEBUG("lookup_value called with key hash: ~p", [Key]),
-    do_lookup_value(whereis(macula_routing_server), Key).
+    %% Get local results (fast, no gen_server)
+    LocalValues = case macula_routing_server:find_value_local(Key, 20) of
+        {ok, L} when is_list(L) -> L;
+        _ -> []
+    end,
+    %% Also query peers for their stored values
+    RemoteValues = case whereis(macula_routing_server) of
+        undefined -> [];
+        Pid ->
+            case safe_find_value(Pid, Key) of
+                {ok, R} when is_list(R) -> R;
+                _ -> []
+            end
+    end,
+    %% Merge and deduplicate by node_id
+    Merged = merge_providers(LocalValues ++ RemoteValues),
+    case Merged of
+        [] -> {error, not_found};
+        _ -> {ok, Merged}
+    end.
 
-do_lookup_value(undefined, _Key) ->
-    ?LOG_ERROR("routing_server not found!"),
-    {error, not_found};
-do_lookup_value(_RoutingServerPid, Key) ->
-    ?LOG_DEBUG("Calling routing_server:find_value..."),
-    Result = safe_find_value(Key),
-    ?LOG_DEBUG("find_value result: ~p", [Result]),
-    normalize_find_value_result(Result).
+%% @private Deduplicate providers by node_id
+merge_providers(Providers) ->
+    lists:foldl(fun(P, Acc) ->
+        NodeId = get_provider_node_id(P),
+        case lists:any(fun(A) -> get_provider_node_id(A) =:= NodeId end, Acc) of
+            true -> Acc;
+            false -> [P | Acc]
+        end
+    end, [], Providers).
 
-normalize_find_value_result({ok, []}) ->
-    {error, not_found};
-normalize_find_value_result({ok, Value}) when is_list(Value) ->
-    {ok, Value};
-normalize_find_value_result({ok, Value}) ->
-    %% Single value, wrap in list
-    {ok, [Value]};
-normalize_find_value_result({error, Reason}) ->
-    {error, Reason}.
+get_provider_node_id(#{node_id := N}) -> N;
+get_provider_node_id(#{<<"node_id">> := N}) -> N;
+get_provider_node_id(_) -> make_ref().
+
+%% @private Safe find_value via gen_server — catches timeouts
+safe_find_value(Pid, Key) ->
+    try macula_routing_server:find_value(Pid, Key, 20)
+    catch
+        exit:{timeout, _} -> {error, timeout}
+    end.
 
 %% @doc Forward a PUBLISH message to the bootstrap gateway for distribution.
 %% @deprecated v0.14.0+ uses direct P2P routing via local DHT lookup.
@@ -174,25 +190,6 @@ do_forward_to_bootstrap(ConnPid, PubMsg) ->
 
 %% @private Safely call routing_server:find_value, catching gen_server timeouts.
 %% The routing server's find_value uses a 10s gen_server:call which can exit
-%% with {timeout, ...} if the routing server is overloaded (e.g., during boot
-%% when multiple QUIC connections flood it with DHT queries). Without this
-%% catch, the exit propagates and crashes the gateway gen_server.
--spec safe_find_value(binary()) -> {ok, list()} | {error, term()}.
-safe_find_value(Key) ->
-    case whereis(macula_routing_server) of
-        undefined ->
-            {error, routing_server_not_running};
-        Pid ->
-            try macula_routing_server:find_value(Pid, Key, 20)
-            catch
-                exit:{timeout, _} ->
-                    ?LOG_WARNING("[DHT] find_value timed out for key_prefix=~p",
-                                [binary:part(Key, 0, min(8, byte_size(Key)))]),
-                    {error, timeout};
-                exit:{noproc, _} ->
-                    {error, routing_server_not_running}
-            end
-    end.
 
 %% @doc Send DHT message to remote peer (fire-and-forget).
 %% Used for STORE operations that don't need a response.
