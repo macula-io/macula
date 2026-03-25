@@ -1449,19 +1449,19 @@ handle_decoded_message({ok, {pubsub_route, PubSubRouteMsg}}, _Stream, State) ->
     RoutingServerPid = whereis(macula_routing_server),
 
     case macula_pubsub_routing:route_or_deliver(LocalNodeId, PubSubRouteMsg, RoutingServerPid) of
-        {deliver, Topic, PublishMsg} ->
-            %% Unwrap and deliver PUBLISH locally to subscribers
-            ?LOG_DEBUG("Pub/Sub route: delivering PUBLISH locally to topic ~p", [Topic]),
+        {deliver, DTopic, PublishMsg} ->
+            ?LOG_INFO("[pubsub_route] DELIVER topic=~s", [DTopic]),
             handle_pubsub_route_deliver(PublishMsg, State);
 
         {forward, NextHopNodeInfo, UpdatedPubSubRouteMsg} ->
-            %% Forward to next hop through mesh
-            ?LOG_DEBUG("Pub/Sub route: forwarding to next hop"),
+            DestNodeId = maps:get(<<"destination_node_id">>, PubSubRouteMsg, undefined),
+            ?LOG_INFO("[pubsub_route] FORWARD local=~s dest=~s",
+                     [binary:encode_hex(LocalNodeId),
+                      case DestNodeId of undefined -> <<"?">>; _ -> binary:encode_hex(DestNodeId) end]),
             forward_pubsub_route(NextHopNodeInfo, UpdatedPubSubRouteMsg, State#state.mesh),
             {noreply, State};
 
         {error, Reason} ->
-            %% Routing error (max hops, no route, etc.)
             ?LOG_ERROR("Pub/Sub route error: ~p", [Reason]),
             {noreply, State}
     end;
