@@ -82,7 +82,13 @@ init({Url, Opts}) ->
     %% Generate a unique peer_id for this peer system
     %% Used for gproc registration to support multiple peer connections per realm
     PeerId = erlang:unique_integer([monotonic, positive]),
-    OptsWithPeerId = Opts#{peer_id => PeerId},
+
+    %% Generate node_id ONCE and share across all children.
+    %% Without this, each child (connection, pubsub_handler, rpc_handler,
+    %% advertisement_manager) generates its own random node_id, causing
+    %% the CONNECT identity to diverge from the DHT subscription identity.
+    NodeId = maps:get(node_id, Opts, macula_utils:generate_node_id()),
+    OptsWithPeerId = Opts#{peer_id => PeerId, node_id => NodeId},
 
     %% Supervision strategy: rest_for_one
     %% If child N crashes, restart N and all children after N
