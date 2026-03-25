@@ -105,11 +105,24 @@ delete_local(Pid, Key, NodeId) ->
     gen_server:call(Pid, {delete_local, Key, NodeId}).
 
 %% @doc Find value in DHT using iterative lookup.
-%% Returns {ok, Value} if found, {nodes, Nodes} if not found.
+%% First tries direct ETS read (no gen_server, no blocking).
+%% Falls back to gen_server call for escalation if not found locally.
 -spec find_value(pid(), binary(), pos_integer()) ->
     {ok, term()} | {nodes, [macula_routing_bucket:node_info()]} | {error, term()}.
 find_value(Pid, Key, K) ->
-    gen_server:call(Pid, {find_value, Key, K}, 10000).
+    %% Fast path: direct ETS read (bypasses gen_server mailbox entirely)
+    case ets:info(macula_dht_storage) of
+        undefined ->
+            gen_server:call(Pid, {find_value, Key, K}, 10000);
+        _ ->
+            case ets:lookup(macula_dht_storage, Key) of
+                [{_, Values}] when is_list(Values), Values =/= [] ->
+                    {ok, Values};
+                _ ->
+                    %% Not in local storage — fall back to gen_server for escalation
+                    gen_server:call(Pid, {find_value, Key, K}, 10000)
+            end
+    end.
 
 %% @doc Get routing table snapshot.
 -spec get_routing_table(pid()) -> macula_routing_table:routing_table().
@@ -143,6 +156,9 @@ init({LocalNodeId, Config}) ->
     EscalationEnabled = maps:get(escalation_enabled, Config, true),
     EscalationTimeout = maps:get(escalation_timeout, Config, 5000),
 
+    %% Named ETS table for concurrent DHT storage reads (bypasses gen_server mailbox)
+    StorageEts = ets:new(macula_dht_storage, [named_table, set, public, {read_concurrency, true}]),
+
     State = #state{
         local_node_id = LocalNodeId,
         routing_table = macula_routing_table:new(LocalNodeId, K),
@@ -151,7 +167,8 @@ init({LocalNodeId, Config}) ->
             k => K,
             alpha => Alpha,
             escalation_enabled => EscalationEnabled,
-            escalation_timeout => EscalationTimeout
+            escalation_timeout => EscalationTimeout,
+            storage_ets => StorageEts
         }
     },
 
@@ -165,12 +182,17 @@ handle_call({find_closest, Target, K}, _From, #state{routing_table = Table} = St
     Closest = macula_routing_table:find_closest(Table, Target, K),
     {reply, Closest, State};
 
-handle_call({store_local, Key, Value}, _From, #state{storage = Storage} = State) ->
+handle_call({store_local, Key, Value}, _From, #state{storage = Storage, config = Config} = State) ->
     ExistingProviders = maps:get(Key, Storage, []),
     ProviderList = ensure_provider_list(ExistingProviders),
     NodeId = maps:get(node_id, Value, undefined),
     UpdatedProviders = upsert_provider(NodeId, Value, ProviderList),
     NewStorage = Storage#{Key => UpdatedProviders},
+    %% Mirror to ETS for concurrent reads
+    case maps:get(storage_ets, Config, undefined) of
+        undefined -> ok;
+        Ets -> ets:insert(Ets, {Key, UpdatedProviders})
+    end,
     {reply, ok, State#state{storage = NewStorage}};
 
 handle_call({store, Key, Value}, _From, #state{routing_table = Table, config = Config} = State) ->
@@ -206,8 +228,17 @@ handle_call(size, _From, #state{routing_table = Table} = State) ->
     Size = macula_routing_table:size(Table),
     {reply, Size, State};
 
-handle_call({delete_local, Key, NodeId}, _From, #state{storage = Storage} = State) ->
+handle_call({delete_local, Key, NodeId}, _From, #state{storage = Storage, config = Config} = State) ->
     NewStorage = delete_provider_from_storage(Key, NodeId, Storage),
+    %% Mirror to ETS
+    case maps:get(storage_ets, Config, undefined) of
+        undefined -> ok;
+        Ets ->
+            case maps:get(Key, NewStorage, []) of
+                [] -> ets:delete(Ets, Key);
+                V -> ets:insert(Ets, {Key, V})
+            end
+    end,
     {reply, ok, State#state{storage = NewStorage}};
 
 handle_call({find_value, Key, K}, From, #state{routing_table = Table, storage = Storage,
@@ -271,7 +302,7 @@ handle_cast({remove_node, NodeId}, #state{routing_table = Table} = State) ->
 %% @private
 %% Handle async store (from _dht.store RPC) - stores locally only without propagation
 %% This is used by bootstrap gateway when receiving store requests from peers
-handle_cast({store, Key, Value}, #state{storage = Storage} = State) when is_binary(Key) ->
+handle_cast({store, Key, Value}, #state{storage = Storage, config = Config} = State) when is_binary(Key) ->
     ?LOG_DEBUG("Async STORE received - key hash prefix: ~p, value: ~p",
               [binary:part(Key, 0, min(8, byte_size(Key))), Value]),
     ExistingProviders = maps:get(Key, Storage, []),
@@ -279,6 +310,11 @@ handle_cast({store, Key, Value}, #state{storage = Storage} = State) when is_bina
     NodeId = get_node_id_from_value(Value),
     UpdatedProviders = upsert_provider(NodeId, Value, ProviderList),
     NewStorage = Storage#{Key => UpdatedProviders},
+    %% Mirror to ETS for concurrent reads
+    case maps:get(storage_ets, Config, undefined) of
+        undefined -> ok;
+        Ets -> ets:insert(Ets, {Key, UpdatedProviders})
+    end,
     ?LOG_DEBUG("Stored value for key, now have ~p provider(s)", [length(UpdatedProviders)]),
     {noreply, State#state{storage = NewStorage}};
 
