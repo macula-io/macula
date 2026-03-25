@@ -421,13 +421,19 @@ propagate_store_to_peers(ClosestNodes, StoreMsg, _Key, _Value) ->
 %% @private Send store message to a peer (best effort)
 send_store_to_peer(NodeInfo, StoreMsg) ->
     ?LOG_DEBUG("[DHT] Sending store to peer ~p", [NodeInfo]),
-    handle_peer_send_result(catch macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg), NodeInfo).
+    try macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg) of
+        Result -> handle_peer_send_result(Result, NodeInfo)
+    catch
+        error:function_clause:Stacktrace ->
+            ?LOG_WARNING("[DHT] Store send function_clause to ~p:~n  ~p", [NodeInfo, Stacktrace]);
+        Class:Error:Stacktrace ->
+            ?LOG_WARNING("[DHT] Store send failed to ~p: ~p:~p~n  ~p",
+                         [NodeInfo, Class, Error, Stacktrace])
+    end.
 
 %% @private Handle peer send result
-handle_peer_send_result({'EXIT', {Error, _Stacktrace}}, NodeInfo) ->
-    ?LOG_WARNING("[DHT] Store send failed to ~p: ~p", [NodeInfo, Error]);
-handle_peer_send_result({'EXIT', Error}, NodeInfo) ->
-    ?LOG_WARNING("[DHT] Store send failed to ~p: ~p", [NodeInfo, Error]);
+handle_peer_send_result({error, Reason}, NodeInfo) ->
+    ?LOG_DEBUG("[DHT] Store send error to ~p: ~p", [NodeInfo, Reason]);
 handle_peer_send_result(Result, _NodeInfo) ->
     ?LOG_DEBUG("[DHT] Store send result: ~p", [Result]).
 
