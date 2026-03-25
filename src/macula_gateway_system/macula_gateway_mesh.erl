@@ -396,45 +396,34 @@ extract_monitor_ref(false) -> undefined.
 %%   - `{Host, Port}' tuple (expected format)
 %%   - Binary string like `host:port'
 %%   - List string like `"host:port"'
-create_mesh_connection(Address, State) ->
+create_mesh_connection(Address, _State) ->
     {Host, Port} = parse_address(Address),
+    Endpoint = iolist_to_binary([format_address(Host), ":", integer_to_list(Port)]),
 
-    %% Connection options with proper keep-alive settings
-    %% Client certs are optional — only include if files exist
-    CertOpts = case get_tls_certificates(State#state.opts) of
-        {CertFile, KeyFile} when CertFile =/= undefined, KeyFile =/= undefined ->
-            case {filelib:is_regular(CertFile), filelib:is_regular(KeyFile)} of
-                {true, true} -> [{cert, CertFile}, {key, KeyFile}];
-                _ -> []
-            end;
-        _ -> []
-    end,
-    ConnOpts = CertOpts ++ [
-        {alpn, ["macula"]},
-        {verify, none},
-        {peer_unidi_stream_count, 3},
-        {idle_timeout_ms, 60000},
-        {keep_alive_interval_ms, 20000},
-        {handshake_idle_timeout_ms, 30000}
-    ],
-
-    %% Format address for QUIC connection
-    FormattedAddress = format_address(Host),
-
-    %% Connect to peer
-    ?LOG_WARNING("[gateway_mesh] P2P connect to ~s:~p (opts=~p)", [FormattedAddress, Port, ConnOpts]),
-    case macula_quic:connect(FormattedAddress, Port, ConnOpts, 5000) of
+    %% Use connection pool — one connection per peer, multiplexed streams
+    case macula_peer_connection_pool:get_connection(Endpoint) of
         {ok, Conn} ->
             case macula_quic:open_stream(Conn) of
                 {ok, Stream} ->
                     {ok, Conn, Stream};
-                {error, _StreamReason} = StreamError ->
-                    macula_quic:close(Conn),
-                    {error, {stream_failed, StreamError}}
+                {error, _StreamReason} ->
+                    %% Connection might be stale — invalidate and retry once
+                    macula_peer_connection_pool:invalidate(Endpoint),
+                    retry_mesh_connection(Endpoint)
             end;
-        ErrorResult ->
-            %% Handle any error format from quicer
-            {error, {connect_failed, ErrorResult}}
+        {error, Reason} ->
+            {error, {connect_failed, Reason}}
+    end.
+
+retry_mesh_connection(Endpoint) ->
+    case macula_peer_connection_pool:get_connection(Endpoint) of
+        {ok, Conn} ->
+            case macula_quic:open_stream(Conn) of
+                {ok, Stream} -> {ok, Conn, Stream};
+                {error, Reason} -> {error, {stream_failed, Reason}}
+            end;
+        {error, Reason} ->
+            {error, {connect_failed, Reason}}
     end.
 
 %% @private
@@ -495,40 +484,6 @@ format_host({_, _, _, _, _, _, _, _} = IPv6) ->
     inet:ntoa(IPv6).
 
 %%%===================================================================
-%%% TLS certificate management
-%%%===================================================================
-
-%% @private
-%% Get TLS certificate paths from opts or environment
-get_tls_certificates(Opts) when is_map(Opts) ->
-    %% Check opts first
-    case {maps:get(cert_file, Opts, undefined), maps:get(key_file, Opts, undefined)} of
-        {undefined, undefined} ->
-            %% Fall back to environment variables, then macula_tls defaults
-            get_tls_certificates_from_env();
-        {CertFile, KeyFile} when CertFile =/= undefined, KeyFile =/= undefined ->
-            {CertFile, KeyFile};
-        _ ->
-            %% Partial config in opts, use macula_tls defaults
-            macula_tls:get_cert_paths()
-    end.
-
-%% @private
-%% Check environment variables (consistent with macula_tls.erl naming)
-get_tls_certificates_from_env() ->
-    case {os:getenv("MACULA_TLS_CERTFILE"), os:getenv("MACULA_TLS_KEYFILE")} of
-        {false, false} ->
-            %% No env vars, use macula_tls defaults (auto-generated if missing)
-            macula_tls:get_cert_paths();
-        {CertEnv, KeyEnv} when CertEnv =/= false, KeyEnv =/= false ->
-            %% Use mounted certificates (production)
-            {CertEnv, KeyEnv};
-        _ ->
-            %% Partial configuration, use macula_tls defaults
-            macula_tls:get_cert_paths()
-    end.
-
-%%%===================================================================
 %%% Connection liveness checking
 %%%===================================================================
 
@@ -563,69 +518,35 @@ check_quic_connection(_) ->
 
 %% @private
 %% @doc Worker process for async message sending.
-%% Creates connection, opens stream, sends message, closes stream.
-%% Does NOT use the connection pool to avoid coordination overhead.
-%% For fire-and-forget messages where delivery is best-effort.
+%% Creates stream on pooled connection, sends message, closes stream.
+%% Connection is reused via pool (QUIC multiplexing).
 -spec async_send_worker(pid(), binary(), term(), binary(), map()) -> ok | {error, term()}.
-async_send_worker(_MeshPid, NodeId, Address, EncodedMessage, Opts) ->
+async_send_worker(_MeshPid, NodeId, Address, EncodedMessage, _Opts) ->
     ?LOG_DEBUG("Starting async send to ~p", [binary:encode_hex(NodeId)]),
-
-    %% Parse address and create connection
     {Host, Port} = parse_address(Address),
+    Endpoint = iolist_to_binary([format_address(Host), ":", integer_to_list(Port)]),
 
-    %% Client certs are optional — only include if files exist
-    CertOpts = case get_tls_certificates(Opts) of
-        {CF, KF} when CF =/= undefined, KF =/= undefined ->
-            case {filelib:is_regular(CF), filelib:is_regular(KF)} of
-                {true, true} -> [{cert, CF}, {key, KF}];
-                _ -> []
-            end;
-        _ -> []
-    end,
-    ConnOpts = CertOpts ++ [
-        {alpn, ["macula"]},
-        {verify, none},
-        {peer_unidi_stream_count, 3},
-        {idle_timeout_ms, 60000},
-        {keep_alive_interval_ms, 20000},
-        {handshake_idle_timeout_ms, 30000}
-    ],
-
-    FormattedAddress = format_address(Host),
-    ?LOG_DEBUG("Connecting to ~s:~p", [FormattedAddress, Port]),
-
-    %% Try to connect with a shorter timeout for async sends
-    case macula_quic:connect(FormattedAddress, Port, ConnOpts, 5000) of
+    case macula_peer_connection_pool:get_connection(Endpoint) of
         {ok, Conn} ->
             case macula_quic:open_stream(Conn) of
                 {ok, Stream} ->
                     case macula_quic:send(Stream, EncodedMessage) of
                         ok ->
-                            ?LOG_DEBUG("Message sent successfully to ~p",
-                                     [binary:encode_hex(NodeId)]),
-                            %% Brief delay for data transmission
+                            ?LOG_DEBUG("Message sent to ~p", [binary:encode_hex(NodeId)]),
                             timer:sleep(50),
-                            %% Close stream and connection
-                            catch macula_quic:close(Stream),
-                            catch macula_quic:close(Conn),
+                            catch quicer:async_shutdown_stream(Stream, 0, 0),
                             ok;
                         {error, SendErr} ->
                             ?LOG_WARNING("Send failed: ~p", [SendErr]),
-                            catch macula_quic:close(Stream),
-                            catch macula_quic:close(Conn),
+                            catch quicer:async_shutdown_stream(Stream, 0, 0),
                             {error, {send_failed, SendErr}}
                     end;
                 {error, StreamErr} ->
                     ?LOG_WARNING("Stream open failed: ~p", [StreamErr]),
-                    catch macula_quic:close(Conn),
+                    macula_peer_connection_pool:invalidate(Endpoint),
                     {error, {stream_failed, StreamErr}}
             end;
-        {error, ConnErr} ->
-            ?LOG_WARNING("Connection failed to ~s:~p: ~p",
-                     [FormattedAddress, Port, ConnErr]),
-            {error, {connect_failed, ConnErr}};
-        {error, Type, Details} ->
-            ?LOG_WARNING("Connection failed to ~s:~p: ~p ~p",
-                     [FormattedAddress, Port, Type, Details]),
-            {error, {connect_failed, {Type, Details}}}
+        {error, Reason} ->
+            ?LOG_WARNING("Pool connection failed to ~s: ~p", [Endpoint, Reason]),
+            {error, {connect_failed, Reason}}
     end.
