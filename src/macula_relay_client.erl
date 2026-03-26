@@ -302,7 +302,7 @@ handle_message({ok, {call, Msg}}, State) ->
                                                          io_lib:format("~p", [R]))}}
                 end,
                 Binary = macula_protocol_encoder:encode(reply, ReplyMsg),
-                macula_quic:send(Stream, Binary)
+                macula_quic:async_send(Stream, Binary)
             end)
     end,
     State;
@@ -372,7 +372,7 @@ replay_state(#state{subscriptions = Subs, procedures = Procs} = State) ->
 maybe_send(_Type, _Msg, #state{stream = undefined}) -> ok;
 maybe_send(Type, Msg, #state{stream = Stream}) ->
     Binary = macula_protocol_encoder:encode(Type, Msg),
-    macula_quic:send(Stream, Binary).
+    macula_quic:async_send(Stream, Binary).
 
 handle_disconnect(#state{status = disconnected} = State) ->
     {noreply, State};

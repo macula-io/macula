@@ -273,7 +273,7 @@ handle_message({error, Reason}, State) ->
 
 send_to_node(Type, Msg, #state{stream = Stream}) ->
     Binary = macula_protocol_encoder:encode(Type, Msg),
-    case macula_quic:send(Stream, Binary) of
+    case macula_quic:async_send(Stream, Binary) of
         ok -> ok;
         {error, Reason} ->
             ?LOG_WARNING("[relay_handler] Send ~p failed: ~p", [Type, Reason])
