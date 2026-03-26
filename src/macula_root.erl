@@ -121,6 +121,35 @@ init_mode(client) ->
 
     {ok, {SupFlags, ChildSpecs}};
 
+%% @doc Relay mode: lightweight hub-spoke server using pg + gproc.
+%% No DHT, no routing tables, no peer discovery. Just QUIC + message forwarding.
+init_mode(relay) ->
+    Version = get_app_version(),
+    Port = get_quic_port(),
+
+    ?LOG_INFO(""),
+    ?LOG_INFO("═══════════════════════════════════════════════════════════════"),
+    ?LOG_INFO("  Starting Macula ~s (Relay Mode)", [Version]),
+    ?LOG_INFO("  QUIC port: ~p", [Port]),
+    ?LOG_INFO("  Hub-spoke routing via pg + gproc"),
+    ?LOG_INFO("═══════════════════════════════════════════════════════════════"),
+    ?LOG_INFO(""),
+
+    SupFlags = #{strategy => one_for_one, intensity => 10, period => 5},
+
+    ChildSpecs = [
+        #{
+            id => macula_relay,
+            start => {macula_relay, start_link, [#{port => Port}]},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [macula_relay]
+        }
+    ],
+
+    {ok, {SupFlags, ChildSpecs}};
+
 %% @doc Server mode: full supervision tree for realm server (gateway, DHT, routing).
 init_mode(server) ->
     Version = get_app_version(),
@@ -376,14 +405,17 @@ get_health_port() ->
 %% - client: Minimal — connects to a realm server, no gateway, no discovery
 %% - server: Full — runs gateway, DHT, routing, accepts connections (realm server)
 %% Default: server (backward compatible with existing deployments)
--spec get_mode() -> client | server.
+-spec get_mode() -> client | server | relay.
 get_mode() ->
     case os:getenv("MACULA_MODE") of
         "client" -> client;
         "CLIENT" -> client;
+        "relay" -> relay;
+        "RELAY" -> relay;
         _ ->
             case application:get_env(macula, mode) of
                 {ok, client} -> client;
+                {ok, relay} -> relay;
                 _ -> server
             end
     end.
