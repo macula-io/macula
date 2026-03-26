@@ -161,6 +161,23 @@ json_payload_in_publish_test() ->
     Result = macula_protocol_encoder:encode(publish, Msg),
     ?assert(is_binary(Result)).
 
+%% Caller passes pre-encoded JSON iolist as payload (not a map, not a binary).
+%% This is what advertise_game does — json:encode on the caller side.
+iolist_payload_in_publish_test() ->
+    Iolist = json:encode(#{<<"action">> => <<"hosted">>, <<"max_players">> => 2}),
+    %% Iolist is NOT a map and NOT a binary — it's a list
+    ?assert(is_list(Iolist)),
+    BinPayload = iolist_to_binary(Iolist),
+    Msg = #{
+        <<"topic">> => <<"test.topic">>,
+        <<"payload">> => BinPayload,
+        <<"qos">> => 0,
+        <<"retain">> => false,
+        <<"message_id">> => crypto:strong_rand_bytes(16)
+    },
+    Result = macula_protocol_encoder:encode(publish, Msg),
+    ?assert(is_binary(Result)).
+
 %% json:encode with integer values produces improper iolists that crash msgpack.
 %% Simple string-only maps may not crash, but integer timestamps do.
 json_iolist_with_integers_crashes_msgpack_test() ->

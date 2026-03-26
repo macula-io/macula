@@ -165,10 +165,7 @@ handle_call(_Request, _From, State) ->
 %%====================================================================
 
 handle_cast({publish, Topic, Payload}, State) ->
-    BinPayload = case is_map(Payload) of
-        true -> iolist_to_binary(json:encode(Payload));
-        false -> Payload
-    end,
+    BinPayload = to_binary_payload(Payload),
     maybe_send(publish, #{
         <<"topic">> => Topic,
         <<"payload">> => BinPayload,
@@ -375,6 +372,13 @@ maybe_send(_Type, _Msg, #state{stream = undefined}) -> ok;
 maybe_send(Type, Msg, #state{stream = Stream}) ->
     Binary = macula_protocol_encoder:encode(Type, Msg),
     macula_quic:async_send(Stream, Binary).
+
+%% Ensure payload is a flat binary before passing to msgpack.
+%% Callers may pass: map, iolist (from json:encode), or binary.
+to_binary_payload(Payload) when is_binary(Payload) -> Payload;
+to_binary_payload(Payload) when is_map(Payload)    -> iolist_to_binary(json:encode(Payload));
+to_binary_payload(Payload) when is_list(Payload)   -> iolist_to_binary(Payload);
+to_binary_payload(Payload)                         -> iolist_to_binary(json:encode(Payload)).
 
 handle_disconnect(#state{status = disconnected} = State) ->
     {noreply, State};
