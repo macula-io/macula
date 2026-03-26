@@ -166,7 +166,7 @@ handle_call(_Request, _From, State) ->
 
 handle_cast({publish, Topic, Payload}, State) ->
     BinPayload = case is_map(Payload) of
-        true -> json:encode(Payload);
+        true -> iolist_to_binary(json:encode(Payload));
         false -> Payload
     end,
     maybe_send(publish, #{
