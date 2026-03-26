@@ -230,11 +230,12 @@ handle_cast(replay_subscriptions, State) ->
         _ ->
             ?LOG_INFO("[PubSubHandler] Replaying ~p subscription(s) after reconnect: ~p",
                      [length(Topics), Topics]),
-            lists:foreach(fun(Topic) ->
-                SubscribeMsg = #{topics => [Topic], qos => 0},
-                macula_connection:send_message_async(
-                    State#state.connection_manager_pid, subscribe, SubscribeMsg)
-            end, Topics)
+            %% Send ALL topics in ONE SUBSCRIBE message.
+            %% Sending individual messages per topic caused race conditions —
+            %% rapid-fire async sends on a freshly opened stream dropped some messages.
+            SubscribeMsg = #{topics => Topics, qos => 0},
+            macula_connection:send_message_async(
+                State#state.connection_manager_pid, subscribe, SubscribeMsg)
     end,
     {noreply, State};
 
