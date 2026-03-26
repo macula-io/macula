@@ -43,13 +43,13 @@ init(Opts) ->
         {error, {already_started, _}} -> ok
     end,
 
-    %% Get TLS certs
-    {CertPath, KeyPath} = macula_tls:get_cert_paths(),
-    {ok, CertPath2, KeyPath2, _} = macula_tls:ensure_cert_exists(CertPath, KeyPath),
+    %% Get TLS certs — check env vars first (production), then macula_tls (dev)
+    {CertPath, KeyPath} = get_tls_paths(),
+    ?LOG_INFO("[relay] TLS cert: ~s, key: ~s", [CertPath, KeyPath]),
 
     ListenOpts = [
-        {cert, CertPath2},
-        {key, KeyPath2},
+        {cert, CertPath},
+        {key, KeyPath},
         {alpn, ["macula"]},
         {idle_timeout_ms, 120000},
         {keep_alive_interval_ms, 30000}
@@ -90,6 +90,28 @@ terminate(_Reason, #state{listener = Listener}) ->
 %%====================================================================
 %% Internal
 %%====================================================================
+
+%% @private Get TLS cert/key paths. Env vars take precedence (production),
+%% then app config, then auto-generate for dev.
+get_tls_paths() ->
+    CertPath = case os:getenv("MACULA_TLS_CERTFILE") of
+        false -> get_tls_path_from_config(cert);
+        C -> C
+    end,
+    KeyPath = case os:getenv("MACULA_TLS_KEYFILE") of
+        false -> get_tls_path_from_config(key);
+        K -> K
+    end,
+    {CertPath, KeyPath}.
+
+get_tls_path_from_config(cert) ->
+    {CertPath, _} = macula_tls:get_cert_paths(),
+    {ok, CertPath2, _, _} = macula_tls:ensure_cert_exists(CertPath, element(2, macula_tls:get_cert_paths())),
+    CertPath2;
+get_tls_path_from_config(key) ->
+    {_, KeyPath} = macula_tls:get_cert_paths(),
+    {ok, _, KeyPath2, _} = macula_tls:ensure_cert_exists(element(1, macula_tls:get_cert_paths()), KeyPath),
+    KeyPath2.
 
 accept_loop(Listener, Parent) ->
     case macula_quic:accept(Listener, 60000) of
