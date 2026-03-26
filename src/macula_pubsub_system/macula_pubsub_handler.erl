@@ -218,6 +218,26 @@ handle_call(_Request, _From, State) ->
 handle_cast({set_connection_manager_pid, Pid}, State) ->
     {noreply, State#state{connection_manager_pid = Pid}};
 
+%% Re-send all SUBSCRIBE messages after connection reconnect.
+%% When the QUIC connection to the gateway drops and reconnects, the gateway
+%% loses all stream subscriptions. The pubsub_handler still has the application's
+%% subscriptions in state — replay them so the gateway knows about them again.
+handle_cast(replay_subscriptions, State) ->
+    Topics = get_subscribed_topics(State#state.subscriptions),
+    case Topics of
+        [] ->
+            ?LOG_DEBUG("[PubSubHandler] No subscriptions to replay");
+        _ ->
+            ?LOG_INFO("[PubSubHandler] Replaying ~p subscription(s) after reconnect: ~p",
+                     [length(Topics), Topics]),
+            lists:foreach(fun(Topic) ->
+                SubscribeMsg = #{topics => [Topic], qos => 0},
+                macula_connection:send_message_async(
+                    State#state.connection_manager_pid, subscribe, SubscribeMsg)
+            end, Topics)
+    end,
+    {noreply, State};
+
 %% Async publish (fire-and-forget from caller's perspective)
 %% This handles the {publish_async, ...} cast from the publish/4 API function
 handle_cast({publish_async, Topic, Data, Opts}, State) ->
@@ -338,6 +358,13 @@ terminate(_Reason, _State) ->
 %%%===================================================================
 %%% Internal functions - Helpers
 %%%===================================================================
+
+%% @doc Extract unique topic list from subscriptions map.
+%% Subscriptions are #{Ref => {Topic, Callback}}, returns deduplicated topic list.
+-spec get_subscribed_topics(#{reference() => {binary(), fun()}}) -> [binary()].
+get_subscribed_topics(Subscriptions) ->
+    Topics = [Topic || {_Ref, {Topic, _Callback}} <- maps:to_list(Subscriptions)],
+    lists:usort(Topics).
 
 %% @doc Generate next message ID
 -spec next_message_id(#state{}) -> {binary(), #state{}}.

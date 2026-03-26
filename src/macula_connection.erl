@@ -539,6 +539,11 @@ complete_connection_setup(Conn, Stream, Host, Port, State) ->
             },
             StateWithKeepalive = start_keepalive_timer(ConnectedState),
 
+            %% Replay subscriptions so the gateway knows about them on the new stream.
+            %% After reconnect, the gateway lost all stream subscriptions from the old
+            %% connection. The pubsub_handler still has the application's subscriptions.
+            replay_peer_subscriptions(StateWithKeepalive),
+
             {ok, StateWithKeepalive};
         {error, Reason} ->
             macula_quic:close(Stream),
@@ -567,6 +572,18 @@ get_advertise_endpoint() ->
         _ ->
             construct_default_endpoint()
     end.
+
+%% @doc Notify the peer's pubsub_handler to re-send SUBSCRIBE messages after reconnect.
+-spec replay_peer_subscriptions(#state{}) -> ok.
+replay_peer_subscriptions(#state{realm = Realm, peer_id = PeerId}) ->
+    case gproc:lookup_local_name({pubsub_handler, Realm, PeerId}) of
+        undefined ->
+            ?LOG_DEBUG("[Connection] No pubsub_handler for replay (realm=~s, peer_id=~p)",
+                      [Realm, PeerId]);
+        PubSubPid ->
+            gen_server:cast(PubSubPid, replay_subscriptions)
+    end,
+    ok.
 
 %% @doc Construct default endpoint from environment and application config.
 %% Port resolution order: MACULA_QUIC_PORT env var, application:get_env(macula, quic_port), 9443.
