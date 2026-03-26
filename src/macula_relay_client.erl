@@ -6,11 +6,13 @@
 %%% Replays all subscriptions and procedure registrations on reconnect.
 %%%
 %%% Usage:
-%%%   {ok, Client} = macula_relay_client:start_link(#{url => <<"https://relay:4433">>}).
-%%%   {ok, Ref} = macula_relay_client:subscribe(Client, <<"my.topic">>, fun(Msg) -> ok end).
-%%%   ok = macula_relay_client:publish(Client, <<"my.topic">>, <<"hello">>).
-%%%   {ok, Ref} = macula_relay_client:advertise(Client, <<"my.proc">>, fun(Args) -> {ok, Args} end).
-%%%   {ok, Result} = macula_relay_client:call(Client, <<"my.proc">>, #{}, 5000).
+%%%
+%%%   Opts = #{url =&gt; &lt;&lt;"https://relay:4433"&gt;&gt;},
+%%%   {ok, Client} = macula_relay_client:start_link(Opts).
+%%%   macula_relay_client:subscribe(Client, Topic, Callback).
+%%%   macula_relay_client:publish(Client, Topic, Payload).
+%%%   macula_relay_client:advertise(Client, Procedure, Handler).
+%%%   macula_relay_client:call(Client, Procedure, Args, Timeout).
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_relay_client).

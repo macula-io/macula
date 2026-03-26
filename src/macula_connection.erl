@@ -792,8 +792,6 @@ remove_peer_from_routing_table(NodeId) when is_binary(NodeId) ->
         RoutingServer -> macula_routing_server:remove_node(RoutingServer, NodeId)
     end.
 
-%% @doc Legacy function - replaced by maybe_register_server_in_dht/2.
-%% Called during connect but now just logs - real registration happens in PONG handler.
 %% @doc Send a protocol message through a stream (raw).
 %% Crashes if message is invalid - this indicates a bug in the caller.
 -spec send_message_raw(atom(), map(), reference()) -> ok | {error, term()}.
