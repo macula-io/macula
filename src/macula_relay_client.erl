@@ -346,11 +346,11 @@ handle_message({error, Reason}, State) ->
 send_connect(State) ->
     NodeId = crypto:strong_rand_bytes(32),
     maybe_send(connect, #{
-        <<"version">> => <<"1.0">>,
-        <<"node_id">> => NodeId,
-        <<"realm_id">> => State#state.realm,
-        <<"capabilities">> => [<<"pubsub">>, <<"rpc">>],
-        <<"endpoint">> => State#state.url
+        version => <<"1.0">>,
+        node_id => NodeId,
+        realm_id => State#state.realm,
+        capabilities => [<<"pubsub">>, <<"rpc">>],
+        endpoint => State#state.url
     }, State).
 
 %% Replay all subscriptions and procedure registrations after reconnect
