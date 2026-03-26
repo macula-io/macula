@@ -5,6 +5,9 @@
 %%% process. Pub/sub uses OTP pg groups. RPC uses gproc registry.
 %%% Process death = automatic cleanup (no TTLs, no manual eviction).
 %%%
+%%% Uses async accept pattern (like macula_gateway_quic_server) —
+%%% quicer:async_accept delivers {quic, new_conn, Conn, Info} messages.
+%%%
 %%% Start: `macula_relay:start_link(#{port => 4433}).'
 %%% @end
 %%%-------------------------------------------------------------------
@@ -51,6 +54,8 @@ init(Opts) ->
         {cert, CertPath},
         {key, KeyPath},
         {alpn, ["macula"]},
+        {peer_unidi_stream_count, 3},
+        {peer_bidi_stream_count, 100},
         {idle_timeout_ms, 120000},
         {keep_alive_interval_ms, 30000}
     ],
@@ -58,8 +63,8 @@ init(Opts) ->
     case macula_quic:listen(Port, ListenOpts) of
         {ok, Listener} ->
             ?LOG_INFO("[relay] Listening on port ~p", [Port]),
-            %% Start accepting connections
-            self() ! accept,
+            %% Register for async connection events
+            register_accept(Listener),
             {ok, #state{listener = Listener, port = Port, handlers = []}};
         {error, Reason} ->
             {stop, {listen_failed, Reason}}
@@ -71,16 +76,50 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(accept, #state{listener = Listener} = State) ->
-    spawn_link(fun() -> accept_loop(Listener, self()) end),
+%% Async accept: quicer delivers new connections as messages
+handle_info({quic, new_conn, Conn, ConnInfo}, #state{listener = Listener} = State) ->
+    ?LOG_INFO("[relay] New connection: ~p", [ConnInfo]),
+    complete_handshake(Conn),
+    %% MUST re-register for next connection
+    register_accept(Listener),
     {noreply, State};
 
-handle_info({new_connection, Conn}, State) ->
-    {ok, Pid} = macula_relay_handler:start_link(Conn),
-    ?LOG_INFO("[relay] New connection, handler ~p", [Pid]),
-    {noreply, State#state{handlers = [Pid | State#state.handlers]}};
+%% Async stream: quicer delivers new streams as messages
+handle_info({quic, new_stream, Stream, StreamProps}, State) ->
+    ?LOG_INFO("[relay] New stream: ~p", [StreamProps]),
+    %% Find which connection this stream belongs to
+    Conn = case StreamProps of
+        #{conn := C} -> C;
+        _ -> get(pending_conn)
+    end,
+    case Conn of
+        undefined ->
+            ?LOG_WARNING("[relay] Stream arrived with no connection context"),
+            {noreply, State};
+        _ ->
+            %% Start handler for this connection+stream pair
+            {ok, Pid} = macula_relay_handler:start_link(Conn, Stream),
+            ?LOG_INFO("[relay] Handler started: ~p", [Pid]),
+            {noreply, State#state{handlers = [Pid | State#state.handlers]}}
+    end;
 
-handle_info(_Info, State) ->
+%% QUIC data arriving on relay process (before handler takes over)
+handle_info({quic, Data, _Stream, _Flags}, State) when is_binary(Data) ->
+    ?LOG_DEBUG("[relay] Data on unowned stream (~p bytes)", [byte_size(Data)]),
+    {noreply, State};
+
+%% Handler process died — remove from handlers list
+handle_info({'EXIT', Pid, Reason}, State) ->
+    case lists:member(Pid, State#state.handlers) of
+        true ->
+            ?LOG_INFO("[relay] Handler ~p exited: ~p", [Pid, Reason]),
+            {noreply, State#state{handlers = lists:delete(Pid, State#state.handlers)}};
+        false ->
+            {noreply, State}
+    end;
+
+handle_info(Info, State) ->
+    ?LOG_DEBUG("[relay] Unhandled info: ~p", [Info]),
     {noreply, State}.
 
 terminate(_Reason, #state{listener = Listener}) ->
@@ -90,6 +129,40 @@ terminate(_Reason, #state{listener = Listener}) ->
 %%====================================================================
 %% Internal
 %%====================================================================
+
+%% Register for async accept — quicer will send {quic, new_conn, ...}
+register_accept(Listener) ->
+    case quicer:async_accept(Listener, #{}) of
+        {ok, _} ->
+            ?LOG_INFO("[relay] Ready for connections"),
+            ok;
+        {error, Reason} ->
+            ?LOG_WARNING("[relay] async_accept failed: ~p", [Reason]),
+            ok
+    end.
+
+%% Complete TLS handshake, then register for async stream accept
+complete_handshake(Conn) ->
+    case quicer:handshake(Conn) of
+        ok ->
+            accept_streams(Conn);
+        {ok, _} ->
+            accept_streams(Conn);
+        {error, Reason} ->
+            ?LOG_ERROR("[relay] Handshake failed: ~p", [Reason]),
+            catch quicer:close_connection(Conn)
+    end.
+
+accept_streams(Conn) ->
+    ?LOG_INFO("[relay] Handshake complete, accepting streams"),
+    put(pending_conn, Conn),
+    case quicer:async_accept_stream(Conn, #{}) of
+        {ok, _} ->
+            ok;
+        {error, Reason} ->
+            ?LOG_WARNING("[relay] async_accept_stream failed: ~p", [Reason]),
+            ok
+    end.
 
 %% @private Get TLS cert/key paths. Env vars take precedence (production),
 %% then app config, then auto-generate for dev.
@@ -112,16 +185,3 @@ get_tls_path_from_config(key) ->
     {_, KeyPath} = macula_tls:get_cert_paths(),
     {ok, _, KeyPath2, _} = macula_tls:ensure_cert_exists(element(1, macula_tls:get_cert_paths()), KeyPath),
     KeyPath2.
-
-accept_loop(Listener, Parent) ->
-    case macula_quic:accept(Listener, 60000) of
-        {ok, Conn} ->
-            Parent ! {new_connection, Conn},
-            accept_loop(Listener, Parent);
-        {error, timeout} ->
-            accept_loop(Listener, Parent);
-        {error, Reason} ->
-            ?LOG_WARNING("[relay] Accept error: ~p", [Reason]),
-            timer:sleep(1000),
-            accept_loop(Listener, Parent)
-    end.

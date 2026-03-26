@@ -15,7 +15,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([start_link/1]).
+-export([start_link/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -record(state, {
@@ -30,25 +30,19 @@
 %% API
 %%====================================================================
 
-start_link(Conn) ->
-    gen_server:start_link(?MODULE, Conn, []).
+start_link(Conn, Stream) ->
+    gen_server:start_link(?MODULE, {Conn, Stream}, []).
 
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
 
-init(Conn) ->
-    %% Accept the first stream from this connection
-    case macula_quic:accept_stream(Conn, 5000) of
-        {ok, Stream} ->
-            quicer:setopt(Stream, active, true),
-            ?LOG_INFO("[relay_handler] Stream accepted"),
-            {ok, #state{conn = Conn, stream = Stream, node_id = <<>>,
-                        recv_buffer = <<>>, pending_calls = #{}}};
-        {error, Reason} ->
-            ?LOG_WARNING("[relay_handler] Stream accept failed: ~p", [Reason]),
-            {stop, {stream_failed, Reason}}
-    end.
+init({Conn, Stream}) ->
+    %% Stream already accepted by relay via async_accept_stream
+    quicer:setopt(Stream, active, true),
+    ?LOG_INFO("[relay_handler] Started with stream"),
+    {ok, #state{conn = Conn, stream = Stream, node_id = <<>>,
+                recv_buffer = <<>>, pending_calls = #{}}}.
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown}, State}.
