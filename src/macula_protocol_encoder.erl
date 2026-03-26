@@ -60,16 +60,27 @@ encode(Type, Msg) when is_atom(Type), is_map(Msg) ->
 %% @end
 -spec validate_message(atom(), map()) -> ok.
 validate_message(connect, Msg) ->
-    #{version := _, node_id := _, realm_id := _, capabilities := _} = Msg,
+    case {maps:is_key(version, Msg), maps:is_key(<<"version">>, Msg)} of
+        {true, _} -> #{version := _, node_id := _, realm_id := _, capabilities := _} = Msg;
+        {_, true} -> #{<<"version">> := _, <<"node_id">> := _, <<"realm_id">> := _} = Msg
+    end,
     ok;
 validate_message(disconnect, Msg) ->
-    #{reason := _, message := _} = Msg,
+    case {maps:is_key(reason, Msg), maps:is_key(<<"reason">>, Msg)} of
+        {true, _} -> #{reason := _, message := _} = Msg;
+        {_, true} -> #{<<"reason">> := _, <<"message">> := _} = Msg
+    end,
     ok;
 validate_message(ping, Msg) ->
-    #{timestamp := _} = Msg,
-    ok;
+    case {maps:is_key(timestamp, Msg), maps:is_key(<<"timestamp">>, Msg)} of
+        {true, _} -> ok;
+        {_, true} -> ok
+    end;
 validate_message(pong, Msg) ->
-    #{timestamp := _, server_time := _} = Msg,
+    case {maps:is_key(timestamp, Msg), maps:is_key(<<"timestamp">>, Msg)} of
+        {true, _} -> #{timestamp := _, server_time := _} = Msg;
+        {_, true} -> #{<<"timestamp">> := _, <<"server_time">> := _} = Msg
+    end,
     ok;
 validate_message(publish, Msg) ->
     %% Accept both atom and binary keys (from MessagePack decoding)

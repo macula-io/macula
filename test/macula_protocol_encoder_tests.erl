@@ -172,19 +172,19 @@ encode_pubsub_route_message_test() ->
 
 connect_requires_version_test() ->
     Msg = maps:remove(version, sample_connect_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(connect, Msg)).
+    ?assertError(_, macula_protocol_encoder:encode(connect, Msg)).
 
 connect_requires_node_id_test() ->
     Msg = maps:remove(node_id, sample_connect_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(connect, Msg)).
+    ?assertError(_, macula_protocol_encoder:encode(connect, Msg)).
 
 connect_requires_realm_id_test() ->
     Msg = maps:remove(realm_id, sample_connect_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(connect, Msg)).
+    ?assertError(_, macula_protocol_encoder:encode(connect, Msg)).
 
 connect_requires_capabilities_test() ->
     Msg = maps:remove(capabilities, sample_connect_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(connect, Msg)).
+    ?assertError(_, macula_protocol_encoder:encode(connect, Msg)).
 
 %%%===================================================================
 %%% Validation Tests - Disconnect Message
@@ -192,11 +192,11 @@ connect_requires_capabilities_test() ->
 
 disconnect_requires_reason_test() ->
     Msg = maps:remove(reason, sample_disconnect_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(disconnect, Msg)).
+    ?assertError(_, macula_protocol_encoder:encode(disconnect, Msg)).
 
 disconnect_requires_message_test() ->
     Msg = maps:remove(message, sample_disconnect_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(disconnect, Msg)).
+    ?assertError(_, macula_protocol_encoder:encode(disconnect, Msg)).
 
 %%%===================================================================
 %%% Validation Tests - Ping/Pong Messages
@@ -204,15 +204,15 @@ disconnect_requires_message_test() ->
 
 ping_requires_timestamp_test() ->
     Msg = maps:remove(timestamp, sample_ping_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(ping, Msg)).
+    ?assertError(_, macula_protocol_encoder:encode(ping, Msg)).
 
 pong_requires_timestamp_test() ->
     Msg = maps:remove(timestamp, sample_pong_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(pong, Msg)).
+    ?assertError(_, macula_protocol_encoder:encode(pong, Msg)).
 
 pong_requires_server_time_test() ->
     Msg = maps:remove(server_time, sample_pong_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(pong, Msg)).
+    ?assertError(_, macula_protocol_encoder:encode(pong, Msg)).
 
 %%%===================================================================
 %%% Validation Tests - Publish Message
