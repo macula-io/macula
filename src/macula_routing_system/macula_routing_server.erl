@@ -401,8 +401,14 @@ handle_info(_Info, State) ->
 -spec is_provider_expired(map(), integer()) -> boolean().
 is_provider_expired(#{stored_at := StoredAt}, Now) ->
     (Now - StoredAt) > ?VALUE_MAX_AGE_MS;
+is_provider_expired(#{<<"stored_at">> := StoredAt}, Now) ->
+    %% Binary key variant (from msgpack deserialization over network)
+    (Now - StoredAt) > ?VALUE_MAX_AGE_MS;
 is_provider_expired(#{ttl := _TTL}, _Now) ->
     %% Has TTL but no stored_at — legacy entry, expire it
+    true;
+is_provider_expired(#{<<"ttl">> := _TTL}, _Now) ->
+    %% Binary key variant — legacy entry, expire it
     true;
 is_provider_expired(_Provider, _Now) ->
     %% No TTL, no stored_at — service entry, keep it
