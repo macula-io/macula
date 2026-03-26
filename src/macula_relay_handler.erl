@@ -38,9 +38,12 @@ start_link(Conn, Stream) ->
 %%====================================================================
 
 init({Conn, Stream}) ->
-    %% Stream already accepted by relay via async_accept_stream
+    %% Transfer ownership from relay process to this handler.
+    %% Without this, {quic, Data, ...} messages go to the relay, not us.
+    ok = quicer:controlling_process(Stream, self()),
+    ok = quicer:controlling_process(Conn, self()),
     quicer:setopt(Stream, active, true),
-    ?LOG_INFO("[relay_handler] Started with stream"),
+    ?LOG_INFO("[relay_handler] Started with stream (ownership transferred)"),
     {ok, #state{conn = Conn, stream = Stream, node_id = <<>>,
                 recv_buffer = <<>>, pending_calls = #{}}}.
 
