@@ -1453,6 +1453,11 @@ handle_decoded_message({ok, {pubsub_route, PubSubRouteMsg}}, _Stream, State) ->
             ?LOG_INFO("[pubsub_route] DELIVER topic=~s", [DTopic]),
             handle_pubsub_route_deliver(PublishMsg, State);
 
+        {deliver_and_forward, DTopic, PublishMsg, NextHopNodeInfo, UpdatedPubSubRouteMsg} ->
+            ?LOG_INFO("[pubsub_route] DELIVER+FORWARD topic=~s", [DTopic]),
+            forward_pubsub_route(NextHopNodeInfo, UpdatedPubSubRouteMsg, State#state.mesh),
+            handle_pubsub_route_deliver(PublishMsg, State);
+
         {forward, NextHopNodeInfo, UpdatedPubSubRouteMsg} ->
             DestNodeId = maps:get(<<"destination_node_id">>, PubSubRouteMsg, undefined),
             ?LOG_INFO("[pubsub_route] FORWARD local=~s dest=~s",

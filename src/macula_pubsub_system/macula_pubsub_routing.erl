@@ -53,6 +53,7 @@ should_deliver_locally(LocalNodeId, PubSubRouteMsg) ->
 %%   {error, Reason} - Cannot route (TTL exceeded, no route, etc.)
 -spec route_or_deliver(binary(), macula_protocol_types:pubsub_route_msg(), pid()) ->
     {deliver, binary(), map()} |
+    {deliver_and_forward, binary(), map(), macula_routing_bucket:node_info(), macula_protocol_types:pubsub_route_msg()} |
     {forward, macula_routing_bucket:node_info(), macula_protocol_types:pubsub_route_msg()} |
     {error, term()}.
 route_or_deliver(LocalNodeId, PubSubRouteMsg, RoutingServerPid) ->
@@ -83,9 +84,21 @@ check_local_delivery(true, _DestNodeId, SourceNodeId, HopCount, Topic, Payload, 
     ?LOG_DEBUG("Pub/Sub route delivering locally: topic ~p from ~p (hops: ~p)",
               [Topic, SourceNodeId, HopCount]),
     {deliver, Topic, Payload};
-check_local_delivery(false, DestNodeId, _SourceNodeId, _HopCount, _Topic, _Payload, PubSubRouteMsg, RoutingServerPid) ->
-    %% Forward to next hop
-    forward_to_next_hop(DestNodeId, PubSubRouteMsg, RoutingServerPid).
+check_local_delivery(false, DestNodeId, SourceNodeId, HopCount, Topic, Payload, PubSubRouteMsg, RoutingServerPid) ->
+    %% Destination doesn't match our node_id, but the message arrived at our
+    %% endpoint via P2P — deliver locally (we likely have subscribers) AND
+    %% forward to the actual destination (preserve DHT hopping).
+    %% This handles stale DHT entries where destination_node_id is an old
+    %% node_id from before a restart, but the endpoint is still correct.
+    ?LOG_DEBUG("Pub/Sub route: dest mismatch, delivering locally AND forwarding. "
+               "topic ~p from ~p (hops: ~p)", [Topic, SourceNodeId, HopCount]),
+    case forward_to_next_hop(DestNodeId, PubSubRouteMsg, RoutingServerPid) of
+        {forward, NextHop, UpdatedMsg} ->
+            {deliver_and_forward, Topic, Payload, NextHop, UpdatedMsg};
+        {error, _} ->
+            %% Can't forward (no route), just deliver locally
+            {deliver, Topic, Payload}
+    end.
 
 %%%===================================================================
 %%% Internal Functions
