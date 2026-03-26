@@ -184,7 +184,7 @@ handle_cast(_Msg, State) ->
 %%====================================================================
 
 handle_info(connect, State) ->
-    QuicOpts = macula_tls:build_client_opts([{alpn, ["macula"]}]),
+    QuicOpts = [{alpn, ["macula"]} | macula_tls:quic_client_opts()],
     case macula_quic:connect(State#state.host, State#state.port, QuicOpts, 10000) of
         {ok, Conn} ->
             case macula_quic:open_stream(Conn) of
