@@ -526,7 +526,11 @@ complete_connection_setup(Conn, Stream, Host, Port, State) ->
     case send_message_raw(connect, ConnectMsg, Stream) of
         ok ->
             ?LOG_INFO("Connected to Macula mesh: ~s:~p", [Host, Port]),
-            register_server_in_dht(State),
+
+            %% Add server to DHT routing table immediately so STORE/FIND_VALUE
+            %% operations have a target. In client mode, this is the ONLY peer
+            %% in the routing table — without it, DHT operations go nowhere.
+            add_server_to_routing_table(Host, Port),
 
             %% Seed connection pool so DHT reuses this QUIC connection
             seed_connection_pool(Host, Port, Conn),
@@ -582,6 +586,30 @@ replay_peer_subscriptions(#state{realm = Realm, peer_id = PeerId}) ->
                       [Realm, PeerId]);
         PubSubPid ->
             gen_server:cast(PubSubPid, replay_subscriptions)
+    end,
+    ok.
+
+%% @doc Add the connected server to the local DHT routing table.
+%% In client mode, this is the ONLY peer — without it, STORE and FIND_VALUE
+%% have no target and DHT operations silently fail (empty results).
+-spec add_server_to_routing_table(string(), integer()) -> ok.
+add_server_to_routing_table(Host, Port) ->
+    Endpoint = iolist_to_binary([<<"https://">>, list_to_binary(Host), <<":">>, integer_to_binary(Port)]),
+    ServerNodeId = crypto:hash(sha256, Endpoint),
+    ServerNodeInfo = #{
+        node_id => ServerNodeId,
+        address => Endpoint,
+        endpoint => Endpoint
+    },
+    case whereis(macula_routing_server) of
+        undefined -> ok;
+        _Pid ->
+            case macula_routing_server:add_node(macula_routing_server, ServerNodeInfo) of
+                ok ->
+                    ?LOG_INFO("[Connection] Added server to routing table: ~s", [Endpoint]);
+                {error, Reason} ->
+                    ?LOG_WARNING("[Connection] Failed to add server to routing table: ~p", [Reason])
+            end
     end,
     ok.
 
@@ -766,12 +794,6 @@ remove_peer_from_routing_table(NodeId) when is_binary(NodeId) ->
 
 %% @doc Legacy function - replaced by maybe_register_server_in_dht/2.
 %% Called during connect but now just logs - real registration happens in PONG handler.
--spec register_server_in_dht(#state{}) -> ok.
-register_server_in_dht(_State) ->
-    %% Server registration now happens when we receive PONG with node_id
-    ?LOG_DEBUG("Server will be registered in DHT when PONG arrives with node_id"),
-    ok.
-
 %% @doc Send a protocol message through a stream (raw).
 %% Crashes if message is invalid - this indicates a bug in the caller.
 -spec send_message_raw(atom(), map(), reference()) -> ok | {error, term()}.
