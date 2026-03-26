@@ -38,12 +38,9 @@ start_link(Conn, Stream) ->
 %%====================================================================
 
 init({Conn, Stream}) ->
-    %% Transfer ownership from relay process to this handler.
-    %% Without this, {quic, Data, ...} messages go to the relay, not us.
-    ok = quicer:controlling_process(Stream, self()),
-    ok = quicer:controlling_process(Conn, self()),
-    quicer:setopt(Stream, active, true),
-    ?LOG_INFO("[relay_handler] Started with stream (ownership transferred)"),
+    %% Relay transfers ownership to us after start_link returns.
+    %% We wait for the signal before setting active mode.
+    ?LOG_INFO("[relay_handler] Waiting for stream ownership"),
     {ok, #state{conn = Conn, stream = Stream, node_id = <<>>,
                 recv_buffer = <<>>, pending_calls = #{}}}.
 
@@ -56,6 +53,11 @@ handle_cast(_Msg, State) ->
 %%====================================================================
 %% QUIC data received
 %%====================================================================
+
+handle_info(ownership_transferred, #state{stream = Stream} = State) ->
+    quicer:setopt(Stream, active, true),
+    ?LOG_INFO("[relay_handler] Ownership received, stream active"),
+    {noreply, State};
 
 handle_info({quic, Data, Stream, _Flags}, #state{stream = Stream} = State)
   when is_binary(Data) ->

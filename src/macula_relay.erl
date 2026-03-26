@@ -97,9 +97,13 @@ handle_info({quic, new_stream, Stream, StreamProps}, State) ->
             ?LOG_WARNING("[relay] Stream arrived with no connection context"),
             {noreply, State};
         _ ->
-            %% Start handler for this connection+stream pair
+            %% Start handler, then transfer stream/conn ownership to it.
+            %% controlling_process MUST be called by the current owner (us).
             {ok, Pid} = macula_relay_handler:start_link(Conn, Stream),
-            ?LOG_INFO("[relay] Handler started: ~p", [Pid]),
+            ok = quicer:controlling_process(Stream, Pid),
+            ok = quicer:controlling_process(Conn, Pid),
+            Pid ! ownership_transferred,
+            ?LOG_INFO("[relay] Handler ~p started, ownership transferred", [Pid]),
             {noreply, State#state{handlers = [Pid | State#state.handlers]}}
     end;
 
