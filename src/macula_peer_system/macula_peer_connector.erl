@@ -236,7 +236,8 @@ send_via_pool(Endpoint, MessageBinary) ->
         {ok, Conn} ->
             do_pool_send_stream(macula_quic:open_stream(Conn), Conn, Endpoint, MessageBinary);
         {error, Reason} ->
-            ?LOG_DEBUG("Pool connection failed: ~p, using direct", [Reason]),
+            ?LOG_WARNING("[PeerConnector] Pool connection to ~s failed: ~p, using direct",
+                        [Endpoint, Reason]),
             send_via_direct_connection(Endpoint, MessageBinary)
     end.
 

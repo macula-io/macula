@@ -175,7 +175,7 @@ handle_call({publish, Topic, Payload}, _From, State) when is_binary(Topic) ->
 %% Used for pubsub_route messages to prevent amplification loops.
 handle_call({deliver_local, Topic, Payload}, _From, State) when is_binary(Topic) ->
     LocalStreams = find_matching_subscribers(Topic, State),
-    ?LOG_DEBUG("Delivering locally to topic ~s: found ~p local subscribers",
+    ?LOG_INFO("[deliver_local] topic=~s subscribers=~p",
              [Topic, length(LocalStreams)]),
     deliver_to_local_streams(LocalStreams, Topic, Payload),
     {reply, ok, State};

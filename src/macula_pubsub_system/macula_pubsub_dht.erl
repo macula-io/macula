@@ -232,18 +232,18 @@ do_query_and_route(Topic, Payload, Qos, TopicKey) ->
 
 %% @private Handle DHT query result
 handle_dht_query_result({ok, Subscribers}, Topic, Payload, Qos) when is_list(Subscribers), length(Subscribers) > 0 ->
-    ?LOG_DEBUG("Found ~p subscriber(s) for topic ~s in DHT, routing message",
-              [length(Subscribers), Topic]),
+    ?LOG_INFO("Found ~p subscriber(s) for topic ~s in DHT, routing",
+             [length(Subscribers), Topic]),
     SourceNodeId = get_local_node_id(),
     route_to_subscribers(Topic, Payload, Qos, Subscribers, SourceNodeId);
 handle_dht_query_result({ok, []}, Topic, _Payload, _Qos) ->
-    ?LOG_DEBUG("No subscribers found for topic ~s in DHT", [Topic]);
+    ?LOG_WARNING("No subscribers found for topic ~s in DHT", [Topic]);
 handle_dht_query_result({ok, SingleSub}, Topic, Payload, Qos) when is_map(SingleSub) ->
     ?LOG_DEBUG("Found 1 subscriber for topic ~s in DHT, routing message", [Topic]),
     SourceNodeId = get_local_node_id(),
     route_to_subscribers(Topic, Payload, Qos, [SingleSub], SourceNodeId);
 handle_dht_query_result({error, not_found}, Topic, _Payload, _Qos) ->
-    ?LOG_DEBUG("No subscribers found for topic ~s in DHT", [Topic]);
+    ?LOG_WARNING("No subscribers in DHT for topic ~s (not_found)", [Topic]);
 handle_dht_query_result({error, QueryError}, Topic, _Payload, _Qos) ->
     ?LOG_WARNING("Failed to query DHT for topic ~s: ~p", [Topic, QueryError]).
 
@@ -268,11 +268,11 @@ send_to_subscriber(SourceNodeId, DestNodeId, DestEndpoint, Topic, PubSubRouteMsg
     %% Try direct send first (works for public IPs and same-network peers)
     case macula_peer_connector:send_message(DestEndpoint, pubsub_route, PubSubRouteMsg) of
         ok ->
-            ?LOG_DEBUG("[~s] Sent pubsub_route directly to subscriber ~s at ~s for topic ~s",
-                      [SourceNodeId, binary:encode_hex(DestNodeId), DestEndpoint, Topic]);
+            ?LOG_INFO("[~s] Sent pubsub_route to ~s at ~s for topic ~s",
+                     [SourceNodeId, binary:encode_hex(DestNodeId), DestEndpoint, Topic]);
         {error, Reason} ->
-            ?LOG_DEBUG("[~s] Direct send to ~s failed (~p), trying NAT-aware routing",
-                      [SourceNodeId, DestEndpoint, Reason]),
+            ?LOG_WARNING("[~s] Direct send to ~s (~s) failed: ~p, trying NAT-aware",
+                        [SourceNodeId, DestEndpoint, Topic, Reason]),
             %% Fall back to NAT-aware routing (hole punch, relay)
             send_to_subscriber_nat_aware(SourceNodeId, DestNodeId, DestEndpoint, Topic, PubSubRouteMsg)
     end.
