@@ -814,6 +814,7 @@ decode_messages(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
 %% Route PUBLISH messages to pub/sub handler
 process_message({publish, Msg}, State) ->
     Topic = maps:get(<<"topic">>, Msg, maps:get(topic, Msg, <<>>)),
+    ?LOG_INFO("[peer] Incoming PUBLISH topic=~s", [Topic]),
     %% Intercept internal mesh lifecycle events
     case handle_mesh_lifecycle_publish(Topic, Msg) of
         handled -> State;
