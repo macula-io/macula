@@ -209,65 +209,27 @@ discover_all_gateway_peers(RoutingServer) ->
             []
     end.
 
-%% @private Connect to a discovered peer gateway
-%% PeerInfo can have atom keys (from local DHT) or binary keys (from RPC response)
+%% @private Record a discovered peer gateway in the routing table.
+%% Does NOT create persistent connections — actual message delivery uses
+%% macula_peer_connector (JIT QUIC with connection pooling).
+%% Persistent connections caused N² fan-out: every node connecting to every
+%% discovered peer, each spawning a full peer_system (pubsub_handler +
+%% rpc_handler + advertisement_manager). With 4 nodes this produced 692+
+%% handlers and reconnect storms on bootstrap restart.
 connect_to_peer(PeerInfo, State) ->
-    %% Extract fields handling both atom and binary keys
     PeerNodeID = get_peer_field(PeerInfo, node_id, <<"node_id">>),
     Host = get_peer_field(PeerInfo, host, <<"host">>),
     Port = get_peer_field(PeerInfo, port, <<"port">>),
-    Realm = get_peer_field(PeerInfo, realm, <<"realm">>),
     #state{node_id = MyNodeID} = State,
 
-    %% Don't connect to ourselves
     case PeerNodeID of
         MyNodeID ->
             ok;
         _ ->
-            %% Build peer URL
             PeerUrl = iolist_to_binary([<<"https://">>, Host, <<":">>, integer_to_binary(Port)]),
-
-            %% Check if already connected
-            case is_already_connected(PeerNodeID) of
-                true ->
-                    ok;  % Already connected
-                false ->
-                    ?LOG_INFO("Connecting to peer ~s at ~s",
-                             [binary:encode_hex(PeerNodeID), PeerUrl]),
-
-                    %% Start peer connection - pass our node_id so gateway stores it correctly
-                    case macula_peers_sup:start_peer(PeerUrl, #{realm => Realm, node_id => MyNodeID}) of
-                        {ok, _PeerPid} ->
-                            ?LOG_INFO("Connected to peer ~s",
-                                     [binary:encode_hex(PeerNodeID)]);
-                        {error, {already_started, _}} ->
-                            ok;  % Already connected
-                        {error, Reason} ->
-                            ?LOG_ERROR("Failed to connect to ~s: ~p",
-                                     [binary:encode_hex(PeerNodeID), Reason])
-                    end
-            end
-    end.
-
-%% @private Check if already connected to a peer
-is_already_connected(_PeerNodeID) ->
-    %% Check if we have an active peer connection to this node
-    case whereis(macula_peers_sup) of
-        undefined ->
-            false;
-        _ ->
-            %% Query peer supervisor for active connections
-            %% This is a simplified check - in production we'd have a proper registry
-            Children = supervisor:which_children(macula_peers_sup),
-            lists:any(fun({_Id, Pid, _Type, _Modules}) ->
-                case Pid of
-                    undefined -> false;
-                    _ ->
-                        %% Check if this peer process is for our target node
-                        %% This is simplified - we'd need to query the peer for its node_id
-                        false  % For now, allow reconnections
-                end
-            end, Children)
+            ?LOG_INFO("Discovered peer ~s at ~s (routing table only)",
+                     [binary:encode_hex(PeerNodeID), PeerUrl]),
+            ok
     end.
 
 %% @private Discover peers by querying gateway's DHT via RPC

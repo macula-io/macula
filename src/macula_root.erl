@@ -316,7 +316,7 @@ get_realm() ->
     case os:getenv("MACULA_REALM") of
         false ->
             application:get_env(macula, realm,
-                application:get_env(macula, gateway_realm, <<"com.example.realm">>));
+                application:get_env(macula, gateway_realm, <<"io.macula">>));
         RealmStr ->
             list_to_binary(RealmStr)
     end.
