@@ -77,11 +77,57 @@ start_link() ->
 %%                  type => worker(),       % optional
 %%                  modules => modules()}   % optional
 init([]) ->
+    Mode = get_mode(),
+    init_mode(Mode).
+
+%% @doc Client mode: minimal supervision tree for connecting to a realm server.
+%% Nodes run in client mode — ONE outbound QUIC connection, no gateway,
+%% no discovery, no NAT traversal. The realm server handles all routing.
+init_mode(client) ->
+    Version = get_app_version(),
+    Realm = get_realm(),
+
+    ?LOG_INFO(""),
+    ?LOG_INFO("═══════════════════════════════════════════════════════════════"),
+    ?LOG_INFO("  Starting Macula ~s (Client Mode)", [Version]),
+    ?LOG_INFO("  Realm: ~s", [Realm]),
+    ?LOG_INFO("  Connecting to realm server — no local gateway"),
+    ?LOG_INFO("═══════════════════════════════════════════════════════════════"),
+    ?LOG_INFO(""),
+
+    %% TLS certs for outbound QUIC
+    {CertPath, KeyPath} = macula_tls:get_cert_paths(),
+    {ok, _CertPath, _KeyPath, TlsNodeID} = macula_tls:ensure_cert_exists(CertPath, KeyPath),
+    NodeID = get_node_id_from_env_or_tls(TlsNodeID),
+
+    ?LOG_INFO("  Node ID: ~s", [binary:encode_hex(NodeID)]),
+
+    SupFlags = #{strategy => one_for_one, intensity => 10, period => 5},
+
+    ChildSpecs = [
+        %% MRI (protocol support)
+        get_mri_registry_spec(),
+        get_mri_ets_spec(),
+
+        %% DHT routing (needed for subscriber/service discovery via the connection)
+        get_routing_server_spec(NodeID),
+
+        %% Peer connections supervisor (hecate_mesh_client creates ONE connection here)
+        get_peers_sup_spec()
+    ],
+
+    ?LOG_INFO("Client mode: 4 subsystems (MRI, DHT routing, peers supervisor)"),
+    ?LOG_INFO(""),
+
+    {ok, {SupFlags, ChildSpecs}};
+
+%% @doc Server mode: full supervision tree for realm server (gateway, DHT, routing).
+init_mode(server) ->
     Version = get_app_version(),
     ?LOG_INFO(""),
     ?LOG_INFO("═══════════════════════════════════════════════════════════════"),
-    ?LOG_INFO("  Starting Macula ~s (Always-On Architecture)", [Version]),
-    ?LOG_INFO("  All capabilities enabled: Bootstrap + Gateway + Peer"),
+    ?LOG_INFO("  Starting Macula ~s (Server Mode — Realm Server)", [Version]),
+    ?LOG_INFO("  All capabilities enabled: Bootstrap + Gateway + Routing"),
     ?LOG_INFO("═══════════════════════════════════════════════════════════════"),
     ?LOG_INFO(""),
 
@@ -90,7 +136,6 @@ init([]) ->
     {ok, _CertPath, _KeyPath, TlsNodeID} = macula_tls:ensure_cert_exists(CertPath, KeyPath),
 
     %% Use NODE_ID from environment if available, otherwise use TLS-derived ID
-    %% NODE_ID env var is used by applications like ping_pong for peer addressing
     NodeID = get_node_id_from_env_or_tls(TlsNodeID),
 
     ?LOG_INFO("✓ TLS Certificate: ~s", [CertPath]),
@@ -117,12 +162,6 @@ init([]) ->
     end,
     ?LOG_INFO(""),
 
-    SupFlags = #{
-        strategy => one_for_one,
-        intensity => 10,
-        period => 5
-    },
-
     %% Check if bridge system is enabled (for hierarchical mesh)
     BridgeConfig = get_bridge_config(),
     BridgeEnabled = maps:get(bridge_enabled, BridgeConfig, false),
@@ -137,28 +176,28 @@ init([]) ->
         %% 1. Core DHT routing (always on)
         get_routing_server_spec(NodeID),
 
-        %% 2. NAT system (NAT detection, hole punching, relay - always on)
+        %% 2. NAT system (NAT detection, hole punching, relay)
         get_nat_system_spec(),
 
-        %% 3. Bootstrap system (always on)
+        %% 3. Bootstrap system
         get_bootstrap_system_spec(Realm, HealthInterval),
 
-        %% 4. Gateway system (always on)
+        %% 4. Gateway system (accepts incoming QUIC connections)
         get_gateway_system_spec(Port, Realm, HealthPort),
 
         %% 5. Bridge system (hierarchical mesh - optional)
         get_bridge_system_spec(BridgeConfig),
 
-        %% 6. Peer connections supervisor (always on)
+        %% 6. Peer connections supervisor
         get_peers_sup_spec(),
 
-        %% 7. Peer discovery (DHT-based P2P mesh formation)
+        %% 7. Peer discovery (updates routing table only — no persistent connections)
         get_peer_discovery_spec(NodeID, Port, Realm),
 
-        %% 8. Platform system (distributed coordination - always on)
+        %% 8. Platform system (distributed coordination)
         get_platform_system_spec(NodeID, Realm),
 
-        %% 9. Registry system (package distribution - always on)
+        %% 9. Registry system (package distribution)
         get_registry_system_spec(NodeID, Realm)
     ],
 
@@ -177,7 +216,7 @@ init([]) ->
             ?LOG_INFO("  [5/11] Bridge System (disabled)")
     end,
     ?LOG_INFO("  [6/11] Peers Supervisor"),
-    ?LOG_INFO("  [7/11] Peer Discovery (P2P Mesh)"),
+    ?LOG_INFO("  [7/11] Peer Discovery"),
     ?LOG_INFO("  [8/11] Platform System (Masterless CRDT)"),
     ?LOG_INFO("  [9/11] Registry System (Package Distribution)"),
     ?LOG_INFO(""),
@@ -192,6 +231,7 @@ init([]) ->
             spawn(fun() -> connect_to_bootstrap_peers(BootstrapPeers, Realm, NodeID) end)
     end,
 
+    SupFlags = #{strategy => one_for_one, intensity => 10, period => 5},
     {ok, {SupFlags, ChildSpecs}}.
 
 %% internal functions
@@ -329,6 +369,23 @@ get_health_port() ->
             application:get_env(macula, health_port, 8080);
         PortStr ->
             list_to_integer(PortStr)
+    end.
+
+%% @private
+%% @doc Get operating mode from environment variable or config.
+%% - client: Minimal — connects to a realm server, no gateway, no discovery
+%% - server: Full — runs gateway, DHT, routing, accepts connections (realm server)
+%% Default: server (backward compatible with existing deployments)
+-spec get_mode() -> client | server.
+get_mode() ->
+    case os:getenv("MACULA_MODE") of
+        "client" -> client;
+        "CLIENT" -> client;
+        _ ->
+            case application:get_env(macula, mode) of
+                {ok, client} -> client;
+                _ -> server
+            end
     end.
 
 %% @private
