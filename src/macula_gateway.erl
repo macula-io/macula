@@ -883,9 +883,39 @@ handle_pubsub_route_deliver(PublishMsg, State) ->
 
     %% CRITICAL: Use deliver_local, NOT publish!
     %% publish() would re-route to remote subscribers, causing infinite amplification.
-    %% deliver_local() only delivers to streams on THIS node.
+    %% deliver_local() only delivers to streams on THIS node (gateway stream subscribers).
     macula_gateway_pubsub:deliver_local(State#state.pubsub, Topic, Payload),
+
+    %% Also deliver to local peer pubsub_handlers (application-level callbacks).
+    %% Gateway pubsub only has stream subscriptions from remote clients connecting to this
+    %% gateway. But macula:subscribe() registers callbacks in the peer's pubsub_handler,
+    %% not in the gateway. Without this, pubsub_route messages arrive but application
+    %% callbacks are never invoked.
+    deliver_to_peer_pubsub_handlers(PublishMsg),
     {noreply, State}.
+
+%% @doc Deliver routed PUBLISH to local peer pubsub_handlers.
+%% These handlers hold application-level subscription callbacks registered via
+%% macula:subscribe(). Without this, pubsub_route messages that arrive at a node's
+%% gateway are only checked against gateway stream subscriptions (from remote clients),
+%% missing the local application's own subscriptions.
+-spec deliver_to_peer_pubsub_handlers(map()) -> ok.
+deliver_to_peer_pubsub_handlers(PublishMsg) ->
+    %% Find all pubsub_handlers on this node via gproc
+    %% Pattern: {pubsub_handler, AnyRealm, AnyPeerId}
+    Pattern = {n, l, {pubsub_handler, '_', '_'}},
+    Handlers = gproc:lookup_pids(Pattern),
+    case Handlers of
+        [] ->
+            ?LOG_DEBUG("[pubsub_route] No local pubsub_handlers to deliver to");
+        _ ->
+            ?LOG_INFO("[pubsub_route] Delivering to ~p local pubsub_handler(s)",
+                     [length(Handlers)]),
+            lists:foreach(fun(Pid) ->
+                macula_pubsub_handler:handle_incoming_publish(Pid, PublishMsg)
+            end, Handlers)
+    end,
+    ok.
 
 %% @doc Forward pubsub_route message to next hop through mesh.
 %% Uses async (fire-and-forget) pattern to avoid blocking gateway.
