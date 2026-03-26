@@ -175,6 +175,13 @@ validate_message(rpc_reply, Msg) ->
         {_, true} -> #{<<"request_id">> := _, <<"from_node">> := _} = Msg
     end,
     ok;
+validate_message(register_procedure, Msg) ->
+    %% Register a procedure on the realm server gateway
+    case {maps:is_key(procedure, Msg), maps:is_key(<<"procedure">>, Msg)} of
+        {true, _} -> #{procedure := _} = Msg;
+        {_, true} -> #{<<"procedure">> := _} = Msg
+    end,
+    ok;
 validate_message(_Type, _Msg) ->
     %% For message types not yet validated, allow anything
     ok.

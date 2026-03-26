@@ -476,13 +476,11 @@ do_call_to_target(TargetNodeId, Procedure, Args, Opts, From, State) ->
 %% @private Local handler found - execute directly
 do_call_maybe_direct({ok, Handler}, BinaryProcedure, Args, Opts, From, State) ->
     do_call({ok, Handler}, BinaryProcedure, Args, Opts, From, State);
-%% @private No local handler - check if it's a gateway-direct procedure
-do_call_maybe_direct(not_found, <<"_dht.", _/binary>> = Procedure, Args, Opts, From, State) ->
-    %% _dht.* procedures are handled directly by the gateway (no DHT lookup needed)
-    do_gateway_direct_call(Procedure, Args, Opts, From, State);
-%% @private No local handler, not gateway-direct - use normal DHT discovery
+%% @private No local handler — send all calls to the gateway (realm server).
+%% The gateway either has a forwarding handler (from register_procedure) or
+%% returns procedure_not_found. No DHT discovery needed in hub-spoke mode.
 do_call_maybe_direct(not_found, BinaryProcedure, Args, Opts, From, State) ->
-    do_call(not_found, BinaryProcedure, Args, Opts, From, State).
+    do_gateway_direct_call(BinaryProcedure, Args, Opts, From, State).
 
 %% @private Send RPC directly to gateway (for _dht.* procedures)
 do_gateway_direct_call(Procedure, _Args, _Opts, _From, #state{connection_manager_pid = undefined} = State) ->

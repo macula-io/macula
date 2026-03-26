@@ -122,6 +122,14 @@ handle_call({advertise_service, Procedure, Handler, Opts}, _From, State) ->
             ?LOG_DEBUG("No local gateway running, handler stored locally only")
     end,
 
+    %% Tell the connected realm server about this procedure so it can forward
+    %% RPC calls from other nodes to our stream. Without this, the realm server
+    %% has no way to know which stream handles which procedure.
+    ConnMgr = State#state.connection_manager_pid,
+    RegisterMsg = #{procedure => BinaryProcedure},
+    macula_connection:send_message_async(ConnMgr, register_procedure, RegisterMsg),
+    ?LOG_INFO("Sent register_procedure to realm server for ~s", [BinaryProcedure]),
+
     %% Store service in DHT for decentralized discovery
     TTL = maps:get(ttl, Opts, ?DEFAULT_TTL),
     ServiceKey = crypto:hash(sha256, BinaryProcedure),

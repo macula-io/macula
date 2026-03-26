@@ -941,35 +941,57 @@ forward_pubsub_route(NextHopNodeInfo, PubSubRouteMsg, MeshPid) ->
 %% See handle_publish/3 and macula_gateway_pubsub_router for current pub/sub distribution.
 
 
-%% @doc Handle RPC call message (legacy direct handling).
+%% @doc Handle RPC call message — forward to registered handler or handle DHT procedures.
 handle_rpc_call(Stream, CallMsg, State) ->
     Procedure = maps:get(<<"procedure">>, CallMsg),
     CallId = maps:get(<<"call_id">>, CallMsg),
+    Args = maps:get(<<"args">>, CallMsg, #{}),
     ?LOG_DEBUG("[Gateway] handle_rpc_call procedure=~p call_id=~p", [Procedure, CallId]),
 
-    %% Special exception: handle DHT-related procedures
+    %% Special exception: handle DHT-related procedures locally
     case Procedure of
         <<"_dht.list_gateways">> ->
-            ?LOG_DEBUG("[Gateway] handling _dht.list_gateways"),
             handle_dht_list_gateways(Stream, CallId, State);
         <<"_dht.store">> ->
-            ?LOG_DEBUG("[Gateway] handling _dht.store"),
             handle_dht_store(Stream, CallId, CallMsg, State);
         _ ->
-            ?LOG_WARNING("BOOTSTRAP-ONLY MODE: Rejecting RPC call to ~s (peers must communicate directly via DHT)", [Procedure]),
-
-            %% Gateway is BOOTSTRAP-ONLY - it does NOT handle RPC calls!
-            %% Peers must discover service providers via DHT and call them directly
-            ErrorReply = #{
-                call_id => CallId,
-                error => #{
-                    code => <<"gateway_bootstrap_only">>,
-                    message => <<"Gateway is bootstrap-only. Discover service via DHT and call peer directly">>
-                }
-            },
-            ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
-            macula_quic:send(Stream, ReplyBinary),
-            {noreply, State}
+            %% Try registered handlers (from register_procedure messages)
+            Rpc = State#state.rpc,
+            case macula_gateway_rpc:invoke_handler(Rpc, Procedure, Args) of
+                {ok, Result} ->
+                    ?LOG_INFO("[Gateway] RPC ~s handled, returning result", [Procedure]),
+                    SuccessReply = #{
+                        call_id => CallId,
+                        result => Result
+                    },
+                    ReplyBinary = macula_protocol_encoder:encode(reply, SuccessReply),
+                    macula_quic:send(Stream, ReplyBinary),
+                    {noreply, State};
+                {error, not_found} ->
+                    ?LOG_WARNING("[Gateway] No handler for procedure ~s", [Procedure]),
+                    ErrorReply = #{
+                        call_id => CallId,
+                        error => #{
+                            code => <<"procedure_not_found">>,
+                            message => <<"No node has registered this procedure">>
+                        }
+                    },
+                    ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+                    macula_quic:send(Stream, ReplyBinary),
+                    {noreply, State};
+                {error, Reason} ->
+                    ?LOG_WARNING("[Gateway] RPC ~s failed: ~p", [Procedure, Reason]),
+                    ErrorReply = #{
+                        call_id => CallId,
+                        error => #{
+                            code => <<"handler_error">>,
+                            message => iolist_to_binary(io_lib:format("~p", [Reason]))
+                        }
+                    },
+                    ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+                    macula_quic:send(Stream, ReplyBinary),
+                    {noreply, State}
+            end
     end.
 
 %% @private Handle _dht.list_gateways RPC for peer discovery
@@ -1501,9 +1523,36 @@ handle_decoded_message({ok, {pubsub_route, PubSubRouteMsg}}, _Stream, State) ->
             {noreply, State}
     end;
 
-%% Handle RPC call message (legacy direct call - will be deprecated).
+%% Handle register_procedure — client tells us it can handle this procedure.
+%% Store procedure → stream so we can forward CALL messages to the right client.
+handle_decoded_message({ok, {register_procedure, RegMsg}}, Stream, State) ->
+    Procedure = maps:get(<<"procedure">>, RegMsg),
+    ?LOG_INFO("[Gateway] Registered procedure ~s on stream ~p", [Procedure, Stream]),
+    Rpc = State#state.rpc,
+    %% Create a forwarding handler that sends the call to the registering stream
+    ForwardHandler = fun(Args) ->
+        CallId = base64:encode(crypto:strong_rand_bytes(12)),
+        CallMsg = #{
+            <<"procedure">> => Procedure,
+            <<"call_id">> => CallId,
+            <<"args">> => Args
+        },
+        CallBinary = macula_protocol_encoder:encode(call, CallMsg),
+        case macula_quic:send(Stream, CallBinary) of
+            ok ->
+                ?LOG_INFO("[Gateway] Forwarded RPC ~s to provider stream", [Procedure]),
+                {ok, #{<<"forwarded">> => true, <<"call_id">> => CallId}};
+            {error, Reason} ->
+                ?LOG_WARNING("[Gateway] Failed to forward RPC ~s: ~p", [Procedure, Reason]),
+                {error, {forward_failed, Reason}}
+        end
+    end,
+    macula_gateway_rpc:register_handler(Rpc, Procedure, ForwardHandler),
+    {noreply, State};
+
+%% Handle RPC call message — forward to the stream that registered the procedure.
 handle_decoded_message({ok, {call, CallMsg}}, Stream, State) ->
-    ?LOG_DEBUG("Received RPC CALL (DIRECT)"),
+    ?LOG_DEBUG("Received RPC CALL"),
     ?LOG_DEBUG("Call message: ~p", [CallMsg]),
     handle_rpc_call(Stream, CallMsg, State);
 

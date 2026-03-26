@@ -55,6 +55,7 @@
 -define(MSG_RPC_ROUTE,      16#23).
 -define(MSG_RPC_REQUEST,    16#24).  % NATS-style async RPC request
 -define(MSG_RPC_REPLY,      16#25).  % NATS-style async RPC reply
+-define(MSG_REGISTER_PROCEDURE, 16#26).  % Register RPC procedure on gateway
 
 %% SWIM membership messages
 -define(MSG_SWIM_PING,      16#30).
@@ -471,6 +472,7 @@ message_type_id(cast) -> ?MSG_CAST;
 message_type_id(rpc_route) -> ?MSG_RPC_ROUTE;
 message_type_id(rpc_request) -> ?MSG_RPC_REQUEST;
 message_type_id(rpc_reply) -> ?MSG_RPC_REPLY;
+message_type_id(register_procedure) -> ?MSG_REGISTER_PROCEDURE;
 message_type_id(swim_ping) -> ?MSG_SWIM_PING;
 message_type_id(swim_ack) -> ?MSG_SWIM_ACK;
 message_type_id(swim_ping_req) -> ?MSG_SWIM_PING_REQ;
@@ -527,6 +529,7 @@ message_type_name(?MSG_CAST) -> {ok, cast};
 message_type_name(?MSG_RPC_ROUTE) -> {ok, rpc_route};
 message_type_name(?MSG_RPC_REQUEST) -> {ok, rpc_request};
 message_type_name(?MSG_RPC_REPLY) -> {ok, rpc_reply};
+message_type_name(?MSG_REGISTER_PROCEDURE) -> {ok, register_procedure};
 message_type_name(?MSG_SWIM_PING) -> {ok, swim_ping};
 message_type_name(?MSG_SWIM_ACK) -> {ok, swim_ack};
 message_type_name(?MSG_SWIM_PING_REQ) -> {ok, swim_ping_req};
