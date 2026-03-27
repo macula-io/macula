@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.31.1] - 2026-03-27
+
+### Added
+
+- **Relay failover diagram** — SVG in `assets/relay_failover.svg`
+
+---
+
 ## [0.31.0] - 2026-03-27
 
 ### Added
