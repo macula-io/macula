@@ -87,7 +87,9 @@ handle_info({quic, new_conn, Conn, ConnInfo}, #state{listener = Listener} = Stat
 %% Async stream: quicer delivers new streams as messages
 handle_info({quic, new_stream, Stream, StreamProps}, State) ->
     ?LOG_INFO("[relay] New stream: ~p", [StreamProps]),
-    %% Find which connection this stream belongs to
+    %% Ensure stream is passive until handler takes over — prevents
+    %% data arriving on the relay process before ownership transfer.
+    catch quicer:setopt(Stream, active, false),
     Conn = case StreamProps of
         #{conn := C} -> C;
         _ -> get(pending_conn)
@@ -97,8 +99,6 @@ handle_info({quic, new_stream, Stream, StreamProps}, State) ->
             ?LOG_WARNING("[relay] Stream arrived with no connection context"),
             {noreply, State};
         _ ->
-            %% Start handler, then transfer stream/conn ownership to it.
-            %% controlling_process MUST be called by the current owner (us).
             {ok, Pid} = macula_relay_handler:start_link(Conn, Stream),
             ok = quicer:controlling_process(Stream, Pid),
             ok = quicer:controlling_process(Conn, Pid),
@@ -107,9 +107,10 @@ handle_info({quic, new_stream, Stream, StreamProps}, State) ->
             {noreply, State#state{handlers = [Pid | State#state.handlers]}}
     end;
 
-%% QUIC data arriving on relay process (before handler takes over)
+%% QUIC data arriving on relay process — should not happen since we
+%% set stream passive before ownership transfer. Log for debugging.
 handle_info({quic, Data, _Stream, _Flags}, State) when is_binary(Data) ->
-    ?LOG_DEBUG("[relay] Data on unowned stream (~p bytes)", [byte_size(Data)]),
+    ?LOG_WARNING("[relay] Unexpected data on relay process (~p bytes) — stream should be passive", [byte_size(Data)]),
     {noreply, State};
 
 %% Handler process died — remove from handlers list
