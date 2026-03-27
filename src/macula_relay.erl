@@ -23,7 +23,10 @@
 -record(state, {
     listener :: reference() | undefined,
     port :: integer(),
-    handlers :: [pid()]
+    handlers :: [pid()],
+    %% stream_ref => {handler_pid, [buffered_data]}
+    %% Captures data that arrives before ownership transfer completes
+    stream_handlers :: #{reference() => pid()}
 }).
 
 %%====================================================================
@@ -65,7 +68,8 @@ init(Opts) ->
             ?LOG_INFO("[relay] Listening on port ~p", [Port]),
             %% Register for async connection events
             register_accept(Listener),
-            {ok, #state{listener = Listener, port = Port, handlers = []}};
+            {ok, #state{listener = Listener, port = Port, handlers = [],
+                        stream_handlers = #{}}};
         {error, Reason} ->
             {stop, {listen_failed, Reason}}
     end.
@@ -104,21 +108,30 @@ handle_info({quic, new_stream, Stream, StreamProps}, State) ->
             ok = quicer:controlling_process(Conn, Pid),
             Pid ! ownership_transferred,
             ?LOG_INFO("[relay] Handler ~p started, ownership transferred", [Pid]),
-            {noreply, State#state{handlers = [Pid | State#state.handlers]}}
+            SH = maps:put(Stream, Pid, State#state.stream_handlers),
+            {noreply, State#state{handlers = [Pid | State#state.handlers],
+                                  stream_handlers = SH}}
     end;
 
-%% QUIC data arriving on relay process — should not happen since we
-%% set stream passive before ownership transfer. Log for debugging.
-handle_info({quic, Data, _Stream, _Flags}, State) when is_binary(Data) ->
-    ?LOG_WARNING("[relay] Unexpected data on relay process (~p bytes) — stream should be passive", [byte_size(Data)]),
+%% QUIC data arriving on relay process before handler takes over.
+%% Forward to the handler that owns this stream.
+handle_info({quic, Data, Stream, Flags}, State) when is_binary(Data) ->
+    case maps:get(Stream, State#state.stream_handlers, undefined) of
+        undefined ->
+            ?LOG_WARNING("[relay] Data for unknown stream (~p bytes)", [byte_size(Data)]);
+        Pid ->
+            Pid ! {quic, Data, Stream, Flags}
+    end,
     {noreply, State};
 
-%% Handler process died — remove from handlers list
+%% Handler process died — remove from handlers list and stream map
 handle_info({'EXIT', Pid, Reason}, State) ->
     case lists:member(Pid, State#state.handlers) of
         true ->
             ?LOG_INFO("[relay] Handler ~p exited: ~p", [Pid, Reason]),
-            {noreply, State#state{handlers = lists:delete(Pid, State#state.handlers)}};
+            SH = maps:filter(fun(_S, P) -> P =/= Pid end, State#state.stream_handlers),
+            {noreply, State#state{handlers = lists:delete(Pid, State#state.handlers),
+                                  stream_handlers = SH}};
         false ->
             {noreply, State}
     end;
