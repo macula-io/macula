@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" width="800" height="420">
+  <defs>
+    <style>
+      text { font-family: 'Segoe UI', -apple-system, system-ui, sans-serif; }
+    </style>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="420" fill="#f8f9fa" rx="12"/>
+
+  <!-- Title -->
+  <text x="400" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#1a1a2e" letter-spacing="0.3">Federated Relay Mesh — Client Failover</text>
+  <text x="400" y="48" text-anchor="middle" font-size="10" fill="#64748b" font-style="italic">Nodes connect to one relay, failover to another on disconnect. Subscriptions replay automatically.</text>
+
+  <!-- ════════════════════════════════ -->
+  <!-- Three relays (top)              -->
+  <!-- ════════════════════════════════ -->
+
+  <!-- Relay 00 -->
+  <rect x="80" y="70" width="150" height="50" rx="8" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.5" filter="url(#shadow)"/>
+  <circle cx="100" cy="95" r="6" fill="#34d399"/>
+  <text x="115" y="92" font-size="12" font-weight="600" fill="#065f46">relay00</text>
+  <text x="115" y="106" font-size="9" fill="#047857">Nuremberg</text>
+
+  <!-- Relay 01 -->
+  <rect x="325" y="70" width="150" height="50" rx="8" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.5" filter="url(#shadow)"/>
+  <circle cx="345" cy="95" r="6" fill="#34d399"/>
+  <text x="360" y="92" font-size="12" font-weight="600" fill="#065f46">relay01</text>
+  <text x="360" y="106" font-size="9" fill="#047857">Helsinki</text>
+
+  <!-- Relay 02 -->
+  <rect x="570" y="70" width="150" height="50" rx="8" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.5" filter="url(#shadow)"/>
+  <circle cx="590" cy="95" r="6" fill="#34d399"/>
+  <text x="605" y="92" font-size="12" font-weight="600" fill="#065f46">relay02</text>
+  <text x="605" y="106" font-size="9" fill="#047857">Linode</text>
+
+  <!-- Relay mesh connections -->
+  <line x1="230" y1="95" x2="325" y2="95" stroke="#34d399" stroke-width="2" stroke-dasharray="6,3"/>
+  <line x1="475" y1="95" x2="570" y2="95" stroke="#34d399" stroke-width="2" stroke-dasharray="6,3"/>
+  <path d="M 230 105 Q 400 135 570 105" fill="none" stroke="#34d399" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.4"/>
+
+  <!-- ════════════════════════════════ -->
+  <!-- Step 1: Normal operation        -->
+  <!-- ════════════════════════════════ -->
+
+  <rect x="30" y="145" width="230" height="125" rx="8" fill="#fff" stroke="#e5e7eb" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="30" y="145" width="230" height="24" rx="8" fill="#1e3a5f"/>
+  <rect x="30" y="157" width="230" height="12" fill="#1e3a5f"/>
+  <text x="145" y="162" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">1. Normal Operation</text>
+
+  <!-- Node connected to relay00 -->
+  <rect x="55" y="185" width="80" height="35" rx="5" fill="#533483" opacity="0.9"/>
+  <text x="95" y="200" text-anchor="middle" font-size="9" fill="#fff" font-weight="600">Hecate Node</text>
+  <text x="95" y="212" text-anchor="middle" font-size="7" fill="rgba(255,255,255,0.7)">beam02</text>
+
+  <!-- Arrow to relay00 -->
+  <line x1="135" y1="195" x2="155" y2="130" stroke="#34d399" stroke-width="2"/>
+  <polygon points="155,130 150,139 160,139" fill="#34d399"/>
+  <text x="165" y="165" font-size="8" fill="#059669" font-weight="600">connected</text>
+
+  <!-- Subscriptions -->
+  <text x="55" y="240" font-size="8" fill="#6b7280">Subscriptions: topic.A, topic.B</text>
+  <text x="55" y="252" font-size="8" fill="#6b7280">RPC: hecate.mpong.join.*</text>
+
+  <!-- ════════════════════════════════ -->
+  <!-- Step 2: Relay dies              -->
+  <!-- ════════════════════════════════ -->
+
+  <rect x="285" y="145" width="230" height="125" rx="8" fill="#fff" stroke="#e5e7eb" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="285" y="145" width="230" height="24" rx="8" fill="#dc2626"/>
+  <rect x="285" y="157" width="230" height="12" fill="#dc2626"/>
+  <text x="400" y="162" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">2. relay00 Dies</text>
+
+  <!-- Node disconnected -->
+  <rect x="310" y="185" width="80" height="35" rx="5" fill="#533483" opacity="0.9"/>
+  <text x="350" y="200" text-anchor="middle" font-size="9" fill="#fff" font-weight="600">Hecate Node</text>
+  <text x="350" y="212" text-anchor="middle" font-size="7" fill="rgba(255,255,255,0.7)">beam02</text>
+
+  <!-- Broken connection -->
+  <line x1="370" y1="185" x2="375" y2="145" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="3,3"/>
+  <text x="395" y="170" font-size="14" fill="#ef4444">✗</text>
+
+  <!-- Detect + pick next -->
+  <text x="310" y="240" font-size="8" fill="#dc2626" font-weight="600">QUIC timeout detected (~3-5s)</text>
+  <text x="310" y="252" font-size="8" fill="#6b7280">Next relay: relay01 (round-robin)</text>
+  <text x="310" y="264" font-size="8" fill="#6b7280">Backoff: 1s + jitter</text>
+
+  <!-- ════════════════════════════════ -->
+  <!-- Step 3: Failover + Replay      -->
+  <!-- ════════════════════════════════ -->
+
+  <rect x="540" y="145" width="230" height="125" rx="8" fill="#fff" stroke="#e5e7eb" stroke-width="1" filter="url(#shadow)"/>
+  <rect x="540" y="145" width="230" height="24" rx="8" fill="#059669"/>
+  <rect x="540" y="157" width="230" height="12" fill="#059669"/>
+  <text x="655" y="162" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">3. Failover + Replay</text>
+
+  <!-- Node connected to relay01 -->
+  <rect x="565" y="185" width="80" height="35" rx="5" fill="#533483" opacity="0.9"/>
+  <text x="605" y="200" text-anchor="middle" font-size="9" fill="#fff" font-weight="600">Hecate Node</text>
+  <text x="605" y="212" text-anchor="middle" font-size="7" fill="rgba(255,255,255,0.7)">beam02</text>
+
+  <!-- Arrow to relay01 -->
+  <line x1="625" y1="185" x2="410" y2="130" stroke="#34d399" stroke-width="2"/>
+  <polygon points="410,130 413,140 418,135" fill="#34d399"/>
+  <text x="510" y="152" font-size="8" fill="#059669" font-weight="600">reconnected</text>
+
+  <!-- Replay -->
+  <text x="565" y="237" font-size="8" fill="#059669" font-weight="600">Replayed automatically:</text>
+  <text x="565" y="249" font-size="8" fill="#6b7280">SUBSCRIBE topic.A, topic.B</text>
+  <text x="565" y="261" font-size="8" fill="#6b7280">REGISTER hecate.mpong.join.*</text>
+
+  <!-- ════════════════════════════════ -->
+  <!-- Bottom: Key properties          -->
+  <!-- ════════════════════════════════ -->
+
+  <rect x="30" y="290" width="740" height="55" rx="8" fill="#1a1a2e"/>
+
+  <text x="70" y="313" font-size="11" fill="#a7f3d0" font-weight="600">Round-Robin</text>
+  <text x="70" y="329" font-size="9" fill="rgba(255,255,255,0.6)">Cycle through relay list</text>
+
+  <circle cx="215" cy="318" r="2" fill="rgba(255,255,255,0.15)"/>
+
+  <text x="245" y="313" font-size="11" fill="#a7f3d0" font-weight="600">Backoff + Jitter</text>
+  <text x="245" y="329" font-size="9" fill="rgba(255,255,255,0.6)">1s base, 30s max, ±30%</text>
+
+  <circle cx="415" cy="318" r="2" fill="rgba(255,255,255,0.15)"/>
+
+  <text x="445" y="313" font-size="11" fill="#a7f3d0" font-weight="600">State Preserved</text>
+  <text x="445" y="329" font-size="9" fill="rgba(255,255,255,0.6)">Subs + RPCs survive failover</text>
+
+  <circle cx="620" cy="318" r="2" fill="rgba(255,255,255,0.15)"/>
+
+  <text x="650" y="313" font-size="11" fill="#a7f3d0" font-weight="600">Load Distributed</text>
+  <text x="650" y="329" font-size="9" fill="rgba(255,255,255,0.6)">Random initial relay</text>
+
+  <!-- Timeline -->
+  <rect x="30" y="360" width="740" height="40" rx="6" fill="#f1f5f9"/>
+  <text x="55" y="378" font-size="9" fill="#475569" font-weight="600">Timeline:</text>
+  <text x="120" y="378" font-size="9" fill="#475569">0s — connected</text>
+  <circle cx="210" cy="375" r="2" fill="#94a3b8"/>
+  <text x="220" y="378" font-size="9" fill="#dc2626">relay dies</text>
+  <circle cx="290" cy="375" r="2" fill="#94a3b8"/>
+  <text x="300" y="378" font-size="9" fill="#475569">~3-5s — timeout detected</text>
+  <circle cx="445" cy="375" r="2" fill="#94a3b8"/>
+  <text x="455" y="378" font-size="9" fill="#475569">~4-6s — QUIC handshake to next relay</text>
+  <circle cx="645" cy="375" r="2" fill="#94a3b8"/>
+  <text x="655" y="378" font-size="9" fill="#059669" font-weight="600">~5-7s — fully reconnected</text>
+  <text x="55" y="393" font-size="8" fill="#94a3b8" font-style="italic">Total downtime: 5-7 seconds. All subscriptions and RPC registrations replayed automatically.</text>
+
+</svg>
