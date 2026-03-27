@@ -35,7 +35,9 @@
     conn :: reference(),
     stream :: reference() | undefined,
     node_id :: binary(),
+    node_name :: binary(),                  %% stable identity (e.g. "hecate@beam00.lab")
     is_peer :: boolean(),                   %% true if this is a relay-to-relay peering connection
+    identified :: boolean(),                %% true after CONNECT handshake processed
     recv_buffer :: binary(),
     pending_calls :: #{binary() => pid()}  %% call_id => caller handler pid
 }).
@@ -56,7 +58,8 @@ init({Conn, Stream}) ->
     %% We wait for the signal before setting active mode.
     ?LOG_INFO("[relay_handler] Waiting for stream ownership"),
     {ok, #state{conn = Conn, stream = Stream, node_id = <<>>,
-                is_peer = false, recv_buffer = <<>>, pending_calls = #{}}}.
+                node_name = <<>>, is_peer = false, identified = false,
+                recv_buffer = <<>>, pending_calls = #{}}}.
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown}, State}.
@@ -178,30 +181,31 @@ handle_message({ok, {connect, Msg}}, State) ->
     NodeId = maps:get(<<"node_id">>, Msg, <<>>),
     Realm = maps:get(<<"realm_id">>, Msg, <<>>),
     IsPeer = maps:get(<<"type">>, Msg, <<"node">>) =:= <<"relay">>,
-    ?LOG_INFO("[relay_handler] ~s connected: realm=~s node=~s",
-             [case IsPeer of true -> <<"Peer relay">>; false -> <<"Node">> end,
-              Realm, binary:encode_hex(NodeId)]),
+    NodeName = maps:get(<<"node_name">>, Msg, binary:encode_hex(NodeId)),
+    Label = case IsPeer of true -> <<"Peer relay">>; false -> <<"Node">> end,
+    ?LOG_INFO("[relay_handler] ~s connected: realm=~s name=~s", [Label, Realm, NodeName]),
+    register_client_node(IsPeer, NodeName),
     send_to_node(pong, #{
         <<"timestamp">> => erlang:system_time(millisecond),
         <<"server_time">> => erlang:system_time(millisecond)
     }, State),
-    State#state{node_id = NodeId, is_peer = IsPeer};
+    State#state{node_id = NodeId, node_name = NodeName,
+                is_peer = IsPeer, identified = true};
+
+%% SUBSCRIBE — must wait for CONNECT first (identified = true).
+%% Without this guard, peering clients race: SUBSCRIBE arrives before
+%% CONNECT is processed, is_peer is still false, and the handler
+%% incorrectly joins {relay_local, _} groups — inflating node counts.
+handle_message({ok, {subscribe, _Msg}}, #state{identified = false} = State) ->
+    ?LOG_WARNING("[relay_handler] SUBSCRIBE before CONNECT — ignoring"),
+    State;
 
 %% SUBSCRIBE — join pg groups for topics
 %% Client handlers join both {relay_topic, T} and {relay_local, T}.
 %% Peer handlers join only {relay_topic, T} (prevents cross-relay loops).
 handle_message({ok, {subscribe, Msg}}, #state{is_peer = IsPeer} = State) ->
     Topics = maps:get(<<"topics">>, Msg, []),
-    lists:foreach(fun(Topic) ->
-        pg:join(pg, {relay_topic, Topic}, self()),
-        case IsPeer of
-            false ->
-                pg:join(pg, {relay_local, Topic}, self()),
-                notify_peering(topic_subscribed, Topic);
-            true  -> ok
-        end,
-        ?LOG_INFO("[relay_handler] Subscribed to ~s (peer=~p)", [Topic, IsPeer])
-    end, Topics),
+    lists:foreach(fun(Topic) -> join_topic(Topic, IsPeer) end, Topics),
     State;
 
 %% UNSUBSCRIBE — leave pg groups
@@ -294,8 +298,23 @@ handle_message({error, Reason}, State) ->
 %% Send helper
 %%====================================================================
 
+%% Register this handler as a connected client node (not peers).
+register_client_node(true, _NodeName) -> ok;
+register_client_node(false, NodeName) ->
+    put(relay_node_name, NodeName),
+    pg:join(pg, relay_connected_nodes, self()).
+
+%% Join topic pg groups. Clients join both groups; peers only relay_topic.
+join_topic(Topic, false) ->
+    pg:join(pg, {relay_topic, Topic}, self()),
+    pg:join(pg, {relay_local, Topic}, self()),
+    notify_peering(topic_subscribed, Topic),
+    ?LOG_INFO("[relay_handler] Subscribed to ~s (peer=false)", [Topic]);
+join_topic(Topic, true) ->
+    pg:join(pg, {relay_topic, Topic}, self()),
+    ?LOG_INFO("[relay_handler] Subscribed to ~s (peer=true)", [Topic]).
+
 %% Notify relay peering module (if running) about subscription changes.
-%% Best-effort: if peering isn't running, silently ignore.
 notify_peering(Event, Topic) ->
     case erlang:whereis(macula_relay_peering) of
         undefined -> ok;

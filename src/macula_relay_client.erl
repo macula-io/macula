@@ -372,9 +372,14 @@ handle_message({error, Reason}, State) ->
 
 send_connect(State) ->
     NodeId = crypto:strong_rand_bytes(32),
+    NodeName = case net_kernel:nodename() of
+        nonode@nohost -> State#state.identity;
+        Name -> atom_to_binary(Name)
+    end,
     maybe_send(connect, #{
         version => <<"1.0">>,
         node_id => NodeId,
+        node_name => NodeName,
         realm_id => State#state.realm,
         capabilities => [<<"pubsub">>, <<"rpc">>],
         endpoint => State#state.url,
