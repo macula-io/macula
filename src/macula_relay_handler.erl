@@ -244,21 +244,16 @@ handle_message({ok, {register_procedure, Msg}}, State) ->
     end,
     State;
 
-%% CALL — find provider via gproc, forward to its handler
+%% CALL — find provider via gproc, forward to its handler.
+%% If not found locally, try peer relays via the peering module.
 handle_message({ok, {call, Msg}}, State) ->
     Procedure = maps:get(<<"procedure">>, Msg, <<>>),
     CallId = maps:get(<<"call_id">>, Msg, <<>>),
     Args = maps:get(<<"args">>, Msg, #{}),
     case gproc:lookup_pids({p, l, {relay_rpc, Procedure}}) of
         [] ->
-            ?LOG_WARNING("[relay_handler] No provider for RPC ~s", [Procedure]),
-            send_to_node(reply, #{
-                <<"call_id">> => CallId,
-                <<"error">> => #{
-                    <<"code">> => <<"procedure_not_found">>,
-                    <<"message">> => <<"No node has registered this procedure">>
-                }
-            }, State);
+            ?LOG_INFO("[relay_handler] RPC ~s not local, trying peer relays", [Procedure]),
+            forward_rpc_to_peers(Procedure, CallId, Args, State);
         [ProviderPid | _] ->
             ?LOG_INFO("[relay_handler] Forwarding RPC ~s to provider ~p", [Procedure, ProviderPid]),
             ProviderPid ! {relay_call, self(), CallId, Procedure, Args}
@@ -322,6 +317,38 @@ join_topic(Topic, false) ->
 join_topic(Topic, true) ->
     pg:join(pg, {relay_topic, Topic}, self()),
     ?LOG_INFO("[relay_handler] Subscribed to ~s (peer=true)", [Topic]).
+
+%% Forward RPC call to peer relays when procedure not found locally.
+%% Spawns async — tries each peer, sends first success back to caller.
+forward_rpc_to_peers(Procedure, CallId, Args, _State) ->
+    HandlerPid = self(),
+    spawn(fun() ->
+        case erlang:whereis(macula_relay_peering) of
+            undefined ->
+                HandlerPid ! {relay_reply, CallId,
+                    #{<<"error">> => #{<<"code">> => <<"procedure_not_found">>,
+                                      <<"message">> => <<"No node has registered this procedure">>}}};
+            PeeringPid ->
+                Clients = gen_server:call(PeeringPid, peer_clients, 2000),
+                Result = try_rpc_on_peers(Procedure, Args, Clients),
+                case Result of
+                    {ok, Response} ->
+                        HandlerPid ! {relay_reply, CallId, Response};
+                    {error, _} ->
+                        HandlerPid ! {relay_reply, CallId,
+                            #{<<"error">> => #{<<"code">> => <<"procedure_not_found">>,
+                                              <<"message">> => <<"No provider on any relay">>}}}
+                end
+        end
+    end).
+
+try_rpc_on_peers(_Procedure, _Args, []) ->
+    {error, not_found};
+try_rpc_on_peers(Procedure, Args, [{_Url, ClientPid} | Rest]) ->
+    case catch macula_relay_client:call(ClientPid, Procedure, Args, 4000) of
+        {ok, Response} -> {ok, Response};
+        _ -> try_rpc_on_peers(Procedure, Args, Rest)
+    end.
 
 %% Notify relay peering module (if running) about subscription changes.
 notify_peering(Event, Topic) ->
