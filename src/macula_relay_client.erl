@@ -45,6 +45,7 @@
     port :: integer(),
     realm :: binary(),
     identity :: binary(),
+    client_type :: binary(),                                  %% <<"node">> or <<"relay">> (for CONNECT handshake)
     conn :: reference() | undefined,
     stream :: reference() | undefined,
     status :: connecting | connected | disconnected,
@@ -105,6 +106,7 @@ init(Opts) ->
     {Host, Port} = parse_url(Url),
     Realm = maps:get(realm, Opts, <<"io.macula">>),
     Identity = maps:get(identity, Opts, <<"anonymous">>),
+    ClientType = maps:get(type, Opts, <<"node">>),
 
     State = #state{
         relays = Relays,
@@ -114,6 +116,7 @@ init(Opts) ->
         port = Port,
         realm = Realm,
         identity = Identity,
+        client_type = ClientType,
         conn = undefined,
         stream = undefined,
         status = connecting,
@@ -374,7 +377,8 @@ send_connect(State) ->
         node_id => NodeId,
         realm_id => State#state.realm,
         capabilities => [<<"pubsub">>, <<"rpc">>],
-        endpoint => State#state.url
+        endpoint => State#state.url,
+        type => State#state.client_type
     }, State).
 
 %% Replay all subscriptions and procedure registrations after reconnect

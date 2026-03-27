@@ -5,6 +5,19 @@
 %%% - pg groups for pub/sub (subscribe = join, publish = broadcast)
 %%% - gproc for RPC (register = reg, call = lookup + forward)
 %%%
+%%% Cross-relay routing uses dual pg groups per topic:
+%%% - `{relay_topic, Topic}' — ALL handlers (client + peer) join.
+%%%   Used for local PUBLISH broadcasting. Peer handlers forward
+%%%   messages to their remote relay.
+%%% - `{relay_local, Topic}' — only CLIENT handlers join.
+%%%   Used for cross-relay delivery (loop-safe). When a message
+%%%   arrives from a peer relay, it is delivered ONLY to local
+%%%   client handlers via this group.
+%%%
+%%% Peer vs client is determined by the CONNECT handshake: peers
+%%% send `type => <<"relay">>'. This prevents pub/sub loops where
+%%% a message would bounce between relays indefinitely.
+%%%
 %%% When this process dies (node disconnects), pg and gproc automatically
 %%% remove all subscriptions and procedure registrations.
 %%% @end
@@ -22,6 +35,7 @@
     conn :: reference(),
     stream :: reference() | undefined,
     node_id :: binary(),
+    is_peer :: boolean(),                   %% true if this is a relay-to-relay peering connection
     recv_buffer :: binary(),
     pending_calls :: #{binary() => pid()}  %% call_id => caller handler pid
 }).
@@ -42,7 +56,7 @@ init({Conn, Stream}) ->
     %% We wait for the signal before setting active mode.
     ?LOG_INFO("[relay_handler] Waiting for stream ownership"),
     {ok, #state{conn = Conn, stream = Stream, node_id = <<>>,
-                recv_buffer = <<>>, pending_calls = #{}}}.
+                is_peer = false, recv_buffer = <<>>, pending_calls = #{}}}.
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown}, State}.
@@ -163,21 +177,28 @@ process_buffer(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
 handle_message({ok, {connect, Msg}}, State) ->
     NodeId = maps:get(<<"node_id">>, Msg, <<>>),
     Realm = maps:get(<<"realm_id">>, Msg, <<>>),
-    ?LOG_INFO("[relay_handler] Node connected: realm=~s node=~s",
-             [Realm, binary:encode_hex(NodeId)]),
-    %% Send PONG as handshake acknowledgment
+    IsPeer = maps:get(<<"type">>, Msg, <<"node">>) =:= <<"relay">>,
+    ?LOG_INFO("[relay_handler] ~s connected: realm=~s node=~s",
+             [case IsPeer of true -> <<"Peer relay">>; false -> <<"Node">> end,
+              Realm, binary:encode_hex(NodeId)]),
     send_to_node(pong, #{
         <<"timestamp">> => erlang:system_time(millisecond),
         <<"server_time">> => erlang:system_time(millisecond)
     }, State),
-    State#state{node_id = NodeId};
+    State#state{node_id = NodeId, is_peer = IsPeer};
 
 %% SUBSCRIBE — join pg groups for topics
-handle_message({ok, {subscribe, Msg}}, State) ->
+%% Client handlers join both {relay_topic, T} and {relay_local, T}.
+%% Peer handlers join only {relay_topic, T} (prevents cross-relay loops).
+handle_message({ok, {subscribe, Msg}}, #state{is_peer = IsPeer} = State) ->
     Topics = maps:get(<<"topics">>, Msg, []),
     lists:foreach(fun(Topic) ->
         pg:join(pg, {relay_topic, Topic}, self()),
-        ?LOG_INFO("[relay_handler] Subscribed to ~s", [Topic])
+        case IsPeer of
+            false -> pg:join(pg, {relay_local, Topic}, self());
+            true  -> ok
+        end,
+        ?LOG_INFO("[relay_handler] Subscribed to ~s (peer=~p)", [Topic, IsPeer])
     end, Topics),
     State;
 
@@ -185,7 +206,8 @@ handle_message({ok, {subscribe, Msg}}, State) ->
 handle_message({ok, {unsubscribe, Msg}}, State) ->
     Topics = maps:get(<<"topics">>, Msg, []),
     lists:foreach(fun(Topic) ->
-        pg:leave(pg, {relay_topic, Topic}, self())
+        pg:leave(pg, {relay_topic, Topic}, self()),
+        pg:leave(pg, {relay_local, Topic}, self())
     end, Topics),
     State;
 
