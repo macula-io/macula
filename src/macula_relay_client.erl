@@ -222,6 +222,9 @@ handle_info(connect, State) ->
             end;
         {error, Reason} ->
             ?LOG_WARNING("[relay_client] Connect to ~s failed: ~p", [State#state.url, Reason]),
+            {noreply, schedule_failover(State)};
+        {error, Type, Detail} ->
+            ?LOG_WARNING("[relay_client] Connect to ~s failed: ~p ~p", [State#state.url, Type, Detail]),
             {noreply, schedule_failover(State)}
     end;
 
@@ -255,6 +258,10 @@ handle_info({quic, send_shutdown_complete, _Stream, _}, State) ->
 handle_info({quic, shutdown, _Ref, _Reason}, State) ->
     handle_disconnect(State);
 handle_info({quic, closed, _Ref, _Reason}, State) ->
+    handle_disconnect(State);
+handle_info({quic, transport_shutdown, _Ref, _Reason}, State) ->
+    handle_disconnect(State);
+handle_info({error, transport_down, _Detail}, State) ->
     handle_disconnect(State);
 handle_info({quic, streams_available, _Conn, _Info}, State) ->
     {noreply, State};
