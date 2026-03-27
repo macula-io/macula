@@ -195,7 +195,9 @@ handle_message({ok, {subscribe, Msg}}, #state{is_peer = IsPeer} = State) ->
     lists:foreach(fun(Topic) ->
         pg:join(pg, {relay_topic, Topic}, self()),
         case IsPeer of
-            false -> pg:join(pg, {relay_local, Topic}, self());
+            false ->
+                pg:join(pg, {relay_local, Topic}, self()),
+                notify_peering(topic_subscribed, Topic);
             true  -> ok
         end,
         ?LOG_INFO("[relay_handler] Subscribed to ~s (peer=~p)", [Topic, IsPeer])
@@ -291,6 +293,14 @@ handle_message({error, Reason}, State) ->
 %%====================================================================
 %% Send helper
 %%====================================================================
+
+%% Notify relay peering module (if running) about subscription changes.
+%% Best-effort: if peering isn't running, silently ignore.
+notify_peering(Event, Topic) ->
+    case erlang:whereis(macula_relay_peering) of
+        undefined -> ok;
+        Pid -> gen_server:cast(Pid, {Event, Topic})
+    end.
 
 send_to_node(Type, Msg, #state{stream = Stream}) ->
     Binary = macula_protocol_encoder:encode(Type, Msg),
