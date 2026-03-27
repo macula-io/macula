@@ -38,6 +38,7 @@
     node_name :: binary(),                  %% stable identity (e.g. "hecate@beam00.lab")
     is_peer :: boolean(),                   %% true if this is a relay-to-relay peering connection
     identified :: boolean(),                %% true after CONNECT handshake processed
+    pending_msgs :: [term()],               %% messages received before CONNECT (replayed after)
     recv_buffer :: binary(),
     pending_calls :: #{binary() => pid()}  %% call_id => caller handler pid
 }).
@@ -59,7 +60,7 @@ init({Conn, Stream}) ->
     ?LOG_INFO("[relay_handler] Waiting for stream ownership"),
     {ok, #state{conn = Conn, stream = Stream, node_id = <<>>,
                 node_name = <<>>, is_peer = false, identified = false,
-                recv_buffer = <<>>, pending_calls = #{}}}.
+                pending_msgs = [], recv_buffer = <<>>, pending_calls = #{}}}.
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown}, State}.
@@ -189,16 +190,16 @@ handle_message({ok, {connect, Msg}}, State) ->
         <<"timestamp">> => erlang:system_time(millisecond),
         <<"server_time">> => erlang:system_time(millisecond)
     }, State),
-    State#state{node_id = NodeId, node_name = NodeName,
-                is_peer = IsPeer, identified = true};
+    State2 = State#state{node_id = NodeId, node_name = NodeName,
+                         is_peer = IsPeer, identified = true},
+    replay_pending(State2);
 
-%% SUBSCRIBE — must wait for CONNECT first (identified = true).
-%% Without this guard, peering clients race: SUBSCRIBE arrives before
-%% CONNECT is processed, is_peer is still false, and the handler
-%% incorrectly joins {relay_local, _} groups — inflating node counts.
-handle_message({ok, {subscribe, _Msg}}, #state{identified = false} = State) ->
-    ?LOG_WARNING("[relay_handler] SUBSCRIBE before CONNECT — ignoring"),
-    State;
+%% Buffer messages received before CONNECT handshake.
+%% Replayed after CONNECT sets is_peer correctly, preventing
+%% the race where SUBSCRIBE joins wrong pg groups.
+handle_message({ok, {Type, _}} = Msg, #state{identified = false, pending_msgs = Pending} = State)
+  when Type =/= connect ->
+    State#state{pending_msgs = [Msg | Pending]};
 
 %% SUBSCRIBE — join pg groups for topics
 %% Client handlers join both {relay_topic, T} and {relay_local, T}.
@@ -297,6 +298,14 @@ handle_message({error, Reason}, State) ->
 %%====================================================================
 %% Send helper
 %%====================================================================
+
+%% Replay messages that arrived before CONNECT.
+replay_pending(#state{pending_msgs = []} = State) -> State;
+replay_pending(#state{pending_msgs = Msgs} = State) ->
+    ?LOG_INFO("[relay_handler] Replaying ~b buffered message(s)", [length(Msgs)]),
+    lists:foldl(fun(Msg, S) -> handle_message(Msg, S) end,
+                State#state{pending_msgs = []},
+                lists:reverse(Msgs)).
 
 %% Register this handler as a connected client node (not peers).
 register_client_node(true, _NodeName) -> ok;
