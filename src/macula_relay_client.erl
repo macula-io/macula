@@ -1,18 +1,20 @@
 %%%-------------------------------------------------------------------
-%%% @doc Macula Relay Client — connects to a relay server via QUIC.
+%%% @doc Macula Relay Client — connects to relay servers via QUIC.
 %%%
-%%% Single gen_server managing ONE persistent QUIC connection.
-%%% Handles subscribe, publish, advertise, and RPC call operations.
+%%% Single gen_server managing ONE persistent QUIC connection with
+%%% automatic failover across multiple relays. On disconnect, cycles
+%%% to the next relay in the list with exponential backoff + jitter.
 %%% Replays all subscriptions and procedure registrations on reconnect.
 %%%
 %%% Usage:
 %%%
-%%%   Opts = #{url =&gt; &lt;&lt;"https://relay:4433"&gt;&gt;},
+%%%   Opts = #{relays => [<<"https://relay00:4433">>,
+%%%                        <<"https://relay01:4433">>,
+%%%                        <<"https://relay02:4433">>]},
 %%%   {ok, Client} = macula_relay_client:start_link(Opts).
-%%%   macula_relay_client:subscribe(Client, Topic, Callback).
-%%%   macula_relay_client:publish(Client, Topic, Payload).
-%%%   macula_relay_client:advertise(Client, Procedure, Handler).
-%%%   macula_relay_client:call(Client, Procedure, Args, Timeout).
+%%%
+%%% Backward compatible — single relay via url key:
+%%%   Opts = #{url => <<"https://relay:4433">>},
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_relay_client).
@@ -26,11 +28,20 @@
 -export([advertise/3, unadvertise/2, call/4]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
--define(RECONNECT_MS, 2000).
+%% Test exports
+-ifdef(TEST).
+-export([backoff_ms/1, parse_url/1]).
+-endif.
+
+-define(RECONNECT_BASE_MS, 1000).
+-define(RECONNECT_MAX_MS, 30000).
+-define(RECONNECT_JITTER, 0.3).
 -define(CALL_TIMEOUT, 5000).
 
 -record(state, {
-    url :: binary(),
+    relays :: [binary()],                                    %% all configured relay URLs
+    relay_index :: non_neg_integer(),                         %% current relay (0-based)
+    url :: binary(),                                         %% current relay URL
     host :: string(),
     port :: integer(),
     realm :: binary(),
@@ -39,10 +50,11 @@
     stream :: reference() | undefined,
     status :: connecting | connected | disconnected,
     recv_buffer :: binary(),
+    reconnect_attempt :: non_neg_integer(),                   %% for exponential backoff
     %% Application state (survives reconnects)
-    subscriptions :: #{reference() => {binary(), fun()}},  %% ref => {topic, callback}
-    procedures :: #{binary() => fun()},                    %% procedure => handler
-    pending_calls :: #{binary() => {pid(), reference()}}   %% call_id => {from, timer_ref}
+    subscriptions :: #{reference() => {binary(), fun()}},     %% ref => {topic, callback}
+    procedures :: #{binary() => fun()},                       %% procedure => handler
+    pending_calls :: #{binary() => {pid(), reference()}}      %% call_id => {from, timer_ref}
 }).
 
 %%====================================================================
@@ -84,12 +96,20 @@ call(Pid, Procedure, Args, Timeout) ->
 %%====================================================================
 
 init(Opts) ->
-    Url = maps:get(url, Opts, <<"https://localhost:4433">>),
+    Relays = case maps:find(relays, Opts) of
+        {ok, List} when is_list(List), length(List) > 0 -> List;
+        _ -> [maps:get(url, Opts, <<"https://localhost:4433">>)]
+    end,
+    %% Randomize initial relay to distribute load across relays
+    Index = rand:uniform(length(Relays)) - 1,
+    Url = lists:nth(Index + 1, Relays),
     {Host, Port} = parse_url(Url),
     Realm = maps:get(realm, Opts, <<"io.macula">>),
     Identity = maps:get(identity, Opts, <<"anonymous">>),
 
     State = #state{
+        relays = Relays,
+        relay_index = Index,
         url = Url,
         host = Host,
         port = Port,
@@ -99,6 +119,7 @@ init(Opts) ->
         stream = undefined,
         status = connecting,
         recv_buffer = <<>>,
+        reconnect_attempt = 0,
         subscriptions = #{},
         procedures = #{},
         pending_calls = #{}
@@ -191,20 +212,18 @@ handle_info(connect, State) ->
                     quicer:setopt(Stream, active, true),
                     ?LOG_INFO("[relay_client] Connected to ~s", [State#state.url]),
                     State2 = State#state{conn = Conn, stream = Stream, status = connected,
-                                         recv_buffer = <<>>},
+                                         recv_buffer = <<>>, reconnect_attempt = 0},
                     send_connect(State2),
                     replay_state(State2),
                     {noreply, State2};
                 {error, StreamErr} ->
-                    ?LOG_WARNING("[relay_client] Stream open failed: ~p", [StreamErr]),
+                    ?LOG_WARNING("[relay_client] Stream open failed on ~s: ~p", [State#state.url, StreamErr]),
                     catch macula_quic:close(Conn),
-                    schedule_reconnect(),
-                    {noreply, State#state{status = disconnected}}
+                    {noreply, schedule_failover(State)}
             end;
         {error, Reason} ->
-            ?LOG_WARNING("[relay_client] Connect failed: ~p, retrying", [Reason]),
-            schedule_reconnect(),
-            {noreply, State#state{status = disconnected}}
+            ?LOG_WARNING("[relay_client] Connect to ~s failed: ~p", [State#state.url, Reason]),
+            {noreply, schedule_failover(State)}
     end;
 
 handle_info({call_timeout, CallId}, State) ->
@@ -383,15 +402,37 @@ to_binary_payload(Payload)                         -> iolist_to_binary(json:enco
 handle_disconnect(#state{status = disconnected} = State) ->
     {noreply, State};
 handle_disconnect(State) ->
-    ?LOG_WARNING("[relay_client] Disconnected, reconnecting..."),
+    ?LOG_WARNING("[relay_client] Disconnected from ~s", [State#state.url]),
     catch macula_quic:close(State#state.stream),
     catch macula_quic:close(State#state.conn),
-    schedule_reconnect(),
-    {noreply, State#state{conn = undefined, stream = undefined, status = disconnected,
-                           recv_buffer = <<>>}}.
+    State2 = State#state{conn = undefined, stream = undefined, status = disconnected,
+                          recv_buffer = <<>>},
+    {noreply, schedule_failover(State2)}.
 
-schedule_reconnect() ->
-    erlang:send_after(?RECONNECT_MS, self(), connect).
+%% Pick next relay (round-robin) and schedule reconnect with exponential backoff + jitter.
+schedule_failover(#state{relays = Relays, relay_index = CurrentIdx,
+                          reconnect_attempt = Attempt} = State) ->
+    NumRelays = length(Relays),
+    %% Try a different relay if available
+    NextIdx = case NumRelays > 1 of
+        true -> (CurrentIdx + 1) rem NumRelays;
+        false -> CurrentIdx
+    end,
+    NextUrl = lists:nth(NextIdx + 1, Relays),
+    {NextHost, NextPort} = parse_url(NextUrl),
+    %% Exponential backoff with jitter (±30%)
+    BackoffMs = backoff_ms(Attempt),
+    erlang:send_after(BackoffMs, self(), connect),
+    ?LOG_INFO("[relay_client] Failover to ~s in ~bms (attempt ~b)",
+              [NextUrl, BackoffMs, Attempt + 1]),
+    State#state{relay_index = NextIdx, url = NextUrl, host = NextHost,
+                port = NextPort, status = disconnected,
+                reconnect_attempt = Attempt + 1}.
+
+backoff_ms(Attempt) ->
+    Base = min(?RECONNECT_BASE_MS * (1 bsl min(Attempt, 10)), ?RECONNECT_MAX_MS),
+    Jitter = round(Base * ?RECONNECT_JITTER),
+    Base + rand:uniform(2 * Jitter + 1) - Jitter - 1.
 
 parse_url(Url) when is_binary(Url) ->
     parse_url(binary_to_list(Url));
