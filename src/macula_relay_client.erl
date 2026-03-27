@@ -8,13 +8,12 @@
 %%%
 %%% Usage:
 %%%
-%%%   Opts = #{relays => [<<"https://relay00:4433">>,
-%%%                        <<"https://relay01:4433">>,
-%%%                        <<"https://relay02:4433">>]},
-%%%   {ok, Client} = macula_relay_client:start_link(Opts).
+%%% ```
+%%% Opts = #{relays => [Relay0, Relay1, Relay2]},
+%%% {ok, Client} = macula_relay_client:start_link(Opts).
+%%% '''
 %%%
-%%% Backward compatible — single relay via url key:
-%%%   Opts = #{url => <<"https://relay:4433">>},
+%%% Backward compatible with single relay via url key.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_relay_client).

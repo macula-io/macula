@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.31.0] - 2026-03-27
+
+### Added
+
+- **Multi-relay failover** — `macula_relay_client` now accepts a list of relays
+  and cycles through them on disconnect with exponential backoff + jitter.
+  - `#{relays => [Url1, Url2, Url3]}` config (backward compat: `#{url => Url}`)
+  - Initial relay randomized to distribute load across relays
+  - Round-robin failover on disconnect
+  - Backoff: 1s base, 30s max, ±30% jitter (prevents thundering herd)
+  - All subscriptions and RPC procedures replayed on every reconnect
+  - 12 new tests (URL parsing, backoff, init, randomization)
+
+---
+
 ## [0.22.11] - 2026-03-22
 
 ### Fixed
