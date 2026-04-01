@@ -376,6 +376,8 @@ send_connect(State) ->
         nonode@nohost -> State#state.identity;
         Name -> atom_to_binary(Name)
     end,
+    %% target_relay = the hostname the client connected to (for multi-tenant relay routing)
+    TargetRelay = list_to_binary(State#state.host),
     Base = #{
         version => <<"1.0">>,
         node_id => NodeId,
@@ -383,7 +385,8 @@ send_connect(State) ->
         realm_id => State#state.realm,
         capabilities => [<<"pubsub">>, <<"rpc">>],
         endpoint => State#state.url,
-        type => State#state.client_type
+        type => State#state.client_type,
+        target_relay => TargetRelay
     },
     Msg = case macula_connection:build_node_identity(#{}) of
         Identity when map_size(Identity) > 0 -> Base#{identity => Identity};

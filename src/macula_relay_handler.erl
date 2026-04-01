@@ -184,10 +184,11 @@ handle_message({ok, {connect, Msg}}, State) ->
     IsPeer = maps:get(<<"type">>, Msg, <<"node">>) =:= <<"relay">>,
     NodeName = maps:get(<<"node_name">>, Msg, binary:encode_hex(NodeId)),
     Identity = maps:get(<<"identity">>, Msg, #{}),
+    TargetRelay = maps:get(<<"target_relay">>, Msg, <<>>),
     Label = case IsPeer of true -> <<"Peer relay">>; false -> <<"Node">> end,
-    ?LOG_INFO("[relay_handler] ~s connected: realm=~s name=~s identity=~p",
-              [Label, Realm, NodeName, Identity]),
-    register_client_node(IsPeer, NodeName, Identity),
+    ?LOG_INFO("[relay_handler] ~s connected: realm=~s name=~s target=~s",
+              [Label, Realm, NodeName, TargetRelay]),
+    register_client_node(IsPeer, NodeName, Identity, TargetRelay),
     send_to_node(pong, #{
         <<"timestamp">> => erlang:system_time(millisecond),
         <<"server_time">> => erlang:system_time(millisecond)
@@ -305,11 +306,19 @@ replay_pending(#state{pending_msgs = Msgs} = State) ->
                 lists:reverse(Msgs)).
 
 %% Register this handler as a connected client node (not peers).
-register_client_node(true, _NodeName, _Identity) -> ok;
-register_client_node(false, NodeName, Identity) ->
+%% Joins both the global group AND the target-relay-specific group
+%% for multi-tenant relay support.
+register_client_node(true, _NodeName, _Identity, _TargetRelay) -> ok;
+register_client_node(false, NodeName, Identity, TargetRelay) ->
     put(relay_node_name, NodeName),
     put(relay_node_identity, Identity),
-    pg:join(pg, relay_connected_nodes, self()).
+    put(relay_target, TargetRelay),
+    pg:join(pg, relay_connected_nodes, self()),
+    %% Also join target-specific group for multi-tenant node counting
+    case TargetRelay of
+        <<>> -> ok;
+        _ -> pg:join(pg, {relay_connected_nodes, TargetRelay}, self())
+    end.
 
 %% Join topic pg groups. Clients join both groups; peers only relay_topic.
 join_topic(Topic, false) ->
