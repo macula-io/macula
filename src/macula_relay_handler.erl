@@ -183,9 +183,11 @@ handle_message({ok, {connect, Msg}}, State) ->
     Realm = maps:get(<<"realm_id">>, Msg, <<>>),
     IsPeer = maps:get(<<"type">>, Msg, <<"node">>) =:= <<"relay">>,
     NodeName = maps:get(<<"node_name">>, Msg, binary:encode_hex(NodeId)),
+    Identity = maps:get(<<"identity">>, Msg, #{}),
     Label = case IsPeer of true -> <<"Peer relay">>; false -> <<"Node">> end,
-    ?LOG_INFO("[relay_handler] ~s connected: realm=~s name=~s", [Label, Realm, NodeName]),
-    register_client_node(IsPeer, NodeName),
+    ?LOG_INFO("[relay_handler] ~s connected: realm=~s name=~s identity=~p",
+              [Label, Realm, NodeName, Identity]),
+    register_client_node(IsPeer, NodeName, Identity),
     send_to_node(pong, #{
         <<"timestamp">> => erlang:system_time(millisecond),
         <<"server_time">> => erlang:system_time(millisecond)
@@ -303,9 +305,10 @@ replay_pending(#state{pending_msgs = Msgs} = State) ->
                 lists:reverse(Msgs)).
 
 %% Register this handler as a connected client node (not peers).
-register_client_node(true, _NodeName) -> ok;
-register_client_node(false, NodeName) ->
+register_client_node(true, _NodeName, _Identity) -> ok;
+register_client_node(false, NodeName, Identity) ->
     put(relay_node_name, NodeName),
+    put(relay_node_identity, Identity),
     pg:join(pg, relay_connected_nodes, self()).
 
 %% Join topic pg groups. Clients join both groups; peers only relay_topic.

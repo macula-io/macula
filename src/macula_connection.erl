@@ -559,13 +559,59 @@ complete_connection_setup(Conn, Stream, Host, Port, State) ->
 -spec build_connect_message(#state{}) -> map().
 build_connect_message(State) ->
     LocalEndpoint = get_advertise_endpoint(),
-    #{
+    Base = #{
         version => <<"1.0">>,
         node_id => State#state.node_id,
         realm_id => State#state.realm,
         capabilities => [pubsub, rpc],
         endpoint => LocalEndpoint
-    }.
+    },
+    case build_node_identity(State#state.opts) of
+        Identity when map_size(Identity) > 0 -> Base#{identity => Identity};
+        _ -> Base
+    end.
+
+%% @doc Build node identity from opts or environment variables.
+%% Opts key `identity' takes precedence. Falls back to HECATE_GEO_*
+%% and MACULA_GEO_* env vars (same pattern as relay identity).
+-spec build_node_identity(map()) -> map().
+build_node_identity(Opts) ->
+    case maps:get(identity, Opts, undefined) of
+        Identity when is_map(Identity), map_size(Identity) > 0 ->
+            Identity;
+        _ ->
+            collect_identity_from_env()
+    end.
+
+collect_identity_from_env() ->
+    Pairs = [
+        {city,    [{"HECATE_GEO_CITY", bin}, {"MACULA_GEO_CITY", bin}]},
+        {country, [{"HECATE_GEO_COUNTRY", bin}, {"MACULA_GEO_COUNTRY", bin}]},
+        {lat,     [{"HECATE_GEO_LAT", float}, {"MACULA_GEO_LAT", float}]},
+        {lng,     [{"HECATE_GEO_LNG", float}, {"MACULA_GEO_LNG", float}]},
+        {owner,   [{"HECATE_OWNER_NAME", bin}]},
+        {site,    [{"HECATE_SITE_NAME", bin}]}
+    ],
+    maps:from_list([{K, V} || {K, Sources} <- Pairs,
+                              V <- [env_first(Sources)],
+                              V =/= null]).
+
+env_first([]) -> null;
+env_first([{Key, Type} | Rest]) ->
+    case os:getenv(Key) of
+        false -> env_first(Rest);
+        ""    -> env_first(Rest);
+        Val   -> convert_env(Val, Type)
+    end.
+
+convert_env(Val, bin) -> list_to_binary(Val);
+convert_env(Val, float) ->
+    try list_to_float(Val)
+    catch error:badarg ->
+        try float(list_to_integer(Val))
+        catch error:badarg -> null
+        end
+    end.
 
 %% @doc Get endpoint to advertise for peer-to-peer connections
 -spec get_advertise_endpoint() -> binary().
