@@ -376,7 +376,7 @@ send_connect(State) ->
         nonode@nohost -> State#state.identity;
         Name -> atom_to_binary(Name)
     end,
-    maybe_send(connect, #{
+    Base = #{
         version => <<"1.0">>,
         node_id => NodeId,
         node_name => NodeName,
@@ -384,7 +384,12 @@ send_connect(State) ->
         capabilities => [<<"pubsub">>, <<"rpc">>],
         endpoint => State#state.url,
         type => State#state.client_type
-    }, State).
+    },
+    Msg = case macula_connection:build_node_identity(#{}) of
+        Identity when map_size(Identity) > 0 -> Base#{identity => Identity};
+        _ -> Base
+    end,
+    maybe_send(connect, Msg, State).
 
 %% Replay all subscriptions and procedure registrations after reconnect
 replay_state(#state{subscriptions = Subs, procedures = Procs} = State) ->

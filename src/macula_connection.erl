@@ -28,6 +28,7 @@
 %% API
 -export([start_link/2, send_message/3, send_message_async/3, get_status/1, default_config/0]).
 -export([hostname_from_node/0]).
+-export([build_node_identity/1]).
 
 %% Bridge system API (v0.13.0+)
 %% Used by macula_bridge_node for parent mesh connections.
