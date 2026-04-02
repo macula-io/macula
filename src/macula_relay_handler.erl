@@ -221,6 +221,17 @@ handle_message({ok, {unsubscribe, Msg}}, State) ->
     end, Topics),
     State;
 
+%% PUBLISH on _relay.graph — merge into relay graph (QUIC-based graph propagation)
+handle_message({ok, {publish, #{<<"topic">> := <<"_relay.graph">>, <<"payload">> := Payload}}}, State) ->
+    case catch json:decode(Payload) of
+        Entries when is_list(Entries) ->
+            ?LOG_DEBUG("[relay_handler] Graph update: ~b entries", [length(Entries)]),
+            catch macula_relay_peering:merge_remote_graph(Entries);
+        _ ->
+            ?LOG_WARNING("[relay_handler] Invalid graph update payload")
+    end,
+    State;
+
 %% PUBLISH — broadcast to all subscribers via pg
 handle_message({ok, {publish, Msg}}, State) ->
     Topic = maps:get(<<"topic">>, Msg, <<>>),
