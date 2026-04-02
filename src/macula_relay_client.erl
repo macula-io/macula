@@ -45,6 +45,7 @@
     port :: integer(),
     realm :: binary(),
     identity :: binary(),
+    geo_identity :: map(),                                    %% geo metadata for CONNECT (city, country, lat, lng)
     client_type :: binary(),                                  %% <<"node">> or <<"relay">> (for CONNECT handshake)
     conn :: reference() | undefined,
     stream :: reference() | undefined,
@@ -106,6 +107,7 @@ init(Opts) ->
     {Host, Port} = parse_url(Url),
     Realm = maps:get(realm, Opts, <<"io.macula">>),
     Identity = maps:get(identity, Opts, <<"anonymous">>),
+    GeoIdentity = maps:get(geo_identity, Opts, #{}),
     ClientType = maps:get(type, Opts, <<"node">>),
 
     State = #state{
@@ -116,6 +118,7 @@ init(Opts) ->
         port = Port,
         realm = Realm,
         identity = Identity,
+        geo_identity = GeoIdentity,
         client_type = ClientType,
         conn = undefined,
         stream = undefined,
@@ -388,9 +391,13 @@ send_connect(State) ->
         type => State#state.client_type,
         target_relay => TargetRelay
     },
-    Msg = case macula_connection:build_node_identity(#{}) of
-        Identity when map_size(Identity) > 0 -> Base#{identity => Identity};
-        _ -> Base
+    Msg = case State#state.geo_identity of
+        GeoId when is_map(GeoId), map_size(GeoId) > 0 -> Base#{identity => GeoId};
+        _ ->
+            case macula_connection:build_node_identity(#{}) of
+                EnvId when map_size(EnvId) > 0 -> Base#{identity => EnvId};
+                _ -> Base
+            end
     end,
     maybe_send(connect, Msg, State).
 
