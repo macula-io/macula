@@ -375,9 +375,15 @@ handle_message({error, Reason}, State) ->
 
 send_connect(State) ->
     NodeId = crypto:strong_rand_bytes(32),
-    NodeName = case net_kernel:nodename() of
-        nonode@nohost -> State#state.identity;
-        Name -> atom_to_binary(Name)
+    %% Use identity as node_name when set (multi-tenant stubs).
+    %% Falls back to Erlang node name, then random hex.
+    NodeName = case State#state.identity of
+        Id when is_binary(Id), byte_size(Id) > 0 -> Id;
+        _ ->
+            case net_kernel:nodename() of
+                nonode@nohost -> binary:encode_hex(crypto:strong_rand_bytes(8));
+                Name -> atom_to_binary(Name)
+            end
     end,
     %% target_relay = the hostname the client connected to (for multi-tenant relay routing)
     TargetRelay = list_to_binary(State#state.host),
