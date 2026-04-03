@@ -148,9 +148,21 @@ handle_info(Info, State) ->
     ?LOG_DEBUG("[relay_handler] Unhandled: ~p", [Info]),
     {noreply, State}.
 
+terminate(Reason, #state{is_peer = false, node_name = NodeName}) when NodeName =/= undefined ->
+    SiteId = get(relay_site_id),
+    %% Publish node.down before pg auto-cleanup removes us from groups
+    publish_system_event(<<"_mesh.node.down">>, #{
+        name => NodeName,
+        target_relay => get(relay_target),
+        site_id => SiteId,
+        reason => iolist_to_binary(io_lib:format("~p", [Reason]))
+    }),
+    %% If last node in site, publish site.down
+    maybe_publish_site_down(SiteId),
+    ?LOG_INFO("[relay_handler] Node ~s terminated: ~p", [NodeName, Reason]),
+    ok;
 terminate(Reason, _State) ->
-    ?LOG_INFO("[relay_handler] Terminated: ~p (pg/gproc auto-cleanup)", [Reason]),
-    %% pg and gproc automatically remove this process from all groups/registrations
+    ?LOG_INFO("[relay_handler] Terminated: ~p", [Reason]),
     ok.
 
 %%====================================================================
@@ -185,10 +197,26 @@ handle_message({ok, {connect, Msg}}, State) ->
     NodeName = maps:get(<<"node_name">>, Msg, binary:encode_hex(NodeId)),
     Identity = maps:get(<<"identity">>, Msg, #{}),
     TargetRelay = maps:get(<<"target_relay">>, Msg, <<>>),
+    Site = maps:get(<<"site">>, Msg, undefined),
+    SiteId = case Site of
+        #{<<"site_id">> := Id} -> Id;
+        _ -> undefined
+    end,
     Label = case IsPeer of true -> <<"Peer relay">>; false -> <<"Node">> end,
-    ?LOG_INFO("[relay_handler] ~s connected: realm=~s name=~s target=~s",
-              [Label, Realm, NodeName, TargetRelay]),
-    register_client_node(IsPeer, NodeName, Identity, TargetRelay),
+    ?LOG_INFO("[relay_handler] ~s connected: realm=~s name=~s target=~s site=~s",
+              [Label, Realm, NodeName, TargetRelay, SiteId]),
+    register_client_node(IsPeer, NodeName, Identity, TargetRelay, Site, SiteId),
+    %% Publish system events (skip for peer relays)
+    case IsPeer of
+        false ->
+            publish_system_event(<<"_mesh.node.up">>, #{
+                name => NodeName, target_relay => TargetRelay,
+                identity => Identity, realm => Realm,
+                site => Site
+            }),
+            maybe_publish_site_up(SiteId, Site, TargetRelay, Realm);
+        true -> ok
+    end,
     send_to_node(pong, #{
         <<"timestamp">> => erlang:system_time(millisecond),
         <<"server_time">> => erlang:system_time(millisecond)
@@ -319,16 +347,23 @@ replay_pending(#state{pending_msgs = Msgs} = State) ->
 %% Register this handler as a connected client node (not peers).
 %% Joins both the global group AND the target-relay-specific group
 %% for multi-tenant relay support.
-register_client_node(true, _NodeName, _Identity, _TargetRelay) -> ok;
-register_client_node(false, NodeName, Identity, TargetRelay) ->
+register_client_node(true, _NodeName, _Identity, _TargetRelay, _Site, _SiteId) -> ok;
+register_client_node(false, NodeName, Identity, TargetRelay, Site, SiteId) ->
     put(relay_node_name, NodeName),
     put(relay_node_identity, Identity),
     put(relay_target, TargetRelay),
+    put(relay_site, Site),
+    put(relay_site_id, SiteId),
     pg:join(pg, relay_connected_nodes, self()),
-    %% Also join target-specific group for multi-tenant node counting
+    %% Target-specific group for multi-tenant node counting
     case TargetRelay of
         <<>> -> ok;
         _ -> pg:join(pg, {relay_connected_nodes, TargetRelay}, self())
+    end,
+    %% Site-specific group — tuple key avoids collision with target_relay groups
+    case SiteId of
+        undefined -> ok;
+        _ -> pg:join(pg, {relay_connected_nodes, {site, SiteId}}, self())
     end.
 
 %% Join topic pg groups. Clients join both groups; peers only relay_topic.
@@ -387,3 +422,48 @@ send_to_node(Type, Msg, #state{stream = Stream}) ->
         {error, Reason} ->
             ?LOG_WARNING("[relay_handler] Send ~p failed: ~p", [Type, Reason])
     end.
+
+%% Publish _mesh.site.up if this is the first node of its site on this relay.
+maybe_publish_site_up(undefined, _, _, _) -> ok;
+maybe_publish_site_up(SiteId, Site, TargetRelay, Realm) ->
+    Members = try pg:get_members(pg, {relay_connected_nodes, {site, SiteId}})
+              catch _:_ -> [] end,
+    case length(Members) of
+        1 ->
+            %% First node in this site — site is now online
+            SitePayload = case Site of
+                M when is_map(M) -> M;
+                _ -> #{site_id => SiteId}
+            end,
+            publish_system_event(<<"_mesh.site.up">>,
+                SitePayload#{target_relay => TargetRelay, realm => Realm});
+        _ -> ok
+    end.
+
+%% Publish _mesh.site.down if this is the last node of its site on this relay.
+maybe_publish_site_down(undefined) -> ok;
+maybe_publish_site_down(SiteId) ->
+    Members = try pg:get_members(pg, {relay_connected_nodes, {site, SiteId}})
+              catch _:_ -> [] end,
+    %% At terminate time, we're still in the group (pg removes after process exits)
+    case length(Members) of
+        1 ->
+            Site = get(relay_site),
+            SitePayload = case Site of
+                M when is_map(M) -> M;
+                _ -> #{site_id => SiteId}
+            end,
+            publish_system_event(<<"_mesh.site.down">>,
+                SitePayload#{target_relay => get(relay_target)});
+        _ -> ok
+    end.
+
+%% Publish a system event to all subscribers of a topic.
+%% Used for _mesh.node.up/down, _mesh.site.up/down etc.
+publish_system_event(Topic, Payload) ->
+    BinPayload = iolist_to_binary(json:encode(
+        Payload#{<<"timestamp">> => erlang:system_time(millisecond)})),
+    Members = try pg:get_members(pg, {relay_topic, Topic}) catch _:_ -> [] end,
+    lists:foreach(fun(Pid) ->
+        Pid ! {relay_publish, Topic, BinPayload}
+    end, Members).

@@ -46,6 +46,7 @@
     realm :: binary(),
     identity :: binary(),
     geo_identity :: map(),                                    %% geo metadata for CONNECT (city, country, lat, lng)
+    site :: map() | undefined,                                %% site metadata for CONNECT (site_id, name, city, lat, lng, site_type)
     client_type :: binary(),                                  %% <<"node">> or <<"relay">> (for CONNECT handshake)
     conn :: reference() | undefined,
     stream :: reference() | undefined,
@@ -108,6 +109,7 @@ init(Opts) ->
     Realm = maps:get(realm, Opts, <<"io.macula">>),
     Identity = maps:get(identity, Opts, <<"anonymous">>),
     GeoIdentity = maps:get(geo_identity, Opts, #{}),
+    Site = maps:get(site, Opts, undefined),
     ClientType = maps:get(type, Opts, <<"node">>),
 
     State = #state{
@@ -119,6 +121,7 @@ init(Opts) ->
         realm = Realm,
         identity = Identity,
         geo_identity = GeoIdentity,
+        site = Site,
         client_type = ClientType,
         conn = undefined,
         stream = undefined,
@@ -397,13 +400,18 @@ send_connect(State) ->
         type => State#state.client_type,
         target_relay => TargetRelay
     },
-    Msg = case State#state.geo_identity of
+    Msg0 = case State#state.geo_identity of
         GeoId when is_map(GeoId), map_size(GeoId) > 0 -> Base#{identity => GeoId};
         _ ->
             case macula_connection:build_node_identity(#{}) of
                 EnvId when map_size(EnvId) > 0 -> Base#{identity => EnvId};
                 _ -> Base
             end
+    end,
+    %% Include site metadata if configured (site_id, name, city, lat, lng, etc.)
+    Msg = case State#state.site of
+        SiteMap when is_map(SiteMap), map_size(SiteMap) > 0 -> Msg0#{site => SiteMap};
+        _ -> Msg0
     end,
     maybe_send(connect, Msg, State).
 
