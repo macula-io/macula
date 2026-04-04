@@ -17,7 +17,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([start_link/1]).
+-export([start_link/1, start_link/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -record(state, {
@@ -33,8 +33,14 @@
 %% API
 %%====================================================================
 
+%% @doc Start the default (singleton) relay listener.
 start_link(Opts) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
+
+%% @doc Start a named relay listener (for per-identity binding).
+%% Name is typically the identity hostname as an atom.
+start_link(Name, Opts) ->
+    gen_server:start_link({local, Name}, ?MODULE, Opts, []).
 
 %%====================================================================
 %% gen_server callbacks
@@ -42,6 +48,7 @@ start_link(Opts) ->
 
 init(Opts) ->
     Port = maps:get(port, Opts, 4433),
+    BindAddr = maps:get(bind_addr, Opts, undefined),
 
     %% Ensure pg scope exists
     case pg:start(pg) of
@@ -63,9 +70,14 @@ init(Opts) ->
         {keep_alive_interval_ms, 30000}
     ],
 
-    case macula_quic:listen(Port, ListenOpts) of
+    ListenTarget = case BindAddr of
+        undefined -> Port;
+        Addr      -> {binary_to_list(Addr), Port}
+    end,
+
+    case macula_quic:listen(ListenTarget, ListenOpts) of
         {ok, Listener} ->
-            ?LOG_INFO("[relay] Listening on port ~p", [Port]),
+            ?LOG_INFO("[relay] Listening on ~p port ~p", [BindAddr, Port]),
             %% Register for async connection events
             register_accept(Listener),
             {ok, #state{listener = Listener, port = Port, handlers = [],

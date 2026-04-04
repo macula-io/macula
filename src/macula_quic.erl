@@ -25,7 +25,13 @@
 %%% API Functions
 %%%===================================================================
 
-%% @doc Start a QUIC listener on the specified port.
+%% @doc Start a QUIC listener on a specific address and port.
+%%
+%% The first argument can be:
+%%   - `Port' (integer) — binds to 0.0.0.0:Port (all IPv4, Docker-safe)
+%%   - `{Address, Port}' — binds to Address:Port (IPv4 or IPv6)
+%%     Address is a string: "0.0.0.0", "192.168.1.1", "2600:3c0e:e001:ec::100"
+%%
 %% Options:
 %%   {cert, CertFile} - Path to PEM certificate file
 %%   {key, KeyFile} - Path to PEM private key file
@@ -35,25 +41,33 @@
 %%   {idle_timeout_ms, N} - Connection idle timeout in milliseconds
 %%   {keep_alive_interval_ms, N} - Keep-alive PING interval in milliseconds
 %% @end
--spec listen(inet:port_number(), list()) -> {ok, reference()} | {error, term()}.
-listen(Port, Opts) ->
-    %% Extract certificate files
+-spec listen(inet:port_number() | {string(), inet:port_number()}, list()) ->
+    {ok, reference()} | {error, term()}.
+listen({Address, Port}, Opts) ->
+    listen_on(format_listen_on(Address, Port), Opts);
+listen(Port, Opts) when is_integer(Port) ->
+    listen_on("0.0.0.0:" ++ integer_to_list(Port), Opts).
+
+%% @private Format address:port string for quicer.
+%% IPv6 addresses are wrapped in brackets per RFC 2732.
+format_listen_on(Address, Port) ->
+    PortStr = integer_to_list(Port),
+    case string:find(Address, ":") of
+        nomatch -> Address ++ ":" ++ PortStr;           %% IPv4: "1.2.3.4:4433"
+        _       -> "[" ++ Address ++ "]:" ++ PortStr    %% IPv6: "[::1]:4433"
+    end.
+
+%% @private Start listener on a formatted listen_on string.
+listen_on(ListenOn, Opts) ->
     CertFile = proplists:get_value(cert, Opts),
     KeyFile = proplists:get_value(key, Opts),
     AlpnProtocols = proplists:get_value(alpn, Opts, ["macula"]),
     PeerUnidiStreamCount = proplists:get_value(peer_unidi_stream_count, Opts, 3),
     PeerBidiStreamCount = proplists:get_value(peer_bidi_stream_count, Opts, 100),
-
-    %% Timeout and keep-alive configuration for mesh stability
-    %% - idle_timeout_ms: How long connection can be idle before closing (60s default)
-    %% - keep_alive_interval_ms: PING interval to keep connection alive (20s default)
-    %% - Keep-alive MUST be < idle_timeout to prevent premature closure
-    %% - 20s keep-alive stays ahead of typical NAT timeouts (20-30s)
     IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 60000),
     KeepAliveIntervalMs = proplists:get_value(keep_alive_interval_ms, Opts, 20000),
     HandshakeIdleTimeoutMs = proplists:get_value(handshake_idle_timeout_ms, Opts, 30000),
 
-    %% Build quicer listener options
     ListenerOpts = [
         {certfile, CertFile},
         {keyfile, KeyFile},
@@ -65,10 +79,6 @@ listen(Port, Opts) ->
         {handshake_idle_timeout_ms, HandshakeIdleTimeoutMs}
     ],
 
-    %% Start QUIC listener on all IPv4 interfaces
-    %% MsQuic defaults to IPv6 (::) which doesn't receive IPv4 traffic in Docker
-    %% bridge networks. Bind explicitly to 0.0.0.0 for IPv4 compatibility.
-    ListenOn = "0.0.0.0:" ++ integer_to_list(Port),
     ?LOG_INFO("Starting listener on ~s with idle_timeout=~pms, keep_alive=~pms",
               [ListenOn, IdleTimeoutMs, KeepAliveIntervalMs]),
     quicer:listen(ListenOn, ListenerOpts).
