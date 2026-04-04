@@ -207,6 +207,7 @@ handle_message({ok, {connect, Msg}}, State) ->
               [Label, Realm, NodeName, TargetRelay, SiteId]),
     register_client_node(IsPeer, NodeName, Identity, TargetRelay, Site, SiteId),
     %% Publish system events (skip for peer relays)
+    PreviousRelay = maps:get(<<"previous_relay">>, Msg, undefined),
     case IsPeer of
         false ->
             publish_system_event(<<"_mesh.node.up">>, #{
@@ -214,7 +215,19 @@ handle_message({ok, {connect, Msg}}, State) ->
                 identity => Identity, realm => Realm,
                 site => Site
             }),
-            maybe_publish_site_up(SiteId, Site, TargetRelay, Realm);
+            maybe_publish_site_up(SiteId, Site, TargetRelay, Realm),
+            %% Reroute detection: node was on a different relay before failover
+            case PreviousRelay of
+                Prev when is_binary(Prev), Prev =/= <<>>, Prev =/= TargetRelay ->
+                    publish_system_event(<<"_mesh.node.reroute">>, #{
+                        name => NodeName,
+                        from_relay => Prev,
+                        to_relay => TargetRelay,
+                        site => Site,
+                        realm => Realm
+                    });
+                _ -> ok
+            end;
         true -> ok
     end,
     send_to_node(pong, #{

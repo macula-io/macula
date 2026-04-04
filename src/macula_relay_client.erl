@@ -48,6 +48,7 @@
     geo_identity :: map(),                                    %% geo metadata for CONNECT (city, country, lat, lng)
     site :: map() | undefined,                                %% site metadata for CONNECT (site_id, name, city, lat, lng, site_type)
     client_type :: binary(),                                  %% <<"node">> or <<"relay">> (for CONNECT handshake)
+    previous_host :: string() | undefined,                    %% host before failover (for reroute detection)
     conn :: reference() | undefined,
     stream :: reference() | undefined,
     status :: connecting | connected | disconnected,
@@ -408,10 +409,16 @@ send_connect(State) ->
                 _ -> Base
             end
     end,
-    %% Include site metadata if configured (site_id, name, city, lat, lng, etc.)
-    Msg = case State#state.site of
+    %% Include site metadata if configured
+    Msg1 = case State#state.site of
         SiteMap when is_map(SiteMap), map_size(SiteMap) > 0 -> Msg0#{site => SiteMap};
         _ -> Msg0
+    end,
+    %% Include previous_relay if this is a failover reconnect (different host)
+    Msg = case State#state.previous_host of
+        PrevHost when is_list(PrevHost), PrevHost =/= State#state.host ->
+            Msg1#{previous_relay => list_to_binary(PrevHost)};
+        _ -> Msg1
     end,
     maybe_send(connect, Msg, State).
 
@@ -471,7 +478,8 @@ schedule_failover(#state{relays = Relays, relay_index = CurrentIdx,
               [NextUrl, BackoffMs, Attempt + 1]),
     State#state{relay_index = NextIdx, url = NextUrl, host = NextHost,
                 port = NextPort, status = disconnected,
-                reconnect_attempt = Attempt + 1}.
+                reconnect_attempt = Attempt + 1,
+                previous_host = State#state.host}.
 
 backoff_ms(Attempt) ->
     Base = min(?RECONNECT_BASE_MS * (1 bsl min(Attempt, 10)), ?RECONNECT_MAX_MS),
