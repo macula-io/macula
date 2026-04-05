@@ -116,13 +116,21 @@ handle_info({quic, new_stream, Stream, StreamProps}, State) ->
             {noreply, State};
         _ ->
             {ok, Pid} = macula_relay_handler:start_link(Conn, Stream),
-            ok = quicer:controlling_process(Stream, Pid),
-            ok = quicer:controlling_process(Conn, Pid),
-            Pid ! ownership_transferred,
-            ?LOG_INFO("[relay] Handler ~p started, ownership transferred", [Pid]),
-            SH = maps:put(Stream, Pid, State#state.stream_handlers),
-            {noreply, State#state{handlers = [Pid | State#state.handlers],
-                                  stream_handlers = SH}}
+            case quicer:controlling_process(Stream, Pid) of
+                ok ->
+                    %% Connection ownership may fail if another handler already owns it
+                    %% (race with concurrent streams on same connection). That's OK —
+                    %% the handler still works with stream ownership.
+                    _ = quicer:controlling_process(Conn, Pid),
+                    Pid ! ownership_transferred,
+                    ?LOG_INFO("[relay] Handler ~p started, ownership transferred", [Pid]),
+                    SH = maps:put(Stream, Pid, State#state.stream_handlers),
+                    {noreply, State#state{handlers = [Pid | State#state.handlers],
+                                          stream_handlers = SH}};
+                {error, Reason} ->
+                    ?LOG_WARNING("[relay] Failed to transfer stream ownership: ~p", [Reason]),
+                    {noreply, State}
+            end
     end;
 
 %% QUIC data arriving on relay process before handler takes over.
