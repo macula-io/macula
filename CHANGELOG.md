@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.35.0] - 2026-04-06
+
+### Added
+
+- **Node multi-homing** — `macula_multi_relay` module manages N concurrent relay connections. Same API as `macula_relay_client` for drop-in replacement. Subscribes and advertises on ALL connections, publishes via PRIMARY, deduplicates incoming messages by message_id (ring buffer, 2048 entries). Primary/secondary role assignment with auto-promotion on failure. Configurable via `connections` key (default: 2).
+- **12 unit tests** for multi-relay: dedup ring buffer, message ID extraction, role assignment, shuffle, status reporting.
+
+---
+
 ## [0.31.1] - 2026-03-27
 
 ### Added
