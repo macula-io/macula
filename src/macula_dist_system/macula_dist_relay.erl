@@ -136,7 +136,7 @@ handle_tunnel_request(Args) ->
             {error, <<"no_mesh_client">>};
         Client ->
             %% Spawn a persistent bridge process for this tunnel
-            BridgePid = spawn_link(fun() ->
+            BridgePid = spawn(fun() ->
                 dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, FromNode)
             end),
             error_logger:info_msg("[dist_relay] Tunnel bridge ~p for ~s~n", [BridgePid, TunnelId]),
