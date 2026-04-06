@@ -94,7 +94,8 @@ handle_info({quic, Data, NewStream, _Flags}, State) when is_binary(Data) ->
 %% Inter-handler messages (from other relay_handler processes)
 %%====================================================================
 
-%% Pub/sub: another handler published to a topic we're subscribed to
+%% Pub/sub: another handler published to a topic we're subscribed to.
+%% After processing, drain any queued RPC messages first (priority inversion fix).
 handle_info({relay_publish, Topic, Payload}, State) ->
     send_to_node(publish, #{
         <<"topic">> => Topic,
@@ -103,26 +104,17 @@ handle_info({relay_publish, Topic, Payload}, State) ->
         <<"retain">> => false,
         <<"message_id">> => crypto:strong_rand_bytes(16)
     }, State),
-    {noreply, State};
+    drain_rpc_messages(State);
 
 %% RPC: another handler wants us to forward a call to our node
 handle_info({relay_call, CallerPid, CallId, Procedure, Args}, State) ->
-    %% Track: when our node replies, forward to CallerPid
-    PendingCalls = maps:put(CallId, CallerPid, State#state.pending_calls),
-    send_to_node(call, #{
-        <<"call_id">> => CallId,
-        <<"procedure">> => Procedure,
-        <<"args">> => Args
-    }, State),
-    {noreply, State#state{pending_calls = PendingCalls}};
+    State2 = handle_rpc_call(CallerPid, CallId, Procedure, Args, State),
+    drain_rpc_messages(State2);
 
 %% RPC reply from caller side: send reply back to the calling node
 handle_info({relay_reply, CallId, Result}, State) ->
-    send_to_node(reply, #{
-        <<"call_id">> => CallId,
-        <<"result">> => Result
-    }, State),
-    {noreply, State};
+    State2 = handle_rpc_reply(CallId, Result, State),
+    drain_rpc_messages(State2);
 
 %%====================================================================
 %% QUIC lifecycle
@@ -144,8 +136,11 @@ handle_info({quic, streams_available, _Conn, _Info}, State) ->
 handle_info({quic, peer_needs_streams, _Conn, _Info}, State) ->
     {noreply, State};
 
-handle_info(Info, State) ->
-    ?LOG_DEBUG("[relay_handler] Unhandled: ~p", [Info]),
+%% Monitor DOWN from spawn_monitor (RPC forwarding processes)
+handle_info({'DOWN', _Ref, process, _Pid, _Reason}, State) ->
+    {noreply, State};
+
+handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(Reason, #state{is_peer = false, node_name = NodeName}) when NodeName =/= undefined ->
@@ -442,15 +437,15 @@ join_topic(Topic, true) ->
 
 %% Forward RPC call to peer relays when procedure not found locally.
 %% Spawns async — tries each peer, sends first success back to caller.
-forward_rpc_via_dht(Procedure, CallId, Args, State) ->
+forward_rpc_via_dht(Procedure, CallId, Args, _State) ->
     HandlerPid = self(),
-    spawn(fun() ->
+    spawn_monitor(fun() ->
         case catch macula_relay_dht:find_procedure(Procedure) of
             {ok, RelayUrl} ->
                 ?LOG_INFO("[relay_handler] DHT found ~s on ~s", [Procedure, RelayUrl]),
                 forward_rpc_to_relay(RelayUrl, Procedure, CallId, Args, HandlerPid);
             _ ->
-                forward_rpc_to_peers(Procedure, CallId, Args, State)
+                forward_rpc_to_peers_sync(Procedure, CallId, Args, HandlerPid)
         end
     end).
 
@@ -493,27 +488,6 @@ forward_rpc_to_peers_sync(Procedure, CallId, Args, HandlerPid) ->
             end
     end.
 
-forward_rpc_to_peers(Procedure, CallId, Args, _State) ->
-    HandlerPid = self(),
-    spawn(fun() ->
-        case erlang:whereis(macula_relay_peering) of
-            undefined ->
-                HandlerPid ! {relay_reply, CallId,
-                    #{<<"error">> => #{<<"code">> => <<"procedure_not_found">>,
-                                      <<"message">> => <<"No node has registered this procedure">>}}};
-            PeeringPid ->
-                Clients = gen_server:call(PeeringPid, peer_clients, 2000),
-                Result = try_rpc_on_peers(Procedure, Args, Clients),
-                case Result of
-                    {ok, Response} ->
-                        HandlerPid ! {relay_reply, CallId, Response};
-                    {error, _} ->
-                        HandlerPid ! {relay_reply, CallId,
-                            #{<<"error">> => #{<<"code">> => <<"procedure_not_found">>,
-                                              <<"message">> => <<"No provider on any relay">>}}}
-                end
-        end
-    end).
 
 try_rpc_on_peers(_Procedure, _Args, []) ->
     {error, not_found};
@@ -615,3 +589,37 @@ safe_decode(Map) when is_map(Map) ->
 safe_decode(_) ->
     #{}.
 
+
+%%====================================================================
+%% RPC priority drain — process all queued CALL/REPLY before returning
+%% to the gen_server loop. Prevents priority inversion where high-volume
+%% PUBLISH messages starve RPC calls.
+%%====================================================================
+
+handle_rpc_call(CallerPid, CallId, Procedure, Args, State) ->
+    PendingCalls = maps:put(CallId, CallerPid, State#state.pending_calls),
+    send_to_node(call, #{
+        <<"call_id">> => CallId,
+        <<"procedure">> => Procedure,
+        <<"args">> => Args
+    }, State),
+    State#state{pending_calls = PendingCalls}.
+
+handle_rpc_reply(CallId, Result, State) ->
+    send_to_node(reply, #{
+        <<"call_id">> => CallId,
+        <<"result">> => Result
+    }, State),
+    State.
+
+drain_rpc_messages(State) ->
+    receive
+        {relay_call, CallerPid, CallId, Procedure, Args} ->
+            State2 = handle_rpc_call(CallerPid, CallId, Procedure, Args, State),
+            drain_rpc_messages(State2);
+        {relay_reply, CallId, Result} ->
+            State2 = handle_rpc_reply(CallId, Result, State),
+            drain_rpc_messages(State2)
+    after 0 ->
+        {noreply, State}
+    end.
