@@ -121,34 +121,77 @@ handle_tunnel_request(Args) ->
     TunnelId = base64:encode(crypto:strong_rand_bytes(16)),
     error_logger:info_msg("[dist_relay] Tunnel request from ~s, id: ~s~n", [FromNode, TunnelId]),
 
+    %% The accepting side needs a PERSISTENT process that:
+    %% - Subscribes to the connecting node's data topic
+    %% - Forwards mesh messages to the Erlang dist handshake
+    %% - Lives for the duration of the distribution connection
+    %%
+    %% We can't use self() here because this handler function runs in
+    %% a temporary spawn inside relay_client — it dies after returning.
     SendTopic = <<"_dist.data.", TunnelId/binary, ".in">>,
     RecvTopic = <<"_dist.data.", TunnelId/binary, ".out">>,
 
     case get_mesh_client() of
         undefined ->
-            error_logger:warning_msg("[dist_relay] No mesh client for tunnel~n"),
             {error, <<"no_mesh_client">>};
         Client ->
-            error_logger:info_msg("[dist_relay] Subscribing to ~s~n", [RecvTopic]),
-            case macula_relay_client:subscribe(Client, RecvTopic,
-                fun(Msg) ->
-                    Data = case Msg of
-                        #{payload := P} -> P;
-                        P when is_binary(P) -> P;
-                        _ -> term_to_binary(Msg)
-                    end,
-                    self() ! {dist_data, Data}
-                end) of
-                {ok, _SubRef} ->
-                    error_logger:info_msg("[dist_relay] Tunnel ~s ready, returning to caller~n", [TunnelId]),
-                    {ok, #{<<"tunnel_id">> => TunnelId,
-                           <<"send_topic">> => SendTopic,
-                           <<"recv_topic">> => RecvTopic}};
-                SubError ->
-                    error_logger:warning_msg("[dist_relay] Subscribe failed: ~p~n", [SubError]),
-                    {error, <<"subscribe_failed">>}
-            end
+            %% Spawn a persistent bridge process for this tunnel
+            BridgePid = spawn_link(fun() ->
+                dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, FromNode)
+            end),
+            error_logger:info_msg("[dist_relay] Tunnel bridge ~p for ~s~n", [BridgePid, TunnelId]),
+            {ok, #{<<"tunnel_id">> => TunnelId,
+                   <<"send_topic">> => SendTopic,
+                   <<"recv_topic">> => RecvTopic}}
     end.
+
+%% Persistent bridge process for the accepting side of a distribution tunnel.
+%% Subscribes to the connecting node's data topic and forwards to the
+%% Erlang distribution system. Lives for the connection duration.
+dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, FromNode) ->
+    error_logger:info_msg("[dist_bridge] Starting for tunnel ~s from ~s~n",
+                          [TunnelId, FromNode]),
+
+    %% Subscribe to incoming data from the connecting node
+    Self = self(),
+    {ok, _SubRef} = macula_relay_client:subscribe(Client, RecvTopic,
+        fun(Msg) ->
+            Data = extract_payload(Msg),
+            Self ! {dist_data_in, Data}
+        end),
+
+    error_logger:info_msg("[dist_bridge] Subscribed to ~s, waiting for handshake~n",
+                          [RecvTopic]),
+
+    %% This process needs to be registered so the Erlang distribution
+    %% system on the accepting side can find it. For now, register
+    %% by tunnel_id. The accepting side's dist_util will use this
+    %% process as the "socket" for the incoming connection.
+    %%
+    %% TODO: integrate with macula_dist:accept_connection to complete
+    %% the accepting side of the distribution handshake.
+    dist_accept_bridge_loop(Client, TunnelId, SendTopic).
+
+dist_accept_bridge_loop(Client, TunnelId, SendTopic) ->
+    receive
+        {dist_data_in, Data} ->
+            %% Data arrived from the connecting node via mesh
+            error_logger:info_msg("[dist_bridge] Received ~b bytes from tunnel ~s~n",
+                                  [byte_size(Data), TunnelId]),
+            %% TODO: forward to dist_util acceptor process
+            dist_accept_bridge_loop(Client, TunnelId, SendTopic);
+        {dist_data_out, Data} ->
+            %% Data to send to the connecting node
+            macula_relay_client:publish(Client, SendTopic, Data),
+            dist_accept_bridge_loop(Client, TunnelId, SendTopic);
+        stop ->
+            error_logger:info_msg("[dist_bridge] Tunnel ~s stopped~n", [TunnelId]),
+            ok
+    end.
+
+extract_payload(#{payload := P}) -> P;
+extract_payload(P) when is_binary(P) -> P;
+extract_payload(Msg) -> term_to_binary(Msg).
 
 %%====================================================================
 %% Internal — mesh client lookup
