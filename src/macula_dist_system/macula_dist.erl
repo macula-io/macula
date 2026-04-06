@@ -530,15 +530,19 @@ recv_timeout(T) -> T.
 
 %% Match inet_tcp_dist: {packet,4} for post-handshake distribution protocol
 quic_setopts_pre_nodeup(Socket) when is_port(Socket) ->
+    error_logger:info_msg("macula_dist: setopts_pre_nodeup gen_tcp~n"),
     inet:setopts(Socket, [{active, false}, {packet, 4}]);
 quic_setopts_pre_nodeup({S, S}) when is_port(S) ->
+    error_logger:info_msg("macula_dist: setopts_pre_nodeup gen_tcp_pair~n"),
     inet:setopts(S, [{active, false}, {packet, 4}]);
 quic_setopts_pre_nodeup({_Conn, _Stream}) ->
     ok.
 
 quic_setopts_post_nodeup(Socket) when is_port(Socket) ->
+    error_logger:info_msg("macula_dist: setopts_post_nodeup gen_tcp~n"),
     inet:setopts(Socket, [{active, true}, {packet, 4}, {deliver, port}, binary]);
 quic_setopts_post_nodeup({S, S}) when is_port(S) ->
+    error_logger:info_msg("macula_dist: setopts_post_nodeup gen_tcp_pair~n"),
     inet:setopts(S, [{active, true}, {packet, 4}, {deliver, port}, binary]);
 quic_setopts_post_nodeup({_Conn, _Stream}) ->
     ok.
@@ -592,7 +596,9 @@ quic_address_for_tcp(Sock, Node) ->
     end.
 
 %% @private Called when distribution handshake completes
-quic_handshake_complete(_Socket, _Node, _DHandle) ->
+quic_handshake_complete(_Socket, Node, DHandle) ->
+    error_logger:info_msg("macula_dist: handshake_complete Node=~p DHandle=~p~n",
+                          [Node, DHandle]),
     ok.
 
 %% @private Send tick (keepalive)
