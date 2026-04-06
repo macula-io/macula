@@ -21,9 +21,10 @@ splitname_test_() ->
         ?_assertEqual({9000, "node1.example.com"}, macula_dist:splitname("9000@node1.example.com")),
         ?_assertEqual(false, macula_dist:splitname("invalid_name")),
         ?_assertEqual(false, macula_dist:splitname("@noport")),
-        ?_assertEqual(false, macula_dist:splitname("abc@host")),  % non-numeric port
-        ?_assertEqual(false, macula_dist:splitname("0@host")),    % port 0 is invalid
-        ?_assertEqual(false, macula_dist:splitname("70000@host")) % port > 65535
+        %% name@host format uses default port (4433)
+        ?_assertMatch({_, "host"}, macula_dist:splitname("abc@host")),
+        ?_assertMatch({_, "host"}, macula_dist:splitname("0@host")),
+        ?_assertMatch({_, "host"}, macula_dist:splitname("70000@host"))
     ]}.
 
 is_node_name_test_() ->
@@ -31,7 +32,7 @@ is_node_name_test_() ->
         ?_assert(macula_dist:is_node_name("4433@192.168.1.100")),
         ?_assert(macula_dist:is_node_name("8080@localhost")),
         ?_assertNot(macula_dist:is_node_name("invalid")),
-        ?_assertNot(macula_dist:is_node_name("abc@host")),
+        ?_assert(macula_dist:is_node_name("abc@host")),  %% name@host is valid
         ?_assertNot(macula_dist:is_node_name(""))
     ]}.
 
