@@ -459,9 +459,10 @@ forward_rpc_to_relay(RelayUrl, Procedure, CallId, Args, HandlerPid) ->
               catch _:_ -> #{} end,
     case maps:get(RelayUrl, Clients, undefined) of
         undefined ->
-            HandlerPid ! {relay_reply, CallId,
-                #{<<"error">> => #{<<"code">> => <<"relay_unreachable">>,
-                                   <<"message">> => <<"DHT relay not connected">>}}};
+            %% DHT relay URL doesn't match any peer client (identity vs box URL mismatch).
+            %% Fall through to sequential peer forwarding as fallback.
+            ?LOG_INFO("[relay_handler] DHT relay ~s not in peer_clients, trying peers", [RelayUrl]),
+            forward_rpc_to_peers_sync(Procedure, CallId, Args, HandlerPid);
         ClientPid ->
             case catch macula_relay_client:call(ClientPid, Procedure, Args, 4000) of
                 {ok, Response} ->
@@ -470,6 +471,25 @@ forward_rpc_to_relay(RelayUrl, Procedure, CallId, Args, HandlerPid) ->
                     HandlerPid ! {relay_reply, CallId,
                         #{<<"error">> => #{<<"code">> => <<"rpc_failed">>,
                                            <<"message">> => <<"DHT relay did not respond">>}}}
+            end
+    end.
+
+forward_rpc_to_peers_sync(Procedure, CallId, Args, HandlerPid) ->
+    case erlang:whereis(macula_relay_peering) of
+        undefined ->
+            HandlerPid ! {relay_reply, CallId,
+                #{<<"error">> => #{<<"code">> => <<"procedure_not_found">>,
+                                   <<"message">> => <<"No peering available">>}}};
+        PeeringPid ->
+            Clients = gen_server:call(PeeringPid, peer_clients, 2000),
+            Result = try_rpc_on_peers(Procedure, Args, maps:to_list(Clients)),
+            case Result of
+                {ok, Response} ->
+                    HandlerPid ! {relay_reply, CallId, Response};
+                {error, _} ->
+                    HandlerPid ! {relay_reply, CallId,
+                        #{<<"error">> => #{<<"code">> => <<"procedure_not_found">>,
+                                           <<"message">> => <<"No provider on any relay">>}}}
             end
     end.
 
