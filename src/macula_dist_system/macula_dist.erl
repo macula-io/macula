@@ -524,17 +524,18 @@ quic_recv({_Conn, Stream}, _Length, Timeout) ->
 recv_timeout(infinity) -> 30000;
 recv_timeout(T) -> T.
 
+%% Match inet_tcp_dist: {packet,4} for post-handshake distribution protocol
 quic_setopts_pre_nodeup(Socket) when is_port(Socket) ->
-    inet:setopts(Socket, [{active, false}]);
+    inet:setopts(Socket, [{active, false}, {packet, 4}]);
 quic_setopts_pre_nodeup({S, S}) when is_port(S) ->
-    inet:setopts(S, [{active, false}]);
+    inet:setopts(S, [{active, false}, {packet, 4}]);
 quic_setopts_pre_nodeup({_Conn, _Stream}) ->
     ok.
 
 quic_setopts_post_nodeup(Socket) when is_port(Socket) ->
-    inet:setopts(Socket, [{active, true}, {packet, 2}]);
+    inet:setopts(Socket, [{active, true}, {packet, 4}, {deliver, port}, binary]);
 quic_setopts_post_nodeup({S, S}) when is_port(S) ->
-    inet:setopts(S, [{active, true}, {packet, 2}]);
+    inet:setopts(S, [{active, true}, {packet, 4}, {deliver, port}, binary]);
 quic_setopts_post_nodeup({_Conn, _Stream}) ->
     ok.
 

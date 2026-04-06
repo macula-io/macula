@@ -255,10 +255,15 @@ create_dist_socket(MeshClient, TunnelId) ->
     {ok, DistSock, DistSock}.
 
 create_loopback_pair() ->
-    {ok, LSock} = gen_tcp:listen(0, [binary, {active, false}, {reuseaddr, true},
-                                     {ip, {127,0,0,1}}]),
+    %% {packet, 2} — dist_util sends length-prefixed messages.
+    %% Without framing, TCP concatenates messages and dist_util
+    %% gets status + challenge in one recv → parse failure.
+    Opts = [binary, {active, false}, {packet, 2}, {nodelay, true},
+            {reuseaddr, true}, {ip, {127,0,0,1}}],
+    {ok, LSock} = gen_tcp:listen(0, Opts),
     {ok, Port} = inet:port(LSock),
-    {ok, CSock} = gen_tcp:connect({127,0,0,1}, Port, [binary, {active, false}]),
+    {ok, CSock} = gen_tcp:connect({127,0,0,1}, Port,
+                                  [binary, {active, false}, {packet, 2}, {nodelay, true}]),
     {ok, ASock} = gen_tcp:accept(LSock),
     gen_tcp:close(LSock),
     {CSock, ASock}.
