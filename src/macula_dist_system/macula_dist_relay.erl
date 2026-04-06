@@ -13,12 +13,11 @@
 %%% 4. dist_util handshake flows through the relay tunnel
 %%% 5. Post-handshake: tick keepalive + distribution traffic via bridge
 %%%
+%%% Bridge processes are supervised by `macula_dist_bridge_sup'
+%%% (simple_one_for_one under `macula_dist_system').
+%%%
 %%% Tunnel bytes are encrypted with AES-256-GCM derived from the
 %%% Erlang distribution cookie. The relay cannot read ETF content.
-%%%
-%%% This is EXPERIMENTAL. Supports Pid ! Msg, gen_server:call,
-%%% pg groups, process monitoring. Does NOT guarantee Mnesia or
-%%% global module compatibility over WAN latency.
 %%%
 %%% == Recommended net_ticktime ==
 %%%
@@ -26,7 +25,6 @@
 %%% to avoid false disconnects:
 %%%   -kernel net_ticktime 120
 %%% The default 60s may cause spurious node-DOWN on high-latency relays.
-%%% BRIDGE_RECV_TIMEOUT should be >= net_ticktime * 4.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_dist_relay).
@@ -41,11 +39,8 @@
 -export([get_tunnel_metrics/0, get_tunnel_metrics/1]).
 
 -define(DIST_TIMEOUT, 25000).
--define(BRIDGE_RECV_TIMEOUT, 60000).
 -define(CONTROLLER_TIMEOUT, 30000).
--define(BACKPRESSURE_HWM, 64).
 
-%% Metrics counter indices
 -define(METRIC_BYTES_OUT, 1).
 -define(METRIC_BYTES_IN, 2).
 -define(METRIC_MSGS_OUT, 3).
@@ -68,8 +63,6 @@ is_relay_mode() ->
     os:getenv("MACULA_DIST_MODE") =:= "relay".
 
 %% @doc Connect to a remote node via relay mesh.
-%% Returns {ok, DistSock, DistSock} where DistSock is a gen_tcp loopback
-%% socket bridged to an encrypted relay tunnel.
 -spec connect(string(), string(), integer()) -> {ok, port(), port()} | {error, term()}.
 connect(NodeStr, _Host, _Port) ->
     ?LOG_INFO("[dist_relay] Connecting to ~s via mesh", [NodeStr]),
@@ -170,29 +163,32 @@ handle_tunnel_request(Args) ->
         undefined ->
             {error, <<"no_mesh_client">>};
         Client ->
-            spawn_monitor_bridge(Client, TunnelId, SendTopic, RecvTopic, FromNode),
+            spawn_accept_bridge(Client, TunnelId, SendTopic, RecvTopic),
             {ok, #{<<"tunnel_id">> => TunnelId,
                    <<"send_topic">> => SendTopic,
                    <<"recv_topic">> => RecvTopic}}
     end.
 
-spawn_monitor_bridge(Client, TunnelId, SendTopic, RecvTopic, FromNode) ->
+%% The accept side has a setup phase (kernel negotiation) before the
+%% supervised bridge can start. This setup process is short-lived —
+%% it creates the loopback pair, negotiates with net_kernel, then
+%% hands off to the supervised bridge.
+spawn_accept_bridge(Client, TunnelId, SendTopic, RecvTopic) ->
     {Pid, _Ref} = spawn_monitor(fun() ->
-        dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, FromNode)
+        dist_accept_setup(Client, TunnelId, SendTopic, RecvTopic)
     end),
-    ?LOG_INFO("[dist_relay] Tunnel bridge ~p for ~s", [Pid, TunnelId]),
+    ?LOG_INFO("[dist_relay] Accept setup ~p for ~s", [Pid, TunnelId]),
     Pid.
 
 %%%===================================================================
-%%% Internal — Accept-side Bridge
+%%% Internal — Accept-side Setup (short-lived, then hands to bridge)
 %%%===================================================================
 
-dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, _FromNode) ->
-    process_flag(trap_exit, true),
+dist_accept_setup(Client, TunnelId, SendTopic, RecvTopic) ->
     Self = self(),
-    Metrics = init_metrics(TunnelId),
     Key = tunnel_key(),
 
+    %% Subscribe for buffering before kernel knows about us
     {ok, BufferSubRef} = macula_relay_client:subscribe(Client, RecvTopic,
         fun(Msg) -> Self ! {dist_data_buffered, extract_payload(Msg)} end),
 
@@ -200,41 +196,34 @@ dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, _FromNode) ->
 
     case whereis(net_kernel) of
         undefined ->
-            ?LOG_WARNING("[dist_bridge] net_kernel not found");
+            ?LOG_WARNING("[dist_bridge] net_kernel not found"),
+            macula_relay_client:unsubscribe(Client, BufferSubRef);
         KernelPid ->
-            setup_accept_bridge(Self, KernelPid, Client, DistSock, BridgeSock,
-                                BufferSubRef, SendTopic, RecvTopic, TunnelId,
-                                Key, Metrics)
+            negotiate_with_kernel(Self, KernelPid, Client, DistSock, BridgeSock,
+                                  BufferSubRef, SendTopic, RecvTopic, TunnelId, Key)
     end.
 
-setup_accept_bridge(Self, KernelPid, Client, DistSock, BridgeSock,
-                    BufferSubRef, SendTopic, RecvTopic, TunnelId,
-                    Key, Metrics) ->
+negotiate_with_kernel(Self, KernelPid, Client, DistSock, BridgeSock,
+                      BufferSubRef, SendTopic, RecvTopic, TunnelId, Key) ->
     KernelPid ! {accept, Self, DistSock, inet, macula_dist},
     receive
         {KernelPid, controller, DistCtrl} ->
             DistCtrl ! {Self, controller, ok},
             macula_relay_client:unsubscribe(Client, BufferSubRef),
             flush_buffered_to_socket(BridgeSock, Key),
-            start_bridge_io(Self, Client, BridgeSock, SendTopic, RecvTopic,
-                            TunnelId, Key, Metrics);
+            %% Hand off to supervised bridge
+            start_supervised_bridge(Client, BridgeSock, SendTopic, RecvTopic,
+                                     TunnelId, Key);
         {KernelPid, unsupported_protocol} ->
-            ?LOG_WARNING("[dist_bridge] Unsupported protocol")
+            ?LOG_WARNING("[dist_bridge] Unsupported protocol"),
+            macula_relay_client:unsubscribe(Client, BufferSubRef)
     after ?CONTROLLER_TIMEOUT ->
-        ?LOG_WARNING("[dist_bridge] Controller timeout")
+        ?LOG_WARNING("[dist_bridge] Controller timeout"),
+        macula_relay_client:unsubscribe(Client, BufferSubRef)
     end.
 
-start_bridge_io(Self, Client, BridgeSock, SendTopic, RecvTopic,
-                TunnelId, Key, Metrics) ->
-    {ok, SubRef} = macula_relay_client:subscribe(Client, RecvTopic,
-        fun(Msg) -> Self ! {tunnel_in, extract_payload(Msg)} end),
-    spawn_link(fun() ->
-        bridge_reader_loop(Client, BridgeSock, SendTopic, TunnelId, Key, Metrics)
-    end),
-    bridge_writer_loop(BridgeSock, TunnelId, Client, SubRef, Key, Metrics).
-
 %%%===================================================================
-%%% Internal — Connect-side Bridge
+%%% Internal — Connect-side Bridge Creation
 %%%===================================================================
 
 create_dist_socket(MeshClient, TunnelId) ->
@@ -243,128 +232,47 @@ create_dist_socket(MeshClient, TunnelId) ->
 
     {DistSock, BridgeSock} = create_loopback_pair(),
 
-    spawn_link(fun() ->
-        tunnel_io_bridge(MeshClient, BridgeSock, SendTopic, RecvTopic, TunnelId)
-    end),
+    Key = tunnel_key(),
+    start_supervised_bridge(MeshClient, BridgeSock, SendTopic, RecvTopic,
+                             TunnelId, Key),
 
     {ok, DistSock, DistSock}.
 
-tunnel_io_bridge(MeshClient, BridgeSock, SendTopic, RecvTopic, TunnelId) ->
-    process_flag(trap_exit, true),
-    Self = self(),
+%%%===================================================================
+%%% Internal — Supervised Bridge Startup
+%%%===================================================================
+
+start_supervised_bridge(Client, BridgeSock, SendTopic, RecvTopic, TunnelId, Key) ->
     Metrics = init_metrics(TunnelId),
-    Key = tunnel_key(),
-
-    {ok, SubRef} = macula_relay_client:subscribe(MeshClient, RecvTopic,
-        fun(Msg) -> Self ! {tunnel_in, extract_payload(Msg)} end),
-
-    spawn_link(fun() ->
-        bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId, Key, Metrics)
-    end),
-    bridge_writer_loop(BridgeSock, TunnelId, MeshClient, SubRef, Key, Metrics).
-
-%%%===================================================================
-%%% Internal — Bridge I/O Loops
-%%%===================================================================
-
-bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId, Key, Metrics) ->
-    case gen_tcp:recv(BridgeSock, 0, ?BRIDGE_RECV_TIMEOUT) of
-        {ok, Data} ->
-            maybe_backpressure(MeshClient),
-            Encrypted = encrypt(Key, Data),
-            macula_relay_client:publish(MeshClient, SendTopic, Encrypted),
-            counters:add(Metrics, ?METRIC_BYTES_OUT, byte_size(Data)),
-            counters:add(Metrics, ?METRIC_MSGS_OUT, 1),
-            bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId, Key, Metrics);
-        {error, closed} ->
-            ?LOG_INFO("[io_bridge] Reader closed for ~s", [TunnelId]);
+    BridgeArgs = #{
+        client => Client,
+        bridge_sock => BridgeSock,
+        send_topic => SendTopic,
+        recv_topic => RecvTopic,
+        tunnel_id => TunnelId,
+        key => Key,
+        metrics => Metrics
+    },
+    case macula_dist_bridge_sup:start_bridge(BridgeArgs) of
+        {ok, Pid} ->
+            ?LOG_INFO("[dist_relay] Supervised bridge ~p for ~s", [Pid, TunnelId]),
+            {ok, Pid};
         {error, Reason} ->
-            ?LOG_WARNING("[io_bridge] Reader error ~p for ~s", [Reason, TunnelId])
+            ?LOG_ERROR("[dist_relay] Failed to start bridge for ~s: ~p",
+                        [TunnelId, Reason]),
+            {error, Reason}
     end.
 
-%% Gap 1: cleanup on exit. Gap 8: writer timeout.
-bridge_writer_loop(BridgeSock, TunnelId, Client, SubRef, Key, Metrics) ->
-    receive
-        {tunnel_in, EncData} when is_binary(EncData) ->
-            case decrypt(Key, EncData) of
-                {ok, Data} ->
-                    counters:add(Metrics, ?METRIC_BYTES_IN, byte_size(Data)),
-                    counters:add(Metrics, ?METRIC_MSGS_IN, 1),
-                    case gen_tcp:send(BridgeSock, Data) of
-                        ok ->
-                            bridge_writer_loop(BridgeSock, TunnelId, Client,
-                                               SubRef, Key, Metrics);
-                        {error, Reason} ->
-                            ?LOG_WARNING("[io_bridge] Writer send error ~p for ~s",
-                                         [Reason, TunnelId]),
-                            cleanup_bridge(BridgeSock, TunnelId, Client, SubRef, Metrics)
-                    end;
-                {error, decrypt_failed} ->
-                    ?LOG_WARNING("[io_bridge] Decrypt failed for ~s (cookie mismatch?)",
-                                 [TunnelId]),
-                    bridge_writer_loop(BridgeSock, TunnelId, Client, SubRef, Key, Metrics)
-            end;
-        {'EXIT', _Pid, _Reason} ->
-            ?LOG_INFO("[io_bridge] Linked process exited for ~s", [TunnelId]),
-            cleanup_bridge(BridgeSock, TunnelId, Client, SubRef, Metrics);
-        stop ->
-            cleanup_bridge(BridgeSock, TunnelId, Client, SubRef, Metrics)
-    after ?BRIDGE_RECV_TIMEOUT ->
-        ?LOG_WARNING("[io_bridge] Writer timeout for ~s", [TunnelId]),
-        cleanup_bridge(BridgeSock, TunnelId, Client, SubRef, Metrics)
-    end.
-
-%% Gap 1: proper cleanup — unsubscribe, close socket, remove metrics
-cleanup_bridge(BridgeSock, TunnelId, Client, SubRef, _Metrics) ->
-    ?LOG_INFO("[io_bridge] Cleaning up tunnel ~s", [TunnelId]),
-    catch macula_relay_client:unsubscribe(Client, SubRef),
-    catch gen_tcp:close(BridgeSock),
-    remove_metrics(TunnelId),
-    ok.
-
 %%%===================================================================
-%%% Internal — Encryption (Gap 3)
+%%% Internal — Encryption
 %%%===================================================================
 
-%% Derive a symmetric key from the Erlang distribution cookie.
-%% Both sides share the same cookie (required for dist handshake).
 tunnel_key() ->
     Cookie = atom_to_binary(erlang:get_cookie()),
     crypto:hash(sha256, <<"macula-dist-tunnel:", Cookie/binary>>).
 
-%% Encrypt with AES-256-GCM. Nonce is random per message (prepended).
-encrypt(Key, Plaintext) ->
-    Nonce = crypto:strong_rand_bytes(12),
-    {Ciphertext, Tag} = crypto:crypto_one_time_aead(
-        aes_256_gcm, Key, Nonce, Plaintext, <<>>, true),
-    <<Nonce/binary, Tag/binary, Ciphertext/binary>>.
-
-%% Decrypt AES-256-GCM. Nonce + tag prepended to ciphertext.
-decrypt(Key, <<Nonce:12/binary, Tag:16/binary, Ciphertext/binary>>) ->
-    case crypto:crypto_one_time_aead(
-            aes_256_gcm, Key, Nonce, Ciphertext, <<>>, Tag, false) of
-        error -> {error, decrypt_failed};
-        Plaintext -> {ok, Plaintext}
-    end;
-decrypt(_Key, _Data) ->
-    {error, decrypt_failed}.
-
 %%%===================================================================
-%%% Internal — Backpressure (Gap 5)
-%%%===================================================================
-
-%% Pause if relay client's message queue is too deep.
-maybe_backpressure(MeshClient) ->
-    case erlang:process_info(MeshClient, message_queue_len) of
-        {message_queue_len, Len} when Len > ?BACKPRESSURE_HWM ->
-            ?LOG_WARNING("[io_bridge] Backpressure: relay queue ~p", [Len]),
-            timer:sleep(1);
-        _ ->
-            ok
-    end.
-
-%%%===================================================================
-%%% Internal — Metrics (Gap 9)
+%%% Internal — Metrics
 %%%===================================================================
 
 init_metrics(TunnelId) ->
@@ -372,13 +280,6 @@ init_metrics(TunnelId) ->
     Tunnels = persistent_term:get(macula_dist_tunnels, #{}),
     persistent_term:put(macula_dist_tunnels, Tunnels#{TunnelId => Ref}),
     Ref.
-
-remove_metrics(TunnelId) ->
-    case persistent_term:get(macula_dist_tunnels, undefined) of
-        undefined -> ok;
-        Tunnels ->
-            persistent_term:put(macula_dist_tunnels, maps:remove(TunnelId, Tunnels))
-    end.
 
 read_metrics(Ref) ->
     #{bytes_out => counters:get(Ref, ?METRIC_BYTES_OUT),
@@ -406,16 +307,21 @@ flush_buffered_to_socket(BridgeSock, Key) ->
         {dist_data_buffered, EncData} ->
             case decrypt(Key, EncData) of
                 {ok, Data} -> gen_tcp:send(BridgeSock, Data);
-                {error, _} ->
-                    %% During buffer phase, data may be unencrypted
-                    %% (from the connecting side's first message before
-                    %% encryption was set up on that side)
-                    gen_tcp:send(BridgeSock, EncData)
+                {error, _} -> gen_tcp:send(BridgeSock, EncData)
             end,
             flush_buffered_to_socket(BridgeSock, Key)
     after 0 ->
         ok
     end.
+
+decrypt(Key, <<Nonce:12/binary, Tag:16/binary, Ciphertext/binary>>) ->
+    case crypto:crypto_one_time_aead(
+            aes_256_gcm, Key, Nonce, Ciphertext, <<>>, Tag, false) of
+        error -> {error, decrypt_failed};
+        Plaintext -> {ok, Plaintext}
+    end;
+decrypt(_Key, _Data) ->
+    {error, decrypt_failed}.
 
 extract_payload(#{payload := P}) -> P;
 extract_payload(P) when is_binary(P) -> P.

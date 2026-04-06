@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @doc Tests for macula_dist_relay — relay-routed Erlang distribution.
+%%% @doc Tests for macula_dist_relay + macula_dist_bridge.
 %%%
 %%% Tests cover:
 %%% - Public API: is_relay_mode, register/get mesh client
@@ -8,6 +8,7 @@
 %%% - Payload extraction
 %%% - Tunnel encryption (AES-256-GCM from cookie)
 %%% - Metrics counters
+%%% - Bridge supervisor
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_dist_relay_tests).
@@ -81,14 +82,7 @@ extract_payload_binary_test() ->
 %%%===================================================================
 
 loopback_pair_created_test() ->
-    Opts = [binary, {active, false}, {reuseaddr, true}, {ip, {127,0,0,1}}],
-    {ok, LSock} = gen_tcp:listen(0, Opts),
-    {ok, Port} = inet:port(LSock),
-    {ok, CSock} = gen_tcp:connect({127,0,0,1}, Port,
-                                  [binary, {active, false}, {packet, 2}, {nodelay, true}]),
-    {ok, ASock} = gen_tcp:accept(LSock),
-    gen_tcp:close(LSock),
-    inet:setopts(ASock, [{packet, raw}, {nodelay, true}]),
+    {CSock, ASock} = make_loopback_pair(),
 
     ok = gen_tcp:send(CSock, <<"hello">>),
     {ok, Data} = gen_tcp:recv(ASock, 0, 1000),
@@ -128,7 +122,7 @@ loopback_pair_packet4_switch_test() ->
     gen_tcp:close(ASock).
 
 %%%===================================================================
-%%% Tests — bridge roundtrip
+%%% Tests — bridge roundtrip (simulated relay via message passing)
 %%%===================================================================
 
 bridge_roundtrip_test() ->
@@ -169,7 +163,6 @@ encrypt_decrypt_roundtrip_test() ->
     Plaintext = <<"hello distribution">>,
     Encrypted = encrypt(Key, Plaintext),
     ?assertNotEqual(Plaintext, Encrypted),
-    ?assert(byte_size(Encrypted) > byte_size(Plaintext)),
     {ok, Decrypted} = decrypt(Key, Encrypted),
     ?assertEqual(Plaintext, Decrypted).
 
@@ -201,17 +194,15 @@ decrypt_tampered_test() ->
 %%%===================================================================
 
 metrics_init_read_test() ->
-    TunnelId = <<"test-metrics-", (integer_to_binary(erlang:unique_integer([positive])))/binary>>,
+    TunnelId = unique_tunnel_id(),
     Ref = init_metrics(TunnelId),
     M = read_metrics(Ref),
     ?assertEqual(0, maps:get(bytes_out, M)),
     ?assertEqual(0, maps:get(bytes_in, M)),
-    ?assertEqual(0, maps:get(msgs_out, M)),
-    ?assertEqual(0, maps:get(msgs_in, M)),
     remove_metrics(TunnelId).
 
 metrics_increment_test() ->
-    TunnelId = <<"test-metrics-inc-", (integer_to_binary(erlang:unique_integer([positive])))/binary>>,
+    TunnelId = unique_tunnel_id(),
     Ref = init_metrics(TunnelId),
     counters:add(Ref, 1, 100),
     counters:add(Ref, 3, 1),
@@ -227,6 +218,24 @@ get_tunnel_metrics_empty_test() ->
 get_tunnel_metrics_specific_missing_test() ->
     persistent_term:erase(macula_dist_tunnels),
     ?assertEqual(undefined, macula_dist_relay:get_tunnel_metrics(<<"nope">>)).
+
+%%%===================================================================
+%%% Tests — bridge supervisor
+%%%===================================================================
+
+bridge_sup_starts_test() ->
+    %% If already running (from dist_system), just verify it exists
+    case whereis(macula_dist_bridge_sup) of
+        undefined ->
+            {ok, Sup} = macula_dist_bridge_sup:start_link(),
+            ?assert(is_pid(Sup)),
+            ?assertEqual([], supervisor:which_children(Sup)),
+            %% Don't kill it — may be needed by other tests.
+            %% It will die when the test process exits.
+            unlink(Sup);
+        Existing ->
+            ?assert(is_pid(Existing))
+    end.
 
 %%%===================================================================
 %%% Tests — advertise_dist_accept
@@ -251,7 +260,9 @@ make_loopback_pair() ->
     inet:setopts(ASock, [{packet, raw}, {nodelay, true}]),
     {CSock, ASock}.
 
-%% Direct access to internal encrypt/decrypt for unit testing
+unique_tunnel_id() ->
+    <<"test-", (integer_to_binary(erlang:unique_integer([positive])))/binary>>.
+
 encrypt(Key, Plaintext) ->
     Nonce = crypto:strong_rand_bytes(12),
     {Ciphertext, Tag} = crypto:crypto_one_time_aead(

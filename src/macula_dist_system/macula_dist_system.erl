@@ -66,6 +66,15 @@ init(Opts) ->
 
     %% Child specifications
     Children = [
+        %% Bridge supervisor for relay distribution tunnels
+        #{
+            id => macula_dist_bridge_sup,
+            start => {macula_dist_bridge_sup, start_link, []},
+            restart => permanent,
+            shutdown => infinity,
+            type => supervisor,
+            modules => [macula_dist_bridge_sup]
+        },
         %% Discovery service (always started)
         #{
             id => macula_dist_discovery,
