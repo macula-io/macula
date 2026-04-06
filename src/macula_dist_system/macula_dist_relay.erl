@@ -135,7 +135,10 @@ request_tunnel(MeshClient, NodeStr) ->
     Procedure = <<"_dist.tunnel.", (list_to_binary(NodeStr))/binary>>,
     Args = #{<<"from_node">> => atom_to_binary(node()),
              <<"target_node">> => list_to_binary(NodeStr)},
-    case macula_relay_client:call(MeshClient, Procedure, Args, ?DIST_TIMEOUT) of
+    %% Gap 7: try all connected relays when using multi_relay.
+    %% If the target is on a different relay, call_any tries each in sequence.
+    Result = tunnel_rpc(MeshClient, Procedure, Args),
+    case Result of
         {ok, #{<<"tunnel_id">> := TunnelId}} ->
             ?LOG_INFO("[dist_relay] Tunnel established: ~s", [TunnelId]),
             create_dist_socket(MeshClient, TunnelId);
@@ -145,6 +148,16 @@ request_tunnel(MeshClient, NodeStr) ->
         {error, Reason} ->
             ?LOG_WARNING("[dist_relay] Tunnel request failed: ~p", [Reason]),
             {error, {tunnel_failed, Reason}}
+    end.
+
+%% Try call_any first (multi_relay). Fall back to direct call (single relay_client).
+tunnel_rpc(MeshClient, Procedure, Args) ->
+    case catch macula_multi_relay:call_any(MeshClient, Procedure, Args, ?DIST_TIMEOUT) of
+        {'EXIT', {noproc, _}} ->
+            %% Not a multi_relay — try as direct relay_client
+            macula_relay_client:call(MeshClient, Procedure, Args, ?DIST_TIMEOUT);
+        Result ->
+            Result
     end.
 
 %%%===================================================================

@@ -26,7 +26,7 @@
 
 -export([start_link/1, stop/1]).
 -export([subscribe/3, unsubscribe/2, publish/3]).
--export([advertise/3, unadvertise/2, call/4]).
+-export([advertise/3, unadvertise/2, call/4, call_any/4]).
 -export([get_status/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -90,6 +90,13 @@ unadvertise(Pid, Procedure) ->
 -spec call(pid(), binary(), map(), timeout()) -> {ok, term()} | {error, term()}.
 call(Pid, Procedure, Args, Timeout) ->
     gen_server:call(Pid, {rpc_call, Procedure, Args, Timeout}, Timeout + 1000).
+
+%% @doc Try an RPC call on each connected relay in sequence.
+%% Returns the first successful result or the last error.
+%% Useful for cross-relay operations where the target may be on a different relay.
+-spec call_any(pid(), binary(), map(), timeout()) -> {ok, term()} | {error, term()}.
+call_any(Pid, Procedure, Args, Timeout) ->
+    gen_server:call(Pid, {rpc_call_any, Procedure, Args, Timeout}, Timeout + 5000).
 
 -spec get_status(pid()) -> {ok, map()}.
 get_status(Pid) ->
@@ -188,6 +195,11 @@ handle_call({rpc_call, Procedure, Args, Timeout}, _From, State) ->
             Result = macula_relay_client:call(Pid, Procedure, Args, Timeout),
             {reply, Result, State}
     end;
+
+handle_call({rpc_call_any, Procedure, Args, Timeout}, _From, State) ->
+    AliveConns = [C || C <- State#state.connections, is_process_alive(C#conn.pid)],
+    Result = try_call_each(AliveConns, Procedure, Args, Timeout),
+    {reply, Result, State};
 
 
 %%====================================================================
@@ -351,11 +363,21 @@ find_primary(Conns) ->
     case [C || #conn{role = primary} = C <- Conns] of
         [Primary | _] -> Primary;
         [] ->
-            %% No primary tagged — use first available
             case Conns of
                 [First | _] -> First;
                 [] -> undefined
             end
+    end.
+
+%% Try RPC on each connection in sequence. Return first success or last error.
+try_call_each([], _Procedure, _Args, _Timeout) ->
+    {error, no_connection};
+try_call_each([#conn{pid = Pid}], Procedure, Args, Timeout) ->
+    macula_relay_client:call(Pid, Procedure, Args, Timeout);
+try_call_each([#conn{pid = Pid} | Rest], Procedure, Args, Timeout) ->
+    case macula_relay_client:call(Pid, Procedure, Args, Timeout) of
+        {ok, _} = Success -> Success;
+        {error, _} -> try_call_each(Rest, Procedure, Args, Timeout)
     end.
 
 %%====================================================================
