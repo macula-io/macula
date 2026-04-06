@@ -291,6 +291,11 @@ handle_message({ok, {publish, #{<<"topic">> := <<"_swim.ping_req">>, <<"payload"
     handle_swim_msg(ping_req, Payload),
     State;
 
+%% PUBLISH on _dht.* — Kademlia DHT protocol for procedure routing
+handle_message({ok, {publish, #{<<"topic">> := <<"_dht.", _/binary>> = Topic, <<"payload">> := Payload}}}, State) ->
+    catch macula_relay_dht:handle_dht_message(Topic, safe_decode(Payload)),
+    State;
+
 %% PUBLISH on _relay.bloom — store peer's Bloom filter for subscription routing
 handle_message({ok, {publish, #{<<"topic">> := <<"_relay.bloom">>, <<"payload">> := BloomBin}}}, State)
   when byte_size(BloomBin) =:= 1024 ->
@@ -325,6 +330,12 @@ handle_message({ok, {register_procedure, Msg}}, State) ->
     catch
         _:_ -> ?LOG_DEBUG("[relay_handler] Procedure ~s already registered", [Procedure])
     end,
+    %% Store in relay DHT so other relays can find this procedure
+    SelfUrl = case get(relay_target) of
+        undefined -> <<>>;
+        Target -> <<"https://", Target/binary, ":4433">>
+    end,
+    catch macula_relay_dht:store_procedure(Procedure, SelfUrl),
     State;
 
 %% CALL — find provider via gproc, forward to its handler.
@@ -335,8 +346,8 @@ handle_message({ok, {call, Msg}}, State) ->
     Args = maps:get(<<"args">>, Msg, #{}),
     case gproc:lookup_pids({p, l, {relay_rpc, Procedure}}) of
         [] ->
-            ?LOG_INFO("[relay_handler] RPC ~s not local, trying peer relays", [Procedure]),
-            forward_rpc_to_peers(Procedure, CallId, Args, State);
+            ?LOG_INFO("[relay_handler] RPC ~s not local, trying DHT then peers", [Procedure]),
+            forward_rpc_via_dht(Procedure, CallId, Args, State);
         [ProviderPid | _] ->
             ?LOG_INFO("[relay_handler] Forwarding RPC ~s to provider ~p", [Procedure, ProviderPid]),
             ProviderPid ! {relay_call, self(), CallId, Procedure, Args}
@@ -419,6 +430,37 @@ join_topic(Topic, true) ->
 
 %% Forward RPC call to peer relays when procedure not found locally.
 %% Spawns async — tries each peer, sends first success back to caller.
+forward_rpc_via_dht(Procedure, CallId, Args, State) ->
+    HandlerPid = self(),
+    spawn(fun() ->
+        case catch macula_relay_dht:find_procedure(Procedure) of
+            {ok, RelayUrl} ->
+                ?LOG_INFO("[relay_handler] DHT found ~s on ~s", [Procedure, RelayUrl]),
+                forward_rpc_to_relay(RelayUrl, Procedure, CallId, Args, HandlerPid);
+            _ ->
+                forward_rpc_to_peers(Procedure, CallId, Args, State)
+        end
+    end).
+
+forward_rpc_to_relay(RelayUrl, Procedure, CallId, Args, HandlerPid) ->
+    Clients = try gen_server:call(macula_relay_peering, peer_clients, 2000)
+              catch _:_ -> #{} end,
+    case maps:get(RelayUrl, Clients, undefined) of
+        undefined ->
+            HandlerPid ! {relay_reply, CallId,
+                #{<<"error">> => #{<<"code">> => <<"relay_unreachable">>,
+                                   <<"message">> => <<"DHT relay not connected">>}}};
+        ClientPid ->
+            case catch macula_relay_client:call(ClientPid, Procedure, Args, 4000) of
+                {ok, Response} ->
+                    HandlerPid ! {relay_reply, CallId, Response};
+                _ ->
+                    HandlerPid ! {relay_reply, CallId,
+                        #{<<"error">> => #{<<"code">> => <<"rpc_failed">>,
+                                           <<"message">> => <<"DHT relay did not respond">>}}}
+            end
+    end.
+
 forward_rpc_to_peers(Procedure, CallId, Args, _State) ->
     HandlerPid = self(),
     spawn(fun() ->
