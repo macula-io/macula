@@ -475,14 +475,13 @@ quic_recv({_Conn, {tunnel, TunnelId, _SendTopic, _RecvTopic}}, _Length, Timeout)
         infinity -> 30000;
         T -> T
     end,
-    error_logger:info_msg("macula_dist: quic_recv waiting for dist_data on tunnel ~s (pid ~p, timeout ~p)~n",
-                          [TunnelId, self(), TimeoutMs]),
     receive
         {dist_data, Data} when is_binary(Data) ->
-            error_logger:info_msg("macula_dist: quic_recv GOT ~p bytes!~n", [byte_size(Data)]),
-            {ok, Data}
+            %% dist_util expects {ok, List} not {ok, Binary}
+            error_logger:info_msg("macula_dist: quic_recv GOT ~p bytes on ~s~n",
+                                  [byte_size(Data), TunnelId]),
+            {ok, binary_to_list(Data)}
     after TimeoutMs ->
-        error_logger:info_msg("macula_dist: quic_recv TIMEOUT on tunnel ~s~n", [TunnelId]),
         {error, timeout}
     end;
 quic_recv({_Conn, Stream}, _Length, Timeout) ->
@@ -492,7 +491,8 @@ quic_recv({_Conn, Stream}, _Length, Timeout) ->
     end,
     receive
         {quic, Data, Stream, _Flags} when is_binary(Data) ->
-            {ok, Data};
+            %% dist_util expects {ok, List} not {ok, Binary}
+            {ok, binary_to_list(Data)};
         {quic, stream_closed, Stream, _Flags} ->
             {error, closed};
         {quic, peer_send_shutdown, Stream, _Flags} ->
