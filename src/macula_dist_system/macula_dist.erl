@@ -469,16 +469,19 @@ quic_send({_Conn, Stream}, Data) ->
     end.
 
 %% @private Receive data from QUIC stream or relay tunnel
-quic_recv({_Conn, {tunnel, _TunnelId, _SendTopic, _RecvTopic}}, _Length, Timeout) ->
-    %% Relay tunnel: data arrives as {dist_data, Binary} messages
+quic_recv({_Conn, {tunnel, TunnelId, _SendTopic, _RecvTopic}}, _Length, Timeout) ->
     TimeoutMs = case Timeout of
         infinity -> 30000;
         T -> T
     end,
+    error_logger:info_msg("macula_dist: quic_recv waiting for dist_data on tunnel ~s (pid ~p, timeout ~p)~n",
+                          [TunnelId, self(), TimeoutMs]),
     receive
         {dist_data, Data} when is_binary(Data) ->
+            error_logger:info_msg("macula_dist: quic_recv GOT ~p bytes!~n", [byte_size(Data)]),
             {ok, Data}
     after TimeoutMs ->
+        error_logger:info_msg("macula_dist: quic_recv TIMEOUT on tunnel ~s~n", [TunnelId]),
         {error, timeout}
     end;
 quic_recv({_Conn, Stream}, _Length, Timeout) ->
