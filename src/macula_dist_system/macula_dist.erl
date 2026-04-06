@@ -446,6 +446,8 @@ connect_quic(Host, Port) ->
 %% @private Complete connection setup — Socket is either {QuicConn, QuicStream}
 %% or a gen_tcp socket (from relay tunnel loopback pair).
 setup_loop(Socket, Node, Type, MyNode, Timer) ->
+    error_logger:info_msg("macula_dist: setup_loop Socket=~p Node=~p MyNode=~p~n",
+                          [Socket, Node, MyNode]),
     HSData = #hs_data{
         kernel_pid = self(),
         this_node = MyNode,
@@ -483,9 +485,11 @@ setup_loop(Socket, Node, Type, MyNode, Timer) ->
 %% @private Send data over QUIC stream or relay tunnel
 %% gen_tcp socket (from relay tunnel loopback pair)
 quic_send(Socket, Data) when is_port(Socket) ->
+    error_logger:info_msg("macula_dist: quic_send gen_tcp ~p bytes~n", [iolist_size(Data)]),
     gen_tcp:send(Socket, Data);
 %% Tuple socket: {Socket, Socket} from tunnel or {Conn, Stream} from QUIC
 quic_send({S, S}, Data) when is_port(S) ->
+    error_logger:info_msg("macula_dist: quic_send gen_tcp_pair ~p bytes~n", [iolist_size(Data)]),
     gen_tcp:send(S, Data);
 quic_send({_Conn, Stream}, Data) ->
     case quicer:send(Stream, Data) of
