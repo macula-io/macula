@@ -62,6 +62,7 @@ connect(NodeStr, _Host, _Port) ->
         MeshClient ->
             %% Step 2: Request a distribution tunnel via mesh RPC
             Procedure = <<"_dist.tunnel.", (list_to_binary(NodeStr))/binary>>,
+            ?LOG_INFO("[dist_relay] Calling ~s via mesh RPC", [Procedure]),
             case macula_relay_client:call(MeshClient, Procedure, #{
                 <<"from_node">> => atom_to_binary(node()),
                 <<"target_node">> => list_to_binary(NodeStr)
@@ -74,6 +75,9 @@ connect(NodeStr, _Host, _Port) ->
                     %% relay_client connection and multiplex dist traffic
                     %% as pub/sub messages on a private topic.
                     create_dist_socket(MeshClient, TunnelId);
+                {ok, #{<<"error">> := ErrorInfo}} ->
+                    ?LOG_WARNING("[dist_relay] Tunnel request returned error: ~p", [ErrorInfo]),
+                    {error, {tunnel_error, ErrorInfo}};
                 {error, Reason} ->
                     ?LOG_WARNING("[dist_relay] Tunnel request failed: ~p", [Reason]),
                     {error, {tunnel_failed, Reason}}
