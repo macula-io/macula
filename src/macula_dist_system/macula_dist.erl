@@ -65,7 +65,7 @@
 -define(DEFAULT_PORT, 4433).
 -define(ALPN, "macula-dist").
 -define(HANDSHAKE_TIMEOUT, 30000).  % 30 seconds
--define(CONNECT_TIMEOUT, 10000).    % 10 seconds
+-define(CONNECT_TIMEOUT, 15000).    % 15 seconds (relay tunnel needs more time)
 
 %% Stream IDs for different message types
 -define(STREAM_CONTROL, 0).

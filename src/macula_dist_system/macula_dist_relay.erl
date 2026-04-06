@@ -67,8 +67,8 @@ connect(NodeStr, _Host, _Port) ->
                 <<"from_node">> => atom_to_binary(node()),
                 <<"target_node">> => list_to_binary(NodeStr)
             }, ?DIST_TIMEOUT) of
-                {ok, #{<<"tunnel_id">> := TunnelId}} ->
-                    ?LOG_INFO("[dist_relay] Tunnel established: ~s", [TunnelId]),
+                {ok, #{<<"tunnel_id">> := TunnelId} = TunnelInfo} ->
+                    error_logger:info_msg("[dist_relay] Tunnel established: ~s (~p)~n", [TunnelId, maps:keys(TunnelInfo)]),
                     %% Step 3: The tunnel_id identifies a relay-side bridge.
                     %% We use the mesh QUIC connection's stream for ETF bytes.
                     %% For the experimental version, we reuse the existing
