@@ -198,7 +198,7 @@ handle_call(get_status, _From, State) ->
     Conns = [#{
         relay => C#conn.relay_url,
         role => atom_to_binary(C#conn.role),
-        pid => list_to_binary(pid_to_list(C#conn.pid))
+        alive => is_process_alive(C#conn.pid)
     } || C <- State#state.connections],
     Status = #{
         connections => Conns,
