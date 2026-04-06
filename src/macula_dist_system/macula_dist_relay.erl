@@ -119,30 +119,35 @@ advertise_dist_accept() ->
 handle_tunnel_request(Args) ->
     FromNode = maps:get(<<"from_node">>, Args, <<>>),
     TunnelId = base64:encode(crypto:strong_rand_bytes(16)),
-    ?LOG_INFO("[dist_relay] Tunnel request from ~s → id: ~s", [FromNode, TunnelId]),
+    error_logger:info_msg("[dist_relay] Tunnel request from ~s, id: ~s~n", [FromNode, TunnelId]),
 
-    %% Set up the receiving side of the tunnel:
-    %% Subscribe to the remote node's outgoing data topic
-    %% Publish to the remote node's incoming data topic
     SendTopic = <<"_dist.data.", TunnelId/binary, ".in">>,
     RecvTopic = <<"_dist.data.", TunnelId/binary, ".out">>,
 
     case get_mesh_client() of
         undefined ->
+            error_logger:warning_msg("[dist_relay] No mesh client for tunnel~n"),
             {error, <<"no_mesh_client">>};
         Client ->
-            %% Subscribe to data from the connecting node
-            Self = self(),
-            {ok, _SubRef} = macula_relay_client:subscribe(Client, RecvTopic,
-                fun(#{payload := Data}) ->
-                    Self ! {dist_data, Data}
-                end),
-
-            %% Notify net_kernel about the incoming connection
-            %% For now, return the tunnel_id so the connecting side can proceed
-            {ok, #{<<"tunnel_id">> => TunnelId,
-                   <<"send_topic">> => SendTopic,
-                   <<"recv_topic">> => RecvTopic}}
+            error_logger:info_msg("[dist_relay] Subscribing to ~s~n", [RecvTopic]),
+            case macula_relay_client:subscribe(Client, RecvTopic,
+                fun(Msg) ->
+                    Data = case Msg of
+                        #{payload := P} -> P;
+                        P when is_binary(P) -> P;
+                        _ -> term_to_binary(Msg)
+                    end,
+                    self() ! {dist_data, Data}
+                end) of
+                {ok, _SubRef} ->
+                    error_logger:info_msg("[dist_relay] Tunnel ~s ready, returning to caller~n", [TunnelId]),
+                    {ok, #{<<"tunnel_id">> => TunnelId,
+                           <<"send_topic">> => SendTopic,
+                           <<"recv_topic">> => RecvTopic}};
+                SubError ->
+                    error_logger:warning_msg("[dist_relay] Subscribe failed: ~p~n", [SubError]),
+                    {error, <<"subscribe_failed">>}
+            end
     end.
 
 %%====================================================================
