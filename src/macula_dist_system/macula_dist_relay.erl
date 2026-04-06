@@ -153,7 +153,14 @@ dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, _FromNode) ->
 
     Self = self(),
 
-    error_logger:info_msg("[dist_bridge] Subscribing + notifying net_kernel~n"),
+    error_logger:info_msg("[dist_bridge] Subscribing FIRST, then notifying kernel~n"),
+
+    %% Subscribe BEFORE notifying kernel — buffer data until controller assigned.
+    %% This prevents a race where alpha sends handshake data before beta subscribes.
+    {ok, _SubRef} = macula_relay_client:subscribe(Client, RecvTopic,
+        fun(Msg) ->
+            Self ! {dist_data_buffered, extract_payload(Msg)}
+        end),
 
     TunnelSocket = {Client, {tunnel, TunnelId, SendTopic, RecvTopic}},
     KernelPid = whereis(net_kernel),
@@ -165,23 +172,35 @@ dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, _FromNode) ->
             KernelPid ! {accept, Self, TunnelSocket, inet, macula_dist},
             receive
                 {KernelPid, controller, DistCtrl} ->
-                    error_logger:info_msg("[dist_bridge] Controller ~p, forwarding data~n", [DistCtrl]),
+                    error_logger:info_msg("[dist_bridge] Controller ~p~n", [DistCtrl]),
                     DistCtrl ! {Self, controller, ok},
 
-                    %% NOW subscribe — forward data to the do_accept process (DistCtrl)
-                    %% which runs quic_recv waiting for {dist_data, Data} messages
-                    {ok, _SubRef} = macula_relay_client:subscribe(Client, RecvTopic,
+                    %% Flush any buffered data to the do_accept process
+                    flush_buffered_data(DistCtrl),
+
+                    %% Resubscribe to forward directly to do_accept from now on
+                    macula_relay_client:subscribe(Client, RecvTopic,
                         fun(Msg) ->
                             DistCtrl ! {dist_data, extract_payload(Msg)}
                         end),
 
-                    error_logger:info_msg("[dist_bridge] Data forwarding to ~p active~n", [DistCtrl]),
+                    error_logger:info_msg("[dist_bridge] Data forwarding active~n"),
                     dist_accept_bridge_loop();
                 {KernelPid, unsupported_protocol} ->
                     error_logger:warning_msg("[dist_bridge] Unsupported protocol~n")
             after 30000 ->
                 error_logger:warning_msg("[dist_bridge] Controller timeout~n")
             end
+    end.
+
+flush_buffered_data(DistCtrl) ->
+    receive
+        {dist_data_buffered, Data} ->
+            error_logger:info_msg("[dist_bridge] Flushing ~b buffered bytes~n", [byte_size(Data)]),
+            DistCtrl ! {dist_data, Data},
+            flush_buffered_data(DistCtrl)
+    after 0 ->
+        ok
     end.
 
 dist_accept_bridge_loop() ->
