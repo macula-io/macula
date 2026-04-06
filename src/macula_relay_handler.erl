@@ -351,7 +351,9 @@ handle_message({ok, {call, Msg}}, State) ->
     Procedure = maps:get(<<"procedure">>, Msg, <<>>),
     CallId = maps:get(<<"call_id">>, Msg, <<>>),
     Args = maps:get(<<"args">>, Msg, #{}),
-    case gproc:lookup_pids({p, l, {relay_rpc, Procedure}}) of
+    AlivePids = [P || P <- gproc:lookup_pids({p, l, {relay_rpc, Procedure}}),
+                       is_process_alive(P)],
+    case AlivePids of
         [] ->
             ?LOG_INFO("[relay_handler] RPC ~s not local, trying DHT then peers", [Procedure]),
             forward_rpc_via_dht(Procedure, CallId, Args, State);
