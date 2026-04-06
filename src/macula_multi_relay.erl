@@ -197,8 +197,8 @@ handle_call({rpc_call, Procedure, Args, Timeout}, _From, State) ->
 handle_call(get_status, _From, State) ->
     Conns = [#{
         relay => C#conn.relay_url,
-        role => C#conn.role,
-        pid => C#conn.pid
+        role => atom_to_binary(C#conn.role),
+        pid => list_to_binary(pid_to_list(C#conn.pid))
     } || C <- State#state.connections],
     Status = #{
         connections => Conns,
