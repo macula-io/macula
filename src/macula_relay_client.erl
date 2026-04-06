@@ -48,6 +48,7 @@
     geo_identity :: map(),                                    %% geo metadata for CONNECT (city, country, lat, lng)
     site :: map() | undefined,                                %% site metadata for CONNECT (site_id, name, city, lat, lng, site_type)
     client_type :: binary(),                                  %% <<"node">> or <<"relay">> (for CONNECT handshake)
+    tls_verify :: verify_peer | none,                         %% TLS verification mode (none for relay peering)
     previous_host :: string() | undefined,                    %% host before failover (for reroute detection)
     conn :: reference() | undefined,
     stream :: reference() | undefined,
@@ -112,6 +113,7 @@ init(Opts) ->
     GeoIdentity = maps:get(geo_identity, Opts, #{}),
     Site = maps:get(site, Opts, undefined),
     ClientType = maps:get(type, Opts, <<"node">>),
+    TlsVerify = maps:get(tls_verify, Opts, verify_peer),
 
     State = #state{
         relays = Relays,
@@ -124,6 +126,7 @@ init(Opts) ->
         geo_identity = GeoIdentity,
         site = Site,
         client_type = ClientType,
+        tls_verify = TlsVerify,
         conn = undefined,
         stream = undefined,
         status = connecting,
@@ -213,7 +216,11 @@ handle_cast(_Msg, State) ->
 %%====================================================================
 
 handle_info(connect, State) ->
-    QuicOpts = [{alpn, ["macula"]} | macula_tls:quic_client_opts()],
+    BaseTlsOpts = case State#state.tls_verify of
+        none -> [{verify, none}];
+        _ -> macula_tls:quic_client_opts()
+    end,
+    QuicOpts = [{alpn, ["macula"]} | BaseTlsOpts],
     case macula_quic:connect(State#state.host, State#state.port, QuicOpts, 10000) of
         {ok, Conn} ->
             case macula_quic:open_stream(Conn) of
