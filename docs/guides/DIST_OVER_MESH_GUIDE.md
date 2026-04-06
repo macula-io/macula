@@ -102,6 +102,44 @@ net_adm:ping('othernode@otherhost').
 - **Throughput**: Limited by relay bandwidth and pub/sub overhead
 - **Single relay**: Currently both nodes must be connected to the same relay mesh
 
+## Security
+
+Tunnel bytes are encrypted with AES-256-GCM. The key is derived from the
+Erlang distribution cookie (`erlang:get_cookie()`), which both nodes must
+share anyway for the dist handshake to succeed.
+
+- Each message gets a random 12-byte nonce (prepended to ciphertext)
+- The relay sees encrypted bytes — it cannot read ETF content
+- A wrong cookie produces `decrypt_failed` warnings in the bridge logs
+
+This is not a substitute for mutual TLS authentication. It protects against
+a compromised or curious relay reading distribution traffic.
+
+## Metrics
+
+Each tunnel tracks byte and message counters:
+
+```erlang
+macula_dist_relay:get_tunnel_metrics().
+%% => [{<<"abc123">>, #{bytes_out => 4096, bytes_in => 2048,
+%%                       msgs_out => 12, msgs_in => 8}}]
+```
+
+## net_ticktime
+
+The default `net_ticktime` of 60 seconds means OTP sends a tick every 15s
+and declares a node DOWN after 4 missed ticks. Over a relay with WAN latency,
+this can cause false disconnects.
+
+**Recommendation:** increase to 120s for relay mode:
+
+```
+erl -kernel net_ticktime 120 -proto_dist macula ...
+```
+
+The `BRIDGE_RECV_TIMEOUT` (60s) should be >= `net_ticktime` to avoid the
+bridge timing out before OTP detects the node is down.
+
 ## Troubleshooting
 
 ### ping returns pang
