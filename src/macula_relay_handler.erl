@@ -280,6 +280,17 @@ handle_message({ok, {publish, #{<<"topic">> := <<"_relay.graph">>, <<"payload">>
     end,
     State;
 
+%% PUBLISH on _swim.* — SWIM failure detector protocol
+handle_message({ok, {publish, #{<<"topic">> := <<"_swim.ping">>, <<"payload">> := Payload}}}, State) ->
+    handle_swim_msg(ping, Payload),
+    State;
+handle_message({ok, {publish, #{<<"topic">> := <<"_swim.ack">>, <<"payload">> := Payload}}}, State) ->
+    handle_swim_msg(ack, Payload),
+    State;
+handle_message({ok, {publish, #{<<"topic">> := <<"_swim.ping_req">>, <<"payload">> := Payload}}}, State) ->
+    handle_swim_msg(ping_req, Payload),
+    State;
+
 %% PUBLISH on _relay.bloom — store peer's Bloom filter for subscription routing
 handle_message({ok, {publish, #{<<"topic">> := <<"_relay.bloom">>, <<"payload">> := BloomBin}}}, State)
   when byte_size(BloomBin) =:= 1024 ->
@@ -497,3 +508,35 @@ publish_system_event(Topic, Payload) ->
     lists:foreach(fun(Pid) ->
         Pid ! {relay_publish, Topic, BinPayload}
     end, Members).
+
+handle_swim_msg(ping, Payload) ->
+    From = maps:get(<<"from">>, safe_decode(Payload), <<>>),
+    catch macula_relay_swim:receive_ping(From, Payload),
+    maybe_store_bloom_from_swim(Payload);
+handle_swim_msg(ack, Payload) ->
+    From = maps:get(<<"from">>, safe_decode(Payload), <<>>),
+    catch macula_relay_swim:receive_ack(From, Payload),
+    maybe_store_bloom_from_swim(Payload);
+handle_swim_msg(ping_req, Payload) ->
+    Decoded = safe_decode(Payload),
+    From = maps:get(<<"from">>, Decoded, <<>>),
+    Target = maps:get(<<"target">>, Decoded, <<>>),
+    catch macula_relay_swim:receive_ping_req(From, Target, Payload).
+
+maybe_store_bloom_from_swim(Payload) ->
+    Decoded = safe_decode(Payload),
+    From = maps:get(<<"from">>, Decoded, <<>>),
+    case maps:get(<<"bloom">>, Decoded, undefined) of
+        undefined -> ok;
+        BloomB64 ->
+            BloomBin = base64:decode(BloomB64),
+            catch macula_relay_peering:receive_peer_bloom(From, BloomBin)
+    end.
+
+safe_decode(Bin) when is_binary(Bin) ->
+    try json:decode(Bin) catch _:_ -> #{} end;
+safe_decode(Map) when is_map(Map) ->
+    Map;
+safe_decode(_) ->
+    #{}.
+
