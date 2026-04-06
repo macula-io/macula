@@ -107,7 +107,15 @@ accept(ListenerHandle) ->
 
 %% @doc Accept a distribution connection.
 %% This is called when a connection is being accepted from a remote node.
+%% Socket can be {QuicConn, Stream} (direct QUIC) or a gen_tcp port (relay tunnel).
 -spec accept_connection(pid(), term(), node(), term(), term()) -> pid().
+accept_connection(AcceptPid, Socket, MyNode, Allowed, SetupTime) when is_port(Socket) ->
+    %% gen_tcp socket from relay tunnel loopback bridge
+    spawn_link(?MODULE, do_accept, [
+        {AcceptPid, Socket, Socket, MyNode, Allowed, SetupTime},
+        self(),
+        connection_id()
+    ]);
 accept_connection(AcceptPid, {QuicConn, Stream}, MyNode, Allowed, SetupTime) ->
     spawn_link(?MODULE, do_accept, [
         {AcceptPid, QuicConn, Stream, MyNode, Allowed, SetupTime},
@@ -125,6 +133,12 @@ setup(Node, Type, MyNode, LongOrShortNames, SetupTime) ->
 
 %% @doc Close a distribution connection.
 -spec close(term()) -> ok.
+close(Socket) when is_port(Socket) ->
+    catch gen_tcp:close(Socket),
+    ok;
+close({S, S}) when is_port(S) ->
+    catch gen_tcp:close(S),
+    ok;
 close({QuicConn, _Stream}) ->
     catch quicer:close_connection(QuicConn),
     ok;
@@ -310,14 +324,19 @@ do_accept({AcceptPid, QuicConn, Stream, MyNode, Allowed, SetupTime}, Kernel, _Co
         dist_util:shutdown(?MODULE, 280, control_transfer_timeout)
     end,
 
-    %% Wait for handoff_done from the handoff_stream call
-    receive
-        {handoff_done, Stream, HandoffData} ->
-            error_logger:info_msg("macula_dist: do_accept got handoff_done: ~p~n", [HandoffData]),
-            ok
-    after 5000 ->
-        error_logger:warning_msg("macula_dist: do_accept handoff_done timeout~n"),
-        ok
+    %% Wait for handoff_done from the handoff_stream call (QUIC only, not gen_tcp)
+    case is_port(Stream) of
+        true ->
+            ok;
+        false ->
+            receive
+                {handoff_done, Stream, HandoffData} ->
+                    error_logger:info_msg("macula_dist: do_accept got handoff_done: ~p~n", [HandoffData]),
+                    ok
+            after 5000 ->
+                error_logger:warning_msg("macula_dist: do_accept handoff_done timeout~n"),
+                ok
+            end
     end,
 
     error_logger:info_msg("macula_dist: do_accept stream/conn ownership received~n"),
@@ -424,8 +443,9 @@ connect_quic(Host, Port) ->
             {error, Reason}
     end.
 
-%% @private Complete connection setup
-setup_loop({_Conn, _Stream} = Socket, Node, Type, MyNode, Timer) ->
+%% @private Complete connection setup — Socket is either {QuicConn, QuicStream}
+%% or a gen_tcp socket (from relay tunnel loopback pair).
+setup_loop(Socket, Node, Type, MyNode, Timer) ->
     HSData = #hs_data{
         kernel_pid = self(),
         this_node = MyNode,
@@ -461,18 +481,12 @@ setup_loop({_Conn, _Stream} = Socket, Node, Type, MyNode, Timer) ->
 %%%===================================================================
 
 %% @private Send data over QUIC stream or relay tunnel
-quic_send({_Conn, {tunnel, TunnelId, SendTopic, _RecvTopic}}, Data) ->
-    BinData = iolist_to_binary(Data),
-    error_logger:info_msg("macula_dist: quic_send ~p bytes on tunnel ~s to ~s~n",
-                          [byte_size(BinData), TunnelId, SendTopic]),
-    case macula_dist_relay:get_mesh_client() of
-        undefined ->
-            error_logger:warning_msg("macula_dist: quic_send NO MESH CLIENT~n"),
-            {error, no_mesh};
-        Client ->
-            macula_relay_client:publish(Client, SendTopic, BinData),
-            ok
-    end;
+%% gen_tcp socket (from relay tunnel loopback pair)
+quic_send(Socket, Data) when is_port(Socket) ->
+    gen_tcp:send(Socket, Data);
+%% Tuple socket: {Socket, Socket} from tunnel or {Conn, Stream} from QUIC
+quic_send({S, S}, Data) when is_port(S) ->
+    gen_tcp:send(S, Data);
 quic_send({_Conn, Stream}, Data) ->
     case quicer:send(Stream, Data) of
         {ok, _} -> ok;
@@ -482,28 +496,22 @@ quic_send({_Conn, Stream}, Data) ->
     end.
 
 %% @private Receive data from QUIC stream or relay tunnel
-quic_recv({_Conn, {tunnel, TunnelId, _SendTopic, _RecvTopic}}, _Length, Timeout) ->
-    TimeoutMs = case Timeout of
-        infinity -> 30000;
-        T -> T
-    end,
-    receive
-        {dist_data, Data} when is_binary(Data) ->
-            %% dist_util expects {ok, List} not {ok, Binary}
-            error_logger:info_msg("macula_dist: quic_recv GOT ~p bytes on ~s~n",
-                                  [byte_size(Data), TunnelId]),
-            {ok, binary_to_list(Data)}
-    after TimeoutMs ->
-        {error, timeout}
+%% gen_tcp socket (from relay tunnel loopback pair)
+%% dist_util expects {ok, List} not {ok, Binary} — convert
+quic_recv(Socket, Length, Timeout) when is_port(Socket) ->
+    case gen_tcp:recv(Socket, Length, recv_timeout(Timeout)) of
+        {ok, Bin} when is_binary(Bin) -> {ok, binary_to_list(Bin)};
+        Other -> Other
+    end;
+quic_recv({S, S}, Length, Timeout) when is_port(S) ->
+    case gen_tcp:recv(S, Length, recv_timeout(Timeout)) of
+        {ok, Bin} when is_binary(Bin) -> {ok, binary_to_list(Bin)};
+        Other -> Other
     end;
 quic_recv({_Conn, Stream}, _Length, Timeout) ->
-    TimeoutMs = case Timeout of
-        infinity -> 30000;
-        T -> T
-    end,
+    TimeoutMs = recv_timeout(Timeout),
     receive
         {quic, Data, Stream, _Flags} when is_binary(Data) ->
-            %% dist_util expects {ok, List} not {ok, Binary}
             {ok, binary_to_list(Data)};
         {quic, stream_closed, Stream, _Flags} ->
             {error, closed};
@@ -513,25 +521,55 @@ quic_recv({_Conn, Stream}, _Length, Timeout) ->
         {error, timeout}
     end.
 
-%% @private Set options before nodeup
-%% Note: quicer doesn't support setopt(active) directly, streams stay in their initial mode
+recv_timeout(infinity) -> 30000;
+recv_timeout(T) -> T.
+
+quic_setopts_pre_nodeup(Socket) when is_port(Socket) ->
+    inet:setopts(Socket, [{active, false}]);
+quic_setopts_pre_nodeup({S, S}) when is_port(S) ->
+    inet:setopts(S, [{active, false}]);
 quic_setopts_pre_nodeup({_Conn, _Stream}) ->
     ok.
 
-%% @private Set options after nodeup
-%% Note: quicer doesn't support setopt(active) directly, streams stay in their initial mode
+quic_setopts_post_nodeup(Socket) when is_port(Socket) ->
+    inet:setopts(Socket, [{active, true}, {packet, 2}]);
+quic_setopts_post_nodeup({S, S}) when is_port(S) ->
+    inet:setopts(S, [{active, true}, {packet, 2}]);
 quic_setopts_post_nodeup({_Conn, _Stream}) ->
     ok.
 
-%% @private Get low-level socket (for process linking)
-quic_getll({Conn, {tunnel, _, _, _}}) ->
-    {ok, Conn};
+quic_getll(Socket) when is_port(Socket) ->
+    {ok, Socket};
+quic_getll({S, S}) when is_port(S) ->
+    {ok, S};
 quic_getll({Conn, _Stream}) ->
     {ok, Conn}.
 
 %% @private Get address information
+quic_address(Socket, Node) when is_port(Socket) ->
+    quic_address_for_tcp(Socket, Node);
+quic_address({S, S}, Node) when is_port(S) ->
+    quic_address_for_tcp(S, Node);
 quic_address({Conn, _Stream}, Node) ->
     case quicer:peername(Conn) of
+        {ok, {IP, Port}} ->
+            #net_address{
+                address = {IP, Port},
+                host = atom_to_list(Node),
+                protocol = ?DRIVER,
+                family = ?FAMILY
+            };
+        {error, _} ->
+            #net_address{
+                address = undefined,
+                host = atom_to_list(Node),
+                protocol = ?DRIVER,
+                family = ?FAMILY
+            }
+    end.
+
+quic_address_for_tcp(Sock, Node) ->
+    case inet:peername(Sock) of
         {ok, {IP, Port}} ->
             #net_address{
                 address = {IP, Port},
@@ -553,14 +591,18 @@ quic_handshake_complete(_Socket, _Node, _DHandle) ->
     ok.
 
 %% @private Send tick (keepalive)
-quic_tick({_Conn, {tunnel, _, _, _}} = Socket) ->
-    quic_send(Socket, <<>>);
+quic_tick(Socket) when is_port(Socket) ->
+    gen_tcp:send(Socket, <<>>);
+quic_tick({S, S}) when is_port(S) ->
+    gen_tcp:send(S, <<>>);
 quic_tick({_Conn, Stream}) ->
     quicer:send(Stream, <<>>).
 
 %% @private Get socket statistics
-quic_getstat({_Conn, {tunnel, _, _, _}}) ->
-    {ok, []};
+quic_getstat(Socket) when is_port(Socket) ->
+    inet:getstat(Socket, [recv_cnt, send_cnt, send_pend]);
+quic_getstat({S, S}) when is_port(S) ->
+    inet:getstat(S, [recv_cnt, send_cnt, send_pend]);
 quic_getstat({Conn, _Stream}) ->
     case quicer:getstat(Conn, [send_cnt, recv_cnt, send_pend]) of
         {ok, Stats} -> {ok, Stats};
@@ -568,8 +610,10 @@ quic_getstat({Conn, _Stream}) ->
     end.
 
 %% @private Set socket options
-quic_setopts({_Conn, {tunnel, _, _, _}}, _Opts) ->
-    ok;
+quic_setopts(Socket, Opts) when is_port(Socket) ->
+    inet:setopts(Socket, Opts);
+quic_setopts({S, S}, Opts) when is_port(S) ->
+    inet:setopts(S, Opts);
 quic_setopts({_Conn, Stream}, Opts) ->
     lists:foreach(
         fun({active, Mode}) -> quicer:setopt(Stream, active, Mode);
@@ -580,6 +624,10 @@ quic_setopts({_Conn, Stream}, Opts) ->
     ok.
 
 %% @private Get socket options
+quic_getopts(Socket, Opts) when is_port(Socket) ->
+    inet:getopts(Socket, Opts);
+quic_getopts({S, S}, Opts) when is_port(S) ->
+    inet:getopts(S, Opts);
 quic_getopts({_Conn, _Stream}, _Opts) ->
     %% Return defaults for now
     {ok, [{active, true}]}.

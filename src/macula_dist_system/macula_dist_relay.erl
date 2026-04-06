@@ -146,8 +146,8 @@ handle_tunnel_request(Args) ->
     end.
 
 %% Persistent bridge process for the accepting side of a distribution tunnel.
-%% Subscribes to the connecting node's data topic and forwards to the
-%% Erlang distribution system. Lives for the connection duration.
+%% Creates a gen_tcp loopback pair so OTP's dist_util gets a real fd.
+%% One end goes to dist_util, the other is bridged to the relay tunnel.
 dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, _FromNode) ->
     error_logger:info_msg("[dist_bridge] Starting for tunnel ~s~n", [TunnelId]),
 
@@ -155,37 +155,49 @@ dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, _FromNode) ->
 
     error_logger:info_msg("[dist_bridge] Subscribing FIRST, then notifying kernel~n"),
 
-    %% Subscribe BEFORE notifying kernel — buffer data until controller assigned.
+    %% Subscribe BEFORE notifying kernel — buffer data until bridge socket ready.
     %% This prevents a race where alpha sends handshake data before beta subscribes.
     {ok, BufferSubRef} = macula_relay_client:subscribe(Client, RecvTopic,
         fun(Msg) ->
             Self ! {dist_data_buffered, extract_payload(Msg)}
         end),
 
-    TunnelSocket = {Client, {tunnel, TunnelId, SendTopic, RecvTopic}},
+    %% Create gen_tcp loopback pair — OTP needs a real fd
+    {DistSock, BridgeSock} = create_loopback_pair(),
+    error_logger:info_msg("[dist_bridge] Loopback pair created for tunnel ~s~n", [TunnelId]),
+
     KernelPid = whereis(net_kernel),
 
     case KernelPid of
         undefined ->
             error_logger:warning_msg("[dist_bridge] net_kernel not found~n");
         _ ->
-            KernelPid ! {accept, Self, TunnelSocket, inet, macula_dist},
+            %% Tell kernel about the dist-facing socket (real gen_tcp port)
+            KernelPid ! {accept, Self, DistSock, inet, macula_dist},
             receive
                 {KernelPid, controller, DistCtrl} ->
                     error_logger:info_msg("[dist_bridge] Controller ~p~n", [DistCtrl]),
                     DistCtrl ! {Self, controller, ok},
 
-                    %% Unsubscribe buffer, flush, then subscribe direct
+                    %% Unsubscribe buffer callback, flush buffered data to bridge socket
                     macula_relay_client:unsubscribe(Client, BufferSubRef),
-                    flush_buffered_data(DistCtrl),
+                    flush_buffered_to_socket(BridgeSock),
 
+                    %% Now set up persistent relay↔socket bridge
+                    %% Relay → BridgeSock (write end)
                     macula_relay_client:subscribe(Client, RecvTopic,
                         fun(Msg) ->
-                            DistCtrl ! {dist_data, extract_payload(Msg)}
+                            Self ! {tunnel_in, extract_payload(Msg)}
                         end),
 
+                    %% BridgeSock → Relay (read end)
+                    spawn(fun() ->
+                        bridge_reader_loop(Client, BridgeSock, SendTopic, TunnelId)
+                    end),
+
                     error_logger:info_msg("[dist_bridge] Data forwarding active~n"),
-                    dist_accept_bridge_loop();
+                    %% Writer loop: relay data → bridge socket → dist_util
+                    bridge_writer_loop(BridgeSock, TunnelId);
                 {KernelPid, unsupported_protocol} ->
                     error_logger:warning_msg("[dist_bridge] Unsupported protocol~n")
             after 30000 ->
@@ -193,20 +205,14 @@ dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, _FromNode) ->
             end
     end.
 
-flush_buffered_data(DistCtrl) ->
+flush_buffered_to_socket(BridgeSock) ->
     receive
         {dist_data_buffered, Data} ->
             error_logger:info_msg("[dist_bridge] Flushing ~b buffered bytes~n", [byte_size(Data)]),
-            DistCtrl ! {dist_data, Data},
-            flush_buffered_data(DistCtrl)
+            gen_tcp:send(BridgeSock, Data),
+            flush_buffered_to_socket(BridgeSock)
     after 0 ->
         ok
-    end.
-
-dist_accept_bridge_loop() ->
-    receive
-        stop -> ok;
-        _Other -> dist_accept_bridge_loop()
     end.
 
 extract_payload(#{payload := P}) -> P;
@@ -231,20 +237,75 @@ get_mesh_client() ->
     end.
 
 create_dist_socket(MeshClient, TunnelId) ->
-    %% Create a pair of linked processes that act as a socket:
-    %% - Send: publish ETF bytes to tunnel topic
-    %% - Recv: subscribe to tunnel topic, deliver as {quic, Data, ...}
+    %% Create a gen_tcp loopback pair. OTP's dist_util needs a real fd.
+    %% One end goes to dist_util. The other end is bridged to the relay tunnel.
     SendTopic = <<"_dist.data.", TunnelId/binary, ".out">>,
     RecvTopic = <<"_dist.data.", TunnelId/binary, ".in">>,
-    Self = self(),
 
-    %% Subscribe to incoming data
+    {DistSock, BridgeSock} = create_loopback_pair(),
+    error_logger:info_msg("[dist_relay] Loopback pair created for tunnel ~s~n", [TunnelId]),
+
+    %% Spawn bridge: reads from BridgeSock → publishes to relay
+    %%               subscribes to relay → writes to BridgeSock
+    spawn(fun() ->
+        tunnel_io_bridge(MeshClient, BridgeSock, SendTopic, RecvTopic, TunnelId)
+    end),
+
+    %% Return the dist-facing socket as a {gen_tcp, Socket} for dist_util
+    {ok, DistSock, DistSock}.
+
+create_loopback_pair() ->
+    {ok, LSock} = gen_tcp:listen(0, [binary, {active, false}, {reuseaddr, true},
+                                     {ip, {127,0,0,1}}]),
+    {ok, Port} = inet:port(LSock),
+    {ok, CSock} = gen_tcp:connect({127,0,0,1}, Port, [binary, {active, false}]),
+    {ok, ASock} = gen_tcp:accept(LSock),
+    gen_tcp:close(LSock),
+    {CSock, ASock}.
+
+tunnel_io_bridge(MeshClient, BridgeSock, SendTopic, RecvTopic, TunnelId) ->
+    error_logger:info_msg("[io_bridge] Starting for tunnel ~s~n", [TunnelId]),
+
+    %% Subscribe to incoming relay data → write to bridge socket
+    Self = self(),
     {ok, _SubRef} = macula_relay_client:subscribe(MeshClient, RecvTopic,
-        fun(#{payload := Data}) ->
-            Self ! {dist_data, Data}
+        fun(Msg) ->
+            Data = extract_payload(Msg),
+            Self ! {tunnel_in, Data}
         end),
 
-    {ok, MeshClient, {tunnel, TunnelId, SendTopic, RecvTopic}}.
+    %% Set bridge socket to passive mode for controlled reading
+    inet:setopts(BridgeSock, [{active, false}]),
+
+    %% Spawn reader: reads from bridge socket → publishes to relay
+    spawn(fun() -> bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId) end),
+
+    %% Writer loop: receives relay data → writes to bridge socket
+    bridge_writer_loop(BridgeSock, TunnelId).
+
+bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId) ->
+    case gen_tcp:recv(BridgeSock, 0, 30000) of
+        {ok, Data} ->
+            macula_relay_client:publish(MeshClient, SendTopic, Data),
+            bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId);
+        {error, closed} ->
+            error_logger:info_msg("[io_bridge] Reader closed for ~s~n", [TunnelId]);
+        {error, Reason} ->
+            error_logger:warning_msg("[io_bridge] Reader error ~p for ~s~n", [Reason, TunnelId])
+    end.
+
+bridge_writer_loop(BridgeSock, TunnelId) ->
+    receive
+        {tunnel_in, Data} when is_binary(Data) ->
+            case gen_tcp:send(BridgeSock, Data) of
+                ok -> bridge_writer_loop(BridgeSock, TunnelId);
+                {error, Reason} ->
+                    error_logger:warning_msg("[io_bridge] Writer error ~p for ~s~n",
+                                            [Reason, TunnelId])
+            end;
+        stop ->
+            gen_tcp:close(BridgeSock)
+    end.
 
 dist_tunnel_process(_TunnelId, _FromNode) ->
     %% This process lives for the duration of the distribution connection
