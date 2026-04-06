@@ -600,15 +600,27 @@ quic_tick({_Conn, Stream}) ->
     quicer:send(Stream, <<>>).
 
 %% @private Get socket statistics
+%% dist_util expects {ok, RecvCount, SendCount, SendPend} — NOT a proplist
 quic_getstat(Socket) when is_port(Socket) ->
-    inet:getstat(Socket, [recv_cnt, send_cnt, send_pend]);
+    getstat_tcp(Socket);
 quic_getstat({S, S}) when is_port(S) ->
-    inet:getstat(S, [recv_cnt, send_cnt, send_pend]);
+    getstat_tcp(S);
 quic_getstat({Conn, _Stream}) ->
     case quicer:getstat(Conn, [send_cnt, recv_cnt, send_pend]) of
-        {ok, Stats} -> {ok, Stats};
-        {error, _} -> {ok, []}
+        {ok, Stats} -> split_stat(Stats, 0, 0, 0);
+        {error, _} -> {ok, 0, 0, 0}
     end.
+
+getstat_tcp(Socket) ->
+    case inet:getstat(Socket, [recv_cnt, send_cnt, send_pend]) of
+        {ok, Stats} -> split_stat(Stats, 0, 0, 0);
+        Error -> Error
+    end.
+
+split_stat([{recv_cnt, R} | Rest], _, W, P) -> split_stat(Rest, R, W, P);
+split_stat([{send_cnt, W} | Rest], R, _, P) -> split_stat(Rest, R, W, P);
+split_stat([{send_pend, P} | Rest], R, W, _) -> split_stat(Rest, R, W, P);
+split_stat([], R, W, P) -> {ok, R, W, P}.
 
 %% @private Set socket options
 quic_setopts(Socket, Opts) when is_port(Socket) ->
