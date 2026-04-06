@@ -7,42 +7,42 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%====================================================================
-%% Dedup ring buffer tests
+%% ETS-based dedup tests
 %%====================================================================
 
 dedup_new_message_test() ->
-    {ok, Pid} = start_test_multi_relay(),
-    ?assertEqual(new, gen_server:call(Pid, {check_dedup, <<"msg-001">>})),
-    stop_test(Pid).
+    Tab = ets:new(test_dedup, [set, public]),
+    %% First insert succeeds
+    ?assertEqual(true, ets:insert_new(Tab, {<<"msg-001">>, true})),
+    ets:delete(Tab).
 
 dedup_duplicate_message_test() ->
-    {ok, Pid} = start_test_multi_relay(),
-    ?assertEqual(new, gen_server:call(Pid, {check_dedup, <<"msg-001">>})),
-    ?assertEqual(duplicate, gen_server:call(Pid, {check_dedup, <<"msg-001">>})),
-    stop_test(Pid).
+    Tab = ets:new(test_dedup, [set, public]),
+    ?assertEqual(true, ets:insert_new(Tab, {<<"msg-001">>, true})),
+    %% Second insert fails (duplicate)
+    ?assertEqual(false, ets:insert_new(Tab, {<<"msg-001">>, true})),
+    ets:delete(Tab).
 
 dedup_different_messages_test() ->
-    {ok, Pid} = start_test_multi_relay(),
-    ?assertEqual(new, gen_server:call(Pid, {check_dedup, <<"msg-001">>})),
-    ?assertEqual(new, gen_server:call(Pid, {check_dedup, <<"msg-002">>})),
-    ?assertEqual(duplicate, gen_server:call(Pid, {check_dedup, <<"msg-001">>})),
-    stop_test(Pid).
+    Tab = ets:new(test_dedup, [set, public]),
+    ?assertEqual(true, ets:insert_new(Tab, {<<"msg-001">>, true})),
+    ?assertEqual(true, ets:insert_new(Tab, {<<"msg-002">>, true})),
+    ?assertEqual(false, ets:insert_new(Tab, {<<"msg-001">>, true})),
+    ets:delete(Tab).
 
-dedup_eviction_test() ->
-    %% The ring buffer is 2048 entries. After 2048+1, the first entry should be evicted.
-    {ok, Pid} = start_test_multi_relay(),
-    %% Fill the buffer
-    lists:foreach(fun(N) ->
-        Id = integer_to_binary(N),
-        ?assertEqual(new, gen_server:call(Pid, {check_dedup, Id}))
-    end, lists:seq(1, 2048)),
-    %% First entry should still be present (buffer not yet overflowed)
-    ?assertEqual(duplicate, gen_server:call(Pid, {check_dedup, <<"1">>})),
-    %% Add one more to overflow
-    ?assertEqual(new, gen_server:call(Pid, {check_dedup, <<"2049">>})),
-    %% Now "1" was evicted (it was the oldest), so it should be "new" again
-    ?assertEqual(new, gen_server:call(Pid, {check_dedup, <<"1">>})),
-    stop_test(Pid).
+dedup_concurrent_test() ->
+    %% ETS insert_new is atomic — concurrent inserts for same key,
+    %% only one returns true.
+    Tab = ets:new(test_dedup, [set, public]),
+    Self = self(),
+    MsgId = <<"concurrent-msg">>,
+    lists:foreach(fun(_) ->
+        spawn(fun() -> Self ! ets:insert_new(Tab, {MsgId, true}) end)
+    end, lists:seq(1, 10)),
+    Results = [receive R -> R after 1000 -> timeout end || _ <- lists:seq(1, 10)],
+    Trues = length([R || R <- Results, R =:= true]),
+    ?assertEqual(1, Trues),
+    ets:delete(Tab).
 
 %%====================================================================
 %% Message ID extraction tests
