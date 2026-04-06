@@ -142,7 +142,7 @@ init_mode(relay) ->
             id => macula_relay,
             start => {macula_relay, start_link, [#{
                 port => Port,
-                bind_addr => application:get_env(macula, gateway_bind_addr, undefined)
+                bind_addr => get_bind_addr()
             }]},
             restart => permanent,
             shutdown => 5000,
@@ -719,3 +719,14 @@ add_bootstrap_to_routing_table(PeerUrl) ->
             ?LOG_ERROR("[DHT Bootstrap] Failed to parse bootstrap URL: ~s", [PeerUrl])
     end,
     ok.
+
+%% @private
+%% @doc Get bind address for main QUIC listener from env var.
+%% When set, the main listener binds to this specific address instead of
+%% wildcard. Required for host networking with per-identity IPv6 listeners.
+get_bind_addr() ->
+    case os:getenv("MACULA_BIND_ADDR") of
+        false -> application:get_env(macula, gateway_bind_addr, undefined);
+        "" -> undefined;
+        Addr -> list_to_binary(Addr)
+    end.
