@@ -76,6 +76,7 @@ connect(NodeStr, _Host, _Port) ->
 %% @doc Advertise this node as accepting distribution connections via relay.
 -spec advertise_dist_accept() -> ok.
 advertise_dist_accept() ->
+    ensure_bridge_sup(),
     case get_mesh_client() of
         undefined ->
             ?LOG_WARNING("[dist_relay] Cannot advertise — no mesh client registered"),
@@ -86,6 +87,21 @@ advertise_dist_accept() ->
             Handler = fun(Args) -> handle_tunnel_request(Args) end,
             macula_relay_client:advertise(Client, Procedure, Handler),
             ?LOG_INFO("[dist_relay] Advertised distribution accept: ~s", [Procedure]),
+            ok
+    end.
+
+%% Start the bridge supervisor if not already running.
+%% Needed when macula_dist_system isn't started (e.g., standalone relay mode).
+ensure_bridge_sup() ->
+    case whereis(macula_dist_bridge_sup) of
+        undefined ->
+            case macula_dist_bridge_sup:start_link() of
+                {ok, _Pid} -> ok;
+                {error, {already_started, _}} -> ok;
+                {error, Reason} ->
+                    ?LOG_ERROR("[dist_relay] Failed to start bridge sup: ~p", [Reason])
+            end;
+        _Pid ->
             ok
     end.
 
