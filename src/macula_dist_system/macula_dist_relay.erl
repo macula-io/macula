@@ -150,14 +150,27 @@ request_tunnel(MeshClient, NodeStr) ->
             {error, {tunnel_failed, Reason}}
     end.
 
-%% Try call_any first (multi_relay). Fall back to direct call (single relay_client).
+%% Use call_any for multi_relay (tries each connected relay).
+%% Fall back to direct call for single relay_client.
 tunnel_rpc(MeshClient, Procedure, Args) ->
-    case catch macula_multi_relay:call_any(MeshClient, Procedure, Args, ?DIST_TIMEOUT) of
-        {'EXIT', {noproc, _}} ->
-            %% Not a multi_relay — try as direct relay_client
-            macula_relay_client:call(MeshClient, Procedure, Args, ?DIST_TIMEOUT);
-        Result ->
-            Result
+    case is_multi_relay(MeshClient) of
+        true ->
+            macula_multi_relay:call_any(MeshClient, Procedure, Args, ?DIST_TIMEOUT);
+        false ->
+            macula_relay_client:call(MeshClient, Procedure, Args, ?DIST_TIMEOUT)
+    end.
+
+%% Check if the PID is a macula_multi_relay gen_server by inspecting
+%% the registered name or the initial call in process_info.
+is_multi_relay(Pid) ->
+    case erlang:process_info(Pid, dictionary) of
+        {dictionary, Dict} ->
+            case proplists:get_value('$initial_call', Dict) of
+                {macula_multi_relay, init, 1} -> true;
+                _ -> false
+            end;
+        _ ->
+            false
     end.
 
 %%%===================================================================
