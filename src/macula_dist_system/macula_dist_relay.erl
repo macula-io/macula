@@ -46,10 +46,9 @@ is_relay_mode() ->
     end.
 
 %% @doc Connect to a remote node via relay mesh.
-%% Returns {ok, Conn, Stream} where the stream carries ETF bytes
-%% through the relay tunnel.
-%% @doc Connect to a remote node via relay mesh.
 %% NodeStr is the full node name (e.g., "hecate@beam00.lab" or "4433@host").
+%% Returns {ok, DistSock, DistSock} where DistSock is a gen_tcp loopback
+%% socket bridged to a relay tunnel.
 -spec connect(string(), string(), integer()) -> {ok, reference(), reference()} | {error, term()}.
 connect(NodeStr, _Host, _Port) ->
     ?LOG_INFO("[dist_relay] Connecting to ~s via mesh", [NodeStr]),
