@@ -23,9 +23,19 @@
 
 -export([connect/2, accept_dist/2]).
 -export([is_relay_mode/0, get_mesh_client/0]).
+-export([register_mesh_client/1]).
+-export([advertise_dist_accept/0]).
 
 -define(DIST_TOPIC, <<"_dist.connect">>).
 -define(DIST_TIMEOUT, 10000).
+
+%% @doc Register a mesh relay client for distribution tunneling.
+%% Called by the application that owns the relay client (e.g., hecate_mesh).
+-spec register_mesh_client(pid()) -> ok.
+register_mesh_client(Pid) when is_pid(Pid) ->
+    persistent_term:put(macula_dist_mesh_client, Pid),
+    ?LOG_INFO("[dist_relay] Mesh client registered: ~p", [Pid]),
+    ok.
 
 %% @doc Check if relay distribution mode is enabled.
 -spec is_relay_mode() -> boolean().
@@ -80,22 +90,70 @@ accept_dist(TunnelId, Opts) ->
     spawn_link(fun() -> dist_tunnel_process(TunnelId, FromNode) end),
     {ok, TunnelId}.
 
+%% @doc Advertise this node as accepting distribution connections via relay.
+%% Registers a `_dist.tunnel.{nodename}` RPC procedure on the mesh.
+-spec advertise_dist_accept() -> ok.
+advertise_dist_accept() ->
+    case get_mesh_client() of
+        undefined ->
+            ?LOG_WARNING("[dist_relay] Cannot advertise — no mesh client registered"),
+            ok;
+        Client ->
+            NodeName = atom_to_binary(node()),
+            Procedure = <<"_dist.tunnel.", NodeName/binary>>,
+            Handler = fun(Args) -> handle_tunnel_request(Args) end,
+            macula_relay_client:advertise(Client, Procedure, Handler),
+            ?LOG_INFO("[dist_relay] Advertised distribution accept: ~s", [Procedure]),
+            ok
+    end.
+
 %%====================================================================
-%% Internal
+%% Internal — tunnel negotiation
 %%====================================================================
 
-get_mesh_client() ->
-    case whereis(hecate_mesh_client) of
+handle_tunnel_request(Args) ->
+    FromNode = maps:get(<<"from_node">>, Args, <<>>),
+    TunnelId = base64:encode(crypto:strong_rand_bytes(16)),
+    ?LOG_INFO("[dist_relay] Tunnel request from ~s → id: ~s", [FromNode, TunnelId]),
+
+    %% Set up the receiving side of the tunnel:
+    %% Subscribe to the remote node's outgoing data topic
+    %% Publish to the remote node's incoming data topic
+    SendTopic = <<"_dist.data.", TunnelId/binary, ".in">>,
+    RecvTopic = <<"_dist.data.", TunnelId/binary, ".out">>,
+
+    case get_mesh_client() of
         undefined ->
-            %% Try macula_multi_relay directly
-            case whereis(macula_multi_relay) of
-                undefined -> undefined;
-                Pid -> Pid
-            end;
-        _Pid ->
-            case hecate_mesh_client:get_client() of
-                {ok, Client} -> Client;
-                _ -> undefined
+            {error, <<"no_mesh_client">>};
+        Client ->
+            %% Subscribe to data from the connecting node
+            Self = self(),
+            {ok, _SubRef} = macula_relay_client:subscribe(Client, RecvTopic,
+                fun(#{payload := Data}) ->
+                    Self ! {dist_data, Data}
+                end),
+
+            %% Notify net_kernel about the incoming connection
+            %% For now, return the tunnel_id so the connecting side can proceed
+            {ok, #{<<"tunnel_id">> => TunnelId,
+                   <<"send_topic">> => SendTopic,
+                   <<"recv_topic">> => RecvTopic}}
+    end.
+
+%%====================================================================
+%% Internal — mesh client lookup
+%%====================================================================
+
+%% Find the mesh relay client. Uses a registered name convention —
+%% any application that provides a relay client registers it as
+%% macula_dist_mesh_client. No dependency on hecate or any specific app.
+get_mesh_client() ->
+    case persistent_term:get(macula_dist_mesh_client, undefined) of
+        undefined -> undefined;
+        Pid when is_pid(Pid) ->
+            case is_process_alive(Pid) of
+                true -> Pid;
+                false -> undefined
             end
     end.
 
