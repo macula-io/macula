@@ -140,7 +140,10 @@ init_mode(relay) ->
     ChildSpecs = [
         #{
             id => macula_relay,
-            start => {macula_relay, start_link, [#{port => Port}]},
+            start => {macula_relay, start_link, [#{
+                port => Port,
+                bind_addr => application:get_env(macula, gateway_bind_addr, undefined)
+            }]},
             restart => permanent,
             shutdown => 5000,
             type => worker,

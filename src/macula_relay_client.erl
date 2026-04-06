@@ -216,11 +216,7 @@ handle_cast(_Msg, State) ->
 %%====================================================================
 
 handle_info(connect, State) ->
-    BaseTlsOpts = case State#state.tls_verify of
-        none -> [{verify, none}];
-        _ -> macula_tls:quic_client_opts()
-    end,
-    QuicOpts = [{alpn, ["macula"]} | BaseTlsOpts],
+    QuicOpts = [{alpn, ["macula"]} | build_tls_opts(State#state.tls_verify)],
     case macula_quic:connect(State#state.host, State#state.port, QuicOpts, 10000) of
         {ok, Conn} ->
             case macula_quic:open_stream(Conn) of
@@ -536,3 +532,11 @@ parts_match(_, _) -> false.
 safe_decode_json(Payload) when is_binary(Payload) ->
     try json:decode(Payload) catch _:_ -> Payload end;
 safe_decode_json(Payload) -> Payload.
+
+%% Build TLS options for QUIC client connection.
+%% verify_peer: use global TLS mode (production or development).
+%% none: force no-verify opts regardless of global mode.
+build_tls_opts(none) ->
+    [{verify, none}];
+build_tls_opts(_) ->
+    macula_tls:quic_client_opts().
