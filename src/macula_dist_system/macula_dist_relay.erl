@@ -27,7 +27,7 @@
 -export([advertise_dist_accept/0]).
 
 -define(DIST_TOPIC, <<"_dist.connect">>).
--define(DIST_TIMEOUT, 10000).
+-define(DIST_TIMEOUT, 25000).
 
 %% @doc Register a mesh relay client for distribution tunneling.
 %% Called by the application that owns the relay client (e.g., hecate_mesh).
