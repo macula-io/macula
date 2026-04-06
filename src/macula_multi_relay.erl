@@ -130,41 +130,19 @@ init(Opts) ->
 
 handle_call({subscribe, Topic, Callback}, _From, State) ->
     Ref = make_ref(),
-    %% Wrap callback with dedup filter
-    Self = self(),
-    DedupCallback = fun(Msg) ->
-        MsgId = extract_message_id(Msg),
-        case MsgId of
-            undefined -> Callback(Msg);
-            _ ->
-                case gen_server:call(Self, {check_dedup, MsgId}, 1000) of
-                    new -> Callback(Msg);
-                    duplicate -> ok
-                end
-        end
-    end,
+    DedupCallback = make_dedup_callback(self(), Callback),
     Subs = maps:put(Ref, {Topic, Callback}, State#state.subscriptions),
-    %% Subscribe on all active connections
-    lists:foreach(fun(#conn{pid = Pid}) ->
-        catch macula_relay_client:subscribe(Pid, Topic, DedupCallback)
-    end, State#state.connections),
+    subscribe_on_all(Topic, DedupCallback, State#state.connections),
     {reply, {ok, Ref}, State#state{subscriptions = Subs}};
 
 handle_call({unsubscribe, Ref}, _From, State) ->
     case maps:get(Ref, State#state.subscriptions, undefined) of
         undefined ->
             {reply, {error, not_found}, State};
-        {Topic, _Callback} ->
+        {_Topic, _Callback} ->
             Subs = maps:remove(Ref, State#state.subscriptions),
-            %% Unsubscribe from all connections
-            lists:foreach(fun(#conn{pid = Pid}) ->
-                %% We don't have the per-connection sub refs, so rely on
-                %% topic-level unsub. This works because relay_client tracks
-                %% by ref internally and we'd need a mapping. For now,
-                %% unsubscribe is best-effort (connection cleanup on terminate).
-                catch macula_relay_client:subscribe(Pid, Topic,
-                    fun(_) -> ok end)
-            end, State#state.connections),
+            %% Note: per-connection sub refs aren't tracked in multi_relay.
+            %% Subscriptions are cleaned up when connections terminate.
             {reply, ok, State#state{subscriptions = Subs}}
     end;
 
@@ -349,17 +327,7 @@ spawn_relay_client(RelayUrl, Opts, #state{subscriptions = Subs, procedures = Pro
 
 replay_subscriptions(Pid, Subs, Self) ->
     maps:foreach(fun(_Ref, {Topic, Callback}) ->
-        DedupCallback = fun(Msg) ->
-            MsgId = extract_message_id(Msg),
-            case MsgId of
-                undefined -> Callback(Msg);
-                _ ->
-                    case gen_server:call(Self, {check_dedup, MsgId}, 1000) of
-                        new -> Callback(Msg);
-                        duplicate -> ok
-                    end
-            end
-        end,
+        DedupCallback = make_dedup_callback(Self, Callback),
         catch macula_relay_client:subscribe(Pid, Topic, DedupCallback)
     end, Subs).
 
@@ -388,6 +356,32 @@ find_primary(Conns) ->
                 [First | _] -> First;
                 [] -> undefined
             end
+    end.
+
+%%====================================================================
+%% Internal: subscription helpers
+%%====================================================================
+
+subscribe_on_all(Topic, Callback, Connections) ->
+    lists:foreach(fun(#conn{pid = Pid}) ->
+        catch macula_relay_client:subscribe(Pid, Topic, Callback)
+    end, Connections).
+
+make_dedup_callback(MultiRelayPid, Callback) ->
+    fun(Msg) ->
+        maybe_invoke_deduped(MultiRelayPid, Callback, Msg)
+    end.
+
+maybe_invoke_deduped(MultiRelayPid, Callback, Msg) ->
+    case extract_message_id(Msg) of
+        undefined -> Callback(Msg);
+        MsgId -> invoke_if_new(MultiRelayPid, Callback, Msg, MsgId)
+    end.
+
+invoke_if_new(MultiRelayPid, Callback, Msg, MsgId) ->
+    case gen_server:call(MultiRelayPid, {check_dedup, MsgId}, 1000) of
+        new -> Callback(Msg);
+        duplicate -> ok
     end.
 
 %%====================================================================
