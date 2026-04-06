@@ -206,6 +206,13 @@ handle_message({ok, {connect, Msg}}, State) ->
     ?LOG_INFO("[relay_handler] ~s connected: realm=~s name=~s target=~s site=~s",
               [Label, Realm, NodeName, TargetRelay, SiteId]),
     register_client_node(IsPeer, NodeName, Identity, TargetRelay, Site, SiteId),
+    %% Store peer URL for Bloom filter routing (peer relays only)
+    case IsPeer of
+        true ->
+            Endpoint = maps:get(<<"endpoint">>, Msg, <<>>),
+            put(relay_peer_url, Endpoint);
+        false -> ok
+    end,
     %% Publish system events (skip for peer relays)
     PreviousRelay = maps:get(<<"previous_relay">>, Msg, undefined),
     case IsPeer of
@@ -270,6 +277,16 @@ handle_message({ok, {publish, #{<<"topic">> := <<"_relay.graph">>, <<"payload">>
             catch macula_relay_peering:merge_remote_graph(Entries);
         _ ->
             ?LOG_WARNING("[relay_handler] Invalid graph update payload")
+    end,
+    State;
+
+%% PUBLISH on _relay.bloom — store peer's Bloom filter for subscription routing
+handle_message({ok, {publish, #{<<"topic">> := <<"_relay.bloom">>, <<"payload">> := BloomBin}}}, State)
+  when byte_size(BloomBin) =:= 1024 ->
+    %% Peer URL from process dictionary (set during CONNECT for relay peers)
+    case get(relay_peer_url) of
+        undefined -> ok;
+        PeerUrl -> catch macula_relay_peering:receive_peer_bloom(PeerUrl, BloomBin)
     end,
     State;
 
