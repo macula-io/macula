@@ -157,7 +157,7 @@ dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, _FromNode) ->
 
     %% Subscribe BEFORE notifying kernel — buffer data until controller assigned.
     %% This prevents a race where alpha sends handshake data before beta subscribes.
-    {ok, _SubRef} = macula_relay_client:subscribe(Client, RecvTopic,
+    {ok, BufferSubRef} = macula_relay_client:subscribe(Client, RecvTopic,
         fun(Msg) ->
             Self ! {dist_data_buffered, extract_payload(Msg)}
         end),
@@ -175,10 +175,10 @@ dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, _FromNode) ->
                     error_logger:info_msg("[dist_bridge] Controller ~p~n", [DistCtrl]),
                     DistCtrl ! {Self, controller, ok},
 
-                    %% Flush any buffered data to the do_accept process
+                    %% Unsubscribe buffer, flush, then subscribe direct
+                    macula_relay_client:unsubscribe(Client, BufferSubRef),
                     flush_buffered_data(DistCtrl),
 
-                    %% Resubscribe to forward directly to do_accept from now on
                     macula_relay_client:subscribe(Client, RecvTopic,
                         fun(Msg) ->
                             DistCtrl ! {dist_data, extract_payload(Msg)}
