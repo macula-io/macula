@@ -255,17 +255,19 @@ create_dist_socket(MeshClient, TunnelId) ->
     {ok, DistSock, DistSock}.
 
 create_loopback_pair() ->
-    %% {packet, 2} — dist_util sends length-prefixed messages.
-    %% Without framing, TCP concatenates messages and dist_util
-    %% gets status + challenge in one recv → parse failure.
-    Opts = [binary, {active, false}, {packet, 2}, {nodelay, true},
-            {reuseaddr, true}, {ip, {127,0,0,1}}],
-    {ok, LSock} = gen_tcp:listen(0, Opts),
+    %% DistSock (CSock) gets {packet, 2} for handshake framing — dist_util needs it.
+    %% BridgeSock (ASock) gets {packet, raw} — the bridge is a transparent byte pipe.
+    %% When dist_util switches DistSock to {packet, 4} post-handshake, the bridge
+    %% doesn't care — it just forwards raw bytes including the length headers.
+    ListenOpts = [binary, {active, false}, {reuseaddr, true}, {ip, {127,0,0,1}}],
+    {ok, LSock} = gen_tcp:listen(0, ListenOpts),
     {ok, Port} = inet:port(LSock),
     {ok, CSock} = gen_tcp:connect({127,0,0,1}, Port,
                                   [binary, {active, false}, {packet, 2}, {nodelay, true}]),
     {ok, ASock} = gen_tcp:accept(LSock),
     gen_tcp:close(LSock),
+    %% ASock (BridgeSock) must NOT have packet framing — raw byte pipe
+    inet:setopts(ASock, [{packet, raw}, {nodelay, true}]),
     {CSock, ASock}.
 
 tunnel_io_bridge(MeshClient, BridgeSock, SendTopic, RecvTopic, TunnelId) ->
