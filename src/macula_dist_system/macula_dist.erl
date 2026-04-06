@@ -135,7 +135,7 @@ close(_) ->
     ok.
 
 %% @doc Check if this module should handle distribution to the given node.
-%% Returns true if the node name is in port@host format.
+%% Returns true for any valid name@host or port@host format.
 -spec select(atom()) -> boolean().
 select(Node) ->
     case splitname(Node) of
@@ -156,18 +156,22 @@ is_node_name(Name) ->
     end.
 
 %% @doc Split a node name into port and host.
-%% Node name format: port@host (e.g., 4433@192.168.1.100)
+%% Supports two formats:
+%%   - port@host (e.g., 4433@192.168.1.100) — explicit port
+%%   - name@host (e.g., test@nanode1.example.com) — uses default port
 -spec splitname(atom() | string()) -> {integer(), string()} | false.
 splitname(NodeName) when is_atom(NodeName) ->
     splitname(atom_to_list(NodeName));
 splitname(NodeName) when is_list(NodeName) ->
     case string:tokens(NodeName, "@") of
-        [PortStr, Host] ->
-            case catch list_to_integer(PortStr) of
+        [NameOrPort, Host] ->
+            case catch list_to_integer(NameOrPort) of
                 Port when is_integer(Port), Port > 0, Port < 65536 ->
                     {Port, Host};
                 _ ->
-                    false
+                    %% Standard name@host format — use default dist port
+                    DefaultPort = application:get_env(kernel, macula_dist_port, ?DEFAULT_PORT),
+                    {DefaultPort, Host}
             end;
         _ ->
             false
@@ -356,7 +360,7 @@ do_setup(Node, Type, MyNode, _LongOrShortNames, SetupTime) ->
     case splitname(Node) of
         {Port, Host} ->
             ConnectFn = case macula_dist_relay:is_relay_mode() of
-                true -> fun() -> macula_dist_relay:connect(Host, Port) end;
+                true -> fun() -> macula_dist_relay:connect(atom_to_list(Node), Host, Port) end;
                 false -> fun() -> connect_quic(Host, Port) end
             end,
             case ConnectFn() of

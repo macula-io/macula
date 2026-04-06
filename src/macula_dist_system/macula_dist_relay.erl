@@ -21,7 +21,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([connect/2, accept_dist/2]).
+-export([connect/3, accept_dist/2]).
 -export([is_relay_mode/0, get_mesh_client/0]).
 -export([register_mesh_client/1]).
 -export([advertise_dist_accept/0]).
@@ -48,10 +48,11 @@ is_relay_mode() ->
 %% @doc Connect to a remote node via relay mesh.
 %% Returns {ok, Conn, Stream} where the stream carries ETF bytes
 %% through the relay tunnel.
--spec connect(string(), integer()) -> {ok, reference(), reference()} | {error, term()}.
-connect(Host, Port) ->
-    NodeName = lists:flatten(io_lib:format("~b@~s", [Port, Host])),
-    ?LOG_INFO("[dist_relay] Connecting to ~s via mesh", [NodeName]),
+%% @doc Connect to a remote node via relay mesh.
+%% NodeStr is the full node name (e.g., "hecate@beam00.lab" or "4433@host").
+-spec connect(string(), string(), integer()) -> {ok, reference(), reference()} | {error, term()}.
+connect(NodeStr, _Host, _Port) ->
+    ?LOG_INFO("[dist_relay] Connecting to ~s via mesh", [NodeStr]),
 
     %% Step 1: Find which relay the target node is connected to
     %% For now, use the same relay we're connected to (they share the mesh)
@@ -60,10 +61,10 @@ connect(Host, Port) ->
             {error, no_mesh_connection};
         MeshClient ->
             %% Step 2: Request a distribution tunnel via mesh RPC
-            Procedure = <<"_dist.tunnel.", (list_to_binary(NodeName))/binary>>,
+            Procedure = <<"_dist.tunnel.", (list_to_binary(NodeStr))/binary>>,
             case macula_relay_client:call(MeshClient, Procedure, #{
                 <<"from_node">> => atom_to_binary(node()),
-                <<"target_node">> => list_to_binary(NodeName)
+                <<"target_node">> => list_to_binary(NodeStr)
             }, ?DIST_TIMEOUT) of
                 {ok, #{<<"tunnel_id">> := TunnelId}} ->
                     ?LOG_INFO("[dist_relay] Tunnel established: ~s", [TunnelId]),
