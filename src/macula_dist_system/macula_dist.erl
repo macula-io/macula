@@ -343,8 +343,14 @@ do_accept({AcceptPid, QuicConn, Stream, MyNode, Allowed, SetupTime}, Kernel, _Co
     },
 
     error_logger:info_msg("macula_dist: do_accept starting handshake~n"),
-    %% Run distribution handshake
-    dist_util:handshake_other_started(HSData).
+    %% Run distribution handshake — catch any exit for diagnostics
+    try
+        dist_util:handshake_other_started(HSData)
+    catch
+        Class:Reason:Stack ->
+            error_logger:error_msg("macula_dist: handshake FAILED ~p:~p~n~p~n",
+                                   [Class, Reason, Stack])
+    end.
 
 %%%===================================================================
 %%% Internal Functions - Setup Outgoing Connection
@@ -442,7 +448,13 @@ setup_loop({_Conn, _Stream} = Socket, Node, Type, MyNode, Timer) ->
         request_type = Type
     },
 
-    dist_util:handshake_we_started(HSData).
+    try
+        dist_util:handshake_we_started(HSData)
+    catch
+        Class:Reason:Stack ->
+            error_logger:error_msg("macula_dist: handshake_we_started FAILED ~p:~p~n~p~n",
+                                   [Class, Reason, Stack])
+    end.
 
 %%%===================================================================
 %%% QUIC Socket Operations
