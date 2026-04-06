@@ -280,31 +280,43 @@ handle_message({ok, {publish, #{<<"topic">> := <<"_relay.graph">>, <<"payload">>
     end,
     State;
 
-%% PUBLISH on _swim.* — SWIM failure detector protocol
-handle_message({ok, {publish, #{<<"topic">> := <<"_swim.ping">>, <<"payload">> := Payload}}}, State) ->
-    handle_swim_msg(ping, Payload),
-    State;
-handle_message({ok, {publish, #{<<"topic">> := <<"_swim.ack">>, <<"payload">> := Payload}}}, State) ->
-    handle_swim_msg(ack, Payload),
-    State;
-handle_message({ok, {publish, #{<<"topic">> := <<"_swim.ping_req">>, <<"payload">> := Payload}}}, State) ->
-    handle_swim_msg(ping_req, Payload),
+%% Internal protocol topics — ONLY accepted from peer relay connections.
+%% Nodes publishing to _swim.*, _dht.*, _relay.bloom are silently dropped.
+
+handle_message({ok, {publish, #{<<"topic">> := <<"_swim.", _/binary>> = Topic,
+                                <<"payload">> := Payload}}},
+               #state{is_peer = true} = State) ->
+    SwimType = case Topic of
+        <<"_swim.ping">> -> ping;
+        <<"_swim.ack">> -> ack;
+        <<"_swim.ping_req">> -> ping_req;
+        _ -> unknown
+    end,
+    case SwimType of
+        unknown -> ok;
+        _ -> handle_swim_msg(SwimType, Payload)
+    end,
     State;
 
-%% PUBLISH on _dht.* — Kademlia DHT protocol for procedure routing
-handle_message({ok, {publish, #{<<"topic">> := <<"_dht.", _/binary>> = Topic, <<"payload">> := Payload}}}, State) ->
+handle_message({ok, {publish, #{<<"topic">> := <<"_dht.", _/binary>> = Topic,
+                                <<"payload">> := Payload}}},
+               #state{is_peer = true} = State) ->
     catch macula_relay_dht:handle_dht_message(Topic, safe_decode(Payload)),
     State;
 
-%% PUBLISH on _relay.bloom — store peer's Bloom filter for subscription routing
-handle_message({ok, {publish, #{<<"topic">> := <<"_relay.bloom">>, <<"payload">> := BloomBin}}}, State)
-  when byte_size(BloomBin) =:= 1024 ->
-    %% Peer URL from process dictionary (set during CONNECT for relay peers)
+handle_message({ok, {publish, #{<<"topic">> := <<"_relay.bloom">>,
+                                <<"payload">> := BloomBin}}},
+               #state{is_peer = true} = State) when byte_size(BloomBin) =:= 1024 ->
     case get(relay_peer_url) of
         undefined -> ok;
         PeerUrl -> catch macula_relay_peering:receive_peer_bloom(PeerUrl, BloomBin)
     end,
     State;
+
+%% Drop internal protocol messages from non-peer connections (nodes)
+handle_message({ok, {publish, #{<<"topic">> := <<"_swim.", _/binary>>}}}, State) -> State;
+handle_message({ok, {publish, #{<<"topic">> := <<"_dht.", _/binary>>}}}, State) -> State;
+handle_message({ok, {publish, #{<<"topic">> := <<"_relay.bloom">>}}}, State) -> State;
 
 %% PUBLISH — broadcast to all subscribers via pg
 handle_message({ok, {publish, Msg}}, State) ->

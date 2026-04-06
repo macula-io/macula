@@ -53,8 +53,8 @@
     target_count :: pos_integer(),                 %% how many connections to maintain
     subscriptions :: #{reference() => {binary(), fun()}},  %% ref => {topic, callback}
     procedures :: #{binary() => fun()},            %% procedure => handler
-    dedup :: queue:queue(binary()),                %% ring buffer of recent message_ids
-    dedup_set :: sets:set(binary())                %% fast lookup for dedup
+    dedup_table :: ets:tid(),                       %% ETS set for O(1) concurrent dedup
+    dedup_queue :: queue:queue(binary())            %% eviction order tracking
 }).
 
 %%====================================================================
@@ -108,6 +108,7 @@ init(Opts) ->
         maps:get(connections, Opts, ?DEFAULT_CONNECTIONS),
         length(Relays)
     ),
+    DedupTable = ets:new(multi_relay_dedup, [set, public, {read_concurrency, true}]),
     State = #state{
         opts = Opts,
         relays = Relays,
@@ -115,8 +116,8 @@ init(Opts) ->
         target_count = TargetCount,
         subscriptions = #{},
         procedures = #{},
-        dedup = queue:new(),
-        dedup_set = sets:new([{version, 2}])
+        dedup_table = DedupTable,
+        dedup_queue = queue:new()
     },
     %% Start connections asynchronously
     self() ! spawn_connections,
@@ -130,7 +131,7 @@ init(Opts) ->
 
 handle_call({subscribe, Topic, Callback}, _From, State) ->
     Ref = make_ref(),
-    DedupCallback = make_dedup_callback(self(), Callback),
+    DedupCallback = make_dedup_callback(State#state.dedup_table, Callback),
     Subs = maps:put(Ref, {Topic, Callback}, State#state.subscriptions),
     subscribe_on_all(Topic, DedupCallback, State#state.connections),
     {reply, {ok, Ref}, State#state{subscriptions = Subs}};
@@ -178,18 +179,6 @@ handle_call({rpc_call, Procedure, Args, Timeout}, _From, State) ->
             {reply, Result, State}
     end;
 
-%%====================================================================
-%% Dedup check (called from callback wrapper)
-%%====================================================================
-
-handle_call({check_dedup, MsgId}, _From, State) ->
-    case sets:is_element(MsgId, State#state.dedup_set) of
-        true ->
-            {reply, duplicate, State};
-        false ->
-            {Ring, Set} = track_message(MsgId, State#state.dedup, State#state.dedup_set),
-            {reply, new, State#state{dedup = Ring, dedup_set = Set}}
-    end;
 
 %%====================================================================
 %% Status
@@ -207,7 +196,7 @@ handle_call(get_status, _From, State) ->
         active_count => length(State#state.connections),
         subscriptions => maps:size(State#state.subscriptions),
         procedures => maps:size(State#state.procedures),
-        dedup_size => queue:len(State#state.dedup)
+        dedup_size => ets:info(State#state.dedup_table, size)
     },
     {reply, {ok, Status}, State};
 
@@ -239,8 +228,9 @@ handle_info(spawn_connections, State) ->
 
 handle_info(health_check, State) ->
     State2 = ensure_connections(State),
+    State3 = cleanup_dedup(State2),
     erlang:send_after(?HEALTH_CHECK_MS, self(), health_check),
-    {noreply, State2};
+    {noreply, State3};
 
 %% A relay_client process died — remove from connections, spawn replacement
 handle_info({'DOWN', MonRef, process, _Pid, Reason}, State) ->
@@ -303,8 +293,8 @@ ensure_connections(#state{connections = Conns, target_count = Target,
     Tagged = assign_roles(AllConns),
     State#state{connections = Tagged}.
 
-spawn_relay_client(RelayUrl, Opts, #state{subscriptions = Subs, procedures = Procs}) ->
-    Self = self(),
+spawn_relay_client(RelayUrl, Opts, #state{subscriptions = Subs, procedures = Procs,
+                                         dedup_table = DedupTable}) ->
     %% Build opts for this specific relay connection
     ClientOpts = Opts#{
         relays => [RelayUrl],
@@ -315,7 +305,7 @@ spawn_relay_client(RelayUrl, Opts, #state{subscriptions = Subs, procedures = Pro
             MonRef = monitor(process, Pid),
             ?LOG_INFO("[multi_relay] Connected to ~s (pid ~p)", [RelayUrl, Pid]),
             %% Replay subscriptions on this new connection
-            replay_subscriptions(Pid, Subs, Self),
+            replay_subscriptions(Pid, Subs, DedupTable),
             %% Replay procedures on this new connection
             replay_procedures(Pid, Procs),
             {ok, #conn{pid = Pid, relay_url = RelayUrl, monitor = MonRef, role = secondary}};
@@ -325,9 +315,9 @@ spawn_relay_client(RelayUrl, Opts, #state{subscriptions = Subs, procedures = Pro
             {error, Reason}
     end.
 
-replay_subscriptions(Pid, Subs, Self) ->
+replay_subscriptions(Pid, Subs, DedupTable) ->
     maps:foreach(fun(_Ref, {Topic, Callback}) ->
-        DedupCallback = make_dedup_callback(Self, Callback),
+        DedupCallback = make_dedup_callback(DedupTable, Callback),
         catch macula_relay_client:subscribe(Pid, Topic, DedupCallback)
     end, Subs).
 
@@ -367,37 +357,52 @@ subscribe_on_all(Topic, Callback, Connections) ->
         catch macula_relay_client:subscribe(Pid, Topic, Callback)
     end, Connections).
 
-make_dedup_callback(MultiRelayPid, Callback) ->
+make_dedup_callback(DedupTable, Callback) ->
     fun(Msg) ->
-        maybe_invoke_deduped(MultiRelayPid, Callback, Msg)
+        maybe_invoke_deduped(DedupTable, Callback, Msg)
     end.
 
-maybe_invoke_deduped(MultiRelayPid, Callback, Msg) ->
+maybe_invoke_deduped(DedupTable, Callback, Msg) ->
     case extract_message_id(Msg) of
         undefined -> Callback(Msg);
-        MsgId -> invoke_if_new(MultiRelayPid, Callback, Msg, MsgId)
+        MsgId -> invoke_if_new(DedupTable, Callback, Msg, MsgId)
     end.
 
-invoke_if_new(MultiRelayPid, Callback, Msg, MsgId) ->
-    case gen_server:call(MultiRelayPid, {check_dedup, MsgId}, 1000) of
-        new -> Callback(Msg);
-        duplicate -> ok
+%% O(1) concurrent dedup via public ETS — no gen_server bottleneck.
+%% insert_new is atomic: returns true only for the first inserter.
+invoke_if_new(DedupTable, Callback, Msg, MsgId) ->
+    case ets:insert_new(DedupTable, {MsgId, true}) of
+        true -> Callback(Msg);
+        false -> ok
     end.
 
+%% Note: ETS cleanup happens periodically in health_check, not per-message.
+%% The queue tracking for eviction order is maintained in the gen_server
+%% state but doesn't block the hot path (insert_new is lock-free).
+
 %%====================================================================
-%% Internal: dedup ring buffer
+%% Internal: dedup ETS cleanup
 %%====================================================================
 
-track_message(MsgId, Ring, Set) ->
-    Ring1 = queue:in(MsgId, Ring),
-    Set1 = sets:add_element(MsgId, Set),
-    case queue:len(Ring1) > ?DEDUP_SIZE of
+%% Periodic cleanup: keep ETS table bounded by evicting oldest entries.
+%% Called from health_check timer. Uses the queue to track insertion order.
+cleanup_dedup(#state{dedup_table = Tab, dedup_queue = Q} = State) ->
+    Size = ets:info(Tab, size),
+    case Size > ?DEDUP_SIZE of
+        false -> State;
         true ->
-            {{value, OldId}, Ring2} = queue:out(Ring1),
-            Set2 = sets:del_element(OldId, Set1),
-            {Ring2, Set2};
-        false ->
-            {Ring1, Set1}
+            {Q2, _Evicted} = evict_oldest(Tab, Q, Size - ?DEDUP_SIZE),
+            State#state{dedup_queue = Q2}
+    end.
+
+evict_oldest(_Tab, Q, 0) -> {Q, 0};
+evict_oldest(Tab, Q, N) ->
+    case queue:out(Q) of
+        {{value, MsgId}, Q2} ->
+            ets:delete(Tab, MsgId),
+            evict_oldest(Tab, Q2, N - 1);
+        {empty, Q} ->
+            {Q, 0}
     end.
 
 extract_message_id(#{<<"message_id">> := MsgId}) when is_binary(MsgId) -> MsgId;

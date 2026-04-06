@@ -32,6 +32,7 @@
     do_handle_find_value/1,
     forward_publish_to_bootstrap/1,
     send_to_peer/3,
+    send_and_wait/4,
     query_peer/3
 ]).
 
@@ -193,6 +194,16 @@ do_forward_to_bootstrap(ConnPid, PubMsg) ->
 
 %% @doc Send DHT message to remote peer (fire-and-forget).
 %% Used for STORE operations that don't need a response.
+%% @doc Send a DHT message to a peer and wait for response.
+%% Used by macula_routing_server for iterative FIND_VALUE lookups.
+-spec send_and_wait(map(), atom(), map(), timeout()) -> {ok, term()} | {error, term()}.
+send_and_wait(NodeInfo, MessageType, Message, Timeout) ->
+    Endpoint = extract_endpoint(NodeInfo),
+    case Endpoint of
+        undefined -> {error, no_endpoint};
+        _ -> macula_peer_connector:send_message_and_wait(Endpoint, MessageType, Message, Timeout)
+    end.
+
 -spec send_to_peer(map(), atom(), map()) -> ok | {error, term()}.
 send_to_peer(NodeInfo, MessageType, Message) ->
     Endpoint = extract_endpoint(NodeInfo),

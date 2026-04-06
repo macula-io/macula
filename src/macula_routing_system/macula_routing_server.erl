@@ -477,7 +477,8 @@ propagate_store_to_peers(ClosestNodes, StoreMsg, _Key, _Value) ->
 %% @private Send store message to a peer (best effort)
 send_store_to_peer(NodeInfo, StoreMsg) ->
     ?LOG_DEBUG("[DHT] Sending store to peer ~p", [NodeInfo]),
-    try macula_gateway_dht:send_to_peer(NodeInfo, store, StoreMsg) of
+    Transport = persistent_term:get(macula_dht_transport, macula_gateway_dht),
+    try Transport:send_to_peer(NodeInfo, store, StoreMsg) of
         Result -> handle_peer_send_result(Result, NodeInfo)
     catch
         error:function_clause:Stacktrace ->
@@ -686,13 +687,14 @@ network_query_find_value(NodeInfo, Key) ->
 do_network_query_find_value(undefined, NodeInfo, _Key) ->
     ?LOG_WARNING("[DHT] network_query_find_value: no endpoint for node ~p", [NodeInfo]),
     {nodes, []};
-do_network_query_find_value(Endpoint, _NodeInfo, Key) ->
+do_network_query_find_value(Endpoint, NodeInfo, Key) ->
     %% Build FIND_VALUE message (the protocol expects raw Key, not encoded)
     FindValueMsg = #{<<"key">> => Key},
     ?LOG_DEBUG("[DHT] network_query_find_value: querying ~s for key", [Endpoint]),
 
+    Transport = persistent_term:get(macula_dht_transport, macula_gateway_dht),
     %% Send request and wait for response (synchronous with 5s timeout)
-    case macula_peer_connector:send_message_and_wait(Endpoint, find_value, FindValueMsg, 5000) of
+    case Transport:send_and_wait(NodeInfo, find_value, FindValueMsg, 5000) of
         {ok, {find_value_reply, Response}} ->
             Result = decode_find_value_response(Response),
             ?LOG_DEBUG("[DHT] network_query_find_value: got reply from ~s: ~p", [Endpoint, Result]),
