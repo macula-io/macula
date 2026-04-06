@@ -271,7 +271,7 @@ handle_message({ok, {unsubscribe, Msg}}, State) ->
 
 %% PUBLISH on _relay.graph — merge into relay graph (QUIC-based graph propagation)
 handle_message({ok, {publish, #{<<"topic">> := <<"_relay.graph">>, <<"payload">> := Payload}}}, State) ->
-    case catch json:decode(Payload) of
+    case safe_decode(Payload) of
         Entries when is_list(Entries) ->
             ?LOG_DEBUG("[relay_handler] Graph update: ~b entries", [length(Entries)]),
             catch macula_relay_peering:merge_remote_graph(Entries);
@@ -322,7 +322,7 @@ handle_message({ok, {publish, #{<<"topic">> := <<"_relay.bloom">>}}}, State) -> 
 handle_message({ok, {publish, Msg}}, State) ->
     Topic = maps:get(<<"topic">>, Msg, <<>>),
     Payload = maps:get(<<"payload">>, Msg, <<>>),
-    Members = try pg:get_members(pg, {relay_topic, Topic}) catch _:_ -> [] end,
+    Members = pg_members({relay_topic, Topic}),
     ?LOG_INFO("[relay_handler] PUBLISH ~s → ~p subscriber(s)", [Topic, length(Members)]),
     lists:foreach(fun(Pid) ->
         case Pid =/= self() of
@@ -521,8 +521,7 @@ send_to_node(Type, Msg, #state{stream = Stream}) ->
 %% Publish _mesh.site.up if this is the first node of its site on this relay.
 maybe_publish_site_up(undefined, _, _, _) -> ok;
 maybe_publish_site_up(SiteId, Site, TargetRelay, Realm) ->
-    Members = try pg:get_members(pg, {relay_connected_nodes, {site, SiteId}})
-              catch _:_ -> [] end,
+    Members = pg_members({relay_connected_nodes, {site, SiteId}}),
     case length(Members) of
         1 ->
             %% First node in this site — site is now online
@@ -538,8 +537,7 @@ maybe_publish_site_up(SiteId, Site, TargetRelay, Realm) ->
 %% Publish _mesh.site.down if this is the last node of its site on this relay.
 maybe_publish_site_down(undefined) -> ok;
 maybe_publish_site_down(SiteId) ->
-    Members = try pg:get_members(pg, {relay_connected_nodes, {site, SiteId}})
-              catch _:_ -> [] end,
+    Members = pg_members({relay_connected_nodes, {site, SiteId}}),
     %% At terminate time, we're still in the group (pg removes after process exits)
     case length(Members) of
         1 ->
@@ -558,7 +556,7 @@ maybe_publish_site_down(SiteId) ->
 publish_system_event(Topic, Payload) ->
     BinPayload = iolist_to_binary(json:encode(
         Payload#{<<"timestamp">> => erlang:system_time(millisecond)})),
-    Members = try pg:get_members(pg, {relay_topic, Topic}) catch _:_ -> [] end,
+    Members = pg_members({relay_topic, Topic}),
     lists:foreach(fun(Pid) ->
         Pid ! {relay_publish, Topic, BinPayload}
     end, Members).
@@ -586,6 +584,9 @@ maybe_store_bloom_from_swim(Payload) ->
             BloomBin = base64:decode(BloomB64),
             catch macula_relay_peering:receive_peer_bloom(From, BloomBin)
     end.
+
+pg_members(Group) ->
+    try pg:get_members(pg, Group) catch _:_ -> [] end.
 
 safe_decode(Bin) when is_binary(Bin) ->
     try json:decode(Bin) catch _:_ -> #{} end;

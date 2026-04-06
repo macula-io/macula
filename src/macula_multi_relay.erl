@@ -155,14 +155,24 @@ handle_call({advertise, Procedure, Handler}, _From, State) ->
     Procs = maps:put(Procedure, Handler, State#state.procedures),
     %% Advertise on all active connections
     lists:foreach(fun(#conn{pid = Pid}) ->
-        catch macula_relay_client:advertise(Pid, Procedure, Handler)
+        case macula_relay_client:advertise(Pid, Procedure, Handler) of
+            {ok, _} -> ok;
+            {error, Reason} ->
+                ?LOG_WARNING("[multi_relay] Advertise ~s on ~p failed: ~p",
+                             [Procedure, Pid, Reason])
+        end
     end, State#state.connections),
     {reply, {ok, make_ref()}, State#state{procedures = Procs}};
 
 handle_call({unadvertise, Procedure}, _From, State) ->
     Procs = maps:remove(Procedure, State#state.procedures),
     lists:foreach(fun(#conn{pid = Pid}) ->
-        catch macula_relay_client:unadvertise(Pid, Procedure)
+        case macula_relay_client:unadvertise(Pid, Procedure) of
+            ok -> ok;
+            {error, Reason} ->
+                ?LOG_WARNING("[multi_relay] Unadvertise ~s on ~p failed: ~p",
+                             [Procedure, Pid, Reason])
+        end
     end, State#state.connections),
     {reply, ok, State#state{procedures = Procs}};
 
