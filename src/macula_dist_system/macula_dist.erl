@@ -53,7 +53,7 @@
 -export([
     acceptor_loop/2,
     do_accept/3,
-    do_setup/5
+    do_setup/6
 ]).
 
 -include_lib("kernel/include/net_address.hrl").
@@ -125,10 +125,12 @@ accept_connection(AcceptPid, {QuicConn, Stream}, MyNode, Allowed, SetupTime) ->
 
 %% @doc Setup an outgoing distribution connection.
 %% Called when this node wants to connect to another node.
+%% self() here is net_kernel — pass it as Kernel to the spawned process.
 -spec setup(node(), term(), atom(), term(), term()) -> pid().
 setup(Node, Type, MyNode, LongOrShortNames, SetupTime) ->
+    Kernel = self(),
     spawn_link(?MODULE, do_setup, [
-        Node, Type, MyNode, LongOrShortNames, SetupTime
+        Kernel, Node, Type, MyNode, LongOrShortNames, SetupTime
     ]).
 
 %% @doc Close a distribution connection.
@@ -379,7 +381,7 @@ do_accept({AcceptPid, QuicConn, Stream, MyNode, Allowed, SetupTime}, Kernel, _Co
 %% Two modes:
 %% - Direct QUIC (default): connect_quic(Host, Port) — requires mutual reachability
 %% - Relay mesh (MACULA_DIST_MODE=relay): tunnel through relay — outbound-only nodes
-do_setup(Node, Type, MyNode, _LongOrShortNames, SetupTime) ->
+do_setup(Kernel, Node, Type, MyNode, _LongOrShortNames, SetupTime) ->
     Timer = dist_util:start_timer(SetupTime),
 
     case splitname(Node) of
@@ -390,7 +392,7 @@ do_setup(Node, Type, MyNode, _LongOrShortNames, SetupTime) ->
             end,
             case ConnectFn() of
                 {ok, Conn, Stream} ->
-                    setup_loop({Conn, Stream}, Node, Type, MyNode, Timer);
+                    setup_loop(Kernel, {Conn, Stream}, Node, Type, MyNode, Timer);
                 {error, Reason} ->
                     error_logger:warning_msg(
                         "macula_dist: connection to ~p failed: ~p~n",
@@ -445,11 +447,11 @@ connect_quic(Host, Port) ->
 
 %% @private Complete connection setup — Socket is either {QuicConn, QuicStream}
 %% or a gen_tcp socket (from relay tunnel loopback pair).
-setup_loop(Socket, Node, Type, MyNode, Timer) ->
-    error_logger:info_msg("macula_dist: setup_loop Socket=~p Node=~p MyNode=~p~n",
-                          [Socket, Node, MyNode]),
+setup_loop(Kernel, Socket, Node, Type, MyNode, Timer) ->
+    error_logger:info_msg("macula_dist: setup_loop Socket=~p Node=~p MyNode=~p Kernel=~p~n",
+                          [Socket, Node, MyNode, Kernel]),
     HSData = #hs_data{
-        kernel_pid = self(),
+        kernel_pid = Kernel,
         this_node = MyNode,
         other_node = Node,
         socket = Socket,
