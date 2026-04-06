@@ -346,13 +346,20 @@ do_accept({AcceptPid, QuicConn, Stream, MyNode, Allowed, SetupTime}, Kernel, _Co
 %%% Internal Functions - Setup Outgoing Connection
 %%%===================================================================
 
-%% @private Setup outgoing distribution connection
+%% @private Setup outgoing distribution connection.
+%% Two modes:
+%% - Direct QUIC (default): connect_quic(Host, Port) — requires mutual reachability
+%% - Relay mesh (MACULA_DIST_MODE=relay): tunnel through relay — outbound-only nodes
 do_setup(Node, Type, MyNode, _LongOrShortNames, SetupTime) ->
     Timer = dist_util:start_timer(SetupTime),
 
     case splitname(Node) of
         {Port, Host} ->
-            case connect_quic(Host, Port) of
+            ConnectFn = case macula_dist_relay:is_relay_mode() of
+                true -> fun() -> macula_dist_relay:connect(Host, Port) end;
+                false -> fun() -> connect_quic(Host, Port) end
+            end,
+            case ConnectFn() of
                 {ok, Conn, Stream} ->
                     setup_loop({Conn, Stream}, Node, Type, MyNode, Timer);
                 {error, Reason} ->
@@ -437,9 +444,19 @@ setup_loop({_Conn, _Stream} = Socket, Node, Type, MyNode, Timer) ->
 %%% QUIC Socket Operations
 %%%===================================================================
 
-%% @private Send data over QUIC stream
+%% @private Send data over QUIC stream or relay tunnel
+quic_send({_Conn, {tunnel, _TunnelId, SendTopic, _RecvTopic}}, Data) ->
+    %% Relay tunnel: publish ETF bytes as a mesh message
+    BinData = iolist_to_binary(Data),
+    case macula_dist_relay:is_relay_mode() of
+        true ->
+            case macula_dist_relay:get_mesh_client() of
+                undefined -> {error, no_mesh};
+                Client -> macula_relay_client:publish(Client, SendTopic, BinData), ok
+            end;
+        false -> {error, not_relay_mode}
+    end;
 quic_send({_Conn, Stream}, Data) ->
-    error_logger:info_msg("macula_dist: quic_send ~p bytes~n", [byte_size(iolist_to_binary(Data))]),
     case quicer:send(Stream, Data) of
         {ok, _} -> ok;
         {error, Reason} ->
@@ -447,26 +464,32 @@ quic_send({_Conn, Stream}, Data) ->
             {error, Reason}
     end.
 
-%% @private Receive data from QUIC stream
-%% Uses active mode - receives data from {quic, Data, Stream, Flags} messages
-quic_recv({_Conn, Stream}, _Length, Timeout) ->
+%% @private Receive data from QUIC stream or relay tunnel
+quic_recv({_Conn, {tunnel, _TunnelId, _SendTopic, _RecvTopic}}, _Length, Timeout) ->
+    %% Relay tunnel: data arrives as {dist_data, Binary} messages
     TimeoutMs = case Timeout of
-        infinity -> 30000;  % Use 30s default for QUIC
+        infinity -> 30000;
         T -> T
     end,
-    %% In active mode, data arrives as messages
+    receive
+        {dist_data, Data} when is_binary(Data) ->
+            {ok, Data}
+    after TimeoutMs ->
+        {error, timeout}
+    end;
+quic_recv({_Conn, Stream}, _Length, Timeout) ->
+    TimeoutMs = case Timeout of
+        infinity -> 30000;
+        T -> T
+    end,
     receive
         {quic, Data, Stream, _Flags} when is_binary(Data) ->
-            error_logger:info_msg("macula_dist: quic_recv got ~p bytes~n", [byte_size(Data)]),
             {ok, Data};
         {quic, stream_closed, Stream, _Flags} ->
-            error_logger:info_msg("macula_dist: quic_recv stream closed~n"),
             {error, closed};
         {quic, peer_send_shutdown, Stream, _Flags} ->
-            error_logger:info_msg("macula_dist: quic_recv peer shutdown~n"),
             {error, closed}
     after TimeoutMs ->
-        error_logger:info_msg("macula_dist: quic_recv timeout after ~p ms~n", [TimeoutMs]),
         {error, timeout}
     end.
 
@@ -481,6 +504,8 @@ quic_setopts_post_nodeup({_Conn, _Stream}) ->
     ok.
 
 %% @private Get low-level socket (for process linking)
+quic_getll({Conn, {tunnel, _, _, _}}) ->
+    {ok, Conn};
 quic_getll({Conn, _Stream}) ->
     {ok, Conn}.
 
@@ -508,11 +533,14 @@ quic_handshake_complete(_Socket, _Node, _DHandle) ->
     ok.
 
 %% @private Send tick (keepalive)
+quic_tick({_Conn, {tunnel, _, _, _}} = Socket) ->
+    quic_send(Socket, <<>>);
 quic_tick({_Conn, Stream}) ->
-    %% Send empty message as keepalive
     quicer:send(Stream, <<>>).
 
 %% @private Get socket statistics
+quic_getstat({_Conn, {tunnel, _, _, _}}) ->
+    {ok, []};
 quic_getstat({Conn, _Stream}) ->
     case quicer:getstat(Conn, [send_cnt, recv_cnt, send_pend]) of
         {ok, Stats} -> {ok, Stats};
@@ -520,6 +548,8 @@ quic_getstat({Conn, _Stream}) ->
     end.
 
 %% @private Set socket options
+quic_setopts({_Conn, {tunnel, _, _, _}}, _Opts) ->
+    ok;
 quic_setopts({_Conn, Stream}, Opts) ->
     lists:foreach(
         fun({active, Mode}) -> quicer:setopt(Stream, active, Mode);
