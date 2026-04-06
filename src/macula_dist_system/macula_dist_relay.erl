@@ -26,6 +26,7 @@
 -export([is_relay_mode/0, get_mesh_client/0]).
 -export([register_mesh_client/1]).
 -export([advertise_dist_accept/0]).
+-export([extract_payload/1]). %% exported for testing
 
 -define(DIST_TIMEOUT, 25000).
 -define(BRIDGE_RECV_TIMEOUT, 60000).

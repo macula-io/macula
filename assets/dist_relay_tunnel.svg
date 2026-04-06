@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" width="800" height="400">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-gray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#6b7280"/>
+    </marker>
+  </defs>
+
+  <style>
+    text { font-family: 'Segoe UI', system-ui, sans-serif; fill: #1e293b; }
+    .title { font-size: 11px; font-weight: 600; }
+    .label { font-size: 9px; }
+    .label-small { font-size: 8px; fill: #475569; }
+    .label-topic { font-size: 8px; fill: #2563eb; font-family: monospace; }
+    .box { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1; rx: 3; }
+    .box-node { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.5; rx: 5; }
+    .box-relay { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.5; rx: 5; }
+    .box-accent { fill: #eff6ff; stroke: #93c5fd; stroke-width: 1; rx: 3; }
+    .loopback { stroke: #9ca3af; stroke-width: 1; stroke-dasharray: 3,2; fill: none; }
+  </style>
+
+  <!-- Background -->
+  <rect width="800" height="400" fill="#ffffff" rx="0"/>
+
+  <!-- ==================== NODE A (Left) ==================== -->
+  <rect x="20" y="30" width="230" height="340" class="box-node"/>
+  <text x="135" y="22" text-anchor="middle" class="title" font-size="12">Node A (Milan)</text>
+
+  <!-- dist_util -->
+  <rect x="55" y="48" width="160" height="28" class="box"/>
+  <text x="135" y="66" text-anchor="middle" class="title">dist_util</text>
+
+  <!-- DistSock -->
+  <rect x="55" y="95" width="160" height="36" class="box-accent"/>
+  <text x="135" y="111" text-anchor="middle" class="title">DistSock</text>
+  <text x="135" y="123" text-anchor="middle" class="label-small">gen_tcp {packet, 2&#x2192;4}</text>
+
+  <!-- Loopback pair label -->
+  <text x="135" y="146" text-anchor="middle" class="label-small" font-style="italic">loopback pair</text>
+
+  <!-- Loopback visual -->
+  <path d="M 100,131 L 100,148 L 170,148 L 170,160" class="loopback"/>
+
+  <!-- BridgeSock -->
+  <rect x="55" y="160" width="160" height="36" class="box-accent"/>
+  <text x="135" y="176" text-anchor="middle" class="title">BridgeSock</text>
+  <text x="135" y="188" text-anchor="middle" class="label-small">gen_tcp {packet, raw}</text>
+
+  <!-- bridge_reader_loop -->
+  <rect x="40" y="220" width="180" height="30" class="box"/>
+  <text x="130" y="239" text-anchor="middle" class="label">bridge_reader_loop</text>
+  <text x="130" y="261" text-anchor="middle" class="label-small">&#x2192; publishes to relay</text>
+
+  <!-- bridge_writer_loop -->
+  <rect x="40" y="280" width="180" height="30" class="box"/>
+  <text x="130" y="299" text-anchor="middle" class="label">bridge_writer_loop</text>
+  <text x="130" y="321" text-anchor="middle" class="label-small">&#x2190; subscribes from relay</text>
+
+  <!-- Arrows inside Node A -->
+  <line x1="135" y1="76" x2="135" y2="95" stroke="#6b7280" stroke-width="1" marker-end="url(#arrow-gray)"/>
+  <line x1="110" y1="196" x2="110" y2="220" stroke="#6b7280" stroke-width="1" marker-end="url(#arrow-gray)"/>
+  <line x1="150" y1="280" x2="150" y2="196" stroke="#6b7280" stroke-width="1" marker-end="url(#arrow-gray)"/>
+
+  <!-- ==================== NODE B (Right) ==================== -->
+  <rect x="550" y="30" width="230" height="340" class="box-node"/>
+  <text x="665" y="22" text-anchor="middle" class="title" font-size="12">Node B (Stockholm)</text>
+
+  <!-- dist_util -->
+  <rect x="585" y="48" width="160" height="28" class="box"/>
+  <text x="665" y="66" text-anchor="middle" class="title">dist_util</text>
+
+  <!-- DistSock -->
+  <rect x="585" y="95" width="160" height="36" class="box-accent"/>
+  <text x="665" y="111" text-anchor="middle" class="title">DistSock</text>
+  <text x="665" y="123" text-anchor="middle" class="label-small">gen_tcp {packet, 2&#x2192;4}</text>
+
+  <!-- Loopback pair label -->
+  <text x="665" y="146" text-anchor="middle" class="label-small" font-style="italic">loopback pair</text>
+
+  <!-- Loopback visual -->
+  <path d="M 630,131 L 630,148 L 700,148 L 700,160" class="loopback"/>
+
+  <!-- BridgeSock -->
+  <rect x="585" y="160" width="160" height="36" class="box-accent"/>
+  <text x="665" y="176" text-anchor="middle" class="title">BridgeSock</text>
+  <text x="665" y="188" text-anchor="middle" class="label-small">gen_tcp {packet, raw}</text>
+
+  <!-- bridge_reader_loop -->
+  <rect x="580" y="220" width="180" height="30" class="box"/>
+  <text x="670" y="239" text-anchor="middle" class="label">bridge_reader_loop</text>
+  <text x="670" y="261" text-anchor="middle" class="label-small">&#x2192; publishes to relay</text>
+
+  <!-- bridge_writer_loop -->
+  <rect x="580" y="280" width="180" height="30" class="box"/>
+  <text x="670" y="299" text-anchor="middle" class="label">bridge_writer_loop</text>
+  <text x="670" y="321" text-anchor="middle" class="label-small">&#x2190; subscribes from relay</text>
+
+  <!-- Arrows inside Node B -->
+  <line x1="665" y1="76" x2="665" y2="95" stroke="#6b7280" stroke-width="1" marker-end="url(#arrow-gray)"/>
+  <line x1="640" y1="196" x2="640" y2="220" stroke="#6b7280" stroke-width="1" marker-end="url(#arrow-gray)"/>
+  <line x1="680" y1="280" x2="680" y2="196" stroke="#6b7280" stroke-width="1" marker-end="url(#arrow-gray)"/>
+
+  <!-- ==================== RELAY (Center) ==================== -->
+  <rect x="300" y="100" width="200" height="200" class="box-relay"/>
+  <text x="400" y="92" text-anchor="middle" class="title" font-size="12" fill="#2563eb">Relay (Paris)</text>
+
+  <!-- Pub/Sub topics -->
+  <text x="400" y="130" text-anchor="middle" class="title" font-size="10" fill="#2563eb">Pub/Sub Topics</text>
+
+  <!-- Topic A→B -->
+  <rect x="315" y="145" width="170" height="28" rx="3" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+  <text x="400" y="163" text-anchor="middle" class="label-topic">_dist.data.{tun}.out</text>
+  <text x="400" y="182" text-anchor="middle" class="label-small">A &#x2192; B</text>
+
+  <!-- Topic B→A -->
+  <rect x="315" y="195" width="170" height="28" rx="3" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+  <text x="400" y="213" text-anchor="middle" class="label-topic">_dist.data.{tun}.in</text>
+  <text x="400" y="232" text-anchor="middle" class="label-small">B &#x2192; A</text>
+
+  <!-- Relay info -->
+  <text x="400" y="265" text-anchor="middle" class="label-small">QUIC transport</text>
+  <text x="400" y="278" text-anchor="middle" class="label-small">content-addressed routing</text>
+
+  <!-- ==================== Arrows: Node A ↔ Relay ==================== -->
+
+  <!-- A reader_loop → Relay (publish out) -->
+  <line x1="220" y1="235" x2="300" y2="159" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Relay → A writer_loop (subscribe in) -->
+  <line x1="300" y1="209" x2="220" y2="295" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ==================== Arrows: Relay ↔ Node B ==================== -->
+
+  <!-- Relay → B writer_loop (deliver out) -->
+  <line x1="500" y1="159" x2="580" y2="295" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- B reader_loop → Relay (publish in) -->
+  <line x1="580" y1="235" x2="500" y2="209" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ==================== Flow Labels ==================== -->
+  <text x="248" y="185" text-anchor="middle" class="label-small" transform="rotate(-30,248,185)">publish</text>
+  <text x="248" y="270" text-anchor="middle" class="label-small" transform="rotate(-20,248,270)">subscribe</text>
+  <text x="552" y="270" text-anchor="middle" class="label-small" transform="rotate(20,552,270)">deliver</text>
+  <text x="552" y="185" text-anchor="middle" class="label-small" transform="rotate(30,552,185)">publish</text>
+
+  <!-- ==================== Legend ==================== -->
+  <text x="400" y="385" text-anchor="middle" class="label-small">Erlang distribution tunneled over macula relay mesh via loopback socket pairs</text>
+</svg>

@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v0.20.13 (March 2026)
+**Current Version**: v0.40.1 (April 2026)
 
 ---
 
@@ -1097,65 +1097,49 @@ All fixes follow idiomatic Erlang patterns:
 
 ---
 
-## 🚀 QUIC Distribution (DEFERRED - v1.1.0+)
+## 🚀 QUIC Distribution + Relay Mesh (v0.40.0+)
 
-**STATUS**: Deferred until after v1.0.0 is proven in production
+**STATUS**: Direct QUIC complete, Relay mesh EXPERIMENTAL
 
-📋 **See `architecture/archive/` for historical planning documents**
+Two distribution modes:
 
-**Problem Solved**: Replace EPMD and TCP-based Erlang distribution with QUIC:
-- ❌ EPMD is centralized (single point of failure)
-- ❌ TCP requires multiple ports and doesn't traverse NAT well
-- ❌ No built-in encryption (TLS is optional add-on)
-- ❌ Edge/mobile deployment is nearly impossible
+| Mode | When | How |
+|------|------|-----|
+| **Direct QUIC** | Nodes can reach each other | `-proto_dist macula` |
+| **Relay mesh** | Nodes behind NAT/firewalls | `MACULA_DIST_MODE=relay` |
 
-**Solution**: QUIC-native distribution with decentralized discovery:
-
-```
-Before (EPMD + TCP):           After (Macula QUIC):
-┌─────────┐                    ┌─────────┐
-│  EPMD   │◄──TCP:4369──►      │ Macula  │◄══QUIC/UDP══►
-│(daemon) │                    │Discovery│  (single port)
-└────┬────┘                    │ (DHT)   │
-     │                         └────┬────┘
-┌────▼────┐                    ┌────▼────┐
-│inet_tcp │◄──TCP range──►     │macula   │◄══QUIC══►
-│  _dist  │                    │  _dist  │
-└─────────┘                    └─────────┘
-```
+📋 **See `docs/guides/DIST_OVER_MESH_GUIDE.md`** for relay mesh usage
 
 **Implementation Status**:
 
 | Module | Purpose | Status |
 |--------|---------|--------|
-| `macula_dist.erl` | QUIC carrier for Erlang distribution | ✅ Complete |
+| `macula_dist.erl` | QUIC + gen_tcp carrier for Erlang distribution | ✅ Complete |
+| `macula_dist_relay.erl` | Relay mesh tunnel (loopback bridge) | ✅ Experimental |
 | `macula_dist_discovery.erl` | DHT-based node discovery (replaces EPMD) | ✅ Complete |
 | `macula_cluster_strategy.erl` | libcluster-compatible strategy | ✅ Complete |
 | `macula_dist_system.erl` | Supervisor for dist subsystem | ✅ Complete |
 
-**Tests**: 31 tests passing
+**Tests**: 39 tests passing (24 dist + 15 relay)
 
-**Usage** (once stable):
+**Proven**: Milan (Italy) ↔ Paris (relay) ↔ Stockholm (Sweden) — `net_adm:ping` → `pong`
+
+**Usage**:
 ```
-%% vm.args
--proto_dist macula
--no_epmd
--start_epmd false
--macula_dist_port 4433
+erl -proto_dist macula -no_epmd -start_epmd false -name mynode@host -setcookie SECRET
 ```
 
 **Key Benefits**:
 - ✅ Built-in TLS 1.3 (mandatory, not optional)
 - ✅ Single UDP port (NAT-friendly)
 - ✅ Decentralized discovery (no EPMD daemon)
-- ✅ Connection migration (survives IP changes)
-- ✅ Compatible with Horde, Swarm, Mnesia, :pg
+- ✅ Relay mesh for outbound-only nodes (firewalls, NATs)
+- ✅ Compatible with Pid ! Msg, gen_server:call, pg groups
 
-**Next Steps**:
-- Integration testing with multi-node clusters
-- Performance benchmarking vs inet_tcp_dist
-- Mnesia replication verification
-- Documentation for ecosystem tools
+**Relay Limitations**:
+- Mnesia not recommended over WAN latency
+- global module may have convergence issues
+- Both nodes must share the same relay mesh
 
 ## Docker Build Best Practices
 
