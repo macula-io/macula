@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.35.4] - 2026-04-06
+
+### Added
+
+- **Kademlia DHT integration** — relay_handler stores procedure→relay mappings in DHT on REGISTER_PROCEDURE. CALL tries DHT lookup before sequential peer fallback. Handles `_dht.*` protocol messages.
+
+---
+
+## [0.35.3] - 2026-04-06
+
+### Added
+
+- **SWIM protocol handlers** — relay_handler recognizes `_swim.ping`, `_swim.ack`, `_swim.ping_req` messages from peer relays. Delegates to `macula_relay_swim` module. Piggybacks Bloom filter exchange on SWIM messages.
+
+---
+
+## [0.35.2] - 2026-04-06
+
+### Fixed
+
+- **Deep nesting cleanup** in `macula_multi_relay` — extracted dedup callback helpers (`make_dedup_callback`, `maybe_invoke_deduped`, `invoke_if_new`, `subscribe_on_all`). Fixed unsubscribe handler that was incorrectly calling subscribe. Max nesting now 1 level.
+
+---
+
+## [0.35.1] - 2026-04-06
+
+### Added
+
+- **Bloom filter support** in relay_handler — recognizes `_relay.bloom` messages from peer relays, forwards to `macula_relay_peering:receive_peer_bloom/2`. Stores `relay_peer_url` in process dictionary during CONNECT for peer identification.
+
+---
+
 ## [0.35.0] - 2026-04-06
 
 ### Added
