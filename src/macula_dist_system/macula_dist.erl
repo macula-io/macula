@@ -449,16 +449,17 @@ setup_loop({_Conn, _Stream} = Socket, Node, Type, MyNode, Timer) ->
 %%%===================================================================
 
 %% @private Send data over QUIC stream or relay tunnel
-quic_send({_Conn, {tunnel, _TunnelId, SendTopic, _RecvTopic}}, Data) ->
-    %% Relay tunnel: publish ETF bytes as a mesh message
+quic_send({_Conn, {tunnel, TunnelId, SendTopic, _RecvTopic}}, Data) ->
     BinData = iolist_to_binary(Data),
-    case macula_dist_relay:is_relay_mode() of
-        true ->
-            case macula_dist_relay:get_mesh_client() of
-                undefined -> {error, no_mesh};
-                Client -> macula_relay_client:publish(Client, SendTopic, BinData), ok
-            end;
-        false -> {error, not_relay_mode}
+    error_logger:info_msg("macula_dist: quic_send ~p bytes on tunnel ~s to ~s~n",
+                          [byte_size(BinData), TunnelId, SendTopic]),
+    case macula_dist_relay:get_mesh_client() of
+        undefined ->
+            error_logger:warning_msg("macula_dist: quic_send NO MESH CLIENT~n"),
+            {error, no_mesh};
+        Client ->
+            macula_relay_client:publish(Client, SendTopic, BinData),
+            ok
     end;
 quic_send({_Conn, Stream}, Data) ->
     case quicer:send(Stream, Data) of
