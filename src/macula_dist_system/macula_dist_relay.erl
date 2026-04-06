@@ -148,45 +148,49 @@ handle_tunnel_request(Args) ->
 %% Persistent bridge process for the accepting side of a distribution tunnel.
 %% Subscribes to the connecting node's data topic and forwards to the
 %% Erlang distribution system. Lives for the connection duration.
-dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, FromNode) ->
-    error_logger:info_msg("[dist_bridge] Starting for tunnel ~s from ~s~n",
-                          [TunnelId, FromNode]),
+dist_accept_bridge(Client, TunnelId, SendTopic, RecvTopic, _FromNode) ->
+    error_logger:info_msg("[dist_bridge] Starting for tunnel ~s~n", [TunnelId]),
 
-    %% Subscribe to incoming data from the connecting node
     Self = self(),
     {ok, _SubRef} = macula_relay_client:subscribe(Client, RecvTopic,
         fun(Msg) ->
-            Data = extract_payload(Msg),
-            Self ! {dist_data_in, Data}
+            Self ! {dist_data, extract_payload(Msg)}
         end),
 
-    error_logger:info_msg("[dist_bridge] Subscribed to ~s, waiting for handshake~n",
-                          [RecvTopic]),
+    error_logger:info_msg("[dist_bridge] Subscribed, notifying net_kernel~n"),
 
-    %% This process needs to be registered so the Erlang distribution
-    %% system on the accepting side can find it. For now, register
-    %% by tunnel_id. The accepting side's dist_util will use this
-    %% process as the "socket" for the incoming connection.
-    %%
-    %% TODO: integrate with macula_dist:accept_connection to complete
-    %% the accepting side of the distribution handshake.
-    dist_accept_bridge_loop(Client, TunnelId, SendTopic).
+    %% Create the tunnel socket that dist_util will use for send/recv
+    TunnelSocket = {Client, {tunnel, TunnelId, SendTopic, RecvTopic}},
 
-dist_accept_bridge_loop(Client, TunnelId, SendTopic) ->
+    %% Notify net_kernel of the incoming connection — same protocol as
+    %% the QUIC acceptor_loop. The kernel will call accept_connection/5
+    %% which spawns do_accept with our tunnel socket.
+    KernelPid = whereis(net_kernel),
+
+    case KernelPid of
+        undefined ->
+            error_logger:warning_msg("[dist_bridge] net_kernel not found~n");
+        _ ->
+            error_logger:info_msg("[dist_bridge] Notifying net_kernel ~p~n", [KernelPid]),
+            KernelPid ! {accept, Self, TunnelSocket, inet, macula_dist},
+            %% Wait for kernel to assign a controller
+            receive
+                {KernelPid, controller, DistCtrl} ->
+                    error_logger:info_msg("[dist_bridge] Controller assigned: ~p~n", [DistCtrl]),
+                    DistCtrl ! {Self, controller, ok};
+                {KernelPid, unsupported_protocol} ->
+                    error_logger:warning_msg("[dist_bridge] Unsupported protocol~n")
+            after 30000 ->
+                error_logger:warning_msg("[dist_bridge] Controller timeout~n")
+            end
+    end,
+    %% Stay alive for the connection
+    dist_accept_bridge_loop().
+
+dist_accept_bridge_loop() ->
     receive
-        {dist_data_in, Data} ->
-            %% Data arrived from the connecting node via mesh
-            error_logger:info_msg("[dist_bridge] Received ~b bytes from tunnel ~s~n",
-                                  [byte_size(Data), TunnelId]),
-            %% TODO: forward to dist_util acceptor process
-            dist_accept_bridge_loop(Client, TunnelId, SendTopic);
-        {dist_data_out, Data} ->
-            %% Data to send to the connecting node
-            macula_relay_client:publish(Client, SendTopic, Data),
-            dist_accept_bridge_loop(Client, TunnelId, SendTopic);
-        stop ->
-            error_logger:info_msg("[dist_bridge] Tunnel ~s stopped~n", [TunnelId]),
-            ok
+        stop -> ok;
+        _Other -> dist_accept_bridge_loop()
     end.
 
 extract_payload(#{payload := P}) -> P;
