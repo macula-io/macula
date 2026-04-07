@@ -465,26 +465,42 @@ handle_disconnect(State) ->
                           recv_buffer = <<>>},
     {noreply, schedule_failover(State2)}.
 
-%% Pick next relay (round-robin) and schedule reconnect with exponential backoff + jitter.
-schedule_failover(#state{relays = Relays, relay_index = CurrentIdx,
-                          reconnect_attempt = Attempt} = State) ->
+%% Pick next relay and schedule reconnect with exponential backoff + jitter.
+%% Uses geographic discovery if available, falls back to round-robin.
+schedule_failover(#state{reconnect_attempt = Attempt} = State) ->
+    {NextUrl, NextState} = select_failover_relay(State),
+    {NextHost, NextPort} = parse_url(NextUrl),
+    BackoffMs = backoff_ms(Attempt),
+    erlang:send_after(BackoffMs, self(), connect),
+    ?LOG_INFO("[relay_client] Failover to ~s in ~bms (attempt ~b)",
+              [NextUrl, BackoffMs, Attempt + 1]),
+    NextState#state{url = NextUrl, host = NextHost, port = NextPort,
+                    status = disconnected, reconnect_attempt = Attempt + 1,
+                    previous_host = State#state.host}.
+
+%% Try geographic discovery first, fall back to round-robin.
+select_failover_relay(#state{host = CurrentHost} = State) ->
+    CurrentHostname = list_to_binary(CurrentHost),
+    case try_discovery_failover(CurrentHostname) of
+        {ok, Url} ->
+            {Url, State};
+        {error, _} ->
+            round_robin_failover(State)
+    end.
+
+try_discovery_failover(CurrentHostname) ->
+    try macula_relay_discovery:nearest_except(CurrentHostname)
+    catch _:_ -> {error, discovery_unavailable}
+    end.
+
+round_robin_failover(#state{relays = Relays, relay_index = CurrentIdx} = State) ->
     NumRelays = length(Relays),
-    %% Try a different relay if available
     NextIdx = case NumRelays > 1 of
         true -> (CurrentIdx + 1) rem NumRelays;
         false -> CurrentIdx
     end,
     NextUrl = lists:nth(NextIdx + 1, Relays),
-    {NextHost, NextPort} = parse_url(NextUrl),
-    %% Exponential backoff with jitter (±30%)
-    BackoffMs = backoff_ms(Attempt),
-    erlang:send_after(BackoffMs, self(), connect),
-    ?LOG_INFO("[relay_client] Failover to ~s in ~bms (attempt ~b)",
-              [NextUrl, BackoffMs, Attempt + 1]),
-    State#state{relay_index = NextIdx, url = NextUrl, host = NextHost,
-                port = NextPort, status = disconnected,
-                reconnect_attempt = Attempt + 1,
-                previous_host = State#state.host}.
+    {NextUrl, State#state{relay_index = NextIdx}}.
 
 backoff_ms(Attempt) ->
     Base = min(?RECONNECT_BASE_MS * (1 bsl min(Attempt, 10)), ?RECONNECT_MAX_MS),
