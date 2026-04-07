@@ -75,6 +75,9 @@ init(#{client := Client, bridge_sock := BridgeSock, send_topic := SendTopic,
        metrics := Metrics}) ->
     process_flag(trap_exit, true),
 
+    %% Socket ownership is transferred by the caller (start_supervised_bridge)
+    %% via gen_tcp:controlling_process AFTER start_link returns.
+
     MonRef = erlang:monitor(process, Client),
     {ok, SubRef} = subscribe_to_tunnel(Client, RecvTopic),
 

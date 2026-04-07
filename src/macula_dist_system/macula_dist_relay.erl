@@ -297,9 +297,8 @@ start_supervised_bridge(Client, BridgeSock, SendTopic, RecvTopic, TunnelId, Key)
     },
     case macula_dist_bridge_sup:start_bridge(BridgeArgs) of
         {ok, Pid} ->
-            %% Transfer socket ownership to the bridge gen_server.
-            %% Without this, if the calling process exits (e.g., accept setup),
-            %% the socket gets closed and the bridge reader dies immediately.
+            %% Transfer socket ownership from creating process to bridge.
+            %% Must be called by the current owner (this process).
             gen_tcp:controlling_process(BridgeSock, Pid),
             ?LOG_INFO("[dist_relay] Supervised bridge ~p for ~s", [Pid, TunnelId]),
             {ok, Pid};
