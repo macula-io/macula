@@ -10,19 +10,19 @@
 </p>
 
 <p align="center">
-  <strong>BEAM-native HTTP/3 mesh networking for decentralized applications</strong>
+  <strong>BEAM-native HTTP/3 mesh networking for distributed applications</strong>
 </p>
 
 ---
 
 ## What is Macula?
 
-Macula is an **Erlang/OTP library** that provides a complete distributed mesh networking stack over HTTP/3 (QUIC). It enables BEAM applications to form self-organizing networks with:
+Macula is an **Erlang/OTP library** that provides a complete distributed mesh networking stack over HTTP/3 (QUIC). It enables BEAM applications to form relay-assisted mesh networks with:
 
+- **Federated relay mesh** -- outbound-only connections, no open ports
 - **Zero configuration clustering** via UDP multicast gossip
 - **NAT-friendly transport** using QUIC (single UDP port)
-- **Decentralized service discovery** via Kademlia DHT
-- **Capability-based security** with DID identities and UCAN tokens
+- **Erlang distribution over relay** -- `net_adm:ping` across firewalls
 
 <p align="center">
   <img src="assets/mesh-architecture.svg" alt="Macula Mesh Architecture" width="100%">
@@ -88,10 +88,10 @@ end).
 
 | Technique | Status | Description |
 |-----------|--------|-------------|
-| **Hole Punching** | Adaptive | Direct P2P through NAT |
+| **Relay Mesh** | Primary | Outbound-only, relays route everything |
 | **STUN-like Probing** | Built-in | Reflexive address detection |
-| **Relay Fallback** | Automatic | When direct fails |
-| **Connection Upgrade** | Transparent | Relay → Direct when possible |
+| **Gossip Discovery** | Automatic | LAN nodes find each other via multicast |
+| **Multi-relay Failover** | Transparent | Automatic failover across relay list |
 
 ### Gossip Clustering
 
@@ -142,7 +142,7 @@ gen_server:call({Name, 'other@remote-host'}, Request).  %% works
 
 See [Distribution Over Mesh Guide](docs/guides/DIST_OVER_MESH_GUIDE.md) for details.
 
-### Content Transfer (P2P Artifacts)
+### Content Transfer (Mesh Artifacts)
 
 <p align="center">
   <img src="assets/content_transfer_flow.svg" alt="Content Transfer" width="100%">
@@ -163,7 +163,7 @@ Content-addressed storage and transfer for distributing OTP releases across the 
 | **MCID** | Content-addressed identifiers (BLAKE3/SHA256) |
 | **Merkle verification** | Chunk-level integrity |
 | **Parallel download** | From multiple providers |
-| **Want/Have/Block** | Efficient P2P protocol |
+| **Want/Have/Block** | Efficient mesh protocol |
 
 ### Authorization (DID + UCAN)
 
@@ -275,13 +275,14 @@ end).
 
 | Guide | Description |
 |-------|-------------|
+| [Getting Started](docs/getting-started.md) | Connect to the relay mesh in 5 minutes |
+| [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Relay-tunneled Erlang distribution |
 | [Cluster API Guide](docs/guides/CLUSTER_API_GUIDE.md) | Clustering and distribution |
 | [Gossip Clustering Guide](docs/guides/GOSSIP_CLUSTERING_GUIDE.md) | UDP multicast discovery |
-| [Content Transfer Guide](docs/guides/CONTENT_TRANSFER_GUIDE.md) | P2P artifact distribution |
+| [Content Transfer Guide](docs/guides/CONTENT_TRANSFER_GUIDE.md) | Mesh artifact distribution |
 | [NAT Traversal Guide](docs/guides/NAT_TRAVERSAL_DEVELOPER_GUIDE.md) | NAT techniques |
 | [DHT Guide](docs/guides/DHT_GUIDE.md) | Kademlia DHT internals |
 | [Authorization Guide](docs/guides/AUTHORIZATION_GUIDE.md) | DID/UCAN security |
-| [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Relay-tunneled Erlang distribution |
 | [TLS Configuration](docs/operator/TLS_CONFIGURATION.md) | Production TLS setup |
 
 ---
@@ -322,7 +323,7 @@ macula_root (application supervisor)
 ├── macula_bridge_system (hierarchical mesh escalation)
 ├── macula_platform_system (CRDT coordination)
 ├── macula_registry_system (package distribution)
-├── macula_content_system (P2P content transfer)
+├── macula_content_system (mesh content transfer)
 ├── macula_cert_system (TLS certificate management)
 └── macula_dist_system (Erlang distribution)
     ├── macula_dist_bridge_sup (relay tunnel bridges)

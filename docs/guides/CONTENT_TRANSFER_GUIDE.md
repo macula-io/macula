@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Macula Content System provides **native BEAM content-addressed transfer** for P2P distribution of OTP releases and artifacts across the mesh. It enables nodes to publish, discover, and fetch content without external dependencies like IPFS or container registries.
+The Macula Content System provides **native BEAM content-addressed transfer** for distributing OTP releases and artifacts across the relay mesh. It enables nodes to publish, discover, and fetch content without external dependencies like IPFS or container registries.
 
 **Key Features:**
 - Content-addressed storage (same content = same identifier everywhere)
@@ -20,7 +20,7 @@ The Macula ecosystem needs a way to distribute artifacts (OTP releases, packages
 - External protocols (IPFS, BitTorrent) - duplicate NAT traversal
 - Centralized package hosts - single point of failure
 
-A native BEAM solution leverages the existing mesh infrastructure, including NAT traversal (v0.12.0+), DHT-based discovery, and direct P2P connections.
+A native BEAM solution leverages the existing relay mesh infrastructure, including DHT-based discovery and relay-routed transport.
 
 ## Protocol Design
 

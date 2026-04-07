@@ -2,7 +2,7 @@
 
 ## Overview
 
-Macula uses a **Kademlia Distributed Hash Table (DHT)** for decentralized service discovery and peer-to-peer routing. This document describes how Kademlia principles are implemented in the HTTP/3 mesh network.
+Macula uses a **Kademlia Distributed Hash Table (DHT)** for service discovery and procedure routing between relay nodes. In the federated relay mesh, the DHT runs between relays (not between end nodes). Nodes discover services by querying their relay, which routes lookups through the Kademlia network of peered relays.
 
 **Key Reference:** [Kademlia: A Peer-to-peer Information System Based on the XOR Metric](http://www.scs.stanford.edu/~dm/home/papers/kpos.pdf) (Maymounkov & Mazières, 2002)
 

@@ -150,7 +150,7 @@ Cache discovered subscribers with TTL-based expiration.
 
 ### Problem
 
-After discovering a subscriber, we still need their endpoint address. Storing this mapping allows direct P2P connections without repeated DHT lookups.
+After discovering a subscriber, we still need their endpoint address. Storing this mapping allows relay-routed connections without repeated DHT lookups.
 
 ### Solution
 

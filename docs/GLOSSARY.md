@@ -57,12 +57,12 @@ A **Macula Cluster** is a small, local deployment of cooperating Macula nodes. T
 - **Intra-cluster mesh** - Nodes form a fully-connected mesh within the Cluster
 - **Deployment-agnostic** - Can run on Kubernetes, Docker, systemd, Nerves, or single process
 - **Common DHT** - Peers discover each other via local DHT
-- **Direct P2P** - Nodes communicate directly within Cluster (low latency)
+- **Direct QUIC** - Nodes communicate directly within Cluster via LAN (low latency)
 - **Typical size** - 1-10 nodes
 
 **Intra-cluster communication:**
-- Currently: Erlang distributed mesh (`node@host` connections)
-- Future: QUIC Distribution when operational (see v1.1.0+ roadmap)
+- LAN: Direct Erlang distribution or QUIC
+- WAN: Erlang distribution over relay mesh (v0.40.0+)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -363,7 +363,7 @@ Cluster (Home)           ←── Smallest unit
 A **peer** is any node participating in the Macula mesh network. Peers can:
 - Publish and subscribe to topics
 - Advertise and call RPC procedures
-- Communicate directly with other peers (P2P)
+- Communicate with other nodes through the relay mesh
 
 Internally implemented by `macula_peer.erl`.
 
@@ -472,7 +472,7 @@ The **Bootstrap System** is a subsystem present in **every node** that handles D
 ### Mesh
 
 The **mesh** is the network topology formed by interconnected Macula peers. Unlike hub-and-spoke architectures, the mesh allows:
-- Direct peer-to-peer communication
+- Communication through relay mesh (WAN) or direct QUIC (LAN)
 - Multiple paths between nodes
 - No single point of failure
 
@@ -520,7 +520,7 @@ The **mesh** is the network topology formed by interconnected Macula peers. Unli
 
 Macula's approach:
 - **QUIC/UDP** - Better NAT compatibility than TCP
-- **Gateway relay** - Fallback when direct P2P fails
+- **Relay mesh** - Primary WAN connectivity (outbound QUIC to relays)
 - **Future:** STUN/TURN/ICE for hole punching
 
 **See also:** NAT Traversal documentation in the guides section.

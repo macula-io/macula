@@ -1,10 +1,8 @@
 # Macula Documentation
 
-> **Audience:** All
-> **Last Updated:** 2025-11-28
-> **Version:** Macula v0.10.0+
+> **Version:** v0.43.0+ (April 2026)
 
-Macula is a distributed platform for building decentralized applications using HTTP/3 (QUIC) transport with P2P mesh networking.
+Macula is an Erlang/OTP library for building distributed applications over a **federated relay mesh** using HTTP/3 (QUIC) transport.
 
 ---
 
@@ -12,118 +10,52 @@ Macula is a distributed platform for building decentralized applications using H
 
 | I want to... | Go to... |
 |--------------|----------|
-| Understand why Macula exists | [Business Overview](business/) |
-| Understand the socio-economic vision | [Motivation](business/MOTIVATION.md) |
-| Compare Macula to Kafka/RabbitMQ/NATS | [Technology Comparison](business/COMPARISON.md) |
-| Get started quickly | [Quick Start](user/QUICK_START.md) |
-| Build my first app | [Hello World Tutorial](user/HELLO_WORLD.md) |
-| Deploy to production | [Operator Guide](operator/) |
-| Understand the architecture | [Architecture Overview](../ARCHITECTURE.md) |
-| Use TWEANN or event sourcing | [Ecosystem Libraries](ecosystem/) |
-| Contribute to Macula | [Developer Guide](developer/) |
+| Get started quickly | [Getting Started](getting-started.md) |
+| Understand pub/sub messaging | [PubSub Guide](guides/PUBSUB_GUIDE.md) |
+| Make RPC calls across the mesh | [RPC Guide](guides/RPC_GUIDE.md) |
+| Connect nodes across firewalls | [Distribution Over Mesh](guides/DIST_OVER_MESH_GUIDE.md) |
+| Form a LAN cluster | [Clustering Guide](guides/CLUSTERING_GUIDE.md) |
+| Configure TLS | [TLS Guide](operator/TLS_GUIDE.md) |
+| Deploy to production | [Operator Guides](operator/) |
 | Look up terminology | [Glossary](GLOSSARY.md) |
+| Contribute to Macula | [Development Guide](guides/DEVELOPMENT.md) |
 
 ---
 
-## Documentation by Audience
+## Guides
 
-### For Business Leaders
+Feature guides for developers building on Macula:
 
-Understand the strategic value of decentralized systems:
+| Guide | Description |
+|-------|-------------|
+| [PubSub](guides/PUBSUB_GUIDE.md) | Publish/subscribe messaging through the relay mesh |
+| [RPC](guides/RPC_GUIDE.md) | Remote procedure calls with DHT-based discovery |
+| [Distribution Over Mesh](guides/DIST_OVER_MESH_GUIDE.md) | Erlang distribution tunneled through relays |
+| [Clustering](guides/CLUSTERING_GUIDE.md) | LAN cluster formation via gossip + static nodes |
+| [Content Transfer](guides/CONTENT_TRANSFER_GUIDE.md) | Content-addressed artifact distribution |
+| [DHT](guides/DHT_GUIDE.md) | Kademlia DHT between relay nodes |
+| [NAT & Connectivity](guides/NAT_GUIDE.md) | NAT types, detection, and relay-first connectivity |
+| [Authorization](guides/AUTHORIZATION_GUIDE.md) | DID identities and UCAN capability tokens |
+| [Protocol Gatekeeper](guides/PROTOCOL_GATEKEEPER_GUIDE.md) | Protocol-level security callbacks |
+| [MRI](guides/MRI_GUIDE.md) | Macula Resource Identifiers |
 
-- **[Platform Overview](business/OVERVIEW.md)** - What Macula enables
-- **[Why Decentralized?](business/WHY_DECENTRALIZED.md)** - The case for decentralization
-- **[Why BEAM?](business/WHY_BEAM.md)** - Technology foundation
-- **[Use Cases](business/USE_CASES.md)** - Business applications
+## Operator Guides
 
-### For Users (Application Developers)
-
-Build applications on the Macula mesh:
-
-- **[Quick Start](user/QUICK_START.md)** - 15-minute mesh setup
-- **[Hello World](user/HELLO_WORLD.md)** - Your first distributed app
-- **[RPC Guide](developer/RPC_GUIDE.md)** - Remote procedure calls
-- **[PubSub Guide](developer/PUBSUB_GUIDE.md)** - Publish/subscribe messaging
-
-### For Operators
-
-Run Macula in production:
-
-- **[Performance Guide](operator/PERFORMANCE_GUIDE.md)** - Tuning and optimization
-- **[Monitoring Guide](operator/MONITORING_GUIDE.md)** - Metrics, logs, and alerting
-- **[Troubleshooting Guide](operator/TROUBLESHOOTING_GUIDE.md)** - Common issues and solutions
-- **[QUIC/TLS Setup](operator/QUIC_TLS_GATEWAY_SETUP.md)** - Gateway TLS configuration
-- **[Memory Management](../architecture/memory_management/README.md)** - Production-ready leak prevention
-
-### For Developers (Contributors)
-
-Contribute to Macula core:
-
-- **[Development Guide](developer/DEVELOPMENT.md)** - Local development setup
-- **[RPC Guide](developer/RPC_GUIDE.md)** - Understanding RPC internals
-- **[PubSub Guide](developer/PUBSUB_GUIDE.md)** - Understanding PubSub internals
-- **[Project Structure](../architecture/MACULA_PROJECT_STRUCTURE.md)** - Module organization
-
----
-
-## Guides (Deep-Dives)
-
-### NAT Traversal
-- **[NAT Types Explained](guides/NAT_TYPES_EXPLAINED.md)** - Understanding NAT classification
-- **[NAT Developer Guide](guides/NAT_TRAVERSAL_DEVELOPER_GUIDE.md)** - API usage and code examples
-- **[NAT Configuration](guides/NAT_CONFIGURATION.md)** - Configuration reference
-- **[NAT Architecture](guides/NAT_ARCHITECTURE.md)** - Visual diagrams and flows
-
-### DHT & Networking
-- **[DHT Guide](guides/DHT_GUIDE.md)** - Kademlia DHT architecture
-
----
-
-## Comparisons
-
-- **[vs Distributed Erlang](comparisons/VS_DISTRIBUTED_ERLANG.md)** - QUIC benefits over inet_dist
-- **[Comparisons Overview](comparisons/README.md)** - Technology comparison matrix
-
----
-
-## Ecosystem Libraries
-
-Related libraries that extend Macula's capabilities:
-
-- **[Ecosystem Overview](ecosystem/)** - All related libraries
-- **[Macula TWEANN](ecosystem/TWEANN.md)** - Evolutionary neural networks for distributed AI
-- **[Reckon Architecture](ecosystem/RECKON.md)** - Event sourcing patterns for BEAM applications
-
----
+| Guide | Description |
+|-------|-------------|
+| [TLS Setup](operator/TLS_GUIDE.md) | Production TLS with Let's Encrypt and QUIC |
+| [Monitoring](operator/MONITORING_GUIDE.md) | Metrics, logs, and alerting |
+| [Performance](operator/PERFORMANCE_GUIDE.md) | Tuning and optimization |
+| [Troubleshooting](operator/TROUBLESHOOTING_GUIDE.md) | Common issues and solutions |
+| [mDNS Setup](operator/MDNS_SETUP.md) | Optional LAN discovery |
 
 ## Architecture
 
-Core architecture documentation lives in [`../architecture/`](../architecture/):
-
-- **[Roadmap](../architecture/ROADMAP.md)** - Implementation roadmap
-- **[C4 Diagrams](../architecture/C4_DIAGRAMS.md)** - Visual architecture overview
-- **[Multi-Tenancy](../architecture/MULTI_TENANCY.md)** - Realm isolation mechanisms
-- **[Module Dependencies](../architecture/MODULE_DEPENDENCIES.md)** - Module relationship map
-- **[Memory Management](../architecture/memory_management/README.md)** - Production hardening
-
----
-
-## Project Links
-
-- **[Main README](../README.md)** - Project overview
-- **[Getting Started](../GETTING_STARTED.md)** - Installation guide
-- **[Changelog](../CHANGELOG.md)** - Version history
-- **[Examples](../examples/)** - Demo applications
-- **[GitHub Issues](https://github.com/macula-io/macula/issues)** - Bug reports and features
-
----
-
-## Archive
-
-Historical and superseded documentation:
-
-- **[Archive Index](archive/)** - Code reviews, migration docs, historical analysis
-- **[Sessions Archive](archive/sessions/)** - Development session summaries
+| Document | Description |
+|----------|-------------|
+| [Supervision Tree](../architecture/FULL_SUPERVISION_TREE.md) | Complete OTP supervision hierarchy |
+| [Roadmap](../architecture/ROADMAP.md) | Implementation roadmap |
+| [C4 Diagrams](../architecture/C4_DIAGRAMS.md) | Visual architecture overview |
 
 ---
 
