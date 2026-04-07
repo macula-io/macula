@@ -88,11 +88,8 @@ local_address_changed(_Conn, _NewAddr, State) ->
     {ok, State}.
 
 %% @doc Handle peer address changed (NAT rebinding)
-%% This callback is triggered when the peer's observed address changes,
-%% typically due to NAT rebinding. We need to:
-%% 1. Log the address change
-%% 2. Invalidate cached NAT profile for the peer
-%% 3. Update connection tracking
+%% This callback is triggered when the peer's observed address changes.
+%% Log the change and notify the gateway.
 peer_address_changed(Conn, NewAddr, #{gateway_pid := GatewayPid} = State) ->
     ?LOG_WARNING("Peer address changed!"),
     ?LOG_INFO("  Connection: ~p", [Conn]),
@@ -100,21 +97,6 @@ peer_address_changed(Conn, NewAddr, #{gateway_pid := GatewayPid} = State) ->
 
     %% Notify gateway of address change (it can update client tracking)
     GatewayPid ! {peer_address_changed, Conn, NewAddr},
-
-    %% If we have a node_id for this connection, invalidate its NAT profile
-    %% The new address means NAT rebinding occurred - cached profile is stale
-    case maps:get(node_id, State, undefined) of
-        undefined ->
-            ?LOG_DEBUG("No node_id in state, skipping NAT cache invalidation");
-        NodeId ->
-            ?LOG_INFO("Invalidating NAT cache for node ~s", [NodeId]),
-            case whereis(macula_nat_cache) of
-                undefined ->
-                    ?LOG_DEBUG("NAT cache not running");
-                _Pid ->
-                    macula_nat_cache:invalidate(NodeId)
-            end
-    end,
 
     {ok, State#{last_peer_address => NewAddr}};
 peer_address_changed(Conn, NewAddr, State) ->

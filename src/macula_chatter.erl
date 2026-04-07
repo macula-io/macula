@@ -405,28 +405,13 @@ decode_chat_message(Payload) ->
 %%% Delivery Metrics
 %%%===================================================================
 
-%% @private Get NAT type from environment or cache
+%% @private Get NAT type from environment variable (informational only).
+%% NAT traversal was removed — relay mesh handles connectivity.
 get_nat_type() ->
     case os:getenv("NAT_TYPE") of
-        false ->
-            case whereis(macula_nat_cache) of
-                undefined -> undefined;
-                _Pid ->
-                    case macula_nat_cache:get_local() of
-                        {ok, #{mapping_policy := M, filtering_policy := F}} ->
-                            classify_nat_type(M, F);
-                        _ -> undefined
-                    end
-            end;
-        Type ->
-            list_to_binary(Type)
+        false -> undefined;
+        Type -> list_to_binary(Type)
     end.
-
-%% @private Classify NAT type from policies
-classify_nat_type(endpoint_independent, endpoint_independent) -> <<"full_cone">>;
-classify_nat_type(endpoint_independent, address_dependent) -> <<"restricted">>;
-classify_nat_type(endpoint_independent, address_and_port_dependent) -> <<"port_restricted">>;
-classify_nat_type(_, _) -> <<"symmetric">>.
 
 %% @private Calculate delivery rate for a single peer
 calc_peer_delivery_rate(#peer_tracker{max_seq = 0}) -> 0.0;

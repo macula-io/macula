@@ -14,6 +14,7 @@ Macula is an Erlang/OTP library for building distributed applications over a **f
 | Understand pub/sub messaging | [PubSub Guide](guides/PUBSUB_GUIDE.md) |
 | Make RPC calls across the mesh | [RPC Guide](guides/RPC_GUIDE.md) |
 | Connect nodes across firewalls | [Distribution Over Mesh](guides/DIST_OVER_MESH_GUIDE.md) |
+
 | Form a LAN cluster | [Clustering Guide](guides/CLUSTERING_GUIDE.md) |
 | Configure TLS | [TLS Guide](operator/TLS_GUIDE.md) |
 | Deploy to production | [Operator Guides](operator/) |
@@ -34,7 +35,6 @@ Feature guides for developers building on Macula:
 | [Clustering](guides/CLUSTERING_GUIDE.md) | LAN cluster formation via gossip + static nodes |
 | [Content Transfer](guides/CONTENT_TRANSFER_GUIDE.md) | Content-addressed artifact distribution |
 | [DHT](guides/DHT_GUIDE.md) | Kademlia DHT between relay nodes |
-| [NAT & Connectivity](guides/NAT_GUIDE.md) | NAT types, detection, and relay-first connectivity |
 | [Authorization](guides/AUTHORIZATION_GUIDE.md) | DID identities and UCAN capability tokens |
 | [Protocol Gatekeeper](guides/PROTOCOL_GATEKEEPER_GUIDE.md) | Protocol-level security callbacks |
 | [MRI](guides/MRI_GUIDE.md) | Macula Resource Identifiers |

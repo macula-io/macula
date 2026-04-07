@@ -80,19 +80,6 @@ end).
 {ok, #{result := 5}} = macula:call(Peer, <<"math.add">>, #{a => 2, b => 3}).
 ```
 
-### NAT Traversal
-
-<p align="center">
-  <img src="assets/nat_traversal_flow.svg" alt="NAT Traversal" width="100%">
-</p>
-
-| Technique | Status | Description |
-|-----------|--------|-------------|
-| **Relay Mesh** | Primary | Outbound-only, relays route everything |
-| **STUN-like Probing** | Built-in | Reflexive address detection |
-| **Gossip Discovery** | Automatic | LAN nodes find each other via multicast |
-| **Multi-relay Failover** | Transparent | Automatic failover across relay list |
-
 ### Gossip Clustering
 
 <p align="center">

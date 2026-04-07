@@ -17,7 +17,7 @@
 %%%
 %%% 1. Try pooled connection (fastest, cached)
 %%% 2. Try direct QUIC connection (new connection)
-%%% 3. Fall back to NAT-aware routing via `macula_nat_connector':
+%%% 3. Fall back returns error (NAT traversal removed — relay mesh handles connectivity):
 %%%    a. Direct connection (if NAT allows)
 %%%    b. Hole punch (coordinated NAT traversal)
 %%%    c. Relay via gateway (guaranteed fallback)
@@ -354,58 +354,12 @@ do_quic_send({error, Reason}, Conn, Stream) ->
     {error, {send_failed, Reason}}.
 
 %%%===================================================================
-%%% NAT-Aware Routing (v0.12.0+)
+%%% NAT-Aware Routing (stub — NAT traversal removed, relay mesh handles connectivity)
 %%%===================================================================
 
 %% @private
-%% @doc Send message via NAT-aware connector (hole punch, relay fallback).
--spec send_via_nat_connector(binary(), binary(), binary(), map()) -> ok | {error, term()}.
-send_via_nat_connector(LocalNodeId, TargetNodeId, MessageBinary, Opts) ->
-    ?LOG_DEBUG("NAT-aware send: ~s -> ~s", [LocalNodeId, TargetNodeId]),
-
-    %% Use macula_nat_connector for intelligent routing
-    ConnectResult = macula_nat_connector:connect(LocalNodeId, TargetNodeId, Opts),
-    send_on_nat_connection(ConnectResult, MessageBinary, TargetNodeId).
-
-%% @private NAT connection established - send message
-send_on_nat_connection({ok, Conn, Strategy}, MessageBinary, TargetNodeId) ->
-    ?LOG_INFO("NAT connection established to ~s via ~p", [TargetNodeId, Strategy]),
-    StreamResult = macula_quic:open_stream(Conn),
-    send_on_nat_stream(StreamResult, Conn, MessageBinary, Strategy);
-%% @private NAT connection failed
-send_on_nat_connection({error, Reason}, _MessageBinary, TargetNodeId) ->
-    ?LOG_WARNING("NAT connection to ~s failed: ~p", [TargetNodeId, Reason]),
-    {error, {nat_connection_failed, Reason}}.
-
-%% @private Stream opened - send message
-send_on_nat_stream({ok, Stream}, Conn, MessageBinary, Strategy) ->
-    SendResult = macula_quic:send(Stream, MessageBinary),
-    handle_nat_send_result(SendResult, Conn, Stream, Strategy);
-%% @private Stream open failed
-send_on_nat_stream({error, Reason}, Conn, _MessageBinary, _Strategy) ->
-    macula_nat_connector:disconnect(Conn),
-    {error, {stream_failed, Reason}}.
-
-%% @private Send succeeded - graceful shutdown and return connection to pool
-handle_nat_send_result(ok, Conn, Stream, Strategy) ->
-    timer:sleep(50),
-    quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0),
-    %% Don't disconnect - keep connection for potential reuse
-    ?LOG_DEBUG("NAT-aware send succeeded via ~p", [Strategy]),
-    maybe_cache_nat_connection(Conn, Strategy),
-    ok;
-%% @private Send failed
-handle_nat_send_result({error, Reason}, Conn, Stream, _Strategy) ->
-    quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0),
-    macula_nat_connector:disconnect(Conn),
-    {error, {send_failed, Reason}}.
-
-%% @private Cache successful NAT connections for reuse
-maybe_cache_nat_connection(_Conn, relay) ->
-    %% Don't cache relay connections - they may have per-message overhead
-    ok;
-maybe_cache_nat_connection(Conn, _Strategy) ->
-    %% For direct and hole_punch, could cache the connection
-    %% For now, just disconnect to keep it simple
-    macula_nat_connector:disconnect(Conn),
-    ok.
+%% @doc NAT-aware routing removed. Returns error so callers fall through to other strategies.
+-spec send_via_nat_connector(binary(), binary(), binary(), map()) -> {error, term()}.
+send_via_nat_connector(_LocalNodeId, TargetNodeId, _MessageBinary, _Opts) ->
+    ?LOG_DEBUG("NAT connector removed — cannot route to ~s without endpoint", [TargetNodeId]),
+    {error, nat_traversal_removed}.

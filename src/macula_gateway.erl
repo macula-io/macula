@@ -98,14 +98,9 @@
 
 -ifdef(TEST).
 -export([
-    format_ip_address/1,
-    normalize_role/1,
-    ensure_port_list/1,
-    get_punch_field/3,
     should_forward_request/2,
     get_advertise_port/1,
     get_gateway_hostname/0,
-    get_peer_address/1,
     find_sibling_in_children/2,
     find_gateway_system_in_children/1,
     format_peer_for_pong/1,
@@ -627,20 +622,11 @@ handle_cast({distribute_publish, Topic, Payload}, State) ->
 
     {noreply, State};
 
-%% @doc Handle message routed from QUIC server (async) - v0.12.0 format with peer address.
+%% @doc Handle message routed from QUIC server (async) - with peer address.
 %% Routes decoded QUIC messages to appropriate business logic handlers.
-%% PeerAddr is captured at receive time for NAT detection (stream may be closed by now).
-handle_cast({route_message, MessageType, Message, Stream, PeerAddr}, State) ->
+handle_cast({route_message, MessageType, Message, Stream, _PeerAddr}, State) ->
     ?LOG_DEBUG("[Gateway] route_message: type=~p, stream=~p", [MessageType, Stream]),
-    %% Store peer address in process dictionary for NAT probe handling
-    %% This allows handle_nat_probe to use the address even if stream is closed
-    put(current_peer_addr, PeerAddr),
-    %% Use existing handle_decoded_message logic
-    Result = handle_decoded_message({ok, {MessageType, Message}}, Stream, State),
-    %% Extract new state from {noreply, NewState} tuple
-    NewState = element(2, Result),
-    erase(current_peer_addr),
-    {noreply, NewState};
+    handle_decoded_message({ok, {MessageType, Message}}, Stream, State);
 
 %% @doc Handle message routed from QUIC server (async) - legacy format without peer address.
 %% For backward compatibility with older QUIC server versions.
@@ -1615,31 +1601,16 @@ handle_decoded_message({ok, {pong, _PongMsg}}, _Stream, State) ->
     ?LOG_DEBUG("Received PONG - connection alive"),
     {noreply, State};
 
-%% Handle NAT_PROBE message - respond with peer's reflexive address for NAT detection.
-%% This enables NATCracker-style NAT type detection by providing the reflexive address.
-handle_decoded_message({ok, {nat_probe, NatProbeMsg}}, Stream, State) ->
-    ?LOG_DEBUG("[Gateway] Received NAT_PROBE message"),
-    handle_nat_probe(Stream, NatProbeMsg, State);
-
-%% Handle NAT_PROBE_REPLY message (client-side, for completeness).
-%% Forwards to NAT detector for request_id correlation and observation processing.
-handle_decoded_message({ok, {nat_probe_reply, NatProbeReplyMsg}}, _Stream, State) ->
-    ?LOG_DEBUG("[Gateway] Received NAT_PROBE_REPLY: ~p", [NatProbeReplyMsg]),
-    %% Forward to NAT detector if running
-    case whereis(macula_nat_detector) of
-        undefined ->
-            ?LOG_DEBUG("[Gateway] NAT detector not running, ignoring reply");
-        Pid ->
-            ?LOG_DEBUG("[Gateway] Forwarding NAT_PROBE_REPLY to detector ~p", [Pid]),
-            %% Forward complete reply message for correlation via request_id
-            macula_nat_detector:handle_probe_reply(NatProbeReplyMsg)
-    end,
+%% NAT_PROBE, NAT_PROBE_REPLY, PUNCH_COORDINATE — removed (relay mesh, no NAT traversal)
+handle_decoded_message({ok, {nat_probe, _}}, _Stream, State) ->
+    ?LOG_DEBUG("[Gateway] Ignoring NAT_PROBE (NAT traversal removed)"),
     {noreply, State};
-
-%% Handle PUNCH_COORDINATE message - triggers coordinated hole punch attempt.
-handle_decoded_message({ok, {punch_coordinate, PunchCoordMsg}}, _Stream, State) ->
-    ?LOG_DEBUG("Received PUNCH_COORDINATE message"),
-    handle_punch_coordinate(PunchCoordMsg, State);
+handle_decoded_message({ok, {nat_probe_reply, _}}, _Stream, State) ->
+    ?LOG_DEBUG("[Gateway] Ignoring NAT_PROBE_REPLY (NAT traversal removed)"),
+    {noreply, State};
+handle_decoded_message({ok, {punch_coordinate, _}}, _Stream, State) ->
+    ?LOG_DEBUG("[Gateway] Ignoring PUNCH_COORDINATE (NAT traversal removed)"),
+    {noreply, State};
 
 %% Handle RPC_REQUEST message (NATS-style async RPC) - execute local handler and send reply.
 handle_decoded_message({ok, {rpc_request, RequestMsg}}, Stream, State) ->
@@ -1764,169 +1735,6 @@ check_and_register_diagnostics(_Pid, GatewayPid) ->
 
 %% REMOVED: unwrap_result_to_map/1 - no longer needed since gateway is bootstrap-only
 %% (was used for RPC result unwrapping)
-
-%%%===================================================================
-%%% NAT Traversal Functions
-%%%===================================================================
-
-%% @doc Handle NAT_PROBE message.
-%% Gets the peer's reflexive address and sends NAT_PROBE_REPLY.
-%% This enables NATCracker-style NAT type detection.
-%%
-%% v0.12.0 fix: Uses cached peer address from process dictionary (set by route_message)
-%% because the stream may be closed by the time we process the message asynchronously.
--spec handle_nat_probe(term(), map(), #state{}) -> {noreply, #state{}}.
-handle_nat_probe(Stream, NatProbeMsg, State) ->
-    %% Extract node_id and request_id from probe message (support both atom and binary keys)
-    NodeId = maps:get(<<"node_id">>, NatProbeMsg, maps:get(node_id, NatProbeMsg, undefined)),
-    RequestId = maps:get(<<"request_id">>, NatProbeMsg, maps:get(request_id, NatProbeMsg, undefined)),
-
-    NodeIdHex = case NodeId of undefined -> <<"unknown">>; N -> binary:encode_hex(N) end,
-    ?LOG_DEBUG("[Gateway] Processing NAT_PROBE from node ~s", [NodeIdHex]),
-
-    %% Get the peer's reflexive address - try cached address first (v0.12.0+)
-    %% then fall back to calling peername on stream (may fail if stream closed)
-    PeerAddr = get_peer_address(Stream),
-    ?LOG_DEBUG("[Gateway] Peer address for NAT_PROBE: ~p", [PeerAddr]),
-    send_nat_probe_reply(PeerAddr, RequestId, Stream, State),
-
-    {noreply, State}.
-
-%% @private Get peer address from cache (v0.12.0+) or stream.
--spec get_peer_address(term()) -> {ok, {inet:ip_address(), inet:port_number()}} | {error, term()}.
-get_peer_address(Stream) ->
-    %% First try cached address from process dictionary (set by route_message v0.12.0+)
-    case get(current_peer_addr) of
-        {ok, {_IP, _Port}} = CachedAddr ->
-            ?LOG_DEBUG("Using cached peer address for NAT_PROBE"),
-            CachedAddr;
-        _ ->
-            %% Fall back to calling peername on stream (may fail if closed)
-            macula_quic:peername(Stream)
-    end.
-
-%% @private Send NAT_PROBE_REPLY with reflexive address.
--spec send_nat_probe_reply({ok, {inet:ip_address(), inet:port_number()}} | {error, term()},
-                           binary() | undefined, term(), #state{}) -> ok.
-send_nat_probe_reply({ok, {IP, Port}}, RequestId, Stream, State) ->
-    ?LOG_DEBUG("[Gateway] Sending NAT_PROBE_REPLY with reflexive ~p:~p", [IP, Port]),
-
-    %% Convert IP to binary string for serialization
-    IPBinary = format_ip_address(IP),
-
-    %% Build NAT_PROBE_REPLY message with request_id for correlation
-    ReplyMsg = #{
-        node_id => State#state.node_id,  % Our node ID (the observer)
-        request_id => RequestId,          % Echo back request_id for correlation
-        reflexive_ip => IPBinary,
-        reflexive_port => Port,
-        server_time => erlang:system_time(millisecond)
-    },
-
-    %% Encode and send reply
-    ReplyBinary = macula_protocol_encoder:encode(nat_probe_reply, ReplyMsg),
-    case macula_quic:send(Stream, ReplyBinary) of
-        ok ->
-            ?LOG_DEBUG("[Gateway] Sent NAT_PROBE_REPLY to ~p:~p", [IP, Port]),
-            ok;
-        {error, SendErr} ->
-            ?LOG_WARNING("[Gateway] Failed to send NAT_PROBE_REPLY: ~p", [SendErr]),
-            ok
-    end;
-
-send_nat_probe_reply({error, Reason}, _RequestId, _Stream, _State) ->
-    ?LOG_WARNING("Could not get peer address for NAT_PROBE: ~p", [Reason]),
-    ok.
-
-%% @doc Format IP address as binary string.
-%% Handles both IPv4 and IPv6 addresses.
--spec format_ip_address(inet:ip_address()) -> binary().
-format_ip_address({A, B, C, D}) ->
-    %% IPv4: {192, 168, 1, 1} -> <<"192.168.1.1">>
-    list_to_binary(io_lib:format("~p.~p.~p.~p", [A, B, C, D]));
-format_ip_address({A, B, C, D, E, F, G, H}) ->
-    %% IPv6: {0, 0, 0, 0, 0, 65535, 49320, 257} -> <<"::ffff:192.168.1.1">>
-    list_to_binary(io_lib:format("~4.16.0B:~4.16.0B:~4.16.0B:~4.16.0B:~4.16.0B:~4.16.0B:~4.16.0B:~4.16.0B",
-                                 [A, B, C, D, E, F, G, H])).
-
-%% @doc Handle PUNCH_COORDINATE message.
-%% Triggers coordinated hole punch attempt at the specified punch_time.
-%% Reports result back to coordinator via NAT coordinator API.
--spec handle_punch_coordinate(map(), #state{}) -> {noreply, #state{}}.
-handle_punch_coordinate(PunchCoordMsg, State) ->
-    %% Extract fields (support both atom and binary keys from MessagePack)
-    SessionId = get_punch_field(PunchCoordMsg, session_id, <<"session_id">>),
-    PeerId = get_punch_field(PunchCoordMsg, peer_id, <<"peer_id">>),
-    PeerHost = get_punch_field(PunchCoordMsg, peer_host, <<"peer_host">>),
-    PeerPorts = get_punch_field(PunchCoordMsg, peer_ports, <<"peer_ports">>),
-    PunchTime = get_punch_field(PunchCoordMsg, punch_time, <<"punch_time">>),
-    Role = get_punch_field(PunchCoordMsg, role, <<"role">>),
-
-    ?LOG_DEBUG("Starting hole punch to peer ~s, role=~p, punch_time=~p",
-               [binary:encode_hex(PeerId), normalize_role(Role), PunchTime]),
-
-    %% Build punch options
-    PunchOpts = #{
-        target_host => PeerHost,
-        target_ports => ensure_port_list(PeerPorts),
-        session_id => SessionId,
-        punch_time => PunchTime,
-        role => normalize_role(Role)
-    },
-
-    %% Spawn async process to execute hole punch and report result
-    NodeId = State#state.node_id,
-    spawn_link(fun() ->
-        execute_and_report_punch(PeerId, PunchOpts, SessionId, NodeId)
-    end),
-
-    {noreply, State}.
-
-%% @private
-%% @doc Execute hole punch and report result back to coordinator.
--spec execute_and_report_punch(binary(), map(), binary(), binary()) -> ok.
-execute_and_report_punch(PeerId, PunchOpts, SessionId, NodeId) ->
-    Ref = macula_hole_punch:execute_async(PeerId, PunchOpts, self()),
-    receive
-        {hole_punch_result, Ref, {ok, _Conn}} ->
-            ?LOG_INFO("Hole punch SUCCESS for session ~s",
-                      [binary:encode_hex(SessionId)]),
-            macula_nat_coordinator:report_result(SessionId, NodeId, success);
-        {hole_punch_result, Ref, {error, Reason}} ->
-            ?LOG_WARNING("Hole punch FAILED for session ~s: ~p",
-                         [binary:encode_hex(SessionId), Reason]),
-            macula_nat_coordinator:report_result(SessionId, NodeId, failure)
-    after 10000 ->
-        ?LOG_WARNING("Hole punch TIMEOUT for session ~s",
-                     [binary:encode_hex(SessionId)]),
-        macula_nat_coordinator:report_result(SessionId, NodeId, failure)
-    end,
-    ok.
-
-%% @private
-%% @doc Extract field from message supporting both atom and binary keys.
--spec get_punch_field(map(), atom(), binary()) -> term().
-get_punch_field(Msg, AtomKey, BinaryKey) ->
-    case maps:get(AtomKey, Msg, undefined) of
-        undefined -> maps:get(BinaryKey, Msg, undefined);
-        Value -> Value
-    end.
-
-%% @private
-%% @doc Normalize role from binary or atom to atom.
--spec normalize_role(binary() | atom()) -> initiator | target.
-normalize_role(<<"initiator">>) -> initiator;
-normalize_role(<<"target">>) -> target;
-normalize_role(initiator) -> initiator;
-normalize_role(target) -> target;
-normalize_role(_) -> initiator.  % Default to initiator
-
-%% @private
-%% @doc Ensure ports is a proper list of integers.
--spec ensure_port_list(term()) -> [inet:port_number()].
-ensure_port_list(Ports) when is_list(Ports) -> Ports;
-ensure_port_list(Port) when is_integer(Port) -> [Port];
-ensure_port_list(_) -> [].
 
 %%%===================================================================
 %%% RPC Handler Lookup from Peer System

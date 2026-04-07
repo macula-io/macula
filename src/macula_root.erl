@@ -8,11 +8,6 @@
 %% <pre>
 %% macula_root (this module - application root)
 %% ├── macula_routing_server (core DHT infrastructure - always on)
-%% ├── macula_nat_system (NAT traversal - always on)
-%% │   ├── macula_nat_detector
-%% │   ├── macula_hole_punch
-%% │   ├── macula_relay_registry
-%% │   └── macula_connection_upgrade
 %% ├── macula_bootstrap_system (bootstrap services - always on)
 %% │   ├── macula_bootstrap_server
 %% │   ├── macula_bootstrap_registry
@@ -82,7 +77,7 @@ init([]) ->
 
 %% @doc Client mode: minimal supervision tree for connecting to a realm server.
 %% Nodes run in client mode — ONE outbound QUIC connection, no gateway,
-%% no discovery, no NAT traversal. The realm server handles all routing.
+%% no discovery. The realm server handles all routing.
 init_mode(client) ->
     Version = get_app_version(),
     Realm = get_realm(),
@@ -208,10 +203,7 @@ init_mode(server) ->
         %% 1. Core DHT routing (always on)
         get_routing_server_spec(NodeID),
 
-        %% 2. NAT system (NAT detection, hole punching, relay)
-        get_nat_system_spec(),
-
-        %% 3. Bootstrap system
+        %% 2. Bootstrap system
         get_bootstrap_system_spec(Realm, HealthInterval),
 
         %% 4. Gateway system (accepts incoming QUIC connections)
@@ -234,23 +226,22 @@ init_mode(server) ->
     ],
 
     ?LOG_INFO("Starting subsystems:"),
-    ?LOG_INFO("  [0/11] MRI Registry + ETS Storage"),
-    ?LOG_INFO("  [1/11] Core DHT Routing"),
-    ?LOG_INFO("  [2/11] NAT System (Detection + Hole Punch + Relay)"),
-    ?LOG_INFO("  [3/11] Bootstrap System"),
-    ?LOG_INFO("  [4/11] Gateway System"),
+    ?LOG_INFO("  [0/10] MRI Registry + ETS Storage"),
+    ?LOG_INFO("  [1/10] Core DHT Routing"),
+    ?LOG_INFO("  [2/10] Bootstrap System"),
+    ?LOG_INFO("  [3/10] Gateway System"),
     case BridgeEnabled of
         true ->
             ParentBridges = maps:get(parent_bridges, BridgeConfig, []),
             MeshLevel = maps:get(mesh_level, BridgeConfig, cluster),
-            ?LOG_INFO("  [5/11] Bridge System (level: ~p, parents: ~p)", [MeshLevel, length(ParentBridges)]);
+            ?LOG_INFO("  [4/10] Bridge System (level: ~p, parents: ~p)", [MeshLevel, length(ParentBridges)]);
         false ->
-            ?LOG_INFO("  [5/11] Bridge System (disabled)")
+            ?LOG_INFO("  [4/10] Bridge System (disabled)")
     end,
-    ?LOG_INFO("  [6/11] Peers Supervisor"),
-    ?LOG_INFO("  [7/11] Peer Discovery"),
-    ?LOG_INFO("  [8/11] Platform System (Masterless CRDT)"),
-    ?LOG_INFO("  [9/11] Registry System (Package Distribution)"),
+    ?LOG_INFO("  [5/10] Peers Supervisor"),
+    ?LOG_INFO("  [6/10] Peer Discovery"),
+    ?LOG_INFO("  [7/10] Platform System (Masterless CRDT)"),
+    ?LOG_INFO("  [8/10] Registry System (Package Distribution)"),
     ?LOG_INFO(""),
 
     %% Schedule bootstrap peer connections after supervision tree is up
@@ -278,18 +269,6 @@ get_routing_server_spec(NodeID) ->
         shutdown => 5000,
         type => worker,
         modules => [macula_routing_server]
-    }.
-
-%% @private
-%% @doc Get NAT system child spec (NAT detection, hole punching, relay).
-get_nat_system_spec() ->
-    #{
-        id => macula_nat_system,
-        start => {macula_nat_system, start_link, [#{}]},
-        restart => permanent,
-        shutdown => infinity,  % supervisor shutdown
-        type => supervisor,
-        modules => [macula_nat_system]
     }.
 
 %% @private

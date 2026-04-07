@@ -88,15 +88,9 @@ Stats = macula_peer_connection_pool:get_stats().
 %% => #{size => 450, hits => 9450, misses => 550, hit_rate => 0.945}
 ```
 
-## NAT Traversal Integration
+## Connectivity
 
-The peer connector integrates with the NAT traversal subsystem:
-
-1. **Detection**: NAT type detected on startup
-2. **Hole Punching**: Coordinated via bootstrap node
-3. **Relay Fallback**: If direct fails, use relay
-
-See `src/macula_nat_system/` for NAT traversal details.
+Nodes connect outbound to relay servers. NAT traversal was removed — the federated relay mesh handles all connectivity.
 
 ## Configuration
 
