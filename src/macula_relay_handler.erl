@@ -31,6 +31,12 @@
 -export([start_link/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
+%% Test exports
+-ifdef(TEST).
+-export([pg_members/1, safe_decode/1, try_rpc_on_peers/3,
+         handle_rpc_call/5, handle_rpc_reply/3, handle_message/2]).
+-endif.
+
 -record(state, {
     conn :: reference(),
     stream :: reference() | undefined,

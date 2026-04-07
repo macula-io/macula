@@ -23,7 +23,8 @@
 
 %% Test exports for bootstrap lookup helpers
 -ifdef(TEST).
--export([extract_peer_info/2, make_peer_info/3, get_map_field/3, get_map_field/4]).
+-export([extract_peer_info/2, make_peer_info/3, get_map_field/3, get_map_field/4,
+         handle_execution_result/1, safe_decode_json/1]).
 -endif.
 
 %%%===================================================================

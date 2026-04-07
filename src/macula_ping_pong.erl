@@ -37,6 +37,20 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
+%% Test exports
+-ifdef(TEST).
+-export([get_nat_type/1, pad_num/1, compute_peer_endpoint/1,
+         generate_peer_list/1, select_random_peer/1,
+         min_val/2, max_val/2,
+         calc_success_rate/1, calc_avg_rtt/1,
+         update_ping_sent/2, update_pong_received/4, update_timeout/2,
+         increment_sent/1, increment_timeout/1,
+         update_rtt/2, merge_stats/2,
+         format_peer_stats/2, format_all_stats/1,
+         group_by_nat/1, format_nat_group/1,
+         get_node_id/1]).
+-endif.
+
 -include_lib("kernel/include/logger.hrl").
 
 -define(SERVER, ?MODULE).
