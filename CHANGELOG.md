@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.45.0] - 2026-04-07
+
+### Added
+
+- **Geographic relay discovery** (`macula_relay_discovery`) — nodes discover all relay identities from seed URLs, rank by haversine distance from own location, and maintain a real-time cache updated by `_mesh.relay.up/down` events. Periodic reconciliation every 5 minutes.
+- **Nearest-relay failover** — `macula_relay_client:schedule_failover` now tries the geographically nearest available relay (via discovery) before falling back to round-robin.
+- **Auto-start discovery** — `macula_multi_relay` starts `macula_relay_discovery` automatically when site opts include lat/lng coordinates.
+- **Mesh event wiring** — `macula_multi_relay` subscribes to `_mesh.relay.up/down` and forwards events to discovery for real-time cache updates.
+
+### API
+
+- `macula_relay_discovery:nearest/0` — URL of nearest online relay
+- `macula_relay_discovery:nearest_except/1` — nearest online relay excluding a failed hostname
+- `macula_relay_discovery:ranked_relays/0` — all relays ranked by distance
+- `macula_relay_discovery:mark_offline/1` — mark a relay as offline in cache
+- `macula_relay_discovery:relay_count/0` — number of known relays
+
+---
+
 ## [0.42.7] - 2026-04-07
 
 ### Added
