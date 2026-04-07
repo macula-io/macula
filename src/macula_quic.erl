@@ -46,7 +46,7 @@
 listen({Address, Port}, Opts) ->
     listen_on(format_listen_on(Address, Port), Opts);
 listen(Port, Opts) when is_integer(Port) ->
-    listen_on("0.0.0.0:" ++ integer_to_list(Port), Opts).
+    listen_on("[::]:" ++ integer_to_list(Port), Opts).
 
 %% @private Format address:port string for quicer.
 %% IPv6 addresses are wrapped in brackets per RFC 2732.
