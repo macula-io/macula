@@ -92,7 +92,7 @@ create_connection(Endpoint, NodeId, RealmId, Pool) when is_map(Pool) ->
                             %% No need for controlling_process or explicit setopt
 
                             %% Send CONNECT message
-                            %% Include advertise endpoint for peer-to-peer connections
+                            %% Include advertise endpoint for mesh connections
                             LocalEndpoint = case application:get_env(macula, advertise_endpoint) of
                                 {ok, Ep} when is_binary(Ep) -> Ep;
                                 _ ->

@@ -62,7 +62,7 @@ macula (OTP application)
 
 ## Peer Connections (Per Client/Peer)
 
-When a peer connects (either as client to gateway, or peer-to-peer), it gets its own supervision tree:
+When a peer connects (either as client to gateway, or relay mesh), it gets its own supervision tree:
 
 ```
 macula_peer_system [rest_for_one] (per connection)
@@ -100,7 +100,7 @@ macula_peer_system [rest_for_one] (per connection)
 - TLS certificates auto-generated if missing (stable Node ID)
 - All subsystems start unconditionally
 - Beautiful startup banner displays configuration
-- Node ready for P2P mesh participation
+- Node ready for relay mesh participation
 
 **Fault Isolation:**
 - Routing server crash → Only routing restarts
@@ -226,7 +226,7 @@ macula_peer_system [rest_for_one] (per connection)
 
 **Strategy:** `rest_for_one`
 **Intensity:** 10 restarts in 60 seconds
-**Instantiation:** One per peer connection (client or P2P peer)
+**Instantiation:** One per peer connection (client or relay peer)
 
 **Children (in dependency order):**
 
@@ -313,7 +313,7 @@ macula_root [one_for_one]
 **Benefits:**
 - Zero configuration required
 - Simplified deployment (no mode selection)
-- True P2P mesh (nodes connect on-demand)
+- Relay mesh (nodes connect on-demand)
 - TLS auto-generated (stable Node ID)
 
 **Environment Variables (v0.8.5+):**

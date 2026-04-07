@@ -309,7 +309,7 @@ unsubscribe(Client, SubRef) when is_pid(Client), is_reference(SubRef) ->
 %% Queries the DHT for all nodes subscribed to the given topic.
 %% Returns a list of subscriber nodes with their node IDs and endpoints.
 %%
-%% This is used for P2P discovery before sending direct messages.
+%% This is used for mesh discovery before sending direct messages.
 -spec discover_subscribers(Client :: client(), Topic :: topic()) ->
     {ok, [#{node_id := binary(), endpoint := binary()}]} | {error, Reason :: term()}.
 discover_subscribers(Client, Topic) when is_pid(Client), is_binary(Topic) ->
@@ -409,7 +409,7 @@ call(Client, Procedure, Args, Opts) when is_pid(Client), is_binary(Procedure), i
 %% already know which node provides the service (e.g., from a previous
 %% DHT discovery, a specific publisher node, or direct node advertisement).
 %%
-%% The message is still routed via DHT infrastructure (for NAT traversal,
+%% The message is still routed via DHT infrastructure (for relay routing,
 %% relay fallback, etc.), but it targets a specific node rather than
 %% discovering one.
 %%

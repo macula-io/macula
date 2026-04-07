@@ -907,7 +907,7 @@ handle_event(Event) ->
 ## See Also
 
 - [RPC Guide](RPC_GUIDE.md) - Remote procedure calls with DHT discovery
-- [Quick Start](../getting-started.md) - Getting started tutorial
+- [Quick Start](../../README.md) - Getting started tutorial
 - [Architecture](../../architecture/FULL_SUPERVISION_TREE.md) - System architecture overview
 
 ---

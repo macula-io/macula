@@ -10,7 +10,6 @@ Macula is an Erlang/OTP library for building distributed applications over a **f
 
 | I want to... | Go to... |
 |--------------|----------|
-| Get started quickly | [Getting Started](getting-started.md) |
 | Understand pub/sub messaging | [PubSub Guide](guides/PUBSUB_GUIDE.md) |
 | Make RPC calls across the mesh | [RPC Guide](guides/RPC_GUIDE.md) |
 | Connect nodes across firewalls | [Distribution Over Mesh](guides/DIST_OVER_MESH_GUIDE.md) |
@@ -55,7 +54,6 @@ Feature guides for developers building on Macula:
 |----------|-------------|
 | [Supervision Tree](guides/FULL_SUPERVISION_TREE.md) | Complete OTP supervision hierarchy |
 | [Roadmap](ROADMAP.md) | Implementation roadmap |
-| [C4 Diagrams](C4_DIAGRAMS.md) | Visual architecture overview |
 
 ---
 

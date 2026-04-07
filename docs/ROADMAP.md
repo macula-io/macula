@@ -128,7 +128,7 @@ Each level of the mesh has its own DHT. Bridge Nodes form meshes at each level:
 |-----------|--------|-------|
 | QUIC Transport | **Complete** | Full gen_server, quicer integration |
 | PubSub (local) | **Complete** | Topic-based, wildcard support |
-| RPC (local) | **Complete** | NATS-style async, direct P2P |
+| RPC (local) | **Complete** | NATS-style async, relay-routed |
 | DHT Kademlia | **Complete** | k-bucket routing, service discovery |
 | Gateway System | **Complete** | Message routing, client management |
 | Bootstrap System | **Complete** | DHT bootstrap, service registry |

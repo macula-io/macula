@@ -154,7 +154,7 @@ After discovering a subscriber, we still need their endpoint address. Storing th
 
 ### Solution
 
-Cache NodeId→Endpoint mappings for direct QUIC connections.
+Cache NodeId→Endpoint mappings for relay-routed connections.
 
 ### Module: `macula_direct_routing`
 

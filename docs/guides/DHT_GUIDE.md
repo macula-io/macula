@@ -262,7 +262,7 @@ Traditional Kademlia uses UDP for RPCs. Macula uses **QUIC (HTTP/3)**:
 - Reliable transport (no packet loss issues)
 - Connection multiplexing (multiple RPCs over one connection)
 - TLS 1.3 encryption (secure by default)
-- NAT traversal (QUIC connection migration)
+- QUIC connection migration
 
 **Message Encoding:**
 ```erlang

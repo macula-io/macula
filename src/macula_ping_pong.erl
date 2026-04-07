@@ -1,7 +1,7 @@
 %%%-------------------------------------------------------------------
-%%% @doc Macula Ping/Pong - Direct P2P Async RPC Demo
+%%% @doc Macula Ping/Pong - Async RPC Health Check Demo
 %%%
-%%% A peer-to-peer communication module that demonstrates bidirectional
+%%% A mesh communication module that demonstrates bidirectional
 %%% messaging across NAT boundaries using Macula's async RPC with
 %%% direct P2P delivery (NATS-style request/reply).
 %%%

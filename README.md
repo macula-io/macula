@@ -262,7 +262,6 @@ end).
 
 | Guide | Description |
 |-------|-------------|
-| [Getting Started](docs/getting-started.md) | Connect to the relay mesh in 5 minutes |
 | [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Relay-tunneled Erlang distribution |
 | [Cluster API Guide](docs/guides/CLUSTERING_GUIDE.md) | Clustering and distribution |
 | [Content Transfer Guide](docs/guides/CONTENT_TRANSFER_GUIDE.md) | Mesh artifact distribution |
@@ -303,7 +302,6 @@ macula_root (application supervisor)
 ├── macula_pubsub_system (pub/sub messaging)
 ├── macula_rpc_system (RPC request/response)
 ├── macula_routing_system (Kademlia DHT)
-├── macula_nat_system (NAT traversal + hole punching)
 ├── macula_bootstrap_system (mesh discovery)
 ├── macula_membership_system (gossip clustering)
 ├── macula_bridge_system (hierarchical mesh escalation)

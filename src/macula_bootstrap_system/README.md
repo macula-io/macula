@@ -178,5 +178,5 @@ MACULA_SEED_NODES="seed1.macula.io:4433,seed2.macula.io:4433,seed3.macula.io:443
 ## Related Documentation
 
 - [DHT Guide](../../docs/guides/DHT_GUIDE.md)
-- [Quick Start](../../docs/getting-started.md)
+- [Quick Start](../../README.md)
 - [Operator Performance Guide](../../docs/operator/PERFORMANCE_GUIDE.md)

@@ -134,7 +134,7 @@ handle_call({advertise_service, Procedure, Handler, Opts}, _From, State) ->
     TTL = maps:get(ttl, Opts, ?DEFAULT_TTL),
     ServiceKey = crypto:hash(sha256, BinaryProcedure),
 
-    %% Allow custom advertise_endpoint for peer-to-peer (providers advertise their own URL)
+    %% Allow custom advertise_endpoint for mesh (providers advertise their own URL)
     AdvertiseEndpoint = maps:get(advertise_endpoint, Opts, State#state.url),
     ServiceValue = #{
         node_id => State#state.node_id,

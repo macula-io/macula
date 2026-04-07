@@ -17,7 +17,7 @@ The Macula Content System provides **native BEAM content-addressed transfer** fo
 
 The Macula ecosystem needs a way to distribute artifacts (OTP releases, packages) without:
 - Container registries (OCI/Docker) - heavy, infrastructure-dependent
-- External protocols (IPFS, BitTorrent) - duplicate NAT traversal
+- External protocols (IPFS, BitTorrent) - separate overlay network
 - Centralized package hosts - single point of failure
 
 A native BEAM solution leverages the existing relay mesh infrastructure, including DHT-based discovery and relay-routed transport.

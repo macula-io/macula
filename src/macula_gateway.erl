@@ -518,7 +518,7 @@ handle_call({local_advertise, _Realm, Procedure, Handler, Opts}, _From, State) -
     TTL = maps:get(ttl, Opts, 300),  % Default 5 minutes
     Metadata = maps:get(metadata, Opts, #{}),
 
-    %% Service value includes node ID and endpoint for P2P discovery
+    %% Service value includes node ID and endpoint for mesh discovery
     ServiceValue = #{
         node_id => State#state.node_id,
         endpoint => <<"gateway://localhost">>,  % Local clients connect via gateway
@@ -763,7 +763,7 @@ handle_connect(Stream, ConnectMsg, #state{realm = Realm} = State) ->
 handle_connect_realm(true, Stream, ConnectMsg, State) ->
     RealmId = maps:get(<<"realm_id">>, ConnectMsg),
     NodeId = maps:get(<<"node_id">>, ConnectMsg),
-    %% Extract endpoint from CONNECT message for peer-to-peer connections
+    %% Extract endpoint from CONNECT message for relay connections
     Endpoint = maps:get(<<"endpoint">>, ConnectMsg, undefined),
 
     _ClientInfo = #{
@@ -1159,7 +1159,7 @@ should_forward_request(_TargetNode, _LocalNodeId) -> true.
 
 %% @private Forward RPC request to target peer via connected client streams.
 %% The gateway acts as a relay - peers connect to it, so we can forward through
-%% the existing QUIC streams instead of trying to make new P2P connections.
+%% the existing QUIC streams instead of trying to make new relay connections.
 forward_rpc_request_to_peer(RequestMsg, TargetNodeId, State) ->
     TargetNodeIdHex = binary:encode_hex(TargetNodeId),
     RequestId = maps:get(<<"request_id">>, RequestMsg),

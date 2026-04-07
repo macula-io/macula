@@ -597,7 +597,7 @@ convert_env(Val, float) ->
         end
     end.
 
-%% @doc Get endpoint to advertise for peer-to-peer connections
+%% @doc Get endpoint to advertise for mesh connections
 -spec get_advertise_endpoint() -> binary().
 get_advertise_endpoint() ->
     case application:get_env(macula, advertise_endpoint) of
