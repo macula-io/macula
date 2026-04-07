@@ -3,11 +3,14 @@
 %%%
 %%% This supervisor manages the distribution subsystem components:
 %%%
+%%% - macula_dist_bridge_sup - Supervisor for relay tunnel bridges
 %%% - macula_dist_discovery - Decentralized node discovery (replaces EPMD)
-%%% - macula_cluster_strategy - Automatic cluster formation
+%%% - macula_cluster_strategy - Automatic cluster formation (optional)
 %%%
-%%% Startup: The distribution system starts automatically with macula application.
-%%% Can also be started manually with macula_dist_system:start_link(Opts).
+%%% The bridge supervisor hosts `macula_dist_bridge' gen_server children
+%%% (one per relay tunnel). When `macula_dist_system' is not started
+%%% (standalone relay mode), `macula_dist_relay:advertise_dist_accept/0'
+%%% starts the bridge supervisor on demand.
 %%%
 %%% Configuration options (in sys.config):
 %%%   dist_port - QUIC port (default 4433)

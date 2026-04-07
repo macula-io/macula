@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.42.7] - 2026-04-07
+
+### Added
+
+- **5-node E2E test environment** — Milan, Stockholm, beam00-02 all connected through relay mesh. Automated test suite: message_send, gen_server_call, pg_members, monitor, metrics.
+- **Cross-relay tunnels** — `macula_multi_relay:call_any/4` tries each connected relay. Nodes on different relays connect via peering.
+- **Relay reconnection** — bridge gen_server monitors relay client PID, re-acquires on DOWN with 30s retry window.
+- **AES-256-GCM tunnel encryption** — key derived from distribution cookie. Relay cannot read ETF content.
+- **Per-tunnel metrics** — `get_tunnel_metrics/0,1` with counters for bytes_in/out, msgs_in/out.
+- **Backpressure** — reader pauses when relay client queue exceeds high-water mark.
+- **Certificate expiry validation** — `macula_gatekeeper:check_certificate_expiry/1` now validates X.509 validity dates.
+
+### Changed
+
+- **Supervised bridges** — `macula_dist_bridge` gen_server under `macula_dist_bridge_sup` (simple_one_for_one). Replaces bare spawn loops.
+- **Code health** — flattened 5-level nesting to max 2, removed try/catch anti-pattern, standardized all logging to `?LOG_*`.
+- **LICENSE** — corrected from MIT to Apache-2.0 (matching rebar.config and README).
+
+### Fixed
+
+- `kernel_pid` deadlock in `do_setup` — was `self()` (spawned process) instead of net_kernel PID.
+- `getstat` must return 4-tuple `{ok, R, W, P}` — ported `split_stat` from `inet_tcp_dist`.
+- Socket ownership transfer — `gen_tcp:controlling_process` for both DistSock and BridgeSock.
+- `tunnel_rpc` detection of multi_relay vs relay_client via process dictionary.
+- `ensure_bridge_sup` for standalone relay mode (when `macula_dist_system` is not started).
+- `{packet, raw}` on BridgeSock — transparent byte pipe for post-handshake `{packet, 4}` switch.
+
+---
+
+## [0.40.0] - 2026-04-06
+
+### Added
+
+- **Erlang distribution over relay mesh** — experimental. Tunnels OTP distribution through the Macula relay mesh using gen_tcp loopback socket pairs. Proven: Milan (Italy) ↔ Paris (relay) ↔ Stockholm (Sweden) → `net_adm:ping` returns `pong`.
+- `macula_dist_relay.erl` — tunnel negotiation, loopback pair creation, bridge I/O.
+- `macula_dist.erl` — added relay mode support to all socket callbacks (send, recv, tick, getstat, setopts, getll, address, close).
+- `MACULA_DIST_MODE=relay` environment variable to enable relay distribution.
+- `register_mesh_client/1` and `advertise_dist_accept/0` public API.
+
+---
+
 ## [0.35.4] - 2026-04-06
 
 ### Added

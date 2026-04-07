@@ -33,6 +33,7 @@
 -module(macula_gatekeeper).
 
 -include_lib("kernel/include/logger.hrl").
+-include_lib("public_key/include/public_key.hrl").
 
 %%====================================================================
 %% Types
@@ -348,9 +349,28 @@ decode_der_certificate(_DerCert) ->
     %% Does not start with SEQUENCE tag - not a valid certificate
     {error, {certificate_invalid, invalid_der_structure}}.
 
-check_certificate_expiry(_Cert) ->
-    %% TODO: Extract validity dates and check against current time
-    ok.
+check_certificate_expiry(Cert) ->
+    TBS = Cert#'OTPCertificate'.tbsCertificate,
+    #'Validity'{notBefore = NotBefore, notAfter = NotAfter} = TBS#'OTPTBSCertificate'.validity,
+    Now = calendar:universal_time(),
+    case {convert_time(NotBefore) =< Now, Now =< convert_time(NotAfter)} of
+        {true, true}   -> ok;
+        {false, _}     -> {error, {certificate_invalid, not_yet_valid}};
+        {_, false}     -> {error, {certificate_invalid, expired}}
+    end.
+
+convert_time({utcTime, T})         -> utc_to_datetime(T);
+convert_time({generalTime, T})     -> general_to_datetime(T).
+
+utc_to_datetime([Y1,Y2,M1,M2,D1,D2,H1,H2,Mi1,Mi2,S1,S2,$Z]) ->
+    Year = list_to_integer([Y1,Y2]),
+    FullYear = if Year >= 50 -> 1900 + Year; true -> 2000 + Year end,
+    {{FullYear, list_to_integer([M1,M2]), list_to_integer([D1,D2])},
+     {list_to_integer([H1,H2]), list_to_integer([Mi1,Mi2]), list_to_integer([S1,S2])}}.
+
+general_to_datetime([Y1,Y2,Y3,Y4,M1,M2,D1,D2,H1,H2,Mi1,Mi2,S1,S2,$Z]) ->
+    {{list_to_integer([Y1,Y2,Y3,Y4]), list_to_integer([M1,M2]), list_to_integer([D1,D2])},
+     {list_to_integer([H1,H2]), list_to_integer([Mi1,Mi2]), list_to_integer([S1,S2])}}.
 
 calculate_fingerprint(CertPem) ->
     Hash = crypto:hash(sha256, CertPem),

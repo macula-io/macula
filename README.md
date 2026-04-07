@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-26+-brightgreen)](https://www.erlang.org)
 [![Hex.pm](https://img.shields.io/hexpm/v/macula.svg)](https://hex.pm/packages/macula)
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow.svg)](https://buymeacoffee.com/beamologist)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow.svg)](https://buymeacoffee.com/rlefever)
 
 <p align="center">
   <img src="assets/logo.svg" width="120" height="120" alt="Macula">
@@ -53,12 +53,15 @@ Macula is an **Erlang/OTP library** that provides a complete distributed mesh ne
 
 ```erlang
 %% Subscribe to a topic
-ok = macula:subscribe(Peer, <<"sensors.temperature">>, fun(Msg) ->
+{ok, SubRef} = macula:subscribe(Peer, <<"sensors.temperature">>, fun(Msg) ->
     io:format("Received: ~p~n", [Msg])
 end).
 
 %% Publish to subscribers
 ok = macula:publish(Peer, <<"sensors.temperature">>, #{value => 23.5}).
+
+%% Unsubscribe when done
+ok = macula:unsubscribe(Peer, SubRef).
 ```
 
 ### RPC (Request/Response)
@@ -68,8 +71,8 @@ ok = macula:publish(Peer, <<"sensors.temperature">>, #{value => 23.5}).
 </p>
 
 ```erlang
-%% Register a procedure handler
-ok = macula:register(Peer, <<"math.add">>, fun(#{a := A, b := B}) ->
+%% Advertise a procedure handler
+{ok, _Ref} = macula:advertise(Peer, <<"math.add">>, fun(#{a := A, b := B}) ->
     {ok, #{result => A + B}}
 end).
 
@@ -107,6 +110,37 @@ ok = macula_cluster:start_cluster(#{
 
 %% Nodes auto-discover via multicast 230.1.1.251:45892
 ```
+
+### Erlang Distribution Over Relay Mesh
+
+<p align="center">
+  <img src="assets/dist_relay_tunnel.svg" alt="Distribution Relay Tunnel" width="100%">
+</p>
+
+Full OTP distribution tunneled through the relay mesh — nodes only need
+outbound connectivity. No VPNs, no open ports.
+
+```erlang
+%% Enable relay distribution
+os:putenv("MACULA_DIST_MODE", "relay"),
+macula_dist_relay:register_mesh_client(Client),
+macula_dist_relay:advertise_dist_accept(),
+
+%% Now standard OTP distribution works across firewalls
+net_adm:ping('other@remote-host').  %% => pong
+gen_server:call({Name, 'other@remote-host'}, Request).  %% works
+```
+
+| Feature | Status |
+|---------|--------|
+| **Handshake over relay** | 5-message dist_util handshake through pub/sub |
+| **AES-256-GCM encryption** | Tunnel bytes encrypted, relay cannot read ETF |
+| **Supervised bridges** | gen_server per tunnel under simple_one_for_one |
+| **Cross-relay tunnels** | Nodes on different relays connect via peering |
+| **Relay reconnection** | Bridge re-acquires client after relay restart |
+| **Metrics** | Per-tunnel byte/message counters |
+
+See [Distribution Over Mesh Guide](docs/guides/DIST_OVER_MESH_GUIDE.md) for details.
 
 ### Content Transfer (P2P Artifacts)
 
@@ -169,7 +203,7 @@ Add to your `rebar.config`:
 
 ```erlang
 {deps, [
-    {macula, "0.19.2"}
+    {macula, "0.42.7"}
 ]}.
 ```
 
@@ -178,7 +212,7 @@ Or in Elixir `mix.exs`:
 ```elixir
 defp deps do
   [
-    {:macula, "~> 0.19.2"}
+    {:macula, "~> 0.42.7"}
   ]
 end
 ```
@@ -196,11 +230,16 @@ application:ensure_all_started(macula).
 }).
 
 %% Subscribe to events
-macula:subscribe(Peer, <<"events.orders">>, fun(Order) ->
+{ok, _SubRef} = macula:subscribe(Peer, <<"events.orders">>, fun(Order) ->
     process_order(Order)
 end).
 
-%% Make RPC calls
+%% Advertise an RPC procedure
+{ok, _AdvRef} = macula:advertise(Peer, <<"inventory.check">>, fun(#{sku := Sku}) ->
+    {ok, check_inventory(Sku)}
+end).
+
+%% Call an RPC procedure (discovers provider via DHT)
 {ok, Result} = macula:call(Peer, <<"inventory.check">>, #{sku => <<"ABC123">>}).
 ```
 
@@ -242,6 +281,7 @@ end).
 | [NAT Traversal Guide](docs/guides/NAT_TRAVERSAL_DEVELOPER_GUIDE.md) | NAT techniques |
 | [DHT Guide](docs/guides/DHT_GUIDE.md) | Kademlia DHT internals |
 | [Authorization Guide](docs/guides/AUTHORIZATION_GUIDE.md) | DID/UCAN security |
+| [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Relay-tunneled Erlang distribution |
 | [TLS Configuration](docs/operator/TLS_CONFIGURATION.md) | Production TLS setup |
 
 ---
@@ -250,6 +290,8 @@ end).
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v0.42.7** | Apr 2026 | Distribution over relay mesh — cross-relay, encryption, supervision, metrics (48 tests) |
+| **v0.40.0** | Apr 2026 | First Erlang dist-over-mesh: net_adm:ping across 3 countries via relay tunnel |
 | **v0.19.2** | Jan 2026 | README rework with feature sections and SVGs |
 | **v0.19.1** | Jan 2026 | Gossip clustering, static strategy (34 tests) |
 | **v0.19.0** | Jan 2026 | Content transfer system, MCID, Want/Have/Block (171 tests) |
@@ -270,15 +312,22 @@ Macula follows an **always-on architecture** where every node has all capabiliti
 
 ```
 macula_root (application supervisor)
-├── macula_routing_server (Kademlia DHT)
-├── macula_nat_system (NAT traversal)
+├── macula_gateway_system (QUIC transport + relay handler)
+├── macula_pubsub_system (pub/sub messaging)
+├── macula_rpc_system (RPC request/response)
+├── macula_routing_system (Kademlia DHT)
+├── macula_nat_system (NAT traversal + hole punching)
 ├── macula_bootstrap_system (mesh discovery)
-├── macula_gateway_system (QUIC transport)
-├── macula_bridge_system (hierarchical mesh)
+├── macula_membership_system (gossip clustering)
+├── macula_bridge_system (hierarchical mesh escalation)
 ├── macula_platform_system (CRDT coordination)
 ├── macula_registry_system (package distribution)
 ├── macula_content_system (P2P content transfer)
+├── macula_cert_system (TLS certificate management)
 └── macula_dist_system (Erlang distribution)
+    ├── macula_dist_bridge_sup (relay tunnel bridges)
+    ├── macula_dist_discovery (DHT node discovery)
+    └── macula_cluster_strategy (optional auto-clustering)
 ```
 
 ---

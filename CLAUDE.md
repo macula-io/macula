@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v0.40.1 (April 2026)
+**Current Version**: v0.42.7 (April 2026)
 
 ---
 
@@ -68,6 +68,13 @@ These are non-negotiable requirements. Violations will result in rejection:
 | v0.18.0 | Jan 2026 | **Cluster API** - bc_gitops integration (ensure_distributed, cookie mgmt, node monitoring - 19 tests) |
 | v0.19.0 | Jan 2026 | **Content Transfer** - P2P artifact distribution via MCID (171 tests) |
 | v0.19.1 | Jan 2026 | **Gossip Clustering** - UDP multicast zero-config discovery (34 tests) |
+| v0.20-0.39 | Feb-Apr 2026 | Relay mesh (federated relays, Bloom filters, SWIM, Kademlia DHT, multi-homing, 155 virtual relays) |
+| v0.40.0 | Apr 2026 | **Dist Over Mesh** - Erlang distribution tunneled through relay mesh (Milan↔Paris↔Stockholm → pong) |
+| v0.40.1 | Apr 2026 | Code health: flatten nesting, let-it-crash, standardize logging, 47 tests |
+| v0.41.0 | Apr 2026 | **Gap closure** - AES-256-GCM encryption, cleanup on disconnect, backpressure, metrics, writer timeout |
+| v0.41.1 | Apr 2026 | **Supervised bridges** - gen_server bridge + simple_one_for_one supervisor (48 tests) |
+| v0.42.0 | Apr 2026 | **Reconnection + cross-relay** - bridge monitors relay client, call_any tries all relays |
+| v0.42.7 | Apr 2026 | **E2E proven** - 5 nodes, 3 countries, cross-relay virtual identities, all 5 test types pass |
 
 ---
 
@@ -1115,14 +1122,19 @@ Two distribution modes:
 | Module | Purpose | Status |
 |--------|---------|--------|
 | `macula_dist.erl` | QUIC + gen_tcp carrier for Erlang distribution | ✅ Complete |
-| `macula_dist_relay.erl` | Relay mesh tunnel (loopback bridge) | ✅ Experimental |
+| `macula_dist_relay.erl` | Relay mesh tunnel negotiation + encryption | ✅ Complete |
+| `macula_dist_bridge.erl` | Supervised gen_server per tunnel (reader+writer+metrics) | ✅ Complete |
+| `macula_dist_bridge_sup.erl` | simple_one_for_one supervisor for bridge processes | ✅ Complete |
 | `macula_dist_discovery.erl` | DHT-based node discovery (replaces EPMD) | ✅ Complete |
 | `macula_cluster_strategy.erl` | libcluster-compatible strategy | ✅ Complete |
 | `macula_dist_system.erl` | Supervisor for dist subsystem | ✅ Complete |
 
-**Tests**: 39 tests passing (24 dist + 15 relay)
+**Tests**: 48 tests passing (24 dist + 24 relay)
 
-**Proven**: Milan (Italy) ↔ Paris (relay) ↔ Stockholm (Sweden) — `net_adm:ping` → `pong`
+**Proven E2E scenarios**:
+- **Same relay**: 5 nodes → relay-de-munich → all connected, all tests pass
+- **Cross-relay**: Milan → relay-it-milan (Nuremberg) ↔ relay-se-stockholm (Helsinki) → Stockholm → pong
+- **Virtual relays**: Per-identity IPv6 QUIC listeners (proven by default — relay-de-munich IS a virtual identity)
 
 **Usage**:
 ```
@@ -1136,10 +1148,17 @@ erl -proto_dist macula -no_epmd -start_epmd false -name mynode@host -setcookie S
 - ✅ Relay mesh for outbound-only nodes (firewalls, NATs)
 - ✅ Compatible with Pid ! Msg, gen_server:call, pg groups
 
-**Relay Limitations**:
+**Features**:
+- AES-256-GCM tunnel encryption (key derived from dist cookie)
+- Supervised bridge processes (gen_server + simple_one_for_one)
+- Relay reconnection (bridge re-acquires client, 30s retry window)
+- Cross-relay tunnels (call_any tries each connected relay)
+- Per-tunnel metrics (bytes_in/out, msgs_in/out)
+- Backpressure (pauses when relay queue exceeds high-water mark)
+
+**Limitations**:
 - Mnesia not recommended over WAN latency
 - global module may have convergence issues
-- Both nodes must share the same relay mesh
 
 ## Docker Build Best Practices
 

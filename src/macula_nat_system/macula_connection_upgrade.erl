@@ -109,36 +109,8 @@ init([]) ->
 
 handle_call({upgrade, PeerId, RelayConn, DirectConn}, _From, State) ->
     NewStats = increment_stat(upgrades_attempted, State#state.stats),
-
-    case maps:get(PeerId, State#state.relays, undefined) of
-        undefined ->
-            ?LOG_WARNING("Upgrade requested for unknown relay: ~p", [PeerId]),
-            {reply, {error, no_relay}, State#state{stats = NewStats}};
-
-        #relay_info{relay_conn = RegisteredRelay} = RelayInfo ->
-            %% Verify the relay connection matches
-            case verify_relay(RelayConn, RegisteredRelay) of
-                true ->
-                    %% Perform the upgrade
-                    case do_upgrade(PeerId, RelayInfo, DirectConn) of
-                        ok ->
-                            ?LOG_INFO("Connection upgraded to direct for peer ~p", [PeerId]),
-                            FinalStats = increment_stat(upgrades_succeeded, NewStats),
-                            NewRelays = maps:remove(PeerId, State#state.relays),
-                            {reply, ok, State#state{
-                                relays = NewRelays,
-                                stats = FinalStats
-                            }};
-                        {error, Reason} ->
-                            ?LOG_WARNING("Upgrade failed for peer ~p: ~p", [PeerId, Reason]),
-                            FinalStats = increment_stat(upgrades_failed, NewStats),
-                            {reply, {error, upgrade_failed}, State#state{stats = FinalStats}}
-                    end;
-                false ->
-                    ?LOG_WARNING("Relay connection mismatch for peer ~p", [PeerId]),
-                    {reply, {error, relay_mismatch}, State#state{stats = NewStats}}
-            end
-    end;
+    RelayInfo = maps:get(PeerId, State#state.relays, undefined),
+    attempt_upgrade(PeerId, RelayConn, DirectConn, RelayInfo, NewStats, State);
 
 handle_call(get_stats, _From, State) ->
     BaseStats = State#state.stats,
@@ -176,6 +148,39 @@ terminate(_Reason, _State) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% @private
+%% @doc Attempt upgrade for a peer, dispatching on relay lookup result.
+-spec attempt_upgrade(binary(), term(), term(), #relay_info{} | undefined, map(), #state{}) ->
+    {reply, term(), #state{}}.
+attempt_upgrade(PeerId, _RelayConn, _DirectConn, undefined, Stats, State) ->
+    ?LOG_WARNING("Upgrade requested for unknown relay: ~p", [PeerId]),
+    {reply, {error, no_relay}, State#state{stats = Stats}};
+attempt_upgrade(PeerId, RelayConn, DirectConn, #relay_info{relay_conn = RegisteredRelay} = RelayInfo, Stats, State) ->
+    case verify_relay(RelayConn, RegisteredRelay) of
+        true ->
+            apply_upgrade(PeerId, RelayInfo, DirectConn, Stats, State);
+        false ->
+            ?LOG_WARNING("Relay connection mismatch for peer ~p", [PeerId]),
+            {reply, {error, relay_mismatch}, State#state{stats = Stats}}
+    end.
+
+%% @private
+%% @doc Apply the upgrade and update state based on result.
+-spec apply_upgrade(binary(), #relay_info{}, term(), map(), #state{}) ->
+    {reply, term(), #state{}}.
+apply_upgrade(PeerId, RelayInfo, DirectConn, Stats, State) ->
+    case do_upgrade(PeerId, RelayInfo, DirectConn) of
+        ok ->
+            ?LOG_INFO("Connection upgraded to direct for peer ~p", [PeerId]),
+            FinalStats = increment_stat(upgrades_succeeded, Stats),
+            NewRelays = maps:remove(PeerId, State#state.relays),
+            {reply, ok, State#state{relays = NewRelays, stats = FinalStats}};
+        {error, Reason} ->
+            ?LOG_WARNING("Upgrade failed for peer ~p: ~p", [PeerId, Reason]),
+            FinalStats = increment_stat(upgrades_failed, Stats),
+            {reply, {error, upgrade_failed}, State#state{stats = FinalStats}}
+    end.
 
 %% @private
 %% @doc Verify the relay connection is the one we registered.

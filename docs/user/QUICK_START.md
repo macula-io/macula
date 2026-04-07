@@ -94,14 +94,10 @@ mix compile
 ### Verify Installation
 
 ```bash
-# Erlang
+# Erlang — verify macula application loads
 rebar3 shell
-> macula:version().
-{ok, "0.1.0"}
-
-# Elixir
-iex -S mix
-iex> Macula.version()
+> application:ensure_all_started(macula).
+{ok, [...]}
 {:ok, "0.1.0"}
 ```
 
@@ -317,27 +313,13 @@ iex --name node3@127.0.0.1 --cookie macula_demo -S mix run -e 'Application.ensur
 In any node's console:
 
 ```erlang
-% Erlang
-macula_membership:get_members().
+% Erlang — check discovered nodes via distribution discovery
+macula_dist_discovery:list_nodes().
 
 % Expected output:
-[
-  #{node_id => <<"a3f5b2e1...">>, state => alive, ...},
-  #{node_id => <<"b7c3d8e2...">>, state => alive, ...},
-  #{node_id => <<"c8d4e9f3...">>, state => alive, ...}
-]
-```
-
-```elixir
-# Elixir
-Macula.Membership.get_members()
-
-# Expected output:
-[
-  %{node_id: "a3f5b2e1...", state: :alive, ...},
-  %{node_id: "b7c3d8e2...", state: :alive, ...},
-  %{node_id: "c8d4e9f3...", state: :alive, ...}
-]
+[#{node => 'node1@host', port => 4433, ...},
+ #{node => 'node2@host', port => 4433, ...},
+ #{node => 'node3@host', port => 4433, ...}]
 ```
 
 ### Check Connections
@@ -356,23 +338,9 @@ macula_topology:get_connections().
 ### Visualize Topology (ASCII Art)
 
 ```erlang
-% Erlang
-macula_topology:print_topology().
-```
-
-**Expected output**:
-```
-Mesh Topology (k-regular, k=2)
-==============================
-
-node1 (a3f5...) ←─→ node2 (b7c3...)
-  ↑                     ↑
-  └────────────→ node3 (c8d4...)
-                       ↑
-                       └────────→ node1
-
-3 nodes, 3 connections
-Average RTT: 1.3ms
+% Erlang — check connected Erlang nodes
+nodes().
+%% => ['node2@host', 'node3@host']
 ```
 
 ---
@@ -585,31 +553,19 @@ The mesh **self-heals** automatically.
 ### List All Nodes in Mesh
 
 ```erlang
-% Erlang
-macula_membership:list_nodes().
+% Erlang — via distribution discovery
+macula_dist_discovery:list_nodes().
+% Or via Erlang distribution
+nodes().
 ```
 
-```elixir
-# Elixir
-Macula.Membership.list_nodes()
-```
-
-### Get Node Statistics
+### Get Tunnel Metrics (Relay Mode)
 
 ```erlang
-% Erlang
-macula:stats().
-
-% Output:
-#{
-  messages_sent => 1543,
-  messages_received => 1687,
-  bytes_sent => 245678,
-  bytes_received => 267890,
-  active_connections => 2,
-  routing_table_size => 3,
-  uptime_seconds => 3600
-}
+% Erlang — per-tunnel byte/message counters
+macula_dist_relay:get_tunnel_metrics().
+%% => [{<<"tunnel_id">>, #{bytes_out => 4096, bytes_in => 2048,
+%%                          msgs_out => 12, msgs_in => 8}}]
 ```
 
 ### Subscribe with Pattern Matching
@@ -689,11 +645,9 @@ macula:publish(Client, <<"important.event">>, Data, #{
 
 **Check network conditions**:
 ```erlang
-% Erlang
-macula_connection:ping(<<"node2_id">>).
-
-% Output:
-{ok, 1.2}  % RTT in milliseconds
+% Erlang — use standard Erlang ping
+net_adm:ping('node2@host').
+%% => pong
 ```
 
 If RTT > 100ms on localhost, check:

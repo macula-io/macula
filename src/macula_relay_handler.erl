@@ -47,6 +47,7 @@
 %% API
 %%====================================================================
 
+-spec start_link(reference(), reference()) -> {ok, pid()} | {error, term()}.
 start_link(Conn, Stream) ->
     gen_server:start_link(?MODULE, {Conn, Stream}, []).
 

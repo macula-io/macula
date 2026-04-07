@@ -21,6 +21,8 @@
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([
     start_link/1,
@@ -117,8 +119,8 @@ init(Opts) ->
     },
 
     %% Log startup
-    error_logger:info_msg(
-        "macula_cluster_strategy: started for topology ~p~n",
+    ?LOG_INFO(
+        "macula_cluster_strategy: started for topology ~p",
         [Topology]
     ),
 
@@ -151,8 +153,8 @@ handle_info({node_lost, NodeName}, State) ->
 
 %% Handle Erlang node up event
 handle_info({nodeup, Node, _Info}, State) ->
-    error_logger:info_msg(
-        "macula_cluster_strategy: node ~p joined cluster~n",
+    ?LOG_INFO(
+        "macula_cluster_strategy: node ~p joined cluster",
         [Node]
     ),
     Connected = maps:put(Node, true, State#state.connected),
@@ -161,8 +163,8 @@ handle_info({nodeup, Node, _Info}, State) ->
 
 %% Handle Erlang node down event
 handle_info({nodedown, Node, _Info}, State) ->
-    error_logger:info_msg(
-        "macula_cluster_strategy: node ~p left cluster~n",
+    ?LOG_INFO(
+        "macula_cluster_strategy: node ~p left cluster",
         [Node]
     ),
     Connected = maps:put(Node, false, State#state.connected),
@@ -213,22 +215,22 @@ maybe_connect_node(Node, State) ->
             State;
         false ->
             %% Try to connect
-            error_logger:info_msg(
-                "macula_cluster_strategy: attempting to connect to ~p~n",
+            ?LOG_INFO(
+                "macula_cluster_strategy: attempting to connect to ~p",
                 [Node]
             ),
             case net_kernel:connect_node(Node) of
                 true ->
-                    error_logger:info_msg(
-                        "macula_cluster_strategy: connected to ~p~n",
+                    ?LOG_INFO(
+                        "macula_cluster_strategy: connected to ~p",
                         [Node]
                     ),
                     Connected = maps:put(Node, true, State#state.connected),
                     notify_callback(State, {connected, Node}),
                     State#state{connected = Connected};
                 false ->
-                    error_logger:warning_msg(
-                        "macula_cluster_strategy: failed to connect to ~p~n",
+                    ?LOG_WARNING(
+                        "macula_cluster_strategy: failed to connect to ~p",
                         [Node]
                     ),
                     State;
@@ -242,8 +244,8 @@ maybe_connect_node(Node, State) ->
 maybe_disconnect_node(Node, State) ->
     case maps:get(Node, State#state.connected, false) of
         true ->
-            error_logger:info_msg(
-                "macula_cluster_strategy: disconnecting from ~p (no longer in discovery)~n",
+            ?LOG_INFO(
+                "macula_cluster_strategy: disconnecting from ~p (no longer in discovery)",
                 [Node]
             ),
             erlang:disconnect_node(Node),

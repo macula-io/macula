@@ -54,6 +54,8 @@
 -define(COORDINATION_DELAY_MS, 100).  % 100ms delay for clock sync
 -define(MAX_PUNCH_ATTEMPTS, 3).
 -define(CLEANUP_INTERVAL_MS, 30000).  % Cleanup stale sessions every 30s
+-define(DEFAULT_TARGET_PORTS, [4433, 4434, 4435]).
+-define(DEFAULT_MAX_AGE, 300).        % 5 minutes
 
 %%%===================================================================
 %%% Types
@@ -429,7 +431,7 @@ do_coordinate_punch(#{session_id := SessionId,
 -spec predict_punch_ports(macula_nat_cache:nat_profile() | undefined) -> [inet:port_number()].
 predict_punch_ports(undefined) ->
     %% No profile - try common port range
-    [4433, 4434, 4435];
+    ?DEFAULT_TARGET_PORTS;
 predict_punch_ports(Profile) ->
     NodeId = maps:get(node_id, Profile, <<>>),
     AllocationPolicy = maps:get(allocation_policy, Profile, unknown),
@@ -445,7 +447,7 @@ do_predict_punch_ports(undefined, Profile, _NodeId, _AllocationPolicy, BasePort)
 do_predict_punch_ports(_Pid, _Profile, NodeId, AllocationPolicy, BasePort) ->
     Prediction = macula_port_predictor:predict(NodeId, AllocationPolicy,
                                                 #{base_port => BasePort, count => 5}),
-    maps:get(ports, Prediction, [4433, 4434, 4435]).
+    maps:get(ports, Prediction, ?DEFAULT_TARGET_PORTS).
 
 %% @private
 %% @doc Simple port prediction fallback for hole punching.
@@ -458,7 +460,7 @@ simple_predict_punch_ports(#{allocation_policy := pc, port_delta := Delta}, Port
 simple_predict_punch_ports(_, Port) when is_integer(Port) ->
     [Port, Port + 1, Port + 2];
 simple_predict_punch_ports(_, _) ->
-    [4433, 4434, 4435].
+    ?DEFAULT_TARGET_PORTS.
 
 %% @private
 %% @doc Send PUNCH_COORDINATE message to a peer.
@@ -688,8 +690,7 @@ add_pending_for_peer(PeerId, SessionId, PendingByPeer) ->
 -spec cleanup_stale_sessions(#state{}) -> #state{}.
 cleanup_stale_sessions(#state{sessions = Sessions} = State) ->
     Now = erlang:system_time(second),
-    MaxAge = 300,  % 5 minutes
-    {Kept, Removed} = partition_sessions(Sessions, Now, MaxAge),
+    {Kept, Removed} = partition_sessions(Sessions, Now, ?DEFAULT_MAX_AGE),
     log_cleanup_result(Removed),
     State#state{sessions = Kept}.
 

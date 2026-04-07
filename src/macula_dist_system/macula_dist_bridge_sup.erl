@@ -1,9 +1,18 @@
 %%%-------------------------------------------------------------------
 %%% @doc Supervisor for distribution relay bridge processes.
 %%%
-%%% Each relay tunnel gets one `macula_dist_bridge' child.
-%%% Uses simple_one_for_one — children are started dynamically
-%%% when tunnels are created.
+%%% Each relay tunnel gets one `macula_dist_bridge' child (gen_server).
+%%% Uses simple_one_for_one — children are started dynamically via
+%%% `start_bridge/1' when tunnels are negotiated.
+%%%
+%%% Children are `temporary' — tunnels are ephemeral and should not
+%%% be restarted automatically. If a bridge dies, OTP's dist_util
+%%% detects the socket close and marks the node DOWN. The user's
+%%% application is responsible for re-pinging if desired.
+%%%
+%%% Part of the `macula_dist_system' supervision tree. Also started
+%%% on demand by `macula_dist_relay:ensure_bridge_sup/0' when the
+%%% full dist_system is not running (standalone relay mode).
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_dist_bridge_sup).
