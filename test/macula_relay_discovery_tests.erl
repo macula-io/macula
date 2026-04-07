@@ -2,7 +2,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
--record(relay_entry, {hostname, url, lat, lng, status, distance_km}).
+-record(relay_entry, {hostname, url, lat, lng, status, distance_km, rtt_ms, last_seen}).
 
 %%====================================================================
 %% Haversine distance
@@ -115,13 +115,23 @@ ranking_test_() ->
             ?assert(macula_relay_discovery:relay_count() >= 3)
         end},
         {"no relays returns error", fun() ->
-            %% Insert fresh set, mark all offline
             insert_test_relay(<<"relay-xx-a.macula.io">>, 50.0, 5.0, offline),
             insert_test_relay(<<"relay-xx-b.macula.io">>, 51.0, 6.0, offline),
-            %% nearest should skip offline relays — only returns error if ALL are offline
-            %% but our Paris/London/Berlin are still online, so this tests the filter
             Result = macula_relay_discovery:nearest_except(<<"relay-xx-a.macula.io">>),
             ?assertMatch({ok, _}, Result)
+        end},
+        {"RTT-based ranking overrides distance", fun() ->
+            %% Berlin is farthest by distance but give it lowest RTT
+            macula_relay_discovery:update_rtt(<<"relay-de-berlin.macula.io">>, 5),
+            macula_relay_discovery:update_rtt(<<"relay-fr-paris.macula.io">>, 50),
+            macula_relay_discovery:update_rtt(<<"relay-gb-london.macula.io">>, 30),
+            {ok, Url} = macula_relay_discovery:nearest(),
+            %% Berlin has lowest RTT (5ms) so it should be nearest now
+            ?assertEqual(<<"https://relay-de-berlin.macula.io:4433">>, Url),
+            %% Clear RTTs for other tests
+            insert_test_relay(<<"relay-fr-paris.macula.io">>, 48.8566, 2.3522, online),
+            insert_test_relay(<<"relay-de-berlin.macula.io">>, 52.5200, 13.4050, online),
+            insert_test_relay(<<"relay-gb-london.macula.io">>, 51.5074, -0.1278, online)
         end}
      ] end}.
 

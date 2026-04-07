@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.45.1] - 2026-04-07
+
+### Added
+
+- **Mesh ping** — `macula_relay_client` sends PING every 30s, measures PONG RTT, publishes to `_mesh.relay.ping` topic with relay hostname, node identity, RTT, coordinates, and timestamp.
+- **RTT-based relay ranking** — `macula_relay_discovery` uses measured RTT (from mesh pings) instead of haversine distance when available. Measured latency always preferred over geographic estimate.
+- **Staleness detection** — `macula_relay_discovery` checks every 60s for relays with no ping for 90s+ and marks them offline. Detects net splits and ungraceful failures without relying on `_mesh.relay.down` events.
+- **Discovery RTT notification** — relay client sends `{ping_rtt, Hostname, RttMs}` to discovery process after each PONG, enabling real-time latency updates.
+
+---
+
 ## [0.45.0] - 2026-04-07
 
 ### Added

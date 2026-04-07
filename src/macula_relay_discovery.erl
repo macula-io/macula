@@ -41,7 +41,8 @@
     extract_hostname/1,
     build_topology_url/1,
     relay_status/1,
-    to_float/1
+    to_float/1,
+    update_rtt/2
 ]).
 
 %% gen_server callbacks
@@ -49,7 +50,9 @@
 
 -define(SERVER, ?MODULE).
 -define(TABLE, macula_relay_discovery_cache).
--define(RECONCILE_MS, 300_000).  % 5 minutes
+-define(RECONCILE_MS, 300_000).     % 5 minutes
+-define(STALENESS_CHECK_MS, 60_000). % 1 minute
+-define(STALE_THRESHOLD_MS, 90_000). % 90 seconds without ping = stale
 -define(BOOTSTRAP_TIMEOUT_MS, 15_000).
 
 -record(relay_entry, {
@@ -58,7 +61,9 @@
     lat :: float(),
     lng :: float(),
     status :: online | offline,
-    distance_km :: float()
+    distance_km :: float(),
+    rtt_ms :: non_neg_integer() | undefined,
+    last_seen :: integer() | undefined   % erlang:monotonic_time(millisecond)
 }).
 
 %%====================================================================
@@ -108,6 +113,7 @@ init(Opts) ->
     MyLng = maps:get(lng, Opts, 0.0),
     State = #{seeds => Seeds, lat => MyLat, lng => MyLng, subscribed => false},
     self() ! bootstrap,
+    schedule_staleness_check(),
     {ok, State}.
 
 handle_call(_, _From, State) ->
@@ -135,6 +141,17 @@ handle_info({relay_up, Hostname, RelayInfo}, #{lat := Lat, lng := Lng} = State) 
 
 handle_info({relay_down, Hostname}, State) ->
     mark_offline(Hostname),
+    {noreply, State};
+
+%% RTT measurement from relay_client PING/PONG
+handle_info({ping_rtt, Hostname, RttMs}, State) ->
+    update_rtt(Hostname, RttMs),
+    {noreply, State};
+
+%% Staleness check — detect silent relays (net split / ungraceful failure)
+handle_info(check_staleness, State) ->
+    check_stale_relays(),
+    schedule_staleness_check(),
     {noreply, State};
 
 handle_info(_, State) ->
@@ -207,13 +224,16 @@ ingest_relay(RelayMap, MyLat, MyLng) ->
     Status = relay_status(maps:get(<<"status">>, RelayMap, <<"unknown">>)),
     Distance = haversine_km(MyLat, MyLng, RelayLat, RelayLng),
     Url = <<"https://", Hostname/binary, ":4433">>,
+    %% Preserve RTT and last_seen from live measurements
+    {ExistingRtt, ExistingLastSeen} = case ets:lookup(?TABLE, Hostname) of
+        [#relay_entry{rtt_ms = R, last_seen = L}] -> {R, L};
+        [] -> {undefined, undefined}
+    end,
     Entry = #relay_entry{
-        hostname = Hostname,
-        url = Url,
-        lat = RelayLat,
-        lng = RelayLng,
-        status = Status,
-        distance_km = Distance
+        hostname = Hostname, url = Url,
+        lat = RelayLat, lng = RelayLng,
+        status = Status, distance_km = Distance,
+        rtt_ms = ExistingRtt, last_seen = ExistingLastSeen
     },
     ets:insert(?TABLE, Entry).
 
@@ -245,9 +265,20 @@ mark_offline(Hostname) ->
 %% Ranked relay access (reads from ETS, no gen_server call)
 %%====================================================================
 
+%% Rank by measured RTT when available, fall back to haversine distance.
 ranked_all() ->
     Entries = ets:tab2list(?TABLE),
-    lists:sort(fun(A, B) -> A#relay_entry.distance_km =< B#relay_entry.distance_km end, Entries).
+    lists:sort(fun rank_compare/2, Entries).
+
+rank_compare(#relay_entry{rtt_ms = A}, #relay_entry{rtt_ms = B})
+  when is_integer(A), is_integer(B) ->
+    A =< B;
+rank_compare(#relay_entry{rtt_ms = A}, _) when is_integer(A) ->
+    true;  %% measured RTT always preferred over estimate
+rank_compare(_, #relay_entry{rtt_ms = B}) when is_integer(B) ->
+    false;
+rank_compare(A, B) ->
+    A#relay_entry.distance_km =< B#relay_entry.distance_km.
 
 ranked_online() ->
     [E || E <- ranked_all(), E#relay_entry.status =:= online].
@@ -256,11 +287,48 @@ ranked_online_except(FailedHostname) ->
     [E || E <- ranked_online(), E#relay_entry.hostname =/= FailedHostname].
 
 %%====================================================================
+%% RTT tracking
+%%====================================================================
+
+update_rtt(Hostname, RttMs) ->
+    Now = erlang:monotonic_time(millisecond),
+    case ets:lookup(?TABLE, Hostname) of
+        [Entry] ->
+            ets:insert(?TABLE, Entry#relay_entry{
+                rtt_ms = RttMs,
+                last_seen = Now,
+                status = online
+            });
+        [] ->
+            ok
+    end.
+
+check_stale_relays() ->
+    Now = erlang:monotonic_time(millisecond),
+    Entries = ets:tab2list(?TABLE),
+    lists:foreach(fun(E) -> check_staleness_entry(E, Now) end, Entries).
+
+check_staleness_entry(#relay_entry{status = offline}, _Now) ->
+    ok;
+check_staleness_entry(#relay_entry{last_seen = undefined}, _Now) ->
+    ok;
+check_staleness_entry(#relay_entry{hostname = H, last_seen = LastSeen} = E, Now) when
+    Now - LastSeen > ?STALE_THRESHOLD_MS ->
+    ?LOG_WARNING("[relay_discovery] Relay stale (no ping for ~bs): ~s",
+                 [(Now - LastSeen) div 1000, H]),
+    ets:insert(?TABLE, E#relay_entry{status = offline});
+check_staleness_entry(_, _) ->
+    ok.
+
+%%====================================================================
 %% Helpers
 %%====================================================================
 
 schedule_reconcile() ->
     erlang:send_after(?RECONCILE_MS, self(), reconcile).
+
+schedule_staleness_check() ->
+    erlang:send_after(?STALENESS_CHECK_MS, self(), check_staleness).
 
 relay_status(<<"online">>) -> online;
 relay_status(_) -> offline.

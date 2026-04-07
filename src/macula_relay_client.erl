@@ -36,6 +36,8 @@
 -define(RECONNECT_MAX_MS, 30000).
 -define(RECONNECT_JITTER, 0.3).
 -define(CALL_TIMEOUT, 5000).
+-define(PING_INTERVAL_MS, 30000).
+-define(PING_TOPIC, <<"_mesh.relay.ping">>).
 
 -record(state, {
     relays :: [binary()],                                    %% all configured relay URLs
@@ -58,7 +60,9 @@
     %% Application state (survives reconnects)
     subscriptions :: #{reference() => {binary(), fun()}},     %% ref => {topic, callback}
     procedures :: #{binary() => fun()},                       %% procedure => handler
-    pending_calls :: #{binary() => {pid(), reference()}}      %% call_id => {from, timer_ref}
+    pending_calls :: #{binary() => {pid(), reference()}},     %% call_id => {from, timer_ref}
+    ping_sent_at :: integer() | undefined,                    %% erlang:monotonic_time(millisecond) when PING sent
+    last_rtt_ms :: non_neg_integer() | undefined              %% most recent RTT measurement
 }).
 
 %%====================================================================
@@ -229,6 +233,7 @@ handle_info(connect, State) ->
                                          recv_buffer = <<>>, reconnect_attempt = 0},
                     send_connect(State2),
                     replay_state(State2),
+                    schedule_ping(),
                     {noreply, State2};
                 {error, StreamErr} ->
                     ?LOG_WARNING("[relay_client] Stream open failed on ~s: ~p", [State#state.url, StreamErr]),
@@ -283,6 +288,14 @@ handle_info({quic, streams_available, _Conn, _Info}, State) ->
 handle_info({quic, peer_needs_streams, _Conn, _Info}, State) ->
     {noreply, State};
 
+handle_info(send_ping, #state{status = connected} = State) ->
+    send_protocol_ping(State),
+    schedule_ping(),
+    {noreply, State#state{ping_sent_at = erlang:monotonic_time(millisecond)}};
+handle_info(send_ping, State) ->
+    %% Not connected — skip, next ping will fire after reconnect
+    {noreply, State};
+
 handle_info(Info, State) ->
     ?LOG_DEBUG("[relay_client] Unhandled: ~p", [Info]),
     {noreply, State}.
@@ -291,6 +304,48 @@ terminate(_Reason, #state{conn = Conn, stream = Stream}) ->
     catch macula_quic:close(Stream),
     catch macula_quic:close(Conn),
     ok.
+
+%%====================================================================
+%% Mesh ping — RTT measurement + publish
+%%====================================================================
+
+schedule_ping() ->
+    erlang:send_after(?PING_INTERVAL_MS, self(), send_ping).
+
+send_protocol_ping(State) ->
+    Ts = erlang:system_time(millisecond),
+    maybe_send(ping, #{timestamp => Ts}, State).
+
+publish_mesh_ping(RttMs, State) ->
+    RelayHost = list_to_binary(State#state.host),
+    NodeName = State#state.identity,
+    Site = State#state.site,
+    Lat = site_field(lat, Site),
+    Lng = site_field(lng, Site),
+    Payload = json:encode(#{
+        relay => RelayHost,
+        node => NodeName,
+        rtt_ms => RttMs,
+        lat => Lat,
+        lng => Lng,
+        ts => erlang:system_time(second)
+    }),
+    maybe_send(publish, #{
+        <<"topic">> => ?PING_TOPIC,
+        <<"payload">> => iolist_to_binary(Payload),
+        <<"qos">> => 0,
+        <<"retain">> => false,
+        <<"message_id">> => base64:encode(crypto:strong_rand_bytes(8))
+    }, State).
+
+notify_discovery(RttMs, State) ->
+    RelayHost = list_to_binary(State#state.host),
+    try macula_relay_discovery ! {ping_rtt, RelayHost, RttMs}
+    catch _:_ -> ok
+    end.
+
+site_field(Key, Site) when is_map(Site) -> maps:get(Key, Site, 0.0);
+site_field(_, _) -> 0.0.
 
 %%====================================================================
 %% Internal: message processing
@@ -366,9 +421,14 @@ handle_message({ok, {reply, Msg}}, State) ->
             State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)}
     end;
 
-%% PONG — connection alive
-handle_message({ok, {pong, _Msg}}, State) ->
+%% PONG — measure RTT and publish mesh ping
+handle_message({ok, {pong, _Msg}}, #state{ping_sent_at = undefined} = State) ->
     State;
+handle_message({ok, {pong, _Msg}}, State) ->
+    RttMs = erlang:monotonic_time(millisecond) - State#state.ping_sent_at,
+    publish_mesh_ping(RttMs, State),
+    notify_discovery(RttMs, State),
+    State#state{ping_sent_at = undefined, last_rtt_ms = RttMs};
 
 handle_message({ok, {Type, _Msg}}, State) ->
     ?LOG_DEBUG("[relay_client] Ignoring message type: ~p", [Type]),
