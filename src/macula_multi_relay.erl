@@ -47,7 +47,8 @@
 }).
 
 -record(state, {
-    opts :: map(),                                %% original start opts (for spawning new connections)
+    opts :: map(),                                %% original start opts
+    relay_discovery_subscribed = false :: boolean(), %% subscribed to _mesh.relay.up/down
     relays :: [binary()],                         %% all configured relay URLs
     connections :: [#conn{}],                      %% active connections
     target_count :: pos_integer(),                 %% how many connections to maintain
@@ -111,6 +112,7 @@ init(Opts) ->
         {ok, List} when is_list(List), length(List) > 0 -> List;
         _ -> [maps:get(url, Opts, <<"https://localhost:4433">>)]
     end,
+    maybe_start_discovery(Relays, Opts),
     TargetCount = min(
         maps:get(connections, Opts, ?DEFAULT_CONNECTIONS),
         length(Relays)
@@ -126,11 +128,22 @@ init(Opts) ->
         dedup_table = DedupTable,
         dedup_queue = queue:new()
     },
-    %% Start connections asynchronously
     self() ! spawn_connections,
-    %% Periodic health check
     erlang:send_after(?HEALTH_CHECK_MS, self(), health_check),
     {ok, State}.
+
+%% Start relay discovery if the caller provides geographic coordinates.
+%% Discovery runs as a standalone gen_server — relay_client uses it for failover.
+maybe_start_discovery(Seeds, #{site := #{lat := Lat, lng := Lng}}) when is_number(Lat), is_number(Lng) ->
+    case whereis(macula_relay_discovery) of
+        undefined ->
+            macula_relay_discovery:start_link(#{seeds => Seeds, lat => Lat, lng => Lng}),
+            ?LOG_INFO("[multi_relay] Started relay discovery (lat: ~.2f, lng: ~.2f)", [Lat, Lng]);
+        _ ->
+            ok
+    end;
+maybe_start_discovery(_, _) ->
+    ok.
 
 %%====================================================================
 %% Subscribe / Unsubscribe — applied to ALL connections
@@ -246,7 +259,8 @@ handle_cast(_Msg, State) ->
 
 handle_info(spawn_connections, State) ->
     State2 = ensure_connections(State),
-    {noreply, State2};
+    State3 = maybe_subscribe_relay_events(State2),
+    {noreply, State3};
 
 handle_info(health_check, State) ->
     State2 = ensure_connections(State),
@@ -274,8 +288,56 @@ handle_info({'DOWN', MonRef, process, _Pid, Reason}, State) ->
             {noreply, State3}
     end;
 
+%% Relay discovery events — forward to macula_relay_discovery
+handle_info({relay_event, <<"_mesh.relay.up">>, Payload}, State) ->
+    forward_relay_event(relay_up, Payload),
+    {noreply, State};
+handle_info({relay_event, <<"_mesh.relay.down">>, Payload}, State) ->
+    forward_relay_event(relay_down, Payload),
+    {noreply, State};
+
 handle_info(_Info, State) ->
     {noreply, State}.
+
+%%====================================================================
+%% Relay discovery integration
+%%====================================================================
+
+%% Subscribe to _mesh.relay.up/down once we have connections and discovery is running.
+maybe_subscribe_relay_events(#state{relay_discovery_subscribed = true} = State) ->
+    State;
+maybe_subscribe_relay_events(#state{connections = []} = State) ->
+    State;
+maybe_subscribe_relay_events(State) ->
+    case whereis(macula_relay_discovery) of
+        undefined ->
+            State;
+        _ ->
+            Self = self(),
+            Primary = get_primary(State),
+            subscribe_relay_topic(Primary, <<"_mesh.relay.up">>, Self),
+            subscribe_relay_topic(Primary, <<"_mesh.relay.down">>, Self),
+            ?LOG_INFO("[multi_relay] Subscribed to relay discovery events"),
+            State#state{relay_discovery_subscribed = true}
+    end.
+
+subscribe_relay_topic(undefined, _, _) -> ok;
+subscribe_relay_topic(#conn{pid = Pid}, Topic, Self) ->
+    macula_relay_client:subscribe(Pid, Topic, fun(Msg) ->
+        Self ! {relay_event, Topic, Msg}
+    end).
+
+get_primary(#state{connections = Conns}) ->
+    lists:keyfind(primary, #conn.role, Conns).
+
+forward_relay_event(relay_up, #{<<"hostname">> := Hostname} = Info) ->
+    Lat = maps:get(<<"lat">>, Info, 0.0),
+    Lng = maps:get(<<"lng">>, Info, 0.0),
+    macula_relay_discovery ! {relay_up, Hostname, #{lat => Lat, lng => Lng}};
+forward_relay_event(relay_down, #{<<"hostname">> := Hostname}) ->
+    macula_relay_discovery ! {relay_down, Hostname};
+forward_relay_event(_, _) ->
+    ok.
 
 terminate(_Reason, #state{connections = Conns}) ->
     lists:foreach(fun(#conn{pid = Pid}) ->
