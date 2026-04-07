@@ -253,7 +253,12 @@ negotiate_with_kernel(Self, KernelPid, Client, DistSock, BridgeSock,
             DistCtrl ! {Self, controller, ok},
             %% Transfer DistSock to the dist controller so it survives
             %% when this setup process exits.
-            gen_tcp:controlling_process(DistSock, DistCtrl),
+            case gen_tcp:controlling_process(DistSock, DistCtrl) of
+                ok -> ok;
+                {error, Err1} ->
+                    error_logger:error_msg("[dist_relay] DistSock transfer to ~p failed: ~p~n",
+                                           [DistCtrl, Err1])
+            end,
             macula_relay_client:unsubscribe(Client, BufferSubRef),
             flush_buffered_to_socket(BridgeSock, Key),
             start_supervised_bridge(Client, BridgeSock, SendTopic, RecvTopic,
@@ -299,9 +304,12 @@ start_supervised_bridge(Client, BridgeSock, SendTopic, RecvTopic, TunnelId, Key)
     },
     case macula_dist_bridge_sup:start_bridge(BridgeArgs) of
         {ok, Pid} ->
-            %% Transfer socket ownership from creating process to bridge.
-            %% Must be called by the current owner (this process).
-            gen_tcp:controlling_process(BridgeSock, Pid),
+            case gen_tcp:controlling_process(BridgeSock, Pid) of
+                ok -> ok;
+                {error, Err2} ->
+                    error_logger:error_msg("[dist_relay] BridgeSock transfer to ~p failed: ~p~n",
+                                           [Pid, Err2])
+            end,
             ?LOG_INFO("[dist_relay] Supervised bridge ~p for ~s", [Pid, TunnelId]),
             {ok, Pid};
         {error, Reason} ->
