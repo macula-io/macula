@@ -46,7 +46,7 @@
 listen({Address, Port}, Opts) ->
     listen_on(format_listen_on(Address, Port), Opts);
 listen(Port, Opts) when is_integer(Port) ->
-    listen_on("[::]:" ++ integer_to_list(Port), Opts).
+    listen_on(Port, Opts).
 
 %% @private Format address:port string for quicer.
 %% IPv6 addresses are wrapped in brackets per RFC 2732.
@@ -79,7 +79,7 @@ listen_on(ListenOn, Opts) ->
         {handshake_idle_timeout_ms, HandshakeIdleTimeoutMs}
     ],
 
-    ?LOG_INFO("Starting listener on ~s with idle_timeout=~pms, keep_alive=~pms",
+    ?LOG_INFO("Starting listener on ~p with idle_timeout=~pms, keep_alive=~pms",
               [ListenOn, IdleTimeoutMs, KeepAliveIntervalMs]),
     quicer:listen(ListenOn, ListenerOpts).
 
