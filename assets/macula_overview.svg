@@ -1,145 +1,188 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 550">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400">
   <defs>
-    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
-    </marker>
     <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" style="stop-color:#6366f1;stop-opacity:1"/>
       <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:1"/>
     </linearGradient>
-    <linearGradient id="nodeGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#f8fafc;stop-opacity:1"/>
-      <stop offset="100%" style="stop-color:#e2e8f0;stop-opacity:1"/>
+    <linearGradient id="appGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ecfdf5;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#d1fae5;stop-opacity:1"/>
     </linearGradient>
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="3" dy="3" stdDeviation="3" flood-opacity="0.15"/>
-    </filter>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="3" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
+    <linearGradient id="relayGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ede9fe;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#ddd6fe;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="quicGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#dbeafe;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#bfdbfe;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="lanGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#fef3c7;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#fde68a;stop-opacity:1"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="2" dy="2" stdDeviation="2" flood-opacity="0.12"/>
     </filter>
   </defs>
 
   <!-- Background -->
-  <rect width="900" height="550" fill="#f8fafc"/>
+  <rect width="800" height="400" fill="#f8fafc"/>
 
   <!-- Header -->
-  <rect x="0" y="0" width="900" height="55" fill="url(#headerGrad)"/>
-  <text x="450" y="35" text-anchor="middle" fill="white" font-family="system-ui" font-size="20" font-weight="bold">Macula HTTP/3 Mesh Platform</text>
+  <rect x="0" y="0" width="800" height="45" fill="url(#headerGrad)"/>
+  <text x="400" y="30" text-anchor="middle" fill="white" font-family="system-ui" font-size="18" font-weight="bold">Macula Federated Relay Mesh</text>
 
-  <!-- Central mesh visualization -->
-  <ellipse cx="450" cy="270" rx="280" ry="160" fill="none" stroke="#e2e8f0" stroke-width="2" stroke-dasharray="8,4"/>
-  <text x="450" y="445" text-anchor="middle" font-family="system-ui" font-size="12" fill="#94a3b8">Decentralized Mesh Network</text>
+  <!-- ================================================================ -->
+  <!-- LAYER 1: Applications (top) -->
+  <!-- ================================================================ -->
+  <rect x="40" y="60" width="580" height="75" rx="10" fill="url(#appGrad)" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
+  <text x="50" y="82" font-family="system-ui" font-size="13" font-weight="700" fill="#047857">Applications</text>
 
-  <!-- Node 1 (top left) -->
-  <g transform="translate(200, 150)">
-    <rect x="-60" y="-35" width="120" height="70" rx="8" fill="url(#nodeGrad)" stroke="#6366f1" stroke-width="2" filter="url(#shadow)"/>
-    <circle cx="0" cy="-15" r="15" fill="#ddd6fe" stroke="#8b5cf6" stroke-width="2"/>
-    <text x="0" y="-10" text-anchor="middle" font-family="system-ui" font-size="14">🖥️</text>
-    <text x="0" y="8" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#4b5563">Node A</text>
-    <text x="0" y="22" text-anchor="middle" font-family="system-ui" font-size="9" fill="#9ca3af">Peer</text>
+  <!-- Sub-boxes inside Applications -->
+  <rect x="55" y="92" width="130" height="32" rx="5" fill="white" stroke="#10b981" stroke-width="1.2"/>
+  <text x="120" y="108" text-anchor="middle" font-family="system-ui" font-size="18">📢</text>
+  <text x="120" y="120" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#047857">Pub/Sub</text>
+
+  <rect x="200" y="92" width="130" height="32" rx="5" fill="white" stroke="#10b981" stroke-width="1.2"/>
+  <text x="265" y="108" text-anchor="middle" font-family="system-ui" font-size="18">&#9889;</text>
+  <text x="265" y="120" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#047857">Async RPC</text>
+
+  <rect x="345" y="92" width="130" height="32" rx="5" fill="white" stroke="#10b981" stroke-width="1.2"/>
+  <text x="410" y="108" text-anchor="middle" font-family="system-ui" font-size="18">&#128230;</text>
+  <text x="410" y="120" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#047857">Distribution</text>
+
+  <rect x="490" y="92" width="120" height="32" rx="5" fill="white" stroke="#10b981" stroke-width="1.2"/>
+  <text x="550" y="108" text-anchor="middle" font-family="system-ui" font-size="18">&#128269;</text>
+  <text x="550" y="120" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#047857">Discovery</text>
+
+  <!-- ================================================================ -->
+  <!-- LAYER 2: Relay Mesh (middle) -->
+  <!-- ================================================================ -->
+  <rect x="40" y="150" width="580" height="95" rx="10" fill="url(#relayGrad)" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="50" y="172" font-family="system-ui" font-size="13" font-weight="700" fill="#6d28d9">Relay Mesh</text>
+
+  <!-- Relay icons -->
+  <g transform="translate(100, 210)">
+    <rect x="-32" y="-22" width="64" height="44" rx="6" fill="white" stroke="#8b5cf6" stroke-width="1.5"/>
+    <text x="0" y="-4" text-anchor="middle" font-family="system-ui" font-size="16">&#127760;</text>
+    <text x="0" y="12" text-anchor="middle" font-family="system-ui" font-size="8" font-weight="600" fill="#6d28d9">Relay A</text>
   </g>
 
-  <!-- Node 2 (top right) -->
-  <g transform="translate(700, 150)">
-    <rect x="-60" y="-35" width="120" height="70" rx="8" fill="url(#nodeGrad)" stroke="#6366f1" stroke-width="2" filter="url(#shadow)"/>
-    <circle cx="0" cy="-15" r="15" fill="#ddd6fe" stroke="#8b5cf6" stroke-width="2"/>
-    <text x="0" y="-10" text-anchor="middle" font-family="system-ui" font-size="14">🖥️</text>
-    <text x="0" y="8" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#4b5563">Node B</text>
-    <text x="0" y="22" text-anchor="middle" font-family="system-ui" font-size="9" fill="#9ca3af">Peer</text>
+  <g transform="translate(265, 210)">
+    <rect x="-32" y="-22" width="64" height="44" rx="6" fill="white" stroke="#8b5cf6" stroke-width="1.5"/>
+    <text x="0" y="-4" text-anchor="middle" font-family="system-ui" font-size="16">&#127760;</text>
+    <text x="0" y="12" text-anchor="middle" font-family="system-ui" font-size="8" font-weight="600" fill="#6d28d9">Relay B</text>
   </g>
 
-  <!-- Node 3 (bottom left) -->
-  <g transform="translate(200, 380)">
-    <rect x="-60" y="-35" width="120" height="70" rx="8" fill="url(#nodeGrad)" stroke="#6366f1" stroke-width="2" filter="url(#shadow)"/>
-    <circle cx="0" cy="-15" r="15" fill="#ddd6fe" stroke="#8b5cf6" stroke-width="2"/>
-    <text x="0" y="-10" text-anchor="middle" font-family="system-ui" font-size="14">📱</text>
-    <text x="0" y="8" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#4b5563">Node C</text>
-    <text x="0" y="22" text-anchor="middle" font-family="system-ui" font-size="9" fill="#9ca3af">Mobile</text>
+  <g transform="translate(430, 210)">
+    <rect x="-32" y="-22" width="64" height="44" rx="6" fill="white" stroke="#8b5cf6" stroke-width="1.5"/>
+    <text x="0" y="-4" text-anchor="middle" font-family="system-ui" font-size="16">&#127760;</text>
+    <text x="0" y="12" text-anchor="middle" font-family="system-ui" font-size="8" font-weight="600" fill="#6d28d9">Relay C</text>
   </g>
 
-  <!-- Node 4 (bottom right) -->
-  <g transform="translate(700, 380)">
-    <rect x="-60" y="-35" width="120" height="70" rx="8" fill="url(#nodeGrad)" stroke="#6366f1" stroke-width="2" filter="url(#shadow)"/>
-    <circle cx="0" cy="-15" r="15" fill="#ddd6fe" stroke="#8b5cf6" stroke-width="2"/>
-    <text x="0" y="-10" text-anchor="middle" font-family="system-ui" font-size="14">🌐</text>
-    <text x="0" y="8" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#4b5563">Node D</text>
-    <text x="0" y="22" text-anchor="middle" font-family="system-ui" font-size="9" fill="#9ca3af">Edge</text>
+  <!-- Inter-relay connections (DHT + Bloom) -->
+  <line x1="132" y1="210" x2="233" y2="210" stroke="#8b5cf6" stroke-width="2" opacity="0.7"/>
+  <line x1="297" y1="210" x2="398" y2="210" stroke="#8b5cf6" stroke-width="2" opacity="0.7"/>
+
+  <!-- Labels on inter-relay links -->
+  <text x="182" y="200" text-anchor="middle" font-family="system-ui" font-size="7" fill="#7c3aed">DHT</text>
+  <text x="348" y="200" text-anchor="middle" font-family="system-ui" font-size="7" fill="#7c3aed">DHT</text>
+
+  <!-- Bloom filter + routing labels -->
+  <rect x="475" y="182" width="130" height="42" rx="5" fill="white" stroke="#a78bfa" stroke-width="1" opacity="0.9"/>
+  <text x="540" y="197" text-anchor="middle" font-family="system-ui" font-size="8" font-weight="600" fill="#7c3aed">Relay Routing</text>
+  <text x="540" y="208" text-anchor="middle" font-family="system-ui" font-size="7" fill="#9ca3af">Kademlia DHT</text>
+  <text x="540" y="218" text-anchor="middle" font-family="system-ui" font-size="7" fill="#9ca3af">Bloom Filters</text>
+
+  <!-- ================================================================ -->
+  <!-- LAYER 3: QUIC Transport (bottom) -->
+  <!-- ================================================================ -->
+  <rect x="40" y="260" width="580" height="75" rx="10" fill="url(#quicGrad)" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="50" y="282" font-family="system-ui" font-size="13" font-weight="700" fill="#1d4ed8">QUIC Transport</text>
+
+  <!-- Sub-boxes inside QUIC -->
+  <rect x="55" y="292" width="155" height="30" rx="5" fill="white" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="132" y="311" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#1d4ed8">Outbound QUIC Connections</text>
+
+  <rect x="225" y="292" width="120" height="30" rx="5" fill="white" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="285" y="311" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#1d4ed8">TLS 1.3 (mandatory)</text>
+
+  <rect x="360" y="292" width="130" height="30" rx="5" fill="white" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="425" y="311" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#1d4ed8">Single UDP Port</text>
+
+  <rect x="505" y="292" width="100" height="30" rx="5" fill="white" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="555" y="311" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#1d4ed8">Firewall Friendly</text>
+
+  <!-- ================================================================ -->
+  <!-- SIDE: LAN Optimization -->
+  <!-- ================================================================ -->
+  <rect x="640" y="60" width="145" height="275" rx="10" fill="url(#lanGrad)" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="712" y="82" text-anchor="middle" font-family="system-ui" font-size="13" font-weight="700" fill="#b45309">LAN</text>
+
+  <!-- LAN details -->
+  <rect x="652" y="95" width="120" height="32" rx="5" fill="white" stroke="#f59e0b" stroke-width="1.2"/>
+  <text x="712" y="115" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#b45309">Direct QUIC</text>
+
+  <rect x="652" y="138" width="120" height="32" rx="5" fill="white" stroke="#f59e0b" stroke-width="1.2"/>
+  <text x="712" y="158" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#b45309">mDNS Discovery</text>
+
+  <rect x="652" y="181" width="120" height="32" rx="5" fill="white" stroke="#f59e0b" stroke-width="1.2"/>
+  <text x="712" y="201" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#b45309">Zero Hop Latency</text>
+
+  <rect x="652" y="224" width="120" height="32" rx="5" fill="white" stroke="#f59e0b" stroke-width="1.2"/>
+  <text x="712" y="244" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="600" fill="#b45309">Gossip Clustering</text>
+
+  <!-- Arrow from LAN to Relay Mesh (fallback) -->
+  <text x="712" y="280" text-anchor="middle" font-family="system-ui" font-size="8" fill="#92400e">Relay fallback</text>
+  <text x="712" y="292" text-anchor="middle" font-family="system-ui" font-size="8" fill="#92400e">for WAN traffic</text>
+  <line x1="640" y1="198" x2="625" y2="198" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.6"/>
+
+  <!-- ================================================================ -->
+  <!-- Key Properties (bottom bar) -->
+  <!-- ================================================================ -->
+  <rect x="40" y="350" width="745" height="40" rx="8" fill="white" stroke="#e5e7eb" filter="url(#shadow)"/>
+
+  <g transform="translate(80, 375)">
+    <circle cx="0" cy="0" r="4" fill="#10b981"/>
+    <text x="10" y="4" font-family="system-ui" font-size="9" fill="#4b5563">Outbound-only nodes</text>
   </g>
 
-  <!-- DHT in center -->
-  <ellipse cx="450" cy="270" rx="70" ry="45" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
-  <text x="450" y="263" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#6d28d9">Kademlia</text>
-  <text x="450" y="280" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#6d28d9">DHT</text>
-
-  <!-- Connection lines -->
-  <line x1="260" y1="155" x2="380" y2="240" stroke="#6366f1" stroke-width="2" opacity="0.6"/>
-  <line x1="640" y1="155" x2="520" y2="240" stroke="#6366f1" stroke-width="2" opacity="0.6"/>
-  <line x1="260" y1="375" x2="380" y2="300" stroke="#6366f1" stroke-width="2" opacity="0.6"/>
-  <line x1="640" y1="375" x2="520" y2="300" stroke="#6366f1" stroke-width="2" opacity="0.6"/>
-
-  <!-- Cross connections -->
-  <line x1="260" y1="150" x2="640" y2="150" stroke="#a5b4fc" stroke-width="1.5" stroke-dasharray="6,3" opacity="0.5"/>
-  <line x1="260" y1="380" x2="640" y2="380" stroke="#a5b4fc" stroke-width="1.5" stroke-dasharray="6,3" opacity="0.5"/>
-  <line x1="200" y1="190" x2="200" y2="340" stroke="#a5b4fc" stroke-width="1.5" stroke-dasharray="6,3" opacity="0.5"/>
-  <line x1="700" y1="190" x2="700" y2="340" stroke="#a5b4fc" stroke-width="1.5" stroke-dasharray="6,3" opacity="0.5"/>
-
-  <!-- Feature boxes -->
-  <!-- Pub/Sub -->
-  <rect x="20" y="80" width="140" height="65" rx="6" fill="white" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
-  <text x="90" y="103" text-anchor="middle" font-family="system-ui" font-size="18">📢</text>
-  <text x="90" y="122" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#047857">Pub/Sub</text>
-  <text x="90" y="136" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Topic-based messaging</text>
-
-  <!-- RPC -->
-  <rect x="20" y="155" width="140" height="65" rx="6" fill="white" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
-  <text x="90" y="178" text-anchor="middle" font-family="system-ui" font-size="18">⚡</text>
-  <text x="90" y="197" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#1d4ed8">Async RPC</text>
-  <text x="90" y="211" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Service discovery</text>
-
-  <!-- NAT Traversal -->
-  <rect x="740" y="80" width="140" height="65" rx="6" fill="white" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
-  <text x="810" y="103" text-anchor="middle" font-family="system-ui" font-size="18">🔓</text>
-  <text x="810" y="122" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#b45309">NAT Traversal</text>
-  <text x="810" y="136" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Hole punch + relay</text>
-
-  <!-- Bridge Mesh -->
-  <rect x="740" y="155" width="140" height="65" rx="6" fill="white" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
-  <text x="810" y="178" text-anchor="middle" font-family="system-ui" font-size="18">🌉</text>
-  <text x="810" y="197" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#6d28d9">Bridge Mesh</text>
-  <text x="810" y="211" text-anchor="middle" font-family="system-ui" font-size="9" fill="#6b7280">Fractal hierarchy</text>
-
-  <!-- Key benefits at bottom -->
-  <rect x="50" y="475" width="800" height="55" rx="8" fill="white" stroke="#e5e7eb" filter="url(#shadow)"/>
-  <text x="450" y="495" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#374151">Key Benefits</text>
-
-  <!-- Benefit items -->
-  <g transform="translate(110, 518)">
-    <circle cx="0" cy="0" r="5" fill="#10b981"/>
-    <text x="12" y="4" font-family="system-ui" font-size="10" fill="#4b5563">No central broker</text>
+  <g transform="translate(230, 375)">
+    <circle cx="0" cy="0" r="4" fill="#8b5cf6"/>
+    <text x="10" y="4" font-family="system-ui" font-size="9" fill="#4b5563">Federated relay sovereignty</text>
   </g>
 
-  <g transform="translate(260, 518)">
-    <circle cx="0" cy="0" r="5" fill="#3b82f6"/>
-    <text x="12" y="4" font-family="system-ui" font-size="10" fill="#4b5563">HTTP/3 QUIC transport</text>
+  <g transform="translate(410, 375)">
+    <circle cx="0" cy="0" r="4" fill="#3b82f6"/>
+    <text x="10" y="4" font-family="system-ui" font-size="9" fill="#4b5563">HTTP/3 QUIC transport</text>
   </g>
 
-  <g transform="translate(430, 518)">
-    <circle cx="0" cy="0" r="5" fill="#f59e0b"/>
-    <text x="12" y="4" font-family="system-ui" font-size="10" fill="#4b5563">NAT-friendly</text>
+  <g transform="translate(575, 375)">
+    <circle cx="0" cy="0" r="4" fill="#f59e0b"/>
+    <text x="10" y="4" font-family="system-ui" font-size="9" fill="#4b5563">LAN-optimized paths</text>
   </g>
 
-  <g transform="translate(550, 518)">
-    <circle cx="0" cy="0" r="5" fill="#8b5cf6"/>
-    <text x="12" y="4" font-family="system-ui" font-size="10" fill="#4b5563">Self-organizing</text>
+  <g transform="translate(715, 375)">
+    <circle cx="0" cy="0" r="4" fill="#ec4899"/>
+    <text x="10" y="4" font-family="system-ui" font-size="9" fill="#4b5563">E2E encrypted</text>
   </g>
 
-  <g transform="translate(700, 518)">
-    <circle cx="0" cy="0" r="5" fill="#ec4899"/>
-    <text x="12" y="4" font-family="system-ui" font-size="10" fill="#4b5563">O(log N) lookups</text>
+  <!-- ================================================================ -->
+  <!-- Node icons connecting to relays (showing outbound connections) -->
+  <!-- ================================================================ -->
+  <!-- Small node icons below the QUIC layer, with arrows up to relays -->
+  <g transform="translate(100, 345)">
+    <text x="0" y="0" text-anchor="middle" font-family="system-ui" font-size="11">&#128187;</text>
   </g>
+  <g transform="translate(200, 345)">
+    <text x="0" y="0" text-anchor="middle" font-family="system-ui" font-size="11">&#128241;</text>
+  </g>
+  <g transform="translate(350, 345)">
+    <text x="0" y="0" text-anchor="middle" font-family="system-ui" font-size="11">&#128187;</text>
+  </g>
+  <g transform="translate(500, 345)">
+    <text x="0" y="0" text-anchor="middle" font-family="system-ui" font-size="11">&#128187;</text>
+  </g>
+
 </svg>
