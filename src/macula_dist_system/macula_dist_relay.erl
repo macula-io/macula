@@ -251,9 +251,11 @@ negotiate_with_kernel(Self, KernelPid, Client, DistSock, BridgeSock,
     receive
         {KernelPid, controller, DistCtrl} ->
             DistCtrl ! {Self, controller, ok},
+            %% Transfer DistSock to the dist controller so it survives
+            %% when this setup process exits.
+            gen_tcp:controlling_process(DistSock, DistCtrl),
             macula_relay_client:unsubscribe(Client, BufferSubRef),
             flush_buffered_to_socket(BridgeSock, Key),
-            %% Hand off to supervised bridge
             start_supervised_bridge(Client, BridgeSock, SendTopic, RecvTopic,
                                      TunnelId, Key);
         {KernelPid, unsupported_protocol} ->
