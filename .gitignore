@@ -28,3 +28,4 @@ nonode@nohost/
 # Lock files (rebuilt from deps)
 rebar.lock
 .backups/
+dist/
