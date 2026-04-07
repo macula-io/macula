@@ -189,11 +189,6 @@ do_forward_to_bootstrap(ConnPid, PubMsg) ->
 %%% Internal functions
 %%%===================================================================
 
-%% @private Safely call routing_server:find_value, catching gen_server timeouts.
-%% The routing server's find_value uses a 10s gen_server:call which can exit
-
-%% @doc Send DHT message to remote peer (fire-and-forget).
-%% Used for STORE operations that don't need a response.
 %% @doc Send a DHT message to a peer and wait for response.
 %% Used by macula_routing_server for iterative FIND_VALUE lookups.
 -spec send_and_wait(map(), atom(), map(), timeout()) -> {ok, term()} | {error, term()}.

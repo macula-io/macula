@@ -476,7 +476,6 @@ GATEWAY_PORT=4433                     # Falls back to MACULA_QUIC_PORT
 
 - `architecture/memory_management/` - Memory leak prevention and bounded data structures
 - `architecture/dht_routed_rpc.md` - DHT-routed RPC design
-- `architecture/NAT_TRAVERSAL_ROADMAP.md` - v0.8.0/v0.9.0 P2P connectivity
 - `architecture/v0.9.0-CONSISTENCY-CONCERNS.md` - Correlation and consistency patterns
 - `CODE_REVIEW_REPORT.md` - Code quality and health score
 

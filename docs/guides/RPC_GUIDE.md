@@ -1005,7 +1005,7 @@ end.
 
 ## See Also
 
-- [Quick Start Guide](../user/QUICK_START.md) - Getting started tutorial
+- [Quick Start Guide](../getting-started.md) - Getting started tutorial
 - [PubSub Guide](PUBSUB_GUIDE.md) - Pub/Sub patterns and usage
 - [Glossary](../GLOSSARY.md) - Terminology reference
 

@@ -53,9 +53,9 @@ Feature guides for developers building on Macula:
 
 | Document | Description |
 |----------|-------------|
-| [Supervision Tree](../architecture/FULL_SUPERVISION_TREE.md) | Complete OTP supervision hierarchy |
-| [Roadmap](../architecture/ROADMAP.md) | Implementation roadmap |
-| [C4 Diagrams](../architecture/C4_DIAGRAMS.md) | Visual architecture overview |
+| [Supervision Tree](guides/FULL_SUPERVISION_TREE.md) | Complete OTP supervision hierarchy |
+| [Roadmap](ROADMAP.md) | Implementation roadmap |
+| [C4 Diagrams](C4_DIAGRAMS.md) | Visual architecture overview |
 
 ---
 

@@ -907,9 +907,8 @@ handle_event(Event) ->
 ## See Also
 
 - [RPC Guide](RPC_GUIDE.md) - Remote procedure calls with DHT discovery
-- [Quick Start](../user/QUICK_START.md) - Getting started tutorial
-- [Hello World](../user/HELLO_WORLD.md) - Your first Macula application
-- [Architecture](../../ARCHITECTURE.md) - System architecture overview
+- [Quick Start](../getting-started.md) - Getting started tutorial
+- [Architecture](../../architecture/FULL_SUPERVISION_TREE.md) - System architecture overview
 
 ---
 

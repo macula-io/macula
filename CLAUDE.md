@@ -201,7 +201,7 @@ handle_call({publish, Topic, Msg}, _From, State) ->  % WRONG - belongs in child
 
 **COMPLETED**: v0.8.0 implemented a different approach than originally planned - direct P2P connections via `macula_peer_connector` with DHT used for service/subscriber discovery.
 
-📋 **See `architecture/v0.8.0-OVERVIEW.md`** for current architecture
+📋 **See `architecture/FULL_SUPERVISION_TREE.md` for supervision hierarchy
 📋 **See `architecture/dht_routed_rpc.md`** for historical reference (planning doc)
 
 **Original Plan (v0.7.x)**: Multi-hop Kademlia DHT routing
@@ -694,7 +694,7 @@ ok = macula_registry_verify:verify_package(ManifestBin, Archive, Sig, PubKey).
 
 **STATUS:** ✅ COMPLETE (34 tests)
 
-📋 **See `docs/guides/GOSSIP_CLUSTERING_GUIDE.md`** for detailed documentation
+📋 **See `docs/guides/CLUSTERING_GUIDE.md`** for detailed documentation
 
 ### What Was Delivered
 
@@ -1066,7 +1066,7 @@ All fixes follow idiomatic Erlang patterns:
 
 **COMPLETED**: v0.11.0 implemented centralized TLS configuration with two-mode operation.
 
-📋 **See `docs/operator/TLS_CONFIGURATION.md`** for operator documentation
+📋 **See `docs/operator/TLS_GUIDE.md`** for operator documentation
 
 **Problem Solved**: Previous TLS configuration used `{verify, none}` everywhere, accepting any certificate.
 
@@ -1080,7 +1080,7 @@ All fixes follow idiomatic Erlang patterns:
 - `src/macula_tls.erl` - Centralized TLS configuration
 - `config/sys.config` - TLS configuration options
 - `scripts/setup-dev-tls.sh` - Development certificate generation
-- `docs/operator/TLS_CONFIGURATION.md` - Operator documentation
+- `docs/operator/TLS_GUIDE.md` - Operator documentation
 - `test/macula_tls_tests.erl` - 29 tests passing
 
 **TLS Configuration Options:**

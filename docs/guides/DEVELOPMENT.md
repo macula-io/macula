@@ -52,7 +52,7 @@ macula/
 └── rebar.config          # Build configuration
 ```
 
-See [Project Structure](../../architecture/MACULA_PROJECT_STRUCTURE.md) for complete module documentation.
+See [Project Structure](../../architecture/FULL_SUPERVISION_TREE.md) for complete module documentation.
 
 ## Running Tests
 

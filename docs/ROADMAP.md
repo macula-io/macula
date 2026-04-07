@@ -598,7 +598,7 @@ apps/macula_protocol/
 
 ### Documentation
 
-- `docs/ARCHITECTURE.md` - Updated conceptual model
+- `architecture/FULL_SUPERVISION_TREE.md` - Updated conceptual model
 - `docs/GLOSSARY.md` - Cluster, Seed, Bridge, SuperMesh
 - `docs/FEDERATION.md` - How to federate Clusters
 - `docs/REGISTRY.md` - Registry operation

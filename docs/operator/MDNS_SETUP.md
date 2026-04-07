@@ -182,5 +182,5 @@ We plan to fork shortishly/mdns and shortishly/envy to the macula-io organizatio
 ## Related Documentation
 
 - [Discovery Guide](../guides/DHT_GUIDE.md) - DHT-based discovery (no mDNS required)
-- [Quick Start](../user/QUICK_START.md) - Getting started with Macula
+- [Quick Start](../getting-started.md) - Getting started with Macula
 - [Development Guide](../developer/DEVELOPMENT.md) - Development setup

@@ -421,5 +421,5 @@ This allows:
 - [BitTorrent BEP-52 - Merkle Tree](https://www.bittorrent.org/beps/bep_0052.html)
 - [BLAKE3 Specification](https://github.com/BLAKE3-team/BLAKE3-specs)
 - [Content Addressable aRchive (CAR)](https://ipld.io/specs/transport/car/)
-- [Macula NAT Traversal Guide](NAT_TRAVERSAL_DEVELOPER_GUIDE.md)
+- [Macula NAT Traversal Guide](DIST_OVER_MESH_GUIDE.md)
 - [Macula DHT Guide](DHT_GUIDE.md)

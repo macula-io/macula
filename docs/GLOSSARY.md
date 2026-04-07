@@ -354,7 +354,7 @@ Cluster (Home)           ←── Smallest unit
 {ok, Client} = macula:connect_local(#{realm => <<"my.app.realm">>}).
 ```
 
-**See also:** [Multi-tenancy in PUBSUB_GUIDE](developer/PUBSUB_GUIDE.md)
+**See also:** [Multi-tenancy in PUBSUB_GUIDE](guides/PUBSUB_GUIDE.md)
 
 ---
 
@@ -592,7 +592,7 @@ Payload = #{
 - `*` - Matches one segment: `<<"sensor.*.measured">>`
 - `#` - Matches zero or more segments: `<<"sensor.#">>`
 
-**See also:** [PubSub Guide](developer/PUBSUB_GUIDE.md)
+**See also:** [PubSub Guide](guides/PUBSUB_GUIDE.md)
 
 ---
 
@@ -611,7 +611,7 @@ end).
 {ok, #{result := 8}} = macula:call(Client, <<"math.add">>, #{a => 5, b => 3}).
 ```
 
-**See also:** [RPC Guide](developer/RPC_GUIDE.md)
+**See also:** [RPC Guide](guides/RPC_GUIDE.md)
 
 ---
 
@@ -892,8 +892,8 @@ The following terms are **outdated** and should not be used in new documentation
 
 ## See Also
 
-- [Platform Overview](business/OVERVIEW.md) - High-level introduction
-- [Quick Start](user/QUICK_START.md) - Getting started guide
-- [RPC Guide](developer/RPC_GUIDE.md) - RPC patterns and usage
-- [PubSub Guide](developer/PUBSUB_GUIDE.md) - Pub/Sub patterns and usage
-- [Architecture Overview](../architecture/v0.8.0-OVERVIEW.md) - Technical architecture
+- [Platform Overview](getting-started.md) - High-level introduction
+- [Quick Start](getting-started.md) - Getting started guide
+- [RPC Guide](guides/RPC_GUIDE.md) - RPC patterns and usage
+- [PubSub Guide](guides/PUBSUB_GUIDE.md) - Pub/Sub patterns and usage
+- [Architecture Overview](../architecture/FULL_SUPERVISION_TREE.md) - Technical architecture

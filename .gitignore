@@ -22,5 +22,8 @@ doc/
 # Archives
 *.gz
 
+# Erlang runtime data (test artifacts)
+nonode@nohost/
+
 # Lock files (rebuilt from deps)
 rebar.lock

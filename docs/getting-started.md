@@ -250,10 +250,10 @@ directly while also maintaining their relay connections for WAN reach.
 | Guide | Description |
 |-------|-------------|
 | [Distribution Over Mesh](guides/DIST_OVER_MESH_GUIDE.md) | Relay-tunneled Erlang distribution in depth |
-| [Gossip Clustering](guides/GOSSIP_CLUSTERING_GUIDE.md) | Zero-config LAN discovery |
+| [Gossip Clustering](guides/CLUSTERING_GUIDE.md) | Zero-config LAN discovery |
 | [Content Transfer](guides/CONTENT_TRANSFER_GUIDE.md) | Mesh artifact distribution |
-| [Cluster API](guides/CLUSTER_API_GUIDE.md) | Clustering and distribution API |
-| [NAT Traversal](guides/NAT_TRAVERSAL_DEVELOPER_GUIDE.md) | NAT techniques and relay fallback |
+| [Cluster API](guides/CLUSTERING_GUIDE.md) | Clustering and distribution API |
+| [Distribution Over Mesh | Erlang distribution through relays |
 | [DHT Guide](guides/DHT_GUIDE.md) | Kademlia DHT internals |
 | [Authorization](guides/AUTHORIZATION_GUIDE.md) | DID/UCAN security model |
-| [TLS Configuration](operator/TLS_CONFIGURATION.md) | Production TLS setup |
+| [TLS Configuration](operator/TLS_GUIDE.md) | Production TLS setup |

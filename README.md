@@ -264,13 +264,12 @@ end).
 |-------|-------------|
 | [Getting Started](docs/getting-started.md) | Connect to the relay mesh in 5 minutes |
 | [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Relay-tunneled Erlang distribution |
-| [Cluster API Guide](docs/guides/CLUSTER_API_GUIDE.md) | Clustering and distribution |
-| [Gossip Clustering Guide](docs/guides/GOSSIP_CLUSTERING_GUIDE.md) | UDP multicast discovery |
+| [Cluster API Guide](docs/guides/CLUSTERING_GUIDE.md) | Clustering and distribution |
 | [Content Transfer Guide](docs/guides/CONTENT_TRANSFER_GUIDE.md) | Mesh artifact distribution |
-| [NAT Traversal Guide](docs/guides/NAT_TRAVERSAL_DEVELOPER_GUIDE.md) | NAT techniques |
+| [NAT Traversal Guide](docs/guides/DIST_OVER_MESH_GUIDE.md) | NAT techniques |
 | [DHT Guide](docs/guides/DHT_GUIDE.md) | Kademlia DHT internals |
 | [Authorization Guide](docs/guides/AUTHORIZATION_GUIDE.md) | DID/UCAN security |
-| [TLS Configuration](docs/operator/TLS_CONFIGURATION.md) | Production TLS setup |
+| [TLS Configuration](docs/operator/TLS_GUIDE.md) | Production TLS setup |
 
 ---
 
