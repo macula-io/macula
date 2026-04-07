@@ -188,7 +188,7 @@ init(Opts) ->
     ?LOG_INFO("RPC handler starting"),
 
     %% Extract required options
-    NodeId = maps:get(node_id, Opts, generate_node_id()),
+    NodeId = maps:get(node_id, Opts, macula_utils:generate_node_id()),
     Realm = maps:get(realm, Opts, <<"default">>),
 
     %% Register this RPC handler with gproc so connection manager can find us
@@ -229,7 +229,7 @@ init_state(Opts, NodeId, Realm) ->
     SelectorState = #{strategy => Strategy},
 
     %% Service interests for pull-based discovery (list of service names to prefetch)
-    ServiceInterests = normalize_service_interests(maps:get(service_interests, Opts, [])),
+    ServiceInterests = macula_rpc_service_interests:normalize(maps:get(service_interests, Opts, [])),
     log_service_interests(ServiceInterests),
 
     {ok, #state{
@@ -248,7 +248,7 @@ init_state(Opts, NodeId, Realm) ->
 
 handle_call({call, Procedure, Args, Opts}, From, State) ->
     Registry = State#state.service_registry,
-    BinaryProcedure = ensure_binary(Procedure),
+    BinaryProcedure = macula_utils:ensure_binary(Procedure),
 
     %% Check if this is a local service first
     LocalResult = macula_service_registry:get_local_handler(Registry, BinaryProcedure),
@@ -257,17 +257,17 @@ handle_call({call, Procedure, Args, Opts}, From, State) ->
 
 %% Synchronous RPC call to specific target node (no DHT discovery)
 handle_call({call_to, TargetNodeId, Procedure, Args, Opts}, From, State) ->
-    BinaryProcedure = ensure_binary(Procedure),
+    BinaryProcedure = macula_utils:ensure_binary(Procedure),
     do_call_to_target(TargetNodeId, BinaryProcedure, Args, Opts, From, State);
 
 %% Async RPC request with DHT discovery (NATS-style)
 handle_call({async_request, Procedure, Args, Opts}, From, State) ->
-    BinaryProcedure = ensure_binary(Procedure),
+    BinaryProcedure = macula_utils:ensure_binary(Procedure),
     do_async_request(BinaryProcedure, Args, Opts, From, State);
 
 %% Async RPC request to specific node (skip DHT)
 handle_call({async_request_to, TargetNodeId, Procedure, Args, Opts}, From, State) ->
-    BinaryProcedure = ensure_binary(Procedure),
+    BinaryProcedure = macula_utils:ensure_binary(Procedure),
     do_async_request_to(TargetNodeId, BinaryProcedure, Args, Opts, From, State);
 
 %% Get service registry for local handler lookup
@@ -298,7 +298,7 @@ handle_cast({register_local_procedure, Procedure, Handler}, State) ->
 
 %% Dynamic prefetch services at runtime
 handle_cast({prefetch_services, Services}, State) ->
-    NormalizedServices = normalize_service_interests(Services),
+    NormalizedServices = macula_rpc_service_interests:normalize(Services),
     %% Add to service interests and trigger prefetch
     NewInterests = lists:usort(State#state.service_interests ++ NormalizedServices),
     State2 = State#state{service_interests = NewInterests},
@@ -785,7 +785,7 @@ handle_async_dht_providers_found(Providers, State) ->
 dispatch_queued_async_requests([], QueuedRequests, State) ->
     %% No providers - notify all callbacks with error
     lists:foreach(fun({RequestId, _Args, _Opts, Callback}) ->
-        invoke_async_callback(Callback, RequestId, {error, no_providers})
+        macula_rpc_async:invoke_callback(Callback, RequestId, {error, no_providers})
     end, QueuedRequests),
     {noreply, State};
 dispatch_queued_async_requests(Providers, QueuedRequests, State) ->
@@ -849,7 +849,7 @@ dispatch_single_async_request(TargetNodeId, RequestId, Args, Opts, Callback, Sta
         {error, Reason} ->
             %% Send failed - notify callback immediately
             ?LOG_WARNING("[~s] Async RPC dispatch failed: ~p", [State#state.node_id, Reason]),
-            invoke_async_callback(Callback, RequestId, {error, {send_failed, Reason}}),
+            macula_rpc_async:invoke_callback(Callback, RequestId, {error, {send_failed, Reason}}),
             State
     end.
 
@@ -869,7 +869,7 @@ do_remote_call_with_failover(Procedure, Args, Opts, From, Providers, ExcludedPro
     MaxAttempts = maps:get(max_attempts, Opts, min(3, length(Providers))),
 
     %% Filter out excluded providers
-    AvailableProviders = filter_excluded_providers(Providers, ExcludedProviders),
+    AvailableProviders = macula_rpc_failover:get_available_providers(#{providers => Providers, excluded => ExcludedProviders}),
 
     %% Check if we have any providers left
     case AvailableProviders of
@@ -1043,12 +1043,12 @@ do_async_request(Procedure, Args, Opts, From, State) ->
 %% @private Execute local handler asynchronously
 do_async_request_local(Procedure, Args, Opts, {CallerPid, _}, Handler, State) ->
     {RequestId, State2} = next_message_id(State),
-    Callback = get_async_callback(Opts, CallerPid),
+    Callback = macula_rpc_async:get_callback(Opts, CallerPid),
 
     %% Execute handler in spawned process and invoke callback
     spawn(fun() ->
         Result = execute_local_handler_safe(Handler, Args),
-        invoke_async_callback(Callback, RequestId, Result)
+        macula_rpc_async:invoke_callback(Callback, RequestId, Result)
     end),
 
     ?LOG_DEBUG("[~s] Async RPC ~s executed locally (request_id: ~s)",
@@ -1083,7 +1083,7 @@ do_async_dht_discovery(Procedure, Args, Opts, {CallerPid, _} = _From, State) ->
 
     %% Generate request ID now (we return it immediately)
     {RequestId, State2} = next_message_id(State),
-    Callback = get_async_callback(Opts, CallerPid),
+    Callback = macula_rpc_async:get_callback(Opts, CallerPid),
 
     %% Store procedure in opts for later use when dispatching
     Opts2 = Opts#{procedure => Procedure},
@@ -1171,7 +1171,7 @@ do_async_request_to(TargetNodeId, Procedure, Args, Opts, {CallerPid, _}, State) 
     ReqIdHex = binary:encode_hex(RequestId),
 
     %% Extract callback (fun or caller pid)
-    Callback = get_async_callback(Opts, CallerPid),
+    Callback = macula_rpc_async:get_callback(Opts, CallerPid),
 
     %% Set timeout and track pending request BEFORE sending
     %% This prevents race condition where reply arrives before pending is stored
@@ -1197,7 +1197,7 @@ do_async_request_to(TargetNodeId, Procedure, Args, Opts, {CallerPid, _}, State) 
 
     %% Build RPC_REQUEST message (NATS-style)
     LocalNodeId = State3#state.node_id,
-    LocalEndpoint = get_local_endpoint(),
+    LocalEndpoint = macula_rpc_async:get_local_endpoint(),
     RequestMsg = #{
         type => <<"rpc_request">>,
         request_id => RequestId,
@@ -1266,13 +1266,13 @@ do_async_rpc_reply(RequestId, Msg, State) ->
                     {error, Error};
                 Value ->
                     %% Try to decode JSON result
-                    DecodedValue = try decode_json(Value) catch _:_ -> Value end,
+                    DecodedValue = try macula_utils:decode_json(Value) catch _:_ -> Value end,
                     {ok, DecodedValue}
             end,
 
             ?LOG_WARNING("[~s] ASYNC_REPLY: invoking callback with result=~p", [State#state.node_id, Result]),
             %% Invoke callback
-            invoke_async_callback(PendingReq#pending_request.callback, RequestId, Result),
+            macula_rpc_async:invoke_callback(PendingReq#pending_request.callback, RequestId, Result),
 
             RTT = erlang:system_time(millisecond) - PendingReq#pending_request.sent_at,
             ?LOG_WARNING("[TIMING ~s] REPLY_SUCCESS: RTT=~pms", [RequestIdHex, RTT]),
@@ -1305,7 +1305,7 @@ do_request_timeout(PendingReq, RequestId, State) ->
     NewPendingRequests = maps:remove(RequestId, State#state.pending_requests),
 
     %% Invoke callback with timeout error
-    invoke_async_callback(PendingReq#pending_request.callback, RequestId, {error, timeout}),
+    macula_rpc_async:invoke_callback(PendingReq#pending_request.callback, RequestId, {error, timeout}),
 
     ?LOG_WARNING("[~s] Async RPC ~s timed out (request_id: ~s)",
                 [State#state.node_id, PendingReq#pending_request.procedure,
@@ -1327,7 +1327,7 @@ do_async_dht_discovery_timeout(PendingDiscovery, ServiceKey, State) ->
     %% Notify all queued requests with timeout error
     QueuedRequests = PendingDiscovery#pending_async_discovery.queued_requests,
     lists:foreach(fun({RequestId, _Args, _Opts, Callback}) ->
-        invoke_async_callback(Callback, RequestId, {error, dht_discovery_timeout})
+        macula_rpc_async:invoke_callback(Callback, RequestId, {error, dht_discovery_timeout})
     end, QueuedRequests),
 
     ?LOG_WARNING("[~s] Async DHT discovery timed out for ~s (~p queued requests)",
@@ -1335,24 +1335,6 @@ do_async_dht_discovery_timeout(PendingDiscovery, ServiceKey, State) ->
                  length(QueuedRequests)]),
 
     {noreply, State2}.
-
-%% @private Get callback from opts or default to pid message
--spec get_async_callback(map(), pid()) -> {fun_cb, fun()} | {pid_cb, pid()}.
-get_async_callback(Opts, CallerPid) ->
-    case maps:get(callback, Opts, undefined) of
-        undefined -> {pid_cb, CallerPid};
-        Fun when is_function(Fun) -> {fun_cb, Fun}
-    end.
-
-%% @private Invoke async callback with result
--spec invoke_async_callback({fun_cb, fun()} | {pid_cb, pid()}, binary(), term()) -> ok.
-invoke_async_callback({fun_cb, Fun}, _RequestId, Result) ->
-    %% Spawn to avoid blocking the gen_server
-    spawn(fun() -> Fun(Result) end),
-    ok;
-invoke_async_callback({pid_cb, Pid}, RequestId, Result) ->
-    Pid ! {rpc_reply, RequestId, Result},
-    ok.
 
 %%%===================================================================
 %%% Internal functions - Helpers
@@ -1365,42 +1347,17 @@ next_message_id(State) ->
     {MsgId, NewCounter} = macula_utils:next_message_id(Counter),
     {MsgId, State#state{msg_id_counter = NewCounter}}.
 
-%% @doc Ensure value is binary
--spec ensure_binary(binary() | list() | atom()) -> binary().
-ensure_binary(Value) ->
-    macula_utils:ensure_binary(Value).
-
 %% @doc Encode RPC call arguments to binary format.
 %% Binary args pass through unchanged, other types are JSON-encoded.
 -spec encode_call_args(term()) -> binary().
 encode_call_args(Args) when is_binary(Args) ->
     Args;
 encode_call_args(Args) when is_map(Args) ->
-    encode_json(Args);
+    macula_utils:encode_json(Args);
 encode_call_args(Args) when is_list(Args) ->
-    encode_json(Args);
+    macula_utils:encode_json(Args);
 encode_call_args(Args) ->
-    encode_json(Args).
-
-%% @doc Encode map/list to JSON binary
--spec encode_json(term()) -> binary().
-encode_json(Data) ->
-    macula_utils:encode_json(Data).
-
-%% @doc Decode JSON binary to map/list
--spec decode_json(binary()) -> map() | list().
-decode_json(Binary) ->
-    macula_utils:decode_json(Binary).
-
-%% @doc Filter out excluded providers from provider list.
-%% Empty exclusion list returns providers unchanged.
--spec filter_excluded_providers(list(), list()) -> list().
-filter_excluded_providers(Providers, []) ->
-    Providers;
-filter_excluded_providers(Providers, ExcludedProviders) ->
-    lists:filter(fun(#{node_id := NodeId}) ->
-        not lists:member(NodeId, ExcludedProviders)
-    end, Providers).
+    macula_utils:encode_json(Args).
 
 %% @doc Format attempt number for logging.
 %% First attempt returns empty string, subsequent attempts show attempt count.
@@ -1409,40 +1366,6 @@ format_attempt_log(1, _MaxAttempts) ->
     "";
 format_attempt_log(Attempt, MaxAttempts) ->
     io_lib:format(" (attempt ~p/~p)", [Attempt, MaxAttempts]).
-
-%% @doc Generate a random node ID
--spec generate_node_id() -> binary().
-generate_node_id() ->
-    macula_utils:generate_node_id().
-
-%% @doc Get local endpoint from environment variables.
-%% Used to include sender's endpoint in RPC requests so receivers can route replies back.
-%% Format: "hostname:port" (e.g., "fc01:4433" in Docker)
--spec get_local_endpoint() -> binary().
-get_local_endpoint() ->
-    Hostname = get_hostname_for_endpoint(),
-    Port = get_port_for_endpoint(),
-    iolist_to_binary([Hostname, <<":">>, Port]).
-
-%% @private Get hostname from environment variables.
--spec get_hostname_for_endpoint() -> binary().
-get_hostname_for_endpoint() ->
-    case os:getenv("MACULA_HOSTNAME") of
-        false ->
-            case os:getenv("HOSTNAME") of
-                false -> <<"localhost">>;
-                Hostname -> list_to_binary(Hostname)
-            end;
-        Hostname -> list_to_binary(Hostname)
-    end.
-
-%% @private Get QUIC port from environment or default.
--spec get_port_for_endpoint() -> binary().
-get_port_for_endpoint() ->
-    case os:getenv("QUIC_PORT") of
-        false -> <<"4433">>;  %% Default QUIC port for Docker setup
-        Port -> list_to_binary(Port)
-    end.
 
 %% @private Send message via gateway (relay fallback for cross-NAT).
 %% Uses the existing connection to the gateway/bootstrap.
@@ -1457,39 +1380,6 @@ send_via_gateway(MessageType, Message, #state{connection_manager_pid = ConnMgrPi
 %%%===================================================================
 %%% Internal functions - Pull-based Service Discovery
 %%%===================================================================
-
-%% @doc Normalize service interests to list of binaries.
-%% Accepts various input formats: list of binaries/atoms/strings, or single value.
--spec normalize_service_interests(term()) -> [binary()].
-normalize_service_interests(Interests) when is_list(Interests) ->
-    lists:filtermap(fun normalize_single_interest/1, Interests);
-normalize_service_interests(Interest) when is_binary(Interest) ->
-    [Interest];
-normalize_service_interests(Interest) when is_atom(Interest) ->
-    [atom_to_binary(Interest, utf8)];
-normalize_service_interests(Interest) when is_list(Interest) ->
-    %% Could be a string
-    case io_lib:printable_list(Interest) of
-        true -> [list_to_binary(Interest)];
-        false -> []
-    end;
-normalize_service_interests(_) ->
-    [].
-
-%% @doc Normalize a single service interest to binary.
-%% Returns {true, Binary} for valid inputs, false for invalid.
--spec normalize_single_interest(term()) -> {true, binary()} | false.
-normalize_single_interest(Interest) when is_binary(Interest), byte_size(Interest) > 0 ->
-    {true, Interest};
-normalize_single_interest(Interest) when is_atom(Interest), Interest =/= undefined ->
-    {true, atom_to_binary(Interest, utf8)};
-normalize_single_interest(Interest) when is_list(Interest), Interest =/= [] ->
-    case io_lib:printable_list(Interest) of
-        true -> {true, list_to_binary(Interest)};
-        false -> false
-    end;
-normalize_single_interest(_) ->
-    false.
 
 %% @doc Log configured service interests during init
 -spec log_service_interests([binary()]) -> ok.
@@ -1604,7 +1494,7 @@ handle_handler_result(Result) ->
 
 %% @private Safely decode JSON, returning original on failure
 safe_decode_json(Value) ->
-    handle_decode_result(catch decode_json(Value), Value).
+    handle_decode_result(catch macula_utils:decode_json(Value), Value).
 
 %% @private Decode succeeded
 handle_decode_result({'EXIT', _}, Original) ->
