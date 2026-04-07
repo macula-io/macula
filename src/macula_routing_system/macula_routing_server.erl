@@ -2,6 +2,9 @@
 %%% @doc
 %%% GenServer managing Kademlia DHT routing table and operations.
 %%% Integrates all routing components: table, DHT algorithms, protocol.
+%%%
+%%% Pure functional helpers are in macula_routing_storage.
+%%% Network transport and escalation are in macula_routing_network.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_routing_server).
@@ -43,8 +46,6 @@
 -define(STALE_THRESHOLD_MS, 300000).
 %% DHT value expiry interval (30 seconds)
 -define(VALUE_EXPIRY_INTERVAL_MS, 30000).
-%% DHT values with TTL older than this are expired (default 5 minutes + 60s grace)
--define(VALUE_MAX_AGE_MS, 360000).
 
 %% State
 -record(state, {
@@ -109,14 +110,14 @@ get_all_keys(Pid) ->
 delete_local(Pid, Key, NodeId) ->
     gen_server:call(Pid, {delete_local, Key, NodeId}).
 
-%% @doc Find value in DHT — goes through gen_server for full iterative lookup.
+%% @doc Find value in DHT -- goes through gen_server for full iterative lookup.
 %% For local-only reads (answering peer queries), use find_value_local/2.
 -spec find_value(pid(), binary(), pos_integer()) ->
     {ok, term()} | {nodes, [macula_routing_bucket:node_info()]} | {error, term()}.
 find_value(Pid, Key, K) ->
     gen_server:call(Pid, {find_value, Key, K}, 10000).
 
-%% @doc Fast local-only lookup via ETS — for answering incoming FIND_VALUE from peers.
+%% @doc Fast local-only lookup via ETS -- for answering incoming FIND_VALUE from peers.
 %% Does NOT query the network. Returns only locally stored values.
 -spec find_value_local(binary(), pos_integer()) ->
     {ok, term()} | {error, not_found}.
@@ -178,9 +179,7 @@ init({LocalNodeId, Config}) ->
         }
     },
 
-    %% Start periodic stale peer eviction
     erlang:send_after(?EVICT_INTERVAL_MS, self(), evict_stale_peers),
-    %% Start periodic DHT value expiry (removes zombie subscriptions)
     erlang:send_after(?VALUE_EXPIRY_INTERVAL_MS, self(), expire_stale_values),
 
     {ok, State}.
@@ -192,22 +191,19 @@ handle_call({find_closest, Target, K}, _From, #state{routing_table = Table} = St
 
 handle_call({store_local, Key, Value}, _From, #state{storage = Storage, config = Config} = State) ->
     ExistingProviders = maps:get(Key, Storage, []),
-    ProviderList = ensure_provider_list(ExistingProviders),
+    ProviderList = macula_routing_storage:ensure_provider_list(ExistingProviders),
     NodeId = maps:get(node_id, Value, undefined),
-    UpdatedProviders = upsert_provider(NodeId, Value, ProviderList),
+    UpdatedProviders = macula_routing_storage:upsert_provider(NodeId, Value, ProviderList),
     NewStorage = Storage#{Key => UpdatedProviders},
-    %% Mirror to ETS for concurrent reads
-    case maps:get(storage_ets, Config, undefined) of
-        undefined -> ok;
-        Ets -> ets:insert(Ets, {Key, UpdatedProviders})
-    end,
+    Ets = maps:get(storage_ets, Config, undefined),
+    macula_routing_storage:mirror_to_ets(Ets, Key, UpdatedProviders),
     {reply, ok, State#state{storage = NewStorage}};
 
 handle_call({store, Key, Value}, _From, #state{routing_table = Table, config = Config} = State) ->
     %% 1. Store locally first
     NewState = case handle_call({store_local, Key, Value}, _From, State) of
         {reply, ok, S} -> S;
-        _ -> State  %% Shouldn't happen but be safe
+        _ -> State
     end,
 
     %% 2. Find k closest nodes to Key
@@ -215,38 +211,28 @@ handle_call({store, Key, Value}, _From, #state{routing_table = Table, config = C
     ClosestNodes = macula_routing_table:find_closest(Table, Key, K),
 
     %% 3. Send STORE message to each node (fire-and-forget, non-blocking)
-    %% Spawn the sends to avoid blocking the routing server on network I/O
     StoreMsg = macula_routing_protocol:encode_store(Key, Value),
-    spawn(fun() -> propagate_store_to_peers(ClosestNodes, StoreMsg, Key, Value) end),
+    spawn(fun() -> macula_routing_network:propagate_store_to_peers(ClosestNodes, StoreMsg, Key, Value) end),
 
     {reply, ok, NewState};
 
 handle_call({get_local, Key}, _From, #state{storage = Storage} = State) ->
-    Reply = format_storage_value(maps:get(Key, Storage, undefined)),
+    Reply = macula_routing_storage:format_storage_value(maps:get(Key, Storage, undefined)),
     {reply, Reply, State};
 
 handle_call(get_all_keys, _From, #state{storage = Storage} = State) ->
-    Keys = maps:keys(Storage),
-    {reply, {ok, Keys}, State};
+    {reply, {ok, maps:keys(Storage)}, State};
 
 handle_call(get_routing_table, _From, #state{routing_table = Table} = State) ->
     {reply, Table, State};
 
 handle_call(size, _From, #state{routing_table = Table} = State) ->
-    Size = macula_routing_table:size(Table),
-    {reply, Size, State};
+    {reply, macula_routing_table:size(Table), State};
 
 handle_call({delete_local, Key, NodeId}, _From, #state{storage = Storage, config = Config} = State) ->
-    NewStorage = delete_provider_from_storage(Key, NodeId, Storage),
-    %% Mirror to ETS
-    case maps:get(storage_ets, Config, undefined) of
-        undefined -> ok;
-        Ets ->
-            case maps:get(Key, NewStorage, []) of
-                [] -> ets:delete(Ets, Key);
-                V -> ets:insert(Ets, {Key, V})
-            end
-    end,
+    NewStorage = macula_routing_storage:delete_provider_from_storage(Key, NodeId, Storage),
+    Ets = maps:get(storage_ets, Config, undefined),
+    macula_routing_storage:mirror_delete_to_ets(Ets, Key, NewStorage),
     {reply, ok, State#state{storage = NewStorage}};
 
 handle_call({find_value, Key, K}, From, #state{routing_table = Table, storage = Storage,
@@ -257,16 +243,15 @@ handle_call({find_value, Key, K}, From, #state{routing_table = Table, storage = 
         V when is_list(V) -> V;
         V -> [V]
     end,
-    %% Always query the network — local values may be incomplete (e.g. pubsub subscribers).
+    %% Always query the network -- local values may be incomplete (e.g. pubsub subscribers).
     %% Spawn to avoid blocking the routing server.
     spawn(fun() ->
-        RemoteResult = find_value_with_escalation(Key, K, Storage, Table, Config),
+        RemoteResult = macula_routing_network:find_value_with_escalation(Key, K, Storage, Table, Config),
         RemoteValues = case RemoteResult of
             {ok, R} when is_list(R) -> R;
             _ -> []
         end,
-        %% Merge local + remote, deduplicate by node_id
-        AllValues = deduplicate_providers(LocalValues ++ RemoteValues),
+        AllValues = macula_routing_storage:deduplicate_providers(LocalValues ++ RemoteValues),
         Reply = case AllValues of
             [] -> {error, not_found};
             _ -> {ok, AllValues}
@@ -283,10 +268,6 @@ handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
 %% @private
-%% Add node to routing table (async operation)
-%% When a new node actually joins, replicate relevant STORE values to it.
-%% This is standard Kademlia: new neighbors receive stored values they are
-%% now among the k-closest nodes for.
 handle_cast({add_node, NodeInfo}, #state{routing_table = Table, storage = Storage,
                                          config = Config} = State) ->
     OldSize = macula_routing_table:size(Table),
@@ -297,10 +278,9 @@ handle_cast({add_node, NodeInfo}, #state{routing_table = Table, storage = Storag
               [case NodeId of B when is_binary(B), byte_size(B) =:= 32 -> binary:encode_hex(B);
                               B when is_binary(B) -> B; _ -> <<"?">> end,
                OldSize, NewSize]),
-    %% Replicate stored values to the new peer if it actually joined
     case NewSize > OldSize of
         true ->
-            spawn(fun() -> replicate_to_new_peer(NodeInfo, Storage, NewTable, Config) end);
+            spawn(fun() -> macula_routing_network:replicate_to_new_peer(NodeInfo, Storage, NewTable, Config) end);
         false ->
             ok
     end,
@@ -316,20 +296,16 @@ handle_cast({remove_node, NodeId}, #state{routing_table = Table} = State) ->
 
 %% @private
 %% Handle async store (from _dht.store RPC) - stores locally only without propagation
-%% This is used by bootstrap gateway when receiving store requests from peers
 handle_cast({store, Key, Value}, #state{storage = Storage, config = Config} = State) when is_binary(Key) ->
     ?LOG_DEBUG("Async STORE received - key hash prefix: ~p, value: ~p",
               [binary:part(Key, 0, min(8, byte_size(Key))), Value]),
     ExistingProviders = maps:get(Key, Storage, []),
-    ProviderList = ensure_provider_list(ExistingProviders),
-    NodeId = get_node_id_from_value(Value),
-    UpdatedProviders = upsert_provider(NodeId, Value, ProviderList),
+    ProviderList = macula_routing_storage:ensure_provider_list(ExistingProviders),
+    NodeId = macula_routing_storage:get_node_id_from_value(Value),
+    UpdatedProviders = macula_routing_storage:upsert_provider(NodeId, Value, ProviderList),
     NewStorage = Storage#{Key => UpdatedProviders},
-    %% Mirror to ETS for concurrent reads
-    case maps:get(storage_ets, Config, undefined) of
-        undefined -> ok;
-        Ets -> ets:insert(Ets, {Key, UpdatedProviders})
-    end,
+    Ets = maps:get(storage_ets, Config, undefined),
+    macula_routing_storage:mirror_to_ets(Ets, Key, UpdatedProviders),
     ?LOG_DEBUG("Stored value for key, now have ~p provider(s)", [length(UpdatedProviders)]),
     {noreply, State#state{storage = NewStorage}};
 
@@ -337,9 +313,6 @@ handle_cast({store, Key, _Value}, State) ->
     ?LOG_ERROR("Async STORE received with non-binary key: ~p", [Key]),
     {noreply, State};
 
-%% @private
-%% Handle async DHT message processing (fire-and-forget)
-%% Used by gateway to avoid blocking on STORE operations
 handle_cast({handle_message_async, Message}, State) ->
     {_Reply, NewState} = process_dht_message(Message, State),
     {noreply, NewState};
@@ -361,10 +334,11 @@ handle_info(evict_stale_peers, #state{routing_table = Table} = State) ->
     end,
     erlang:send_after(?EVICT_INTERVAL_MS, self(), evict_stale_peers),
     {noreply, State#state{routing_table = NewTable}};
+
 handle_info(expire_stale_values, #state{storage = Storage, config = Config} = State) ->
     Now = erlang:system_time(millisecond),
     {NewStorage, Expired} = maps:fold(fun(Key, Providers, {StorageAcc, ExpiredCount}) ->
-        Fresh = [P || P <- Providers, not is_provider_expired(P, Now)],
+        Fresh = [P || P <- Providers, not macula_routing_storage:is_provider_expired(P, Now)],
         case {Fresh, length(Providers) - length(Fresh)} of
             {[], Removed} ->
                 {maps:remove(Key, StorageAcc), ExpiredCount + Removed};
@@ -395,402 +369,13 @@ handle_info(expire_stale_values, #state{storage = Storage, config = Config} = St
 handle_info(_Info, State) ->
     {noreply, State}.
 
-%% @private Check if a provider entry is expired based on its stored_at timestamp.
-%% Providers without stored_at are considered expired if they have a ttl field
-%% (indicating they're subscription entries that should have been timestamped).
--spec is_provider_expired(map(), integer()) -> boolean().
-is_provider_expired(#{stored_at := StoredAt}, Now) ->
-    (Now - StoredAt) > ?VALUE_MAX_AGE_MS;
-is_provider_expired(#{<<"stored_at">> := StoredAt}, Now) ->
-    %% Binary key variant (from msgpack deserialization over network)
-    (Now - StoredAt) > ?VALUE_MAX_AGE_MS;
-is_provider_expired(#{ttl := _TTL}, _Now) ->
-    %% Has TTL but no stored_at — legacy entry, expire it
-    true;
-is_provider_expired(#{<<"ttl">> := _TTL}, _Now) ->
-    %% Binary key variant — legacy entry, expire it
-    true;
-is_provider_expired(_Provider, _Now) ->
-    %% No TTL, no stored_at — service entry, keep it
-    false.
-
 %% @private
 terminate(_Reason, _State) ->
     ok.
 
 %%%===================================================================
-%%% Internal Functions
+%%% Internal Functions - DHT Message Processing
 %%%===================================================================
-
-%% @doc Replicate stored values to a newly joined peer (called in spawned process).
-%% Standard Kademlia behavior: when a new node joins the routing table,
-%% send it any stored values for which it is now among the k-closest nodes.
--spec replicate_to_new_peer(map(), map(), macula_routing_table:routing_table(), map()) -> ok.
-replicate_to_new_peer(NewNodeInfo, Storage, Table, Config) ->
-    K = maps:get(k, Config, 20),
-    NewNodeId = maps:get(node_id, NewNodeInfo, undefined),
-    Replicated = maps:fold(fun(Key, Providers, Acc) ->
-        ClosestNodes = macula_routing_table:find_closest(Table, Key, K),
-        ClosestIds = [maps:get(node_id, N, undefined) || N <- ClosestNodes],
-        case lists:member(NewNodeId, ClosestIds) of
-            true ->
-                ProviderList = ensure_provider_list(Providers),
-                lists:foreach(fun(Provider) ->
-                    StoreMsg = macula_routing_protocol:encode_store(Key, Provider),
-                    send_store_to_peer(NewNodeInfo, StoreMsg)
-                end, ProviderList),
-                Acc + length(ProviderList);
-            false ->
-                Acc
-        end
-    end, 0, Storage),
-    case Replicated > 0 of
-        true ->
-            ?LOG_DEBUG("[RoutingServer] Replicated ~p stored value(s) to new peer ~s",
-                      [Replicated, format_node_id(NewNodeId)]);
-        false ->
-            ok
-    end,
-    ok.
-
-%% @doc Format node_id for logging.
--spec format_node_id(binary() | undefined) -> binary().
-format_node_id(undefined) -> <<"?">>;
-format_node_id(B) when is_binary(B), byte_size(B) =:= 32 -> binary:encode_hex(B);
-format_node_id(B) when is_binary(B) -> B;
-format_node_id(_) -> <<"?">>.
-
-%% @doc Propagate STORE message to peers (called in spawned process).
-%% Non-blocking: network I/O happens in separate process, won't block routing server.
--spec propagate_store_to_peers(list(), map(), binary(), term()) -> ok.
-propagate_store_to_peers([], _StoreMsg, Key, Value) ->
-    %% No nodes in routing table - forward to bootstrap gateway via RPC
-    ?LOG_DEBUG("[DHT] No peers in routing table, forwarding store to bootstrap"),
-    forward_store_to_bootstrap(Key, Value);
-propagate_store_to_peers(ClosestNodes, StoreMsg, _Key, _Value) ->
-    ?LOG_DEBUG("[DHT] Propagating store to ~p peer(s)", [length(ClosestNodes)]),
-    lists:foreach(fun(NodeInfo) ->
-        send_store_to_peer(NodeInfo, StoreMsg)
-    end, ClosestNodes),
-    ok.
-
-%% @private Send store message to a peer (best effort)
-send_store_to_peer(NodeInfo, StoreMsg) ->
-    ?LOG_DEBUG("[DHT] Sending store to peer ~p", [NodeInfo]),
-    Transport = persistent_term:get(macula_dht_transport, macula_gateway_dht),
-    try Transport:send_to_peer(NodeInfo, store, StoreMsg) of
-        Result -> handle_peer_send_result(Result, NodeInfo)
-    catch
-        error:function_clause:Stacktrace ->
-            ?LOG_WARNING("[DHT] Store send function_clause to ~p:~n  ~p", [NodeInfo, Stacktrace]);
-        Class:Error:Stacktrace ->
-            ?LOG_WARNING("[DHT] Store send failed to ~p: ~p:~p~n  ~p",
-                         [NodeInfo, Class, Error, Stacktrace])
-    end.
-
-%% @private Handle peer send result
-handle_peer_send_result({error, Reason}, NodeInfo) ->
-    ?LOG_DEBUG("[DHT] Store send error to ~p: ~p", [NodeInfo, Reason]);
-handle_peer_send_result(Result, _NodeInfo) ->
-    ?LOG_DEBUG("[DHT] Store send result: ~p", [Result]).
-
-%% @doc Forward DHT STORE to bootstrap gateway via RPC when routing table is empty.
-%% This allows embedded gateways to propagate subscriptions to the central bootstrap DHT.
--spec forward_store_to_bootstrap(binary(), term()) -> ok.
-forward_store_to_bootstrap(Key, Value) ->
-    %% Call the _dht.store RPC procedure on the bootstrap gateway
-    %% This is a fire-and-forget operation - we don't wait for response
-    RpcHandler = whereis(macula_rpc_handler),
-    do_forward_store(RpcHandler, Key, Value).
-
-%% @private RPC handler not available
-do_forward_store(undefined, _Key, _Value) ->
-    ok;
-%% @private RPC handler available - spawn and forward
-do_forward_store(_RpcHandler, Key, Value) ->
-    Procedure = <<"_dht.store">>,
-    Args = #{
-        <<"key">> => Key,
-        <<"value">> => Value
-    },
-    %% Spawn fire-and-forget call to bootstrap
-    spawn(fun() -> forward_store_via_local_client(Procedure, Args) end),
-    ok.
-
-%% @private Forward store via local client (spawned process)
-forward_store_via_local_client(Procedure, Args) ->
-    LocalClient = whereis(macula_local_client),
-    do_forward_via_client(LocalClient, Procedure, Args).
-
-%% @private Local client not available
-do_forward_via_client(undefined, _Procedure, _Args) ->
-    ok;
-%% @private Local client available - make call
-do_forward_via_client(LocalClient, Procedure, Args) ->
-    handle_forward_result(catch macula:call(LocalClient, Procedure, Args, #{timeout => 5000})).
-
-%% @private Handle forward result (fire-and-forget, ignore errors)
-handle_forward_result({'EXIT', _}) ->
-    ok;
-handle_forward_result(_Result) ->
-    ok.
-
-%% @doc Extract node_id from value map, handling both atom and binary keys.
--spec get_node_id_from_value(map()) -> binary() | undefined.
-get_node_id_from_value(#{node_id := NodeId}) -> NodeId;
-get_node_id_from_value(#{<<"node_id">> := NodeId}) -> NodeId;
-get_node_id_from_value(_Value) -> undefined.
-
-%% @doc Find index of provider with matching node_id in provider list.
--spec find_provider_index(binary(), [map()]) -> pos_integer() | not_found.
-find_provider_index(NodeId, ProviderList) ->
-    find_provider_index(NodeId, ProviderList, 1).
-
-find_provider_index(_NodeId, [], _Index) ->
-    not_found;
-find_provider_index(NodeId, [Provider | Rest], Index) ->
-    ProviderNodeId = get_node_id_from_value(Provider),
-    check_provider_match(NodeId, ProviderNodeId, Rest, Index).
-
-check_provider_match(NodeId, NodeId, _Rest, Index) -> Index;
-check_provider_match(NodeId, _Other, Rest, Index) ->
-    find_provider_index(NodeId, Rest, Index + 1).
-
-%% @doc Ensure value is a list for multi-provider storage.
--spec ensure_provider_list(term()) -> [term()].
-ensure_provider_list(List) when is_list(List) -> List;
-ensure_provider_list(Value) -> [Value].
-
-%% @doc Insert or update a provider in the list.
-%% Stamps every entry with stored_at for expiry tracking.
--spec upsert_provider(binary() | undefined, map(), [map()]) -> [map()].
-upsert_provider(undefined, Value, ProviderList) ->
-    [Value#{stored_at => erlang:system_time(millisecond)} | ProviderList];
-upsert_provider(NodeId, Value, ProviderList) ->
-    Stamped = Value#{stored_at => erlang:system_time(millisecond)},
-    upsert_by_index(find_provider_index(NodeId, ProviderList), Stamped, ProviderList).
-
-upsert_by_index(not_found, Value, ProviderList) ->
-    [Value | ProviderList];
-upsert_by_index(Index, Value, ProviderList) ->
-    lists:sublist(ProviderList, Index - 1) ++ [Value] ++ lists:nthtail(Index, ProviderList).
-
-%% @doc Deduplicate providers by node_id — keeps first occurrence.
-deduplicate_providers(Providers) ->
-    lists:foldl(fun(P, Acc) ->
-        NId = get_node_id_from_value(P),
-        case lists:any(fun(A) -> get_node_id_from_value(A) =:= NId end, Acc) of
-            true -> Acc;
-            false -> [P | Acc]
-        end
-    end, [], Providers).
-
-%% @doc Format storage value for get_local response.
--spec format_storage_value(undefined | term()) -> not_found | {ok, [term()]}.
-format_storage_value(undefined) -> not_found;
-format_storage_value(Value) when is_list(Value) -> {ok, Value};
-format_storage_value(Value) -> {ok, [Value]}.
-
-%% @doc Delete a specific provider from storage by node_id.
--spec delete_provider_from_storage(binary(), binary(), map()) -> map().
-delete_provider_from_storage(Key, NodeId, Storage) ->
-    case maps:get(Key, Storage, undefined) of
-        undefined -> Storage;
-        Providers when is_list(Providers) ->
-            delete_provider_by_node_id(Key, NodeId, Providers, Storage);
-        _SingleValue -> maps:remove(Key, Storage)
-    end.
-
-delete_provider_by_node_id(Key, NodeId, Providers, Storage) ->
-    FilterFn = fun(P) -> get_node_id_from_value(P) =/= NodeId end,
-    UpdatedProviders = lists:filter(FilterFn, Providers),
-    update_or_remove_key(Key, UpdatedProviders, Storage).
-
-update_or_remove_key(Key, [], Storage) -> maps:remove(Key, Storage);
-update_or_remove_key(Key, Providers, Storage) -> Storage#{Key => Providers}.
-
-%% @doc Find value with escalation support.
-%% Local-first lookup: returns local values immediately if found.
-%% Only queries DHT network if no local values (for RPC provider discovery).
-%% For pub/sub, bootstrap stores all subscriptions locally - no network query needed.
--spec find_value_with_escalation(binary(), pos_integer(), map(),
-                                  macula_routing_table:routing_table(), map()) ->
-    {ok, term()} | {error, term()}.
-find_value_with_escalation(Key, K, Storage, Table, Config) ->
-    %% 1. Check bridge cache first (fastest)
-    case check_bridge_cache(Key) of
-        {ok, CachedValue} ->
-            ?LOG_DEBUG("find_value: cache hit for key ~p", [Key]),
-            {ok, CachedValue};
-        not_found ->
-            %% 2. Get local values (if any)
-            LocalValues = case maps:get(Key, Storage, undefined) of
-                undefined -> [];
-                Value when is_list(Value) -> Value;
-                Value -> [Value]
-            end,
-            %% 3. If local values found, return immediately (local-first)
-            %% For pub/sub with bootstrap pattern, all subscriptions are local
-            find_value_with_local(LocalValues, Key, K, Table, Config)
-    end.
-
-%% @private Return local values immediately if found, else query network
-find_value_with_local(LocalValues, _Key, _K, _Table, _Config) when LocalValues =/= [] ->
-    ?LOG_DEBUG("[DHT] find_value: returning ~p local value(s)", [length(LocalValues)]),
-    {ok, LocalValues};
-find_value_with_local([], Key, K, Table, Config) ->
-    %% No local values - query network for remote providers (RPC discovery)
-    ?LOG_DEBUG("[DHT] find_value: no local values, querying network"),
-    NetworkValues = case find_value_via_dht(Key, K, Table) of
-        {ok, RemoteList} when is_list(RemoteList) -> RemoteList;
-        {ok, RemoteSingle} -> [RemoteSingle];
-        _ -> []
-    end,
-    ?LOG_DEBUG("[DHT] find_value: network returned ~p value(s)", [length(NetworkValues)]),
-    case NetworkValues of
-        [] ->
-            %% Try escalation if nothing found
-            maybe_escalate_query(Key, Config);
-        _ ->
-            {ok, NetworkValues}
-    end.
-find_value_via_dht(Key, K, Table) ->
-    %% Log routing table state for debugging
-    InitialClosest = macula_routing_table:find_closest(Table, Key, K),
-    ?LOG_DEBUG("[DHT] find_value_via_dht: routing_table has ~p nodes for key lookup", [length(InitialClosest)]),
-    lists:foreach(fun(NodeInfo) ->
-        ?LOG_DEBUG("[DHT] find_value_via_dht: will query node ~p at ~p",
-                  [maps:get(node_id, NodeInfo, unknown), get_node_endpoint(NodeInfo)])
-    end, InitialClosest),
-
-    QueryFn = fun(NodeInfo, QueryKey) -> network_query_find_value(NodeInfo, QueryKey) end,
-    case macula_routing_dht:find_value(Table, Key, K, QueryFn) of
-        {ok, Value} ->
-            ?LOG_DEBUG("[DHT] find_value_via_dht: found ~p subscriber(s)", [length(Value)]),
-            {ok, Value};
-        {nodes, Nodes} ->
-            ?LOG_DEBUG("[DHT] find_value_via_dht: not found, got ~p nodes", [length(Nodes)]),
-            {ok, []};
-        {error, Reason} ->
-            ?LOG_WARNING("[DHT] find_value_via_dht: error ~p", [Reason]),
-            {error, Reason}
-    end.
-
-%% @private Network query function for FIND_VALUE.
-%% Sends FIND_VALUE request to a peer and waits for response.
-%% Returns {value, Value} if peer has the value, {nodes, []} otherwise.
--spec network_query_find_value(map(), binary()) -> {value, term()} | {nodes, list()}.
-network_query_find_value(NodeInfo, Key) ->
-    Endpoint = get_node_endpoint(NodeInfo),
-    do_network_query_find_value(Endpoint, NodeInfo, Key).
-
-do_network_query_find_value(undefined, NodeInfo, _Key) ->
-    ?LOG_WARNING("[DHT] network_query_find_value: no endpoint for node ~p", [NodeInfo]),
-    {nodes, []};
-do_network_query_find_value(Endpoint, NodeInfo, Key) ->
-    %% Build FIND_VALUE message (the protocol expects raw Key, not encoded)
-    FindValueMsg = #{<<"key">> => Key},
-    ?LOG_DEBUG("[DHT] network_query_find_value: querying ~s for key", [Endpoint]),
-
-    Transport = persistent_term:get(macula_dht_transport, macula_gateway_dht),
-    %% Send request and wait for response (synchronous with 5s timeout)
-    case Transport:send_and_wait(NodeInfo, find_value, FindValueMsg, 5000) of
-        {ok, {find_value_reply, Response}} ->
-            Result = decode_find_value_response(Response),
-            ?LOG_DEBUG("[DHT] network_query_find_value: got reply from ~s: ~p", [Endpoint, Result]),
-            Result;
-        {ok, {OtherType, _Response}} ->
-            ?LOG_WARNING("[DHT] network_query_find_value: unexpected reply type ~p from ~s", [OtherType, Endpoint]),
-            {nodes, []};
-        {error, timeout} ->
-            ?LOG_WARNING("[DHT] network_query_find_value: timeout querying ~s", [Endpoint]),
-            {nodes, []};
-        {error, Reason} ->
-            ?LOG_WARNING("[DHT] network_query_find_value: error ~p querying ~s", [Reason, Endpoint]),
-            {nodes, []}
-    end.
-
-%% @private Decode FIND_VALUE reply content.
-decode_find_value_response(Response) ->
-    case macula_routing_protocol:decode_find_value_reply(Response) of
-        {ok, {value, Value}} ->
-            {value, Value};
-        {ok, {nodes, Nodes}} ->
-            {nodes, Nodes};
-        {error, _Reason} ->
-            {nodes, []}
-    end.
-
-%% @private Extract endpoint from node info.
-get_node_endpoint(#{endpoint := Endpoint}) when is_binary(Endpoint) ->
-    Endpoint;
-get_node_endpoint(#{address := {Host, Port}}) when is_integer(Port) ->
-    iolist_to_binary([format_host(Host), <<":">>, integer_to_binary(Port)]);
-get_node_endpoint(#{<<"endpoint">> := Endpoint}) when is_binary(Endpoint) ->
-    Endpoint;
-get_node_endpoint(#{address := Address}) when is_binary(Address) ->
-    %% Address is already a full URL (e.g., <<"https://host:port">>)
-    Address;
-get_node_endpoint(#{<<"address">> := Address}) when is_binary(Address) ->
-    %% Address is already a full URL (binary key version)
-    Address;
-get_node_endpoint(_) ->
-    undefined.
-
-%% @private Format host for URL.
-format_host({A, B, C, D}) when is_integer(A) ->
-    io_lib:format("~B.~B.~B.~B", [A, B, C, D]);
-format_host(Host) when is_list(Host) ->
-    Host;
-format_host(Host) when is_binary(Host) ->
-    binary_to_list(Host).
-
-%% @doc Check bridge cache for value.
--spec check_bridge_cache(binary()) -> {ok, term()} | not_found.
-check_bridge_cache(Key) ->
-    case whereis(macula_bridge_cache) of
-        undefined -> not_found;
-        CachePid ->
-            case macula_bridge_cache:get(CachePid, Key) of
-                {ok, Value} -> {ok, Value};
-                _ -> not_found
-            end
-    end.
-
-%% @doc Escalate query to parent bridge if enabled.
--spec maybe_escalate_query(binary(), map()) -> {ok, term()} | {error, term()}.
-maybe_escalate_query(Key, Config) ->
-    EscalationEnabled = maps:get(escalation_enabled, Config, true),
-    case EscalationEnabled of
-        false ->
-            {ok, []};
-        true ->
-            escalate_to_bridge(Key, Config)
-    end.
-
-%% @doc Escalate query to parent bridge.
--spec escalate_to_bridge(binary(), map()) -> {ok, term()} | {error, term()}.
-escalate_to_bridge(Key, Config) ->
-    case whereis(macula_bridge_node) of
-        undefined ->
-            ?LOG_DEBUG("find_value: no bridge node available for escalation"),
-            {ok, []};
-        BridgePid ->
-            Timeout = maps:get(escalation_timeout, Config, 5000),
-            Query = #{type => find_value, key => Key},
-            ?LOG_DEBUG("find_value: escalating query for key ~p to bridge", [Key]),
-            case macula_bridge_node:escalate_query(BridgePid, Query, Timeout) of
-                {ok, Value} ->
-                    ?LOG_DEBUG("find_value: escalation successful, got value"),
-                    {ok, Value};
-                {error, not_connected} ->
-                    ?LOG_DEBUG("find_value: bridge not connected to parent"),
-                    {ok, []};
-                {error, Reason} ->
-                    ?LOG_WARNING("find_value: escalation failed: ~p", [Reason]),
-                    {ok, []}
-            end
-    end.
 
 %% @doc Process incoming DHT message and generate reply.
 -spec process_dht_message(map(), #state{}) -> {map(), #state{}}.
@@ -830,16 +415,11 @@ dispatch_dht_message(unknown, _Message, State) ->
 handle_find_node(Message, #state{routing_table = Table, config = Config} = State) ->
     {ok, Target} = macula_routing_protocol:decode_find_node(Message),
     K = maps:get(k, Config, 20),
-
-    %% Find k closest nodes
     TableSize = macula_routing_table:size(Table),
     Closest = macula_routing_table:find_closest(Table, Target, K),
     ?LOG_DEBUG("[RoutingServer] FIND_NODE: target=~s, table_size=~p, found=~p",
               [binary:encode_hex(Target), TableSize, length(Closest)]),
-
-    %% Encode reply
     Reply = macula_routing_protocol:encode_find_node_reply(Closest),
-
     {Reply, State}.
 
 %% @doc Handle STORE request.
@@ -850,9 +430,9 @@ handle_store(Message, #state{storage = Storage} = State) ->
              [binary:part(Key, 0, min(8, byte_size(Key))), maps:get(node_id, Value, maps:get(<<"node_id">>, Value, unknown))]),
     ?LOG_DEBUG("STORE: key=~p, value=~p", [Key, Value]),
     ExistingProviders = maps:get(Key, Storage, []),
-    ProviderList = ensure_provider_list(ExistingProviders),
-    NodeId = get_node_id_from_value(Value),
-    UpdatedProviders = upsert_provider(NodeId, Value, ProviderList),
+    ProviderList = macula_routing_storage:ensure_provider_list(ExistingProviders),
+    NodeId = macula_routing_storage:get_node_id_from_value(Value),
+    UpdatedProviders = macula_routing_storage:upsert_provider(NodeId, Value, ProviderList),
     NewStorage = Storage#{Key => UpdatedProviders},
     ?LOG_DEBUG("STORE complete: new_storage_size=~p, key_prefix=~p",
               [maps:size(NewStorage), binary:part(Key, 0, min(8, byte_size(Key)))]),
