@@ -96,6 +96,24 @@
     terminate/2
 ]).
 
+-ifdef(TEST).
+-export([
+    format_ip_address/1,
+    normalize_role/1,
+    ensure_port_list/1,
+    get_punch_field/3,
+    should_forward_request/2,
+    get_advertise_port/1,
+    get_gateway_hostname/0,
+    get_peer_address/1,
+    find_sibling_in_children/2,
+    find_gateway_system_in_children/1,
+    format_peer_for_pong/1,
+    cleanup_stale_stream/4,
+    build_gateway_endpoint/1
+]).
+-endif.
+
 -record(state, {
     port :: inet:port_number(),
     realm :: binary(),

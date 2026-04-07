@@ -57,6 +57,27 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
+-ifdef(TEST).
+-export([
+    classify_mapping_policy/4,
+    classify_allocation_policy/4,
+    classify_port_contiguity/1,
+    infer_filtering_policy/1,
+    port_preservation_policy/2,
+    parse_reflexive_address/2,
+    get_msg_field/3,
+    ensure_observer_id/2,
+    is_public_ip/1,
+    is_private_ip/3,
+    is_loopback/1,
+    select_best_ip/1,
+    extract_ipv4_addresses/1,
+    parse_float_env/1,
+    get_binary_env/1,
+    create_profile/3
+]).
+-endif.
+
 -define(SERVER, ?MODULE).
 -define(DEFAULT_DETECTION_TIMEOUT_MS, 2000).
 -define(REFRESH_INTERVAL_MS, 300000).  % 5 minutes
