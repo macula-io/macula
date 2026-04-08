@@ -108,10 +108,12 @@ pub fn create_bound_socket(addr: IpAddr, port: u16) -> Result<UdpSocket, String>
         .set_nonblocking(true)
         .map_err(|e| format!("nonblocking: {}", e))?;
 
-    // For IPv6, bind to the specific address (not dual-stack)
     if addr.is_ipv6() {
+        // [::] (unspecified) = dual-stack (accepts IPv4 + IPv6)
+        // Specific IPv6 (e.g. fd00::1) = v6-only (per-identity binding)
+        let v6_only = !addr.is_unspecified();
         socket
-            .set_only_v6(true)
+            .set_only_v6(v6_only)
             .map_err(|e| format!("IPV6_V6ONLY: {}", e))?;
     }
 

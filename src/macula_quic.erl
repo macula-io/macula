@@ -88,7 +88,7 @@ init() ->
 %% @doc Listen on all interfaces (dual-stack) at the given port.
 -spec listen(inet:port_number(), list()) -> {ok, reference()} | {error, term()}.
 listen(Port, Opts) when is_integer(Port) ->
-    listen(<<"0.0.0.0">>, Port, Opts).
+    listen(<<"::">>, Port, Opts).
 
 %% @doc Listen on a specific bind address and port.
 %% BindAddr is a binary: "0.0.0.0", "192.168.1.1", "2600:3c0e::100", etc.
