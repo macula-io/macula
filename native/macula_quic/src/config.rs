@@ -101,11 +101,19 @@ pub fn create_bound_socket(addr: IpAddr, port: u16) -> Result<UdpSocket, String>
     let socket = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))
         .map_err(|e| format!("socket create: {}", e))?;
 
-    // SO_REUSEPORT only for wildcard listeners — per-identity listeners bind
-    // unique addresses and MUST NOT share the port, otherwise the kernel
-    // load-balances incoming connections across all listeners on port 4433,
-    // causing peer relay connections to land on random per-identity handlers.
-    if addr.is_unspecified() {
+    // SO_REUSEADDR on all listeners — allows multiple sockets on the same port
+    // with different addresses. The kernel routes to the most specific match:
+    // [2a01:...::100]:4433 wins over [::]:4433 for connections to ::100.
+    //
+    // SO_REUSEPORT ONLY on per-identity listeners — they need it to coexist
+    // with the wildcard [::]:4433 listener. The wildcard does NOT use
+    // SO_REUSEPORT, so it won't participate in kernel load-balancing.
+    // This ensures peer relay connections to the box IP (::1) always land
+    // on the main wildcard listener, not on a random per-identity one.
+    socket
+        .set_reuse_address(true)
+        .map_err(|e| format!("SO_REUSEADDR: {}", e))?;
+    if !addr.is_unspecified() {
         socket
             .set_reuse_port(true)
             .map_err(|e| format!("SO_REUSEPORT: {}", e))?;
