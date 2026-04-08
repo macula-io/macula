@@ -200,9 +200,13 @@ setopt(Stream, active, Value) ->
     nif_setopt_active(Stream, Value).
 
 %% @doc Transfer ownership of a handle to another process.
+%% Works with both stream and connection handles.
 -spec controlling_process(reference(), pid()) -> ok | {error, term()}.
 controlling_process(Handle, Pid) ->
-    nif_controlling_process(Handle, Pid).
+    try nif_controlling_process(Handle, Pid)
+    catch error:badarg ->
+        nif_controlling_process_conn(Handle, Pid)
+    end.
 
 %%%===================================================================
 %%% Compat API
@@ -303,6 +307,9 @@ nif_setopt_active(_Stream, _Value) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_controlling_process(_Handle, _Pid) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_controlling_process_conn(_Handle, _Pid) ->
     erlang:nif_error(nif_not_loaded).
 
 %%%===================================================================

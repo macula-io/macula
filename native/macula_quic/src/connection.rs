@@ -71,8 +71,13 @@ fn nif_connect<'a>(
             .first()
             .ok_or_else(|| format!("no addresses for {}", addr_str))?;
 
-        // Create client endpoint (ephemeral local port)
-        let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
+        // Create client endpoint — match address family to remote
+        let local_bind: std::net::SocketAddr = if remote_addr.is_ipv6() {
+            "[::]:0".parse().unwrap()
+        } else {
+            "0.0.0.0:0".parse().unwrap()
+        };
+        let mut endpoint = quinn::Endpoint::client(local_bind)
             .map_err(|e| format!("client endpoint: {}", e))?;
         endpoint.set_default_client_config(client_config);
 
@@ -180,6 +185,18 @@ fn nif_async_accept_stream<'a>(
     });
 
     conn.set_stream_accept_task(handle);
+    Ok(atoms::ok().encode(env))
+}
+
+/// NIF: controlling_process_conn(ConnRef, NewPid) -> ok
+#[rustler::nif]
+fn nif_controlling_process_conn<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+    new_owner: LocalPid,
+) -> NifResult<Term<'a>> {
+    let mut owner = conn.owner.write().unwrap();
+    *owner = new_owner;
     Ok(atoms::ok().encode(env))
 }
 

@@ -28,6 +28,7 @@ rustler::init!(
         connection::nif_open_stream,
         connection::nif_close_connection,
         connection::nif_async_accept_stream,
+        connection::nif_controlling_process_conn,
         connection::nif_peername,
         // Stream
         stream::nif_send,
