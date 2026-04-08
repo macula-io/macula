@@ -87,6 +87,11 @@
     unmonitor_nodes/0
 ]).
 
+%% World Wide Computer — single entry point for mesh distribution
+-export([
+    join_mesh/1
+]).
+
 %% Type exports
 -export_type([
     client/0,
@@ -797,6 +802,56 @@ monitor_nodes() ->
 -spec unmonitor_nodes() -> ok.
 unmonitor_nodes() ->
     macula_cluster:unmonitor_nodes().
+
+%%%===================================================================
+%%% World Wide Computer — Mesh Distribution
+%%%===================================================================
+
+%% @doc Join the Macula relay mesh and enable Erlang distribution over it.
+%%
+%% This is the single entry point for connecting a BEAM node to the
+%% global mesh. After calling this function, you can use standard OTP
+%% distribution primitives (net_adm:ping, gen_server:call, pg:join,
+%% monitor) to reach any other node on the mesh.
+%%
+%% Options (map):
+%%   relays - list of relay URL binaries (required)
+%%   realm - mesh realm binary (default: "io.macula")
+%%   identity - node identity binary (default: node name)
+%%   tls_verify - none | verify_peer (default: none)
+%%
+%% @since v0.47.0
+-spec join_mesh(map()) -> ok | {error, term()}.
+join_mesh(Opts) ->
+    Relays = maps:get(relays, Opts),
+    Realm = maps:get(realm, Opts, <<"io.macula">>),
+    Identity = maps:get(identity, Opts, atom_to_binary(node())),
+    TlsVerify = maps:get(tls_verify, Opts, none),
+
+    %% 1. Connect to the relay mesh
+    ClientOpts = #{
+        relays => Relays,
+        realm => Realm,
+        identity => Identity,
+        tls_verify => TlsVerify
+    },
+    case macula_relay_client:start_link(ClientOpts) of
+        {ok, Client} ->
+            %% 2. Enable relay distribution
+            os:putenv("MACULA_DIST_MODE", "relay"),
+
+            %% 3. Register mesh client for distribution tunneling
+            macula_dist_relay:register_mesh_client(Client),
+
+            %% 4. Advertise this node as accepting distribution connections
+            macula_dist_relay:advertise_dist_accept(),
+
+            ?LOG_INFO("[macula] Joined mesh via ~s — distribution enabled", [hd(Relays)]),
+            ok;
+        {error, Reason} ->
+            ?LOG_ERROR("[macula] Failed to join mesh: ~p", [Reason]),
+            {error, Reason}
+    end.
 
 %%%===================================================================
 %%% Internal functions
