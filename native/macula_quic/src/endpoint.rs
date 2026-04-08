@@ -77,6 +77,10 @@ fn nif_listen<'a>(
     let socket = config::create_bound_socket(addr, port as u16)
         .map_err(|e| rustler::Error::Term(Box::new(e)))?;
 
+    // Quinn's TokioRuntime requires a tokio context (Handle::current()).
+    // We enter the runtime context here since NIFs run on BEAM scheduler threads.
+    let _guard = runtime::rt().enter();
+
     let endpoint = quinn::Endpoint::new(
         quinn::EndpointConfig::default(),
         Some(server_config),
