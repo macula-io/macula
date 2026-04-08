@@ -101,9 +101,15 @@ pub fn create_bound_socket(addr: IpAddr, port: u16) -> Result<UdpSocket, String>
     let socket = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))
         .map_err(|e| format!("socket create: {}", e))?;
 
-    socket
-        .set_reuse_port(true)
-        .map_err(|e| format!("SO_REUSEPORT: {}", e))?;
+    // SO_REUSEPORT only for wildcard listeners — per-identity listeners bind
+    // unique addresses and MUST NOT share the port, otherwise the kernel
+    // load-balances incoming connections across all listeners on port 4433,
+    // causing peer relay connections to land on random per-identity handlers.
+    if addr.is_unspecified() {
+        socket
+            .set_reuse_port(true)
+            .map_err(|e| format!("SO_REUSEPORT: {}", e))?;
+    }
     socket
         .set_nonblocking(true)
         .map_err(|e| format!("nonblocking: {}", e))?;
