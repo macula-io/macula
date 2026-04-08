@@ -377,26 +377,11 @@ process_buffer(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
     end.
 
 %% Incoming SWIM messages — sent directly by remote relay handler on the inbound
-%% stream as a PUBLISH. Route to the SWIM gen_server (macula_relay_swim) if running.
+%% stream as a PUBLISH. Route to SWIM gen_server + extract piggybacked Bloom.
 handle_message({ok, {publish, #{<<"topic">> := <<"_swim.", _/binary>> = Topic,
                                 <<"payload">> := Payload}}}, State) ->
-    case erlang:whereis(macula_relay_swim) of
-        undefined -> ok;
-        SwimPid ->
-            Decoded = safe_decode_json(Payload),
-            From = case Decoded of
-                M when is_map(M) -> maps:get(<<"from">>, M, <<>>);
-                _ -> <<>>
-            end,
-            case Topic of
-                <<"_swim.ack">> ->
-                    gen_server:cast(SwimPid, {ack_received, From, Payload});
-                <<"_swim.ping">> ->
-                    gen_server:cast(SwimPid, {ping_received, From, Payload});
-                _ -> ok
-            end,
-            ok
-    end,
+    Decoded = safe_decode_json(Payload),
+    route_swim_message(Topic, Payload, Decoded),
     State;
 
 %% Incoming PUBLISH from relay
@@ -662,6 +647,31 @@ parts_match(_, _) -> false.
 safe_decode_json(Payload) when is_binary(Payload) ->
     try json:decode(Payload) catch _:_ -> Payload end;
 safe_decode_json(Payload) -> Payload.
+
+%% SWIM message routing — decomposed from handle_message to avoid nesting.
+route_swim_message(Topic, RawPayload, Decoded) ->
+    From = swim_from(Decoded),
+    forward_to_swim(Topic, From, RawPayload),
+    store_piggybacked_bloom(From, Decoded).
+
+swim_from(#{<<"from">> := F}) when is_binary(F) -> F;
+swim_from(_) -> <<>>.
+
+forward_to_swim(<<"_swim.ack">>, From, Payload) ->
+    swim_cast({ack_received, From, Payload});
+forward_to_swim(<<"_swim.ping">>, From, Payload) ->
+    swim_cast({ping_received, From, Payload});
+forward_to_swim(_, _, _) -> ok.
+
+swim_cast(Msg) ->
+    case erlang:whereis(macula_relay_swim) of
+        undefined -> ok;
+        Pid -> gen_server:cast(Pid, Msg)
+    end.
+
+store_piggybacked_bloom(From, #{<<"bloom">> := B64}) when is_binary(B64) ->
+    catch macula_relay_peering:receive_peer_bloom(From, base64:decode(B64));
+store_piggybacked_bloom(_, _) -> ok.
 
 maybe_add_trace(Msg, undefined) -> Msg;
 maybe_add_trace(Msg, Trace) -> Msg#{<<"_trace">> => Trace}.
