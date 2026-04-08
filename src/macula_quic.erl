@@ -85,8 +85,11 @@ init() ->
 %%% Listener API
 %%%===================================================================
 
-%% @doc Listen on all interfaces (dual-stack) at the given port.
--spec listen(inet:port_number(), list()) -> {ok, reference()} | {error, term()}.
+%% @doc Listen on a port or {Address, Port} tuple.
+-spec listen(inet:port_number() | {string() | binary(), inet:port_number()}, list()) ->
+    {ok, reference()} | {error, term()}.
+listen({Address, Port}, Opts) ->
+    listen(Address, Port, Opts);
 listen(Port, Opts) when is_integer(Port) ->
     listen(<<"::">>, Port, Opts).
 
