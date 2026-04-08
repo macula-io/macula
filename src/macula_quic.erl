@@ -91,7 +91,7 @@ listen(Port, Opts) when is_integer(Port) ->
     listen(<<"0.0.0.0">>, Port, Opts).
 
 %% @doc Listen on a specific bind address and port.
-%% BindAddr: <<"0.0.0.0">> | <<"192.168.1.1">> | <<"2600:3c0e::100">> etc.
+%% BindAddr is a binary: "0.0.0.0", "192.168.1.1", "2600:3c0e::100", etc.
 -spec listen(binary() | string(), inet:port_number(), list()) -> {ok, reference()} | {error, term()}.
 listen(BindAddr, Port, Opts) when is_list(BindAddr) ->
     listen(list_to_binary(BindAddr), Port, Opts);
