@@ -311,6 +311,7 @@ handle_cast({incoming_publish, Msg}, State) ->
     %% Support both atom and binary keys from MessagePack decoding
     Topic = extract_topic(Msg),
     Payload = extract_payload(Msg),
+    Trace = maps:get(<<"_trace">>, Msg, maps:get('_trace', Msg, undefined)),
 
     ?LOG_DEBUG("[~s] Received PUBLISH message: topic=~s, payload_size=~p bytes",
               [State#state.node_id, Topic, byte_size(Payload)]),
@@ -327,7 +328,7 @@ handle_cast({incoming_publish, Msg}, State) ->
 
     %% Invoke callbacks for matching subscriptions (delegate to subscription module)
     macula_pubsub_subscription:invoke_callbacks(
-        SubscriptionMatches, Topic, Payload, State#state.node_id
+        SubscriptionMatches, Topic, Payload, State#state.node_id, Trace
     ),
 
     {noreply, State};
@@ -464,13 +465,17 @@ do_async_publish(_ConnMgrPid, Topic, Data, Opts, State) ->
             {MsgId, State2} = next_message_id(State),
             Payload = encode_payload(Data),
 
-            PublishMsg = #{
+            PublishMsg0 = #{
                 topic => BinaryTopic,
                 payload => Payload,
                 qos => Qos,
                 retain => Retain,
                 message_id => MsgId
             },
+            PublishMsg = case maps:get(trace, Opts, false) of
+                true -> PublishMsg0#{<<"_trace">> => []};
+                _ -> PublishMsg0
+            end,
 
             ?LOG_DEBUG("[PubSubHandler] Sending to do_publish: topic=~s", [BinaryTopic]),
             gen_server:cast(self(), {do_publish, PublishMsg, Qos, BinaryTopic, Payload, Opts, MsgId}),

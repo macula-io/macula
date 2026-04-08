@@ -33,8 +33,9 @@
 
 %% Test exports
 -ifdef(TEST).
--export([pg_members/1, safe_decode/1, try_rpc_on_peers/3,
-         handle_rpc_call/5, handle_rpc_reply/3, handle_message/2]).
+-export([pg_members/1, safe_decode/1, try_rpc_on_peers/4,
+         handle_rpc_call/6, handle_rpc_reply/4, handle_message/2,
+         maybe_append_hop/2, extract_trace/1, maybe_add_trace/2]).
 -endif.
 
 -record(state, {
@@ -104,23 +105,30 @@ handle_info({quic, Data, NewStream, _Flags}, State) when is_binary(Data) ->
 %% Pub/sub: another handler published to a topic we're subscribed to.
 %% After processing, drain any queued RPC messages first (priority inversion fix).
 handle_info({relay_publish, Topic, Payload}, State) ->
-    send_to_node(publish, #{
+    handle_info({relay_publish, Topic, Payload, undefined}, State);
+handle_info({relay_publish, Topic, Payload, Trace}, State) ->
+    Msg = #{
         <<"topic">> => Topic,
         <<"payload">> => Payload,
         <<"qos">> => 0,
         <<"retain">> => false,
         <<"message_id">> => crypto:strong_rand_bytes(16)
-    }, State),
+    },
+    send_to_node(publish, maybe_add_trace(Msg, Trace), State),
     drain_rpc_messages(State);
 
 %% RPC: another handler wants us to forward a call to our node
 handle_info({relay_call, CallerPid, CallId, Procedure, Args}, State) ->
-    State2 = handle_rpc_call(CallerPid, CallId, Procedure, Args, State),
+    handle_info({relay_call, CallerPid, CallId, Procedure, Args, undefined}, State);
+handle_info({relay_call, CallerPid, CallId, Procedure, Args, Trace}, State) ->
+    State2 = handle_rpc_call(CallerPid, CallId, Procedure, Args, Trace, State),
     drain_rpc_messages(State2);
 
 %% RPC reply from caller side: send reply back to the calling node
 handle_info({relay_reply, CallId, Result}, State) ->
-    State2 = handle_rpc_reply(CallId, Result, State),
+    handle_info({relay_reply, CallId, Result, undefined}, State);
+handle_info({relay_reply, CallId, Result, Trace}, State) ->
+    State2 = handle_rpc_reply(CallId, Result, Trace, State),
     drain_rpc_messages(State2);
 
 %%====================================================================
@@ -324,11 +332,12 @@ handle_message({ok, {publish, #{<<"topic">> := <<"_relay.bloom">>}}}, State) -> 
 handle_message({ok, {publish, Msg}}, State) ->
     Topic = maps:get(<<"topic">>, Msg, <<>>),
     Payload = maps:get(<<"payload">>, Msg, <<>>),
+    Trace = maybe_append_hop(extract_trace(Msg), <<"fwd">>),
     Members = pg_members({relay_topic, Topic}),
     ?LOG_INFO("[relay_handler] PUBLISH ~s → ~p subscriber(s)", [Topic, length(Members)]),
     lists:foreach(fun(Pid) ->
         case Pid =/= self() of
-            true -> Pid ! {relay_publish, Topic, Payload};
+            true -> Pid ! {relay_publish, Topic, Payload, Trace};
             false -> ok
         end
     end, Members),
@@ -358,15 +367,16 @@ handle_message({ok, {call, Msg}}, State) ->
     Procedure = maps:get(<<"procedure">>, Msg, <<>>),
     CallId = maps:get(<<"call_id">>, Msg, <<>>),
     Args = maps:get(<<"args">>, Msg, #{}),
+    Trace = maybe_append_hop(extract_trace(Msg), <<"fwd">>),
     AlivePids = [P || P <- gproc:lookup_pids({p, l, {relay_rpc, Procedure}}),
                        is_process_alive(P)],
     case AlivePids of
         [] ->
             ?LOG_INFO("[relay_handler] RPC ~s not local, trying DHT then peers", [Procedure]),
-            forward_rpc_via_dht(Procedure, CallId, Args, State);
+            forward_rpc_via_dht(Procedure, CallId, Args, Trace, State);
         [ProviderPid | _] ->
             ?LOG_INFO("[relay_handler] Forwarding RPC ~s to provider ~p", [Procedure, ProviderPid]),
-            ProviderPid ! {relay_call, self(), CallId, Procedure, Args}
+            ProviderPid ! {relay_call, self(), CallId, Procedure, Args, Trace}
     end,
     State;
 
@@ -374,11 +384,12 @@ handle_message({ok, {call, Msg}}, State) ->
 handle_message({ok, {reply, Msg}}, State) ->
     CallId = maps:get(<<"call_id">>, Msg, <<>>),
     Result = maps:get(<<"result">>, Msg, maps:get(<<"error">>, Msg, #{})),
+    Trace = maybe_append_hop(extract_trace(Msg), <<"ret">>),
     case maps:get(CallId, State#state.pending_calls, undefined) of
         undefined ->
             ?LOG_DEBUG("[relay_handler] Reply for unknown call_id ~s", [CallId]);
         CallerPid ->
-            CallerPid ! {relay_reply, CallId, Result}
+            CallerPid ! {relay_reply, CallId, Result, Trace}
     end,
     State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)};
 
@@ -446,19 +457,19 @@ join_topic(Topic, true) ->
 
 %% Forward RPC call to peer relays when procedure not found locally.
 %% Spawns async — tries each peer, sends first success back to caller.
-forward_rpc_via_dht(Procedure, CallId, Args, _State) ->
+forward_rpc_via_dht(Procedure, CallId, Args, Trace, _State) ->
     HandlerPid = self(),
     spawn_monitor(fun() ->
         case catch macula_relay_dht:find_procedure(Procedure) of
             {ok, RelayUrl} ->
                 ?LOG_INFO("[relay_handler] DHT found ~s on ~s", [Procedure, RelayUrl]),
-                forward_rpc_to_relay(RelayUrl, Procedure, CallId, Args, HandlerPid);
+                forward_rpc_to_relay(RelayUrl, Procedure, CallId, Args, Trace, HandlerPid);
             _ ->
-                forward_rpc_to_peers_sync(Procedure, CallId, Args, HandlerPid)
+                forward_rpc_to_peers_sync(Procedure, CallId, Args, Trace, HandlerPid)
         end
     end).
 
-forward_rpc_to_relay(RelayUrl, Procedure, CallId, Args, HandlerPid) ->
+forward_rpc_to_relay(RelayUrl, Procedure, CallId, Args, Trace, HandlerPid) ->
     Clients = try gen_server:call(macula_relay_peering, peer_clients, 2000)
               catch _:_ -> #{} end,
     case maps:get(RelayUrl, Clients, undefined) of
@@ -466,44 +477,57 @@ forward_rpc_to_relay(RelayUrl, Procedure, CallId, Args, HandlerPid) ->
             %% DHT relay URL doesn't match any peer client (identity vs box URL mismatch).
             %% Fall through to sequential peer forwarding as fallback.
             ?LOG_INFO("[relay_handler] DHT relay ~s not in peer_clients, trying peers", [RelayUrl]),
-            forward_rpc_to_peers_sync(Procedure, CallId, Args, HandlerPid);
+            forward_rpc_to_peers_sync(Procedure, CallId, Args, Trace, HandlerPid);
         ClientPid ->
-            case catch macula_relay_client:call(ClientPid, Procedure, Args, 4000) of
+            TraceOpts = case Trace of
+                undefined -> #{};
+                _ -> #{<<"_trace">> => Trace}
+            end,
+            case catch macula_relay_client:call(ClientPid, Procedure, Args, 4000, TraceOpts) of
                 {ok, Response} ->
-                    HandlerPid ! {relay_reply, CallId, Response};
+                    HandlerPid ! {relay_reply, CallId, Response, Trace};
+                {ok, Response, ReplyTrace} ->
+                    HandlerPid ! {relay_reply, CallId, Response, ReplyTrace};
                 _ ->
                     HandlerPid ! {relay_reply, CallId,
                         #{<<"error">> => #{<<"code">> => <<"rpc_failed">>,
-                                           <<"message">> => <<"DHT relay did not respond">>}}}
+                                           <<"message">> => <<"DHT relay did not respond">>}}, Trace}
             end
     end.
 
-forward_rpc_to_peers_sync(Procedure, CallId, Args, HandlerPid) ->
+forward_rpc_to_peers_sync(Procedure, CallId, Args, Trace, HandlerPid) ->
     case erlang:whereis(macula_relay_peering) of
         undefined ->
             HandlerPid ! {relay_reply, CallId,
                 #{<<"error">> => #{<<"code">> => <<"procedure_not_found">>,
-                                   <<"message">> => <<"No peering available">>}}};
+                                   <<"message">> => <<"No peering available">>}}, Trace};
         PeeringPid ->
             Clients = gen_server:call(PeeringPid, peer_clients, 2000),
-            Result = try_rpc_on_peers(Procedure, Args, maps:to_list(Clients)),
+            Result = try_rpc_on_peers(Procedure, Args, Trace, maps:to_list(Clients)),
             case Result of
                 {ok, Response} ->
-                    HandlerPid ! {relay_reply, CallId, Response};
+                    HandlerPid ! {relay_reply, CallId, Response, Trace};
+                {ok, Response, ReplyTrace} ->
+                    HandlerPid ! {relay_reply, CallId, Response, ReplyTrace};
                 {error, _} ->
                     HandlerPid ! {relay_reply, CallId,
                         #{<<"error">> => #{<<"code">> => <<"procedure_not_found">>,
-                                           <<"message">> => <<"No provider on any relay">>}}}
+                                           <<"message">> => <<"No provider on any relay">>}}, Trace}
             end
     end.
 
 
-try_rpc_on_peers(_Procedure, _Args, []) ->
+try_rpc_on_peers(_Procedure, _Args, _Trace, []) ->
     {error, not_found};
-try_rpc_on_peers(Procedure, Args, [{_Url, ClientPid} | Rest]) ->
-    case catch macula_relay_client:call(ClientPid, Procedure, Args, 4000) of
+try_rpc_on_peers(Procedure, Args, Trace, [{_Url, ClientPid} | Rest]) ->
+    TraceOpts = case Trace of
+        undefined -> #{};
+        _ -> #{<<"_trace">> => Trace}
+    end,
+    case catch macula_relay_client:call(ClientPid, Procedure, Args, 4000, TraceOpts) of
         {ok, Response} -> {ok, Response};
-        _ -> try_rpc_on_peers(Procedure, Args, Rest)
+        {ok, Response, ReplyTrace} -> {ok, Response, ReplyTrace};
+        _ -> try_rpc_on_peers(Procedure, Args, Trace, Rest)
     end.
 
 %% Notify relay peering module (if running) about subscription changes.
@@ -591,6 +615,37 @@ maybe_store_bloom_from_swim(Payload) ->
 pg_members(Group) ->
     try pg:get_members(pg, Group) catch _:_ -> [] end.
 
+%%====================================================================
+%% Traceroute helpers — opt-in per-message hop tracking
+%%====================================================================
+
+%% @doc Append a hop entry to the trace path. Returns undefined when
+%% tracing is not active (no _trace field in message).
+maybe_append_hop(undefined, _Dir) -> undefined;
+maybe_append_hop(Trace, Dir) when is_list(Trace) ->
+    Trace ++ [#{<<"relay">> => get_relay_self_url(),
+                <<"ts">> => erlang:system_time(millisecond),
+                <<"dir">> => Dir}].
+
+%% @doc Get the relay's own URL, cached in process dictionary.
+get_relay_self_url() ->
+    case get(relay_self_url) of
+        undefined ->
+            Url = try gen_server:call(macula_relay_peering, self_url, 500)
+                  catch _:_ -> atom_to_binary(node()) end,
+            put(relay_self_url, Url),
+            Url;
+        Cached -> Cached
+    end.
+
+%% @doc Extract trace from a decoded message map (binary keys from MessagePack).
+extract_trace(Msg) ->
+    maps:get(<<"_trace">>, Msg, undefined).
+
+%% @doc Add _trace field to a message map if tracing is active.
+maybe_add_trace(Msg, undefined) -> Msg;
+maybe_add_trace(Msg, Trace) -> Msg#{<<"_trace">> => Trace}.
+
 safe_decode(Bin) when is_binary(Bin) ->
     try json:decode(Bin) catch _:_ -> #{} end;
 safe_decode(Map) when is_map(Map) ->
@@ -605,29 +660,37 @@ safe_decode(_) ->
 %% PUBLISH messages starve RPC calls.
 %%====================================================================
 
-handle_rpc_call(CallerPid, CallId, Procedure, Args, State) ->
+handle_rpc_call(CallerPid, CallId, Procedure, Args, Trace, State) ->
     PendingCalls = maps:put(CallId, CallerPid, State#state.pending_calls),
-    send_to_node(call, #{
+    Msg = #{
         <<"call_id">> => CallId,
         <<"procedure">> => Procedure,
         <<"args">> => Args
-    }, State),
+    },
+    send_to_node(call, maybe_add_trace(Msg, Trace), State),
     State#state{pending_calls = PendingCalls}.
 
-handle_rpc_reply(CallId, Result, State) ->
-    send_to_node(reply, #{
+handle_rpc_reply(CallId, Result, Trace, State) ->
+    Msg = #{
         <<"call_id">> => CallId,
         <<"result">> => Result
-    }, State),
+    },
+    send_to_node(reply, maybe_add_trace(Msg, Trace), State),
     State.
 
 drain_rpc_messages(State) ->
     receive
         {relay_call, CallerPid, CallId, Procedure, Args} ->
-            State2 = handle_rpc_call(CallerPid, CallId, Procedure, Args, State),
+            State2 = handle_rpc_call(CallerPid, CallId, Procedure, Args, undefined, State),
+            drain_rpc_messages(State2);
+        {relay_call, CallerPid, CallId, Procedure, Args, Trace} ->
+            State2 = handle_rpc_call(CallerPid, CallId, Procedure, Args, Trace, State),
             drain_rpc_messages(State2);
         {relay_reply, CallId, Result} ->
-            State2 = handle_rpc_reply(CallId, Result, State),
+            State2 = handle_rpc_reply(CallId, Result, undefined, State),
+            drain_rpc_messages(State2);
+        {relay_reply, CallId, Result, Trace} ->
+            State2 = handle_rpc_reply(CallId, Result, Trace, State),
             drain_rpc_messages(State2)
     after 0 ->
         {noreply, State}

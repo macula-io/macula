@@ -17,7 +17,7 @@
 
 %% API
 -export([add_subscription/4, remove_subscription/2,
-         find_matches/3, invoke_callbacks/4]).
+         find_matches/3, invoke_callbacks/4, invoke_callbacks/5]).
 
 -type topic() :: binary().
 -type callback() :: fun((map()) -> ok).
@@ -76,9 +76,13 @@ find_matches(Topic, Subscriptions, Config) ->
 %% @doc Invoke callbacks for matching subscriptions.
 %% Spawns async tasks to invoke each callback.
 -spec invoke_callbacks([{subscription_ref(), {topic(), callback()}}], topic(), payload(), node_id()) -> ok.
-invoke_callbacks([], _Topic, _Payload, _NodeId) ->
-    ok;
 invoke_callbacks(Matches, Topic, Payload, NodeId) ->
+    invoke_callbacks(Matches, Topic, Payload, NodeId, undefined).
+
+-spec invoke_callbacks([{subscription_ref(), {topic(), callback()}}], topic(), payload(), node_id(), list() | undefined) -> ok.
+invoke_callbacks([], _Topic, _Payload, _NodeId, _Trace) ->
+    ok;
+invoke_callbacks(Matches, Topic, Payload, NodeId, Trace) ->
     ?LOG_INFO("[~s] Found ~p subscription(s) for topic: ~s",
              [NodeId, length(Matches), Topic]),
 
@@ -86,7 +90,7 @@ invoke_callbacks(Matches, Topic, Payload, NodeId) ->
     lists:foreach(
         fun({_SubRef, {SubTopic, Callback}}) ->
             spawn(fun() ->
-                invoke_single_callback(Callback, Topic, SubTopic, Payload, NodeId)
+                invoke_single_callback(Callback, Topic, SubTopic, Payload, NodeId, Trace)
             end)
         end,
         Matches
@@ -98,13 +102,17 @@ invoke_callbacks(Matches, Topic, Payload, NodeId) ->
 %%%===================================================================
 
 %% @private Invoke a single callback with payload decoding
-invoke_single_callback(Callback, Topic, SubTopic, Payload, NodeId) ->
+invoke_single_callback(Callback, Topic, SubTopic, Payload, NodeId, Trace) ->
     DecodedPayload = safe_decode_json(Payload),
-    PublishData = #{
+    Base = #{
         topic => Topic,
         matched_pattern => SubTopic,
         payload => DecodedPayload
     },
+    PublishData = case Trace of
+        undefined -> Base;
+        _ -> Base#{'_trace' => Trace}
+    end,
     handle_callback_invocation(catch Callback(PublishData), Topic, NodeId).
 
 %% @private Safely decode JSON payload

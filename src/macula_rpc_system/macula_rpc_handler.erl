@@ -928,12 +928,16 @@ do_remote_call_to_provider(Procedure, Args, Opts, From, Provider, AllProviders, 
     %% Build call message (RPC call)
     #{node_id := ProviderNodeId} = Provider,
 
-    CallMsg = #{
+    CallMsg0 = #{
         call_id => CallId,
         procedure => Procedure,
         args => EncodedArgs,
         realm => State#state.realm
     },
+    CallMsg = case maps:get(trace, Opts, false) of
+        true -> CallMsg0#{<<"_trace">> => []};
+        _ -> CallMsg0
+    end,
 
     %% Wrap call in DHT routing envelope
     LocalNodeId = State#state.node_id,
@@ -1007,6 +1011,7 @@ handle_rpc_reply(CallId, Msg, State) ->
 %% @doc Send reply to the original caller
 -spec send_reply_to_caller(term(), map(), #state{}) -> ok.
 send_reply_to_caller(From, Msg, State) ->
+    Trace = maps:get(<<"_trace">>, Msg, maps:get('_trace', Msg, undefined)),
     case maps:get(<<"result">>, Msg, maps:get(result, Msg, undefined)) of
         undefined ->
             %% Error response
@@ -1017,7 +1022,11 @@ send_reply_to_caller(From, Msg, State) ->
             %% Success response
             DecodedResult = safe_decode_json(Result),
             ?LOG_DEBUG("[~s] RPC success response received", [State#state.node_id]),
-            gen_server:reply(From, {ok, DecodedResult})
+            Reply = case Trace of
+                undefined -> {ok, DecodedResult};
+                _ -> {ok, DecodedResult, #{trace => Trace}}
+            end,
+            gen_server:reply(From, Reply)
     end.
 
 %%%===================================================================

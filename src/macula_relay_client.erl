@@ -24,7 +24,7 @@
 
 -export([start_link/1, stop/1]).
 -export([subscribe/3, unsubscribe/2, publish/3]).
--export([advertise/3, unadvertise/2, call/4]).
+-export([advertise/3, unadvertise/2, call/4, call/5]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% Test exports
@@ -99,7 +99,11 @@ unadvertise(Pid, Procedure) ->
 
 -spec call(pid(), binary(), map(), timeout()) -> {ok, term()} | {error, term()}.
 call(Pid, Procedure, Args, Timeout) ->
-    gen_server:call(Pid, {rpc_call, Procedure, Args, Timeout}, Timeout + 1000).
+    call(Pid, Procedure, Args, Timeout, #{}).
+
+-spec call(pid(), binary(), map(), timeout(), map()) -> {ok, term()} | {error, term()}.
+call(Pid, Procedure, Args, Timeout, Opts) ->
+    gen_server:call(Pid, {rpc_call, Procedure, Args, Timeout, Opts}, Timeout + 1000).
 
 %%====================================================================
 %% gen_server callbacks
@@ -186,14 +190,21 @@ handle_call({unadvertise, Procedure}, _From, State) ->
 %%====================================================================
 
 handle_call({rpc_call, Procedure, Args, Timeout}, From, State) ->
+    handle_call({rpc_call, Procedure, Args, Timeout, #{}}, From, State);
+handle_call({rpc_call, Procedure, Args, Timeout, Opts}, From, State) ->
     CallId = base64:encode(crypto:strong_rand_bytes(12)),
     TimerRef = erlang:send_after(Timeout, self(), {call_timeout, CallId}),
     PendingCalls = maps:put(CallId, {From, TimerRef}, State#state.pending_calls),
-    maybe_send(call, #{
+    Msg = #{
         <<"call_id">> => CallId,
         <<"procedure">> => Procedure,
         <<"args">> => Args
-    }, State),
+    },
+    Msg2 = case maps:get(<<"_trace">>, Opts, undefined) of
+        undefined -> Msg;
+        Trace -> Msg#{<<"_trace">> => Trace}
+    end,
+    maybe_send(call, Msg2, State),
     {noreply, State#state{pending_calls = PendingCalls}};
 
 handle_call(_Request, _From, State) ->
@@ -369,7 +380,8 @@ process_buffer(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
 handle_message({ok, {publish, Msg}}, State) ->
     Topic = maps:get(<<"topic">>, Msg, <<>>),
     Payload = maps:get(<<"payload">>, Msg, <<>>),
-    invoke_matching_callbacks(Topic, Payload, State#state.subscriptions),
+    Trace = maps:get(<<"_trace">>, Msg, undefined),
+    invoke_matching_callbacks(Topic, Payload, Trace, State#state.subscriptions),
     State;
 
 %% Incoming CALL from relay (we're the provider)
@@ -377,10 +389,12 @@ handle_message({ok, {call, Msg}}, State) ->
     Procedure = maps:get(<<"procedure">>, Msg, <<>>),
     CallId = maps:get(<<"call_id">>, Msg, <<>>),
     Args = maps:get(<<"args">>, Msg, #{}),
+    Trace = maps:get(<<"_trace">>, Msg, undefined),
     case maps:get(Procedure, State#state.procedures, undefined) of
         undefined ->
-            maybe_send(reply, #{<<"call_id">> => CallId,
-                                <<"error">> => #{<<"code">> => <<"not_found">>}}, State);
+            ReplyBase = #{<<"call_id">> => CallId,
+                          <<"error">> => #{<<"code">> => <<"not_found">>}},
+            maybe_send(reply, maybe_add_trace(ReplyBase, Trace), State);
         Handler ->
             %% Execute handler in separate process to avoid blocking
             Stream = State#state.stream,
@@ -388,13 +402,14 @@ handle_message({ok, {call, Msg}}, State) ->
                 Result = try Handler(Args)
                          catch _:Err -> {error, Err}
                          end,
-                ReplyMsg = case Result of
+                ReplyBase = case Result of
                     {ok, R} -> #{<<"call_id">> => CallId, <<"result">> => R};
                     {error, R} -> #{<<"call_id">> => CallId,
                                     <<"error">> => #{<<"code">> => <<"handler_error">>,
                                                      <<"message">> => iolist_to_binary(
                                                          io_lib:format("~p", [R]))}}
                 end,
+                ReplyMsg = maybe_add_trace(ReplyBase, Trace),
                 Binary = macula_protocol_encoder:encode(reply, ReplyMsg),
                 macula_quic:async_send(Stream, Binary)
             end)
@@ -404,6 +419,7 @@ handle_message({ok, {call, Msg}}, State) ->
 %% Incoming REPLY from relay (we're the caller)
 handle_message({ok, {reply, Msg}}, State) ->
     CallId = maps:get(<<"call_id">>, Msg, <<>>),
+    Trace = maps:get(<<"_trace">>, Msg, undefined),
     case maps:get(CallId, State#state.pending_calls, undefined) of
         undefined ->
             ?LOG_DEBUG("[relay_client] Reply for unknown call_id"),
@@ -417,7 +433,15 @@ handle_message({ok, {reply, Msg}}, State) ->
                 R ->
                     {ok, R}
             end,
-            gen_server:reply(From, Result),
+            Reply = case Trace of
+                undefined -> Result;
+                _ ->
+                    case Result of
+                        {ok, R2} -> {ok, R2, #{trace => Trace}};
+                        Other -> Other
+                    end
+            end,
+            gen_server:reply(From, Reply),
             State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)}
     end;
 
@@ -580,13 +604,18 @@ parse_host_port(HostPort) ->
         [Host] -> {Host, 4433}
     end.
 
-invoke_matching_callbacks(Topic, Payload, Subscriptions) ->
+invoke_matching_callbacks(Topic, Payload, Trace, Subscriptions) ->
     DecodedPayload = safe_decode_json(Payload),
+    Base = #{topic => Topic, payload => DecodedPayload},
+    Event = case Trace of
+        undefined -> Base;
+        _ -> Base#{'_trace' => Trace}
+    end,
     maps:foreach(fun(_Ref, {SubTopic, Callback}) ->
         case topic_matches(SubTopic, Topic) of
             true ->
                 spawn(fun() ->
-                    try Callback(#{topic => Topic, payload => DecodedPayload})
+                    try Callback(Event)
                     catch C:E -> ?LOG_WARNING("[relay_client] Callback error: ~p:~p", [C, E])
                     end
                 end);
@@ -610,6 +639,9 @@ parts_match(_, _) -> false.
 safe_decode_json(Payload) when is_binary(Payload) ->
     try json:decode(Payload) catch _:_ -> Payload end;
 safe_decode_json(Payload) -> Payload.
+
+maybe_add_trace(Msg, undefined) -> Msg;
+maybe_add_trace(Msg, Trace) -> Msg#{<<"_trace">> => Trace}.
 
 %% Build TLS options for QUIC client connection.
 %% verify_peer: use global TLS mode (production or development).

@@ -180,7 +180,9 @@
     message_id := binary(),        % 16-byte unique message ID
     %% Authorization fields (v0.17.0+)
     publisher_did => binary(),     % Optional: publisher's DID
-    ucan_token => binary()         % Optional: UCAN for cross-namespace publish
+    ucan_token => binary(),        % Optional: UCAN for cross-namespace publish
+    %% Traceroute (v0.48.0+)
+    '_trace' => [map()]            % Optional: hop trace entries [{relay, ts, dir}, ...]
 }.
 
 -type subscribe_msg() :: #{
@@ -204,7 +206,9 @@
     timeout => integer(),          % Optional timeout in milliseconds
     %% Authorization fields (v0.17.0+)
     caller_did => binary(),        % Optional: caller's DID
-    ucan_token => binary()         % Optional: UCAN for cross-namespace call
+    ucan_token => binary(),        % Optional: UCAN for cross-namespace call
+    %% Traceroute (v0.48.0+)
+    '_trace' => [map()]            % Optional: hop trace entries [{relay, ts, dir}, ...]
 }.
 
 -type reply_msg() :: #{
@@ -213,7 +217,9 @@
     error => #{                    % Error details (on failure)
         code := binary(),          % Error code
         message := binary()        % Error message
-    }
+    },
+    %% Traceroute (v0.48.0+)
+    '_trace' => [map()]            % Optional: hop trace from CALL + return hops
 }.
 
 -type cast_msg() :: #{

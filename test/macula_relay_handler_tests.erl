@@ -130,7 +130,7 @@ safe_decode_non_binary_non_map_returns_empty_map_test() ->
 
 try_rpc_on_peers_empty_list_returns_not_found_test() ->
     ?assertEqual({error, not_found},
-                 macula_relay_handler:try_rpc_on_peers(<<"proc">>, #{}, [])).
+                 macula_relay_handler:try_rpc_on_peers(<<"proc">>, #{}, undefined, [])).
 
 try_rpc_on_peers_skips_dead_pid_test() ->
     %% Spawn a process that exits immediately — its pid is dead.
@@ -139,7 +139,7 @@ try_rpc_on_peers_skips_dead_pid_test() ->
     %% macula_relay_client:call/4 on a dead pid will throw, which
     %% try_rpc_on_peers catches and continues to next peer.
     Result = macula_relay_handler:try_rpc_on_peers(
-        <<"proc">>, #{}, [{<<"url1">>, DeadPid}]),
+        <<"proc">>, #{}, undefined, [{<<"url1">>, DeadPid}]),
     ?assertEqual({error, not_found}, Result).
 
 %%====================================================================
@@ -153,7 +153,7 @@ handle_rpc_call_stores_caller_in_pending_test() ->
     %% handle_rpc_call will try send_to_node which will fail (dummy stream),
     %% but the state update still happens.
     State2 = macula_relay_handler:handle_rpc_call(
-        CallerPid, CallId, <<"proc">>, #{}, State),
+        CallerPid, CallId, <<"proc">>, #{}, undefined, State),
     ?assertEqual(CallerPid, maps:get(CallId, State2#state.pending_calls)).
 
 handle_rpc_call_preserves_existing_calls_test() ->
@@ -161,7 +161,7 @@ handle_rpc_call_preserves_existing_calls_test() ->
     State = make_state(#{pending_calls => ExistingCalls}),
     OtherPid = spawn(fun() -> receive stop -> ok end end),
     State2 = macula_relay_handler:handle_rpc_call(
-        OtherPid, <<"new-call">>, <<"proc">>, #{}, State),
+        OtherPid, <<"new-call">>, <<"proc">>, #{}, undefined, State),
     ?assertEqual(self(), maps:get(<<"old-call">>, State2#state.pending_calls)),
     ?assertEqual(OtherPid, maps:get(<<"new-call">>, State2#state.pending_calls)),
     OtherPid ! stop.
@@ -175,7 +175,7 @@ handle_rpc_reply_returns_state_unchanged_pending_test() ->
     %% happens in the REPLY message handler. It just sends to node.
     State = make_state(),
     State2 = macula_relay_handler:handle_rpc_reply(
-        <<"call-456">>, #{<<"result">> => <<"ok">>}, State),
+        <<"call-456">>, #{<<"result">> => <<"ok">>}, undefined, State),
     %% State should be unchanged (no pending_calls modification).
     ?assertEqual(State#state.pending_calls, State2#state.pending_calls).
 
@@ -220,7 +220,10 @@ handle_message_error_returns_state_test() ->
 
 handle_message_reply_removes_pending_call_test() ->
     CallerPid = spawn(fun() ->
-        receive {relay_reply, _, _} -> ok after 1000 -> ok end
+        receive
+            {relay_reply, _, _} -> ok;
+            {relay_reply, _, _, _} -> ok
+        after 1000 -> ok end
     end),
     CallId = <<"reply-test-call">>,
     State = make_state(#{pending_calls => #{CallId => CallerPid}}),
@@ -275,7 +278,8 @@ handle_message_publish_does_not_send_to_self_test() ->
         State),
     %% Drain mailbox — should NOT have relay_publish.
     receive
-        {relay_publish, Topic, _} -> ?assert(false)
+        {relay_publish, Topic, _} -> ?assert(false);
+        {relay_publish, Topic, _, _} -> ?assert(false)
     after 50 ->
         ok
     end,
