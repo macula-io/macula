@@ -304,7 +304,7 @@ handle_message({ok, {publish, #{<<"topic">> := <<"_swim.", _/binary>> = Topic,
     end,
     case SwimType of
         unknown -> ok;
-        _ -> handle_swim_msg(SwimType, Payload)
+        _ -> handle_swim_msg(SwimType, Payload, State)
     end,
     State;
 
@@ -588,19 +588,45 @@ publish_system_event(Topic, Payload) ->
         Pid ! {relay_publish, Topic, BinPayload}
     end, Members).
 
-handle_swim_msg(ping, Payload) ->
+handle_swim_msg(ping, Payload, State) ->
     From = maps:get(<<"from">>, safe_decode(Payload), <<>>),
     catch macula_relay_swim:receive_ping(From, Payload),
+    %% Send ACK directly back on the same QUIC stream the ping arrived on.
+    %% Previously, SWIM sent ACKs via the outbound peering client, but with
+    %% SO_REUSEPORT the outbound client's publish could land on a different
+    %% handler process on the remote side. Replying on the inbound stream
+    %% guarantees the ACK reaches the originating relay.
+    send_swim_ack_direct(From, State),
     maybe_store_bloom_from_swim(Payload);
-handle_swim_msg(ack, Payload) ->
+handle_swim_msg(ack, Payload, _State) ->
     From = maps:get(<<"from">>, safe_decode(Payload), <<>>),
     catch macula_relay_swim:receive_ack(From, Payload),
     maybe_store_bloom_from_swim(Payload);
-handle_swim_msg(ping_req, Payload) ->
+handle_swim_msg(ping_req, Payload, _State) ->
     Decoded = safe_decode(Payload),
     From = maps:get(<<"from">>, Decoded, <<>>),
     Target = maps:get(<<"target">>, Decoded, <<>>),
     catch macula_relay_swim:receive_ping_req(From, Target, Payload).
+
+%% Send SWIM ACK directly back on the inbound QUIC stream.
+%% This bypasses the outbound peering client, avoiding SO_REUSEPORT
+%% load-balancing issues where ACKs land on random handler processes.
+send_swim_ack_direct(PeerUrl, State) ->
+    SelfUrl = get_relay_self_url(),
+    BloomBin = try gen_server:call(macula_relay_peering, get_local_bloom, 500)
+               catch _:_ -> <<0:(1024*8)>> end,
+    Payload = iolist_to_binary(json:encode(#{
+        <<"from">> => SelfUrl,
+        <<"bloom">> => base64:encode(BloomBin)
+    })),
+    send_to_node(publish, #{
+        <<"topic">> => <<"_swim.ack">>,
+        <<"payload">> => Payload,
+        <<"qos">> => 0,
+        <<"retain">> => false,
+        <<"message_id">> => crypto:strong_rand_bytes(16)
+    }, State),
+    ?LOG_DEBUG("[relay_handler] SWIM ACK sent direct to ~s", [PeerUrl]).
 
 maybe_store_bloom_from_swim(Payload) ->
     Decoded = safe_decode(Payload),
