@@ -29,3 +29,5 @@ nonode@nohost/
 rebar.lock
 .backups/
 dist/
+/native/macula_quic/target/
+/priv/libmacula_quic.so

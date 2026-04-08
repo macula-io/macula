@@ -1208,7 +1208,7 @@ forward_via_stream(StreamPid, RequestMsg, TargetNodeId, TargetNodeIdHex, ReqIdHe
     T_fwd = erlang:system_time(millisecond),
     ?LOG_WARNING("[TIMING ~s] GW_REQ_FWD: T=~p to ~s (~p bytes)",
                  [ReqIdHex, T_fwd, TargetNodeIdHex, byte_size(EncodedMsg)]),
-    case quicer:send(StreamPid, EncodedMsg) of
+    case macula_quic:send(StreamPid, EncodedMsg) of
         {ok, _} ->
             T_sent = erlang:system_time(millisecond),
             ?LOG_WARNING("[TIMING ~s] GW_REQ_SENT: T=~p (send_time=~pms)",
@@ -1303,7 +1303,7 @@ handle_local_rpc_request(ReplyStream, _RequestMsg, RequestId, Procedure, Args, F
               [binary:encode_hex(FromNode)]),
 
     EncodedReply = macula_protocol_encoder:encode(rpc_reply, ReplyMsg),
-    case quicer:send(ReplyStream, EncodedReply) of
+    case macula_quic:send(ReplyStream, EncodedReply) of
         {ok, _} ->
             ?LOG_DEBUG("[Gateway] Successfully sent RPC_REPLY to ~s", [binary:encode_hex(FromNode)]);
         {error, SendError} ->
@@ -1332,7 +1332,7 @@ send_reply_via_client_stream(FromNode, ReplyMsg, State) ->
 %% @private Send an RPC reply through a stream
 send_reply_to_stream(StreamPid, ReplyMsg, FromNodeHex) ->
     EncodedReply = macula_protocol_encoder:encode(rpc_reply, ReplyMsg),
-    case quicer:send(StreamPid, EncodedReply) of
+    case macula_quic:send(StreamPid, EncodedReply) of
         {ok, _} ->
             ?LOG_DEBUG("[Gateway] Sent RPC_REPLY to ~s via client stream", [FromNodeHex]);
         {error, Reason} ->
@@ -1402,7 +1402,7 @@ forward_rpc_reply_via_stream(StreamPid, ReplyMsg, ToNode, ToNodeHex, ReqIdHex, C
     EncodedReply = macula_protocol_encoder:encode(rpc_reply, ReplyMsg),
     ?LOG_WARNING("[TIMING ~s] GW_REPLY_FWD: T=~p to ~s (~p bytes)",
                  [ReqIdHex, T_fwd, ToNodeHex, byte_size(EncodedReply)]),
-    case quicer:send(StreamPid, EncodedReply) of
+    case macula_quic:send(StreamPid, EncodedReply) of
         {ok, BytesSent} ->
             T_sent = erlang:system_time(millisecond),
             ?LOG_WARNING("[TIMING ~s] GW_REPLY_SENT: T=~p (send_time=~pms, bytes=~p)",

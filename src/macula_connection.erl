@@ -229,7 +229,7 @@ handle_info(connect, State) ->
 handle_info({connect_result, {ok, Conn, Stream}}, State) ->
     %% Ownership was already transferred by the spawned process before it exited.
     %% Now set active mode so we receive {quic, ...} messages.
-    quicer:setopt(Stream, active, true),
+    macula_quic:setopt(Stream, active, true),
     #{host := Host, port := Port} = State#state.opts,
     case complete_connection_setup(Conn, Stream, Host, Port, State) of
         {ok, State2} ->
@@ -405,8 +405,8 @@ spawn_connect(State) ->
                     %% Transfer ownership to gen_server BEFORE this process exits.
                     %% If we don't, quicer closes the stream/connection when this
                     %% spawned process terminates (it's the controlling process).
-                    ok = quicer:controlling_process(Conn, Self),
-                    ok = quicer:controlling_process(Stream, Self),
+                    ok = macula_quic:controlling_process(Conn, Self),
+                    ok = macula_quic:controlling_process(Stream, Self),
                     {ok, Conn, Stream};
                 Other ->
                     Other

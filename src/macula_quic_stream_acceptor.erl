@@ -48,7 +48,7 @@ init([GatewayPid, Conn]) ->
 
     %% Register for stream events with active mode
     StreamOpts = #{active => true},
-    case quicer:async_accept_stream(Conn, StreamOpts) of
+    case macula_quic:async_accept_stream(Conn, StreamOpts) of
         {ok, Conn} ->
             ?LOG_DEBUG("Registered for streams (active mode)"),
             {ok, #state{
@@ -82,7 +82,7 @@ handle_info({quic, new_stream, Stream, Props}, #state{gateway_pid = GatewayPid, 
 
     %% Register for next stream
     StreamOpts = #{active => true},
-    case quicer:async_accept_stream(Conn, StreamOpts) of
+    case macula_quic:async_accept_stream(Conn, StreamOpts) of
         {ok, Conn} ->
             ?LOG_DEBUG("Re-registered for next stream"),
             {noreply, State};

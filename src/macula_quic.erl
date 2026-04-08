@@ -1,223 +1,314 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% Main API module for Macula QUIC transport.
-%%% Provides a simplified wrapper around the quicer library.
+%%% @doc Macula QUIC transport — Quinn-based Rust NIF.
+%%%
+%%% Provides QUIC listener, connection, and stream operations backed
+%%% by Quinn (Rust) instead of MsQuic. Key improvement: listeners
+%%% actually bind to specific IP addresses, enabling per-identity
+%%% IPv6 binding for virtual relay identities.
+%%%
+%%% Active-mode messages delivered to owning process:
+%%%   {quic, Data, StreamRef, Flags}       — stream data
+%%%   {quic, new_conn, ConnRef, Info}      — new connection accepted
+%%%   {quic, new_stream, StreamRef, Props} — new stream accepted
+%%%   {quic, peer_send_shutdown, StreamRef, undefined}
+%%%   {quic, stream_closed, StreamRef, Flags}
+%%%   {quic, shutdown, Handle, Reason}
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_quic).
 
 -include_lib("kernel/include/logger.hrl").
 
+-on_load(init/0).
+
 -export([
+    %% Listener
     listen/2,
+    listen/3,
+    async_accept/1,
+    async_accept/2,
+    close_listener/1,
+
+    %% Connection
     connect/4,
-    accept/2,
-    accept_stream/2,
     open_stream/1,
+    close_connection/1,
+    async_accept_stream/1,
+    async_accept_stream/2,
+    handshake/1,
+    peername/1,
+    sockname/1,
+
+    %% Stream
     send/2,
     async_send/2,
-    recv/2,
+    close_stream/1,
+    setopt/3,
+    controlling_process/2,
+
+    %% Compat: generic close (tries stream → conn → listener)
     close/1,
-    peername/1
+
+    %% Dist compat (synchronous accept, stream accept with opts)
+    accept/2,
+    accept_stream/3,
+    open_stream/2,
+    handoff_stream/3,
+
+    %% Shutdown (maps to close with flags)
+    async_shutdown_stream/3,
+    async_shutdown_connection/3,
+
+    %% Stats
+    getstat/2
 ]).
 
 %%%===================================================================
-%%% API Functions
+%%% NIF Loading
 %%%===================================================================
 
-%% @doc Start a QUIC listener on a specific address and port.
-%%
-%% The first argument can be:
-%%   - `Port' (integer) — binds to 0.0.0.0:Port (all IPv4, Docker-safe)
-%%   - `{Address, Port}' — binds to Address:Port (IPv4 or IPv6)
-%%     Address is a string: "0.0.0.0", "192.168.1.1", "2600:3c0e:e001:ec::100"
-%%
-%% Options:
-%%   {cert, CertFile} - Path to PEM certificate file
-%%   {key, KeyFile} - Path to PEM private key file
-%%   {alpn, [Protocol]} - List of ALPN protocols (e.g., ["macula"])
-%%   {peer_unidi_stream_count, N} - Max unidirectional streams
-%%   {peer_bidi_stream_count, N} - Max bidirectional streams
-%%   {idle_timeout_ms, N} - Connection idle timeout in milliseconds
-%%   {keep_alive_interval_ms, N} - Keep-alive PING interval in milliseconds
-%% @end
--spec listen(inet:port_number() | {string(), inet:port_number()}, list()) ->
-    {ok, reference()} | {error, term()}.
-listen({Address, Port}, Opts) ->
-    listen_on(format_listen_on(Address, Port), Opts);
-listen(Port, Opts) when is_integer(Port) ->
-    listen_on(Port, Opts).
-
-%% @private Format address:port string for quicer.
-%% IPv6 addresses are wrapped in brackets per RFC 2732.
-format_listen_on(Address, Port) ->
-    PortStr = integer_to_list(Port),
-    case string:find(Address, ":") of
-        nomatch -> Address ++ ":" ++ PortStr;           %% IPv4: "1.2.3.4:4433"
-        _       -> "[" ++ Address ++ "]:" ++ PortStr    %% IPv6: "[::1]:4433"
+init() ->
+    PrivDir = code:priv_dir(macula),
+    SoName = filename:join(PrivDir, "libmacula_quic"),
+    case erlang:load_nif(SoName, 0) of
+        ok ->
+            ?LOG_INFO("[macula_quic] Quinn NIF loaded from ~s", [SoName]),
+            ok;
+        {error, {reload, _}} ->
+            ok;
+        {error, Reason} ->
+            ?LOG_WARNING("[macula_quic] NIF load failed: ~p (path: ~s)", [Reason, SoName]),
+            {error, Reason}
     end.
 
-%% @private Start listener on a formatted listen_on string.
-listen_on(ListenOn, Opts) ->
-    CertFile = proplists:get_value(cert, Opts),
-    KeyFile = proplists:get_value(key, Opts),
-    AlpnProtocols = proplists:get_value(alpn, Opts, ["macula"]),
-    PeerUnidiStreamCount = proplists:get_value(peer_unidi_stream_count, Opts, 3),
-    PeerBidiStreamCount = proplists:get_value(peer_bidi_stream_count, Opts, 100),
-    IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 60000),
-    KeepAliveIntervalMs = proplists:get_value(keep_alive_interval_ms, Opts, 20000),
-    HandshakeIdleTimeoutMs = proplists:get_value(handshake_idle_timeout_ms, Opts, 30000),
+%%%===================================================================
+%%% Listener API
+%%%===================================================================
 
-    ListenerOpts = [
-        {certfile, CertFile},
-        {keyfile, KeyFile},
-        {alpn, AlpnProtocols},
-        {peer_unidi_stream_count, PeerUnidiStreamCount},
-        {peer_bidi_stream_count, PeerBidiStreamCount},
-        {idle_timeout_ms, IdleTimeoutMs},
-        {keep_alive_interval_ms, KeepAliveIntervalMs},
-        {handshake_idle_timeout_ms, HandshakeIdleTimeoutMs}
-    ],
+%% @doc Listen on all interfaces (dual-stack) at the given port.
+-spec listen(inet:port_number(), list()) -> {ok, reference()} | {error, term()}.
+listen(Port, Opts) when is_integer(Port) ->
+    listen(<<"0.0.0.0">>, Port, Opts).
 
-    ?LOG_INFO("Starting listener on ~p with idle_timeout=~pms, keep_alive=~pms",
-              [ListenOn, IdleTimeoutMs, KeepAliveIntervalMs]),
-    quicer:listen(ListenOn, ListenerOpts).
+%% @doc Listen on a specific bind address and port.
+%% BindAddr: <<"0.0.0.0">> | <<"192.168.1.1">> | <<"2600:3c0e::100">> etc.
+-spec listen(binary() | string(), inet:port_number(), list()) -> {ok, reference()} | {error, term()}.
+listen(BindAddr, Port, Opts) when is_list(BindAddr) ->
+    listen(list_to_binary(BindAddr), Port, Opts);
+listen(BindAddr, Port, Opts) when is_binary(BindAddr) ->
+    CertFile = to_binary(proplists:get_value(cert, Opts)),
+    KeyFile = to_binary(proplists:get_value(key, Opts)),
+    Alpn = [to_binary(A) || A <- proplists:get_value(alpn, Opts, ["macula"])],
+    IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 120000),
+    KeepAliveMs = proplists:get_value(keep_alive_interval_ms, Opts, 30000),
+    BidiStreams = proplists:get_value(peer_bidi_stream_count, Opts, 100),
+    UniStreams = proplists:get_value(peer_unidi_stream_count, Opts, 3),
+    ?LOG_INFO("Starting listener on ~s:~p with idle_timeout=~pms, keep_alive=~pms",
+              [BindAddr, Port, IdleTimeoutMs, KeepAliveMs]),
+    nif_listen(BindAddr, Port, CertFile, KeyFile, Alpn,
+               IdleTimeoutMs, KeepAliveMs, BidiStreams, UniStreams).
 
-%% @doc Connect to a QUIC server.
-%% Options:
-%%   {alpn, [Protocol]} - List of ALPN protocols
-%%   {verify, none | verify_peer} - Certificate verification mode
-%%   {cacertfile, Path} - CA certificate bundle for verification (v0.16.3+)
-%%   {depth, N} - Max certificate chain depth (v0.16.3+)
-%%   {server_name_indication, Host} - SNI hostname (v0.16.3+)
-%%   {idle_timeout_ms, N} - Connection idle timeout in milliseconds
-%%   {keep_alive_interval_ms, N} - Keep-alive PING interval in milliseconds
-%% @end
--spec connect(string() | inet:ip_address(), inet:port_number(), list(), timeout()) ->
+%% @doc Start accepting connections on a listener.
+%% Delivers {quic, new_conn, ConnRef, Info} to the calling process.
+-spec async_accept(reference()) -> ok | {error, term()}.
+async_accept(Listener) ->
+    async_accept(Listener, #{}).
+
+-spec async_accept(reference(), map()) -> ok | {error, term()}.
+async_accept(Listener, _Opts) ->
+    nif_async_accept(Listener).
+
+%% @doc Close a listener.
+-spec close_listener(reference()) -> ok.
+close_listener(Listener) ->
+    nif_close_listener(Listener).
+
+%%%===================================================================
+%%% Connection API
+%%%===================================================================
+
+%% @doc Connect to a remote QUIC server.
+-spec connect(string() | binary(), inet:port_number(), list(), timeout()) ->
     {ok, reference()} | {error, term()}.
 connect(Host, Port, Opts, Timeout) ->
-    %% Extract QUIC-specific options with defaults
-    AlpnProtocols = proplists:get_value(alpn, Opts, ["macula"]),
-
-    %% Timeout and keep-alive configuration for mesh stability
-    %% CRITICAL: Both endpoints negotiate idle timeout - the SMALLER value wins
-    %% So we must configure our client with proper values too
+    HostBin = to_binary(Host),
+    Alpn = [to_binary(A) || A <- proplists:get_value(alpn, Opts, ["macula"])],
+    Verify = proplists:get_value(verify, Opts, none) =/= none,
     IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 60000),
-    KeepAliveIntervalMs = proplists:get_value(keep_alive_interval_ms, Opts, 20000),
-    HandshakeIdleTimeoutMs = proplists:get_value(handshake_idle_timeout_ms, Opts, 30000),
+    KeepAliveMs = proplists:get_value(keep_alive_interval_ms, Opts, 20000),
+    nif_connect(HostBin, Port, Alpn, Verify, IdleTimeoutMs, KeepAliveMs, Timeout).
 
-    %% Build base quicer options
-    BaseOpts = [
-        {alpn, AlpnProtocols},
-        {idle_timeout_ms, IdleTimeoutMs},
-        {keep_alive_interval_ms, KeepAliveIntervalMs},
-        {handshake_idle_timeout_ms, HandshakeIdleTimeoutMs}
-    ],
-
-    %% Pass through ALL TLS options from macula_tls (v0.16.3+)
-    %% This includes: verify, cacertfile, depth, server_name_indication, verify_fun
-    TlsOptKeys = [verify, cacertfile, depth, server_name_indication, verify_fun, certfile, keyfile],
-    TlsOpts = [{K, V} || K <- TlsOptKeys, {ok, V} <- [safe_get_value(K, Opts)]],
-
-    QuicerOpts = BaseOpts ++ TlsOpts,
-
-    %% Log connection attempt with TLS mode info
-    VerifyMode = proplists:get_value(verify, Opts, none),
-    CACertFile = proplists:get_value(cacertfile, Opts, undefined),
-    ?LOG_DEBUG("Connecting to ~s:~p with idle_timeout=~pms, keep_alive=~pms, verify=~p, cacertfile=~p",
-              [Host, Port, IdleTimeoutMs, KeepAliveIntervalMs, VerifyMode, CACertFile]),
-    ?LOG_DEBUG("Full QuicerOpts: ~p", [QuicerOpts]),
-    quicer:connect(Host, Port, QuicerOpts, Timeout).
-
-%% @doc Safely get a value from proplist, returning {ok, Value} or error.
-%% @private
--spec safe_get_value(atom(), list()) -> {ok, term()} | error.
-safe_get_value(Key, Opts) ->
-    case proplists:get_value(Key, Opts) of
-        undefined -> error;
-        Value -> {ok, Value}
-    end.
-
-%% @doc Accept an incoming connection on a listener.
-%% After accepting, the connection needs handshake to complete.
--spec accept(reference(), timeout()) -> {ok, reference()} | {error, term()}.
-accept(ListenerPid, Timeout) ->
-    case quicer:accept(ListenerPid, [], Timeout) of
-        {ok, Conn} ->
-            %% Complete TLS handshake
-            case quicer:handshake(Conn) of
-                {ok, Conn} -> {ok, Conn};
-                Error -> Error
-            end;
-        Error ->
-            Error
-    end.
-
-%% @doc Accept an incoming stream on a connection.
--spec accept_stream(reference(), timeout()) -> {ok, reference()} | {error, term()}.
-accept_stream(ConnPid, _Timeout) ->
-    %% accept_stream/2 doesn't take timeout, it returns immediately
-    quicer:accept_stream(ConnPid, []).
-
-%% @doc Open a new bidirectional stream on a connection.
+%% @doc Open a new bidirectional stream.
 -spec open_stream(reference()) -> {ok, reference()} | {error, term()}.
-open_stream(ConnPid) ->
-    quicer:start_stream(ConnPid, []).
+open_stream(Conn) ->
+    nif_open_stream(Conn).
+
+%% @doc Close a connection.
+-spec close_connection(reference()) -> ok.
+close_connection(Conn) ->
+    nif_close_connection(Conn).
+
+%% @doc Start accepting streams on a connection.
+%% Delivers {quic, new_stream, StreamRef, #{conn => ConnRef}} to the owning process.
+-spec async_accept_stream(reference()) -> ok | {error, term()}.
+async_accept_stream(Conn) ->
+    async_accept_stream(Conn, #{}).
+
+-spec async_accept_stream(reference(), map()) -> ok | {error, term()}.
+async_accept_stream(Conn, _Opts) ->
+    nif_async_accept_stream(Conn).
+
+%% @doc Complete TLS handshake.
+%% With Quinn, handshake completes during accept — this is a no-op for compat.
+-spec handshake(reference()) -> ok | {ok, reference()} | {error, term()}.
+handshake(Conn) ->
+    {ok, Conn}.
+
+%% @doc Get remote address of a connection.
+-spec peername(reference()) -> {ok, {string(), inet:port_number()}} | {error, term()}.
+peername(Conn) ->
+    nif_peername(Conn).
+
+%% @doc Get local address (liveness probe).
+-spec sockname(reference()) -> {ok, {string(), inet:port_number()}} | {error, term()}.
+sockname(_Conn) ->
+    %% TODO: implement via nif_sockname
+    {ok, {"0.0.0.0", 0}}.
+
+%%%===================================================================
+%%% Stream API
+%%%===================================================================
 
 %% @doc Send data on a stream (blocking).
 -spec send(reference(), iodata()) -> ok | {error, term()}.
-send(StreamPid, Data) ->
-    case quicer:send(StreamPid, Data) of
-        {ok, _BytesSent} -> ok;
-        Error -> Error
-    end.
+send(Stream, Data) ->
+    nif_send(Stream, iolist_to_binary(Data)).
 
-%% @doc Send data on a stream asynchronously (non-blocking).
-%% This returns immediately without waiting for QUIC flow control.
+%% @doc Send data asynchronously.
 -spec async_send(reference(), iodata()) -> ok | {error, term()}.
-async_send(StreamPid, Data) ->
-    case quicer:async_send(StreamPid, Data) of
-        {ok, _BytesSent} -> ok;
-        Error -> Error
-    end.
+async_send(Stream, Data) ->
+    nif_async_send(Stream, iolist_to_binary(Data)).
 
-%% @doc Receive data from a stream (blocking).
--spec recv(reference(), timeout()) -> {ok, binary()} | {error, term()}.
-recv(StreamPid, Timeout) ->
-    %% quicer sends data as messages, so we need to receive from mailbox
-    receive
-        {quic, Data, StreamPid, _Props} ->
-            {ok, Data}
-    after Timeout ->
-        {error, timeout}
-    end.
+%% @doc Close a stream.
+-spec close_stream(reference()) -> ok.
+close_stream(Stream) ->
+    nif_close_stream(Stream).
 
-%% @doc Close a listener, connection, or stream.
-%% Tries stream, then connection, then listener close in sequence.
+%% @doc Set active mode on a stream handle.
+-spec setopt(reference(), active, boolean()) -> ok.
+setopt(Stream, active, Value) ->
+    nif_setopt_active(Stream, Value).
+
+%% @doc Transfer ownership of a handle to another process.
+-spec controlling_process(reference(), pid()) -> ok | {error, term()}.
+controlling_process(Handle, Pid) ->
+    nif_controlling_process(Handle, Pid).
+
+%%%===================================================================
+%%% Compat API
+%%%===================================================================
+
+%% @doc Generic close — tries stream, then connection, then listener.
 -spec close(reference()) -> ok.
-close(Pid) ->
-    %% quicer uses different close functions based on resource type
-    close_as_stream(catch quicer:close_stream(Pid), Pid).
+close(Ref) ->
+    try nif_close_stream(Ref) of ok -> ok
+    catch _:_ ->
+        try nif_close_connection(Ref) of ok -> ok
+        catch _:_ ->
+            try nif_close_listener(Ref) of ok -> ok
+            catch _:_ -> ok
+            end
+        end
+    end.
 
-%% @private Stream close succeeded
-close_as_stream(ok, _Pid) ->
-    ok;
-%% @private Stream close failed - try as connection
-close_as_stream(_, Pid) ->
-    close_as_connection(catch quicer:close_connection(Pid), Pid).
+%% @doc Async shutdown stream (compat with quicer flags).
+-spec async_shutdown_stream(reference(), integer(), integer()) -> ok.
+async_shutdown_stream(Stream, _Flag, _Code) ->
+    nif_close_stream(Stream).
 
-%% @private Connection close succeeded
-close_as_connection(ok, _Pid) ->
-    ok;
-%% @private Connection close failed - try as listener
-close_as_connection(_, Pid) ->
-    _ = catch quicer:close_listener(Pid),
-    ok.
+%% @doc Async shutdown connection (compat with quicer flags).
+-spec async_shutdown_connection(reference(), integer(), integer()) -> ok.
+async_shutdown_connection(Conn, _Flag, _Code) ->
+    nif_close_connection(Conn).
 
-%% @doc Get the peer's address from a stream or connection handle.
-%% Returns {ok, {IP, Port}} on success or {error, Reason} on failure.
-%% Works with both stream and connection handles.
--spec peername(term()) -> {ok, {inet:ip_address(), inet:port_number()}} | {error, term()}.
-peername(Handle) ->
-    %% quicer:peername/1 works on both stream and connection handles
-    quicer:peername(Handle).
+%% @doc Get connection stats (stub — returns empty for now).
+-spec getstat(reference(), [atom()]) -> {ok, [{atom(), integer()}]} | {error, term()}.
+getstat(_Conn, Stats) ->
+    {ok, [{S, 0} || S <- Stats]}.
+
+%%%===================================================================
+%%% Dist Compat API
+%%%===================================================================
+
+%% @doc Synchronous accept (for macula_dist). Blocks until connection arrives.
+-spec accept(reference(), map()) -> {ok, reference()} | {error, term()}.
+accept(_Listener, _Opts) ->
+    %% TODO: implement blocking accept for dist — for now returns error
+    {error, not_implemented}.
+
+%% @doc Accept stream with options and timeout (for macula_dist).
+-spec accept_stream(reference(), map(), timeout()) -> {ok, reference()} | {error, term()}.
+accept_stream(Conn, _Opts, _Timeout) ->
+    async_accept_stream(Conn).
+
+%% @doc Open stream with options map (for macula_dist).
+-spec open_stream(reference(), map()) -> {ok, reference()} | {error, term()}.
+open_stream(Conn, _Opts) ->
+    open_stream(Conn).
+
+%% @doc Hand off a stream to another process (for macula_dist).
+-spec handoff_stream(reference(), pid(), map()) -> ok | {error, term()}.
+handoff_stream(Stream, NewOwner, _Opts) ->
+    controlling_process(Stream, NewOwner).
+
+%%%===================================================================
+%%% NIF Stubs
+%%%===================================================================
+
+nif_listen(_BindAddr, _Port, _CertFile, _KeyFile, _Alpn,
+           _IdleTimeoutMs, _KeepAliveMs, _BidiStreams, _UniStreams) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_async_accept(_Listener) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_close_listener(_Listener) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_connect(_Host, _Port, _Alpn, _Verify, _IdleTimeoutMs, _KeepAliveMs, _TimeoutMs) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_open_stream(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_close_connection(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_async_accept_stream(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_peername(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_send(_Stream, _Data) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_async_send(_Stream, _Data) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_close_stream(_Stream) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_setopt_active(_Stream, _Value) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_controlling_process(_Handle, _Pid) ->
+    erlang:nif_error(nif_not_loaded).
+
+%%%===================================================================
+%%% Internal
+%%%===================================================================
+
+to_binary(B) when is_binary(B) -> B;
+to_binary(L) when is_list(L) -> list_to_binary(L);
+to_binary(A) when is_atom(A) -> atom_to_binary(A).

@@ -12,7 +12,6 @@
 
 -behaviour(gen_server).
 
--include_lib("quicer/include/quicer.hrl").
 -include_lib("kernel/include/logger.hrl").
 
 %% API
@@ -181,7 +180,7 @@ handle_cast({return_connection, Endpoint, Connection}, State) ->
 handle_cast({invalidate, Endpoint}, State) ->
     case ets:lookup(?TABLE, Endpoint) of
         [#pooled_conn{connection = Conn}] ->
-            catch quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+            catch macula_quic:async_shutdown_connection(Conn, 0, 0),
             ets:delete(?TABLE, Endpoint);
         [] -> ok
     end,
@@ -199,7 +198,7 @@ handle_info(cleanup_idle_connections, State) ->
         [{{'$1', '$3'}}]
     }]),
     lists:foreach(fun({Endpoint, Conn}) ->
-        catch quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+        catch macula_quic:async_shutdown_connection(Conn, 0, 0),
         ets:delete(?TABLE, Endpoint)
     end, Expired),
     erlang:send_after(?CLEANUP_INTERVAL_MS, self(), cleanup_idle_connections),
@@ -210,7 +209,7 @@ handle_info(_Info, State) ->
 
 terminate(_Reason, _State) ->
     lists:foreach(fun(#pooled_conn{connection = Conn}) ->
-        catch quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0)
+        catch macula_quic:async_shutdown_connection(Conn, 0, 0)
     end, ets:tab2list(?TABLE)),
     ok.
 
@@ -262,7 +261,7 @@ strip_protocol("http://" ++ Rest) -> Rest;
 strip_protocol(Endpoint) -> Endpoint.
 
 is_connection_alive(Conn) ->
-    case quicer:getstat(Conn, [recv_cnt]) of
+    case macula_quic:getstat(Conn, [recv_cnt]) of
         {ok, _} -> true;
         _ -> false
     end.
@@ -288,7 +287,7 @@ evict_oldest() ->
                 {Endpoint, _} ->
                     case ets:lookup(?TABLE, Endpoint) of
                         [#pooled_conn{connection = Conn}] ->
-                            catch quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
+                            catch macula_quic:async_shutdown_connection(Conn, 0, 0);
                         _ -> ok
                     end,
                     ets:delete(?TABLE, Endpoint)

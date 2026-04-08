@@ -80,7 +80,7 @@ handle_cast(_Msg, State) ->
 %%====================================================================
 
 handle_info(ownership_transferred, #state{stream = Stream} = State) ->
-    quicer:setopt(Stream, active, true),
+    macula_quic:setopt(Stream, active, true),
     ?LOG_INFO("[relay_handler] Ownership received, stream active"),
     {noreply, State};
 
@@ -92,7 +92,7 @@ handle_info({quic, Data, Stream, _Flags}, #state{stream = Stream} = State)
 
 %% New stream from this connection (e.g., for additional data)
 handle_info({quic, Data, NewStream, _Flags}, State) when is_binary(Data) ->
-    quicer:setopt(NewStream, active, true),
+    macula_quic:setopt(NewStream, active, true),
     Buffer = <<(State#state.recv_buffer)/binary, Data/binary>>,
     {NewBuffer, State2} = process_buffer(Buffer, State),
     {noreply, State2#state{recv_buffer = NewBuffer, stream = NewStream}};

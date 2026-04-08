@@ -227,7 +227,7 @@ handle_info(connect, State) ->
         {ok, Conn} ->
             case macula_quic:open_stream(Conn) of
                 {ok, Stream} ->
-                    quicer:setopt(Stream, active, true),
+                    macula_quic:setopt(Stream, active, true),
                     ?LOG_INFO("[relay_client] Connected to ~s", [State#state.url]),
                     State2 = State#state{conn = Conn, stream = Stream, status = connected,
                                          recv_buffer = <<>>, reconnect_attempt = 0},

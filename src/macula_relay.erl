@@ -105,7 +105,7 @@ handle_info({quic, new_stream, Stream, StreamProps}, State) ->
     ?LOG_INFO("[relay] New stream: ~p", [StreamProps]),
     %% Ensure stream is passive until handler takes over — prevents
     %% data arriving on the relay process before ownership transfer.
-    catch quicer:setopt(Stream, active, false),
+    catch macula_quic:setopt(Stream, active, false),
     Conn = case StreamProps of
         #{conn := C} -> C;
         _ -> get(pending_conn)
@@ -116,12 +116,12 @@ handle_info({quic, new_stream, Stream, StreamProps}, State) ->
             {noreply, State};
         _ ->
             {ok, Pid} = macula_relay_handler:start_link(Conn, Stream),
-            case quicer:controlling_process(Stream, Pid) of
+            case macula_quic:controlling_process(Stream, Pid) of
                 ok ->
                     %% Connection ownership may fail if another handler already owns it
                     %% (race with concurrent streams on same connection). That's OK —
                     %% the handler still works with stream ownership.
-                    _ = quicer:controlling_process(Conn, Pid),
+                    _ = macula_quic:controlling_process(Conn, Pid),
                     Pid ! ownership_transferred,
                     ?LOG_INFO("[relay] Handler ~p started, ownership transferred", [Pid]),
                     SH = maps:put(Stream, Pid, State#state.stream_handlers),
@@ -170,7 +170,7 @@ terminate(_Reason, #state{listener = Listener}) ->
 
 %% Register for async accept — quicer will send {quic, new_conn, ...}
 register_accept(Listener) ->
-    case quicer:async_accept(Listener, #{}) of
+    case macula_quic:async_accept(Listener, #{}) of
         {ok, _} ->
             ?LOG_INFO("[relay] Ready for connections"),
             ok;
@@ -181,20 +181,20 @@ register_accept(Listener) ->
 
 %% Complete TLS handshake, then register for async stream accept
 complete_handshake(Conn) ->
-    case quicer:handshake(Conn) of
+    case macula_quic:handshake(Conn) of
         ok ->
             accept_streams(Conn);
         {ok, _} ->
             accept_streams(Conn);
         {error, Reason} ->
             ?LOG_ERROR("[relay] Handshake failed: ~p", [Reason]),
-            catch quicer:close_connection(Conn)
+            catch macula_quic:close_connection(Conn)
     end.
 
 accept_streams(Conn) ->
     ?LOG_INFO("[relay] Handshake complete, accepting streams"),
     put(pending_conn, Conn),
-    case quicer:async_accept_stream(Conn, #{}) of
+    case macula_quic:async_accept_stream(Conn, #{}) of
         {ok, _} ->
             ok;
         {error, Reason} ->

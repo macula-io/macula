@@ -59,7 +59,6 @@
 -module(macula_peer_connector).
 
 -include_lib("kernel/include/logger.hrl").
--include_lib("quicer/include/quicer.hrl").
 
 %% API
 -export([
@@ -123,15 +122,15 @@ send_and_wait_stream(Conn, MessageBinary, Timeout) ->
     case macula_quic:open_stream(Conn) of
         {ok, Stream} ->
             %% Set stream to active mode to receive reply
-            case quicer:setopt(Stream, active, true) of
+            case macula_quic:setopt(Stream, active, true) of
                 ok ->
                     send_and_wait_reply(Conn, Stream, MessageBinary, Timeout);
                 {error, Reason} ->
-                    quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+                    macula_quic:async_shutdown_connection(Conn, 0, 0),
                     {error, {setopt_failed, Reason}}
             end;
         {error, Reason} ->
-            quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+            macula_quic:async_shutdown_connection(Conn, 0, 0),
             {error, {stream_failed, Reason}}
     end.
 
@@ -142,8 +141,8 @@ send_and_wait_reply(Conn, Stream, MessageBinary, Timeout) ->
             %% Wait for reply with loop to ignore control messages
             wait_for_data_reply(Conn, Stream, Timeout, erlang:monotonic_time(millisecond));
         {error, Reason} ->
-            quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0),
-            quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+            macula_quic:async_shutdown_stream(Stream, 2, 0),
+            macula_quic:async_shutdown_connection(Conn, 0, 0),
             {error, {send_failed, Reason}}
     end.
 
@@ -157,8 +156,8 @@ wait_for_data_reply(Conn, Stream, Timeout, StartTime) ->
             ?LOG_INFO("[PeerConnector] Received reply: ~p bytes", [byte_size(Data)]),
             ReplyResult = macula_protocol_decoder:decode(Data),
             ?LOG_INFO("[PeerConnector] Decoded reply: ~p", [ReplyResult]),
-            quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0),
-            quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+            macula_quic:async_shutdown_stream(Stream, 1, 0),
+            macula_quic:async_shutdown_connection(Conn, 0, 0),
             ReplyResult;
         {quic, Data, OtherStream, _Flags} when is_binary(Data) ->
             %% Data on different stream - ignore and keep waiting for OUR stream
@@ -184,8 +183,8 @@ wait_for_data_reply(Conn, Stream, Timeout, StartTime) ->
             %% Closure of other streams - ignore
             wait_for_data_reply(Conn, Stream, Timeout, StartTime)
     after RemainingTime ->
-        quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0),
-        quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+        macula_quic:async_shutdown_stream(Stream, 2, 0),
+        macula_quic:async_shutdown_connection(Conn, 0, 0),
         {error, timeout}
     end.
 
@@ -245,7 +244,7 @@ send_via_pool(Endpoint, MessageBinary) ->
 do_pool_send_stream({ok, Stream}, _Conn, _Endpoint, MessageBinary) ->
     SendResult = macula_quic:send(Stream, MessageBinary),
     timer:sleep(50),
-    catch quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0),
+    catch macula_quic:async_shutdown_stream(Stream, 1, 0),
     case SendResult of
         ok -> ok;
         {error, Reason} ->
@@ -338,19 +337,19 @@ do_quic_stream({ok, Stream}, Conn, MessageBinary) ->
     do_quic_send(SendResult, Conn, Stream);
 %% @private Stream open failed
 do_quic_stream({error, Reason}, Conn, _MessageBinary) ->
-    quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+    macula_quic:async_shutdown_connection(Conn, 0, 0),
     {error, {stream_failed, Reason}}.
 
 %% @private Send succeeded - graceful shutdown
 do_quic_send(ok, Conn, Stream) ->
     timer:sleep(50),
-    quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0),
-    quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+    macula_quic:async_shutdown_stream(Stream, 1, 0),
+    macula_quic:async_shutdown_connection(Conn, 0, 0),
     ok;
 %% @private Send failed - abort stream
 do_quic_send({error, Reason}, Conn, Stream) ->
-    quicer:async_shutdown_stream(Stream, ?QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0),
-    quicer:async_shutdown_connection(Conn, ?QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0),
+    macula_quic:async_shutdown_stream(Stream, 2, 0),
+    macula_quic:async_shutdown_connection(Conn, 0, 0),
     {error, {send_failed, Reason}}.
 
 %%%===================================================================

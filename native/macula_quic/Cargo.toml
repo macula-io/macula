@@ -1,0 +1,24 @@
+[package]
+name = "macula_quic"
+version = "0.1.0"
+edition = "2021"
+authors = ["Macula <raf.lefever@erlef.org>"]
+description = "Quinn QUIC NIF for the Macula mesh — per-address IPv6 binding"
+
+[lib]
+name = "macula_quic"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.34"
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rustls-pemfile = "2"
+webpki-roots = "0.26"
+tokio = { version = "1", features = ["full"] }
+socket2 = { version = "0.5", features = ["all"] }
+bytes = "1"
+
+[profile.release]
+lto = true
+opt-level = 3

@@ -495,7 +495,7 @@ is_connection_alive(undefined) ->
     false;
 is_connection_alive(Conn) when is_reference(Conn) ->
     %% QUIC connection reference - use sockname as liveness probe
-    check_quic_connection(catch quicer:sockname(Conn));
+    check_quic_connection(catch macula_quic:sockname(Conn));
 is_connection_alive(Conn) when is_pid(Conn) ->
     %% Erlang process - use is_process_alive
     erlang:is_process_alive(Conn);
@@ -534,11 +534,11 @@ async_send_worker(_MeshPid, NodeId, Address, EncodedMessage, _Opts) ->
                         ok ->
                             ?LOG_DEBUG("Message sent to ~p", [binary:encode_hex(NodeId)]),
                             timer:sleep(50),
-                            catch quicer:async_shutdown_stream(Stream, 0, 0),
+                            catch macula_quic:async_shutdown_stream(Stream, 0, 0),
                             ok;
                         {error, SendErr} ->
                             ?LOG_WARNING("Send failed: ~p", [SendErr]),
-                            catch quicer:async_shutdown_stream(Stream, 0, 0),
+                            catch macula_quic:async_shutdown_stream(Stream, 0, 0),
                             {error, {send_failed, SendErr}}
                     end;
                 {error, StreamErr} ->

@@ -127,7 +127,7 @@ init(Opts) ->
                        [Port, MaxPerIp, IpWindowMs, MaxGlobalPerSec]),
 
             %% Start async accept to receive connections
-            case quicer:async_accept(Listener, #{}) of
+            case macula_quic:async_accept(Listener, #{}) of
                 {ok, Listener} ->
                     ?LOG_INFO("Async accept registered", []),
                     ok;
@@ -205,11 +205,11 @@ handle_info({quic, new_stream, Stream, StreamProps}, State) ->
     %% Accept more streams on this connection
     case Conn of
         undefined -> ok;
-        _ -> quicer:async_accept_stream(Conn, #{})
+        _ -> macula_quic:async_accept_stream(Conn, #{})
     end,
 
     %% Set stream to active mode to receive data automatically
-    case quicer:setopt(Stream, active, true) of
+    case macula_quic:setopt(Stream, active, true) of
         ok ->
             ?LOG_DEBUG("[Gateway QUIC] Stream set to active mode"),
             {noreply, State};
@@ -229,7 +229,7 @@ handle_info({quic, Data, Stream, Flags}, State) when is_binary(Data) ->
     PeerAddr = case get({stream_peer_addr, Stream}) of
         undefined ->
             %% Fallback: try quicer:peername (may fail for streams)
-            quicer:peername(Stream);
+            macula_quic:peername(Stream);
         StoredAddr ->
             {ok, StoredAddr}
     end,
@@ -243,7 +243,7 @@ handle_info({quic, Data, Stream, Flags}, State) when is_binary(Data) ->
 %% @doc Handle QUIC event: new_conn (connection established).
 %% Rate limits by source IP and global connection rate before completing handshake.
 handle_info({quic, new_conn, Conn, ConnInfo}, State) ->
-    PeerAddrResult = quicer:peername(Conn),
+    PeerAddrResult = macula_quic:peername(Conn),
     ?LOG_DEBUG("[Gateway QUIC] New connection: ~p, info=~p, peer=~p",
               [Conn, ConnInfo, PeerAddrResult]),
 
@@ -266,7 +266,7 @@ handle_info({quic, new_conn, Conn, ConnInfo}, State) ->
         rejected ->
             record_recent_connection(IP, Now, rejected),
             maybe_log_rate_limited(IP),
-            catch quicer:close_connection(Conn)
+            catch macula_quic:close_connection(Conn)
     end,
 
     %% MUST always re-register for next connection
@@ -344,7 +344,7 @@ get_node_id(Realm, Port) when is_binary(Realm), is_integer(Port) ->
 %% @doc Complete TLS handshake on QUIC connection.
 -spec complete_handshake(quicer:connection_handle()) -> ok.
 complete_handshake(Conn) ->
-    case quicer:handshake(Conn) of
+    case macula_quic:handshake(Conn) of
         ok ->
             accept_streams(Conn);
         {ok, _} ->
@@ -359,7 +359,7 @@ complete_handshake(Conn) ->
 -spec accept_streams(quicer:connection_handle()) -> ok.
 accept_streams(Conn) ->
     ?LOG_INFO("Connection handshake completed successfully", []),
-    case quicer:async_accept_stream(Conn, #{}) of
+    case macula_quic:async_accept_stream(Conn, #{}) of
         {ok, Conn} ->
             %% Track which connection we're accepting streams for
             %% We'll need this to look up peer address when streams arrive
@@ -374,7 +374,7 @@ accept_streams(Conn) ->
 %% @doc Register listener for next incoming connection.
 -spec register_next_connection(quicer:listener_handle()) -> ok.
 register_next_connection(Listener) ->
-    case quicer:async_accept(Listener, #{}) of
+    case macula_quic:async_accept(Listener, #{}) of
         {ok, _} ->
             ?LOG_INFO("Ready for next connection", []),
             ok;

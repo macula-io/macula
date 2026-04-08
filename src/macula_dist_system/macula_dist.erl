@@ -130,10 +130,10 @@ close({S, S}) when is_port(S) ->
     catch gen_tcp:close(S),
     ok;
 close({QuicConn, _Stream}) ->
-    catch quicer:close_connection(QuicConn),
+    catch macula_quic:close_connection(QuicConn),
     ok;
 close(QuicConn) when is_reference(QuicConn) ->
-    catch quicer:close_connection(QuicConn),
+    catch macula_quic:close_connection(QuicConn),
     ok;
 close(_) ->
     ok.
@@ -200,7 +200,7 @@ start_quic_listener(Port) ->
         {peer_bidi_stream_count, 100},
         {peer_unidi_stream_count, 100}
     ],
-    case quicer:listen(Port, ListenerOpts) of
+    case macula_quic:listen(Port, ListenerOpts) of
         {ok, Listener} ->
             ?LOG_INFO("[dist] Listening on UDP port ~p", [Port]),
             {ok, Listener};
@@ -214,7 +214,7 @@ start_quic_listener(Port) ->
 
 %% @private Acceptor loop — recursively accepts QUIC connections.
 acceptor_loop(Kernel, Listener) ->
-    case quicer:accept(Listener, #{active => false}) of
+    case macula_quic:accept(Listener, #{active => false}) of
         {ok, Conn} ->
             handle_accepted_connection(Kernel, Conn);
         {error, closed} ->
@@ -225,12 +225,12 @@ acceptor_loop(Kernel, Listener) ->
     acceptor_loop(Kernel, Listener).
 
 handle_accepted_connection(Kernel, Conn) ->
-    case quicer:handshake(Conn) of
+    case macula_quic:handshake(Conn) of
         {ok, Conn} ->
             handle_quic_handshake(Kernel, Conn);
         {error, Reason} ->
             ?LOG_WARNING("[dist] QUIC handshake failed: ~p", [Reason]),
-            quicer:close_connection(Conn)
+            macula_quic:close_connection(Conn)
     end.
 
 handle_quic_handshake(Kernel, Conn) ->
@@ -239,7 +239,7 @@ handle_quic_handshake(Kernel, Conn) ->
             notify_kernel_and_transfer(Kernel, Conn, Stream);
         {error, Reason} ->
             ?LOG_WARNING("[dist] Stream accept failed: ~p", [Reason]),
-            quicer:close_connection(Conn)
+            macula_quic:close_connection(Conn)
     end.
 
 notify_kernel_and_transfer(Kernel, Conn, Stream) ->
@@ -255,9 +255,9 @@ notify_kernel_and_transfer(Kernel, Conn, Stream) ->
     end.
 
 transfer_stream_ownership(Conn, Stream, DistCtrl) ->
-    case quicer:handoff_stream(Stream, DistCtrl, #{}) of
+    case macula_quic:handoff_stream(Stream, DistCtrl, #{}) of
         ok ->
-            case quicer:controlling_process(Conn, DistCtrl) of
+            case macula_quic:controlling_process(Conn, DistCtrl) of
                 ok ->
                     DistCtrl ! {self(), controller, ok};
                 {error, Reason} ->
@@ -270,7 +270,7 @@ transfer_stream_ownership(Conn, Stream, DistCtrl) ->
     end.
 
 accept_dist_stream(Conn) ->
-    quicer:accept_stream(Conn, #{active => true}, ?HANDSHAKE_TIMEOUT).
+    macula_quic:accept_stream(Conn, #{active => true}, ?HANDSHAKE_TIMEOUT).
 
 %%%===================================================================
 %%% Internal — Accept Incoming Connection
@@ -343,13 +343,13 @@ connect_quic(Host, Port) ->
         {idle_timeout_ms, 60000}
     ],
     ConnOpts = merge_dist_opts(BaseOpts, TlsOpts),
-    case quicer:connect(Host, Port, ConnOpts, ?CONNECT_TIMEOUT) of
+    case macula_quic:connect(Host, Port, ConnOpts, ?CONNECT_TIMEOUT) of
         {ok, Conn} ->
-            case quicer:start_stream(Conn, #{active => false}) of
+            case macula_quic:open_stream(Conn, #{active => false}) of
                 {ok, Stream} ->
                     {ok, Conn, Stream};
                 {error, Reason} ->
-                    quicer:close_connection(Conn),
+                    macula_quic:close_connection(Conn),
                     {error, {stream_failed, Reason}}
             end;
         {error, Reason} ->
@@ -393,7 +393,7 @@ quic_send(Socket, Data) when is_port(Socket) ->
 quic_send({S, S}, Data) when is_port(S) ->
     gen_tcp:send(S, Data);
 quic_send({_Conn, Stream}, Data) ->
-    case quicer:send(Stream, Data) of
+    case macula_quic:send(Stream, Data) of
         {ok, _} -> ok;
         {error, _} = Err -> Err
     end.
@@ -458,7 +458,7 @@ quic_address(Socket, Node) when is_port(Socket) ->
 quic_address({S, S}, Node) when is_port(S) ->
     make_net_address(inet:peername(S), Node);
 quic_address({Conn, _Stream}, Node) ->
-    make_net_address(quicer:peername(Conn), Node).
+    make_net_address(macula_quic:peername(Conn), Node).
 
 make_net_address({ok, {IP, Port}}, Node) ->
     #net_address{address = {IP, Port}, host = atom_to_list(Node),
@@ -479,7 +479,7 @@ quic_tick(Socket) when is_port(Socket) ->
 quic_tick({S, S}) when is_port(S) ->
     gen_tcp:send(S, <<>>);
 quic_tick({_Conn, Stream}) ->
-    quicer:send(Stream, <<>>).
+    macula_quic:send(Stream, <<>>).
 
 %% --- getstat (dist_util expects {ok, R, W, P} 4-tuple) ---
 
@@ -488,7 +488,7 @@ quic_getstat(Socket) when is_port(Socket) ->
 quic_getstat({S, S}) when is_port(S) ->
     getstat_tcp(S);
 quic_getstat({Conn, _Stream}) ->
-    case quicer:getstat(Conn, [send_cnt, recv_cnt, send_pend]) of
+    case macula_quic:getstat(Conn, [send_cnt, recv_cnt, send_pend]) of
         {ok, Stats} -> split_stat(Stats, 0, 0, 0);
         {error, _} -> {ok, 0, 0, 0}
     end.
@@ -512,7 +512,7 @@ quic_setopts({S, S}, Opts) when is_port(S) ->
     inet:setopts(S, Opts);
 quic_setopts({_Conn, Stream}, Opts) ->
     lists:foreach(
-        fun({active, Mode}) -> quicer:setopt(Stream, active, Mode);
+        fun({active, Mode}) -> macula_quic:setopt(Stream, active, Mode);
            (_) -> ok
         end, Opts),
     ok.

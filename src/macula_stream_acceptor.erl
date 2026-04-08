@@ -22,7 +22,7 @@ start_link(Conn, Gateway) ->
 init(Conn, Gateway) ->
     ?LOG_INFO("Started for connection ~p, gateway ~p", [Conn, Gateway]),
     %% Register interest in incoming streams
-    case quicer:async_accept_stream(Conn, #{}) of
+    case macula_quic:async_accept_stream(Conn, #{}) of
         {ok, Conn} ->
             ?LOG_DEBUG("Async stream acceptance registered"),
             receive_loop(Conn, Gateway);
@@ -40,11 +40,11 @@ receive_loop(Conn, Gateway) ->
             ?LOG_DEBUG("========================================"),
 
             %% Set stream to active mode for automatic data delivery
-            case quicer:setopt(Stream, active, true) of
+            case macula_quic:setopt(Stream, active, true) of
                 ok ->
                     ?LOG_DEBUG("Stream set to active mode"),
                     %% Transfer ownership to gateway
-                    case quicer:controlling_process(Stream, Gateway) of
+                    case macula_quic:controlling_process(Stream, Gateway) of
                         ok ->
                             ?LOG_DEBUG("Stream ownership transferred to gateway"),
                             %% Notify gateway about new stream
@@ -53,12 +53,12 @@ receive_loop(Conn, Gateway) ->
                             receive_loop(Conn, Gateway);
                         {error, TransferErr} ->
                             ?LOG_ERROR("Failed to transfer stream ownership: ~p", [TransferErr]),
-                            quicer:close_stream(Stream),
+                            macula_quic:close_stream(Stream),
                             receive_loop(Conn, Gateway)
                     end;
                 {error, SetOptErr} ->
                     ?LOG_ERROR("Failed to set stream active: ~p", [SetOptErr]),
-                    quicer:close_stream(Stream),
+                    macula_quic:close_stream(Stream),
                     receive_loop(Conn, Gateway)
             end;
 

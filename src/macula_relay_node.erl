@@ -380,11 +380,11 @@ close_session(SessionId, State) ->
 close_session_connections(Session) ->
     case maps:get(initiator_conn, Session, undefined) of
         undefined -> ok;
-        InitConn -> catch quicer:close_connection(InitConn)
+        InitConn -> catch macula_quic:close_connection(InitConn)
     end,
     case maps:get(target_conn, Session, undefined) of
         undefined -> ok;
-        TargetConn -> catch quicer:close_connection(TargetConn)
+        TargetConn -> catch macula_quic:close_connection(TargetConn)
     end,
     ok.
 
