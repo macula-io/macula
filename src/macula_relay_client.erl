@@ -376,6 +376,29 @@ process_buffer(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
             {Buffer, State}
     end.
 
+%% Incoming SWIM messages — sent directly by remote relay handler on the inbound
+%% stream as a PUBLISH. Route to the SWIM gen_server (macula_relay_swim) if running.
+handle_message({ok, {publish, #{<<"topic">> := <<"_swim.", _/binary>> = Topic,
+                                <<"payload">> := Payload}}}, State) ->
+    case erlang:whereis(macula_relay_swim) of
+        undefined -> ok;
+        SwimPid ->
+            Decoded = safe_decode_json(Payload),
+            From = case Decoded of
+                M when is_map(M) -> maps:get(<<"from">>, M, <<>>);
+                _ -> <<>>
+            end,
+            case Topic of
+                <<"_swim.ack">> ->
+                    gen_server:cast(SwimPid, {ack_received, From, Payload});
+                <<"_swim.ping">> ->
+                    gen_server:cast(SwimPid, {ping_received, From, Payload});
+                _ -> ok
+            end,
+            ok
+    end,
+    State;
+
 %% Incoming PUBLISH from relay
 handle_message({ok, {publish, Msg}}, State) ->
     Topic = maps:get(<<"topic">>, Msg, <<>>),
