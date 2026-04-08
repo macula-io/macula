@@ -23,7 +23,7 @@ init(Conn, Gateway) ->
     ?LOG_INFO("Started for connection ~p, gateway ~p", [Conn, Gateway]),
     %% Register interest in incoming streams
     case macula_quic:async_accept_stream(Conn, #{}) of
-        {ok, Conn} ->
+        ok -> ok; {ok, Conn} ->
             ?LOG_DEBUG("Async stream acceptance registered"),
             receive_loop(Conn, Gateway);
         {error, AcceptErr} ->

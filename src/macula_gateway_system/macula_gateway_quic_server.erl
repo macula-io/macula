@@ -128,7 +128,7 @@ init(Opts) ->
 
             %% Start async accept to receive connections
             case macula_quic:async_accept(Listener, #{}) of
-                {ok, Listener} ->
+                ok -> ok; {ok, Listener} ->
                     ?LOG_INFO("Async accept registered", []),
                     ok;
                 {error, AcceptErr} ->
@@ -360,7 +360,7 @@ complete_handshake(Conn) ->
 accept_streams(Conn) ->
     ?LOG_INFO("Connection handshake completed successfully", []),
     case macula_quic:async_accept_stream(Conn, #{}) of
-        {ok, Conn} ->
+        ok -> ok; {ok, Conn} ->
             %% Track which connection we're accepting streams for
             %% We'll need this to look up peer address when streams arrive
             put(pending_stream_conn, Conn),
@@ -375,7 +375,7 @@ accept_streams(Conn) ->
 -spec register_next_connection(quicer:listener_handle()) -> ok.
 register_next_connection(Listener) ->
     case macula_quic:async_accept(Listener, #{}) of
-        {ok, _} ->
+        ok -> ok; {ok, _} ->
             ?LOG_INFO("Ready for next connection", []),
             ok;
         {error, AcceptErr} ->

@@ -171,6 +171,9 @@ terminate(_Reason, #state{listener = Listener}) ->
 %% Register for async accept — quicer will send {quic, new_conn, ...}
 register_accept(Listener) ->
     case macula_quic:async_accept(Listener, #{}) of
+        ok ->
+            ?LOG_INFO("[relay] Ready for connections"),
+            ok;
         {ok, _} ->
             ?LOG_INFO("[relay] Ready for connections"),
             ok;
@@ -195,7 +198,7 @@ accept_streams(Conn) ->
     ?LOG_INFO("[relay] Handshake complete, accepting streams"),
     put(pending_conn, Conn),
     case macula_quic:async_accept_stream(Conn, #{}) of
-        {ok, _} ->
+        ok -> ok; {ok, _} ->
             ok;
         {error, Reason} ->
             ?LOG_WARNING("[relay] async_accept_stream failed: ~p", [Reason]),
