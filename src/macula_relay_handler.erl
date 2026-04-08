@@ -304,6 +304,9 @@ handle_message({ok, {publish, #{<<"topic">> := <<"_swim.", _/binary>> = Topic,
     end,
     case SwimType of
         unknown -> ok;
+        ack ->
+            ?LOG_INFO("[relay_handler] SWIM ACK arrived from peer ~s", [State#state.node_name]),
+            handle_swim_msg(ack, Payload);
         _ -> handle_swim_msg(SwimType, Payload)
     end,
     State;
@@ -324,7 +327,9 @@ handle_message({ok, {publish, #{<<"topic">> := <<"_relay.bloom">>,
     State;
 
 %% Drop internal protocol messages from non-peer connections (nodes)
-handle_message({ok, {publish, #{<<"topic">> := <<"_swim.", _/binary>>}}}, State) -> State;
+handle_message({ok, {publish, #{<<"topic">> := <<"_swim.", _/binary>> = T}}}, State) ->
+    ?LOG_WARNING("[relay_handler] SWIM ~s DROPPED from non-peer ~s", [T, State#state.node_name]),
+    State;
 handle_message({ok, {publish, #{<<"topic">> := <<"_dht.", _/binary>>}}}, State) -> State;
 handle_message({ok, {publish, #{<<"topic">> := <<"_relay.bloom">>}}}, State) -> State;
 
