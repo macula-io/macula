@@ -11,31 +11,32 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            artifact: libmacula_quic-linux-x86_64.so
-          - target: x86_64-unknown-linux-musl
-            artifact: libmacula_quic-linux-musl-x86_64.so
-
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
-      - name: Install musl tools
-        if: contains(matrix.target, 'musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Build NIF
+      - name: Build glibc NIF
         run: |
           cd native/macula_quic
-          cargo build --release --target ${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/libmacula_quic.so ../../${{ matrix.artifact }}
+          cargo build --release
+          cp target/release/libmacula_quic.so ../../libmacula_quic-linux-x86_64.so
+
+      - name: Generate glibc checksum
+        run: sha256sum libmacula_quic-linux-x86_64.so > libmacula_quic-linux-x86_64.so.sha256
+
+      - name: Build musl NIF (Alpine container)
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/work -w /work/native/macula_quic \
+            alpine:3.22 sh -c '
+              apk add --no-cache rust cargo build-base &&
+              cargo build --release &&
+              cp target/release/libmacula_quic.so /work/libmacula_quic-linux-musl-x86_64.so
+            '
+
+      - name: Generate musl checksum
+        run: sha256sum libmacula_quic-linux-musl-x86_64.so > libmacula_quic-linux-musl-x86_64.so.sha256
 
       - name: Generate checksum
         run: sha256sum ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
@@ -45,14 +46,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ matrix.artifact }}
-            ${{ matrix.artifact }}.sha256
+            libmacula_quic-linux-x86_64.so
+            libmacula_quic-linux-x86_64.so.sha256
+            libmacula_quic-linux-musl-x86_64.so
+            libmacula_quic-linux-musl-x86_64.so.sha256
 
       - name: Upload artifact (for workflow_dispatch)
         if: "!startsWith(github.ref, 'refs/tags/')"
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: macula-quic-nifs
           path: |
-            ${{ matrix.artifact }}
-            ${{ matrix.artifact }}.sha256
+            libmacula_quic-*.so
+            libmacula_quic-*.sha256
