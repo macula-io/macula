@@ -132,6 +132,7 @@ fn nif_open_stream<'a>(
             let resource = ResourceArc::new(stream::StreamResource::new(
                 send, recv, conn.clone(), caller,
             ));
+            stream::StreamResource::start_recv_loop(resource.clone());
             Ok((atoms::ok(), resource).encode(env))
         }
         Err(e) => Ok((atoms::error(), e).encode(env)),
@@ -177,6 +178,7 @@ fn nif_async_accept_stream<'a>(
                         conn_arc.clone(),
                         owner,
                     ));
+                    stream::StreamResource::start_recv_loop(stream_resource.clone());
                     message::send_new_stream(&owner, stream_resource, conn_arc.clone(), 0);
                 }
                 Err(_) => break, // Connection closed

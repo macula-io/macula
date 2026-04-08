@@ -10,6 +10,7 @@ use crate::{atoms, connection::ConnectionResource, message, runtime};
 /// Opaque stream handle exposed to Erlang via ResourceArc.
 pub struct StreamResource {
     send: Mutex<Option<quinn::SendStream>>,
+    recv: Mutex<Option<quinn::RecvStream>>,
     recv_task: Mutex<Option<JoinHandle<()>>>,
     pub conn: ResourceArc<ConnectionResource>,
     pub owner: RwLock<LocalPid>,
@@ -25,25 +26,27 @@ impl StreamResource {
         conn: ResourceArc<ConnectionResource>,
         owner: LocalPid,
     ) -> Self {
-        let resource = Self {
+        Self {
             send: Mutex::new(Some(send)),
+            recv: Mutex::new(Some(recv)),
             recv_task: Mutex::new(None),
             conn,
             owner: RwLock::new(owner),
             active: AtomicBool::new(false),
             active_notify: Notify::new(),
             closed: AtomicBool::new(false),
-        };
-        // Note: recv task is NOT started here — it starts when active mode is enabled
-        // The recv stream is moved into the task in start_recv_task
-        // For now, we need to store it somewhere. We'll use a separate approach.
-        // Actually, let's start the recv task immediately but have it wait on active_notify.
-        resource
+        }
     }
 
-    /// Start the background read loop. Must be called after construction
-    /// with the recv stream.
-    pub fn start_recv_loop(self_arc: ResourceArc<Self>, mut recv: quinn::RecvStream) {
+    /// Start the background read loop. Takes the recv stream from self.
+    /// Must be called after the ResourceArc is created.
+    pub fn start_recv_loop(self_arc: ResourceArc<Self>) {
+        let mut recv_opt = self_arc.recv.lock().unwrap();
+        let mut recv = match recv_opt.take() {
+            Some(r) => r,
+            None => return, // Already started or no recv stream
+        };
+        drop(recv_opt);
         let stream_arc = self_arc.clone();
 
         let handle = runtime::rt().spawn(async move {
