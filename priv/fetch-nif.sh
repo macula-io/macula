@@ -55,14 +55,17 @@ if [ "${OS}" != "linux" ]; then
     exit 0
 fi
 
-# Detect musl (Alpine) vs glibc — precompiled NIF is glibc, musl must build from source
+# Detect musl (Alpine) vs glibc
+LIBC="glibc"
 if ldd --version 2>&1 | grep -qi musl; then
-    echo "[macula_quic] musl libc detected (Alpine) — building from source"
-    build_from_source
-    exit 0
+    LIBC="musl"
 fi
 
-ARTIFACT="libmacula_quic-${OS}-${ARCH}.so"
+if [ "${LIBC}" = "musl" ]; then
+    ARTIFACT="libmacula_quic-${OS}-musl-${ARCH}.so"
+else
+    ARTIFACT="libmacula_quic-${OS}-${ARCH}.so"
+fi
 
 # Read version from app.src
 VERSION=$(grep '{vsn' "${BASEDIR}/src/macula.app.src" 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || echo "")

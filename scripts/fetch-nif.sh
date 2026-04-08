@@ -55,7 +55,17 @@ if [ "${OS}" != "linux" ]; then
     exit 0
 fi
 
-ARTIFACT="libmacula_quic-${OS}-${ARCH}.so"
+# Detect musl (Alpine) vs glibc
+LIBC="glibc"
+if ldd --version 2>&1 | grep -qi musl; then
+    LIBC="musl"
+fi
+
+if [ "${LIBC}" = "musl" ]; then
+    ARTIFACT="libmacula_quic-${OS}-musl-${ARCH}.so"
+else
+    ARTIFACT="libmacula_quic-${OS}-${ARCH}.so"
+fi
 
 # Read version from app.src
 VERSION=$(grep '{vsn' "${BASEDIR}/src/macula.app.src" 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || echo "")
