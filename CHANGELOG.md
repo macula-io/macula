@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.1] - 2026-04-09
+
+### Fixed
+
+- **Documentation overhaul** for SDK scope: moved 9 relay-specific docs (operator guides, DHT, content transfer, supervision tree) to macula-relay. Rewrote README, GLOSSARY, ROADMAP, PubSub/RPC guides for SDK-only perspective. Fixed all broken cross-references.
+- **5 new dark-themed animated SVGs**: SDK architecture, connect flow, identity/crypto stack, MRI trie index, dist-over-mesh tunnel. Replaced light-themed dist_relay_tunnel.
+- **Moved 8 orphaned SVGs** (content system, DHT, overview) to macula-relay where they belong.
+- **Removed duplicate** `docs/guides/mri.md` (MRI_GUIDE.md is canonical).
+
+---
+
 ## [1.0.0] - 2026-04-09
 
 ### BREAKING — SDK/Relay Separation

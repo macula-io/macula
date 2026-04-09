@@ -143,72 +143,17 @@ rebar3 ex_doc
 
 Generated docs appear in `doc/` directory. Open `doc/index.html` in a browser.
 
-## Docker Development
+## Rust NIFs
 
-### Clean Build (Always After Code Changes)
-```bash
-# Prune cache and rebuild from scratch
-docker builder prune -af
-docker compose -f <compose-file> build --no-cache
-```
+The SDK includes Rust NIFs for performance-critical operations. They build automatically via `priv/build-nifs.sh` during `rebar3 compile`. Requires a Rust toolchain (`cargo`). If Rust is not available, pure Erlang fallbacks are used.
 
-**Why?** Docker build cache can use stale layers even after code changes. Always prune and rebuild when testing code changes.
-
-### Multi-Node Test Environment
-```bash
-cd docker
-docker-compose -f docker-compose.multi-node-test.yml up
-```
-
-This starts:
-- 1 registry node (gateway)
-- 3 provider nodes (advertise services)
-- 1 client node (discovers and calls services)
-
-## Memory Management
-
-Macula implements comprehensive memory leak prevention. See [Memory Management](../../architecture/memory_management/README.md) for details.
-
-**Key Mechanisms:**
-- Bounded connection pools (max 1,000 connections, LRU eviction)
-- Client connection limits (max 10,000 clients, configurable)
-- Service TTL/cleanup (5-minute TTL, 60-second cleanup interval)
-- Stream cleanup on disconnect
-- Caller process monitoring for RPC handlers
-
-**Monitoring:**
-```erlang
-%% Check connection pool size
-macula_gateway_mesh:pool_size(GatewayPid).
-
-%% Check client count
-macula_gateway_client_manager:client_count(ManagerPid).
-
-%% Check service registry size
-macula_service_registry:service_count().
-```
-
-## Refactoring Status
-
-### Gateway Refactoring (COMPLETED - Jan 2025)
-The gateway module has been refactored into 6 focused modules with comprehensive tests:
-
-- ✅ `macula_gateway_client_manager.erl` - Client lifecycle (24 tests)
-- ✅ `macula_gateway_pubsub.erl` - Pub/Sub routing (31 tests)
-- ✅ `macula_gateway_rpc.erl` - RPC handler management (20 tests)
-- ✅ `macula_gateway_mesh.erl` - Mesh connection pooling (16 tests)
-- ✅ `macula_gateway_dht.erl` - DHT query forwarding (stateless)
-- ✅ `macula_gateway_rpc_router.erl` - Multi-hop RPC routing (17 tests)
-- ✅ `macula_gateway_sup.erl` - Supervision tree (24 tests)
-
-Total: 132 tests, all passing.
-
-### Connection Refactoring (COMPLETED - Nov 2025)
-The v0.7.0 nomenclature refactoring achieved separation of concerns:
-- `macula_peer` - High-level API facade for mesh operations
-- `macula_connection` - Low-level QUIC transport layer
-
-See CLAUDE.md for current architecture details.
+| NIF Crate | Provides |
+|-----------|----------|
+| `native/macula_quic/` | Quinn QUIC transport (precompiled download available) |
+| `native/macula_crypto_nif/` | Ed25519, BLAKE3, SHA-256 |
+| `native/macula_ucan_nif/` | UCAN token create/verify |
+| `native/macula_did_nif/` | DID document operations |
+| `native/macula_mri_nif/` | MRI parsing, trie index |
 
 ## Contributing Workflow
 
