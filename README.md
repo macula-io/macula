@@ -1,4 +1,4 @@
-# Macula
+# Macula SDK
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-26+-brightgreen)](https://www.erlang.org)
@@ -10,187 +10,33 @@
 </p>
 
 <p align="center">
-  <strong>BEAM-native HTTP/3 mesh networking for distributed applications</strong>
+  <strong>Erlang/OTP client SDK for the Macula HTTP/3 relay mesh</strong>
 </p>
 
 ---
 
 ## What is Macula?
 
-Macula is an **Erlang/OTP library** that provides a complete distributed mesh networking stack over HTTP/3 (QUIC). It enables BEAM applications to form relay-assisted mesh networks with:
+Macula is an **Erlang/OTP client SDK** for building applications that connect to a [Macula relay mesh](https://github.com/macula-io/macula-relay). It provides:
 
-- **Federated relay mesh** -- outbound-only connections, no open ports
-- **Zero configuration clustering** via UDP multicast gossip
-- **NAT-friendly transport** using QUIC (single UDP port)
-- **Erlang distribution over relay** -- `net_adm:ping` across firewalls
+- **Pub/Sub messaging** -- topic-based event distribution across the mesh
+- **RPC (request/response)** -- service discovery and invocation via DHT
+- **Erlang distribution over relay** -- `net_adm:ping` across firewalls, no VPN
+- **Identity** -- Ed25519 keypairs, UCAN tokens, DID documents (NIF-accelerated)
+- **MRI** -- Macula Resource Identifiers for typed, hierarchical resource addressing
+- **Zero-config clustering** -- UDP multicast gossip for LAN nodes
 
-<p align="center">
-  <img src="assets/mesh-architecture.svg" alt="Macula Mesh Architecture" width="100%">
-</p>
-
----
-
-## Features
-
-### Mesh Networking
-
-<p align="center">
-  <img src="assets/macula_overview.svg" alt="Macula Overview" width="100%">
-</p>
-
-| Feature | Description |
-|---------|-------------|
-| **HTTP/3 over QUIC** | NAT-friendly, firewall-friendly, built-in TLS 1.3 |
-| **Kademlia DHT** | Decentralized routing with O(log N) lookups |
-| **Multi-tenant realms** | Isolated namespaces for different applications |
-| **Connection pooling** | 94.5% hit rate, LRU eviction |
-
-### Pub/Sub Messaging
-
-<p align="center">
-  <img src="assets/pubsub_flow.svg" alt="PubSub Flow" width="100%">
-</p>
-
-```erlang
-%% Subscribe to a topic
-{ok, SubRef} = macula:subscribe(Peer, <<"sensors.temperature">>, fun(Msg) ->
-    io:format("Received: ~p~n", [Msg])
-end).
-
-%% Publish to subscribers
-ok = macula:publish(Peer, <<"sensors.temperature">>, #{value => 23.5}).
-
-%% Unsubscribe when done
-ok = macula:unsubscribe(Peer, SubRef).
-```
-
-### RPC (Request/Response)
-
-<p align="center">
-  <img src="assets/rpc_flow.svg" alt="RPC Flow" width="100%">
-</p>
-
-```erlang
-%% Advertise a procedure handler
-{ok, _Ref} = macula:advertise(Peer, <<"math.add">>, fun(#{a := A, b := B}) ->
-    {ok, #{result => A + B}}
-end).
-
-%% Call the procedure (discovers provider via DHT)
-{ok, #{result := 5}} = macula:call(Peer, <<"math.add">>, #{a => 2, b => 3}).
-```
-
-### Gossip Clustering
-
-<p align="center">
-  <img src="assets/gossip_clustering.svg" alt="Gossip Clustering" width="100%">
-</p>
-
-Zero-configuration cluster formation using UDP multicast:
-
-```erlang
-%% Start gossip-based clustering
-ok = macula_cluster:start_cluster(#{
-    strategy => gossip,
-    secret => <<"my_cluster_secret">>  %% Optional HMAC authentication
-}).
-
-%% Nodes auto-discover via multicast 230.1.1.251:45892
-```
-
-### Erlang Distribution Over Relay Mesh
-
-<p align="center">
-  <img src="assets/dist_relay_tunnel.svg" alt="Distribution Relay Tunnel" width="100%">
-</p>
-
-Full OTP distribution tunneled through the relay mesh — nodes only need
-outbound connectivity. No VPNs, no open ports.
-
-```erlang
-%% Enable relay distribution
-os:putenv("MACULA_DIST_MODE", "relay"),
-macula_dist_relay:register_mesh_client(Client),
-macula_dist_relay:advertise_dist_accept(),
-
-%% Now standard OTP distribution works across firewalls
-net_adm:ping('other@remote-host').  %% => pong
-gen_server:call({Name, 'other@remote-host'}, Request).  %% works
-```
-
-| Feature | Status |
-|---------|--------|
-| **Handshake over relay** | 5-message dist_util handshake through pub/sub |
-| **AES-256-GCM encryption** | Tunnel bytes encrypted, relay cannot read ETF |
-| **Supervised bridges** | gen_server per tunnel under simple_one_for_one |
-| **Cross-relay tunnels** | Nodes on different relays connect via peering |
-| **Relay reconnection** | Bridge re-acquires client after relay restart |
-| **Metrics** | Per-tunnel byte/message counters |
-
-See [Distribution Over Mesh Guide](docs/guides/DIST_OVER_MESH_GUIDE.md) for details.
-
-### Content Transfer (Mesh Artifacts)
-
-<p align="center">
-  <img src="assets/content_transfer_flow.svg" alt="Content Transfer" width="100%">
-</p>
-
-Content-addressed storage and transfer for distributing OTP releases across the mesh:
-
-```erlang
-%% Publish a file to the mesh
-{ok, MCID} = macula_content:publish("/path/to/release.tar.gz").
-
-%% Fetch from any provider
-{ok, Binary} = macula_content:fetch(MCID).
-```
-
-| Feature | Description |
-|---------|-------------|
-| **MCID** | Content-addressed identifiers (BLAKE3/SHA256) |
-| **Merkle verification** | Chunk-level integrity |
-| **Parallel download** | From multiple providers |
-| **Want/Have/Block** | Efficient mesh protocol |
-
-### Authorization (DID + UCAN)
-
-<p align="center">
-  <img src="assets/authorization_flow.svg" alt="Authorization Flow" width="100%">
-</p>
-
-Decentralized capability-based authorization:
-
-| Component | Purpose |
-|-----------|---------|
-| **DID** | Decentralized identifiers for namespace ownership |
-| **UCAN** | Capability tokens for delegated permissions |
-| **Namespace** | `did:macula:io.example.user` owns `io.example.user.*` |
-
-### Hierarchical DHT (Bridge System)
-
-<p align="center">
-  <img src="assets/kademlia_dht.svg" alt="Kademlia DHT" width="100%">
-</p>
-
-Fractal mesh hierarchy with query escalation:
-
-```
-Cluster → Street → Neighborhood → City → Province → Country → Region → Global
-```
-
-When a DHT query fails locally, it escalates to parent levels with results cached at lower levels.
+Nodes connect **outbound** to relays over QUIC. No open ports, NAT-friendly.
 
 ---
 
 ## Quick Start
 
-### Installation
-
-Add to your `rebar.config`:
+Add to `rebar.config`:
 
 ```erlang
 {deps, [
-    {macula, "0.42.7"}
+    {macula, "1.0.0"}
 ]}.
 ```
 
@@ -198,63 +44,107 @@ Or in Elixir `mix.exs`:
 
 ```elixir
 defp deps do
-  [
-    {:macula, "~> 0.42.7"}
-  ]
+  [{:macula, "~> 1.0"}]
 end
 ```
 
-### Basic Usage
+### Connect and Communicate
 
 ```erlang
-%% Start macula application
+%% Start macula
 application:ensure_all_started(macula).
 
-%% Connect to the mesh
-{ok, Peer} = macula:connect(<<"quic://seed.example.com:9443">>, #{
-    realm => <<"io.example.myapp">>,
-    node_id => <<"node-001">>
+%% Connect to the mesh via a relay
+{ok, Client} = macula:connect(<<"quic://boot.macula.io:443">>, #{
+    realm => <<"io.example.myapp">>
 }).
 
 %% Subscribe to events
-{ok, _SubRef} = macula:subscribe(Peer, <<"events.orders">>, fun(Order) ->
-    process_order(Order)
+{ok, _SubRef} = macula:subscribe(Client, <<"sensors.temperature">>, fun(Msg) ->
+    io:format("Received: ~p~n", [Msg])
 end).
+
+%% Publish to subscribers
+ok = macula:publish(Client, <<"sensors.temperature">>, #{value => 23.5}).
 
 %% Advertise an RPC procedure
-{ok, _AdvRef} = macula:advertise(Peer, <<"inventory.check">>, fun(#{sku := Sku}) ->
-    {ok, check_inventory(Sku)}
+{ok, _Ref} = macula:advertise(Client, <<"math.add">>, fun(#{a := A, b := B}) ->
+    {ok, #{result => A + B}}
 end).
 
-%% Call an RPC procedure (discovers provider via DHT)
-{ok, Result} = macula:call(Peer, <<"inventory.check">>, #{sku => <<"ABC123">>}).
+%% Call a procedure (relay discovers the provider)
+{ok, #{result := 5}} = macula:call(Client, <<"math.add">>, #{a => 2, b => 3}).
+```
+
+### Erlang Distribution Over Mesh
+
+Full OTP distribution tunneled through the relay mesh. No VPNs, no open ports.
+
+```erlang
+%% Single call to join the mesh with distribution
+macula:join_mesh(#{
+    realm => <<"io.macula">>,
+    relays => [<<"quic://boot.macula.io:443">>],
+    site => #{name => <<"my-site">>, lat => 51.5, lng => -0.1}
+}).
+
+%% Standard OTP distribution now works across firewalls
+net_adm:ping('other@remote-host').  %% => pong
+gen_server:call({Name, 'other@remote-host'}, Request).  %% works
+```
+
+### LAN Clustering
+
+Zero-configuration cluster formation using UDP multicast:
+
+```erlang
+ok = macula_cluster:start_cluster(#{
+    strategy => gossip,
+    secret => <<"my_cluster_secret">>
+}).
+%% Nodes auto-discover via multicast 230.1.1.251:45892
 ```
 
 ---
 
-## Configuration
+## Identity and Crypto (NIF-accelerated)
 
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MACULA_QUIC_PORT` | `9443` | QUIC listener port |
-| `MACULA_REALM` | `com.example.realm` | Default realm |
-| `HEALTH_PORT` | `8080` | Health check HTTP port |
-| `MACULA_TLS_MODE` | `development` | TLS mode (`production`/`development`) |
-| `CLUSTER_STRATEGY` | `gossip` | Cluster strategy (`gossip`/`static`/`mdns`) |
-| `CLUSTER_SECRET` | - | Shared secret for gossip HMAC |
-
-### Application Config
+Built-in Rust NIFs with pure Erlang fallbacks for all operations:
 
 ```erlang
-{macula, [
-    {quic_port, 9443},
-    {realm, <<"io.example.myapp">>},
-    {tls_mode, production},
-    {tls_cacertfile, "/etc/ssl/certs/ca-certificates.crt"}
-]}.
+%% Ed25519 keypair
+{ok, {PubKey, PrivKey}} = macula_crypto_nif:generate_keypair().
+{ok, Sig} = macula_crypto_nif:sign(<<"hello">>, PrivKey).
+true = macula_crypto_nif:verify(<<"hello">>, Sig, PubKey).
+
+%% BLAKE3 hashing
+Hash = macula_crypto_nif:blake3(Data).
+
+%% UCAN capability tokens
+{ok, Token} = macula_ucan_nif:create(Issuer, Audience, Caps, PrivKey).
+{ok, Payload} = macula_ucan_nif:verify(Token, PubKey).
+
+%% DID documents
+{ok, Doc} = macula_did_nif:create_document(<<"did:macula:io.example">>, PubKey).
 ```
+
+## MRI (Resource Identifiers)
+
+Typed, hierarchical resource addressing: `mri:{type}:{realm}/{path}`
+
+```erlang
+{ok, Parsed} = macula_mri:parse(<<"mri:app:io.macula/acme/counter">>).
+%% #{type => app, realm => <<"io.macula">>, path => [<<"acme">>, <<"counter">>]}
+
+MRI = macula_mri:new_app(<<"io.macula">>, <<"acme">>, <<"counter">>).
+%% <<"mri:app:io.macula/acme/counter">>
+
+%% Trie index for million-scale hierarchy queries
+{ok, Idx} = macula_mri:build_index(MRIs).
+{ok, Children} = macula_mri:index_children(Idx, <<"io.macula">>, [<<"acme">>]).
+```
+
+23 built-in types: realm, org, user, app, service, artifact, instance, license, cert, key, topic, proc, content, device, cluster, location, zone, network, model, dataset, config, class, taxonomy. Custom types via `macula_mri_registry`.
 
 ---
 
@@ -262,58 +152,33 @@ end).
 
 | Guide | Description |
 |-------|-------------|
-| [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Relay-tunneled Erlang distribution |
-| [Cluster API Guide](docs/guides/CLUSTERING_GUIDE.md) | Clustering and distribution |
-| [Content Transfer Guide](docs/guides/CONTENT_TRANSFER_GUIDE.md) | Mesh artifact distribution |
-| [NAT Traversal Guide](docs/guides/DIST_OVER_MESH_GUIDE.md) | NAT techniques |
-| [DHT Guide](docs/guides/DHT_GUIDE.md) | Kademlia DHT internals |
+| [PubSub Guide](docs/guides/PUBSUB_GUIDE.md) | Topic-based messaging |
+| [RPC Guide](docs/guides/RPC_GUIDE.md) | Request/response patterns |
+| [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Erlang dist through relays |
+| [Clustering Guide](docs/guides/CLUSTERING_GUIDE.md) | LAN gossip clustering |
 | [Authorization Guide](docs/guides/AUTHORIZATION_GUIDE.md) | DID/UCAN security |
-| [TLS Configuration](docs/operator/TLS_GUIDE.md) | Production TLS setup |
+| [MRI Guide](docs/guides/MRI_GUIDE.md) | Resource identifiers |
+| [Development Guide](docs/guides/DEVELOPMENT.md) | Building and testing |
+| [Glossary](docs/GLOSSARY.md) | Terminology |
+
+For relay server documentation, see [macula-relay](https://github.com/macula-io/macula-relay).
 
 ---
 
-## Version History
+## SDK Modules (48)
 
-| Version | Date | Highlights |
-|---------|------|------------|
-| **v0.42.7** | Apr 2026 | Distribution over relay mesh — cross-relay, encryption, supervision, metrics (48 tests) |
-| **v0.40.0** | Apr 2026 | First Erlang dist-over-mesh: net_adm:ping across 3 countries via relay tunnel |
-| **v0.19.2** | Jan 2026 | README rework with feature sections and SVGs |
-| **v0.19.1** | Jan 2026 | Gossip clustering, static strategy (34 tests) |
-| **v0.19.0** | Jan 2026 | Content transfer system, MCID, Want/Have/Block (171 tests) |
-| **v0.18.0** | Jan 2026 | Cluster API for bc_gitops integration (19 tests) |
-| **v0.16.0** | Dec 2025 | Registry system, Ed25519 signing (60 tests) |
-| **v0.15.0** | Dec 2025 | Gossip protocol, CRDT replication (29 tests) |
-| **v0.14.0** | Dec 2025 | Masterless CRDT architecture (48 tests) |
-| **v0.13.0** | Dec 2025 | Hierarchical DHT, bridge system (40 tests) |
-| **v0.12.0** | Nov 2025 | Complete NAT traversal (70 tests) |
+| Group | Modules |
+|-------|---------|
+| **Facade** | `macula`, `macula_app`, `macula_root` |
+| **Client Transport** | `macula_relay_client`, `macula_multi_relay`, `macula_local_client`, `macula_client_behaviour`, `macula_quic` |
+| **Wire Protocol** | `macula_protocol_encoder`, `macula_protocol_decoder`, `macula_protocol_types`, `macula_core_types` |
+| **Crypto / Identity** | `macula_crypto_nif`, `macula_blake3_nif`, `macula_ucan_nif`, `macula_did_nif` |
+| **Cert System** | `macula_cert`, `macula_cert_system`, `macula_trust_store` |
+| **MRI** | `macula_mri`, `macula_mri_nif`, `macula_mri_registry`, `macula_mri_store`, `macula_mri_graph`, `macula_mri_ets` |
+| **Dist Over Mesh** | `macula_dist`, `macula_dist_bridge`, `macula_dist_bridge_sup`, `macula_dist_discovery`, `macula_dist_relay`, `macula_dist_mdns_advertiser`, `macula_dist_system`, `macula_cluster`, `macula_cluster_gossip`, `macula_cluster_static`, `macula_cluster_strategy` |
+| **Utilities** | `macula_id`, `macula_names`, `macula_node`, `macula_realm`, `macula_time`, `macula_uri`, `macula_utils`, `macula_cache`, `macula_console`, `macula_ping_pong`, `macula_provider_selector`, `macula_service_registry` |
 
-See [CHANGELOG.md](CHANGELOG.md) for full history.
-
----
-
-## Architecture
-
-Macula follows an **always-on architecture** where every node has all capabilities:
-
-```
-macula_root (application supervisor)
-├── macula_gateway_system (QUIC transport + relay handler)
-├── macula_pubsub_system (pub/sub messaging)
-├── macula_rpc_system (RPC request/response)
-├── macula_routing_system (Kademlia DHT)
-├── macula_bootstrap_system (mesh discovery)
-├── macula_membership_system (gossip clustering)
-├── macula_bridge_system (hierarchical mesh escalation)
-├── macula_platform_system (CRDT coordination)
-├── macula_registry_system (package distribution)
-├── macula_content_system (mesh content transfer)
-├── macula_cert_system (TLS certificate management)
-└── macula_dist_system (Erlang distribution)
-    ├── macula_dist_bridge_sup (relay tunnel bridges)
-    ├── macula_dist_discovery (DHT node discovery)
-    └── macula_cluster_strategy (optional auto-clustering)
-```
+Server modules (gateway, DHT routing, RPC routing, PubSub routing, SWIM, peering, bootstrap, bridge, content, registry) live in [macula-relay](https://github.com/macula-io/macula-relay).
 
 ---
 
@@ -321,18 +186,10 @@ macula_root (application supervisor)
 
 | Project | Description |
 |---------|-------------|
+| [macula-relay](https://github.com/macula-io/macula-relay) | Relay server (hub-spoke routing, DHT, peering) |
+| [macula-mri-khepri](https://github.com/macula-io/macula-mri-khepri) | Distributed MRI persistence (Khepri/Raft) |
 | [macula-ecosystem](https://github.com/macula-io/macula-ecosystem) | Documentation hub |
-| [macula-console](https://github.com/macula-io/macula-console) | Management console |
-| [bc-gitops](https://github.com/beam-campus/bc-gitops) | GitOps reconciler |
-| [macula-tweann](https://github.com/macula-io/macula-tweann) | Neuroevolution framework |
-
----
-
-## Community
-
-- **Hex.pm**: [hex.pm/packages/macula](https://hex.pm/packages/macula)
-- **GitHub**: [github.com/macula-io/macula](https://github.com/macula-io/macula)
-- **Issues**: [github.com/macula-io/macula/issues](https://github.com/macula-io/macula/issues)
+| [hecate-daemon](https://github.com/hecate-social/hecate-daemon) | AI agent sidecar for mesh |
 
 ---
 

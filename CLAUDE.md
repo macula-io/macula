@@ -42,48 +42,26 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## Architecture Overview
 
-Macula is a **federated relay mesh**. Nodes connect outbound to relays over QUIC.
-Relays route pub/sub, RPC, and Erlang distribution traffic.
+Macula SDK is a **48-module client library** for connecting to the Macula relay mesh. Nodes connect outbound to relays over QUIC. Relays (in [macula-relay](https://github.com/macula-io/macula-relay)) handle routing.
+
+**SDK provides:** client transport, wire protocol, identity (Ed25519/UCAN/DID NIFs), MRI resource identifiers, cert system, Erlang distribution over mesh, LAN clustering.
+
+**Relay provides** (separate repo): gateway, Kademlia DHT, RPC routing, PubSub routing, SWIM, peering, bootstrap, bridge, content, registry, authorization enforcement.
 
 Key documentation:
 - `docs/guides/DIST_OVER_MESH_GUIDE.md` - Erlang distribution over relay mesh
 - `docs/guides/CLUSTERING_GUIDE.md` - Cluster formation
-- `docs/GLOSSARY.md` - Complete terminology reference
-- `docs/operator/TLS_GUIDE.md` - TLS configuration
+- `docs/guides/MRI_GUIDE.md` - Resource identifiers
+- `docs/guides/AUTHORIZATION_GUIDE.md` - DID/UCAN security
+- `docs/GLOSSARY.md` - Terminology
 
-### Distribution Modes
-
-| Mode | When | How |
-|------|------|-----|
-| **Direct QUIC** | Nodes can reach each other | `-proto_dist macula` |
-| **Relay mesh** | Nodes behind NAT/firewalls | `MACULA_DIST_MODE=relay` |
-
-### `*_system` Module Convention
-
-All `*_system` modules are **supervisors only**. They contain child specifications and supervision strategy. They do NOT contain business logic, message handling, or state management.
-
----
-
-## Docker Build Best Practices
-
-**Problem**: Docker build cache can use stale layers even after source code changes, leading to outdated code in the image.
-
-**Solution**: Always prune build cache and rebuild from scratch when testing code changes:
+## Testing
 
 ```bash
-docker builder prune -af
-docker compose -f docker-compose.multi-node-test.yml build --no-cache
+rebar3 compile        # Compile (builds Rust NIFs from native/)
+rebar3 eunit          # Run tests
+rebar3 ex_doc         # Build documentation
 ```
-
-Don't waste time inspecting Docker images to verify code or trusting cached builds after changes. Just prune and rebuild from scratch.
-
-## Testing Workflow
-
-1. Make code changes
-2. Compile: `rebar3 compile`
-3. Prune Docker cache: `docker builder prune -af`
-4. Rebuild image: `docker compose -f <compose-file> build --no-cache`
-5. Run tests: `docker compose -f <compose-file> up`
 
 ## Coding Guidelines
 
@@ -163,9 +141,9 @@ process_request(Request, State) ->
 
 ### After Completing Work - ALWAYS Update
 
-1. **CLAUDE.md** - Add new version row, update "Current Version" in header
-2. **ROADMAP.md** - Mark completed items, add new files/tests
-3. **Sync docs** - `docs/GLOSSARY.md`, `docs/operator/*.md`, ADRs as needed
+1. **CLAUDE.md** - Update "Current Version" in header
+2. **CHANGELOG.md** - Document changes
+3. **Sync docs** - `docs/GLOSSARY.md`, SDK guides as needed
 
 ## Bash Scripting Guidelines
 

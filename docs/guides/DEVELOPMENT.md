@@ -31,28 +31,32 @@ rebar3 shell
 
 ## Project Structure
 
-Macula is organized as a single Erlang/OTP library with ~68 modules:
+Macula SDK is organized as a single Erlang/OTP library with 48 modules:
 
 ```
 macula/
-├── src/                    # Source code (~68 .erl files)
-│   ├── macula_quic*.erl   # QUIC transport layer
-│   ├── macula_protocol*.erl # Wire protocol encoding/decoding
-│   ├── macula_connection*.erl # Connection management
-│   ├── macula_gateway*.erl # Gateway components
-│   ├── macula_routing*.erl # Kademlia DHT routing
-│   ├── macula_pubsub*.erl # Pub/Sub messaging
-│   ├── macula_rpc*.erl    # RPC operations
-│   └── macula_*.erl       # Core utilities
-├── test/                  # EUnit tests
-├── include/               # Header files (.hrl)
-├── architecture/          # Architecture documentation
-├── docs/                  # User-facing documentation
-├── examples/              # Example applications
-└── rebar.config          # Build configuration
+├── src/                          # Source code (48 .erl files)
+│   ├── macula.erl               # Public facade (connect, subscribe, publish, call, advertise)
+│   ├── macula_relay_client.erl  # QUIC relay connection
+│   ├── macula_multi_relay.erl   # Multi-homed connections
+│   ├── macula_quic.erl          # QUIC transport abstraction
+│   ├── macula_protocol_*.erl    # Wire protocol encoding/decoding
+│   ├── macula_crypto_nif.erl    # Ed25519, BLAKE3, SHA-256 (Rust NIF + Erlang fallback)
+│   ├── macula_ucan_nif.erl      # UCAN token operations (Rust NIF + Erlang fallback)
+│   ├── macula_did_nif.erl       # DID document operations (Rust NIF + Erlang fallback)
+│   ├── macula_mri.erl           # Resource identifiers (parse, format, hierarchy, trie index)
+│   ├── macula_cert_system/      # Ed25519 keypairs, cert generation, trust store
+│   ├── macula_dist_system/      # Erlang distribution over relay mesh
+│   └── macula_*.erl             # Utilities (id, names, node, realm, time, uri, cache)
+├── native/                       # Rust NIF source (Quinn QUIC + crypto/UCAN/DID/MRI)
+├── test/                         # EUnit tests
+├── include/                      # Header files (.hrl)
+├── docs/                         # SDK guides
+├── priv/                         # Build scripts, precompiled NIFs
+└── rebar.config                  # Build configuration
 ```
 
-See [Project Structure](../../architecture/FULL_SUPERVISION_TREE.md) for complete module documentation.
+Server modules (gateway, DHT routing, RPC/PubSub routing, SWIM, peering, etc.) live in [macula-relay](https://github.com/macula-io/macula-relay).
 
 ## Running Tests
 
@@ -63,8 +67,8 @@ rebar3 eunit
 
 ### Specific Module Tests
 ```bash
-rebar3 eunit --module=macula_id_tests
-rebar3 eunit --module=macula_gateway_client_manager_tests
+rebar3 eunit --module=macula_mri_tests
+rebar3 eunit --module=macula_crypto_nif_tests
 ```
 
 ### Test Coverage
