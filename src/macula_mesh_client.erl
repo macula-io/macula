@@ -559,7 +559,7 @@ maybe_send(Type, _Msg, #state{stream = undefined}) ->
     ?LOG_WARNING("[mesh_client] DROPPED ~p — stream undefined", [Type]);
 maybe_send(Type, Msg, #state{stream = Stream}) ->
     Binary = macula_protocol_encoder:encode(Type, Msg),
-    ?LOG_INFO("[mesh_client] SEND ~p (~p bytes)", [Type, byte_size(Binary)]),
+    ?LOG_WARNING("[mesh_client] SEND ~p (~p bytes) stream=~p", [Type, byte_size(Binary), Stream]),
     macula_quic:async_send(Stream, Binary).
 
 %% Ensure payload is a flat binary before passing to msgpack.
