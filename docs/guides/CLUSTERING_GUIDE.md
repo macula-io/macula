@@ -369,5 +369,4 @@ rebar3 eunit --dir=test/macula_dist_system
 ## Related Documentation
 
 - [Dist Over Mesh Guide](DIST_OVER_MESH_GUIDE.md) - WAN connectivity via relay mesh
-- [Troubleshooting Guide](../operator/TROUBLESHOOTING_GUIDE.md) - Common issues
 - [Erlang Distribution Protocol](https://www.erlang.org/doc/reference_manual/distributed.html)

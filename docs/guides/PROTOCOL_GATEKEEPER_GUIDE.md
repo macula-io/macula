@@ -382,5 +382,4 @@ rebar3 eunit --module=macula_gatekeeper_tests
 ## See Also
 
 - [Authorization Guide](AUTHORIZATION_GUIDE.md) - UCAN-based authorization
-- [Content Transfer Guide](CONTENT_TRANSFER_GUIDE.md) - MCID content distribution
-- [DHT Guide](DHT_GUIDE.md) - Distributed hash table operations
+- [MRI Guide](MRI_GUIDE.md) - Resource identifiers

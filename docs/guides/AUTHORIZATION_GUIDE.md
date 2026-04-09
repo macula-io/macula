@@ -650,5 +650,5 @@ macula_authorization_audit:set_retention(Seconds).
 
 ### Related Guides
 
-- [DHT Guide](DHT_GUIDE.md) - Distributed certificate discovery
 - [Clustering Guide](CLUSTERING_GUIDE.md) - Using certificates in clusters
+- [MRI Guide](MRI_GUIDE.md) - Resource identifiers for authorization scoping
