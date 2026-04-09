@@ -1,22 +1,25 @@
 %%%-------------------------------------------------------------------
-%%% @doc Macula Relay Client — connects to relay servers via QUIC.
+%%% @doc Macula Mesh Client — connects a node to the relay mesh via QUIC.
 %%%
-%%% Single gen_server managing ONE persistent QUIC connection with
-%%% automatic failover across multiple relays. On disconnect, cycles
+%%% Single gen_server managing ONE persistent QUIC connection to a relay
+%%% with automatic failover across multiple relays. On disconnect, cycles
 %%% to the next relay in the list with exponential backoff + jitter.
 %%% Replays all subscriptions and procedure registrations on reconnect.
+%%%
+%%% This is the SDK client module. For relay-to-relay peering connections,
+%%% see macula_relay_client in the macula-relay repository.
 %%%
 %%% Usage:
 %%%
 %%% ```
-%%% Opts = #{relays => [Relay0, Relay1, Relay2]},
-%%% {ok, Client} = macula_relay_client:start_link(Opts).
+%%% {ok, Client} = macula_mesh_client:start_link(#{
+%%%     relays => [<<"quic://boot.macula.io:443">>],
+%%%     realm => <<"io.macula">>
+%%% }).
 %%% '''
-%%%
-%%% Backward compatible with single relay via url key.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_relay_client).
+-module(macula_mesh_client).
 
 -behaviour(gen_server).
 
@@ -49,7 +52,7 @@
     identity :: binary(),
     geo_identity :: map(),                                    %% geo metadata for CONNECT (city, country, lat, lng)
     site :: map() | undefined,                                %% site metadata for CONNECT (site_id, name, city, lat, lng, site_type)
-    client_type :: binary(),                                  %% <<"node">> or <<"relay">> (for CONNECT handshake)
+    client_type = <<"node">> :: binary(),                      %% always "node" for mesh clients
     tls_verify :: verify_peer | none,                         %% TLS verification mode (none for relay peering)
     previous_host :: string() | undefined,                    %% host before failover (for reroute detection)
     conn :: reference() | undefined,
@@ -122,7 +125,7 @@ init(Opts) ->
     Identity = maps:get(identity, Opts, <<"anonymous">>),
     GeoIdentity = maps:get(geo_identity, Opts, #{}),
     Site = maps:get(site, Opts, undefined),
-    ClientType = maps:get(type, Opts, <<"node">>),
+    %% Mesh clients are always "node" type (relay peering uses macula_relay_client)
     TlsVerify = maps:get(tls_verify, Opts, verify_peer),
 
     State = #state{
@@ -135,7 +138,7 @@ init(Opts) ->
         identity = Identity,
         geo_identity = GeoIdentity,
         site = Site,
-        client_type = ClientType,
+        %% client_type defaults to <<"node">> in record def
         tls_verify = TlsVerify,
         conn = undefined,
         stream = undefined,
@@ -501,7 +504,8 @@ send_connect(State) ->
     Msg0 = case State#state.geo_identity of
         GeoId when is_map(GeoId), map_size(GeoId) > 0 -> Base#{identity => GeoId};
         _ ->
-            case macula_connection:build_node_identity(#{}) of
+            %% macula_connection is in macula-relay; build identity from env
+            case build_env_identity() of
                 EnvId when map_size(EnvId) > 0 -> Base#{identity => EnvId};
                 _ -> Base
             end
@@ -669,8 +673,7 @@ swim_cast(Msg) ->
         Pid -> gen_server:cast(Pid, Msg)
     end.
 
-store_piggybacked_bloom(From, #{<<"bloom">> := B64}) when is_binary(B64) ->
-    catch macula_relay_peering:receive_peer_bloom(From, base64:decode(B64));
+%% Mesh clients ignore bloom filters — those are relay-to-relay peering data.
 store_piggybacked_bloom(_, _) -> ok.
 
 maybe_add_trace(Msg, undefined) -> Msg;
@@ -683,3 +686,31 @@ build_tls_opts(none) ->
     [{verify, none}];
 build_tls_opts(_) ->
     macula_tls:quic_client_opts().
+
+%% @private Build node identity from environment variables.
+%% Reads HECATE_GEO_* / MACULA_GEO_* env vars for geo metadata.
+build_env_identity() ->
+    Pairs = [
+        {city,    "HECATE_GEO_CITY"},
+        {country, "HECATE_GEO_COUNTRY"},
+        {owner,   "HECATE_OWNER_NAME"},
+        {site,    "HECATE_SITE_NAME"}
+    ],
+    Floats = [
+        {lat, "HECATE_GEO_LAT"},
+        {lng, "HECATE_GEO_LNG"}
+    ],
+    M1 = lists:foldl(fun({K, Env}, Acc) ->
+        case os:getenv(Env) of
+            false -> Acc;
+            Val -> Acc#{K => list_to_binary(Val)}
+        end
+    end, #{}, Pairs),
+    lists:foldl(fun({K, Env}, Acc) ->
+        case os:getenv(Env) of
+            false -> Acc;
+            Val ->
+                try Acc#{K => list_to_float(Val)}
+                catch _:_ -> Acc end
+        end
+    end, M1, Floats).

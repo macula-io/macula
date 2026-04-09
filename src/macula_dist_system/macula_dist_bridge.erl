@@ -215,7 +215,7 @@ publish_with_retry(_Client, _Topic, _Data, 0) ->
 publish_with_retry(Client, Topic, Data, Retries) ->
     case is_process_alive(Client) of
         true ->
-            macula_relay_client:publish(Client, Topic, Data);
+            macula_mesh_client:publish(Client, Topic, Data);
         false ->
             timer:sleep(1000),
             publish_with_retry(Client, Topic, Data, Retries - 1)
@@ -223,7 +223,7 @@ publish_with_retry(Client, Topic, Data, Retries) ->
 
 subscribe_to_tunnel(Client, RecvTopic) ->
     Self = self(),
-    macula_relay_client:subscribe(Client, RecvTopic,
+    macula_mesh_client:subscribe(Client, RecvTopic,
         fun(Msg) -> Self ! {tunnel_in, macula_dist_relay:extract_payload(Msg)} end).
 
 %%%===================================================================
@@ -261,7 +261,7 @@ demonitor_if_set(undefined) -> ok;
 demonitor_if_set(Ref) -> erlang:demonitor(Ref, [flush]).
 
 unsubscribe_if_set(_Client, undefined) -> ok;
-unsubscribe_if_set(Client, Ref) -> macula_relay_client:unsubscribe(Client, Ref).
+unsubscribe_if_set(Client, Ref) -> macula_mesh_client:unsubscribe(Client, Ref).
 
 remove_metrics(TunnelId) ->
     case persistent_term:get(macula_dist_tunnels, undefined) of

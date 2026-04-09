@@ -1,12 +1,12 @@
 %%%-------------------------------------------------------------------
 %%% @doc Multi-relay client — maintains N concurrent relay connections.
 %%%
-%%% Wraps multiple macula_relay_client instances for node multi-homing.
+%%% Wraps multiple macula_mesh_client instances for node multi-homing.
 %%% Subscribes and advertises on ALL connections. Publishes via PRIMARY.
 %%% Deduplicates incoming messages by message_id (ring buffer).
 %%%
 %%% On primary failure: promotes secondary, connects a new secondary.
-%%% Same API as macula_relay_client for drop-in replacement.
+%%% Same API as macula_mesh_client for drop-in replacement.
 %%%
 %%% Usage:
 %%% ```
@@ -59,7 +59,7 @@
 }).
 
 %%====================================================================
-%% API — same signatures as macula_relay_client
+%% API — same signatures as macula_mesh_client
 %%====================================================================
 
 start_link(Opts) ->
@@ -175,7 +175,7 @@ handle_call({advertise, Procedure, Handler}, _From, State) ->
     Procs = maps:put(Procedure, Handler, State#state.procedures),
     %% Advertise on all active connections
     lists:foreach(fun(#conn{pid = Pid}) ->
-        case macula_relay_client:advertise(Pid, Procedure, Handler) of
+        case macula_mesh_client:advertise(Pid, Procedure, Handler) of
             {ok, _} -> ok;
             {error, Reason} ->
                 ?LOG_WARNING("[multi_relay] Advertise ~s on ~p failed: ~p",
@@ -187,7 +187,7 @@ handle_call({advertise, Procedure, Handler}, _From, State) ->
 handle_call({unadvertise, Procedure}, _From, State) ->
     Procs = maps:remove(Procedure, State#state.procedures),
     lists:foreach(fun(#conn{pid = Pid}) ->
-        case macula_relay_client:unadvertise(Pid, Procedure) of
+        case macula_mesh_client:unadvertise(Pid, Procedure) of
             ok -> ok;
             {error, Reason} ->
                 ?LOG_WARNING("[multi_relay] Unadvertise ~s on ~p failed: ~p",
@@ -205,7 +205,7 @@ handle_call({rpc_call, Procedure, Args, Timeout}, _From, State) ->
         undefined ->
             {reply, {error, no_connection}, State};
         #conn{pid = Pid} ->
-            Result = macula_relay_client:call(Pid, Procedure, Args, Timeout),
+            Result = macula_mesh_client:call(Pid, Procedure, Args, Timeout),
             {reply, Result, State}
     end;
 
@@ -246,7 +246,7 @@ handle_cast({publish, Topic, Payload}, State) ->
     case find_primary(State#state.connections) of
         undefined -> ok;
         #conn{pid = Pid} ->
-            macula_relay_client:publish(Pid, Topic, Payload)
+            macula_mesh_client:publish(Pid, Topic, Payload)
     end,
     {noreply, State};
 
@@ -323,7 +323,7 @@ maybe_subscribe_relay_events(State) ->
 
 subscribe_relay_topic(undefined, _, _) -> ok;
 subscribe_relay_topic(#conn{pid = Pid}, Topic, Self) ->
-    macula_relay_client:subscribe(Pid, Topic, fun(Msg) ->
+    macula_mesh_client:subscribe(Pid, Topic, fun(Msg) ->
         Self ! {relay_event, Topic, Msg}
     end).
 
@@ -341,7 +341,7 @@ forward_relay_event(_, _) ->
 
 terminate(_Reason, #state{connections = Conns}) ->
     lists:foreach(fun(#conn{pid = Pid}) ->
-        catch macula_relay_client:stop(Pid)
+        catch macula_mesh_client:stop(Pid)
     end, Conns),
     ok.
 
@@ -384,7 +384,7 @@ spawn_relay_client(RelayUrl, Opts, #state{subscriptions = Subs, procedures = Pro
         relays => [RelayUrl],
         url => RelayUrl
     },
-    case macula_relay_client:start_link(ClientOpts) of
+    case macula_mesh_client:start_link(ClientOpts) of
         {ok, Pid} ->
             MonRef = monitor(process, Pid),
             ?LOG_INFO("[multi_relay] Connected to ~s (pid ~p)", [RelayUrl, Pid]),
@@ -402,12 +402,12 @@ spawn_relay_client(RelayUrl, Opts, #state{subscriptions = Subs, procedures = Pro
 replay_subscriptions(Pid, Subs, DedupTable) ->
     maps:foreach(fun(_Ref, {Topic, Callback}) ->
         DedupCallback = make_dedup_callback(DedupTable, Callback),
-        catch macula_relay_client:subscribe(Pid, Topic, DedupCallback)
+        catch macula_mesh_client:subscribe(Pid, Topic, DedupCallback)
     end, Subs).
 
 replay_procedures(Pid, Procs) ->
     maps:foreach(fun(Procedure, Handler) ->
-        catch macula_relay_client:advertise(Pid, Procedure, Handler)
+        catch macula_mesh_client:advertise(Pid, Procedure, Handler)
     end, Procs).
 
 assign_roles([]) -> [];
@@ -435,9 +435,9 @@ find_primary(Conns) ->
 try_call_each([], _Procedure, _Args, _Timeout) ->
     {error, no_connection};
 try_call_each([#conn{pid = Pid}], Procedure, Args, Timeout) ->
-    macula_relay_client:call(Pid, Procedure, Args, Timeout);
+    macula_mesh_client:call(Pid, Procedure, Args, Timeout);
 try_call_each([#conn{pid = Pid} | Rest], Procedure, Args, Timeout) ->
-    case macula_relay_client:call(Pid, Procedure, Args, Timeout) of
+    case macula_mesh_client:call(Pid, Procedure, Args, Timeout) of
         {ok, _} = Success -> Success;
         {error, _} -> try_call_each(Rest, Procedure, Args, Timeout)
     end.
@@ -448,7 +448,7 @@ try_call_each([#conn{pid = Pid} | Rest], Procedure, Args, Timeout) ->
 
 subscribe_on_all(Topic, Callback, Connections) ->
     lists:foreach(fun(#conn{pid = Pid}) ->
-        catch macula_relay_client:subscribe(Pid, Topic, Callback)
+        catch macula_mesh_client:subscribe(Pid, Topic, Callback)
     end, Connections).
 
 make_dedup_callback(DedupTable, Callback) ->

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.2] - 2026-04-09
+
+### Fixed
+
+- **CRITICAL: Facade rewrite** — `macula.erl` now delegates to `macula_relay_client` instead of `macula_peer`. The old facade pulled in the entire server-mode dependency chain (peer system, RPC handler, routing server, connection dispatch) which doesn't exist in the SDK. This caused crash loops on all beam cluster nodes.
+- **Restored `macula_relay_discovery`** — nearest-relay selection used by `macula_multi_relay` and `macula_relay_client` failover. Was incorrectly classified as relay-only.
+- **Restored `macula_tls`** — QUIC TLS options used by `macula_relay_client` and dist system.
+- **Guarded optional relay deps** — `macula_relay_peering` (bloom filters) and `macula_routing_dht` (dist discovery) are now checked via `code:ensure_loaded` before calling. Work when macula-relay is co-loaded, gracefully no-op otherwise.
+- **Removed server-mode modules** — `macula_peer`, `macula_client_behaviour`, `macula_local_client`, `macula_ping_pong`, `macula_service_registry`, `macula_provider_selector` no longer in SDK. They belong in macula-relay.
+- **Inlined `build_env_identity/0`** in mesh client — removes dependency on `macula_connection` (relay module).
+- **Renamed `macula_relay_client` to `macula_mesh_client`** — the SDK client connects nodes to the mesh (type: "node"). Relay-to-relay peering uses `macula_relay_client` in the macula-relay repo. One module, one responsibility.
+- **Stripped bloom filter code** from mesh client — relay peering data has no place in the SDK.
+
+### Changed
+
+- `macula:connect/2` now accepts a URL or list of URLs, returns a `macula_mesh_client` pid
+- `macula:subscribe/3`, `call/4`, `advertise/4` delegate to `macula_mesh_client` (was `macula_peer`)
+- `macula_multi_relay` wraps `macula_mesh_client` instances (was `macula_relay_client`)
+- Module count: 45 (was 48 in v1.0.0)
+
+---
+
 ## [1.0.1] - 2026-04-09
 
 ### Fixed

@@ -371,33 +371,25 @@ code_change(_OldVsn, State, _Extra) ->
 %% @private Store node info in DHT
 store_in_dht(NodeName, NodeInfo) ->
     Key = make_dht_key(NodeName),
-    case whereis(macula_routing_dht) of
-        undefined ->
-            store_in_local_cache(NodeName, NodeInfo);
-        _Pid ->
-            macula_routing_dht:store(Key, term_to_binary(NodeInfo)),
-            ok
+    case dht_available() of
+        false -> store_in_local_cache(NodeName, NodeInfo);
+        true -> macula_routing_dht:store(Key, term_to_binary(NodeInfo)), ok
     end.
 
 %% @private Remove node info from DHT
 remove_from_dht(NodeName) ->
     Key = make_dht_key(NodeName),
-    case whereis(macula_routing_dht) of
-        undefined ->
-            remove_from_local_cache(NodeName);
-        _Pid ->
-            macula_routing_dht:delete(Key),
-            ok
+    case dht_available() of
+        false -> remove_from_local_cache(NodeName);
+        true -> macula_routing_dht:delete(Key), ok
     end.
 
 %% @private Look up node info in DHT
 lookup_in_dht(NodeName) ->
     Key = make_dht_key(NodeName),
-    case whereis(macula_routing_dht) of
-        undefined ->
-            lookup_in_local_cache(NodeName);
-        _Pid ->
-            lookup_in_dht_result(macula_routing_dht:find(Key), NodeName)
+    case dht_available() of
+        false -> lookup_in_local_cache(NodeName);
+        true -> lookup_in_dht_result(macula_routing_dht:find(Key), NodeName)
     end.
 
 %% @private Handle DHT lookup result
@@ -486,11 +478,16 @@ maybe_unannounce_mdns(_NodeName, _State) ->
 
 %% @private Subscribe to DHT events
 maybe_subscribe_to_dht() ->
-    case whereis(macula_routing_dht) of
-        undefined ->
-            ok;
-        _Pid ->
-            macula_routing_dht:subscribe(?DHT_PREFIX, self())
+    case dht_available() of
+        false -> ok;
+        true -> macula_routing_dht:subscribe(?DHT_PREFIX, self())
+    end.
+
+%% @private Check if macula_routing_dht module is available (loaded by macula-relay).
+dht_available() ->
+    case code:ensure_loaded(macula_routing_dht) of
+        {module, _} -> whereis(macula_routing_dht) =/= undefined;
+        _ -> false
     end.
 
 %%%===================================================================

@@ -85,7 +85,7 @@ advertise_dist_accept() ->
             NodeName = atom_to_binary(node()),
             Procedure = <<"_dist.tunnel.", NodeName/binary>>,
             Handler = fun(Args) -> handle_tunnel_request(Args) end,
-            macula_relay_client:advertise(Client, Procedure, Handler),
+            macula_mesh_client:advertise(Client, Procedure, Handler),
             ?LOG_INFO("[dist_relay] Advertised distribution accept: ~s", [Procedure]),
             ok
     end.
@@ -173,7 +173,7 @@ tunnel_rpc(MeshClient, Procedure, Args) ->
         true ->
             macula_multi_relay:call_any(MeshClient, Procedure, Args, ?DIST_TIMEOUT);
         false ->
-            macula_relay_client:call(MeshClient, Procedure, Args, ?DIST_TIMEOUT)
+            macula_mesh_client:call(MeshClient, Procedure, Args, ?DIST_TIMEOUT)
     end.
 
 %% Check if the PID is a macula_multi_relay gen_server by inspecting
@@ -231,7 +231,7 @@ dist_accept_setup(Client, TunnelId, SendTopic, RecvTopic) ->
     Key = tunnel_key(),
 
     %% Subscribe for buffering before kernel knows about us
-    {ok, BufferSubRef} = macula_relay_client:subscribe(Client, RecvTopic,
+    {ok, BufferSubRef} = macula_mesh_client:subscribe(Client, RecvTopic,
         fun(Msg) -> Self ! {dist_data_buffered, extract_payload(Msg)} end),
 
     {DistSock, BridgeSock} = create_loopback_pair(),
@@ -239,7 +239,7 @@ dist_accept_setup(Client, TunnelId, SendTopic, RecvTopic) ->
     case whereis(net_kernel) of
         undefined ->
             ?LOG_WARNING("[dist_bridge] net_kernel not found"),
-            macula_relay_client:unsubscribe(Client, BufferSubRef);
+            macula_mesh_client:unsubscribe(Client, BufferSubRef);
         KernelPid ->
             negotiate_with_kernel(Self, KernelPid, Client, DistSock, BridgeSock,
                                   BufferSubRef, SendTopic, RecvTopic, TunnelId, Key)
@@ -254,16 +254,16 @@ negotiate_with_kernel(Self, KernelPid, Client, DistSock, BridgeSock,
             %% Transfer DistSock to the dist controller so it survives
             %% when this setup process exits.
             gen_tcp:controlling_process(DistSock, DistCtrl),
-            macula_relay_client:unsubscribe(Client, BufferSubRef),
+            macula_mesh_client:unsubscribe(Client, BufferSubRef),
             flush_buffered_to_socket(BridgeSock, Key),
             start_supervised_bridge(Client, BridgeSock, SendTopic, RecvTopic,
                                      TunnelId, Key);
         {KernelPid, unsupported_protocol} ->
             ?LOG_WARNING("[dist_bridge] Unsupported protocol"),
-            macula_relay_client:unsubscribe(Client, BufferSubRef)
+            macula_mesh_client:unsubscribe(Client, BufferSubRef)
     after ?CONTROLLER_TIMEOUT ->
         ?LOG_WARNING("[dist_bridge] Controller timeout"),
-        macula_relay_client:unsubscribe(Client, BufferSubRef)
+        macula_mesh_client:unsubscribe(Client, BufferSubRef)
     end.
 
 %%%===================================================================
