@@ -1,8 +1,8 @@
-# Macula Documentation
+# Macula SDK Documentation
 
-> **Version:** v0.43.0+ (April 2026)
+> **Version:** v1.0.0 (April 2026)
 
-Macula is an Erlang/OTP library for building distributed applications over a **federated relay mesh** using HTTP/3 (QUIC) transport.
+Macula SDK is an Erlang/OTP client library for connecting to a **federated relay mesh** over HTTP/3 (QUIC).
 
 ---
 
@@ -13,48 +13,35 @@ Macula is an Erlang/OTP library for building distributed applications over a **f
 | Understand pub/sub messaging | [PubSub Guide](guides/PUBSUB_GUIDE.md) |
 | Make RPC calls across the mesh | [RPC Guide](guides/RPC_GUIDE.md) |
 | Connect nodes across firewalls | [Distribution Over Mesh](guides/DIST_OVER_MESH_GUIDE.md) |
-
 | Form a LAN cluster | [Clustering Guide](guides/CLUSTERING_GUIDE.md) |
-| Configure TLS | [TLS Guide](operator/TLS_GUIDE.md) |
-| Deploy to production | [Operator Guides](operator/) |
+| Understand DID/UCAN security | [Authorization Guide](guides/AUTHORIZATION_GUIDE.md) |
+| Work with resource identifiers | [MRI Guide](guides/MRI_GUIDE.md) |
 | Look up terminology | [Glossary](GLOSSARY.md) |
 | Contribute to Macula | [Development Guide](guides/DEVELOPMENT.md) |
 
 ---
 
-## Guides
-
-Feature guides for developers building on Macula:
+## SDK Guides
 
 | Guide | Description |
 |-------|-------------|
-| [PubSub](guides/PUBSUB_GUIDE.md) | Publish/subscribe messaging through the relay mesh |
-| [RPC](guides/RPC_GUIDE.md) | Remote procedure calls with DHT-based discovery |
+| [PubSub](guides/PUBSUB_GUIDE.md) | Topic-based messaging through the relay mesh |
+| [RPC](guides/RPC_GUIDE.md) | Request/response with DHT-based discovery |
 | [Distribution Over Mesh](guides/DIST_OVER_MESH_GUIDE.md) | Erlang distribution tunneled through relays |
-| [Clustering](guides/CLUSTERING_GUIDE.md) | LAN cluster formation via gossip + static nodes |
-| [Content Transfer](guides/CONTENT_TRANSFER_GUIDE.md) | Content-addressed artifact distribution |
-| [DHT](guides/DHT_GUIDE.md) | Kademlia DHT between relay nodes |
+| [Clustering](guides/CLUSTERING_GUIDE.md) | LAN cluster formation via gossip |
 | [Authorization](guides/AUTHORIZATION_GUIDE.md) | DID identities and UCAN capability tokens |
 | [Protocol Gatekeeper](guides/PROTOCOL_GATEKEEPER_GUIDE.md) | Protocol-level security callbacks |
 | [MRI](guides/MRI_GUIDE.md) | Macula Resource Identifiers |
+| [Development](guides/DEVELOPMENT.md) | Building and testing |
 
-## Operator Guides
-
-| Guide | Description |
-|-------|-------------|
-| [TLS Setup](operator/TLS_GUIDE.md) | Production TLS with Let's Encrypt and QUIC |
-| [Monitoring](operator/MONITORING_GUIDE.md) | Metrics, logs, and alerting |
-| [Performance](operator/PERFORMANCE_GUIDE.md) | Tuning and optimization |
-| [Troubleshooting](operator/TROUBLESHOOTING_GUIDE.md) | Common issues and solutions |
-| [mDNS Setup](operator/MDNS_SETUP.md) | Optional LAN discovery |
-
-## Architecture
+## Reference
 
 | Document | Description |
 |----------|-------------|
-| [Supervision Tree](guides/FULL_SUPERVISION_TREE.md) | Complete OTP supervision hierarchy |
-| [Roadmap](ROADMAP.md) | Implementation roadmap |
+| [Glossary](GLOSSARY.md) | Terminology reference |
+| [Roadmap](ROADMAP.md) | SDK roadmap |
 
 ---
 
-**Built for the BEAM community**
+For relay server documentation (operator guides, DHT internals, peering, monitoring),
+see [macula-relay](https://github.com/macula-io/macula-relay).
