@@ -1,0 +1,37 @@
+[package]
+name = "macula_ucan_nif"
+version = "0.1.0"
+authors = ["rgfaber"]
+edition = "2021"
+description = "NIF for Macula UCAN token operations"
+
+[lib]
+name = "macula_ucan_nif"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Rustler for Erlang NIF bindings
+rustler = "0.34"
+
+# JSON serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Ed25519 signatures
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+
+# Random number generation
+rand = "0.8"
+
+# Base64 encoding (URL-safe for JWT)
+base64 = "0.22"
+
+# For signature verification
+signature = "2.2"
+
+# SHA-256 for CID generation
+sha2 = "0.10"
+
+[profile.release]
+lto = true
+opt-level = 3

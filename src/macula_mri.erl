@@ -34,6 +34,10 @@
 %% DHT topic/procedure derivation (for instances)
 -export([derive_topic/2, derive_procedure/2, to_topic_prefix/1]).
 
+%% Trie index operations (NIF-accelerated, O(d) queries)
+-export([build_index/1, index_children/3, index_descendants/3]).
+-export([index_insert/4, index_remove/3, index_size/1]).
+
 %% Types
 -export_type([mri/0, mri_map/0, mri_type/0, realm/0, path_segment/0]).
 
@@ -450,19 +454,22 @@ validate_realm_format(Realm, Path) ->
     end.
 
 is_valid_realm_format(Realm) ->
-    %% Simple validation: contains at least one dot, alphanumeric + dots
-    case binary:match(Realm, <<".">>) of
-        nomatch -> false;
-        _ ->
-            %% Check all characters are valid
-            lists:all(
-                fun(C) ->
-                    (C >= $a andalso C =< $z) orelse
-                    (C >= $0 andalso C =< $9) orelse
-                    C =:= $.
-                end,
-                binary_to_list(Realm)
-            )
+    %% Use NIF when available (avoids binary_to_list conversion)
+    case nif_available() of
+        true -> macula_mri_nif:validate_realm_format(Realm);
+        false ->
+            case binary:match(Realm, <<".">>) of
+                nomatch -> false;
+                _ ->
+                    lists:all(
+                        fun(C) ->
+                            (C >= $a andalso C =< $z) orelse
+                            (C >= $0 andalso C =< $9) orelse
+                            C =:= $.
+                        end,
+                        binary_to_list(Realm)
+                    )
+            end
     end.
 
 validate_path(Path) when length(Path) > ?MAX_PATH_DEPTH ->
@@ -499,16 +506,68 @@ is_valid_segment_format(Segment) ->
     end.
 
 validate_segment_chars(Segment) ->
-    lists:all(
-        fun(C) ->
-            (C >= $a andalso C =< $z) orelse
-            (C >= $0 andalso C =< $9) orelse
-            C =:= $- orelse
-            C =:= $_
-        end,
-        binary_to_list(Segment)
-    ).
+    case nif_available() of
+        true -> macula_mri_nif:validate_segment_chars(Segment);
+        false ->
+            lists:all(
+                fun(C) ->
+                    (C >= $a andalso C =< $z) orelse
+                    (C >= $0 andalso C =< $9) orelse
+                    C =:= $- orelse
+                    C =:= $_
+                end,
+                binary_to_list(Segment)
+            )
+    end.
 
 drop_last([]) -> [];
 drop_last([_]) -> [];
 drop_last(List) -> lists:droplast(List).
+
+%% @private Check if the MRI NIF module is available.
+nif_available() ->
+    case code:ensure_loaded(macula_mri_nif) of
+        {module, macula_mri_nif} -> macula_mri_nif:is_nif_loaded();
+        _ -> false
+    end.
+
+%%===================================================================
+%% Trie Index Operations (NIF-accelerated)
+%%===================================================================
+
+%% @doc Build a trie index from a list of MRI tuples.
+%% Input: list of `{Realm, PathSegments, FullMRI}' tuples.
+%% Returns an opaque index reference (NIF) or map (Erlang fallback).
+%% Enables O(d) hierarchy queries instead of O(n) table scans.
+-spec build_index([{realm(), [path_segment()], mri()}]) -> {ok, term()}.
+build_index(MRIs) ->
+    macula_mri_nif:build_path_index(MRIs).
+
+%% @doc Find direct children of a parent using a trie index.
+%% O(d) complexity where d is path depth.
+-spec index_children(term(), realm(), [path_segment()]) ->
+    {ok, [mri()]} | {error, term()}.
+index_children(Index, Realm, Path) ->
+    macula_mri_nif:index_find_children(Index, Realm, Path).
+
+%% @doc Find all descendants of a parent using a trie index.
+%% O(d+m) complexity where d is path depth and m is descendant count.
+-spec index_descendants(term(), realm(), [path_segment()]) ->
+    {ok, [mri()]} | {error, term()}.
+index_descendants(Index, Realm, Path) ->
+    macula_mri_nif:index_find_descendants(Index, Realm, Path).
+
+%% @doc Insert a single MRI into an existing trie index.
+-spec index_insert(term(), realm(), [path_segment()], mri()) -> ok | {error, term()}.
+index_insert(Index, Realm, Path, MRI) ->
+    macula_mri_nif:index_insert(Index, Realm, Path, MRI).
+
+%% @doc Remove a single MRI from an existing trie index.
+-spec index_remove(term(), realm(), [path_segment()]) -> ok | {error, term()}.
+index_remove(Index, Realm, Path) ->
+    macula_mri_nif:index_remove(Index, Realm, Path).
+
+%% @doc Get the number of MRIs in a trie index.
+-spec index_size(term()) -> {ok, non_neg_integer()}.
+index_size(Index) ->
+    macula_mri_nif:index_size(Index).

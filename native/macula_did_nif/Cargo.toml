@@ -1,0 +1,28 @@
+[package]
+name = "macula_did_nif"
+version = "0.1.0"
+authors = ["rgfaber"]
+edition = "2021"
+description = "NIF for Macula DID (Decentralized Identifier) operations"
+
+[lib]
+name = "macula_did_nif"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Rustler for Erlang NIF bindings
+rustler = "0.34"
+
+# JSON serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Ed25519 for key verification
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+
+# Base58 encoding (Bitcoin alphabet, for multibase 'z' prefix)
+bs58 = "0.5"
+
+[profile.release]
+lto = true
+opt-level = 3

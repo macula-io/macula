@@ -108,8 +108,8 @@ hex_decode(Hex) ->
 %% @private
 %% BLAKE3 hash with NIF acceleration when available.
 %%
-%% Tries to use macula_blake3_nif (from macula-nifs package) which provides
-%% a Rust NIF implementation that is 10-20x faster than pure Erlang.
+%% Uses macula_blake3_nif which provides a Rust NIF implementation
+%% that is 10-20x faster than pure Erlang.
 %% Falls back to pure Erlang implementation if NIFs are not available.
 -spec blake3_hash(binary()) -> hash().
 blake3_hash(Data) ->
