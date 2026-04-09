@@ -79,16 +79,26 @@ childspecs() ->
     [].
 
 %% @doc Listen for incoming distribution connections.
+%% In relay mode, skip the QUIC listener — all connections go through the relay.
 -spec listen(atom()) -> {ok, {term(), #net_address{}, 1..3}} | {error, term()}.
 listen(NodeName) ->
-    Port = get_dist_port(NodeName),
-    case start_quic_listener(Port) of
-        {ok, ListenerHandle} ->
+    case macula_dist_relay:is_relay_mode() of
+        true ->
+            %% Relay mode: no QUIC listener needed. Connections arrive via relay tunnel.
+            Port = 0,
             Address = make_address(NodeName, Port),
-            {ok, {ListenerHandle, Address, 1}};
-        {error, Reason} ->
-            ?LOG_ERROR("[dist] Listen failed: ~p", [Reason]),
-            {error, Reason}
+            ?LOG_INFO("[dist] Relay mode — no QUIC listener (tunnels via relay)"),
+            {ok, {relay_mode, Address, 1}};
+        false ->
+            Port = get_dist_port(NodeName),
+            case start_quic_listener(Port) of
+                {ok, ListenerHandle} ->
+                    Address = make_address(NodeName, Port),
+                    {ok, {ListenerHandle, Address, 1}};
+                {error, Reason} ->
+                    ?LOG_ERROR("[dist] Listen failed: ~p", [Reason]),
+                    {error, Reason}
+            end
     end.
 
 %% @doc Accept incoming connections. Called in a loop by net_kernel.
