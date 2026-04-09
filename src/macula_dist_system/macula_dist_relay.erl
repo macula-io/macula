@@ -300,6 +300,7 @@ start_supervised_bridge(Client, BridgeSock, SendTopic, RecvTopic, TunnelId, Key)
     case macula_dist_bridge_sup:start_bridge(BridgeArgs) of
         {ok, Pid} ->
             gen_tcp:controlling_process(BridgeSock, Pid),
+            Pid ! socket_ready,
             ?LOG_INFO("[dist_relay] Supervised bridge ~p for ~s", [Pid, TunnelId]),
             {ok, Pid};
         {error, Reason} ->

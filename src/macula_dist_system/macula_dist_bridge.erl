@@ -75,19 +75,16 @@ init(#{client := Client, bridge_sock := BridgeSock, send_topic := SendTopic,
        metrics := Metrics}) ->
     process_flag(trap_exit, true),
 
-    %% Socket ownership is transferred by the caller (start_supervised_bridge)
-    %% via gen_tcp:controlling_process AFTER start_link returns.
-
     MonRef = erlang:monitor(process, Client),
     {ok, SubRef} = subscribe_to_tunnel(Client, RecvTopic),
 
-    ReaderPid = start_reader(Client, BridgeSock, SendTopic, TunnelId, Key, Metrics),
-
-    ?LOG_INFO("[dist_bridge] Started for tunnel ~s (reader ~p)", [TunnelId, ReaderPid]),
+    %% Don't start reader yet — socket ownership hasn't been transferred.
+    %% The caller sends {socket_ready} after gen_tcp:controlling_process.
+    ?LOG_INFO("[dist_bridge] Waiting for socket handoff for tunnel ~s", [TunnelId]),
 
     {ok, #state{bridge_sock = BridgeSock, tunnel_id = TunnelId, client = Client,
                 client_mon = MonRef, sub_ref = SubRef, key = Key, metrics = Metrics,
-                reader_pid = ReaderPid, send_topic = SendTopic, recv_topic = RecvTopic,
+                reader_pid = undefined, send_topic = SendTopic, recv_topic = RecvTopic,
                 reconnect_count = 0},
      ?BRIDGE_RECV_TIMEOUT}.
 
@@ -116,6 +113,14 @@ handle_info({tunnel_in, EncData}, #state{key = Key, bridge_sock = BridgeSock,
             ?LOG_WARNING("[dist_bridge] Decrypt failed for ~s", [TunnelId]),
             {noreply, State, ?BRIDGE_RECV_TIMEOUT}
     end;
+
+%% --- Socket ownership transferred, start reader ---
+handle_info(socket_ready, #state{reader_pid = undefined, client = Client,
+                                  bridge_sock = BridgeSock, send_topic = SendTopic,
+                                  tunnel_id = TunnelId, key = Key, metrics = Metrics} = State) ->
+    ReaderPid = start_reader(Client, BridgeSock, SendTopic, TunnelId, Key, Metrics),
+    ?LOG_INFO("[dist_bridge] Reader started (~p) for ~s", [ReaderPid, TunnelId]),
+    {noreply, State#state{reader_pid = ReaderPid}, ?BRIDGE_RECV_TIMEOUT};
 
 %% --- Reader exited (linked process) ---
 handle_info({'EXIT', Pid, Reason}, #state{reader_pid = Pid, tunnel_id = TunnelId} = State) ->
