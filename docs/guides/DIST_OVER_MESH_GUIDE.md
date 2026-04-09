@@ -59,7 +59,7 @@ When you `net_adm:ping('other@host')`, Macula:
 
 The relay sees encrypted bytes — it cannot read your Erlang terms.
 
-![Relay Tunnel Architecture](assets/dist_relay_tunnel.svg)
+![Relay Tunnel Architecture](assets/dist_over_mesh.svg)
 
 ## join_mesh Options
 
