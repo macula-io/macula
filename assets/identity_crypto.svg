@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 380" width="700" height="380">
+  <defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="rustGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#a371f7" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#a371f7" stop-opacity="0.05"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="700" height="380" fill="url(#bg3)"/>
+
+  <text x="350" y="30" text-anchor="middle" fill="#f0f6fc" font-family="system-ui, sans-serif" font-size="16" font-weight="bold">Identity and Crypto Stack (NIF-accelerated)</text>
+  <text x="350" y="48" text-anchor="middle" fill="#8b949e" font-family="system-ui, sans-serif" font-size="11">Rust NIFs with pure Erlang fallbacks -- works everywhere</text>
+
+  <!-- NIF background glow -->
+  <rect x="20" y="62" width="660" height="290" rx="12" fill="url(#rustGrad)" stroke="#a371f7" stroke-width="0.5" opacity="0.6">
+    <animate attributeName="opacity" values="0.6;0.3;0.6" dur="5s" repeatCount="indefinite"/>
+  </rect>
+  <text x="660" y="80" text-anchor="end" fill="#a371f7" font-family="monospace" font-size="9" opacity="0.6">native/ Rust NIFs</text>
+
+  <!-- Ed25519 -->
+  <rect x="40" y="90" width="190" height="120" rx="8" fill="#21262d" stroke="#58a6ff" stroke-width="1.2"/>
+  <text x="135" y="112" text-anchor="middle" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="13" font-weight="bold">Ed25519</text>
+  <text x="135" y="130" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula_crypto_nif</text>
+
+  <text x="50" y="152" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">generate_keypair/0</text>
+  <text x="50" y="167" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">sign/2 verify/3</text>
+  <text x="50" y="182" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">blake3/1 sha256/1</text>
+  <text x="50" y="197" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">secure_compare/2</text>
+
+  <!-- Arrow Ed25519 → UCAN -->
+  <line x1="230" y1="150" x2="258" y2="150" stroke="#f97316" stroke-width="1.5"/>
+  <polygon points="256,146 264,150 256,154" fill="#f97316"/>
+  <text x="247" y="140" text-anchor="middle" fill="#f97316" font-family="system-ui, sans-serif" font-size="8">signs</text>
+
+  <!-- UCAN -->
+  <rect x="265" y="90" width="180" height="120" rx="8" fill="#21262d" stroke="#f97316" stroke-width="1.2"/>
+  <text x="355" y="112" text-anchor="middle" fill="#f97316" font-family="system-ui, sans-serif" font-size="13" font-weight="bold">UCAN Tokens</text>
+  <text x="355" y="130" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula_ucan_nif</text>
+
+  <text x="275" y="152" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">create/4,5</text>
+  <text x="275" y="167" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">verify/2 decode/1</text>
+  <text x="275" y="182" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">get_capabilities/1</text>
+  <text x="275" y="197" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">compute_cid/1</text>
+
+  <!-- Arrow UCAN → DID -->
+  <line x1="445" y1="150" x2="473" y2="150" stroke="#3fb950" stroke-width="1.5"/>
+  <polygon points="471,146 479,150 471,154" fill="#3fb950"/>
+  <text x="459" y="140" text-anchor="middle" fill="#3fb950" font-family="system-ui, sans-serif" font-size="8">issued by</text>
+
+  <!-- DID -->
+  <rect x="480" y="90" width="180" height="120" rx="8" fill="#21262d" stroke="#3fb950" stroke-width="1.2"/>
+  <text x="570" y="112" text-anchor="middle" fill="#3fb950" font-family="system-ui, sans-serif" font-size="13" font-weight="bold">DID Documents</text>
+  <text x="570" y="130" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula_did_nif</text>
+
+  <text x="490" y="152" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">create_document/2</text>
+  <text x="490" y="167" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">parse_did/1</text>
+  <text x="490" y="182" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">is_descendant/2</text>
+  <text x="490" y="197" fill="#6e7681" font-family="system-ui, sans-serif" font-size="10">verify_controller/2</text>
+
+  <!-- DID Hierarchy -->
+  <rect x="40" y="230" width="620" height="110" rx="8" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+  <text x="350" y="252" text-anchor="middle" fill="#f0f6fc" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">Hierarchical DID Identity</text>
+
+  <!-- Tree -->
+  <text x="300" y="278" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="11">did:macula:io.macula</text>
+  <text x="423" y="278" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">(realm -- root of trust)</text>
+
+  <line x1="300" y1="284" x2="180" y2="302" stroke="#30363d" stroke-width="1"/>
+  <line x1="300" y1="284" x2="420" y2="302" stroke="#30363d" stroke-width="1"/>
+
+  <text x="180" y="316" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">did:macula:io.macula.acme</text>
+  <text x="310" y="316" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">(org)</text>
+
+  <text x="420" y="316" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">did:macula:io.macula.bob</text>
+  <text x="545" y="316" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">(org)</text>
+
+  <line x1="180" y1="322" x2="140" y2="335" stroke="#30363d" stroke-width="1"/>
+  <text x="140" y="328" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">.acme.weather</text>
+
+  <!-- Animated trust chain arrow -->
+  <line x1="300" y1="268" x2="300" y2="284" stroke="#f97316" stroke-width="1" opacity="0.5">
+    <animate attributeName="opacity" values="0.5;0.2;0.5" dur="2s" repeatCount="indefinite"/>
+  </line>
+
+  <!-- Bottom note -->
+  <text x="350" y="370" text-anchor="middle" fill="#8b949e" font-family="system-ui, sans-serif" font-size="10">Each level is controlled by its parent. Ed25519 keypairs at every level. UCAN delegates capabilities down the hierarchy.</text>
+</svg>

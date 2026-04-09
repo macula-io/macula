@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 400" width="680" height="400">
+  <defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="680" height="400" fill="url(#bg4)"/>
+
+  <text x="340" y="28" text-anchor="middle" fill="#f0f6fc" font-family="system-ui, sans-serif" font-size="16" font-weight="bold">MRI Trie Index (NIF-accelerated)</text>
+  <text x="340" y="46" text-anchor="middle" fill="#8b949e" font-family="system-ui, sans-serif" font-size="11">O(d) hierarchy queries at million-scale -- Rust trie via macula_mri:build_index/1</text>
+
+  <!-- MRI Format -->
+  <rect x="20" y="60" width="640" height="34" rx="6" fill="#21262d" stroke="#30363d"/>
+  <text x="340" y="82" text-anchor="middle" fill="#f97316" font-family="monospace" font-size="13">mri:{type}:{realm}/{path}</text>
+
+  <!-- Trie visualization -->
+  <!-- Root: io.macula -->
+  <rect x="260" y="114" width="160" height="30" rx="5" fill="#21262d" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="340" y="134" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="11">io.macula</text>
+  <text x="430" y="134" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">realm</text>
+
+  <!-- Branches from root -->
+  <line x1="290" y1="144" x2="140" y2="174" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="340" y1="144" x2="340" y2="174" stroke="#30363d" stroke-width="1.2"/>
+  <line x1="390" y1="144" x2="540" y2="174" stroke="#30363d" stroke-width="1.2"/>
+
+  <!-- acme -->
+  <rect x="60" y="174" width="160" height="28" rx="5" fill="#21262d" stroke="#3fb950" stroke-width="1"/>
+  <text x="140" y="193" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">acme</text>
+
+  <!-- devices -->
+  <rect x="260" y="174" width="160" height="28" rx="5" fill="#21262d" stroke="#3fb950" stroke-width="1"/>
+  <text x="340" y="193" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">devices</text>
+
+  <!-- apps -->
+  <rect x="460" y="174" width="160" height="28" rx="5" fill="#21262d" stroke="#3fb950" stroke-width="1"/>
+  <text x="540" y="193" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">apps</text>
+
+  <!-- acme children -->
+  <line x1="100" y1="202" x2="60" y2="228" stroke="#30363d" stroke-width="1"/>
+  <line x1="180" y1="202" x2="200" y2="228" stroke="#30363d" stroke-width="1"/>
+
+  <rect x="10" y="228" width="110" height="26" rx="4" fill="#21262d" stroke="#f97316" stroke-width="0.8"/>
+  <text x="65" y="246" text-anchor="middle" fill="#f97316" font-family="monospace" font-size="9">counter</text>
+  <circle cx="128" cy="241" r="5" fill="#f97316" opacity="0.3">
+    <animate attributeName="opacity" values="0.3;0.7;0.3" dur="2.5s" repeatCount="indefinite"/>
+  </circle>
+
+  <rect x="150" y="228" width="110" height="26" rx="4" fill="#21262d" stroke="#f97316" stroke-width="0.8"/>
+  <text x="205" y="246" text-anchor="middle" fill="#f97316" font-family="monospace" font-size="9">weather</text>
+
+  <!-- devices children -->
+  <line x1="310" y1="202" x2="290" y2="228" stroke="#30363d" stroke-width="1"/>
+  <line x1="370" y1="202" x2="390" y2="228" stroke="#30363d" stroke-width="1"/>
+
+  <rect x="235" y="228" width="110" height="26" rx="4" fill="#21262d" stroke="#f97316" stroke-width="0.8"/>
+  <text x="290" y="246" text-anchor="middle" fill="#f97316" font-family="monospace" font-size="9">sensor-1</text>
+
+  <rect x="355" y="228" width="110" height="26" rx="4" fill="#21262d" stroke="#f97316" stroke-width="0.8"/>
+  <text x="410" y="246" text-anchor="middle" fill="#f97316" font-family="monospace" font-size="9">sensor-2</text>
+
+  <!-- apps children -->
+  <line x1="540" y1="202" x2="540" y2="228" stroke="#30363d" stroke-width="1"/>
+
+  <rect x="485" y="228" width="110" height="26" rx="4" fill="#21262d" stroke="#f97316" stroke-width="0.8"/>
+  <text x="540" y="246" text-anchor="middle" fill="#f97316" font-family="monospace" font-size="9">dashboard</text>
+
+  <!-- Query highlight: index_children -->
+  <rect x="20" y="275" width="310" height="110" rx="8" fill="#21262d" stroke="#58a6ff" stroke-width="1"/>
+  <text x="175" y="296" text-anchor="middle" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">index_children/3 -- O(d)</text>
+  <text x="30" y="318" fill="#c9d1d9" font-family="monospace" font-size="10">{ok, Idx} = macula_mri:build_index(All),</text>
+  <text x="30" y="336" fill="#c9d1d9" font-family="monospace" font-size="10">{ok, Kids} = macula_mri:index_children(</text>
+  <text x="30" y="352" fill="#c9d1d9" font-family="monospace" font-size="10">    Idx, &lt;&lt;"io.macula"&gt;&gt;, [&lt;&lt;"acme"&gt;&gt;]).</text>
+  <text x="30" y="372" fill="#3fb950" font-family="monospace" font-size="10">%% => [counter, weather]</text>
+
+  <!-- Performance comparison -->
+  <rect x="350" y="275" width="310" height="110" rx="8" fill="#21262d" stroke="#a371f7" stroke-width="1"/>
+  <text x="505" y="296" text-anchor="middle" fill="#a371f7" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">Performance vs ETS scan</text>
+
+  <text x="370" y="320" fill="#6e7681" font-family="system-ui, sans-serif" font-size="11">1M MRIs:</text>
+  <text x="470" y="320" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="11">ETS scan = O(n) = ~200ms</text>
+  <text x="470" y="340" fill="#3fb950" font-family="system-ui, sans-serif" font-size="11" font-weight="bold">Trie NIF  = O(d) = ~0.1ms</text>
+
+  <text x="370" y="364" fill="#6e7681" font-family="system-ui, sans-serif" font-size="11">10M MRIs:</text>
+  <text x="470" y="364" fill="#c9d1d9" font-family="system-ui, sans-serif" font-size="11">ETS = ~2000ms</text>
+  <text x="580" y="364" fill="#3fb950" font-family="system-ui, sans-serif" font-size="11" font-weight="bold">Trie = ~0.1ms</text>
+
+  <!-- Animated search path -->
+  <circle r="4" fill="#58a6ff" opacity="0.7">
+    <animateMotion dur="3s" repeatCount="indefinite" path="M340,130 L140,188 L65,241"/>
+    <animate attributeName="opacity" values="0.7;0.3;0.7" dur="3s" repeatCount="indefinite"/>
+  </circle>
+</svg>

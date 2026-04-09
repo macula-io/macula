@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="boxGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#21262d"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#fb923c"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="480" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="400" y="36" text-anchor="middle" fill="#f0f6fc" font-family="system-ui, sans-serif" font-size="18" font-weight="bold">Macula SDK v1.0.0 — 48 Modules</text>
+  <text x="400" y="56" text-anchor="middle" fill="#8b949e" font-family="system-ui, sans-serif" font-size="12">Client library for the Macula HTTP/3 relay mesh</text>
+
+  <!-- Facade box -->
+  <rect x="280" y="72" width="240" height="40" rx="6" fill="url(#boxGrad)" stroke="#f97316" stroke-width="1.5"/>
+  <text x="400" y="97" text-anchor="middle" fill="#f97316" font-family="monospace" font-size="13" font-weight="bold">macula.erl</text>
+  <text x="518" y="97" fill="#8b949e" font-family="system-ui, sans-serif" font-size="9">facade</text>
+  <!-- Pulse animation on facade -->
+  <rect x="280" y="72" width="240" height="40" rx="6" fill="none" stroke="#f97316" stroke-width="1.5" opacity="0.4">
+    <animate attributeName="opacity" values="0.4;0.1;0.4" dur="3s" repeatCount="indefinite"/>
+  </rect>
+
+  <!-- Row 1: Transport -->
+  <rect x="20" y="130" width="230" height="100" rx="8" fill="url(#boxGrad)" stroke="#30363d" stroke-width="1"/>
+  <text x="135" y="150" text-anchor="middle" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">Client Transport</text>
+  <text x="30" y="170" fill="#c9d1d9" font-family="monospace" font-size="10">macula_relay_client</text>
+  <text x="30" y="185" fill="#c9d1d9" font-family="monospace" font-size="10">macula_multi_relay</text>
+  <text x="30" y="200" fill="#c9d1d9" font-family="monospace" font-size="10">macula_local_client</text>
+  <text x="30" y="215" fill="#c9d1d9" font-family="monospace" font-size="10">macula_quic</text>
+
+  <!-- Row 1: Wire Protocol -->
+  <rect x="265" y="130" width="200" height="100" rx="8" fill="url(#boxGrad)" stroke="#30363d" stroke-width="1"/>
+  <text x="365" y="150" text-anchor="middle" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">Wire Protocol</text>
+  <text x="275" y="170" fill="#c9d1d9" font-family="monospace" font-size="10">macula_protocol_encoder</text>
+  <text x="275" y="185" fill="#c9d1d9" font-family="monospace" font-size="10">macula_protocol_decoder</text>
+  <text x="275" y="200" fill="#c9d1d9" font-family="monospace" font-size="10">macula_protocol_types</text>
+  <text x="275" y="215" fill="#c9d1d9" font-family="monospace" font-size="10">macula_core_types</text>
+
+  <!-- Row 1: Identity / Crypto -->
+  <rect x="480" y="130" width="300" height="100" rx="8" fill="url(#boxGrad)" stroke="#30363d" stroke-width="1"/>
+  <text x="630" y="150" text-anchor="middle" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">Identity / Crypto (Rust NIFs)</text>
+  <text x="490" y="170" fill="#c9d1d9" font-family="monospace" font-size="10">macula_crypto_nif</text>
+  <text x="650" y="170" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">Ed25519, BLAKE3, SHA-256</text>
+  <text x="490" y="185" fill="#c9d1d9" font-family="monospace" font-size="10">macula_ucan_nif</text>
+  <text x="650" y="185" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">capability tokens</text>
+  <text x="490" y="200" fill="#c9d1d9" font-family="monospace" font-size="10">macula_did_nif</text>
+  <text x="650" y="200" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">decentralized identifiers</text>
+  <text x="490" y="215" fill="#c9d1d9" font-family="monospace" font-size="10">macula_blake3_nif</text>
+  <text x="650" y="215" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">content hashing</text>
+  <!-- NIF glow -->
+  <rect x="480" y="130" width="300" height="100" rx="8" fill="none" stroke="#a371f7" stroke-width="0.8" opacity="0.3">
+    <animate attributeName="opacity" values="0.3;0.1;0.3" dur="4s" repeatCount="indefinite"/>
+  </rect>
+
+  <!-- Row 2: MRI -->
+  <rect x="20" y="248" width="300" height="100" rx="8" fill="url(#boxGrad)" stroke="#30363d" stroke-width="1"/>
+  <text x="170" y="268" text-anchor="middle" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">MRI (Resource Identifiers)</text>
+  <text x="30" y="288" fill="#c9d1d9" font-family="monospace" font-size="10">macula_mri</text>
+  <text x="160" y="288" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">parse, format, hierarchy, trie index</text>
+  <text x="30" y="303" fill="#c9d1d9" font-family="monospace" font-size="10">macula_mri_registry</text>
+  <text x="200" y="303" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">23 builtin + custom types</text>
+  <text x="30" y="318" fill="#c9d1d9" font-family="monospace" font-size="10">macula_mri_store / _graph</text>
+  <text x="230" y="318" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">adapter behaviours</text>
+  <text x="30" y="333" fill="#c9d1d9" font-family="monospace" font-size="10">macula_mri_ets</text>
+  <text x="160" y="333" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">default in-memory adapter</text>
+
+  <!-- Row 2: Cert System -->
+  <rect x="335" y="248" width="200" height="100" rx="8" fill="url(#boxGrad)" stroke="#30363d" stroke-width="1"/>
+  <text x="435" y="268" text-anchor="middle" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">Cert System</text>
+  <text x="345" y="288" fill="#c9d1d9" font-family="monospace" font-size="10">macula_cert</text>
+  <text x="345" y="303" fill="#c9d1d9" font-family="monospace" font-size="10">macula_cert_system</text>
+  <text x="345" y="318" fill="#c9d1d9" font-family="monospace" font-size="10">macula_trust_store</text>
+  <text x="345" y="338" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">Ed25519 keypairs, self-sovereign identity</text>
+
+  <!-- Row 2: Dist Over Mesh -->
+  <rect x="550" y="248" width="230" height="100" rx="8" fill="url(#boxGrad)" stroke="#30363d" stroke-width="1"/>
+  <text x="665" y="268" text-anchor="middle" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">Dist Over Mesh</text>
+  <text x="560" y="288" fill="#c9d1d9" font-family="monospace" font-size="10">macula_dist</text>
+  <text x="560" y="303" fill="#c9d1d9" font-family="monospace" font-size="10">macula_dist_bridge</text>
+  <text x="560" y="318" fill="#c9d1d9" font-family="monospace" font-size="10">macula_cluster</text>
+  <text x="560" y="338" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">OTP distribution through relays</text>
+
+  <!-- Row 3: Utilities -->
+  <rect x="20" y="366" width="760" height="44" rx="8" fill="url(#boxGrad)" stroke="#30363d" stroke-width="1"/>
+  <text x="50" y="393" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">Utilities</text>
+  <text x="120" y="393" fill="#c9d1d9" font-family="monospace" font-size="10">macula_id  macula_names  macula_node  macula_realm  macula_time  macula_uri  macula_utils  macula_cache</text>
+
+  <!-- Bottom: Relay pointer -->
+  <line x1="400" y1="428" x2="400" y2="450" stroke="#f97316" stroke-width="1" stroke-dasharray="4,3"/>
+  <polygon points="395,448 400,458 405,448" fill="#f97316" opacity="0.7">
+    <animate attributeName="opacity" values="0.7;0.3;0.7" dur="2s" repeatCount="indefinite"/>
+  </polygon>
+  <text x="400" y="474" text-anchor="middle" fill="#8b949e" font-family="system-ui, sans-serif" font-size="11">QUIC connection to macula-relay (gateway, DHT, RPC routing, PubSub routing)</text>
+</svg>

@@ -17,6 +17,10 @@
 
 ## What is Macula?
 
+<p align="center">
+  <img src="assets/sdk_architecture.svg" alt="Macula SDK Architecture" width="100%">
+</p>
+
 Macula is an **Erlang/OTP client SDK** for building applications that connect to a [Macula relay mesh](https://github.com/macula-io/macula-relay). It provides:
 
 - **Pub/Sub messaging** -- topic-based event distribution across the mesh
@@ -47,6 +51,10 @@ defp deps do
   [{:macula, "~> 1.0"}]
 end
 ```
+
+<p align="center">
+  <img src="assets/connect_flow.svg" alt="SDK Connect Flow" width="100%">
+</p>
 
 ### Connect and Communicate
 
@@ -109,6 +117,10 @@ ok = macula_cluster:start_cluster(#{
 
 ## Identity and Crypto (NIF-accelerated)
 
+<p align="center">
+  <img src="assets/identity_crypto.svg" alt="Identity and Crypto Stack" width="100%">
+</p>
+
 Built-in Rust NIFs with pure Erlang fallbacks for all operations:
 
 ```erlang
@@ -129,6 +141,10 @@ Hash = macula_crypto_nif:blake3(Data).
 ```
 
 ## MRI (Resource Identifiers)
+
+<p align="center">
+  <img src="assets/mri_trie_index.svg" alt="MRI Trie Index" width="100%">
+</p>
 
 Typed, hierarchical resource addressing: `mri:{type}:{realm}/{path}`
 
