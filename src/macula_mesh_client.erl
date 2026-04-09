@@ -281,6 +281,7 @@ handle_info({call_timeout, CallId}, State) ->
     case maps:get(CallId, State#state.pending_calls, undefined) of
         undefined -> {noreply, State};
         {From, _TimerRef} ->
+            ?LOG_WARNING("[mesh_client] RPC call ~s TIMED OUT (no reply from relay)", [CallId]),
             gen_server:reply(From, {error, timeout}),
             {noreply, State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)}}
     end;
@@ -554,9 +555,11 @@ replay_state(#state{subscriptions = Subs, procedures = Procs} = State) ->
         maybe_send(register_procedure, #{<<"procedure">> => Proc}, State)
     end, Procs).
 
-maybe_send(_Type, _Msg, #state{stream = undefined}) -> ok;
+maybe_send(Type, _Msg, #state{stream = undefined}) ->
+    ?LOG_WARNING("[mesh_client] DROPPED ~p — stream undefined", [Type]);
 maybe_send(Type, Msg, #state{stream = Stream}) ->
     Binary = macula_protocol_encoder:encode(Type, Msg),
+    ?LOG_INFO("[mesh_client] SEND ~p (~p bytes)", [Type, byte_size(Binary)]),
     macula_quic:async_send(Stream, Binary).
 
 %% Ensure payload is a flat binary before passing to msgpack.
