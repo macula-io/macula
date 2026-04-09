@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.0] - 2026-04-09
+
+### BREAKING — SDK/Relay Separation
+
+Macula is now a **lean 48-module client SDK**. All server/relay modules (~111) have been moved to the private `macula-relay` repository.
+
+**If you run a relay server**, depend on `macula-relay` (which depends on this SDK).
+**If you build mesh applications**, depend on `macula` — this package. The API is unchanged.
+
+### Added
+
+- **Crypto NIFs** — Ed25519 keypairs, signing, verification, BLAKE3, SHA-256, base64, secure compare. Rust NIF with pure Erlang fallback. Absorbed from `macula-nifs` package.
+- **UCAN NIFs** — Token create/verify/decode with Ed25519. Rust NIF with pure Erlang fallback.
+- **DID NIFs** — W3C DID document operations, hierarchical DID parsing. Rust NIF with pure Erlang fallback.
+- **MRI trie index** — `macula_mri:build_index/1`, `index_children/3`, `index_descendants/3` for O(d) hierarchy queries at million-scale. NIF-accelerated via Rust trie.
+- **MRI NIF validation** — `is_valid_realm_format/1` and `validate_segment_chars/1` delegate to NIF when available, avoiding `binary_to_list` conversion.
+- **Build system** — `priv/build-nifs.sh` builds all Rust NIFs (Quinn QUIC + crypto + UCAN + DID + MRI) from source with precompiled download fallback for Quinn.
+
+### Changed
+
+- **macula_mri.erl** is now THE canonical MRI definition — single source of truth for types, parsing, validation, hierarchy, construction, DHT derivation, and trie indexing.
+- **macula_root.erl** now only starts SDK subsystems (MRI registry + ETS adapter). Server systems live in macula-relay.
+- **Description** — "Macula HTTP/3 Mesh SDK" (was "Complete distributed application framework").
+
+### Removed
+
+- All gateway system modules (moved to macula-relay)
+- All routing system / Kademlia DHT modules (moved to macula-relay)
+- All RPC system modules (moved to macula-relay)
+- All PubSub system modules (moved to macula-relay)
+- All peer system modules (moved to macula-relay)
+- All membership/SWIM modules (moved to macula-relay)
+- All bootstrap system modules (moved to macula-relay)
+- All bridge system modules (moved to macula-relay)
+- All platform system / CRDT modules (moved to macula-relay)
+- All content system modules (moved to macula-relay)
+- All registry system modules (moved to macula-relay)
+- Server-side authorization, TLS, connection management (moved to macula-relay)
+- Relay server, relay handler, relay node, relay discovery (moved to macula-relay)
+
+### Absorbed (from macula-nifs)
+
+- `macula_crypto_nif.erl` — Ed25519, BLAKE3, SHA-256
+- `macula_blake3_nif.erl` — BLAKE3 high-level API
+- `macula_ucan_nif.erl` — UCAN token operations
+- `macula_did_nif.erl` — DID document operations
+- `macula_mri_nif.erl` — MRI NIF bridge (internal)
+- 4 Rust NIF crates in `native/`
+
+---
+
+## [0.49.0] - 2026-04-09
+
+### Added
+
+- **Cross-relay RPC** — DHT procedure store + call forwarding in gateway. Procedures advertised on one relay are discoverable and callable from other relays via peering overlay.
+
+---
+
 ## [0.45.1] - 2026-04-07
 
 ### Added

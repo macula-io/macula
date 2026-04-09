@@ -34,12 +34,12 @@
 %%
 %% == MRI Format ==
 %%
-%% MRIs follow the format: `mri:{type}:{realm}` or `mri:{type}:{realm}/{path...}`
+%% MRIs follow the format: mri:type:realm or mri:type:realm/path
 %%
 %% Examples:
-%% - `mri:realm:io.macula` - A realm
-%% - `mri:app:io.macula/counter` - An app in the io.macula realm
-%% - `mri:service:io.macula/counter/api` - A service endpoint
+%%   mri:realm:io.macula — A realm
+%%   mri:app:io.macula/counter — An app in the io.macula realm
+%%   mri:service:io.macula/counter/api — A service endpoint
 %%
 %% @author rgfaber
 -module(macula_mri_nif).
