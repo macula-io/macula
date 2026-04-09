@@ -162,6 +162,8 @@ join_mesh(Opts) ->
     },
     case macula_mesh_client:start_link(ClientOpts) of
         {ok, Client} ->
+            %% Wait for relay connection before advertising
+            wait_for_relay(Client, 30),
             os:putenv("MACULA_DIST_MODE", "relay"),
             macula_dist_relay:register_mesh_client(Client),
             macula_dist_relay:advertise_dist_accept(),
@@ -170,4 +172,17 @@ join_mesh(Opts) ->
         {error, Reason} ->
             ?LOG_ERROR("[macula] Failed to join mesh: ~p", [Reason]),
             {error, Reason}
+    end.
+
+%% @private Wait for relay connection by attempting a subscribe/unsubscribe.
+wait_for_relay(_Client, 0) ->
+    ?LOG_WARNING("[macula] Relay connection not ready after timeout");
+wait_for_relay(Client, Retries) ->
+    case catch macula_mesh_client:subscribe(Client, <<"_ping.test">>, fun(_) -> ok end) of
+        {ok, Ref} ->
+            catch macula_mesh_client:unsubscribe(Client, Ref),
+            ok;
+        _ ->
+            timer:sleep(1000),
+            wait_for_relay(Client, Retries - 1)
     end.
