@@ -223,6 +223,10 @@ start_quic_listener(Port) ->
 %%%===================================================================
 
 %% @private Acceptor loop — recursively accepts QUIC connections.
+%% In relay mode, block forever — inbound connections arrive via relay tunnel,
+%% not via QUIC accept. The relay_mode atom signals this.
+acceptor_loop(_Kernel, relay_mode) ->
+    receive stop -> ok end;
 acceptor_loop(Kernel, Listener) ->
     case macula_quic:accept(Listener, #{active => false}) of
         {ok, Conn} ->
