@@ -417,8 +417,10 @@ handle_message({ok, {call, Msg}}, State) ->
     CallId = maps:get(<<"call_id">>, Msg, <<>>),
     Args = maps:get(<<"args">>, Msg, #{}),
     Trace = maps:get(<<"_trace">>, Msg, undefined),
+    ?LOG_WARNING("[RPC-TRACE] CALL received from relay: proc=~s call_id=~s", [Procedure, CallId]),
     case maps:get(Procedure, State#state.procedures, undefined) of
         undefined ->
+            ?LOG_WARNING("[RPC-TRACE] No handler for proc=~s, sending not_found reply", [Procedure]),
             ReplyBase = #{<<"call_id">> => CallId,
                           <<"error">> => #{<<"code">> => <<"not_found">>}},
             maybe_send(reply, maybe_add_trace(ReplyBase, Trace), State);
@@ -429,6 +431,8 @@ handle_message({ok, {call, Msg}}, State) ->
                 Result = try Handler(Args)
                          catch _:Err -> {error, Err}
                          end,
+                ?LOG_WARNING("[RPC-TRACE] Handler result for call_id=~s: ~p",
+                             [CallId, element(1, Result)]),
                 ReplyBase = case Result of
                     {ok, R} -> #{<<"call_id">> => CallId, <<"result">> => R};
                     {error, R} -> #{<<"call_id">> => CallId,
@@ -438,6 +442,8 @@ handle_message({ok, {call, Msg}}, State) ->
                 end,
                 ReplyMsg = maybe_add_trace(ReplyBase, Trace),
                 Binary = macula_protocol_encoder:encode(reply, ReplyMsg),
+                ?LOG_WARNING("[RPC-TRACE] Sending REPLY to relay: call_id=~s ~p bytes stream=~p",
+                             [CallId, byte_size(Binary), Stream]),
                 macula_quic:async_send(Stream, Binary)
             end)
     end,
@@ -447,9 +453,11 @@ handle_message({ok, {call, Msg}}, State) ->
 handle_message({ok, {reply, Msg}}, State) ->
     CallId = maps:get(<<"call_id">>, Msg, <<>>),
     Trace = maps:get(<<"_trace">>, Msg, undefined),
+    ?LOG_WARNING("[RPC-TRACE] REPLY received from relay: call_id=~s pending=~p",
+                 [CallId, maps:keys(State#state.pending_calls)]),
     case maps:get(CallId, State#state.pending_calls, undefined) of
         undefined ->
-            ?LOG_DEBUG("[relay_client] Reply for unknown call_id"),
+            ?LOG_WARNING("[RPC-TRACE] REPLY for UNKNOWN call_id=~s (not in pending)", [CallId]),
             State;
         {From, TimerRef} ->
             erlang:cancel_timer(TimerRef),
