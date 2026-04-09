@@ -98,6 +98,7 @@ handle_cast(_Msg, State) ->
 handle_info({tunnel_in, EncData}, #state{key = Key, bridge_sock = BridgeSock,
                                           metrics = Metrics, tunnel_id = TunnelId} = State)
         when is_binary(EncData) ->
+    ?LOG_WARNING("[BRIDGE-TRACE] tunnel_in: ~p bytes for ~s", [byte_size(EncData), TunnelId]),
     case decrypt(Key, EncData) of
         {ok, Data} ->
             counters:add(Metrics, ?METRIC_BYTES_IN, byte_size(Data)),
@@ -119,7 +120,7 @@ handle_info(socket_ready, #state{reader_pid = undefined, client = Client,
                                   bridge_sock = BridgeSock, send_topic = SendTopic,
                                   tunnel_id = TunnelId, key = Key, metrics = Metrics} = State) ->
     ReaderPid = start_reader(Client, BridgeSock, SendTopic, TunnelId, Key, Metrics),
-    ?LOG_INFO("[dist_bridge] Reader started (~p) for ~s", [ReaderPid, TunnelId]),
+    ?LOG_WARNING("[BRIDGE-TRACE] Reader started (~p) for ~s sock=~p", [ReaderPid, TunnelId, BridgeSock]),
     {noreply, State#state{reader_pid = ReaderPid}, ?BRIDGE_RECV_TIMEOUT};
 
 %% --- Reader exited (linked process) ---
@@ -202,6 +203,7 @@ start_reader(Client, BridgeSock, SendTopic, TunnelId, Key, Metrics) ->
 bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId, Key, Metrics) ->
     case gen_tcp:recv(BridgeSock, 0, ?BRIDGE_RECV_TIMEOUT) of
         {ok, Data} ->
+            ?LOG_WARNING("[BRIDGE-TRACE] Reader recv ~p bytes for ~s", [byte_size(Data), TunnelId]),
             maybe_backpressure(MeshClient),
             Encrypted = encrypt(Key, Data),
             publish_with_retry(MeshClient, SendTopic, Encrypted, ?PUBLISH_RETRIES),
@@ -209,9 +211,9 @@ bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId, Key, Metrics) ->
             counters:add(Metrics, ?METRIC_MSGS_OUT, 1),
             bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId, Key, Metrics);
         {error, closed} ->
-            ?LOG_INFO("[dist_bridge] Reader closed for ~s", [TunnelId]);
+            ?LOG_WARNING("[BRIDGE-TRACE] Reader CLOSED for ~s sock=~p", [TunnelId, BridgeSock]);
         {error, Reason} ->
-            ?LOG_WARNING("[dist_bridge] Reader error ~p for ~s", [Reason, TunnelId])
+            ?LOG_WARNING("[BRIDGE-TRACE] Reader ERROR ~p for ~s sock=~p", [Reason, TunnelId, BridgeSock])
     end.
 
 publish_with_retry(_Client, _Topic, _Data, 0) ->
