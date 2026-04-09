@@ -40,7 +40,7 @@ Add to `rebar.config`:
 
 ```erlang
 {deps, [
-    {macula, "1.0.0"}
+    {macula, "1.1.0"}
 ]}.
 ```
 
@@ -185,18 +185,18 @@ For relay server documentation, see [macula-relay](https://github.com/macula-io/
 
 ---
 
-## SDK Modules (48)
+## SDK Modules (45)
 
 | Group | Modules |
 |-------|---------|
 | **Facade** | `macula`, `macula_app`, `macula_root` |
-| **Client Transport** | `macula_relay_client`, `macula_multi_relay`, `macula_local_client`, `macula_client_behaviour`, `macula_quic` |
+| **Client Transport** | `macula_mesh_client`, `macula_multi_relay`, `macula_quic`, `macula_relay_discovery`, `macula_tls` |
 | **Wire Protocol** | `macula_protocol_encoder`, `macula_protocol_decoder`, `macula_protocol_types`, `macula_core_types` |
 | **Crypto / Identity** | `macula_crypto_nif`, `macula_blake3_nif`, `macula_ucan_nif`, `macula_did_nif` |
 | **Cert System** | `macula_cert`, `macula_cert_system`, `macula_trust_store` |
 | **MRI** | `macula_mri`, `macula_mri_nif`, `macula_mri_registry`, `macula_mri_store`, `macula_mri_graph`, `macula_mri_ets` |
 | **Dist Over Mesh** | `macula_dist`, `macula_dist_bridge`, `macula_dist_bridge_sup`, `macula_dist_discovery`, `macula_dist_relay`, `macula_dist_mdns_advertiser`, `macula_dist_system`, `macula_cluster`, `macula_cluster_gossip`, `macula_cluster_static`, `macula_cluster_strategy` |
-| **Utilities** | `macula_id`, `macula_names`, `macula_node`, `macula_realm`, `macula_time`, `macula_uri`, `macula_utils`, `macula_cache`, `macula_console`, `macula_ping_pong`, `macula_provider_selector`, `macula_service_registry` |
+| **Utilities** | `macula_id`, `macula_names`, `macula_node`, `macula_realm`, `macula_time`, `macula_uri`, `macula_utils`, `macula_cache`, `macula_console` |
 
 Server modules (gateway, DHT routing, RPC routing, PubSub routing, SWIM, peering, bootstrap, bridge, content, registry) live in [macula-relay](https://github.com/macula-io/macula-relay).
 

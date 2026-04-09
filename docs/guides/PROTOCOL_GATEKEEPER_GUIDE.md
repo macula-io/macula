@@ -9,7 +9,7 @@ The Macula mesh uses a **gatekeeper pattern** to validate applications before al
 1. **macula_protocol** - A behaviour that defines the contract mesh-worthy apps must implement
 2. **macula_gatekeeper** - A module that validates applications implement the protocol correctly
 
-![Gatekeeper Security Model](../../assets/gatekeeper_security_model.svg)
+![Gatekeeper Security Model](assets/gatekeeper_security_model.svg)
 
 ## Why Gatekeeping?
 
@@ -31,7 +31,7 @@ The gatekeeper ensures applications:
 
 Every mesh application must implement these 8 callbacks:
 
-![Protocol Callbacks](../../assets/protocol_callbacks.svg)
+![Protocol Callbacks](assets/protocol_callbacks.svg)
 
 #### Identity and Configuration
 
@@ -206,7 +206,7 @@ The gatekeeper validates applications using a **pipeline pattern** where each st
 
 ### Verification Pipeline
 
-![Gatekeeper Flow](../../assets/gatekeeper_flow.svg)
+![Gatekeeper Flow](assets/gatekeeper_flow.svg)
 
 1. **Protocol Loaded** - Ensure `macula_protocol` module is available on the target node
 2. **Behaviour Check** - Verify all 8 callbacks are exported

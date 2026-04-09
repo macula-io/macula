@@ -13,7 +13,7 @@ The Macula Cluster API (`macula_cluster.erl`) provides a standardized interface 
 - **Cookie Management** - Resolving, setting, and persisting cluster cookies
 - **Node Monitoring** - Subscribing to node join/leave events
 
-![Cluster API Integration](../../assets/cluster_integration.svg)
+![Cluster API Integration](assets/cluster_integration.svg)
 
 ---
 
@@ -83,7 +83,7 @@ end
 
 The `macula_cluster_gossip` module provides automatic cluster discovery using UDP multicast, implemented natively in Erlang.
 
-![Gossip Clustering](../../assets/gossip_clustering.svg)
+![Gossip Clustering](assets/gossip_clustering.svg)
 
 ### How It Works
 

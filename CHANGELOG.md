@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-04-09
+
+### Added
+
+- **Cross-relay Erlang distribution** — `macula_dist` now works across federated relay boxes (previously only same-relay). Tested: Milan (Italy) to Stockholm (Sweden) through Nuremberg and Helsinki relays.
+
+### Fixed
+
+- **Cross-relay pub/sub race condition** — publish messages with zero local subscribers are now forwarded to peer relay clients, ensuring dist tunnel handshake data reaches remote relays before peer SUBSCRIBE propagates.
+
+### Changed
+
+- **Code quality cleanup** — removed 16 debug WARNING logs, extracted `dispatch_incoming_call/5`, `execute_and_reply/5`, `decode_reply/2`, `maybe_attach_trace/2` from `macula_mesh_client` to flatten nesting. Replaced triple-nested try/catch in `macula_quic:close/1` with recursive helper.
+- **process_buffer guard** — uses binary pattern guard instead of case expression.
+- **maybe_send** — per-message SEND/DROPPED logs downgraded from WARNING to DEBUG.
+- **Documentation** — fixed asset paths for hexdocs (5 guides), updated module list (45 modules), fixed version references.
+- **Hex config** — fixed files list (removed nonexistent `architecture/`, added `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, simplified native/ include), fixed release version.
+
+---
+
 ## [1.0.2] - 2026-04-09
 
 ### Fixed

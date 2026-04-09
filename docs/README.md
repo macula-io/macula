@@ -1,6 +1,6 @@
 # Macula SDK Documentation
 
-> **Version:** v1.0.0 (April 2026)
+> **Version:** v1.1.0 (April 2026)
 
 Macula SDK is an Erlang/OTP client library for connecting to a **federated relay mesh** over HTTP/3 (QUIC).
 
