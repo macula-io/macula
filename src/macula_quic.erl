@@ -218,14 +218,14 @@ controlling_process(Handle, Pid) ->
 %% @doc Generic close — tries stream, then connection, then listener.
 -spec close(reference()) -> ok.
 close(Ref) ->
-    try nif_close_stream(Ref) of ok -> ok
-    catch _:_ ->
-        try nif_close_connection(Ref) of ok -> ok
-        catch _:_ ->
-            try nif_close_listener(Ref) of ok -> ok
-            catch _:_ -> ok
-            end
-        end
+    close_as(Ref, [fun nif_close_stream/1,
+                    fun nif_close_connection/1,
+                    fun nif_close_listener/1]).
+
+close_as(_Ref, []) -> ok;
+close_as(Ref, [CloseFn | Rest]) ->
+    try CloseFn(Ref) of ok -> ok
+    catch _:_ -> close_as(Ref, Rest)
     end.
 
 %% @doc Async shutdown stream (compat with quicer flags).

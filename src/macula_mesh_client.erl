@@ -384,16 +384,14 @@ site_field(_, _) -> 0.0.
 process_buffer(Buffer, State) when byte_size(Buffer) < 8 ->
     {Buffer, State};
 process_buffer(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
-                 PayloadLen:32/big-unsigned, Rest/binary>> = Buffer, State) ->
-    case byte_size(Rest) >= PayloadLen of
-        true ->
-            MsgBytes = binary:part(Buffer, 0, 8 + PayloadLen),
-            Remaining = binary:part(Buffer, 8 + PayloadLen, byte_size(Buffer) - 8 - PayloadLen),
-            State2 = handle_message(macula_protocol_decoder:decode(MsgBytes), State),
-            process_buffer(Remaining, State2);
-        false ->
-            {Buffer, State}
-    end.
+                 PayloadLen:32/big-unsigned, Rest/binary>> = Buffer, State)
+  when byte_size(Rest) >= PayloadLen ->
+    MsgBytes = binary:part(Buffer, 0, 8 + PayloadLen),
+    Remaining = binary:part(Buffer, 8 + PayloadLen, byte_size(Buffer) - 8 - PayloadLen),
+    State2 = handle_message(macula_protocol_decoder:decode(MsgBytes), State),
+    process_buffer(Remaining, State2);
+process_buffer(Buffer, State) ->
+    {Buffer, State}.
 
 %% Incoming SWIM messages — sent directly by remote relay handler on the inbound
 %% stream as a PUBLISH. Route to SWIM gen_server + extract piggybacked Bloom.
@@ -417,65 +415,20 @@ handle_message({ok, {call, Msg}}, State) ->
     CallId = maps:get(<<"call_id">>, Msg, <<>>),
     Args = maps:get(<<"args">>, Msg, #{}),
     Trace = maps:get(<<"_trace">>, Msg, undefined),
-    ?LOG_WARNING("[RPC-TRACE] CALL received from relay: proc=~s call_id=~s", [Procedure, CallId]),
-    case maps:get(Procedure, State#state.procedures, undefined) of
-        undefined ->
-            ?LOG_WARNING("[RPC-TRACE] No handler for proc=~s, sending not_found reply", [Procedure]),
-            ReplyBase = #{<<"call_id">> => CallId,
-                          <<"error">> => #{<<"code">> => <<"not_found">>}},
-            maybe_send(reply, maybe_add_trace(ReplyBase, Trace), State);
-        Handler ->
-            %% Execute handler in separate process to avoid blocking
-            Stream = State#state.stream,
-            spawn(fun() ->
-                Result = try Handler(Args)
-                         catch _:Err -> {error, Err}
-                         end,
-                ?LOG_WARNING("[RPC-TRACE] Handler result for call_id=~s: ~p",
-                             [CallId, element(1, Result)]),
-                ReplyBase = case Result of
-                    {ok, R} -> #{<<"call_id">> => CallId, <<"result">> => R};
-                    {error, R} -> #{<<"call_id">> => CallId,
-                                    <<"error">> => #{<<"code">> => <<"handler_error">>,
-                                                     <<"message">> => iolist_to_binary(
-                                                         io_lib:format("~p", [R]))}}
-                end,
-                ReplyMsg = maybe_add_trace(ReplyBase, Trace),
-                Binary = macula_protocol_encoder:encode(reply, ReplyMsg),
-                ?LOG_WARNING("[RPC-TRACE] Sending REPLY to relay: call_id=~s ~p bytes stream=~p",
-                             [CallId, byte_size(Binary), Stream]),
-                macula_quic:async_send(Stream, Binary)
-            end)
-    end,
+    dispatch_incoming_call(Procedure, CallId, Args, Trace, State),
     State;
 
 %% Incoming REPLY from relay (we're the caller)
 handle_message({ok, {reply, Msg}}, State) ->
     CallId = maps:get(<<"call_id">>, Msg, <<>>),
-    Trace = maps:get(<<"_trace">>, Msg, undefined),
-    ?LOG_WARNING("[RPC-TRACE] REPLY received from relay: call_id=~s pending=~p",
-                 [CallId, maps:keys(State#state.pending_calls)]),
     case maps:get(CallId, State#state.pending_calls, undefined) of
         undefined ->
-            ?LOG_WARNING("[RPC-TRACE] REPLY for UNKNOWN call_id=~s (not in pending)", [CallId]),
+            ?LOG_DEBUG("[relay_client] Reply for unknown call_id ~s", [CallId]),
             State;
         {From, TimerRef} ->
             erlang:cancel_timer(TimerRef),
-            Result = case maps:get(<<"result">>, Msg, undefined) of
-                undefined ->
-                    Error = maps:get(<<"error">>, Msg, #{}),
-                    {error, Error};
-                R ->
-                    {ok, R}
-            end,
-            Reply = case Trace of
-                undefined -> Result;
-                _ ->
-                    case Result of
-                        {ok, R2} -> {ok, R2, #{trace => Trace}};
-                        Other -> Other
-                    end
-            end,
+            Trace = maps:get(<<"_trace">>, Msg, undefined),
+            Reply = decode_reply(Msg, Trace),
             gen_server:reply(From, Reply),
             State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)}
     end;
@@ -498,6 +451,49 @@ handle_message({error, Reason}, State) ->
     State.
 
 %%====================================================================
+%%====================================================================
+%% RPC call/reply helpers — decomposed from handle_message
+%%====================================================================
+
+%% Dispatch an incoming CALL to the registered handler or reply not_found.
+dispatch_incoming_call(Procedure, CallId, Args, Trace, State) ->
+    case maps:get(Procedure, State#state.procedures, undefined) of
+        undefined ->
+            Reply = #{<<"call_id">> => CallId,
+                      <<"error">> => #{<<"code">> => <<"not_found">>}},
+            maybe_send(reply, maybe_add_trace(Reply, Trace), State);
+        Handler ->
+            Stream = State#state.stream,
+            spawn(fun() ->
+                execute_and_reply(Handler, Args, CallId, Trace, Stream)
+            end)
+    end.
+
+execute_and_reply(Handler, Args, CallId, Trace, Stream) ->
+    Result = try Handler(Args) catch _:Err -> {error, Err} end,
+    ReplyBase = format_call_result(Result, CallId),
+    Binary = macula_protocol_encoder:encode(reply, maybe_add_trace(ReplyBase, Trace)),
+    macula_quic:async_send(Stream, Binary).
+
+format_call_result({ok, R}, CallId) ->
+    #{<<"call_id">> => CallId, <<"result">> => R};
+format_call_result({error, R}, CallId) ->
+    #{<<"call_id">> => CallId,
+      <<"error">> => #{<<"code">> => <<"handler_error">>,
+                       <<"message">> => iolist_to_binary(io_lib:format("~p", [R]))}}.
+
+%% Decode a REPLY message into the caller-facing result tuple.
+decode_reply(Msg, Trace) ->
+    Result = case maps:get(<<"result">>, Msg, undefined) of
+        undefined -> {error, maps:get(<<"error">>, Msg, #{})};
+        R -> {ok, R}
+    end,
+    maybe_attach_trace(Result, Trace).
+
+maybe_attach_trace(Result, undefined) -> Result;
+maybe_attach_trace({ok, R}, Trace) -> {ok, R, #{trace => Trace}};
+maybe_attach_trace(Other, _Trace) -> Other.
+
 %% Internal helpers
 %%====================================================================
 
@@ -564,10 +560,9 @@ replay_state(#state{subscriptions = Subs, procedures = Procs} = State) ->
     end, Procs).
 
 maybe_send(Type, _Msg, #state{stream = undefined}) ->
-    ?LOG_WARNING("[mesh_client] DROPPED ~p — stream undefined", [Type]);
+    ?LOG_DEBUG("[mesh_client] Dropped ~p — no stream", [Type]);
 maybe_send(Type, Msg, #state{stream = Stream}) ->
     Binary = macula_protocol_encoder:encode(Type, Msg),
-    ?LOG_WARNING("[mesh_client] SEND ~p (~p bytes) stream=~p", [Type, byte_size(Binary), Stream]),
     macula_quic:async_send(Stream, Binary).
 
 %% Ensure payload is a flat binary before passing to msgpack.
