@@ -972,17 +972,8 @@ handle_rpc_call(Stream, CallMsg, State) ->
                     macula_quic:send(Stream, ReplyBinary),
                     {noreply, State};
                 {error, not_found} ->
-                    ?LOG_WARNING("[Gateway] No handler for procedure ~s", [Procedure]),
-                    ErrorReply = #{
-                        call_id => CallId,
-                        error => #{
-                            code => <<"procedure_not_found">>,
-                            message => <<"No node has registered this procedure">>
-                        }
-                    },
-                    ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
-                    macula_quic:send(Stream, ReplyBinary),
-                    {noreply, State};
+                    %% Not registered locally — try DHT lookup for cross-relay routing
+                    forward_rpc_via_dht(Stream, CallId, Procedure, CallMsg, State);
                 {error, Reason} ->
                     ?LOG_WARNING("[Gateway] RPC ~s failed: ~p", [Procedure, Reason]),
                     ErrorReply = #{
@@ -997,6 +988,134 @@ handle_rpc_call(Stream, CallMsg, State) ->
                     {noreply, State}
             end
     end.
+
+%% @private Forward RPC call via DHT — look up which relay hosts the procedure,
+%% then forward the call through the overlay peering network.
+%% Called when local handler lookup returns not_found.
+forward_rpc_via_dht(Stream, CallId, Procedure, CallMsg, State) ->
+    case find_procedure_in_dht(Procedure) of
+        {ok, RelayUrl} ->
+            ?LOG_INFO("[Gateway] DHT found procedure ~s at ~s, forwarding", [Procedure, RelayUrl]),
+            forward_call_to_relay(Stream, CallId, CallMsg, RelayUrl, State);
+        not_found ->
+            ?LOG_WARNING("[Gateway] No handler for procedure ~s (local + DHT)", [Procedure]),
+            ErrorReply = #{
+                call_id => CallId,
+                error => #{
+                    code => <<"procedure_not_found">>,
+                    message => <<"No node has registered this procedure">>
+                }
+            },
+            ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+            macula_quic:send(Stream, ReplyBinary),
+            {noreply, State}
+    end.
+
+%% @private Forward a call message to a remote relay via its peering connection.
+%% Uses macula_relay_client:call on the peer connection to invoke the procedure
+%% on the remote relay. The remote relay has the handler registered locally.
+forward_call_to_relay(Stream, CallId, CallMsg, RelayUrl, State) ->
+    Procedure = maps:get(<<"procedure">>, CallMsg, <<>>),
+    Args = maps:get(<<"args">>, CallMsg, #{}),
+    PeerClients = try gen_server:call(macula_relay_peering, peer_clients, 2000)
+                  catch _:_ -> #{} end,
+    case find_peer_for_url(RelayUrl, PeerClients) of
+        {ok, PeerPid} ->
+            %% Forward via the peering relay_client — the remote relay's gateway
+            %% will find the handler locally and return the result.
+            spawn(fun() ->
+                Result = try macula_relay_client:call(PeerPid, Procedure, Args, 4000)
+                         catch _:Err -> {error, Err} end,
+                Reply = case Result of
+                    {ok, R} ->
+                        ?LOG_INFO("[Gateway] Cross-relay RPC ~s succeeded via ~s",
+                                 [Procedure, RelayUrl]),
+                        #{call_id => CallId, result => R};
+                    {error, Reason} ->
+                        ?LOG_WARNING("[Gateway] Cross-relay RPC ~s failed via ~s: ~p",
+                                    [Procedure, RelayUrl, Reason]),
+                        #{call_id => CallId,
+                          error => #{code => <<"cross_relay_error">>,
+                                     message => iolist_to_binary(
+                                         io_lib:format("~p", [Reason]))}}
+                end,
+                ReplyBinary = macula_protocol_encoder:encode(reply, Reply),
+                macula_quic:send(Stream, ReplyBinary)
+            end),
+            {noreply, State};
+        not_found ->
+            ?LOG_WARNING("[Gateway] No peering connection to ~s for procedure ~s",
+                        [RelayUrl, Procedure]),
+            send_rpc_error(Stream, CallId, <<"relay_unreachable">>,
+                          <<"No peering connection to hosting relay">>),
+            {noreply, State}
+    end.
+
+%% @private Find the peer client PID for a relay URL.
+%% Peer clients are keyed by URL in the peering module.
+find_peer_for_url(RelayUrl, PeerClients) ->
+    %% Try exact match first, then prefix match (URL may have different port/path)
+    case maps:get(RelayUrl, PeerClients, undefined) of
+        undefined ->
+            %% Try matching by hostname prefix
+            HostPrefix = extract_host_prefix(RelayUrl),
+            find_peer_by_prefix(HostPrefix, maps:to_list(PeerClients));
+        Pid -> {ok, Pid}
+    end.
+
+extract_host_prefix(Url) ->
+    binary:replace(
+        binary:replace(Url, <<"https://">>, <<>>),
+        <<"http://">>, <<>>).
+
+find_peer_by_prefix(_Prefix, []) -> not_found;
+find_peer_by_prefix(Prefix, [{Url, Pid} | Rest]) ->
+    case binary:match(ensure_binary(Url), Prefix) of
+        {0, _} -> {ok, Pid};
+        _ -> find_peer_by_prefix(Prefix, Rest)
+    end.
+
+ensure_binary(V) when is_binary(V) -> V;
+ensure_binary(V) when is_list(V) -> list_to_binary(V);
+ensure_binary(V) -> iolist_to_binary(io_lib:format("~p", [V])).
+
+%% @private Store procedure in DHT (if routing server is available).
+store_procedure_in_dht(Procedure) ->
+    case whereis(macula_routing_server) of
+        undefined -> ok;
+        Pid ->
+            SelfUrl = try gen_server:call(macula_relay_peering, self_url, 2000)
+                      catch _:_ -> <<"unknown">> end,
+            Value = #{<<"node_id">> => binary:encode_hex(crypto:hash(sha256, SelfUrl)),
+                      <<"endpoint">> => SelfUrl,
+                      <<"stored_at">> => erlang:system_time(millisecond)},
+            catch macula_routing_server:store(Pid, Procedure, Value),
+            ?LOG_INFO("[Gateway] Stored procedure ~s in DHT (relay: ~s)", [Procedure, SelfUrl]),
+            ok
+    end.
+
+%% @private Find procedure in DHT.
+find_procedure_in_dht(Procedure) ->
+    case whereis(macula_routing_server) of
+        undefined -> not_found;
+        Pid ->
+            case catch macula_routing_server:find_value(Pid, Procedure) of
+                {ok, Values} when is_list(Values), length(Values) > 0 ->
+                    %% Pick the first (or most recent) result
+                    #{<<"endpoint">> := Endpoint} = hd(Values),
+                    {ok, Endpoint};
+                _ -> not_found
+            end
+    end.
+
+%% @private Send an RPC error reply.
+send_rpc_error(Stream, CallId, Code, Message) ->
+    ErrorReply = #{
+        call_id => CallId,
+        error => #{code => Code, message => Message}
+    },
+    ReplyBinary = macula_protocol_encoder:encode(reply, ErrorReply),
+    macula_quic:send(Stream, ReplyBinary).
 
 %% @private Handle _dht.list_gateways RPC for peer discovery
 handle_dht_list_gateways(Stream, CallId, _State) ->
@@ -1529,6 +1648,7 @@ handle_decoded_message({ok, {pubsub_route, PubSubRouteMsg}}, _Stream, State) ->
 
 %% Handle register_procedure — client tells us it can handle this procedure.
 %% Store procedure → stream so we can forward CALL messages to the right client.
+%% Also publish to DHT so other relays can discover and route calls here.
 handle_decoded_message({ok, {register_procedure, RegMsg}}, Stream, State) ->
     Procedure = maps:get(<<"procedure">>, RegMsg),
     ?LOG_INFO("[Gateway] Registered procedure ~s on stream ~p", [Procedure, Stream]),
@@ -1552,6 +1672,8 @@ handle_decoded_message({ok, {register_procedure, RegMsg}}, Stream, State) ->
         end
     end,
     macula_gateway_rpc:register_handler(Rpc, Procedure, ForwardHandler),
+    %% Publish procedure→relay mapping to DHT for cross-relay discovery
+    store_procedure_in_dht(Procedure),
     {noreply, State};
 
 %% Handle RPC call message — forward to the stream that registered the procedure.
