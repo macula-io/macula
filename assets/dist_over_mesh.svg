@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 740 340" width="740" height="340">
+  <defs>
+    <linearGradient id="bg5" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="tunnelGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f97316" stop-opacity="0.08"/>
+      <stop offset="50%" stop-color="#f97316" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#f97316" stop-opacity="0.08"/>
+    </linearGradient>
+    <filter id="glow5">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="740" height="340" fill="url(#bg5)"/>
+
+  <text x="370" y="28" text-anchor="middle" fill="#f0f6fc" font-family="system-ui, sans-serif" font-size="16" font-weight="bold">Erlang Distribution Over Relay Mesh</text>
+  <text x="370" y="46" text-anchor="middle" fill="#8b949e" font-family="system-ui, sans-serif" font-size="11">net_adm:ping across firewalls -- no VPN, no open ports, AES-256-GCM encrypted</text>
+
+  <!-- Node A (left) -->
+  <rect x="30" y="80" width="170" height="180" rx="10" fill="#21262d" stroke="#58a6ff" stroke-width="1.5"/>
+
+  <!-- Erlang logo stylized (3 waves) -->
+  <g transform="translate(55, 92)" opacity="0.7">
+    <path d="M0,20 Q10,5 20,20 Q30,35 40,20" stroke="#a71d31" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+    <path d="M0,28 Q10,13 20,28 Q30,43 40,28" stroke="#a71d31" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+    <path d="M0,36 Q10,21 20,36 Q30,51 40,36" stroke="#a71d31" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <text x="115" y="108" text-anchor="middle" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">Node A</text>
+  <text x="115" y="124" text-anchor="middle" fill="#6e7681" font-family="monospace" font-size="9">app@milan</text>
+
+  <rect x="44" y="138" width="142" height="22" rx="3" fill="#161b22" stroke="#30363d"/>
+  <text x="115" y="154" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">gen_server:call(...)</text>
+
+  <rect x="44" y="168" width="142" height="22" rx="3" fill="#161b22" stroke="#30363d"/>
+  <text x="115" y="184" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">macula_dist_bridge</text>
+
+  <rect x="44" y="198" width="142" height="22" rx="3" fill="#161b22" stroke="#a371f7" stroke-width="0.8"/>
+  <text x="115" y="214" text-anchor="middle" fill="#a371f7" font-family="monospace" font-size="9">AES-256-GCM encrypt</text>
+
+  <rect x="44" y="228" width="142" height="22" rx="3" fill="#161b22" stroke="#30363d"/>
+  <text x="115" y="244" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">macula_relay_client</text>
+
+  <!-- Encrypted tunnel (center) -->
+  <rect x="220" y="120" width="300" height="100" rx="12" fill="url(#tunnelGrad)" stroke="#f97316" stroke-width="0.8" stroke-dasharray="6,4"/>
+
+  <text x="370" y="145" text-anchor="middle" fill="#f97316" font-family="system-ui, sans-serif" font-size="11" font-weight="bold">Encrypted Tunnel</text>
+  <text x="370" y="162" text-anchor="middle" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">ETF bytes wrapped in AES-256-GCM</text>
+  <text x="370" y="176" text-anchor="middle" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">key = distribution cookie</text>
+
+  <!-- Lock icon -->
+  <rect x="356" y="185" width="28" height="20" rx="3" fill="none" stroke="#f97316" stroke-width="1.2"/>
+  <path d="M362,185 L362,178 Q362,172 370,172 Q378,172 378,178 L378,185" fill="none" stroke="#f97316" stroke-width="1.2"/>
+  <circle cx="370" cy="196" r="2" fill="#f97316">
+    <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Relays in the middle -->
+  <rect x="270" y="232" width="90" height="34" rx="6" fill="#21262d" stroke="#f97316" stroke-width="1"/>
+  <text x="315" y="254" text-anchor="middle" fill="#f97316" font-family="monospace" font-size="9">Relay A</text>
+
+  <line x1="360" y1="249" x2="380" y2="249" stroke="#3fb950" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <rect x="380" y="232" width="90" height="34" rx="6" fill="#21262d" stroke="#3fb950" stroke-width="1"/>
+  <text x="425" y="254" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">Relay B</text>
+
+  <text x="370" y="283" text-anchor="middle" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">relays see encrypted bytes only</text>
+
+  <!-- Animated data packets left → right -->
+  <circle r="3.5" fill="#f97316" filter="url(#glow5)">
+    <animateMotion dur="2.5s" repeatCount="indefinite" path="M200,180 L540,180"/>
+    <animate attributeName="opacity" values="0.9;0.3;0.9" dur="2.5s" repeatCount="indefinite"/>
+  </circle>
+  <!-- Return packet right → left -->
+  <circle r="3" fill="#58a6ff" opacity="0.6">
+    <animateMotion dur="3s" repeatCount="indefinite" path="M540,190 L200,190"/>
+    <animate attributeName="opacity" values="0.6;0.2;0.6" dur="3s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Arrows Node A → tunnel -->
+  <line x1="200" y1="180" x2="220" y2="180" stroke="#f97316" stroke-width="1.5"/>
+
+  <!-- Arrows tunnel → Node B -->
+  <line x1="520" y1="180" x2="540" y2="180" stroke="#f97316" stroke-width="1.5"/>
+
+  <!-- Node B (right) -->
+  <rect x="540" y="80" width="170" height="180" rx="10" fill="#21262d" stroke="#3fb950" stroke-width="1.5"/>
+
+  <!-- Erlang logo stylized -->
+  <g transform="translate(565, 92)" opacity="0.7">
+    <path d="M0,20 Q10,5 20,20 Q30,35 40,20" stroke="#a71d31" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+    <path d="M0,28 Q10,13 20,28 Q30,43 40,28" stroke="#a71d31" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+    <path d="M0,36 Q10,21 20,36 Q30,51 40,36" stroke="#a71d31" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <text x="625" y="108" text-anchor="middle" fill="#3fb950" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">Node B</text>
+  <text x="625" y="124" text-anchor="middle" fill="#6e7681" font-family="monospace" font-size="9">db@stockholm</text>
+
+  <rect x="554" y="138" width="142" height="22" rx="3" fill="#161b22" stroke="#30363d"/>
+  <text x="625" y="154" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">gen_server:reply(...)</text>
+
+  <rect x="554" y="168" width="142" height="22" rx="3" fill="#161b22" stroke="#30363d"/>
+  <text x="625" y="184" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">macula_dist_bridge</text>
+
+  <rect x="554" y="198" width="142" height="22" rx="3" fill="#161b22" stroke="#a371f7" stroke-width="0.8"/>
+  <text x="625" y="214" text-anchor="middle" fill="#a371f7" font-family="monospace" font-size="9">AES-256-GCM decrypt</text>
+
+  <rect x="554" y="228" width="142" height="22" rx="3" fill="#161b22" stroke="#30363d"/>
+  <text x="625" y="244" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">macula_relay_client</text>
+
+  <!-- Bottom: the punchline -->
+  <text x="370" y="320" text-anchor="middle" fill="#f0f6fc" font-family="monospace" font-size="12">net_adm:ping('db@stockholm').  %% => pong</text>
+  <text x="370" y="336" text-anchor="middle" fill="#8b949e" font-family="system-ui, sans-serif" font-size="10">Standard OTP distribution. Different countries. Through firewalls. 3 lines of setup.</text>
+</svg>

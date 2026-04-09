@@ -86,6 +86,10 @@ end).
 
 ### Erlang Distribution Over Mesh
 
+<p align="center">
+  <img src="assets/dist_over_mesh.svg" alt="Erlang Distribution Over Relay Mesh" width="100%">
+</p>
+
 Full OTP distribution tunneled through the relay mesh. No VPNs, no open ports.
 
 ```erlang
