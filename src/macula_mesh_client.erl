@@ -28,6 +28,7 @@
 -export([start_link/1, stop/1]).
 -export([subscribe/3, unsubscribe/2, publish/3]).
 -export([advertise/3, unadvertise/2, call/4, call/5]).
+-export([is_connected/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% Test exports
@@ -79,6 +80,10 @@ start_link(Opts) ->
 -spec stop(pid()) -> ok.
 stop(Pid) ->
     gen_server:stop(Pid).
+
+-spec is_connected(pid()) -> boolean().
+is_connected(Pid) ->
+    gen_server:call(Pid, is_connected).
 
 -spec subscribe(pid(), binary(), fun((map()) -> ok)) -> {ok, reference()}.
 subscribe(Pid, Topic, Callback) ->
@@ -152,6 +157,16 @@ init(Opts) ->
 
     self() ! connect,
     {ok, State}.
+
+%%====================================================================
+%% Status
+%%====================================================================
+
+handle_call(is_connected, _From, #state{status = connected, stream = S} = State)
+  when S =/= undefined ->
+    {reply, true, State};
+handle_call(is_connected, _From, State) ->
+    {reply, false, State};
 
 %%====================================================================
 %% Subscribe / Unsubscribe

@@ -174,13 +174,13 @@ join_mesh(Opts) ->
             {error, Reason}
     end.
 
-%% @private Wait for relay connection by attempting a subscribe/unsubscribe.
+%% @private Wait until the mesh client has an active QUIC stream.
 wait_for_relay(_Client, 0) ->
     ?LOG_WARNING("[macula] Relay connection not ready after timeout");
 wait_for_relay(Client, Retries) ->
-    case catch macula_mesh_client:subscribe(Client, <<"_ping.test">>, fun(_) -> ok end) of
-        {ok, Ref} ->
-            catch macula_mesh_client:unsubscribe(Client, Ref),
+    case catch macula_mesh_client:is_connected(Client) of
+        true ->
+            ?LOG_INFO("[macula] Relay connected"),
             ok;
         _ ->
             timer:sleep(1000),
