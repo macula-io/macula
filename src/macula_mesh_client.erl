@@ -129,9 +129,10 @@ init(Opts) ->
         {ok, List} when is_list(List), length(List) > 0 -> List;
         _ -> [maps:get(url, Opts, <<"https://localhost:4433">>)]
     end,
-    %% Randomize initial relay to distribute load across relays
-    Index = rand:uniform(length(Relays)) - 1,
-    Url = lists:nth(Index + 1, Relays),
+    %% First relay is the preferred target (e.g., nearest virtual relay identity).
+    %% Remaining entries are ordered fallbacks for failover — not load balancing.
+    Index = 0,
+    Url = hd(Relays),
     {Host, Port} = parse_url(Url),
     Realm = maps:get(realm, Opts, <<"io.macula">>),
     Identity = maps:get(identity, Opts, <<"anonymous">>),
