@@ -31,6 +31,7 @@
     nearest/0,
     nearest_except/1,
     ranked_relays/0,
+    lookup/1,
     relay_count/0,
     mark_offline/1
 ]).
@@ -87,13 +88,31 @@ nearest_except(FailedHostname) ->
         [] -> {error, no_relays}
     end.
 
--spec ranked_relays() -> [#{hostname := binary(), url := binary(), distance_km := float(), status := atom()}].
+-spec ranked_relays() -> [#{hostname := binary(), url := binary(), distance_km := float(), status := atom(), lat := float(), lng := float(), rtt_ms := non_neg_integer() | undefined}].
 ranked_relays() ->
     [#{hostname => E#relay_entry.hostname,
        url => E#relay_entry.url,
+       lat => E#relay_entry.lat,
+       lng => E#relay_entry.lng,
        distance_km => E#relay_entry.distance_km,
+       rtt_ms => E#relay_entry.rtt_ms,
        status => E#relay_entry.status}
      || E <- ranked_all()].
+
+-spec lookup(binary()) -> {ok, map()} | {error, not_found}.
+lookup(Hostname) ->
+    case ets:lookup(?TABLE, Hostname) of
+        [E] ->
+            {ok, #{hostname => E#relay_entry.hostname,
+                   url => E#relay_entry.url,
+                   lat => E#relay_entry.lat,
+                   lng => E#relay_entry.lng,
+                   distance_km => E#relay_entry.distance_km,
+                   rtt_ms => E#relay_entry.rtt_ms,
+                   status => E#relay_entry.status}};
+        [] ->
+            {error, not_found}
+    end.
 
 relay_count() ->
     case ets:info(?TABLE, size) of

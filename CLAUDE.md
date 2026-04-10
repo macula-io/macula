@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v1.1.0 (April 2026)
+**Current Version**: v1.2.0 (April 2026)
 
 ---
 

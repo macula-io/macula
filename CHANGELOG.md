@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-04-10
+
+### Added
+
+- **`macula_relay_discovery:lookup/1`** — lookup a single relay's geo info by hostname from the discovery cache.
+- **`ranked_relays/0` enriched** — now includes `lat`, `lng`, and `rtt_ms` fields alongside existing `hostname`, `url`, `distance_km`, `status`.
+
+---
+
 ## [1.1.0] - 2026-04-09
 
 ### Added
