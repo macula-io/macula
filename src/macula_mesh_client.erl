@@ -114,7 +114,7 @@ call(Pid, Procedure, Args, Timeout, Opts) ->
     gen_server:call(Pid, {rpc_call, Procedure, Args, Timeout, Opts}, Timeout + 1000).
 
 %% @doc Fire-and-forget RPC call. Sends CALL to the relay and delivers the reply
-%% as `{relay_reply, CorrelationId, Result, Trace}` to CallbackPid.
+%% as {relay_reply, CorrelationId, Result, Trace} to CallbackPid.
 %% Does NOT block the caller. Used for cross-relay RPC forwarding.
 -spec async_call(pid(), binary(), map(), timeout(), map(), pid(), binary()) -> ok.
 async_call(Pid, Procedure, Args, Timeout, Opts, CallbackPid, CorrelationId) ->

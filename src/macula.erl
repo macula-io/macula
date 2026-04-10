@@ -127,7 +127,7 @@ unadvertise(Client, Procedure) when is_pid(Client), is_binary(Procedure) ->
 
 %% @doc Call a remote procedure on a specific target node (default 5s timeout).
 %%
-%% Target can be a mesh name (e.g., <<"hamburg">>), site_id, or node_id.
+%% Target can be a mesh name, site_id, or node_id (all binaries).
 %% The relay resolves the target and routes the CALL directly to that node.
 -spec call_node(client(), binary(), procedure(), term()) ->
     {ok, term()} | {error, term()}.
