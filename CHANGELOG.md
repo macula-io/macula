@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.1] - 2026-04-10
+
+### Changed
+
+- **Deduplicated CALL message building** — extracted `build_call_msg/4` shared by sync `call/5` and async `async_call/7`. No behavioral change.
+
+---
+
 ## [1.4.0] - 2026-04-10
 
 ### Added
