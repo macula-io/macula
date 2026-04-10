@@ -204,6 +204,8 @@
     args := binary(),              % JSON-encoded arguments
     call_id := binary(),           % 16-byte unique call ID
     timeout => integer(),          % Optional timeout in milliseconds
+    %% Directed RPC (v1.4.0+)
+    target => binary(),            % Optional: target node (name, site_id, or node_id)
     %% Authorization fields (v0.17.0+)
     caller_did => binary(),        % Optional: caller's DID
     ucan_token => binary(),        % Optional: UCAN for cross-namespace call

@@ -20,6 +20,9 @@
 %% RPC
 -export([call/3, call/4, advertise/3, advertise/4, unadvertise/2]).
 
+%% Directed RPC (Mesh Name Service)
+-export([call_node/4, call_node/5, resolve/2, list_nodes/1, list_nodes/2]).
+
 %% Cluster (LAN)
 -export([ensure_distributed/0, get_cookie/0, set_cookie/1,
          monitor_nodes/0, unmonitor_nodes/0]).
@@ -117,6 +120,45 @@ advertise(Client, Procedure, Handler, _Opts) when is_pid(Client), is_binary(Proc
 -spec unadvertise(client(), procedure()) -> ok | {error, term()}.
 unadvertise(Client, Procedure) when is_pid(Client), is_binary(Procedure) ->
     macula_mesh_client:unadvertise(Client, Procedure).
+
+%%%===================================================================
+%%% Directed RPC (Mesh Name Service)
+%%%===================================================================
+
+%% @doc Call a remote procedure on a specific target node (default 5s timeout).
+%%
+%% Target can be a mesh name (e.g., <<"hamburg">>), site_id, or node_id.
+%% The relay resolves the target and routes the CALL directly to that node.
+-spec call_node(client(), binary(), procedure(), term()) ->
+    {ok, term()} | {error, term()}.
+call_node(Client, Target, Procedure, Args) ->
+    call_node(Client, Target, Procedure, Args, 5000).
+
+%% @doc Call a remote procedure on a specific target node with timeout.
+-spec call_node(client(), binary(), procedure(), term(), pos_integer()) ->
+    {ok, term()} | {error, term()}.
+call_node(Client, Target, Procedure, Args, Timeout)
+  when is_pid(Client), is_binary(Target), is_binary(Procedure) ->
+    macula_mesh_client:call(Client, Procedure, Args, Timeout, #{target => Target}).
+
+%% @doc Resolve a mesh name to node identity information.
+%%
+%% Returns the node's identity including name, site_id, city, endpoint,
+%% and connected_at timestamp. Works for names, site_ids, or node_ids.
+-spec resolve(client(), binary()) -> {ok, map()} | {error, term()}.
+resolve(Client, Name) when is_pid(Client), is_binary(Name) ->
+    macula_mesh_client:call(Client, <<"_mesh.resolve">>,
+                           #{<<"name">> => Name}, 5000).
+
+%% @doc List all nodes connected to the relay (default 5s timeout).
+-spec list_nodes(client()) -> {ok, map()} | {error, term()}.
+list_nodes(Client) ->
+    list_nodes(Client, #{}).
+
+%% @doc List all nodes connected to the relay with options.
+-spec list_nodes(client(), map()) -> {ok, map()} | {error, term()}.
+list_nodes(Client, _Opts) when is_pid(Client) ->
+    macula_mesh_client:call(Client, <<"_mesh.list_nodes">>, #{}, 5000).
 
 %%%===================================================================
 %%% Cluster (LAN)

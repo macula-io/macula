@@ -27,7 +27,7 @@
 
 -export([start_link/1, stop/1]).
 -export([subscribe/3, unsubscribe/2, publish/3]).
--export([advertise/3, unadvertise/2, call/4, call/5]).
+-export([advertise/3, unadvertise/2, call/4, call/5, async_call/7]).
 -export([is_connected/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -112,6 +112,13 @@ call(Pid, Procedure, Args, Timeout) ->
 -spec call(pid(), binary(), map(), timeout(), map()) -> {ok, term()} | {error, term()}.
 call(Pid, Procedure, Args, Timeout, Opts) ->
     gen_server:call(Pid, {rpc_call, Procedure, Args, Timeout, Opts}, Timeout + 1000).
+
+%% @doc Fire-and-forget RPC call. Sends CALL to the relay and delivers the reply
+%% as `{relay_reply, CorrelationId, Result, Trace}` to CallbackPid.
+%% Does NOT block the caller. Used for cross-relay RPC forwarding.
+-spec async_call(pid(), binary(), map(), timeout(), map(), pid(), binary()) -> ok.
+async_call(Pid, Procedure, Args, Timeout, Opts, CallbackPid, CorrelationId) ->
+    gen_server:cast(Pid, {async_rpc_call, Procedure, Args, Timeout, Opts, CallbackPid, CorrelationId}).
 
 %%====================================================================
 %% gen_server callbacks
@@ -213,14 +220,19 @@ handle_call({rpc_call, Procedure, Args, Timeout, Opts}, From, State) ->
     CallId = base64:encode(crypto:strong_rand_bytes(12)),
     TimerRef = erlang:send_after(Timeout, self(), {call_timeout, CallId}),
     PendingCalls = maps:put(CallId, {From, TimerRef}, State#state.pending_calls),
-    Msg = #{
+    Msg0 = #{
         <<"call_id">> => CallId,
         <<"procedure">> => Procedure,
         <<"args">> => Args
     },
+    %% Directed RPC: add target field if specified
+    Msg1 = case maps:get(target, Opts, undefined) of
+        undefined -> Msg0;
+        Target -> Msg0#{<<"target">> => Target}
+    end,
     Msg2 = case maps:get(<<"_trace">>, Opts, undefined) of
-        undefined -> Msg;
-        Trace -> Msg#{<<"_trace">> => Trace}
+        undefined -> Msg1;
+        Trace -> Msg1#{<<"_trace">> => Trace}
     end,
     maybe_send(call, Msg2, State),
     {noreply, State#state{pending_calls = PendingCalls}};
@@ -242,6 +254,31 @@ handle_cast({publish, Topic, Payload}, State) ->
         <<"message_id">> => crypto:strong_rand_bytes(16)
     }, State),
     {noreply, State};
+
+%%====================================================================
+%% Async RPC (non-blocking cross-relay forwarding)
+%%====================================================================
+
+handle_cast({async_rpc_call, Procedure, Args, Timeout, Opts, CallbackPid, CorrelationId}, State) ->
+    CallId = base64:encode(crypto:strong_rand_bytes(12)),
+    TimerRef = erlang:send_after(Timeout, self(), {call_timeout, CallId}),
+    PendingCalls = maps:put(CallId, {async, CallbackPid, CorrelationId, TimerRef},
+                            State#state.pending_calls),
+    Msg0 = #{
+        <<"call_id">> => CallId,
+        <<"procedure">> => Procedure,
+        <<"args">> => Args
+    },
+    Msg1 = case maps:get(target, Opts, undefined) of
+        undefined -> Msg0;
+        Target -> Msg0#{<<"target">> => Target}
+    end,
+    Msg2 = case maps:get(<<"_trace">>, Opts, undefined) of
+        undefined -> Msg1;
+        Trace -> Msg1#{<<"_trace">> => Trace}
+    end,
+    maybe_send(call, Msg2, State),
+    {noreply, State#state{pending_calls = PendingCalls}};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -283,6 +320,13 @@ handle_info({call_timeout, CallId}, State) ->
         {From, _TimerRef} ->
             ?LOG_WARNING("[mesh_client] RPC call ~s TIMED OUT (no reply from relay)", [CallId]),
             gen_server:reply(From, {error, timeout}),
+            {noreply, State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)}};
+        {async, CallbackPid, CorrelationId, _TimerRef} ->
+            ?LOG_WARNING("[mesh_client] Async RPC ~s TIMED OUT", [CallId]),
+            CallbackPid ! {relay_reply, CorrelationId,
+                          #{<<"error">> => #{<<"code">> => <<"timeout">>,
+                                             <<"message">> => <<"Cross-relay RPC timed out">>}},
+                          undefined},
             {noreply, State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)}}
     end;
 
@@ -426,10 +470,18 @@ handle_message({ok, {reply, Msg}}, State) ->
             ?LOG_DEBUG("[relay_client] Reply for unknown call_id ~s", [CallId]),
             State;
         {From, TimerRef} ->
+            %% Synchronous call — unblock the caller
             erlang:cancel_timer(TimerRef),
             Trace = maps:get(<<"_trace">>, Msg, undefined),
             Reply = decode_reply(Msg, Trace),
             gen_server:reply(From, Reply),
+            State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)};
+        {async, CallbackPid, CorrelationId, TimerRef} ->
+            %% Async call — deliver reply to callback PID
+            erlang:cancel_timer(TimerRef),
+            Trace = maps:get(<<"_trace">>, Msg, undefined),
+            Reply = decode_reply(Msg, Trace),
+            CallbackPid ! {relay_reply, CorrelationId, unwrap_reply(Reply), Trace},
             State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)}
     end;
 
@@ -493,6 +545,13 @@ decode_reply(Msg, Trace) ->
 maybe_attach_trace(Result, undefined) -> Result;
 maybe_attach_trace({ok, R}, Trace) -> {ok, R, #{trace => Trace}};
 maybe_attach_trace(Other, _Trace) -> Other.
+
+%% @private Unwrap decoded reply to raw result for async callbacks.
+%% relay_reply expects the raw result map, not {ok, Result} tuples.
+unwrap_reply({ok, Result}) -> Result;
+unwrap_reply({ok, Result, _TraceInfo}) -> Result;
+unwrap_reply({error, ErrorMap}) -> #{<<"error">> => ErrorMap};
+unwrap_reply(Other) -> Other.
 
 %% Internal helpers
 %%====================================================================
