@@ -1,6 +1,6 @@
 {application, macula, [
     {description, "Macula HTTP/3 Mesh SDK — connect, subscribe, publish, call, advertise"},
-    {vsn, "1.2.0"},
+    {vsn, "1.3.0"},
     {registered, []},
     {mod, {macula_app, []}},
     {applications, [

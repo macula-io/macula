@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] - 2026-04-10
+
+### Added
+
+- **`macula_topic` module** — enforced mesh topic naming convention: `{realm}/{org}/{app}/{domain}/{name}_v{N}`. Provides `fact/5`, `hope/5`, `build/5`, `parse/1`, `validate/1`. Past tense = fact (pub/sub), present tense = hope (RPC). See `docs/guides/TOPIC_NAMING_GUIDE.md`.
+- **`TOPIC_NAMING_GUIDE.md`** — normative specification for mesh topic structure, anti-patterns, wildcard subscription examples.
+
+---
+
 ## [1.2.0] - 2026-04-10
 
 ### Added
