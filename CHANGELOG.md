@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] - 2026-04-10
+
+### Added
+
+- **Directed RPC** — `macula:call_node/4,5` routes a CALL to a specific target node by mesh name, site_id, or node_id. The relay resolves the target and forwards directly.
+- **Mesh Name Service** — `macula:resolve/2` resolves a mesh name to node identity (name, site_id, city, endpoint). `macula:list_nodes/1,2` lists all connected nodes on the relay.
+- **`macula_mesh_client:async_call/7`** — non-blocking RPC that delivers the reply to a callback PID instead of blocking via gen_server:call. Used by relays for cross-relay RPC forwarding.
+- **`target` field on CALL messages** — optional field in the wire protocol. When present, the relay routes to that specific node instead of any handler.
+
+---
+
 ## [1.3.1] - 2026-04-10
 
 ### Fixed
