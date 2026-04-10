@@ -220,21 +220,7 @@ handle_call({rpc_call, Procedure, Args, Timeout, Opts}, From, State) ->
     CallId = base64:encode(crypto:strong_rand_bytes(12)),
     TimerRef = erlang:send_after(Timeout, self(), {call_timeout, CallId}),
     PendingCalls = maps:put(CallId, {From, TimerRef}, State#state.pending_calls),
-    Msg0 = #{
-        <<"call_id">> => CallId,
-        <<"procedure">> => Procedure,
-        <<"args">> => Args
-    },
-    %% Directed RPC: add target field if specified
-    Msg1 = case maps:get(target, Opts, undefined) of
-        undefined -> Msg0;
-        Target -> Msg0#{<<"target">> => Target}
-    end,
-    Msg2 = case maps:get(<<"_trace">>, Opts, undefined) of
-        undefined -> Msg1;
-        Trace -> Msg1#{<<"_trace">> => Trace}
-    end,
-    maybe_send(call, Msg2, State),
+    maybe_send(call, build_call_msg(CallId, Procedure, Args, Opts), State),
     {noreply, State#state{pending_calls = PendingCalls}};
 
 handle_call(_Request, _From, State) ->
@@ -264,20 +250,7 @@ handle_cast({async_rpc_call, Procedure, Args, Timeout, Opts, CallbackPid, Correl
     TimerRef = erlang:send_after(Timeout, self(), {call_timeout, CallId}),
     PendingCalls = maps:put(CallId, {async, CallbackPid, CorrelationId, TimerRef},
                             State#state.pending_calls),
-    Msg0 = #{
-        <<"call_id">> => CallId,
-        <<"procedure">> => Procedure,
-        <<"args">> => Args
-    },
-    Msg1 = case maps:get(target, Opts, undefined) of
-        undefined -> Msg0;
-        Target -> Msg0#{<<"target">> => Target}
-    end,
-    Msg2 = case maps:get(<<"_trace">>, Opts, undefined) of
-        undefined -> Msg1;
-        Trace -> Msg1#{<<"_trace">> => Trace}
-    end,
-    maybe_send(call, Msg2, State),
+    maybe_send(call, build_call_msg(CallId, Procedure, Args, Opts), State),
     {noreply, State#state{pending_calls = PendingCalls}};
 
 handle_cast(_Msg, State) ->
@@ -545,6 +518,18 @@ decode_reply(Msg, Trace) ->
 maybe_attach_trace(Result, undefined) -> Result;
 maybe_attach_trace({ok, R}, Trace) -> {ok, R, #{trace => Trace}};
 maybe_attach_trace(Other, _Trace) -> Other.
+
+%% @private Build a CALL message map with optional target and trace fields.
+build_call_msg(CallId, Procedure, Args, Opts) ->
+    Msg0 = #{<<"call_id">> => CallId, <<"procedure">> => Procedure, <<"args">> => Args},
+    Msg1 = case maps:get(target, Opts, undefined) of
+        undefined -> Msg0;
+        Target -> Msg0#{<<"target">> => Target}
+    end,
+    case maps:get(<<"_trace">>, Opts, undefined) of
+        undefined -> Msg1;
+        Trace -> Msg1#{<<"_trace">> => Trace}
+    end.
 
 %% @private Unwrap decoded reply to raw result for async callbacks.
 %% relay_reply expects the raw result map, not {ok, Result} tuples.
