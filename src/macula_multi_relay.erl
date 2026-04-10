@@ -323,8 +323,14 @@ maybe_subscribe_relay_events(State) ->
 
 subscribe_relay_topic(undefined, _, _) -> ok;
 subscribe_relay_topic(#conn{pid = Pid}, Topic, Self) ->
-    macula_mesh_client:subscribe(Pid, Topic, fun(Msg) ->
-        Self ! {relay_event, Topic, Msg}
+    %% Non-blocking — the mesh client may still be connecting (QUIC NIF).
+    %% A synchronous call here causes a timeout crash if connect is slow.
+    spawn(fun() ->
+        try macula_mesh_client:subscribe(Pid, Topic, fun(Msg) ->
+            Self ! {relay_event, Topic, Msg}
+        end)
+        catch _:_ -> ok
+        end
     end).
 
 get_primary(#state{connections = Conns}) ->

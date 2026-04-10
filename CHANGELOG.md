@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.1] - 2026-04-10
+
+### Fixed
+
+- **`macula_multi_relay` crash on slow relay connect** — `subscribe_relay_topic` was a synchronous `gen_server:call` that timed out when the QUIC NIF was still connecting. Now spawns the subscribe non-blocking.
+
+---
+
 ## [1.3.0] - 2026-04-10
 
 ### Added
