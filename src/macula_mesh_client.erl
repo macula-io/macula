@@ -55,6 +55,7 @@
     site :: map() | undefined,                                %% site metadata for CONNECT (site_id, name, city, lat, lng, site_type)
     client_type = <<"node">> :: binary(),                      %% always "node" for mesh clients
     tls_verify :: verify_peer | none,                         %% TLS verification mode (none for relay peering)
+    preferred_host :: string(),                               %% first relay hostname (for target_relay in CONNECT)
     previous_host :: string() | undefined,                    %% host before failover (for reroute detection)
     conn :: reference() | undefined,
     stream :: reference() | undefined,
@@ -146,6 +147,7 @@ init(Opts) ->
         relay_index = Index,
         url = Url,
         host = Host,
+        preferred_host = Host,
         port = Port,
         realm = Realm,
         identity = Identity,
@@ -554,8 +556,10 @@ send_connect(State) ->
                 Name -> atom_to_binary(Name)
             end
     end,
-    %% target_relay = the hostname the client connected to (for multi-tenant relay routing)
-    TargetRelay = list_to_binary(State#state.host),
+    %% target_relay = the PREFERRED relay (first in list), not the actual connected host.
+    %% When failover connects to a box URL, target_relay still identifies the intended
+    %% virtual relay identity so the node registers under the correct city.
+    TargetRelay = list_to_binary(State#state.preferred_host),
     Base = #{
         version => <<"1.0">>,
         node_id => NodeId,
