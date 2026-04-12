@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.15] - 2026-04-12
+
+### Fixed
+
+- **Stale `ping_sent_at` survived reconnect** — `handle_disconnect/1`
+  reset conn/stream/status/buffer but left `ping_sent_at` set to the
+  prior connection's unanswered-PING timestamp. The first `send_ping`
+  tick after a fresh reconnect compared Now against that old value,
+  instantly declared the new connection dead, and triggered another
+  reconnect. Symptom: fleet logs full of "No PONG for 120004ms" only
+  28s after a successful Connected log — a tight spin that prevented
+  PING/PONG from ever completing on the replacement connection.
+
+  Also includes refactors from the last published version (no behavior
+  change): send_ping handler and execute_and_reply split into
+  function-head-dispatched clauses to flatten nested case/try.
+
+---
+
 ## [1.4.14] - 2026-04-12
 
 ### Fixed

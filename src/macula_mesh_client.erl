@@ -703,8 +703,11 @@ handle_disconnect(State) ->
     ?LOG_WARNING("[relay_client] Disconnected from ~s", [State#state.url]),
     catch macula_quic:close(State#state.stream),
     catch macula_quic:close(State#state.conn),
+    %% ping_sent_at MUST be cleared here — otherwise the next connection's
+    %% dead-detection tick compares Now against the previous connection's
+    %% unanswered PING, firing an immediate false-positive reconnect.
     State2 = State#state{conn = undefined, stream = undefined, status = disconnected,
-                          recv_buffer = <<>>},
+                          recv_buffer = <<>>, ping_sent_at = undefined},
     {noreply, schedule_failover(State2)}.
 
 %% Pick next relay and schedule reconnect with exponential backoff + jitter.
