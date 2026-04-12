@@ -131,20 +131,39 @@ is_nif_loaded_returns_boolean_test() ->
 %%%===================================================================
 
 %% These tests verify the pure Erlang fallback works
-%% even if NIFs fail to load.
+%% even if NIFs fail to load. CRITICAL: the persistent_term flag
+%% is module-wide VM state — if we don't restore it, every
+%% subsequent crypto/blake3/did/ucan test in the same VM falls
+%% through to the Erlang fallback path. Use a fixture to isolate.
 
-fallback_hash_test() ->
-    %% Force fallback by not loading NIFs
-    persistent_term:erase(macula_crypto_nif_loaded),
-    Data = <<"fallback test">>,
-    Hash = macula_blake3_nif:hash(Data),
-    ?assertEqual(32, byte_size(Hash)).
-
-fallback_streaming_test() ->
-    persistent_term:erase(macula_crypto_nif_loaded),
-    Chunks = [<<"chunk1">>, <<"chunk2">>, <<"chunk3">>],
-    Hash = macula_blake3_nif:hash_streaming(Chunks),
-    ?assertEqual(32, byte_size(Hash)).
+fallback_test_() ->
+    {foreach,
+     fun() ->
+         %% Save current flag before each test stomps on it.
+         persistent_term:get(macula_crypto_nif_loaded, undefined)
+     end,
+     fun(Saved) ->
+         %% Restore the flag so later tests see the NIF again.
+         case Saved of
+             undefined -> persistent_term:erase(macula_crypto_nif_loaded);
+             Val       -> persistent_term:put(macula_crypto_nif_loaded, Val)
+         end
+     end,
+     [fun(_) ->
+         ?_test(begin
+             persistent_term:erase(macula_crypto_nif_loaded),
+             Hash = macula_blake3_nif:hash(<<"fallback test">>),
+             ?assertEqual(32, byte_size(Hash))
+         end)
+      end,
+      fun(_) ->
+         ?_test(begin
+             persistent_term:erase(macula_crypto_nif_loaded),
+             Chunks = [<<"chunk1">>, <<"chunk2">>, <<"chunk3">>],
+             Hash = macula_blake3_nif:hash_streaming(Chunks),
+             ?assertEqual(32, byte_size(Hash))
+         end)
+      end]}.
 
 %%%===================================================================
 %%% Helper Functions

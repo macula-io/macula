@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.13] - 2026-04-12
+
+### Fixed
+
+- **Crypto NIF test flake** — `macula_blake3_nif_tests` fallback tests erased the `macula_crypto_nif_loaded` persistent_term to force the Erlang fallback path, then never restored it. Subsequent NIF tests in the same VM saw `is_nif_loaded() = false`, fell through to `erlang_sign/2`, and produced signatures via a code path that disagreed with the NIF-generated keypair format. Symptom: `signing_tests`, `verification_tests`, `roundtrip_tests` failed with `{error, invalid_private_key}` only in full-suite runs, passed in isolation.
+
+  Replaced the raw `erase` calls with an EUnit `{foreach, Setup, Cleanup, ...}` fixture that snapshots and restores the persistent_term across the fallback path tests. Full suite is now 448/448 green.
+
+---
+
 ## [1.4.12] - 2026-04-12
 
 ### Fixed
