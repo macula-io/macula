@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.18] - 2026-04-12
+
+### Diagnostic
+
+- **QUIC data-arrival tracing** — 1.4.17 established:
+  - PING send DOES fire on peer_clients (49 in 3 min)
+  - PONG send DOES fire on receiving relay handlers (is_peer=true)
+  - PONG recv NEVER fires on the originating peer_client
+  - Non-PUBLISH frame recv NEVER fires either
+  - Cross-relay pub/sub delivery ALSO zero in the same window
+
+  So nothing inbound reaches the peer_client gen_server after the
+  initial CONNECT-pong. Either (a) data arrives at the QUIC layer
+  but not as {quic, Data, Stream, Flags} messages, or (b) data
+  never reaches the QUIC layer at all.
+
+  Adds:
+  - [trace] quic_data bytes=N — fires on every binary data message
+  - [trace] streams_available / peer_needs_streams — prints the info
+  - [trace] peer opened new stream — if nuremberg initiates a new
+    stream we currently ignore, data would be stranded
+
+---
+
 ## [1.4.17] - 2026-04-12
 
 ### Diagnostic

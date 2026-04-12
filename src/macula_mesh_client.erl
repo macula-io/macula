@@ -331,6 +331,8 @@ handle_info({call_timeout, CallId}, State) ->
 %%====================================================================
 
 handle_info({quic, Data, _Stream, _Flags}, State) when is_binary(Data) ->
+    ?LOG_INFO("[relay_client] [trace] quic_data bytes=~p url=~s",
+              [byte_size(Data), State#state.url]),
     Buffer = <<(State#state.recv_buffer)/binary, Data/binary>>,
     {NewBuffer, State2} = process_buffer(Buffer, State),
     {noreply, State2#state{recv_buffer = NewBuffer}};
@@ -353,9 +355,17 @@ handle_info({quic, transport_shutdown, _Ref, _Reason}, State) ->
     handle_disconnect(State);
 handle_info({error, transport_down, _Detail}, State) ->
     handle_disconnect(State);
-handle_info({quic, streams_available, _Conn, _Info}, State) ->
+handle_info({quic, streams_available, _Conn, Info}, State) ->
+    ?LOG_INFO("[relay_client] [trace] streams_available info=~p url=~s",
+              [Info, State#state.url]),
     {noreply, State};
-handle_info({quic, peer_needs_streams, _Conn, _Info}, State) ->
+handle_info({quic, peer_needs_streams, _Conn, Info}, State) ->
+    ?LOG_INFO("[relay_client] [trace] peer_needs_streams info=~p url=~s",
+              [Info, State#state.url]),
+    {noreply, State};
+handle_info({quic, new_stream, NewStream, _Flags}, State) ->
+    ?LOG_WARNING("[relay_client] [trace] peer opened new stream ~p url=~s",
+                 [NewStream, State#state.url]),
     {noreply, State};
 
 %% No outstanding PING — record timestamp so dead-detection has a baseline.
