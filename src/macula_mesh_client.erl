@@ -289,9 +289,7 @@ handle_info(connect, State) ->
         {ok, Conn} ->
             case macula_quic:open_stream(Conn) of
                 {ok, Stream} ->
-                    SetoptRes = macula_quic:setopt(Stream, active, true),
-                    ?LOG_INFO("[relay_client] [trace] stream opened Stream=~p active_setopt=~p url=~s",
-                              [Stream, SetoptRes, State#state.url]),
+                    macula_quic:setopt(Stream, active, true),
                     ?LOG_INFO("[relay_client] Connected to ~s", [State#state.url]),
                     State2 = State#state{conn = Conn, stream = Stream, status = connected,
                                          recv_buffer = <<>>, reconnect_attempt = 0},
@@ -333,8 +331,8 @@ handle_info({call_timeout, CallId}, State) ->
 %%====================================================================
 
 handle_info({quic, Data, _Stream, _Flags}, State) when is_binary(Data) ->
-    ?LOG_INFO("[relay_client] [trace] quic_data bytes=~p url=~s",
-              [byte_size(Data), State#state.url]),
+    ?LOG_DEBUG("[relay_client] quic_data bytes=~p url=~s",
+               [byte_size(Data), State#state.url]),
     Buffer = <<(State#state.recv_buffer)/binary, Data/binary>>,
     {NewBuffer, State2} = process_buffer(Buffer, State),
     {noreply, State2#state{recv_buffer = NewBuffer}};
@@ -358,15 +356,15 @@ handle_info({quic, transport_shutdown, _Ref, _Reason}, State) ->
 handle_info({error, transport_down, _Detail}, State) ->
     handle_disconnect(State);
 handle_info({quic, streams_available, _Conn, Info}, State) ->
-    ?LOG_INFO("[relay_client] [trace] streams_available info=~p url=~s",
-              [Info, State#state.url]),
+    ?LOG_DEBUG("[relay_client] streams_available info=~p url=~s",
+               [Info, State#state.url]),
     {noreply, State};
 handle_info({quic, peer_needs_streams, _Conn, Info}, State) ->
-    ?LOG_INFO("[relay_client] [trace] peer_needs_streams info=~p url=~s",
-              [Info, State#state.url]),
+    ?LOG_DEBUG("[relay_client] peer_needs_streams info=~p url=~s",
+               [Info, State#state.url]),
     {noreply, State};
 handle_info({quic, new_stream, NewStream, _Flags}, State) ->
-    ?LOG_WARNING("[relay_client] [trace] peer opened new stream ~p url=~s",
+    ?LOG_WARNING("[relay_client] peer opened new stream ~p url=~s",
                  [NewStream, State#state.url]),
     {noreply, State};
 
@@ -388,7 +386,7 @@ handle_info(quic_connection_dead, State) ->
     handle_disconnect(State);
 
 handle_info(Info, State) ->
-    ?LOG_INFO("[relay_client] [trace] UNHANDLED ~p url=~s",
+    ?LOG_INFO("[relay_client] UNHANDLED ~p url=~s",
               [Info, State#state.url]),
     {noreply, State}.
 
@@ -421,7 +419,7 @@ schedule_ping() ->
 
 send_protocol_ping(State) ->
     Ts = erlang:system_time(millisecond),
-    ?LOG_INFO("[relay_client] [trace] PING send url=~s", [State#state.url]),
+    ?LOG_DEBUG("[relay_client] PING send url=~s", [State#state.url]),
     maybe_send(ping, #{timestamp => Ts}, State).
 
 publish_mesh_ping(RttMs, State) ->
@@ -474,12 +472,11 @@ process_buffer(Buffer, State) ->
     {Buffer, State}.
 
 %% @private Frame arrival tracing. Filters out the publish firehose
-%% so logs show handshake/ping/pong/rpc frames only while diagnosing
-%% cross-relay PONG delivery.
+%% so DEBUG logs show handshake/ping/pong/rpc frames only.
 trace_frame_arrival(16#10, _Size, _Url) -> ok;  %% PUBLISH — skipped
 trace_frame_arrival(TypeId, Size, Url) ->
-    ?LOG_INFO("[relay_client] [trace] frame type_id=~p len=~p url=~s",
-              [TypeId, Size, Url]).
+    ?LOG_DEBUG("[relay_client] frame type_id=~p len=~p url=~s",
+               [TypeId, Size, Url]).
 
 %% Incoming SWIM messages — sent directly by remote relay handler on the inbound
 %% stream as a PUBLISH. Route to SWIM gen_server + extract piggybacked Bloom.
@@ -531,20 +528,20 @@ handle_message({ok, {reply, Msg}}, State) ->
 
 %% PONG — measure RTT and publish mesh ping
 handle_message({ok, {pong, _Msg}}, #state{ping_sent_at = undefined} = State) ->
-    ?LOG_INFO("[relay_client] [trace] PONG recv (ping_sent_at=undef) url=~s",
-              [State#state.url]),
+    ?LOG_DEBUG("[relay_client] PONG recv (ping_sent_at=undef) url=~s",
+               [State#state.url]),
     State;
 handle_message({ok, {pong, _Msg}}, State) ->
     RttMs = erlang:monotonic_time(millisecond) - State#state.ping_sent_at,
-    ?LOG_INFO("[relay_client] [trace] PONG recv rtt_ms=~p url=~s",
-              [RttMs, State#state.url]),
+    ?LOG_DEBUG("[relay_client] PONG recv rtt_ms=~p url=~s",
+               [RttMs, State#state.url]),
     publish_mesh_ping(RttMs, State),
     notify_discovery(RttMs, State),
     State#state{ping_sent_at = undefined, last_rtt_ms = RttMs};
 
 handle_message({ok, {Type, _Msg}}, State) ->
-    ?LOG_INFO("[relay_client] [trace] ignoring frame type=~p url=~s",
-              [Type, State#state.url]),
+    ?LOG_DEBUG("[relay_client] ignoring frame type=~p url=~s",
+               [Type, State#state.url]),
     State;
 
 handle_message({error, Reason}, State) ->

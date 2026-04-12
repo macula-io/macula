@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.20] - 2026-04-12
+
+### Changed
+
+- **Demoted diagnostic `[trace]` logs** — the tracing added during the
+  cross-relay PONG investigation (1.4.16–1.4.19) was shipping at INFO
+  and flooding production at thousands of events/second. All `[trace]`
+  markers dropped; firehose sites (`quic_data`, `frame type_id`,
+  `PING send`, `PONG recv`, `ignoring frame`, `streams_available`,
+  `peer_needs_streams`) now log at DEBUG. `UNHANDLED handle_info`
+  stays at INFO, `peer opened new stream` stays at WARNING —
+  genuinely rare events worth seeing in production. Stream-open
+  setopt trace deleted outright.
+- P0 of the relay refactor plan (see `macula-relay/plans/
+  PLAN_MACULA_RELAY_REFACTOR.md`). No behavior change.
+
+---
+
 ## [1.4.19] - 2026-04-12
 
 ### Diagnostic
