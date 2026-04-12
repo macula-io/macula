@@ -408,6 +408,7 @@ schedule_ping() ->
 
 send_protocol_ping(State) ->
     Ts = erlang:system_time(millisecond),
+    ?LOG_INFO("[relay_client] [trace] PING send url=~s", [State#state.url]),
     maybe_send(ping, #{timestamp => Ts}, State).
 
 publish_mesh_ping(RttMs, State) ->

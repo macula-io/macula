@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.17] - 2026-04-12
+
+### Diagnostic
+
+- **PING send tracing** — 1.4.16 traced PONG send + frame recv.
+  Results: helsinki receives type_id=4 (PONG) exactly once per
+  connect (CONNECT-pong), then only type_id=33 (RPC replies) and
+  PUBLISH. No protocol-level PONGs after the handshake. Meanwhile
+  on the RELAY side, `is_peer=true` PONG sends never fire — nuremberg
+  never processes a PING from a peer connection.
+  
+  To distinguish "helsinki never sent PING" from "nuremberg never
+  received/processed PING", this release adds one more trace:
+  `[trace] PING send url=<url>` on every `send_protocol_ping/1`.
+  
+  Pair with the 1.4.16 relay-side trace to conclude.
+
+---
+
 ## [1.4.16] - 2026-04-12
 
 ### Diagnostic
