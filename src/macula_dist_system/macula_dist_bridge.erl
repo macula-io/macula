@@ -85,14 +85,13 @@ init(#{client := Client, bridge_sock := BridgeSock, send_topic := SendTopic,
     {ok, #state{bridge_sock = BridgeSock, tunnel_id = TunnelId, client = Client,
                 client_mon = MonRef, sub_ref = SubRef, key = Key, metrics = Metrics,
                 reader_pid = undefined, send_topic = SendTopic, recv_topic = RecvTopic,
-                reconnect_count = 0},
-     ?BRIDGE_RECV_TIMEOUT}.
+                reconnect_count = 0}}.
 
 handle_call(_Request, _From, State) ->
-    {reply, {error, unknown}, State, ?BRIDGE_RECV_TIMEOUT}.
+    {reply, {error, unknown}, State}.
 
 handle_cast(_Msg, State) ->
-    {noreply, State, ?BRIDGE_RECV_TIMEOUT}.
+    {noreply, State}.
 
 %% --- Tunnel data from relay subscription ---
 handle_info({tunnel_in, EncData}, #state{key = Key, bridge_sock = BridgeSock,
@@ -105,14 +104,14 @@ handle_info({tunnel_in, EncData}, #state{key = Key, bridge_sock = BridgeSock,
             counters:add(Metrics, ?METRIC_MSGS_IN, 1),
             case gen_tcp:send(BridgeSock, Data) of
                 ok ->
-                    {noreply, State, ?BRIDGE_RECV_TIMEOUT};
+                    {noreply, State};
                 {error, Reason} ->
                     ?LOG_WARNING("[dist_bridge] Send error ~p for ~s", [Reason, TunnelId]),
                     {stop, {send_error, Reason}, State}
             end;
         {error, decrypt_failed} ->
             ?LOG_WARNING("[dist_bridge] Decrypt failed for ~s", [TunnelId]),
-            {noreply, State, ?BRIDGE_RECV_TIMEOUT}
+            {noreply, State}
     end;
 
 %% --- Socket ownership transferred, start reader ---
@@ -121,7 +120,7 @@ handle_info(socket_ready, #state{reader_pid = undefined, client = Client,
                                   tunnel_id = TunnelId, key = Key, metrics = Metrics} = State) ->
     ReaderPid = start_reader(Client, BridgeSock, SendTopic, TunnelId, Key, Metrics),
     ?LOG_INFO("[dist_bridge] Reader started (~p) for ~s", [ReaderPid, TunnelId]),
-    {noreply, State#state{reader_pid = ReaderPid}, ?BRIDGE_RECV_TIMEOUT};
+    {noreply, State#state{reader_pid = ReaderPid}};
 
 %% --- Reader exited (linked process) ---
 handle_info({'EXIT', Pid, Reason}, #state{reader_pid = Pid, tunnel_id = TunnelId} = State) ->
@@ -129,7 +128,7 @@ handle_info({'EXIT', Pid, Reason}, #state{reader_pid = Pid, tunnel_id = TunnelId
     {stop, {reader_exit, Reason}, State};
 
 handle_info({'EXIT', _Pid, _Reason}, State) ->
-    {noreply, State, ?BRIDGE_RECV_TIMEOUT};
+    {noreply, State};
 
 %% --- Relay client died (Gap 2: reconnection) ---
 handle_info({'DOWN', MonRef, process, _Pid, Reason},
@@ -143,13 +142,8 @@ handle_info({'DOWN', MonRef, process, _Pid, Reason},
 handle_info(reconnect_tick, State) ->
     attempt_reconnect(State);
 
-%% --- No data timeout ---
-handle_info(timeout, #state{tunnel_id = TunnelId} = State) ->
-    ?LOG_WARNING("[dist_bridge] Timeout (no data) for ~s", [TunnelId]),
-    {stop, timeout, State};
-
 handle_info(_Msg, State) ->
-    {noreply, State, ?BRIDGE_RECV_TIMEOUT}.
+    {noreply, State}.
 
 terminate(_Reason, #state{bridge_sock = BridgeSock, tunnel_id = TunnelId,
                            client = Client, sub_ref = SubRef,
@@ -175,7 +169,7 @@ attempt_reconnect(#state{recv_topic = RecvTopic, tunnel_id = TunnelId,
         undefined ->
             ?LOG_INFO("[dist_bridge] No relay client yet, retry ~p for ~s", [N + 1, TunnelId]),
             erlang:send_after(?RECONNECT_INTERVAL, self(), reconnect_tick),
-            {noreply, State#state{reconnect_count = N + 1}, ?BRIDGE_RECV_TIMEOUT};
+            {noreply, State#state{reconnect_count = N + 1}};
         NewClient ->
             ?LOG_INFO("[dist_bridge] Re-acquired relay client for ~s", [TunnelId]),
             MonRef = erlang:monitor(process, NewClient),
@@ -187,8 +181,7 @@ attempt_reconnect(#state{recv_topic = RecvTopic, tunnel_id = TunnelId,
                                       State#state.key, State#state.metrics),
             {noreply, State#state{client = NewClient, client_mon = MonRef,
                                    sub_ref = SubRef, reader_pid = NewReader,
-                                   reconnect_count = 0},
-             ?BRIDGE_RECV_TIMEOUT}
+                                   reconnect_count = 0}}
     end.
 
 %%%===================================================================
@@ -200,6 +193,9 @@ start_reader(Client, BridgeSock, SendTopic, TunnelId, Key, Metrics) ->
         bridge_reader_loop(Client, BridgeSock, SendTopic, TunnelId, Key, Metrics)
     end).
 
+%% Read from the loopback socket and forward to the relay.
+%% {error, timeout} is NOT fatal — just means no traffic in the window.
+%% Only exit on {error, closed} or genuine errors.
 bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId, Key, Metrics) ->
     case gen_tcp:recv(BridgeSock, 0, ?BRIDGE_RECV_TIMEOUT) of
         {ok, Data} ->
@@ -208,6 +204,9 @@ bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId, Key, Metrics) ->
             publish_with_retry(MeshClient, SendTopic, Encrypted, ?PUBLISH_RETRIES),
             counters:add(Metrics, ?METRIC_BYTES_OUT, byte_size(Data)),
             counters:add(Metrics, ?METRIC_MSGS_OUT, 1),
+            bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId, Key, Metrics);
+        {error, timeout} ->
+            %% No traffic in the window — keep reading.
             bridge_reader_loop(MeshClient, BridgeSock, SendTopic, TunnelId, Key, Metrics);
         {error, closed} ->
             ?LOG_INFO("[dist_bridge] Reader closed for ~s", [TunnelId]);

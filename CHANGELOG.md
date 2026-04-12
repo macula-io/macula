@@ -7,6 +7,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.12] - 2026-04-12
+
+### Fixed
+
+- **Dead-QUIC detection never fired** — `macula_mesh_client` overwrote `ping_sent_at` on every 30s PING tick, so `Elapsed` was always exactly one interval and the `>2*PING_INTERVAL_MS` threshold that triggers `quic_connection_dead` was never crossed. Peer relay connections that died silently (network partition, firewall drop, box crash without clean close) were never detected — the client sat on a stale stream for the process lifetime, silently dropping every frame via `maybe_send`. Now we preserve the oldest unanswered PING timestamp; after ~90s of missing PONGs the client force-reconnects.
+
+### Cleanup
+
+- Removed two stale tests in `macula_dist_bridge_tests`:
+  - `bridge_timeout_test` — tested the `handle_info(timeout, ...)` clause that was (correctly) deleted in v1.4.9 when we stopped treating idle periods as fatal.
+  - `bridge_reader_exit_stops_bridge_test` — never delivered `socket_ready`, so the reader never started and the assertion could never be reached.
+
+---
+
+## [1.4.11] - 2026-04-12
+
+### Fixed
+
+- **Cross-relay RPC silent drops** — `macula_mesh_client` had two silent failure modes that manifested as unexplained "Cross-relay RPC timed out" errors when peer relay streams died:
+
+  1. `maybe_send/3` dropped frames at DEBUG level when `stream = undefined`. Demoted DEBUG → WARNING so dead peer streams are visible in production logs.
+  2. `macula_quic:async_send/2` errors were ignored. Now logged at WARNING with the frame type and reason.
+  3. `async_rpc_call` with `stream = undefined` enqueued the call into `pending_calls` and waited for the 4-5s timeout. Now replies immediately via CallbackPid with `peer_disconnected` so the caller (relay RPC forwarder) can fail fast or try other peers.
+
+  Observed symptom: Helsinki relay forwarding `_dist.tunnel.bob@host00.lab` to "2 peer(s)" after SWIM marked both peers offline — neither Paris nor Nuremberg received the CALL. Client saw timeout after 5s. Tunnel eventually established on retry in the opposite direction.
+
+---
+
+## [1.4.10] - 2026-04-12
+
+### Changed
+
+- **Diagnostic logging around RPC reply path** — `execute_and_reply/5` previously swallowed encoder/send failures silently. Handler crashes were caught but not logged; encoder exceptions killed the spawned process with no trace; `macula_quic:async_send/2` errors were ignored. All three paths now log at ERROR level with the call_id so missing replies can be attributed to their actual cause. The happy path logs at DEBUG level for flow tracing.
+
+  Added to debug an issue where `_dist.tunnel.*` RPC replies never reached the relay despite the handler returning successfully when invoked synchronously from a shell.
+
+---
+
+## [1.4.9] - 2026-04-12
+
+### Fixed
+
+- **Dist bridge dying every 60s during idle periods** — two bugs compounding:
+  1. Bridge reader loop treated `{error, timeout}` from `gen_tcp:recv` as fatal and exited. Timeout just means "no traffic in the window," not connection failure. Reader now loops on timeout.
+  2. Bridge gen_server used its mailbox timeout as a death signal, stopping with `{stop, timeout}` when no messages arrived. Same mistake. Removed the idle timeout entirely — real failures are caught by `{'EXIT', ...}` from the reader, `{'DOWN', ...}` from the relay client, and `gen_tcp:send` errors.
+
+  Together these caused dist connections between quiet nodes to cycle every 60-90 seconds: bridge dies → node disconnect → auto-reconnect → repeat.
+
+---
+
+## [1.4.8] - 2026-04-12
+
+### Fixed
+
+- **Bridge supervisor cascade death** — `macula_dist_bridge_sup` was started via `start_link` from the caller of `macula:join_mesh/1` (typically the user's shell evaluator). When the shell crashed (e.g., from a typo causing `undef`), the EXIT signal cascaded: shell → bridge supervisor → all dist tunnels → mesh client. Now the bridge supervisor is a permanent child of `macula_root`, isolated from user code failures.
+
+---
+
+## [1.4.7] - 2026-04-12
+
+### Fixed
+
+- **Dead QUIC connection detection** — `macula_mesh_client` now monitors PONG responses. If no PONG arrives within 2 ping cycles (60s), the connection is considered dead and triggers `handle_disconnect` → reconnect. Previously, dead connections were never detected — the process stayed alive with a stale stream, silently dropping all outbound data.
+
+---
+
+## [1.4.6] - 2026-04-11
+
+### Fixed
+
+- **Hex package now includes NIF Rust source** — `rebar3_hex` reads `files` from `.app.src`, not from the `{hex, [...]}` section in `rebar.config`. Moved the `files` list to `.app.src` with explicit native crate paths (excluding `target/` build artifacts). Consumers with Rust installed can now build NIFs from source when no precompiled binary is available.
+
+---
+
+## [1.4.5] - 2026-04-11
+
+### Fixed
+
+- **NIF build from source inside `_build/`** — `fetch-nif.sh` lacked the symlink fallback that `build-nifs.sh` has. When compiling as a hex dependency, `native/` isn't symlinked into `_build/prod/lib/macula/`, so source builds failed with "No Rust source." Now follows the `src/` symlink to find the source root.
+
+---
+
+## [1.4.4] - 2026-04-11
+
+### Fixed
+
+- **Erlang distribution over mesh returning pang** — `request_tunnel` crashed with `case_clause` when the relay included `_trace` in RPC call messages. `decode_reply` returns a 3-tuple `{ok, Result, #{trace => Trace}}` in that case, but `request_tunnel` only matched 2-tuples. Added `normalize_rpc_result/1` to strip the trace wrapper, plus a catch-all clause to prevent future silent crashes.
+- **Dist tunnel RPC timeout exceeded OTP setup timer** — `DIST_TIMEOUT` was 25s but OTP's `SetupTime` is typically 7s. The setup timer killed the `do_setup` process before the RPC could return, suppressing all error logs. Reduced to 5s.
+
+### Added
+
+- Diagnostic logging in `macula_dist` connect path for easier future debugging.
+
+---
+
 ## [1.4.1] - 2026-04-10
 
 ### Changed

@@ -51,6 +51,18 @@ init([]) ->
             restart => permanent,
             shutdown => 5000,
             type => worker
+        },
+
+        %% Distribution-over-mesh bridge supervisor.
+        %% Started here (under the application supervisor) so it survives
+        %% shell crashes and other transient process deaths in user code.
+        #{
+            id => macula_dist_bridge_sup,
+            start => {macula_dist_bridge_sup, start_link, []},
+            restart => permanent,
+            shutdown => infinity,
+            type => supervisor,
+            modules => [macula_dist_bridge_sup]
         }
     ],
 

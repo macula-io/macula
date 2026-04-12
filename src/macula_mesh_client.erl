@@ -248,6 +248,15 @@ handle_cast({publish, Topic, Payload}, State) ->
 %% Async RPC (non-blocking cross-relay forwarding)
 %%====================================================================
 
+handle_cast({async_rpc_call, _Procedure, _Args, _Timeout, _Opts, CallbackPid, CorrelationId},
+            #state{stream = undefined} = State) ->
+    ?LOG_WARNING("[relay_client] async_call dropped — no stream (corr=~s)",
+                 [CorrelationId]),
+    CallbackPid ! {relay_reply, CorrelationId,
+                   #{<<"error">> => #{<<"code">> => <<"peer_disconnected">>,
+                                      <<"message">> => <<"no stream to peer">>}},
+                   undefined},
+    {noreply, State};
 handle_cast({async_rpc_call, Procedure, Args, Timeout, Opts, CallbackPid, CorrelationId}, State) ->
     CallId = base64:encode(crypto:strong_rand_bytes(12)),
     TimerRef = erlang:send_after(Timeout, self(), {call_timeout, CallId}),
@@ -338,13 +347,38 @@ handle_info({quic, streams_available, _Conn, _Info}, State) ->
 handle_info({quic, peer_needs_streams, _Conn, _Info}, State) ->
     {noreply, State};
 
-handle_info(send_ping, #state{status = connected} = State) ->
-    send_protocol_ping(State),
-    schedule_ping(),
-    {noreply, State#state{ping_sent_at = erlang:monotonic_time(millisecond)}};
+handle_info(send_ping, #state{status = connected, ping_sent_at = LastPing} = State) ->
+    %% If previous PING never got a PONG, the connection is dead.
+    %% CRITICAL: preserve the OLDEST unanswered PING timestamp — do NOT overwrite
+    %% on each tick. Overwriting means Elapsed is always exactly one interval,
+    %% so the >2x threshold never fires and dead connections go undetected.
+    Now = erlang:monotonic_time(millisecond),
+    case LastPing of
+        undefined ->
+            send_protocol_ping(State),
+            schedule_ping(),
+            {noreply, State#state{ping_sent_at = Now}};
+        SentAt ->
+            Elapsed = Now - SentAt,
+            case Elapsed > ?PING_INTERVAL_MS * 2 of
+                true ->
+                    ?LOG_WARNING("[relay_client] No PONG for ~pms — connection dead, reconnecting",
+                                 [Elapsed]),
+                    self() ! quic_connection_dead,
+                    schedule_ping(),
+                    {noreply, State};
+                false ->
+                    %% Prior PING still outstanding — do NOT overwrite ping_sent_at.
+                    send_protocol_ping(State),
+                    schedule_ping(),
+                    {noreply, State}
+            end
+    end;
 handle_info(send_ping, State) ->
     %% Not connected — skip, next ping will fire after reconnect
     {noreply, State};
+handle_info(quic_connection_dead, State) ->
+    handle_disconnect(State);
 
 handle_info(Info, State) ->
     ?LOG_DEBUG("[relay_client] Unhandled: ~p", [Info]),
@@ -498,10 +532,27 @@ dispatch_incoming_call(Procedure, CallId, Args, Trace, State) ->
     end.
 
 execute_and_reply(Handler, Args, CallId, Trace, Stream) ->
-    Result = try Handler(Args) catch _:Err -> {error, Err} end,
+    Result = try Handler(Args)
+             catch C:E:S ->
+                 ?LOG_ERROR("[relay_client] handler crash call_id=~s ~p:~p ~p",
+                            [CallId, C, E, S]),
+                 {error, E}
+             end,
+    ?LOG_DEBUG("[relay_client] handler result call_id=~s: ~p", [CallId, Result]),
     ReplyBase = format_call_result(Result, CallId),
-    Binary = macula_protocol_encoder:encode(reply, maybe_add_trace(ReplyBase, Trace)),
-    macula_quic:async_send(Stream, Binary).
+    try
+        Binary = macula_protocol_encoder:encode(reply, maybe_add_trace(ReplyBase, Trace)),
+        case macula_quic:async_send(Stream, Binary) of
+            ok ->
+                ?LOG_DEBUG("[relay_client] REPLY sent call_id=~s", [CallId]);
+            {error, SendErr} ->
+                ?LOG_ERROR("[relay_client] REPLY send failed call_id=~s: ~p",
+                           [CallId, SendErr])
+        end
+    catch C2:E2:S2 ->
+        ?LOG_ERROR("[relay_client] encode/send crash call_id=~s ~p:~p ~p",
+                   [CallId, C2, E2, S2])
+    end.
 
 format_call_result({ok, R}, CallId) ->
     #{<<"call_id">> => CallId, <<"result">> => R};
@@ -609,10 +660,14 @@ replay_state(#state{subscriptions = Subs, procedures = Procs} = State) ->
     end, Procs).
 
 maybe_send(Type, _Msg, #state{stream = undefined}) ->
-    ?LOG_DEBUG("[mesh_client] Dropped ~p — no stream", [Type]);
+    ?LOG_WARNING("[relay_client] Dropped ~p frame — no stream", [Type]);
 maybe_send(Type, Msg, #state{stream = Stream}) ->
     Binary = macula_protocol_encoder:encode(Type, Msg),
-    macula_quic:async_send(Stream, Binary).
+    case macula_quic:async_send(Stream, Binary) of
+        ok -> ok;
+        {error, Reason} ->
+            ?LOG_WARNING("[relay_client] Send ~p failed: ~p", [Type, Reason])
+    end.
 
 %% Ensure payload is a flat binary before passing to msgpack.
 %% Callers may pass: map, iolist (from json:encode), or binary.

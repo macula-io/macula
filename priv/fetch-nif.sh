@@ -11,6 +11,16 @@ PRIV_DIR="${BASEDIR}/priv"
 NIF_FILE="${PRIV_DIR}/libmacula_quic.so"
 NATIVE_DIR="${BASEDIR}/native/macula_quic"
 
+# When compiling inside _build/, native/ isn't symlinked but src/ is.
+# Follow the src symlink to find the source root and its native/ dir.
+if [ ! -d "${NATIVE_DIR}" ] && [ -L "${BASEDIR}/src" ]; then
+    SRC_TARGET=$(readlink -f "${BASEDIR}/src")
+    SOURCE_ROOT=$(dirname "${SRC_TARGET}")
+    if [ -d "${SOURCE_ROOT}/native/macula_quic" ]; then
+        NATIVE_DIR="${SOURCE_ROOT}/native/macula_quic"
+    fi
+fi
+
 # Skip if NIF already exists
 if [ -f "${NIF_FILE}" ]; then
     exit 0

@@ -38,7 +38,10 @@
 -export([extract_payload/1]).
 -export([get_tunnel_metrics/0, get_tunnel_metrics/1]).
 
--define(DIST_TIMEOUT, 25000).
+%% Must be shorter than OTP's SetupTime (typically 7000ms).
+%% If RPC takes longer, dist_util's timer kills the do_setup process
+%% before we can log any errors — pang with zero diagnostics.
+-define(DIST_TIMEOUT, 5000).
 -define(CONTROLLER_TIMEOUT, 30000).
 
 -define(METRIC_BYTES_OUT, 1).
@@ -90,17 +93,13 @@ advertise_dist_accept() ->
             ok
     end.
 
-%% Start the bridge supervisor if not already running.
-%% Needed when macula_dist_system isn't started (e.g., standalone relay mode).
+%% Bridge supervisor is started by macula_root (application supervisor),
+%% so it survives shell crashes and user code failures. This is a no-op
+%% kept for backwards compatibility.
 ensure_bridge_sup() ->
     case whereis(macula_dist_bridge_sup) of
         undefined ->
-            case macula_dist_bridge_sup:start_link() of
-                {ok, _Pid} -> ok;
-                {error, {already_started, _}} -> ok;
-                {error, Reason} ->
-                    ?LOG_ERROR("[dist_relay] Failed to start bridge sup: ~p", [Reason])
-            end;
+            ?LOG_WARNING("[dist_relay] Bridge sup not running — macula app may not be started");
         _Pid ->
             ok
     end.
@@ -151,9 +150,12 @@ request_tunnel(MeshClient, NodeStr) ->
     Procedure = <<"_dist.tunnel.", (list_to_binary(NodeStr))/binary>>,
     Args = #{<<"from_node">> => atom_to_binary(node()),
              <<"target_node">> => list_to_binary(NodeStr)},
-    %% Gap 7: try all connected relays when using multi_relay.
-    %% If the target is on a different relay, call_any tries each in sequence.
-    Result = tunnel_rpc(MeshClient, Procedure, Args),
+    ?LOG_INFO("[dist_relay] RPC ~s via ~p", [Procedure, MeshClient]),
+    RawResult = tunnel_rpc(MeshClient, Procedure, Args),
+    %% Normalize: mesh_client may return {ok, R, TraceMap} when relay
+    %% includes _trace in the call round-trip.  Strip the trace wrapper
+    %% so pattern matching below always sees a 2-tuple.
+    Result = normalize_rpc_result(RawResult),
     case Result of
         {ok, #{<<"tunnel_id">> := TunnelId}} ->
             ?LOG_INFO("[dist_relay] Tunnel established: ~s", [TunnelId]),
@@ -163,8 +165,14 @@ request_tunnel(MeshClient, NodeStr) ->
             {error, {tunnel_error, ErrorInfo}};
         {error, Reason} ->
             ?LOG_WARNING("[dist_relay] Tunnel request failed: ~p", [Reason]),
-            {error, {tunnel_failed, Reason}}
+            {error, {tunnel_failed, Reason}};
+        Other ->
+            ?LOG_WARNING("[dist_relay] Unexpected RPC result: ~p", [Other]),
+            {error, {unexpected_result, Other}}
     end.
+
+normalize_rpc_result({ok, R, _Trace}) -> {ok, R};
+normalize_rpc_result(Other) -> Other.
 
 %% Use call_any for multi_relay (tries each connected relay).
 %% Fall back to direct call for single relay_client.

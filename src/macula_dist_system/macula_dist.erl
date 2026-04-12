@@ -333,12 +333,15 @@ do_setup(Kernel, Node, Type, MyNode, _LongOrShortNames, SetupTime) ->
     end.
 
 do_setup_connect(Kernel, Node, Type, MyNode, Timer, Host, Port) ->
-    ConnectFn = case macula_dist_relay:is_relay_mode() of
+    RelayMode = macula_dist_relay:is_relay_mode(),
+    ?LOG_INFO("[dist] setup ~p relay_mode=~p host=~s port=~p", [Node, RelayMode, Host, Port]),
+    ConnectFn = case RelayMode of
         true  -> fun() -> macula_dist_relay:connect(atom_to_list(Node), Host, Port) end;
         false -> fun() -> connect_quic(Host, Port) end
     end,
     case ConnectFn() of
         {ok, Conn, Stream} ->
+            ?LOG_INFO("[dist] Connected to ~p, starting handshake", [Node]),
             HSData = make_hs_data(Kernel, MyNode, {Conn, Stream}, Timer, undefined),
             dist_util:handshake_we_started(
                 HSData#hs_data{other_node = Node, request_type = Type});

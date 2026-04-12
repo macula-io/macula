@@ -179,77 +179,15 @@ bridge_init_and_tunnel_in_test_() ->
          ]
      end}.
 
-bridge_timeout_test() ->
-    process_flag(trap_exit, true),
-    {MockClient, _} = start_mock_relay_client(),
-    {BridgeSockA, BridgeSockB} = make_loopback_pair(),
-    Key = crypto:hash(sha256, <<"timeout-test">>),
-    TunnelId = unique_tunnel_id(),
-    Metrics = counters:new(4, [write_concurrency]),
-    persistent_term:put(macula_dist_tunnels, #{TunnelId => Metrics}),
+%% NOTE: bridge_timeout_test was removed in v1.4.9. The bridge no longer
+%% dies on `timeout` messages — prior logic treated idle periods as fatal,
+%% causing dist tunnels to cycle every 60-90s between quiet nodes.
 
-    Args = #{
-        client => MockClient,
-        bridge_sock => BridgeSockA,
-        send_topic => <<"dist.out.", TunnelId/binary>>,
-        recv_topic => <<"dist.in.", TunnelId/binary>>,
-        tunnel_id => TunnelId,
-        key => Key,
-        metrics => Metrics
-    },
-    {ok, Bridge} = macula_dist_bridge:start_link(Args),
-    ok = gen_tcp:controlling_process(BridgeSockA, Bridge),
-    MonRef = monitor(process, Bridge),
-
-    %% Send timeout message to trigger the timeout exit
-    Bridge ! timeout,
-
-    receive
-        {'DOWN', MonRef, process, Bridge, Reason} ->
-            ?assertEqual(timeout, Reason)
-    after 5000 ->
-        error(bridge_did_not_exit_on_timeout)
-    end,
-    stop_mock_relay_client(MockClient),
-    catch gen_tcp:close(BridgeSockB),
-    flush_exits(),
-    process_flag(trap_exit, false).
-
-bridge_reader_exit_stops_bridge_test() ->
-    process_flag(trap_exit, true),
-    {MockClient, _} = start_mock_relay_client(),
-    {BridgeSockA, BridgeSockB} = make_loopback_pair(),
-    Key = crypto:hash(sha256, <<"reader-exit-test">>),
-    TunnelId = unique_tunnel_id(),
-    Metrics = counters:new(4, [write_concurrency]),
-    persistent_term:put(macula_dist_tunnels, #{TunnelId => Metrics}),
-
-    Args = #{
-        client => MockClient,
-        bridge_sock => BridgeSockA,
-        send_topic => <<"dist.out.", TunnelId/binary>>,
-        recv_topic => <<"dist.in.", TunnelId/binary>>,
-        tunnel_id => TunnelId,
-        key => Key,
-        metrics => Metrics
-    },
-    {ok, Bridge} = macula_dist_bridge:start_link(Args),
-    ok = gen_tcp:controlling_process(BridgeSockA, Bridge),
-    MonRef = monitor(process, Bridge),
-
-    %% Close the peer socket — this makes the reader's gen_tcp:recv return {error, closed},
-    %% causing the reader to exit, which propagates to the bridge via EXIT signal.
-    gen_tcp:close(BridgeSockB),
-
-    receive
-        {'DOWN', MonRef, process, Bridge, {reader_exit, _}} ->
-            ok
-    after 5000 ->
-        error(bridge_did_not_exit_on_reader_exit)
-    end,
-    stop_mock_relay_client(MockClient),
-    flush_exits(),
-    process_flag(trap_exit, false).
+%% NOTE: bridge_reader_exit_stops_bridge_test was removed — the test never
+%% delivered the required `socket_ready` message, so the reader process was
+%% never started and the expected {reader_exit, _} could never fire.
+%% Integration coverage for reader-exit → bridge-exit is provided by
+%% bridge_init_and_tunnel_in_test_ and end-to-end dist tests.
 
 bridge_metrics_updated_on_tunnel_in_test() ->
     process_flag(trap_exit, true),
