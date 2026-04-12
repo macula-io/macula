@@ -6,8 +6,10 @@
 %%% to the next relay in the list with exponential backoff + jitter.
 %%% Replays all subscriptions and procedure registrations on reconnect.
 %%%
-%%% This is the SDK client module. For relay-to-relay peering connections,
-%%% see macula_relay_client in the macula-relay repository.
+%%% This is the SDK client module. It speaks the node role only — it
+%%% cannot identify as a relay, cannot subscribe to _swim/_dht/_relay.*,
+%%% and has no loop-prevention concerns. For relay-to-relay peering
+%%% connections, see macula_peer_client in the macula-relay repository.
 %%%
 %%% Usage:
 %%%
@@ -27,7 +29,7 @@
 
 -export([start_link/1, stop/1]).
 -export([subscribe/3, unsubscribe/2, publish/3]).
--export([advertise/3, unadvertise/2, call/4, call/5, async_call/7]).
+-export([advertise/3, unadvertise/2, call/4, call/5]).
 -export([is_connected/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -53,8 +55,7 @@
     identity :: binary(),
     geo_identity :: map(),                                    %% geo metadata for CONNECT (city, country, lat, lng)
     site :: map() | undefined,                                %% site metadata for CONNECT (site_id, name, city, lat, lng, site_type)
-    client_type = <<"node">> :: binary(),                      %% always "node" for mesh clients
-    tls_verify :: verify_peer | none,                         %% TLS verification mode (none for relay peering)
+    tls_verify :: verify_peer | none,                         %% TLS verification mode (none for dev/localhost)
     preferred_host :: string(),                               %% first relay hostname (for target_relay in CONNECT)
     previous_host :: string() | undefined,                    %% host before failover (for reroute detection)
     conn :: reference() | undefined,
@@ -114,13 +115,6 @@ call(Pid, Procedure, Args, Timeout) ->
 call(Pid, Procedure, Args, Timeout, Opts) ->
     gen_server:call(Pid, {rpc_call, Procedure, Args, Timeout, Opts}, Timeout + 1000).
 
-%% @doc Fire-and-forget RPC call. Sends CALL to the relay and delivers the reply
-%% as {relay_reply, CorrelationId, Result, Trace} to CallbackPid.
-%% Does NOT block the caller. Used for cross-relay RPC forwarding.
--spec async_call(pid(), binary(), map(), timeout(), map(), pid(), binary()) -> ok.
-async_call(Pid, Procedure, Args, Timeout, Opts, CallbackPid, CorrelationId) ->
-    gen_server:cast(Pid, {async_rpc_call, Procedure, Args, Timeout, Opts, CallbackPid, CorrelationId}).
-
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
@@ -139,18 +133,6 @@ init(Opts) ->
     Identity = maps:get(identity, Opts, <<"anonymous">>),
     GeoIdentity = maps:get(geo_identity, Opts, #{}),
     Site = maps:get(site, Opts, undefined),
-    %% Client type governs how the receiving relay classifies this
-    %% connection. `<<"relay">>' → is_peer=true: SWIM/DHT/relay.ping
-    %% protocol messages are accepted, publishes deliver to
-    %% {relay_local,T} only (loop prevention). `<<"node">>' (default)
-    %% is the normal application client profile.
-    %%
-    %% macula_relay_peering passes type=<<"relay">> for peer_clients.
-    %% Previously this option was silently ignored (hardcoded to
-    %% <<"node">>), so peer SWIM/DHT messages were dropped by the
-    %% is_peer=true guards in the relay handler and SWIM never
-    %% round-tripped across relays.
-    ClientType = maps:get(type, Opts, <<"node">>),
     TlsVerify = maps:get(tls_verify, Opts, verify_peer),
 
     State = #state{
@@ -164,7 +146,6 @@ init(Opts) ->
         identity = Identity,
         geo_identity = GeoIdentity,
         site = Site,
-        client_type = ClientType,
         tls_verify = TlsVerify,
         conn = undefined,
         stream = undefined,
@@ -255,27 +236,6 @@ handle_cast({publish, Topic, Payload}, State) ->
     }, State),
     {noreply, State};
 
-%%====================================================================
-%% Async RPC (non-blocking cross-relay forwarding)
-%%====================================================================
-
-handle_cast({async_rpc_call, _Procedure, _Args, _Timeout, _Opts, CallbackPid, CorrelationId},
-            #state{stream = undefined} = State) ->
-    ?LOG_WARNING("[relay_client] async_call dropped — no stream (corr=~s)",
-                 [CorrelationId]),
-    CallbackPid ! {relay_reply, CorrelationId,
-                   #{<<"error">> => #{<<"code">> => <<"peer_disconnected">>,
-                                      <<"message">> => <<"no stream to peer">>}},
-                   undefined},
-    {noreply, State};
-handle_cast({async_rpc_call, Procedure, Args, Timeout, Opts, CallbackPid, CorrelationId}, State) ->
-    CallId = base64:encode(crypto:strong_rand_bytes(12)),
-    TimerRef = erlang:send_after(Timeout, self(), {call_timeout, CallId}),
-    PendingCalls = maps:put(CallId, {async, CallbackPid, CorrelationId, TimerRef},
-                            State#state.pending_calls),
-    maybe_send(call, build_call_msg(CallId, Procedure, Args, Opts), State),
-    {noreply, State#state{pending_calls = PendingCalls}};
-
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -316,13 +276,6 @@ handle_info({call_timeout, CallId}, State) ->
         {From, _TimerRef} ->
             ?LOG_WARNING("[mesh_client] RPC call ~s TIMED OUT (no reply from relay)", [CallId]),
             gen_server:reply(From, {error, timeout}),
-            {noreply, State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)}};
-        {async, CallbackPid, CorrelationId, _TimerRef} ->
-            ?LOG_WARNING("[mesh_client] Async RPC ~s TIMED OUT", [CallId]),
-            CallbackPid ! {relay_reply, CorrelationId,
-                          #{<<"error">> => #{<<"code">> => <<"timeout">>,
-                                             <<"message">> => <<"Cross-relay RPC timed out">>}},
-                          undefined},
             {noreply, State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)}}
     end;
 
@@ -478,14 +431,6 @@ trace_frame_arrival(TypeId, Size, Url) ->
     ?LOG_DEBUG("[relay_client] frame type_id=~p len=~p url=~s",
                [TypeId, Size, Url]).
 
-%% Incoming SWIM messages — sent directly by remote relay handler on the inbound
-%% stream as a PUBLISH. Route to SWIM gen_server + extract piggybacked Bloom.
-handle_message({ok, {publish, #{<<"topic">> := <<"_swim.", _/binary>> = Topic,
-                                <<"payload">> := Payload}}}, State) ->
-    Decoded = safe_decode_json(Payload),
-    route_swim_message(Topic, Payload, Decoded),
-    State;
-
 %% Incoming PUBLISH from relay
 handle_message({ok, {publish, Msg}}, State) ->
     Topic = maps:get(<<"topic">>, Msg, <<>>),
@@ -516,13 +461,6 @@ handle_message({ok, {reply, Msg}}, State) ->
             Trace = maps:get(<<"_trace">>, Msg, undefined),
             Reply = decode_reply(Msg, Trace),
             gen_server:reply(From, Reply),
-            State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)};
-        {async, CallbackPid, CorrelationId, TimerRef} ->
-            %% Async call — deliver reply to callback PID
-            erlang:cancel_timer(TimerRef),
-            Trace = maps:get(<<"_trace">>, Msg, undefined),
-            Reply = decode_reply(Msg, Trace),
-            CallbackPid ! {relay_reply, CorrelationId, unwrap_reply(Reply), Trace},
             State#state{pending_calls = maps:remove(CallId, State#state.pending_calls)}
     end;
 
@@ -632,13 +570,6 @@ build_call_msg(CallId, Procedure, Args, Opts) ->
         Trace -> Msg1#{<<"_trace">> => Trace}
     end.
 
-%% @private Unwrap decoded reply to raw result for async callbacks.
-%% relay_reply expects the raw result map, not {ok, Result} tuples.
-unwrap_reply({ok, Result}) -> Result;
-unwrap_reply({ok, Result, _TraceInfo}) -> Result;
-unwrap_reply({error, ErrorMap}) -> #{<<"error">> => ErrorMap};
-unwrap_reply(Other) -> Other.
-
 %% Internal helpers
 %%====================================================================
 
@@ -665,7 +596,7 @@ send_connect(State) ->
         realm_id => State#state.realm,
         capabilities => [<<"pubsub">>, <<"rpc">>],
         endpoint => State#state.url,
-        type => State#state.client_type,
+        type => <<"node">>,
         target_relay => TargetRelay
     },
     Msg0 = case State#state.geo_identity of
@@ -826,30 +757,6 @@ parts_match(_, _) -> false.
 safe_decode_json(Payload) when is_binary(Payload) ->
     try json:decode(Payload) catch _:_ -> Payload end;
 safe_decode_json(Payload) -> Payload.
-
-%% SWIM message routing — decomposed from handle_message to avoid nesting.
-route_swim_message(Topic, RawPayload, Decoded) ->
-    From = swim_from(Decoded),
-    forward_to_swim(Topic, From, RawPayload),
-    store_piggybacked_bloom(From, Decoded).
-
-swim_from(#{<<"from">> := F}) when is_binary(F) -> F;
-swim_from(_) -> <<>>.
-
-forward_to_swim(<<"_swim.ack">>, From, Payload) ->
-    swim_cast({ack_received, From, Payload});
-forward_to_swim(<<"_swim.ping">>, From, Payload) ->
-    swim_cast({ping_received, From, Payload});
-forward_to_swim(_, _, _) -> ok.
-
-swim_cast(Msg) ->
-    case erlang:whereis(macula_relay_swim) of
-        undefined -> ok;
-        Pid -> gen_server:cast(Pid, Msg)
-    end.
-
-%% Mesh clients ignore bloom filters — those are relay-to-relay peering data.
-store_piggybacked_bloom(_, _) -> ok.
 
 maybe_add_trace(Msg, undefined) -> Msg;
 maybe_add_trace(Msg, Trace) -> Msg#{<<"_trace">> => Trace}.

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.21] - 2026-04-13
+
+### Changed (breaking, but no production consumer affected)
+
+- **`macula_mesh_client` is node-only.** The `type` option and the
+  `client_type` state field are gone — `type => <<"node">>` is hardcoded
+  in the CONNECT handshake. The SDK cannot be coerced into the peer
+  role by accident. Relay-to-relay peering migrated to a dedicated
+  `macula_peer_client` module (in the macula-relay repo) with its own
+  supervisor and own subsystem folder.
+- **`macula_mesh_client:async_call/7` removed.** This was a peer-only
+  path (cross-relay RPC forwarding). Moved to `macula_peer_client` where
+  it belongs.
+- **SWIM routing removed from SDK.** `_swim.*` PUBLISH frames never
+  reached node clients in practice (relays only send SWIM on peer
+  connections); the dead-code path, the `route_swim_message`
+  helpers, and the `unwrap_reply` helper for async-call are all gone.
+
+### P1 of the relay refactor
+
+- One role per module. Invariants live at module boundaries instead
+  of in `{identified, is_peer}` guards. See
+  `macula-relay/plans/PLAN_MACULA_RELAY_REFACTOR.md`.
+
+---
+
 ## [1.4.20] - 2026-04-12
 
 ### Changed
