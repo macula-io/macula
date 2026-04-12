@@ -358,33 +358,17 @@ handle_info({quic, streams_available, _Conn, _Info}, State) ->
 handle_info({quic, peer_needs_streams, _Conn, _Info}, State) ->
     {noreply, State};
 
-handle_info(send_ping, #state{status = connected, ping_sent_at = LastPing} = State) ->
-    %% If previous PING never got a PONG, the connection is dead.
-    %% CRITICAL: preserve the OLDEST unanswered PING timestamp — do NOT overwrite
-    %% on each tick. Overwriting means Elapsed is always exactly one interval,
-    %% so the >2x threshold never fires and dead connections go undetected.
-    Now = erlang:monotonic_time(millisecond),
-    case LastPing of
-        undefined ->
-            send_protocol_ping(State),
-            schedule_ping(),
-            {noreply, State#state{ping_sent_at = Now}};
-        SentAt ->
-            Elapsed = Now - SentAt,
-            case Elapsed > ?PING_INTERVAL_MS * 2 of
-                true ->
-                    ?LOG_WARNING("[relay_client] No PONG for ~pms — connection dead, reconnecting",
-                                 [Elapsed]),
-                    self() ! quic_connection_dead,
-                    schedule_ping(),
-                    {noreply, State};
-                false ->
-                    %% Prior PING still outstanding — do NOT overwrite ping_sent_at.
-                    send_protocol_ping(State),
-                    schedule_ping(),
-                    {noreply, State}
-            end
-    end;
+%% No outstanding PING — record timestamp so dead-detection has a baseline.
+handle_info(send_ping, #state{status = connected, ping_sent_at = undefined} = State) ->
+    send_protocol_ping(State),
+    schedule_ping(),
+    {noreply, State#state{ping_sent_at = erlang:monotonic_time(millisecond)}};
+%% A PING is outstanding — dispatch on how long it has been outstanding.
+%% Preserve the ORIGINAL ping_sent_at so Elapsed grows each tick and the
+%% dead-connection threshold (> 2× PING_INTERVAL_MS) actually fires.
+handle_info(send_ping, #state{status = connected, ping_sent_at = SentAt} = State) ->
+    Elapsed = erlang:monotonic_time(millisecond) - SentAt,
+    handle_outstanding_ping(Elapsed > ?PING_INTERVAL_MS * 2, Elapsed, State);
 handle_info(send_ping, State) ->
     %% Not connected — skip, next ping will fire after reconnect
     {noreply, State};
@@ -393,6 +377,21 @@ handle_info(quic_connection_dead, State) ->
 
 handle_info(Info, State) ->
     ?LOG_DEBUG("[relay_client] Unhandled: ~p", [Info]),
+    {noreply, State}.
+
+%% Outstanding PING exceeded the dead-threshold — skip this tick's
+%% PING send and declare the connection dead; reconnect will fire.
+handle_outstanding_ping(true, Elapsed, State) ->
+    ?LOG_WARNING("[relay_client] No PONG for ~pms — connection dead, reconnecting",
+                 [Elapsed]),
+    self() ! quic_connection_dead,
+    schedule_ping(),
+    {noreply, State};
+%% Still within the window — re-send PING, but do NOT update
+%% ping_sent_at (that would mask the growing gap).
+handle_outstanding_ping(false, _Elapsed, State) ->
+    send_protocol_ping(State),
+    schedule_ping(),
     {noreply, State}.
 
 terminate(_Reason, #state{conn = Conn, stream = Stream}) ->
@@ -543,27 +542,38 @@ dispatch_incoming_call(Procedure, CallId, Args, Trace, State) ->
     end.
 
 execute_and_reply(Handler, Args, CallId, Trace, Stream) ->
-    Result = try Handler(Args)
-             catch C:E:S ->
-                 ?LOG_ERROR("[relay_client] handler crash call_id=~s ~p:~p ~p",
-                            [CallId, C, E, S]),
-                 {error, E}
-             end,
+    Result = invoke_handler(Handler, Args, CallId),
     ?LOG_DEBUG("[relay_client] handler result call_id=~s: ~p", [CallId, Result]),
-    ReplyBase = format_call_result(Result, CallId),
-    try
-        Binary = macula_protocol_encoder:encode(reply, maybe_add_trace(ReplyBase, Trace)),
-        case macula_quic:async_send(Stream, Binary) of
-            ok ->
-                ?LOG_DEBUG("[relay_client] REPLY sent call_id=~s", [CallId]);
-            {error, SendErr} ->
-                ?LOG_ERROR("[relay_client] REPLY send failed call_id=~s: ~p",
-                           [CallId, SendErr])
-        end
-    catch C2:E2:S2 ->
-        ?LOG_ERROR("[relay_client] encode/send crash call_id=~s ~p:~p ~p",
-                   [CallId, C2, E2, S2])
+    send_reply(Result, CallId, Trace, Stream).
+
+%% @private Run the handler, capturing any crash for diagnostics.
+invoke_handler(Handler, Args, CallId) ->
+    try Handler(Args)
+    catch C:E:S ->
+        ?LOG_ERROR("[relay_client] handler crash call_id=~s ~p:~p ~p",
+                   [CallId, C, E, S]),
+        {error, E}
     end.
+
+%% @private Encode and send the REPLY. Encoder/send failures are
+%% logged at ERROR so missing replies don't vanish into spawned-process
+%% exits. The enclosing try swallows crashes — let-it-crash is a false
+%% economy here because the caller is a fire-and-forget spawn.
+send_reply(Result, CallId, Trace, Stream) ->
+    Reply = maybe_add_trace(format_call_result(Result, CallId), Trace),
+    try
+        Binary = macula_protocol_encoder:encode(reply, Reply),
+        report_send(macula_quic:async_send(Stream, Binary), CallId)
+    catch C:E:S ->
+        ?LOG_ERROR("[relay_client] encode/send crash call_id=~s ~p:~p ~p",
+                   [CallId, C, E, S])
+    end.
+
+report_send(ok, CallId) ->
+    ?LOG_DEBUG("[relay_client] REPLY sent call_id=~s", [CallId]);
+report_send({error, Reason}, CallId) ->
+    ?LOG_ERROR("[relay_client] REPLY send failed call_id=~s: ~p",
+               [CallId, Reason]).
 
 format_call_result({ok, R}, CallId) ->
     #{<<"call_id">> => CallId, <<"result">> => R};
