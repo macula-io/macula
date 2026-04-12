@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.14] - 2026-04-12
+
+### Fixed
+
+- **Peer relay connections misidentified as nodes on CONNECT** —
+  `macula_mesh_client:init/1` silently ignored the `type` option and
+  hardcoded `client_type = <<"node">>` for every client. The CONNECT
+  frame sent `type=node` even when `macula_relay_peering` had passed
+  `type=<<"relay">>`. Receiving relays consequently set `is_peer=false`
+  for every incoming peer connection, and the `_swim.*`/`_dht.*`/
+  `_relay.*` protocol handlers — guarded on `is_peer=true` — dropped
+  every internal protocol publish.
+
+  Visible symptoms once DEAD promotion was actually working (relay
+  v1.4.12+): every peer permanently marked DEAD within ~12s, because
+  SWIM ACKs never round-tripped. Cascades: empty topology dashboards,
+  stale graph status, false "peer down" alerts.
+
+  Fix: honor the `type` option; peer clients now correctly identify
+  themselves, SWIM ACKs flow, `is_peer=true`-guarded handlers run.
+
+---
+
 ## [1.4.13] - 2026-04-12
 
 ### Fixed

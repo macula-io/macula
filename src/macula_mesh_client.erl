@@ -139,7 +139,18 @@ init(Opts) ->
     Identity = maps:get(identity, Opts, <<"anonymous">>),
     GeoIdentity = maps:get(geo_identity, Opts, #{}),
     Site = maps:get(site, Opts, undefined),
-    %% Mesh clients are always "node" type (relay peering uses macula_relay_client)
+    %% Client type governs how the receiving relay classifies this
+    %% connection. `<<"relay">>' → is_peer=true: SWIM/DHT/relay.ping
+    %% protocol messages are accepted, publishes deliver to
+    %% {relay_local,T} only (loop prevention). `<<"node">>' (default)
+    %% is the normal application client profile.
+    %%
+    %% macula_relay_peering passes type=<<"relay">> for peer_clients.
+    %% Previously this option was silently ignored (hardcoded to
+    %% <<"node">>), so peer SWIM/DHT messages were dropped by the
+    %% is_peer=true guards in the relay handler and SWIM never
+    %% round-tripped across relays.
+    ClientType = maps:get(type, Opts, <<"node">>),
     TlsVerify = maps:get(tls_verify, Opts, verify_peer),
 
     State = #state{
@@ -153,7 +164,7 @@ init(Opts) ->
         identity = Identity,
         geo_identity = GeoIdentity,
         site = Site,
-        %% client_type defaults to <<"node">> in record def
+        client_type = ClientType,
         tls_verify = TlsVerify,
         conn = undefined,
         stream = undefined,
