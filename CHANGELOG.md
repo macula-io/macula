@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.16] - 2026-04-12
+
+### Diagnostic
+
+- **Cross-relay PONG round-trip tracing** — fleet observation shows
+  relay peer_clients disconnecting every ~90s with "No PONG for
+  60002ms" despite the receiving relay's handler reporting successful
+  `send_to_node(pong, ...)` and no `Send pong failed` warnings.
+  SWIM publishes (`_swim.ack`) occasionally arrive over the same
+  stream, so the connection isn't dead — only PONG frames vanish.
+
+  This release adds minimal wire-level tracing to isolate where
+  frames go missing:
+  - `macula_mesh_client:process_buffer/2` logs every incoming frame
+    type_id + length (PUBLISH skipped to avoid firehose).
+  - Incoming PONG handler logs the RTT + URL.
+  - Unmatched frame types log at INFO (previously DEBUG).
+
+  Intended as a time-limited diagnostic build. Logs will be demoted
+  to DEBUG or removed once the root cause is identified.
+
+---
+
 ## [1.4.15] - 2026-04-12
 
 ### Fixed

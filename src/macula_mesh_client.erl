@@ -447,15 +447,25 @@ site_field(_, _) -> 0.0.
 
 process_buffer(Buffer, State) when byte_size(Buffer) < 8 ->
     {Buffer, State};
-process_buffer(<<_Version:8, _TypeId:8, _Flags:8, _Reserved:8,
+process_buffer(<<_Version:8, TypeId:8, _Flags:8, _Reserved:8,
                  PayloadLen:32/big-unsigned, Rest/binary>> = Buffer, State)
   when byte_size(Rest) >= PayloadLen ->
     MsgBytes = binary:part(Buffer, 0, 8 + PayloadLen),
     Remaining = binary:part(Buffer, 8 + PayloadLen, byte_size(Buffer) - 8 - PayloadLen),
+    %% Skip the 0x10 PUBLISH firehose — trace everything else.
+    trace_frame_arrival(TypeId, PayloadLen, State#state.url),
     State2 = handle_message(macula_protocol_decoder:decode(MsgBytes), State),
     process_buffer(Remaining, State2);
 process_buffer(Buffer, State) ->
     {Buffer, State}.
+
+%% @private Frame arrival tracing. Filters out the publish firehose
+%% so logs show handshake/ping/pong/rpc frames only while diagnosing
+%% cross-relay PONG delivery.
+trace_frame_arrival(16#10, _Size, _Url) -> ok;  %% PUBLISH — skipped
+trace_frame_arrival(TypeId, Size, Url) ->
+    ?LOG_INFO("[relay_client] [trace] frame type_id=~p len=~p url=~s",
+              [TypeId, Size, Url]).
 
 %% Incoming SWIM messages — sent directly by remote relay handler on the inbound
 %% stream as a PUBLISH. Route to SWIM gen_server + extract piggybacked Bloom.
@@ -507,15 +517,20 @@ handle_message({ok, {reply, Msg}}, State) ->
 
 %% PONG — measure RTT and publish mesh ping
 handle_message({ok, {pong, _Msg}}, #state{ping_sent_at = undefined} = State) ->
+    ?LOG_INFO("[relay_client] [trace] PONG recv (ping_sent_at=undef) url=~s",
+              [State#state.url]),
     State;
 handle_message({ok, {pong, _Msg}}, State) ->
     RttMs = erlang:monotonic_time(millisecond) - State#state.ping_sent_at,
+    ?LOG_INFO("[relay_client] [trace] PONG recv rtt_ms=~p url=~s",
+              [RttMs, State#state.url]),
     publish_mesh_ping(RttMs, State),
     notify_discovery(RttMs, State),
     State#state{ping_sent_at = undefined, last_rtt_ms = RttMs};
 
 handle_message({ok, {Type, _Msg}}, State) ->
-    ?LOG_DEBUG("[relay_client] Ignoring message type: ~p", [Type]),
+    ?LOG_INFO("[relay_client] [trace] ignoring frame type=~p url=~s",
+              [Type, State#state.url]),
     State;
 
 handle_message({error, Reason}, State) ->
