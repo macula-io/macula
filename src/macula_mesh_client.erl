@@ -289,7 +289,9 @@ handle_info(connect, State) ->
         {ok, Conn} ->
             case macula_quic:open_stream(Conn) of
                 {ok, Stream} ->
-                    macula_quic:setopt(Stream, active, true),
+                    SetoptRes = macula_quic:setopt(Stream, active, true),
+                    ?LOG_INFO("[relay_client] [trace] stream opened Stream=~p active_setopt=~p url=~s",
+                              [Stream, SetoptRes, State#state.url]),
                     ?LOG_INFO("[relay_client] Connected to ~s", [State#state.url]),
                     State2 = State#state{conn = Conn, stream = Stream, status = connected,
                                          recv_buffer = <<>>, reconnect_attempt = 0},
@@ -386,7 +388,8 @@ handle_info(quic_connection_dead, State) ->
     handle_disconnect(State);
 
 handle_info(Info, State) ->
-    ?LOG_DEBUG("[relay_client] Unhandled: ~p", [Info]),
+    ?LOG_INFO("[relay_client] [trace] UNHANDLED ~p url=~s",
+              [Info, State#state.url]),
     {noreply, State}.
 
 %% Outstanding PING exceeded the dead-threshold — skip this tick's

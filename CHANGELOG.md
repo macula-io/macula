@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.19] - 2026-04-12
+
+### Diagnostic
+
+- **Catch-all handle_info tracing + setopt result** — 1.4.18 deployed
+  and on fresh peer_client connections to relays: zero quic_data,
+  zero streams_available, zero peer_needs_streams, zero new_stream.
+  The peer_client gen_server is alive (PING send fires on schedule)
+  but NO message ever reaches its handle_info from QUIC.
+
+  This release adds two final traces:
+  - The catch-all handle_info clause logs unknown messages at INFO
+    instead of swallowing them at DEBUG.
+  - The stream-open path logs the Stream ref + setopt(active, true)
+    return value so we can see if active-mode is actually accepted.
+
+  Together these should show whether messages arrive but don't match
+  any handler, or whether the stream is producing no events at all.
+
+---
+
 ## [1.4.18] - 2026-04-12
 
 ### Diagnostic

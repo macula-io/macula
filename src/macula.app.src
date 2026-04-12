@@ -1,6 +1,6 @@
 {application, macula, [
     {description, "Macula HTTP/3 Mesh SDK — connect, subscribe, publish, call, advertise"},
-    {vsn, "1.4.18"},
+    {vsn, "1.4.19"},
     %% Hex packaging: include NIF source (without target/ build artifacts)
     {files, [
         "src", "include", "priv",
