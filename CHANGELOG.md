@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.23] - 2026-04-13
+
+### Fixed
+
+- **`macula_dist_bridge` no longer crash-reports on clean reader exit.**
+  When the remote side of a dist tunnel closes gracefully (peer disconnect,
+  `global` partition resolution, supervisor shutdown), the reader exits
+  with reason `normal` / `shutdown` / `{shutdown, _}`. The gen_server
+  previously mapped all reader EXITs uniformly to `{stop, {reader_exit,
+  Reason}, State}`, which OTP treats as an abnormal termination and emits
+  a full CRASH REPORT + SUPERVISOR REPORT for every clean close. Split
+  the handler into four clauses: three clean-exit reasons return `{stop,
+  normal, State}` (silent); anything else keeps the diagnostic
+  `{stop, {reader_exit, Reason}, State}` and logs WARNING instead of INFO.
+  Noticed during `mesh_chat` testing where `global:prevent_overlapping_partitions`
+  produced one CRASH REPORT per disconnect.
+
 ## [1.4.22] - 2026-04-13
 
 ### Fixed

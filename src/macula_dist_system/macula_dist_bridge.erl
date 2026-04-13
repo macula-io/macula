@@ -123,8 +123,24 @@ handle_info(socket_ready, #state{reader_pid = undefined, client = Client,
     {noreply, State#state{reader_pid = ReaderPid}};
 
 %% --- Reader exited (linked process) ---
-handle_info({'EXIT', Pid, Reason}, #state{reader_pid = Pid, tunnel_id = TunnelId} = State) ->
-    ?LOG_INFO("[dist_bridge] Reader exited (~p) for ~s", [Reason, TunnelId]),
+%% Clean exits (peer closed the dist tunnel, `global` disconnected, reader
+%% finished draining, supervisor shutdown) are not crashes — `{stop, normal}`
+%% so the gen_server terminates without a CRASH REPORT.
+handle_info({'EXIT', Pid, normal}, #state{reader_pid = Pid,
+                                           tunnel_id = TunnelId} = State) ->
+    ?LOG_INFO("[dist_bridge] Reader closed cleanly for ~s", [TunnelId]),
+    {stop, normal, State};
+handle_info({'EXIT', Pid, shutdown}, #state{reader_pid = Pid,
+                                             tunnel_id = TunnelId} = State) ->
+    ?LOG_INFO("[dist_bridge] Reader shutdown for ~s", [TunnelId]),
+    {stop, normal, State};
+handle_info({'EXIT', Pid, {shutdown, _}}, #state{reader_pid = Pid,
+                                                  tunnel_id = TunnelId} = State) ->
+    ?LOG_INFO("[dist_bridge] Reader shutdown for ~s", [TunnelId]),
+    {stop, normal, State};
+handle_info({'EXIT', Pid, Reason}, #state{reader_pid = Pid,
+                                           tunnel_id = TunnelId} = State) ->
+    ?LOG_WARNING("[dist_bridge] Reader crashed (~p) for ~s", [Reason, TunnelId]),
     {stop, {reader_exit, Reason}, State};
 
 handle_info({'EXIT', _Pid, _Reason}, State) ->
