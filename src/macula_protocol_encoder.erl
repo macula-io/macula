@@ -83,10 +83,14 @@ validate_message(pong, Msg) ->
     end,
     ok;
 validate_message(publish, Msg) ->
-    %% Accept both atom and binary keys (from MessagePack decoding)
+    %% Only topic + payload are semantically required for a publish frame.
+    %% qos / retain / message_id are optional MQTT-style metadata — callers
+    %% like peer-relay heartbeat only carry topic+payload, and the wire
+    %% decoder + consumers treat the extras as `maps:get/3` with defaults.
+    %% Accept both atom and binary keys (from MessagePack decoding).
     case {maps:is_key(topic, Msg), maps:is_key(<<"topic">>, Msg)} of
-        {true, _} -> #{topic := _, payload := _, qos := _, retain := _, message_id := _} = Msg;
-        {_, true} -> #{<<"topic">> := _, <<"payload">> := _, <<"qos">> := _, <<"retain">> := _, <<"message_id">> := _} = Msg
+        {true, _} -> #{topic := _, payload := _} = Msg;
+        {_, true} -> #{<<"topic">> := _, <<"payload">> := _} = Msg
     end,
     ok;
 validate_message(subscribe, Msg) ->

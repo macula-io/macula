@@ -226,17 +226,33 @@ publish_requires_payload_test() ->
     Msg = maps:remove(payload, sample_publish_msg()),
     ?assertError({badmatch, _}, macula_protocol_encoder:encode(publish, Msg)).
 
-publish_requires_qos_test() ->
+%% qos / retain / message_id are OPTIONAL in publish frames.
+%% Peer-to-peer relay frames (heartbeat pong, SWIM relay, etc.) omit
+%% them entirely; consumers read them with `maps:get/3' defaults.
+
+publish_accepts_missing_qos_test() ->
     Msg = maps:remove(qos, sample_publish_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(publish, Msg)).
+    ?assert(is_binary(macula_protocol_encoder:encode(publish, Msg))).
 
-publish_requires_retain_test() ->
+publish_accepts_missing_retain_test() ->
     Msg = maps:remove(retain, sample_publish_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(publish, Msg)).
+    ?assert(is_binary(macula_protocol_encoder:encode(publish, Msg))).
 
-publish_requires_message_id_test() ->
+publish_accepts_missing_message_id_test() ->
     Msg = maps:remove(message_id, sample_publish_msg()),
-    ?assertError({badmatch, _}, macula_protocol_encoder:encode(publish, Msg)).
+    ?assert(is_binary(macula_protocol_encoder:encode(publish, Msg))).
+
+publish_accepts_minimal_map_test() ->
+    %% Smallest legal publish: topic + payload only (atom keys).
+    Result = macula_protocol_encoder:encode(publish,
+        #{topic => <<"_relay.pong">>, payload => <<"hi">>}),
+    ?assert(is_binary(Result)).
+
+publish_accepts_minimal_binary_keys_test() ->
+    %% Smallest legal publish: topic + payload only (binary keys).
+    Result = macula_protocol_encoder:encode(publish,
+        #{<<"topic">> => <<"_relay.pong">>, <<"payload">> => <<"hi">>}),
+    ?assert(is_binary(Result)).
 
 %% Test that publish accepts binary keys (from MessagePack decoding)
 publish_accepts_binary_keys_test() ->

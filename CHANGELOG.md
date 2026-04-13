@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.22] - 2026-04-13
+
+### Fixed
+
+- **`macula_protocol_encoder:validate_message(publish, …)` relaxed.**
+  Required only `topic` + `payload`; `qos`, `retain`, `message_id`
+  are now optional. Peer-relay heartbeat frames
+  (`_relay.pong`, `_relay.ping`) carry only topic+payload and were
+  crashing the receiving peer handler on every heartbeat via
+  `{badmatch, …}` in the validator. Consumers already read the
+  optional fields with `maps:get/3` defaults, so the wire contract
+  is unchanged for messages that do carry them. Fleet-observed
+  symptom: inbound peer handlers on Nuremberg/Helsinki/Paris died
+  within seconds of startup (`temporary` children, never restarted),
+  leaving `handlers.peer = 0` in `/status` while outbound
+  `macula_peer_client` processes stayed connected. Cross-relay
+  peer message delivery was silently degraded.
+
+### Tests
+
+- `publish_requires_qos/retain/message_id_test` flipped to
+  `publish_accepts_missing_*` — three cases now assert the fields
+  are optional.
+- `publish_accepts_minimal_map_test` + `..._binary_keys_test` —
+  round-trip the smallest legal publish (`{topic, payload}` only)
+  in both key styles.
+
+---
+
 ## [1.4.21] - 2026-04-13
 
 ### Changed (breaking, but no production consumer affected)
