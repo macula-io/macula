@@ -17,10 +17,15 @@
 -module(macula_frame).
 
 -export([
-    %% Constructors
+    %% Constructors — handshake
     connect/1, hello/1, goodbye/2, goodbye/3,
 
-    %% Sign / verify
+    %% Constructors — SWIM
+    swim_ping/1, swim_ack/1, swim_suspect/1, swim_confirm/1,
+    swim_update/1,
+    sign_swim_update/2, verify_swim_update/1,
+
+    %% Sign / verify frame
     sign/2, verify/2,
 
     %% Wire codec — single frame
@@ -37,14 +42,24 @@
     frame/0,
     frame_type/0,
     connect_spec/0,
-    hello_spec/0
+    hello_spec/0,
+    swim_ping_spec/0,
+    swim_ack_spec/0,
+    swim_suspect_spec/0,
+    swim_update/0,
+    swim_update_spec/0,
+    member_state/0
 ]).
 
--define(SIG_DOMAIN, "macula-v2-frame\0").
--define(PROTOCOL_VERSION, 2).
--define(MAX_FRAME_BYTES, 16#FFFFFF).   %% 16 MiB cap (Part 6 §2.2).
+-define(SIG_DOMAIN,        "macula-v2-frame\0").
+-define(SWIM_UPDATE_DOMAIN, "macula-v2-swim-update\0").
+-define(PROTOCOL_VERSION,   2).
+-define(MAX_FRAME_BYTES,    16#FFFFFF).   %% 16 MiB cap (Part 6 §2.2).
 
--type frame_type() :: connect | hello | goodbye.
+-type frame_type() :: connect | hello | goodbye
+                    | swim_ping | swim_ack | swim_suspect | swim_confirm.
+
+-type member_state() :: alive | suspect | confirmed_failed.
 
 -type frame() :: map().
 
@@ -69,6 +84,43 @@
     addresses               => [map()],
     site                    => map() | undefined,
     refusal_code            => non_neg_integer() | undefined
+}.
+
+-type swim_update_spec() :: #{
+    target      := macula_identity:pubkey(),
+    state       := member_state(),
+    incarnation := non_neg_integer(),
+    observed_at := pos_integer(),
+    by          := macula_identity:pubkey()
+}.
+
+-type swim_update() :: #{
+    target      := macula_identity:pubkey(),
+    state       := member_state(),
+    incarnation := non_neg_integer(),
+    observed_at := pos_integer(),
+    by          := macula_identity:pubkey(),
+    signature   => <<_:512>>
+}.
+
+-type swim_ping_spec() :: #{
+    round       := non_neg_integer(),
+    incarnation := non_neg_integer(),
+    piggyback   => [swim_update()]
+}.
+
+-type swim_ack_spec() :: #{
+    round       := non_neg_integer(),
+    responder   := macula_identity:pubkey(),
+    incarnation := non_neg_integer(),
+    piggyback   => [swim_update()]
+}.
+
+-type swim_suspect_spec() :: #{
+    target             := macula_identity:pubkey(),
+    target_incarnation := non_neg_integer(),
+    suspected_by       := macula_identity:pubkey(),
+    ttl                := non_neg_integer()
 }.
 
 %%------------------------------------------------------------------
@@ -132,6 +184,113 @@ goodbye(Reason, Detail, Caps)
 do_goodbye(Reason, Detail, Caps) ->
     Header = base(goodbye, Caps),
     Header#{reason => Reason, detail => Detail}.
+
+%%------------------------------------------------------------------
+%% SWIM frame constructors (Part 6 §8)
+%%
+%% Ping / Ack carry the sender's current `incarnation' and a list of
+%% piggyback updates. Suspect / Confirm are the explicit dissemination
+%% path; their `ttl' is decremented by each rebroadcaster.
+%%------------------------------------------------------------------
+
+-spec swim_ping(swim_ping_spec()) -> frame().
+swim_ping(#{round := Round, incarnation := Inc} = Spec)
+  when is_integer(Round), Round >= 0,
+       is_integer(Inc), Inc >= 0 ->
+    Header = base(swim_ping, 0),
+    Header#{
+        round       => Round,
+        incarnation => Inc,
+        piggyback   => maps:get(piggyback, Spec, [])
+    }.
+
+-spec swim_ack(swim_ack_spec()) -> frame().
+swim_ack(#{round := Round, responder := Responder, incarnation := Inc} = Spec)
+  when is_integer(Round), Round >= 0,
+       is_binary(Responder), byte_size(Responder) =:= 32,
+       is_integer(Inc), Inc >= 0 ->
+    Header = base(swim_ack, 0),
+    Header#{
+        round       => Round,
+        responder   => Responder,
+        incarnation => Inc,
+        piggyback   => maps:get(piggyback, Spec, [])
+    }.
+
+-spec swim_suspect(swim_suspect_spec()) -> frame().
+swim_suspect(Spec) ->
+    build_suspect_like(swim_suspect, Spec).
+
+-spec swim_confirm(swim_suspect_spec()) -> frame().
+swim_confirm(Spec) ->
+    build_suspect_like(swim_confirm, Spec).
+
+build_suspect_like(Type,
+                   #{target := Target,
+                     target_incarnation := Inc,
+                     suspected_by := By,
+                     ttl := Ttl})
+  when is_binary(Target), byte_size(Target) =:= 32,
+       is_integer(Inc), Inc >= 0,
+       is_binary(By), byte_size(By) =:= 32,
+       is_integer(Ttl), Ttl >= 0 ->
+    Header = base(Type, 0),
+    Header#{
+        target             => Target,
+        target_incarnation => Inc,
+        suspected_by       => By,
+        ttl                => Ttl
+    }.
+
+%%------------------------------------------------------------------
+%% SWIM piggyback updates
+%%
+%% Updates are individually signed by the observer (`by') so piggyback
+%% propagation can be verified end-to-end. Domain separator differs
+%% from the frame signature (`macula-v2-swim-update\0').
+%%------------------------------------------------------------------
+
+-spec swim_update(swim_update_spec()) -> swim_update().
+swim_update(#{target := T, state := St, incarnation := Inc,
+              observed_at := Ts, by := By})
+  when is_binary(T),  byte_size(T)  =:= 32,
+       is_binary(By), byte_size(By) =:= 32,
+       is_integer(Inc), Inc >= 0,
+       is_integer(Ts),  Ts  > 0,
+       (St =:= alive orelse St =:= suspect orelse St =:= confirmed_failed) ->
+    #{
+        target      => T,
+        state       => St,
+        incarnation => Inc,
+        observed_at => Ts,
+        by          => By
+    }.
+
+-spec sign_swim_update(swim_update(),
+                       macula_identity:key_pair() | macula_identity:privkey()) ->
+    swim_update().
+sign_swim_update(Update, Identity) ->
+    Bytes = canonical_swim_update(Update),
+    Sig = macula_identity:sign([?SWIM_UPDATE_DOMAIN, Bytes], Identity),
+    Update#{signature => Sig}.
+
+-spec verify_swim_update(swim_update()) -> {ok, swim_update()} | {error, term()}.
+verify_swim_update(#{signature := Sig, by := By} = Update)
+  when is_binary(Sig), byte_size(Sig) =:= 64,
+       is_binary(By),  byte_size(By)  =:= 32 ->
+    Bytes = canonical_swim_update(Update),
+    verify_update_result(
+        macula_identity:verify([?SWIM_UPDATE_DOMAIN, Bytes], Sig, By),
+        Update);
+verify_swim_update(_Update) ->
+    {error, bad_swim_update}.
+
+verify_update_result(true,  Update) -> {ok, Update};
+verify_update_result(false, _Update) -> {error, signature_invalid}.
+
+canonical_swim_update(Update) ->
+    term_to_binary(maps:without([signature], Update),
+                   [{minor_version, 2}, deterministic]).
 
 %%------------------------------------------------------------------
 %% Sign / verify

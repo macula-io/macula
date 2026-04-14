@@ -43,27 +43,24 @@ setopt_active_rejects_bad_value_test() ->
     ?assertError(function_clause, macula_transport:setopt_active(Fake, bogus)).
 
 %%------------------------------------------------------------------
-%% Failure paths through the NIF
-%%
-%% Rustler's default error path raises (not returns); we let it propagate
-%% — Erlang's let-it-crash is the right model for transport-layer faults.
-%% Callers (macula_peering's gen_statem) handle via state transitions and
-%% supervision restart. A future enhancement may add a boundary translator.
+%% Failure paths through the NIF — NIF returns {error, BinaryReason}.
 %%------------------------------------------------------------------
 
-listen_raises_on_missing_certfile_test() ->
+listen_returns_error_for_missing_certfile_test() ->
     application:ensure_all_started(macula_transport),
-    ?assertError(_, macula_transport:listen(#{
-        bind     => "127.0.0.1",
+    Result = macula_transport:listen(#{
+        bind     => <<"127.0.0.1">>,
         port     => 0,
-        certfile => "/nonexistent/cert.pem",
-        keyfile  => "/nonexistent/key.pem"
-    })).
+        certfile => <<"/nonexistent/cert.pem">>,
+        keyfile  => <<"/nonexistent/key.pem">>
+    }),
+    ?assertMatch({error, _}, Result).
 
-connect_raises_on_bogus_host_test() ->
+connect_returns_error_for_unreachable_host_test() ->
     application:ensure_all_started(macula_transport),
-    ?assertError(_, macula_transport:connect(#{
-        host       => "127.0.0.1",
+    Result = macula_transport:connect(#{
+        host       => <<"127.0.0.1">>,
         port       => 1,             %% reserved; nothing listening
         timeout_ms => 500
-    })).
+    }),
+    ?assertMatch({error, _}, Result).

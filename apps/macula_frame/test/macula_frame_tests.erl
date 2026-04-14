@@ -184,3 +184,113 @@ build_hello(Kp) ->
         accepted                => true,
         negotiated_capabilities => 16#0F
     }).
+
+%%------------------------------------------------------------------
+%% SWIM frames
+%%------------------------------------------------------------------
+
+swim_ping_has_expected_shape_test() ->
+    Kp = macula_identity:generate(),
+    Pub = macula_identity:public(Kp),
+    U   = signed_update(Pub, alive, Kp),
+    F = macula_frame:swim_ping(#{round => 3, incarnation => 7, piggyback => [U]}),
+    ?assertEqual(swim_ping, macula_frame:frame_type(F)),
+    ?assertEqual(3, maps:get(round, F)),
+    ?assertEqual(7, maps:get(incarnation, F)),
+    ?assertMatch([#{signature := _}], maps:get(piggyback, F)).
+
+swim_ack_carries_responder_test() ->
+    Kp = macula_identity:generate(),
+    Pub = macula_identity:public(Kp),
+    F = macula_frame:swim_ack(#{
+        round => 3, responder => Pub, incarnation => 7, piggyback => []
+    }),
+    ?assertEqual(swim_ack, macula_frame:frame_type(F)),
+    ?assertEqual(Pub, maps:get(responder, F)).
+
+swim_suspect_and_confirm_share_shape_test() ->
+    Target = crypto:strong_rand_bytes(32),
+    By     = crypto:strong_rand_bytes(32),
+    Spec = #{target => Target, target_incarnation => 2,
+             suspected_by => By, ttl => 5},
+    S = macula_frame:swim_suspect(Spec),
+    C = macula_frame:swim_confirm(Spec),
+    ?assertEqual(swim_suspect, macula_frame:frame_type(S)),
+    ?assertEqual(swim_confirm, macula_frame:frame_type(C)),
+    ?assertEqual(Target, maps:get(target, S)),
+    ?assertEqual(Target, maps:get(target, C)),
+    ?assertEqual(5, maps:get(ttl, S)).
+
+swim_ping_sign_verify_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(
+        macula_frame:swim_ping(#{round => 1, incarnation => 0, piggyback => []}),
+        Kp),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(F, macula_identity:public(Kp))).
+
+swim_ping_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(
+        macula_frame:swim_ping(#{round => 42, incarnation => 1, piggyback => []}),
+        Kp),
+    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, Decoded),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(Decoded, macula_identity:public(Kp))).
+
+%%------------------------------------------------------------------
+%% SWIM piggyback updates — signed independently by observer
+%%------------------------------------------------------------------
+
+swim_update_sign_verify_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    U = signed_update(macula_identity:public(Kp), alive, Kp),
+    ?assertMatch({ok, _}, macula_frame:verify_swim_update(U)).
+
+swim_update_rejects_tamper_test() ->
+    Kp = macula_identity:generate(),
+    U = signed_update(macula_identity:public(Kp), alive, Kp),
+    Tampered = U#{state => suspect},
+    ?assertEqual({error, signature_invalid},
+                 macula_frame:verify_swim_update(Tampered)).
+
+swim_update_rejects_wrong_observer_test() ->
+    Kp1 = macula_identity:generate(),
+    Kp2 = macula_identity:generate(),
+    %% Claim "by = Kp1" but sign with Kp2.
+    Unsigned = macula_frame:swim_update(#{
+        target      => crypto:strong_rand_bytes(32),
+        state       => alive,
+        incarnation => 0,
+        observed_at => erlang:system_time(millisecond),
+        by          => macula_identity:public(Kp1)
+    }),
+    Signed = macula_frame:sign_swim_update(Unsigned, Kp2),
+    ?assertEqual({error, signature_invalid},
+                 macula_frame:verify_swim_update(Signed)).
+
+swim_update_domain_is_distinct_from_frame_domain_test() ->
+    %% Signing a swim_update with the swim-update domain should not verify
+    %% if the frame sig-verify path (different domain) is tried.
+    Kp = macula_identity:generate(),
+    U = signed_update(macula_identity:public(Kp), alive, Kp),
+    %% Attempt frame-verify on a signed update — must fail (bad_frame
+    %% because it's missing frame fields, or signature_invalid).
+    Result = macula_frame:verify(U, macula_identity:public(Kp)),
+    ?assertNotMatch({ok, _}, Result).
+
+%%------------------------------------------------------------------
+%% Helpers
+%%------------------------------------------------------------------
+
+signed_update(Target, State, Kp) ->
+    By = macula_identity:public(Kp),
+    U = macula_frame:swim_update(#{
+        target      => Target,
+        state       => State,
+        incarnation => 0,
+        observed_at => erlang:system_time(millisecond),
+        by          => By
+    }),
+    macula_frame:sign_swim_update(U, Kp).
