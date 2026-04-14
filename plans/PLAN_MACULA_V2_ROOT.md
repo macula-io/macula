@@ -112,12 +112,23 @@ These map directly into V2 architecture — §4.10 presence binding (Pillar 1), 
 | `hecate-social/hecate-daemon` | hecate-social | ACTIVE | User-facing runtime. Will consume Macula 2.x when ready. |
 | `macula-io/macula-demo` | macula-io | ACTIVE (legacy fleet) | Continues hosting the lab fleet on V1 Docker images until V2 cutover. |
 
-Module naming within `hecate-station`:
+Module naming (decision 2026-04-14):
 
-- `macula_*` prefix for modules that implement **pure Macula protocol** (extractable to `macula-io/macula-mesh` library later if/when a second consumer appears — YAGNI until then)
-  - `macula_peering`, `macula_handler`, `macula_dht`, `macula_swim`
-- `hecate_station_*` prefix for modules that are **station-as-product shell**
-  - `hecate_station`, `hecate_station_sup`, `hecate_station_health`, `hecate_station_config`, `hecate_station_admin`
+- **`macula_*`** = protocol primitives, live in **`macula-io/macula` v2** (the SDK).
+  Anything shared meaningfully between station, daemon, and stub.
+  - `macula` (facade), `macula_identity`, `macula_record`, `macula_frame`,
+    `macula_transport`, `macula_peering`, `macula_diagnostics`.
+- **`hecate_*`** = station-role implementations, live in **`hecate-social/hecate-station`**.
+  Code only stations run.
+  - `hecate_station` (root + config + admin + health),
+    `hecate_dht`, `hecate_swim`, `hecate_routing`, `hecate_handler`,
+    `hecate_bootstrap`, `hecate_overlay`, `hecate_realm`.
+
+The earlier "all `macula_*` lives in hecate-station as YAGNI" framing was
+revised: SDK-vs-station split is the cleaner separation. Algorithms (SWIM,
+S/Kademlia, Plumtree) are Macula's; *this Erlang implementation* of them
+is Hecate's. Other implementations (Rust station, Go station) would carry
+their own equivalents.
 
 Wire topics:
 - `_macula.*` — protocol-level system topics (replaces V1 `_relay.*`)
@@ -181,9 +192,10 @@ Wire topic discipline:
 - Realm-specific app topics inherit the realm's namespace (`{realm}/...`)
 
 Module naming:
-- `macula_*` for reusable protocol layer code
-- `hecate_station_*` for station-as-product shell
-- `hecate_*` for Hecate-specific apps (daemon, web, apps)
+- `macula_*` — protocol primitives in the SDK (`macula-io/macula`)
+- `hecate_*` — Hecate product code: daemon, web, plugins, AND the station's
+  server-role apps (`hecate_dht`, `hecate_swim`, `hecate_routing`, `hecate_handler`,
+  `hecate_bootstrap`, `hecate_overlay`, `hecate_realm`, `hecate_station*`)
 - Nothing ever carries a `_v2` suffix — the repo and version numbers convey version
 
 ---
@@ -215,7 +227,7 @@ Documented in Part 9; tracked here for visibility. Decisions needed BEFORE the r
 | O7 | GDPR controller model — three-level (node / realm / foundation)? | Phase 7 start; needs legal review |
 | O8 | Gateway-tier incentive model — foundation-funded v1, tokens v2? | V2 launch |
 | O9 | Post-quantum migration timeline (Dilithium or hybrid) | Revisited Phase 9 |
-| O10 | Quinn vs quicer NIF — stay with quicer or switch upstream? | Phase 1 start (might resolve by itself) |
+| O10 | ~~Quinn vs quicer NIF~~ — **RESOLVED 2026-04-14: Quinn.** V1 already migrated; V2 inherits. | — |
 
 ---
 
@@ -287,7 +299,7 @@ Each fix landed. Each revealed the next rake. The pattern made clear: V1 lacks a
   - Threat model drafted separately.
   - Relay Resilience plan drafted separately (7 pillars).
   - All three had overlapping content.
-- 2026-04-14 (this session):
+- 2026-04-14 (planning session):
   - Consolidation to single V2 plan agreed.
   - New private repo `hecate-social/hecate-station` agreed (Q1).
   - Walking-skeleton Phase 1 definition agreed (Q2).
@@ -296,6 +308,15 @@ Each fix landed. Each revealed the next rake. The pattern made clear: V1 lacks a
   - SDK home = `macula-io/macula` (v2 on main); station home = `hecate-social/hecate-station` (Q5, revised).
   - Name `station` chosen over `relay` / `router` / `node` (Q1.5).
   - `_v2` suffix dropped; `_macula.*` topic namespace for protocol-layer (Q2 follow-up).
+- 2026-04-14 (Phase 1 kickoff):
+  - **SDK / station naming split**: `macula_*` apps stay in macula-io/macula; station-role apps in hecate-station rename `macula_*` → `hecate_*`. Test: "shared meaningfully" between station + daemon + stub ⇒ SDK; otherwise station.
+  - **`macula` SDK = umbrella** with 7 sub-apps: `macula`, `macula_identity`, `macula_record`, `macula_frame`, `macula_transport`, `macula_peering`, `macula_diagnostics`.
+  - **Quinn NIF** lives at `apps/macula_transport/native/macula_quic/` (was umbrella root); pre_hook moved to `macula_transport/rebar.config`. Enables `{git_subdir, ...}` consumption.
+  - **hecate-station deps** = 7 `git_subdir` entries to macula v2 branch until 2.0.0 ships on hex.
+  - **Diagnostics** SDK only — namespacing via event names (`_macula.*` vs `_hecate.*`).
+  - **macula_handler** folded into `macula` facade (client-side `advertise/3`); station owns `hecate_handler` (server-side dispatch registry).
+  - O10 (Quinn vs quicer) RESOLVED: Quinn.
+  - macula v2 branch cut + pushed; macula_identity fully implemented (eunit 19/0); both repos compile + xref + dialyzer clean.
 
 ### Related session logs
 

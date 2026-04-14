@@ -45,72 +45,89 @@ Three constraints shape the plan:
 
 ---
 
-## 3. `hecate-station` rebar3 layout
+## 3. Repo layouts (revised 2026-04-14)
 
-Umbrella layout. Root app is `hecate_station`; domain apps live under `apps/`.
+Two repos: SDK lives in `macula-io/macula` v2; station-role implementations
+live in `hecate-social/hecate-station` and consume the SDK.
+
+### 3.1 `macula-io/macula` (SDK — hex `macula` 2.x)
+
+Umbrella. Each sub-app is independently fetchable via `{git_subdir, ...}`.
+
+```
+macula/                             % v2 branch
+├── apps/
+│   ├── macula/                     % facade: advertise/3, call/3, subscribe/3,
+│   │   │                            publish/3, connect/2 (client-side handler API
+│   │   │                            folded in)
+│   │   └── src/macula.erl, macula.app.src
+│   ├── macula_identity/            % Ed25519 keys, S/Kademlia crypto puzzle
+│   ├── macula_record/              % PKARR records, deterministic CBOR
+│   ├── macula_frame/               % BERT codec, source-route header primitives
+│   ├── macula_transport/           % Quinn NIF wrapper (dial + accept)
+│   │   ├── native/macula_quic/     % Quinn Rust crate (NIF source)
+│   │   ├── priv/build-macula-quic.sh
+│   │   └── rebar.config            % pre_hook builds NIF
+│   ├── macula_peering/             % conn state machine (symmetric, event-driven)
+│   └── macula_diagnostics/         % structured events; namespaced (_macula.*)
+├── plans/                          % PLAN_MACULA_V2_*.md (this plan, mirrored)
+├── config/                         % sys.config + vm.args
+├── rebar.config
+├── .github/workflows/ci.yml
+├── README.md, CHANGELOG.md, LICENSE
+```
+
+### 3.2 `hecate-social/hecate-station` (station product)
 
 ```
 hecate-station/
 ├── apps/
-│   ├── hecate_station/              % root; supervises, owns config, admin endpoint
-│   │   ├── src/
-│   │   │   ├── hecate_station.erl           % facade + lifecycle API
-│   │   │   ├── hecate_station_app.erl
-│   │   │   ├── hecate_station_sup.erl
-│   │   │   ├── hecate_station_config.erl    % loads config, derives node_record
-│   │   │   ├── hecate_station_health.erl    % /status endpoint + metrics
-│   │   │   ├── hecate_station_admin.erl     % /admin endpoint + authn
-│   │   │   └── hecate_station.app.src
-│   │   └── rebar.config
-│   │
-│   ├── macula_identity/              % StationId/NodeId generation, crypto puzzle
-│   ├── macula_record/                % PKARR record CBOR encode/decode + sign/verify
-│   ├── macula_frame/                 % BERT frame encode/decode + sign/verify
-│   ├── macula_transport/             % QUIC wrapper over quicer NIF
-│   ├── macula_peering/               % peer-client + peer-server state machines (Part 4 §10)
-│   ├── macula_handler/               % handler-pid lifecycle; single-provider enforcement
-│   ├── macula_dht/                   % S/Kademlia: buckets, lookups, STORE path
-│   ├── macula_swim/                  % SWIM-Lifeguard
-│   ├── macula_routing/               % Suurballe, source-route header, path cache
-│   ├── macula_bootstrap/             % 5-tier bootstrap cascade
-│   ├── macula_overlay/               % HyParView + Plumtree (intra-realm)
-│   ├── macula_realm/                 % realm directory, endorsement flows
-│   └── macula_diagnostics/           % structured logs + observability emitters
-│
-├── plans/                           % PLAN_MACULA_V2_*.md (this plan) after repo creation
-├── config/
-│   ├── sys.config
-│   └── vm.args
-├── rebar.config
-├── rebar.lock                       % in .gitignore (per MEMORY)
-├── .gitignore
-├── .github/workflows/               % CI
+│   ├── hecate_station/             % root: config, admin, health, lifecycle
+│   ├── hecate_dht/                 % S/Kademlia node (server role)
+│   ├── hecate_swim/                % SWIM-Lifeguard member
+│   ├── hecate_routing/             % path computation + source-route forwarding
+│   ├── hecate_handler/             % CALL dispatch registry, single-provider, heartbeat
+│   ├── hecate_bootstrap/           % 5-tier cascade orchestrator
+│   ├── hecate_overlay/             % HyParView + Plumtree (intra-realm)
+│   └── hecate_realm/               % realm directory cache
+├── plans/                          % PLAN_MACULA_V2_*.md (mirrored)
+├── config/                         % sys.config + vm.args
+├── rebar.config                    % deps: 7 macula sub-apps via git_subdir
+├── .github/workflows/ci.yml
 ├── Dockerfile
-├── README.md
-└── LICENSE                          % Apache-2.0
+├── README.md, LICENSE
 ```
 
-### 3.1 Module-per-app discipline
+### 3.3 Module-per-app discipline
 
-One coherent concern per app. An app that grows beyond ~3000 LOC is a sign to split. Apps named `macula_*` implement pure protocol; apps named `hecate_station_*` are product shell (Part 1 §10.4).
+One coherent concern per app. An app that grows beyond ~3000 LOC is a sign to
+split. SDK apps (`macula_*`) export pure protocol; station apps (`hecate_*`)
+implement server-role behaviours on top.
 
-### 3.2 Dependency arrows
+### 3.4 Dependency arrows
 
 ```
-hecate_station_app (root)
-  └─ macula_bootstrap ── macula_dht ── macula_peering ── macula_transport
-                                                   └── macula_frame
-                                                   └── macula_record
-     macula_overlay ── macula_dht
-     macula_handler ── macula_frame
-     macula_swim ── macula_transport
-     macula_routing ── macula_dht
-     macula_realm ── macula_record
-     macula_identity   (used everywhere; no deps besides stdlib + crypto)
-     macula_diagnostics (used everywhere; no deps)
+SDK (macula-io/macula):
+  macula (facade)
+    ├─ macula_identity    (no deps beyond stdlib + crypto)
+    ├─ macula_record      (depends on macula_identity)
+    ├─ macula_frame       (depends on macula_identity)
+    ├─ macula_transport   (depends on Quinn NIF; no Erlang app deps)
+    ├─ macula_peering     (depends on macula_frame, macula_transport, macula_record, macula_identity)
+    └─ macula_diagnostics (no deps; used everywhere)
+
+Station (hecate-social/hecate-station):
+  hecate_station (root sup, config, admin, health)
+    ├─ hecate_dht       (depends on macula)
+    ├─ hecate_swim      (depends on macula)
+    ├─ hecate_routing   (depends on macula, hecate_dht)
+    ├─ hecate_handler   (depends on macula)
+    ├─ hecate_bootstrap (depends on macula, hecate_dht)
+    ├─ hecate_overlay   (depends on macula, hecate_dht)
+    └─ hecate_realm     (depends on macula)
 ```
 
-No cycles. Apps reach downward only; `hecate_station_*` apps may depend on any `macula_*` app but not vice versa.
+No cycles. SDK never depends on station; station depends only on SDK.
 
 ---
 
@@ -118,8 +135,9 @@ No cycles. Apps reach downward only; `hecate_station_*` apps may depend on any `
 
 ### 4.1 Conventions
 
-- **`macula_<concern>`** for protocol-layer modules (reusable into `macula` SDK if extracted later).
-- **`hecate_station_<concern>`** for station-shell modules (product-specific).
+- **`macula_<concern>`** for SDK protocol-layer modules — live in `macula-io/macula`.
+- **`hecate_<concern>`** for station-role modules — live in `hecate-social/hecate-station`.
+- **`hecate_station_<concern>`** for station shell modules (config, admin, health, lifecycle).
 - **`<verb>_<noun>`** for command-style modules when vertical slicing applies (e.g. `register_station_in_realm.erl`).
 - Erlang modules use snake_case; types use lower_snake_case; macros SCREAMING_SNAKE.
 
@@ -135,19 +153,21 @@ No cycles. Apps reach downward only; `hecate_station_*` apps may depend on any `
 | `macula_transport:open_quic/2`, `close/1` | QUIC connection lifecycle |
 | `macula_peering:connect/2` | Peer state machine (Part 4 §10) |
 | `macula_peering:refresh/1` | REFRESH phase (Part 4 §7) |
-| `macula_handler:register/3`, `unregister/2` | Pillar 1 + 2 registry |
-| `macula_handler:heartbeat/1` | Pillar 3 |
-| `macula_dht:lookup/2`, `store/2`, `find_node/2` | DHT ops (Part 3 §10) |
-| `macula_dht:admit_peer/2` | Tier-diverse bucket admission (Part 3 §4.3) |
-| `macula_swim:join/2`, `leave/1` | SWIM group membership |
-| `macula_swim:probe_round/1` | Lifeguard probe logic |
-| `macula_routing:compute_paths/3` | Suurballe k=3 disjoint (Part 3 §6.3) |
-| `macula_routing:verify_header/2` | Source-route per-hop check (Part 6 §11.2) |
-| `macula_bootstrap:cascade/1` | 5-tier cascade (Part 5 §3) |
-| `macula_overlay:join_realm/2` | HyParView join |
-| `macula_overlay:publish/3`, `subscribe/3` | Plumtree push-lazy |
-| `macula_realm:endorse_member/3`, `verify_endorsement/2` | Realm admission |
-| `macula_diagnostics:emit_metric/3`, `emit_event/2` | Structured observability |
+| `macula:advertise/3` | Client-side handler registration (SDK facade) |
+| `hecate_handler:register/3`, `unregister/2` | Server-side registry (Pillars 1 + 2) |
+| `hecate_handler:heartbeat/1` | Pillar 3 |
+| `hecate_dht:lookup/2`, `store/2`, `find_node/2` | DHT ops (Part 3 §10) |
+| `hecate_dht:admit_peer/2` | Tier-diverse bucket admission (Part 3 §4.3) |
+| `hecate_swim:join/2`, `leave/1` | SWIM group membership |
+| `hecate_swim:probe_round/1` | Lifeguard probe logic |
+| `hecate_routing:compute_paths/3` | Suurballe k=3 disjoint (Part 3 §6.3) |
+| `macula_frame:verify_source_route/2` | Source-route header parse + verify (Part 6 §11.2) |
+| `hecate_routing:forward/2` | Per-hop forwarding (Part 6 §11.2) |
+| `hecate_bootstrap:cascade/1` | 5-tier cascade (Part 5 §3) |
+| `hecate_overlay:join_realm/2` | HyParView join |
+| `hecate_overlay:publish/3`, `subscribe/3` | Plumtree push-lazy |
+| `hecate_realm:endorse_member/3`, `verify_endorsement/2` | Realm admission |
+| `macula_diagnostics:emit_metric/3`, `emit_event/2` | Structured observability (SDK; namespaced) |
 | `hecate_station:start/0`, `stop/0` | Public lifecycle facade |
 | `hecate_station_health:status/0` | /status JSON snapshot |
 | `hecate_station_admin:authorise/2` | /admin authn gate |
