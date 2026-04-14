@@ -49,6 +49,9 @@
     %% Constructors — Plumtree (Part 3 §7.2)
     plumtree_gossip/1, plumtree_ihave/1, plumtree_graft/1, plumtree_prune/1,
 
+    %% Constructors — PubSub (Part 6 §6)
+    publish/1, subscribe/1, unsubscribe/1, event/1,
+
     %% Sign / verify frame
     sign/2, verify/2,
 
@@ -87,7 +90,9 @@
     neighbor_priority/0,
     plumtree_gossip_spec/0, plumtree_ihave_spec/0,
     plumtree_graft_spec/0, plumtree_prune_spec/0,
-    msg_id/0
+    msg_id/0,
+    publish_spec/0, subscribe_spec/0, unsubscribe_spec/0, event_spec/0,
+    delivery_channel/0
 ]).
 
 -define(SIG_DOMAIN,        "macula-v2-frame\0").
@@ -107,7 +112,8 @@
                     | hyparview_neighbor | hyparview_disconnect
                     | hyparview_shuffle | hyparview_shuffle_reply
                     | plumtree_gossip | plumtree_ihave
-                    | plumtree_graft | plumtree_prune.
+                    | plumtree_graft | plumtree_prune
+                    | publish | subscribe | unsubscribe | event.
 
 -type member_state() :: alive | suspect | confirmed_failed.
 
@@ -349,6 +355,45 @@
 
 -type plumtree_prune_spec() :: #{
     realm := id256()
+}.
+
+%%------------------------------------------------------------------
+%% PubSub frame specs (Part 6 §6)
+%%------------------------------------------------------------------
+
+-type delivery_channel() :: plumtree | dht | direct.
+
+-type publish_spec() :: #{
+    topic           := binary(),
+    realm           := id256(),
+    publisher       := macula_identity:pubkey(),
+    seq             := non_neg_integer(),
+    payload         := term(),
+    published_at_ms := non_neg_integer(),
+    ttl_ms          => non_neg_integer() | undefined
+}.
+
+-type subscribe_spec() :: #{
+    topic      := binary(),
+    realm      := id256(),
+    subscriber := macula_identity:pubkey(),
+    filter     => term() | undefined,
+    options    => map()
+}.
+
+-type unsubscribe_spec() :: #{
+    topic      := binary(),
+    realm      := id256(),
+    subscriber := macula_identity:pubkey()
+}.
+
+-type event_spec() :: #{
+    topic         := binary(),
+    realm         := id256(),
+    publisher     := macula_identity:pubkey(),
+    seq           := non_neg_integer(),
+    payload       := term(),
+    delivered_via := delivery_channel()
 }.
 
 %%------------------------------------------------------------------
@@ -815,6 +860,81 @@ plumtree_graft(#{realm := R, msg_id := M, round := Rd})
 plumtree_prune(#{realm := R})
   when is_binary(R), byte_size(R) =:= 32 ->
     (base(plumtree_prune, 0))#{realm => R}.
+
+%%------------------------------------------------------------------
+%% PubSub constructors (Part 6 §6)
+%%------------------------------------------------------------------
+
+-spec publish(publish_spec()) -> frame().
+publish(#{topic := T, realm := R, publisher := Pub, seq := Seq,
+          payload := Payload, published_at_ms := PubAt} = Spec)
+  when is_binary(T),
+       is_binary(R),   byte_size(R)   =:= 32,
+       is_binary(Pub), byte_size(Pub) =:= 32,
+       is_integer(Seq),   Seq   >= 0,
+       is_integer(PubAt), PubAt >= 0 ->
+    Ttl = maps:get(ttl_ms, Spec, undefined),
+    validate_optional_ttl(Ttl),
+    (base(publish, 0))#{
+        topic           => T,
+        realm           => R,
+        publisher       => Pub,
+        seq             => Seq,
+        payload         => Payload,
+        published_at_ms => PubAt,
+        ttl_ms          => Ttl
+    }.
+
+-spec subscribe(subscribe_spec()) -> frame().
+subscribe(#{topic := T, realm := R, subscriber := Sub} = Spec)
+  when is_binary(T),
+       is_binary(R),   byte_size(R)   =:= 32,
+       is_binary(Sub), byte_size(Sub) =:= 32 ->
+    Filter  = maps:get(filter,  Spec, undefined),
+    Options = maps:get(options, Spec, #{}),
+    validate_options(Options),
+    (base(subscribe, 0))#{
+        topic      => T,
+        realm      => R,
+        subscriber => Sub,
+        filter     => Filter,
+        options    => Options
+    }.
+
+-spec unsubscribe(unsubscribe_spec()) -> frame().
+unsubscribe(#{topic := T, realm := R, subscriber := Sub})
+  when is_binary(T),
+       is_binary(R),   byte_size(R)   =:= 32,
+       is_binary(Sub), byte_size(Sub) =:= 32 ->
+    (base(unsubscribe, 0))#{
+        topic      => T,
+        realm      => R,
+        subscriber => Sub
+    }.
+
+-spec event(event_spec()) -> frame().
+event(#{topic := T, realm := R, publisher := Pub, seq := Seq,
+        payload := Payload, delivered_via := Via})
+  when is_binary(T),
+       is_binary(R),   byte_size(R)   =:= 32,
+       is_binary(Pub), byte_size(Pub) =:= 32,
+       is_integer(Seq), Seq >= 0,
+       (Via =:= plumtree orelse Via =:= dht orelse Via =:= direct) ->
+    (base(event, 0))#{
+        topic         => T,
+        realm         => R,
+        publisher     => Pub,
+        seq           => Seq,
+        payload       => Payload,
+        delivered_via => Via
+    }.
+
+-spec validate_optional_ttl(non_neg_integer() | undefined) -> ok.
+validate_optional_ttl(undefined)                             -> ok;
+validate_optional_ttl(N) when is_integer(N), N >= 0          -> ok.
+
+-spec validate_options(map()) -> ok.
+validate_options(M) when is_map(M) -> ok.
 
 %%------------------------------------------------------------------
 %% Sign / verify

@@ -919,3 +919,114 @@ plumtree_gossip_wire_roundtrip_test() ->
     ?assertEqual(F, D),
     ?assertMatch({ok, _},
                  macula_frame:verify(D, macula_identity:public(Kp))).
+
+%%------------------------------------------------------------------
+%% PubSub frames — Part 6 §6
+%%------------------------------------------------------------------
+
+publish_carries_topic_and_payload_test() ->
+    Pub = crypto:strong_rand_bytes(32),
+    F = macula_frame:publish(#{
+        topic           => <<"realm/acme/news/headlines">>,
+        realm           => crypto:strong_rand_bytes(32),
+        publisher       => Pub,
+        seq             => 42,
+        payload         => #{headline => <<"breaking">>},
+        published_at_ms => erlang:system_time(millisecond)
+    }),
+    ?assertEqual(publish, macula_frame:frame_type(F)),
+    ?assertEqual(Pub,     maps:get(publisher, F)),
+    ?assertEqual(42,      maps:get(seq, F)),
+    ?assertEqual(undefined, maps:get(ttl_ms, F)).
+
+publish_with_ttl_test() ->
+    F = macula_frame:publish(#{
+        topic           => <<"t">>,
+        realm           => crypto:strong_rand_bytes(32),
+        publisher       => crypto:strong_rand_bytes(32),
+        seq             => 0,
+        payload         => ok,
+        published_at_ms => 1,
+        ttl_ms          => 60_000
+    }),
+    ?assertEqual(60_000, maps:get(ttl_ms, F)).
+
+subscribe_carries_subscriber_and_options_test() ->
+    Sub = crypto:strong_rand_bytes(32),
+    F = macula_frame:subscribe(#{
+        topic      => <<"t">>,
+        realm      => crypto:strong_rand_bytes(32),
+        subscriber => Sub,
+        options    => #{qos => 1}
+    }),
+    ?assertEqual(subscribe, macula_frame:frame_type(F)),
+    ?assertEqual(Sub,       maps:get(subscriber, F)),
+    ?assertEqual(#{qos => 1}, maps:get(options, F)),
+    ?assertEqual(undefined, maps:get(filter, F)).
+
+unsubscribe_carries_subscriber_test() ->
+    Sub = crypto:strong_rand_bytes(32),
+    F = macula_frame:unsubscribe(#{
+        topic      => <<"t">>,
+        realm      => crypto:strong_rand_bytes(32),
+        subscriber => Sub
+    }),
+    ?assertEqual(unsubscribe, macula_frame:frame_type(F)),
+    ?assertEqual(Sub,         maps:get(subscriber, F)).
+
+event_carries_delivery_channel_test() ->
+    F = macula_frame:event(#{
+        topic         => <<"t">>,
+        realm         => crypto:strong_rand_bytes(32),
+        publisher     => crypto:strong_rand_bytes(32),
+        seq           => 7,
+        payload       => <<"data">>,
+        delivered_via => plumtree
+    }),
+    ?assertEqual(event, macula_frame:frame_type(F)),
+    ?assertEqual(plumtree, maps:get(delivered_via, F)).
+
+event_rejects_unknown_delivery_channel_test() ->
+    ?assertError(function_clause,
+                 macula_frame:event(#{
+                     topic         => <<"t">>,
+                     realm         => crypto:strong_rand_bytes(32),
+                     publisher     => crypto:strong_rand_bytes(32),
+                     seq           => 0,
+                     payload       => ok,
+                     delivered_via => carrier_pigeon})).
+
+publish_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:publish(#{
+            topic           => <<"t">>,
+            realm           => crypto:strong_rand_bytes(32),
+            publisher       => macula_identity:public(Kp),
+            seq             => 3,
+            payload         => <<"hi">>,
+            published_at_ms => 1_000}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(D, macula_identity:public(Kp))).
+
+subscribe_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:subscribe(#{
+            topic      => <<"t">>,
+            realm      => crypto:strong_rand_bytes(32),
+            subscriber => macula_identity:public(Kp)}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+event_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:event(#{
+            topic         => <<"t">>,
+            realm         => crypto:strong_rand_bytes(32),
+            publisher     => macula_identity:public(Kp),
+            seq           => 0,
+            payload       => ok,
+            delivered_via => direct}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
