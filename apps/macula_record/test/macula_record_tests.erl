@@ -197,3 +197,166 @@ tombstone_wire_roundtrip_test() ->
     {ok, _} = macula_record:verify(Decoded),
     ?assertEqual(16#0C, macula_record:type(Decoded)),
     ?assertEqual(Pub, macula_record:key(Decoded)).
+
+%%------------------------------------------------------------------
+%% realm_directory
+%%------------------------------------------------------------------
+
+realm_directory_shape_test() ->
+    Kp = macula_identity:generate(),
+    RealmId = macula_identity:public(Kp),
+    AdminKey = crypto:strong_rand_bytes(32),
+    R = macula_record:realm_directory(RealmId, <<"my realm">>, AdminKey),
+    ?assertEqual(16#03, macula_record:type(R)),
+    ?assertEqual(RealmId, macula_record:key(R)),
+    P = macula_record:payload(R),
+    ?assertEqual(RealmId, maps:get({text, <<"realm_id">>}, P)),
+    ?assertEqual({text, <<"my realm">>}, maps:get({text, <<"name">>}, P)),
+    ?assertEqual(AdminKey, maps:get({text, <<"admin_key">>}, P)),
+    ?assert(maps:is_key({text, <<"created_at">>}, P)),
+    ?assertNot(maps:is_key({text, <<"policy_url">>}, P)).
+
+realm_directory_with_policy_url_test() ->
+    Kp = macula_identity:generate(),
+    RealmId = macula_identity:public(Kp),
+    AdminKey = crypto:strong_rand_bytes(32),
+    R = macula_record:realm_directory(RealmId, <<"r">>, AdminKey,
+                                      #{policy_url => <<"https://ex.io">>}),
+    ?assertEqual({text, <<"https://ex.io">>},
+                 maps:get({text, <<"policy_url">>}, macula_record:payload(R))).
+
+realm_directory_sign_verify_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    RealmId = macula_identity:public(Kp),
+    R = macula_record:realm_directory(RealmId, <<"r">>,
+                                      crypto:strong_rand_bytes(32)),
+    Signed = macula_record:sign(R, Kp),
+    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
+    {ok, _} = macula_record:verify(Decoded).
+
+realm_directory_rejects_non_32_byte_realm_id_test() ->
+    ?assertError(function_clause,
+        macula_record:realm_directory(<<0:64>>, <<"r">>,
+                                      crypto:strong_rand_bytes(32))).
+
+%%------------------------------------------------------------------
+%% realm_stations
+%%------------------------------------------------------------------
+
+realm_stations_shape_test() ->
+    Kp = macula_identity:generate(),
+    RealmId = macula_identity:public(Kp),
+    S1 = crypto:strong_rand_bytes(32),
+    S2 = crypto:strong_rand_bytes(32),
+    Entries = [
+        #{station_id => S1, roles => [<<"directory">>]},
+        #{station_id => S2, roles => [<<"replica">>, <<"relay">>]}
+    ],
+    R = macula_record:realm_stations(RealmId, Entries),
+    ?assertEqual(16#04, macula_record:type(R)),
+    ?assertEqual(RealmId, macula_record:key(R)),
+    P = macula_record:payload(R),
+    [E1, E2] = maps:get({text, <<"stations">>}, P),
+    ?assertEqual(S1, maps:get({text, <<"station_id">>}, E1)),
+    ?assertEqual([{text, <<"replica">>}, {text, <<"relay">>}],
+                 maps:get({text, <<"roles">>}, E2)).
+
+realm_stations_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    RealmId = macula_identity:public(Kp),
+    R = macula_record:realm_stations(
+          RealmId,
+          [#{station_id => crypto:strong_rand_bytes(32),
+             roles      => [<<"directory">>]}]),
+    Signed = macula_record:sign(R, Kp),
+    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
+    ?assertEqual(16#04, macula_record:type(Decoded)),
+    {ok, _} = macula_record:verify(Decoded).
+
+realm_stations_accepts_empty_list_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:realm_stations(macula_identity:public(Kp), []),
+    ?assertEqual([], maps:get({text, <<"stations">>},
+                              macula_record:payload(R))).
+
+%%------------------------------------------------------------------
+%% procedure_advertisement
+%%------------------------------------------------------------------
+
+procedure_advertisement_shape_test() ->
+    Kp = macula_identity:generate(),
+    NodeId = macula_identity:public(Kp),
+    Station = crypto:strong_rand_bytes(32),
+    R = macula_record:procedure_advertisement(NodeId,
+                                              <<"mcp://weather/forecast">>,
+                                              Station),
+    ?assertEqual(16#06, macula_record:type(R)),
+    ?assertEqual(NodeId, macula_record:key(R)),
+    P = macula_record:payload(R),
+    ?assertEqual({text, <<"mcp://weather/forecast">>},
+                 maps:get({text, <<"procedure_uri">>}, P)),
+    ?assertEqual(NodeId, maps:get({text, <<"advertiser_node">>}, P)),
+    ?assertEqual(Station, maps:get({text, <<"serving_station">>}, P)).
+
+procedure_advertisement_with_capacity_hints_test() ->
+    Kp = macula_identity:generate(),
+    Station = crypto:strong_rand_bytes(32),
+    R = macula_record:procedure_advertisement(
+          macula_identity:public(Kp),
+          <<"mcp://x/y">>,
+          Station,
+          #{rate_limit_qps => 100, max_concurrency => 8}),
+    P = macula_record:payload(R),
+    ?assertEqual(100, maps:get({text, <<"rate_limit_qps">>}, P)),
+    ?assertEqual(8,   maps:get({text, <<"max_concurrency">>}, P)).
+
+procedure_advertisement_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:procedure_advertisement(
+          macula_identity:public(Kp),
+          <<"mcp://weather/forecast">>,
+          crypto:strong_rand_bytes(32)),
+    Signed = macula_record:sign(R, Kp),
+    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
+    {ok, _} = macula_record:verify(Decoded).
+
+%%------------------------------------------------------------------
+%% storage_key/1 — DHT storage key derivation (Part 3 §3.3)
+%%------------------------------------------------------------------
+
+storage_key_node_record_is_envelope_key_test() ->
+    Kp = macula_identity:generate(),
+    NodeId = macula_identity:public(Kp),
+    R = macula_record:node_record(NodeId, [], 0),
+    ?assertEqual(NodeId, macula_record:storage_key(R)).
+
+storage_key_realm_directory_is_realm_id_test() ->
+    Kp = macula_identity:generate(),
+    RealmId = macula_identity:public(Kp),
+    R = macula_record:realm_directory(RealmId, <<"r">>,
+                                      crypto:strong_rand_bytes(32)),
+    ?assertEqual(RealmId, macula_record:storage_key(R)).
+
+storage_key_realm_stations_is_hashed_test() ->
+    Kp = macula_identity:generate(),
+    RealmId = macula_identity:public(Kp),
+    Expected = crypto:hash(sha256, <<"station_set", RealmId/binary>>),
+    R = macula_record:realm_stations(RealmId, []),
+    ?assertEqual(Expected, macula_record:storage_key(R)),
+    ?assertNotEqual(RealmId, macula_record:storage_key(R)).
+
+storage_key_procedure_advertisement_is_uri_hash_test() ->
+    Kp = macula_identity:generate(),
+    Uri = <<"mcp://weather/forecast">>,
+    R = macula_record:procedure_advertisement(macula_identity:public(Kp),
+                                              Uri,
+                                              crypto:strong_rand_bytes(32)),
+    ?assertEqual(crypto:hash(sha256, Uri), macula_record:storage_key(R)),
+    %% The envelope key (advertiser NodeId) differs from the storage key.
+    ?assertNotEqual(macula_record:key(R), macula_record:storage_key(R)).
+
+storage_key_tombstone_is_superseded_key_test() ->
+    Kp = macula_identity:generate(),
+    Pub = macula_identity:public(Kp),
+    Tomb = macula_record:tombstone(Pub, 16#01, revoked),
+    ?assertEqual(Pub, macula_record:storage_key(Tomb)).

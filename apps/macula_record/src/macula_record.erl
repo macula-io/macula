@@ -18,6 +18,9 @@
 -export([
     %% Constructors
     node_record/3, node_record/4,
+    realm_directory/3, realm_directory/4,
+    realm_stations/2, realm_stations/3,
+    procedure_advertisement/3, procedure_advertisement/4,
     tombstone/3, tombstone/4,
 
     %% Sign / verify
@@ -28,7 +31,10 @@
 
     %% Accessors
     type/1, key/1, version/1, created_at/1, expires_at/1,
-    payload/1, signature/1
+    payload/1, signature/1,
+
+    %% DHT storage-key derivation (Part 3 §3.3)
+    storage_key/1
 ]).
 
 -export_type([
@@ -36,14 +42,24 @@
     type_tag/0,
     version/0,
     node_record_opts/0,
+    realm_directory_opts/0,
+    realm_station_entry/0,
+    realm_stations_opts/0,
+    procedure_advertisement_opts/0,
     tombstone_opts/0
 ]).
 
 %% Domain separation prefix for record signatures (Part 6 §10.2).
 -define(SIG_DOMAIN, "macula-v2-record\0").
 
--define(TYPE_NODE_RECORD, 16#01).
--define(TYPE_TOMBSTONE,   16#0C).
+-define(TYPE_NODE_RECORD,             16#01).
+-define(TYPE_REALM_DIRECTORY,          16#03).
+-define(TYPE_REALM_STATIONS,           16#04).
+-define(TYPE_PROCEDURE_ADVERTISEMENT,  16#06).
+-define(TYPE_TOMBSTONE,                16#0C).
+
+%% Domain separation for derived storage keys (Part 3 §3.3).
+-define(STORAGE_DOMAIN_STATION_SET, <<"station_set">>).
 
 %% Default record TTL (Part 4 §11): expire 48h after creation.
 -define(DEFAULT_TTL_MS, 48 * 60 * 60 * 1000).
@@ -66,6 +82,25 @@
     caps_hint    => binary(),
     display_name => binary(),
     ttl_ms       => pos_integer()
+}.
+
+-type realm_directory_opts() :: #{
+    policy_url => binary(),
+    ttl_ms     => pos_integer()
+}.
+
+-type realm_station_entry() :: #{
+    station_id := macula_identity:pubkey(),
+    roles      := [binary()]
+}.
+
+-type realm_stations_opts() :: #{ttl_ms => pos_integer()}.
+
+-type procedure_advertisement_opts() :: #{
+    session_token_hint => binary(),
+    rate_limit_qps     => non_neg_integer(),
+    max_concurrency    => non_neg_integer(),
+    ttl_ms             => pos_integer()
 }.
 
 -type tombstone_opts() :: #{
@@ -94,6 +129,74 @@ node_record(NodeId, Realms, Capabilities, Opts)
     StationId = maps:get(station_id, Opts, NodeId),
     Payload = node_payload(NodeId, StationId, Realms, Capabilities, Opts),
     envelope(?TYPE_NODE_RECORD, NodeId, Payload, Opts).
+
+%%------------------------------------------------------------------
+%% Constructors — realm_directory (Part 6 §9.4)
+%%
+%% A realm's "meta" record — name, admin key, optional policy URL.
+%% Owning key is the RealmId; storage key is also the RealmId.
+%%------------------------------------------------------------------
+
+-spec realm_directory(macula_identity:pubkey(), binary(),
+                      macula_identity:pubkey()) -> record().
+realm_directory(RealmId, Name, AdminKey) ->
+    realm_directory(RealmId, Name, AdminKey, #{}).
+
+-spec realm_directory(macula_identity:pubkey(), binary(),
+                      macula_identity:pubkey(),
+                      realm_directory_opts()) -> record().
+realm_directory(RealmId, Name, AdminKey, Opts)
+  when is_binary(RealmId),  byte_size(RealmId)  =:= 32,
+       is_binary(Name),
+       is_binary(AdminKey), byte_size(AdminKey) =:= 32 ->
+    Payload = realm_directory_payload(RealmId, Name, AdminKey, Opts),
+    envelope(?TYPE_REALM_DIRECTORY, RealmId, Payload, Opts).
+
+%%------------------------------------------------------------------
+%% Constructors — realm_stations (Part 6 §9.5)
+%%
+%% Stored at storage key SHA-256("station_set" || RealmId) so a
+%% fresh station can look up all stations serving a realm without
+%% knowing the realm admin's NodeId. Envelope key remains the
+%% RealmId (admin signs the record).
+%%------------------------------------------------------------------
+
+-spec realm_stations(macula_identity:pubkey(),
+                     [realm_station_entry()]) -> record().
+realm_stations(RealmId, Entries) ->
+    realm_stations(RealmId, Entries, #{}).
+
+-spec realm_stations(macula_identity:pubkey(),
+                     [realm_station_entry()],
+                     realm_stations_opts()) -> record().
+realm_stations(RealmId, Entries, Opts)
+  when is_binary(RealmId), byte_size(RealmId) =:= 32,
+       is_list(Entries) ->
+    Payload = realm_stations_payload(RealmId, Entries),
+    envelope(?TYPE_REALM_STATIONS, RealmId, Payload, Opts).
+
+%%------------------------------------------------------------------
+%% Constructors — procedure_advertisement (Part 6 §9.7)
+%%
+%% Stored at storage key SHA-256(procedure_uri). Envelope key is
+%% the advertiser's NodeId (advertiser signs the record).
+%%------------------------------------------------------------------
+
+-spec procedure_advertisement(macula_identity:pubkey(), binary(),
+                              macula_identity:pubkey()) -> record().
+procedure_advertisement(AdvertiserNode, ProcedureUri, ServingStation) ->
+    procedure_advertisement(AdvertiserNode, ProcedureUri, ServingStation, #{}).
+
+-spec procedure_advertisement(macula_identity:pubkey(), binary(),
+                              macula_identity:pubkey(),
+                              procedure_advertisement_opts()) -> record().
+procedure_advertisement(AdvertiserNode, ProcedureUri, ServingStation, Opts)
+  when is_binary(AdvertiserNode), byte_size(AdvertiserNode) =:= 32,
+       is_binary(ProcedureUri),
+       is_binary(ServingStation), byte_size(ServingStation) =:= 32 ->
+    Payload = procedure_advertisement_payload(AdvertiserNode, ProcedureUri,
+                                              ServingStation, Opts),
+    envelope(?TYPE_PROCEDURE_ADVERTISEMENT, AdvertiserNode, Payload, Opts).
 
 %%------------------------------------------------------------------
 %% Constructors — tombstone (Part 6 §9.13)
@@ -234,6 +337,63 @@ tombstone_payload(SupKey, SupType, ReplacedAt, Reason, Detail) ->
 
 detail_value(undefined) -> null;
 detail_value(Bin) when is_binary(Bin) -> {text, Bin}.
+
+realm_directory_payload(RealmId, Name, AdminKey, Opts) ->
+    Base = #{
+        {text, <<"realm_id">>}   => RealmId,
+        {text, <<"name">>}       => {text, Name},
+        {text, <<"admin_key">>}  => AdminKey,
+        {text, <<"created_at">>} => erlang:system_time(millisecond)
+    },
+    with_text(Base, <<"policy_url">>, maps:get(policy_url, Opts, undefined)).
+
+realm_stations_payload(RealmId, Entries) ->
+    #{
+        {text, <<"realm_id">>} => RealmId,
+        {text, <<"stations">>} => [realm_station_entry(E) || E <- Entries]
+    }.
+
+realm_station_entry(#{station_id := SId, roles := Roles})
+  when is_binary(SId), byte_size(SId) =:= 32, is_list(Roles) ->
+    #{
+        {text, <<"station_id">>} => SId,
+        {text, <<"roles">>}      => [{text, R} || R <- Roles,
+                                                  is_binary(R)]
+    }.
+
+procedure_advertisement_payload(AdvertiserNode, ProcedureUri,
+                                ServingStation, Opts) ->
+    Base = #{
+        {text, <<"procedure_uri">>}   => {text, ProcedureUri},
+        {text, <<"advertiser_node">>} => AdvertiserNode,
+        {text, <<"serving_station">>} => ServingStation
+    },
+    M1 = with_text(Base, <<"session_token_hint">>,
+                   maps:get(session_token_hint, Opts, undefined)),
+    M2 = with_uint(M1, <<"rate_limit_qps">>,
+                   maps:get(rate_limit_qps, Opts, undefined)),
+    with_uint(M2, <<"max_concurrency">>,
+              maps:get(max_concurrency, Opts, undefined)).
+
+with_uint(Map, _Key, undefined) -> Map;
+with_uint(Map,  Key, N) when is_integer(N), N >= 0 ->
+    Map#{ {text, Key} => N }.
+
+%%------------------------------------------------------------------
+%% DHT storage-key derivation (Part 3 §3.3)
+%%------------------------------------------------------------------
+
+-spec storage_key(record()) -> <<_:256>>.
+storage_key(#{type := Type, key := K})
+  when Type =:= ?TYPE_NODE_RECORD;
+       Type =:= ?TYPE_REALM_DIRECTORY;
+       Type =:= ?TYPE_TOMBSTONE ->
+    K;
+storage_key(#{type := ?TYPE_REALM_STATIONS, key := RealmId}) ->
+    crypto:hash(sha256, <<?STORAGE_DOMAIN_STATION_SET/binary, RealmId/binary>>);
+storage_key(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT, payload := P}) ->
+    {text, Uri} = maps:get({text, <<"procedure_uri">>}, P),
+    crypto:hash(sha256, Uri).
 
 %% Build the envelope CBOR map. Includes signature when present.
 to_envelope_map(#{type := T, key := K, version := V,
