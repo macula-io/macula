@@ -294,3 +294,260 @@ signed_update(Target, State, Kp) ->
         by          => By
     }),
     macula_frame:sign_swim_update(U, Kp).
+
+%%------------------------------------------------------------------
+%% DHT frames — Part 6 §7
+%%------------------------------------------------------------------
+
+%% -- PING / PONG --------------------------------------------------
+
+ping_has_16_byte_nonce_test() ->
+    Nonce = crypto:strong_rand_bytes(16),
+    F = macula_frame:ping(#{nonce => Nonce}),
+    ?assertEqual(ping, macula_frame:frame_type(F)),
+    ?assertEqual(Nonce, maps:get(nonce, F)).
+
+ping_rejects_wrong_nonce_size_test() ->
+    ?assertError(function_clause,
+                 macula_frame:ping(#{nonce => <<0:64>>})).
+
+pong_has_16_byte_nonce_test() ->
+    Nonce = crypto:strong_rand_bytes(16),
+    F = macula_frame:pong(#{nonce => Nonce}),
+    ?assertEqual(pong, macula_frame:frame_type(F)),
+    ?assertEqual(Nonce, maps:get(nonce, F)).
+
+ping_pong_share_nonce_in_roundtrip_test() ->
+    Nonce = crypto:strong_rand_bytes(16),
+    Ping  = macula_frame:ping(#{nonce => Nonce}),
+    Pong  = macula_frame:pong(#{nonce => Nonce}),
+    ?assertEqual(maps:get(nonce, Ping), maps:get(nonce, Pong)).
+
+ping_sign_verify_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F  = macula_frame:sign(
+           macula_frame:ping(#{nonce => crypto:strong_rand_bytes(16)}),
+           Kp),
+    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, Decoded),
+    ?assertMatch({ok, _}, macula_frame:verify(Decoded,
+                                              macula_identity:public(Kp))).
+
+%% -- FIND_NODE / NODES --------------------------------------------
+
+find_node_has_key_origin_depth_test() ->
+    Key    = crypto:strong_rand_bytes(32),
+    Origin = crypto:strong_rand_bytes(32),
+    F = macula_frame:find_node(#{key => Key, origin => Origin, depth => 2}),
+    ?assertEqual(find_node, macula_frame:frame_type(F)),
+    ?assertEqual(Key, maps:get(key, F)),
+    ?assertEqual(Origin, maps:get(origin, F)),
+    ?assertEqual(2, maps:get(depth, F)).
+
+find_node_rejects_non_32_byte_key_test() ->
+    ?assertError(function_clause,
+                 macula_frame:find_node(#{key    => <<0:128>>,
+                                          origin => crypto:strong_rand_bytes(32),
+                                          depth  => 0})).
+
+nodes_carries_station_refs_test() ->
+    Ref1 = sample_station_ref(),
+    Ref2 = sample_station_ref(),
+    Key  = crypto:strong_rand_bytes(32),
+    F    = macula_frame:nodes(#{key => Key, nodes => [Ref1, Ref2]}),
+    ?assertEqual(nodes, macula_frame:frame_type(F)),
+    ?assertEqual(2, length(maps:get(nodes, F))),
+    ?assertEqual(Key, maps:get(key, F)).
+
+nodes_accepts_empty_list_test() ->
+    F = macula_frame:nodes(#{key => crypto:strong_rand_bytes(32),
+                             nodes => []}),
+    ?assertEqual([], maps:get(nodes, F)).
+
+nodes_validates_each_station_ref_test() ->
+    Bad = #{node_id => <<0:256>>, station_id => <<0:256>>,
+            tier => 99,   %% invalid — tier 0..4
+            country => <<"BE">>, last_seen_at => 1},
+    ?assertError(function_clause,
+                 macula_frame:nodes(#{key   => <<0:256>>,
+                                      nodes => [Bad]})).
+
+find_node_nodes_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    Req = macula_frame:sign(
+           macula_frame:find_node(#{key    => crypto:strong_rand_bytes(32),
+                                    origin => crypto:strong_rand_bytes(32),
+                                    depth  => 1}),
+           Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(Req)),
+    ?assertEqual(Req, D),
+    Resp = macula_frame:sign(
+             macula_frame:nodes(#{key => crypto:strong_rand_bytes(32),
+                                  nodes => [sample_station_ref()]}),
+             Kp),
+    {ok, D2, <<>>} = macula_frame:decode(macula_frame:encode(Resp)),
+    ?assertEqual(Resp, D2),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(D2, macula_identity:public(Kp))).
+
+%% -- FIND_VALUE / VALUE -------------------------------------------
+
+find_value_has_key_and_origin_test() ->
+    Key    = crypto:strong_rand_bytes(32),
+    Origin = crypto:strong_rand_bytes(32),
+    F = macula_frame:find_value(#{key => Key, origin => Origin}),
+    ?assertEqual(find_value, macula_frame:frame_type(F)),
+    ?assertEqual(Key, maps:get(key, F)),
+    ?assertEqual(Origin, maps:get(origin, F)).
+
+value_carries_records_test() ->
+    Rec = sample_record(),
+    F = macula_frame:value(#{key => crypto:strong_rand_bytes(32),
+                             records => [Rec]}),
+    ?assertEqual(value, macula_frame:frame_type(F)),
+    ?assertEqual([Rec], maps:get(records, F)).
+
+value_rejects_malformed_record_test() ->
+    BadRec = #{type => 1, key => <<0:256>>, payload => not_a_map},
+    ?assertError(function_clause,
+                 macula_frame:value(#{key     => crypto:strong_rand_bytes(32),
+                                      records => [BadRec]})).
+
+find_value_value_wire_roundtrip_test() ->
+    Kp  = macula_identity:generate(),
+    Req = macula_frame:sign(
+            macula_frame:find_value(#{key    => crypto:strong_rand_bytes(32),
+                                      origin => crypto:strong_rand_bytes(32)}),
+            Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(Req)),
+    ?assertEqual(Req, D),
+    Rsp = macula_frame:sign(
+            macula_frame:value(#{key => crypto:strong_rand_bytes(32),
+                                 records => [sample_record()]}),
+            Kp),
+    {ok, D2, <<>>} = macula_frame:decode(macula_frame:encode(Rsp)),
+    ?assertEqual(Rsp, D2).
+
+%% -- STORE / STORE_ACK --------------------------------------------
+
+store_carries_record_test() ->
+    Rec = sample_record(),
+    F = macula_frame:store(#{record => Rec}),
+    ?assertEqual(store, macula_frame:frame_type(F)),
+    ?assertEqual(Rec, maps:get(record, F)).
+
+store_rejects_bad_record_test() ->
+    ?assertError(function_clause,
+                 macula_frame:store(#{record => not_a_record})).
+
+store_ack_positive_test() ->
+    Key = crypto:strong_rand_bytes(32),
+    F = macula_frame:store_ack(#{key => Key, stored => true}),
+    ?assertEqual(store_ack, macula_frame:frame_type(F)),
+    ?assertEqual(true, maps:get(stored, F)),
+    ?assertEqual(undefined, maps:get(reason, F)).
+
+store_ack_with_rejection_reason_test() ->
+    F = macula_frame:store_ack(#{key => crypto:strong_rand_bytes(32),
+                                 stored => false,
+                                 reason => quota}),
+    ?assertEqual(false, maps:get(stored, F)),
+    ?assertEqual(quota, maps:get(reason, F)).
+
+store_ack_rejects_non_atom_reason_test() ->
+    ?assertError(function_clause,
+                 macula_frame:store_ack(#{key    => crypto:strong_rand_bytes(32),
+                                          stored => false,
+                                          reason => <<"bad">>})).
+
+store_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F  = macula_frame:sign(macula_frame:store(#{record => sample_record()}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(D, macula_identity:public(Kp))).
+
+%% -- REPLICATE / REPLICATE_ACK ------------------------------------
+
+replicate_carries_record_and_custodian_flag_test() ->
+    F = macula_frame:replicate(#{record => sample_record(),
+                                 new_custodian => true}),
+    ?assertEqual(replicate, macula_frame:frame_type(F)),
+    ?assertEqual(true, maps:get(new_custodian, F)).
+
+replicate_rejects_non_boolean_flag_test() ->
+    ?assertError(function_clause,
+                 macula_frame:replicate(#{record => sample_record(),
+                                          new_custodian => perhaps})).
+
+replicate_ack_test() ->
+    Key = crypto:strong_rand_bytes(32),
+    F = macula_frame:replicate_ack(#{key => Key, accepted => true}),
+    ?assertEqual(replicate_ack, macula_frame:frame_type(F)),
+    ?assertEqual(Key, maps:get(key, F)),
+    ?assertEqual(true, maps:get(accepted, F)).
+
+replicate_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F  = macula_frame:sign(
+           macula_frame:replicate(#{record => sample_record(),
+                                    new_custodian => false}),
+           Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(D, macula_identity:public(Kp))).
+
+%% -- station_ref helper -------------------------------------------
+
+station_ref_populates_defaults_test() ->
+    Ref = macula_frame:station_ref(#{
+        node_id      => <<0:256>>,
+        station_id   => <<0:256>>,
+        tier         => 1,
+        country      => <<"BE">>,
+        last_seen_at => 1
+    }),
+    ?assertEqual([], maps:get(addresses, Ref)),
+    ?assertEqual(undefined, maps:get(asn, Ref)).
+
+station_ref_rejects_tier_above_4_test() ->
+    ?assertError(function_clause,
+                 macula_frame:station_ref(#{
+                     node_id      => <<0:256>>,
+                     station_id   => <<0:256>>,
+                     tier         => 5,
+                     country      => <<"BE">>,
+                     last_seen_at => 1
+                 })).
+
+station_ref_rejects_wrong_country_size_test() ->
+    ?assertError(function_clause,
+                 macula_frame:station_ref(#{
+                     node_id      => <<0:256>>,
+                     station_id   => <<0:256>>,
+                     tier         => 1,
+                     country      => <<"BEL">>,
+                     last_seen_at => 1
+                 })).
+
+%%------------------------------------------------------------------
+%% DHT helpers
+%%------------------------------------------------------------------
+
+sample_station_ref() ->
+    macula_frame:station_ref(#{
+        node_id      => crypto:strong_rand_bytes(32),
+        station_id   => crypto:strong_rand_bytes(32),
+        addresses    => [],
+        tier         => 2,
+        asn          => 64512,
+        country      => <<"BE">>,
+        last_seen_at => erlang:system_time(millisecond)
+    }).
+
+sample_record() ->
+    Kp = macula_identity:generate(),
+    Node = macula_record:node_record(macula_identity:public(Kp), [], 0),
+    macula_record:sign(Node, Kp).

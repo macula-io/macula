@@ -8,8 +8,10 @@
 %% map. The map carries the common header fields (`Part 6 §3') plus
 %% type-specific fields and an Ed25519 signature.
 %%
-%% Phase 1 covers CONNECT / HELLO / GOODBYE only; CALL / PUBLISH / DHT /
-%% SWIM frames land in later phases.
+%% Phase 1 covers CONNECT / HELLO / GOODBYE. Phase 2 adds SWIM. Phase 3
+%% (Session 3.4) adds the DHT operation frames from Part 6 §7:
+%% PING / PONG, FIND_NODE / NODES, FIND_VALUE / VALUE, STORE / STORE_ACK,
+%% REPLICATE / REPLICATE_ACK. CALL / PUBLISH frames land in later phases.
 %%
 %% Signatures are Ed25519 over `"macula-v2-frame\0" ++ canonical_bert(unsigned)'
 %% where `canonical_bert' is `term_to_binary' with `[{minor_version, 2},
@@ -24,6 +26,16 @@
     swim_ping/1, swim_ack/1, swim_suspect/1, swim_confirm/1,
     swim_update/1,
     sign_swim_update/2, verify_swim_update/1,
+
+    %% Constructors — DHT (Part 6 §7)
+    ping/1, pong/1,
+    find_node/1, nodes/1,
+    find_value/1, value/1,
+    store/1, store_ack/1,
+    replicate/1, replicate_ack/1,
+
+    %% DHT helper — build and validate a station_ref entry
+    station_ref/1,
 
     %% Sign / verify frame
     sign/2, verify/2,
@@ -48,7 +60,13 @@
     swim_suspect_spec/0,
     swim_update/0,
     swim_update_spec/0,
-    member_state/0
+    member_state/0,
+    ping_spec/0, pong_spec/0,
+    find_node_spec/0, nodes_spec/0,
+    find_value_spec/0, value_spec/0,
+    store_spec/0, store_ack_spec/0,
+    replicate_spec/0, replicate_ack_spec/0,
+    station_ref/0, station_ref_spec/0
 ]).
 
 -define(SIG_DOMAIN,        "macula-v2-frame\0").
@@ -57,7 +75,12 @@
 -define(MAX_FRAME_BYTES,    16#FFFFFF).   %% 16 MiB cap (Part 6 §2.2).
 
 -type frame_type() :: connect | hello | goodbye
-                    | swim_ping | swim_ack | swim_suspect | swim_confirm.
+                    | swim_ping | swim_ack | swim_suspect | swim_confirm
+                    | ping | pong
+                    | find_node | nodes
+                    | find_value | value
+                    | store | store_ack
+                    | replicate | replicate_ack.
 
 -type member_state() :: alive | suspect | confirmed_failed.
 
@@ -121,6 +144,82 @@
     target_incarnation := non_neg_integer(),
     suspected_by       := macula_identity:pubkey(),
     ttl                := non_neg_integer()
+}.
+
+%%------------------------------------------------------------------
+%% DHT frame specs (Part 6 §7)
+%%
+%% `key' and `origin' are 32-byte identifiers (NodeId / RealmId /
+%% SHA-256 derivation per Part 3 §3.3). `country' is the 2-byte
+%% ISO-3166-1 alpha-2 code. A `station_ref()' is the tier-diverse
+%% routing-table payload returned in NODES responses.
+%%------------------------------------------------------------------
+
+-type id256() :: <<_:256>>.
+-type nonce128() :: <<_:128>>.
+-type tier() :: 0..4.
+-type country() :: <<_:16>>.
+
+-type station_ref_spec() :: #{
+    node_id      := macula_identity:pubkey(),
+    station_id   := macula_identity:pubkey(),
+    addresses    => [map()],
+    tier         := tier(),
+    asn          => non_neg_integer() | undefined,
+    country      := country(),
+    last_seen_at := pos_integer()
+}.
+
+-type station_ref() :: #{
+    node_id      := macula_identity:pubkey(),
+    station_id   := macula_identity:pubkey(),
+    addresses    := [map()],
+    tier         := tier(),
+    asn          := non_neg_integer() | undefined,
+    country      := country(),
+    last_seen_at := pos_integer()
+}.
+
+-type ping_spec()          :: #{nonce := nonce128()}.
+-type pong_spec()          :: #{nonce := nonce128()}.
+
+-type find_node_spec()     :: #{
+    key    := id256(),
+    origin := macula_identity:pubkey(),
+    depth  := non_neg_integer()
+}.
+
+-type nodes_spec()         :: #{
+    key   := id256(),
+    nodes := [station_ref()]
+}.
+
+-type find_value_spec()    :: #{
+    key    := id256(),
+    origin := macula_identity:pubkey()
+}.
+
+-type value_spec()         :: #{
+    key     := id256(),
+    records := [macula_record:record()]
+}.
+
+-type store_spec()         :: #{record := macula_record:record()}.
+
+-type store_ack_spec()     :: #{
+    key    := id256(),
+    stored := boolean(),
+    reason => atom() | undefined
+}.
+
+-type replicate_spec()     :: #{
+    record        := macula_record:record(),
+    new_custodian := boolean()
+}.
+
+-type replicate_ack_spec() :: #{
+    key      := id256(),
+    accepted := boolean()
 }.
 
 %%------------------------------------------------------------------
@@ -291,6 +390,118 @@ verify_update_result(false, _Update) -> {error, signature_invalid}.
 canonical_swim_update(Update) ->
     term_to_binary(maps:without([signature], Update),
                    [{minor_version, 2}, deterministic]).
+
+%%------------------------------------------------------------------
+%% DHT frame constructors (Part 6 §7)
+%%
+%% Every DHT frame carries `capabilities => 0' (no capability
+%% negotiation in-operation) and the standard header from `base/2'.
+%% Request/response pairs share their `key' / `nonce' so a responder
+%% can match queries to replies without a transaction table.
+%%------------------------------------------------------------------
+
+-spec ping(ping_spec()) -> frame().
+ping(#{nonce := N}) when is_binary(N), byte_size(N) =:= 16 ->
+    (base(ping, 0))#{nonce => N}.
+
+-spec pong(pong_spec()) -> frame().
+pong(#{nonce := N}) when is_binary(N), byte_size(N) =:= 16 ->
+    (base(pong, 0))#{nonce => N}.
+
+-spec find_node(find_node_spec()) -> frame().
+find_node(#{key := K, origin := O, depth := D})
+  when is_binary(K), byte_size(K) =:= 32,
+       is_binary(O), byte_size(O) =:= 32,
+       is_integer(D), D >= 0 ->
+    (base(find_node, 0))#{key => K, origin => O, depth => D}.
+
+-spec nodes(nodes_spec()) -> frame().
+nodes(#{key := K, nodes := Ns})
+  when is_binary(K), byte_size(K) =:= 32,
+       is_list(Ns) ->
+    Validated = [station_ref(Ref) || Ref <- Ns],
+    (base(nodes, 0))#{key => K, nodes => Validated}.
+
+-spec find_value(find_value_spec()) -> frame().
+find_value(#{key := K, origin := O})
+  when is_binary(K), byte_size(K) =:= 32,
+       is_binary(O), byte_size(O) =:= 32 ->
+    (base(find_value, 0))#{key => K, origin => O}.
+
+-spec value(value_spec()) -> frame().
+value(#{key := K, records := Rs})
+  when is_binary(K), byte_size(K) =:= 32,
+       is_list(Rs) ->
+    lists:foreach(fun validate_record/1, Rs),
+    (base(value, 0))#{key => K, records => Rs}.
+
+-spec store(store_spec()) -> frame().
+store(#{record := R}) ->
+    validate_record(R),
+    (base(store, 0))#{record => R}.
+
+-spec store_ack(store_ack_spec()) -> frame().
+store_ack(#{key := K, stored := Stored} = Spec)
+  when is_binary(K), byte_size(K) =:= 32,
+       is_boolean(Stored) ->
+    Reason = maps:get(reason, Spec, undefined),
+    validate_optional_reason(Reason),
+    (base(store_ack, 0))#{key => K, stored => Stored, reason => Reason}.
+
+-spec replicate(replicate_spec()) -> frame().
+replicate(#{record := R, new_custodian := NC})
+  when is_boolean(NC) ->
+    validate_record(R),
+    (base(replicate, 0))#{record => R, new_custodian => NC}.
+
+-spec replicate_ack(replicate_ack_spec()) -> frame().
+replicate_ack(#{key := K, accepted := A})
+  when is_binary(K), byte_size(K) =:= 32,
+       is_boolean(A) ->
+    (base(replicate_ack, 0))#{key => K, accepted => A}.
+
+%%------------------------------------------------------------------
+%% station_ref — validated payload for NODES responses
+%%------------------------------------------------------------------
+
+-spec station_ref(station_ref_spec()) -> station_ref().
+station_ref(#{node_id := NodeId, station_id := StationId,
+              tier := Tier, country := Country,
+              last_seen_at := LastSeen} = Spec)
+  when is_binary(NodeId),    byte_size(NodeId)    =:= 32,
+       is_binary(StationId), byte_size(StationId) =:= 32,
+       is_integer(Tier),     Tier >= 0, Tier =< 4,
+       is_binary(Country),   byte_size(Country)   =:= 2,
+       is_integer(LastSeen), LastSeen > 0 ->
+    Addresses = maps:get(addresses, Spec, []),
+    Asn       = maps:get(asn, Spec, undefined),
+    validate_asn(Asn),
+    validate_addresses(Addresses),
+    #{
+        node_id      => NodeId,
+        station_id   => StationId,
+        addresses    => Addresses,
+        tier         => Tier,
+        asn          => Asn,
+        country      => Country,
+        last_seen_at => LastSeen
+    }.
+
+-spec validate_asn(non_neg_integer() | undefined) -> ok.
+validate_asn(undefined) -> ok;
+validate_asn(N) when is_integer(N), N >= 0 -> ok.
+
+-spec validate_addresses([map()]) -> ok.
+validate_addresses([])                        -> ok;
+validate_addresses([A | Rest]) when is_map(A) -> validate_addresses(Rest).
+
+-spec validate_record(macula_record:record()) -> ok.
+validate_record(#{type := _, key := <<_:256>>, payload := P}) when is_map(P) ->
+    ok.
+
+-spec validate_optional_reason(atom() | undefined) -> ok.
+validate_optional_reason(undefined)                      -> ok;
+validate_optional_reason(R) when is_atom(R), R =/= true, R =/= false -> ok.
 
 %%------------------------------------------------------------------
 %% Sign / verify
