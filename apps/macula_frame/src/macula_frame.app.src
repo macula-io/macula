@@ -2,7 +2,7 @@
     {description, "Macula SDK — BERT-encoded wire frames + source-route header primitives"},
     {vsn, "2.0.0-alpha.1"},
     {registered, []},
-    {applications, [kernel, stdlib, crypto, macula_identity]},
+    {applications, [kernel, stdlib, crypto, macula_identity, macula_record]},
     {env, []},
     {modules, []},
     {licenses, ["Apache-2.0"]},
