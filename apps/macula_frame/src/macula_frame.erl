@@ -46,6 +46,9 @@
     hyparview_join/1, hyparview_forward_join/1, hyparview_neighbor/1,
     hyparview_disconnect/1, hyparview_shuffle/1, hyparview_shuffle_reply/1,
 
+    %% Constructors — Plumtree (Part 3 §7.2)
+    plumtree_gossip/1, plumtree_ihave/1, plumtree_graft/1, plumtree_prune/1,
+
     %% Sign / verify frame
     sign/2, verify/2,
 
@@ -81,7 +84,10 @@
     hyparview_join_spec/0, hyparview_forward_join_spec/0,
     hyparview_neighbor_spec/0, hyparview_disconnect_spec/0,
     hyparview_shuffle_spec/0, hyparview_shuffle_reply_spec/0,
-    neighbor_priority/0
+    neighbor_priority/0,
+    plumtree_gossip_spec/0, plumtree_ihave_spec/0,
+    plumtree_graft_spec/0, plumtree_prune_spec/0,
+    msg_id/0
 ]).
 
 -define(SIG_DOMAIN,        "macula-v2-frame\0").
@@ -99,7 +105,9 @@
                     | call | result | error
                     | hyparview_join | hyparview_forward_join
                     | hyparview_neighbor | hyparview_disconnect
-                    | hyparview_shuffle | hyparview_shuffle_reply.
+                    | hyparview_shuffle | hyparview_shuffle_reply
+                    | plumtree_gossip | plumtree_ihave
+                    | plumtree_graft | plumtree_prune.
 
 -type member_state() :: alive | suspect | confirmed_failed.
 
@@ -312,6 +320,35 @@
 -type hyparview_shuffle_reply_spec() :: #{
     realm       := id256(),
     peer_sample := [macula_identity:pubkey()]
+}.
+
+%%------------------------------------------------------------------
+%% Plumtree frame specs (Part 3 §7.2)
+%%------------------------------------------------------------------
+
+-type msg_id() :: <<_:128>>.
+
+-type plumtree_gossip_spec() :: #{
+    realm   := id256(),
+    msg_id  := msg_id(),
+    round   := non_neg_integer(),
+    payload := term()
+}.
+
+-type plumtree_ihave_spec() :: #{
+    realm  := id256(),
+    msg_id := msg_id(),
+    round  := non_neg_integer()
+}.
+
+-type plumtree_graft_spec() :: #{
+    realm  := id256(),
+    msg_id := msg_id(),
+    round  := non_neg_integer()
+}.
+
+-type plumtree_prune_spec() :: #{
+    realm := id256()
 }.
 
 %%------------------------------------------------------------------
@@ -742,6 +779,42 @@ hyparview_shuffle_reply(#{realm := R, peer_sample := S})
 
 -spec validate_pubkey(binary()) -> ok.
 validate_pubkey(B) when is_binary(B), byte_size(B) =:= 32 -> ok.
+
+%%------------------------------------------------------------------
+%% Plumtree constructors (Part 3 §7.2)
+%%------------------------------------------------------------------
+
+-spec plumtree_gossip(plumtree_gossip_spec()) -> frame().
+plumtree_gossip(#{realm := R, msg_id := M, round := Rd,
+                  payload := Payload})
+  when is_binary(R), byte_size(R) =:= 32,
+       is_binary(M), byte_size(M) =:= 16,
+       is_integer(Rd), Rd >= 0 ->
+    (base(plumtree_gossip, 0))#{
+        realm   => R,
+        msg_id  => M,
+        round   => Rd,
+        payload => Payload
+    }.
+
+-spec plumtree_ihave(plumtree_ihave_spec()) -> frame().
+plumtree_ihave(#{realm := R, msg_id := M, round := Rd})
+  when is_binary(R), byte_size(R) =:= 32,
+       is_binary(M), byte_size(M) =:= 16,
+       is_integer(Rd), Rd >= 0 ->
+    (base(plumtree_ihave, 0))#{realm => R, msg_id => M, round => Rd}.
+
+-spec plumtree_graft(plumtree_graft_spec()) -> frame().
+plumtree_graft(#{realm := R, msg_id := M, round := Rd})
+  when is_binary(R), byte_size(R) =:= 32,
+       is_binary(M), byte_size(M) =:= 16,
+       is_integer(Rd), Rd >= 0 ->
+    (base(plumtree_graft, 0))#{realm => R, msg_id => M, round => Rd}.
+
+-spec plumtree_prune(plumtree_prune_spec()) -> frame().
+plumtree_prune(#{realm := R})
+  when is_binary(R), byte_size(R) =:= 32 ->
+    (base(plumtree_prune, 0))#{realm => R}.
 
 %%------------------------------------------------------------------
 %% Sign / verify

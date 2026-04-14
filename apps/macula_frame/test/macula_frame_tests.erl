@@ -857,3 +857,65 @@ hyparview_disconnect_wire_roundtrip_test() ->
             realm => crypto:strong_rand_bytes(32)}), Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
+
+%%------------------------------------------------------------------
+%% Plumtree frames — Part 3 §7.2
+%%------------------------------------------------------------------
+
+plumtree_gossip_carries_msg_id_round_payload_test() ->
+    MsgId = crypto:strong_rand_bytes(16),
+    F = macula_frame:plumtree_gossip(#{
+        realm   => crypto:strong_rand_bytes(32),
+        msg_id  => MsgId,
+        round   => 3,
+        payload => #{event => <<"hello">>}
+    }),
+    ?assertEqual(plumtree_gossip, macula_frame:frame_type(F)),
+    ?assertEqual(MsgId, maps:get(msg_id, F)),
+    ?assertEqual(3, maps:get(round, F)),
+    ?assertEqual(#{event => <<"hello">>}, maps:get(payload, F)).
+
+plumtree_gossip_rejects_short_msg_id_test() ->
+    ?assertError(function_clause,
+                 macula_frame:plumtree_gossip(#{
+                     realm   => crypto:strong_rand_bytes(32),
+                     msg_id  => <<0:64>>,
+                     round   => 0,
+                     payload => ok})).
+
+plumtree_ihave_round_trip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:plumtree_ihave(#{
+            realm  => crypto:strong_rand_bytes(32),
+            msg_id => crypto:strong_rand_bytes(16),
+            round  => 1}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertEqual(plumtree_ihave, macula_frame:frame_type(D)).
+
+plumtree_graft_round_trip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:plumtree_graft(#{
+            realm  => crypto:strong_rand_bytes(32),
+            msg_id => crypto:strong_rand_bytes(16),
+            round  => 2}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+plumtree_prune_carries_realm_only_test() ->
+    R = crypto:strong_rand_bytes(32),
+    F = macula_frame:plumtree_prune(#{realm => R}),
+    ?assertEqual(plumtree_prune, macula_frame:frame_type(F)),
+    ?assertEqual(R, maps:get(realm, F)).
+
+plumtree_gossip_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:plumtree_gossip(#{
+            realm   => crypto:strong_rand_bytes(32),
+            msg_id  => crypto:strong_rand_bytes(16),
+            round   => 0,
+            payload => <<"data">>}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(D, macula_identity:public(Kp))).
