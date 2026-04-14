@@ -58,10 +58,15 @@ fn nif_listen<'a>(
     uni_streams: u32,
 ) -> NifResult<Term<'a>> {
     let caller = env.pid();
+    eprintln!("[macula_quic] nif_listen entry bind={} port={} cert={} key={}", bind_addr, port, certfile, keyfile);
 
     let addr: IpAddr = bind_addr
         .parse()
-        .map_err(|e| rustler::Error::Term(Box::new(format!("invalid bind_addr: {}", e))))?;
+        .map_err(|e| {
+            eprintln!("[macula_quic] bind_addr parse err: {}", e);
+            rustler::Error::Term(Box::new(format!("invalid bind_addr: {}", e)))
+        })?;
+    eprintln!("[macula_quic] addr parsed ok");
 
     let server_config = config::build_server_config(
         &certfile,
@@ -72,10 +77,18 @@ fn nif_listen<'a>(
         bidi_streams,
         uni_streams,
     )
-    .map_err(|e| rustler::Error::Term(Box::new(e)))?;
+    .map_err(|e| {
+        eprintln!("[macula_quic] server_config err: {}", e);
+        rustler::Error::Term(Box::new(e))
+    })?;
+    eprintln!("[macula_quic] server_config built");
 
     let socket = config::create_bound_socket(addr, port as u16)
-        .map_err(|e| rustler::Error::Term(Box::new(e)))?;
+        .map_err(|e| {
+            eprintln!("[macula_quic] create_bound_socket err: {}", e);
+            rustler::Error::Term(Box::new(e))
+        })?;
+    eprintln!("[macula_quic] socket bound");
 
     // Quinn's TokioRuntime requires a tokio context (Handle::current()).
     // We enter the runtime context here since NIFs run on BEAM scheduler threads.
