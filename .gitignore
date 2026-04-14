@@ -17,10 +17,10 @@ doc/
 rebar.lock
 
 # Rust NIF build artifacts
-/native/*/target/
-/priv/*.so
-/priv/*.dylib
-/priv/*.dll
+**/native/*/target/
+**/priv/*.so
+**/priv/*.dylib
+**/priv/*.dll
 
 # Archives
 *.gz
