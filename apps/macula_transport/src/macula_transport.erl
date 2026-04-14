@@ -191,12 +191,14 @@ controlling_process(Stream, Pid) when is_pid(Pid) ->
 %% Internals
 %%------------------------------------------------------------------
 
-to_str(B) when is_binary(B) -> binary_to_list(B);
-to_str(L) when is_list(L) -> L;
-to_str({A, B, C, D}) ->
-    inet:ntoa({A, B, C, D});
-to_str({A, B, C, D, E, F, G, H}) ->
-    inet:ntoa({A, B, C, D, E, F, G, H}).
+%% Rustler 0.34 `String' decoder accepts binaries only (not Erlang char
+%% lists); normalise every path / hostname / bind-addr input to a binary.
+to_str(B) when is_binary(B) -> B;
+to_str(L) when is_list(L)   -> iolist_to_binary(L);
+to_str({_, _, _, _} = V4) ->
+    iolist_to_binary(inet:ntoa(V4));
+to_str({_, _, _, _, _, _, _, _} = V6) ->
+    iolist_to_binary(inet:ntoa(V6)).
 
 to_alpn(L) when is_list(L) ->
     [iolist_to_binary(A) || A <- L].
