@@ -42,6 +42,10 @@
     %% Constructors — CALL (Part 6 §5)
     call/1, result/1, call_error/1,
 
+    %% Constructors — HyParView (Part 3 §7.1)
+    hyparview_join/1, hyparview_forward_join/1, hyparview_neighbor/1,
+    hyparview_disconnect/1, hyparview_shuffle/1, hyparview_shuffle_reply/1,
+
     %% Sign / verify frame
     sign/2, verify/2,
 
@@ -73,7 +77,11 @@
     replicate_spec/0, replicate_ack_spec/0,
     station_ref/0, station_ref_spec/0,
     call_spec/0, result_spec/0, call_error_spec/0,
-    call_id/0
+    call_id/0,
+    hyparview_join_spec/0, hyparview_forward_join_spec/0,
+    hyparview_neighbor_spec/0, hyparview_disconnect_spec/0,
+    hyparview_shuffle_spec/0, hyparview_shuffle_reply_spec/0,
+    neighbor_priority/0
 ]).
 
 -define(SIG_DOMAIN,        "macula-v2-frame\0").
@@ -88,7 +96,10 @@
                     | find_value | value
                     | store | store_ack
                     | replicate | replicate_ack
-                    | call | result | error.
+                    | call | result | error
+                    | hyparview_join | hyparview_forward_join
+                    | hyparview_neighbor | hyparview_disconnect
+                    | hyparview_shuffle | hyparview_shuffle_reply.
 
 -type member_state() :: alive | suspect | confirmed_failed.
 
@@ -261,6 +272,46 @@
     detail               => binary() | undefined,
     offending_hop        => macula_identity:pubkey() | undefined,
     source_route_partial => binary()
+}.
+
+%%------------------------------------------------------------------
+%% HyParView frame specs (Part 3 §7.1)
+%%------------------------------------------------------------------
+
+-type neighbor_priority() :: high | low.
+
+-type hyparview_join_spec() :: #{
+    realm      := id256(),
+    new_member := macula_identity:pubkey()
+}.
+
+-type hyparview_forward_join_spec() :: #{
+    realm      := id256(),
+    new_member := macula_identity:pubkey(),
+    ttl        := non_neg_integer(),
+    arwl       := non_neg_integer(),
+    prwl       := non_neg_integer()
+}.
+
+-type hyparview_neighbor_spec() :: #{
+    realm    := id256(),
+    priority := neighbor_priority()
+}.
+
+-type hyparview_disconnect_spec() :: #{
+    realm := id256()
+}.
+
+-type hyparview_shuffle_spec() :: #{
+    realm       := id256(),
+    origin      := macula_identity:pubkey(),
+    ttl         := non_neg_integer(),
+    peer_sample := [macula_identity:pubkey()]
+}.
+
+-type hyparview_shuffle_reply_spec() :: #{
+    realm       := id256(),
+    peer_sample := [macula_identity:pubkey()]
 }.
 
 %%------------------------------------------------------------------
@@ -633,6 +684,64 @@ validate_optional_detail(B) when is_binary(B)        -> ok.
 -spec validate_optional_hop(macula_identity:pubkey() | undefined) -> ok.
 validate_optional_hop(undefined)                              -> ok;
 validate_optional_hop(B) when is_binary(B), byte_size(B) =:= 32 -> ok.
+
+%%------------------------------------------------------------------
+%% HyParView constructors (Part 3 §7.1)
+%%------------------------------------------------------------------
+
+-spec hyparview_join(hyparview_join_spec()) -> frame().
+hyparview_join(#{realm := R, new_member := M})
+  when is_binary(R), byte_size(R) =:= 32,
+       is_binary(M), byte_size(M) =:= 32 ->
+    (base(hyparview_join, 0))#{realm => R, new_member => M}.
+
+-spec hyparview_forward_join(hyparview_forward_join_spec()) -> frame().
+hyparview_forward_join(#{realm := R, new_member := M,
+                         ttl := Ttl, arwl := A, prwl := P})
+  when is_binary(R), byte_size(R) =:= 32,
+       is_binary(M), byte_size(M) =:= 32,
+       is_integer(Ttl), Ttl >= 0,
+       is_integer(A),   A >= 0,
+       is_integer(P),   P >= 0 ->
+    (base(hyparview_forward_join, 0))#{
+        realm => R, new_member => M,
+        ttl => Ttl, arwl => A, prwl => P
+    }.
+
+-spec hyparview_neighbor(hyparview_neighbor_spec()) -> frame().
+hyparview_neighbor(#{realm := R, priority := P})
+  when is_binary(R), byte_size(R) =:= 32,
+       (P =:= high orelse P =:= low) ->
+    (base(hyparview_neighbor, 0))#{realm => R, priority => P}.
+
+-spec hyparview_disconnect(hyparview_disconnect_spec()) -> frame().
+hyparview_disconnect(#{realm := R})
+  when is_binary(R), byte_size(R) =:= 32 ->
+    (base(hyparview_disconnect, 0))#{realm => R}.
+
+-spec hyparview_shuffle(hyparview_shuffle_spec()) -> frame().
+hyparview_shuffle(#{realm := R, origin := O,
+                    ttl := Ttl, peer_sample := S})
+  when is_binary(R), byte_size(R) =:= 32,
+       is_binary(O), byte_size(O) =:= 32,
+       is_integer(Ttl), Ttl >= 0,
+       is_list(S) ->
+    lists:foreach(fun validate_pubkey/1, S),
+    (base(hyparview_shuffle, 0))#{
+        realm => R, origin => O, ttl => Ttl, peer_sample => S
+    }.
+
+-spec hyparview_shuffle_reply(hyparview_shuffle_reply_spec()) -> frame().
+hyparview_shuffle_reply(#{realm := R, peer_sample := S})
+  when is_binary(R), byte_size(R) =:= 32,
+       is_list(S) ->
+    lists:foreach(fun validate_pubkey/1, S),
+    (base(hyparview_shuffle_reply, 0))#{
+        realm => R, peer_sample => S
+    }.
+
+-spec validate_pubkey(binary()) -> ok.
+validate_pubkey(B) when is_binary(B), byte_size(B) =:= 32 -> ok.
 
 %%------------------------------------------------------------------
 %% Sign / verify

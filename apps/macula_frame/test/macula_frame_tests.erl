@@ -716,3 +716,144 @@ spec_with(Field, BadValue) ->
         caller      => crypto:strong_rand_bytes(32)
     },
     maps:put(Field, BadValue, Base).
+
+%%------------------------------------------------------------------
+%% HyParView frames — Part 3 §7.1
+%%------------------------------------------------------------------
+
+hyparview_join_shape_test() ->
+    Realm = crypto:strong_rand_bytes(32),
+    Member = crypto:strong_rand_bytes(32),
+    F = macula_frame:hyparview_join(#{realm => Realm, new_member => Member}),
+    ?assertEqual(hyparview_join, macula_frame:frame_type(F)),
+    ?assertEqual(Realm,  maps:get(realm, F)),
+    ?assertEqual(Member, maps:get(new_member, F)).
+
+hyparview_join_rejects_short_realm_test() ->
+    ?assertError(function_clause,
+                 macula_frame:hyparview_join(#{realm => <<0:128>>,
+                                               new_member => <<0:256>>})).
+
+hyparview_forward_join_carries_ttl_arwl_prwl_test() ->
+    F = macula_frame:hyparview_forward_join(#{
+        realm      => crypto:strong_rand_bytes(32),
+        new_member => crypto:strong_rand_bytes(32),
+        ttl        => 6,
+        arwl       => 6,
+        prwl       => 3
+    }),
+    ?assertEqual(hyparview_forward_join, macula_frame:frame_type(F)),
+    ?assertEqual(6, maps:get(ttl, F)),
+    ?assertEqual(6, maps:get(arwl, F)),
+    ?assertEqual(3, maps:get(prwl, F)).
+
+hyparview_neighbor_high_priority_test() ->
+    F = macula_frame:hyparview_neighbor(#{
+        realm    => crypto:strong_rand_bytes(32),
+        priority => high
+    }),
+    ?assertEqual(hyparview_neighbor, macula_frame:frame_type(F)),
+    ?assertEqual(high, maps:get(priority, F)).
+
+hyparview_neighbor_low_priority_test() ->
+    F = macula_frame:hyparview_neighbor(#{
+        realm    => crypto:strong_rand_bytes(32),
+        priority => low
+    }),
+    ?assertEqual(low, maps:get(priority, F)).
+
+hyparview_neighbor_rejects_unknown_priority_test() ->
+    ?assertError(function_clause,
+                 macula_frame:hyparview_neighbor(#{
+                     realm    => crypto:strong_rand_bytes(32),
+                     priority => medium})).
+
+hyparview_disconnect_carries_realm_only_test() ->
+    R = crypto:strong_rand_bytes(32),
+    F = macula_frame:hyparview_disconnect(#{realm => R}),
+    ?assertEqual(hyparview_disconnect, macula_frame:frame_type(F)),
+    ?assertEqual(R, maps:get(realm, F)).
+
+hyparview_shuffle_carries_origin_ttl_and_sample_test() ->
+    Origin = crypto:strong_rand_bytes(32),
+    Sample = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 4)],
+    F = macula_frame:hyparview_shuffle(#{
+        realm => crypto:strong_rand_bytes(32),
+        origin => Origin,
+        ttl    => 4,
+        peer_sample => Sample
+    }),
+    ?assertEqual(hyparview_shuffle, macula_frame:frame_type(F)),
+    ?assertEqual(Origin, maps:get(origin, F)),
+    ?assertEqual(Sample, maps:get(peer_sample, F)).
+
+hyparview_shuffle_rejects_non_pubkey_in_sample_test() ->
+    ?assertError(function_clause,
+                 macula_frame:hyparview_shuffle(#{
+                     realm => crypto:strong_rand_bytes(32),
+                     origin => crypto:strong_rand_bytes(32),
+                     ttl    => 4,
+                     peer_sample => [<<"too short">>]})).
+
+hyparview_shuffle_reply_carries_sample_test() ->
+    Sample = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 3)],
+    F = macula_frame:hyparview_shuffle_reply(#{
+        realm => crypto:strong_rand_bytes(32),
+        peer_sample => Sample
+    }),
+    ?assertEqual(hyparview_shuffle_reply, macula_frame:frame_type(F)),
+    ?assertEqual(Sample, maps:get(peer_sample, F)).
+
+%% -- sign + wire roundtrip cover all 6 frame types --
+
+hyparview_join_sign_verify_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:hyparview_join(#{
+            realm => crypto:strong_rand_bytes(32),
+            new_member => crypto:strong_rand_bytes(32)}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(D, macula_identity:public(Kp))).
+
+hyparview_forward_join_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:hyparview_forward_join(#{
+            realm => crypto:strong_rand_bytes(32),
+            new_member => crypto:strong_rand_bytes(32),
+            ttl => 6, arwl => 6, prwl => 3}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+hyparview_neighbor_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:hyparview_neighbor(#{
+            realm => crypto:strong_rand_bytes(32),
+            priority => low}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+hyparview_shuffle_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    Sample = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 3)],
+    F = macula_frame:sign(macula_frame:hyparview_shuffle(#{
+            realm => crypto:strong_rand_bytes(32),
+            origin => crypto:strong_rand_bytes(32),
+            ttl => 4, peer_sample => Sample}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+hyparview_shuffle_reply_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:hyparview_shuffle_reply(#{
+            realm => crypto:strong_rand_bytes(32),
+            peer_sample => [crypto:strong_rand_bytes(32)]}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+hyparview_disconnect_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:hyparview_disconnect(#{
+            realm => crypto:strong_rand_bytes(32)}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
