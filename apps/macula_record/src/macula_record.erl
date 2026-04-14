@@ -20,6 +20,7 @@
     node_record/3, node_record/4,
     realm_directory/3, realm_directory/4,
     realm_stations/2, realm_stations/3,
+    realm_member_endorsement/2, realm_member_endorsement/3,
     procedure_advertisement/3, procedure_advertisement/4,
     tombstone/3, tombstone/4,
 
@@ -48,6 +49,7 @@
     realm_directory_opts/0,
     realm_station_entry/0,
     realm_stations_opts/0,
+    realm_member_endorsement_opts/0,
     procedure_advertisement_opts/0,
     tombstone_opts/0
 ]).
@@ -55,14 +57,19 @@
 %% Domain separation prefix for record signatures (Part 6 §10.2).
 -define(SIG_DOMAIN, "macula-v2-record\0").
 
--define(TYPE_NODE_RECORD,             16#01).
--define(TYPE_REALM_DIRECTORY,          16#03).
--define(TYPE_REALM_STATIONS,           16#04).
--define(TYPE_PROCEDURE_ADVERTISEMENT,  16#06).
--define(TYPE_TOMBSTONE,                16#0C).
+-define(TYPE_NODE_RECORD,                16#01).
+-define(TYPE_REALM_DIRECTORY,            16#03).
+-define(TYPE_REALM_STATIONS,             16#04).
+-define(TYPE_REALM_MEMBER_ENDORSEMENT,   16#05).
+-define(TYPE_PROCEDURE_ADVERTISEMENT,    16#06).
+-define(TYPE_TOMBSTONE,                  16#0C).
 
 %% Domain separation for derived storage keys (Part 3 §3.3).
--define(STORAGE_DOMAIN_STATION_SET, <<"station_set">>).
+-define(STORAGE_DOMAIN_STATION_SET,    <<"station_set">>).
+-define(STORAGE_DOMAIN_MEMBER_ENDORSE, <<"member_endorsement">>).
+
+%% Default endorsement validity window (30 days).
+-define(DEFAULT_ENDORSEMENT_TTL_MS, 30 * 24 * 60 * 60 * 1000).
 
 %% Default record TTL (Part 4 §11): expire 48h after creation.
 -define(DEFAULT_TTL_MS, 48 * 60 * 60 * 1000).
@@ -98,6 +105,12 @@
 }.
 
 -type realm_stations_opts() :: #{ttl_ms => pos_integer()}.
+
+-type realm_member_endorsement_opts() :: #{
+    valid_from   => pos_integer(),
+    valid_until  => pos_integer(),
+    ttl_ms       => pos_integer()
+}.
 
 -type procedure_advertisement_opts() :: #{
     session_token_hint => binary(),
@@ -177,6 +190,42 @@ realm_stations(RealmId, Entries, Opts)
        is_list(Entries) ->
     Payload = realm_stations_payload(RealmId, Entries),
     envelope(?TYPE_REALM_STATIONS, RealmId, Payload, Opts).
+
+%%------------------------------------------------------------------
+%% Constructors — realm_member_endorsement (Part 6 §9.6)
+%%
+%% Admin-signed statement that `MemberNode' is authorised to act as
+%% a member of the realm. Stored at a derived storage key so a new
+%% station joining the realm can look it up by `{realm, node}' pair
+%% without knowing the record version. Envelope key is the RealmId
+%% (admin signs).
+%%------------------------------------------------------------------
+
+-spec realm_member_endorsement(macula_identity:pubkey(),
+                               #{realm      := macula_identity:pubkey(),
+                                 member_node := macula_identity:pubkey(),
+                                 roles       := [binary()]}) -> record().
+realm_member_endorsement(RealmId, Spec) ->
+    realm_member_endorsement(RealmId, Spec, #{}).
+
+-spec realm_member_endorsement(macula_identity:pubkey(),
+                               #{realm       := macula_identity:pubkey(),
+                                 member_node := macula_identity:pubkey(),
+                                 roles       := [binary()]},
+                               realm_member_endorsement_opts()) -> record().
+realm_member_endorsement(RealmId,
+                         #{realm := RealmId, member_node := Member,
+                           roles := Roles} = _Spec, Opts)
+  when is_binary(RealmId), byte_size(RealmId) =:= 32,
+       is_binary(Member),  byte_size(Member)  =:= 32,
+       is_list(Roles) ->
+    NowMs = erlang:system_time(millisecond),
+    ValidFrom  = maps:get(valid_from,  Opts, NowMs),
+    ValidUntil = maps:get(valid_until, Opts,
+                          NowMs + ?DEFAULT_ENDORSEMENT_TTL_MS),
+    Payload = realm_member_endorsement_payload(RealmId, Member, Roles,
+                                               ValidFrom, ValidUntil),
+    envelope(?TYPE_REALM_MEMBER_ENDORSEMENT, RealmId, Payload, Opts).
 
 %%------------------------------------------------------------------
 %% Constructors — procedure_advertisement (Part 6 §9.7)
@@ -389,6 +438,17 @@ realm_station_entry(#{station_id := SId, roles := Roles})
                                                   is_binary(R)]
     }.
 
+realm_member_endorsement_payload(RealmId, Member, Roles,
+                                 ValidFrom, ValidUntil) ->
+    #{
+        {text, <<"realm">>}       => RealmId,
+        {text, <<"member_node">>} => Member,
+        {text, <<"roles">>}       => [{text, R} || R <- Roles,
+                                                    is_binary(R)],
+        {text, <<"valid_from">>}  => ValidFrom,
+        {text, <<"valid_until">>} => ValidUntil
+    }.
+
 procedure_advertisement_payload(AdvertiserNode, ProcedureUri,
                                 ServingStation, Opts) ->
     Base = #{
@@ -419,6 +479,11 @@ storage_key(#{type := Type, key := K})
     K;
 storage_key(#{type := ?TYPE_REALM_STATIONS, key := RealmId}) ->
     crypto:hash(sha256, <<?STORAGE_DOMAIN_STATION_SET/binary, RealmId/binary>>);
+storage_key(#{type := ?TYPE_REALM_MEMBER_ENDORSEMENT,
+              key := RealmId, payload := P}) ->
+    Member = maps:get({text, <<"member_node">>}, P),
+    crypto:hash(sha256, <<?STORAGE_DOMAIN_MEMBER_ENDORSE/binary,
+                          RealmId/binary, Member/binary>>);
 storage_key(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT, payload := P}) ->
     {text, Uri} = maps:get({text, <<"procedure_uri">>}, P),
     crypto:hash(sha256, Uri).

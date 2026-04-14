@@ -280,6 +280,86 @@ realm_stations_accepts_empty_list_test() ->
                               macula_record:payload(R))).
 
 %%------------------------------------------------------------------
+%% realm_member_endorsement
+%%------------------------------------------------------------------
+
+realm_member_endorsement_shape_test() ->
+    AdminKp = macula_identity:generate(),
+    RealmId = macula_identity:public(AdminKp),
+    Member  = crypto:strong_rand_bytes(32),
+    R = macula_record:realm_member_endorsement(
+          RealmId,
+          #{realm => RealmId, member_node => Member,
+            roles => [<<"peer">>]}),
+    ?assertEqual(16#05, macula_record:type(R)),
+    ?assertEqual(RealmId, macula_record:key(R)),
+    P = macula_record:payload(R),
+    ?assertEqual(RealmId, maps:get({text, <<"realm">>}, P)),
+    ?assertEqual(Member,  maps:get({text, <<"member_node">>}, P)),
+    ?assertEqual([{text, <<"peer">>}],
+                 maps:get({text, <<"roles">>}, P)),
+    ?assert(is_integer(maps:get({text, <<"valid_from">>}, P))),
+    ?assert(is_integer(maps:get({text, <<"valid_until">>}, P))),
+    ValidFrom  = maps:get({text, <<"valid_from">>}, P),
+    ValidUntil = maps:get({text, <<"valid_until">>}, P),
+    ?assert(ValidUntil > ValidFrom).
+
+realm_member_endorsement_custom_validity_window_test() ->
+    AdminKp = macula_identity:generate(),
+    RealmId = macula_identity:public(AdminKp),
+    Member  = crypto:strong_rand_bytes(32),
+    R = macula_record:realm_member_endorsement(
+          RealmId,
+          #{realm => RealmId, member_node => Member, roles => []},
+          #{valid_from => 1000, valid_until => 5000}),
+    P = macula_record:payload(R),
+    ?assertEqual(1000, maps:get({text, <<"valid_from">>}, P)),
+    ?assertEqual(5000, maps:get({text, <<"valid_until">>}, P)).
+
+realm_member_endorsement_sign_verify_roundtrip_test() ->
+    AdminKp = macula_identity:generate(),
+    RealmId = macula_identity:public(AdminKp),
+    Member  = crypto:strong_rand_bytes(32),
+    R = macula_record:realm_member_endorsement(
+          RealmId,
+          #{realm => RealmId, member_node => Member,
+            roles => [<<"peer">>, <<"directory">>]}),
+    Signed = macula_record:sign(R, AdminKp),
+    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
+    ?assertEqual(16#05, macula_record:type(Decoded)),
+    {ok, _} = macula_record:verify(Decoded).
+
+realm_member_endorsement_storage_key_binds_realm_and_member_test() ->
+    AdminKp = macula_identity:generate(),
+    RealmId = macula_identity:public(AdminKp),
+    M1 = crypto:strong_rand_bytes(32),
+    M2 = crypto:strong_rand_bytes(32),
+    R1 = macula_record:realm_member_endorsement(
+           RealmId,
+           #{realm => RealmId, member_node => M1, roles => []}),
+    R2 = macula_record:realm_member_endorsement(
+           RealmId,
+           #{realm => RealmId, member_node => M2, roles => []}),
+    K1 = macula_record:storage_key(R1),
+    K2 = macula_record:storage_key(R2),
+    ?assertEqual(32, byte_size(K1)),
+    ?assertEqual(32, byte_size(K2)),
+    %% Different members → different keys even for same realm.
+    ?assertNotEqual(K1, K2),
+    %% Key differs from realm envelope key and from realm_stations hash.
+    ?assertNotEqual(RealmId, K1),
+    RStations = macula_record:realm_stations(RealmId, []),
+    ?assertNotEqual(macula_record:storage_key(RStations), K1).
+
+realm_member_endorsement_rejects_non_32_byte_member_test() ->
+    RealmId = crypto:strong_rand_bytes(32),
+    ?assertError(function_clause,
+                 macula_record:realm_member_endorsement(
+                   RealmId,
+                   #{realm => RealmId, member_node => <<1,2,3>>,
+                     roles => []})).
+
+%%------------------------------------------------------------------
 %% procedure_advertisement
 %%------------------------------------------------------------------
 
