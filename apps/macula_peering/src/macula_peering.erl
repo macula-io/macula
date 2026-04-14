@@ -22,7 +22,8 @@
 -export([
     connect/1,
     accept/2,
-    close/1, close/2
+    close/1, close/2,
+    send_frame/2
 ]).
 
 -type opts() :: macula_peering_conn:opts().
@@ -64,3 +65,9 @@ close(Pid) ->
 -spec close(pid(), atom()) -> ok.
 close(Pid, Reason) ->
     gen_statem:cast(Pid, {close, Reason}).
+
+%% @doc Send a frame through the peer connection. Signs the frame with
+%% the local identity if it isn't already signed. Fire-and-forget.
+-spec send_frame(pid(), macula_frame:frame()) -> ok.
+send_frame(Pid, Frame) when is_map(Frame) ->
+    gen_statem:cast(Pid, {send_frame, Frame}).

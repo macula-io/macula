@@ -227,6 +227,9 @@ connected(info, {quic, closed, _Conn, _Detail}, Data) ->
 connected(cast, {close, Reason}, Data) ->
     _ = send_goodbye(Data#data.quic_stream, Reason, Data),
     {next_state, draining, Data};
+connected(cast, {send_frame, Frame}, Data) ->
+    _ = send_application_frame(Frame, Data),
+    {keep_state, Data};
 connected(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, connected, Data).
 
@@ -285,6 +288,15 @@ send_goodbye(Stream, Reason, Data) ->
     Frame = macula_frame:goodbye(Reason, undefined),
     Signed = macula_frame:sign(Frame, Data#data.identity),
     macula_transport:send(Stream, macula_frame:encode(Signed)).
+
+send_application_frame(_Frame, #data{quic_stream = undefined}) ->
+    ok;
+send_application_frame(Frame, #data{quic_stream = Stream, identity = Id}) ->
+    Signed = ensure_signed(Frame, Id),
+    macula_transport:send(Stream, macula_frame:encode(Signed)).
+
+ensure_signed(#{signature := _} = Frame, _Id) -> Frame;
+ensure_signed(Frame, Id) -> macula_frame:sign(Frame, Id).
 
 close_quic(#data{quic_conn = undefined}) ->
     ok;
