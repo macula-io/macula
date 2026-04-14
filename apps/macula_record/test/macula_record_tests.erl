@@ -494,3 +494,163 @@ refresh_round_trip_over_wire_test() ->
     Fresh = macula_record:refresh(R, Kp),
     {ok, Decoded} = macula_record:decode(macula_record:encode(Fresh)),
     ?assertEqual(Fresh, Decoded).
+
+%%------------------------------------------------------------------
+%% foundation_seed_list (§9.14)
+%%------------------------------------------------------------------
+
+foundation_seed_list_shape_test() ->
+    Kp = macula_identity:generate(),
+    Fk = macula_identity:public(Kp),
+    Seed1 = #{node_id => crypto:strong_rand_bytes(32),
+              addresses => [#{{text, <<"v6">>} => {text, <<"2a02::1">>},
+                              {text, <<"port">>} => 7000}],
+              tier => 4},
+    Seed2 = #{node_id => crypto:strong_rand_bytes(32),
+              addresses => [],
+              tier => 3},
+    R = macula_record:foundation_seed_list(Fk, [Seed1, Seed2]),
+    ?assertEqual(16#0D, macula_record:type(R)),
+    ?assertEqual(Fk, macula_record:key(R)),
+    P = macula_record:payload(R),
+    [E1, E2] = maps:get({text, <<"seeds">>}, P),
+    ?assertEqual(4, maps:get({text, <<"tier">>}, E1)),
+    ?assertEqual(3, maps:get({text, <<"tier">>}, E2)).
+
+foundation_seed_list_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:foundation_seed_list(
+          macula_identity:public(Kp),
+          [#{node_id => crypto:strong_rand_bytes(32),
+             addresses => [], tier => 4}]),
+    Signed = macula_record:sign(R, Kp),
+    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
+    ?assertEqual(16#0D, macula_record:type(Decoded)),
+    {ok, _} = macula_record:verify(Decoded).
+
+foundation_seed_list_rejects_wrong_tier_test() ->
+    Kp = macula_identity:generate(),
+    ?assertError(function_clause,
+                 macula_record:foundation_seed_list(
+                   macula_identity:public(Kp),
+                   [#{node_id => crypto:strong_rand_bytes(32),
+                      addresses => [], tier => 1}])).
+
+%%------------------------------------------------------------------
+%% foundation_parameter (§9.15)
+%%------------------------------------------------------------------
+
+foundation_parameter_shape_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:foundation_parameter(
+          macula_identity:public(Kp), <<"puzzle_difficulty">>, 8),
+    ?assertEqual(16#0E, macula_record:type(R)),
+    P = macula_record:payload(R),
+    ?assertEqual({text, <<"puzzle_difficulty">>},
+                 maps:get({text, <<"param_name">>}, P)),
+    ?assertEqual(8, maps:get({text, <<"param_value">>}, P)),
+    ?assertEqual(null, maps:get({text, <<"prior_version">>}, P)).
+
+foundation_parameter_with_prior_version_test() ->
+    Kp = macula_identity:generate(),
+    Prior = macula_record_uuid:v7(erlang:system_time(millisecond) - 1),
+    R = macula_record:foundation_parameter(
+          macula_identity:public(Kp), <<"tRepublish_ms">>, 3_600_000,
+          #{prior_version => Prior}),
+    P = macula_record:payload(R),
+    ?assertEqual(Prior, maps:get({text, <<"prior_version">>}, P)).
+
+foundation_parameter_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:foundation_parameter(
+          macula_identity:public(Kp), <<"tExpire_ms">>, 86_400_000),
+    Signed = macula_record:sign(R, Kp),
+    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
+    ?assertEqual(16#0E, macula_record:type(Decoded)),
+    {ok, _} = macula_record:verify(Decoded).
+
+%%------------------------------------------------------------------
+%% foundation_realm_trust_list (§9.16)
+%%------------------------------------------------------------------
+
+foundation_realm_trust_list_shape_test() ->
+    Kp = macula_identity:generate(),
+    T1 = crypto:strong_rand_bytes(32),
+    T2 = crypto:strong_rand_bytes(32),
+    Rv = crypto:strong_rand_bytes(32),
+    R = macula_record:foundation_realm_trust_list(
+          macula_identity:public(Kp), [T1, T2],
+          #{realms_revoked => [Rv]}),
+    ?assertEqual(16#0F, macula_record:type(R)),
+    P = macula_record:payload(R),
+    ?assertEqual([T1, T2], maps:get({text, <<"realms_trusted">>}, P)),
+    ?assertEqual([Rv],     maps:get({text, <<"realms_revoked">>}, P)).
+
+foundation_realm_trust_list_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:foundation_realm_trust_list(
+          macula_identity:public(Kp),
+          [crypto:strong_rand_bytes(32)]),
+    Signed = macula_record:sign(R, Kp),
+    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
+    ?assertEqual(16#0F, macula_record:type(Decoded)),
+    {ok, _} = macula_record:verify(Decoded).
+
+%%------------------------------------------------------------------
+%% foundation_t3_attestation (§9.17)
+%%------------------------------------------------------------------
+
+foundation_t3_attestation_shape_test() ->
+    Kp = macula_identity:generate(),
+    Station = crypto:strong_rand_bytes(32),
+    Audit = erlang:system_time(millisecond),
+    R = macula_record:foundation_t3_attestation(
+          macula_identity:public(Kp), Station, Audit,
+          #{notes => <<"audited Q2-2026">>}),
+    ?assertEqual(16#10, macula_record:type(R)),
+    P = macula_record:payload(R),
+    ?assertEqual(Station, maps:get({text, <<"station_id">>}, P)),
+    ?assertEqual(3, maps:get({text, <<"tier_attested">>}, P)),
+    ?assertEqual({text, <<"audited Q2-2026">>},
+                 maps:get({text, <<"notes">>}, P)).
+
+foundation_t3_attestation_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:foundation_t3_attestation(
+          macula_identity:public(Kp),
+          crypto:strong_rand_bytes(32),
+          erlang:system_time(millisecond)),
+    Signed = macula_record:sign(R, Kp),
+    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
+    ?assertEqual(16#10, macula_record:type(Decoded)),
+    {ok, _} = macula_record:verify(Decoded).
+
+%%------------------------------------------------------------------
+%% storage_key for foundation types
+%%------------------------------------------------------------------
+
+storage_key_foundation_seed_list_is_hashed_test() ->
+    Kp = macula_identity:generate(),
+    Fk = macula_identity:public(Kp),
+    R = macula_record:foundation_seed_list(Fk, []),
+    ?assertEqual(32, byte_size(macula_record:storage_key(R))),
+    ?assertNotEqual(Fk, macula_record:storage_key(R)).
+
+storage_key_foundation_parameter_varies_by_name_test() ->
+    Kp = macula_identity:generate(),
+    Fk = macula_identity:public(Kp),
+    R1 = macula_record:foundation_parameter(Fk, <<"a">>, 1),
+    R2 = macula_record:foundation_parameter(Fk, <<"b">>, 1),
+    ?assertNotEqual(macula_record:storage_key(R1),
+                    macula_record:storage_key(R2)).
+
+storage_key_foundation_t3_attestation_varies_by_station_test() ->
+    Kp = macula_identity:generate(),
+    Fk = macula_identity:public(Kp),
+    S1 = crypto:strong_rand_bytes(32),
+    S2 = crypto:strong_rand_bytes(32),
+    Now = erlang:system_time(millisecond),
+    R1 = macula_record:foundation_t3_attestation(Fk, S1, Now),
+    R2 = macula_record:foundation_t3_attestation(Fk, S2, Now),
+    ?assertNotEqual(macula_record:storage_key(R1),
+                    macula_record:storage_key(R2)).

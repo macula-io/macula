@@ -17,6 +17,14 @@ released yet. See `plans/PLAN_MACULA_V2_ROOT.md` for scope.
 - Umbrella skeleton — 7 SDK apps (`macula`, `macula_identity`, `macula_record`,
   `macula_frame`, `macula_transport`, `macula_peering`, `macula_diagnostics`).
 - Quinn QUIC NIF inherited from v1 at `native/macula_quic/`.
+- Phase 6.1 — foundation record types (Part 6 §9.14–§9.17):
+  `macula_record:foundation_seed_list/2,3`, `foundation_parameter/3,4`,
+  `foundation_realm_trust_list/2,3`, `foundation_t3_attestation/3,4` with
+  derived storage keys and wire roundtrip coverage.
+- Phase 6.1 — `macula_foundation` trust anchor module: firmware-embedded
+  pubkey resolution (`pubkeys/0`, `live_pubkeys/0`), `is_foundation/1`
+  membership test, `verify_record/1` for the four foundation record
+  types, and placeholder-mode detection.
 
 ---
 
