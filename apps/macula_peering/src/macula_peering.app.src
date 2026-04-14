@@ -1,8 +1,9 @@
 {application, macula_peering, [
     {description, "Macula SDK — peer connection state machine (symmetric, event-driven)"},
     {vsn, "2.0.0-alpha.1"},
-    {registered, []},
-    {applications, [kernel, stdlib, macula_frame, macula_transport, macula_record, macula_identity]},
+    {registered, [macula_peering_sup]},
+    {mod, {macula_peering_app, []}},
+    {applications, [kernel, stdlib, macula_frame, macula_transport, macula_record, macula_identity, macula_diagnostics]},
     {env, []},
     {modules, []},
     {licenses, ["Apache-2.0"]},
