@@ -360,3 +360,57 @@ storage_key_tombstone_is_superseded_key_test() ->
     Pub = macula_identity:public(Kp),
     Tomb = macula_record:tombstone(Pub, 16#01, revoked),
     ?assertEqual(Pub, macula_record:storage_key(Tomb)).
+
+%%------------------------------------------------------------------
+%% refresh/2 — owner republish
+%%------------------------------------------------------------------
+
+refresh_preserves_type_key_payload_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:sign(
+          macula_record:node_record(macula_identity:public(Kp), [], 7),
+          Kp),
+    timer:sleep(2),
+    Fresh = macula_record:refresh(R, Kp),
+    ?assertEqual(macula_record:type(R),    macula_record:type(Fresh)),
+    ?assertEqual(macula_record:key(R),     macula_record:key(Fresh)),
+    ?assertEqual(macula_record:payload(R), macula_record:payload(Fresh)).
+
+refresh_bumps_version_and_timestamps_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:sign(
+          macula_record:node_record(macula_identity:public(Kp), [], 0),
+          Kp),
+    timer:sleep(2),
+    Fresh = macula_record:refresh(R, Kp),
+    ?assertNotEqual(macula_record:version(R), macula_record:version(Fresh)),
+    ?assert(macula_record:created_at(Fresh) >= macula_record:created_at(R)),
+    ?assert(macula_record:expires_at(Fresh) >= macula_record:expires_at(R)).
+
+refresh_preserves_ttl_duration_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:sign(
+          macula_record:node_record(macula_identity:public(Kp), [], 0,
+                                    #{ttl_ms => 60_000}),
+          Kp),
+    Fresh = macula_record:refresh(R, Kp),
+    Ttl  = macula_record:expires_at(R)     - macula_record:created_at(R),
+    Ttl2 = macula_record:expires_at(Fresh) - macula_record:created_at(Fresh),
+    ?assertEqual(Ttl, Ttl2).
+
+refresh_produces_verifiable_record_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:sign(
+          macula_record:node_record(macula_identity:public(Kp), [], 0),
+          Kp),
+    Fresh = macula_record:refresh(R, Kp),
+    ?assertMatch({ok, _}, macula_record:verify(Fresh)).
+
+refresh_round_trip_over_wire_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:sign(
+          macula_record:node_record(macula_identity:public(Kp), [], 0),
+          Kp),
+    Fresh = macula_record:refresh(R, Kp),
+    {ok, Decoded} = macula_record:decode(macula_record:encode(Fresh)),
+    ?assertEqual(Fresh, Decoded).

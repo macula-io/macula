@@ -26,6 +26,9 @@
     %% Sign / verify
     sign/2, verify/1,
 
+    %% Owner refresh — new version + timestamps, re-sign (Part 3 §11)
+    refresh/2,
+
     %% Wire codec
     encode/1, decode/1,
 
@@ -242,6 +245,31 @@ verify_signature(true, Record) ->
     expiry_check(Record);
 verify_signature(false, _Record) ->
     {error, signature_invalid}.
+
+%% @doc Rebuild a record with a fresh UUIDv7 version and a new
+%% `created_at' / `expires_at' pair (preserving the original TTL),
+%% then re-sign with `Identity'. Used by the owner's tRepublish
+%% loop (Part 3 §11) to keep a record alive across churn without
+%% changing its type, key, or payload.
+%%
+%% The new signature replaces any prior signature; callers can
+%% safely pass an already-signed record — the prior signature is
+%% stripped before re-signing.
+-spec refresh(record(),
+              macula_identity:key_pair() | macula_identity:privkey()) ->
+          record().
+refresh(Record, Identity) ->
+    NowMs = erlang:system_time(millisecond),
+    TtlMs = maps:get(expires_at, Record) - maps:get(created_at, Record),
+    Fresh = #{
+        type       => maps:get(type, Record),
+        key        => maps:get(key, Record),
+        version    => macula_record_uuid:v7(NowMs),
+        created_at => NowMs,
+        expires_at => NowMs + TtlMs,
+        payload    => maps:get(payload, Record)
+    },
+    sign(Fresh, Identity).
 
 expiry_check(#{expires_at := X} = Record) ->
     case erlang:system_time(millisecond) >= X of
