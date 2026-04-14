@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main, v2]
+  pull_request:
+    branches: [main, v2]
+
+jobs:
+  build:
+    name: Build + test (OTP ${{ matrix.otp }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: ['27.0']
+        rebar3: ['3.23.0']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Erlang/OTP + rebar3
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          rebar3-version: ${{ matrix.rebar3 }}
+
+      - name: Cache _build
+        uses: actions/cache@v4
+        with:
+          path: |
+            _build
+            ~/.cache/rebar3
+            native/macula_quic/target
+          key: ${{ runner.os }}-otp${{ matrix.otp }}-${{ hashFiles('**/rebar.config', '**/*.app.src', 'native/macula_quic/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-otp${{ matrix.otp }}-
+
+      - name: Compile
+        run: rebar3 compile
+
+      - name: Xref
+        run: rebar3 xref
+
+      - name: EUnit
+        run: rebar3 eunit
+
+      - name: Common Test
+        run: rebar3 ct
+
+      - name: Dialyzer
+        run: rebar3 dialyzer

@@ -1,34 +1,32 @@
+# Erlang / rebar3
 .eunit
 *.o
 *.beam
 *.plt
 erl_crash.dump
-.concrete/DEV_MODE
+rebar3.crashdump
 
-# rebar 2.x
-.rebar
-rel/example_project
-ebin/*.beam
-deps
-
-# rebar 3
 .rebar3
 _build/
 _checkouts/
 
-# Generated documentation
+# Generated docs
 doc/
-
-# Archives
-*.gz
-
-# Erlang runtime data (test artifacts)
-nonode@nohost/
 
 # Lock files (rebuilt from deps)
 rebar.lock
-.backups/
-dist/
-# Rust NIF build artifacts and compiled .so files
+
+# Rust NIF build artifacts
 /native/*/target/
 /priv/*.so
+/priv/*.dylib
+/priv/*.dll
+
+# Archives
+*.gz
+*.tar
+
+# Editor / misc
+*.swp
+*.swo
+.DS_Store

@@ -1,0 +1,10 @@
+{application, macula_record, [
+    {description, "Macula SDK — PKARR-compatible signed records with deterministic CBOR"},
+    {vsn, "2.0.0-alpha.1"},
+    {registered, []},
+    {applications, [kernel, stdlib, crypto, macula_identity]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [{"GitHub", "https://github.com/macula-io/macula"}]}
+]}.

@@ -1,224 +1,75 @@
-# Macula SDK
+# macula
 
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-26+-brightgreen)](https://www.erlang.org)
-[![Hex.pm](https://img.shields.io/hexpm/v/macula.svg)](https://hex.pm/packages/macula)
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow.svg)](https://buymeacoffee.com/rlefever)
-
-<p align="center">
-  <img src="assets/logo.svg" width="120" height="120" alt="Macula">
-</p>
-
-<p align="center">
-  <strong>Erlang/OTP client SDK for the Macula HTTP/3 relay mesh</strong>
-</p>
+**Macula SDK v2** — protocol primitives for the Macula mesh.
 
 ---
 
-## What is Macula?
+## Status
 
-<p align="center">
-  <img src="assets/sdk_architecture.svg" alt="Macula SDK Architecture" width="100%">
-</p>
+| Phase | State |
+|-------|-------|
+| V1 (main branch) | 🧊 Frozen at 1.4.23 — legacy fleet continues running |
+| V2 (this branch) | 🏗️ Bootstrapping from first principles |
 
-Macula is an **Erlang/OTP client SDK** for building applications that connect to a [Macula relay mesh](https://github.com/macula-io/macula-relay). It provides:
-
-- **Pub/Sub messaging** -- topic-based event distribution across the mesh
-- **RPC (request/response)** -- service discovery and invocation via DHT
-- **Erlang distribution over relay** -- `net_adm:ping` across firewalls, no VPN
-- **Identity** -- Ed25519 keypairs, UCAN tokens, DID documents (NIF-accelerated)
-- **MRI** -- Macula Resource Identifiers for typed, hierarchical resource addressing
-- **Zero-config clustering** -- UDP multicast gossip for LAN nodes
-
-Nodes connect **outbound** to relays over QUIC. No open ports, NAT-friendly.
+This branch holds V2 of Macula. V1 is preserved on `main` for the legacy fleet; do not cross-pollinate.
 
 ---
 
-## Quick Start
+## What this is
 
-Add to `rebar.config`:
+Macula SDK is the protocol layer. It provides:
 
-```erlang
-{deps, [
-    {macula, "1.1.0"}
-]}.
+- **Identity** — Ed25519 key pairs, S/Kademlia crypto-puzzle NodeIds.
+- **Records** — PKARR-compatible signed DNS-like records (CBOR canonical encoding).
+- **Frames** — BERT-encoded wire frames (CONNECT, HELLO, GOODBYE, CALL, …).
+- **Transport** — QUIC via Quinn NIF (`native/macula_quic/`).
+- **Peering** — symmetric CONNECTING → HANDSHAKING → CONNECTED state machine.
+- **Diagnostics** — structured event emission + telemetry exports.
+
+Anything that speaks Macula uses the SDK. Station implementations (e.g., [hecate-station](https://github.com/hecate-social/hecate-station)) layer DHT, SWIM, routing, handler dispatch, bootstrap, overlay, and realm directory on top.
+
+---
+
+## Repo layout
+
 ```
+apps/
+├── macula/              % facade (advertise, call, subscribe, connect)
+├── macula_identity/     % Ed25519 + crypto puzzle
+├── macula_record/       % PKARR + deterministic CBOR
+├── macula_frame/        % BERT codec + source-route header primitives
+├── macula_transport/    % Quinn NIF wrapper (dial + accept)
+├── macula_peering/      % conn state machine (symmetric)
+└── macula_diagnostics/  % structured events + telemetry
 
-Or in Elixir `mix.exs`:
+native/
+└── macula_quic/         % Quinn QUIC NIF
 
-```elixir
-defp deps do
-  [{:macula, "~> 1.0"}]
-end
-```
-
-<p align="center">
-  <img src="assets/connect_flow.svg" alt="SDK Connect Flow" width="100%">
-</p>
-
-### Connect and Communicate
-
-```erlang
-%% Start macula
-application:ensure_all_started(macula).
-
-%% Connect to the mesh via a relay
-{ok, Client} = macula:connect(<<"quic://boot.macula.io:443">>, #{
-    realm => <<"io.example.myapp">>
-}).
-
-%% Subscribe to events
-{ok, _SubRef} = macula:subscribe(Client, <<"sensors.temperature">>, fun(Msg) ->
-    io:format("Received: ~p~n", [Msg])
-end).
-
-%% Publish to subscribers
-ok = macula:publish(Client, <<"sensors.temperature">>, #{value => 23.5}).
-
-%% Advertise an RPC procedure
-{ok, _Ref} = macula:advertise(Client, <<"math.add">>, fun(#{a := A, b := B}) ->
-    {ok, #{result => A + B}}
-end).
-
-%% Call a procedure (relay discovers the provider)
-{ok, #{result := 5}} = macula:call(Client, <<"math.add">>, #{a => 2, b => 3}).
-```
-
-### Erlang Distribution Over Mesh
-
-<p align="center">
-  <img src="assets/dist_over_mesh.svg" alt="Erlang Distribution Over Relay Mesh" width="100%">
-</p>
-
-Full OTP distribution tunneled through the relay mesh. No VPNs, no open ports.
-
-```erlang
-%% Single call to join the mesh with distribution
-macula:join_mesh(#{
-    realm => <<"io.macula">>,
-    relays => [<<"quic://boot.macula.io:443">>],
-    site => #{name => <<"my-site">>, lat => 51.5, lng => -0.1}
-}).
-
-%% Standard OTP distribution now works across firewalls
-net_adm:ping('other@remote-host').  %% => pong
-gen_server:call({Name, 'other@remote-host'}, Request).  %% works
-```
-
-### LAN Clustering
-
-Zero-configuration cluster formation using UDP multicast:
-
-```erlang
-ok = macula_cluster:start_cluster(#{
-    strategy => gossip,
-    secret => <<"my_cluster_secret">>
-}).
-%% Nodes auto-discover via multicast 230.1.1.251:45892
+plans/
+└── PLAN_MACULA_V2_*.md  % design spec
 ```
 
 ---
 
-## Identity and Crypto (NIF-accelerated)
+## Build
 
-<p align="center">
-  <img src="assets/identity_crypto.svg" alt="Identity and Crypto Stack" width="100%">
-</p>
-
-Built-in Rust NIFs with pure Erlang fallbacks for all operations:
-
-```erlang
-%% Ed25519 keypair
-{ok, {PubKey, PrivKey}} = macula_crypto_nif:generate_keypair().
-{ok, Sig} = macula_crypto_nif:sign(<<"hello">>, PrivKey).
-true = macula_crypto_nif:verify(<<"hello">>, Sig, PubKey).
-
-%% BLAKE3 hashing
-Hash = macula_crypto_nif:blake3(Data).
-
-%% UCAN capability tokens
-{ok, Token} = macula_ucan_nif:create(Issuer, Audience, Caps, PrivKey).
-{ok, Payload} = macula_ucan_nif:verify(Token, PubKey).
-
-%% DID documents
-{ok, Doc} = macula_did_nif:create_document(<<"did:macula:io.example">>, PubKey).
+```sh
+rebar3 compile
+rebar3 eunit
+rebar3 ct
+rebar3 dialyzer
 ```
 
-## MRI (Resource Identifiers)
-
-<p align="center">
-  <img src="assets/mri_trie_index.svg" alt="MRI Trie Index" width="100%">
-</p>
-
-Typed, hierarchical resource addressing: `mri:{type}:{realm}/{path}`
-
-```erlang
-{ok, Parsed} = macula_mri:parse(<<"mri:app:io.macula/acme/counter">>).
-%% #{type => app, realm => <<"io.macula">>, path => [<<"acme">>, <<"counter">>]}
-
-MRI = macula_mri:new_app(<<"io.macula">>, <<"acme">>, <<"counter">>).
-%% <<"mri:app:io.macula/acme/counter">>
-
-%% Trie index for million-scale hierarchy queries
-{ok, Idx} = macula_mri:build_index(MRIs).
-{ok, Children} = macula_mri:index_children(Idx, <<"io.macula">>, [<<"acme">>]).
-```
-
-23 built-in types: realm, org, user, app, service, artifact, instance, license, cert, key, topic, proc, content, device, cluster, location, zone, network, model, dataset, config, class, taxonomy. Custom types via `macula_mri_registry`.
+The Quinn NIF builds automatically via `priv/build-macula-quic.sh` on first compile (requires Rust toolchain).
 
 ---
 
-## Documentation
+## Design spec
 
-| Guide | Description |
-|-------|-------------|
-| [PubSub Guide](docs/guides/PUBSUB_GUIDE.md) | Topic-based messaging |
-| [RPC Guide](docs/guides/RPC_GUIDE.md) | Request/response patterns |
-| [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Erlang dist through relays |
-| [Clustering Guide](docs/guides/CLUSTERING_GUIDE.md) | LAN gossip clustering |
-| [Authorization Guide](docs/guides/AUTHORIZATION_GUIDE.md) | DID/UCAN security |
-| [MRI Guide](docs/guides/MRI_GUIDE.md) | Resource identifiers |
-| [Development Guide](docs/guides/DEVELOPMENT.md) | Building and testing |
-| [Glossary](docs/GLOSSARY.md) | Terminology |
-
-For relay server documentation, see [macula-relay](https://github.com/macula-io/macula-relay).
-
----
-
-## SDK Modules (45)
-
-| Group | Modules |
-|-------|---------|
-| **Facade** | `macula`, `macula_app`, `macula_root` |
-| **Client Transport** | `macula_mesh_client`, `macula_multi_relay`, `macula_quic`, `macula_relay_discovery`, `macula_tls` |
-| **Wire Protocol** | `macula_protocol_encoder`, `macula_protocol_decoder`, `macula_protocol_types`, `macula_core_types` |
-| **Crypto / Identity** | `macula_crypto_nif`, `macula_blake3_nif`, `macula_ucan_nif`, `macula_did_nif` |
-| **Cert System** | `macula_cert`, `macula_cert_system`, `macula_trust_store` |
-| **MRI** | `macula_mri`, `macula_mri_nif`, `macula_mri_registry`, `macula_mri_store`, `macula_mri_graph`, `macula_mri_ets` |
-| **Dist Over Mesh** | `macula_dist`, `macula_dist_bridge`, `macula_dist_bridge_sup`, `macula_dist_discovery`, `macula_dist_relay`, `macula_dist_mdns_advertiser`, `macula_dist_system`, `macula_cluster`, `macula_cluster_gossip`, `macula_cluster_static`, `macula_cluster_strategy` |
-| **Utilities** | `macula_id`, `macula_names`, `macula_node`, `macula_realm`, `macula_time`, `macula_uri`, `macula_utils`, `macula_cache`, `macula_console` |
-
-Server modules (gateway, DHT routing, RPC routing, PubSub routing, SWIM, peering, bootstrap, bridge, content, registry) live in [macula-relay](https://github.com/macula-io/macula-relay).
-
----
-
-## Related Projects
-
-| Project | Description |
-|---------|-------------|
-| [macula-relay](https://github.com/macula-io/macula-relay) | Relay server (hub-spoke routing, DHT, peering) |
-| [macula-mri-khepri](https://github.com/macula-io/macula-mri-khepri) | Distributed MRI persistence (Khepri/Raft) |
-| [macula-ecosystem](https://github.com/macula-io/macula-ecosystem) | Documentation hub |
-| [hecate-daemon](https://github.com/hecate-social/hecate-daemon) | AI agent sidecar for mesh |
+See `plans/PLAN_MACULA_V2_ROOT.md` and Parts 1–9. All architectural decisions trace back there.
 
 ---
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) for details.
-
----
-
-<p align="center">
-  <sub>Built with the BEAM</sub>
-</p>
+Apache-2.0 — see [`LICENSE`](LICENSE).

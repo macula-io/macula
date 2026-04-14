@@ -1,0 +1,20 @@
+{application, macula, [
+    {description, "Macula SDK v2 — facade (advertise, call, subscribe, connect)"},
+    {vsn, "2.0.0-alpha.1"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        crypto,
+        macula_identity,
+        macula_record,
+        macula_frame,
+        macula_transport,
+        macula_peering,
+        macula_diagnostics
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [{"GitHub", "https://github.com/macula-io/macula"}]}
+]}.

@@ -1,0 +1,6 @@
+-sname macula
+-setcookie macula_dev_cookie
+
++K true
++A 64
++sbt db

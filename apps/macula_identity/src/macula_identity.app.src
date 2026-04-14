@@ -1,0 +1,13 @@
+{application, macula_identity, [
+    {description, "Macula SDK — Ed25519 identities + S/Kademlia crypto puzzle"},
+    {vsn, "2.0.0-alpha.1"},
+    {registered, []},
+    {applications, [kernel, stdlib, crypto]},
+    {env, [
+        %% Leading zero bits required on SHA-256(pubkey). Adaptive in later phases.
+        {puzzle_difficulty, 8}
+    ]},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [{"GitHub", "https://github.com/macula-io/macula"}]}
+]}.
