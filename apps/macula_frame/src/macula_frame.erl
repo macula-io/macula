@@ -11,7 +11,9 @@
 %% Phase 1 covers CONNECT / HELLO / GOODBYE. Phase 2 adds SWIM. Phase 3
 %% (Session 3.4) adds the DHT operation frames from Part 6 §7:
 %% PING / PONG, FIND_NODE / NODES, FIND_VALUE / VALUE, STORE / STORE_ACK,
-%% REPLICATE / REPLICATE_ACK. CALL / PUBLISH frames land in later phases.
+%% REPLICATE / REPLICATE_ACK. Phase 4 (Session 4.1) adds the CALL /
+%% RESULT / ERROR frames from Part 6 §5 plus the BOLT#4 error
+%% taxonomy in `macula_bolt4'. PUBLISH frames land later.
 %%
 %% Signatures are Ed25519 over `"macula-v2-frame\0" ++ canonical_bert(unsigned)'
 %% where `canonical_bert' is `term_to_binary' with `[{minor_version, 2},
@@ -36,6 +38,9 @@
 
     %% DHT helper — build and validate a station_ref entry
     station_ref/1,
+
+    %% Constructors — CALL (Part 6 §5)
+    call/1, result/1, call_error/1,
 
     %% Sign / verify frame
     sign/2, verify/2,
@@ -66,7 +71,9 @@
     find_value_spec/0, value_spec/0,
     store_spec/0, store_ack_spec/0,
     replicate_spec/0, replicate_ack_spec/0,
-    station_ref/0, station_ref_spec/0
+    station_ref/0, station_ref_spec/0,
+    call_spec/0, result_spec/0, call_error_spec/0,
+    call_id/0
 ]).
 
 -define(SIG_DOMAIN,        "macula-v2-frame\0").
@@ -80,7 +87,8 @@
                     | find_node | nodes
                     | find_value | value
                     | store | store_ack
-                    | replicate | replicate_ack.
+                    | replicate | replicate_ack
+                    | call | result | error.
 
 -type member_state() :: alive | suspect | confirmed_failed.
 
@@ -220,6 +228,39 @@
 -type replicate_ack_spec() :: #{
     key      := id256(),
     accepted := boolean()
+}.
+
+%%------------------------------------------------------------------
+%% CALL frame specs (Part 6 §5)
+%%------------------------------------------------------------------
+
+-type call_id() :: <<_:128>>.
+
+-type call_spec() :: #{
+    call_id      := call_id(),
+    procedure    := binary(),
+    realm        := id256(),
+    payload      := term(),
+    deadline_ms  := integer(),
+    caller       := macula_identity:pubkey(),
+    source_route => binary(),
+    retry_budget => non_neg_integer()
+}.
+
+-type result_spec() :: #{
+    call_id              := call_id(),
+    payload              := term(),
+    responded_by         := macula_identity:pubkey(),
+    source_route_reverse => binary()
+}.
+
+-type call_error_spec() :: #{
+    call_id              := call_id(),
+    code                 := macula_bolt4:code(),
+    reported_by          := macula_identity:pubkey(),
+    detail               => binary() | undefined,
+    offending_hop        => macula_identity:pubkey() | undefined,
+    source_route_partial => binary()
 }.
 
 %%------------------------------------------------------------------
@@ -502,6 +543,96 @@ validate_record(#{type := _, key := <<_:256>>, payload := P}) when is_map(P) ->
 -spec validate_optional_reason(atom() | undefined) -> ok.
 validate_optional_reason(undefined)                      -> ok;
 validate_optional_reason(R) when is_atom(R), R =/= true, R =/= false -> ok.
+
+%%------------------------------------------------------------------
+%% CALL / RESULT / ERROR constructors (Part 6 §5)
+%%
+%% CALL is the request envelope; RESULT is the success response;
+%% `call_error/1' (avoids clashing with the auto-imported
+%% `error/1' BIF) builds a structured BOLT#4 failure.
+%%
+%% Source-route fields are accepted as opaque binaries here —
+%% encoding/decoding the source-route header lands in Phase 4
+%% Session 4.2 against `macula_routing'.
+%%------------------------------------------------------------------
+
+-spec call(call_spec()) -> frame().
+call(#{call_id := CallId, procedure := Proc, realm := Realm,
+       payload := Payload, deadline_ms := DeadlineMs,
+       caller := Caller} = Spec)
+  when is_binary(CallId),  byte_size(CallId) =:= 16,
+       is_binary(Proc),
+       is_binary(Realm),   byte_size(Realm)  =:= 32,
+       is_integer(DeadlineMs),
+       is_binary(Caller),  byte_size(Caller) =:= 32 ->
+    SourceRoute = maps:get(source_route, Spec, <<>>),
+    RetryBudget = maps:get(retry_budget, Spec, 0),
+    validate_source_route(SourceRoute),
+    validate_retry_budget(RetryBudget),
+    Header = base(call, 0),
+    Header#{
+        call_id      => CallId,
+        procedure    => Proc,
+        realm        => Realm,
+        payload      => Payload,
+        deadline_ms  => DeadlineMs,
+        caller       => Caller,
+        source_route => SourceRoute,
+        retry_budget => RetryBudget
+    }.
+
+-spec result(result_spec()) -> frame().
+result(#{call_id := CallId, payload := Payload,
+         responded_by := RespondedBy} = Spec)
+  when is_binary(CallId),       byte_size(CallId) =:= 16,
+       is_binary(RespondedBy),  byte_size(RespondedBy) =:= 32 ->
+    Reverse = maps:get(source_route_reverse, Spec, <<>>),
+    validate_source_route(Reverse),
+    Header = base(result, 0),
+    Header#{
+        call_id              => CallId,
+        payload              => Payload,
+        responded_by         => RespondedBy,
+        source_route_reverse => Reverse
+    }.
+
+-spec call_error(call_error_spec()) -> frame().
+call_error(#{call_id := CallId, code := Code,
+             reported_by := ReportedBy} = Spec)
+  when is_binary(CallId),       byte_size(CallId) =:= 16,
+       is_integer(Code),        Code >= 0, Code =< 255,
+       is_binary(ReportedBy),   byte_size(ReportedBy) =:= 32 ->
+    Name      = macula_bolt4:name(Code),
+    Detail    = maps:get(detail, Spec, undefined),
+    Hop       = maps:get(offending_hop, Spec, undefined),
+    Partial   = maps:get(source_route_partial, Spec, <<>>),
+    validate_optional_detail(Detail),
+    validate_optional_hop(Hop),
+    validate_source_route(Partial),
+    Header = base(error, 0),
+    Header#{
+        call_id              => CallId,
+        code                 => Code,
+        name                 => Name,
+        reported_by          => ReportedBy,
+        detail               => Detail,
+        offending_hop        => Hop,
+        source_route_partial => Partial
+    }.
+
+-spec validate_source_route(binary()) -> ok.
+validate_source_route(B) when is_binary(B) -> ok.
+
+-spec validate_retry_budget(non_neg_integer()) -> ok.
+validate_retry_budget(N) when is_integer(N), N >= 0 -> ok.
+
+-spec validate_optional_detail(binary() | undefined) -> ok.
+validate_optional_detail(undefined)                  -> ok;
+validate_optional_detail(B) when is_binary(B)        -> ok.
+
+-spec validate_optional_hop(macula_identity:pubkey() | undefined) -> ok.
+validate_optional_hop(undefined)                              -> ok;
+validate_optional_hop(B) when is_binary(B), byte_size(B) =:= 32 -> ok.
 
 %%------------------------------------------------------------------
 %% Sign / verify

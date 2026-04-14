@@ -551,3 +551,168 @@ sample_record() ->
     Kp = macula_identity:generate(),
     Node = macula_record:node_record(macula_identity:public(Kp), [], 0),
     macula_record:sign(Node, Kp).
+
+%%------------------------------------------------------------------
+%% CALL / RESULT / ERROR frames — Part 6 §5
+%%------------------------------------------------------------------
+
+%% -- CALL ---------------------------------------------------------
+
+call_has_required_header_fields_test() ->
+    F = sample_call(),
+    ?assertEqual(call, macula_frame:frame_type(F)),
+    ?assertEqual(16, byte_size(maps:get(call_id, F))),
+    ?assertEqual(32, byte_size(maps:get(realm, F))),
+    ?assertEqual(32, byte_size(maps:get(caller, F))),
+    ?assertEqual(<<>>, maps:get(source_route, F)),
+    ?assertEqual(0,    maps:get(retry_budget, F)).
+
+call_with_optional_fields_test() ->
+    Caller = crypto:strong_rand_bytes(32),
+    F = macula_frame:call(#{
+        call_id      => macula_record_uuid:v7(),
+        procedure    => <<"realm/acme/weather/forecast/get_v1">>,
+        realm        => crypto:strong_rand_bytes(32),
+        payload      => #{city => <<"Brussels">>},
+        deadline_ms  => erlang:system_time(millisecond) + 5_000,
+        caller       => Caller,
+        source_route => <<1, 2, 3>>,
+        retry_budget => 3
+    }),
+    ?assertEqual(<<1, 2, 3>>, maps:get(source_route, F)),
+    ?assertEqual(3, maps:get(retry_budget, F)).
+
+call_rejects_wrong_call_id_size_test() ->
+    ?assertError(function_clause,
+                 macula_frame:call(spec_with(call_id, <<0:64>>))).
+
+call_rejects_wrong_realm_size_test() ->
+    ?assertError(function_clause,
+                 macula_frame:call(spec_with(realm, <<0:128>>))).
+
+call_sign_verify_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F  = macula_frame:sign(sample_call(macula_identity:public(Kp)), Kp),
+    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, Decoded),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(Decoded, macula_identity:public(Kp))).
+
+%% -- RESULT -------------------------------------------------------
+
+result_has_required_fields_test() ->
+    Responded = crypto:strong_rand_bytes(32),
+    F = macula_frame:result(#{
+        call_id      => macula_record_uuid:v7(),
+        payload      => #{ok => true},
+        responded_by => Responded
+    }),
+    ?assertEqual(result,    macula_frame:frame_type(F)),
+    ?assertEqual(Responded, maps:get(responded_by, F)),
+    ?assertEqual(<<>>,      maps:get(source_route_reverse, F)).
+
+result_rejects_wrong_responded_by_size_test() ->
+    ?assertError(function_clause,
+                 macula_frame:result(#{
+                     call_id      => macula_record_uuid:v7(),
+                     payload      => ok,
+                     responded_by => <<0:64>>})).
+
+result_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:result(#{
+            call_id      => macula_record_uuid:v7(),
+            payload      => <<"hello">>,
+            responded_by => macula_identity:public(Kp)
+        }), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+%% -- ERROR --------------------------------------------------------
+
+call_error_carries_code_and_derived_name_test() ->
+    F = macula_frame:call_error(#{
+        call_id     => macula_record_uuid:v7(),
+        code        => 16#01,
+        reported_by => crypto:strong_rand_bytes(32)
+    }),
+    ?assertEqual(error,             macula_frame:frame_type(F)),
+    ?assertEqual(16#01,             maps:get(code, F)),
+    ?assertEqual(unknown_next_peer, maps:get(name, F)),
+    ?assertEqual(undefined,         maps:get(detail, F)),
+    ?assertEqual(undefined,         maps:get(offending_hop, F)).
+
+call_error_with_offending_hop_and_detail_test() ->
+    Hop = crypto:strong_rand_bytes(32),
+    F = macula_frame:call_error(#{
+        call_id       => macula_record_uuid:v7(),
+        code          => 16#02,
+        reported_by   => crypto:strong_rand_bytes(32),
+        detail        => <<"backend down">>,
+        offending_hop => Hop,
+        source_route_partial => <<9, 8, 7>>
+    }),
+    ?assertEqual(temporary_relay_failure, maps:get(name, F)),
+    ?assertEqual(<<"backend down">>,      maps:get(detail, F)),
+    ?assertEqual(Hop,                     maps:get(offending_hop, F)),
+    ?assertEqual(<<9, 8, 7>>,             maps:get(source_route_partial, F)).
+
+call_error_rejects_unknown_code_test() ->
+    %% macula_bolt4:name/1 raises on unknown code; ensure that
+    %% propagates out of the constructor.
+    ?assertError({bolt4_unknown, _, _},
+                 macula_frame:call_error(#{
+                     call_id => macula_record_uuid:v7(),
+                     code    => 99,
+                     reported_by => crypto:strong_rand_bytes(32)})).
+
+call_error_rejects_wrong_offending_hop_size_test() ->
+    ?assertError(function_clause,
+                 macula_frame:call_error(#{
+                     call_id     => macula_record_uuid:v7(),
+                     code        => 16#01,
+                     reported_by => crypto:strong_rand_bytes(32),
+                     offending_hop => <<0:64>>})).
+
+call_error_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:call_error(#{
+            call_id     => macula_record_uuid:v7(),
+            code        => 16#0E,
+            reported_by => macula_identity:public(Kp)
+        }), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertEqual(signature_invalid, maps:get(name, D)),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(D, macula_identity:public(Kp))).
+
+%%------------------------------------------------------------------
+%% CALL helpers
+%%------------------------------------------------------------------
+
+sample_call() ->
+    sample_call(crypto:strong_rand_bytes(32)).
+
+sample_call(Caller) ->
+    macula_frame:call(#{
+        call_id     => macula_record_uuid:v7(),
+        procedure   => <<"realm/acme/weather/forecast/get_v1">>,
+        realm       => crypto:strong_rand_bytes(32),
+        payload     => #{city => <<"Brussels">>},
+        deadline_ms => erlang:system_time(millisecond) + 5_000,
+        caller      => Caller
+    }).
+
+%% Build a CALL spec replacing one field with a bad value, used to
+%% test guard rejection.
+spec_with(Field, BadValue) ->
+    Base = #{
+        call_id     => macula_record_uuid:v7(),
+        procedure   => <<"foo">>,
+        realm       => crypto:strong_rand_bytes(32),
+        payload     => ok,
+        deadline_ms => erlang:system_time(millisecond) + 1_000,
+        caller      => crypto:strong_rand_bytes(32)
+    },
+    maps:put(Field, BadValue, Base).
