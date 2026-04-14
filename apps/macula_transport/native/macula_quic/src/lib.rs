@@ -9,6 +9,11 @@ mod stream;
 use rustler::{Env, Term};
 
 fn on_load(env: Env, _info: Term) -> bool {
+    // rustls 0.23+ requires a process-wide crypto provider to be installed
+    // before any TLS config can be built. Install the ring-backed default.
+    // install_default() returns Err if another provider is already installed
+    // — harmless; we ignore it.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     runtime::init();
     rustler::resource!(endpoint::ListenerResource, env);
     rustler::resource!(connection::ConnectionResource, env);
