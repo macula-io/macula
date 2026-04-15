@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.24] - 2026-04-15
+
+### Fixed
+
+- **`macula_mesh_client:invoke_matching_callbacks/4` now invokes
+  subscription callbacks inline instead of spawning a worker per
+  callback.** Correctness fix for dist-over-mesh.
+
+  The bridge in `macula_dist_bridge` subscribes to its tunnel's
+  receive topic with a callback that does `Self ! {tunnel_in,
+  Payload}`. Previously each incoming PUBLISH on a subscribed
+  topic caused `invoke_matching_callbacks` to `spawn(fun() ->
+  Callback(Event) end)`. Two consecutive PUBLISHes produced two
+  concurrent spawns that raced to `Self !`, so the bridge
+  mailbox received `{tunnel_in, _}` frames in undefined order.
+  The bridge then wrote those frames to gen_tcp in the order
+  received, handing a scrambled byte stream to the dist
+  controller — dist handshake failure or post-handshake
+  corruption followed under any real load.
+
+  Inline invocation preserves per-connection FIFO end-to-end.
+  The existing try/catch around the callback is retained, so a
+  misbehaving user callback still cannot take down the client.
+  Additional benefits (applicable beyond dist): no process
+  explosion under high-traffic topics, and a slow callback
+  now backpressures the mesh_client receive loop, which
+  backpressures the QUIC stream, which backpressures the
+  remote producer — the correct shape for a reliable push
+  pub/sub.
+
+- **`macula_mesh_client:dispatch_incoming_call/5` now monitors
+  the spawned handler worker.** A handler worker that exited
+  abnormally without sending a reply (external kill, OOM,
+  supervisor cascade) previously caused the caller to time out
+  with no diagnostic trail. The worker is now `spawn_monitor`'d
+  and the gen_server has a `'DOWN'` clause that logs a WARNING
+  with Procedure + CallId + Reason when the worker dies before
+  completion. Normal exits are silently consumed. The spawn is
+  kept (not inlined) deliberately — a slow handler must not
+  block the receive loop, which also processes incoming REPLYs
+  for any outstanding calls this client made.
+
 ## [1.4.23] - 2026-04-13
 
 ### Fixed

@@ -338,6 +338,28 @@ handle_info(send_ping, State) ->
 handle_info(quic_connection_dead, State) ->
     handle_disconnect(State);
 
+%% Handler worker exit. The worker is the process spawned by
+%% dispatch_incoming_call/5 to run an advertised procedure handler.
+%%   - normal exit: the handler ran and send_reply completed, clean up.
+%%   - abnormal exit: the worker died before sending a reply; the caller
+%%     will time out. Log with Procedure + CallId so the failure has a
+%%     diagnostic trail instead of vanishing silently.
+handle_info({'DOWN', Ref, process, _Pid, Reason}, State) ->
+    case erase({handler_worker, Ref}) of
+        undefined ->
+            ?LOG_DEBUG("[relay_client] DOWN from unknown monitor ~p: ~p",
+                       [Ref, Reason]),
+            {noreply, State};
+        {_Procedure, _CallId} when Reason =:= normal ->
+            {noreply, State};
+        {Procedure, CallId} ->
+            ?LOG_WARNING("[relay_client] Handler worker for ~s "
+                         "(call_id=~s) died abnormally: ~p — "
+                         "reply dropped, caller will time out",
+                         [Procedure, CallId, Reason]),
+            {noreply, State}
+    end;
+
 handle_info(Info, State) ->
     ?LOG_INFO("[relay_client] UNHANDLED ~p url=~s",
               [Info, State#state.url]),
@@ -492,6 +514,20 @@ handle_message({error, Reason}, State) ->
 %%====================================================================
 
 %% Dispatch an incoming CALL to the registered handler or reply not_found.
+%%
+%% The worker is spawned (not inlined) deliberately: a slow handler
+%% must not block mesh_client's receive loop, which also has to
+%% process incoming REPLYs to any outstanding calls this client made.
+%% Inlining would deadlock on any client that both advertises AND
+%% calls into the mesh.
+%%
+%% The worker is monitored so an out-of-band exit (external kill,
+%% OOM, cascade) that terminates the worker WITHOUT having sent the
+%% reply is logged instead of silently dropped. Without the monitor
+%% the caller just times out with no trail. The in-band try/catch
+%% inside invoke_handler/3 still catches handler exceptions and
+%% turns them into an {error, _} reply — the monitor covers what
+%% try/catch cannot: non-exception process terminations.
 dispatch_incoming_call(Procedure, CallId, Args, Trace, State) ->
     case maps:get(Procedure, State#state.procedures, undefined) of
         undefined ->
@@ -500,9 +536,10 @@ dispatch_incoming_call(Procedure, CallId, Args, Trace, State) ->
             maybe_send(reply, maybe_add_trace(Reply, Trace), State);
         Handler ->
             Stream = State#state.stream,
-            spawn(fun() ->
+            {_Pid, Ref} = erlang:spawn_monitor(fun() ->
                 execute_and_reply(Handler, Args, CallId, Trace, Stream)
-            end)
+            end),
+            put({handler_worker, Ref}, {Procedure, CallId})
     end.
 
 execute_and_reply(Handler, Args, CallId, Trace, Stream) ->
@@ -722,6 +759,24 @@ parse_host_port(HostPort) ->
         [Host] -> {Host, 4433}
     end.
 
+%% Deliver a matching PUBLISH to every local subscription, inline.
+%%
+%% Inline (rather than spawn-per-callback) is load-bearing for
+%% dist-over-mesh. Every tunnel byte-frame arrives as a PUBLISH and
+%% the bridge callback does `Self ! {tunnel_in, Payload}'. With a
+%% spawn-per-callback, consecutive PUBLISHes spawn concurrent workers
+%% that race to send into the bridge mailbox — the bridge then
+%% receives frames out of order, writes them to gen_tcp out of order,
+%% and the dist controller sees a scrambled byte stream. Inline
+%% preserves per-connection FIFO end-to-end.
+%%
+%% Other benefits (applicable to any subscription callback):
+%%   - avoids process explosion under high-traffic topics
+%%   - lets a slow callback backpressure the mesh_client receive loop,
+%%     which backpressures the QUIC stream — the correct shape for a
+%%     reliable push pub/sub
+%%   - exceptions are caught and logged with relay_client context so
+%%     a misbehaving user callback cannot take down the client
 invoke_matching_callbacks(Topic, Payload, Trace, Subscriptions) ->
     DecodedPayload = safe_decode_json(Payload),
     Base = #{topic => Topic, payload => DecodedPayload},
@@ -732,11 +787,9 @@ invoke_matching_callbacks(Topic, Payload, Trace, Subscriptions) ->
     maps:foreach(fun(_Ref, {SubTopic, Callback}) ->
         case topic_matches(SubTopic, Topic) of
             true ->
-                spawn(fun() ->
-                    try Callback(Event)
-                    catch C:E -> ?LOG_WARNING("[relay_client] Callback error: ~p:~p", [C, E])
-                    end
-                end);
+                try Callback(Event)
+                catch C:E -> ?LOG_WARNING("[relay_client] Callback error: ~p:~p", [C, E])
+                end;
             false -> ok
         end
     end, Subscriptions).
