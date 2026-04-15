@@ -105,7 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   role by accident. Relay-to-relay peering migrated to a dedicated
   `macula_peer_client` module (in the macula-relay repo) with its own
   supervisor and own subsystem folder.
-- **`macula_mesh_client:async_call/7` removed.** This was a peer-only
+- **<code>macula_mesh_client:async_call/7</code> removed.** This was a peer-only
   path (cross-relay RPC forwarding). Moved to `macula_peer_client` where
   it belongs.
 - **SWIM routing removed from SDK.** `_swim.*` PUBLISH frames never
@@ -387,7 +387,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Directed RPC** — `macula:call_node/4,5` routes a CALL to a specific target node by mesh name, site_id, or node_id. The relay resolves the target and forwards directly.
 - **Mesh Name Service** — `macula:resolve/2` resolves a mesh name to node identity (name, site_id, city, endpoint). `macula:list_nodes/1,2` lists all connected nodes on the relay.
-- **`macula_mesh_client:async_call/7`** — non-blocking RPC that delivers the reply to a callback PID instead of blocking via gen_server:call. Used by relays for cross-relay RPC forwarding.
+- **<code>macula_mesh_client:async_call/7</code>** — non-blocking RPC that delivers the reply to a callback PID instead of blocking via gen_server:call. Used by relays for cross-relay RPC forwarding.
 - **`target` field on CALL messages** — optional field in the wire protocol. When present, the relay routes to that specific node instead of any handler.
 
 ---
@@ -755,7 +755,7 @@ Macula is now a **lean 48-module client SDK**. All server/relay modules (~111) h
 
 ### Added
 
-- **`macula:get_known_peers/1`** — Public API to list known peers from the DHT
+- **<code>macula:get_known_peers/1</code>** — Public API to list known peers from the DHT
   routing table. Returns `[#{node_id => HexBinary, endpoint => Binary}]`.
   Applications should use this instead of reaching into internal modules.
 
@@ -2046,11 +2046,11 @@ This major release exposes Platform Layer capabilities to workload applications 
 ### Added
 
 #### Platform Layer APIs (New in v0.10.0)
-- **`macula:register_workload/2`** - Register with Platform Layer, get cluster info
-- **`macula:get_leader/1`** - Query current Raft leader node
-- **`macula:subscribe_leader_changes/2`** - Subscribe to leadership change notifications
+- **<code>macula:register_workload/2</code>** - Register with Platform Layer, get cluster info
+- **<code>macula:get_leader/1</code>** - Query current Raft leader node
+- **<code>macula:subscribe_leader_changes/2</code>** - Subscribe to leadership change notifications
 - **`macula:propose_crdt_update/3,4`** - Update shared state via CRDTs (LWW-Register supported)
-- **`macula:read_crdt/2`** - Read CRDT-managed shared state
+- **<code>macula:read_crdt/2</code>** - Read CRDT-managed shared state
 
 These APIs enable workloads to:
 - Access distributed coordination via Raft leader election
@@ -2794,7 +2794,7 @@ None - Fully backward compatible with v0.7.x
 
 **Upgrade Guide**: Simply update dependency version - no code changes required.
 
-**Full Details**: See [`architecture/v0.8.0-OVERVIEW.md`](architecture/v0.8.0-OVERVIEW.md) and [`architecture/v0.8.0-CHANGELOG.md`](architecture/v0.8.0-CHANGELOG.md)
+**Full Details**: See <code>architecture/v0.8.0-OVERVIEW.md</code> and <code>architecture/v0.8.0-CHANGELOG.md</code> (archived, pre-v1.0 docs)
 
 ---
 

@@ -44,7 +44,7 @@
   <text x="115" y="214" text-anchor="middle" fill="#a371f7" font-family="monospace" font-size="9">AES-256-GCM encrypt</text>
 
   <rect x="44" y="228" width="142" height="22" rx="3" fill="#161b22" stroke="#30363d"/>
-  <text x="115" y="244" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">macula_relay_client</text>
+  <text x="115" y="244" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">macula_mesh_client</text>
 
   <!-- Encrypted tunnel (center) -->
   <rect x="220" y="120" width="300" height="100" rx="12" fill="url(#tunnelGrad)" stroke="#f97316" stroke-width="0.8" stroke-dasharray="6,4"/>
@@ -111,7 +111,7 @@
   <text x="625" y="214" text-anchor="middle" fill="#a371f7" font-family="monospace" font-size="9">AES-256-GCM decrypt</text>
 
   <rect x="554" y="228" width="142" height="22" rx="3" fill="#161b22" stroke="#30363d"/>
-  <text x="625" y="244" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">macula_relay_client</text>
+  <text x="625" y="244" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">macula_mesh_client</text>
 
   <!-- Bottom: the punchline -->
   <text x="370" y="320" text-anchor="middle" fill="#f0f6fc" font-family="monospace" font-size="12">net_adm:ping('db@stockholm').  %% => pong</text>

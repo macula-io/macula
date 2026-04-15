@@ -38,7 +38,7 @@
   <!-- Row 1: Transport -->
   <rect x="20" y="130" width="230" height="100" rx="8" fill="url(#boxGrad)" stroke="#30363d" stroke-width="1"/>
   <text x="135" y="150" text-anchor="middle" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">Client Transport</text>
-  <text x="30" y="170" fill="#c9d1d9" font-family="monospace" font-size="10">macula_relay_client</text>
+  <text x="30" y="170" fill="#c9d1d9" font-family="monospace" font-size="10">macula_mesh_client</text>
   <text x="30" y="185" fill="#c9d1d9" font-family="monospace" font-size="10">macula_multi_relay</text>
   <text x="30" y="200" fill="#c9d1d9" font-family="monospace" font-size="10">macula_local_client</text>
   <text x="30" y="215" fill="#c9d1d9" font-family="monospace" font-size="10">macula_quic</text>

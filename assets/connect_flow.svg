@@ -23,7 +23,7 @@
   <text x="120" y="117" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula:connect/2</text>
 
   <rect x="45" y="136" width="150" height="28" rx="4" fill="#161b22" stroke="#30363d"/>
-  <text x="120" y="155" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula_relay_client</text>
+  <text x="120" y="155" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula_mesh_client</text>
 
   <rect x="45" y="174" width="150" height="28" rx="4" fill="#161b22" stroke="#30363d"/>
   <text x="120" y="193" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula_quic (Quinn NIF)</text>
