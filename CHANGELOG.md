@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.26] - 2026-04-16
+
+### Added
+
+- **`macula:join_dist_relay/1`** — public entry point for Erlang
+  distribution over a dedicated dist relay
+  (`macula-io/macula-dist-relay`) instead of the pub/sub bridge that
+  `join_mesh/1` sets up. Takes `#{url => <<"quic://host:4434">>}`.
+  Starts a `macula_dist_relay_client` under the `macula_dist_system`
+  supervisor and sets `MACULA_DIST_MODE=dist_relay`.
+- **`macula_dist_relay_client`** — `gen_server` maintaining a persistent
+  QUIC connection to a dist relay. API: `start_link/2,3`,
+  `request_tunnel/2`, `set_kernel/2`, `whereis_client/0`,
+  `close_tunnel/2`, `status/1`. Blocks synchronously on
+  `request_tunnel/2` until the 32-byte tunnel_id prefix on the new
+  QUIC stream is parsed and matched; returns `{ok, ConnRef, StreamRef}`
+  usable as the `macula_dist` Socket.
+- **`macula_dist_relay_protocol`** — wire protocol encoder/decoder
+  for the dedicated dist relay. Length-prefixed MessagePack frames
+  on stream 0 (control): `identify/identified`,
+  `tunnel_request/tunnel_ok/tunnel_error`, `tunnel_notify`,
+  `tunnel_close`. Tunnel data streams (stream 1+) carry raw bytes
+  with a 32-byte hex tunnel_id prefix for stream→tunnel correlation.
+- **`macula_dist:dist_mode/0`** — dispatches on `MACULA_DIST_MODE`
+  env var: `relay` (legacy pub/sub bridge via station), `dist_relay`
+  (dedicated dist relay, new), or `direct` (raw QUIC, default). The
+  direct-QUIC path is unchanged; the `relay` path is kept intact for
+  migration.
+- **`macula_dist_system:start_dist_relay_client/2`** — dynamic child
+  start under the dist_system supervisor, used by
+  `macula:join_dist_relay/1` when the URL is chosen at runtime.
+  Boot-time configuration via the `dist_relay_url` app env or
+  `start_link/1` opts is also supported.
+
+### Fixed
+
+- **`macula_dist_relay_client`: missing `async_accept_stream` after
+  control stream open.** When the relay opened a tunnel stream on the
+  node's QUIC connection, no `{quic, new_stream, ...}` event fired and
+  the stream was silently dropped. The client now calls
+  `macula_quic:async_accept_stream/1` after the control stream opens
+  and re-arms after each `new_stream` event so subsequent tunnels
+  also produce events.
+- **`macula_dist_relay_client`: prefix-before-control race.** The
+  32-byte tunnel_id prefix on a new QUIC stream could arrive before
+  the corresponding `tunnel_ok` / `tunnel_notify` control message on
+  the control stream — they travel on different QUIC streams with no
+  ordering guarantee. Added an `orphan_streams` buffer keyed by
+  tunnel_id: when prefix extraction finds no pending tunnel, the
+  stream is parked; when `rekey_pending` (outbound) or the
+  `tunnel_notify` handler (inbound) registers the tunnel_id,
+  `drain_orphan_stream/2` re-runs the match and completes the handoff.
+- **Leftover bytes handoff for outbound and inbound tunnels.** When
+  the 32-byte prefix and the peer's first dist handshake frame
+  arrived in the same QUIC data event, the extra bytes after the
+  prefix were being discarded. Now re-injected as a synthetic
+  `{quic, Leftover, Stream, #{}}` message to the new stream owner
+  (caller pid for outbound; the spawned setup process then the dist
+  controller for inbound).
+- **Inbound tunnel net_kernel handoff.** Previously the client only
+  logged "matched but net_kernel handoff TODO". Now spawns a
+  short-lived monitored setup process that completes the
+  `{accept, ...} → {controller, DistCtrl} → stream ownership transfer`
+  dance synchronously before exiting. Spawn is justified under the
+  "one-shot setup-and-handoff" exception documented in the spawn
+  feedback — exits after handoff, monitored for crash visibility.
+
+### Infrastructure / Tooling (related repos, not code in this package)
+
+- `macula-io/macula-dist-relay` — dedicated dist relay server (Erlang
+  release + OCI image at `ghcr.io/macula-io/macula-dist-relay`).
+  Integration test suite (Common Test) exercising identify handshake,
+  tunnel creation with prefix matching, bidirectional byte forwarding,
+  missing-target error, clean disconnect. Writing the suite caught
+  four bugs fixed in this release.
+- `macula-io/macula-demo/infrastructure/dist-hetzner-nuremberg/` —
+  production Hetzner deployment with Caddy (Linode DNS-01 wildcard
+  TLS) and `dist-{cc}-{city}.macula.io` virtual identity DNS naming.
+
 ## [1.4.25] - 2026-04-16
 
 ### Fixed
