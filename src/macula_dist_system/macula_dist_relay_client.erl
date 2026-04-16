@@ -90,7 +90,12 @@
     active_tunnels = #{}   :: #{reference() => binary()},
     %% Setup processes currently doing the net_kernel handoff for inbound
     %% tunnels. Monitored so we notice crashes during handshake.
-    setups = #{}           :: #{reference() => binary()}  %% MonitorRef → TunnelId
+    setups = #{}           :: #{reference() => binary()},  %% MonitorRef → TunnelId
+    %% Streams whose prefix has been extracted but no pending tunnel
+    %% matches yet — because the control message (tunnel_ok or
+    %% tunnel_notify) is still in flight. Re-matched once the control
+    %% side registers the tunnel_id.
+    orphan_streams = #{}   :: #{binary() => {reference(), binary()}}  %% TunnelId → {Stream, Leftover}
 }).
 
 %%====================================================================
@@ -170,15 +175,16 @@ handle_cast(_Msg, State) ->
 %% --- QUIC events ---
 
 handle_info({quic, new_stream, Stream, _Props}, #state{control = undefined} = State) ->
-    %% First stream arriving after connect = the relay accepting our
-    %% control stream open. But our client OPENS the control stream,
-    %% so new_stream events here are tunnel streams opened by the relay.
-    %% Since we have no control stream yet, this is unexpected — ignore.
+    %% Our client OPENS the control stream, so new_stream events here
+    %% are relay-initiated tunnel streams. Without a control stream yet
+    %% we can't correlate them, so this is unexpected.
     ?LOG_WARNING("[dist_relay_client] Unexpected new_stream before control: ~p", [Stream]),
     {noreply, State};
-handle_info({quic, new_stream, Stream, _Props}, State) ->
+handle_info({quic, new_stream, Stream, _Props}, #state{conn = Conn} = State) ->
     ok = macula_quic:setopt(Stream, active, true),
-    ?LOG_DEBUG("[dist_relay_client] Incoming tunnel stream ~p, awaiting prefix", [Stream]),
+    %% Re-arm accept so the next tunnel stream also gets a new_stream event.
+    ok = macula_quic:async_accept_stream(Conn),
+    ?LOG_INFO("[dist_relay_client] Incoming tunnel stream ~p, awaiting prefix", [Stream]),
     Unident = (State#state.unidentified_streams)#{Stream => <<>>},
     {noreply, State#state{unidentified_streams = Unident}};
 
@@ -243,6 +249,11 @@ handle_connect({error, Reason}, _State) ->
 
 handle_open_control({ok, Ctrl}, Conn, State) ->
     ok = macula_quic:setopt(Ctrl, active, true),
+    %% Register to receive {quic, new_stream, ...} events for tunnel
+    %% streams the relay opens on our connection. Without this, inbound
+    %% tunnel streams (and the streams the relay opens for our own
+    %% outbound tunnel_requests) are silently dropped.
+    ok = macula_quic:async_accept_stream(Conn),
     send_identify(Ctrl, State#state.node_name),
     {ok, State#state{conn = Conn, control = Ctrl}};
 handle_open_control({error, Reason}, Conn, _State) ->
@@ -298,7 +309,9 @@ handle_control_msg(#{type := tunnel_error, reason := Reason}, State) ->
 handle_control_msg(#{type := tunnel_notify, tunnel_id := TunnelId, source := Source}, State) ->
     ?LOG_INFO("[dist_relay_client] Incoming tunnel ~s from ~s", [TunnelId, Source]),
     Inbound = (State#state.pending_inbound)#{TunnelId => Source},
-    try_match_unidentified(State#state{pending_inbound = Inbound});
+    %% A stream for this tunnel may have arrived before the notify —
+    %% drain orphan_streams now that pending_inbound has the tunnel_id.
+    drain_orphan_stream(TunnelId, State#state{pending_inbound = Inbound});
 
 handle_control_msg(Msg, State) ->
     ?LOG_WARNING("[dist_relay_client] Unknown control message: ~p", [Msg]),
@@ -313,7 +326,11 @@ rekey_pending(TunnelId, #state{pending_outbound = Pending} = State) ->
             NewPending = Rest#{TunnelId => Updated},
             ?LOG_DEBUG("[dist_relay_client] Re-keyed ~p to tunnel ~s",
                        [Key, TunnelId]),
-            try_match_unidentified(State#state{pending_outbound = NewPending});
+            %% A stream for this tunnel may already be orphaned waiting
+            %% for the tunnel_ok — drain it now that pending_outbound
+            %% has the tunnel_id.
+            drain_orphan_stream(TunnelId,
+                State#state{pending_outbound = NewPending});
         not_found ->
             ?LOG_WARNING("[dist_relay_client] tunnel_ok without pending: ~s", [TunnelId]),
             State
@@ -437,10 +454,27 @@ match_inbound({_Source, Rest}, TunnelId, Stream, Leftover,
         active_tunnels = Active,
         setups = NewSetups
     }};
-match_inbound(error, TunnelId, _Stream, _Leftover, State) ->
-    ?LOG_WARNING("[dist_relay_client] Stream prefix ~s matches no pending tunnel",
-                 [TunnelId]),
-    {noreply, State}.
+match_inbound(error, TunnelId, Stream, Leftover,
+              #state{orphan_streams = Orphans} = State) ->
+    %% Neither outbound nor inbound has registered this tunnel yet —
+    %% control message is in flight. Stash the stream and retry the
+    %% match when tunnel_ok / tunnel_notify arrives.
+    ?LOG_INFO("[dist_relay_client] Orphan stream for tunnel ~s — awaiting control",
+              [TunnelId]),
+    {noreply, State#state{orphan_streams = Orphans#{TunnelId => {Stream, Leftover}}}}.
+
+%% When a new tunnel_id appears in pending_outbound or pending_inbound,
+%% check the orphan_streams buffer and complete the match if there's a
+%% waiting stream.
+drain_orphan_stream(TunnelId, #state{orphan_streams = Orphans} = State) ->
+    dispatch_orphan(maps:take(TunnelId, Orphans), TunnelId, State).
+
+dispatch_orphan({{Stream, Leftover}, Rest}, TunnelId, State) ->
+    State2 = State#state{orphan_streams = Rest},
+    {noreply, S3} = match_tunnel(TunnelId, Stream, Leftover, State2),
+    S3;
+dispatch_orphan(error, _TunnelId, State) ->
+    State.
 
 %% Short-lived process that owns the stream through the net_kernel accept
 %% handshake. Exits normally after transferring ownership to the dist
@@ -471,14 +505,6 @@ handle_controller_assignment(Kernel, Stream, Leftover, TunnelId) ->
     after 30_000 ->
         exit({setup_timeout, controller_assignment, TunnelId})
     end.
-
-%% Called after state changes that might enable a match — re-runs
-%% the prefix extraction pass on any accumulated unidentified streams
-%% whose buffer might now be matchable. In practice, the buffers only
-%% grow when data arrives, so this is a no-op here. Kept as a seam
-%% for future logic (e.g. timeout-driven cleanup).
-try_match_unidentified(State) ->
-    State.
 
 %%====================================================================
 %% Cleanup
