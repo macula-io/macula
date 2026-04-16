@@ -38,10 +38,12 @@
 -export([extract_payload/1]).
 -export([get_tunnel_metrics/0, get_tunnel_metrics/1]).
 
-%% Must be shorter than OTP's SetupTime (typically 7000ms).
-%% If RPC takes longer, dist_util's timer kills the do_setup process
-%% before we can log any errors — pang with zero diagnostics.
--define(DIST_TIMEOUT, 5000).
+%% Must be shorter than OTP's SetupTime. Default SetupTime is 7000ms
+%% but we set it to 15000ms via dist_setup_timeout (see macula_dist.erl).
+%% If the tunnel RPC takes longer than DIST_TIMEOUT, the caller gets
+%% {error, timeout} with diagnostics. If it takes longer than
+%% SetupTime, dist_util kills do_setup with zero diagnostics (just pang).
+-define(DIST_TIMEOUT, 10000).
 -define(CONTROLLER_TIMEOUT, 30000).
 
 -define(METRIC_BYTES_OUT, 1).

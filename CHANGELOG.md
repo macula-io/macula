@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.25] - 2026-04-16
+
+### Fixed
+
+- **`macula_dist_relay` DIST_TIMEOUT bumped from 5000ms to 10000ms.**
+  The tunnel setup RPC must traverse: alice's QUIC stream → relay
+  handler gproc lookup → bob's QUIC stream → bob's mesh_client
+  handler execution → reply path back. On a relay handling 1400+
+  nodes with scheduler pressure (observed: OTP logger switching to
+  drop mode from heartbeat flood), 5s is too tight. Raised to 10s.
+  
+  Callers should also raise OTP's `net_setuptime` to at least 15s
+  (`application:set_env(kernel, net_setuptime, 15)`) so dist_util
+  doesn't kill the setup process before DIST_TIMEOUT fires — OTP's
+  default SetupTime of 7s is lower than the new DIST_TIMEOUT.
+
 ## [1.4.24] - 2026-04-15
 
 ### Fixed
