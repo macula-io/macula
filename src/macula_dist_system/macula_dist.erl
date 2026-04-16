@@ -474,6 +474,7 @@ quic_send({S, S}, Data) when is_port(S) ->
     gen_tcp:send(S, Data);
 quic_send({_Conn, Stream}, Data) ->
     case macula_quic:send(Stream, Data) of
+        ok -> ok;
         {ok, _} -> ok;
         {error, _} = Err -> Err
     end.
