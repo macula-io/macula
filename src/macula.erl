@@ -28,7 +28,7 @@
          monitor_nodes/0, unmonitor_nodes/0]).
 
 %% Mesh Distribution
--export([join_mesh/1]).
+-export([join_mesh/1, join_dist_relay/1]).
 
 %% Types
 -export_type([client/0, topic/0, procedure/0]).
@@ -214,6 +214,39 @@ join_mesh(Opts) ->
         {error, Reason} ->
             ?LOG_ERROR("[macula] Failed to join mesh: ~p", [Reason]),
             {error, Reason}
+    end.
+
+%% @doc Enable Erlang distribution over a dedicated dist relay
+%% (`macula-io/macula-dist-relay').
+%%
+%% Different from `join_mesh/1':
+%% - Connects to a dist relay (port 4434, ALPN `macula-dist'), NOT the
+%%   pub/sub station mesh
+%% - No mesh_client, no pub/sub subscriptions — only dist traffic
+%% - Uses raw QUIC stream routing with no MessagePack overhead
+%%
+%% Options:
+%% - `url' (required): `<<"quic://relay.example.com:4434">>'
+%%
+%% After this returns `ok', standard OTP distribution (`rpc:call/4',
+%% `gen_server:call/3' across nodes, `pg' groups, etc.) works across
+%% firewalls via the dist relay.
+-spec join_dist_relay(map()) -> ok | {error, term()}.
+join_dist_relay(Opts) ->
+    Url = maps:get(url, Opts),
+    NodeName = atom_to_binary(node()),
+    case macula_dist_system:start_dist_relay_client(Url, NodeName) of
+        {ok, _Pid} ->
+            os:putenv("MACULA_DIST_MODE", "dist_relay"),
+            ?LOG_INFO("[macula] Joined dist relay ~s — distribution enabled", [Url]),
+            ok;
+        {error, {already_started, _Pid}} ->
+            os:putenv("MACULA_DIST_MODE", "dist_relay"),
+            ?LOG_INFO("[macula] dist_relay_client already running — mode set"),
+            ok;
+        {error, Reason} = Err ->
+            ?LOG_ERROR("[macula] Failed to join dist relay: ~p", [Reason]),
+            Err
     end.
 
 %% @private Wait until the mesh client has an active QUIC stream.

@@ -27,7 +27,8 @@
 %% API
 -export([
     start_link/0,
-    start_link/1
+    start_link/1,
+    start_dist_relay_client/2
 ]).
 
 %% Supervisor callbacks
@@ -48,6 +49,22 @@ start_link() ->
 -spec start_link(map()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, Opts).
+
+%% @doc Dynamically start the dist_relay_client under this supervisor.
+%% Used by `macula:join_dist_relay/1' when the relay URL is chosen at
+%% runtime rather than at application boot.
+-spec start_dist_relay_client(binary() | string(), binary()) ->
+    {ok, pid()} | {error, term()}.
+start_dist_relay_client(Url, NodeName) ->
+    ChildSpec = #{
+        id => macula_dist_relay_client,
+        start => {macula_dist_relay_client, start_link, [Url, NodeName]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [macula_dist_relay_client]
+    },
+    supervisor:start_child(?SERVER, ChildSpec).
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -89,7 +106,8 @@ init(Opts) ->
             type => worker,
             modules => [macula_dist_discovery]
         }
-    ] ++ maybe_cluster_strategy(AutoCluster, Opts),
+    ] ++ maybe_cluster_strategy(AutoCluster, Opts)
+      ++ maybe_dist_relay_client(Opts),
 
     {ok, {SupFlags, Children}}.
 
@@ -112,5 +130,29 @@ maybe_cluster_strategy(true, Opts) ->
             shutdown => 5000,
             type => worker,
             modules => [macula_cluster_strategy]
+        }
+    ].
+
+%% @private Start the dist relay client if a dist_relay URL is configured.
+%% The client maintains a persistent QUIC connection to a dist relay and
+%% tunnels Erlang distribution traffic through it. Only one client per
+%% node (registered as `macula_dist_relay_client').
+maybe_dist_relay_client(Opts) ->
+    Url = maps:get(dist_relay_url, Opts,
+        application:get_env(macula, dist_relay_url, undefined)),
+    dist_relay_client_child(Url).
+
+dist_relay_client_child(undefined) ->
+    [];
+dist_relay_client_child(Url) ->
+    NodeName = atom_to_binary(node()),
+    [
+        #{
+            id => macula_dist_relay_client,
+            start => {macula_dist_relay_client, start_link, [Url, NodeName]},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker,
+            modules => [macula_dist_relay_client]
         }
     ].

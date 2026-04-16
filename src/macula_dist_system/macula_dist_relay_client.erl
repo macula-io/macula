@@ -56,6 +56,7 @@
 
 -export([start_link/2, start_link/3]).
 -export([request_tunnel/2, close_tunnel/2, status/1]).
+-export([set_kernel/2, whereis_client/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(TUNNEL_ID_SIZE, 32).  %% 32-byte hex string (16 raw bytes → encode_hex)
@@ -75,6 +76,9 @@
     node_name           :: binary(),
     identified = false  :: boolean(),
     recv_buf = <<>>     :: binary(),
+    %% net_kernel pid for inbound tunnel accept delivery.
+    %% Set by macula_dist:accept/1 before any inbound tunnels are expected.
+    kernel_pid          :: pid() | undefined,
     %% Streams we've received but haven't yet matched to a tunnel
     %% (waiting for the 32-byte prefix).
     unidentified_streams = #{} :: #{reference() => binary()},
@@ -83,7 +87,10 @@
     %% Inbound tunnels: tunnel_id → source_node (awaiting stream)
     pending_inbound = #{}  :: #{binary() => binary()},
     %% Active tunnels: stream → tunnel_id
-    active_tunnels = #{}   :: #{reference() => binary()}
+    active_tunnels = #{}   :: #{reference() => binary()},
+    %% Setup processes currently doing the net_kernel handoff for inbound
+    %% tunnels. Monitored so we notice crashes during handshake.
+    setups = #{}           :: #{reference() => binary()}  %% MonitorRef → TunnelId
 }).
 
 %%====================================================================
@@ -94,9 +101,25 @@
 start_link(RelayUrl, NodeName) ->
     start_link(RelayUrl, NodeName, #{}).
 
+%% @doc Start the client with a locally-registered name so macula_dist
+%% can find it without being passed the pid. Only one dist_relay_client
+%% per node makes sense — a node connects to exactly one dist relay for
+%% its cluster traffic.
 -spec start_link(binary() | string(), binary(), map()) -> {ok, pid()} | {error, term()}.
 start_link(RelayUrl, NodeName, Opts) ->
-    gen_server:start_link(?MODULE, {RelayUrl, NodeName, Opts}, []).
+    gen_server:start_link({local, ?MODULE}, ?MODULE, {RelayUrl, NodeName, Opts}, []).
+
+%% @doc Tell the client which process to deliver `{accept, ...}' messages
+%% to when inbound tunnels arrive. Called by `macula_dist:accept/1' with
+%% the net_kernel pid (`self()' at that call site).
+-spec set_kernel(pid(), pid()) -> ok.
+set_kernel(Client, Kernel) when is_pid(Client), is_pid(Kernel) ->
+    gen_server:call(Client, {set_kernel, Kernel}).
+
+%% @doc Locate the registered client, if any.
+-spec whereis_client() -> pid() | undefined.
+whereis_client() ->
+    erlang:whereis(?MODULE).
 
 %% @doc Request a tunnel to TargetNode. Blocks until the tunnel stream
 %% is ready or the request fails/times out. Returns a {ConnRef, StreamRef}
@@ -127,6 +150,9 @@ handle_call({request_tunnel, _Target}, _From, #state{identified = false} = State
     {reply, {error, not_identified}, State};
 handle_call({request_tunnel, Target}, From, State) ->
     send_tunnel_request(Target, From, State);
+handle_call({set_kernel, Kernel}, _From, State) ->
+    ?LOG_INFO("[dist_relay_client] kernel_pid set to ~p", [Kernel]),
+    {reply, ok, State#state{kernel_pid = Kernel}};
 handle_call(status, _From, State) ->
     {reply, status_map(State), State};
 handle_call(_Msg, _From, State) ->
@@ -176,8 +202,21 @@ handle_info({quic, Closed, Ref, _}, State)
   when Closed =:= closed; Closed =:= shutdown; Closed =:= transport_shutdown ->
     handle_closure(Ref, Closed, State);
 
+%% Inbound-tunnel setup process lifecycle
+handle_info({'DOWN', MonRef, process, _Pid, Reason}, #state{setups = Setups} = State) ->
+    handle_setup_down(maps:take(MonRef, Setups), Reason, State);
+
 handle_info(Info, State) ->
     ?LOG_DEBUG("[dist_relay_client] Unhandled: ~p", [Info]),
+    {noreply, State}.
+
+handle_setup_down({TunnelId, Rest}, normal, State) ->
+    ?LOG_DEBUG("[dist_relay_client] Setup for ~s completed", [TunnelId]),
+    {noreply, State#state{setups = Rest}};
+handle_setup_down({TunnelId, Rest}, Reason, State) ->
+    ?LOG_WARNING("[dist_relay_client] Setup for ~s crashed: ~p", [TunnelId, Reason]),
+    {noreply, State#state{setups = Rest}};
+handle_setup_down(error, _Reason, State) ->
     {noreply, State}.
 
 terminate(_Reason, #state{conn = Conn}) when Conn =/= undefined ->
@@ -341,8 +380,16 @@ match_tunnel(TunnelId, Stream, LeftoverBytes, State) ->
     match_outbound(maps:take(TunnelId, State#state.pending_outbound),
                    TunnelId, Stream, LeftoverBytes, State).
 
-match_outbound({#pending_tunnel{from = From}, Rest}, TunnelId, Stream, _Leftover, State) ->
-    %% Outbound match — reply to the blocked request_tunnel caller
+match_outbound({#pending_tunnel{from = From}, Rest}, TunnelId, Stream, Leftover, State) ->
+    %% Outbound match. Transfer stream ownership to the caller BEFORE
+    %% replying so subsequent {quic, ...} messages go to the caller, not
+    %% to this gen_server. Then re-inject any bytes that arrived with
+    %% the prefix (typically the peer's first dist handshake frame) as
+    %% a synthetic QUIC data event the caller will see when it starts
+    %% reading.
+    {CallerPid, _Tag} = From,
+    ok = macula_quic:controlling_process(Stream, CallerPid),
+    deliver_leftover(CallerPid, Stream, Leftover),
     gen_server:reply(From, {ok, State#state.conn, Stream}),
     Active = (State#state.active_tunnels)#{Stream => TunnelId},
     {noreply, State#state{pending_outbound = Rest, active_tunnels = Active}};
@@ -350,18 +397,80 @@ match_outbound(error, TunnelId, Stream, Leftover, State) ->
     match_inbound(maps:take(TunnelId, State#state.pending_inbound),
                   TunnelId, Stream, Leftover, State).
 
-match_inbound({_Source, Rest}, TunnelId, Stream, _Leftover, State) ->
-    %% Inbound match — Phase 2 MVP: log only. Integration with net_kernel
-    %% is done in macula_dist.erl (next step). For now the stream stays
-    %% active-owned by this gen_server and bytes are dropped on the floor.
-    ?LOG_INFO("[dist_relay_client] Inbound tunnel ~s matched stream ~p "
-              "(net_kernel handoff TODO)", [TunnelId, Stream]),
+%% Re-inject leftover bytes as a QUIC data event to the new stream owner.
+%% This is critical: if prefix + first dist frame arrive in the same QUIC
+%% data message, the dist frame would be lost without this handoff.
+deliver_leftover(_Pid, _Stream, <<>>) ->
+    ok;
+deliver_leftover(Pid, Stream, Leftover) ->
+    Pid ! {quic, Leftover, Stream, #{}},
+    ok.
+
+match_inbound({_Source, Rest}, TunnelId, Stream,
+              _Leftover, #state{kernel_pid = undefined} = State) ->
+    ?LOG_WARNING("[dist_relay_client] Inbound tunnel ~s arrived before "
+                 "kernel_pid set — dropping stream ~p", [TunnelId, Stream]),
+    catch macula_quic:close_stream(Stream),
+    {noreply, State#state{pending_inbound = Rest}};
+match_inbound({_Source, Rest}, TunnelId, Stream, Leftover,
+              #state{kernel_pid = Kernel, conn = Conn, setups = Setups} = State) ->
+    %% Start a monitored setup process for the net_kernel accept handshake.
+    %% The handshake requires synchronous receive — can't do it inside a
+    %% gen_server. This is the "one-shot setup-and-handoff" exception
+    %% documented in feedback_no_anonymous_spawn.md: the process exits
+    %% after transferring stream ownership, and we monitor it for
+    %% crash visibility.
+    Socket = {Conn, Stream},
+    {SetupPid, MonRef} = spawn_monitor(
+        fun() -> inbound_accept_setup(Kernel, Socket, TunnelId) end),
+    ?LOG_INFO("[dist_relay_client] Inbound tunnel ~s → setup ~p",
+              [TunnelId, SetupPid]),
+    ok = macula_quic:controlling_process(Stream, SetupPid),
+    %% Hand over ownership along with any leftover bytes. Setup process
+    %% will re-inject them to the dist controller after the net_kernel
+    %% handshake.
+    SetupPid ! {stream_owned, Stream, Leftover},
     Active = (State#state.active_tunnels)#{Stream => TunnelId},
-    {noreply, State#state{pending_inbound = Rest, active_tunnels = Active}};
+    NewSetups = Setups#{MonRef => TunnelId},
+    {noreply, State#state{
+        pending_inbound = Rest,
+        active_tunnels = Active,
+        setups = NewSetups
+    }};
 match_inbound(error, TunnelId, _Stream, _Leftover, State) ->
     ?LOG_WARNING("[dist_relay_client] Stream prefix ~s matches no pending tunnel",
                  [TunnelId]),
     {noreply, State}.
+
+%% Short-lived process that owns the stream through the net_kernel accept
+%% handshake. Exits normally after transferring ownership to the dist
+%% controller (and re-injecting any leftover bytes that came with the
+%% tunnel prefix), or crashes (visible via DOWN in the client) if the
+%% handshake fails.
+inbound_accept_setup(Kernel, {_Conn, Stream} = Socket, TunnelId) ->
+    Leftover = wait_for_ownership(Stream, TunnelId),
+    Kernel ! {accept, self(), Socket, inet, macula_dist},
+    handle_controller_assignment(Kernel, Stream, Leftover, TunnelId).
+
+wait_for_ownership(Stream, TunnelId) ->
+    receive
+        {stream_owned, Stream, Data} -> Data
+    after 5_000 ->
+        exit({setup_timeout, stream_ownership, TunnelId})
+    end.
+
+handle_controller_assignment(Kernel, Stream, Leftover, TunnelId) ->
+    receive
+        {Kernel, controller, DistCtrl} ->
+            ok = macula_quic:controlling_process(Stream, DistCtrl),
+            deliver_leftover(DistCtrl, Stream, Leftover),
+            DistCtrl ! {self(), controller, ok},
+            ok;
+        {Kernel, unsupported_protocol} ->
+            exit({unsupported_protocol, TunnelId})
+    after 30_000 ->
+        exit({setup_timeout, controller_assignment, TunnelId})
+    end.
 
 %% Called after state changes that might enable a match — re-runs
 %% the prefix extraction pass on any accumulated unidentified streams

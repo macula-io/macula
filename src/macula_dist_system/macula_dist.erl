@@ -79,32 +79,64 @@ childspecs() ->
     [].
 
 %% @doc Listen for incoming distribution connections.
-%% In relay mode, skip the QUIC listener — all connections go through the relay.
+%%
+%% Dispatches on the current mode (set via MACULA_DIST_MODE env var):
+%% - `relay' (legacy): pub/sub bridge through the station — no local listener
+%% - `dist_relay': tunnels via the dedicated dist relay — no local listener
+%% - `direct' (default): raw QUIC listener on the dist port
 -spec listen(atom()) -> {ok, {term(), #net_address{}, 1..3}} | {error, term()}.
 listen(NodeName) ->
-    case macula_dist_relay:is_relay_mode() of
-        true ->
-            %% Relay mode: no QUIC listener needed. Connections arrive via relay tunnel.
-            Port = 0,
-            Address = make_address(NodeName, Port),
-            ?LOG_INFO("[dist] Relay mode — no QUIC listener (tunnels via relay)"),
-            {ok, {relay_mode, Address, 1}};
-        false ->
-            Port = get_dist_port(NodeName),
-            case start_quic_listener(Port) of
-                {ok, ListenerHandle} ->
-                    Address = make_address(NodeName, Port),
-                    {ok, {ListenerHandle, Address, 1}};
-                {error, Reason} ->
-                    ?LOG_ERROR("[dist] Listen failed: ~p", [Reason]),
-                    {error, Reason}
-            end
-    end.
+    do_listen(dist_mode(), NodeName).
+
+do_listen(relay, NodeName) ->
+    ?LOG_INFO("[dist] Relay mode (pub/sub bridge) — no QUIC listener"),
+    {ok, {relay_mode, make_address(NodeName, 0), 1}};
+do_listen(dist_relay, NodeName) ->
+    ?LOG_INFO("[dist] dist_relay mode — tunnels via macula-dist-relay"),
+    register_node_with_dist_relay(NodeName),
+    {ok, {dist_relay_mode, make_address(NodeName, 0), 1}};
+do_listen(direct, NodeName) ->
+    Port = get_dist_port(NodeName),
+    handle_quic_listen(start_quic_listener(Port), NodeName, Port).
+
+handle_quic_listen({ok, Listener}, NodeName, Port) ->
+    {ok, {Listener, make_address(NodeName, Port), 1}};
+handle_quic_listen({error, Reason}, _NodeName, _Port) ->
+    ?LOG_ERROR("[dist] Listen failed: ~p", [Reason]),
+    {error, Reason}.
+
+register_node_with_dist_relay(NodeName) ->
+    %% The dist_relay_client started on node boot should be up by now.
+    %% If it's not, log + continue — outgoing setup will fail cleanly
+    %% with client_not_running which is better than blocking listen/1.
+    maybe_announce_node(macula_dist_relay_client:whereis_client(), NodeName).
+
+maybe_announce_node(undefined, NodeName) ->
+    ?LOG_WARNING("[dist] dist_relay_client not running — dist over relay will "
+                 "fail until macula:join_mesh/1 is called with dist_relay opt "
+                 "(node=~p)", [NodeName]);
+maybe_announce_node(_Pid, _NodeName) ->
+    %% Client was started with the NodeName already (via start_link) and
+    %% sent identify during init. Nothing more to do here.
+    ok.
 
 %% @doc Accept incoming connections. Called in a loop by net_kernel.
+%%
+%% In direct-QUIC mode: acceptor_loop runs accept on the listener handle.
+%% In relay (pub/sub) / dist_relay modes: acceptor_loop blocks — inbound
+%% connections arrive via the respective client which delivers the
+%% `{accept, ...}' messages directly to net_kernel.
 -spec accept(term()) -> pid().
+accept(dist_relay_mode = Sentinel) ->
+    register_kernel_with_dist_relay(macula_dist_relay_client:whereis_client()),
+    spawn_link(?MODULE, acceptor_loop, [self(), Sentinel]);
 accept(ListenerHandle) ->
     spawn_link(?MODULE, acceptor_loop, [self(), ListenerHandle]).
+
+register_kernel_with_dist_relay(undefined) ->
+    ?LOG_ERROR("[dist] Cannot accept in dist_relay mode — client not running");
+register_kernel_with_dist_relay(Client) ->
+    ok = macula_dist_relay_client:set_kernel(Client, self()).
 
 %% @doc Accept a distribution connection from a remote node.
 %% Socket is either {QuicConn, Stream} (direct QUIC) or a gen_tcp port (relay).
@@ -197,6 +229,22 @@ address() ->
     make_address(Port, Host).
 
 %%%===================================================================
+%%% Internal — Mode Detection
+%%%===================================================================
+
+%% @private Distribution transport mode.
+%% - `relay' (legacy): pub/sub bridge via station (macula-relay). MACULA_DIST_MODE=relay
+%% - `dist_relay': dedicated dist relay (macula-dist-relay). MACULA_DIST_MODE=dist_relay
+%% - `direct' (default): raw QUIC on the dist port
+-spec dist_mode() -> relay | dist_relay | direct.
+dist_mode() ->
+    mode_from_env(os:getenv("MACULA_DIST_MODE")).
+
+mode_from_env("relay") -> relay;
+mode_from_env("dist_relay") -> dist_relay;
+mode_from_env(_) -> direct.
+
+%%%===================================================================
 %%% Internal — QUIC Listener
 %%%===================================================================
 
@@ -223,9 +271,11 @@ start_quic_listener(Port) ->
 %%%===================================================================
 
 %% @private Acceptor loop — recursively accepts QUIC connections.
-%% In relay mode, block forever — inbound connections arrive via relay tunnel,
-%% not via QUIC accept. The relay_mode atom signals this.
+%% In relay / dist_relay modes, block forever — inbound connections arrive
+%% via the respective client, not via QUIC accept.
 acceptor_loop(_Kernel, relay_mode) ->
+    receive stop -> ok end;
+acceptor_loop(_Kernel, dist_relay_mode) ->
     receive stop -> ok end;
 acceptor_loop(Kernel, Listener) ->
     case macula_quic:accept(Listener, #{active => false}) of
@@ -333,22 +383,35 @@ do_setup(Kernel, Node, Type, MyNode, _LongOrShortNames, SetupTime) ->
     end.
 
 do_setup_connect(Kernel, Node, Type, MyNode, Timer, Host, Port) ->
-    RelayMode = macula_dist_relay:is_relay_mode(),
-    ?LOG_INFO("[dist] setup ~p relay_mode=~p host=~s port=~p", [Node, RelayMode, Host, Port]),
-    ConnectFn = case RelayMode of
-        true  -> fun() -> macula_dist_relay:connect(atom_to_list(Node), Host, Port) end;
-        false -> fun() -> connect_quic(Host, Port) end
-    end,
-    case ConnectFn() of
-        {ok, Conn, Stream} ->
-            ?LOG_INFO("[dist] Connected to ~p, starting handshake", [Node]),
-            HSData = make_hs_data(Kernel, MyNode, {Conn, Stream}, Timer, undefined),
-            dist_util:handshake_we_started(
-                HSData#hs_data{other_node = Node, request_type = Type});
-        {error, Reason} ->
-            ?LOG_WARNING("[dist] Connection to ~p failed: ~p", [Node, Reason]),
-            dist_util:shutdown(?MODULE, ?LINE, {connect_failed, Reason})
-    end.
+    Mode = dist_mode(),
+    ?LOG_INFO("[dist] setup ~p mode=~p host=~s port=~p", [Node, Mode, Host, Port]),
+    handle_connect_result(connect_by_mode(Mode, Node, Host, Port),
+                          Kernel, Node, Type, MyNode, Timer).
+
+connect_by_mode(relay, Node, Host, Port) ->
+    macula_dist_relay:connect(atom_to_list(Node), Host, Port);
+connect_by_mode(dist_relay, Node, _Host, _Port) ->
+    connect_via_dist_relay(Node);
+connect_by_mode(direct, _Node, Host, Port) ->
+    connect_quic(Host, Port).
+
+connect_via_dist_relay(Node) ->
+    handle_client_lookup(macula_dist_relay_client:whereis_client(), Node).
+
+handle_client_lookup(undefined, _Node) ->
+    {error, dist_relay_client_not_running};
+handle_client_lookup(Client, Node) ->
+    NodeBin = atom_to_binary(Node),
+    macula_dist_relay_client:request_tunnel(Client, NodeBin).
+
+handle_connect_result({ok, Conn, Stream}, Kernel, Node, Type, MyNode, Timer) ->
+    ?LOG_INFO("[dist] Connected to ~p, starting handshake", [Node]),
+    HSData = make_hs_data(Kernel, MyNode, {Conn, Stream}, Timer, undefined),
+    dist_util:handshake_we_started(
+        HSData#hs_data{other_node = Node, request_type = Type});
+handle_connect_result({error, Reason}, _Kernel, Node, _Type, _MyNode, _Timer) ->
+    ?LOG_WARNING("[dist] Connection to ~p failed: ~p", [Node, Reason]),
+    dist_util:shutdown(?MODULE, ?LINE, {connect_failed, Reason}).
 
 connect_quic(Host, Port) ->
     {CertFile, KeyFile} = get_tls_certs(),
