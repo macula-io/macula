@@ -406,6 +406,7 @@ match_outbound({#pending_tunnel{from = From}, Rest}, TunnelId, Stream, Leftover,
     %% reading.
     {CallerPid, _Tag} = From,
     ok = macula_quic:controlling_process(Stream, CallerPid),
+    ok = macula_quic:setopt(Stream, active, true),
     deliver_leftover(CallerPid, Stream, Leftover),
     gen_server:reply(From, {ok, State#state.conn, Stream}),
     Active = (State#state.active_tunnels)#{Stream => TunnelId},
@@ -443,6 +444,7 @@ match_inbound({_Source, Rest}, TunnelId, Stream, Leftover,
     ?LOG_INFO("[dist_relay_client] Inbound tunnel ~s → setup ~p",
               [TunnelId, SetupPid]),
     ok = macula_quic:controlling_process(Stream, SetupPid),
+    ok = macula_quic:setopt(Stream, active, true),
     %% Hand over ownership along with any leftover bytes. Setup process
     %% will re-inject them to the dist controller after the net_kernel
     %% handshake.
@@ -497,6 +499,7 @@ handle_controller_assignment(Kernel, Stream, Leftover, TunnelId) ->
     receive
         {Kernel, controller, DistCtrl} ->
             ok = macula_quic:controlling_process(Stream, DistCtrl),
+            ok = macula_quic:setopt(Stream, active, true),
             deliver_leftover(DistCtrl, Stream, Leftover),
             DistCtrl ! {self(), controller, ok},
             ok;
