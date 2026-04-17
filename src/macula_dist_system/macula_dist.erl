@@ -632,9 +632,22 @@ quic_handshake_complete({_Conn, Stream}, Node, DHandle) ->
     %% Returns the PREVIOUS value, so we ignore it rather than asserting.
     _ = erlang:dist_ctrl_set_opt(DHandle, get_size, true),
     ok = erlang:dist_ctrl_get_data_notification(DHandle),
+    %% Handshake-phase recv buffer may still hold bytes that arrived AFTER
+    %% the last handshake frame (peer's first post-nodeup packet-4 frame,
+    %% typically). If we drop them here, BEAM's dist parser chokes on the
+    %% following frame because the stream is truncated mid-header. Seed
+    %% the ctrl_loop's buffer with whatever recv_frame stashed.
+    Seed = take_stashed_bytes(Stream),
+    Seeded = put_incoming(DHandle, Seed),
     %% Don't return — dist_util's con_loop cannot drive the
     %% `dist_data' / `dist_ctrl_get_data' protocol. Our loop replaces it.
-    ctrl_loop(Node, Stream, DHandle, <<>>).
+    ctrl_loop(Node, Stream, DHandle, Seeded).
+
+take_stashed_bytes(Stream) ->
+    case erlang:erase({macula_dist_recv_buf, Stream}) of
+        undefined -> <<>>;
+        Bin when is_binary(Bin) -> Bin
+    end.
 
 %% @private Dist controller loop — flat clauses, one message class each.
 %%
@@ -698,8 +711,8 @@ drain_out(DHandle, Stream) ->
 send_out(none, _DHandle, _Stream) ->
     ok;
 send_out({Size, Data}, DHandle, Stream) ->
-    Frame = [<<Size:32>> | Data],
-    write_frame(macula_quic:send(Stream, iolist_to_binary(Frame))),
+    Frame = iolist_to_binary([<<Size:32>> | Data]),
+    write_frame(macula_quic:send(Stream, Frame)),
     drain_out(DHandle, Stream).
 
 write_frame(ok) -> ok;
@@ -712,8 +725,14 @@ write_frame({error, Reason}) ->
 
 put_incoming(DHandle, Buf) ->
     {Frames, Leftover} = parse_frames(Buf, []),
-    lists:foreach(fun(F) -> erlang:dist_ctrl_put_data(DHandle, F) end, Frames),
+    lists:foreach(fun(F) -> deliver_frame(DHandle, F) end, Frames),
     Leftover.
+
+%% Zero-length frames are dist-layer ticks — they must NOT be forwarded to
+%% dist_ctrl_put_data, which rejects them as corrupt. (ssl_dist applies the
+%% same `when 0 < Size' guard in read_application_dist_data.)
+deliver_frame(_DHandle, <<>>) -> ok;
+deliver_frame(DHandle, Frame) -> erlang:dist_ctrl_put_data(DHandle, Frame).
 
 %% Parse as many complete `<<Size:32, Payload:Size/binary>>' frames as the
 %% buffer holds. Returns `{FramesInOrder, Leftover}'.

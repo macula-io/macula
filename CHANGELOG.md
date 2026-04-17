@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.30] - 2026-04-17
+
+### Fixed
+
+**Dist-over-relay now survives WAN latency — truncation of the first
+post-nodeup frame fixed.** v1.4.29 handled clean handshakes (local e2e
+passed) but returned a `corrupted distribution header` warning and then
+pang on the first ping over the Hetzner dist relay. Root cause: when the
+peer's final handshake frame and its first post-nodeup `{packet, 4}` frame
+arrived in the same QUIC stream delivery event, `recv_frame/3` consumed
+the handshake frame and stashed the leftover (start of the post-nodeup
+frame) in the process dictionary under `{macula_dist_recv_buf, Stream}`.
+The ctrl loop then started with an empty buffer and the first few bytes
+of the very first post-nodeup frame were silently dropped — the next
+full frame landed mid-header and BEAM's dist parser reported corruption.
+
+Fix: `quic_handshake_complete/3` now erases the stashed buffer and seeds
+the ctrl loop's accumulator with those bytes before entering the receive
+loop. Local loopback latency hid the bug (peer's first post-nodeup frame
+always arrived as a separate `{quic, ...}' event), but real WAN RTT ≥ one
+scheduler tick is enough to merge the frames.
+
+**Zero-length packet-4 frames no longer forwarded to `dist_ctrl_put_data/2`.**
+`parse_frames/2` happily extracted `<<>>`-payload frames (dist-layer ticks),
+and the previous `lists:foreach` called `dist_ctrl_put_data(DHandle, <<>>)`
+which BEAM rejects as corrupt. Now routed through `deliver_frame/2` which
+short-circuits the empty case — matches `ssl_gen_statem`'s `when 0 < Size`
+guard.
+
+### Verified
+
+End-to-end against `quic://dist-de-nuremberg.macula.io:4434` (Hetzner
+dist relay, ~50 ms RTT): `net_adm:ping → pong`,
+`rpc:call(alice, erlang, node, []) → alice_test@host00`,
+`nodes() = [alice_test@host00]`. Scripts: `test-local.sh` (local) +
+`test-dist-relay.sh` (WAN) in `present-macula-dist`.
+
+---
+
 ## [1.4.29] - 2026-04-17
 
 ### Fixed
