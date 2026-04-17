@@ -61,13 +61,23 @@
     do_setup/6
 ]).
 
+-ifdef(TEST).
+%% Exports for unit tests — pure helpers that are otherwise private.
+-export([
+    frame_outgoing/2,
+    packet_mode/1,
+    set_packet_mode/2,
+    extract_frame/4,
+    parse_frames/2
+]).
+-endif.
+
 -define(FAMILY, inet).
 -define(DRIVER, macula_dist).
 -define(DEFAULT_PORT, 4433).
 -define(ALPN, "macula-dist").
 -define(HANDSHAKE_TIMEOUT, 30000).
 -define(CONNECT_TIMEOUT, 15000).
--define(HANDOFF_TIMEOUT, 5000).
 
 %%%===================================================================
 %%% Distribution Carrier Callbacks
@@ -351,21 +361,9 @@ do_accept({AcceptPid, QuicConn, Stream, MyNode, Allowed, SetupTime}, Kernel, _Un
         dist_util:shutdown(?MODULE, ?LINE, control_transfer_timeout)
     end,
 
-    wait_for_handoff(Stream),
-
     Socket = {QuicConn, Stream},
     HSData = make_hs_data(Kernel, MyNode, Socket, Timer, Allowed),
     dist_util:handshake_other_started(HSData).
-
-%% QUIC needs handoff_done; gen_tcp does not.
-wait_for_handoff(Stream) when is_port(Stream) ->
-    ok;
-wait_for_handoff(Stream) ->
-    receive
-        {handoff_done, Stream, _HandoffData} -> ok
-    after ?HANDOFF_TIMEOUT ->
-        ok
-    end.
 
 %%%===================================================================
 %%% Internal — Setup Outgoing Connection
@@ -467,17 +465,34 @@ make_hs_data(Kernel, MyNode, Socket, Timer, Allowed) ->
 %%%===================================================================
 
 %% --- send ---
+%%
+%% QUIC streams are raw bytestreams — no packet framing is done by the
+%% transport. dist_util expects `{packet, 2}' during handshake and
+%% `{packet, 4}' post-nodeup (from gen_tcp's perspective). Without framing,
+%% recv returns arbitrary-sized chunks that don't align with dist frames.
+%%
+%% We emulate the packet option per-stream in the dist controller's process
+%% dictionary. Default is 2 (handshake mode); `quic_setopts_pre_nodeup'
+%% upgrades to 4 before post-handshake traffic begins.
 
 quic_send(Socket, Data) when is_port(Socket) ->
     gen_tcp:send(Socket, Data);
 quic_send({S, S}, Data) when is_port(S) ->
     gen_tcp:send(S, Data);
 quic_send({_Conn, Stream}, Data) ->
-    case macula_quic:send(Stream, Data) of
+    Framed = frame_outgoing(packet_mode(Stream), Data),
+    case macula_quic:send(Stream, Framed) of
         ok -> ok;
         {ok, _} -> ok;
         {error, _} = Err -> Err
     end.
+
+frame_outgoing(2, Data) ->
+    Bin = iolist_to_binary(Data),
+    <<(byte_size(Bin)):16, Bin/binary>>;
+frame_outgoing(4, Data) ->
+    Bin = iolist_to_binary(Data),
+    <<(byte_size(Bin)):32, Bin/binary>>.
 
 %% --- recv (dist_util expects {ok, List}) ---
 
@@ -486,17 +501,55 @@ quic_recv(Socket, Length, Timeout) when is_port(Socket) ->
 quic_recv({S, S}, Length, Timeout) when is_port(S) ->
     recv_tcp(S, Length, Timeout);
 quic_recv({_Conn, Stream}, _Length, Timeout) ->
-    TimeoutMs = recv_timeout(Timeout),
+    recv_frame(Stream, packet_mode(Stream), recv_timeout(Timeout)).
+
+%% Pull one complete length-prefixed frame. Accumulates bytes across
+%% multiple QUIC data events via a per-stream buffer in the proc dict.
+recv_frame(Stream, Mode, TimeoutMs) ->
+    Buf = erlang:get({macula_dist_recv_buf, Stream}),
+    extract_frame(Stream, Mode, init_buf(Buf), TimeoutMs).
+
+init_buf(undefined) -> <<>>;
+init_buf(B) when is_binary(B) -> B.
+
+extract_frame(Stream, 2, <<L:16, Frame:L/binary, Rest/binary>>, _Timeout) ->
+    stash_buf(Stream, Rest),
+    {ok, binary_to_list(Frame)};
+extract_frame(Stream, 4, <<L:32, Frame:L/binary, Rest/binary>>, _Timeout) ->
+    stash_buf(Stream, Rest),
+    {ok, binary_to_list(Frame)};
+extract_frame(Stream, Mode, Buf, TimeoutMs) ->
+    wait_more_bytes(Stream, Mode, Buf, TimeoutMs).
+
+wait_more_bytes(Stream, Mode, Buf, TimeoutMs) ->
     receive
         {quic, Data, Stream, _Flags} when is_binary(Data) ->
-            {ok, binary_to_list(Data)};
+            extract_frame(Stream, Mode, <<Buf/binary, Data/binary>>, TimeoutMs);
         {quic, stream_closed, Stream, _Flags} ->
+            stash_buf(Stream, Buf),
             {error, closed};
         {quic, peer_send_shutdown, Stream, _Flags} ->
+            stash_buf(Stream, Buf),
             {error, closed}
     after TimeoutMs ->
+        stash_buf(Stream, Buf),
         {error, timeout}
     end.
+
+stash_buf(Stream, <<>>) ->
+    erlang:erase({macula_dist_recv_buf, Stream});
+stash_buf(Stream, Buf) ->
+    erlang:put({macula_dist_recv_buf, Stream}, Buf).
+
+packet_mode(Stream) ->
+    packet_mode_of(erlang:get({macula_dist_packet_mode, Stream})).
+
+packet_mode_of(undefined) -> 2;
+packet_mode_of(N) when N =:= 2; N =:= 4 -> N.
+
+set_packet_mode(Stream, N) when N =:= 2; N =:= 4 ->
+    erlang:put({macula_dist_packet_mode, Stream}, N),
+    ok.
 
 recv_tcp(Socket, Length, Timeout) ->
     case gen_tcp:recv(Socket, Length, recv_timeout(Timeout)) of
@@ -513,8 +566,8 @@ quic_setopts_pre_nodeup(Socket) when is_port(Socket) ->
     inet:setopts(Socket, [{active, false}, {packet, 4}]);
 quic_setopts_pre_nodeup({S, S}) when is_port(S) ->
     inet:setopts(S, [{active, false}, {packet, 4}]);
-quic_setopts_pre_nodeup({_Conn, _Stream}) ->
-    ok.
+quic_setopts_pre_nodeup({_Conn, Stream}) ->
+    set_packet_mode(Stream, 4).
 
 quic_setopts_post_nodeup(Socket) when is_port(Socket) ->
     inet:setopts(Socket, [{active, true}, {packet, 4}, {deliver, port}, binary]);
@@ -529,8 +582,17 @@ quic_getll(Socket) when is_port(Socket) ->
     {ok, Socket};
 quic_getll({S, S}) when is_port(S) ->
     {ok, S};
-quic_getll({Conn, _Stream}) ->
-    {ok, Conn}.
+quic_getll({_Conn, _Stream}) ->
+    %% dist_util passes the returned value to erlang:setnode as the DistCtrl.
+    %% Must be a port or a pid that implements the dist controller
+    %% protocol (dist_ctrl_get_data / dist_ctrl_put_data). We return self()
+    %% — the dist controller process (do_setup or do_accept) whose
+    %% post-handshake loop shepherds bytes between the QUIC stream and the
+    %% distribution runtime via the dist_ctrl_* BIFs.
+    %%
+    %% Note: dist_util's default con_loop does NOT implement this
+    %% shuffling — a custom loop is wired in via f_handshake_complete.
+    {ok, self()}.
 
 %% --- address ---
 
@@ -549,9 +611,116 @@ make_net_address(_, Node) ->
                  protocol = ?DRIVER, family = ?FAMILY}.
 
 %% --- handshake_complete ---
+%%
+%% dist_util calls this AFTER f_setopts_post_nodeup and BEFORE con_loop.
+%% For QUIC carrier we hijack the controlling process here and never
+%% return — dist_util's con_loop doesn't understand `dist_data'
+%% notifications or raw stream reads, so we run our own loop that shuffles
+%% bytes between the QUIC stream and the distribution runtime via the
+%% `erlang:dist_ctrl_*' BIFs.
+%%
+%% For gen_tcp sockets (when Socket is a port) we fall through to the
+%% default no-op; the native port handles dist framing itself.
 
-quic_handshake_complete(_Socket, _Node, _DHandle) ->
+quic_handshake_complete(Socket, _Node, _DHandle) when is_port(Socket) ->
+    ok;
+quic_handshake_complete({S, S}, _Node, _DHandle) when is_port(S) ->
+    ok;
+quic_handshake_complete({_Conn, Stream}, Node, DHandle) ->
+    ?LOG_INFO("[dist] handshake complete for ~p — entering ctrl loop", [Node]),
+    %% Ask the runtime to return {Size, Data} tuples from dist_ctrl_get_data.
+    %% Returns the PREVIOUS value, so we ignore it rather than asserting.
+    _ = erlang:dist_ctrl_set_opt(DHandle, get_size, true),
+    ok = erlang:dist_ctrl_get_data_notification(DHandle),
+    %% Don't return — dist_util's con_loop cannot drive the
+    %% `dist_data' / `dist_ctrl_get_data' protocol. Our loop replaces it.
+    ctrl_loop(Node, Stream, DHandle, <<>>).
+
+%% @private Dist controller loop — flat clauses, one message class each.
+%%
+%% `InBuf' is the accumulator for inbound bytes from the QUIC stream.
+%% A packet-4 frame may arrive split across several `{quic, ...}' events
+%% so we buffer until we have a complete frame (or several).
+ctrl_loop(Node, Stream, DHandle, InBuf) ->
+    receive Msg -> handle_msg(Msg, Node, Stream, DHandle, InBuf) end.
+
+handle_msg(dist_data, Node, Stream, DHandle, InBuf) ->
+    drain_out(DHandle, Stream),
+    ok = erlang:dist_ctrl_get_data_notification(DHandle),
+    ctrl_loop(Node, Stream, DHandle, InBuf);
+handle_msg({quic, Data, Stream, _Flags}, Node, Stream, DHandle, InBuf)
+  when is_binary(Data) ->
+    NewBuf = put_incoming(DHandle, <<InBuf/binary, Data/binary>>),
+    ctrl_loop(Node, Stream, DHandle, NewBuf);
+handle_msg({quic, peer_send_shutdown, Stream, _}, Node, Stream, _DH, _B) ->
+    exit({shutdown, {Node, peer_send_shutdown}});
+handle_msg({quic, stream_closed, Stream, _}, Node, Stream, _DH, _B) ->
+    exit({shutdown, {Node, stream_closed}});
+handle_msg({quic, transport_shutdown, _, _}, Node, _Stream, _DH, _B) ->
+    exit({shutdown, {Node, transport_shutdown}});
+handle_msg({quic, closed, _, _}, Node, _Stream, _DH, _B) ->
+    exit({shutdown, {Node, closed}});
+handle_msg({_Kernel, disconnect}, Node, _Stream, _DH, _B) ->
+    exit({shutdown, {Node, disconnected}});
+handle_msg({_Kernel, tick}, Node, Stream, DHandle, InBuf) ->
+    send_tick(Stream),
+    ctrl_loop(Node, Stream, DHandle, InBuf);
+handle_msg({_Kernel, aux_tick}, Node, Stream, DHandle, InBuf) ->
+    send_tick(Stream),
+    ctrl_loop(Node, Stream, DHandle, InBuf);
+handle_msg({From, Ref, {setopts, _Opts}}, Node, Stream, DHandle, InBuf) ->
+    From ! {Ref, ok},
+    ctrl_loop(Node, Stream, DHandle, InBuf);
+handle_msg({From, Ref, {getopts, _Opts}}, Node, Stream, DHandle, InBuf) ->
+    From ! {Ref, {ok, []}},
+    ctrl_loop(Node, Stream, DHandle, InBuf);
+handle_msg({From, get_status}, Node, Stream, DHandle, InBuf) ->
+    {ok, R, W, _} = getstat_dist(DHandle),
+    From ! {self(), get_status, {ok, R, W}},
+    ctrl_loop(Node, Stream, DHandle, InBuf);
+handle_msg(_Other, Node, Stream, DHandle, InBuf) ->
+    ctrl_loop(Node, Stream, DHandle, InBuf).
+
+%% Zero-length packet-4 frame — the dist-layer keepalive.
+send_tick(Stream) ->
+    _ = macula_quic:send(Stream, <<0:32>>),
     ok.
+
+getstat_dist(DHandle) ->
+    %% erlang:dist_get_stat returns {ok, Read, Write, PendingWrites}.
+    erlang:dist_get_stat(DHandle).
+
+%% --- outbound: drain runtime → QUIC stream ---
+
+drain_out(DHandle, Stream) ->
+    send_out(erlang:dist_ctrl_get_data(DHandle), DHandle, Stream).
+
+send_out(none, _DHandle, _Stream) ->
+    ok;
+send_out({Size, Data}, DHandle, Stream) ->
+    Frame = [<<Size:32>> | Data],
+    write_frame(macula_quic:send(Stream, iolist_to_binary(Frame))),
+    drain_out(DHandle, Stream).
+
+write_frame(ok) -> ok;
+write_frame({ok, _}) -> ok;
+write_frame({error, Reason}) ->
+    ?LOG_ERROR("[dist] ctrl_loop send failed: ~p", [Reason]),
+    exit({dist_send_failed, Reason}).
+
+%% --- inbound: QUIC stream → runtime. Return leftover tail. ---
+
+put_incoming(DHandle, Buf) ->
+    {Frames, Leftover} = parse_frames(Buf, []),
+    lists:foreach(fun(F) -> erlang:dist_ctrl_put_data(DHandle, F) end, Frames),
+    Leftover.
+
+%% Parse as many complete `<<Size:32, Payload:Size/binary>>' frames as the
+%% buffer holds. Returns `{FramesInOrder, Leftover}'.
+parse_frames(<<Size:32, Payload:Size/binary, Rest/binary>>, Acc) ->
+    parse_frames(Rest, [Payload | Acc]);
+parse_frames(Partial, Acc) ->
+    {lists:reverse(Acc), Partial}.
 
 %% --- tick ---
 
@@ -560,7 +729,10 @@ quic_tick(Socket) when is_port(Socket) ->
 quic_tick({S, S}) when is_port(S) ->
     gen_tcp:send(S, <<>>);
 quic_tick({_Conn, Stream}) ->
-    macula_quic:send(Stream, <<>>).
+    %% Dist tick = zero-payload packet. Frame with current packet mode
+    %% (post-nodeup so always 4 here, but read the mode to stay honest).
+    Frame = frame_outgoing(packet_mode(Stream), <<>>),
+    macula_quic:send(Stream, Frame).
 
 %% --- getstat (dist_util expects {ok, R, W, P} 4-tuple) ---
 

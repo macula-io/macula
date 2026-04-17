@@ -84,3 +84,81 @@ select_test_() ->
         ?_assertEqual(false, macula_dist:select(any_handle)),
         ?_assertEqual(false, macula_dist:select('invalid_node'))
     ]}.
+
+%%%===================================================================
+%%% Tests - Packet Framing (handshake=2, post-nodeup=4)
+%%%===================================================================
+
+frame_outgoing_test_() ->
+    {"Packet framing wraps payload with 2- or 4-byte length prefix", [
+        %% packet=2
+        ?_assertEqual(<<0:16>>, macula_dist:frame_outgoing(2, <<>>)),
+        ?_assertEqual(<<3:16, "abc">>, macula_dist:frame_outgoing(2, <<"abc">>)),
+        %% packet=4
+        ?_assertEqual(<<0:32>>, macula_dist:frame_outgoing(4, <<>>)),
+        ?_assertEqual(<<3:32, "abc">>, macula_dist:frame_outgoing(4, <<"abc">>)),
+        %% iolist input flattened
+        ?_assertEqual(<<5:16, "hello">>,
+                      macula_dist:frame_outgoing(2, ["hel", <<"lo">>]))
+    ]}.
+
+packet_mode_default_test() ->
+    %% Fresh process dict → handshake mode (2)
+    Stream = make_ref(),
+    ?assertEqual(2, macula_dist:packet_mode(Stream)).
+
+packet_mode_switch_test() ->
+    Stream = make_ref(),
+    ok = macula_dist:set_packet_mode(Stream, 4),
+    ?assertEqual(4, macula_dist:packet_mode(Stream)),
+    ok = macula_dist:set_packet_mode(Stream, 2),
+    ?assertEqual(2, macula_dist:packet_mode(Stream)).
+
+parse_frames_test_() ->
+    {"Parse 4-byte length-prefixed frames from a buffer", [
+        %% Empty buffer → no frames, empty leftover
+        ?_assertEqual({[], <<>>}, macula_dist:parse_frames(<<>>, [])),
+        %% Single complete frame → one payload, no leftover
+        ?_assertEqual({[<<"abc">>], <<>>},
+                      macula_dist:parse_frames(<<3:32, "abc">>, [])),
+        %% Two complete frames → both payloads in order
+        ?_assertEqual({[<<"abc">>, <<"defg">>], <<>>},
+                      macula_dist:parse_frames(
+                          <<3:32, "abc", 4:32, "defg">>, [])),
+        %% Partial header → leftover preserves bytes
+        ?_assertEqual({[], <<0,0>>},
+                      macula_dist:parse_frames(<<0, 0>>, [])),
+        %% Complete header + partial payload → leftover keeps everything
+        ?_assertEqual({[], <<5:32, "hi">>},
+                      macula_dist:parse_frames(<<5:32, "hi">>, [])),
+        %% One complete + one partial → first payload delivered, partial held
+        ?_assertEqual({[<<"abc">>], <<5:32, "hi">>},
+                      macula_dist:parse_frames(
+                          <<3:32, "abc", 5:32, "hi">>, [])),
+        %% Zero-length frame (dist tick) → empty binary payload
+        ?_assertEqual({[<<>>], <<>>},
+                      macula_dist:parse_frames(<<0:32>>, []))
+    ]}.
+
+extract_frame_buffered_test() ->
+    %% When a full frame sits in the buffer, extract_frame returns it
+    %% immediately with no mailbox receive needed.
+    Stream = make_ref(),
+    erlang:erase({macula_dist_recv_buf, Stream}),
+    Buf = <<5:16, "hello">>,
+    Result = macula_dist:extract_frame(Stream, 2, Buf, 0),
+    ?assertEqual({ok, "hello"}, Result),
+    %% Leftover from the frame should be erased (all consumed).
+    ?assertEqual(undefined, erlang:get({macula_dist_recv_buf, Stream})).
+
+extract_frame_partial_timeout_test() ->
+    %% Incomplete frame + empty mailbox + 0 timeout → {error, timeout},
+    %% partial buffer stashed for the next call.
+    Stream = make_ref(),
+    erlang:erase({macula_dist_recv_buf, Stream}),
+    Result = macula_dist:extract_frame(Stream, 2, <<0, 5, "hel">>, 0),
+    ?assertEqual({error, timeout}, Result),
+    %% The partial bytes should have been stashed.
+    ?assertEqual(<<0, 5, "hel">>, erlang:get({macula_dist_recv_buf, Stream})),
+    %% Clean up proc dict.
+    erlang:erase({macula_dist_recv_buf, Stream}).

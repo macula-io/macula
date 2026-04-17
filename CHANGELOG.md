@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.29] - 2026-04-17
+
+### Fixed
+
+**Erlang distribution over the dedicated dist relay (`MACULA_DIST_MODE=dist_relay`)
+now completes the full handshake and establishes a live dist connection.** Prior
+releases got as far as building the QUIC tunnel, then returned `pang` on any
+`net_adm:ping/1`. Four separate defects along the accept/setup path were fixed:
+
+- **Packet framing added to `quic_send/2` + `quic_recv/3`.** `dist_util` expects
+  `{packet, 2}` framing during the handshake (send_name, recv_status,
+  recv_challenge, send_challenge_reply, recv_challenge_ack) and `{packet, 4}`
+  after `f_setopts_pre_nodeup`. A QUIC stream is a raw bytestream with no
+  packet option, so the previous implementation forwarded unframed payloads.
+  The carrier now tracks the packet mode per stream (in the dist controller's
+  process dictionary) and prepends/strips the 2- or 4-byte length prefix in
+  `frame_outgoing/2` / `recv_frame/3`. `quic_setopts_pre_nodeup/1` flips the
+  mode to 4 at the exact boundary `dist_util` expects.
+- **Inbound handshake bytes no longer lost during setup handoff.** In
+  `macula_dist_relay_client:match_inbound`, the stream is first handed to a
+  short-lived setup process that then transfers ownership to the dist
+  controller once `net_kernel` replies with the controller pid. Any
+  `{quic, Data, Stream, _}` messages that arrived between those two steps
+  accumulated in the setup process's mailbox and were discarded on exit —
+  which is exactly where the peer's first handshake frame often lands.
+  `handle_controller_assignment/4` now drains those messages and re-injects
+  them to the dist controller alongside the tunnel-prefix leftover.
+- **5-second dead wait removed from `do_accept/3`.** The accept path waited
+  for a `{handoff_done, Stream, _}` message that nothing on the QUIC side
+  sends; this added a fixed 5 s latency to every inbound connection before
+  `handshake_other_started` was called. The stream is already handed off
+  via `controlling_process/2` + `setopt(active, true)` before `do_accept`
+  runs, so the wait was pure dead weight.
+- **Dist controller loop implemented via `f_handshake_complete/3`.**
+  `quic_getll/1` previously returned the opaque QUIC connection reference,
+  which `erlang:setnode/3` cannot use as a distribution controller. The
+  carrier now registers `self()` (the `do_setup` / `do_accept` process) as
+  the dist controller and, via `f_handshake_complete`, never returns from
+  that callback — instead entering a dedicated `ctrl_loop/4` that:
+    * subscribes to `dist_data` notifications and drains runtime bytes
+      via `erlang:dist_ctrl_get_data/1` (with `get_size=true`), wrapping
+      each chunk in a 4-byte length prefix before writing to the stream;
+    * accumulates inbound QUIC bytes, parses complete `{packet, 4}` frames,
+      and feeds each payload to `erlang:dist_ctrl_put_data/2`;
+    * handles `{Kernel, tick}` / `{Kernel, aux_tick}` by emitting a
+      zero-length packet-4 frame (dist-layer keepalive);
+    * exits cleanly on `stream_closed` / `peer_send_shutdown` /
+      `transport_shutdown`.
+  `dist_util`'s default `con_loop` has no knowledge of the `dist_data`
+  protocol and was silently dropping both directions of dist traffic.
+
+### Changed
+
+- **`packet_mode/1` refactored to flat function heads** (via the
+  `packet_mode_of/1` helper), matching the rest of the module's dispatch
+  style and easing eunit coverage.
+- **Unused `?HANDOFF_TIMEOUT` macro removed** (5000 ms), now that
+  `wait_for_handoff/1` is gone.
+
+### Added
+
+- **Unit tests for the framing primitives.** `macula_dist_tests` now covers
+  `frame_outgoing/2` (both packet modes, empty payload, iolist input),
+  `packet_mode/1` default + switch, `parse_frames/2` (complete frames,
+  partial header, partial payload, mixed, zero-length tick frame), and
+  `extract_frame/4` (both the mailbox-free happy path and the
+  partial-timeout stash-and-return path). 40 tests in this module, all
+  green.
+
+---
+
 ## [1.4.26] - 2026-04-16
 
 ### Added

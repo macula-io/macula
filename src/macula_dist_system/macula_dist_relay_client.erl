@@ -500,13 +500,34 @@ handle_controller_assignment(Kernel, Stream, Leftover, TunnelId) ->
         {Kernel, controller, DistCtrl} ->
             ok = macula_quic:controlling_process(Stream, DistCtrl),
             ok = macula_quic:setopt(Stream, active, true),
-            deliver_leftover(DistCtrl, Stream, Leftover),
+            %% Drain any {quic, ...} messages for this stream that arrived
+            %% while we were waiting for net_kernel. Bytes arrive at the
+            %% current stream owner (us) from the moment controlling_process
+            %% is called in match_inbound until now. If we don't drain and
+            %% forward them, the peer's first handshake frame disappears
+            %% and DistCtrl hangs on recv_name forever.
+            Drained = drain_stream_messages(Stream),
+            deliver_leftover(DistCtrl, Stream, <<Leftover/binary, Drained/binary>>),
             DistCtrl ! {self(), controller, ok},
             ok;
         {Kernel, unsupported_protocol} ->
             exit({unsupported_protocol, TunnelId})
     after 30_000 ->
         exit({setup_timeout, controller_assignment, TunnelId})
+    end.
+
+%% Consume every buffered {quic, Data, Stream, _} message from our mailbox
+%% and concatenate into a single binary. Stops when the mailbox is empty of
+%% stream-data events (selective receive with 0-timeout).
+drain_stream_messages(Stream) ->
+    drain_stream_messages(Stream, <<>>).
+
+drain_stream_messages(Stream, Acc) ->
+    receive
+        {quic, Data, Stream, _Flags} when is_binary(Data) ->
+            drain_stream_messages(Stream, <<Acc/binary, Data/binary>>)
+    after 0 ->
+        Acc
     end.
 
 %%====================================================================
