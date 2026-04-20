@@ -349,4 +349,4 @@ macula_mri_registry:register_type(<<"turbine">>, #{
 ## Related
 
 - [Storage: macula_mri_khepri](https://github.com/macula-io/macula-mri-khepri)
-- [Design Document](https://github.com/macula-io/macula-console/blob/main/plans/DESIGN_MACULA_RESOURCE_IDENTIFIERS.md)
+- Design Document (archived with the deprecated `macula-console` repo)
