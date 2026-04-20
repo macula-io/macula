@@ -1,3 +1,10 @@
+> ⚠️ **OUTDATED (2026-04-20)**: References archived repos
+> (macula-neurolab, macula-tweann, macula-os, macula-os-nix,
+> macula-nifs, macula-neuroevolution-{esdb,evoq}, macula-console,
+> macula-arcade, macula-marketplace, macula-gitops).
+> See current repos at rgfaber/faber-* and hecate-social/hecate-*.
+> Kept for historical reference only.
+
 # Macula SDK Roadmap
 
 > **Last Updated:** 2026-04-09
