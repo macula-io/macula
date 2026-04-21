@@ -27,6 +27,12 @@
 -export([start_link/1, stop/1]).
 -export([subscribe/3, unsubscribe/2, publish/3]).
 -export([advertise/3, unadvertise/2, call/4, call_any/4]).
+%% Streaming RPC (v1.5.2+) — see PLAN_MACULA_STREAMING.md.
+%% advertise_stream broadcasts to ALL connections (mirror of advertise/3)
+%% so any relay can route an incoming STREAM_OPEN here. call_stream and
+%% open_stream are sticky to the primary connection — a stream's frames
+%% must stay on one underlying mesh_client for the stream's lifetime.
+-export([advertise_stream/4, call_stream/4, open_stream/4]).
 -export([get_status/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -95,6 +101,22 @@ call(Pid, Procedure, Args, Timeout) ->
 %% @doc Try an RPC call on each connected relay in sequence.
 %% Returns the first successful result or the last error.
 %% Useful for cross-relay operations where the target may be on a different relay.
+-spec advertise_stream(pid(), binary(), atom(), fun((pid(), term()) -> any())) ->
+        ok | {error, term()}.
+advertise_stream(Pid, Procedure, Mode, Handler) ->
+    gen_server:call(Pid, {advertise_stream, Procedure, Mode, Handler}).
+
+-spec call_stream(pid(), binary(), term(), timeout()) ->
+        {ok, pid()} | {error, term()}.
+call_stream(Pid, Procedure, Args, Timeout) ->
+    gen_server:call(Pid, {call_stream, Procedure, Args, Timeout},
+                    Timeout + 1000).
+
+-spec open_stream(pid(), binary(), term(), map()) ->
+        {ok, pid()} | {error, term()}.
+open_stream(Pid, Procedure, Args, Opts) ->
+    gen_server:call(Pid, {open_stream, Procedure, Args, Opts}).
+
 -spec call_any(pid(), binary(), map(), timeout()) -> {ok, term()} | {error, term()}.
 call_any(Pid, Procedure, Args, Timeout) ->
     gen_server:call(Pid, {rpc_call_any, Procedure, Args, Timeout}, Timeout + 5000).
@@ -213,6 +235,40 @@ handle_call({rpc_call_any, Procedure, Args, Timeout}, _From, State) ->
     AliveConns = [C || C <- State#state.connections, is_process_alive(C#conn.pid)],
     Result = try_call_each(AliveConns, Procedure, Args, Timeout),
     {reply, Result, State};
+
+%%====================================================================
+%% Streaming RPC (v1.5.2+)
+%%====================================================================
+
+handle_call({advertise_stream, Procedure, Mode, Handler}, _From, State) ->
+    %% Broadcast the advertisement to all underlying mesh_clients so
+    %% any relay routing an incoming STREAM_OPEN to us can match.
+    Results = [macula_mesh_client:advertise_stream(Pid, Procedure, Mode, Handler)
+               || #conn{pid = Pid} <- State#state.connections],
+    case lists:any(fun(ok) -> true; (_) -> false end, Results) of
+        true  -> {reply, ok, State};
+        false -> {reply, {error, no_connection}, State}
+    end;
+
+handle_call({call_stream, Procedure, Args, Timeout}, _From, State) ->
+    case find_primary(State#state.connections) of
+        undefined ->
+            {reply, {error, no_connection}, State};
+        #conn{pid = Pid} ->
+            Result = macula_mesh_client:call_stream(Pid, Procedure, Args,
+                                                    #{}, Timeout),
+            {reply, Result, State}
+    end;
+
+handle_call({open_stream, Procedure, Args, Opts}, _From, State) ->
+    case find_primary(State#state.connections) of
+        undefined ->
+            {reply, {error, no_connection}, State};
+        #conn{pid = Pid} ->
+            %% mesh_client extracts mode from Opts; default bidi.
+            Result = macula_mesh_client:open_stream(Pid, Procedure, Args, Opts),
+            {reply, Result, State}
+    end;
 
 
 %%====================================================================

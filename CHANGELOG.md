@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.2] - 2026-04-21
+
+### Added
+
+**Streaming surface on `macula_multi_relay`** so multi-homed clients
+(used by hecate-daemon's mesh client) can advertise + open streaming
+RPCs. Without this, only single-connection clients could use the
+streaming primitives shipped in v1.5.0/v1.5.1.
+
+New exports:
+- `macula_multi_relay:advertise_stream/4` — broadcasts the
+  advertisement to ALL underlying mesh_clients, mirroring the
+  unary-advertise pattern. Any relay can then route an incoming
+  STREAM_OPEN to one of our connections.
+- `macula_multi_relay:call_stream/4` — sticky to the primary
+  connection. A stream's frames must stay on one underlying
+  mesh_client for the stream's lifetime.
+- `macula_multi_relay:open_stream/4` — same stickiness for
+  client-stream / bidi.
+
+Pure additive layer over `macula_mesh_client`'s existing streaming
+API (no `mesh_client` change). Phase 1 + Phase 2 streaming tests
+unchanged at 22/22.
+
+Required to unblock the Phase 4 pilot consumer cutovers
+(`PLAN_MACULA_STREAMING.md`): hecate-daemon's `serve_llm`,
+`serve_file_content_rpc` (briefcase), and `serve_git_over_mesh`.
+
+---
+
 ## [1.5.1] - 2026-04-21
 
 ### Added
