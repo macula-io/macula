@@ -20,6 +20,7 @@
 -export([
     start_link/1,
     pair/2,
+    attach_remote/3,
     send/2,
     send/3,
     recv/1,
@@ -59,7 +60,18 @@
 -type stream_id() :: binary().
 -type result() :: {ok, term()} | {error, term()}.
 
--export_type([role/0, mode/0, encoding/0, chunk/0, stream_id/0, result/0]).
+%% Peer shape (Phase 2+):
+%%   undefined             — unpaired
+%%   {local, Pid}          — Phase 1 in-process pairing
+%%   {remote, Client, Sid} — Phase 2 QUIC: peer lives on another node,
+%%                           deliveries are encoded as STREAM_* frames
+%%                           and sent out the mesh_client's QUIC stream.
+-type peer() :: undefined
+              | {local, pid()}
+              | {remote, pid(), stream_id()}.
+
+-export_type([role/0, mode/0, encoding/0, chunk/0, stream_id/0, result/0,
+              peer/0]).
 
 -record(state, {
     id              :: stream_id(),
@@ -67,7 +79,7 @@
     mode            :: mode(),
     owner           :: pid(),
     owner_ref       :: reference(),
-    peer            :: pid() | undefined,
+    peer            :: peer(),
     %% Recv side: inbound chunks queued, waiting recv/2 callers, eof flag
     inbox = queue:new() :: queue:queue({encoding(), term()}),
     waiters = queue:new() :: queue:queue({{pid(), reference()}, reference()}),
@@ -92,12 +104,25 @@
 start_link(Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
 
-%% @doc Pair two stream processes as peers (local dispatch only).
+%% @doc Pair two stream processes as peers (Phase 1 local dispatch).
 -spec pair(pid(), pid()) -> ok.
 pair(A, B) when is_pid(A), is_pid(B) ->
-    ok = gen_server:call(A, {pair, B}),
-    ok = gen_server:call(B, {pair, A}),
+    ok = gen_server:call(A, {pair_local, B}),
+    ok = gen_server:call(B, {pair_local, A}),
     ok.
+
+%% @doc Attach a remote (QUIC) peer to this stream. Used by
+%% `macula_mesh_client` to wire a stream to its QUIC-carrier: all
+%% deliveries out of this stream will be encoded as STREAM_* frames
+%% and sent through `Client`'s relay connection, tagged with
+%% `StreamId`. Deliveries INTO this stream still arrive via the
+%% `deliver_chunk/end/error/reply` casts below — mesh_client decodes
+%% the incoming frames and forwards them to the local stream pid it
+%% tracks for this StreamId.
+-spec attach_remote(pid(), pid(), stream_id()) -> ok.
+attach_remote(StreamPid, ClientPid, StreamId)
+  when is_pid(StreamPid), is_pid(ClientPid), is_binary(StreamId) ->
+    gen_server:call(StreamPid, {pair_remote, ClientPid, StreamId}).
 
 %% @doc Send a binary chunk on the stream.
 -spec send(pid(), binary()) -> ok | {error, term()}.
@@ -219,18 +244,19 @@ init(Opts) ->
 
 %% --- pair --------------------------------------------------------------
 
-handle_call({pair, Peer}, _From, State) ->
+handle_call({pair_local, Peer}, _From, State) ->
     _ = erlang:monitor(process, Peer),
-    {reply, ok, State#state{peer = Peer}};
+    {reply, ok, State#state{peer = {local, Peer}}};
+handle_call({pair_remote, ClientPid, StreamId}, _From, State) ->
+    _ = erlang:monitor(process, ClientPid),
+    {reply, ok, State#state{peer = {remote, ClientPid, StreamId}}};
 
 %% --- send --------------------------------------------------------------
 
-handle_call({send, _Encoding, _Body}, _From, #state{closed_send = true}) ->
-    {reply, {error, send_closed}, #state{}};
+handle_call({send, _Encoding, _Body}, _From, #state{closed_send = true} = State) ->
+    {reply, {error, send_closed}, State};
 handle_call({send, Encoding, Body}, _From, State) ->
-    case forward_to_peer(State, fun(Peer) ->
-            macula_stream:deliver_chunk(Peer, Encoding, Body)
-         end) of
+    case forward_to_peer(State, {chunk, Encoding, Body}) of
         ok ->
             {reply, ok, State#state{seq_out = State#state.seq_out + 1}};
         {error, _} = Err ->
@@ -248,9 +274,7 @@ handle_call(close_send, _From, State) ->
     State1 = case State#state.closed_send of
                  true -> State;
                  false ->
-                     _ = forward_to_peer(State, fun(Peer) ->
-                             macula_stream:deliver_end(Peer, send)
-                         end),
+                     _ = forward_to_peer(State, {end_stream, send}),
                      State#state{closed_send = true}
              end,
     {reply, ok, State1};
@@ -258,21 +282,10 @@ handle_call(close_send, _From, State) ->
 %% --- close -------------------------------------------------------------
 
 handle_call(close, _From, State) ->
-    State1 = case State#state.closed_send of
-                 true ->
-                     _ = forward_to_peer(State, fun(Peer) ->
-                             macula_stream:deliver_end(Peer, both)
-                         end),
-                     State;
-                 false ->
-                     _ = forward_to_peer(State, fun(Peer) ->
-                             macula_stream:deliver_end(Peer, both)
-                         end),
-                     State#state{closed_send = true}
-             end,
-    State2 = State1#state{closed_recv = true},
-    State3 = drain_waiters(eof, State2),
-    {reply, ok, State3};
+    _ = forward_to_peer(State, {end_stream, both}),
+    State1 = State#state{closed_send = true, closed_recv = true},
+    State2 = drain_waiters(eof, State1),
+    {reply, ok, State2};
 
 %% --- await_reply -------------------------------------------------------
 
@@ -293,9 +306,7 @@ handle_call({await_reply, Timeout}, From, State) ->
 handle_call({set_reply, Result}, _From, State) ->
     State1 = case State#state.reply of
                  undefined ->
-                     _ = forward_to_peer(State, fun(Peer) ->
-                             macula_stream:deliver_reply(Peer, Result)
-                         end),
+                     _ = forward_to_peer(State, {reply, Result}),
                      State#state{reply = Result};
                  _ ->
                      State
@@ -304,9 +315,7 @@ handle_call({set_reply, Result}, _From, State) ->
 
 handle_call({abort, Code, Message}, _From, State) ->
     Err = {error, {Code, Message}},
-    _ = forward_to_peer(State, fun(Peer) ->
-            macula_stream:deliver_error(Peer, Code, Message)
-        end),
+    _ = forward_to_peer(State, {error, Code, Message}),
     State1 = State#state{closed_recv = true, closed_send = true,
                          reply = case State#state.reply of
                                      undefined -> Err;
@@ -392,20 +401,9 @@ handle_info({reply_timeout, From}, State) ->
     {noreply, State#state{reply_waiters = NewWaiters}};
 
 handle_info({'DOWN', Ref, process, Pid, _Reason}, State) ->
-    case {Ref, Pid} of
-        {OwnerRef, OwnerPid} when OwnerRef =:= State#state.owner_ref,
-                                  OwnerPid =:= State#state.owner ->
-            {stop, normal, State};
-        _ when Pid =:= State#state.peer ->
-            %% Peer died — surface as a stream error to local readers
-            Err = {error, peer_down},
-            State1 = State#state{closed_recv = true, closed_send = true,
-                                 peer = undefined},
-            State2 = drain_waiters(Err, State1),
-            State3 = settle_reply_waiters_with(Err, State2),
-            {noreply, State3};
-        _ -> {noreply, State}
-    end;
+    IsOwner = Ref =:= State#state.owner_ref andalso
+              Pid =:= State#state.owner,
+    handle_down(IsOwner, Pid, State);
 
 handle_info(_Msg, State) ->
     {noreply, State}.
@@ -416,8 +414,82 @@ terminate(_Reason, _State) -> ok.
 %%% Internal helpers
 %%%===================================================================
 
-forward_to_peer(#state{peer = undefined}, _Fun) -> {error, no_peer};
-forward_to_peer(#state{peer = Peer}, Fun) when is_pid(Peer) -> Fun(Peer).
+%% @private Dispatch a stream-level action to the peer.
+%%
+%% Peer-shape-aware:
+%%   {local, Pid}          — in-process pair; cast the symmetric
+%%                           deliver_* helper directly.
+%%   {remote, Client, Sid} — hand off to macula_mesh_client which
+%%                           encodes the action as a STREAM_* frame
+%%                           and sends it out the QUIC stream.
+%%
+%% Action shapes:
+%%   {chunk, Encoding, Body}
+%%   {end_stream, send | both}
+%%   {error, Code, Message}
+%%   {reply, Result}
+forward_to_peer(#state{peer = undefined}, _Action) ->
+    {error, no_peer};
+forward_to_peer(#state{peer = {local, Pid}}, {chunk, Encoding, Body}) ->
+    deliver_chunk(Pid, Encoding, Body);
+forward_to_peer(#state{peer = {local, Pid}}, {end_stream, Role}) ->
+    deliver_end(Pid, Role);
+forward_to_peer(#state{peer = {local, Pid}}, {error, Code, Message}) ->
+    deliver_error(Pid, Code, Message);
+forward_to_peer(#state{peer = {local, Pid}}, {reply, Result}) ->
+    deliver_reply(Pid, Result);
+forward_to_peer(#state{peer = {remote, Client, Sid}} = S, Action) ->
+    send_remote(Client, Sid, Action, S#state.seq_out).
+
+send_remote(Client, Sid, {chunk, Encoding, Body}, Seq) ->
+    macula_mesh_client:send_stream_frame(Client, stream_data, #{
+        stream_id => Sid,
+        seq => Seq,
+        body => Body,
+        encoding => Encoding
+    });
+send_remote(Client, Sid, {end_stream, Role}, _Seq) ->
+    macula_mesh_client:send_stream_frame(Client, stream_end, #{
+        stream_id => Sid,
+        role => Role
+    });
+send_remote(Client, Sid, {error, Code, Message}, _Seq) ->
+    macula_mesh_client:send_stream_frame(Client, stream_error, #{
+        stream_id => Sid,
+        code => Code,
+        message => Message
+    });
+send_remote(Client, Sid, {reply, {ok, Value}}, _Seq) ->
+    macula_mesh_client:send_stream_frame(Client, stream_reply, #{
+        stream_id => Sid,
+        result => Value
+    });
+send_remote(Client, Sid, {reply, {error, Reason}}, _Seq) ->
+    macula_mesh_client:send_stream_frame(Client, stream_reply, #{
+        stream_id => Sid,
+        error => #{code => <<"error">>,
+                   message => iolist_to_binary(io_lib:format("~p", [Reason]))}
+    }).
+
+%% @private Owner DOWN → stop. Otherwise check whether the dead pid
+%% was our peer (or our peer's mesh_client for remote peers) and, if
+%% so, surface as a stream error to any local readers / reply waiters.
+handle_down(true, _Pid, State) ->
+    {stop, normal, State};
+handle_down(false, Pid, #state{peer = {local, Pid}} = State) ->
+    propagate_peer_down(State);
+handle_down(false, Pid, #state{peer = {remote, Pid, _Sid}} = State) ->
+    propagate_peer_down(State);
+handle_down(false, _Pid, State) ->
+    {noreply, State}.
+
+propagate_peer_down(State) ->
+    Err = {error, peer_down},
+    State1 = State#state{closed_recv = true, closed_send = true,
+                         peer = undefined},
+    State2 = drain_waiters(Err, State1),
+    State3 = settle_reply_waiters_with(Err, State2),
+    {noreply, State3}.
 
 %% @doc Either deliver a chunk to a waiting recv/2 caller or queue it.
 enqueue_or_deliver(Encoding, Body, #state{waiters = W0} = State) ->

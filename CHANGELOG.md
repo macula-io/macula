@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.1] - 2026-04-21
+
+### Added
+
+**Streaming RPC Phase 2 — STREAM_* frames wired through QUIC.** The
+SDK surface shipped in v1.5.0 now round-trips across a real relay
+connection. Two nodes that are both connected to a relay can open
+streaming calls end-to-end against each other.
+
+- `macula_stream` got a peer-shape refactor: the `peer` field is now
+  one of `undefined | {local, Pid} | {remote, ClientPid, StreamId}`.
+  Local pairing keeps the Phase 1 fast path; remote pairing hands
+  every outbound action off to `macula_mesh_client:send_stream_frame/3`
+  which encodes it as a STREAM_* frame and writes it to the QUIC
+  stream. Public API unchanged.
+
+- `macula_mesh_client` additions:
+  - `advertise_stream/3,4` registers a streaming handler locally AND
+    emits a `register_procedure` frame upstream, identical to the
+    unary advertise path.
+  - `call_stream/4,5`, `open_stream/4,5` — open a client-side stream
+    against a connected mesh client: generate stream_id, spawn a
+    `macula_stream` in `client` role, bind it as `{remote, self(),
+    Sid}`, emit STREAM_OPEN.
+  - `send_stream_frame/3` — the hook `macula_stream` uses when its
+    peer shape is remote. Pure cast — no backpressure at the SDK
+    layer yet (see Phase 2.1 deferrals below).
+  - Incoming STREAM_OPEN / DATA / END / ERROR / REPLY frames are
+    demuxed by `stream_id` and dispatched into the right local
+    `macula_stream` pid. STREAM_OPEN for an unknown procedure is
+    answered with STREAM_ERROR `not_found`.
+  - On relay disconnect, every open stream is aborted with
+    `{<<"disconnected">>, ...}` so recv / await_reply waiters
+    unblock immediately instead of hanging until reconnect.
+
+- `macula.erl` SDK additions (additive — v1.5.0 local variants kept):
+  - `call_stream/3,4` gained `(Client, Procedure, Args[, Opts])`
+    shapes; the first-arg type selects local-vs-remote dispatch.
+  - `open_stream/3,4` likewise.
+  - `advertise_stream/3,4` gained `(Client, Procedure, Handler)` /
+    `(Client, Procedure, Mode, Handler)` shapes.
+
+### Phase 2 caveats
+
+This turn ships **frame multiplexing** on the existing single QUIC
+stream per connection — each call_id / stream_id is demuxed in
+software in `mesh_client` and the relay. The one-QUIC-stream-per-call
+optimisation described in the plan (HoL-blocking isolation at the
+transport layer) is deferred to **Phase 2.1**.
+
+**No SDK-layer credit control.** QUIC's connection-level flow control
+plus the natural gen_server back-pressure from `send/2` (a
+`gen_server:call` into `macula_stream`) is the v1 backpressure story.
+Explicit per-stream credit frames land in **Phase 3**.
+
+**Cross-node CT** (node A → relay → node B, 100 MB transfer) is
+deferred to Phase 2.1 once the live two-node harness is in place.
+Phase 2 ships unit coverage for both sides of the wire — mocked
+QUIC + synthetic incoming frames in the SDK, ETS routing table +
+forwarding assertions in the relay.
+
+### Tests
+
+Eight new eunit cases in `test/macula_stream_remote_tests.erl`
+(meck-based, zero network I/O): call_stream emits STREAM_OPEN with
+the right fields; incoming STREAM_DATA / STREAM_REPLY / STREAM_ERROR
+route to the matching stream pid; advertise_stream emits
+register_procedure upstream; incoming STREAM_OPEN for an advertised
+procedure invokes the handler and emits chunks; STREAM_OPEN for an
+unknown procedure answers STREAM_ERROR `not_found`; relay disconnect
+aborts every open stream.
+
+All 14 Phase 1 tests in `test/macula_stream_tests.erl` pass unchanged
+— Phase 2 is additive.
+
+---
+
 ## [1.5.0] - 2026-04-21
 
 ### Added

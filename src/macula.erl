@@ -22,7 +22,7 @@
 
 %% Streaming RPC (v1.5.0+ — see PLAN_MACULA_STREAMING.md)
 -export([
-    call_stream/2, call_stream/3,
+    call_stream/2, call_stream/3, call_stream/4,
     open_stream/3, open_stream/4,
     advertise_stream/2, advertise_stream/3, advertise_stream/4,
     unadvertise_stream/1,
@@ -176,44 +176,101 @@ unadvertise(Client, Procedure) when is_pid(Client), is_binary(Procedure) ->
 %%%     end.
 
 %% @doc Open a server-stream call (default mode).
+%%
+%% Phase 1 shortcut — dispatches in-process via the local registry.
+%% For cross-node streaming use the `(Client, Procedure, Args)' form.
 -spec call_stream(procedure(), term()) -> {ok, stream()} | {error, term()}.
-call_stream(Procedure, Args) ->
+call_stream(Procedure, Args) when is_binary(Procedure) ->
     call_stream(Procedure, Args, #{}).
 
 %% @doc Open a server-stream call with options.
--spec call_stream(procedure(), term(), map()) -> {ok, stream()} | {error, term()}.
-call_stream(Procedure, Args, Opts) when is_binary(Procedure) ->
-    macula_stream_local:call_stream(Procedure, Args, Opts).
+%%
+%% Two shapes:
+%%   call_stream(Procedure, Args, Opts) — LOCAL dispatch only
+%%   call_stream(Client, Procedure, Args) — REMOTE via mesh client
+-spec call_stream(procedure() | client(), procedure() | term(), term() | map()) ->
+        {ok, stream()} | {error, term()}.
+call_stream(Procedure, Args, Opts) when is_binary(Procedure), is_map(Opts) ->
+    macula_stream_local:call_stream(Procedure, Args, Opts);
+call_stream(Client, Procedure, Args) when is_pid(Client), is_binary(Procedure) ->
+    macula_mesh_client:call_stream(Client, Procedure, Args, #{}).
 
-%% @doc Open a client-stream or bidi call (mode in opts; default bidi).
--spec open_stream(procedure(), term(), map()) -> {ok, stream()} | {error, term()}.
-open_stream(Procedure, Args, Opts) when is_binary(Procedure) ->
-    macula_stream_local:open_stream(Procedure, Args, Opts).
+%% @doc Open a remote server-stream call against a mesh client, with opts.
+-spec call_stream(client(), procedure(), term(), map()) ->
+        {ok, stream()} | {error, term()}.
+call_stream(Client, Procedure, Args, Opts)
+  when is_pid(Client), is_binary(Procedure), is_map(Opts) ->
+    macula_mesh_client:call_stream(Client, Procedure, Args, Opts).
+
+%% @doc Open a client-stream or bidi call.
+%%
+%% Two shapes:
+%%   open_stream(Procedure, Args, Opts) — LOCAL dispatch
+%%   open_stream(Client, Procedure, Args) — REMOTE, default mode bidi
+-spec open_stream(procedure() | client(), procedure() | term(), term() | map()) ->
+        {ok, stream()} | {error, term()}.
+open_stream(Procedure, Args, Opts) when is_binary(Procedure), is_map(Opts) ->
+    macula_stream_local:open_stream(Procedure, Args, Opts);
+open_stream(Client, Procedure, Args) when is_pid(Client), is_binary(Procedure) ->
+    macula_mesh_client:open_stream(Client, Procedure, Args, #{}).
 
 %% @doc Open a stream with explicit mode.
--spec open_stream(procedure(), term(), map(), stream_mode()) ->
+%%
+%% Two shapes:
+%%   open_stream(Procedure, Args, Opts, Mode) — LOCAL dispatch, explicit mode
+%%   open_stream(Client, Procedure, Args, Opts) — REMOTE via mesh client
+-spec open_stream(procedure() | client(), procedure() | term(),
+                  term() | map(), stream_mode() | map()) ->
         {ok, stream()} | {error, term()}.
 open_stream(Procedure, Args, Opts, Mode)
-  when is_binary(Procedure), is_atom(Mode) ->
-    macula_stream_local:open_stream(Procedure, Args, Opts#{mode => Mode}).
+  when is_binary(Procedure), is_map(Opts), is_atom(Mode) ->
+    macula_stream_local:open_stream(Procedure, Args, Opts#{mode => Mode});
+open_stream(Client, Procedure, Args, Opts)
+  when is_pid(Client), is_binary(Procedure), is_map(Opts) ->
+    macula_mesh_client:open_stream(Client, Procedure, Args, Opts).
 
 %% @doc Advertise a streaming procedure (default: server_stream).
+%% LOCAL dispatch only — see `advertise_stream/3,4' for the Client form.
 -spec advertise_stream(procedure(), stream_handler()) -> ok | {error, term()}.
-advertise_stream(Procedure, Handler) ->
+advertise_stream(Procedure, Handler)
+  when is_binary(Procedure), is_function(Handler, 2) ->
     advertise_stream(Procedure, server_stream, Handler).
 
-%% @doc Advertise a streaming procedure with explicit mode.
--spec advertise_stream(procedure(), stream_mode(), stream_handler()) ->
+%% @doc Advertise a streaming procedure.
+%%
+%% Two shapes:
+%%   advertise_stream(Procedure, Mode, Handler)   — LOCAL dispatch
+%%   advertise_stream(Client, Procedure, Handler) — REMOTE, default
+%%                                                  mode server_stream
+-spec advertise_stream(procedure() | client(),
+                       stream_mode() | procedure(),
+                       stream_handler()) ->
         ok | {error, term()}.
-advertise_stream(Procedure, Mode, Handler) ->
-    advertise_stream(Procedure, Mode, Handler, #{}).
+advertise_stream(Procedure, Mode, Handler)
+  when is_binary(Procedure), is_atom(Mode), is_function(Handler, 2) ->
+    advertise_stream(Procedure, Mode, Handler, #{});
+advertise_stream(Client, Procedure, Handler)
+  when is_pid(Client), is_binary(Procedure), is_function(Handler, 2) ->
+    macula_mesh_client:advertise_stream(Client, Procedure, server_stream,
+                                        Handler).
 
-%% @doc Advertise with options (reserved for Phase 2: ucan, etc.).
--spec advertise_stream(procedure(), stream_mode(), stream_handler(), map()) ->
+%% @doc Advertise with explicit mode / options.
+%%
+%% Two shapes:
+%%   advertise_stream(Procedure, Mode, Handler, Opts)   — LOCAL
+%%   advertise_stream(Client, Procedure, Mode, Handler) — REMOTE
+-spec advertise_stream(procedure() | client(),
+                       stream_mode() | procedure(),
+                       stream_handler() | stream_mode(),
+                       map() | stream_handler()) ->
         ok | {error, term()}.
-advertise_stream(Procedure, Mode, Handler, _Opts)
-  when is_binary(Procedure), is_function(Handler, 2) ->
-    macula_stream_local:advertise(Procedure, Mode, Handler).
+advertise_stream(Procedure, Mode, Handler, Opts)
+  when is_binary(Procedure), is_function(Handler, 2), is_map(Opts) ->
+    macula_stream_local:advertise(Procedure, Mode, Handler);
+advertise_stream(Client, Procedure, Mode, Handler)
+  when is_pid(Client), is_binary(Procedure), is_atom(Mode),
+       is_function(Handler, 2) ->
+    macula_mesh_client:advertise_stream(Client, Procedure, Mode, Handler).
 
 %% @doc Stop advertising a streaming procedure.
 -spec unadvertise_stream(procedure()) -> ok.
