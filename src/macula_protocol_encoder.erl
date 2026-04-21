@@ -197,6 +197,40 @@ validate_message(register_procedure, Msg) ->
         {_, true} -> #{<<"procedure">> := _} = Msg
     end,
     ok;
+validate_message(stream_open, Msg) ->
+    %% Streaming RPC open frame — see PLAN_MACULA_STREAMING.md.
+    case {maps:is_key(stream_id, Msg), maps:is_key(<<"stream_id">>, Msg)} of
+        {true, _} -> #{stream_id := _, procedure := _, mode := _, args := _} = Msg;
+        {_, true} -> #{<<"stream_id">> := _, <<"procedure">> := _,
+                       <<"mode">> := _, <<"args">> := _} = Msg
+    end,
+    ok;
+validate_message(stream_data, Msg) ->
+    case {maps:is_key(stream_id, Msg), maps:is_key(<<"stream_id">>, Msg)} of
+        {true, _} -> #{stream_id := _, seq := _, body := _, encoding := _} = Msg;
+        {_, true} -> #{<<"stream_id">> := _, <<"seq">> := _,
+                       <<"body">> := _, <<"encoding">> := _} = Msg
+    end,
+    ok;
+validate_message(stream_end, Msg) ->
+    case {maps:is_key(stream_id, Msg), maps:is_key(<<"stream_id">>, Msg)} of
+        {true, _} -> #{stream_id := _, role := _} = Msg;
+        {_, true} -> #{<<"stream_id">> := _, <<"role">> := _} = Msg
+    end,
+    ok;
+validate_message(stream_error, Msg) ->
+    case {maps:is_key(stream_id, Msg), maps:is_key(<<"stream_id">>, Msg)} of
+        {true, _} -> #{stream_id := _, code := _, message := _} = Msg;
+        {_, true} -> #{<<"stream_id">> := _, <<"code">> := _, <<"message">> := _} = Msg
+    end,
+    ok;
+validate_message(stream_reply, Msg) ->
+    %% Either `result` or `error` must be present.
+    case {maps:is_key(stream_id, Msg), maps:is_key(<<"stream_id">>, Msg)} of
+        {true, _} -> #{stream_id := _} = Msg;
+        {_, true} -> #{<<"stream_id">> := _} = Msg
+    end,
+    ok;
 validate_message(_Type, _Msg) ->
     %% For message types not yet validated, allow anything
     ok.

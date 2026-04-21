@@ -53,6 +53,18 @@ init([]) ->
             type => worker
         },
 
+        %% Local registry + dispatcher for streaming RPC (v1.5.0+).
+        %% In-process pairing of client/server stream halves; the QUIC-
+        %% backed cross-node path lands in Phase 2 of
+        %% PLAN_MACULA_STREAMING.md.
+        #{
+            id => macula_stream_local,
+            start => {macula_stream_local, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
         %% Distribution-over-mesh bridge supervisor.
         %% Started here (under the application supervisor) so it survives
         %% shell crashes and other transient process deaths in user code.

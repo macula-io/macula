@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] - 2026-04-21
+
+### Added
+
+**Streaming RPC primitives** — Phase 1 of `PLAN_MACULA_STREAMING.md`
+(macula-architecture/plans). Adds an additive SDK surface for
+streaming RPC alongside the existing `call/advertise`. Three patterns
+supported (gRPC taxonomy):
+
+- `server_stream` — single Args, streamed reply
+- `client_stream` — streamed Args, single reply
+- `bidi` — duplex
+
+New SDK API in `macula.erl`:
+- `call_stream/2,3` — open a server-stream call
+- `open_stream/3,4` — open a client-stream / bidi call
+- `advertise_stream/2,3,4`, `unadvertise_stream/1`
+- `send/2,3` — send a chunk (raw or msgpack-encoded)
+- `recv/1,2` — receive next chunk; returns `{chunk, Bin}` |
+  `{data, Term}` | `eof` | `{error, Reason}`
+- `close/1`, `close_send/1` — full close / half-close write side
+- `await_reply/1,2` — wait for terminal reply (client-stream / bidi)
+- `set_reply/2`, `abort/3` — server-side: emit terminal value or
+  STREAM_ERROR
+
+Two new modules:
+- `macula_stream` — single-stream gen_server (state machine)
+- `macula_stream_local` — registry + dispatcher for the local path
+
+Five new wire-format frames in `macula_protocol_types`/
+`macula_protocol_encoder`/`macula_protocol_decoder`:
+`STREAM_OPEN` (0x27), `STREAM_DATA` (0x28), `STREAM_END` (0x29),
+`STREAM_ERROR` (0x2A), `STREAM_REPLY` (0x2B).
+
+### Phase 1 caveat
+
+This release ships the LOCAL dispatch path only — both halves of a
+streaming call live in the same BEAM and are paired in-process. The
+public surface is the one cross-node streaming will use; only the
+transport behind `macula_stream_local` changes. Phase 2 (1 week) wires
+STREAM_* frames through QUIC: one QUIC stream per stream_id, relay
+forwards opaque frames with credit pass-through.
+
+Existing `call/3,4` and `advertise/3,4` are untouched; per-consumer
+opt-in to streaming via separate `..._stream` procedure names.
+
+Tests: 14 new eunit cases (`test/macula_stream_tests.erl`) cover
+server-stream, client-stream, bidi, msgpack-encoded chunks, handler
+crash → abort, explicit abort, recv timeout, plus protocol-frame
+round-trips for all five new types.
+
+---
+
 ## [1.4.30] - 2026-04-17
 
 ### Fixed

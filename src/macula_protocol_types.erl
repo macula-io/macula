@@ -29,7 +29,14 @@
     rpc_route_msg/0,
     pubsub_route_msg/0,
     bridge_rpc_msg/0,
-    bridge_data_msg/0
+    bridge_data_msg/0,
+    stream_open_msg/0,
+    stream_data_msg/0,
+    stream_end_msg/0,
+    stream_error_msg/0,
+    stream_reply_msg/0,
+    stream_id/0,
+    stream_mode/0
 ]).
 
 %%%===================================================================
@@ -56,6 +63,15 @@
 -define(MSG_RPC_REQUEST,    16#24).  % NATS-style async RPC request
 -define(MSG_RPC_REPLY,      16#25).  % NATS-style async RPC reply
 -define(MSG_REGISTER_PROCEDURE, 16#26).  % Register RPC procedure on gateway
+
+%% Streaming RPC messages (v1.5.0+)
+%% See PLAN_MACULA_STREAMING.md (macula-architecture/plans).
+%% One QUIC stream per stream_id; STREAM_DATA frames carry chunks.
+-define(MSG_STREAM_OPEN,    16#27).  % Open a streaming RPC call
+-define(MSG_STREAM_DATA,    16#28).  % Chunk frame (raw bytes or msgpack)
+-define(MSG_STREAM_END,     16#29).  % Half-close or full close
+-define(MSG_STREAM_ERROR,   16#2A).  % Abnormal stream termination
+-define(MSG_STREAM_REPLY,   16#2B).  % Terminal reply (client-stream / bidi)
 
 %% SWIM membership messages
 -define(MSG_SWIM_PING,      16#30).
@@ -118,6 +134,8 @@
     connect | disconnect | ping | pong |
     publish | subscribe | unsubscribe | pubsub_route |
     call | reply | cast | rpc_route | rpc_request | rpc_reply |
+    register_procedure |
+    stream_open | stream_data | stream_end | stream_error | stream_reply |
     swim_ping | swim_ack | swim_ping_req |
     find_node | find_node_reply | store | find_value | find_value_reply |
     nat_probe | nat_probe_reply | punch_request | punch_coordinate |
@@ -230,6 +248,53 @@
     %% Authorization fields (v0.17.0+)
     caller_did => binary(),        % Optional: caller's DID
     ucan_token => binary()         % Optional: UCAN for cross-namespace cast
+}.
+
+%% Streaming RPC Messages (v1.5.0+)
+%%
+%% Each streaming RPC call has a `stream_id` (16-byte unique). All
+%% frames for a given stream carry that id. One QUIC stream per
+%% stream_id; relay forwards frames as opaque bytes.
+
+-type stream_id() :: binary().                     % 16-byte unique id
+-type stream_mode() :: server_stream
+                     | client_stream
+                     | bidi.
+
+-type stream_open_msg() :: #{
+    stream_id := stream_id(),
+    procedure := binary(),                         % e.g. <<"foo.bar.fetch_stream">>
+    mode      := stream_mode(),
+    args      := binary() | map(),                 % opening Args (msgpack-friendly)
+    %% Authorization fields, mirroring call_msg
+    caller_did => binary(),
+    ucan_token => binary(),
+    %% Directed routing
+    target    => binary()
+}.
+
+-type stream_data_msg() :: #{
+    stream_id := stream_id(),
+    seq       := non_neg_integer(),                % monotonically increasing per direction
+    body      := binary() | map(),                 % raw chunk OR msgpack-encoded term
+    encoding  := raw | msgpack                     % how `body` should be interpreted
+}.
+
+-type stream_end_msg() :: #{
+    stream_id := stream_id(),
+    role      := send | both                       % half-close (write) or full close
+}.
+
+-type stream_error_msg() :: #{
+    stream_id := stream_id(),
+    code      := binary(),                         % short error code
+    message   := binary()                          % human-readable
+}.
+
+-type stream_reply_msg() :: #{
+    stream_id := stream_id(),
+    result    => term(),                           % terminal value (client-stream / bidi)
+    error     => #{ code := binary(), message := binary() }
 }.
 
 %% RPC Routing Message (for multi-hop DHT routing)
@@ -481,6 +546,11 @@ message_type_id(rpc_route) -> ?MSG_RPC_ROUTE;
 message_type_id(rpc_request) -> ?MSG_RPC_REQUEST;
 message_type_id(rpc_reply) -> ?MSG_RPC_REPLY;
 message_type_id(register_procedure) -> ?MSG_REGISTER_PROCEDURE;
+message_type_id(stream_open) -> ?MSG_STREAM_OPEN;
+message_type_id(stream_data) -> ?MSG_STREAM_DATA;
+message_type_id(stream_end) -> ?MSG_STREAM_END;
+message_type_id(stream_error) -> ?MSG_STREAM_ERROR;
+message_type_id(stream_reply) -> ?MSG_STREAM_REPLY;
 message_type_id(swim_ping) -> ?MSG_SWIM_PING;
 message_type_id(swim_ack) -> ?MSG_SWIM_ACK;
 message_type_id(swim_ping_req) -> ?MSG_SWIM_PING_REQ;
@@ -538,6 +608,11 @@ message_type_name(?MSG_RPC_ROUTE) -> {ok, rpc_route};
 message_type_name(?MSG_RPC_REQUEST) -> {ok, rpc_request};
 message_type_name(?MSG_RPC_REPLY) -> {ok, rpc_reply};
 message_type_name(?MSG_REGISTER_PROCEDURE) -> {ok, register_procedure};
+message_type_name(?MSG_STREAM_OPEN) -> {ok, stream_open};
+message_type_name(?MSG_STREAM_DATA) -> {ok, stream_data};
+message_type_name(?MSG_STREAM_END) -> {ok, stream_end};
+message_type_name(?MSG_STREAM_ERROR) -> {ok, stream_error};
+message_type_name(?MSG_STREAM_REPLY) -> {ok, stream_reply};
 message_type_name(?MSG_SWIM_PING) -> {ok, swim_ping};
 message_type_name(?MSG_SWIM_ACK) -> {ok, swim_ack};
 message_type_name(?MSG_SWIM_PING_REQ) -> {ok, swim_ping_req};
