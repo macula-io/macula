@@ -171,7 +171,7 @@ open_stream(Pid, Procedure, Args, Opts, Timeout) ->
         {open_stream, Procedure, Args, Opts, Mode}, Timeout).
 
 %% @doc Send a STREAM_* frame out the QUIC stream (called by
-%% `macula_stream' processes when their peer shape is `{remote, ...}`).
+%% macula_stream processes when their peer shape is {remote, ...}).
 -spec send_stream_frame(pid(), atom(), map()) -> ok.
 send_stream_frame(Pid, Type, Msg) ->
     gen_server:cast(Pid, {send_stream_frame, Type, Msg}).

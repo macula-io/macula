@@ -1,15 +1,15 @@
 %%%-------------------------------------------------------------------
 %%% @doc Macula streaming RPC — single-stream state machine.
 %%%
-%%% Owns one streaming RPC's state. Each `call_stream`, `open_stream`,
-%%% or server-side handler invocation gets its own `macula_stream`
+%%% Owns one streaming RPC's state. Each call_stream, open_stream,
+%%% or server-side handler invocation gets its own macula_stream
 %%% gen_server. Phase 1 only supports the LOCAL dispatch path: the
-%%% client-side and server-side `macula_stream` processes live in the
-%%% same BEAM and are paired with `pair/2`. Phase 2 swaps the local
-%%% peer for a QUIC stream owned by `macula_mesh_client`; the public
+%%% client-side and server-side macula_stream processes live in the
+%%% same BEAM and are paired with pair/2. Phase 2 swaps the local
+%%% peer for a QUIC stream owned by macula_mesh_client; the public
 %%% API stays unchanged.
 %%%
-%%% See `PLAN_MACULA_STREAMING.md` (macula-architecture/plans).
+%%% See PLAN_MACULA_STREAMING.md (macula-architecture/plans).
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_stream).
@@ -99,7 +99,7 @@
 
 %% @doc Start a stream gen_server.
 %%
-%% Required opts: `id`, `role`, `mode`, `owner`.
+%% Required opts: id, role, mode, owner.
 -spec start_link(map()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
@@ -112,11 +112,11 @@ pair(A, B) when is_pid(A), is_pid(B) ->
     ok.
 
 %% @doc Attach a remote (QUIC) peer to this stream. Used by
-%% `macula_mesh_client` to wire a stream to its QUIC-carrier: all
+%% macula_mesh_client to wire a stream to its QUIC-carrier: all
 %% deliveries out of this stream will be encoded as STREAM_* frames
-%% and sent through `Client`'s relay connection, tagged with
-%% `StreamId`. Deliveries INTO this stream still arrive via the
-%% `deliver_chunk/end/error/reply` casts below — mesh_client decodes
+%% and sent through Client's relay connection, tagged with
+%% StreamId. Deliveries INTO this stream still arrive via the
+%% deliver_chunk/end/error/reply casts below — mesh_client decodes
 %% the incoming frames and forwards them to the local stream pid it
 %% tracks for this StreamId.
 -spec attach_remote(pid(), pid(), stream_id()) -> ok.
@@ -190,7 +190,7 @@ set_error(Pid, Reason) ->
     gen_server:call(Pid, {set_reply, {error, Reason}}).
 
 %% @doc Abort the stream with a STREAM_ERROR frame. Both sides close;
-%% any pending recv/await_reply waiters receive `{error, {Code, Message}}`.
+%% any pending recv/await_reply waiters receive {error, {Code, Message}}.
 -spec abort(pid(), binary(), binary()) -> ok.
 abort(Pid, Code, Message) when is_binary(Code), is_binary(Message) ->
     gen_server:call(Pid, {abort, Code, Message}).

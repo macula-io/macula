@@ -1,15 +1,15 @@
 %%%-------------------------------------------------------------------
 %%% @doc Local registry + dispatcher for streaming RPC.
 %%%
-%%% Phase 1 of `PLAN_MACULA_STREAMING.md` ships LOCAL streaming only —
-%%% the client-side and server-side `macula_stream` processes both live
-%%% in the same BEAM and are paired with `macula_stream:pair/2`. This
-%%% module is the registry that lets `call_stream` find a locally-
+%%% Phase 1 of PLAN_MACULA_STREAMING.md ships LOCAL streaming only —
+%%% the client-side and server-side macula_stream processes both live
+%%% in the same BEAM and are paired with macula_stream:pair/2. This
+%%% module is the registry that lets call_stream find a locally-
 %%% advertised handler for a given procedure name.
 %%%
-%%% Phase 2 will add a parallel path through `macula_mesh_client` that
-%%% bridges streams to QUIC. The public SDK surface in `macula.erl`
-%%% stays the same; `macula_stream_local` becomes a fast in-process
+%%% Phase 2 will add a parallel path through macula_mesh_client that
+%%% bridges streams to QUIC. The public SDK surface in macula.erl
+%%% stays the same; macula_stream_local becomes a fast in-process
 %%% short-circuit for procedures advertised on the same node.
 %%% @end
 %%%-------------------------------------------------------------------
@@ -73,15 +73,15 @@ unadvertise(Procedure) when is_binary(Procedure) ->
     gen_server:call(?SERVER, {unadvertise, Procedure}).
 
 %% @doc Open a server-stream call. Returns the client-side stream pid.
-%% The caller drains chunks with `macula_stream:recv/2`.
+%% The caller drains chunks with macula_stream:recv/2.
 -spec call_stream(binary(), term(), map()) ->
         {ok, pid()} | {error, term()}.
 call_stream(Procedure, Args, Opts) ->
     open_kind(Procedure, Args, Opts, server_stream).
 
 %% @doc Open a client-stream or bidi call. Returns the client-side
-%% stream pid; caller writes with `macula_stream:send/2,3` and reads
-%% the terminal value with `macula_stream:await_reply/1,2`.
+%% stream pid; caller writes with macula_stream:send/2,3 and reads
+%% the terminal value with macula_stream:await_reply/1,2.
 -spec open_stream(binary(), term(), map()) ->
         {ok, pid()} | {error, term()}.
 open_stream(Procedure, Args, Opts) ->
@@ -167,7 +167,7 @@ spawn_pair(Procedure, Mode, Handler, Args, Opts) ->
 
 %% Owner of the server-side stream is a no-op host process; it just
 %% keeps the stream alive while the handler runs in a sibling process.
-%% Using `self()` would cause the registry gen_server to exit if the
+%% Using self() would cause the registry gen_server to exit if the
 %% client linked to it; spawn a dedicated host instead.
 self_host_pid() ->
     spawn(fun() ->
