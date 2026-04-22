@@ -16,20 +16,22 @@ From the SDK perspective: advertise a handler, call a procedure, get a result.
 
 ## Advertising a Procedure
 
-Register a handler function that other nodes can call:
+Build the procedure name via `macula_topic` — inline strings are rejected by the client validator.
 
 ```erlang
-%% Advertise with a function handler
-{ok, Ref} = macula:advertise(Client, <<"math.add">>, fun(#{a := A, b := B}) ->
+%% Advertise an app-tier procedure
+Procedure = macula_topic:app_hope(Realm, Org, App,
+                                  <<"math">>, <<"add">>, 1),
+{ok, Ref} = macula:advertise(Client, Procedure, fun(#{a := A, b := B}) ->
     {ok, #{result => A + B}}
 end).
 
-%% Advertise with options
-{ok, Ref} = macula:advertise(Client, <<"weather.get_current">>, fun(Args) ->
-    Location = maps:get(<<"location">>, Args),
-    {ok, fetch_weather(Location)}
+%% Advertise a realm-tier procedure (e.g. realm authority's check_health)
+HealthProc = macula_topic:realm_hope(Realm, <<"auth">>, <<"check_health">>, 1),
+{ok, Ref} = macula:advertise(Client, HealthProc, fun(_args) ->
+    {ok, #{status => <<"ok">>}}
 end, #{
-    description => <<"Get current weather for a location">>
+    description => <<"Realm health check">>
 }).
 
 %% Stop advertising
@@ -49,10 +51,13 @@ ok = macula:unadvertise(Client, Ref).
 
 ```erlang
 %% Synchronous call with default timeout (5s)
-{ok, #{result := 5}} = macula:call(Client, <<"math.add">>, #{a => 2, b => 3}).
+Procedure = macula_topic:app_hope(Realm, Org, App, <<"math">>, <<"add">>, 1),
+{ok, #{result := 5}} = macula:call(Client, Procedure, #{a => 2, b => 3}).
 
 %% Call with explicit timeout
-{ok, Weather} = macula:call(Client, <<"weather.get_current">>,
+WeatherProc = macula_topic:app_hope(Realm, Org, App,
+                                    <<"weather">>, <<"get_current">>, 1),
+{ok, Weather} = macula:call(Client, WeatherProc,
     #{location => <<"berlin">>}, 10000).  %% 10 second timeout
 ```
 
@@ -102,26 +107,18 @@ end.
 
 ## Procedure Naming Conventions
 
-Use dot-separated names reflecting business intent:
+**See [TOPIC_NAMING_GUIDE.md](TOPIC_NAMING_GUIDE.md) — RPC procedures and pub/sub topics share the same canonical 5-segment format.**
 
-```
-math.add                    -- simple utility
-weather.get_current         -- domain.action
-io.hecate.weather.get_current -- namespaced with realm prefix
-_dht.list_gateways          -- system procedures (underscore prefix)
-```
+Quick summary:
+- Procedure names are mesh topics with present-tense names: `{realm}/{publisher}/{publisher}/{domain}/{verb_subject}_v{N}`
+- Pick a tier: `realm_hope` (realm authority), `org_hope` (org-spanning), `app_hope` (app-specific)
+- Build via `macula_topic` — never inline strings
+- IDs in args, never in procedure name
+- No CRUD verbs
 
-| Convention | Example | Use |
-|------------|---------|-----|
-| Business procedures | `inventory.check` | Application RPC |
-| Namespaced | `io.macula.weather.get_current` | Multi-tenant |
-| System | `_dht.list_gateways` | Infrastructure (underscore prefix) |
-
-**Naming rules:**
-- Use `verb.noun` or `domain.action` format
-- NO CRUD: `place_order`, not `create_order`
-- Lowercase, dot-separated
-- IDs in args, not procedure names
+Examples:
+- App: `io.macula/beam-campus/hecate/math/add_v1`
+- Realm: `io.macula/_realm/_realm/auth/check_health_v1`
 
 ---
 

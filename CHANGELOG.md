@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.0] - 2026-04-23
+
+### BREAKING — `macula_topic` ownership-tier rewrite
+
+The single `macula_topic:fact/5 + hope/5` builder is replaced by three
+ownership-tier builders. The old API is removed; this is a hard cut
+(no deprecation window — no production users yet).
+
+**Why:** the previous "one builder fits all" forced realm-owned facts
+(membership, identity) into per-app namespaces, which made the realm
+authority masquerade as each app and silently broke cross-app
+subscribers. See `docs/guides/TOPIC_NAMING_GUIDE.md` for the full
+rationale.
+
+### Removed
+
+- `macula_topic:fact/5` — replaced by `realm_fact/4`, `org_fact/5`, `app_fact/6`
+- `macula_topic:hope/5` — replaced by `realm_hope/4`, `org_hope/5`, `app_hope/6`
+- `macula_topic:build/5` — replaced by `build/6` with split org/app args
+- `macula_topic:app_id/0` type — org and app are now separate types
+
+### Added
+
+**Three-tier builders** in `macula_topic`:
+
+| Tier | Builder | Topic shape |
+|------|---------|-------------|
+| Realm | `realm_fact/4`, `realm_hope/4` | `{realm}/_realm/_realm/{domain}/{name}_v{N}` |
+| Org   | `org_fact/5`, `org_hope/5`     | `{realm}/{org}/_org/{domain}/{name}_v{N}` |
+| App   | `app_fact/6`, `app_hope/6`     | `{realm}/{org}/{app}/{domain}/{name}_v{N}` |
+
+Reserved sentinels `_realm` and `_org` fill elided publisher slots so
+the parser keeps fixed 5-token arity. They cannot collide with real
+org or app names (DNS-label rules forbid leading underscore).
+
+**`parse/1` now infers tier**:
+
+```erlang
+{ok, #{tier := realm, ...}} = macula_topic:parse(<<"io.macula/_realm/_realm/membership/revoked_v1">>).
+{ok, #{tier := org,   ...}} = macula_topic:parse(<<"io.macula/beam-campus/_org/licenses/issued_batch_v1">>).
+{ok, #{tier := app,   ...}} = macula_topic:parse(<<"io.macula/beam-campus/hecate/mpong/lobby_opened_v1">>).
+```
+
+**Mismatched sentinel combinations are rejected** at both build and
+parse time (e.g. `_realm/hecate` or `beam-campus/_realm` cannot be
+constructed or parsed).
+
+**`is_system_topic/1` tightened** — only `_mesh.*` is a valid system
+topic prefix. Other underscore prefixes are rejected (previously any
+`_*` was treated as a system topic).
+
+### Documentation
+
+- `docs/guides/TOPIC_NAMING_GUIDE.md` — extended with tier semantics,
+  decision tree, sentinel rules, validation examples, anti-patterns
+  drawn from real bugs (the realm/daemon dot-vs-slash mismatch).
+- `docs/guides/PUBSUB_GUIDE.md`, `docs/guides/RPC_GUIDE.md` — examples
+  rewritten to use `macula_topic` builders; old dot-form recommendations
+  removed; both now cross-reference TOPIC_NAMING_GUIDE.md.
+
+### Migration
+
+Callers using the removed API must switch to a tier builder. Quick
+mapping for the common case:
+
+```erlang
+%% Before
+Topic = macula_topic:fact(Realm, <<"beam-campus/hecate">>,
+                          Domain, Name, V).
+
+%% After — pick the right tier
+Topic = macula_topic:app_fact(Realm, <<"beam-campus">>, <<"hecate">>,
+                              Domain, Name, V).
+```
+
+If the topic is realm- or org-owned, use the corresponding tier builder
+instead. See `hecate-social/hecate-agents/skills/MESH_TOPIC_TIERING.md`
+for the decision tree and tier-classification policy.
+
+### Tests
+
+46 new tests covering all three tiers, sentinel rejection, parse-tier
+inference, mismatched-sentinel detection, segment validation, system
+topic exemption, and per-tier roundtrip.
+
+---
+
 ## [1.5.2] - 2026-04-21
 
 ### Added

@@ -30,13 +30,18 @@ Payload = WHO/WHERE/WHEN it happened (entity details)
 
 **WRONG** (causes topic explosion):
 ```erlang
-%% DO NOT DO THIS
-macula:publish(Client, <<"sensor.manchester.main-street.wind">>, #{speed => 42.5}).
+%% DO NOT DO THIS — ID in topic
+Topic = macula_topic:app_fact(Realm, Org, App,
+                              <<"weather">>,
+                              <<"manchester_main_street_wind_measured">>, 1),
+macula:publish(Client, Topic, #{speed => 42.5}).
 ```
 
 **CORRECT** (IDs in payload):
 ```erlang
-macula:publish(Client, <<"weather.wind_measured">>, #{
+Topic = macula_topic:app_fact(Realm, Org, App,
+                              <<"weather">>, <<"wind_measured">>, 1),
+macula:publish(Client, Topic, #{
     station_id => <<"manchester-main-street">>,
     speed => 42.5,
     unit => <<"km/h">>,
@@ -48,14 +53,19 @@ macula:publish(Client, <<"weather.wind_measured">>, #{
 
 ## Subscribing to Topics
 
+Always build the topic via `macula_topic` — direct strings will be rejected by the client validator.
+
 ```erlang
+Topic = macula_topic:app_fact(Realm, Org, App,
+                              <<"sensors">>, <<"temperature_measured">>, 1),
+
 %% Subscribe with a callback function
-{ok, SubRef} = macula:subscribe(Client, <<"sensors.temperature">>, fun(Msg) ->
+{ok, SubRef} = macula:subscribe(Client, Topic, fun(Msg) ->
     io:format("Temperature: ~p~n", [Msg])
 end).
 
 %% Subscribe with a process (receives {macula_event, Topic, Payload} messages)
-{ok, SubRef} = macula:subscribe(Client, <<"sensors.temperature">>, self()).
+{ok, SubRef} = macula:subscribe(Client, Topic, self()).
 
 %% Unsubscribe
 ok = macula:unsubscribe(Client, SubRef).
@@ -73,14 +83,18 @@ ok = macula:unsubscribe(Client, SubRef).
 
 ```erlang
 %% Publish a map payload (encoded as MessagePack on the wire)
-ok = macula:publish(Client, <<"orders.placed">>, #{
+OrdersTopic = macula_topic:app_fact(Realm, Org, App,
+                                    <<"orders">>, <<"placed">>, 1),
+ok = macula:publish(Client, OrdersTopic, #{
     order_id => <<"ord-123">>,
     customer => <<"acme">>,
     total => 4999
 }).
 
 %% Publish binary payload
-ok = macula:publish(Client, <<"logs.raw">>, <<"2026-04-09 ERROR: disk full">>).
+LogsTopic = macula_topic:app_fact(Realm, Org, App,
+                                  <<"logs">>, <<"raw_recorded">>, 1),
+ok = macula:publish(Client, LogsTopic, <<"2026-04-09 ERROR: disk full">>).
 ```
 
 ### Delivery Guarantees
@@ -93,21 +107,15 @@ ok = macula:publish(Client, <<"logs.raw">>, <<"2026-04-09 ERROR: disk full">>).
 
 ## Topic Naming Conventions
 
-Use dot-separated hierarchical names reflecting business domain:
+**See [TOPIC_NAMING_GUIDE.md](TOPIC_NAMING_GUIDE.md) — the canonical specification.**
 
-```
-weather.wind_measured         -- weather domain, wind measurement event
-io.hecate.weather.{cc}.{city} -- namespaced with realm prefix
-_mesh.node.up                 -- system topics (underscore prefix)
-_mesh.relay.ping              -- relay infrastructure events
-```
-
-| Convention | Example | Use |
-|------------|---------|-----|
-| Business events | `orders.placed` | Application events |
-| Namespaced | `io.macula.weather.de.berlin` | Multi-tenant isolation |
-| System | `_mesh.node.up` | Infrastructure events (underscore prefix) |
-| Wildcard-ready | `sensors.temperature` (not `sensors.temperature.sensor-1`) | ID in payload |
+Quick summary:
+- Every topic is exactly 5 slash-separated segments: `{realm}/{publisher}/{publisher}/{domain}/{name}_v{N}`
+- Pick a tier: `realm_fact/realm_hope`, `org_fact/org_hope`, or `app_fact/app_hope`
+- Build via `macula_topic` — never inline strings
+- Past tense for facts, present tense for hopes
+- IDs in payload, never in topic
+- System topics (`_mesh.*`) are infrastructure-owned and dot-separated; do not use in app code
 
 ---
 
