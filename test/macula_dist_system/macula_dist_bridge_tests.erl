@@ -201,8 +201,8 @@ bridge_metrics_updated_on_tunnel_in_test() ->
     Args = #{
         client => MockClient,
         bridge_sock => BridgeSockA,
-        send_topic => <<"dist.out.", TunnelId/binary>>,
-        recv_topic => <<"dist.in.", TunnelId/binary>>,
+        send_topic => <<"_dist.data.", TunnelId/binary, ".out">>,
+        recv_topic => <<"_dist.data.", TunnelId/binary, ".in">>,
         tunnel_id => TunnelId,
         key => Key,
         metrics => Metrics
@@ -281,8 +281,8 @@ setup_bridge() ->
     Args = #{
         client => MockClient,
         bridge_sock => BridgeSockA,
-        send_topic => <<"dist.out.", TunnelId/binary>>,
-        recv_topic => <<"dist.in.", TunnelId/binary>>,
+        send_topic => <<"_dist.data.", TunnelId/binary, ".out">>,
+        recv_topic => <<"_dist.data.", TunnelId/binary, ".in">>,
         tunnel_id => TunnelId,
         key => Key,
         metrics => Metrics

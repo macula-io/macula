@@ -21,7 +21,7 @@ The two `{publisher}` slots carry different values depending on the **ownership 
 | `domain` | Bounded context | `mpong`, `licenses`, `membership` |
 | `name_vN` | Topic name + version suffix | `lobby_opened_v1`, `chat_to_model_v1` |
 
-System topics (prefix `_mesh.`) are exempt from this structure. They are dot-separated and infrastructure-owned. Do not use them in application code.
+System topics (any leading-underscore prefix — `_mesh.*`, `_dist.*`, `_dht.*`) are exempt from this structure. They are dot-separated, infrastructure-owned, and out of scope for application code.
 
 ---
 
@@ -208,6 +208,8 @@ Do NOT write `MaculaRealm.Topics` or similar wrapper modules. Call the Erlang bu
 `macula_mesh_client:publish/3`, `subscribe/3`, `advertise/3`, and `call/4` validate the topic against `macula_topic:validate/1` and reject any non-canonical form. The only exception is the `_mesh.*` system topic prefix used by infrastructure.
 
 This means inline string construction will **fail at runtime**, not silently publish to a dead topic. The previous failure mode — where one side built `io.macula.membership.revoked` (4 dot-separated tokens) and the other built `io.macula/beam-campus/hecate/membership/revoked_v1` (5 slash-separated tokens) and they never matched — is no longer possible.
+
+System topics (any leading-underscore prefix) bypass canonical validation: `_mesh.node.up`, `_dist.tunnel.X`, `_dht.list_gateways` etc. all pass through.
 
 ---
 

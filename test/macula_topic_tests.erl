@@ -204,8 +204,13 @@ validate_good_app_tier_test() ->
     ok = macula_topic:validate(<<"io.macula/beam-campus/hecate/llm/chat_to_model_v1">>).
 
 validate_system_topic_test() ->
+    %% Any leading-underscore prefix is treated as a system topic and
+    %% bypasses canonical-form validation.
     ok = macula_topic:validate(<<"_mesh.node.up">>),
-    ok = macula_topic:validate(<<"_mesh.relay.ping">>).
+    ok = macula_topic:validate(<<"_mesh.relay.ping">>),
+    ok = macula_topic:validate(<<"_dist.tunnel.node@host">>),
+    ok = macula_topic:validate(<<"_dist.data.tunnel-123.in">>),
+    ok = macula_topic:validate(<<"_dht.list_gateways">>).
 
 validate_rejects_dot_form_test() ->
     %% The legacy realm publisher's form. Must reject loudly.
@@ -224,11 +229,10 @@ validate_rejects_arbitrary_garbage_test() ->
     {error, _} = macula_topic:validate(<<"">>),
     {error, _} = macula_topic:validate(<<"/////">>).
 
-validate_rejects_non_mesh_underscore_prefix_test() ->
-    %% Only `_mesh.*` is a valid system topic. Other underscore prefixes
-    %% are rejected — they are NOT exempt.
-    {error, _} = macula_topic:validate(<<"_dht.list_gateways">>),
-    {error, _} = macula_topic:validate(<<"_realm.foo.bar">>).
+%% No "non-mesh underscore prefix" rejection: any leading-underscore
+%% topic is treated as a system topic and exempt. Out of scope per
+%% project policy — system topics are infrastructure-owned, not
+%% governed by the application-tier convention.
 
 %%====================================================================
 %% is_system_topic
@@ -238,10 +242,13 @@ system_topic_test() ->
     ?assert(macula_topic:is_system_topic(<<"_mesh.node.up">>)),
     ?assert(macula_topic:is_system_topic(<<"_mesh.node.down">>)),
     ?assert(macula_topic:is_system_topic(<<"_mesh.relay.ping">>)),
+    ?assert(macula_topic:is_system_topic(<<"_dist.tunnel.node@host">>)),
+    ?assert(macula_topic:is_system_topic(<<"_dht.list_gateways">>)),
     ?assertNot(macula_topic:is_system_topic(<<"io.macula/_realm/_realm/membership/revoked_v1">>)),
     ?assertNot(macula_topic:is_system_topic(<<"io.macula/beam-campus/hecate/mpong/lobby_opened_v1">>)),
-    ?assertNot(macula_topic:is_system_topic(<<"_dht.list_gateways">>)),
-    ?assertNot(macula_topic:is_system_topic(<<"_realm.foo">>)).
+    %% Canonical topics with sentinels still parse correctly — they
+    %% start with the realm name, not an underscore.
+    ?assertNot(macula_topic:is_system_topic(<<"io.macula">>)).
 
 %%====================================================================
 %% Roundtrip per tier

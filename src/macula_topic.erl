@@ -24,8 +24,9 @@
 %%% Use realm_hope / org_hope / app_hope for RPC procedure names
 %%% (present tense names — we want something to happen).
 %%%
-%%% System topics (with _mesh. prefix) are infrastructure-owned,
-%%% dot-separated, and exempt from this 5-segment structure.
+%%% System topics (with leading underscore — _mesh.*, _dist.*, _dht.*)
+%%% are infrastructure-owned, dot-separated, and exempt from this
+%%% 5-segment structure.
 %%%
 %%% Full guide: docs/guides/TOPIC_NAMING_GUIDE.md
 %%% @end
@@ -126,23 +127,25 @@ build(Realm, Org, App, Domain, Name, Version)
 
 %% @doc Parse a topic into its constituent parts and tier.
 %% Returns an error tuple for any non-canonical topic. System topics
-%% (with _mesh. prefix) are not canonical and will return an error.
+%% (leading underscore prefix) are not canonical and will return an error
+%% from parse/1; use validate/1 to accept system topics as well.
 -spec parse(topic()) -> {ok, map()} | {error, term()}.
 parse(Topic) when is_binary(Topic) ->
     parse_segments(binary:split(Topic, <<"/">>, [global]), Topic).
 
 %% @doc Validate a topic string. Accepts canonical 5-segment topics
-%% AND system topics (_mesh. prefix infrastructure events).
+%% AND system topics (leading underscore prefix infrastructure events).
 -spec validate(topic()) -> ok | {error, term()}.
 validate(Topic) when is_binary(Topic) ->
     validate_dispatch(is_system_topic(Topic), Topic).
 
-%% @doc Check if a topic is a system topic. System topics use
-%% underscore prefix and dot separator (e.g. _mesh.node.up).
-%% They are infrastructure-owned and exempt from the canonical
-%% 5-segment structure.
+%% @doc Check if a topic is a system topic. System topics use the
+%% leading-underscore convention (e.g. _mesh.node.up, _dist.tunnel.X,
+%% _dht.list_gateways). They are infrastructure-owned, dot-separated,
+%% and exempt from the canonical 5-segment structure. Out of scope
+%% for this validator — passed through as-is.
 -spec is_system_topic(binary()) -> boolean().
-is_system_topic(<<"_mesh.", _/binary>>) -> true;
+is_system_topic(<<"_", _/binary>>) -> true;
 is_system_topic(_) -> false.
 
 %%%===================================================================

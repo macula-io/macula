@@ -97,6 +97,7 @@ is_connected(Pid) ->
 
 -spec subscribe(pid(), binary(), fun((map()) -> ok)) -> {ok, reference()}.
 subscribe(Pid, Topic, Callback) ->
+    validate_topic_or_die(Topic),
     gen_server:call(Pid, {subscribe, Topic, Callback}).
 
 -spec unsubscribe(pid(), reference()) -> ok.
@@ -105,14 +106,17 @@ unsubscribe(Pid, Ref) ->
 
 -spec publish(pid(), binary(), binary() | map()) -> ok.
 publish(Pid, Topic, Payload) ->
+    validate_topic_or_die(Topic),
     gen_server:cast(Pid, {publish, Topic, Payload}).
 
 -spec advertise(pid(), binary(), fun((map()) -> {ok, term()} | {error, term()})) -> {ok, reference()}.
 advertise(Pid, Procedure, Handler) ->
+    validate_topic_or_die(Procedure),
     gen_server:call(Pid, {advertise, Procedure, Handler}).
 
 -spec unadvertise(pid(), binary()) -> ok.
 unadvertise(Pid, Procedure) ->
+    validate_topic_or_die(Procedure),
     gen_server:call(Pid, {unadvertise, Procedure}).
 
 -spec call(pid(), binary(), map(), timeout()) -> {ok, term()} | {error, term()}.
@@ -121,7 +125,22 @@ call(Pid, Procedure, Args, Timeout) ->
 
 -spec call(pid(), binary(), map(), timeout(), map()) -> {ok, term()} | {error, term()}.
 call(Pid, Procedure, Args, Timeout, Opts) ->
+    validate_topic_or_die(Procedure),
     gen_server:call(Pid, {rpc_call, Procedure, Args, Timeout, Opts}, Timeout + 1000).
+
+%% Validate a topic or RPC procedure name against the canonical
+%% macula_topic structure. Accepts canonical 5-segment topics and
+%% _mesh.* system topics. Throws on anything else — invalid topics
+%% are programming errors that must fail loudly, not silently land
+%% on a dead route.
+validate_topic_or_die(Topic) when is_binary(Topic) ->
+    validate_dispatch(macula_topic:validate(Topic), Topic);
+validate_topic_or_die(Topic) ->
+    error({invalid_topic, Topic, not_a_binary}).
+
+validate_dispatch(ok, _Topic) -> ok;
+validate_dispatch({error, Reason}, Topic) ->
+    error({invalid_topic, Topic, Reason}).
 
 %%====================================================================
 %% Streaming RPC API (v1.5.1+ Phase 2)
@@ -143,6 +162,7 @@ advertise_stream(Pid, Procedure, Handler) ->
         ok | {error, term()}.
 advertise_stream(Pid, Procedure, Mode, Handler)
   when is_binary(Procedure), is_atom(Mode), is_function(Handler, 2) ->
+    validate_topic_or_die(Procedure),
     gen_server:call(Pid, {advertise_stream, Procedure, Mode, Handler}).
 
 %% @doc Open a server-stream call against a connected mesh client.
@@ -154,6 +174,7 @@ call_stream(Pid, Procedure, Args, Opts) ->
 -spec call_stream(pid(), binary(), term(), map(), timeout()) ->
         {ok, pid()} | {error, term()}.
 call_stream(Pid, Procedure, Args, Opts, Timeout) ->
+    validate_topic_or_die(Procedure),
     gen_server:call(Pid,
         {open_stream, Procedure, Args, Opts, server_stream}, Timeout).
 
@@ -166,6 +187,7 @@ open_stream(Pid, Procedure, Args, Opts) ->
 -spec open_stream(pid(), binary(), term(), map(), timeout()) ->
         {ok, pid()} | {error, term()}.
 open_stream(Pid, Procedure, Args, Opts, Timeout) ->
+    validate_topic_or_die(Procedure),
     Mode = maps:get(mode, Opts, bidi),
     gen_server:call(Pid,
         {open_stream, Procedure, Args, Opts, Mode}, Timeout).

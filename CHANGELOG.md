@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.0] - 2026-04-23
+
+### Added — topic validation gate at `macula_mesh_client`
+
+Every public entry point that takes a topic or RPC procedure name now
+validates the input against `macula_topic:validate/1` BEFORE any
+gen_server interaction. Invalid topics raise
+`error({invalid_topic, Topic, Reason})` with a stack trace pointing
+at the caller — no more silent publishes to dead routes.
+
+**Functions gated:**
+- `subscribe/3`, `publish/3`
+- `advertise/3`, `unadvertise/2`
+- `call/4`, `call/5`
+- `advertise_stream/3`, `advertise_stream/4`
+- `call_stream/4`, `call_stream/5`
+- `open_stream/4`, `open_stream/5`
+
+**Why:** the v2.0.0 builders enforce structure at construction time,
+but anyone bypassing them (inline string interpolation, dot-form
+legacy code) could still publish anything. The realm-vs-daemon
+membership lifecycle has been silently dead because of exactly this
+drift — realm published `io.macula.membership.revoked` (4 dots) while
+the daemon listened on `io.macula/beam-campus/hecate/membership/revoked_v1`
+(canonical). With the validation gate in place, that drift fails at
+the call site instead of vanishing into the wire.
+
+**System topics exempt:** any leading-underscore prefix (`_mesh.*`,
+`_dist.*`, `_dht.*`) bypasses canonical validation. These are
+infrastructure-owned and out of scope for the application-tier
+convention.
+
+**`is_system_topic/1` corrected:** v2.0.0 narrowed this to `_mesh.*`
+only; v2.1.0 restores the original "any leading underscore" behavior
+to accommodate `_dist.*` (Erlang-distribution-over-mesh tunnel topics)
+and `_dht.*` (DHT system topics) that are equally infrastructure-owned.
+
+### Tests
+
+- 20 new validation-gate tests in `macula_mesh_client_validate_tests`
+  covering every gated entry point with dot-form, garbage, empty,
+  non-binary, and sentinel-mismatch inputs.
+- `macula_topic_tests` updated to assert any underscore-prefix is a
+  system topic (45 tests total, all pass).
+
+### Migration
+
+Internal callers that previously constructed non-canonical topics as
+test fixtures must update. One test file in this repo
+(`macula_dist_bridge_tests.erl`) was updated to use the production
+`_dist.data.{tunnel_id}.{in|out}` form instead of an ad-hoc
+`dist.in.{tunnel_id}` form. No other internal regressions.
+
+### Documentation
+
+- `docs/guides/TOPIC_NAMING_GUIDE.md` updated to clarify that any
+  leading-underscore prefix is a system topic exempt from validation.
+
+---
+
 ## [2.0.0] - 2026-04-23
 
 ### BREAKING — `macula_topic` ownership-tier rewrite
