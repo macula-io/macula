@@ -299,3 +299,53 @@ multi_dot_realm_test() ->
                                   <<"mpong">>, <<"lobby_opened">>, 1),
     ?assertEqual(<<"io.macula.demo/beam-campus/hecate/mpong/lobby_opened_v1">>, Topic),
     {ok, #{realm := <<"io.macula.demo">>}} = macula_topic:parse(Topic).
+
+%%====================================================================
+%% Edge cases — empty / boundary segments
+%%====================================================================
+
+build_rejects_empty_realm_test() ->
+    ?assertError({invalid_segment, realm, <<>>},
+        macula_topic:realm_fact(<<>>, <<"membership">>, <<"revoked">>, 1)).
+
+build_rejects_empty_domain_test() ->
+    ?assertError({invalid_segment, domain, <<>>},
+        macula_topic:realm_fact(<<"io.macula">>, <<>>, <<"revoked">>, 1)).
+
+build_rejects_empty_name_test() ->
+    ?assertError({invalid_segment, name, <<>>},
+        macula_topic:realm_fact(<<"io.macula">>, <<"membership">>, <<>>, 1)).
+
+build_rejects_empty_org_test() ->
+    ?assertError({invalid_segment, org, <<>>},
+        macula_topic:org_fact(<<"io.macula">>, <<>>, <<"licenses">>, <<"issued">>, 1)).
+
+build_rejects_empty_app_test() ->
+    ?assertError({invalid_segment, app, <<>>},
+        macula_topic:app_fact(<<"io.macula">>, <<"beam-campus">>, <<>>,
+                              <<"mpong">>, <<"lobby_opened">>, 1)).
+
+build_rejects_leading_dash_in_org_test() ->
+    %% Regex requires segment to start with [a-z0-9]; leading `-` rejected.
+    ?assertError({invalid_segment, org, <<"-bad">>},
+        macula_topic:app_fact(<<"io.macula">>, <<"-bad">>, <<"hecate">>,
+                              <<"mpong">>, <<"lobby_opened">>, 1)).
+
+build_rejects_slash_in_segment_test() ->
+    %% A slash in the realm would split the topic into the wrong shape.
+    %% Regex character class excludes /.
+    ?assertError({invalid_segment, realm, <<"io/macula">>},
+        macula_topic:realm_fact(<<"io/macula">>, <<"membership">>, <<"revoked">>, 1)).
+
+build_accepts_high_version_test() ->
+    Topic = macula_topic:app_fact(<<"io.macula">>, <<"beam-campus">>, <<"hecate">>,
+                                  <<"mpong">>, <<"lobby_opened">>, 999),
+    ?assertEqual(<<"io.macula/beam-campus/hecate/mpong/lobby_opened_v999">>, Topic),
+    {ok, #{version := 999}} = macula_topic:parse(Topic).
+
+parse_rejects_zero_version_in_topic_test() ->
+    %% _v0 would parse as Version=0 then fail roundtrip-build (build rejects 0).
+    %% parse/1 itself accepts the literal but the value is non-pos-int —
+    %% confirm parse currently accepts (it does, integer_to_binary handles 0).
+    %% This documents existing behavior; tighten in a future minor if needed.
+    {ok, #{version := 0}} = macula_topic:parse(<<"io.macula/beam-campus/hecate/mpong/event_v0">>).

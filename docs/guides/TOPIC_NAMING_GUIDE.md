@@ -31,11 +31,13 @@ A topic's tier answers one question: **who owns its schema and authority?**
 
 | Tier | Builder | Topic shape | Owner |
 |---|---|---|---|
-| **realm** | `realm_fact/3`, `realm_hope/3` | `{realm}/_realm/_realm/{domain}/{name}_v{N}` | The realm authority — concepts shared by every member regardless of org/app (membership, identity, ban) |
-| **org** | `org_fact/4`, `org_hope/4` | `{realm}/{org}/_org/{domain}/{name}_v{N}` | An org — concepts shared by multiple apps within one org (licensing, billing, org-wide settings) |
-| **app** | `app_fact/5`, `app_hope/5` | `{realm}/{org}/{app}/{domain}/{name}_v{N}` | A specific app — anything app-internal (game state, RPCs, app-specific events) |
+| **realm** | `realm_fact/4`, `realm_hope/4` | `{realm}/_realm/_realm/{domain}/{name}_v{N}` | The realm authority — concepts shared by every member regardless of org/app (membership, identity, ban) |
+| **org** | `org_fact/5`, `org_hope/5` | `{realm}/{org}/_org/{domain}/{name}_v{N}` | An org — concepts shared by multiple apps within one org (licensing, billing, org-wide settings) |
+| **app** | `app_fact/6`, `app_hope/6` | `{realm}/{org}/{app}/{domain}/{name}_v{N}` | A specific app — anything app-internal (game state, RPCs, app-specific events) |
 
-`realm_*` and `org_*` are positional shortcuts. The underlying `build/6` always emits 5 tokens. Sentinels fill elided slots so the parser never branches on length.
+Each builder takes the realm name as its first argument; org-tier additionally takes the org; app-tier takes both org and app. The underlying `build/6` always emits 5 tokens. Sentinels (`_realm`, `_org`) fill elided publisher slots so the parser never branches on length.
+
+**Per-app convenience wrappers** (e.g. `hecate_topics`) typically pre-fill realm + org + app constants and expose 3-arg variants — see the Hecate practical guide for the wrapper pattern.
 
 ### Picking a tier
 

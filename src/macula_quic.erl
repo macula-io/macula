@@ -37,7 +37,6 @@
     async_accept_stream/2,
     handshake/1,
     peername/1,
-    sockname/1,
 
     %% Stream
     send/2,
@@ -49,8 +48,7 @@
     %% Compat: generic close (tries stream → conn → listener)
     close/1,
 
-    %% Dist compat (synchronous accept, stream accept with opts)
-    accept/2,
+    %% Dist compat (stream accept with opts, stream open with opts)
     accept_stream/3,
     open_stream/2,
     handoff_stream/3,
@@ -172,12 +170,6 @@ handshake(Conn) ->
 peername(Conn) ->
     nif_peername(Conn).
 
-%% @doc Get local address (liveness probe).
--spec sockname(reference()) -> {ok, {string(), inet:port_number()}} | {error, term()}.
-sockname(_Conn) ->
-    %% TODO: implement via nif_sockname
-    {ok, {"0.0.0.0", 0}}.
-
 %%%===================================================================
 %%% Stream API
 %%%===================================================================
@@ -238,7 +230,11 @@ async_shutdown_stream(Stream, _Flag, _Code) ->
 async_shutdown_connection(Conn, _Flag, _Code) ->
     nif_close_connection(Conn).
 
-%% @doc Get connection stats (stub — returns empty for now).
+%% @doc Get connection stats. Currently returns zeros for all
+%% requested counters — Quinn exposes per-connection stats but the
+%% NIF binding hasn't surfaced them yet. Used by macula_dist for
+%% telemetry; zeroed values are harmless (dist_util only uses these
+%% for liveness signals).
 -spec getstat(reference(), [atom()]) -> {ok, [{atom(), integer()}]} | {error, term()}.
 getstat(_Conn, Stats) ->
     {ok, [{S, 0} || S <- Stats]}.
@@ -246,12 +242,6 @@ getstat(_Conn, Stats) ->
 %%%===================================================================
 %%% Dist Compat API
 %%%===================================================================
-
-%% @doc Synchronous accept (for macula_dist). Blocks until connection arrives.
--spec accept(reference(), map()) -> {ok, reference()} | {error, term()}.
-accept(_Listener, _Opts) ->
-    %% TODO: implement blocking accept for dist — for now returns error
-    {error, not_implemented}.
 
 %% @doc Accept stream with options and timeout (for macula_dist).
 -spec accept_stream(reference(), map(), timeout()) -> {ok, reference()} | {error, term()}.

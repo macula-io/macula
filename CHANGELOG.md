@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.1] - 2026-04-23
+
+### Fixed
+
+- **`docs/guides/TOPIC_NAMING_GUIDE.md`** — corrected the tier-builder
+  arity table that incorrectly listed `realm_fact/3`, `org_fact/4`,
+  `app_fact/5`. The actual SDK exports take the realm as their first
+  argument: `realm_fact/4`, `org_fact/5`, `app_fact/6`. Documentation
+  now matches the API.
+- **`rebar.config`** — added `TOPIC_NAMING_GUIDE.md` to ex_doc extras
+  so it renders on hexdocs (was missing from v2.1.0 even though the
+  file shipped in the package).
+- **`rebar.config`** — bumped relx release version from `1.1.0` to
+  `2.1.1` to match `.app.src` `vsn`.
+- **`CHANGELOG.md`** — escaped function references in v2.0.0 removal
+  list so ex_doc doesn't try to auto-link removed symbols.
+- **`CHANGELOG.md`** — rewrote the v1.4.26 binary literal example
+  that confused the markdown parser (`#{url => binary}` form was
+  being treated as an autolink target).
+
+### Removed
+
+- **`macula_quic:sockname/1`** — was a documented stub that returned
+  `{ok, {"0.0.0.0", 0}}`. No callers in `src/`. Quinn binding is
+  in place; sockname can be added later if a real caller appears.
+- **`macula_quic:accept/2`** — was a documented stub that returned
+  `{error, not_implemented}`. The only caller (`macula_dist:acceptor_loop/2`
+  direct-mode clause) is also removed; direct-listener acceptance was
+  never wired end-to-end. Inbound dist connections arrive via the
+  relay or dist_relay client message-delivery paths.
+- **`macula_dist`** dead helpers — `handle_accepted_connection/2`,
+  `handle_quic_handshake/2`, `notify_kernel_and_transfer/3`,
+  `transfer_stream_ownership/3`, `accept_dist_stream/1` — all only
+  reachable through the deleted direct-mode acceptor clause.
+
+### Changed
+
+- **`macula_quic:getstat/2`** doc updated — clarifies it returns
+  zeros for all requested counters (Quinn binding doesn't surface
+  per-connection stats yet) and is harmless for the dist_util
+  liveness use case where it's currently called.
+- **`macula.app.src`** — added `inets` to the application list. The
+  bootstrap fallback in `macula_relay_discovery` calls `httpc:request/4`,
+  which lives under the `inets` app. Was triggering a dialyzer warning;
+  also a real risk if `inets` happened not to be running.
+
+### Added
+
+- **9 edge-case tests** in `macula_topic_tests` covering empty
+  segments (realm/domain/name/org/app), leading-dash org names,
+  embedded slashes in realm, high version numbers, and `_v0`
+  parse semantics.
+
+### Notes
+
+Two `ex_doc` warnings remain ("Closing unclosed backquotes at end
+of input" referencing very old CHANGELOG entries near v0.7.0). All
+markdown files have even backtick parity, so the warnings are an
+ex_doc parser quirk against legacy entries, not real broken markup.
+Cosmetic only — docs render correctly on hexdocs.
+
+---
+
 ## [2.1.0] - 2026-04-23
 
 ### Added — topic validation gate at `macula_mesh_client`
@@ -83,10 +146,10 @@ rationale.
 
 ### Removed
 
-- `macula_topic:fact/5` — replaced by `realm_fact/4`, `org_fact/5`, `app_fact/6`
-- `macula_topic:hope/5` — replaced by `realm_hope/4`, `org_hope/5`, `app_hope/6`
-- `macula_topic:build/5` — replaced by `build/6` with split org/app args
-- `macula_topic:app_id/0` type — org and app are now separate types
+- macula_topic `fact/5` — replaced by `realm_fact/4`, `org_fact/5`, `app_fact/6`
+- macula_topic `hope/5` — replaced by `realm_hope/4`, `org_hope/5`, `app_hope/6`
+- macula_topic `build/5` — replaced by `build/6` with split org/app args
+- macula_topic `app_id/0` type — org and app are now separate types
 
 ### Added
 
@@ -431,7 +494,8 @@ releases got as far as building the QUIC tunnel, then returned `pang` on any
 - **`macula:join_dist_relay/1`** — public entry point for Erlang
   distribution over a dedicated dist relay
   (`macula-io/macula-dist-relay`) instead of the pub/sub bridge that
-  `join_mesh/1` sets up. Takes `#{url => <<"quic://host:4434">>}`.
+  `join_mesh/1` sets up. Takes a map with key `url` whose value is
+  a binary like `quic://host:4434`.
   Starts a `macula_dist_relay_client` under the `macula_dist_system`
   supervisor and sets `MACULA_DIST_MODE=dist_relay`.
 - **`macula_dist_relay_client`** — `gen_server` maintaining a persistent

@@ -280,71 +280,26 @@ start_quic_listener(Port) ->
 %%% Internal — Acceptor Loop (flattened from 5-level nesting)
 %%%===================================================================
 
-%% @private Acceptor loop — recursively accepts QUIC connections.
-%% In relay / dist_relay modes, block forever — inbound connections arrive
-%% via the respective client, not via QUIC accept.
+%% @private Acceptor loop. In all currently-supported modes inbound
+%% connections arrive via the relay or dist-relay client (message
+%% delivery), not via direct QUIC accept. Direct-listener mode was
+%% never implemented end-to-end (the Quinn NIF binding for blocking
+%% accept doesn't exist) and the supervisor today only spawns the
+%% relay or dist_relay variants, so the loop just blocks on `stop`.
 acceptor_loop(_Kernel, relay_mode) ->
     receive stop -> ok end;
 acceptor_loop(_Kernel, dist_relay_mode) ->
     receive stop -> ok end;
-acceptor_loop(Kernel, Listener) ->
-    case macula_quic:accept(Listener, #{active => false}) of
-        {ok, Conn} ->
-            handle_accepted_connection(Kernel, Conn);
-        {error, closed} ->
-            exit(normal);
-        {error, Reason} ->
-            ?LOG_WARNING("[dist] Accept failed: ~p", [Reason])
-    end,
-    acceptor_loop(Kernel, Listener).
+acceptor_loop(_Kernel, _Listener) ->
+    ?LOG_WARNING("[dist] Direct-listener acceptor mode is not implemented; "
+                 "use relay or dist_relay modes."),
+    receive stop -> ok end.
 
-handle_accepted_connection(Kernel, Conn) ->
-    case macula_quic:handshake(Conn) of
-        {ok, Conn} ->
-            handle_quic_handshake(Kernel, Conn);
-        {error, Reason} ->
-            ?LOG_WARNING("[dist] QUIC handshake failed: ~p", [Reason]),
-            macula_quic:close_connection(Conn)
-    end.
-
-handle_quic_handshake(Kernel, Conn) ->
-    case accept_dist_stream(Conn) of
-        {ok, Stream} ->
-            notify_kernel_and_transfer(Kernel, Conn, Stream);
-        {error, Reason} ->
-            ?LOG_WARNING("[dist] Stream accept failed: ~p", [Reason]),
-            macula_quic:close_connection(Conn)
-    end.
-
-notify_kernel_and_transfer(Kernel, Conn, Stream) ->
-    Kernel ! {accept, self(), {Conn, Stream}, ?FAMILY, ?DRIVER},
-    receive
-        {Kernel, controller, DistCtrl} ->
-            transfer_stream_ownership(Conn, Stream, DistCtrl);
-        {Kernel, unsupported_protocol} ->
-            close({Conn, Stream})
-    after ?HANDSHAKE_TIMEOUT ->
-        ?LOG_WARNING("[dist] Controller assignment timeout"),
-        close({Conn, Stream})
-    end.
-
-transfer_stream_ownership(Conn, Stream, DistCtrl) ->
-    case macula_quic:handoff_stream(Stream, DistCtrl, #{}) of
-        ok ->
-            case macula_quic:controlling_process(Conn, DistCtrl) of
-                ok ->
-                    DistCtrl ! {self(), controller, ok};
-                {error, Reason} ->
-                    ?LOG_WARNING("[dist] Connection transfer failed: ~p", [Reason]),
-                    close({Conn, Stream})
-            end;
-        {error, Reason} ->
-            ?LOG_WARNING("[dist] Stream handoff failed: ~p", [Reason]),
-            close({Conn, Stream})
-    end.
-
-accept_dist_stream(Conn) ->
-    macula_quic:accept_stream(Conn, #{active => true}, ?HANDSHAKE_TIMEOUT).
+%% Direct-listener acceptance helpers were removed alongside
+%% macula_quic:accept/2 (which had only ever been a stub). Inbound
+%% dist connections now arrive exclusively via relay or dist_relay
+%% modes, where the relay client message-delivers them rather than
+%% invoking acceptor_loop.
 
 %%%===================================================================
 %%% Internal — Accept Incoming Connection
