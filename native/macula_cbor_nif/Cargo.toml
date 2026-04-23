@@ -1,0 +1,14 @@
+[package]
+name = "macula_cbor_nif"
+version = "0.1.0"
+edition = "2021"
+description = "CBOR pack/unpack NIF for Macula mesh wire protocol"
+
+[lib]
+name = "macula_cbor_nif"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.34"
+ciborium = "0.2"
+ciborium-io = "0.2"

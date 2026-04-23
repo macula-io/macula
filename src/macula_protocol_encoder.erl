@@ -39,8 +39,8 @@ encode(Type, Msg) when is_atom(Type), is_map(Msg) ->
     %% Get message type ID
     TypeId = macula_protocol_types:message_type_id(Type),
 
-    %% Encode payload with MessagePack
-    Payload = msgpack:pack(Msg, [{map_format, map}]),
+    %% Encode payload with CBOR (RFC 8949) — v3.0.0 wire format.
+    Payload = macula_cbor_nif:pack(Msg),
 
     %% Build frame: 8-byte header + payload
     PayloadLen = byte_size(Payload),

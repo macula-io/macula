@@ -55,10 +55,10 @@ do_decode_with_type({error, unknown_type}, TypeId, _PayloadBytes) ->
     {error, {unknown_type, TypeId}}.
 
 %% @doc Decode MessagePack payload.
-%% Returns {error, Reason} for invalid msgpack data.
+%% Returns {error, Reason} for malformed CBOR (v3.0.0 wire format).
 -spec decode_payload(atom(), binary()) -> {ok, {atom(), map()}} | {error, term()}.
 decode_payload(Type, PayloadBytes) ->
-    UnpackResult = msgpack:unpack(PayloadBytes, [{map_format, map}]),
+    UnpackResult = macula_cbor_nif:unpack(PayloadBytes),
     do_decode_payload(UnpackResult, Type).
 
 %% @private Unpack succeeded

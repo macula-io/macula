@@ -769,12 +769,13 @@ send_stream_open(StreamId, Procedure, Mode, Args, State) ->
         args => args_payload(Args)
     }, State).
 
-%% STREAM_OPEN args: msgpack accepts a map or binary. Coerce arbitrary
-%% terms to a msgpack-friendly shape — callers may pass #{k => v} maps
-%% directly, so leave those through.
+%% STREAM_OPEN args: pass binaries + maps through unchanged so the
+%% protocol encoder can encode them as a single CBOR payload. Other
+%% term shapes get pre-packed to a CBOR binary blob — recipients
+%% then decode that blob themselves if they understand it.
 args_payload(B) when is_binary(B) -> B;
 args_payload(M) when is_map(M)    -> M;
-args_payload(Other)               -> msgpack:pack(Other, [{map_format, map}]).
+args_payload(Other)               -> macula_cbor_nif:pack(Other).
 
 stream_id_of(Msg) ->
     case maps:find(stream_id, Msg) of

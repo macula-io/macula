@@ -69,5 +69,6 @@ build_nif "macula_crypto_nif"
 build_nif "macula_ucan_nif"
 build_nif "macula_did_nif"
 build_nif "macula_mri_nif"
+build_nif "macula_cbor_nif"
 
 echo "[macula] All NIFs ready."

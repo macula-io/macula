@@ -47,16 +47,15 @@
 
 -spec encode(control_msg()) -> binary().
 encode(Msg) when is_map(Msg) ->
-    Payload = msgpack:pack(encode_map(Msg), [{map_format, map}]),
-    PayloadBin = iolist_to_binary(Payload),
+    PayloadBin = macula_cbor_nif:pack(encode_map(Msg)),
     Len = byte_size(PayloadBin),
     <<Len:32/big-unsigned, PayloadBin/binary>>.
 
 -spec decode(binary()) -> {ok, control_msg()} | {error, term()}.
 decode(PayloadBin) ->
-    case msgpack:unpack(PayloadBin, [{map_format, map}]) of
+    case macula_cbor_nif:unpack(PayloadBin) of
         {ok, Map} -> decode_map(Map);
-        {error, Reason} -> {error, {msgpack_decode, Reason}}
+        {error, Reason} -> {error, {cbor_decode, Reason}}
     end.
 
 %% @doc Extract zero or more complete frames from a buffer.

@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.0.0] - 2026-04-23
+
+### BREAKING — wire format switched from MessagePack to CBOR (RFC 8949)
+
+The mesh wire protocol now uses CBOR for every frame's payload instead
+of MessagePack. This is a hard wire-format break: every relay and every
+SDK consumer must roll forward together. Greenfield migration — no
+deprecation window.
+
+### Why
+
+CBOR was chosen because it composes natively with the rest of the
+Macula identity + auth stack:
+
+- **UCAN tokens** — already CBOR-serialized (DAG-CBOR via IPLD)
+- **DIDs** — CBOR-serialized when signed
+- **Ed25519/X25519 signatures** — COSE-CBOR is the canonical wrapper
+- **Future WebAuthn integration** — CBOR-native
+
+With CBOR as the wire format, signature payloads can be canonical-CBOR
+encoded once and signed directly, removing the msgpack-vs-CBOR
+double-encoding that previously sat between the protocol and auth
+layers.
+
+CBOR also brings:
+
+- IETF standardization (RFC 8949) vs msgpack's GitHub-governed spec
+- Deterministic encoding rules (RFC 8949 §4.2.1) — required for signed
+  payloads
+- IANA-registered tag types for typed data (UUID, datetime, big int)
+- Indefinite-length items (streaming-friendly)
+
+### Added
+
+- **`macula_cbor_nif`** — new Erlang module + Rust NIF that pack/unpack
+  Erlang terms to/from CBOR via the `ciborium` crate. Loaded
+  automatically; no Erlang fallback (see "No fallback" below).
+- **`native/macula_cbor_nif/`** — new Rust crate, ~150 lines, depends on
+  `ciborium 0.2`. Built by `priv/build-nifs.sh` alongside the existing
+  five NIFs.
+- **`test/macula_cbor_nif_tests.erl`** — 20 tests covering primitive
+  roundtrips (int/float/bin/bool/null/list/nested), map roundtrips
+  (including the protocol payload shape), documented lossiness
+  (atoms→binary, tuples→list), error paths (garbage/truncated/empty
+  inputs), and RFC 8949 fixed-prefix self-checks (zero, empty array,
+  empty map, true, false, null).
+
+### Removed
+
+- **`msgpack` hex package** dependency — removed from `rebar.config` and
+  from the `applications` list in `macula.app.src`. The pure-Erlang
+  msgpack implementation was the dominant cost in the per-frame
+  serialization path; CBOR via Rust NIF replaces it with byte-identical
+  semantics on the type shapes Macula actually uses.
+
+### Migrated call sites (5)
+
+| File | Change |
+|---|---|
+| `src/macula_protocol_encoder.erl:43` | `msgpack:pack/2 → macula_cbor_nif:pack/1` |
+| `src/macula_protocol_decoder.erl:61` | `msgpack:unpack/2 → macula_cbor_nif:unpack/1`; error tuple is now `{cbor_decode_error, Reason}` |
+| `src/macula_mesh_client.erl:777` | `args_payload/1` arbitrary-term branch uses `macula_cbor_nif:pack/1` |
+| `src/macula_dist_system/macula_dist_relay_protocol.erl:50` | encode uses `macula_cbor_nif:pack/1` |
+| `src/macula_dist_system/macula_dist_relay_protocol.erl:57` | decode uses `macula_cbor_nif:unpack/1`; error tuple is `{cbor_decode, Reason}` |
+
+### Type mapping (Erlang ↔ CBOR)
+
+```
+Atom (true / false)    ↔ Bool
+Atom (nil / undefined) ↔ Null  (decode always returns `nil`)
+Atom (other)            → Text string  (LOSSY — decoder returns binary)
+Binary                 ↔ Byte string
+Integer                ↔ Integer  (uint or negative-int as appropriate)
+Float                  ↔ Float
+List                   ↔ Array
+Tuple                   → Array  (LOSSY — decoder returns list)
+Map                    ↔ Map
+```
+
+Atoms and tuples lose their type information across the wire — same
+constraint as the previous msgpack-era protocol. Callers using maps
+of binary keys (the protocol convention) are unaffected.
+
+### No fallback
+
+Unlike the crypto/DID/UCAN/MRI NIFs, `macula_cbor_nif` has no pure-Erlang
+fallback. The protocol layer is in the same critical path as
+`macula_quic` (which also has no Erlang fallback). Failing fast at
+NIF-load time is the right behavior; a slow Erlang fallback would
+silently halve throughput. If the NIF fails to load, every
+`pack/unpack` call raises `{nif_error, nif_not_loaded}` — loud,
+attributable, recoverable by fixing the build environment.
+
+### Migration
+
+For SDK consumers: this is wire-incompatible with v2.x. Daemons and
+relays running v2.x cannot communicate with v3.x. Roll forward in
+lockstep.
+
+For any external code that called `macula:` API with binary args, no
+change is needed — the SDK API surface is unchanged. Only the wire
+encoding inside the SDK changed.
+
+If you were using `msgpack` from your own application code that also
+imported macula, you will need to add `msgpack` as your own direct
+dependency (it is no longer transitively pulled in by macula).
+
+---
+
 ## [2.1.1] - 2026-04-23
 
 ### Fixed
@@ -29,15 +138,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **`macula_quic:sockname/1`** — was a documented stub that returned
+- **macula_quic `sockname/1`** — was a documented stub that returned
   `{ok, {"0.0.0.0", 0}}`. No callers in `src/`. Quinn binding is
   in place; sockname can be added later if a real caller appears.
-- **`macula_quic:accept/2`** — was a documented stub that returned
-  `{error, not_implemented}`. The only caller (`macula_dist:acceptor_loop/2`
-  direct-mode clause) is also removed; direct-listener acceptance was
-  never wired end-to-end. Inbound dist connections arrive via the
-  relay or dist_relay client message-delivery paths.
-- **`macula_dist`** dead helpers — `handle_accepted_connection/2`,
+- **macula_quic `accept/2`** — was a documented stub that returned
+  `{error, not_implemented}`. The only caller (macula_dist
+  `acceptor_loop/2` direct-mode clause) is also removed; direct-listener
+  acceptance was never wired end-to-end. Inbound dist connections
+  arrive via the relay or dist_relay client message-delivery paths.
+- **macula_dist** dead helpers — `handle_accepted_connection/2`,
   `handle_quic_handshake/2`, `notify_kernel_and_transfer/3`,
   `transfer_stream_ownership/3`, `accept_dist_stream/1` — all only
   reachable through the deleted direct-mode acceptor clause.

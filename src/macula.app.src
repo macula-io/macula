@@ -1,6 +1,6 @@
 {application, macula, [
     {description, "Macula HTTP/3 Mesh SDK — connect, subscribe, publish, call, advertise"},
-    {vsn, "2.1.1"},
+    {vsn, "3.0.0"},
     %% Hex packaging: include NIF source (without target/ build artifacts)
     {files, [
         "src", "include", "priv",
@@ -9,6 +9,7 @@
         "native/macula_ucan_nif/Cargo.toml", "native/macula_ucan_nif/Cargo.lock", "native/macula_ucan_nif/src",
         "native/macula_did_nif/Cargo.toml", "native/macula_did_nif/Cargo.lock", "native/macula_did_nif/src",
         "native/macula_mri_nif/Cargo.toml", "native/macula_mri_nif/Cargo.lock", "native/macula_mri_nif/src",
+        "native/macula_cbor_nif/Cargo.toml", "native/macula_cbor_nif/Cargo.lock", "native/macula_cbor_nif/src",
         "rebar.config", "rebar.lock",
         "README.md", "CHANGELOG.md", "LICENSE",
         "CONTRIBUTING.md", "CODE_OF_CONDUCT.md"
@@ -22,7 +23,6 @@
         public_key,
         ssl,
         inets,
-        msgpack,
         gproc
     ]},
     %% mdns is optional - macula works without it using DHT discovery
