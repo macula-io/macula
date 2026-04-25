@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.2.0] - 2026-04-25
+
+### Added — signed DHT records
+
+A new SDK API for typed, signed, content-addressed records stored in the
+relay mesh's distributed hash table. Closes the gap that previously
+forced consumers (the realm dashboard) to poll HTTP endpoints or rely
+on V1 macula-relay heartbeat misnomers for service discovery.
+
+#### `macula_record` — record helpers
+
+- `macula_record:build(Type, Payload, KeyPair, TtlMs)` constructs a
+  signed record. The signing scheme is deterministic CBOR encode of
+  `[type, payload, pubkey, ttl_ms]` then Ed25519 over the result.
+- `macula_record:key_of(Record)` returns the 32-byte BLAKE3 content
+  address: `blake3(canonical_body || sig)`. Including the signature in
+  the hash means two distinct signers of identical logical content
+  produce distinct addresses — every record is uniquely keyed by
+  (signer, content).
+- `macula_record:verify(Record)` verifies the Ed25519 signature.
+- `macula_record:canonical_body(Record)` exposes the signed bytes for
+  external verifiers.
+
+#### `macula` SDK surface — record API
+
+- `macula:put_record/2` — store a signed record (relay rejects
+  invalid signatures).
+- `macula:find_record/2` — fetch by content key. Returns
+  `{error, not_found}` on miss.
+- `macula:find_records_by_type/2` — list records of a given type tag
+  visible from the connected relay.
+- `macula:subscribe_records/3` — receive new records of a type as
+  they are stored. Pid callbacks get `{record, Record}`; fun
+  callbacks are invoked directly.
+- `macula:unsubscribe_records/2` — cancel a record subscription.
+
+Type tags are application-defined `0..255` bytes; the SDK does not
+interpret payloads. By convention, tag `0x02` is `station_record`
+(hecate stations), `0x11` is `content_announcement`.
+
+### Backend requirements
+
+The record API depends on the relay backend advertising the
+`_dht.put_record`, `_dht.find_record`, and `_dht.find_records_by_type`
+procedures, plus publishing on `_dht.records.<type>.stored` topics on
+record store. V1 macula-relay does not implement these — they are
+new in `hecate-station`. Consumers connecting to V1 relays will get
+`{error, no_handler}` on every record operation; the SDK surface is
+forward-looking.
+
+---
+
 ## [3.1.0] - 2026-04-25
 
 ### Added — crypto primitives consolidated into the SDK

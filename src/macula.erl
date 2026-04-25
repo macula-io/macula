@@ -20,6 +20,13 @@
 %% RPC
 -export([call/3, call/4, advertise/3, advertise/4, unadvertise/2]).
 
+%% Signed DHT records (v3.2.0)
+-export([put_record/2,
+         find_record/2,
+         find_records_by_type/2,
+         subscribe_records/3,
+         unsubscribe_records/2]).
+
 %% Streaming RPC (v1.5.0+ — see PLAN_MACULA_STREAMING.md)
 -export([
     call_stream/2, call_stream/3, call_stream/4,
@@ -45,7 +52,8 @@
 
 %% Types
 -export_type([client/0, topic/0, procedure/0,
-              stream/0, stream_mode/0, stream_handler/0]).
+              stream/0, stream_mode/0, stream_handler/0,
+              record/0, record_type/0, record_key/0]).
 
 -type client() :: pid().
 -type topic() :: binary().
@@ -54,6 +62,10 @@
 -type stream() :: pid().
 -type stream_mode() :: server_stream | client_stream | bidi.
 -type stream_handler() :: fun((stream(), term()) -> any()).
+
+-type record()      :: macula_record:record().
+-type record_type() :: macula_record:record_type().
+-type record_key()  :: macula_record:record_key().
 
 %%%===================================================================
 %%% Connection
@@ -138,6 +150,125 @@ advertise(Client, Procedure, Handler, _Opts) when is_pid(Client), is_binary(Proc
 -spec unadvertise(client(), procedure()) -> ok | {error, term()}.
 unadvertise(Client, Procedure) when is_pid(Client), is_binary(Procedure) ->
     macula_mesh_client:unadvertise(Client, Procedure).
+
+%%%===================================================================
+%%% Signed DHT records (v3.2.0)
+%%%===================================================================
+%%%
+%%% Records are typed, signed, content-addressed payloads stored in
+%%% the relay mesh's distributed hash table. Two complementary
+%%% retrieval paths:
+%%%
+%%%   - `find_record/2'           — fetch one record by its content key
+%%%   - `find_records_by_type/2'  — list every record of a given type tag
+%%%
+%%% Plus a live-update channel:
+%%%
+%%%   - `subscribe_records/3'     — receive new records of a type as
+%%%                                 they are stored
+%%%
+%%% See `macula_record' for the record shape, signing scheme, and
+%%% key derivation. Type tags are application-defined `0..255' bytes.
+%%% The SDK treats payloads as opaque — applications layer their own
+%%% schemas on top (e.g. `hecate' uses tag `16#02' for stations,
+%%% `16#11' for content announcements).
+
+%% Procedure + topic shape — hidden from API consumers but exposed
+%% as documentation. The relay backend (hecate-station and successors)
+%% MUST advertise these procedures and publish on the per-type
+%% record-stored topic for the SDK to function.
+-define(DHT_PUT_RECORD_PROC,           <<"_dht.put_record">>).
+-define(DHT_FIND_RECORD_PROC,          <<"_dht.find_record">>).
+-define(DHT_FIND_RECORDS_BY_TYPE_PROC, <<"_dht.find_records_by_type">>).
+-define(DHT_RECORD_TIMEOUT_MS,         5_000).
+
+%% @doc Store a signed record in the mesh DHT.
+%%
+%% The record must already be built and signed via
+%% `macula_record:build/4'. The relay validates the signature on
+%% receipt; an invalid signature returns `{error, bad_signature}'.
+%% Successful stores propagate to the K-nearest peers in the DHT
+%% under the record's content key.
+-spec put_record(client(), record()) -> ok | {error, term()}.
+put_record(Client, Record) when is_pid(Client), is_map(Record) ->
+    classify_put(macula_mesh_client:call(Client, ?DHT_PUT_RECORD_PROC,
+                                         Record, ?DHT_RECORD_TIMEOUT_MS)).
+
+classify_put({ok, ok})       -> ok;
+classify_put({ok, Reply})    -> {error, {unexpected_reply, Reply}};
+classify_put({error, _} = E) -> E.
+
+%% @doc Fetch a record by its content-address key.
+%%
+%% Returns `{error, not_found}' when no record exists at the key.
+%% The returned record's signature should be verified via
+%% `macula_record:verify/1' before its payload is trusted.
+-spec find_record(client(), record_key()) ->
+    {ok, record()} | {error, not_found | term()}.
+find_record(Client, Key)
+  when is_pid(Client), is_binary(Key), byte_size(Key) =:= 32 ->
+    classify_find(macula_mesh_client:call(Client, ?DHT_FIND_RECORD_PROC,
+                                          #{key => Key},
+                                          ?DHT_RECORD_TIMEOUT_MS)).
+
+classify_find({ok, #{type := _, payload := _, sig := _} = Record}) ->
+    {ok, Record};
+classify_find({ok, not_found})     -> {error, not_found};
+classify_find({ok, Reply})         -> {error, {unexpected_reply, Reply}};
+classify_find({error, _} = E)      -> E.
+
+%% @doc Return every record of a given type currently visible from
+%% the connected relay.
+%%
+%% Coverage depends on the relay's view of the DHT — a single relay
+%% sees its local replicas plus whatever its peers have gossiped.
+%% Aggregating across the full mesh requires querying multiple
+%% relays and deduplicating by record key.
+-spec find_records_by_type(client(), record_type()) ->
+    {ok, [record()]} | {error, term()}.
+find_records_by_type(Client, Type)
+  when is_pid(Client), is_integer(Type), Type >= 0, Type =< 255 ->
+    classify_list(macula_mesh_client:call(Client,
+                                          ?DHT_FIND_RECORDS_BY_TYPE_PROC,
+                                          #{type => Type},
+                                          ?DHT_RECORD_TIMEOUT_MS)).
+
+classify_list({ok, Records}) when is_list(Records) -> {ok, Records};
+classify_list({ok, Reply})    -> {error, {unexpected_reply, Reply}};
+classify_list({error, _} = E) -> E.
+
+%% @doc Subscribe to live record-stored events filtered by type.
+%%
+%% The callback (or pid) receives each newly-stored record of the
+%% given type as `{record, Record}' (pid form) or via direct
+%% invocation (fun form). Returns a subscription reference for
+%% `unsubscribe_records/2'. Topic shape is `_dht.records.<type>.stored',
+%% rendered with the type tag as a decimal integer for log
+%% friendliness.
+-spec subscribe_records(client(), record_type(),
+                        fun((record()) -> any()) | pid()) ->
+    {ok, reference()} | {error, term()}.
+subscribe_records(Client, Type, Callback)
+  when is_pid(Client), is_integer(Type), Type >= 0, Type =< 255 ->
+    Topic = record_stored_topic(Type),
+    macula_mesh_client:subscribe(Client, Topic,
+                                 wrap_record_callback(Callback)).
+
+%% @doc Cancel a `subscribe_records/3' subscription.
+-spec unsubscribe_records(client(), reference()) -> ok | {error, term()}.
+unsubscribe_records(Client, Ref)
+  when is_pid(Client), is_reference(Ref) ->
+    macula_mesh_client:unsubscribe(Client, Ref).
+
+record_stored_topic(Type) ->
+    iolist_to_binary([<<"_dht.records.">>,
+                      integer_to_binary(Type),
+                      <<".stored">>]).
+
+wrap_record_callback(Pid) when is_pid(Pid) ->
+    fun(Record) -> Pid ! {record, Record}, ok end;
+wrap_record_callback(Fun) when is_function(Fun, 1) ->
+    fun(Record) -> Fun(Record), ok end.
 
 %%%===================================================================
 %%% Streaming RPC (v1.5.0+)

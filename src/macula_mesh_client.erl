@@ -128,6 +128,7 @@ call(Pid, Procedure, Args, Timeout, Opts) ->
     validate_topic_or_die(Procedure),
     gen_server:call(Pid, {rpc_call, Procedure, Args, Timeout, Opts}, Timeout + 1000).
 
+
 %% Validate a topic or RPC procedure name against the canonical
 %% macula_topic structure. Accepts canonical 5-segment topics and
 %% _mesh.* system topics. Throws on anything else — invalid topics
