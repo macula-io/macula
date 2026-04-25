@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.5.0] - 2026-04-25
+
+### Added — domain-defined record types via `macula_record:envelope/4`
+
+The SDK now exposes its generic record builder as a public function so
+domain code (realm-fact emitters, license registries, application-level
+DHT-stored facts) can mint signed records without needing a per-type
+constructor in the SDK.
+
+  * `envelope(Type, SignerPubkey, Payload, Opts)` — returns an unsigned
+    record map for any tag in `0x20-0xFF`. The reserved range
+    `0x01-0x1F` stays owned by the SDK's typed constructors.
+  * Optional `subject_id` opt → 32-byte arbitrary binary. Used by
+    `storage_key/1` to derive a per-subject DHT slot
+    (`BLAKE3-substituted SHA-256 of <<type, signer_key, subject_id>>`)
+    so a single signer can publish many records under distinct slots
+    (e.g., a realm admin signing one record per license).
+  * Wire format adds an optional `u` (subject_id) CBOR field
+    alongside the existing `t/k/v/c/x/p/s` envelope. Records produced
+    under 3.4.0 still verify and decode unchanged; 3.5.0 records
+    without `subject_id` are wire-identical to 3.4.0.
+
+Drives `PLAN_DHT_FIRST.md` (macula-realm) — every realm fact becomes a
+signed DHT record so stations stay realm-agnostic.
+
+---
+
 ## [3.4.0] - 2026-04-25
 
 ### Added — `node_record` carries optional geo + reach metadata

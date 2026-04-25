@@ -705,3 +705,62 @@ storage_key_foundation_t3_attestation_varies_by_station_test() ->
     R2 = macula_record:foundation_t3_attestation(Fk, S2, Now),
     ?assertNotEqual(macula_record:storage_key(R1),
                     macula_record:storage_key(R2)).
+
+%%------------------------------------------------------------------
+%% Domain-defined record types (0x20-0xFF) — envelope/4
+%%------------------------------------------------------------------
+
+domain_envelope_round_trip_test() ->
+    Kp     = macula_identity:generate(),
+    Pub    = macula_identity:public(Kp),
+    Type   = 16#20,
+    Payload = #{
+        {text, <<"realm">>}      => <<"io.macula">>,
+        {text, <<"member_did">>} => <<"did:macula:abc">>
+    },
+    R0 = macula_record:envelope(Type, Pub, Payload, #{}),
+    Signed = macula_record:sign(R0, Kp),
+    {ok, Verified} = macula_record:verify(Signed),
+    ?assertEqual(Type, macula_record:type(Verified)),
+    ?assertEqual(Pub,  macula_record:key(Verified)),
+    Wire = macula_record:encode(Signed),
+    {ok, Decoded} = macula_record:decode(Wire),
+    ?assertEqual(Type, macula_record:type(Decoded)),
+    ?assertEqual(Payload, macula_record:payload(Decoded)).
+
+domain_storage_key_without_subject_is_signer_pubkey_test() ->
+    Kp  = macula_identity:generate(),
+    Pub = macula_identity:public(Kp),
+    R   = macula_record:envelope(16#42, Pub, #{}, #{}),
+    ?assertEqual(Pub, macula_record:storage_key(R)).
+
+domain_storage_key_with_subject_varies_test() ->
+    %% One signer, two subjects → distinct DHT slots.
+    Kp  = macula_identity:generate(),
+    Pub = macula_identity:public(Kp),
+    R1 = macula_record:envelope(16#22, Pub, #{}, #{subject_id => <<"license-aaa">>}),
+    R2 = macula_record:envelope(16#22, Pub, #{}, #{subject_id => <<"license-bbb">>}),
+    ?assertNotEqual(macula_record:storage_key(R1),
+                    macula_record:storage_key(R2)),
+    ?assertEqual(32, byte_size(macula_record:storage_key(R1))),
+    ?assertEqual(32, byte_size(macula_record:storage_key(R2))).
+
+domain_subject_id_round_trips_through_wire_test() ->
+    Kp     = macula_identity:generate(),
+    Pub    = macula_identity:public(Kp),
+    Sid    = crypto:hash(sha256, <<"member-x@realm-y">>),
+    R0     = macula_record:envelope(16#20, Pub, #{}, #{subject_id => Sid}),
+    Signed = macula_record:sign(R0, Kp),
+    {ok, V} = macula_record:verify(Signed),
+    ?assertEqual(Sid, maps:get(subject_id, V)),
+    Wire   = macula_record:encode(Signed),
+    {ok, D} = macula_record:decode(Wire),
+    ?assertEqual(Sid, maps:get(subject_id, D)),
+    %% storage_key must agree on both sides
+    ?assertEqual(macula_record:storage_key(Signed),
+                 macula_record:storage_key(D)).
+
+domain_envelope_rejects_bad_key_size_test() ->
+    ShortKey = <<1, 2, 3>>,
+    ?assertError(function_clause,
+                 macula_record:envelope(16#20, ShortKey, #{}, #{})).

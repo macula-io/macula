@@ -29,6 +29,11 @@
     foundation_t3_attestation/3, foundation_t3_attestation/4,
     tombstone/3, tombstone/4,
 
+    %% Generic builder for domain-defined record types (tag 0x20-0xFF).
+    %% Domain code (e.g. realm fact types) supplies its own type tag,
+    %% storage key, and CBOR payload map; SDK only signs + ships.
+    envelope/4,
+
     %% Sign / verify
     sign/2, verify/1,
 
@@ -68,6 +73,10 @@
 %% Domain separation prefix for record signatures (Part 6 §10.2).
 -define(SIG_DOMAIN, "macula-v2-record\0").
 
+%% Type tag allocation (1 byte):
+%%   0x01-0x1F  reserved for macula infrastructure types (this module)
+%%   0x20-0xFF  domain-defined; callers manage their own registry
+%%              and use envelope/4 to build records.
 -define(TYPE_NODE_RECORD,                  16#01).
 -define(TYPE_REALM_DIRECTORY,              16#03).
 -define(TYPE_REALM_STATIONS,               16#04).
@@ -79,6 +88,7 @@
 -define(TYPE_FOUNDATION_REALM_TRUST_LIST,  16#0F).
 -define(TYPE_FOUNDATION_T3_ATTESTATION,    16#10).
 -define(TYPE_CONTENT_ANNOUNCEMENT,         16#11).
+-define(DOMAIN_TYPE_MIN,                   16#20).
 
 %% Domain separation for derived storage keys (Part 3 §3.3).
 -define(STORAGE_DOMAIN_STATION_SET,    <<"station_set">>).
@@ -546,11 +556,11 @@ decode(Bin) when is_binary(Bin) ->
 decode_value(Map) when is_map(Map) ->
     G = fun(Key) -> maps:get({text, Key}, Map, undefined) end,
     parse_envelope(G(<<"t">>), G(<<"k">>), G(<<"v">>), G(<<"c">>),
-                   G(<<"x">>), G(<<"p">>), G(<<"s">>));
+                   G(<<"x">>), G(<<"p">>), G(<<"u">>), G(<<"s">>));
 decode_value(_Other) ->
     {error, bad_record}.
 
-parse_envelope(T, K, V, C, X, P, S)
+parse_envelope(T, K, V, C, X, P, U, S)
   when is_integer(T), T > 0,
        is_binary(K), byte_size(K) =:= 32,
        is_binary(V), byte_size(V) =:= 16,
@@ -558,13 +568,18 @@ parse_envelope(T, K, V, C, X, P, S)
        is_integer(X), X > 0,
        is_map(P),
        is_binary(S), byte_size(S) =:= 64 ->
-    {ok, #{type => T, key => K, version => V,
-           created_at => C, expires_at => X,
-           payload => P, signature => S}};
-parse_envelope(_, _, _, _, _, _, undefined) ->
+    Base = #{type => T, key => K, version => V,
+             created_at => C, expires_at => X,
+             payload => P, signature => S},
+    {ok, with_decoded_subject(Base, U)};
+parse_envelope(_, _, _, _, _, _, _, undefined) ->
     {error, missing_signature};
-parse_envelope(_, _, _, _, _, _, _) ->
+parse_envelope(_, _, _, _, _, _, _, _) ->
     {error, bad_record}.
+
+with_decoded_subject(R, undefined)               -> R;
+with_decoded_subject(R, Sid) when is_binary(Sid) -> R#{subject_id => Sid};
+with_decoded_subject(R, _Other)                  -> R.
 
 %%------------------------------------------------------------------
 %% Accessors
@@ -582,17 +597,41 @@ signature(#{signature := S}) -> S.
 %% Internals
 %%------------------------------------------------------------------
 
-envelope(Type, Key, Payload, Opts) ->
+%% @doc Generic record builder. Used internally by every typed
+%% constructor and exposed publicly for domain-defined record types
+%% in the 0x20-0xFF tag range. Returns an UNSIGNED record map; pair
+%% with `sign/2'.
+%%
+%% The `key' field is always the signer's 32-byte Ed25519 public key
+%% (`verify/1' looks it up there). For facts where one signer
+%% publishes about many subjects (e.g., a realm admin signing many
+%% license records), pass a `subject_id' opt — `storage_key/1'
+%% derives a per-subject 32-byte slot via
+%% `BLAKE3(<<type, key, subject_id>>)'. Without `subject_id' the
+%% storage key is `key' verbatim (one DHT slot per signer).
+%%
+%% Domain code names its own payload fields. Single-letter wire keys
+%% (Part 6 §9) are an envelope-level concern; payloads use whatever
+%% naming makes sense in the domain.
+-spec envelope(type_tag(), <<_:256>>, map(), map()) -> record().
+envelope(Type, Key, Payload, Opts)
+  when is_integer(Type), Type > 0, Type =< 16#FF,
+       is_binary(Key), byte_size(Key) =:= 32,
+       is_map(Payload), is_map(Opts) ->
     NowMs = erlang:system_time(millisecond),
     TtlMs = maps:get(ttl_ms, Opts, ?DEFAULT_TTL_MS),
-    #{
+    Base = #{
         type       => Type,
         key        => Key,
         version    => macula_record_uuid:v7(NowMs),
         created_at => NowMs,
         expires_at => NowMs + TtlMs,
         payload    => Payload
-    }.
+    },
+    with_subject(Base, maps:get(subject_id, Opts, undefined)).
+
+with_subject(Map, undefined)                       -> Map;
+with_subject(Map, Sid) when is_binary(Sid)         -> Map#{subject_id => Sid}.
 
 node_payload(NodeId, StationId, Realms, Caps, Opts) ->
     Base = #{
@@ -787,7 +826,21 @@ storage_key(#{type := ?TYPE_FOUNDATION_REALM_TRUST_LIST, key := Fk}) ->
     crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_TRUST/binary, Fk/binary>>);
 storage_key(#{type := ?TYPE_FOUNDATION_T3_ATTESTATION, payload := P}) ->
     Sid = maps:get({text, <<"station_id">>}, P),
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_ATTEST/binary, Sid/binary>>).
+    crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_ATTEST/binary, Sid/binary>>);
+%% Domain-defined types (0x20-0xFF). When the envelope carries a
+%% `subject_id' the storage key is derived from <<type, signer_key,
+%% subject_id>> so one signer can publish many records under
+%% distinct DHT slots. Without `subject_id' the storage key is the
+%% signer's pubkey (one slot per signer).
+storage_key(#{type := T, key := K, subject_id := Sid})
+  when is_integer(T), T >= ?DOMAIN_TYPE_MIN, T =< 16#FF,
+       is_binary(K), byte_size(K) =:= 32,
+       is_binary(Sid) ->
+    crypto:hash(sha256, <<T:8, K/binary, Sid/binary>>);
+storage_key(#{type := T, key := K})
+  when is_integer(T), T >= ?DOMAIN_TYPE_MIN, T =< 16#FF,
+       is_binary(K), byte_size(K) =:= 32 ->
+    K.
 
 %% Build the envelope CBOR map. Includes signature when present.
 to_envelope_map(#{type := T, key := K, version := V,
@@ -801,7 +854,12 @@ to_envelope_map(#{type := T, key := K, version := V,
         {text, <<"x">>} => X,
         {text, <<"p">>} => P
     },
-    add_signature(Base, maps:get(signature, R, undefined)).
+    M1 = add_subject(Base, maps:get(subject_id, R, undefined)),
+    add_signature(M1, maps:get(signature, R, undefined)).
+
+add_subject(M, undefined) -> M;
+add_subject(M, Sid) when is_binary(Sid) ->
+    M#{ {text, <<"u">>} => Sid }.    %% u = subject_id (Part 6 §9 extension)
 
 add_signature(M, undefined) -> M;
 add_signature(M, Sig) when is_binary(Sig) ->
