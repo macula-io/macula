@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.1.0] - 2026-04-25
+
+### Added — crypto primitives consolidated into the SDK
+
+Two crypto-adjacent modules previously vendored in `hecate-station` are
+now part of the SDK proper. The architectural rule going forward is
+**crypto primitives belong in the SDK**, not in consumers.
+
+- **`macula_identity`** — Ed25519 keypair generation, sign/verify, public-key
+  extraction, S/Kademlia crypto puzzle. Used by anything that signs
+  records, frames, or session handshakes.
+- **`macula_record_cbor`** — Pure-Erlang deterministic CBOR encoder/decoder
+  (RFC 8949 §4.2.1). Distinct from `macula_cbor_nif`: this module is the
+  *deterministic* canonicalization layer used for record signing where
+  byte-for-byte stability is required across implementations. The NIF
+  is for general/perf encoding; this module is for verifiable signing.
+
+### Why
+
+`hecate-station` was the only consumer that needed Ed25519 + record
+canonicalization, but the underlying primitives are not station-specific
+and would have to be re-implemented for any other consumer (clients
+producing signed records, e.g. UCAN-style flows). Centralizing in the
+SDK avoids fragmentation.
+
+No breaking change — `macula 3.0.x` callers see new modules but no
+existing API surface moves.
+
+---
+
 ## [3.0.0] - 2026-04-23
 
 ### BREAKING — wire format switched from MessagePack to CBOR (RFC 8949)

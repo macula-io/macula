@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v3.0.0 (April 2026)
+**Current Version**: v3.1.0 (April 2026)
 
 ---
 
@@ -42,7 +42,13 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## Architecture Overview
 
-Macula SDK is a **48-module client library** for connecting to the Macula relay mesh. Nodes connect outbound to relays over QUIC. Relays (in [macula-relay](https://github.com/macula-io/macula-relay)) handle routing.
+Macula SDK is a **50-module client library** for connecting to the Macula relay mesh. Nodes connect outbound to relays over QUIC. Relays (in [macula-relay](https://github.com/macula-io/macula-relay)) handle routing.
+
+**Crypto primitives belong in the SDK.** Ed25519 (`macula_identity`),
+BLAKE3 (`macula_blake3_nif`), CBOR (`macula_cbor_nif` for general,
+`macula_record_cbor` for deterministic canonicalization) all live here.
+Consumers (hecate-station, future SDK clients) should never re-implement
+these — pull them from this repo.
 
 **SDK provides:** client transport, wire protocol, identity (Ed25519/UCAN/DID NIFs), MRI resource identifiers, cert system, Erlang distribution over mesh, LAN clustering.
 
