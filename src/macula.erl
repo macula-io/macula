@@ -64,8 +64,8 @@
 -type stream_handler() :: fun((stream(), term()) -> any()).
 
 -type record()      :: macula_record:record().
--type record_type() :: macula_record:record_type().
--type record_key()  :: macula_record:record_key().
+-type record_type() :: macula_record:type_tag().
+-type record_key()  :: <<_:256>>.   %% DHT storage key — `macula_record:storage_key/1' output.
 
 %%%===================================================================
 %%% Connection
@@ -152,26 +152,33 @@ unadvertise(Client, Procedure) when is_pid(Client), is_binary(Procedure) ->
     macula_mesh_client:unadvertise(Client, Procedure).
 
 %%%===================================================================
-%%% Signed DHT records (v3.2.0)
+%%% Signed DHT records (v3.3.0)
 %%%===================================================================
 %%%
-%%% Records are typed, signed, content-addressed payloads stored in
-%%% the relay mesh's distributed hash table. Two complementary
-%%% retrieval paths:
+%%% Records are typed, signed payloads stored in the relay mesh's
+%%% distributed hash table. The record format follows Macula V2
+%%% spec Part 6 §9 (PKARR-compatible CBOR with single-letter keys
+%%% `t', `k', `v', `c', `x', `p', `s'), Part 6 §10.2 (signing
+%%% domain `"macula-v2-record\\0" || canonical_cbor(unsigned)'),
+%%% and Part 3 §3.3 (domain-separated storage keys).
 %%%
-%%%   - `find_record/2'           — fetch one record by its content key
-%%%   - `find_records_by_type/2'  — list every record of a given type tag
+%%% See `macula_record' for the record shape, the typed
+%%% constructors (`node_record/3', `realm_directory/3',
+%%% `realm_stations/2', `procedure_advertisement/3',
+%%% `content_announcement/3', `tombstone/3', and the foundation_*
+%%% constructors), and `storage_key/1' for the DHT addressing rule.
+%%%
+%%% Two complementary retrieval paths:
+%%%
+%%%   - `find_record/2'           — fetch one record by its
+%%%                                 `storage_key/1' output
+%%%   - `find_records_by_type/2'  — list every record of a given
+%%%                                 type tag
 %%%
 %%% Plus a live-update channel:
 %%%
-%%%   - `subscribe_records/3'     — receive new records of a type as
-%%%                                 they are stored
-%%%
-%%% See `macula_record' for the record shape, signing scheme, and
-%%% key derivation. Type tags are application-defined `0..255' bytes.
-%%% The SDK treats payloads as opaque — applications layer their own
-%%% schemas on top (e.g. `hecate' uses tag `16#02' for stations,
-%%% `16#11' for content announcements).
+%%%   - `subscribe_records/3'     — receive new records of a type
+%%%                                 as they are stored
 
 %% Procedure + topic shape — hidden from API consumers but exposed
 %% as documentation. The relay backend (hecate-station and successors)
@@ -184,11 +191,14 @@ unadvertise(Client, Procedure) when is_pid(Client), is_binary(Procedure) ->
 
 %% @doc Store a signed record in the mesh DHT.
 %%
-%% The record must already be built and signed via
-%% `macula_record:build/4'. The relay validates the signature on
-%% receipt; an invalid signature returns `{error, bad_signature}'.
-%% Successful stores propagate to the K-nearest peers in the DHT
-%% under the record's content key.
+%% Build the record via the typed constructors in `macula_record'
+%% (`node_record/3,4', `content_announcement/3,4', `tombstone/3,4',
+%% `realm_directory/3,4', `procedure_advertisement/3,4', etc.) then
+%% sign it with `macula_record:sign/2'. The relay validates the
+%% signature on receipt; an invalid signature returns
+%% `{error, bad_signature}'. Successful stores propagate to the
+%% K-nearest peers in the DHT under the record's
+%% `macula_record:storage_key/1'.
 -spec put_record(client(), record()) -> ok | {error, term()}.
 put_record(Client, Record) when is_pid(Client), is_map(Record) ->
     classify_put(macula_mesh_client:call(Client, ?DHT_PUT_RECORD_PROC,
@@ -198,7 +208,7 @@ classify_put({ok, ok})       -> ok;
 classify_put({ok, Reply})    -> {error, {unexpected_reply, Reply}};
 classify_put({error, _} = E) -> E.
 
-%% @doc Fetch a record by its content-address key.
+%% @doc Fetch a record by its `macula_record:storage_key/1'.
 %%
 %% Returns `{error, not_found}' when no record exists at the key.
 %% The returned record's signature should be verified via

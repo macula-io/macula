@@ -7,55 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [3.2.0] - 2026-04-25
+## [3.3.0] - 2026-04-25
 
-### Added — signed DHT records
+### Changed (BREAKING) — record API now spec-compliant
 
-A new SDK API for typed, signed, content-addressed records stored in the
-relay mesh's distributed hash table. Closes the gap that previously
-forced consumers (the realm dashboard) to poll HTTP endpoints or rely
-on V1 macula-relay heartbeat misnomers for service discovery.
+3.2.0 shipped a `macula_record` module with an ad-hoc record format
+(BLAKE3-of-content key, custom signing domain, opaque payload). It
+was incompatible with the existing Macula V2 record spec
+(`hecate_record` in hecate-station): different signing domain,
+different key derivation, no per-type domain separation.
 
-#### `macula_record` — record helpers
+3.3.0 deletes that 3.2.0 module and replaces it with the
+**spec-compliant** record implementation, vendored from
+hecate-station. The SDK is now the canonical home for the record
+API; downstream consumers (hecate-station, macula-realm) drop their
+copies and depend on `macula` instead.
 
-- `macula_record:build(Type, Payload, KeyPair, TtlMs)` constructs a
-  signed record. The signing scheme is deterministic CBOR encode of
-  `[type, payload, pubkey, ttl_ms]` then Ed25519 over the result.
-- `macula_record:key_of(Record)` returns the 32-byte BLAKE3 content
-  address: `blake3(canonical_body || sig)`. Including the signature in
-  the hash means two distinct signers of identical logical content
-  produce distinct addresses — every record is uniquely keyed by
-  (signer, content).
-- `macula_record:verify(Record)` verifies the Ed25519 signature.
-- `macula_record:canonical_body(Record)` exposes the signed bytes for
-  external verifiers.
+3.2.0 should not be used. Anyone who pulled it for the
+`put_record`/`find_record` API: please skip directly to 3.3.0.
 
-#### `macula` SDK surface — record API
+### `macula_record` — Macula V2 records (Part 6 §9)
 
-- `macula:put_record/2` — store a signed record (relay rejects
-  invalid signatures).
-- `macula:find_record/2` — fetch by content key. Returns
-  `{error, not_found}` on miss.
-- `macula:find_records_by_type/2` — list records of a given type tag
-  visible from the connected relay.
-- `macula:subscribe_records/3` — receive new records of a type as
-  they are stored. Pid callbacks get `{record, Record}`; fun
-  callbacks are invoked directly.
-- `macula:unsubscribe_records/2` — cancel a record subscription.
+PKARR-compatible CBOR records with single-letter keys (`t`, `k`,
+`v`, `c`, `x`, `p`, `s`), signed with the domain-separated scheme
+``"macula-v2-record\0" || canonical_cbor(unsigned)`` (Part 6 §10.2),
+addressed by domain-separated storage keys (Part 3 §3.3).
 
-Type tags are application-defined `0..255` bytes; the SDK does not
-interpret payloads. By convention, tag `0x02` is `station_record`
-(hecate stations), `0x11` is `content_announcement`.
+Typed constructors for all 11 spec record types: `node_record/3,4`
+(`type=0x01`), `realm_directory/3,4` (`type=0x03`),
+`realm_stations/2,3` (`type=0x04`), `realm_member_endorsement/2,3`
+(`type=0x05`), `procedure_advertisement/3,4` (`type=0x06`),
+`tombstone/3,4` (`type=0x0C`), `foundation_seed_list/2,3`
+(`type=0x0D`), `foundation_parameter/3,4` (`type=0x0E`),
+`foundation_realm_trust_list/2,3` (`type=0x0F`),
+`foundation_t3_attestation/3,4` (`type=0x10`),
+`content_announcement/3,4` (`type=0x11`).
+
+Plus the spec accessors: `sign/2`, `verify/1`, `refresh/2`,
+`encode/1`, `decode/1`, `type/1`, `key/1`, `version/1`,
+`created_at/1`, `expires_at/1`, `payload/1`, `signature/1`,
+`storage_key/1`.
+
+### `macula_record_uuid` — UUIDv7
+
+Helper for record `version` fields. Time-ordered 128-bit identifiers,
+unique within an Ed25519 signing key's record namespace.
+
+### `macula_foundation` — foundation record helpers
+
+Builders for the four foundation record types (`foundation_seed_list`,
+`foundation_parameter`, `foundation_realm_trust_list`,
+`foundation_t3_attestation`) plus verification. Used by the bootstrap
+cascade's foundation tier.
+
+### `macula` SDK surface — record RPC API (unchanged shape)
+
+Same procedure namespace + topic shape as 3.2.0, with the
+spec-compliant record payload:
+
+- `macula:put_record/2` (`_dht.put_record`)
+- `macula:find_record/2` (`_dht.find_record`) — key is
+  `macula_record:storage_key/1` output
+- `macula:find_records_by_type/2` (`_dht.find_records_by_type`)
+- `macula:subscribe_records/3` / `unsubscribe_records/2`
+  (`_dht.records.<type>.stored`)
 
 ### Backend requirements
 
 The record API depends on the relay backend advertising the
-`_dht.put_record`, `_dht.find_record`, and `_dht.find_records_by_type`
-procedures, plus publishing on `_dht.records.<type>.stored` topics on
-record store. V1 macula-relay does not implement these — they are
-new in `hecate-station`. Consumers connecting to V1 relays will get
-`{error, no_handler}` on every record operation; the SDK surface is
-forward-looking.
+`_dht.*` procedures and publishing on `_dht.records.<type>.stored`.
+V1 macula-relay does not implement these — they are
+hecate-station territory.
+
+---
+
+## [3.2.0] - 2026-04-25 — DO NOT USE
+
+Shipped with a non-spec-compliant `macula_record`. Replaced by 3.3.0.
+
+### Original (now-deleted) entry — for reference
+
+Originally added a record API with BLAKE3-of-content keys and a
+custom signing domain. The shape conflicted with the existing
+hecate-station Macula V2 record spec implementation. Replaced
+wholesale by 3.3.0; see that entry for the canonical API.
 
 ---
 
