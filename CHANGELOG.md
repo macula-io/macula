@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.4.0] - 2026-04-25
+
+### Added — `node_record` carries optional geo + reach metadata
+
+Six new optional fields on `node_record`, settable via the
+`macula_record:node_record/4` opts map:
+
+- `hostname` — human-readable DNS name (e.g. `<<"relay-be-leuven.macula.io">>`)
+- `endpoint` — full reach URL (e.g. `<<"quic://relay-be-leuven.macula.io:4433">>`)
+- `city`, `country` — display location
+- `lat`, `lng` — float or integer coordinates; encoded as CBOR text
+  strings via `float_to_binary/2` (compact, 6 decimals) for
+  cross-implementation determinism
+
+Subscribers — particularly `macula-realm`'s topology dashboard —
+read these straight from the record payload via `payload/1` +
+`maps:get({text, <<"lat">>}, ...)`, eliminating the V1
+`/topology` HTTP polling sidetrack.
+
+The fields are **additive**: records produced with the 3.3.0 API
+still verify and decode under 3.4.0 unchanged. Old subscribers
+that aren't aware of the new fields ignore them harmlessly.
+
+CBOR map keys are single-letter only on the wire spec sections that
+explicitly demand it; the node_record envelope already uses
+descriptive keys (`node_id`, `station_id`, `realms`, `capabilities`,
+`caps_hint`, `display_name`), so the new fields use the same
+descriptive style.
+
+---
+
 ## [3.3.0] - 2026-04-25
 
 ### Changed (BREAKING) — record API now spec-compliant

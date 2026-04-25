@@ -46,7 +46,58 @@ node_record_omits_unset_optional_fields_test() ->
     R = macula_record:node_record(macula_identity:public(Kp), [], 0),
     P = macula_record:payload(R),
     ?assertNot(maps:is_key({text, <<"caps_hint">>}, P)),
-    ?assertNot(maps:is_key({text, <<"display_name">>}, P)).
+    ?assertNot(maps:is_key({text, <<"display_name">>}, P)),
+    ?assertNot(maps:is_key({text, <<"hostname">>}, P)),
+    ?assertNot(maps:is_key({text, <<"endpoint">>}, P)),
+    ?assertNot(maps:is_key({text, <<"city">>}, P)),
+    ?assertNot(maps:is_key({text, <<"country">>}, P)),
+    ?assertNot(maps:is_key({text, <<"lat">>}, P)),
+    ?assertNot(maps:is_key({text, <<"lng">>}, P)).
+
+node_record_with_geo_metadata_test() ->
+    %% Subscribers (e.g. realm dashboards) read geo straight from
+    %% the payload — no side-channel fetches. v3.4.0 added these
+    %% optional fields so stations advertise their location with
+    %% their identity record.
+    Kp = macula_identity:generate(),
+    R = macula_record:node_record(
+          macula_identity:public(Kp), [], 0,
+          #{hostname => <<"relay-be-leuven.macula.io">>,
+            endpoint => <<"quic://relay-be-leuven.macula.io:4433">>,
+            city     => <<"Leuven">>,
+            country  => <<"BE">>,
+            lat      => 50.8798,
+            lng      => 4.7005}),
+    P = macula_record:payload(R),
+    ?assertEqual({text, <<"relay-be-leuven.macula.io">>},
+                 maps:get({text, <<"hostname">>}, P)),
+    ?assertEqual({text, <<"quic://relay-be-leuven.macula.io:4433">>},
+                 maps:get({text, <<"endpoint">>}, P)),
+    ?assertEqual({text, <<"Leuven">>},
+                 maps:get({text, <<"city">>}, P)),
+    ?assertEqual({text, <<"BE">>},
+                 maps:get({text, <<"country">>}, P)),
+    ?assertEqual({text, <<"50.8798">>},
+                 maps:get({text, <<"lat">>}, P)),
+    ?assertEqual({text, <<"4.7005">>},
+                 maps:get({text, <<"lng">>}, P)),
+    %% Round-trip through encode/decode preserves the geo fields.
+    Signed   = macula_record:sign(R, Kp),
+    Bytes    = macula_record:encode(Signed),
+    {ok, R2} = macula_record:decode(Bytes),
+    ?assertEqual({text, <<"50.8798">>},
+                 maps:get({text, <<"lat">>},
+                          macula_record:payload(R2))).
+
+node_record_with_integer_geo_test() ->
+    %% Integer 0 should encode as text "0", not be silently dropped.
+    Kp = macula_identity:generate(),
+    R = macula_record:node_record(
+          macula_identity:public(Kp), [], 0,
+          #{lat => 0, lng => 0}),
+    P = macula_record:payload(R),
+    ?assertEqual({text, <<"0">>}, maps:get({text, <<"lat">>}, P)),
+    ?assertEqual({text, <<"0">>}, maps:get({text, <<"lng">>}, P)).
 
 %%------------------------------------------------------------------
 %% Sign / verify

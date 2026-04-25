@@ -32,3 +32,6 @@ dist/
 # Rust NIF build artifacts and compiled .so files
 /native/*/target/
 /priv/*.so
+# Rebar3 stale NIF build outputs (older layout)
+/apps/
+rebar3.crashdump

@@ -111,7 +111,18 @@
     station_id   => macula_identity:pubkey(),
     caps_hint    => binary(),
     display_name => binary(),
-    ttl_ms       => pos_integer()
+    ttl_ms       => pos_integer(),
+    %% Optional self-described location + reach metadata.
+    %% Subscribers (e.g. realm dashboards) read these from the
+    %% record payload to render maps without polling a side-channel.
+    %% All four geo fields travel together — supplying any without
+    %% the others is allowed but generally reduces utility.
+    hostname     => binary(),
+    endpoint     => binary(),
+    city         => binary(),
+    country      => binary(),
+    lat          => float() | integer(),
+    lng          => float() | integer()
 }.
 
 -type realm_directory_opts() :: #{
@@ -590,12 +601,28 @@ node_payload(NodeId, StationId, Realms, Caps, Opts) ->
         {text, <<"realms">>}       => Realms,
         {text, <<"capabilities">>} => Caps
     },
-    M1 = with_text(Base, <<"caps_hint">>,    maps:get(caps_hint,    Opts, undefined)),
-    with_text(M1,    <<"display_name">>, maps:get(display_name, Opts, undefined)).
+    M1 = with_text(Base,  <<"caps_hint">>,    maps:get(caps_hint,    Opts, undefined)),
+    M2 = with_text(M1,    <<"display_name">>, maps:get(display_name, Opts, undefined)),
+    M3 = with_text(M2,    <<"hostname">>,     maps:get(hostname,     Opts, undefined)),
+    M4 = with_text(M3,    <<"endpoint">>,     maps:get(endpoint,     Opts, undefined)),
+    M5 = with_text(M4,    <<"city">>,         maps:get(city,         Opts, undefined)),
+    M6 = with_text(M5,    <<"country">>,      maps:get(country,      Opts, undefined)),
+    M7 = with_geo(M6,     <<"lat">>,          maps:get(lat,          Opts, undefined)),
+    with_geo(M7,          <<"lng">>,          maps:get(lng,          Opts, undefined)).
 
 with_text(Map, _Key, undefined) -> Map;
 with_text(Map,  Key, Bin) when is_binary(Bin) ->
     Map#{ {text, Key} => {text, Bin} }.
+
+%% Geo coordinates travel as CBOR text strings — float canonicalisation
+%% is fragile across language implementations, while a fixed-decimals
+%% text rendering is stable. Subscribers parse with `binary_to_float/1'
+%% (or `binary_to_integer/1' if the source was an integer like 0).
+with_geo(Map, _Key, undefined) -> Map;
+with_geo(Map,  Key, V) when is_float(V) ->
+    Map#{ {text, Key} => {text, float_to_binary(V, [{decimals, 6}, compact])} };
+with_geo(Map,  Key, V) when is_integer(V) ->
+    Map#{ {text, Key} => {text, integer_to_binary(V)} }.
 
 tombstone_payload(SupKey, SupType, ReplacedAt, Reason, Detail) ->
     Base = #{
