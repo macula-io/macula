@@ -132,7 +132,11 @@
     city         => binary(),
     country      => binary(),
     lat          => float() | integer(),
-    lng          => float() | integer()
+    lng          => float() | integer(),
+    %% Actor discriminator — `<<"station">>' for relay identities,
+    %% `<<"daemon">>' for client identities. Subscribers route on
+    %% this to render presence events on different mesh channels.
+    kind         => binary()
 }.
 
 -type realm_directory_opts() :: #{
@@ -647,7 +651,13 @@ node_payload(NodeId, StationId, Realms, Caps, Opts) ->
     M5 = with_text(M4,    <<"city">>,         maps:get(city,         Opts, undefined)),
     M6 = with_text(M5,    <<"country">>,      maps:get(country,      Opts, undefined)),
     M7 = with_geo(M6,     <<"lat">>,          maps:get(lat,          Opts, undefined)),
-    with_geo(M7,          <<"lng">>,          maps:get(lng,          Opts, undefined)).
+    M8 = with_geo(M7,     <<"lng">>,          maps:get(lng,          Opts, undefined)),
+    %% `kind' is the actor discriminator — `station' for relay
+    %% identities, `daemon' for client identities. Subscribers route
+    %% on this to render presence events on different mesh channels.
+    %% Records without `kind' predate the field and are treated as
+    %% `station' by consumers.
+    with_text(M8,         <<"kind">>,         maps:get(kind,         Opts, undefined)).
 
 with_text(Map, _Key, undefined) -> Map;
 with_text(Map,  Key, Bin) when is_binary(Bin) ->

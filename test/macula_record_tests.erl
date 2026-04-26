@@ -52,7 +52,17 @@ node_record_omits_unset_optional_fields_test() ->
     ?assertNot(maps:is_key({text, <<"city">>}, P)),
     ?assertNot(maps:is_key({text, <<"country">>}, P)),
     ?assertNot(maps:is_key({text, <<"lat">>}, P)),
-    ?assertNot(maps:is_key({text, <<"lng">>}, P)).
+    ?assertNot(maps:is_key({text, <<"lng">>}, P)),
+    ?assertNot(maps:is_key({text, <<"kind">>}, P)).
+
+node_record_with_kind_field_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:node_record(
+          macula_identity:public(Kp), [], 0,
+          #{kind => <<"daemon">>}),
+    P = macula_record:payload(R),
+    ?assertEqual({text, <<"daemon">>},
+                 maps:get({text, <<"kind">>}, P)).
 
 node_record_with_geo_metadata_test() ->
     %% Subscribers (e.g. realm dashboards) read geo straight from

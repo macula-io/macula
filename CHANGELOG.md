@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.10.1] - 2026-04-26
+
+### Added — `kind` field on `node_record`
+
+`macula_record:node_record/4` now accepts an optional `kind` opt,
+emitted into the payload as `{text, <<"kind">>} => {text, Bin}'.
+Stations set it to `<<"station">>'; daemons (Part 4 of the
+DHT-first topology integration in hecate-station / hecate-daemon)
+set it to `<<"daemon">>'. The discriminator lets subscribers route
+presence facts on distinct mesh channels (`_mesh.station.*' vs
+`_mesh.daemon.*') without inferring actor type from capability
+bits.
+
+Records without `kind' predate the field. Consumers default the
+missing field to `<<"station">>' since stations were the only
+producers prior to 3.10.1.
+
+### Tests
+
+  * `macula_record_tests` now covers the `kind` field via two
+    cases — `node_record_with_kind_field_test' (presence) and
+    the existing `node_record_omits_unset_optional_fields_test'
+    (absence). 67 cases total, all pass.
+
+---
+
 ## [3.10.0] - 2026-04-26
 
 ### Added — streaming subscribe on `macula_station_client`
