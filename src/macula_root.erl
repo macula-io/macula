@@ -75,6 +75,19 @@ init([]) ->
             shutdown => infinity,
             type => supervisor,
             modules => [macula_dist_bridge_sup]
+        },
+
+        %% Peering — per-peer connection state machines (CONNECT/HELLO
+        %% handshake + frame send/receive). One macula_peering_conn
+        %% gen_statem per peer, supervised by macula_peering_conn_sup
+        %% under the macula_peering_sup top supervisor.
+        #{
+            id => macula_peering_sup,
+            start => {macula_peering_sup, start_link, []},
+            restart => permanent,
+            shutdown => infinity,
+            type => supervisor,
+            modules => [macula_peering_sup]
         }
     ],
 

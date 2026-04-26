@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.7.0] - 2026-04-26
+
+### Added — peering state machine + diagnostics primitives
+
+Two more modules vendored from hecate-station as the canonical SDK
+implementation, finishing the V2 fork mop-up alongside `macula_frame`
+in 3.6.0:
+
+  * `macula_peering` + `macula_peering_conn` + `macula_peering_sup` +
+    `macula_peering_conn_sup` — per-peer connection state machine
+    (CONNECT / HELLO handshake, frame send/receive, GOODBYE drain).
+    One `macula_peering_conn` gen_statem per peer, supervised by
+    `macula_peering_conn_sup` under `macula_peering_sup`. The top
+    supervisor is started by `macula_root` when the SDK boots, so
+    `application:ensure_all_started(macula)` registers both
+    `macula_peering_sup` and `macula_peering_conn_sup`.
+  * `macula_diagnostics` — structured event emission via OTP `logger`
+    + per-process counter / gauge metrics. Phase 1 implementation;
+    upgrades to Prometheus / OpenTelemetry exporters land in Phase 7
+    without changing the public surface.
+
+### Changed — peering uses `macula_quic` directly
+
+The vendored peering modules call `macula_quic` directly (positional
+args + opts list) rather than going through an option-map adapter.
+Peering's caller-facing `target` opt is still a map (`#{host, port,
+alpn?, timeout_ms?}`), unpacked inside `macula_peering_conn` before
+dispatching to `macula_quic:connect/4`. Result: one transport layer
+in the SDK, no adapter-on-adapter.
+
+The hecate-station-internal `hecate_transport` adapter survives in
+hecate-station for that repo's own listener / server modules — those
+keep their option-map calling style.
+
+### Fixed — EDoc cleanups in vendored modules
+
+`rebar3 ex_doc` now runs clean. Affected modules vendored in 3.6.0
+plus the new ones from 3.7.0:
+
+  * Markdown-style paired backticks (`` `text` ``) replaced with the
+    EDoc-native form (`` `text' ``) in `macula_frame`,
+    `macula_source_route`, `macula_bolt4`, `macula_peering*` and
+    `macula_diagnostics`. EDoc does not support markdown backticks.
+  * Binary syntax (`` <<...>> ``) inside `<pre>` blocks in
+    `macula_frame` HTML-escaped to `&lt;&lt;...&gt;&gt;` — the EDoc
+    XML parser was consuming `<<` as the start of a tag.
+
+---
+
 ## [3.6.0] - 2026-04-26
 
 ### Added — Macula V2 frame primitives (CBOR wire)

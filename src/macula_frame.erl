@@ -2,7 +2,7 @@
 %%
 %% A wire frame is a length-prefixed deterministic CBOR map:
 %% <pre>
-%%   <<Length:32/big, Cbor/binary>>
+%%   &lt;&lt;Length:32/big, Cbor/binary&gt;&gt;
 %% </pre>
 %% where `Cbor' is the RFC 8949 §4.2.1 deterministic encoding of a single
 %% map. The map carries the common header fields (`Part 6 §3') plus
@@ -415,7 +415,7 @@
 %% Content transfer frame specs (Part 6 §9)
 %%
 %% MCID — Macula Content IDentifier — 34 bytes:
-%% <<Version:8, Codec:8, Hash:32/binary>>. Block payloads carry
+%% &lt;&lt;Version:8, Codec:8, Hash:32/binary&gt;&gt;. Block payloads carry
 %% raw chunk bytes; manifest payloads carry the structured manifest
 %% map. Frames are signed by the sender for accountability; the
 %% recipient verifies the signature on top of the per-block /

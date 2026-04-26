@@ -15,25 +15,25 @@
 %% </pre>
 %%
 %% <ul>
-%%   <li><code>version</code> (1 byte) — currently `1`.</li>
-%%   <li><code>total_hops</code> (1 byte) — `1..8`.</li>
+%%   <li><code>version</code> (1 byte) — currently `1'.</li>
+%%   <li><code>total_hops</code> (1 byte) — `1..8'.</li>
 %%   <li><code>current_hop</code> (1 byte) — index of the hop currently
-%%       processing. `new/2,3` creates a header with `0`; each hop
+%%       processing. `new/2,3' creates a header with `0'; each hop
 %%       advances by 1 before forwarding; the destination
-%%       observes `current_hop = total_hops - 1` and after one
-%%       final advance sees `is_complete/1 = true`.</li>
+%%       observes `current_hop = total_hops - 1' and after one
+%%       final advance sees `is_complete/1 = true'.</li>
 %%   <li><code>deadline</code> (8 bytes, unsigned) — absolute Unix ms
-%%       past which the CALL is dropped (BOLT#4 `expiry_too_soon`).</li>
+%%       past which the CALL is dropped (BOLT#4 `expiry_too_soon').</li>
 %%   <li><code>path_hash</code> (16 bytes) — first 16 bytes of
-%%       `SHA-256(concat(hops))`. Computed once at the origin and
+%%       `SHA-256(concat(hops))'. Computed once at the origin and
 %%       checked at every hop. Tampering with the hop sequence
 %%       breaks the hash.</li>
-%%   <li><code>hops</code> — `total_hops × 16` bytes; each entry is
+%%   <li><code>hops</code> — `total_hops × 16' bytes; each entry is
 %%       the first 16 bytes of the NodeId at that hop.</li>
 %% </ul>
 %%
-%% Fixed overhead is 27 bytes (`1 + 1 + 1 + 8 + 16`). A path of
-%% `N` hops occupies `27 + 16*N` bytes; maximum (`N = 8`) is
+%% Fixed overhead is 27 bytes (`1 + 1 + 1 + 8 + 16'). A path of
+%% `N' hops occupies `27 + 16*N' bytes; maximum (`N = 8') is
 %% 155 bytes.
 %%
 %% Reference: plans/PLAN_MACULA_V2_PART6_PROTOCOL.md §11;
