@@ -410,3 +410,210 @@ find_record_not_found_test_() ->
          macula_station_client:stop(Pid),
          ok
      end}.
+
+%%------------------------------------------------------------------
+%% subscribe/3 sends a SUBSCRIBE frame
+%%------------------------------------------------------------------
+
+subscribe_sends_frame_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_client:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
+         {ok, SubRef} = macula_station_client:subscribe(
+                          Pid, <<"_mesh.station.announced_v1">>, self()),
+         ?assert(is_reference(SubRef)),
+         receive
+             {'$gen_cast', {send_frame, #{frame_type := subscribe,
+                                          topic := <<"_mesh.station.announced_v1">>}}} ->
+                 ok
+         after 1_000 ->
+             erlang:error(no_subscribe_frame)
+         end,
+         macula_station_client:stop(Pid),
+         ok
+     end}.
+
+%%------------------------------------------------------------------
+%% Inbound EVENT frame fans out to subscriber
+%%------------------------------------------------------------------
+
+event_frame_delivered_to_subscriber_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_client:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
+         Topic = <<"_mesh.station.announced_v1">>,
+         {ok, SubRef} = macula_station_client:subscribe(Pid, Topic, self()),
+         %% Drain the outbound subscribe cast.
+         receive
+             {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
+         after 1_000 -> erlang:error(no_subscribe_frame)
+         end,
+         %% Inject an EVENT frame.
+         PublisherKey = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type    => event,
+             topic         => Topic,
+             realm         => <<0:256>>,
+             publisher     => PublisherKey,
+             seq           => 42,
+             payload       => #{hello => <<"world">>},
+             delivered_via => direct
+         }},
+         receive
+             {macula_event, R, T, P, Meta} ->
+                 ?assertEqual(SubRef, R),
+                 ?assertEqual(Topic, T),
+                 ?assertEqual(#{hello => <<"world">>}, P),
+                 ?assertEqual(PublisherKey, maps:get(publisher, Meta)),
+                 ?assertEqual(42, maps:get(seq, Meta))
+         after 2_000 -> erlang:error(no_event_delivered)
+         end,
+         macula_station_client:stop(Pid),
+         ok
+     end}.
+
+%%------------------------------------------------------------------
+%% unsubscribe/2 sends UNSUBSCRIBE frame and stops delivery
+%%------------------------------------------------------------------
+
+unsubscribe_sends_frame_and_clears_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_client:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
+         Topic = <<"_mesh.station.announced_v1">>,
+         {ok, SubRef} = macula_station_client:subscribe(Pid, Topic, self()),
+         receive
+             {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
+         after 1_000 -> erlang:error(no_subscribe_frame)
+         end,
+         ok = macula_station_client:unsubscribe(Pid, SubRef),
+         receive
+             {'$gen_cast', {send_frame, #{frame_type := unsubscribe,
+                                          topic := T}}} ->
+                 ?assertEqual(Topic, T)
+         after 1_000 ->
+             erlang:error(no_unsubscribe_frame)
+         end,
+         %% After unsubscribe, EVENT frames must not be delivered.
+         PublisherKey = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type    => event,
+             topic         => Topic,
+             realm         => <<0:256>>,
+             publisher     => PublisherKey,
+             seq           => 1,
+             payload       => post_unsubscribe,
+             delivered_via => direct
+         }},
+         receive
+             {macula_event, _, _, post_unsubscribe, _} ->
+                 erlang:error(event_after_unsubscribe)
+         after 200 -> ok
+         end,
+         macula_station_client:stop(Pid),
+         ok
+     end}.
+
+%%------------------------------------------------------------------
+%% Subscriber pid death drops the subscription
+%%------------------------------------------------------------------
+
+subscriber_down_drops_subscription_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_client:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
+         %% Spawn a subscriber that exits immediately after subscribing
+         %% from its own pid.
+         Test = self(),
+         Sub = spawn(fun() ->
+             {ok, R} = macula_station_client:subscribe(
+                         Pid, <<"_mesh.station.announced_v1">>, self()),
+             Test ! {sub_started, self(), R}
+         end),
+         receive
+             {sub_started, Sub, _SubRef} -> ok
+         after 1_000 -> erlang:error(subscriber_did_not_subscribe)
+         end,
+         %% Drain the outbound subscribe cast.
+         receive
+             {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
+         after 1_000 -> erlang:error(no_subscribe_frame)
+         end,
+         %% Subscriber has exited (returned from its fun). The client
+         %% should observe DOWN and emit a best-effort UNSUBSCRIBE frame.
+         receive
+             {'$gen_cast', {send_frame, #{frame_type := unsubscribe}}} -> ok
+         after 1_000 -> erlang:error(no_cleanup_unsubscribe)
+         end,
+         macula_station_client:stop(Pid),
+         ok
+     end}.
+
+%%------------------------------------------------------------------
+%% Disconnect emits macula_event_gone to every subscriber
+%%------------------------------------------------------------------
+
+disconnect_notifies_subscribers_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_client:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
+         {ok, SubRef} = macula_station_client:subscribe(
+                          Pid, <<"_mesh.station.announced_v1">>, self()),
+         receive
+             {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
+         after 1_000 -> erlang:error(no_subscribe_frame)
+         end,
+         Pid ! {macula_peering, disconnected, FakePeer, peer_closed},
+         receive
+             {macula_event_gone, R, Reason} ->
+                 ?assertEqual(SubRef, R),
+                 ?assertMatch({disconnected, peer_closed}, Reason)
+         after 2_000 -> erlang:error(no_event_gone)
+         end,
+         ok
+     end}.

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.10.0] - 2026-04-26
+
+### Added — streaming subscribe on `macula_station_client`
+
+The station-client now exposes a pubsub surface alongside the
+existing request/response (`call/4`, `put_record/2,3`,
+`find_record/2,3`, `find_records_by_type/2,3`):
+
+  * `subscribe/3` — sends a SUBSCRIBE frame to the connected station
+    and registers a delivery pid. Returns `{ok, SubRef}`. The
+    subscriber receives `{macula_event, SubRef, Topic, Payload,
+    Meta}` for every matching EVENT frame the station fans out, and
+    a single `{macula_event_gone, SubRef, Reason}` when the
+    connection drops or the client stops.
+  * `unsubscribe/2` — sends a best-effort UNSUBSCRIBE frame and
+    clears local bookkeeping. Idempotent.
+
+The client monitors each subscriber pid; if it dies the
+subscription is cleaned up and a best-effort UNSUBSCRIBE goes on
+the wire. On disconnect every active subscription receives one
+`macula_event_gone` so consumers can react without polling
+`is_connected/1`.
+
+This unblocks topology aggregators (e.g. macula-realm) that need to
+hear about new DHT records as they land, instead of polling
+`find_records_by_type` and only ever seeing the seed station's
+local cache.
+
+### Tests
+
+  * 5 new EUnit cases: `subscribe_sends_frame`,
+    `event_frame_delivered_to_subscriber`,
+    `unsubscribe_sends_frame_and_clears`,
+    `subscriber_down_drops_subscription`,
+    `disconnect_notifies_subscribers`.
+  * Total `macula_station_client_tests` count: 15. All pass.
+
+---
+
 ## [3.9.0] - 2026-04-26
 
 ### Added — DHT writes via V2 station-client

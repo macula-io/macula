@@ -1,20 +1,23 @@
-%% @doc V2 station-client — outbound RPC over `macula_peering'.
+%% @doc Station-client — outbound RPC + pubsub over `macula_peering'.
 %%
 %% A `macula_station_client' is a `gen_server' that owns one
 %% `macula_peering' connection to a single station endpoint. It
 %% drives the CONNECT/HELLO handshake as the client side, then
-%% sends application-layer CALL frames built with `macula_frame:call/1'
-%% and matches inbound RESULT/ERROR frames against pending
-%% `gen_server:call' callers using the 16-byte CALL id.
+%% exposes two surfaces over the same peering pipe:
 %%
-%% This is the V2 counterpart to `macula_mesh_client', which speaks
-%% the V1 relay protocol. V1 clients cannot drive V2 stations because
-%% V2 stations dispatch the QUIC connection straight into
-%% `macula_peering:accept/2' — V1 CONNECT frames never reach the
-%% V2 handler registry. This module bridges the gap so that a V1-era
-%% consumer (e.g. macula-realm's topology subscriber) can issue
-%% `_dht.find_records_by_type' against a V2 station and receive its
-%% signed RESULT.
+%% <ul>
+%%   <li><strong>Request/response</strong> — `call/4' sends a CALL
+%%       frame and matches inbound RESULT/ERROR frames against
+%%       pending callers using the 16-byte CALL id. Convenience
+%%       wrappers cover `_dht.put_record', `_dht.find_record', and
+%%       `_dht.find_records_by_type'.</li>
+%%   <li><strong>Streaming subscribe</strong> — `subscribe/3' sends
+%%       a SUBSCRIBE frame and registers a delivery pid. Inbound
+%%       EVENT frames matching the topic fan out to subscribers as
+%%       `{macula_event, SubRef, Topic, Payload, Meta}'. On
+%%       disconnect each subscriber receives a single
+%%       `{macula_event_gone, SubRef, Reason}'.</li>
+%% </ul>
 %%
 %% == Lifecycle ==
 %%
@@ -30,11 +33,12 @@
 %%   <li>RESULT or ERROR arrives as `{macula_peering, frame, Pid, Frame}'
 %%       → look up `call_id', cancel timer, reply to caller.</li>
 %%   <li>`{macula_peering, disconnected, Pid, Reason}' → fail all
-%%       pending calls with `{error, {disconnected, Reason}}', stop the
-%%       client (caller is responsible for restart / reconnect).</li>
+%%       pending calls with `{error, {disconnected, Reason}}', notify
+%%       all subscribers via `macula_event_gone', stop the client
+%%       (caller is responsible for restart / reconnect).</li>
 %% </ol>
 %%
-%% == Reply taxonomy ==
+%% == Call reply taxonomy ==
 %%
 %% <table>
 %%   <tr><th>Inbound frame</th><th>`call/4' returns</th></tr>
@@ -47,12 +51,13 @@
 %%
 %% == Realm field ==
 %%
-%% V2 CALL frames carry a 32-byte `realm' id. Stations deployed today
-%% advertise an empty `realms' list (realm-agnostic infrastructure)
-%% and do not enforce a realm match on inbound CALLs — the dispatch
-%% path verifies the signature and looks up the procedure, nothing
-%% more. Callers therefore pass any 32-byte value; this module
-%% defaults to all-zeros when no realm is configured.
+%% Outbound CALL and SUBSCRIBE frames carry a 32-byte `realm' id.
+%% Stations deployed today advertise an empty `realms' list
+%% (realm-agnostic infrastructure) and do not enforce a realm match
+%% on inbound frames — the dispatch path verifies the signature and
+%% looks up the procedure / topic, nothing more. Callers therefore
+%% pass any 32-byte value; this module defaults to all-zeros when no
+%% realm is configured.
 -module(macula_station_client).
 -behaviour(gen_server).
 
@@ -63,6 +68,8 @@
     put_record/2, put_record/3,
     find_record/2, find_record/3,
     find_records_by_type/2, find_records_by_type/3,
+    subscribe/3,
+    unsubscribe/2,
     is_connected/1,
     peer_node_id/1
 ]).
@@ -111,8 +118,18 @@
     %% peer's node id, set on `connected'.
     peer_node_id     :: macula_identity:pubkey() | undefined,
     %% map of CALL id (16 bytes) -> {From, TimerRef}.
-    pending = #{}    :: #{<<_:128>> => {gen_server:from(), reference()}}
+    pending = #{}    :: #{<<_:128>> => {gen_server:from(), reference()}},
+    %% Active topic subscriptions keyed by SubRef returned to the
+    %% subscriber. The reverse `topic_index' lets inbound EVENT
+    %% frames fan out to all SubRefs subscribed to a given topic
+    %% without scanning the whole subscriptions map.
+    subscriptions = #{} :: #{reference() => subscription()},
+    topic_index   = #{} :: #{binary() => sets:set(reference())}
 }).
+
+-type subscription() :: {Topic     :: binary(),
+                         Subscriber :: pid(),
+                         Mon        :: reference()}.
 
 %%====================================================================
 %% Public API
@@ -215,6 +232,41 @@ classify_records({ok, Records}) when is_list(Records) -> {ok, Records};
 classify_records({ok, Other})                          -> {error, {unexpected_reply, Other}};
 classify_records({error, _} = E)                       -> E.
 
+%% @doc Subscribe to a peering pubsub topic. Sends a SUBSCRIBE frame
+%% to the connected station and registers `Subscriber' as the
+%% delivery pid for inbound EVENT frames matching `Topic'.
+%%
+%% Returns `{ok, SubRef}' once the SUBSCRIBE frame is sent. Stations
+%% do not acknowledge SUBSCRIBE — the contract is best-effort,
+%% mirroring the existing peering pubsub semantics.
+%%
+%% Subscriber receives one of:
+%%
+%% <ul>
+%%   <li>`{macula_event, SubRef, Topic, Payload, Meta}' — every time
+%%       an EVENT frame arrives for `Topic'. `Meta' is a map with
+%%       `publisher', `seq', and `delivered_via' fields.</li>
+%%   <li>`{macula_event_gone, SubRef, Reason}' — once, when the
+%%       connection drops or the client stops. The subscription map
+%%       is cleared on the same transition.</li>
+%% </ul>
+%%
+%% The client monitors `Subscriber'; if it dies the subscription is
+%% torn down (best-effort UNSUBSCRIBE on the wire).
+-spec subscribe(pid(), binary(), pid()) ->
+    {ok, reference()} | {error, not_connected}.
+subscribe(Client, Topic, Subscriber)
+  when is_pid(Client), is_binary(Topic), is_pid(Subscriber) ->
+    gen_server:call(Client, {subscribe, Topic, Subscriber}, 5_000).
+
+%% @doc Drop a subscription. Sends a best-effort UNSUBSCRIBE frame
+%% to the station and clears local bookkeeping. Always returns `ok',
+%% even when `SubRef' is unknown — unsubscribe is idempotent.
+-spec unsubscribe(pid(), reference()) -> ok.
+unsubscribe(Client, SubRef)
+  when is_pid(Client), is_reference(SubRef) ->
+    gen_server:call(Client, {unsubscribe, SubRef}, 5_000).
+
 -spec is_connected(pid()) -> boolean().
 is_connected(Pid) ->
     case gen_server:call(Pid, is_connected, 1_000) of
@@ -274,6 +326,28 @@ handle_call(peer_node_id, _From, #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
 handle_call(peer_node_id, _From, #state{peer_node_id = Id} = S) ->
     {reply, {ok, Id}, S};
+
+handle_call({subscribe, _Topic, _Sub}, _From,
+            #state{peer_pid = undefined} = S) ->
+    {reply, {error, not_connected}, S};
+handle_call({subscribe, Topic, Subscriber}, _From,
+            #state{peer_pid = Pid, identity = Id, realm = Realm,
+                   subscriptions = Subs, topic_index = Idx} = S) ->
+    SubRef = make_ref(),
+    Mon    = erlang:monitor(process, Subscriber),
+    SubKey = macula_identity:public(Id),
+    Frame  = macula_frame:subscribe(#{topic      => Topic,
+                                      realm      => Realm,
+                                      subscriber => SubKey}),
+    ok = macula_peering:send_frame(Pid, Frame),
+    NewSubs = Subs#{SubRef => {Topic, Subscriber, Mon}},
+    NewIdx  = add_topic_sub(Topic, SubRef, Idx),
+    {reply, {ok, SubRef}, S#state{subscriptions = NewSubs,
+                                  topic_index   = NewIdx}};
+
+handle_call({unsubscribe, SubRef}, _From, S) ->
+    {reply, ok, on_unsubscribe(SubRef, S)};
+
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
@@ -322,6 +396,9 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid} = S) ->
     {stop, normal, NewS#state{peer_pid = undefined,
                               peer_node_id = undefined}};
 
+handle_info({'DOWN', Mon, process, _Pid, _Reason}, S) ->
+    {noreply, on_subscriber_down(Mon, S)};
+
 handle_info(_Other, S) ->
     {noreply, S}.
 
@@ -359,9 +436,15 @@ on_frame(#{frame_type := error, call_id := CallId} = Frame,
     Name = maps:get(name, Frame, undefined),
     deliver_pending(maps:take(CallId, P),
                     {error, {call_error, Code, Name}}, S);
-%% Anything else (HyParView, Plumtree, SWIM, content) — ignore for
-%% the realm-topology client. A dedicated overlay subscriber lives
-%% in a separate module.
+%% EVENT — pubsub delivery. Fan out to every subscriber whose topic
+%% matches. Stations may push EVENTs without a prior SUBSCRIBE on
+%% this connection (e.g. wildcard / catalog channels); silently drop
+%% those.
+on_frame(#{frame_type := event, topic := Topic} = Frame, S) ->
+    deliver_event(Topic, Frame, S);
+%% HyParView / Plumtree / SWIM / content frames pass through here.
+%% This client cares only about call/result/error and event; the
+%% rest is for dedicated overlay modules.
 on_frame(_Frame, S) ->
     S.
 
@@ -379,20 +462,105 @@ on_timeout({{From, _OldTRef}, NewP}, S) ->
     gen_server:reply(From, {error, timeout}),
     {noreply, S#state{pending = NewP}}.
 
-fail_all_pending(Reason, #state{pending = P} = S) ->
+fail_all_pending(Reason, #state{pending = P, subscriptions = Subs} = S) ->
     maps:foreach(fun(_CallId, {From, TRef}) ->
         _ = erlang:cancel_timer(TRef),
         gen_server:reply(From, {error, Reason})
     end, P),
-    S#state{pending = #{}}.
+    maps:foreach(fun(SubRef, {_Topic, Subscriber, Mon}) ->
+        erlang:demonitor(Mon, [flush]),
+        Subscriber ! {macula_event_gone, SubRef, Reason}
+    end, Subs),
+    S#state{pending = #{}, subscriptions = #{}, topic_index = #{}}.
+
+%%-------------------------------------------------------------------
+%% Subscription helpers
+%%-------------------------------------------------------------------
+
+add_topic_sub(Topic, SubRef, Idx) ->
+    Set = maps:get(Topic, Idx, sets:new()),
+    Idx#{Topic => sets:add_element(SubRef, Set)}.
+
+del_topic_sub(Topic, SubRef, Idx) ->
+    on_set_after_del(Topic, sets:del_element(SubRef, maps:get(Topic, Idx, sets:new())), Idx).
+
+on_set_after_del(Topic, Set, Idx) ->
+    on_empty_set(sets:is_empty(Set), Topic, Set, Idx).
+
+on_empty_set(true,  Topic, _Set, Idx) -> maps:remove(Topic, Idx);
+on_empty_set(false, Topic,  Set, Idx) -> Idx#{Topic => Set}.
+
+%% Drop a single subscription. Best-effort UNSUBSCRIBE on the wire
+%% (drops silently when disconnected — the station prunes stale
+%% subscribers eventually). Idempotent: unknown SubRef is a no-op.
+on_unsubscribe(SubRef, #state{subscriptions = Subs,
+                              topic_index   = Idx,
+                              peer_pid      = Pid,
+                              identity      = Id,
+                              realm         = Realm} = S) ->
+    on_unsubscribe_take(maps:take(SubRef, Subs), SubRef, Idx, Pid, Id, Realm, S).
+
+on_unsubscribe_take(error, _SubRef, _Idx, _Pid, _Id, _Realm, S) ->
+    S;
+on_unsubscribe_take({{Topic, _Subscriber, Mon}, NewSubs},
+                    SubRef, Idx, Pid, Id, Realm, S) ->
+    erlang:demonitor(Mon, [flush]),
+    NewIdx = del_topic_sub(Topic, SubRef, Idx),
+    send_unsubscribe(Pid, Topic, Realm, Id),
+    S#state{subscriptions = NewSubs, topic_index = NewIdx}.
+
+send_unsubscribe(undefined, _Topic, _Realm, _Id) ->
+    ok;
+send_unsubscribe(Pid, Topic, Realm, Id) ->
+    SubKey = macula_identity:public(Id),
+    Frame  = macula_frame:unsubscribe(#{topic      => Topic,
+                                        realm      => Realm,
+                                        subscriber => SubKey}),
+    catch macula_peering:send_frame(Pid, Frame),
+    ok.
+
+%% Subscriber pid died — find its SubRef(s) by monitor ref, drop
+%% them. A pid can only have one subscription via one monitor, but
+%% scan defensively.
+on_subscriber_down(Mon, #state{subscriptions = Subs} = S) ->
+    Found = maps:fold(fun
+        (SubRef, {_T, _P, M}, Acc) when M =:= Mon -> [SubRef | Acc];
+        (_, _, Acc) -> Acc
+    end, [], Subs),
+    lists:foldl(fun on_unsubscribe/2, S, Found).
+
+%% Fan an EVENT frame out to every subscriber for that topic.
+deliver_event(Topic, Frame, #state{topic_index = Idx} = S) ->
+    deliver_event_to(maps:find(Topic, Idx), Topic, Frame, S),
+    S.
+
+deliver_event_to(error, _Topic, _Frame, _S) ->
+    ok;
+deliver_event_to({ok, Set}, Topic, Frame, #state{subscriptions = Subs}) ->
+    Payload = maps:get(payload, Frame),
+    Meta = #{publisher     => maps:get(publisher, Frame),
+             seq           => maps:get(seq, Frame),
+             delivered_via => maps:get(delivered_via, Frame, direct)},
+    sets:fold(fun(SubRef, _) ->
+        deliver_event_one(SubRef, Topic, Payload, Meta, Subs)
+    end, ok, Set).
+
+deliver_event_one(SubRef, Topic, Payload, Meta, Subs) ->
+    fan_event(maps:find(SubRef, Subs), SubRef, Topic, Payload, Meta).
+
+fan_event(error, _SubRef, _Topic, _Payload, _Meta) ->
+    ok;
+fan_event({ok, {_T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
+    Subscriber ! {macula_event, SubRef, Topic, Payload, Meta},
+    ok.
 
 %%-------------------------------------------------------------------
 %% Helpers
 %%-------------------------------------------------------------------
 
-%% A realm-agnostic client (realm = all-zeros) should advertise an
-%% empty realms list in CONNECT — the V2 station spec uses an empty
-%% list to mean "no realm membership claimed".
+%% A realm-agnostic client (realm = all-zeros) advertises an empty
+%% realms list in CONNECT — the station spec uses an empty list to
+%% mean "no realm membership claimed".
 realms_for_connect(<<0:256>>) -> [];
 realms_for_connect(R) when is_binary(R), byte_size(R) =:= 32 -> [R].
 
