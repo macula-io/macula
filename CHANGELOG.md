@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.6.0] - 2026-04-26
+
+### Added — Macula V2 frame primitives (CBOR wire)
+
+Three new modules vendored into the SDK as the canonical implementation
+for hecate-station and any future Macula V2 service:
+
+  * `macula_frame` — CONNECT / HELLO / GOODBYE, SWIM
+    (ping / ack / suspect / confirm / update), DHT
+    (ping / pong / find_node / nodes / find_value / value /
+    store / store_ack / replicate / replicate_ack), CALL / RESULT /
+    ERROR (Part 6 §5), HyParView, Plumtree, PubSub, content transfer.
+    Length-prefixed deterministic CBOR (RFC 8949 §4.2.1) per Part 6 §3.
+  * `macula_bolt4` — BOLT#4-style error-code taxonomy used by
+    `macula_frame:call_error/1' and friends.
+  * `macula_source_route` — onion-style source-route header builders
+    plus the rotation helpers feature gates.
+
+Atom-keyed in-process maps round-trip transparently:
+  * Encode walks the map, converting atoms to text strings via
+    `atom_to_binary/2'; floats stringify compactly; integers, binaries
+    and lists pass through unchanged.
+  * Decode walks the decoded CBOR term and restores atoms via
+    `binary_to_existing_atom/2' (safe — never grows the atom table from
+    untrusted input).
+  * Records (`record', `records' fields) delegate to
+    `macula_record:encode/1' so the SDK's canonical CBOR shape is
+    preserved verbatim across the wire.
+
+This unifies the two parallel implementations that had diverged into
+the deferred macula-v2 umbrella branch (`apps/macula_frame/`) and into
+hecate-station (`apps/hecate_frame/`). Both implementations were
+byte-identical BERT before this commit; both consumers now depend on
+the SDK module instead.
+
+PLAN_WIRE_CBOR.md (hecate-station) drove this — the macula 3.x mesh
+client speaks CBOR per Part 6 §3 but hecate-station was on BERT, and
+the wire incompatibility silently dropped every cross-codec frame.
+With both sides on this `macula_frame', station<->station and
+station<->macula-client traffic share a single canonical wire codec.
+
+### Tests — 116 macula_frame tests pass
+
+Round-trip coverage for every frame family (handshake, SWIM, DHT,
+CALL/RESULT/ERROR, HyParView, Plumtree, PubSub, content). 654 SDK
+eunit tests pass overall.
+
+---
+
 ## [3.5.0] - 2026-04-25
 
 ### Added — domain-defined record types via `macula_record:envelope/4`
