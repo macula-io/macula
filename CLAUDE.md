@@ -50,9 +50,28 @@ BLAKE3 (`macula_blake3_nif`), CBOR (`macula_cbor_nif` for general,
 Consumers (hecate-station, future SDK clients) should never re-implement
 these — pull them from this repo.
 
-**SDK provides:** client transport, wire protocol, identity (Ed25519/UCAN/DID NIFs), MRI resource identifiers, cert system, Erlang distribution over mesh, LAN clustering.
+**SDK provides:** client transport, wire protocol, identity (Ed25519/UCAN/DID NIFs), MRI resource identifiers, cert system, Erlang distribution over mesh, LAN clustering, peer connection state machine (`macula_peering*`), structured diagnostics (`macula_diagnostics`).
 
 **Relay provides** (separate repo): gateway, Kademlia DHT, RPC routing, PubSub routing, SWIM, peering, bootstrap, bridge, content, registry, authorization enforcement.
+
+### V2 umbrella retired
+
+The `macula-v2` umbrella branch (`/tmp/macula-v2/apps/`) — which carried
+`macula_identity`, `macula_record`, `macula_frame`, `macula_peering`,
+`macula_diagnostics` and a now-dead `macula_transport` NIF wrapper — has
+been fully absorbed into this SDK as of 3.7.0:
+
+| V2 app | Where it lives now |
+|---|---|
+| `macula_identity` | SDK `src/macula_identity.erl` (pre-3.6) |
+| `macula_record` | SDK `src/macula_record.erl` (pre-3.6) |
+| `macula_frame` | SDK `src/macula_frame.erl` + `macula_bolt4` + `macula_source_route` (3.6.0) |
+| `macula_peering` | SDK `src/macula_peering*.erl` (3.7.0) |
+| `macula_diagnostics` | SDK `src/macula_diagnostics.erl` (3.7.0) |
+| `macula_transport` | DEAD — superseded by SDK's `macula_quic` (Quinn-based NIF). hecate-station keeps a thin `hecate_transport` option-map adapter for its own listener / server modules. |
+
+The v2 umbrella tree can be retired wholesale; nothing in the active
+codebase references it.
 
 Key documentation:
 - `docs/guides/DIST_OVER_MESH_GUIDE.md` - Erlang distribution over relay mesh
