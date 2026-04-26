@@ -216,3 +216,197 @@ call_times_out_when_no_reply_test_() ->
          macula_station_client:stop(Pid),
          ok
      end}.
+
+%%------------------------------------------------------------------
+%% put_record/2 success path: classifies RESULT(ok) as ok
+%%------------------------------------------------------------------
+
+put_record_ok_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_client:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
+         CallerRef = make_ref(),
+         Test = self(),
+         %% A signed node_record makes a realistic put_record argument.
+         Record = macula_record:sign(
+                    macula_record:node_record(macula_identity:public(Identity),
+                                              [], 0),
+                    Identity),
+         spawn_link(fun() ->
+             R = macula_station_client:put_record(Pid, Record, 1_000),
+             Test ! {CallerRef, R}
+         end),
+         CallId = receive
+             {'$gen_cast', {send_frame, #{frame_type := call,
+                                          procedure  := <<"_dht.put_record">>,
+                                          call_id    := Id}}} ->
+                 Id
+         after 1_000 ->
+             erlang:error(no_put_record_cast)
+         end,
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type => result,
+             call_id    => CallId,
+             payload    => ok,
+             responded_by => PeerNodeId
+         }},
+         receive
+             {CallerRef, Reply} ->
+                 ?assertEqual(ok, Reply)
+         after 2_000 ->
+             erlang:error(no_caller_reply)
+         end,
+         macula_station_client:stop(Pid),
+         ok
+     end}.
+
+%%------------------------------------------------------------------
+%% put_record/2 unexpected reply surfaces as {error, {unexpected_reply, _}}
+%%------------------------------------------------------------------
+
+put_record_unexpected_reply_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_client:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
+         CallerRef = make_ref(),
+         Test = self(),
+         Record = macula_record:sign(
+                    macula_record:node_record(macula_identity:public(Identity),
+                                              [], 0),
+                    Identity),
+         spawn_link(fun() ->
+             R = macula_station_client:put_record(Pid, Record, 1_000),
+             Test ! {CallerRef, R}
+         end),
+         CallId = receive
+             {'$gen_cast', {send_frame, #{frame_type := call,
+                                          procedure  := <<"_dht.put_record">>,
+                                          call_id    := Id}}} -> Id
+         after 1_000 -> erlang:error(no_put_record_cast)
+         end,
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type   => result,
+             call_id      => CallId,
+             payload      => #{some => garbage},
+             responded_by => PeerNodeId
+         }},
+         receive
+             {CallerRef, Reply} ->
+                 ?assertMatch({error, {unexpected_reply, _}}, Reply)
+         after 2_000 -> erlang:error(no_reply)
+         end,
+         macula_station_client:stop(Pid),
+         ok
+     end}.
+
+%%------------------------------------------------------------------
+%% find_record/2 success path: classifies a signed record map
+%%------------------------------------------------------------------
+
+find_record_ok_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_client:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
+         CallerRef = make_ref(),
+         Test = self(),
+         Key = crypto:strong_rand_bytes(32),
+         spawn_link(fun() ->
+             R = macula_station_client:find_record(Pid, Key, 1_000),
+             Test ! {CallerRef, R}
+         end),
+         CallId = receive
+             {'$gen_cast', {send_frame, #{frame_type := call,
+                                          procedure  := <<"_dht.find_record">>,
+                                          call_id    := Id,
+                                          payload    := #{key := K}}}}
+               when K =:= Key -> Id
+         after 1_000 ->
+             erlang:error(no_find_record_cast)
+         end,
+         FakeRecord = #{type => 1, payload => #{}, sig => <<>>},
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type   => result,
+             call_id      => CallId,
+             payload      => FakeRecord,
+             responded_by => PeerNodeId
+         }},
+         receive
+             {CallerRef, Reply} ->
+                 ?assertEqual({ok, FakeRecord}, Reply)
+         after 2_000 -> erlang:error(no_reply)
+         end,
+         macula_station_client:stop(Pid),
+         ok
+     end}.
+
+%%------------------------------------------------------------------
+%% find_record/2 surfaces RESULT(not_found) as {error, not_found}
+%%------------------------------------------------------------------
+
+find_record_not_found_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_client:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
+         CallerRef = make_ref(),
+         Test = self(),
+         Key = crypto:strong_rand_bytes(32),
+         spawn_link(fun() ->
+             R = macula_station_client:find_record(Pid, Key, 1_000),
+             Test ! {CallerRef, R}
+         end),
+         CallId = receive
+             {'$gen_cast', {send_frame, #{frame_type := call,
+                                          procedure  := <<"_dht.find_record">>,
+                                          call_id    := Id}}} -> Id
+         after 1_000 -> erlang:error(no_find_record_cast)
+         end,
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type   => result,
+             call_id      => CallId,
+             payload      => not_found,
+             responded_by => PeerNodeId
+         }},
+         receive
+             {CallerRef, Reply} ->
+                 ?assertEqual({error, not_found}, Reply)
+         after 2_000 -> erlang:error(no_reply)
+         end,
+         macula_station_client:stop(Pid),
+         ok
+     end}.

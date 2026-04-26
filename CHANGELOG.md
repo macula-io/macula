@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.9.0] - 2026-04-26
+
+### Added — DHT writes via V2 station-client
+
+Round out `macula_station_client` so it can drive every DHT operation
+a node needs against a V2 station, not just reads:
+
+  * `put_record/2,3` — wraps `_dht.put_record`. Returns `ok` on a
+    `RESULT(ok)` reply, `{error, {unexpected_reply, _}}` on any other
+    payload, `{error, timeout}` / `{error, {disconnected, _}}` per the
+    existing `call/4` taxonomy. Stations replicate the put across the
+    K-nearest peers in their Kademlia routing table, so a single call
+    against any one connected station propagates to the rest of the DHT.
+  * `find_record/2,3` — wraps `_dht.find_record`. Returns
+    `{ok, Record}` for a signed record map, `{error, not_found}` for
+    a `RESULT(not_found)` reply.
+
+This closes the gap that left node daemons unable to publish
+`node_record` / domain-fact records into V2-only stations:
+`macula_mesh_client` (V1) speaks the V1 wire and is rejected by
+hecate-station's V2 peering listener, so before this release writes
+silently dropped. Consumers (hecate-daemon, future SDK clients) now
+have a single read+write path through `macula_station_client`.
+
+### Tests
+
+  * 4 new EUnit cases: `put_record_ok`,
+    `put_record_unexpected_reply`, `find_record_ok`,
+    `find_record_not_found`.
+  * Total `macula_station_client_tests` count: 10. All pass.
+
+---
+
 ## [3.8.0] - 2026-04-26
 
 ### Added — V2 station-client (`macula_station_client`)

@@ -60,6 +60,8 @@
     start_link/1,
     stop/1,
     call/4,
+    put_record/2, put_record/3,
+    find_record/2, find_record/3,
     find_records_by_type/2, find_records_by_type/3,
     is_connected/1,
     peer_node_id/1
@@ -151,6 +153,48 @@ call(Pid, Procedure, Payload, TimeoutMs)
         exit:{noproc, _}       -> {error, noproc};
         exit:{normal, _}       -> {error, gone}
     end.
+
+%% @doc Convenience wrapper for `_dht.put_record'. The record must be
+%% a fully-signed `macula_record:record()' map (build via
+%% `macula_record:envelope/3,4' + `macula_record:sign/2'). Returns
+%% `ok' on success, `{error, Reason}' on RPC failure or unexpected
+%% reply.
+%%
+%% Stations replicate the put across the K-nearest peers in their
+%% Kademlia routing table, so a single `put_record/2' call against
+%% any one connected station propagates to the rest of the DHT.
+-spec put_record(pid(), map()) -> ok | {error, term()}.
+put_record(Pid, Record) ->
+    put_record(Pid, Record, ?DEFAULT_DEADLINE_MS).
+
+-spec put_record(pid(), map(), pos_integer()) -> ok | {error, term()}.
+put_record(Pid, Record, TimeoutMs) when is_pid(Pid), is_map(Record) ->
+    classify_put(call(Pid, <<"_dht.put_record">>, Record, TimeoutMs)).
+
+classify_put({ok, ok})       -> ok;
+classify_put({ok, Other})    -> {error, {unexpected_reply, Other}};
+classify_put({error, _} = E) -> E.
+
+%% @doc Convenience wrapper for `_dht.find_record'. Looks up a record
+%% by its `macula_record:storage_key/1' (32-byte BLAKE3 digest).
+%% Returns `{error, not_found}' when no record exists at the key.
+%% Callers SHOULD verify the returned record's signature with
+%% `macula_record:verify/1' before trusting its payload.
+-spec find_record(pid(), <<_:256>>) ->
+    {ok, map()} | {error, not_found | term()}.
+find_record(Pid, Key) ->
+    find_record(Pid, Key, ?DEFAULT_DEADLINE_MS).
+
+-spec find_record(pid(), <<_:256>>, pos_integer()) ->
+    {ok, map()} | {error, not_found | term()}.
+find_record(Pid, Key, TimeoutMs)
+  when is_pid(Pid), is_binary(Key), byte_size(Key) =:= 32 ->
+    classify_find(call(Pid, <<"_dht.find_record">>, #{key => Key}, TimeoutMs)).
+
+classify_find({ok, #{type := _, payload := _, sig := _} = R}) -> {ok, R};
+classify_find({ok, not_found})   -> {error, not_found};
+classify_find({ok, Other})       -> {error, {unexpected_reply, Other}};
+classify_find({error, _} = E)    -> E.
 
 %% @doc Convenience wrapper for `_dht.find_records_by_type'. Returns
 %% the decoded list of signed records (CBOR-decoded maps as produced
