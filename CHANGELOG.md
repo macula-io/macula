@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.8.0] - 2026-04-26
+
+### Added — V2 station-client (`macula_station_client`)
+
+A high-level outbound RPC client for V2 stations, built on top of the
+`macula_peering` state machine and `macula_frame` CALL/RESULT/ERROR
+frames vendored in 3.6.0–3.7.0.
+
+  * `macula_station_client:start_link/1` — spawn a `gen_server` that
+    owns one `macula_peering` connection to a single station endpoint
+    and drives the CONNECT/HELLO handshake as the client side.
+  * `macula_station_client:call/4` — issue a CALL frame and block
+    until the station replies, the deadline elapses, or the connection
+    drops. RESULT/ERROR frames are matched against pending callers via
+    the 16-byte `call_id`.
+  * `macula_station_client:find_records_by_type/2,3` — convenience
+    wrapper for the `_dht.find_records_by_type` procedure that any
+    station with the standard handler registry exposes.
+
+This bridges a real protocol gap: V1 consumers (`macula_mesh_client`)
+cannot drive V2 stations because V2 stations dispatch the QUIC
+connection straight into `macula_peering:accept/2`, so V1 CONNECT
+frames never reach the V2 handler registry. Until 3.8.0, an SDK user
+who wanted to query a deployed station for its DHT records had to
+re-implement the V2 client surface from scratch (the realm topology
+subscriber in macula-realm hit exactly this).
+
+### Tests
+
+Six new EUnit tests cover seed parsing, CALL frame construction,
+RESULT/ERROR matching by `call_id`, deadline expiry, and connection
+drop. The live QUIC handshake against a real V2 station is exercised
+in hecate-station's CT suites.
+
+---
+
 ## [3.7.0] - 2026-04-26
 
 ### Added — peering state machine + diagnostics primitives
