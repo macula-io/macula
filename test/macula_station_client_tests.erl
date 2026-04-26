@@ -617,3 +617,55 @@ disconnect_notifies_subscribers_test_() ->
          end,
          ok
      end}.
+
+%%------------------------------------------------------------------
+%% subscribe/3 before connect — frame drains on connected event
+%%------------------------------------------------------------------
+
+subscribe_before_connect_drains_on_connected_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         %% Drain any leftover send_frame casts from prior tests in
+         %% this module — eunit may share the test process mailbox
+         %% across cases.
+         flush_send_frame_casts(),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_client:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         %% Subscribe BEFORE injecting the connected event. This used
+         %% to return {error, not_connected}; in 3.10.2+ it stores
+         %% the subscription and returns {ok, SubRef}.
+         {ok, SubRef} = macula_station_client:subscribe(
+                          Pid, <<"_mesh.station.announced_v1">>, self()),
+         ?assert(is_reference(SubRef)),
+         %% No frame on the wire yet — peer not connected.
+         receive
+             {'$gen_cast', {send_frame, _}} ->
+                 erlang:error(premature_send_frame)
+         after 200 -> ok
+         end,
+         %% Now mark connected; the drain handler must send the
+         %% pending SUBSCRIBE frame.
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         receive
+             {'$gen_cast', {send_frame, #{frame_type := subscribe,
+                                          topic := T}}} ->
+                 ?assertEqual(<<"_mesh.station.announced_v1">>, T)
+         after 1_000 ->
+             erlang:error(subscribe_frame_not_drained)
+         end,
+         macula_station_client:stop(Pid),
+         ok
+     end}.
+
+flush_send_frame_casts() ->
+    receive
+        {'$gen_cast', {send_frame, _}} -> flush_send_frame_casts()
+    after 0 -> ok
+    end.

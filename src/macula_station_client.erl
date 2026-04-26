@@ -327,21 +327,21 @@ handle_call(peer_node_id, _From, #state{peer_node_id = undefined} = S) ->
 handle_call(peer_node_id, _From, #state{peer_node_id = Id} = S) ->
     {reply, {ok, Id}, S};
 
-handle_call({subscribe, _Topic, _Sub}, _From,
-            #state{peer_pid = undefined} = S) ->
-    {reply, {error, not_connected}, S};
 handle_call({subscribe, Topic, Subscriber}, _From,
-            #state{peer_pid = Pid, identity = Id, realm = Realm,
-                   subscriptions = Subs, topic_index = Idx} = S) ->
-    SubRef = make_ref(),
-    Mon    = erlang:monitor(process, Subscriber),
-    SubKey = macula_identity:public(Id),
-    Frame  = macula_frame:subscribe(#{topic      => Topic,
-                                      realm      => Realm,
-                                      subscriber => SubKey}),
-    ok = macula_peering:send_frame(Pid, Frame),
+            #state{subscriptions = Subs, topic_index = Idx} = S) ->
+    SubRef  = make_ref(),
+    Mon     = erlang:monitor(process, Subscriber),
     NewSubs = Subs#{SubRef => {Topic, Subscriber, Mon}},
     NewIdx  = add_topic_sub(Topic, SubRef, Idx),
+    %% Send the SUBSCRIBE frame now if peering is up; otherwise the
+    %% `connected' handler drains every stored subscription on
+    %% handshake completion. Avoids the race where a consumer calls
+    %% `subscribe/3' immediately after `start_link/1' before the
+    %% peering CONNECT/HELLO has finished — the SUBSCRIBE used to
+    %% return `{error, not_connected}' and silently never land on
+    %% the wire even though the client became connected milliseconds
+    %% later.
+    maybe_send_subscribe(Topic, S),
     {reply, {ok, SubRef}, S#state{subscriptions = NewSubs,
                                   topic_index   = NewIdx}};
 
@@ -374,7 +374,9 @@ handle_info(attempt_connect, #state{seed = Seed, identity = Id, realm = Realm,
 
 handle_info({macula_peering, connected, Pid, PeerNodeId},
             #state{peer_pid = Pid} = S) ->
-    {noreply, S#state{peer_node_id = PeerNodeId}};
+    NewS = S#state{peer_node_id = PeerNodeId},
+    drain_pending_subscribes(NewS),
+    {noreply, NewS};
 
 handle_info({macula_peering, frame, Pid, Frame},
             #state{peer_pid = Pid} = S) ->
@@ -517,6 +519,32 @@ send_unsubscribe(Pid, Topic, Realm, Id) ->
                                         realm      => Realm,
                                         subscriber => SubKey}),
     catch macula_peering:send_frame(Pid, Frame),
+    ok.
+
+%% Send a SUBSCRIBE frame for `Topic' iff peering is connected.
+maybe_send_subscribe(_Topic, #state{peer_pid = undefined}) ->
+    ok;
+maybe_send_subscribe(Topic, #state{peer_pid = Pid, identity = Id,
+                                   realm = Realm}) ->
+    SubKey = macula_identity:public(Id),
+    Frame  = macula_frame:subscribe(#{topic      => Topic,
+                                      realm      => Realm,
+                                      subscriber => SubKey}),
+    catch macula_peering:send_frame(Pid, Frame),
+    ok.
+
+%% On handshake completion, send a SUBSCRIBE frame for every stored
+%% subscription. Subscribers that came in before connect have been
+%% sitting in `subscriptions' with no wire frame yet sent — drain
+%% them now.
+drain_pending_subscribes(#state{subscriptions = Subs} = S) ->
+    %% `topic_index' may carry the same topic for multiple SubRefs
+    %% (multiple local subscribers to the same topic). The wire-level
+    %% SUBSCRIBE is per-(topic, subscriber-pubkey), and we use a
+    %% single subscriber pubkey (this client's identity) for every
+    %% stored subscription, so de-duplicate by Topic.
+    Topics = lists:usort([T || {_SubRef, {T, _Sub, _Mon}} <- maps:to_list(Subs)]),
+    [maybe_send_subscribe(T, S) || T <- Topics],
     ok.
 
 %% Subscriber pid died — find its SubRef(s) by monitor ref, drop

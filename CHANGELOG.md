@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.10.2] - 2026-04-27
+
+### Fixed — `subscribe/3' now queues until peering connects
+
+`macula_station_client:subscribe/3' used to return
+`{error, not_connected}' when called before the peering
+CONNECT/HELLO completed — the typical pattern for any consumer
+that subscribes immediately after `start_link/1'. The wire frame
+never went out, the consumer's mailbox stayed silent, and the
+station never saw the subscriber.
+
+3.10.2 stores the subscription state immediately and returns
+`{ok, SubRef}' regardless of connection state. The wire-level
+SUBSCRIBE goes out either right then (already connected) or via
+a drain on the `connected' peering event (handshake completes
+later). Disconnect still drops every subscription the same way it
+always did — the queue lives only across the handshake, not
+across reconnects.
+
+### Tests
+
+  * 1 new EUnit case covering the subscribe-before-connect path:
+    subscribe immediately after start_link, inject the connected
+    event, capture the SUBSCRIBE frame on the wire.
+
+---
+
 ## [3.10.1] - 2026-04-26
 
 ### Added — `kind` field on `node_record`
