@@ -40,7 +40,7 @@ server_stream_test_() ->
                   fun(Stream, #{n := N}) ->
                       [ok = macula:send(Stream, integer_to_binary(I))
                        || I <- lists:seq(1, N)],
-                      macula:close(Stream)
+                      macula:close_stream(Stream)
                   end),
              {ok, S} = macula:call_stream(<<"t.count">>, #{n => 5}),
              Got = drain(S, []),
@@ -57,7 +57,7 @@ server_stream_test_() ->
                   fun(Stream, _Args) ->
                       ok = macula:send(Stream, #{a => 1}, msgpack),
                       ok = macula:send(Stream, #{a => 2}, msgpack),
-                      macula:close(Stream)
+                      macula:close_stream(Stream)
                   end),
              {ok, S} = macula:call_stream(<<"t.terms">>, #{}),
              ?assertEqual({data, #{a => 1}}, macula:recv(S)),
@@ -143,7 +143,7 @@ error_test_() ->
              ok = macula:advertise_stream(<<"t.silent">>, server_stream,
                   fun(Stream, _Args) ->
                       timer:sleep(500),
-                      macula:close(Stream)
+                      macula:close_stream(Stream)
                   end),
              {ok, S} = macula:call_stream(<<"t.silent">>, #{}),
              ?assertEqual({error, timeout}, macula:recv(S, 100))

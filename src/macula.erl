@@ -2,8 +2,26 @@
 %%% @doc Macula SDK — Public API for mesh applications.
 %%%
 %%% This is the main entry point for applications using the Macula SDK.
-%%% All functions delegate to macula_mesh_client or macula_multi_relay
-%%% for relay mesh communication.
+%%%
+%%% == V2 (canonical, since 3.11.0) ==
+%%%
+%%% Apps connect via `connect/2', which returns a `macula_client'
+%%% pool that internally wraps N peering links to N stations.
+%%% `publish/4', `publish/5', `subscribe/4', `subscribe/5', and
+%%% `unsubscribe/2' route through the pool with realm-per-call
+%%% semantics. See `macula_pubsub' for the slice module of the same
+%%% surface.
+%%%
+%%% == V1 (legacy, retired at 4.0.0) ==
+%%%
+%%% Older apps used a single-connection client (`macula_mesh_client').
+%%% V1 facade surfaces still here untouched: `subscribe/3',
+%%% `publish/3', `call/3,4', `advertise/3,4', `unadvertise/2',
+%%% `put_record/2', plus all stream and directed-RPC operations.
+%%% V1 callers wishing to keep V1 semantics for connect/publish/4/
+%%% unsubscribe/close after upgrading to 3.11.0 should call
+%%% `macula_mesh_client' / `macula_stream_v1' directly — see the
+%%% migration guide.
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -11,11 +29,15 @@
 
 -include_lib("kernel/include/logger.hrl").
 
-%% Connection
--export([connect/2, disconnect/1]).
+%% Connection — V2 (pool)
+-export([connect/2, close/1, child_spec/3]).
+%% Connection — V1 (legacy)
+-export([disconnect/1]).
 
-%% Pub/Sub
--export([subscribe/3, unsubscribe/2, publish/3, publish/4]).
+%% Pub/Sub — V2 (realm-per-call) + V1 (no-realm)
+-export([subscribe/3, subscribe/4, subscribe/5,
+         unsubscribe/2,
+         publish/3, publish/4, publish/5]).
 
 %% RPC
 -export([call/3, call/4, advertise/3, advertise/4, unadvertise/2]).
@@ -28,6 +50,8 @@
          unsubscribe_records/2]).
 
 %% Streaming RPC (v1.5.0+ — see PLAN_MACULA_STREAMING.md)
+%% NOTE: V1 stream `close/1' renamed to `close_stream/1' in 3.11.0
+%% to free `close/1' for the V2 pool surface.
 -export([
     call_stream/2, call_stream/3, call_stream/4,
     open_stream/3, open_stream/4,
@@ -35,7 +59,7 @@
     unadvertise_stream/1,
     send/2, send/3,
     recv/1, recv/2,
-    close/1, close_send/1,
+    close_stream/1, close_send/1,
     await_reply/1, await_reply/2,
     set_reply/2, abort/3
 ]).
@@ -51,11 +75,14 @@
 -export([join_mesh/1, join_dist_relay/1]).
 
 %% Types
--export_type([client/0, topic/0, procedure/0,
+-export_type([client/0, pool/0, realm/0,
+              topic/0, procedure/0,
               stream/0, stream_mode/0, stream_handler/0,
               record/0, record_type/0, record_key/0]).
 
--type client() :: pid().
+-type client() :: pid().              %% V1 client (`macula_mesh_client').
+-type pool()   :: macula_client:pool(). %% V2 pool (`macula_client').
+-type realm()  :: <<_:256>>.            %% V2 32-byte realm tag.
 -type topic() :: binary().
 -type procedure() :: binary().
 
@@ -68,58 +95,111 @@
 -type record_key()  :: <<_:256>>.   %% DHT storage key — `macula_record:storage_key/1' output.
 
 %%%===================================================================
-%%% Connection
+%%% Connection — V2 (pool, since 3.11.0)
 %%%===================================================================
 
-%% @doc Connect to a Macula relay.
+%% @doc Connect to the Macula relay mesh and return a pool handle.
 %%
-%% Returns a client PID (macula_mesh_client gen_server) that you pass
-%% to all other API functions. Accepts a single URL binary or a list.
--spec connect(binary() | [binary()], map()) -> {ok, client()} | {error, term()}.
-connect(Url, Opts) when is_binary(Url) ->
-    connect([Url], Opts);
-connect(Relays, Opts) when is_list(Relays), is_map(Opts) ->
-    Connections = maps:get(connections, Opts, 1),
-    ClientOpts = Opts#{relays => Relays},
-    case Connections of
-        1 ->
-            macula_mesh_client:start_link(ClientOpts);
-        N when N > 1 ->
-            macula_multi_relay:start_link(ClientOpts#{connections => N})
-    end.
+%% `Seeds' is a list of relay endpoints (URL binaries/strings or
+%% `#{host, port}' maps). The pool spawns one peering link per seed
+%% and routes ops with replication, replay, and event dedup. Returns
+%% immediately; link handshakes complete asynchronously.
+%%
+%% See `macula_client' for the canonical pool implementation and
+%% `macula_pubsub' for the slice module.
+%%
+%% **Breaking change since 3.11.0**: this function previously
+%% returned a `macula_mesh_client' single-connection client. V1
+%% callers must now call `macula_mesh_client:start_link/1' directly
+%% to retain V1 semantics. See `CHANGELOG.md' / migration guide.
+-spec connect([macula_client:seed()], macula_client:opts()) ->
+    {ok, pool()} | {error, term()}.
+connect(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
+    macula_client:connect(Seeds, Opts).
 
-%% @doc Disconnect from the relay.
+%% @doc Stop a V2 pool. Every subscriber receives a final
+%% `{macula_event_gone, SubRef, pool_closed}' message.
+-spec close(pool()) -> ok.
+close(Pool) when is_pid(Pool) ->
+    macula_client:close(Pool).
+
+%% @doc OTP child spec to drop a V2 pool into a caller's supervision
+%% tree.
+-spec child_spec(term(), [macula_client:seed()], macula_client:opts()) ->
+    supervisor:child_spec().
+child_spec(Id, Seeds, Opts) ->
+    macula_client:child_spec(Id, Seeds, Opts).
+
+%%%===================================================================
+%%% Connection — V1 (legacy)
+%%%===================================================================
+
+%% @doc Disconnect a V1 `macula_mesh_client' client. **Legacy** —
+%% V2 pools use `close/1'.
 -spec disconnect(client()) -> ok.
 disconnect(Client) when is_pid(Client) ->
     macula_mesh_client:stop(Client).
 
 %%%===================================================================
-%%% Pub/Sub
+%%% Pub/Sub — V1 (legacy)
 %%%===================================================================
 
-%% @doc Subscribe to a topic.
-%%
-%% The callback receives the event payload (map or binary).
-%% Returns a subscription reference for unsubscribing.
+%% @doc V1 subscribe — single-connection client, no realm. **Legacy**.
+%% V2 callers use `subscribe/4' or `subscribe/5'.
 -spec subscribe(client(), topic(), fun((term()) -> ok) | pid()) ->
     {ok, reference()} | {error, term()}.
 subscribe(Client, Topic, Callback) when is_pid(Client), is_binary(Topic) ->
     macula_mesh_client:subscribe(Client, Topic, Callback).
 
-%% @doc Unsubscribe from a topic.
--spec unsubscribe(client(), reference()) -> ok | {error, term()}.
-unsubscribe(Client, SubRef) when is_pid(Client) ->
-    macula_mesh_client:unsubscribe(Client, SubRef).
-
-%% @doc Publish an event to a topic (fire-and-forget).
+%% @doc V1 publish — single-connection client, no realm. **Legacy**.
+%% V2 callers use `publish/4' or `publish/5'.
 -spec publish(client(), topic(), term()) -> ok.
-publish(Client, Topic, Data) ->
-    publish(Client, Topic, Data, #{}).
-
-%% @doc Publish an event with options.
--spec publish(client(), topic(), term(), map()) -> ok.
-publish(Client, Topic, Data, _Opts) when is_pid(Client), is_binary(Topic) ->
+publish(Client, Topic, Data) when is_pid(Client), is_binary(Topic) ->
     macula_mesh_client:publish(Client, Topic, Data).
+
+%%%===================================================================
+%%% Pub/Sub — V2 (pool, realm-per-call, since 3.11.0)
+%%%===================================================================
+
+%% @doc Publish to `(Realm, Topic)' on `Pool'. Equivalent to
+%% `publish/5' with empty opts.
+%%
+%% **Breaking change since 3.11.0**: this signature previously was
+%% `publish(Client, Topic, Data, Opts)' (V1). V1 callers using the
+%% 4-arg form must call `macula_mesh_client:publish/3' directly to
+%% retain V1 semantics.
+-spec publish(pool(), realm(), topic(), term()) -> ok | {error, term()}.
+publish(Pool, Realm, Topic, Payload) ->
+    macula_pubsub:publish(Pool, Realm, Topic, Payload).
+
+%% @doc Publish to `(Realm, Topic)' on `Pool' with options. See
+%% `macula_pubsub:publish/5' for honored opts.
+-spec publish(pool(), realm(), topic(), term(), map()) ->
+    ok | {error, term()}.
+publish(Pool, Realm, Topic, Payload, Opts) ->
+    macula_pubsub:publish(Pool, Realm, Topic, Payload, Opts).
+
+%% @doc Subscribe `Subscriber' to `(Realm, Topic)' on `Pool'.
+%% Equivalent to `subscribe/5' with empty opts.
+-spec subscribe(pool(), realm(), topic(), pid()) -> {ok, reference()}.
+subscribe(Pool, Realm, Topic, Subscriber) ->
+    macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber).
+
+%% @doc Subscribe `Subscriber' to `(Realm, Topic)' on `Pool' with
+%% options. See `macula_pubsub:subscribe/5'.
+-spec subscribe(pool(), realm(), topic(), pid(), map()) ->
+    {ok, reference()}.
+subscribe(Pool, Realm, Topic, Subscriber, Opts) ->
+    macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber, Opts).
+
+%% @doc Drop a V2 pool subscription. Idempotent.
+%%
+%% **Breaking change since 3.11.0**: this routes to the V2 pool
+%% (`macula_client:unsubscribe/2'). V1 callers must call
+%% `macula_mesh_client:unsubscribe/2' directly to drop a V1 sub.
+-spec unsubscribe(pool(), reference()) -> ok.
+unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
+    macula_pubsub:unsubscribe(Pool, SubRef).
 
 %%%===================================================================
 %%% RPC
@@ -305,7 +385,7 @@ wrap_record_callback(Fun) when is_function(Fun, 1) ->
 %%%        fun(Stream, #{n := N}) ->
 %%%             [ok = macula:send(Stream, integer_to_binary(I))
 %%%              || I <- lists:seq(1, N)],
-%%%             macula:close(Stream)
+%%%             macula:close_stream(Stream)
 %%%        end),
 %%%   {ok, S} = macula:call_stream(<<"foo.count">>, #{n => 5}),
 %%%   drain(S).
@@ -443,9 +523,10 @@ recv(Stream) when is_pid(Stream) ->
 recv(Stream, Timeout) when is_pid(Stream) ->
     macula_stream_v1:recv(Stream, Timeout).
 
-%% @doc Close the stream (both sides).
--spec close(stream()) -> ok.
-close(Stream) when is_pid(Stream) ->
+%% @doc Close a V1 stream (both sides). Renamed from `close/1' in
+%% 3.11.0 because `close/1' now refers to the V2 pool surface.
+-spec close_stream(stream()) -> ok.
+close_stream(Stream) when is_pid(Stream) ->
     macula_stream_v1:close(Stream).
 
 %% @doc Half-close the write side; recv still drains.
