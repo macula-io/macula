@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.10.3] - 2026-04-27
+
+### Fixed — `handshaking' state now times out after 30s
+
+`macula_peering_conn' added a `state_timeout' on the `handshaking'
+state. If CONNECT/HELLO does not complete within 30 seconds the
+worker emits a `_macula.peering.handshake_timeout' diagnostic and
+exits cleanly.
+
+Without this, peers speaking the wrong wire format (e.g. V1 daemon
+clients dialling V2 stations) leave workers stuck in `handshaking'
+indefinitely, accumulating bytes in the per-worker buffer that
+never form a valid V2 frame. Production observed 1000+ such workers
+per relay box (`PLAN_FLYING_RESTART').
+
+The diagnostic carries `role', `buf_size', `has_stream' and
+`timeout_ms' so operators can correlate with V1/V2 protocol mismatch.
+
+This pairs with the per-identity peering cap added on the
+`hecate_station_listener' side (cap blocks unbounded NEW connections;
+this timeout drains the EXISTING stuck pool).
+
+---
+
 ## [3.10.2] - 2026-04-27
 
 ### Fixed — `subscribe/3' now queues until peering connects
