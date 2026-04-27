@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] — Phase 1 of `PLAN_V2_PARITY` (target 3.11.0)
+
+### Changed — realm-per-call
+
+`macula_station_link` now requires the 32-byte realm tag per
+operation rather than as a connect-time option. Stations are
+realm-agnostic infrastructure; the realm travels in every wire
+frame. API:
+
+- `call/4` → `call/5` (Realm between Pid and Procedure)
+- `subscribe/3` → `subscribe/4` (Realm between Pid and Topic)
+- new `publish/4` (fire-and-forget, requires full handshake)
+- DHT wrappers (`put_record`, `find_record`, `find_records_by_type`)
+  keep their shape; route under the all-zeros realm tag internally.
+
+This is a **breaking change** for any direct consumer of
+`macula_station_link`. Pool consumers (`macula_client`, landing in
+this same release) absorb the change.
+
+### Deferred to Phase 2 — `macula_auth`
+
+The Phase 1 handover plan called for landing `macula_auth` types +
+`{not_implemented, phase_2}` stubs. That conflicts with the SDK's
+`CLAUDE.md` rule "NO TODO STUBS — Code Must Be Functional." Per
+that rule, `macula_auth` is **not** included in 3.11.0 and is now
+a hard gate item for Phase 2: full `mint`/`delegate`/`verify`/
+`prove`/`list_capabilities`/`token_id` over `macula_ucan_nif`. See
+`~/.claude/plans/PLAN_V2_PARITY.md` §15a for the deferral record.
+
+---
+
 ## [3.10.3] - 2026-04-27
 
 ### Fixed — `handshaking' state now times out after 30s
