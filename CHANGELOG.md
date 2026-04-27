@@ -7,9 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] — Phase 1 of `PLAN_V2_PARITY` (target 3.11.0)
+## [3.11.0] - 2026-04-27 — Phase 1 of `PLAN_V2_PARITY`
 
-### Changed — realm-per-call
+### Added — `macula_client` pool (canonical V2 client handle)
+
+`src/client/macula_client.erl` is the new canonical SDK client. It
+holds N peering links to N stations and routes ops with replication,
+subscription replay, and inbound-event dedup. Apps no longer manage
+individual `macula_station_link` workers — they call
+`macula_client` (or the `macula` facade, which re-exports the same
+surface).
+
+Public API: `connect/2`, `close/1`, `child_spec/3`, `publish/5`,
+`subscribe/5`, `unsubscribe/2`. See
+`docs/guides/CONNECTING_GUIDE.md`.
+
+The pool uses **one shared identity across all links**: stations see
+the pool as a single peer (one pubkey across N links). Inbound
+EVENT frames are deduped by `(Realm, Publisher, Seq)` over a
+60s-default sliding window. `replication_factor` (default 1) fans
+each PUBLISH to N healthy links — partial success counts as
+success.
+
+Decomposed across three files:
+- `macula_client.erl`        — gen_server + public API + bookkeeping
+- `macula_client_dedup.erl`  — ETS dedup keyed by `{realm, publisher, seq}`
+- `macula_client_replay.erl` — sub replay on link respawn
+
+### Added — `macula_pubsub` slice module
+
+`src/pubsub/macula_pubsub.erl` is the pub/sub-specific surface:
+`publish/4`, `publish/5`, `subscribe/4`, `subscribe/5`,
+`unsubscribe/2`. Thin delegation over `macula_client` with
+realm-per-call guards. Apps may import the slice directly or call
+through the `macula` facade.
+
+### Changed — realm-per-call (`macula_station_link`)
 
 `macula_station_link` now requires the 32-byte realm tag per
 operation rather than as a connect-time option. Stations are
@@ -23,8 +56,47 @@ frame. API:
   keep their shape; route under the all-zeros realm tag internally.
 
 This is a **breaking change** for any direct consumer of
-`macula_station_link`. Pool consumers (`macula_client`, landing in
-this same release) absorb the change.
+`macula_station_link`. Pool consumers (`macula_client`) absorb the
+change.
+
+### Changed — `macula` facade V2 surface
+
+The facade is rewired with V2 functions on the same surfaces that
+were V1:
+
+- `connect/2` — now returns a V2 pool (was: V1 `macula_mesh_client`)
+- `publish/4` — now `(Pool, Realm, Topic, Payload)` (was: V1
+  `(Client, Topic, Data, Opts)`)
+- `unsubscribe/2` — now routes to `macula_client` (V2 pool)
+
+New on the facade:
+- `close/1`, `child_spec/3`
+- `publish/5`, `subscribe/4`, `subscribe/5`
+
+V1 facade surfaces are otherwise untouched: `subscribe/3`,
+`publish/3`, `disconnect/1`, `call/3,4`, `advertise/3,4`,
+`unadvertise/2`, `put_record/2`, `find_record/2`,
+`find_records_by_type/2`, plus all stream + directed-RPC
+operations.
+
+### Renamed — `close/1` → `close_stream/1` for V1 streams
+
+`macula:close/1` previously closed a V1 stream pid; in 3.11.0 it
+closes a V2 pool. The V1 stream-close moves to
+`macula:close_stream/1`. `macula:close_send/1` (half-close) is
+unchanged. **Audit every callsite of `macula:close/1` before
+upgrading** — the arity is identical so the compiler accepts both
+shapes silently. See `docs/migrations/V1_TO_V2_PUBSUB.md`.
+
+### Added — docs
+
+- `docs/guides/CONNECTING_GUIDE.md` — pool model, seeds, identity,
+  replication, lifecycle, `child_spec/3` integration.
+- `docs/guides/PUBSUB_GUIDE.md` — rewritten for V2: realm-per-call
+  subscribe/publish, dedup, EVENT delivery, message format.
+- `docs/migrations/V1_TO_V2_PUBSUB.md` — what broke, before/after
+  snippets, two migration paths (adopt V2 vs keep V1 via
+  `macula_mesh_client` direct-module calls).
 
 ### Deferred to Phase 2 — `macula_auth`
 
@@ -35,6 +107,21 @@ that rule, `macula_auth` is **not** included in 3.11.0 and is now
 a hard gate item for Phase 2: full `mint`/`delegate`/`verify`/
 `prove`/`list_capabilities`/`token_id` over `macula_ucan_nif`. See
 `~/.claude/plans/PLAN_V2_PARITY.md` §15a for the deferral record.
+
+### Tests
+
+- 685 eunit / 0 fail (was 658 in 3.10.3).
+- New: `macula_client_tests` (10 cases),
+  `macula_client_dedup_tests` (8 cases), `macula_pubsub_tests`
+  (4 cases), `macula_facade_tests` (4 cases).
+- Updated: `macula_station_link_tests` — 19 cases (+4 new for
+  realm isolation + publish/4 success + publish/4 not_connected
+  guard).
+- Removed three V1-facade test files superseded by the new V2
+  tests: `macula_client_SUITE`, `macula_client_integration_SUITE`,
+  `macula_client_pubsub_tests`. V1 still covered by direct-module
+  tests `macula_mesh_client_validate_tests` +
+  `macula_multi_relay_tests`.
 
 ---
 

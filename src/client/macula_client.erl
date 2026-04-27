@@ -43,10 +43,10 @@
 %% == Replay ==
 %%
 %% When a link's process dies the pool monitor fires; the pool
-%% schedules a respawn after `?LINK_RESPAWN_DELAY_MS' (1s). On
-%% respawn, `macula_client_replay:subs_to/2' re-issues every
-%% currently-tracked `(Realm, Topic)' subscription against the new
-%% link.
+%% schedules a respawn after ?LINK_RESPAWN_DELAY_MS (1s). On respawn,
+%% the pool re-issues every currently-tracked (Realm, Topic)
+%% subscription against the new link via the internal
+%% macula_client_replay helper.
 -module(macula_client).
 -behaviour(gen_server).
 

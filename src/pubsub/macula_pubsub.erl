@@ -14,18 +14,19 @@
 %%
 %% == Quick start ==
 %%
-%% <pre>
-%% {ok, Pool} = macula:connect([{<<"https://relay.example">>}], #{}).
-%% Topic = <<"weather.measured_v1">>,
-%% Realm = my_realm_id_32_bytes_here,
-%% ok          = macula_pubsub:publish(Pool, Realm, Topic,
-%%                                     #{temp =&gt; 20}).
-%% {ok, Sub}   = macula_pubsub:subscribe(Pool, Realm, Topic, self()).
+%% ```
+%% {ok, Pool} = macula:connect(Seeds, ConnectOpts),
+%% ok          = macula_pubsub:publish(Pool, Realm, Topic, Payload),
+%% {ok, Sub}   = macula_pubsub:subscribe(Pool, Realm, Topic, self()),
 %% receive
-%%     {macula_event, Sub, Topic, Payload, Meta} -&gt; ...
-%% end.
+%%     {macula_event, Sub, Topic, Payload, Meta} -> ok
+%% end,
 %% ok          = macula_pubsub:unsubscribe(Pool, Sub).
-%% </pre>
+%% '''
+%%
+%% See `docs/guides/PUBSUB_GUIDE.md' for a full guide and
+%% `docs/migrations/V1_TO_V2_PUBSUB.md' for the breaking changes
+%% from the pre-3.11.0 facade.
 -module(macula_pubsub).
 
 -export([publish/4, publish/5,
