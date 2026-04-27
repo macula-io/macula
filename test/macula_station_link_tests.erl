@@ -1,4 +1,4 @@
-%% EUnit tests for `macula_station_client'.
+%% EUnit tests for `macula_station_link'.
 %%
 %% A live QUIC handshake against a real V2 station is exercised in
 %% the hecate-station Common Test suites. These tests focus on the
@@ -6,7 +6,7 @@
 %% construction, RESULT/ERROR matching by `call_id', timeout fallback,
 %% and disconnection cleanup. Peering is exercised by injecting
 %% synthetic frames as if `macula_peering' had delivered them.
--module(macula_station_client_tests).
+-module(macula_station_link_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -20,23 +20,23 @@ seed_url_https_with_port_test() ->
     %% care that the URL parsed without crashing.
     {ok, _} = application:ensure_all_started(macula),
     Identity = macula_identity:generate(),
-    {ok, Pid} = macula_station_client:start_link(#{
+    {ok, Pid} = macula_station_link:start_link(#{
         seed     => <<"https://localhost:4433">>,
         identity => Identity
     }),
     ?assert(is_process_alive(Pid)),
-    macula_station_client:stop(Pid),
+    macula_station_link:stop(Pid),
     ok.
 
 seed_map_test() ->
     {ok, _} = application:ensure_all_started(macula),
     Identity = macula_identity:generate(),
-    {ok, Pid} = macula_station_client:start_link(#{
+    {ok, Pid} = macula_station_link:start_link(#{
         seed     => #{host => <<"127.0.0.1">>, port => 65000},
         identity => Identity
     }),
     ?assert(is_process_alive(Pid)),
-    macula_station_client:stop(Pid),
+    macula_station_link:stop(Pid),
     ok.
 
 %%------------------------------------------------------------------
@@ -48,7 +48,7 @@ result_frame_resolves_pending_caller_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -71,7 +71,7 @@ result_frame_resolves_pending_caller_test_() ->
          CallerRef = make_ref(),
          Test = self(),
          spawn_link(fun() ->
-             R = macula_station_client:call(Pid,
+             R = macula_station_link:call(Pid,
                                             <<"_dht.find_records_by_type">>,
                                             #{type => 1}, 1_000),
              Test ! {CallerRef, R}
@@ -98,7 +98,7 @@ result_frame_resolves_pending_caller_test_() ->
          after 2_000 ->
              erlang:error(no_caller_reply)
          end,
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 
@@ -111,7 +111,7 @@ error_frame_surfaces_to_caller_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -122,7 +122,7 @@ error_frame_surfaces_to_caller_test_() ->
          CallerRef = make_ref(),
          Test = self(),
          spawn_link(fun() ->
-             R = macula_station_client:call(Pid, <<"_dht.find_records_by_type">>,
+             R = macula_station_link:call(Pid, <<"_dht.find_records_by_type">>,
                                             #{type => 1}, 1_000),
              Test ! {CallerRef, R}
          end),
@@ -146,7 +146,7 @@ error_frame_surfaces_to_caller_test_() ->
          after 2_000 ->
              erlang:error(no_caller_reply)
          end,
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 
@@ -159,7 +159,7 @@ disconnect_fails_pending_callers_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -170,7 +170,7 @@ disconnect_fails_pending_callers_test_() ->
          CallerRef = make_ref(),
          Test = self(),
          spawn_link(fun() ->
-             R = macula_station_client:call(Pid, <<"_dht.find_records_by_type">>,
+             R = macula_station_link:call(Pid, <<"_dht.find_records_by_type">>,
                                             #{type => 1}, 5_000),
              Test ! {CallerRef, R}
          end),
@@ -200,7 +200,7 @@ call_times_out_when_no_reply_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -209,11 +209,11 @@ call_times_out_when_no_reply_test_() ->
          Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
          _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
          %% Issue a call with a tiny deadline and never inject a reply.
-         R = macula_station_client:call(Pid,
+         R = macula_station_link:call(Pid,
                                         <<"_dht.find_records_by_type">>,
                                         #{type => 1}, 200),
          ?assertEqual({error, timeout}, R),
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 
@@ -226,7 +226,7 @@ put_record_ok_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -242,7 +242,7 @@ put_record_ok_test_() ->
                                               [], 0),
                     Identity),
          spawn_link(fun() ->
-             R = macula_station_client:put_record(Pid, Record, 1_000),
+             R = macula_station_link:put_record(Pid, Record, 1_000),
              Test ! {CallerRef, R}
          end),
          CallId = receive
@@ -265,7 +265,7 @@ put_record_ok_test_() ->
          after 2_000 ->
              erlang:error(no_caller_reply)
          end,
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 
@@ -278,7 +278,7 @@ put_record_unexpected_reply_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -293,7 +293,7 @@ put_record_unexpected_reply_test_() ->
                                               [], 0),
                     Identity),
          spawn_link(fun() ->
-             R = macula_station_client:put_record(Pid, Record, 1_000),
+             R = macula_station_link:put_record(Pid, Record, 1_000),
              Test ! {CallerRef, R}
          end),
          CallId = receive
@@ -313,7 +313,7 @@ put_record_unexpected_reply_test_() ->
                  ?assertMatch({error, {unexpected_reply, _}}, Reply)
          after 2_000 -> erlang:error(no_reply)
          end,
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 
@@ -326,7 +326,7 @@ find_record_ok_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -338,7 +338,7 @@ find_record_ok_test_() ->
          Test = self(),
          Key = crypto:strong_rand_bytes(32),
          spawn_link(fun() ->
-             R = macula_station_client:find_record(Pid, Key, 1_000),
+             R = macula_station_link:find_record(Pid, Key, 1_000),
              Test ! {CallerRef, R}
          end),
          CallId = receive
@@ -362,7 +362,7 @@ find_record_ok_test_() ->
                  ?assertEqual({ok, FakeRecord}, Reply)
          after 2_000 -> erlang:error(no_reply)
          end,
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 
@@ -375,7 +375,7 @@ find_record_not_found_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -387,7 +387,7 @@ find_record_not_found_test_() ->
          Test = self(),
          Key = crypto:strong_rand_bytes(32),
          spawn_link(fun() ->
-             R = macula_station_client:find_record(Pid, Key, 1_000),
+             R = macula_station_link:find_record(Pid, Key, 1_000),
              Test ! {CallerRef, R}
          end),
          CallId = receive
@@ -407,7 +407,7 @@ find_record_not_found_test_() ->
                  ?assertEqual({error, not_found}, Reply)
          after 2_000 -> erlang:error(no_reply)
          end,
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 
@@ -420,7 +420,7 @@ subscribe_sends_frame_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -428,7 +428,7 @@ subscribe_sends_frame_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
          _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
-         {ok, SubRef} = macula_station_client:subscribe(
+         {ok, SubRef} = macula_station_link:subscribe(
                           Pid, <<"_mesh.station.announced_v1">>, self()),
          ?assert(is_reference(SubRef)),
          receive
@@ -438,7 +438,7 @@ subscribe_sends_frame_test_() ->
          after 1_000 ->
              erlang:error(no_subscribe_frame)
          end,
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 
@@ -451,7 +451,7 @@ event_frame_delivered_to_subscriber_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -460,7 +460,7 @@ event_frame_delivered_to_subscriber_test_() ->
          Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
          _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
          Topic = <<"_mesh.station.announced_v1">>,
-         {ok, SubRef} = macula_station_client:subscribe(Pid, Topic, self()),
+         {ok, SubRef} = macula_station_link:subscribe(Pid, Topic, self()),
          %% Drain the outbound subscribe cast.
          receive
              {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
@@ -486,7 +486,7 @@ event_frame_delivered_to_subscriber_test_() ->
                  ?assertEqual(42, maps:get(seq, Meta))
          after 2_000 -> erlang:error(no_event_delivered)
          end,
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 
@@ -499,7 +499,7 @@ unsubscribe_sends_frame_and_clears_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -508,12 +508,12 @@ unsubscribe_sends_frame_and_clears_test_() ->
          Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
          _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
          Topic = <<"_mesh.station.announced_v1">>,
-         {ok, SubRef} = macula_station_client:subscribe(Pid, Topic, self()),
+         {ok, SubRef} = macula_station_link:subscribe(Pid, Topic, self()),
          receive
              {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
          after 1_000 -> erlang:error(no_subscribe_frame)
          end,
-         ok = macula_station_client:unsubscribe(Pid, SubRef),
+         ok = macula_station_link:unsubscribe(Pid, SubRef),
          receive
              {'$gen_cast', {send_frame, #{frame_type := unsubscribe,
                                           topic := T}}} ->
@@ -537,7 +537,7 @@ unsubscribe_sends_frame_and_clears_test_() ->
                  erlang:error(event_after_unsubscribe)
          after 200 -> ok
          end,
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 
@@ -550,7 +550,7 @@ subscriber_down_drops_subscription_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -562,7 +562,7 @@ subscriber_down_drops_subscription_test_() ->
          %% from its own pid.
          Test = self(),
          Sub = spawn(fun() ->
-             {ok, R} = macula_station_client:subscribe(
+             {ok, R} = macula_station_link:subscribe(
                          Pid, <<"_mesh.station.announced_v1">>, self()),
              Test ! {sub_started, self(), R}
          end),
@@ -581,7 +581,7 @@ subscriber_down_drops_subscription_test_() ->
              {'$gen_cast', {send_frame, #{frame_type := unsubscribe}}} -> ok
          after 1_000 -> erlang:error(no_cleanup_unsubscribe)
          end,
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 
@@ -594,7 +594,7 @@ disconnect_notifies_subscribers_test_() ->
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
@@ -602,7 +602,7 @@ disconnect_notifies_subscribers_test_() ->
          PeerNodeId = macula_identity:public(macula_identity:generate()),
          Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
          _ = sys:replace_state(Pid, fun(S) -> setelement(8, S, FakePeer) end),
-         {ok, SubRef} = macula_station_client:subscribe(
+         {ok, SubRef} = macula_station_link:subscribe(
                           Pid, <<"_mesh.station.announced_v1">>, self()),
          receive
              {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
@@ -631,14 +631,14 @@ subscribe_before_connect_drains_on_connected_test_() ->
          %% across cases.
          flush_send_frame_casts(),
          Identity = macula_identity:generate(),
-         {ok, Pid} = macula_station_client:start_link(#{
+         {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
              identity => Identity
          }),
          %% Subscribe BEFORE injecting the connected event. This used
          %% to return {error, not_connected}; in 3.10.2+ it stores
          %% the subscription and returns {ok, SubRef}.
-         {ok, SubRef} = macula_station_client:subscribe(
+         {ok, SubRef} = macula_station_link:subscribe(
                           Pid, <<"_mesh.station.announced_v1">>, self()),
          ?assert(is_reference(SubRef)),
          %% No frame on the wire yet — peer not connected.
@@ -660,7 +660,7 @@ subscribe_before_connect_drains_on_connected_test_() ->
          after 1_000 ->
              erlang:error(subscribe_frame_not_drained)
          end,
-         macula_station_client:stop(Pid),
+         macula_station_link:stop(Pid),
          ok
      end}.
 

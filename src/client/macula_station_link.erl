@@ -1,8 +1,25 @@
-%% @doc Station-client — outbound RPC + pubsub over `macula_peering'.
+%% @private
+%% @doc Per-station link — internal to `macula_client' (the pool).
 %%
-%% A `macula_station_client' is a `gen_server' that owns one
-%% `macula_peering' connection to a single station endpoint. It
-%% drives the CONNECT/HELLO handshake as the client side, then
+%% A `macula_station_link' is a `gen_server' that owns one
+%% `macula_peering' connection to a single station endpoint. The
+%% pool spawns one link per healthy seed and routes operations
+%% through them transparently. **Application code should not call
+%% `macula_station_link' directly** — use `macula_client' (or the
+%% `macula' facade), which handles failover, replication, dedup,
+%% and subscription replay.
+%%
+%% This module is kept publicly accessible for diagnostics and
+%% special-case use (e.g. probing a specific station). It is
+%% marked `@private' so it does not appear in user-facing
+%% documentation indices.
+%%
+%% Per `PLAN_V2_PARITY' Q6: the per-station worker name is
+%% `macula_station_link' (not `macula_station_client') — a station
+%% is an identity bound to one IPv6:port; one relay box hosts many
+%% stations; a "client" name is taken by the pool above.
+%%
+%% It drives the CONNECT/HELLO handshake as the client side, then
 %% exposes two surfaces over the same peering pipe:
 %%
 %% <ul>
@@ -58,7 +75,7 @@
 %% looks up the procedure / topic, nothing more. Callers therefore
 %% pass any 32-byte value; this module defaults to all-zeros when no
 %% realm is configured.
--module(macula_station_client).
+-module(macula_station_link).
 -behaviour(gen_server).
 
 -export([
