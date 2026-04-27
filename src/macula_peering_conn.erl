@@ -53,6 +53,12 @@
 }).
 
 -define(DRAIN_TIMEOUT_MS, 5_000).
+%% Maximum time the `handshaking' state may take before the worker
+%% gives up. CONNECT/HELLO is sub-second on a healthy peer; 30s is
+%% generous. Drains workers stuck because the peer speaks the wrong
+%% protocol (e.g. V1 frames against a V2 station) — without this the
+%% sup accumulates stuck workers indefinitely. See PLAN_FLYING_RESTART.
+-define(HANDSHAKE_TIMEOUT_MS, 30_000).
 
 %%------------------------------------------------------------------
 %% Lifecycle
@@ -138,7 +144,7 @@ handshaking(enter, _Old, #data{role = client, quic_conn = Conn} = Data) ->
     on_handshake_enter_client(macula_quic:open_stream(Conn), Data);
 handshaking(enter, _Old, #data{role = server, quic_conn = Conn} = Data) ->
     ok = macula_quic:async_accept_stream(Conn),
-    {keep_state, Data};
+    {keep_state, Data, [handshake_state_timeout()]};
 handshaking(info, {quic, new_stream, Stream, _Info}, Data) ->
     ok = macula_quic:setopt(Stream, active, true),
     {keep_state, Data#data{quic_stream = Stream}};
@@ -151,13 +157,31 @@ handshaking(info, {quic, closed, _Conn, _Detail}, Data) ->
 handshaking(cast, {close, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, Data};
+%% No CONNECT/HELLO completed within the timeout window. Most common
+%% cause: peer is speaking a different protocol version (e.g. V1
+%% frames at a V2 station) — bytes accumulate in `buf' but never form
+%% a valid frame. Surface a structured diagnostic and exit so the sup
+%% does not retain the worker forever.
+handshaking(state_timeout, handshake_timeout,
+            #data{role = Role, buf = Buf, quic_stream = Stream} = Data) ->
+    macula_diagnostics:event(<<"_macula.peering.handshake_timeout">>, #{
+        role         => Role,
+        buf_size     => byte_size(Buf),
+        has_stream   => Stream =/= undefined,
+        timeout_ms   => ?HANDSHAKE_TIMEOUT_MS
+    }),
+    notify(disconnected, handshake_timeout, Data),
+    {stop, normal, Data};
 handshaking(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, handshaking, Data).
+
+handshake_state_timeout() ->
+    {state_timeout, ?HANDSHAKE_TIMEOUT_MS, handshake_timeout}.
 
 on_handshake_enter_client({ok, Stream}, Data) ->
     ok = macula_quic:setopt(Stream, active, true),
     ok = send_connect(Stream, Data),
-    {keep_state, Data#data{quic_stream = Stream}};
+    {keep_state, Data#data{quic_stream = Stream}, [handshake_state_timeout()]};
 on_handshake_enter_client(Err, Data) ->
     notify(disconnected, {open_stream_failed, Err}, Data),
     {stop, normal, Data}.
