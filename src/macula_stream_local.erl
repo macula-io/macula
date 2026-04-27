@@ -3,7 +3,7 @@
 %%%
 %%% Phase 1 of PLAN_MACULA_STREAMING.md ships LOCAL streaming only —
 %%% the client-side and server-side macula_stream processes both live
-%%% in the same BEAM and are paired with macula_stream:pair/2. This
+%%% in the same BEAM and are paired with macula_stream_v1:pair/2. This
 %%% module is the registry that lets call_stream find a locally-
 %%% advertised handler for a given procedure name.
 %%%
@@ -38,7 +38,7 @@
 -define(SERVER, ?MODULE).
 
 -type handler() :: fun((Stream :: pid(), Args :: term()) -> any()).
--type mode() :: macula_stream:mode().
+-type mode() :: macula_stream_v1:mode().
 
 -record(state, {
     %% procedure (binary) -> {Mode, Handler}
@@ -73,15 +73,15 @@ unadvertise(Procedure) when is_binary(Procedure) ->
     gen_server:call(?SERVER, {unadvertise, Procedure}).
 
 %% @doc Open a server-stream call. Returns the client-side stream pid.
-%% The caller drains chunks with macula_stream:recv/2.
+%% The caller drains chunks with macula_stream_v1:recv/2.
 -spec call_stream(binary(), term(), map()) ->
         {ok, pid()} | {error, term()}.
 call_stream(Procedure, Args, Opts) ->
     open_kind(Procedure, Args, Opts, server_stream).
 
 %% @doc Open a client-stream or bidi call. Returns the client-side
-%% stream pid; caller writes with macula_stream:send/2,3 and reads
-%% the terminal value with macula_stream:await_reply/1,2.
+%% stream pid; caller writes with macula_stream_v1:send/2,3 and reads
+%% the terminal value with macula_stream_v1:await_reply/1,2.
 -spec open_stream(binary(), term(), map()) ->
         {ok, pid()} | {error, term()}.
 open_stream(Procedure, Args, Opts) ->
@@ -145,20 +145,20 @@ ensure_compatible(_Requested, _Advertised) ->
 spawn_pair(Procedure, Mode, Handler, Args, Opts) ->
     StreamId = stream_id(),
     Caller = maps:get(owner, Opts, self()),
-    {ok, ClientPid} = macula_stream:start_link(#{
+    {ok, ClientPid} = macula_stream_v1:start_link(#{
         id => StreamId,
         role => client,
         mode => Mode,
         owner => Caller
     }),
     HandlerHost = self_host_pid(),
-    {ok, ServerPid} = macula_stream:start_link(#{
+    {ok, ServerPid} = macula_stream_v1:start_link(#{
         id => StreamId,
         role => server,
         mode => Mode,
         owner => HandlerHost
     }),
-    ok = macula_stream:pair(ClientPid, ServerPid),
+    ok = macula_stream_v1:pair(ClientPid, ServerPid),
     %% Run the handler in a dedicated process so a crashing handler
     %% doesn't take down the caller, and so the handler can block on
     %% recv/send without affecting the client.
@@ -183,7 +183,7 @@ spawn_link_handler(Handler, Stream, Args, Procedure) ->
                           ErrMsg = list_to_binary(io_lib:format(
                               "handler ~s crashed: ~p:~p~n~p",
                               [Procedure, Class, Reason, Stack])),
-                          _ = macula_stream:abort(Stream, ErrCode, ErrMsg),
+                          _ = macula_stream_v1:abort(Stream, ErrCode, ErrMsg),
                           ok
                   end
           end).

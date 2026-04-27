@@ -12,7 +12,7 @@
 %%% See PLAN_MACULA_STREAMING.md (macula-architecture/plans).
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_stream).
+-module(macula_stream_v1).
 
 -behaviour(gen_server).
 

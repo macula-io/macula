@@ -75,7 +75,7 @@
     ping_sent_at :: integer() | undefined,                    %% erlang:monotonic_time(millisecond) when PING sent
     last_rtt_ms :: non_neg_integer() | undefined,             %% most recent RTT measurement
     %% Streaming RPC (v1.5.1+ Phase 2)
-    streams = #{} :: #{binary() => pid()},                    %% stream_id => macula_stream pid
+    streams = #{} :: #{binary() => pid()},                    %% stream_id => macula_stream_v1 pid
     stream_procedures = #{} :: #{binary() => {atom(), fun()}} %% procedure => {Mode, Handler/2}
 }).
 
@@ -194,7 +194,7 @@ open_stream(Pid, Procedure, Args, Opts, Timeout) ->
         {open_stream, Procedure, Args, Opts, Mode}, Timeout).
 
 %% @doc Send a STREAM_* frame out the QUIC stream (called by
-%% macula_stream processes when their peer shape is {remote, ...}).
+%% macula_stream_v1 processes when their peer shape is {remote, ...}).
 -spec send_stream_frame(pid(), atom(), map()) -> ok.
 send_stream_frame(Pid, Type, Msg) ->
     gen_server:cast(Pid, {send_stream_frame, Type, Msg}).
@@ -325,13 +325,13 @@ handle_call({open_stream, Procedure, Args, Opts, Mode}, {CallerPid, _Tag},
             State) ->
     StreamId = crypto:strong_rand_bytes(16),
     Owner = maps:get(owner, Opts, CallerPid),
-    {ok, StreamPid} = macula_stream:start_link(#{
+    {ok, StreamPid} = macula_stream_v1:start_link(#{
         id => StreamId,
         role => client,
         mode => Mode,
         owner => Owner
     }),
-    ok = macula_stream:attach_remote(StreamPid, self(), StreamId),
+    ok = macula_stream_v1:attach_remote(StreamPid, self(), StreamId),
     _ = erlang:monitor(process, StreamPid),
     send_stream_open(StreamId, Procedure, Mode, Args, State),
     Streams = maps:put(StreamId, StreamPid, State#state.streams),
@@ -355,7 +355,7 @@ handle_cast({publish, Topic, Payload}, State) ->
     }, State),
     {noreply, State};
 
-%% Streaming RPC: a `macula_stream' with `{remote, self(), Sid}' peer
+%% Streaming RPC: a `macula_stream_v1' with `{remote, self(), Sid}' peer
 %% asks us to encode and send a STREAM_* frame.
 handle_cast({send_stream_frame, Type, Msg}, State) ->
     maybe_send(Type, Msg, State),
@@ -472,7 +472,7 @@ handle_info(quic_connection_dead, State) ->
 handle_info({'DOWN', Ref, process, Pid, Reason}, State) ->
     case erase({handler_worker, Ref}) of
         undefined ->
-            %% Might be a tracked macula_stream pid — drop its entry.
+            %% Might be a tracked macula_stream_v1 pid — drop its entry.
             Streams2 = maps:filter(fun(_Sid, P) -> P =/= Pid end,
                                    State#state.streams),
             case map_size(Streams2) =:= map_size(State#state.streams) of
@@ -829,13 +829,13 @@ start_incoming_stream(StreamId, Procedure, Mode, Handler, Args, State) ->
     %% The server-side stream needs an owner; use a minimal host
     %% process so a crashing handler doesn't take down the mesh_client.
     Host = spawn(fun() -> receive stop -> ok end end),
-    {ok, StreamPid} = macula_stream:start_link(#{
+    {ok, StreamPid} = macula_stream_v1:start_link(#{
         id => StreamId,
         role => server,
         mode => Mode,
         owner => Host
     }),
-    ok = macula_stream:attach_remote(StreamPid, self(), StreamId),
+    ok = macula_stream_v1:attach_remote(StreamPid, self(), StreamId),
     _ = erlang:monitor(process, StreamPid),
     Streams = maps:put(StreamId, StreamPid, State#state.streams),
     _HandlerPid = spawn_stream_handler(Handler, StreamPid, Args, Procedure),
@@ -856,7 +856,7 @@ spawn_stream_handler(Handler, Stream, Args, Procedure) ->
                 Msg = iolist_to_binary(io_lib:format(
                     "handler ~s crashed: ~p:~p~n~p",
                     [Procedure, Class, Reason, Stack])),
-                _ = macula_stream:abort(Stream, Code, Msg)
+                _ = macula_stream_v1:abort(Stream, Code, Msg)
         end
     end).
 
@@ -870,7 +870,7 @@ handle_incoming_stream_data(Msg, State) ->
             ?LOG_DEBUG("[relay_client] STREAM_DATA for unknown id", []),
             State;
         Pid ->
-            macula_stream:deliver_chunk(Pid, Encoding, Body),
+            macula_stream_v1:deliver_chunk(Pid, Encoding, Body),
             State
     end.
 
@@ -885,7 +885,7 @@ handle_incoming_stream_end(Msg, State) ->
     case maps:get(StreamId, State#state.streams, undefined) of
         undefined -> State;
         Pid ->
-            macula_stream:deliver_end(Pid, Role),
+            macula_stream_v1:deliver_end(Pid, Role),
             maybe_forget_stream(Role, StreamId, State)
     end.
 
@@ -906,7 +906,7 @@ handle_incoming_stream_error(Msg, State) ->
     case maps:get(StreamId, State#state.streams, undefined) of
         undefined -> State;
         Pid ->
-            macula_stream:deliver_error(Pid, Code, Message),
+            macula_stream_v1:deliver_error(Pid, Code, Message),
             State#state{streams = maps:remove(StreamId, State#state.streams)}
     end.
 
@@ -925,7 +925,7 @@ handle_incoming_stream_reply(Msg, State) ->
     case maps:get(StreamId, State#state.streams, undefined) of
         undefined -> State;
         Pid ->
-            macula_stream:deliver_reply(Pid, Result),
+            macula_stream_v1:deliver_reply(Pid, Result),
             State
     end.
 
@@ -947,7 +947,7 @@ maybe_expire_stream_on_send(_Type, _Msg, State) ->
 %% see their stream abort and exit cleanly.
 teardown_streams(State) ->
     maps:foreach(fun(_Sid, Pid) ->
-        catch macula_stream:abort(Pid, <<"disconnected">>, <<"relay disconnect">>)
+        catch macula_stream_v1:abort(Pid, <<"disconnected">>, <<"relay disconnect">>)
     end, State#state.streams),
     State#state{streams = #{}}.
 

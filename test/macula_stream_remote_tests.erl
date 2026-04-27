@@ -97,7 +97,7 @@ stream_data_frame_routes_to_stream_test_() ->
             }),
             Client ! {quic, DataBin, QStream, []},
             ?assertEqual({chunk, <<"hello">>},
-                         macula_stream:recv(StreamPid, 1000))
+                         macula_stream_v1:recv(StreamPid, 1000))
           end}]
      end}.
 
@@ -117,7 +117,7 @@ stream_reply_settles_await_reply_test_() ->
             }),
             Client ! {quic, ReplyBin, QStream, []},
             ?assertEqual({ok, <<"done">>},
-                         macula_stream:await_reply(StreamPid, 1000))
+                         macula_stream_v1:await_reply(StreamPid, 1000))
           end}]
      end}.
 
@@ -137,7 +137,7 @@ stream_error_propagates_test_() ->
             }),
             Client ! {quic, ErrBin, QStream, []},
             ?assertEqual({error, {<<"bad">>, <<"no good">>}},
-                         macula_stream:recv(StreamPid, 1000))
+                         macula_stream_v1:recv(StreamPid, 1000))
           end}]
      end}.
 
@@ -162,8 +162,8 @@ incoming_stream_open_dispatches_handler_test_() ->
             Parent = self(),
             Handler = fun(Stream, Args) ->
                 Parent ! {handler_ran, Args},
-                ok = macula_stream:send(Stream, <<"ack">>),
-                macula_stream:close(Stream)
+                ok = macula_stream_v1:send(Stream, <<"ack">>),
+                macula_stream_v1:close(Stream)
             end,
             ok = macula_mesh_client:advertise_stream(
                 Client, <<"t.serve.echo">>, server_stream, Handler),
@@ -224,7 +224,7 @@ disconnect_aborts_open_streams_test_() ->
             _ = wait_for_frames(stream_open, 1, 500),
             Client ! {quic, closed, QStream, test_teardown},
             ?assertMatch({error, {<<"disconnected">>, _}},
-                         macula_stream:recv(StreamPid, 1000))
+                         macula_stream_v1:recv(StreamPid, 1000))
           end}]
      end}.
 

@@ -421,12 +421,12 @@ unadvertise_stream(Procedure) when is_binary(Procedure) ->
 %% @doc Send a binary chunk on the stream.
 -spec send(stream(), binary()) -> ok | {error, term()}.
 send(Stream, Bin) when is_pid(Stream), is_binary(Bin) ->
-    macula_stream:send(Stream, Bin).
+    macula_stream_v1:send(Stream, Bin).
 
 %% @doc Send a chunk with explicit encoding.
 -spec send(stream(), binary() | term(), raw | msgpack) -> ok | {error, term()}.
 send(Stream, Body, Encoding) when is_pid(Stream) ->
-    macula_stream:send(Stream, Body, Encoding).
+    macula_stream_v1:send(Stream, Body, Encoding).
 
 %% @doc Receive the next chunk (blocks).
 -spec recv(stream()) -> {chunk, binary()}
@@ -434,44 +434,44 @@ send(Stream, Body, Encoding) when is_pid(Stream) ->
                       | eof
                       | {error, term()}.
 recv(Stream) when is_pid(Stream) ->
-    macula_stream:recv(Stream).
+    macula_stream_v1:recv(Stream).
 
 -spec recv(stream(), timeout()) -> {chunk, binary()}
                                  | {data, term()}
                                  | eof
                                  | {error, term()}.
 recv(Stream, Timeout) when is_pid(Stream) ->
-    macula_stream:recv(Stream, Timeout).
+    macula_stream_v1:recv(Stream, Timeout).
 
 %% @doc Close the stream (both sides).
 -spec close(stream()) -> ok.
 close(Stream) when is_pid(Stream) ->
-    macula_stream:close(Stream).
+    macula_stream_v1:close(Stream).
 
 %% @doc Half-close the write side; recv still drains.
 -spec close_send(stream()) -> ok.
 close_send(Stream) when is_pid(Stream) ->
-    macula_stream:close_send(Stream).
+    macula_stream_v1:close_send(Stream).
 
 %% @doc Wait for the terminal reply (client-stream / bidi).
 -spec await_reply(stream()) -> {ok, term()} | {error, term()}.
 await_reply(Stream) when is_pid(Stream) ->
-    macula_stream:await_reply(Stream).
+    macula_stream_v1:await_reply(Stream).
 
 -spec await_reply(stream(), timeout()) -> {ok, term()} | {error, term()}.
 await_reply(Stream, Timeout) when is_pid(Stream) ->
-    macula_stream:await_reply(Stream, Timeout).
+    macula_stream_v1:await_reply(Stream, Timeout).
 
 %% @doc Server-side: emit the terminal reply value.
 -spec set_reply(stream(), term()) -> ok.
 set_reply(Stream, Result) when is_pid(Stream) ->
-    macula_stream:set_reply(Stream, Result).
+    macula_stream_v1:set_reply(Stream, Result).
 
 %% @doc Abort the stream with an error frame.
 -spec abort(stream(), binary(), binary()) -> ok.
 abort(Stream, Code, Message)
   when is_pid(Stream), is_binary(Code), is_binary(Message) ->
-    macula_stream:abort(Stream, Code, Message).
+    macula_stream_v1:abort(Stream, Code, Message).
 
 %%%===================================================================
 %%% Directed RPC (Mesh Name Service)
