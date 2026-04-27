@@ -16,6 +16,15 @@
 %%   <li>`non_neg_integer()' — uint (major 0)</li>
 %%   <li>`binary()' — byte string (major 2)</li>
 %%   <li>`{text, binary()}' — UTF-8 text string (major 3)</li>
+%%   <li>`atom()' — UTF-8 text string (major 3) via
+%%       `atom_to_binary/1'. Accepted for round-trip robustness:
+%%       the frame decoder atomizes binary keys via
+%%       binary_to_existing_atom/1, so a record decoded from
+%%       the wire and re-encoded for sig verify carries atom keys
+%%       inside the payload sub-map. Encoding atoms as text
+%%       reproduces the original wire bytes byte-for-byte (atom
+%%       names round-trip exactly through utf8). `null' has a
+%%       dedicated clause and is NOT routed here.</li>
 %%   <li>`[value()]' — array (major 4)</li>
 %%   <li>`#{value() => value()}' — map (major 5)</li>
 %%   <li>`null' — simple null (major 7, value 22)</li>
@@ -31,7 +40,8 @@
   | {text, binary()}
   | [value()]
   | #{value() => value()}
-  | null.
+  | null
+  | atom().
 
 -define(MAX_UINT64, 16#FFFFFFFFFFFFFFFF).
 
@@ -51,7 +61,16 @@ encode(L) when is_list(L) ->
 encode(M) when is_map(M) ->
     encode_map(M);
 encode(null) ->
-    <<16#F6>>.
+    <<16#F6>>;
+%% Atoms encode as their UTF-8 name as a major-3 text string. This
+%% makes the codec self-healing across the wire round-trip: the frame
+%% decoder atomizes binary keys via binary_to_existing_atom/1, and
+%% records re-encoded for signature verify hit those atoms here. By
+%% the symmetry of atom_to_binary/1 / binary_to_existing_atom/1,
+%% the resulting wire bytes match the original record exactly.
+encode(A) when is_atom(A) ->
+    Bin = atom_to_binary(A, utf8),
+    <<(head(3, byte_size(Bin)))/binary, Bin/binary>>.
 
 encode_array(L) ->
     Body = << <<(encode(E))/binary>> || E <- L >>,

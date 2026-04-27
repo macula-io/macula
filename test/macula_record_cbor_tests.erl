@@ -86,6 +86,79 @@ shortest_uint_encoding_test() ->
     ?assertEqual(<<27, 0, 0, 0, 1, 0, 0, 0, 0>>,
                  macula_record_cbor:encode(16#100000000)).
 
+%%------------------------------------------------------------------
+%% Atom encoding (round-trip robustness)
+%%------------------------------------------------------------------
+%%
+%% Background: `macula_frame:from_wire_envelope/1' atomizes binary
+%% keys it recognises via `binary_to_existing_atom/1'. When such a
+%% record is fed back through `macula_record:verify/1', the verifier
+%% re-encodes the envelope for signature verification — and the
+%% recursive payload sub-map carries atom keys. The encoder MUST
+%% accept atoms (and emit them as the same UTF-8 byte string the
+%% binary key originally had) so the canonical bytes round-trip.
+
+encode_atom_emits_text_string_test() ->
+    %% Atom encodes identically to its `{text, atom_to_binary/1}' form.
+    A     = encode_atom_emits_text_string_test,
+    AsBin = atom_to_binary(A, utf8),
+    ?assertEqual(macula_record_cbor:encode({text, AsBin}),
+                 macula_record_cbor:encode(A)).
+
+encode_atom_in_map_keys_test() ->
+    %% Atom-keyed and text-keyed maps with the same name encode to
+    %% identical bytes — the round-trip from wire (text) → frame
+    %% decode (atom) → re-encode (text) is byte-for-byte stable.
+    AtomMap = #{hostname => <<"beam00.lab">>},
+    TextMap = #{{text, <<"hostname">>} => <<"beam00.lab">>},
+    ?assertEqual(macula_record_cbor:encode(TextMap),
+                 macula_record_cbor:encode(AtomMap)).
+
+encode_null_still_uses_simple_value_test() ->
+    %% Atom clause must NOT shadow the dedicated `null' clause —
+    %% null still emits the major-7 simple value, not a text string.
+    ?assertEqual(<<16#F6>>, macula_record_cbor:encode(null)).
+
+verify_round_trip_with_atomized_payload_test() ->
+    %% Real-world reproducer: build a node_record (text keys), sign,
+    %% then simulate the wire round-trip by atomizing the payload's
+    %% recognised text keys via `binary_to_existing_atom'. Verify
+    %% must accept the atomized record (which means the encoder's
+    %% canonical_unsigned re-encoding must handle atoms).
+    Kp     = macula_identity:generate(),
+    Pub    = macula_identity:public(Kp),
+    Opts   = #{ttl_ms   => 60000,
+               kind     => <<"daemon">>,
+               hostname => <<"beam00.lab">>},
+    Signed = macula_record:sign(macula_record:node_record(Pub, [], 0, Opts), Kp),
+    %% Atomize keys recursively in the payload sub-map (mimicking
+    %% `macula_frame:from_wire_envelope/1' on the receive path).
+    Atomized = atomize_keys(Signed),
+    ?assertMatch({ok, _}, macula_record:verify(Atomized)).
+
+%% Recursive key-atomizer that mimics what `macula_frame:envelope_key/1'
+%% does to a wire-decoded record. Top-level atom keys are kept; nested
+%% map keys that match an existing atom become atoms.
+atomize_keys(M) when is_map(M) ->
+    maps:fold(fun(K, V, Acc) ->
+                  K1 = key_to_atom(K),
+                  V1 = atomize_keys(V),
+                  Acc#{K1 => V1}
+              end, #{}, M);
+atomize_keys(L) when is_list(L) ->
+    [atomize_keys(E) || E <- L];
+atomize_keys(V) -> V.
+
+key_to_atom({text, B}) when is_binary(B) ->
+    try binary_to_existing_atom(B, utf8)
+    catch error:badarg -> {text, B}
+    end;
+key_to_atom(B) when is_binary(B) ->
+    try binary_to_existing_atom(B, utf8)
+    catch error:badarg -> B
+    end;
+key_to_atom(K) -> K.
+
 definite_lengths_only_test() ->
     %% Indefinite-length items would have AI=31 in the type byte.
     %% Confirm none of our encodings use that.

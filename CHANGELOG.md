@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.11.1] - 2026-04-27
+
+### Fixed — `macula_record_cbor:encode/1` accepts atoms
+
+`encode/1` previously crashed with `function_clause` when handed a
+map containing atom keys. In production this manifested when the
+station's `_dht.put_record` handler called `macula_record:verify/1`
+on a wire-decoded record:
+
+  * macula_frame:from_wire_envelope/1 atomizes binary keys via
+    `binary_to_existing_atom/1` (the safe variant — only known
+    atoms become atoms; unknown ones stay as `{text, Bin}` or
+    binary).
+  * Recognised payload keys like `hostname`, `endpoint`, `kind`,
+    `node_id`, `city`, `country`, `lat`, `lng`, `capabilities`
+    are all SDK-level atoms (declared in `node_payload/5`), so
+    they DID get atomized.
+  * `verify/1` then re-encodes the envelope for signature check,
+    walking the payload sub-map. The encoder's `function_clause`
+    fired at the first atom key, the handler crashed, and the
+    daemon's announcer saw `{call_error, 2, temporary_relay_failure}`
+    on every refresh.
+
+The fix adds a clause `encode(A) when is_atom(A) -> ...` that emits
+the atom's UTF-8 name as a major-3 text string. By the symmetry of
+`atom_to_binary/1` / `binary_to_existing_atom/1` the resulting wire
+bytes are byte-for-byte identical to the original record's encoding,
+so signature verification succeeds.
+
+`null` retains its dedicated `<<16#F6>>' clause (major-7 simple
+value); the atom clause is matched only after `null'.
+
+### Tests
+
+  * 4 new EUnit cases in `macula_record_cbor_tests`:
+    - `encode_atom_emits_text_string_test`
+    - `encode_atom_in_map_keys_test`
+    - `encode_null_still_uses_simple_value_test`
+    - `verify_round_trip_with_atomized_payload_test`
+      (full `node_record` build → sign → atomize-keys (mimicking
+       macula_frame:from_wire_envelope) → verify returns `{ok, _}`).
+
+### Consumer impact
+
+`hecate-station`, `hecate-daemon`, and `macula-realm` all pin
+`{macula, "~> 3.11.0"}', so 3.11.1 is auto-allowed; refresh each
+consumer's lock (`rm rebar.lock' or `mix deps.update macula') and
+push to trigger a rebuild.
+
+---
+
 ## [3.11.0] - 2026-04-27 — Phase 1 of `PLAN_V2_PARITY`
 
 ### Added — `macula_client` pool (canonical V2 client handle)
