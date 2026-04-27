@@ -143,7 +143,7 @@ test_buffer_multiple_chunks_test() ->
 
 test_encode_json_simple_map_test() ->
     Data = #{name => <<"John">>, age => 30},
-    Encoded = macula_utils:encode_json(Data),
+    Encoded = iolist_to_binary(json:encode(Data)),
     ?assert(is_binary(Encoded)),
     ?assert(byte_size(Encoded) > 0).
 
@@ -155,14 +155,14 @@ test_encode_json_nested_structure_test() ->
         },
         items => [<<"item1">>, <<"item2">>]
     },
-    Encoded = macula_utils:encode_json(Data),
+    Encoded = iolist_to_binary(json:encode(Data)),
     ?assert(is_binary(Encoded)),
     ?assert(byte_size(Encoded) > 0).
 
 test_decode_json_valid_test() ->
     Original = #{name => <<"Bob">>, value => 42},
-    Encoded = macula_utils:encode_json(Original),
-    Decoded = macula_utils:decode_json(Encoded),
+    Encoded = iolist_to_binary(json:encode(Original)),
+    Decoded = json:decode(Encoded),
     ?assert(is_map(Decoded)).
 
 test_round_trip_encoding_test() ->
@@ -171,7 +171,7 @@ test_round_trip_encoding_test() ->
         number => 123,
         nested => #{inner => <<"value">>}
     },
-    Encoded = macula_utils:encode_json(Original),
-    Decoded = macula_utils:decode_json(Encoded),
+    Encoded = iolist_to_binary(json:encode(Original)),
+    Decoded = json:decode(Encoded),
     ?assert(is_map(Decoded)),
     ?assert(maps:is_key(<<"string">>, Decoded) orelse maps:is_key(string, Decoded)).

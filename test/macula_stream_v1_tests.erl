@@ -3,7 +3,7 @@
 %%% dispatch). See PLAN_MACULA_STREAMING.md.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_stream_tests).
+-module(macula_stream_v1_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 

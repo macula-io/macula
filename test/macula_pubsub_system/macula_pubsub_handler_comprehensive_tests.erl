@@ -592,7 +592,7 @@ callback_receives_decoded_json_payload_test() ->
 
     %% WHEN: Incoming publish with JSON payload
     JsonData = #{key => <<"value">>, number => 42},
-    JsonBinary = macula_utils:encode_json(JsonData),
+    JsonBinary = iolist_to_binary(json:encode(JsonData)),
     PublishMsg = #{
         topic => Topic,
         payload => JsonBinary
