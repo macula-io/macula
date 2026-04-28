@@ -136,7 +136,14 @@
     %% Actor discriminator — `<<"station">>' for relay identities,
     %% `<<"daemon">>' for client identities. Subscribers route on
     %% this to render presence events on different mesh channels.
-    kind         => binary()
+    kind         => binary(),
+    %% Overlay-peer list: binary pubkeys of peer stations this node
+    %% currently has an active overlay session with (HyParView active
+    %% view + station-link cache). Surfaced so realm dashboards can
+    %% draw relay-to-relay edges without a side-channel topology poll.
+    %% Empty list / `undefined' suppresses the field — older records
+    %% predate this addition and consumers default to no edges.
+    peers        => [macula_identity:pubkey()]
 }.
 
 -type realm_directory_opts() :: #{
@@ -652,12 +659,16 @@ node_payload(NodeId, StationId, Realms, Caps, Opts) ->
     M6 = with_text(M5,    <<"country">>,      maps:get(country,      Opts, undefined)),
     M7 = with_geo(M6,     <<"lat">>,          maps:get(lat,          Opts, undefined)),
     M8 = with_geo(M7,     <<"lng">>,          maps:get(lng,          Opts, undefined)),
+    %% Overlay peers travel as a CBOR list of 32-byte pubkey binaries.
+    %% Subscribers join the list against `state.stations` to draw
+    %% relay-to-relay edges. Empty list / undefined → field absent.
+    M9 = with_peers(M8,                       maps:get(peers,        Opts, undefined)),
     %% `kind' is the actor discriminator — `station' for relay
     %% identities, `daemon' for client identities. Subscribers route
     %% on this to render presence events on different mesh channels.
     %% Records without `kind' predate the field and are treated as
     %% `station' by consumers.
-    with_text(M8,         <<"kind">>,         maps:get(kind,         Opts, undefined)).
+    with_text(M9,         <<"kind">>,         maps:get(kind,         Opts, undefined)).
 
 with_text(Map, _Key, undefined) -> Map;
 with_text(Map,  Key, Bin) when is_binary(Bin) ->
@@ -672,6 +683,21 @@ with_geo(Map,  Key, V) when is_float(V) ->
     Map#{ {text, Key} => {text, float_to_binary(V, [{decimals, 6}, compact])} };
 with_geo(Map,  Key, V) when is_integer(V) ->
     Map#{ {text, Key} => {text, integer_to_binary(V)} }.
+
+%% Overlay peer list. A list of 32-byte pubkey binaries that announce
+%% which other stations this node currently has an active overlay
+%% session with. Empty list / undefined → field absent (subscribers
+%% predating this field default to no edges). Sorted on entry so the
+%% canonical CBOR encoding is deterministic for the same set of peers
+%% regardless of insertion order.
+with_peers(Map, undefined) -> Map;
+with_peers(Map, [])        -> Map;
+with_peers(Map, Peers) when is_list(Peers) ->
+    Sorted = lists:usort([P || P <- Peers, is_binary(P), byte_size(P) =:= 32]),
+    case Sorted of
+        []     -> Map;
+        Sorted -> Map#{ {text, <<"peers">>} => Sorted }
+    end.
 
 tombstone_payload(SupKey, SupType, ReplacedAt, Reason, Detail) ->
     Base = #{
