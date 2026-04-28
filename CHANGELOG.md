@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.12.1] - 2026-04-28
+
+### Fixed — `macula_station_link:call/5` gated on completed handshake
+
+The `{call, ...}` `gen_server` clause was gated on `peer_pid`, which
+is set the moment `macula_peering:connect/1` returns — **before** the
+peering worker has finished the CONNECT/HELLO handshake. The
+matching `{publish, ...}` clause is correctly gated on `peer_node_id`
+(set by the `{macula_peering, connected, ...}' notification after
+HELLO).
+
+The race: a caller (e.g. a freshly-spawned daemon stub) issues
+`put_record/3` immediately after `start_link/1`. The link forwards
+the call frame via `macula_peering:send_frame/2` =
+`gen_statem:cast(PeerPid, {send_frame, Frame})` while the peering
+worker is still in `handshaking`. The `handshaking` state has no
+clause for `cast({send_frame, _})`, so the cast falls into
+`drop_unexpected/4` and the frame is silently dropped. The caller's
+deadline timer eventually fires and surfaces `{error, timeout}`,
+even though the underlying QUIC connection is healthy and any
+subsequent call (after the timer's wake-up) would have succeeded.
+
+The fix gates `{call, ...}` on `peer_node_id` to match `{publish, ...}`.
+Callers that issue a request before the handshake completes now get
+`{error, not_connected}` immediately, matching the SDK's documented
+contract for the disconnected case. Existing call sites (e.g.
+`hecate_stub_daemon`) already handle `{error, not_connected}` with a
+short backoff, so no consumer change is required.
+
+Direct evidence of the bug from the production fleet — handshaking
+peering_conn workers on relay boxes carry buffers that successfully
+parse as V1 wire frames (a separate problem in `hecate-daemon`'s
+unfixed realm-join path), but the V2-protocol stub workers also
+showed timeout-then-recycle cycles on every put_record.
+
+---
+
 ## [3.12.0] - 2026-04-28
 
 ### Added — `peers` opt on `node_record/4` for overlay topology

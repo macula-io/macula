@@ -73,9 +73,18 @@ result_frame_resolves_pending_caller_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -123,9 +132,18 @@ error_frame_surfaces_to_caller_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -174,9 +192,18 @@ disconnect_fails_pending_callers_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -216,9 +243,18 @@ call_times_out_when_no_reply_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          R = macula_station_link:call(Pid, ?REALM,
                                         <<"_dht.find_records_by_type">>,
@@ -243,9 +279,18 @@ put_record_ok_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -296,9 +341,18 @@ put_record_unexpected_reply_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -346,9 +400,18 @@ find_record_ok_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -397,9 +460,18 @@ find_record_not_found_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          CallerRef = make_ref(),
          Test = self(),
@@ -444,9 +516,18 @@ subscribe_sends_frame_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          {ok, SubRef} = macula_station_link:subscribe(
                           Pid, ?REALM, <<"_mesh.station.announced_v1">>, self()),
@@ -478,9 +559,18 @@ event_frame_delivered_to_subscriber_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          Topic = <<"_mesh.station.announced_v1">>,
          {ok, SubRef} = macula_station_link:subscribe(
@@ -528,9 +618,18 @@ event_in_other_realm_not_delivered_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          Topic = <<"weather.measured_v1">>,
          RealmA = <<1:256>>,
@@ -642,9 +741,18 @@ unsubscribe_sends_frame_and_clears_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          Topic = <<"_mesh.station.announced_v1">>,
          {ok, SubRef} = macula_station_link:subscribe(
@@ -697,9 +805,18 @@ subscriber_down_drops_subscription_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          Test = self(),
          Sub = spawn(fun() ->
@@ -739,9 +856,18 @@ disconnect_notifies_subscribers_test_() ->
          }),
          FakePeer = self(),
          PeerNodeId = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         %% Force-inject both peer_pid (7) and peer_node_id (8) so the
+         %% link skips the racy `{macula_peering, connected, _, _}'
+         %% info-message dance — that handler is gated on
+         %% `peer_pid = Pid', which is not yet set when the message
+         %% arrives in this test setup, so it would silently fall
+         %% through `handle_info(_Other, S)' and never set
+         %% `peer_node_id'. Since 3.12.1 `{call, ...}' is gated on
+         %% `peer_node_id' (matching `{publish, ...}'), the test now
+         %% must set both fields atomically.
          _ = sys:replace_state(Pid, fun(S) ->
-             setelement(?PEER_PID_INDEX, S, FakePeer)
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          {ok, SubRef} = macula_station_link:subscribe(
                           Pid, ?REALM,

@@ -354,7 +354,17 @@ init(Opts) ->
     {ok, State}.
 
 handle_call({call, _Realm, _Proc, _Payload, _Tmo}, _From,
-            #state{peer_pid = undefined} = S) ->
+            #state{peer_node_id = undefined} = S) ->
+    %% Gate CALL on the full CONNECT/HELLO handshake (mirrors the
+    %% `{publish, ...}' clause below). `peer_pid' is set the moment
+    %% `macula_peering:connect/1' returns, BEFORE the peering worker
+    %% has finished handshaking. Frames sent during the peering
+    %% statem's `handshaking' state have no clause for
+    %% `cast({send_frame, _})' and silently fall into
+    %% `drop_unexpected', so the call frame never lands on the wire
+    %% and the caller eventually times out at `Tmo'. Returning
+    %% `{error, not_connected}' here lets the caller back off and
+    %% retry once the handshake completes.
     {reply, {error, not_connected}, S};
 handle_call({call, Realm, Proc, Payload, Tmo}, From,
             #state{peer_pid = Pid, identity = Id, pending = P} = S) ->
