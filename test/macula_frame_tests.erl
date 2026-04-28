@@ -1032,6 +1032,69 @@ event_wire_roundtrip_test() ->
     ?assertEqual(F, D).
 
 %%------------------------------------------------------------------
+%% advertise / unadvertise — Part 6 §5.5
+%%------------------------------------------------------------------
+
+advertise_carries_required_fields_test() ->
+    Kp    = macula_identity:generate(),
+    Realm = crypto:strong_rand_bytes(32),
+    Adv   = macula_identity:public(Kp),
+    F     = macula_frame:advertise(#{realm      => Realm,
+                                     procedure  => <<"_p">>,
+                                     advertiser => Adv}),
+    ?assertEqual(advertise, macula_frame:frame_type(F)),
+    ?assertEqual(Realm, maps:get(realm, F)),
+    ?assertEqual(<<"_p">>, maps:get(procedure, F)),
+    ?assertEqual(Adv, maps:get(advertiser, F)),
+    ?assertEqual(#{}, maps:get(options, F)).
+
+advertise_rejects_short_realm_test() ->
+    Adv = macula_identity:public(macula_identity:generate()),
+    ?assertError(function_clause,
+                 macula_frame:advertise(#{realm      => <<0:8>>,
+                                          procedure  => <<"_p">>,
+                                          advertiser => Adv})).
+
+advertise_rejects_short_advertiser_test() ->
+    ?assertError(function_clause,
+                 macula_frame:advertise(#{realm      => <<0:256>>,
+                                          procedure  => <<"_p">>,
+                                          advertiser => <<0:8>>})).
+
+advertise_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:advertise(#{
+            realm      => crypto:strong_rand_bytes(32),
+            procedure  => <<"_realm.membership.join_with_token_v1">>,
+            advertiser => macula_identity:public(Kp),
+            options    => #{rate_limit_qps => 100}}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(D, macula_identity:public(Kp))).
+
+unadvertise_carries_required_fields_test() ->
+    Kp    = macula_identity:generate(),
+    Realm = crypto:strong_rand_bytes(32),
+    Adv   = macula_identity:public(Kp),
+    F     = macula_frame:unadvertise(#{realm      => Realm,
+                                       procedure  => <<"_p">>,
+                                       advertiser => Adv}),
+    ?assertEqual(unadvertise, macula_frame:frame_type(F)),
+    ?assertEqual(Realm, maps:get(realm, F)),
+    ?assertEqual(<<"_p">>, maps:get(procedure, F)),
+    ?assertEqual(Adv, maps:get(advertiser, F)).
+
+unadvertise_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:unadvertise(#{
+            realm      => crypto:strong_rand_bytes(32),
+            procedure  => <<"_p">>,
+            advertiser => macula_identity:public(Kp)}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+%%------------------------------------------------------------------
 %% Content transfer frames — Part 6 §9
 %%------------------------------------------------------------------
 

@@ -926,6 +926,308 @@ subscribe_before_connect_drains_on_connected_test_() ->
          ok
      end}.
 
+%%==================================================================
+%% advertise/4 + inbound CALL dispatch
+%%==================================================================
+
+advertise_sends_frame_when_connected_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Procedure = <<"_realm.membership.join_with_token_v1">>,
+         Handler = fun(_Args) -> {ok, #{joined => true}} end,
+         ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
+         AdvertiserPub = macula_identity:public(Identity),
+         receive
+             {'$gen_cast', {send_frame,
+                            #{frame_type := advertise,
+                              realm      := R,
+                              procedure  := P,
+                              advertiser := A}}} ->
+                 ?assertEqual(?REALM, R),
+                 ?assertEqual(Procedure, P),
+                 ?assertEqual(AdvertiserPub, A)
+         after 1_000 ->
+             erlang:error(advertise_frame_not_sent)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+advertise_before_connect_drains_on_connected_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         Procedure = <<"_realm.membership.join_with_token_v1">>,
+         Handler = fun(_Args) -> ok end,
+         ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
+         %% Pre-connect: nothing on the wire yet.
+         receive
+             {'$gen_cast', {send_frame, _}} ->
+                 erlang:error(premature_send_frame)
+         after 200 -> ok
+         end,
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             setelement(?PEER_PID_INDEX, S, FakePeer)
+         end),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         receive
+             {'$gen_cast', {send_frame,
+                            #{frame_type := advertise,
+                              procedure  := P}}} ->
+                 ?assertEqual(Procedure, P)
+         after 1_000 ->
+             erlang:error(advertise_frame_not_drained)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+inbound_call_dispatches_to_handler_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Procedure = <<"_realm.membership.join_with_token_v1">>,
+         %% Handler asserts on input + returns canonical reply.
+         Handler = fun(#{token := <<"abc">>}) -> {ok, #{member_id => 42}} end,
+         ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
+         flush_send_frame_casts(),
+         CallId = <<1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16>>,
+         CallerPub = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type  => call,
+             call_id     => CallId,
+             realm       => ?REALM,
+             procedure   => Procedure,
+             payload     => #{token => <<"abc">>},
+             deadline_ms => erlang:system_time(millisecond) + 5_000,
+             caller      => CallerPub
+         }},
+         receive
+             {'$gen_cast', {send_frame,
+                            #{frame_type := result,
+                              call_id    := Id,
+                              payload    := Payload}}} ->
+                 ?assertEqual(CallId, Id),
+                 ?assertEqual(#{member_id => 42}, Payload)
+         after 1_000 ->
+             erlang:error(no_result_frame_sent)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+inbound_call_unknown_procedure_returns_error_frame_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         CallId = <<2:128>>,
+         CallerPub = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type  => call,
+             call_id     => CallId,
+             realm       => ?REALM,
+             procedure   => <<"_no.such.procedure">>,
+             payload     => #{},
+             deadline_ms => erlang:system_time(millisecond) + 5_000,
+             caller      => CallerPub
+         }},
+         receive
+             {'$gen_cast', {send_frame,
+                            #{frame_type := error,
+                              call_id    := Id,
+                              code       := Code}}} ->
+                 ?assertEqual(CallId, Id),
+                 ?assertEqual(16#01, Code)  %% unknown_next_peer
+         after 1_000 ->
+             erlang:error(no_error_frame_sent)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+inbound_call_handler_crash_returns_error_frame_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Procedure = <<"_test.crash">>,
+         Handler = fun(_Args) -> error(deliberate) end,
+         ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
+         flush_send_frame_casts(),
+         CallId = <<3:128>>,
+         CallerPub = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type  => call,
+             call_id     => CallId,
+             realm       => ?REALM,
+             procedure   => Procedure,
+             payload     => #{},
+             deadline_ms => erlang:system_time(millisecond) + 5_000,
+             caller      => CallerPub
+         }},
+         receive
+             {'$gen_cast', {send_frame,
+                            #{frame_type := error,
+                              call_id    := Id,
+                              code       := Code}}} ->
+                 ?assertEqual(CallId, Id),
+                 ?assertEqual(16#02, Code)  %% temporary_relay_failure
+         after 1_000 ->
+             erlang:error(no_error_frame_sent)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+inbound_call_handler_error_tuple_passes_through_as_result_test_() ->
+    %% Matches `hecate_handler_dispatch:normalise/1' contract:
+    %% `{error, Reason}' becomes a RESULT(payload={error, Reason}),
+    %% NOT a call_error frame. The error is application-level.
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Procedure = <<"_test.app_error">>,
+         Handler = fun(_Args) -> {error, invalid_token} end,
+         ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
+         flush_send_frame_casts(),
+         CallId = <<4:128>>,
+         CallerPub = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type  => call,
+             call_id     => CallId,
+             realm       => ?REALM,
+             procedure   => Procedure,
+             payload     => #{},
+             deadline_ms => erlang:system_time(millisecond) + 5_000,
+             caller      => CallerPub
+         }},
+         receive
+             {'$gen_cast', {send_frame,
+                            #{frame_type := result,
+                              payload    := Payload}}} ->
+                 ?assertEqual({error, invalid_token}, Payload)
+         after 1_000 ->
+             erlang:error(no_result_frame_sent)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+unadvertise_clears_handler_and_sends_frame_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Procedure = <<"_test.unadv">>,
+         ok = macula_station_link:advertise(Pid, ?REALM, Procedure,
+                                            fun(_) -> ok end),
+         flush_send_frame_casts(),
+         ok = macula_station_link:unadvertise(Pid, ?REALM, Procedure),
+         receive
+             {'$gen_cast', {send_frame,
+                            #{frame_type := unadvertise,
+                              procedure  := P}}} ->
+                 ?assertEqual(Procedure, P)
+         after 1_000 ->
+             erlang:error(no_unadvertise_frame_sent)
+         end,
+         %% After unadvertise, an inbound CALL must produce
+         %% unknown_next_peer (handler was cleared).
+         CallId = <<5:128>>,
+         CallerPub = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type  => call,
+             call_id     => CallId,
+             realm       => ?REALM,
+             procedure   => Procedure,
+             payload     => #{},
+             deadline_ms => erlang:system_time(millisecond) + 5_000,
+             caller      => CallerPub
+         }},
+         receive
+             {'$gen_cast', {send_frame,
+                            #{frame_type := error,
+                              code       := Code}}} ->
+                 ?assertEqual(16#01, Code)
+         after 1_000 ->
+             erlang:error(no_error_frame_sent)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
 flush_send_frame_casts() ->
     receive
         {'$gen_cast', {send_frame, _}} -> flush_send_frame_casts()

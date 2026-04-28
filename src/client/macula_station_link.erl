@@ -90,9 +90,13 @@
     find_records_by_type/2, find_records_by_type/3,
     subscribe/4,
     unsubscribe/2,
+    advertise/4,
+    unadvertise/3,
     is_connected/1,
     peer_node_id/1
 ]).
+
+-export_type([handler/0]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -143,13 +147,24 @@
     topic_index   = #{} :: #{{<<_:256>>, binary()} => sets:set(reference())},
     %% Monotonic per-link publish sequence (stamps outbound PUBLISH
     %% frames). Resets on link respawn — pool dedup absorbs the gap.
-    publish_seq = 0 :: non_neg_integer()
+    publish_seq = 0 :: non_neg_integer(),
+    %% Advertised RPC procedures. Keyed by `{Realm, Procedure}`. The
+    %% link sends one ADVERTISE frame per entry on every successful
+    %% (re)connect (drained alongside subscriptions on `connected').
+    %% Inbound CALL frames whose `(realm, procedure)' is in this map
+    %% are dispatched to the registered handler; the resulting
+    %% RESULT or call_error frame is shipped back over the same
+    %% peering connection.
+    procedures = #{} :: #{{<<_:256>>, binary()} => handler()}
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
                          Topic     :: binary(),
                          Subscriber :: pid(),
                          Mon        :: reference()}.
+
+-type handler() :: fun((term()) -> term())
+                 | {module(), atom()}.
 
 %%====================================================================
 %% Public API
@@ -325,6 +340,43 @@ unsubscribe(Client, SubRef)
   when is_pid(Client), is_reference(SubRef) ->
     gen_server:call(Client, {unsubscribe, SubRef}, 5_000).
 
+%% @doc Advertise an RPC procedure handler. The link sends an
+%% ADVERTISE frame to the connected station; the station forwards
+%% inbound CALL frames matching `(Realm, Procedure)' back over the
+%% peering connection where this link dispatches them to `Handler'.
+%%
+%% Idempotent: re-advertising replaces the prior handler. Replayed
+%% on every (re)connect — the caller does not need to re-call
+%% `advertise/4' after a peering reconnect.
+%%
+%% Returns once the handler is registered locally. The wire frame
+%% goes out immediately if the peering handshake has completed; if
+%% not, it is queued for the post-HELLO drain (matches `subscribe/4'
+%% semantics).
+%%
+%% Handlers run in a transient process spawned per CALL. They must
+%% return `{ok, Reply}', `{error, Reason}', or any other term (treated
+%% as `{ok, Other}' shorthand). A handler crash is mapped to a
+%% structured `temporary_relay_failure' BOLT#4 error.
+-spec advertise(pid(), <<_:256>>, binary(), handler()) -> ok.
+advertise(Pid, Realm, Procedure, Handler)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (is_function(Handler, 1) orelse
+        (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)) ->
+    gen_server:call(Pid, {advertise, Realm, Procedure, Handler}, 5_000).
+
+%% @doc Drop a previously-advertised procedure. Sends a best-effort
+%% UNADVERTISE frame to the station and clears the local handler
+%% binding. Idempotent: unknown `(Realm, Procedure)' is a no-op.
+-spec unadvertise(pid(), <<_:256>>, binary()) -> ok.
+unadvertise(Pid, Realm, Procedure)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure) ->
+    gen_server:call(Pid, {unadvertise, Realm, Procedure}, 5_000).
+
 -spec is_connected(pid()) -> boolean().
 is_connected(Pid) ->
     case gen_server:call(Pid, is_connected, 1_000) of
@@ -436,6 +488,24 @@ handle_call({subscribe, Realm, Topic, Subscriber}, _From,
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, on_unsubscribe(SubRef, S)};
 
+handle_call({advertise, Realm, Proc, Handler}, _From,
+            #state{procedures = P} = S) ->
+    %% Register locally first so that any CALL frame arriving in the
+    %% same scheduler tick as the ADVERTISE round-trips correctly.
+    %% Replays from the post-HELLO drain pick up the same map.
+    NewS = S#state{procedures = P#{{Realm, Proc} => Handler}},
+    maybe_send_advertise(Realm, Proc, NewS),
+    {reply, ok, NewS};
+
+handle_call({unadvertise, Realm, Proc}, _From,
+            #state{procedures = P} = S) ->
+    %% Best-effort UNADVERTISE on the wire; ignore disconnected.
+    %% Local clear happens regardless so subsequent inbound CALLs for
+    %% this procedure surface as `unknown_next_peer' from the relay.
+    NewS = S#state{procedures = maps:remove({Realm, Proc}, P)},
+    maybe_send_unadvertise(Realm, Proc, S),
+    {reply, ok, NewS};
+
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
@@ -466,6 +536,7 @@ handle_info({macula_peering, connected, Pid, PeerNodeId},
             #state{peer_pid = Pid} = S) ->
     NewS = S#state{peer_node_id = PeerNodeId},
     drain_pending_subscribes(NewS),
+    drain_pending_advertises(NewS),
     {noreply, NewS};
 
 handle_info({macula_peering, frame, Pid, Frame},
@@ -534,6 +605,13 @@ on_frame(#{frame_type := error, call_id := CallId} = Frame,
 %% silently drop those.
 on_frame(#{frame_type := event, topic := Topic, realm := Realm} = Frame, S) ->
     deliver_event(Realm, Topic, Frame, S);
+%% Inbound CALL — relay forwarded a CALL whose (realm, procedure)
+%% this link advertised. Dispatch to the registered handler and ship
+%% the resulting RESULT or call_error frame back over the same
+%% peering connection.
+on_frame(#{frame_type := call} = Frame, S) ->
+    handle_inbound_call(Frame, S),
+    S;
 %% HyParView / Plumtree / SWIM / content frames pass through here.
 %% This client cares only about call/result/error and event; the
 %% rest is for dedicated overlay modules.
@@ -670,6 +748,106 @@ fan_event(error, _SubRef, _Topic, _Payload, _Meta) ->
 fan_event({ok, {_R, _T, Subscriber, _Mon}}, SubRef, Topic, Payload, Meta) ->
     Subscriber ! {macula_event, SubRef, Topic, Payload, Meta},
     ok.
+
+%%-------------------------------------------------------------------
+%% Advertise helpers
+%%-------------------------------------------------------------------
+
+%% Send an ADVERTISE frame iff peering is connected. Otherwise the
+%% post-HELLO drain replays it. Mirrors `maybe_send_subscribe/3'.
+maybe_send_advertise(_Realm, _Procedure, #state{peer_node_id = undefined}) ->
+    ok;
+maybe_send_advertise(Realm, Procedure,
+                     #state{peer_pid = Pid, identity = Id}) ->
+    Pub = macula_identity:public(Id),
+    Frame = macula_frame:advertise(#{realm      => Realm,
+                                     procedure  => Procedure,
+                                     advertiser => Pub}),
+    catch macula_peering:send_frame(Pid, Frame),
+    ok.
+
+%% Best-effort UNADVERTISE on the wire. Disconnected → no-op (the
+%% station purges advertised procedures on peer disconnect anyway).
+maybe_send_unadvertise(_Realm, _Procedure, #state{peer_node_id = undefined}) ->
+    ok;
+maybe_send_unadvertise(Realm, Procedure,
+                       #state{peer_pid = Pid, identity = Id}) ->
+    Pub = macula_identity:public(Id),
+    Frame = macula_frame:unadvertise(#{realm      => Realm,
+                                       procedure  => Procedure,
+                                       advertiser => Pub}),
+    catch macula_peering:send_frame(Pid, Frame),
+    ok.
+
+%% On handshake completion, send an ADVERTISE frame for every stored
+%% procedure. Mirrors `drain_pending_subscribes/1'.
+drain_pending_advertises(#state{procedures = Procs} = S) ->
+    maps:foreach(fun({Realm, Procedure}, _Handler) ->
+        maybe_send_advertise(Realm, Procedure, S)
+    end, Procs),
+    ok.
+
+%% Inbound CALL — relay forwarded a CALL whose `(realm, procedure)'
+%% this link has advertised. Look up the handler, invoke it, and
+%% ship the resulting RESULT or call_error frame back over the same
+%% peering connection.
+%%
+%% A handler crash maps to BOLT#4 `temporary_relay_failure' (0x02);
+%% an unknown `(realm, procedure)' (race between UNADVERTISE in
+%% flight and a stale forwarded CALL) maps to `unknown_next_peer'
+%% (0x01) — same taxonomy as `hecate_handler_dispatch'.
+handle_inbound_call(#{call_id := CallId, procedure := Proc, realm := Realm,
+                      payload := Payload} = _Frame,
+                    #state{procedures = Procs, identity = Id,
+                           peer_pid = Pid}) when is_pid(Pid) ->
+    SelfPub = macula_identity:public(Id),
+    Reply   = build_inbound_call_reply(maps:find({Realm, Proc}, Procs),
+                                       CallId, Payload, SelfPub),
+    macula_peering:send_frame(Pid, Reply),
+    ok;
+handle_inbound_call(_Frame, _State) ->
+    ok.
+
+%% Handler not registered locally — synthesise a signed
+%% `unknown_next_peer' BOLT#4 error.
+build_inbound_call_reply(error, CallId, _Payload, SelfPub) ->
+    macula_frame:call_error(#{call_id     => CallId,
+                              code        => 16#01,
+                              reported_by => SelfPub});
+build_inbound_call_reply({ok, Handler}, CallId, Payload, SelfPub) ->
+    safe_invoke_handler(Handler, Payload, CallId, SelfPub).
+
+%% Handler dispatch with crash trap. The try/catch is justified:
+%% it converts otherwise-opaque process failures into a structured
+%% BOLT#4 error so the caller observes a reliable taxonomy rather
+%% than a `{disconnected, killed}' signal when a single bad CALL
+%% takes down the link.
+safe_invoke_handler(Handler, Payload, CallId, SelfPub) ->
+    try invoke_handler(Handler, Payload) of
+        Reply ->
+            macula_frame:result(#{call_id      => CallId,
+                                  payload      => normalise_reply(Reply),
+                                  responded_by => SelfPub})
+    catch
+        Class:Reason:Stack ->
+            logger:warning(
+              "[station_link] handler crashed: ~p:~p~n  stack=~p",
+              [Class, Reason, Stack]),
+            macula_frame:call_error(#{call_id     => CallId,
+                                      code        => 16#02,
+                                      reported_by => SelfPub})
+    end.
+
+invoke_handler(Fun, Args) when is_function(Fun, 1) ->
+    Fun(Args);
+invoke_handler({M, F}, Args) when is_atom(M), is_atom(F) ->
+    M:F(Args).
+
+%% Match `hecate_handler_dispatch:normalise/1' so handlers writen
+%% against either side return the same shape.
+normalise_reply({ok, Value})        -> Value;
+normalise_reply({error, _} = Error) -> Error;
+normalise_reply(Other)              -> Other.
 
 %%-------------------------------------------------------------------
 %% Helpers

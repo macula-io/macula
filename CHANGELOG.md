@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.13.0] - 2026-04-28
+
+### Added — V2 ADVERTISE/UNADVERTISE wire frames + station_link advertise API
+
+Closes the V2-fleet fresh-install blocker. macula-realm could not
+register RPC procedures over the V2 wire because the protocol only
+exposed CALL/RESULT/ERROR. Realms had to keep advertising via V1
+`:macula.advertise`, but V1 frames are silently dropped by V2
+listeners (visible as `_realm.membership.join_with_token_v1` hanging
+on every fresh daemon's join).
+
+`macula_frame` gains two new frame types:
+
+- `advertise/1` — `(realm, procedure, advertiser, options)`, signed
+  by the advertiser. The connected station registers
+  `(realm, procedure)` in its per-connection routing table so
+  inbound CALL frames matching that key are forwarded back across
+  the advertiser's QUIC connection.
+- `unadvertise/1` — `(realm, procedure, advertiser)`. Drops the
+  registration. Idempotent. Implicit on peer disconnect (the
+  station's `peer_observer` purges every entry whose `conn_pid`
+  equals the dropped connection).
+
+`macula_station_link` gains:
+
+- `advertise/4` — `(Pid, Realm, Procedure, Handler)`. Registers the
+  handler locally and sends an ADVERTISE frame on the wire. Queued
+  until HELLO completes (drained on `connected` alongside pending
+  subscribes). Handler signature mirrors `hecate_handler_dispatch`:
+  `{ok, Reply}` / `{error, Reason}` / bare value, with crash trap
+  mapping to BOLT#4 `temporary_relay_failure` (0x02).
+- `unadvertise/3` — `(Pid, Realm, Procedure)`. Best-effort wire
+  frame, always clears the local handler.
+- Inbound CALL handling: `(realm, procedure)` matched against the
+  local procedure map, dispatched, RESULT/ERROR shipped back. An
+  unmatched procedure produces a signed `unknown_next_peer` (0x01)
+  reply.
+- Replay on reconnect: every advertised procedure re-emits ADVERTISE
+  on `(Pid, connected, ...)`, mirroring `drain_pending_subscribes`.
+
+Wire frame round-trip and SDK behaviour covered by 13 new tests
+(7 station_link + 6 frame). All 122 frame tests + 26 station_link
+tests pass; dialyzer clean.
+
+The companion station-side routing lives in
+[hecate-station](https://github.com/hecate-social/hecate-station):
+new `hecate_remote_advertise_registry` plus modifications to
+`hecate_station_peer_observer` to forward CALLs across the
+advertiser's connection and relay RESULT/ERROR back.
+
+---
+
 ## [3.12.1] - 2026-04-28
 
 ### Fixed — `macula_station_link:call/5` gated on completed handshake

@@ -58,6 +58,15 @@
     %% Constructors — PubSub (Part 6 §6)
     publish/1, subscribe/1, unsubscribe/1, event/1,
 
+    %% Constructors — RPC procedure advertise (connection-scoped,
+    %% Part 6 §5.5). Companions to call/result/error: a peer connected
+    %% to a station registers itself as the handler for a procedure
+    %% URI in the station's per-connection routing table; the station
+    %% forwards inbound CALL frames for that procedure back over the
+    %% advertiser's connection. Tombstoned on UNADVERTISE or peer
+    %% disconnect.
+    advertise/1, unadvertise/1,
+
     %% Constructors — Content transfer (Part 6 §9)
     want/1, have/1, block/1,
     manifest_req/1, manifest_res/1, cancel/1,
@@ -102,6 +111,7 @@
     plumtree_graft_spec/0, plumtree_prune_spec/0,
     msg_id/0,
     publish_spec/0, subscribe_spec/0, unsubscribe_spec/0, event_spec/0,
+    advertise_spec/0, unadvertise_spec/0,
     delivery_channel/0,
     mcid/0, want_priority/0, want_entry/0, have_entry/0,
     want_spec/0, have_spec/0, block_spec/0,
@@ -127,6 +137,7 @@
                     | plumtree_gossip | plumtree_ihave
                     | plumtree_graft | plumtree_prune
                     | publish | subscribe | unsubscribe | event
+                    | advertise | unadvertise
                     | want | have | block
                     | manifest_req | manifest_res | cancel.
 
@@ -409,6 +420,30 @@
     seq           := non_neg_integer(),
     payload       := term(),
     delivered_via := delivery_channel()
+}.
+
+%%------------------------------------------------------------------
+%% RPC advertise frame specs (Part 6 §5.5)
+%%
+%% A peer connected to a station declares itself the handler for
+%% `procedure' under `realm'. The station's per-connection
+%% advertise registry routes inbound CALL frames for that procedure
+%% back across the advertiser's QUIC connection. Tombstoned on
+%% explicit UNADVERTISE or on peer disconnect (cleanup runs in the
+%% peer_observer's terminate path).
+%%------------------------------------------------------------------
+
+-type advertise_spec() :: #{
+    realm      := id256(),
+    procedure  := binary(),
+    advertiser := macula_identity:pubkey(),
+    options    => map()
+}.
+
+-type unadvertise_spec() :: #{
+    realm      := id256(),
+    procedure  := binary(),
+    advertiser := macula_identity:pubkey()
 }.
 
 %%------------------------------------------------------------------
@@ -1000,6 +1035,35 @@ validate_optional_ttl(N) when is_integer(N), N >= 0          -> ok.
 
 -spec validate_options(map()) -> ok.
 validate_options(M) when is_map(M) -> ok.
+
+%%------------------------------------------------------------------
+%% RPC advertise constructors (Part 6 §5.5)
+%%------------------------------------------------------------------
+
+-spec advertise(advertise_spec()) -> frame().
+advertise(#{realm := R, procedure := Proc, advertiser := Adv} = Spec)
+  when is_binary(R),    byte_size(R)   =:= 32,
+       is_binary(Proc),
+       is_binary(Adv),  byte_size(Adv) =:= 32 ->
+    Options = maps:get(options, Spec, #{}),
+    validate_options(Options),
+    (base(advertise, 0))#{
+        realm      => R,
+        procedure  => Proc,
+        advertiser => Adv,
+        options    => Options
+    }.
+
+-spec unadvertise(unadvertise_spec()) -> frame().
+unadvertise(#{realm := R, procedure := Proc, advertiser := Adv})
+  when is_binary(R),    byte_size(R)   =:= 32,
+       is_binary(Proc),
+       is_binary(Adv),  byte_size(Adv) =:= 32 ->
+    (base(unadvertise, 0))#{
+        realm      => R,
+        procedure  => Proc,
+        advertiser => Adv
+    }.
 
 %%------------------------------------------------------------------
 %% Content transfer constructors (Part 6 §9)
