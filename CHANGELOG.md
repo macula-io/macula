@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.12.0] - 2026-04-28
+
+### Added — `peers` opt on `node_record/4` for overlay topology
+
+`macula_record:node_record_opts()` now accepts an optional `peers`
+field — a list of 32-byte pubkey binaries identifying the stations
+this node currently has an active overlay session with.
+
+When non-empty (`undefined` or `[]` keep the field absent), the list
+is dropped into the canonical CBOR payload at
+`{text, <<"peers">>}` after `lists:usort/1` deduplication + sort. The
+deterministic ordering preserves the signature-stable property of the
+existing canonical form: the same set of peers always encodes to
+identical bytes regardless of insertion order.
+
+Records that omit the field (older publishers, daemons, anyone who
+doesn't supply `peers`) round-trip exactly as before — the new
+clause in `node_payload/5` is a no-op when the opt is absent.
+
+Consumers (e.g. realm topology dashboards) join the list against
+their station view to draw relay-to-relay edges without a
+side-channel topology poll. `hecate-station 896d6b5+` populates the
+field at announce time from each per-identity `hecate_station_peer_observer`.
+
+---
+
 ## [3.11.1] - 2026-04-27
 
 ### Fixed — `macula_record_cbor:encode/1` accepts atoms
