@@ -4,7 +4,7 @@
 
 set -e
 
-PROJECT_ROOT="/home/rl/work/github.com/macula-io/macula"
+PROJECT_ROOT="/home/rl/work/codeberg.org/macula-io/macula"
 COVERAGE_DIR="${PROJECT_ROOT}/_build/test/cover"
 
 cd "${PROJECT_ROOT}"
