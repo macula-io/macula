@@ -21,7 +21,7 @@
   <img src="assets/sdk_architecture.svg" alt="Macula SDK Architecture" width="100%">
 </p>
 
-Macula is an **Erlang/OTP client SDK** for building applications that connect to a [Macula relay mesh](https://github.com/macula-io/macula-relay). It provides:
+Macula is an **Erlang/OTP client SDK** for building applications that connect to a [Macula relay mesh](https://codeberg.org/macula-io/macula-relay). It provides:
 
 - **Pub/Sub messaging** -- topic-based event distribution across the mesh
 - **RPC (request/response)** -- service discovery and invocation via DHT
@@ -181,7 +181,7 @@ MRI = macula_mri:new_app(<<"io.macula">>, <<"acme">>, <<"counter">>).
 | [Development Guide](docs/guides/DEVELOPMENT.md) | Building and testing |
 | [Glossary](docs/GLOSSARY.md) | Terminology |
 
-For relay server documentation, see [macula-relay](https://github.com/macula-io/macula-relay).
+For relay server documentation, see [macula-relay](https://codeberg.org/macula-io/macula-relay).
 
 ---
 
@@ -198,7 +198,7 @@ For relay server documentation, see [macula-relay](https://github.com/macula-io/
 | **Dist Over Mesh** | `macula_dist`, `macula_dist_bridge`, `macula_dist_bridge_sup`, `macula_dist_discovery`, `macula_dist_relay`, `macula_dist_mdns_advertiser`, `macula_dist_system`, `macula_cluster`, `macula_cluster_gossip`, `macula_cluster_static`, `macula_cluster_strategy` |
 | **Utilities** | `macula_id`, `macula_names`, `macula_node`, `macula_realm`, `macula_time`, `macula_uri`, `macula_utils`, `macula_cache`, `macula_console` |
 
-Server modules (gateway, DHT routing, RPC routing, PubSub routing, SWIM, peering, bootstrap, bridge, content, registry) live in [macula-relay](https://github.com/macula-io/macula-relay).
+Server modules (gateway, DHT routing, RPC routing, PubSub routing, SWIM, peering, bootstrap, bridge, content, registry) live in [macula-relay](https://codeberg.org/macula-io/macula-relay).
 
 ---
 
@@ -206,10 +206,10 @@ Server modules (gateway, DHT routing, RPC routing, PubSub routing, SWIM, peering
 
 | Project | Description |
 |---------|-------------|
-| [macula-relay](https://github.com/macula-io/macula-relay) | Relay server (hub-spoke routing, DHT, peering) |
-| [macula-mri-khepri](https://github.com/macula-io/macula-mri-khepri) | Distributed MRI persistence (Khepri/Raft) |
-| [macula-ecosystem](https://github.com/macula-io/macula-ecosystem) | Documentation hub |
-| [hecate-daemon](https://github.com/hecate-social/hecate-daemon) | AI agent sidecar for mesh |
+| [macula-relay](https://codeberg.org/macula-io/macula-relay) | Relay server (hub-spoke routing, DHT, peering) |
+| [macula-mri-khepri](https://codeberg.org/macula-io/macula-mri-khepri) | Distributed MRI persistence (Khepri/Raft) |
+| [macula-ecosystem](https://codeberg.org/macula-io/macula-ecosystem) | Documentation hub |
+| [hecate-daemon](https://codeberg.org/hecate-social/hecate-daemon) | AI agent sidecar for mesh |
 
 ---
 
