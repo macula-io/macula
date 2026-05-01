@@ -5,6 +5,8 @@ use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::cert;
+
 /// Build a Quinn ServerConfig from Erlang options.
 ///
 /// Required: certfile, keyfile
@@ -50,14 +52,28 @@ pub fn build_server_config(
 
 /// Build a Quinn ClientConfig.
 ///
-/// When verify is false (development mode), certificate verification is skipped.
+/// Three trust modes:
+///   - `pinned_pubkey = Some(pk)` — pubkey-anchored (sovereign overlay
+///     path). Validates the leaf cert's Ed25519 SubjectPublicKeyInfo
+///     against `pk`. No CA chain. See PLAN_SOVEREIGN_OVERLAY_PHASE1
+///     §4.4.
+///   - `pinned_pubkey = None`, `verify = true` — webpki + system CAs
+///     (existing public-IP path with Let's Encrypt-anchored certs).
+///   - `pinned_pubkey = None`, `verify = false` — skip all verification
+///     (development/test only).
 pub fn build_client_config(
     alpn: &[String],
     verify: bool,
+    pinned_pubkey: Option<Vec<u8>>,
     idle_timeout_ms: u64,
     keep_alive_ms: u64,
 ) -> Result<ClientConfig, String> {
-    let client_crypto = if verify {
+    let client_crypto = if let Some(pk) = pinned_pubkey {
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(cert::PubkeyPinVerifier::new(pk)))
+            .with_no_client_auth()
+    } else if verify {
         let mut roots = rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         rustls::ClientConfig::builder()

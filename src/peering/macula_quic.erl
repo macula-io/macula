@@ -32,6 +32,9 @@
     %% Connection
     connect/4,
     open_stream/1,
+
+    %% Sovereign overlay (Yggdrasil) — self-signed cert generation
+    generate_self_signed_cert/3,
     close_connection/1,
     async_accept_stream/1,
     async_accept_stream/2,
@@ -135,9 +138,37 @@ connect(Host, Port, Opts, Timeout) ->
     HostBin = to_binary(Host),
     Alpn = [to_binary(A) || A <- proplists:get_value(alpn, Opts, ["macula"])],
     Verify = proplists:get_value(verify, Opts, none) =/= none,
+    %% `verify_pubkey' is a 32-byte Ed25519 pubkey to pin against the
+    %% leaf cert SPKI. Empty binary disables pinning. Sovereign
+    %% overlay path uses this to validate by pubkey alone (no CA).
+    VerifyPubkey = proplists:get_value(verify_pubkey, Opts, <<>>),
     IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 60000),
     KeepAliveMs = proplists:get_value(keep_alive_interval_ms, Opts, 20000),
-    nif_connect(HostBin, Port, Alpn, Verify, IdleTimeoutMs, KeepAliveMs, Timeout).
+    nif_connect(HostBin, Port, Alpn, Verify, VerifyPubkey,
+                IdleTimeoutMs, KeepAliveMs, Timeout).
+
+%%%===================================================================
+%%% Sovereign overlay (Yggdrasil) — self-signed cert generation
+%%%===================================================================
+
+%% @doc Generate a self-signed X.509 cert from an Ed25519 keypair.
+%% Returns `{ok, {CertPem, KeyPem}}' as PEM-encoded binaries
+%% suitable for handing to `macula_quic:listen/3' via
+%% `cert' / `key' opts (after writing to disk).
+%%
+%% Used by `macula_yggdrasil:cert_for/1' for the sovereign-overlay
+%% listener path — the cert wraps the identity's macula pubkey,
+%% no CA chain required. See PLAN_SOVEREIGN_OVERLAY_PHASE1 §4.3.
+-spec generate_self_signed_cert(Pubkey :: binary(),
+                                Privkey :: binary(),
+                                Sans :: [binary() | string()]) ->
+    {ok, {CertPem :: binary(), KeyPem :: binary()}} | {error, term()}.
+generate_self_signed_cert(Pubkey, Privkey, Sans)
+        when is_binary(Pubkey), byte_size(Pubkey) =:= 32,
+             is_binary(Privkey), byte_size(Privkey) =:= 32 ->
+    SansCsv = iolist_to_binary(
+                  lists:join(<<",">>, [to_binary(S) || S <- Sans])),
+    nif_generate_self_signed_cert(Pubkey, Privkey, SansCsv).
 
 %% @doc Open a new bidirectional stream.
 -spec open_stream(reference()) -> {ok, reference()} | {error, term()}.
@@ -272,7 +303,11 @@ nif_async_accept(_Listener) ->
 nif_close_listener(_Listener) ->
     erlang:nif_error(nif_not_loaded).
 
-nif_connect(_Host, _Port, _Alpn, _Verify, _IdleTimeoutMs, _KeepAliveMs, _TimeoutMs) ->
+nif_connect(_Host, _Port, _Alpn, _Verify, _VerifyPubkey,
+            _IdleTimeoutMs, _KeepAliveMs, _TimeoutMs) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_generate_self_signed_cert(_Pubkey, _Privkey, _Sans) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_open_stream(_Conn) ->

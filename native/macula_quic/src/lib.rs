@@ -1,4 +1,5 @@
 mod atoms;
+mod cert;
 mod config;
 mod connection;
 mod endpoint;
@@ -36,6 +37,8 @@ rustler::init!(
         stream::nif_close_stream,
         stream::nif_setopt_active,
         stream::nif_controlling_process,
+        // Sovereign overlay (Yggdrasil) helpers
+        cert::nif_generate_self_signed_cert,
     ],
     load = on_load
 );

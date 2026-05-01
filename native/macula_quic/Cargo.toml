@@ -18,6 +18,14 @@ webpki-roots = "0.26"
 tokio = { version = "1", features = ["full"] }
 socket2 = { version = "0.5", features = ["all"] }
 bytes = "1"
+# Self-signed Ed25519 cert generation for Yggdrasil pubkey-anchored
+# QUIC. See PLAN_SOVEREIGN_OVERLAY_PHASE1 §4.3.
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+# rcgen exposes its `not_before`/`not_after` as `time::OffsetDateTime`.
+time = "0.3"
+# Extract Ed25519 SPKI pubkey from leaf cert for pubkey-pin
+# verification.
+x509-parser = "0.16"
 
 [profile.release]
 lto = true

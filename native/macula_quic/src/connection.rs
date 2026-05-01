@@ -43,6 +43,10 @@ impl Drop for ConnectionResource {
 /// NIF: connect(Host, Port, Opts) -> {ok, ConnRef} | {error, Reason}
 ///
 /// Blocks the dirty scheduler until handshake completes (up to timeout).
+///
+/// `verify_pubkey` is a 32-byte Ed25519 pubkey to pin against the
+/// leaf cert's SubjectPublicKeyInfo. An empty binary disables
+/// pinning and falls back to `verify` semantics (system-CA or skip).
 #[rustler::nif(schedule = "DirtyCpu")]
 fn nif_connect<'a>(
     env: Env<'a>,
@@ -50,14 +54,22 @@ fn nif_connect<'a>(
     port: u32,
     alpn: Vec<String>,
     verify: bool,
+    verify_pubkey: Vec<u8>,
     idle_timeout_ms: u64,
     keep_alive_ms: u64,
     timeout_ms: u64,
 ) -> NifResult<Term<'a>> {
     let caller = env.pid();
 
-    let client_config = config::build_client_config(&alpn, verify, idle_timeout_ms, keep_alive_ms)
-        .map_err(|e| rustler::Error::Term(Box::new(e)))?;
+    let pinned = if verify_pubkey.is_empty() {
+        None
+    } else {
+        Some(verify_pubkey)
+    };
+
+    let client_config =
+        config::build_client_config(&alpn, verify, pinned, idle_timeout_ms, keep_alive_ms)
+            .map_err(|e| rustler::Error::Term(Box::new(e)))?;
 
     let result = runtime::rt().block_on(async {
         // Resolve hostname
