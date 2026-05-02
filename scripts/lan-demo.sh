@@ -17,7 +17,8 @@
 #   teardown     remove TUN devices on both sides
 #   auto         Phase 1: two netns + ping6 across (PLAN_MACULA_NET §12)
 #   auto3        Phase 2: three netns + curl over DHT-resolved mesh
-#   auto-daemons Phase 3.7: hosted-identity gateway, sender → helsinki → alice
+#   auto-daemons   Phase 3.7: hosted-identity gateway, sender → helsinki → alice
+#   auto-alice-bob Phase 3 §8 #4: full Alice ↔ Bob via Helsinki ↔ Nuremberg
 
 set -euo pipefail
 
@@ -132,9 +133,15 @@ case "${cmd}" in
     build-beam02)
         # Skipping `as prod release` — rebar.config points at config/{sys.config,vm.args}
         # which aren't checked in. Plain compile + raw erl is enough for the demo.
+        # rebar3's NIF hook will skip rebuilding the .so if it sees a
+        # cached one even when the underlying Rust toolchain has been
+        # bumped, which lands us with a stale glibc-incompatible NIF.
+        # Force rebuild by clearing target/ and the priv .so files.
         ssh_beam02 'set -eu
             export PATH=$HOME/.asdf/shims:$PATH
             cd ~/macula-src
+            for nif in native/*/; do rm -rf "${nif}target"; done
+            rm -f _build/default/lib/macula/priv/*.so
             rebar3 compile
             erlc -pa _build/default/lib/macula/ebin \
                  -o _build/default/lib/macula/ebin \
@@ -221,6 +228,25 @@ case "${cmd}" in
               "${BEAM02_HOST}:macula-src/scripts/"
         ssh_beam02 'chmod +x ~/macula-src/scripts/netns-daemons-demo.sh'
         ssh_beam02 '~/macula-src/scripts/netns-daemons-demo.sh run'
+        ;;
+
+    auto-alice-bob)
+        # Phase 3 §8 #4 acceptance: 4 netns + bridge + mock DHT.
+        # Two host stations (Helsinki, Nuremberg) and two daemons
+        # (Alice attached to Helsinki, Bob attached to Nuremberg).
+        # Both daemons send a CBOR data envelope to the other; the
+        # bytes traverse alice -> helsinki -> nuremberg -> bob (and
+        # the symmetric path) via the controller's forward_fn ->
+        # route_packet:dispatch_envelope chain. Acceptance is a
+        # "[daemon] received" line in BOTH alice.log and bob.log.
+        scp -q "${ROOT_DIR}/scripts/netns-alice-bob-demo.sh" \
+              "${ROOT_DIR}/scripts/lan_demo_node3.erl" \
+              "${ROOT_DIR}/scripts/lan_demo_dht.erl" \
+              "${ROOT_DIR}/scripts/lan_demo_host_node.erl" \
+              "${ROOT_DIR}/scripts/lan_demo_daemon_node.erl" \
+              "${BEAM02_HOST}:macula-src/scripts/"
+        ssh_beam02 'chmod +x ~/macula-src/scripts/netns-alice-bob-demo.sh'
+        ssh_beam02 '~/macula-src/scripts/netns-alice-bob-demo.sh run'
         ;;
 
     *)

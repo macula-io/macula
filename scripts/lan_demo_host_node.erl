@@ -25,7 +25,6 @@
 -export([start/0]).
 
 -define(REALM,      <<16#11:256>>).
--define(IDENT_HOST, <<16#bb:256>>).
 -define(QUIC_PORT,  4400).
 -define(TUN,        <<"macula0">>).
 
@@ -39,7 +38,8 @@ start() ->
     end.
 
 start_unsafe() ->
-    Kp       = deterministic_keypair(),
+    SeedHex  = getenv("MACULA_HOST_SEED_HEX", "bb"),
+    Kp       = deterministic_keypair_from_hex(SeedHex),
     Pk       = macula_identity:public(Kp),
     SelfAddr = macula_address:derive(?REALM, Pk),
     SelfFmt  = macula_address:format(SelfAddr),
@@ -100,7 +100,8 @@ start_unsafe() ->
         attach_send_fn => fun macula_quic:send/2,
         lookup_fn      => fun macula_host_identity:lookup/1,
         attach_fn      => fun macula_host_identity:attach/4,
-        fallback_fn    => fun macula_deliver_packet:handle_envelope/1
+        fallback_fn    => fun macula_deliver_packet:handle_envelope/1,
+        forward_fn     => fun macula_route_packet:dispatch_envelope/2
     }),
 
     %% Replace the Phase-2 default handler with the controller — only
@@ -204,10 +205,28 @@ realm_prefix(<<P:48, _/bitstring>>) ->
 %% Identity + misc
 %% =============================================================================
 
-deterministic_keypair() ->
-    Seed = ?IDENT_HOST,
+deterministic_keypair_from_hex(Hex) when is_list(Hex) ->
+    Seed = decode_seed(Hex),
     {Pub, Priv} = crypto:generate_key(eddsa, ed25519, Seed),
     #{public => iolist_to_binary(Pub), private => iolist_to_binary(Priv)}.
+
+%% Pad a short hex string to a 32-byte seed by treating the hex value
+%% as the lowest byte and zero-padding the high bytes. Mirrors the
+%% bash demo's <<16#bb:256>> construction.
+decode_seed(Hex) when is_list(Hex) ->
+    Cleaned = case Hex of
+        "0x" ++ Rest -> Rest;
+        _            -> Hex
+    end,
+    decode_seed_padded(length(Cleaned), Cleaned).
+
+decode_seed_padded(64, Hex) ->
+    binary:decode_hex(list_to_binary(Hex));
+decode_seed_padded(N, Hex) when N > 0, N =< 64 ->
+    Padded = string:right(Hex, 64, $0),
+    binary:decode_hex(list_to_binary(Padded));
+decode_seed_padded(_, _) ->
+    erlang:halt(1).
 
 hexbin(Bin) ->
     binary:encode_hex(Bin, lowercase).

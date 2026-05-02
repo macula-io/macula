@@ -19,7 +19,6 @@
 -export([start/0]).
 
 -define(REALM,        <<16#11:256>>).
--define(IDENT_DAEMON, <<16#dd:256>>).
 -define(QUIC_PORT,    4400).
 
 start() ->
@@ -32,7 +31,11 @@ start() ->
     end.
 
 start_unsafe() ->
-    Kp       = deterministic_keypair(),
+    %% Identity seed is configurable so the same module supports
+    %% multiple daemon roles in a single demo (Alice + Bob via
+    %% MACULA_DAEMON_SEED_HEX).
+    SeedHex = getenv("MACULA_DAEMON_SEED_HEX", "dd"),
+    Kp       = deterministic_keypair_from_hex(SeedHex),
     Pk       = macula_identity:public(Kp),
     SelfAddr = macula_address:derive(?REALM, Pk),
     SelfFmt  = macula_address:format(SelfAddr),
@@ -56,18 +59,45 @@ start_unsafe() ->
         host           => binary_to_list(HostHost),
         port           => HostPort
     },
-    InboundHandler = fun(Cbor) ->
-        %% Decode for human-friendly log output. Acceptance line:
-        %%   [daemon] received <src>->" <dst>" <len> bytes
-        log_envelope(Cbor)
-    end,
+    InboundHandler = fun(Cbor) -> log_envelope(Cbor) end,
 
-    {ok, _Handle} = macula_attach_identity:attach(
+    {ok, Handle} = macula_attach_identity:attach(
                        HostEndpoint, ?REALM, Kp,
                        #{inbound_handler => InboundHandler}),
 
+    %% Optional peer send: if MACULA_DAEMON_PEER_SEED_HEX is set, the
+    %% daemon constructs an envelope dst = derive(realm, peer_pubkey)
+    %% and sends it via attach_identity. The send waits for the first
+    %% refresh_ms tick of the host so Alice's hosted record is in the
+    %% DHT by the time the peer's host station tries to forward.
+    maybe_send_to_peer(Handle, SelfAddr,
+                        getenv("MACULA_DAEMON_PEER_SEED_HEX", undefined),
+                        list_to_integer(getenv("MACULA_DAEMON_SEND_DELAY_MS",
+                                                "1000"))),
+
     io:format("[daemon] up; idling.~n"),
     timer:sleep(infinity).
+
+maybe_send_to_peer(_Handle, _SelfAddr, undefined, _DelayMs) ->
+    ok;
+maybe_send_to_peer(Handle, SelfAddr, PeerSeedHex, DelayMs) ->
+    PeerKp = deterministic_keypair_from_hex(PeerSeedHex),
+    PeerPk = macula_identity:public(PeerKp),
+    PeerAddr = macula_address:derive(?REALM, PeerPk),
+    spawn(fun() ->
+        timer:sleep(DelayMs),
+        Envelope = macula_cbor_nif:pack(#{
+            <<"v">>       => 1,
+            <<"type">>    => <<"data">>,
+            <<"src">>     => SelfAddr,
+            <<"dst">>     => PeerAddr,
+            <<"payload">> => <<"phase 3.7+ alice<->bob">>
+        }),
+        Result = macula_attach_identity:send(Handle, Envelope),
+        io:format("[daemon] sent to ~s: ~p~n",
+                  [macula_address:format(PeerAddr), Result])
+    end),
+    ok.
 
 log_envelope(Cbor) ->
     case macula_cbor_nif:unpack(Cbor) of
@@ -90,10 +120,29 @@ log_envelope(Cbor) ->
 %% Identity + env helpers
 %% =============================================================================
 
-deterministic_keypair() ->
-    Seed = ?IDENT_DAEMON,
+deterministic_keypair_from_hex(Hex) when is_list(Hex) ->
+    Seed = decode_seed(Hex),
     {Pub, Priv} = crypto:generate_key(eddsa, ed25519, Seed),
     #{public => iolist_to_binary(Pub), private => iolist_to_binary(Priv)}.
+
+%% Pad a short hex string (e.g. "dd") to a 32-byte seed by treating
+%% the hex value as the lowest byte and zero-padding the high bytes.
+%% Matches the bash demo's <<16#dd:256>> construction.
+decode_seed(Hex) when is_list(Hex) ->
+    %% Strip optional 0x prefix.
+    Cleaned = case Hex of
+        "0x" ++ Rest -> Rest;
+        _ -> Hex
+    end,
+    case length(Cleaned) of
+        64 -> binary:decode_hex(list_to_binary(Cleaned));
+        N when N > 0, N =< 64 ->
+            %% Right-align: <<16#dd:256>> = 31 zero bytes then 0xdd.
+            Padded = string:right(Cleaned, 64, $0),
+            binary:decode_hex(list_to_binary(Padded));
+        _ ->
+            erlang:halt(1)
+    end.
 
 decode_host_pubkey(undefined) ->
     io:format("FATAL: MACULA_HOST_PUBKEY_HEX not set~n"),
