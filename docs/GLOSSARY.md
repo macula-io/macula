@@ -10,7 +10,7 @@
 ## Architecture
 
 ### Relay
-A stateless message router. Nodes connect outbound via QUIC. Relays route pub/sub events, RPC calls, and Erlang distribution traffic between nodes. Relays are run by [macula-relay](https://github.com/macula-io/macula-relay).
+A stateless message router. Nodes connect outbound via QUIC. Relays route pub/sub events, RPC calls, and Erlang distribution traffic between nodes. Relays are run by macula-station.
 
 ### Relay Mesh
 The federated network of relays that route messages between nodes. Relays peer with each other via Kademlia DHT for cross-relay discovery.
@@ -113,4 +113,4 @@ Erlang distribution cookie. In Macula, also used as the AES-256-GCM key for tunn
 
 ---
 
-For relay-specific terminology (DHT internals, peering, SWIM, bloom filters, relay boxes, virtual identities), see [macula-relay](https://github.com/macula-io/macula-relay) documentation.
+For relay-specific terminology (DHT internals, peering, SWIM, bloom filters, relay boxes, virtual identities), see macula-station documentation.

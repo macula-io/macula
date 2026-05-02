@@ -44,4 +44,4 @@
 ---
 
 For relay server roadmap (DHT improvements, peering, SWIM, content transfer),
-see [macula-relay](https://github.com/macula-io/macula-relay).
+see macula-station.

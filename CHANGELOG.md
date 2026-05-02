@@ -116,7 +116,7 @@ Wire frame round-trip and SDK behaviour covered by 13 new tests
 tests pass; dialyzer clean.
 
 The companion station-side routing lives in
-[hecate-station](https://github.com/hecate-social/hecate-station):
+hecate-station (renamed to macula-station 2026-04-30):
 new `hecate_remote_advertise_registry` plus modifications to
 `hecate_station_peer_observer` to forward CALLs across the
 advertiser's connection and relay RESULT/ERROR back.

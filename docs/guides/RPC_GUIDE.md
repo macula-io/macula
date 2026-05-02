@@ -147,4 +147,4 @@ When multiple nodes advertise the same procedure, the relay selects a provider:
 
 For relay operators and contributors: RPC routing, DHT procedure store,
 cross-relay call forwarding, and provider selection are documented in
-[macula-relay](https://github.com/macula-io/macula-relay).
+macula-station.

@@ -42,7 +42,7 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## Architecture Overview
 
-Macula SDK is a **64-module client library** for connecting to the Macula relay mesh. Nodes connect outbound to relays over QUIC. Relays (in [macula-relay](https://github.com/macula-io/macula-relay)) handle routing.
+Macula SDK is a **64-module client library** for connecting to the Macula relay mesh. Nodes connect outbound to relays over QUIC. Relays (in macula-station) handle routing.
 
 **Crypto primitives belong in the SDK.** Ed25519 (`macula_identity`),
 BLAKE3 (`macula_blake3_nif`), CBOR (`macula_cbor_nif` for general,

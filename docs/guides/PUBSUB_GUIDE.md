@@ -373,7 +373,7 @@ observability layer.
 Routing behind the relay (DHT-based subscriber discovery, peering,
 cross-station gossip, bloom filters, sticky-routing) is the relay's
 concern. See
-[hecate-station](https://github.com/hecate-social/hecate-station) for
+macula-station for
 the current relay implementation.
 
 From the SDK side, you publish and subscribe; the pool handles the

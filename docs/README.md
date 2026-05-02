@@ -54,4 +54,4 @@ Macula SDK is an Erlang/OTP client library for connecting to a **federated relay
 ---
 
 For relay server documentation (operator guides, DHT internals, peering, monitoring),
-see [macula-relay](https://github.com/macula-io/macula-relay).
+see macula-station.

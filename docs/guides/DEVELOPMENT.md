@@ -56,7 +56,7 @@ macula/
 └── rebar.config                  # Build configuration
 ```
 
-Server modules (gateway, DHT routing, RPC/PubSub routing, SWIM, peering, etc.) live in [macula-relay](https://github.com/macula-io/macula-relay).
+Server modules (gateway, DHT routing, RPC/PubSub routing, SWIM, peering, etc.) live in macula-station.
 
 ## Running Tests
 
