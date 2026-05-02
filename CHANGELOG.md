@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.14.0] - 2026-05-02
+
+### Added — Sovereign-overlay (Yggdrasil) building blocks
+
+Phase 1 Tier 3 of the sovereign-overlay rollout — see
+`PLAN_SOVEREIGN_OVERLAY_PHASE1.md` (macula-architecture) §4.2-§4.4.
+This release delivers the SDK-side primitives that let stations
+present, and daemons validate, a pubkey-anchored QUIC identity
+with no DNS, no Let's Encrypt, no CA chain.
+
+New module `macula_yggdrasil`:
+
+- `address_for/1` — derive the Yggdrasil IPv6 (200::/7) from a
+  raw 32-byte Ed25519 pubkey. Matches yggdrasil-go's
+  `AddrForKey` reference exactly. Verified against the live
+  3-relay fleet's pubkeys/addresses (Helsinki, Nuremberg, Paris).
+- `format_address/1` — 16-byte IPv6 binary → canonical
+  colon-separated string.
+- `cert_for/1,2` — generate a self-signed X.509 cert wrapping an
+  Ed25519 keypair. The derived Yggdrasil IPv6 lands as IP SAN;
+  optional extra DNS SANs supported. Cert validity 10 years.
+
+NIF additions in `macula_quic` (Quinn QUIC):
+
+- `generate_self_signed_cert/3` via `rcgen` 0.13. Takes raw
+  Ed25519 pubkey + secret seed + SAN list, returns
+  `{ok, {CertPem, KeyPem}}`.
+- `PubkeyPinVerifier` — rustls `ServerCertVerifier` impl that
+  pins on the leaf cert's Ed25519 SubjectPublicKeyInfo rather
+  than walking a CA chain. Equivalent of TLS RFC 7250
+  raw-public-key without the wire-protocol change.
+- `build_client_config` gains `Option<Vec<u8>> pinned_pubkey`.
+  None preserves existing webpki/skip behaviour.
+
+Erlang dial-target syntax extension:
+
+- `macula_quic:connect/4` accepts `{pubkey, Pk32 :: binary()}`
+  as a target in addition to the existing host string. Derives
+  the Yggdrasil IPv6, sets the verify_pubkey opt, dispatches
+  through the standard nif_connect path.
+- `macula_peering_conn:do_connect` recognises the same shape
+  via a `pubkey` key on the target map.
+
+NIF connection layer:
+
+- `nif_connect` now takes an additional `verify_pubkey: Vec<u8>`
+  parameter (arity 7 → 8). Empty binary disables pinning.
+- `[ipv6]:port` host strings are supported via bracket-stripping
+  before `lookup_host` and SNI assignment.
+
+### Notes for downstream consumers
+
+- `macula_quic:connect/4` ABI is unchanged; the new
+  `verify_pubkey` opt is opt-in, defaults to `<<>>`.
+- `nif_connect` arity bumped 7 → 8. Anyone shipping a NIF .so
+  built against the 3.13 Erlang module needs to ship the 3.14
+  `.so` together. Mixing produces
+  `{bad_lib, "Function not found macula_quic:nif_connect/7"}`
+  on load.
+- New crate deps in `macula_quic`: rcgen 0.13 (pem+ring),
+  x509-parser 0.16, time 0.3.
+
+---
+
 ## [3.13.0] - 2026-04-28
 
 ### Added — V2 ADVERTISE/UNADVERTISE wire frames + station_link advertise API

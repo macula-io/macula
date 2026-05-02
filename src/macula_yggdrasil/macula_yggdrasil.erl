@@ -1,18 +1,18 @@
 %% @doc Yggdrasil-network helpers — pubkey-derived IPv6 addressing
 %% and self-signed Ed25519 cert generation.
 %%
-%% Phase 1 (Tier 3) of the sovereign-overlay rollout. See the plan
-%% at `macula-internal/macula-architecture/plans/PLAN_SOVEREIGN_OVERLAY_PHASE1.md`
+%% Phase 1 (Tier 3) of the sovereign-overlay rollout. See the
+%% plan at PLAN_SOVEREIGN_OVERLAY_PHASE1.md (in macula-architecture)
 %% — §4.2 for the address derivation algorithm and §4.3 for the
 %% self-signed cert path.
 %%
 %% Pure functions only. No network I/O. The Yggdrasil sidecar
-%% (`yggdrasilnetwork/yggdrasil-go`) is what actually routes the
+%% (yggdrasilnetwork/yggdrasil-go) is what actually routes the
 %% packets through the overlay; this module is the
-%% pubkey↔address bridge and the cert generator.
+%% pubkey/address bridge and the cert generator.
 %%
 %% Addressing matches the upstream yggdrasil-go reference
-%% implementation (`src/address/address.go`, `AddrForKey`):
+%% implementation (src/address/address.go, AddrForKey):
 %%
 %%   1. Take a 32-byte Ed25519 public key.
 %%   2. Bitwise invert it.
@@ -22,10 +22,10 @@
 %%      the run.
 %%   5. Take the next 112 bits — these are the low 14 bytes of
 %%      the IPv6 address.
-%%   6. Prepend `0x02` (Yggdrasil node-address prefix; subnet
-%%      uses `0x03`).
+%%   6. Prepend 0x02 (Yggdrasil node-address prefix; subnet
+%%      uses 0x03).
 %%
-%% The resulting `200::/7` address is the routable IPv6 of the
+%% The resulting 200::/7 address is the routable IPv6 of the
 %% Yggdrasil node owning that keypair.
 -module(macula_yggdrasil).
 
