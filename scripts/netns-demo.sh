@@ -8,11 +8,12 @@
 #   each has macula0 TUN; ping6 from A to B's macula-net addr.
 #
 # Subcommands:
-#   run    setup → start nodes → ping → teardown (default)
+#   run    setup → start nodes → ping → curl → teardown (default)
 #   setup  netns + veth + addresses
 #   start  background-spawn both BEAM nodes
 #   ping   ping -6 from A to B's macula-net addr
-#   stop   kill both BEAMs
+#   curl   spin python http.server in B, curl from A
+#   stop   kill both BEAMs (and http.server)
 #   teardown remove netns + veth
 
 set -euo pipefail
@@ -31,6 +32,9 @@ PIDFILE_A=/tmp/macula-netns-a.pid
 PIDFILE_B=/tmp/macula-netns-b.pid
 LOG_A=/tmp/macula-netns-a.log
 LOG_B=/tmp/macula-netns-b.log
+HTTPD_PIDFILE=/tmp/macula-netns-httpd.pid
+HTTPD_LOG=/tmp/macula-netns-httpd.log
+HTTPD_PORT=8080
 
 erl_pa_args() {
     local out=()
@@ -114,8 +118,57 @@ ping_a_to_b() {
     sudo ip netns exec "${NETNS_A}" ping -6 -c 4 -W 2 "${addr_b}"
 }
 
+# Phase 1 acceptance bullet 4: a standard userspace tool (curl) reaches
+# a TCP server bound to a macula-net address — proving it's a real
+# IPv6 substrate, not a closed protocol.
+curl_a_to_b() {
+    local addr_b
+    addr_b="$(print_addr b)"
+    echo ">>> http.server bind=[${addr_b}]:${HTTPD_PORT} in ${NETNS_B}"
+
+    # Serve a tiny static dir so we know exactly what should come back.
+    local doc_root=/tmp/macula-netns-www
+    sudo rm -rf "${doc_root}"
+    sudo mkdir -p "${doc_root}"
+    echo "macula-net phase1 ok" | sudo tee "${doc_root}/hello.txt" >/dev/null
+
+    : > "${HTTPD_LOG}"
+    sudo ip netns exec "${NETNS_B}" \
+        python3 -m http.server "${HTTPD_PORT}" \
+        --bind "${addr_b}" --directory "${doc_root}" \
+        > "${HTTPD_LOG}" 2>&1 &
+    echo $! > "${HTTPD_PIDFILE}"
+
+    # Wait for bind: poll ss for the LISTEN socket inside netns B.
+    local ready=0
+    for _ in $(seq 1 40); do
+        if sudo ip netns exec "${NETNS_B}" ss -ltn 2>/dev/null \
+                | grep -q ":${HTTPD_PORT} "; then
+            ready=1; break
+        fi
+        sleep 0.25
+    done
+    if [ "${ready}" -ne 1 ]; then
+        echo "httpd failed to bind; log:"
+        sudo cat "${HTTPD_LOG}"
+        return 1
+    fi
+
+    echo ">>> curl -6 from ${NETNS_A}"
+    local body
+    body="$(sudo ip netns exec "${NETNS_A}" \
+        curl --silent --show-error --fail --max-time 5 \
+        "http://[${addr_b}]:${HTTPD_PORT}/hello.txt")"
+    echo "    body: ${body}"
+    if [ "${body}" != "macula-net phase1 ok" ]; then
+        echo "    UNEXPECTED BODY"
+        return 1
+    fi
+    echo ">>> curl OK — Phase 1 TCP acceptance met"
+}
+
 stop_all() {
-    for pf in "${PIDFILE_A}" "${PIDFILE_B}"; do
+    for pf in "${PIDFILE_A}" "${PIDFILE_B}" "${HTTPD_PIDFILE}"; do
         if [ -f "${pf}" ]; then
             local pid; pid="$(cat "${pf}")"
             sudo kill "${pid}" 2>/dev/null || true
@@ -137,6 +190,7 @@ case "${cmd}" in
     setup)    setup ;;
     start)    start_all ;;
     ping)     ping_a_to_b ;;
+    curl)     curl_a_to_b ;;
     stop)     stop_all ;;
     teardown) teardown ;;
     run)
@@ -144,6 +198,7 @@ case "${cmd}" in
         setup
         start_all
         ping_a_to_b
+        curl_a_to_b
         ;;
-    *) echo "usage: $0 {run|setup|start|ping|stop|teardown}" >&2; exit 2 ;;
+    *) echo "usage: $0 {run|setup|start|ping|curl|stop|teardown}" >&2; exit 2 ;;
 esac
