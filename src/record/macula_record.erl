@@ -29,6 +29,10 @@
     foundation_t3_attestation/3, foundation_t3_attestation/4,
     tombstone/3, tombstone/4,
 
+    %% macula-net Phase 2 — DHT-backed station resolution.
+    station_endpoint/2, station_endpoint/3,
+    address_pubkey_map/2, address_pubkey_map/3,
+
     %% Generic builder for domain-defined record types (tag 0x20-0xFF).
     %% Domain code (e.g. realm fact types) supplies its own type tag,
     %% storage key, and CBOR payload map; SDK only signs + ships.
@@ -67,8 +71,20 @@
     foundation_parameter_opts/0,
     foundation_realm_trust_list_opts/0,
     foundation_t3_attestation_opts/0,
-    tombstone_opts/0
+    tombstone_opts/0,
+    station_endpoint_opts/0,
+    address_pubkey_map_opts/0
 ]).
+
+-type station_endpoint_opts() :: #{
+    host_advertised => [binary()],
+    alpn            => binary(),
+    ttl_ms          => pos_integer()
+}.
+
+-type address_pubkey_map_opts() :: #{
+    ttl_ms => pos_integer()
+}.
 
 %% Domain separation prefix for record signatures (Part 6 §10.2).
 -define(SIG_DOMAIN, "macula-v2-record\0").
@@ -88,6 +104,8 @@
 -define(TYPE_FOUNDATION_REALM_TRUST_LIST,  16#0F).
 -define(TYPE_FOUNDATION_T3_ATTESTATION,    16#10).
 -define(TYPE_CONTENT_ANNOUNCEMENT,         16#11).
+-define(TYPE_STATION_ENDPOINT,             16#12). %% macula-net Phase 2
+-define(TYPE_ADDRESS_PUBKEY_MAP,           16#13). %% macula-net Phase 2 (redirect)
 -define(DOMAIN_TYPE_MIN,                   16#20).
 
 %% Domain separation for derived storage keys (Part 3 §3.3).
@@ -97,6 +115,13 @@
 -define(STORAGE_DOMAIN_FOUND_PARAM,    <<"foundation_parameter">>).
 -define(STORAGE_DOMAIN_FOUND_TRUST,    <<"foundation_realm_trust_list">>).
 -define(STORAGE_DOMAIN_FOUND_ATTEST,   <<"foundation_t3_attestation">>).
+-define(STORAGE_DOMAIN_STATION_ENDPOINT, <<"station_endpoint">>).
+-define(STORAGE_DOMAIN_ADDRESS_PUBKEY,   <<"address_pubkey_map">>).
+
+%% macula-net record TTL (Part 4 §11; PLAN_MACULA_NET §3.6). Mirrors
+%% macula_dist_discovery: short enough to drop stale stations within
+%% minutes, long enough that a one-minute refresh keeps it live.
+-define(MACULA_NET_TTL_MS, 5 * 60 * 1000).
 
 %% Default endorsement validity window (30 days).
 -define(DEFAULT_ENDORSEMENT_TTL_MS, 30 * 24 * 60 * 60 * 1000).
@@ -496,6 +521,66 @@ tombstone(SupersededKey, SupersededType, Reason, Opts)
     envelope(?TYPE_TOMBSTONE, SupersededKey, Payload, Opts).
 
 %%------------------------------------------------------------------
+%% Constructors — macula-net station_endpoint (PLAN_MACULA_NET §Phase2)
+%%
+%% Advertises a station's QUIC endpoint so resolvers can reach it
+%% after looking up its identity pubkey. Storage key namespaces under
+%% `station_endpoint:' so it doesn't collide with node_record (which
+%% uses the bare pubkey as storage key).
+%%------------------------------------------------------------------
+
+-spec station_endpoint(macula_identity:pubkey(),
+                       QuicPort :: 1..65535) -> record().
+station_endpoint(StationPubkey, QuicPort) ->
+    station_endpoint(StationPubkey, QuicPort, #{}).
+
+-spec station_endpoint(macula_identity:pubkey(),
+                       QuicPort :: 1..65535,
+                       station_endpoint_opts()) -> record().
+station_endpoint(StationPubkey, QuicPort, Opts)
+  when is_binary(StationPubkey), byte_size(StationPubkey) =:= 32,
+       is_integer(QuicPort), QuicPort > 0, QuicPort =< 65535 ->
+    Payload0 = #{ {text, <<"quic_port">>} => QuicPort },
+    P1 = with_host_list(Payload0, maps:get(host_advertised, Opts, undefined)),
+    P2 = with_text(P1, <<"alpn">>, maps:get(alpn, Opts, undefined)),
+    Opts1 = maps:merge(#{ttl_ms => ?MACULA_NET_TTL_MS}, Opts),
+    envelope(?TYPE_STATION_ENDPOINT, StationPubkey, P2, Opts1).
+
+%%------------------------------------------------------------------
+%% Constructors — macula-net address_pubkey_map (Phase 2 redirect)
+%%
+%% Maps a macula-net IPv6 address to its hosting station's pubkey.
+%% Resolvers do `find_record(sha256(addr_pubkey_map: || addr))', then
+%% use the returned `key' as the index for the station_endpoint
+%% lookup. The address-binding check
+%% (`derive_address(realm, key) == addr') is the resolver's job.
+%%------------------------------------------------------------------
+
+-spec address_pubkey_map(macula_identity:pubkey(),
+                         Addr :: <<_:128>>) -> record().
+address_pubkey_map(StationPubkey, Addr) ->
+    address_pubkey_map(StationPubkey, Addr, #{}).
+
+-spec address_pubkey_map(macula_identity:pubkey(),
+                         Addr :: <<_:128>>,
+                         address_pubkey_map_opts()) -> record().
+address_pubkey_map(StationPubkey, Addr, Opts)
+  when is_binary(StationPubkey), byte_size(StationPubkey) =:= 32,
+       is_binary(Addr), byte_size(Addr) =:= 16 ->
+    Payload = #{ {text, <<"addr">>} => Addr },
+    Opts1 = maps:merge(#{ttl_ms => ?MACULA_NET_TTL_MS}, Opts),
+    envelope(?TYPE_ADDRESS_PUBKEY_MAP, StationPubkey, Payload, Opts1).
+
+with_host_list(Map, undefined) -> Map;
+with_host_list(Map, []) -> Map;
+with_host_list(Map, Hosts) when is_list(Hosts) ->
+    Bins = [H || H <- Hosts, is_binary(H)],
+    case Bins of
+        [] -> Map;
+        _  -> Map#{ {text, <<"host_advertised">>} => Bins }
+    end.
+
+%%------------------------------------------------------------------
 %% Sign / verify
 %%------------------------------------------------------------------
 
@@ -863,6 +948,18 @@ storage_key(#{type := ?TYPE_FOUNDATION_REALM_TRUST_LIST, key := Fk}) ->
 storage_key(#{type := ?TYPE_FOUNDATION_T3_ATTESTATION, payload := P}) ->
     Sid = maps:get({text, <<"station_id">>}, P),
     crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_ATTEST/binary, Sid/binary>>);
+%% station_endpoint: keyed by station pubkey under its own domain so
+%% it doesn't collide with node_record (which keys on the same
+%% pubkey).
+storage_key(#{type := ?TYPE_STATION_ENDPOINT, key := StationPubkey}) ->
+    crypto:hash(sha256, <<?STORAGE_DOMAIN_STATION_ENDPOINT/binary,
+                          StationPubkey/binary>>);
+%% address_pubkey_map: keyed by the macula-net address itself so a
+%% bare-IPv6 query can find it without already knowing the pubkey.
+storage_key(#{type := ?TYPE_ADDRESS_PUBKEY_MAP, payload := P}) ->
+    Addr = maps:get({text, <<"addr">>}, P),
+    crypto:hash(sha256, <<?STORAGE_DOMAIN_ADDRESS_PUBKEY/binary,
+                          Addr/binary>>);
 %% Domain-defined types (0x20-0xFF). When the envelope carries a
 %% `subject_id' the storage key is derived from <<type, signer_key,
 %% subject_id>> so one signer can publish many records under
