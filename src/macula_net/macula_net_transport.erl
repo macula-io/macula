@@ -24,12 +24,14 @@
 -export_type([
     station_id/0,
     handler/0,
-    cbor_envelope/0
+    cbor_envelope/0,
+    stream_ref/0
 ]).
 
 -type station_id()    :: binary().
 -type cbor_envelope() :: binary().
--type handler()       :: fun((cbor_envelope()) -> any()).
+-type stream_ref()    :: reference().
+-type handler()       :: fun((cbor_envelope(), stream_ref()) -> any()).
 
 %% Send a CBOR-encoded macula-net envelope to a known station.
 %% Returns ok on successful enqueue (NOT delivery — the transport may
@@ -38,5 +40,10 @@
 
 %% Register the handler that will be called for every inbound envelope.
 %% The handler is called from the transport's own process; it should be
-%% non-blocking (typically a cast to macula_deliver_packet:handle_envelope/1).
+%% non-blocking (typically a cast to macula_deliver_packet:handle_envelope/1
+%% or to a host_attach_controller). The second argument is the inbound
+%% bidi stream's reference, opaque to non-host handlers but used by
+%% host_attach_controller (Phase 3.5) to forward replies on the same
+%% stream the daemon dialed in on. See
+%% PLAN_MACULA_NET_PHASE3_5_TRANSPORT_SEAM.md for the rationale.
 -callback set_handler(handler()) -> ok.

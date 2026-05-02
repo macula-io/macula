@@ -98,8 +98,14 @@ start(#{realm_pubkey    := Realm,
     }),
 
     %% 4. Wire the transport's inbound handler to deliver_packet.
+    %% Phase 3.5 promoted the handler to arity-2 (Cbor, StreamRef);
+    %% station-only nodes ignore the StreamRef. Host stations replace
+    %% this wiring with macula_host_attach_controller:handle/2 — see
+    %% PLAN_MACULA_NET_PHASE3_5_TRANSPORT_SEAM.md.
     ok = macula_net_transport_quic:set_handler(
-            fun macula_deliver_packet:handle_envelope/1),
+            fun(Cbor, _StreamRef) ->
+                macula_deliver_packet:handle_envelope(Cbor)
+            end),
 
     %% 5. Connect outbound to each peer + populate egress route table.
     SendFun  = fun(StationId, Cbor) ->

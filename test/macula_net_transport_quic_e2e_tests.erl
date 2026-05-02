@@ -52,7 +52,7 @@ setup() ->
                         #{port => ?LISTEN_PORT_B}),
             Sink = {?ENVELOPE_SINK, TestNode},
             ok = macula_net_transport_quic:set_handler(
-                    fun(Cbor) -> Sink ! {peer_got, Cbor}, ok end),
+                    fun(Cbor, _StreamRef) -> Sink ! {peer_got, Cbor}, ok end),
             Caller ! {ready, self()},
             holder_loop()
         end),

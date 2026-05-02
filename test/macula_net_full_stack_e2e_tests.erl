@@ -63,7 +63,9 @@ setup() ->
             {ok, _} = macula_net_transport_quic:start_link(
                         #{port => ?LISTEN_PORT_B}),
             ok = macula_net_transport_quic:set_handler(
-                    fun macula_deliver_packet:handle_envelope/1),
+                    fun(Cbor, _StreamRef) ->
+                        macula_deliver_packet:handle_envelope(Cbor)
+                    end),
             Sink = {?PAYLOAD_SINK, TestNode},
             Writer = fun(Pkt) -> Sink ! {delivered, Pkt}, ok end,
             ok = macula_deliver_packet:configure(#{

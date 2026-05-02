@@ -122,7 +122,7 @@ init(#{host_endpoint   := #{station_pubkey := StationId,
                     %% callback.
                     Self = self(),
                     ok = macula_net_transport_quic:set_handler(
-                            fun(Cbor) ->
+                            fun(Cbor, _StreamRef) ->
                                 gen_server:cast(Self, {inbound, Cbor})
                             end),
                     {ok, #state{config = Config,

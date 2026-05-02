@@ -94,8 +94,13 @@ stop() ->
     end.
 
 %% @doc Register the inbound handler. Called for every received envelope.
+%%
+%% The handler is invoked as `Handler(Cbor, StreamRef)' where StreamRef
+%% is the bidi-stream reference the frame arrived on. Non-host handlers
+%% can ignore StreamRef; the host_attach_controller (Phase 3.5) uses it
+%% to forward replies on the same stream a daemon dialed in on.
 -spec set_handler(macula_net_transport:handler()) -> ok.
-set_handler(Handler) when is_function(Handler, 1) ->
+set_handler(Handler) when is_function(Handler, 2) ->
     gen_server:call(?SERVER, {set_handler, Handler}).
 
 %% @doc Open an outbound QUIC connection + bidi stream to a peer station.
@@ -269,7 +274,7 @@ deliver_buffered(Stream, NewBytes, #state{handler = Handler,
     Existing = maps:get(Stream, InStreams, #in_state{}),
     Combined = <<(Existing#in_state.buf)/binary, NewBytes/binary>>,
     {Frames, Rest} = extract_frames(Combined, []),
-    lists:foreach(fun(F) -> safe_invoke(Handler, F) end, Frames),
+    lists:foreach(fun(F) -> safe_invoke(Handler, F, Stream) end, Frames),
     State#state{in_streams = InStreams#{Stream => #in_state{buf = Rest}}}.
 
 extract_frames(<<Len:32/big, Cbor:Len/binary, Rest/binary>>, Acc)
@@ -282,12 +287,12 @@ extract_frames(<<Len:32/big, _/binary>> = _Bin, Acc) when Len > ?MAX_FRAME_BYTES
 extract_frames(Bin, Acc) ->
     {lists:reverse(Acc), Bin}.
 
-safe_invoke(undefined, _Cbor) -> ok;
-safe_invoke(Handler, Cbor) when is_function(Handler, 1) ->
+safe_invoke(undefined, _Cbor, _Stream) -> ok;
+safe_invoke(Handler, Cbor, Stream) when is_function(Handler, 2) ->
     %% Per CLAUDE.md: avoid try/catch where possible. We accept it here
     %% because a user-supplied handler crashing must not take down the
     %% transport. This is the boundary; below it we let it crash.
-    try Handler(Cbor)
+    try Handler(Cbor, Stream)
     catch _:_ -> ok
     end.
 
