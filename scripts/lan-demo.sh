@@ -15,6 +15,9 @@
 #   run-beam02   start macula-net on beam02 (sudo, foreground over ssh)
 #   ping         ping -6 from workstation to beam02's macula-net addr
 #   teardown     remove TUN devices on both sides
+#   auto         Phase 1: two netns + ping6 across (PLAN_MACULA_NET §12)
+#   auto3        Phase 2: three netns + curl over DHT-resolved mesh
+#   auto-daemons Phase 3.7: hosted-identity gateway, sender → helsinki → alice
 
 set -euo pipefail
 
@@ -198,6 +201,22 @@ case "${cmd}" in
               "${BEAM02_HOST}:macula-src/scripts/"
         ssh_beam02 'chmod +x ~/macula-src/scripts/netns3-demo.sh'
         ssh_beam02 '~/macula-src/scripts/netns3-demo.sh run'
+        ;;
+
+    auto-daemons)
+        # Phase 3.7 auto demo: 3 netns + bridge + mock DHT + the
+        # hosted-identity gateway. Sender curls Alice's address via
+        # the kernel TUN; the IPv6 packet traverses Helsinki via the
+        # host_attach_controller and lands in Alice's daemon process.
+        # Acceptance is a "[daemon] received" line in alice.log.
+        scp -q "${ROOT_DIR}/scripts/netns-daemons-demo.sh" \
+              "${ROOT_DIR}/scripts/lan_demo_node3.erl" \
+              "${ROOT_DIR}/scripts/lan_demo_dht.erl" \
+              "${ROOT_DIR}/scripts/lan_demo_host_node.erl" \
+              "${ROOT_DIR}/scripts/lan_demo_daemon_node.erl" \
+              "${BEAM02_HOST}:macula-src/scripts/"
+        ssh_beam02 'chmod +x ~/macula-src/scripts/netns-daemons-demo.sh'
+        ssh_beam02 '~/macula-src/scripts/netns-daemons-demo.sh run'
         ;;
 
     *)
