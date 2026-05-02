@@ -188,6 +188,18 @@ case "${cmd}" in
         ssh_beam02 '~/macula-src/scripts/netns-demo.sh run'
         ;;
 
+    auto3)
+        # Phase 2 auto demo: 3 netns + bridge + mock DHT + curl
+        # across the macula-net mesh. Same pattern as `auto` but
+        # exercises the DHT-resolution path end-to-end.
+        scp -q "${ROOT_DIR}/scripts/netns3-demo.sh" \
+              "${ROOT_DIR}/scripts/lan_demo_node3.erl" \
+              "${ROOT_DIR}/scripts/lan_demo_dht.erl" \
+              "${BEAM02_HOST}:macula-src/scripts/"
+        ssh_beam02 'chmod +x ~/macula-src/scripts/netns3-demo.sh'
+        ssh_beam02 '~/macula-src/scripts/netns3-demo.sh run'
+        ;;
+
     *)
         sed -n '/^# /,/^$/p' "$0" | sed 's/^# \{0,1\}//'
         ;;

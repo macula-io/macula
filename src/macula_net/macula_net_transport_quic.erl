@@ -318,7 +318,12 @@ ensure_self_signed_cert(Port) ->
               false -> "/tmp";
               V -> V
           end,
-    Stem = filename:join(Tmp, io_lib:format("macula-net-~p", [Port])),
+    %% Include the OS pid in the stem so multiple BEAM nodes sharing
+    %% the same /tmp (e.g. several netns on one box) don't race on
+    %% writing the cert/key files. Without this, Phase 2's three-netns
+    %% demo hits "TLS keys may not be consistent: KeyMismatch".
+    Stem = filename:join(Tmp, io_lib:format("macula-net-~p-~s",
+                                             [Port, os:getpid()])),
     CertPath = lists:flatten([Stem, ".crt"]),
     KeyPath  = lists:flatten([Stem, ".key"]),
     ok = file:write_file(CertPath, CertPem),
