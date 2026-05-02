@@ -187,17 +187,7 @@ make_tun_writer(Handle) ->
 start_tun_reader(skipped) ->
     ok;
 start_tun_reader(Handle) ->
-    ReaderPid = spawn_link(fun reader_proxy_loop/0),
+    {ok, ReaderPid} = macula_tun_reader_proxy:start_link(#{
+        dispatch_fn => fun macula_route_packet:dispatch/1
+    }),
     ok = macula_tun:start_reader(Handle, ReaderPid).
-
-%% Tiny proxy: receives `{macula_net_packet, Handle, Payload}` from
-%% the TUN reader thread and forwards each Payload to the egress
-%% router. Linked to the caller so it dies with the app.
-reader_proxy_loop() ->
-    receive
-        {macula_net_packet, _Handle, Payload} ->
-            _ = macula_route_packet:dispatch(Payload),
-            reader_proxy_loop();
-        stop ->
-            ok
-    end.
