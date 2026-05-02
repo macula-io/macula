@@ -10,7 +10,7 @@ Please read and follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/macula.git`
-3. Add upstream remote: `git remote add upstream https://github.com/macula-io/macula.git`
+3. Add upstream remote: `git remote add upstream https://codeberg.org/macula-io/macula.git`
 4. Create a feature branch: `git checkout -b feature/your-feature`
 
 ## Development Setup

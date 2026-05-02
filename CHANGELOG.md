@@ -4807,7 +4807,7 @@ System.put_env("MACULA_REALM", realm)
 
 ---
 
-[0.7.0]: https://github.com/macula-io/macula/compare/v0.6.7...v0.7.0
-[0.6.7]: https://github.com/macula-io/macula/compare/v0.6.6...v0.6.7
-[0.6.0]: https://github.com/macula-io/macula/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/macula-io/macula/releases/tag/v0.5.0
+[0.7.0]: https://codeberg.org/macula-io/macula/compare/v0.6.7...v0.7.0
+[0.6.7]: https://codeberg.org/macula-io/macula/compare/v0.6.6...v0.6.7
+[0.6.0]: https://codeberg.org/macula-io/macula/compare/v0.5.0...v0.6.0
+[0.5.0]: https://codeberg.org/macula-io/macula/releases/tag/v0.5.0

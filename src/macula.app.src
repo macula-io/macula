@@ -30,5 +30,5 @@
     {env, []},
     {modules, []},
     {licenses, ["Apache-2.0"]},
-    {links, [{"GitHub", "https://github.com/macula-io/macula"}]}
+    {links, [{"GitHub", "https://codeberg.org/macula-io/macula"}]}
  ]}.

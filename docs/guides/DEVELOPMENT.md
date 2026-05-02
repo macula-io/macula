@@ -13,7 +13,7 @@ This guide covers setting up a development environment for contributing to Macul
 
 ```bash
 # Clone the repository
-git clone https://github.com/macula-io/macula.git
+git clone https://codeberg.org/macula-io/macula.git
 cd macula
 
 # Fetch dependencies
@@ -198,7 +198,7 @@ The SDK includes Rust NIFs for performance-critical operations. They build autom
 
 ## Getting Help
 
-- **Issues**: [GitHub Issues](https://github.com/macula-io/macula/issues)
+- **Issues**: [GitHub Issues](https://codeberg.org/macula-io/macula/issues)
 - **Documentation**: See `architecture/` directory for detailed architecture docs
 
 ---

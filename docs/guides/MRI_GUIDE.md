@@ -348,5 +348,5 @@ macula_mri_registry:register_type(<<"turbine">>, #{
 
 ## Related
 
-- [Storage: macula_mri_khepri](https://github.com/macula-io/macula-mri-khepri)
+- [Storage: macula_mri_khepri](https://codeberg.org/macula-io/macula-mri-khepri)
 - Design Document (archived with the deprecated `macula-console` repo)
