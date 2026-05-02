@@ -33,6 +33,7 @@
     routes/0,
     lookup/1,
     dispatch/1,
+    dispatch_envelope/2,
     encapsulate/3
 ]).
 
@@ -238,6 +239,34 @@ dispatch_to({ok, #{station := Station, send := Send}}, Packet, Src, Dst) ->
 
 send_via(ok, Station)               -> {ok, Station};
 send_via({error, _} = Err, _Station) -> Err.
+
+%% @doc Forward a pre-built macula-net envelope toward `Dst'.
+%%
+%% Same lookup + resolve + connect + send pipeline as {@link
+%% dispatch/1}, but skips the IPv6-to-CBOR encapsulation step. Used
+%% by {@link macula_host_attach_controller} when a hosted daemon
+%% emits a data envelope whose `dst' is neither hosted on the same
+%% station nor the station's own address — the host station forwards
+%% the same bytes onward, preserving the envelope's `src' so the
+%% routing is transparent at L3.
+-spec dispatch_envelope(CborEnvelope :: binary(), Dst :: <<_:128>>) ->
+    {ok, StationId :: binary()} | {error, term()}.
+dispatch_envelope(Cbor, Dst) when is_binary(Cbor), is_binary(Dst), byte_size(Dst) =:= 16 ->
+    dispatch_envelope_in_mode(mode(), Cbor, Dst).
+
+dispatch_envelope_in_mode(undefined, _Cbor, _Dst) ->
+    {error, not_configured};
+dispatch_envelope_in_mode(static, Cbor, Dst) ->
+    forward_static(lookup_in_mode(static, Dst), Cbor);
+dispatch_envelope_in_mode(dht, Cbor, Dst) ->
+    Resolver = resolver(),
+    Send     = maps:get(send_fn, Resolver),
+    deliver_dht(macula_cache_route:lookup(Dst), Dst, Cbor, Send, Resolver).
+
+forward_static(not_found, _Cbor) ->
+    {error, no_route};
+forward_static({ok, #{station := Station, send := Send}}, Cbor) ->
+    send_via(Send(Station, Cbor), Station).
 
 %% @doc Build a macula-net envelope around an IPv6 packet. Public so
 %% other layers (e.g. daemon attachment) can craft envelopes directly.

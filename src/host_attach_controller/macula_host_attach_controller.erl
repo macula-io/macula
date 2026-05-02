@@ -55,6 +55,8 @@
                                 macula_record:host_delegation(),
                                 stream_ref()) -> ok | {error, term()}).
 -type fallback_fn()    :: fun((binary()) -> any()).
+-type forward_fn()     :: fun((Cbor :: binary(), Dst :: <<_:128>>) ->
+                                  {ok, term()} | {error, term()}).
 
 -type config() :: #{
     realm_pubkey   := <<_:256>>,
@@ -62,11 +64,13 @@
     attach_send_fn := attach_send_fn(),
     lookup_fn      := lookup_fn(),
     attach_fn      := attach_fn(),
-    fallback_fn    := fallback_fn()
+    fallback_fn    := fallback_fn(),
+    forward_fn     => forward_fn()
 }.
 
 -record(state, {
-    config :: config()
+    config   :: config(),
+    own_addr :: <<_:128>>
 }).
 
 %% =============================================================================
@@ -107,13 +111,19 @@ delegation_from_wire(_) ->
 %% gen_server callbacks
 %% =============================================================================
 
-init(#{realm_pubkey   := _, host_pubkey    := _,
+init(#{realm_pubkey   := Realm, host_pubkey    := HostPk,
        attach_send_fn := S, lookup_fn      := L,
        attach_fn      := A, fallback_fn    := F} = Config)
   when is_function(S, 2), is_function(L, 1),
        is_function(A, 4), is_function(F, 1) ->
     process_flag(trap_exit, true),
-    {ok, #state{config = Config}}.
+    OwnAddr = macula_address:derive(Realm, HostPk),
+    %% Default forward_fn: drop. Production wires
+    %% fun macula_route_packet:dispatch_envelope/2 here. Tests pass a
+    %% capture fn. With no forward_fn the controller falls through to
+    %% fallback_fn for non-hosted-non-local data, preserving the
+    %% Phase 3.5 behaviour for callers that don't opt in.
+    {ok, #state{config = Config, own_addr = OwnAddr}}.
 
 handle_call(_Other, _From, State) ->
     {reply, {error, unknown_call}, State}.
@@ -145,7 +155,7 @@ dispatch_decoded(_Other, Cbor, _StreamRef, State) ->
 dispatch_typed(#{<<"type">> := <<"macula_attach_v1">>} = M, _Cbor, StreamRef, State) ->
     handle_attach(M, StreamRef, State);
 dispatch_typed(#{<<"type">> := <<"data">>, <<"dst">> := Dst} = _M, Cbor, _StreamRef, State) ->
-    route_data(safe_lookup(Dst, State), Cbor, State);
+    route_data(safe_lookup(Dst, State), Dst, Cbor, State);
 dispatch_typed(_Other, Cbor, _StreamRef, State) ->
     fallback(Cbor, State).
 
@@ -177,20 +187,44 @@ log_attach({error, Reason}, Addr) ->
     ok.
 
 %% --- data routing -----------------------------------------------------------
+%%
+%% Three-way split per the §7.1 sub-spec:
+%%   1. dst is a hosted daemon address — forward on its attach stream.
+%%   2. dst is the host station's own address — fallback (deliver_packet
+%%      writes to TUN).
+%%   3. otherwise — forward via route_packet:dispatch_envelope.
 
-route_data({ok, OutStream}, Cbor, #state{config = #{attach_send_fn := SendFn}}) ->
+route_data({ok, OutStream}, _Dst, Cbor, #state{config = #{attach_send_fn := SendFn}}) ->
     %% Re-frame: the daemon expects the same length-prefixed CBOR shape
     %% the station wire uses.
     Frame = <<(byte_size(Cbor)):32/big, Cbor/binary>>,
     log_send(safe_call2(SendFn, OutStream, Frame));
-route_data(not_found, Cbor, State) ->
-    fallback(Cbor, State).
+route_data(not_found, Dst, Cbor, #state{own_addr = OwnAddr} = State)
+  when Dst =:= OwnAddr ->
+    fallback(Cbor, State);
+route_data(not_found, Dst, Cbor, State) ->
+    forward_or_fallback(Dst, Cbor, State).
+
+forward_or_fallback(Dst, Cbor, #state{config = Config} = State) ->
+    forward_dispatch(maps:get(forward_fn, Config, undefined), Dst, Cbor, State).
+
+forward_dispatch(undefined, _Dst, Cbor, State) ->
+    fallback(Cbor, State);
+forward_dispatch(Fn, Dst, Cbor, _State) ->
+    log_forward(safe_call2(Fn, Cbor, Dst)).
 
 log_send(ok) -> ok;
 log_send({error, Reason}) ->
     error_logger:warning_msg(
       "[host_attach_controller] send to hosted daemon failed: ~p",
       [Reason]),
+    ok.
+
+log_forward({ok, _}) -> ok;
+log_forward(ok)      -> ok;
+log_forward({error, Reason}) ->
+    error_logger:warning_msg(
+      "[host_attach_controller] forward failed: ~p", [Reason]),
     ok.
 
 %% --- fallback ---------------------------------------------------------------

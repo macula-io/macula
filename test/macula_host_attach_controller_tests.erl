@@ -81,13 +81,17 @@ start_controller(#{host := #{pk := HPk}}) ->
     FallbackFn   = fun(Cbor) ->
                        ?SINK ! {fallback, Cbor}, ok
                    end,
+    ForwardFn    = fun(Cbor, Dst) ->
+                       ?SINK ! {forward, Cbor, Dst}, {ok, forwarded}
+                   end,
     {ok, _} = macula_host_attach_controller:start_link(#{
                   realm_pubkey   => ?REALM,
                   host_pubkey    => HPk,
                   attach_send_fn => AttachSendFn,
                   lookup_fn      => LookupFn,
                   attach_fn      => AttachFn,
-                  fallback_fn    => FallbackFn
+                  fallback_fn    => FallbackFn,
+                  forward_fn     => ForwardFn
               }).
 
 await(Tag, Timeout) ->
@@ -145,13 +149,17 @@ controller_test_() ->
         {timeout, 5,
          {setup, fun setup/0, fun cleanup/1, fun data_for_hosted_dst_forwards_on_stored_stream/1}},
         {timeout, 5,
-         {setup, fun setup/0, fun cleanup/1, fun data_for_unhosted_dst_falls_through/1}},
+         {setup, fun setup/0, fun cleanup/1, fun data_for_unhosted_dst_falls_through_when_no_forward_fn/1}},
         {timeout, 5,
          {setup, fun setup/0, fun cleanup/1, fun garbage_cbor_falls_through/1}},
         {timeout, 5,
          {setup, fun setup/0, fun cleanup/1, fun unknown_type_falls_through/1}},
         {timeout, 5,
-         {setup, fun setup/0, fun cleanup/1, fun delegation_from_wire_round_trips/1}}
+         {setup, fun setup/0, fun cleanup/1, fun delegation_from_wire_round_trips/1}},
+        {timeout, 5,
+         {setup, fun setup/0, fun cleanup/1, fun data_for_remote_dst_forwards/1}},
+        {timeout, 5,
+         {setup, fun setup/0, fun cleanup/1, fun data_for_host_own_addr_falls_back_to_local/1}}
     ]}.
 
 attach_dispatches_to_attach_fn(Ctx) ->
@@ -222,19 +230,34 @@ data_for_hosted_dst_forwards_on_stored_stream(Ctx) ->
         ?assertEqual(timeout, await(fallback, 100))
     end.
 
-data_for_unhosted_dst_falls_through(Ctx) ->
+data_for_unhosted_dst_falls_through_when_no_forward_fn(#{host := Host} = _Ctx) ->
     fun() ->
-        start_controller(Ctx),
+        %% Bring up a controller WITHOUT forward_fn — Phase 3.5
+        %% behaviour. Non-hosted-non-local data must drop into
+        %% fallback_fn since nothing else can route it.
+        catch unregister(?SINK),
+        true = register(?SINK, self()),
+        ensure_lookup_table(),
+        AttachSendFn = fun(_S, _F) -> ok end,
+        LookupFn     = fun(D) -> table_lookup(ets:lookup(?LOOKUP_TABLE, D)) end,
+        AttachFn     = fun(_, _, _, _) -> ok end,
+        FallbackFn   = fun(Cbor) -> ?SINK ! {fallback, Cbor}, ok end,
+        {ok, _} = macula_host_attach_controller:start_link(#{
+            realm_pubkey   => ?REALM,
+            host_pubkey    => maps:get(pk, Host),
+            attach_send_fn => AttachSendFn,
+            lookup_fn      => LookupFn,
+            attach_fn      => AttachFn,
+            fallback_fn    => FallbackFn
+            %% NB: no forward_fn — controller must default to fallback.
+        }),
         Src   = new_actor(),
         Dst   = new_actor(),
         Frame = build_data_frame(maps:get(addr, Src),
                                   maps:get(addr, Dst),
                                   <<"hello">>),
-        %% No set_lookup/2 call -> lookup returns not_found.
         ok = macula_host_attach_controller:handle(Frame, make_ref()),
-        Got = await(fallback, 2000),
-        ?assertEqual({fallback, Frame}, Got),
-        ?assertEqual(timeout, await(sent, 100))
+        ?assertEqual({fallback, Frame}, await(fallback, 2000))
     end.
 
 garbage_cbor_falls_through(Ctx) ->
@@ -256,6 +279,41 @@ unknown_type_falls_through(Ctx) ->
         ok = macula_host_attach_controller:handle(Frame, make_ref()),
         Got = await(fallback, 1000),
         ?assertEqual({fallback, Frame}, Got)
+    end.
+
+data_for_remote_dst_forwards(Ctx) ->
+    fun() ->
+        start_controller(Ctx),
+        Src    = new_actor(),
+        Remote = new_actor(),
+        Frame = build_data_frame(maps:get(addr, Src),
+                                  maps:get(addr, Remote),
+                                  <<"forward me">>),
+        %% Remote dst is not hosted (no entry in lookup table) and not
+        %% the host's own address — must hit forward_fn.
+        ok = macula_host_attach_controller:handle(Frame, make_ref()),
+        Got = await(forward, 2000),
+        ?assertMatch({forward, Frame, _Dst}, Got),
+        {forward, _, ForwardDst} = Got,
+        ?assertEqual(maps:get(addr, Remote), ForwardDst),
+        %% No fallback nor attach_send for the forwarding branch.
+        ?assertEqual(timeout, await(fallback, 100)),
+        ?assertEqual(timeout, await(sent, 100))
+    end.
+
+data_for_host_own_addr_falls_back_to_local(#{host := Host} = Ctx) ->
+    fun() ->
+        start_controller(Ctx),
+        Src      = new_actor(),
+        OwnAddr  = maps:get(addr, Host),
+        %% Frame addressed to the host station itself — the kernel's
+        %% TUN owns this address. Falls back to fallback_fn (which is
+        %% deliver_packet:handle_envelope in production).
+        Frame = build_data_frame(maps:get(addr, Src), OwnAddr, <<"local">>),
+        ok = macula_host_attach_controller:handle(Frame, make_ref()),
+        ?assertEqual({fallback, Frame}, await(fallback, 1000)),
+        ?assertEqual(timeout, await(forward, 100)),
+        ?assertEqual(timeout, await(sent, 100))
     end.
 
 delegation_from_wire_round_trips(_Ctx) ->
