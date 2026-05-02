@@ -33,11 +33,28 @@ erl_pa_args() {
     done
 }
 
+# Resolve a binary that might live in the invoking user's asdf shims,
+# even when this script runs under sudo (root PATH lacks shims).
+resolve_bin() {
+    local name="$1"
+    local invoking_user="${SUDO_USER:-${USER}}"
+    local user_home
+    user_home="$(getent passwd "${invoking_user}" | cut -d: -f6)"
+    local shim="${user_home}/.asdf/shims/${name}"
+    if [ -x "${shim}" ]; then
+        echo "${shim}"
+        return 0
+    fi
+    command -v "${name}" || { echo "ERROR: ${name} not found" >&2; return 1; }
+}
+
 print_addr() {
     local role="$1"
     local hex
     case "${role}" in a) hex=aa ;; b) hex=bb ;; esac
-    erl -noshell $(erl_pa_args) -eval "
+    local erl_bin
+    erl_bin="$(resolve_bin erl)"
+    "${erl_bin}" -noshell $(erl_pa_args) -eval "
         Realm = <<16#11:256>>,
         Ident = <<16#${hex}:256>>,
         io:format(\"~s\", [macula_address:format(macula_address:derive(Realm, Ident))]),
@@ -46,10 +63,13 @@ print_addr() {
 }
 
 ensure_local_build() {
+    local rebar3_bin erlc_bin
+    rebar3_bin="$(resolve_bin rebar3)"
+    erlc_bin="$(resolve_bin erlc)"
     if [ ! -d "${ROOT_DIR}/_build/default/lib/macula/ebin" ]; then
-        ( cd "${ROOT_DIR}" && rebar3 compile )
+        ( cd "${ROOT_DIR}" && "${rebar3_bin}" compile )
     fi
-    erlc -pa "${ROOT_DIR}/_build/default/lib/macula/ebin" \
+    "${erlc_bin}" -pa "${ROOT_DIR}/_build/default/lib/macula/ebin" \
          -o "${ROOT_DIR}/_build/default/lib/macula/ebin" \
          "${ROOT_DIR}/scripts/lan_demo_node.erl"
 }
@@ -67,17 +87,21 @@ case "${cmd}" in
         ;;
 
     prep-beam02)
+        # Rust 1.88 is the highest version whose pre-built libstd
+        # still targets glibc <= 2.29. beam02 (Ubuntu 20.04) ships
+        # glibc 2.31, so anything newer (1.89+) embeds calls to
+        # GLIBC_2.32+/2.33+ symbols and the NIF fails to load.
         ssh_beam02 'set -eu
             export PATH=$HOME/.asdf/shims:$PATH
             ~/.asdf/bin/asdf plugin add rebar  2>/dev/null || true
             ~/.asdf/bin/asdf plugin add rust   2>/dev/null || true
             ~/.asdf/bin/asdf install rebar 3.25.0
-            ~/.asdf/bin/asdf install rust 1.90.0
+            ~/.asdf/bin/asdf install rust 1.88.0
             ~/.asdf/bin/asdf global rebar 3.25.0
-            ~/.asdf/bin/asdf global rust  1.90.0
+            ~/.asdf/bin/asdf global rust  1.88.0
             grep -q "^erlang " ~/.tool-versions || echo "erlang 26.0" >> ~/.tool-versions
             grep -q "^rebar "  ~/.tool-versions || echo "rebar 3.25.0"  >> ~/.tool-versions
-            grep -q "^rust "   ~/.tool-versions || echo "rust 1.90.0"   >> ~/.tool-versions
+            grep -q "^rust "   ~/.tool-versions || echo "rust 1.88.0"   >> ~/.tool-versions
             echo "--- versions ---"
             ~/.asdf/shims/erl -version
             ~/.asdf/shims/rebar3 version
@@ -93,19 +117,22 @@ case "${cmd}" in
             --exclude 'doc/' \
             --exclude '*.beam' \
             --exclude 'native/*/target/' \
+            --exclude '.tool-versions' \
             "${ROOT_DIR}/" "${BEAM02_HOST}:macula-src/"
         echo ">>> synced -> ${BEAM02_HOST}:~/macula-src/"
         ;;
 
     build-beam02)
+        # Skipping `as prod release` — rebar.config points at config/{sys.config,vm.args}
+        # which aren't checked in. Plain compile + raw erl is enough for the demo.
         ssh_beam02 'set -eu
             export PATH=$HOME/.asdf/shims:$PATH
             cd ~/macula-src
-            rebar3 as prod release
+            rebar3 compile
             erlc -pa _build/default/lib/macula/ebin \
                  -o _build/default/lib/macula/ebin \
                  scripts/lan_demo_node.erl
-            ls -la _build/prod/rel/macula/bin/macula
+            ls _build/default/lib/macula/priv/*.so | head
         '
         ;;
 
@@ -114,23 +141,27 @@ case "${cmd}" in
         addr_a="$(print_addr a)"
         addr_b="$(print_addr b)"
         echo ">>> local self=${addr_a}  peer=${addr_b} via ${BEAM02_LAN_IP}:${QUIC_PORT}"
-        # sudo strips PATH; pass MACULA_PEER_HOST through and use erl by full path.
-        ERL_BIN=$(command -v erl)
-        exec sudo MACULA_PEER_HOST="${BEAM02_LAN_IP}" \
-            "${ERL_BIN}" -noshell $(erl_pa_args) -s lan_demo_node start_a
+        ERL_BIN="$(resolve_bin erl)"
+        # If we're already root (script invoked via `sudo ...`) skip the
+        # nested sudo; otherwise self-elevate.
+        if [ "$(id -u)" -eq 0 ]; then
+            exec env MACULA_PEER_HOST="${BEAM02_LAN_IP}" \
+                "${ERL_BIN}" -noshell $(erl_pa_args) -s lan_demo_node start_a
+        else
+            exec sudo MACULA_PEER_HOST="${BEAM02_LAN_IP}" \
+                "${ERL_BIN}" -noshell $(erl_pa_args) -s lan_demo_node start_a
+        fi
         ;;
 
     run-beam02)
         addr_a="$(print_addr a)"
         addr_b="$(print_addr b)"
         echo ">>> beam02 self=${addr_b}  peer=${addr_a} via ${LOCAL_LAN_IP}:${QUIC_PORT}"
-        ssh -t "${BEAM02_HOST}" "set -eu
+        ssh "${BEAM02_HOST}" "set -eu
             cd ~/macula-src
-            ERL=\$(ls _build/prod/rel/macula/erts-*/bin/erl)
             sudo MACULA_PEER_HOST=${LOCAL_LAN_IP} \\
-                \"\${ERL}\" -noshell \\
-                -pa _build/default/lib/macula/ebin \\
-                \$(for d in _build/prod/rel/macula/lib/*/ebin; do printf ' -pa %s' \$d; done) \\
+                \$HOME/.asdf/installs/erlang/26.0/bin/erl -noshell \\
+                \$(for d in _build/default/lib/*/ebin; do printf ' -pa %s' \$d; done) \\
                 -s lan_demo_node start_b
         "
         ;;
@@ -146,6 +177,15 @@ case "${cmd}" in
         sudo ip link del "${TUN}" 2>/dev/null || true
         ssh_beam02 "sudo ip link del ${TUN} 2>/dev/null || true"
         echo ">>> torn down"
+        ;;
+
+    auto)
+        # Push the netns demo script to beam02 and run it. Two BEAM
+        # nodes, two netns, ping6 across — fully automated, no
+        # human-in-the-loop. Workstation just orchestrates over ssh.
+        scp -q "${ROOT_DIR}/scripts/netns-demo.sh" "${BEAM02_HOST}:macula-src/scripts/netns-demo.sh"
+        ssh_beam02 'chmod +x ~/macula-src/scripts/netns-demo.sh'
+        ssh_beam02 '~/macula-src/scripts/netns-demo.sh run'
         ;;
 
     *)
