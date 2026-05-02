@@ -232,22 +232,34 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 handle_connect(true, _StationId, _Host, _Port, State) ->
     {reply, {error, already_connected}, State};
 handle_connect(false, StationId, Host, Port, State) ->
-    case macula_quic:connect(to_binary(Host), Port, default_connect_opts(),
-                             ?CONNECT_TIMEOUT_MS) of
-        {ok, Conn} ->
-            ok = macula_quic:controlling_process(Conn, self()),
-            case macula_quic:open_stream(Conn) of
-                {ok, Stream} ->
-                    Link = #out_link{conn = Conn, stream = Stream},
-                    Out2 = (State#state.out)#{StationId => Link},
-                    {reply, ok, State#state{out = Out2}};
-                {error, _} = OpenErr ->
-                    _ = macula_quic:close_connection(Conn),
-                    {reply, OpenErr, State}
-            end;
-        {error, _} = ConnErr ->
-            {reply, ConnErr, State}
-    end.
+    after_quic_connect(macula_quic:connect(to_binary(Host), Port,
+                                            default_connect_opts(),
+                                            ?CONNECT_TIMEOUT_MS),
+                        StationId, State).
+
+after_quic_connect({error, _} = E, _StationId, State) ->
+    {reply, E, State};
+after_quic_connect({ok, Conn}, StationId, State) ->
+    ok = macula_quic:controlling_process(Conn, self()),
+    after_open_stream(macula_quic:open_stream(Conn), Conn, StationId, State).
+
+after_open_stream({error, _} = E, Conn, _StationId, State) ->
+    _ = macula_quic:close_connection(Conn),
+    {reply, E, State};
+after_open_stream({ok, Stream}, Conn, StationId,
+                   #state{out = Out, in_streams = InStreams} = State) ->
+    %% Phase 3.5 — activate recv on outbound streams so the host can
+    %% send forwarded data back on the same bidi stream the daemon
+    %% dialed in on. Phase 1/2 didn't surface this because traffic
+    %% only flowed one way (Bob -> Helsinki -> TUN); 3.6 needs the
+    %% return path. Track the stream in in_streams so deliver_buffered
+    %% has a framing buffer for it.
+    ok = macula_quic:setopt(Stream, active, true),
+    Link = #out_link{conn = Conn, stream = Stream},
+    {reply, ok, State#state{
+        out         = Out#{StationId => Link},
+        in_streams  = InStreams#{Stream => #in_state{}}
+    }}.
 
 drop_out_link(StationId, Out, State) ->
     case maps:take(StationId, Out) of
