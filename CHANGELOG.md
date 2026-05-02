@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.15.1] - 2026-05-02
+
+### Fixed
+
+- `macula_quic:nif_connect/8` rejected every call with `badarg`. The
+  Rust signature took `verify_pubkey: Vec<u8>` but rustler's `Vec<T>`
+  decoder only accepts list terms, never binaries — so every caller
+  passing a binary (which is every caller) blew up at the decode
+  boundary. Switched to `Binary<'a>` mirroring
+  `cert.rs:nif_generate_self_signed_cert`. Affects every
+  `macula_quic:connect/4` user, not just macula-net.
+- `macula_net_transport_quic` ignored every inbound stream byte: the
+  data-arrival pattern matched `{quic, data, Stream, Data}`, but the
+  NIF emits `{quic, Binary, StreamRef, Flags}` (mirroring quicer's
+  shape — see `native/macula_quic/src/message.rs`). Fixed the clause
+  guard.
+
+### Added
+
+- `test/macula_net_transport_quic_e2e_tests.erl` — two-node QUIC
+  envelope round-trip via `peer:start_link/1`. Catches both bugs above.
+- `test/macula_net_full_stack_e2e_tests.erl` — full pipeline: node A
+  `macula_route_packet:dispatch` → QUIC → node B
+  `macula_deliver_packet:handle_envelope` → captured payload, asserted
+  byte-identical.
+
 ## [3.15.0] - 2026-05-02
 
 ### Added — macula-net L3 substrate (Phase 1)

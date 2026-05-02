@@ -178,8 +178,11 @@ handle_info({quic, new_stream, Stream, _StreamInfo},
     ok = macula_quic:setopt(Stream, active, true),
     {noreply, State#state{in_streams = InStreams#{Stream => #in_state{}}}};
 
-%% Bytes arrived on an inbound stream.
-handle_info({quic, data, Stream, Data}, State) ->
+%% Bytes arrived on an inbound stream. macula_quic delivers data as
+%% `{quic, Binary, StreamRef, Flags}' (mirroring quicer's shape), NOT
+%% `{quic, data, ...}'. See native/macula_quic/src/message.rs.
+handle_info({quic, Data, Stream, _Flags}, State)
+  when is_binary(Data), is_reference(Stream) ->
     {noreply, deliver_buffered(Stream, Data, State)};
 
 %% Stream / connection lifecycle: clean up tracking maps.

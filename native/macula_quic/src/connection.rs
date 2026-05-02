@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, RwLock};
 
-use rustler::{Encoder, Env, LocalPid, NifResult, ResourceArc, Term};
+use rustler::{Binary, Encoder, Env, LocalPid, NifResult, ResourceArc, Term};
 use tokio::task::JoinHandle;
 
 use crate::{atoms, config, message, runtime, stream};
@@ -47,6 +47,11 @@ impl Drop for ConnectionResource {
 /// `verify_pubkey` is a 32-byte Ed25519 pubkey to pin against the
 /// leaf cert's SubjectPublicKeyInfo. An empty binary disables
 /// pinning and falls back to `verify` semantics (system-CA or skip).
+///
+/// `verify_pubkey` is `Binary<'a>` rather than `Vec<u8>` because
+/// rustler's `Vec<u8>` decoder requires a list term and rejects
+/// Erlang binaries (which is how every caller passes pubkeys).
+/// See cert.rs:nif_generate_self_signed_cert for the same pattern.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn nif_connect<'a>(
     env: Env<'a>,
@@ -54,7 +59,7 @@ fn nif_connect<'a>(
     port: u32,
     alpn: Vec<String>,
     verify: bool,
-    verify_pubkey: Vec<u8>,
+    verify_pubkey: Binary<'a>,
     idle_timeout_ms: u64,
     keep_alive_ms: u64,
     timeout_ms: u64,
@@ -64,7 +69,7 @@ fn nif_connect<'a>(
     let pinned = if verify_pubkey.is_empty() {
         None
     } else {
-        Some(verify_pubkey)
+        Some(verify_pubkey.as_slice().to_vec())
     };
 
     let client_config =
