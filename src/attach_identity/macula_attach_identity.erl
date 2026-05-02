@@ -112,29 +112,35 @@ init(#{host_endpoint   := #{station_pubkey := StationId,
     process_flag(trap_exit, true),
     DaemonPk   = macula_identity:public(KeyPair),
     DaemonAddr = macula_address:derive(Realm, DaemonPk),
-    case ensure_connected(StationId, Host, Port) of
-        ok ->
-            case send_handshake(StationId, DaemonPk, DaemonAddr,
-                                Realm, KeyPair) of
-                ok ->
-                    %% Wire the transport's inbound handler so we can
-                    %% deliver received envelopes to the daemon's
-                    %% callback.
-                    Self = self(),
-                    ok = macula_net_transport_quic:set_handler(
-                            fun(Cbor, _StreamRef) ->
-                                gen_server:cast(Self, {inbound, Cbor})
-                            end),
-                    {ok, #state{config = Config,
-                                station_id = StationId,
-                                daemon_addr = DaemonAddr,
-                                inbound_handler = Handler}};
-                {error, _} = E ->
-                    {stop, E}
-            end;
-        {error, _} = E ->
-            {stop, E}
-    end.
+    after_connect(ensure_connected(StationId, Host, Port),
+                   StationId, Host, Port,
+                   DaemonPk, DaemonAddr, Realm, KeyPair, Handler, Config).
+
+%% Stage 1: outbound QUIC connection up?
+after_connect({error, _} = E, _StationId, _Host, _Port,
+              _DaemonPk, _DaemonAddr, _Realm, _KeyPair, _Handler, _Config) ->
+    {stop, E};
+after_connect(ok, StationId, _Host, _Port,
+              DaemonPk, DaemonAddr, Realm, KeyPair, Handler, Config) ->
+    after_handshake(send_handshake(StationId, DaemonPk, DaemonAddr,
+                                    Realm, KeyPair),
+                     StationId, DaemonAddr, Handler, Config).
+
+%% Stage 2: handshake CBOR sent?
+after_handshake({error, _} = E, _StationId, _DaemonAddr, _Handler, _Config) ->
+    {stop, E};
+after_handshake(ok, StationId, DaemonAddr, Handler, Config) ->
+    %% Wire the transport's inbound handler so we can deliver received
+    %% envelopes to the daemon's callback.
+    Self = self(),
+    ok = macula_net_transport_quic:set_handler(
+            fun(Cbor, _StreamRef) ->
+                gen_server:cast(Self, {inbound, Cbor})
+            end),
+    {ok, #state{config          = Config,
+                station_id      = StationId,
+                daemon_addr     = DaemonAddr,
+                inbound_handler = Handler}}.
 
 handle_call({send, Envelope}, _From, #state{station_id = SId} = State) ->
     {reply, macula_net_transport_quic:send(SId, Envelope), State};
