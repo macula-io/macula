@@ -1,0 +1,13 @@
+[package]
+name = "macula_tun_nif"
+version = "0.1.0"
+edition = "2021"
+description = "TUN device NIF (Linux) for macula-net L3 substrate"
+
+[lib]
+name = "macula_tun_nif"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.34"
+tun-rs = { version = "2", default-features = false }

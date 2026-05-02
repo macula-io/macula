@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.15.0] - 2026-05-02
+
+### Added — macula-net L3 substrate (Phase 1)
+
+First slice of the sovereign-IPv6 substrate per `PLAN_MACULA_NET.md`
+(macula-architecture). Macula now owns its own crypto-derived IPv6
+addressing layer; identities (stations + daemons) become first-class
+endpoints in the host's standard networking stack.
+
+New slices in `src/`:
+
+- `derive_address/macula_address` — pubkey -> IPv6 (BLAKE3, ULA prefix).
+  Reuses `macula_blake3_nif`; no new NIF.
+- `manage_tun_device/macula_tun` + `macula_tun_nif` — Linux TUN
+  lifecycle + packet I/O via Rust NIF (`tun-rs`). Reader thread pumps
+  packets to a registered BEAM Pid as `{macula_net_packet, ...}`
+  messages.
+- `route_packet/` — egress. `macula_route_packet_ipv6` parses the
+  IPv6 fixed header; `macula_route_packet` looks up dst in a static
+  station table and dispatches the CBOR envelope to the station's
+  transport callback.
+- `deliver_packet/macula_deliver_packet` — ingress. Decodes the CBOR
+  envelope (via `macula_cbor_nif`), validates, writes inner IPv6
+  packet to the local TUN if dst is local.
+- `macula_net/` — facade + `macula_net_transport` behaviour +
+  `macula_net_transport_quic` (Quinn-based, uses the SDK's existing
+  `macula_quic` primitives — no new QUIC NIF).
+
+New native crate: `native/macula_tun_nif/` (rustler 0.34, tun-rs 2).
+Linux only for Phase 1.
+
+29 new eunit tests across the slices; all existing tests pass.
+
+Phase 1 simplifications (deferred to Phase 4 hardening): static station
+table (no DHT yet — Phase 2), single-hop only, self-signed throwaway
+TLS certs, ctrl/gossip envelope types accepted but not handled.
+
+The repo `macula-io/macula-net` (where this work was prototyped) has
+been folded into this SDK and deleted.
+
+---
+
 ## [3.14.0] - 2026-05-02
 
 ### Added — Sovereign-overlay (Yggdrasil) building blocks

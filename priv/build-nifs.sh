@@ -71,4 +71,9 @@ build_nif "macula_did_nif"
 build_nif "macula_mri_nif"
 build_nif "macula_cbor_nif"
 
+# ============================================================
+# 3. macula-net NIFs (L3 substrate)
+# ============================================================
+build_nif "macula_tun_nif"
+
 echo "[macula] All NIFs ready."
