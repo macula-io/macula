@@ -72,16 +72,24 @@ fn nif_connect<'a>(
             .map_err(|e| rustler::Error::Term(Box::new(e)))?;
 
     let result = runtime::rt().block_on(async {
-        // Resolve hostname
-        let addr_str = format!("{}:{}", host, port);
-        let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(&addr_str)
+        // Strip square brackets if the caller passed `[ipv6]` form
+        // (used by the pubkey-pin path where the host string is a
+        // synthetic `[ipv6]` derived from the target pubkey). The
+        // bare IP works for both DNS resolution and SNI.
+        let host_str: &str = host
+            .trim_start_matches('[')
+            .trim_end_matches(']');
+
+        // Two-arg lookup_host avoids the bracket+colon parsing the
+        // single-string form requires for IPv6.
+        let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host_str, port as u16))
             .await
-            .map_err(|e| format!("resolve {}: {}", addr_str, e))?
+            .map_err(|e| format!("resolve {}:{}: {}", host_str, port, e))?
             .collect();
 
         let remote_addr = addrs
             .first()
-            .ok_or_else(|| format!("no addresses for {}", addr_str))?;
+            .ok_or_else(|| format!("no addresses for {}:{}", host_str, port))?;
 
         // Create client endpoint — match address family to remote
         let local_bind: std::net::SocketAddr = if remote_addr.is_ipv6() {
@@ -93,9 +101,10 @@ fn nif_connect<'a>(
             .map_err(|e| format!("client endpoint: {}", e))?;
         endpoint.set_default_client_config(client_config);
 
-        // Connect with timeout
+        // Connect with timeout. SNI = bare host string (rustls
+        // ServerName accepts a literal IP address as a valid name).
         let connecting = endpoint
-            .connect(*remote_addr, &host)
+            .connect(*remote_addr, host_str)
             .map_err(|e| format!("connect: {}", e))?;
 
         let connection = tokio::time::timeout(

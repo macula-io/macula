@@ -132,8 +132,31 @@ close_listener(Listener) ->
 %%%===================================================================
 
 %% @doc Connect to a remote QUIC server.
--spec connect(string() | binary(), inet:port_number(), list(), timeout()) ->
-    {ok, reference()} | {error, term()}.
+%%
+%% Target forms:
+%% <ul>
+%%   <li>`Host :: binary() | string()' — the existing hostname /
+%%       IP-string path. Validation depends on `verify' / `verify_pubkey'
+%%       opts.</li>
+%%   <li>`{pubkey, Pubkey :: binary()}' — sovereign-overlay path.
+%%       The 32-byte Ed25519 pubkey is the identity. The Yggdrasil
+%%       IPv6 is derived from it; the leaf cert is validated by SPKI
+%%       pin against the same pubkey. No DNS, no CA. See
+%%       PLAN_SOVEREIGN_OVERLAY_PHASE1 §4.4.</li>
+%% </ul>
+-spec connect(Target, inet:port_number(), list(), timeout()) ->
+    {ok, reference()} | {error, term()}
+        when Target :: binary() | string() | {pubkey, binary()}.
+connect({pubkey, Pubkey}, Port, Opts, Timeout)
+        when is_binary(Pubkey), byte_size(Pubkey) =:= 32 ->
+    Addr = macula_yggdrasil:address_for(Pubkey),
+    HostBin = <<"[", (macula_yggdrasil:format_address(Addr))/binary, "]">>,
+    %% Force pubkey-pin verification; override any conflicting opt.
+    Opts1 = lists:keystore(verify_pubkey, 1, Opts, {verify_pubkey, Pubkey}),
+    %% `verify' must stay falsy on this path — webpki would reject
+    %% the IP-form SNI server-name and refuse to load.
+    Opts2 = lists:keystore(verify, 1, Opts1, {verify, none}),
+    connect(HostBin, Port, Opts2, Timeout);
 connect(Host, Port, Opts, Timeout) ->
     HostBin = to_binary(Host),
     Alpn = [to_binary(A) || A <- proplists:get_value(alpn, Opts, ["macula"])],
