@@ -90,21 +90,25 @@ case "${cmd}" in
         ;;
 
     prep-beam02)
-        # Rust 1.88 is the highest version whose pre-built libstd
-        # still targets glibc <= 2.29. beam02 (Ubuntu 20.04) ships
-        # glibc 2.31, so anything newer (1.89+) embeds calls to
-        # GLIBC_2.32+/2.33+ symbols and the NIF fails to load.
+        # Rust 1.90 is the right pin on beam02 as of 2026-05-02. The
+        # transitive `time` crate started requiring rustc 1.88.0+ so
+        # 1.85 no longer compiles; the late-handover note about 1.88
+        # being the safe ceiling turned out to be stale because 1.88's
+        # pre-built libstd embeds GLIBC_2.34 pthread_* symbols that
+        # Ubuntu 20.04's glibc 2.31 doesn't provide. 1.90 happens to
+        # link only up to GLIBC_2.29 — verified end-to-end by the
+        # auto-daemons demo (Phase 3.7).
         ssh_beam02 'set -eu
             export PATH=$HOME/.asdf/shims:$PATH
             ~/.asdf/bin/asdf plugin add rebar  2>/dev/null || true
             ~/.asdf/bin/asdf plugin add rust   2>/dev/null || true
             ~/.asdf/bin/asdf install rebar 3.25.0
-            ~/.asdf/bin/asdf install rust 1.88.0
+            ~/.asdf/bin/asdf install rust 1.90.0
             ~/.asdf/bin/asdf global rebar 3.25.0
-            ~/.asdf/bin/asdf global rust  1.88.0
+            ~/.asdf/bin/asdf global rust  1.90.0
             grep -q "^erlang " ~/.tool-versions || echo "erlang 26.0" >> ~/.tool-versions
             grep -q "^rebar "  ~/.tool-versions || echo "rebar 3.25.0"  >> ~/.tool-versions
-            grep -q "^rust "   ~/.tool-versions || echo "rust 1.88.0"   >> ~/.tool-versions
+            grep -q "^rust "   ~/.tool-versions || echo "rust 1.90.0"   >> ~/.tool-versions
             echo "--- versions ---"
             ~/.asdf/shims/erl -version
             ~/.asdf/shims/rebar3 version

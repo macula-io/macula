@@ -56,7 +56,9 @@ start_unsafe(Role) ->
     io:format("[~s] starting transport_quic...~n", [Role]),
     {ok, _} = macula_net_transport_quic:start_link(#{port => ?QUIC_PORT}),
     ok = macula_net_transport_quic:set_handler(
-            fun macula_deliver_packet:handle_envelope/1),
+            fun(Cbor, _StreamRef) ->
+                macula_deliver_packet:handle_envelope(Cbor)
+            end),
     io:format("[~s] starting cache_route...~n", [Role]),
     {ok, _} = macula_cache_route:start_link(#{sweep_ms => 30_000}),
 
@@ -158,16 +160,10 @@ open_tun_or_die() ->
     end.
 
 start_tun_reader(Handle) ->
-    Reader = spawn_link(fun reader_proxy_loop/0),
-    ok = macula_tun:start_reader(Handle, Reader).
-
-reader_proxy_loop() ->
-    receive
-        {macula_net_packet, _Handle, Pkt} ->
-            _ = macula_route_packet:dispatch(Pkt),
-            reader_proxy_loop();
-        stop -> ok
-    end.
+    {ok, ReaderPid} = macula_tun_reader_proxy:start_link(#{
+        dispatch_fn => fun macula_route_packet:dispatch/1
+    }),
+    ok = macula_tun:start_reader(Handle, ReaderPid).
 
 configure_kernel(SelfAddrBin, RealmPrefix) ->
     %% `nodad' bypasses Duplicate Address Detection so user-space can
