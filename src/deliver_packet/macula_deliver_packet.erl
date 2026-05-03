@@ -70,7 +70,22 @@ configure(#{local_addresses := Addrs, tun_writer := Writer})
     ok | {error, version_unsupported | decode_failed | no_route
                 | not_configured | tun_write_failed | term()}.
 handle_envelope(Cbor) when is_binary(Cbor) ->
-    handle_with_config(lookup_config(), Cbor).
+    T0 = erlang:monotonic_time(microsecond),
+    Result = handle_with_config(lookup_config(), Cbor),
+    emit_ingress_telemetry(Result, T0),
+    Result.
+
+emit_ingress_telemetry(ok, T0) ->
+    Latency = erlang:monotonic_time(microsecond) - T0,
+    telemetry:execute([macula, net, ingress, delivered],
+                      #{latency_us => Latency}, #{kind => <<"data">>});
+emit_ingress_telemetry({error, Reason}, _T0) ->
+    telemetry:execute([macula, net, ingress, dropped],
+                      #{count => 1}, #{reason => reason_bin(Reason)}).
+
+reason_bin(R) when is_atom(R)   -> atom_to_binary(R, utf8);
+reason_bin(R) when is_binary(R) -> R;
+reason_bin(_)                    -> <<"unknown">>.
 
 %% =============================================================================
 %% Internals

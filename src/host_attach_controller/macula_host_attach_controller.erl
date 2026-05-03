@@ -178,13 +178,33 @@ attach_with_delegation(Delegation, Addr, Pk, StreamRef,
                         #state{config = #{attach_fn := AttachFn}}) ->
     log_attach(safe_call4(AttachFn, Addr, Pk, Delegation, StreamRef), Addr).
 
-log_attach(ok, _Addr) ->
+log_attach(ok, Addr) ->
+    telemetry:execute([macula, net, attach, attached],
+                      #{count => 1},
+                      #{daemon_addr_prefix => addr_prefix_hex(Addr)}),
     ok;
 log_attach({error, Reason}, Addr) ->
+    telemetry:execute([macula, net, attach, detached],
+                      #{count => 1},
+                      #{event => <<"attach_rejected">>,
+                        reason => reason_bin(Reason),
+                        daemon_addr_prefix => addr_prefix_hex(Addr)}),
     error_logger:warning_msg(
       "[host_attach_controller] attach rejected for ~p: ~p",
       [binary:part(Addr, 0, 8), Reason]),
     ok.
+
+addr_prefix_hex(Addr) when is_binary(Addr), byte_size(Addr) >= 8 ->
+    <<Prefix:8/binary, _/binary>> = Addr,
+    bin_to_hex(Prefix);
+addr_prefix_hex(_) -> <<"unknown">>.
+
+bin_to_hex(Bin) ->
+    list_to_binary([io_lib:format("~2.16.0b", [B]) || <<B>> <= Bin]).
+
+reason_bin(R) when is_atom(R)   -> atom_to_binary(R, utf8);
+reason_bin(R) when is_binary(R) -> R;
+reason_bin(_)                    -> <<"unknown">>.
 
 %% --- data routing -----------------------------------------------------------
 %%

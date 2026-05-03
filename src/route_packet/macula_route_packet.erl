@@ -164,11 +164,31 @@ lookup_in_mode(dht, Address) ->
 -spec dispatch(Packet :: binary()) ->
     {ok, StationId :: binary()} | {error, no_route | malformed_packet | term()}.
 dispatch(Packet) when is_binary(Packet), byte_size(Packet) >= 40 ->
+    T0 = erlang:monotonic_time(microsecond),
     Src = macula_route_packet_ipv6:src(Packet),
     Dst = macula_route_packet_ipv6:dst(Packet),
-    dispatch_in_mode(mode(), Packet, Src, Dst);
+    Result = dispatch_in_mode(mode(), Packet, Src, Dst),
+    emit_dispatch_telemetry(Result, T0),
+    Result;
 dispatch(_) ->
+    telemetry:execute([macula, net, egress, dropped],
+                      #{count => 1},
+                      #{reason => <<"malformed_packet">>}),
     {error, malformed_packet}.
+
+emit_dispatch_telemetry({ok, _Station}, T0) ->
+    Latency = erlang:monotonic_time(microsecond) - T0,
+    telemetry:execute([macula, net, egress, dispatched],
+                      #{latency_us => Latency},
+                      #{kind => <<"data">>});
+emit_dispatch_telemetry({error, Reason}, _T0) ->
+    telemetry:execute([macula, net, egress, dropped],
+                      #{count => 1},
+                      #{reason => reason_bin(Reason)}).
+
+reason_bin(R) when is_atom(R)   -> atom_to_binary(R, utf8);
+reason_bin(R) when is_binary(R) -> R;
+reason_bin(_)                    -> <<"unknown">>.
 
 %% Static mode (Phase 1).
 dispatch_in_mode(static, Packet, Src, Dst) ->
@@ -252,7 +272,16 @@ send_via({error, _} = Err, _Station) -> Err.
 -spec dispatch_envelope(CborEnvelope :: binary(), Dst :: <<_:128>>) ->
     {ok, StationId :: binary()} | {error, term()}.
 dispatch_envelope(Cbor, Dst) when is_binary(Cbor), is_binary(Dst), byte_size(Dst) =:= 16 ->
-    dispatch_envelope_in_mode(mode(), Cbor, Dst).
+    Result = dispatch_envelope_in_mode(mode(), Cbor, Dst),
+    emit_relay_telemetry(Result),
+    Result.
+
+emit_relay_telemetry({ok, _Station}) ->
+    telemetry:execute([macula, net, relay, dispatched],
+                      #{count => 1}, #{kind => <<"data">>});
+emit_relay_telemetry({error, Reason}) ->
+    telemetry:execute([macula, net, egress, dropped],
+                      #{count => 1}, #{reason => reason_bin(Reason)}).
 
 dispatch_envelope_in_mode(undefined, _Cbor, _Dst) ->
     {error, not_configured};

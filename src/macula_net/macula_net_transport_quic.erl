@@ -181,6 +181,8 @@ handle_info({quic, new_stream, Stream, _StreamInfo},
             #state{in_streams = InStreams} = State) ->
     ok = macula_quic:controlling_process(Stream, self()),
     ok = macula_quic:setopt(Stream, active, true),
+    telemetry:execute([macula, net, transport, stream_opened],
+                      #{count => 1}, #{direction => <<"inbound">>}),
     {noreply, State#state{in_streams = InStreams#{Stream => #in_state{}}}};
 
 %% Bytes arrived on an inbound stream. macula_quic delivers data as
@@ -193,6 +195,8 @@ handle_info({quic, Data, Stream, _Flags}, State)
 %% Stream / connection lifecycle: clean up tracking maps.
 handle_info({quic, stream_closed, Stream, _Reason},
             #state{in_streams = InStreams} = State) ->
+    telemetry:execute([macula, net, transport, stream_closed],
+                      #{count => 1}, #{direction => <<"inbound">>}),
     {noreply, State#state{in_streams = maps:remove(Stream, InStreams)}};
 
 handle_info({quic, conn_closed, _Conn, _Reason}, State) ->
@@ -230,6 +234,8 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 %% =============================================================================
 
 handle_connect(true, _StationId, _Host, _Port, State) ->
+    telemetry:execute([macula, net, transport, connect],
+                      #{count => 1}, #{outcome => <<"already_connected">>}),
     {reply, {error, already_connected}, State};
 handle_connect(false, StationId, Host, Port, State) ->
     after_quic_connect(macula_quic:connect(to_binary(Host), Port,
@@ -237,14 +243,20 @@ handle_connect(false, StationId, Host, Port, State) ->
                                             ?CONNECT_TIMEOUT_MS),
                         StationId, State).
 
-after_quic_connect({error, _} = E, _StationId, State) ->
+after_quic_connect({error, Reason} = E, _StationId, State) ->
+    telemetry:execute([macula, net, transport, connect],
+                      #{count => 1},
+                      #{outcome => connect_outcome(Reason)}),
     {reply, E, State};
 after_quic_connect({ok, Conn}, StationId, State) ->
     ok = macula_quic:controlling_process(Conn, self()),
     after_open_stream(macula_quic:open_stream(Conn), Conn, StationId, State).
 
-after_open_stream({error, _} = E, Conn, _StationId, State) ->
+after_open_stream({error, Reason} = E, Conn, _StationId, State) ->
     _ = macula_quic:close_connection(Conn),
+    telemetry:execute([macula, net, transport, connect],
+                      #{count => 1},
+                      #{outcome => connect_outcome(Reason)}),
     {reply, E, State};
 after_open_stream({ok, Stream}, Conn, StationId,
                    #state{out = Out, in_streams = InStreams} = State) ->
@@ -256,10 +268,20 @@ after_open_stream({ok, Stream}, Conn, StationId,
     %% has a framing buffer for it.
     ok = macula_quic:setopt(Stream, active, true),
     Link = #out_link{conn = Conn, stream = Stream},
+    telemetry:execute([macula, net, transport, connect],
+                      #{count => 1}, #{outcome => <<"ok">>}),
+    telemetry:execute([macula, net, transport, stream_opened],
+                      #{count => 1}, #{direction => <<"outbound">>}),
     {reply, ok, State#state{
         out         = Out#{StationId => Link},
         in_streams  = InStreams#{Stream => #in_state{}}
     }}.
+
+connect_outcome(timeout)              -> <<"timeout">>;
+connect_outcome(connection_refused)   -> <<"refused">>;
+connect_outcome(R) when is_atom(R)    -> atom_to_binary(R, utf8);
+connect_outcome(R) when is_binary(R)  -> R;
+connect_outcome(_)                    -> <<"error">>.
 
 drop_out_link(StationId, Out, State) ->
     case maps:take(StationId, Out) of

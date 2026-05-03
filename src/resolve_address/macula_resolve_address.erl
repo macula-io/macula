@@ -75,7 +75,26 @@ resolve(Addr, Realm, FindFn)
     %% legitimate address has at most one redirect; a misconfigured
     %% one with both would silently take the station path here.
     %% Phase 4 hardening: detect + flag the conflict.
-    redirect_lookup(FindFn(redirect_key(Addr)), Addr, Realm, FindFn).
+    T0 = erlang:monotonic_time(microsecond),
+    Result = redirect_lookup(FindFn(redirect_key(Addr)), Addr, Realm, FindFn),
+    emit_resolve_telemetry(Result, T0),
+    Result.
+
+emit_resolve_telemetry({ok, _Endpoint}, T0) ->
+    Latency = erlang:monotonic_time(microsecond) - T0,
+    telemetry:execute([macula, net, resolve, complete],
+                      #{latency_us => Latency},
+                      #{outcome => <<"hit">>});
+emit_resolve_telemetry({error, not_found}, T0) ->
+    Latency = erlang:monotonic_time(microsecond) - T0,
+    telemetry:execute([macula, net, resolve, complete],
+                      #{latency_us => Latency},
+                      #{outcome => <<"miss">>});
+emit_resolve_telemetry({error, _Other}, T0) ->
+    Latency = erlang:monotonic_time(microsecond) - T0,
+    telemetry:execute([macula, net, resolve, complete],
+                      #{latency_us => Latency},
+                      #{outcome => <<"error">>}).
 
 %% =============================================================================
 %% Internals
