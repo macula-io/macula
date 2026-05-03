@@ -267,6 +267,10 @@ handle_telemetry_event([macula, net, transport, stream_closed], _M, Md, _Cfg) ->
 handle_telemetry_event([macula, net, transport, path_mtu], #{bytes := Bytes}, Md, _Cfg) ->
     Peer = maps:get(peer, Md, <<"unknown">>),
     set_gauge(<<"macula_net_transport_path_mtu_bytes">>, [{peer, Peer}], Bytes);
+handle_telemetry_event([macula, net, resolve_quorum, decided], _M, Md, _Cfg) ->
+    Outcome = maps:get(outcome, Md, <<"unknown">>),
+    inc_counter(<<"macula_net_resolve_quorum_total">>,
+                [{outcome, Outcome}], 1);
 handle_telemetry_event(_Other, _M, _Md, _Cfg) ->
     ok.
 
@@ -368,6 +372,9 @@ register_default_metrics() ->
     register_counter(<<"macula_net_transport_stream_total">>,
                      [direction, outcome],
                      <<"Total QUIC stream open/close events.">>),
+    register_counter(<<"macula_net_resolve_quorum_total">>,
+                     [outcome],
+                     <<"Resolve-quorum decisions (consistent/disagreement/insufficient).">>),
 
     register_gauge(<<"macula_net_attach_active">>, [],
                    <<"Currently attached daemons on this station.">>),
@@ -403,7 +410,8 @@ attach_telemetry() ->
         [macula, net, transport, connect],
         [macula, net, transport, stream_opened],
         [macula, net, transport, stream_closed],
-        [macula, net, transport, path_mtu]
+        [macula, net, transport, path_mtu],
+        [macula, net, resolve_quorum, decided]
     ],
     _ = telemetry:detach(Id),
     ok = telemetry:attach_many(Id, Events,
