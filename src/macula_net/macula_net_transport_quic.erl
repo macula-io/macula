@@ -35,7 +35,9 @@
     set_handler/1,
     connect/3,
     disconnect/1,
-    send/2
+    send/2,
+    peer_path_mtu/1,
+    connection_count/0
 ]).
 
 %% gen_server
@@ -47,6 +49,7 @@
 -define(MAX_FRAME_BYTES, 16#100000).         %% 1 MiB cap
 -define(STREAM_OPEN_TIMEOUT_MS, 5000).
 -define(CONNECT_TIMEOUT_MS, 5000).
+-define(PATH_MTU_TICK_MS, 5000).
 
 -record(out_link, {
     conn   :: reference(),
@@ -115,6 +118,22 @@ connect(StationId, Host, Port) ->
 disconnect(StationId) ->
     gen_server:call(?SERVER, {disconnect, StationId}).
 
+%% @doc Path MTU as currently tracked by Quinn for the connection to
+%% `StationId'. Phase 4.2 — see PLAN_MACULA_NET_PHASE4_2_MTU_PMTUD.md.
+-spec peer_path_mtu(macula_net_transport:station_id()) ->
+    {ok, pos_integer()} | {error, not_connected | term()}.
+peer_path_mtu(StationId) ->
+    gen_server:call(?SERVER, {peer_path_mtu, StationId}).
+
+%% @doc Active outbound-connection count. Used by macula_metrics's
+%% gauge poller (see PLAN_MACULA_NET_PHASE4_1_OBSERVABILITY.md).
+-spec connection_count() -> non_neg_integer().
+connection_count() ->
+    case whereis(?SERVER) of
+        undefined -> 0;
+        _         -> gen_server:call(?SERVER, connection_count)
+    end.
+
 %% @doc Send a CBOR envelope to a known station (must be `connect'ed first).
 -spec send(macula_net_transport:station_id(),
            macula_net_transport:cbor_envelope()) -> ok | {error, term()}.
@@ -140,6 +159,7 @@ init([#{port := Port} = Opts]) ->
     case macula_quic:listen(BindAddr, Port, ListenOpts) of
         {ok, Listener} ->
             ok = macula_quic:async_accept(Listener),
+            erlang:send_after(?PATH_MTU_TICK_MS, self(), tick_path_mtu),
             {ok, #state{listener   = Listener,
                         listen_port = Port,
                         cert_path  = CertPath,
@@ -160,6 +180,12 @@ handle_call({disconnect, StationId}, _From, #state{out = Out} = State) ->
 
 handle_call({send, StationId, Cbor}, _From, #state{out = Out} = State) ->
     {reply, do_send(maps:get(StationId, Out, undefined), Cbor), State};
+
+handle_call({peer_path_mtu, StationId}, _From, #state{out = Out} = State) ->
+    {reply, do_peer_path_mtu(maps:get(StationId, Out, undefined)), State};
+
+handle_call(connection_count, _From, #state{out = Out} = State) ->
+    {reply, map_size(Out), State};
 
 handle_call(_Other, _From, State) ->
     {reply, {error, unknown_call}, State}.
@@ -203,6 +229,11 @@ handle_info({quic, conn_closed, _Conn, _Reason}, State) ->
     {noreply, State};
 
 handle_info({'EXIT', _Pid, _Reason}, State) ->
+    {noreply, State};
+
+handle_info(tick_path_mtu, #state{out = Out} = State) ->
+    maps:foreach(fun emit_path_mtu/2, Out),
+    erlang:send_after(?PATH_MTU_TICK_MS, self(), tick_path_mtu),
     {noreply, State};
 
 handle_info(_Other, State) ->
@@ -298,6 +329,32 @@ do_send(undefined, _Cbor) ->
 do_send(#out_link{stream = Stream}, Cbor) ->
     Frame = <<(byte_size(Cbor)):32/big, Cbor/binary>>,
     macula_quic:send(Stream, Frame).
+
+do_peer_path_mtu(undefined) ->
+    {error, not_connected};
+do_peer_path_mtu(#out_link{conn = Conn}) ->
+    macula_quic:max_datagram_size(Conn).
+
+emit_path_mtu(StationId, #out_link{conn = Conn}) ->
+    decide_emit_mtu(macula_quic:max_datagram_size(Conn), StationId).
+
+decide_emit_mtu({ok, Bytes}, StationId) ->
+    telemetry:execute([macula, net, transport, path_mtu],
+                      #{bytes => Bytes},
+                      #{peer => station_label(StationId)});
+decide_emit_mtu({error, _}, _StationId) ->
+    ok.
+
+station_label(StationId) when is_binary(StationId), byte_size(StationId) >= 8 ->
+    <<Prefix:8/binary, _/binary>> = StationId,
+    bin_to_hex(Prefix);
+station_label(StationId) when is_binary(StationId) ->
+    bin_to_hex(StationId);
+station_label(_) ->
+    <<"unknown">>.
+
+bin_to_hex(Bin) ->
+    list_to_binary([io_lib:format("~2.16.0b", [B]) || <<B>> <= Bin]).
 
 %% =============================================================================
 %% Inbound framing

@@ -264,6 +264,9 @@ handle_telemetry_event([macula, net, transport, stream_closed], _M, Md, _Cfg) ->
     Direction = maps:get(direction, Md, <<"inbound">>),
     inc_counter(<<"macula_net_transport_stream_total">>,
                 [{direction, Direction}, {outcome, <<"closed">>}], 1);
+handle_telemetry_event([macula, net, transport, path_mtu], #{bytes := Bytes}, Md, _Cfg) ->
+    Peer = maps:get(peer, Md, <<"unknown">>),
+    set_gauge(<<"macula_net_transport_path_mtu_bytes">>, [{peer, Peer}], Bytes);
 handle_telemetry_event(_Other, _M, _Md, _Cfg) ->
     ok.
 
@@ -372,6 +375,8 @@ register_default_metrics() ->
                    <<"Entries in the route cache (DHT mode).">>),
     register_gauge(<<"macula_net_transport_connections">>, [],
                    <<"Active QUIC connections.">>),
+    register_gauge(<<"macula_net_transport_path_mtu_bytes">>, [peer],
+                   <<"Quinn-tracked path MTU per outbound peer (bytes).">>),
 
     register_histogram(<<"macula_net_resolve_latency_seconds">>, [],
                        <<"DHT resolve latency.">>,
@@ -397,7 +402,8 @@ attach_telemetry() ->
         [macula, net, attach, detached],
         [macula, net, transport, connect],
         [macula, net, transport, stream_opened],
-        [macula, net, transport, stream_closed]
+        [macula, net, transport, stream_closed],
+        [macula, net, transport, path_mtu]
     ],
     _ = telemetry:detach(Id),
     ok = telemetry:attach_many(Id, Events,
