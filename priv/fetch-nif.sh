@@ -28,6 +28,20 @@ fi
 
 mkdir -p "${PRIV_DIR}"
 
+# MACULA_FORCE_SOURCE_BUILD=1 → skip GitHub-release download, build
+# from source. Use this on hosts whose glibc is older than the CI
+# runner's (e.g., beam02 on Ubuntu 20.04 = glibc 2.31, while CI
+# release artifacts may require glibc ≥ 2.34).
+if [ "${MACULA_FORCE_SOURCE_BUILD:-0}" = "1" ]; then
+    echo "[macula_quic] MACULA_FORCE_SOURCE_BUILD=1 — skipping download"
+    build_from_source() {
+        cargo build --release --manifest-path "${NATIVE_DIR}/Cargo.toml"
+        cp "${NATIVE_DIR}/target/release/libmacula_quic.so" "${NIF_FILE}"
+    }
+    build_from_source
+    exit 0
+fi
+
 build_from_source() {
     if [ ! -d "${NATIVE_DIR}" ]; then
         echo "[macula_quic] ERROR: No Rust source and download failed."

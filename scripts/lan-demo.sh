@@ -133,12 +133,15 @@ case "${cmd}" in
     build-beam02)
         # Skipping `as prod release` — rebar.config points at config/{sys.config,vm.args}
         # which aren't checked in. Plain compile + raw erl is enough for the demo.
-        # rebar3's NIF hook will skip rebuilding the .so if it sees a
-        # cached one even when the underlying Rust toolchain has been
-        # bumped, which lands us with a stale glibc-incompatible NIF.
-        # Force rebuild by clearing target/ and the priv .so files.
+        #
+        # MACULA_FORCE_SOURCE_BUILD=1 ensures fetch-nif.sh builds
+        # libmacula_quic.so from source on beam02 instead of
+        # downloading the GitHub release artifact (which requires
+        # glibc ≥ 2.34 — beam02 has 2.31). See
+        # feedback_fetch_nif_glibc_trap.md.
         ssh_beam02 'set -eu
             export PATH=$HOME/.asdf/shims:$PATH
+            export MACULA_FORCE_SOURCE_BUILD=1
             cd ~/macula-src
             for nif in native/*/; do rm -rf "${nif}target"; done
             rm -f _build/default/lib/macula/priv/*.so
