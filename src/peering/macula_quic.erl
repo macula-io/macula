@@ -40,6 +40,7 @@
     async_accept_stream/2,
     handshake/1,
     peername/1,
+    max_datagram_size/1,
 
     %% Stream
     send/2,
@@ -224,6 +225,14 @@ handshake(Conn) ->
 peername(Conn) ->
     nif_peername(Conn).
 
+%% @doc Path MTU as discovered by Quinn's DPLPMTUD on this connection.
+%% Returns `{ok, Bytes}' once the path MTU has been established;
+%% `{error, no_path_mtu}' early in the connection lifecycle (before the
+%% first probe lands) or if the peer disabled datagrams. Phase 4.2.
+-spec max_datagram_size(reference()) -> {ok, pos_integer()} | {error, term()}.
+max_datagram_size(Conn) ->
+    nif_max_datagram_size(Conn).
+
 %%%===================================================================
 %%% Stream API
 %%%===================================================================
@@ -343,6 +352,9 @@ nif_async_accept_stream(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_peername(_Conn) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_max_datagram_size(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_send(_Stream, _Data) ->

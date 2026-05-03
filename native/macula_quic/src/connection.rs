@@ -239,3 +239,25 @@ fn nif_peername<'a>(
     let port = addr.port() as u32;
     Ok((atoms::ok(), (ip, port)).encode(env))
 }
+
+/// NIF: max_datagram_size(ConnRef) -> {ok, Bytes} | {error, already_closed}
+///
+/// Returns the current path MTU on this connection as tracked by
+/// Quinn's path-state machine. Reflects DPLPMTUD probing (RFC 8899)
+/// once the connection has been up long enough; before that, returns
+/// Quinn's initial-MTU default (typically 1200 for IPv6).
+///
+/// Misnamed for historical reasons — semantics is path MTU in bytes,
+/// not max QUIC datagram payload size. Phase 4.2.
+#[rustler::nif]
+fn nif_max_datagram_size<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+) -> NifResult<Term<'a>> {
+    if conn.closed.load(Ordering::Relaxed) {
+        return Ok((atoms::error(), atoms::already_closed()).encode(env));
+    }
+    let stats = conn.connection.stats();
+    let mtu = stats.path.current_mtu as u64;
+    Ok((atoms::ok(), mtu).encode(env))
+}

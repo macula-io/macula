@@ -31,6 +31,7 @@ rustler::init!(
         connection::nif_async_accept_stream,
         connection::nif_controlling_process_conn,
         connection::nif_peername,
+        connection::nif_max_datagram_size,
         // Stream
         stream::nif_send,
         stream::nif_async_send,
