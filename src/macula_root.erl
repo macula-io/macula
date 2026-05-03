@@ -34,7 +34,7 @@ init([]) ->
 
     SupFlags = #{strategy => one_for_one, intensity => 10, period => 5},
 
-    ChildSpecs = [
+    ChildSpecs = observability_children() ++ [
         %% MRI Type Registry (type validation, custom type registration)
         #{
             id => macula_mri_registry,
@@ -99,3 +99,34 @@ get_app_version() ->
         {ok, Vsn} -> "v" ++ Vsn;
         undefined -> "v0.0.0"
     end.
+
+%% Phase 4.1 — opt-in observability children. Read from application
+%% env so embedded callers (Hecate, tests) can disable wholesale.
+%% Defaults: metrics on, http off, packet_trace not started (it's a
+%% pure module, no process needed).
+observability_children() ->
+    metrics_children(application:get_env(macula, metrics_enabled, true))
+        ++ metrics_http_children(
+              application:get_env(macula, metrics_http_enabled, false)).
+
+metrics_children(false) -> [];
+metrics_children(true) ->
+    [#{
+        id => macula_metrics,
+        start => {macula_metrics, start_link, []},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker
+    }].
+
+metrics_http_children(false) -> [];
+metrics_http_children(true) ->
+    Port = application:get_env(macula, metrics_http_port, 9145),
+    Bind = application:get_env(macula, metrics_http_bind, {127,0,0,1}),
+    [#{
+        id => macula_metrics_http,
+        start => {macula_metrics_http, start_link, [#{port => Port, bind => Bind}]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker
+    }].

@@ -24,7 +24,8 @@
         public_key,
         ssl,
         inets,
-        gproc
+        gproc,
+        telemetry
     ]},
     %% mdns is optional - macula works without it using DHT discovery
     {optional_applications, [mdns]},
