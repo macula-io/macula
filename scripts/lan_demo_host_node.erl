@@ -189,7 +189,14 @@ handle_connect({error, _} = E)              -> E.
 %% =============================================================================
 
 open_tun_or_die() ->
-    after_tun_open(macula_tun:open(?TUN, 1280)).
+    Mtu = list_to_integer(getenv("MACULA_TUN_MTU", "1280")),
+    io:format("[host] tun_mtu  = ~p~n", [Mtu]),
+    Handle = after_tun_open(macula_tun:open(?TUN, Mtu)),
+    KernelMtu = string:trim(os:cmd(
+        io_lib:format("ip link show ~s 2>/dev/null | awk '/mtu/ {print $5}'",
+                      [?TUN]))),
+    io:format("[host] tun kernel mtu (verified): ~s~n", [KernelMtu]),
+    Handle.
 
 after_tun_open({ok, H})        -> H;
 after_tun_open({error, R})     ->

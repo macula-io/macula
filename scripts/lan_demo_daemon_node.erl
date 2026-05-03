@@ -84,6 +84,11 @@ maybe_send_to_peer(Handle, SelfAddr, PeerSeedHex, DelayMs) ->
     PeerKp = deterministic_keypair_from_hex(PeerSeedHex),
     PeerPk = macula_identity:public(PeerKp),
     PeerAddr = macula_address:derive(?REALM, PeerPk),
+    PayloadSize = list_to_integer(getenv("MACULA_DAEMON_PAYLOAD_BYTES", "22")),
+    Payload = case PayloadSize of
+        22 -> <<"phase 3.7+ alice<->bob">>;
+        N  -> crypto:strong_rand_bytes(N)
+    end,
     spawn(fun() ->
         timer:sleep(DelayMs),
         Envelope = macula_cbor_nif:pack(#{
@@ -91,13 +96,20 @@ maybe_send_to_peer(Handle, SelfAddr, PeerSeedHex, DelayMs) ->
             <<"type">>    => <<"data">>,
             <<"src">>     => SelfAddr,
             <<"dst">>     => PeerAddr,
-            <<"payload">> => <<"phase 3.7+ alice<->bob">>
+            <<"payload">> => Payload
         }),
         Result = macula_attach_identity:send(Handle, Envelope),
-        io:format("[daemon] sent to ~s: ~p~n",
-                  [macula_address:format(PeerAddr), Result])
+        Sha = binary:part(crypto:hash(sha256, Payload), 0, 8),
+        io:format("[daemon] sent to ~s: ~p byte(s) sha8=~s result=~p~n",
+                  [macula_address:format(PeerAddr),
+                   byte_size(Payload),
+                   bin_to_hex(Sha),
+                   Result])
     end),
     ok.
+
+bin_to_hex(Bin) ->
+    list_to_binary([io_lib:format("~2.16.0b", [B]) || <<B>> <= Bin]).
 
 log_envelope(Cbor) ->
     case macula_cbor_nif:unpack(Cbor) of
@@ -105,10 +117,12 @@ log_envelope(Cbor) ->
                <<"src">>  := Src,
                <<"dst">>  := Dst,
                <<"payload">> := P}} ->
-            io:format("[daemon] received ~s -> ~s, ~p byte(s)~n",
+            Sha = binary:part(crypto:hash(sha256, P), 0, 8),
+            io:format("[daemon] received ~s -> ~s, ~p byte(s) sha8=~s~n",
                       [macula_address:format(Src),
                        macula_address:format(Dst),
-                       byte_size(P)]);
+                       byte_size(P),
+                       bin_to_hex(Sha)]);
         {ok, Other} ->
             io:format("[daemon] received non-data: ~p~n", [Other]);
         {error, R} ->

@@ -130,6 +130,7 @@ start_host() {
             MACULA_HOST_VETH_IP="${ip}" \
             MACULA_HOST_SEED_HEX="${seed}" \
             MACULA_METRICS_PORT="${metrics_port}" \
+            MACULA_TUN_MTU="${MACULA_TUN_MTU:-1280}" \
         "${ERL_BIN}" -noshell "${pa[@]}" -s lan_demo_host_node start \
         > "${log}" 2>&1 &
     echo $! > "${pidfile}"
@@ -159,6 +160,7 @@ start_daemon() {
             MACULA_DAEMON_SEED_HEX="${seed}" \
             MACULA_DAEMON_PEER_SEED_HEX="${peer_seed}" \
             MACULA_DAEMON_SEND_DELAY_MS="${send_delay}" \
+            MACULA_DAEMON_PAYLOAD_BYTES="${MACULA_DAEMON_PAYLOAD_BYTES:-22}" \
         "${ERL_BIN}" -noshell "${pa[@]}" -s lan_demo_daemon_node start \
         > "${log}" 2>&1 &
     echo $! > "${pidfile}"
@@ -205,7 +207,14 @@ verify() {
     # trip (alice -> helsinki -> nuremberg -> bob and reverse) a few
     # seconds to land. The acceptance signal is "[daemon] received"
     # in BOTH alice.log and bob.log.
-    sleep 4
+    #
+    # Larger payloads (MACULA_DAEMON_PAYLOAD_BYTES > 22) take longer.
+    # Scale the wait by ~1s per 256 KiB of payload.
+    local extra_wait=0
+    if [ "${MACULA_DAEMON_PAYLOAD_BYTES:-22}" -gt 22 ]; then
+        extra_wait=$(( (MACULA_DAEMON_PAYLOAD_BYTES + 262143) / 262144 ))
+    fi
+    sleep $((4 + extra_wait))
     local fail=0
     if grep -q "\[daemon\] received" "${LOG_DIR}/alice.log"; then
         echo ">>> alice received:"
@@ -229,8 +238,34 @@ verify() {
         return 1
     fi
     echo ">>> Phase 3 §8 #4 acceptance: Alice ↔ Bob both directions"
+    verify_payload_integrity
     verify_metrics
     return 0
+}
+
+verify_payload_integrity() {
+    # Phase 4.2 §5 #6 — for any non-default payload size, sender and
+    # receiver compute sha8 of the payload. Sender prints "sent ...
+    # sha8=X"; receiver prints "received ... sha8=Y". For a successful
+    # MTU run, the sha8 sent by alice MUST equal the sha8 received by
+    # bob (and vice-versa).
+    local size="${MACULA_DAEMON_PAYLOAD_BYTES:-22}"
+    [ "${size}" -le 22 ] && return 0
+    set +e
+    local alice_sent bob_recv bob_sent alice_recv
+    alice_sent="$(grep -oE 'sha8=[0-9a-f]+' "${LOG_DIR}/alice.log" | grep -m1 sha8)"
+    bob_recv="$(grep -oE 'sha8=[0-9a-f]+'   "${LOG_DIR}/bob.log"   | grep -m1 sha8)"
+    bob_sent="$(grep -oE 'sha8=[0-9a-f]+'   "${LOG_DIR}/bob.log"   | sed -n 2p)"
+    alice_recv="$(grep -oE 'sha8=[0-9a-f]+' "${LOG_DIR}/alice.log" | sed -n 2p)"
+    set -e
+    echo ">>> alice sent  ${alice_sent}, bob received ${bob_recv}"
+    echo ">>> bob sent    ${bob_sent}, alice received ${alice_recv}"
+    if [ "${alice_sent}" = "${bob_recv}" ] && [ "${bob_sent}" = "${alice_recv}" ]; then
+        echo ">>> Phase 4.2 §5 #6 acceptance: ${size}-byte payload sha8 round-trip OK"
+        return 0
+    fi
+    echo "FAIL: sha8 mismatch in payload integrity check"
+    return 1
 }
 
 verify_metrics() {
@@ -272,6 +307,12 @@ verify_metrics() {
             echo "FAIL: ${name} no relay sample (expected for daemon-via-host)"
             fail=1
         fi
+        path_mtu="$(printf '%s\n' "${body}" \
+                    | grep -E '^macula_net_transport_path_mtu_bytes' \
+                    | head -1)"
+        echo ">>> ${name} transport_path_mtu_bytes:"
+        [ -n "${path_mtu}" ] && printf '  %s\n' "${path_mtu}" \
+            || echo "  <none yet — needs >5s uptime>"
     done
     set -e
     if [ ${fail} -ne 0 ]; then
