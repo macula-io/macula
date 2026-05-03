@@ -121,13 +121,15 @@ start_dht() {
 }
 
 start_host() {
-    local role="$1" ns="$2" pidfile="$3" log="$4" seed="$5" ip="$6"
+    local role="$1" ns="$2" pidfile="$3" log="$4" seed="$5" ip="$6" \
+          metrics_port="$7"
     : > "${log}"
     mapfile -t pa < <(erl_pa_args)
     sudo ip netns exec "${ns}" \
         env MACULA_DHT_HOST="${BR_IP}" MACULA_DHT_PORT="${DHT_PORT}" \
             MACULA_HOST_VETH_IP="${ip}" \
             MACULA_HOST_SEED_HEX="${seed}" \
+            MACULA_METRICS_PORT="${metrics_port}" \
         "${ERL_BIN}" -noshell "${pa[@]}" -s lan_demo_host_node start \
         > "${log}" 2>&1 &
     echo $! > "${pidfile}"
@@ -136,12 +138,12 @@ start_host() {
 
 start_helsinki() {
     start_host helsinki "${NETNS_H}" "${PIDFILE_H}" \
-               "${LOG_DIR}/helsinki.log" "${HELSINKI_SEED}" 10.99.0.2
+               "${LOG_DIR}/helsinki.log" "${HELSINKI_SEED}" 10.99.0.2 9145
 }
 
 start_nuremberg() {
     start_host nuremberg "${NETNS_N}" "${PIDFILE_N}" \
-               "${LOG_DIR}/nuremberg.log" "${NUREMBERG_SEED}" 10.99.0.3
+               "${LOG_DIR}/nuremberg.log" "${NUREMBERG_SEED}" 10.99.0.3 9146
 }
 
 start_daemon() {
@@ -227,7 +229,56 @@ verify() {
         return 1
     fi
     echo ">>> Phase 3 §8 #4 acceptance: Alice ↔ Bob both directions"
+    verify_metrics
     return 0
+}
+
+verify_metrics() {
+    # Phase 4.1 §8 #6 — scrape Prometheus endpoints exposed by both
+    # host stations. Helsinki on 10.99.0.2:9145, Nuremberg on
+    # 10.99.0.3:9146. Both bind in their own netns; root ns reaches
+    # them via the bridge-routed veths.
+    #
+    # Locally relax `set -e` because grep returning 1 (no-match) inside
+    # command substitution would otherwise drag the function down.
+    set +e
+    echo ">>> verifying metrics endpoints"
+    local fail=0
+    local label name port ip body egress ingress
+    for label in helsinki:9145:10.99.0.2 nuremberg:9146:10.99.0.3; do
+        name="${label%%:*}"
+        port="$(printf '%s' "${label}" | cut -d: -f2)"
+        ip="${label##*:}"
+        body="$(curl -s --max-time 3 "http://${ip}:${port}/metrics")"
+        if [ -z "${body}" ]; then
+            echo "FAIL: ${name} /metrics empty or unreachable (${ip}:${port})"
+            fail=1
+            continue
+        fi
+        egress="$(printf '%s\n' "${body}" \
+                  | grep -E 'macula_net_envelopes_forwarded_total.*direction="egress"' \
+                  | head -1)"
+        ingress="$(printf '%s\n' "${body}" \
+                   | grep -E 'macula_net_envelopes_forwarded_total.*direction="ingress"' \
+                   | head -1)"
+        relay="$(printf '%s\n' "${body}" \
+                 | grep -E 'macula_net_envelopes_forwarded_total.*direction="relay"' \
+                 | head -1)"
+        echo ">>> ${name} envelopes_forwarded_total samples:"
+        [ -n "${egress}" ]  && printf '  %s\n' "${egress}"
+        [ -n "${ingress}" ] && printf '  %s\n' "${ingress}"
+        [ -n "${relay}" ]   && printf '  %s\n' "${relay}"
+        if [ -z "${relay}" ]; then
+            echo "FAIL: ${name} no relay sample (expected for daemon-via-host)"
+            fail=1
+        fi
+    done
+    set -e
+    if [ ${fail} -ne 0 ]; then
+        echo "FAIL: Phase 4.1 §8 #6 metrics verification failed"
+        return 1
+    fi
+    echo ">>> Phase 4.1 §8 #6 acceptance: metrics scraped from both hosts"
 }
 
 stop_all() {

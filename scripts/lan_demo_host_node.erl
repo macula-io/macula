@@ -110,8 +110,30 @@ start_unsafe() ->
     ok = macula_net_transport_quic:set_handler(
             fun macula_host_attach_controller:handle/2),
 
+    %% Phase 4.1 — observability. Start metrics + Prometheus endpoint
+    %% if MACULA_METRICS_PORT is set in the environment. Bind to the
+    %% netns veth IP so curls from the root namespace can scrape it.
+    maybe_start_metrics(SelfIP),
+
     io:format("[host] up; idling.~n"),
     timer:sleep(infinity).
+
+maybe_start_metrics(SelfIP) ->
+    case getenv("MACULA_METRICS_PORT", "") of
+        "" -> ok;
+        PortStr ->
+            Port = list_to_integer(PortStr),
+            {ok, _} = application:ensure_all_started(telemetry),
+            {ok, _} = application:ensure_all_started(inets),
+            {ok, _} = macula_metrics:start_link(
+                        #{install_default_gauges => true}),
+            BindStr = binary_to_list(SelfIP),
+            {ok, BindIp} = inet:parse_address(BindStr),
+            {ok, _} = macula_metrics_http:start_link(
+                        #{port => Port, bind => BindIp}),
+            io:format("[host] metrics  = http://~s:~p/metrics~n",
+                      [SelfIP, Port])
+    end.
 
 %% =============================================================================
 %% DHT client (matches lan_demo_dht wire format)
