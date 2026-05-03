@@ -1,0 +1,12 @@
+
+=== macula-net soak report ===
+  duration_min=4
+  loop_ms=1000
+  payload_bytes=4096
+  scrape_interval_s=30
+  started_at=2026-05-03T12:56:28+02:00
+  scrape_rows=16
+  warmup_scrapes=4 (per host) — deltas measured from end of warmup
+  helsinki   forwarded_delta=124  dropped_delta=1  ✓ drop_ratio=0.81%
+  nuremberg  forwarded_delta=124  dropped_delta=1  ✓ drop_ratio=0.81%
+==> PASS: no excess drops in steady state

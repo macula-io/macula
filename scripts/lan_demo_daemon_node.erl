@@ -89,8 +89,8 @@ maybe_send_to_peer(Handle, SelfAddr, PeerSeedHex, DelayMs) ->
         22 -> <<"phase 3.7+ alice<->bob">>;
         N  -> crypto:strong_rand_bytes(N)
     end,
-    spawn(fun() ->
-        timer:sleep(DelayMs),
+    LoopMs = list_to_integer(getenv("MACULA_DAEMON_LOOP_MS", "0")),
+    Send = fun() ->
         Envelope = macula_cbor_nif:pack(#{
             <<"v">>       => 1,
             <<"type">>    => <<"data">>,
@@ -105,8 +105,22 @@ maybe_send_to_peer(Handle, SelfAddr, PeerSeedHex, DelayMs) ->
                    byte_size(Payload),
                    bin_to_hex(Sha),
                    Result])
+    end,
+    spawn(fun() ->
+        timer:sleep(DelayMs),
+        Send(),
+        soak_loop(Send, LoopMs)
     end),
     ok.
+
+%% Phase 4.7 — soak workload generator. When MACULA_DAEMON_LOOP_MS > 0
+%% the daemon keeps sending after the initial one-shot, so the soak
+%% harness has continuous traffic to observe.
+soak_loop(_Send, 0) -> ok;
+soak_loop(Send, LoopMs) ->
+    timer:sleep(LoopMs),
+    Send(),
+    soak_loop(Send, LoopMs).
 
 bin_to_hex(Bin) ->
     list_to_binary([io_lib:format("~2.16.0b", [B]) || <<B>> <= Bin]).

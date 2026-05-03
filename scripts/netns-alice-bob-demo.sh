@@ -161,6 +161,7 @@ start_daemon() {
             MACULA_DAEMON_PEER_SEED_HEX="${peer_seed}" \
             MACULA_DAEMON_SEND_DELAY_MS="${send_delay}" \
             MACULA_DAEMON_PAYLOAD_BYTES="${MACULA_DAEMON_PAYLOAD_BYTES:-22}" \
+            MACULA_DAEMON_LOOP_MS="${MACULA_DAEMON_LOOP_MS:-0}" \
         "${ERL_BIN}" -noshell "${pa[@]}" -s lan_demo_daemon_node start \
         > "${log}" 2>&1 &
     echo $! > "${pidfile}"
@@ -369,8 +370,27 @@ case "${cmd}" in
         wait_for_up
         verify
         ;;
+    soak)
+        # Phase 4.7 — start the demo and idle indefinitely. Daemons
+        # cycle send via MACULA_DAEMON_LOOP_MS; soak.sh's scraper
+        # reads /metrics from the host stations; soak.sh's stop
+        # subcommand kills the soak via the pidfile we drop here.
+        trap 'teardown' EXIT
+        ensure_demo_compiled
+        setup
+        start_dht
+        start_helsinki
+        start_nuremberg
+        start_alice
+        start_bob
+        wait_for_up
+        echo $$ > /tmp/macula-alicebob/soak.pid
+        echo ">>> soak running (pid=$$); send SIGTERM to terminate"
+        # Block forever; trap teardown handles exit.
+        while true; do sleep 60; done
+        ;;
     *)
-        echo "usage: $0 {run|setup|dht|start|verify|stop|teardown}" >&2
+        echo "usage: $0 {run|soak|setup|dht|start|verify|stop|teardown}" >&2
         exit 2
         ;;
 esac
