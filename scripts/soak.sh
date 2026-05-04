@@ -85,11 +85,18 @@ cmd_start() {
     # Remote log path on beam02; the workstation-side log captures
     # only the ssh session.
     local remote_log=/tmp/macula-soak.beam02.log
+    # `disown` is load-bearing: without it the remote sshd waits on the
+    # backgrounded child's session-channel FDs (inherited from the
+    # remote shell) before closing the SSH connection. Symptom is the
+    # local ssh client hangs forever, blocking cmd_start from reaching
+    # the scraper-launch lines below — workload runs, no scrape data.
+    # `setsid` alone is insufficient on bash-over-ssh.
     ssh_beam02 "mkdir -p /tmp && rm -f /tmp/macula-alicebob/soak.pid &&
                 MACULA_DAEMON_LOOP_MS=${loop_ms} \
                 MACULA_DAEMON_PAYLOAD_BYTES=${payload} \
                 setsid nohup bash ~/macula-src/scripts/netns-alice-bob-demo.sh soak \
                 > ${remote_log} 2>&1 < /dev/null &
+                disown
                 echo started" || true
 
     # Wait for the soak.pid to appear so we know setup completed.
@@ -129,6 +136,21 @@ cmd_start() {
 
     echo ">>> soak in progress; scraper pid=${scrape_pid}; will auto-stop after ${duration_min} min"
     echo ">>> follow with: tail -f ${csv}"
+
+    # Sanity check: confirm scraper actually launched and is writing.
+    # Wait one scrape interval then verify the pidfile and at least one
+    # data row exist. Catches the silent-scraper-death class of bugs.
+    sleep "$((SCRAPE_INTERVAL_S + 5))"
+    if ! [ -f "${LOCAL_SCRAPE_PIDFILE}" ] || ! kill -0 "$(cat "${LOCAL_SCRAPE_PIDFILE}")" 2>/dev/null; then
+        echo "FAIL: scraper died within first scrape interval; see ${soaklog}" >&2
+        exit 1
+    fi
+    local rows; rows=$(($(wc -l < "${csv}") - 1))
+    if [ "${rows}" -lt 1 ]; then
+        echo "FAIL: scraper alive but no rows after ${SCRAPE_INTERVAL_S}s; see ${soaklog}" >&2
+        exit 1
+    fi
+    echo ">>> sanity check passed: ${rows} row(s) scraped after first interval"
 }
 
 scrape_one() {
@@ -175,6 +197,10 @@ cmd_stop() {
             rm -f "${pf}"
         fi
     done
+    # Belt-and-braces: pkill any orchestrator process. Recovers from
+    # the broken state where the orchestrator hung in cmd_start before
+    # writing the pidfiles (see cmd_status BROKEN diagnostic).
+    pkill -u "$(id -u)" -f 'soak\.sh start' 2>/dev/null || true
 
     # Stop remote soak
     ssh_beam02 'if [ -f /tmp/macula-alicebob/soak.pid ]; then
@@ -195,9 +221,22 @@ cmd_status() {
             local rows; rows=$(($(wc -l < "${SOAK_LOG_DIR}/metrics.csv") - 1))
             echo "       rows scraped: ${rows}"
         fi
-    else
-        echo "soak: NOT RUNNING"
+        return 0
     fi
+    # Detect "broken" state: orchestrator process alive but no scraper
+    # pidfile. This is the symptom of an SSH that hung during cmd_start
+    # (workload runs on beam02, no scrape data captured). Reports
+    # honestly instead of misleading "NOT RUNNING".
+    local orchestrators
+    orchestrators=$(pgrep -f 'soak\.sh start' 2>/dev/null | grep -v $$ || true)
+    if [ -n "${orchestrators}" ]; then
+        echo "soak: BROKEN (orchestrator alive but scraper pidfile missing)"
+        echo "      orchestrator pids: ${orchestrators}"
+        echo "      most likely the cmd_start SSH hung at workload-launch"
+        echo "      recover with: $0 stop"
+        return 1
+    fi
+    echo "soak: NOT RUNNING"
 }
 
 cmd_report() {
