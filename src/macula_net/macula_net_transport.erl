@@ -13,7 +13,7 @@
 %%%   <li>Caller starts the transport's listener (impl-specific args).</li>
 %%%   <li>Caller registers an inbound handler via {@link set_handler/1};
 %%%       the transport calls this for every CBOR envelope it receives.</li>
-%%%   <li>Caller establishes outbound links via the impl's `connect`
+%%%   <li>Caller establishes outbound links via the impl's <code>connect</code>
 %%%       function (impl-specific).</li>
 %%%   <li>{@link send/2} delivers an encoded envelope to a known station.</li>
 %%% </ol>

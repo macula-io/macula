@@ -22,7 +22,7 @@
 %%%     port => 45892,                        %% UDP port
 %%%     broadcast_interval => 1500,           %% ms between broadcasts
 %%%     multicast_ttl => 1,                   %% TTL (1 = same subnet)
-%%%     secret => <<"my-cluster-secret">>     %% Optional: filter by secret
+%%%     secret => &lt;&lt;"my-cluster-secret"&gt;&gt;     %% Optional: filter by secret
 %%% }).
 %%% '''
 %%%

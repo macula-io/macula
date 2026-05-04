@@ -3,10 +3,10 @@
 %%%
 %%% Per the macula-net spec (PLAN_MACULA_NET.md §3.1):
 %%%
-%%% ```
+%%% <pre>
 %%%   addr = 0xfd | blake3(realm_master_pubkey)[0:40 bits]
 %%%               | blake3(identity_pubkey)[0:80 bits]
-%%% ```
+%%% </pre>
 %%%
 %%% Uses {@link macula_blake3_nif:hash/1} for the BLAKE3 primitive — no
 %%% new NIF; reuses the SDK's existing crypto layer.

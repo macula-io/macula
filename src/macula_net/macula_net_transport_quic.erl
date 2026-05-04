@@ -6,9 +6,9 @@
 %%% stream per outbound connection carries length-prefixed CBOR
 %%% envelopes:
 %%%
-%%% ```
-%%%   <<Len:32/big, Cbor:Len/binary>>
-%%% ```
+%%% <pre>
+%%%   &lt;&lt;Len:32/big, Cbor:Len/binary&gt;&gt;
+%%% </pre>
 %%%
 %%% == Phase 1 simplifications ==
 %%%
@@ -82,8 +82,8 @@
 %% `Opts' map keys:
 %% <ul>
 %%   <li>`port' — UDP port for the QUIC listener (mandatory)</li>
-%%   <li>`bind' — bind address binary (default `<<"::">>')</li>
-%%   <li>`alpn' — ALPN protocol id binary (default `<<"macula-net">>')</li>
+%%   <li>`bind' — bind address binary (default `&lt;&lt;"::"&gt;&gt;')</li>
+%%   <li>`alpn' — ALPN protocol id binary (default `&lt;&lt;"macula-net"&gt;&gt;')</li>
 %% </ul>
 -spec start_link(map()) -> {ok, pid()} | {error, term()}.
 start_link(#{port := _} = Opts) ->

@@ -381,13 +381,13 @@ wrap_record_callback(Fun) when is_function(Fun, 1) ->
 %%%
 %%% Example (server-stream):
 %%%
-%%%   ok = macula:advertise_stream(<<"foo.count">>, server_stream,
+%%%   ok = macula:advertise_stream(&lt;&lt;"foo.count"&gt;&gt;, server_stream,
 %%%        fun(Stream, #{n := N}) ->
 %%%             [ok = macula:send(Stream, integer_to_binary(I))
 %%%              || I <- lists:seq(1, N)],
 %%%             macula:close_stream(Stream)
 %%%        end),
-%%%   {ok, S} = macula:call_stream(<<"foo.count">>, #{n => 5}),
+%%%   {ok, S} = macula:call_stream(&lt;&lt;"foo.count"&gt;&gt;, #{n => 5}),
 %%%   drain(S).
 %%%
 %%% drain(S) ->
@@ -659,7 +659,7 @@ join_mesh(Opts) ->
 %% - Uses raw QUIC stream routing with no MessagePack overhead
 %%
 %% Options:
-%% - `url' (required): `<<"quic://relay.example.com:4434">>'
+%% - `url' (required): `&lt;&lt;"quic://relay.example.com:4434"&gt;&gt;'
 %%
 %% After this returns `ok', standard OTP distribution (`rpc:call/4',
 %% `gen_server:call/3' across nodes, `pg' groups, etc.) works across

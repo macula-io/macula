@@ -188,8 +188,8 @@
     country      => binary(),
     lat          => float() | integer(),
     lng          => float() | integer(),
-    %% Actor discriminator — `<<"station">>' for relay identities,
-    %% `<<"daemon">>' for client identities. Subscribers route on
+    %% Actor discriminator — `&lt;&lt;"station"&gt;&gt;' for relay identities,
+    %% `&lt;&lt;"daemon"&gt;&gt;' for client identities. Subscribers route on
     %% this to render presence events on different mesh channels.
     kind         => binary(),
     %% Overlay-peer list: binary pubkeys of peer stations this node
@@ -847,7 +847,7 @@ signature(#{signature := S}) -> S.
 %% publishes about many subjects (e.g., a realm admin signing many
 %% license records), pass a `subject_id' opt — `storage_key/1'
 %% derives a per-subject 32-byte slot via
-%% `BLAKE3(<<type, key, subject_id>>)'. Without `subject_id' the
+%% `BLAKE3(&lt;&lt;type, key, subject_id&gt;&gt;)'. Without `subject_id' the
 %% storage key is `key' verbatim (one DHT slot per signer).
 %%
 %% Domain code names its own payload fields. Single-letter wire keys
@@ -1114,8 +1114,8 @@ storage_key(#{type := ?TYPE_HOSTED_ADDRESS_MAP, payload := P}) ->
     crypto:hash(sha256, <<?STORAGE_DOMAIN_HOSTED_ADDRESS/binary,
                           Addr/binary>>);
 %% Domain-defined types (0x20-0xFF). When the envelope carries a
-%% `subject_id' the storage key is derived from <<type, signer_key,
-%% subject_id>> so one signer can publish many records under
+%% `subject_id' the storage key is derived from &lt;&lt;type, signer_key,
+%% subject_id&gt;&gt; so one signer can publish many records under
 %% distinct DHT slots. Without `subject_id' the storage key is the
 %% signer's pubkey (one slot per signer).
 storage_key(#{type := T, key := K, subject_id := Sid})

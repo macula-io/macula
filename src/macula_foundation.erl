@@ -23,7 +23,7 @@
 %% == Placeholders ==
 %%
 %% The five keys returned by `pubkeys/0' at the time of this writing
-%% are deterministic <b>placeholders</b> (`<<"macula-v2-foundation-*">>'
+%% are deterministic <b>placeholders</b> (`&lt;&lt;"macula-v2-foundation-*"&gt;&gt;'
 %% SHA-256 digests). They are NOT backed by live FROST shares. Any
 %% record signed against a placeholder will fail verification because
 %% no corresponding private key exists. Production firmware MUST

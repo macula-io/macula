@@ -16,12 +16,12 @@
 %% DID documents follow W3C DID Core specification with Ed25519 keys:
 %% ```
 %% #{
-%%   <<"@context">> => [<<"https://www.w3.org/ns/did/v1">>],
-%%   <<"id">> => <<"did:macula:io.macula.acme">>,
-%%   <<"controller">> => <<"did:macula:io.macula">>,
-%%   <<"verificationMethod">> => [...],
-%%   <<"authentication">> => [...],
-%%   <<"assertionMethod">> => [...]
+%%   &lt;&lt;"@context"&gt;&gt; => [&lt;&lt;"https://www.w3.org/ns/did/v1"&gt;&gt;],
+%%   &lt;&lt;"id"&gt;&gt; => &lt;&lt;"did:macula:io.macula.acme"&gt;&gt;,
+%%   &lt;&lt;"controller"&gt;&gt; => &lt;&lt;"did:macula:io.macula"&gt;&gt;,
+%%   &lt;&lt;"verificationMethod"&gt;&gt; => [...],
+%%   &lt;&lt;"authentication"&gt;&gt; => [...],
+%%   &lt;&lt;"assertionMethod"&gt;&gt; => [...]
 %% }
 %% '''
 %%

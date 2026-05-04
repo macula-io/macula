@@ -8,7 +8,7 @@
 %%% == Usage ==
 %%%
 %%% ```
-%%% {ok, Tun} = macula_tun:open(<<"macula0">>, 1280),
+%%% {ok, Tun} = macula_tun:open(&lt;&lt;"macula0"&gt;&gt;, 1280),
 %%% ok        = macula_tun:start_reader(Tun, self()),
 %%% ok        = macula_tun:write(Tun, IPv6Packet),
 %%% ...
@@ -42,7 +42,7 @@
 ]).
 
 -opaque handle()      :: reference().
--type   if_name()     :: binary().     %% e.g. <<"macula0">>
+-type   if_name()     :: binary().     %% e.g. &lt;&lt;"macula0"&gt;&gt;
 -type   mtu()         :: 1280..65535.
 -type   ipv6_packet() :: binary().
 

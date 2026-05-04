@@ -145,7 +145,7 @@ get_cookie() ->
 %% Examples:
 %% ```
 %% ok = macula_cluster:set_cookie(my_secret_cookie).
-%% ok = macula_cluster:set_cookie(<<"my_secret_cookie">>).
+%% ok = macula_cluster:set_cookie(&lt;&lt;"my_secret_cookie"&gt;&gt;).
 %% '''
 -spec set_cookie(atom() | binary()) -> ok.
 set_cookie(Cookie) when is_binary(Cookie) ->
@@ -382,7 +382,7 @@ start_cluster() ->
 %%     strategy => gossip,
 %%     multicast_addr => {239, 1, 1, 1},
 %%     port => 9999,
-%%     secret => <<"my-cluster-secret">>
+%%     secret => &lt;&lt;"my-cluster-secret"&gt;&gt;
 %% }).
 %%
 %% %% Static strategy with explicit nodes

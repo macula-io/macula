@@ -146,8 +146,8 @@ is_nif_loaded() ->
 %%
 %% Example:
 %% ```
-%% {ok, #{type := <<"app">>, realm := <<"io.macula">>, path := [<<"counter">>]}} =
-%%     macula_mri_nif:parse_mri(<<"mri:app:io.macula/counter">>).
+%% {ok, #{type := &lt;&lt;"app"&gt;&gt;, realm := &lt;&lt;"io.macula"&gt;&gt;, path := [&lt;&lt;"counter"&gt;&gt;]}} =
+%%     macula_mri_nif:parse_mri(&lt;&lt;"mri:app:io.macula/counter"&gt;&gt;).
 %% '''
 -spec parse_mri(MRI :: binary()) ->
     {ok, #{type := binary(), realm := binary(), path := [binary()]}} |
@@ -211,7 +211,7 @@ is_builtin_type(_) ->
 %%
 %% Example:
 %% ```
-%% <<"foo/bar/baz">> = macula_mri_nif:join_path_segments([<<"foo">>, <<"bar">>, <<"baz">>]).
+%% &lt;&lt;"foo/bar/baz"&gt;&gt; = macula_mri_nif:join_path_segments([&lt;&lt;"foo"&gt;&gt;, &lt;&lt;"bar"&gt;&gt;, &lt;&lt;"baz"&gt;&gt;]).
 %% '''
 -spec join_path_segments(Segments :: [binary()]) -> binary().
 join_path_segments(Segments) when is_list(Segments) ->
@@ -226,8 +226,8 @@ join_path_segments(_) ->
 %%
 %% Example:
 %% ```
-%% {ok, <<"mri:app:io.macula/counter">>} =
-%%     macula_mri_nif:format_mri(<<"app">>, <<"io.macula">>, [<<"counter">>]).
+%% {ok, &lt;&lt;"mri:app:io.macula/counter"&gt;&gt;} =
+%%     macula_mri_nif:format_mri(&lt;&lt;"app"&gt;&gt;, &lt;&lt;"io.macula"&gt;&gt;, [&lt;&lt;"counter"&gt;&gt;]).
 %% '''
 -spec format_mri(Type :: binary(), Realm :: binary(), Path :: [binary()]) ->
     {ok, binary()} | {error, invalid_type | invalid_realm}.
@@ -249,11 +249,11 @@ format_mri(_, _, _) ->
 %% Example:
 %% ```
 %% AllMRIs = [
-%%     {<<"io.macula">>, [<<"apps">>], <<"mri:app:io.macula/apps">>},
-%%     {<<"io.macula">>, [<<"apps">>, <<"counter">>], <<"mri:app:io.macula/apps/counter">>}
+%%     {&lt;&lt;"io.macula"&gt;&gt;, [&lt;&lt;"apps"&gt;&gt;], &lt;&lt;"mri:app:io.macula/apps"&gt;&gt;},
+%%     {&lt;&lt;"io.macula"&gt;&gt;, [&lt;&lt;"apps"&gt;&gt;, &lt;&lt;"counter"&gt;&gt;], &lt;&lt;"mri:app:io.macula/apps/counter"&gt;&gt;}
 %% ],
-%% [<<"mri:app:io.macula/apps/counter">>] =
-%%     macula_mri_nif:find_children(<<"io.macula">>, [<<"apps">>], AllMRIs).
+%% [&lt;&lt;"mri:app:io.macula/apps/counter"&gt;&gt;] =
+%%     macula_mri_nif:find_children(&lt;&lt;"io.macula"&gt;&gt;, [&lt;&lt;"apps"&gt;&gt;], AllMRIs).
 %% '''
 -spec find_children(
     ParentRealm :: binary(),
@@ -301,8 +301,8 @@ find_descendants(_, _, _) ->
 %% Example:
 %% ```
 %% AllMRIs = [
-%%     {<<"io.macula">>, [<<"apps">>], <<"mri:app:io.macula/apps">>},
-%%     {<<"io.macula">>, [<<"apps">>, <<"counter">>], <<"mri:app:io.macula/apps/counter">>}
+%%     {&lt;&lt;"io.macula"&gt;&gt;, [&lt;&lt;"apps"&gt;&gt;], &lt;&lt;"mri:app:io.macula/apps"&gt;&gt;},
+%%     {&lt;&lt;"io.macula"&gt;&gt;, [&lt;&lt;"apps"&gt;&gt;, &lt;&lt;"counter"&gt;&gt;], &lt;&lt;"mri:app:io.macula/apps/counter"&gt;&gt;}
 %% ],
 %% {ok, Index} = macula_mri_nif:build_path_index(AllMRIs).
 %% '''
@@ -323,8 +323,8 @@ build_path_index(_) ->
 %% Example:
 %% ```
 %% {ok, Index} = macula_mri_nif:build_path_index(AllMRIs),
-%% {ok, [<<"mri:app:io.macula/apps/counter">>]} =
-%%     macula_mri_nif:index_find_children(Index, <<"io.macula">>, [<<"apps">>]).
+%% {ok, [&lt;&lt;"mri:app:io.macula/apps/counter"&gt;&gt;]} =
+%%     macula_mri_nif:index_find_children(Index, &lt;&lt;"io.macula"&gt;&gt;, [&lt;&lt;"apps"&gt;&gt;]).
 %% '''
 -spec index_find_children(Index :: reference() | map(), Realm :: binary(), Path :: [binary()]) ->
     {ok, [binary()]} | {error, invalid_realm}.
@@ -356,8 +356,8 @@ index_find_descendants(_, _, _) ->
 %%
 %% Example:
 %% ```
-%% ok = macula_mri_nif:index_insert(Index, <<"io.macula">>, [<<"devices">>, <<"sensor1">>],
-%%                                   <<"mri:device:io.macula/devices/sensor1">>).
+%% ok = macula_mri_nif:index_insert(Index, &lt;&lt;"io.macula"&gt;&gt;, [&lt;&lt;"devices"&gt;&gt;, &lt;&lt;"sensor1"&gt;&gt;],
+%%                                   &lt;&lt;"mri:device:io.macula/devices/sensor1"&gt;&gt;).
 %% '''
 -spec index_insert(Index :: reference() | map(), Realm :: binary(), Path :: [binary()], MRI :: binary()) ->
     ok | {error, invalid_realm}.

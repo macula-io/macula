@@ -12,8 +12,8 @@
 %%% ```
 %%% Opts = #{relays => [R1, R2, R3, R4, R5],
 %%%          connections => 2,           %% default 2
-%%%          realm => <<"io.macula">>,
-%%%          identity => <<"my-node">>},
+%%%          realm => &lt;&lt;"io.macula"&gt;&gt;,
+%%%          identity => &lt;&lt;"my-node"&gt;&gt;},
 %%% {ok, Pid} = macula_multi_relay:start_link(Opts).
 %%% '''
 %%% @end

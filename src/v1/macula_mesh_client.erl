@@ -15,8 +15,8 @@
 %%%
 %%% ```
 %%% {ok, Client} = macula_mesh_client:start_link(#{
-%%%     relays => [<<"quic://boot.macula.io:443">>],
-%%%     realm => <<"io.macula">>
+%%%     relays => [&lt;&lt;"quic://boot.macula.io:443"&gt;&gt;],
+%%%     realm => &lt;&lt;"io.macula"&gt;&gt;
 %%% }).
 %%% '''
 %%% @end

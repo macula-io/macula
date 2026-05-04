@@ -299,7 +299,7 @@
 
 %% RPC Routing Message (for multi-hop DHT routing)
 
-%% Note: Binary keys (<<"key">>) are used because MsgPack decoder returns binary keys.
+%% Note: Binary keys (&lt;&lt;"key"&gt;&gt;) are used because MsgPack decoder returns binary keys.
 -type rpc_route_msg() :: #{
     binary() => term()                % Binary keys: destination_node_id, source_node_id,
                                       % hop_count, max_hops, payload_type, payload
@@ -307,7 +307,7 @@
 
 %% Pub/Sub Routing Message (for multi-hop DHT routing)
 
-%% Note: Binary keys (<<"key">>) are used because MsgPack decoder returns binary keys.
+%% Note: Binary keys (&lt;&lt;"key"&gt;&gt;) are used because MsgPack decoder returns binary keys.
 -type pubsub_route_msg() :: #{
     binary() => term()                % Binary keys: destination_node_id, source_node_id,
                                       % hop_count, max_hops, topic, payload

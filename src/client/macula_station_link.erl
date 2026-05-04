@@ -115,7 +115,7 @@
     identity => macula_identity:key_pair(),
     %% Capability bitfield announced in CONNECT (default 0).
     capabilities => non_neg_integer(),
-    %% ALPN list passed through to QUIC (default [<<"macula">>]).
+    %% ALPN list passed through to QUIC (default [&lt;&lt;"macula"&gt;&gt;]).
     alpn         => [binary()],
     %% Connect timeout in ms (default 30_000).
     connect_timeout_ms => non_neg_integer()
@@ -191,7 +191,7 @@ stop(Pid) ->
 %% per-frame so a single link can multiplex many realms.
 %%
 %% `Procedure' is the V2 procedure name, e.g.
-%% `<<"_dht.find_records_by_type">>'. `Payload' is any term that
+%% `&lt;&lt;"_dht.find_records_by_type"&gt;&gt;'. `Payload' is any term that
 %% `macula_frame:call/1' accepts (typically a map).
 -spec call(pid(), <<_:256>>, binary(), term(), pos_integer()) ->
     {ok, term()} | {error, term()}.
