@@ -253,7 +253,7 @@ close_stream(Stream) ->
     nif_close_stream(Stream).
 
 %% @doc Set active mode on a stream handle.
--spec setopt(reference(), active, boolean()) -> ok.
+-spec setopt(reference(), active, boolean()) -> ok | {error, term()}.
 setopt(Stream, active, Value) ->
     nif_setopt_active(Stream, Value).
 

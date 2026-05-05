@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.15.3] - 2026-05-05
+
+### Fixed
+
+- `macula_peering_conn:on_handshake_enter_client/2` crashed with
+  `badmatch` when `macula_quic:setopt/3` or `macula_quic:send/2`
+  returned `{error, _}`. This is a normal race: the QUIC connection
+  can die between `nif_connect` returning `{ok, Conn}` and the
+  client gen_statem entering its `handshaking` state (peer closes,
+  network drops, server sends `CONNECTION_CLOSE` after TLS but
+  before the first stream). Pre-3.15.3 this crashed the
+  peering_conn supervisor child with a `badmatch {error,
+  <<"connection lost">>}` and dumped a stacktrace per attempt.
+  Now: surface `disconnected` with a structured `{setopt_failed |
+  send_connect_failed, Reason}` and let the caller schedule a
+  reconnect via the standard backoff path.
+
+  Discovered during BE station fleet on falkenstein
+  (2026-05-05) — every concurrent outbound dial that completed the
+  TLS handshake but then failed at the application layer crashed
+  the gen_statem and accumulated SUPERVISOR crash reports.
+
+- `macula_quic:setopt/3` spec widened from `ok` to
+  `ok | {error, term()}`. The NIF surfaces errors when the stream
+  handle is stale or invalid; the narrow spec made dialyzer
+  reject defensive `{error, _}` matches in callers.
+
 ## [3.15.2] - 2026-05-05
 
 ### Fixed

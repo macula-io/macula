@@ -179,9 +179,28 @@ handshake_state_timeout() ->
     {state_timeout, ?HANDSHAKE_TIMEOUT_MS, handshake_timeout}.
 
 on_handshake_enter_client({ok, Stream}, Data) ->
-    ok = macula_quic:setopt(Stream, active, true),
-    ok = send_connect(Stream, Data),
-    {keep_state, Data#data{quic_stream = Stream}, [handshake_state_timeout()]};
+    %% setopt/send can both fail if the QUIC connection died between
+    %% nif_connect returning {ok, Conn} and us getting here (peer
+    %% closed, network drop, server rejected with a CONNECTION_CLOSE
+    %% frame after the TLS handshake but before we open a stream).
+    %% Prior to 3.15.3 the `ok = ...` matches turned every such
+    %% race into a crash; now we surface a structured disconnect
+    %% and let the caller schedule a reconnect.
+    case macula_quic:setopt(Stream, active, true) of
+        ok ->
+            case send_connect(Stream, Data) of
+                ok ->
+                    {keep_state,
+                     Data#data{quic_stream = Stream},
+                     [handshake_state_timeout()]};
+                {error, _} = SendErr ->
+                    notify(disconnected, {send_connect_failed, SendErr}, Data),
+                    {stop, normal, Data}
+            end;
+        {error, _} = SetoptErr ->
+            notify(disconnected, {setopt_failed, SetoptErr}, Data),
+            {stop, normal, Data}
+    end;
 on_handshake_enter_client(Err, Data) ->
     notify(disconnected, {open_stream_failed, Err}, Data),
     {stop, normal, Data}.
