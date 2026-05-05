@@ -325,7 +325,7 @@ classify_records({error, _} = E)                       -> E.
 %% The client monitors `Subscriber'; if it dies the subscription is
 %% torn down (best-effort UNSUBSCRIBE on the wire).
 -spec subscribe(pid(), <<_:256>>, binary(), pid()) ->
-    {ok, reference()}.
+    {ok, reference()} | {error, term()}.
 subscribe(Client, Realm, Topic, Subscriber)
   when is_pid(Client),
        is_binary(Realm), byte_size(Realm) =:= 32,
@@ -335,7 +335,7 @@ subscribe(Client, Realm, Topic, Subscriber)
 %% @doc Drop a subscription. Sends a best-effort UNSUBSCRIBE frame
 %% to the station and clears local bookkeeping. Always returns `ok',
 %% even when `SubRef' is unknown — unsubscribe is idempotent.
--spec unsubscribe(pid(), reference()) -> ok.
+-spec unsubscribe(pid(), reference()) -> ok | {error, term()}.
 unsubscribe(Client, SubRef)
   when is_pid(Client), is_reference(SubRef) ->
     gen_server:call(Client, {unsubscribe, SubRef}, 5_000).
@@ -358,7 +358,7 @@ unsubscribe(Client, SubRef)
 %% return `{ok, Reply}', `{error, Reason}', or any other term (treated
 %% as `{ok, Other}' shorthand). A handler crash is mapped to a
 %% structured `temporary_relay_failure' BOLT#4 error.
--spec advertise(pid(), <<_:256>>, binary(), handler()) -> ok.
+-spec advertise(pid(), <<_:256>>, binary(), handler()) -> ok | {error, term()}.
 advertise(Pid, Realm, Procedure, Handler)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,
@@ -370,7 +370,7 @@ advertise(Pid, Realm, Procedure, Handler)
 %% @doc Drop a previously-advertised procedure. Sends a best-effort
 %% UNADVERTISE frame to the station and clears the local handler
 %% binding. Idempotent: unknown `(Realm, Procedure)' is a no-op.
--spec unadvertise(pid(), <<_:256>>, binary()) -> ok.
+-spec unadvertise(pid(), <<_:256>>, binary()) -> ok | {error, term()}.
 unadvertise(Pid, Realm, Procedure)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.15.2] - 2026-05-05
+
+### Fixed
+
+- `macula_station_link` SDK specs widened to admit `{error, term()}`
+  returns. The wrappers around `gen_server:call/3` (`subscribe/4`,
+  `unsubscribe/2`, `advertise/4`, `unadvertise/3`) declared narrow
+  return types (`{ok, reference()}` / `ok`) but in reality dispatch
+  to an arbitrary `pid()` and surface `{error, unknown_call}` (or
+  any other reply) when the target gen_server does not implement
+  the call. Callers that pattern-matched only the success shape in
+  a `try ... of` (no wildcard) crashed with `try_clause` — silent
+  bug until consumers passed non-conforming pids alongside SDK
+  link clients (e.g. macula-station's seed-dial outbound link
+  workers). Now: `subscribe/4 -> {ok, reference()} | {error, term()}`,
+  `unsubscribe/2 -> ok | {error, term()}`, `advertise/4 -> ok |
+  {error, term()}`, `unadvertise/3 -> ok | {error, term()}`.
+
+  No runtime behaviour change — these are spec-only widenings.
+  Consumers should add a wildcard `_Other -> ...` clause when
+  pattern-matching the return value, since `try ... of {ok, X} ->
+  ... catch _:_ -> ... end` does NOT catch the `try_clause`
+  exception raised by an unmatched `of` pattern.
+
 ## [3.15.1] - 2026-05-02
 
 ### Fixed
