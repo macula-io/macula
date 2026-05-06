@@ -92,11 +92,16 @@
     unsubscribe/2,
     advertise/4,
     unadvertise/3,
+    %% Streaming RPC (SDK 3.17+, Part 6 §5.6)
+    call_stream/5,
+    advertise_stream/5,
+    unadvertise_stream/3,
+    send_stream_frame/3,
     is_connected/1,
     peer_node_id/1
 ]).
 
--export_type([handler/0]).
+-export_type([handler/0, stream_handler/0]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -155,7 +160,24 @@
     %% are dispatched to the registered handler; the resulting
     %% RESULT or call_error frame is shipped back over the same
     %% peering connection.
-    procedures = #{} :: #{{<<_:256>>, binary()} => handler()}
+    procedures = #{} :: #{{<<_:256>>, binary()} => handler()},
+    %% Advertised streaming procedures. Same wire shape as `procedures'
+    %% (one `advertise' frame per entry replayed on reconnect); the
+    %% stored value carries the declared mode (`server_stream' /
+    %% `client_stream' / `bidi') plus a 2-arg handler invoked on
+    %% inbound STREAM_OPEN. Distinct from `procedures' so the
+    %% dispatch path can pick the right shape per inbound frame
+    %% (CALL → `procedures'; STREAM_OPEN → `stream_procedures').
+    stream_procedures = #{} :: #{{<<_:256>>, binary()} =>
+                                 {macula_frame:stream_mode(),
+                                  stream_handler()}},
+    %% Open streams keyed by 16-byte stream_id. Each entry pairs the
+    %% local `macula_stream_v1' pid (client- or server-side) with the
+    %% monitor reference returned when this link started watching it.
+    %% Inbound STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
+    %% frames are dispatched into the matching stream pid via the
+    %% peer-to-peer protocol on `macula_stream_v1'.
+    streams = #{} :: #{macula_frame:stream_id() => {pid(), reference()}}
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
@@ -165,6 +187,8 @@
 
 -type handler() :: fun((term()) -> term())
                  | {module(), atom()}.
+
+-type stream_handler() :: fun((pid(), term()) -> any()).
 
 %%====================================================================
 %% Public API
@@ -377,6 +401,87 @@ unadvertise(Pid, Realm, Procedure)
        is_binary(Procedure) ->
     gen_server:call(Pid, {unadvertise, Realm, Procedure}, 5_000).
 
+%% @doc Open a streaming RPC on this link. Returns `{ok, StreamPid}'
+%% bound to the caller; the caller drives the stream via
+%% `macula_stream_v1:send/2,3', `recv/1,2', `close_send/1', `close/1',
+%% and `await_reply/1,2' (for client-stream / bidi modes).
+%%
+%% `Realm' and `Procedure' name the remote streaming endpoint.
+%% `Args' is the opening payload (any term that
+%% `macula_frame:stream_open/1' accepts). `Opts' may include:
+%%
+%% <ul>
+%%   <li>`mode'  — `server_stream' (default), `client_stream', or
+%%                 `bidi'.</li>
+%%   <li>`owner' — the pid that owns the stream lifecycle (default:
+%%                 the calling pid). Stream stops when the owner
+%%                 dies.</li>
+%%   <li>`deadline_ms' — wall-clock deadline stamped on the
+%%                 STREAM_OPEN frame (default: now + 30s).</li>
+%% </ul>
+%%
+%% Returns `{error, not_connected}' when the QUIC handshake has not
+%% completed; the caller may retry once the link reports
+%% `is_connected/1'. The pool layer (`macula_client') should be
+%% preferred over direct invocation — it picks a healthy link
+%% transparently.
+-spec call_stream(pid(), <<_:256>>, binary(), term(), map()) ->
+    {ok, pid()} | {error, term()}.
+call_stream(Pid, Realm, Procedure, Args, Opts)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       is_map(Opts) ->
+    gen_server:call(Pid,
+                    {stream_open, Realm, Procedure, Args, Opts, self()},
+                    5_000).
+
+%% @doc Advertise a streaming RPC handler. Idempotent — re-advertising
+%% replaces the prior `{Mode, Handler}'. Replayed on every
+%% (re)connect alongside unary advertisements. Wire shape is the
+%% existing `advertise' frame; the receiving station routes inbound
+%% STREAM_OPEN frames for `(Realm, Procedure)' back over this peering
+%% connection where this link spawns a server-side
+%% `macula_stream_v1' and dispatches `Handler(StreamPid, Args)' in a
+%% transient process.
+-spec advertise_stream(pid(), <<_:256>>, binary(),
+                        macula_frame:stream_mode(), stream_handler()) ->
+    ok | {error, term()}.
+advertise_stream(Pid, Realm, Procedure, Mode, Handler)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (Mode =:= server_stream orelse Mode =:= client_stream
+        orelse Mode =:= bidi),
+       is_function(Handler, 2) ->
+    gen_server:call(Pid,
+                    {stream_advertise, Realm, Procedure, Mode, Handler},
+                    5_000).
+
+%% @doc Drop a previously-advertised streaming procedure. Idempotent.
+-spec unadvertise_stream(pid(), <<_:256>>, binary()) ->
+    ok | {error, term()}.
+unadvertise_stream(Pid, Realm, Procedure)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure) ->
+    gen_server:call(Pid,
+                    {stream_unadvertise, Realm, Procedure},
+                    5_000).
+
+%% @doc Cast a STREAM_* outbound frame. Called by `macula_stream_v1'
+%% processes paired against this link via the
+%% `{remote_via_link, Pid, Sid}' peer shape — the stream invokes this
+%% to ship its STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
+%% bytes through the link's peering connection.
+%%
+%% Always returns `ok' (the operation is fire-and-forget; the link
+%% drops the frame if not yet connected and the stream's own backoff
+%% policy decides what to do).
+-spec send_stream_frame(pid(), atom(), map()) -> ok.
+send_stream_frame(Pid, Type, Spec) when is_pid(Pid), is_atom(Type), is_map(Spec) ->
+    gen_server:cast(Pid, {send_stream_frame, Type, Spec}).
+
 -spec is_connected(pid()) -> boolean().
 is_connected(Pid) ->
     case gen_server:call(Pid, is_connected, 1_000) of
@@ -506,8 +611,44 @@ handle_call({unadvertise, Realm, Proc}, _From,
     maybe_send_unadvertise(Realm, Proc, S),
     {reply, ok, NewS};
 
+%%-- Streaming RPC ---------------------------------------------------
+
+handle_call({stream_open, _R, _P, _A, _O, _Caller}, _From,
+            #state{peer_node_id = undefined} = S) ->
+    %% Mirror the gating used for `call' / `publish' — STREAM_OPEN
+    %% frames sent before HELLO completes hit `drop_unexpected' in
+    %% the peering statem and never make it to the wire.
+    {reply, {error, not_connected}, S};
+handle_call({stream_open, Realm, Proc, Args, Opts, Caller}, _From, S) ->
+    {reply_value, Reply, NewS} = open_client_stream(Realm, Proc, Args, Opts,
+                                                    Caller, S),
+    {reply, Reply, NewS};
+
+handle_call({stream_advertise, Realm, Proc, Mode, Handler}, _From,
+            #state{stream_procedures = SP} = S) ->
+    NewS = S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}}},
+    maybe_send_advertise(Realm, Proc, NewS),
+    {reply, ok, NewS};
+
+handle_call({stream_unadvertise, Realm, Proc}, _From,
+            #state{stream_procedures = SP} = S) ->
+    NewS = S#state{stream_procedures = maps:remove({Realm, Proc}, SP)},
+    maybe_send_unadvertise(Realm, Proc, S),
+    {reply, ok, NewS};
+
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
+
+%%-- Outbound STREAM_* from a paired stream_v1 process ---------------
+
+handle_cast({send_stream_frame, _Type, _Spec},
+            #state{peer_pid = undefined} = S) ->
+    {noreply, S};
+handle_cast({send_stream_frame, Type, Spec},
+            #state{peer_pid = Pid, identity = Id} = S) ->
+    Frame = build_stream_frame(Type, finalise_stream_spec(Type, Spec, Id)),
+    catch macula_peering:send_frame(Pid, Frame),
+    {noreply, on_outbound_stream_frame(Type, Spec, S)};
 
 handle_cast(_Msg, S) -> {noreply, S}.
 
@@ -537,6 +678,7 @@ handle_info({macula_peering, connected, Pid, PeerNodeId},
     NewS = S#state{peer_node_id = PeerNodeId},
     drain_pending_subscribes(NewS),
     drain_pending_advertises(NewS),
+    drain_pending_stream_advertises(NewS),
     {noreply, NewS};
 
 handle_info({macula_peering, frame, Pid, Frame},
@@ -559,8 +701,12 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid} = S) ->
     {stop, normal, NewS#state{peer_pid = undefined,
                               peer_node_id = undefined}};
 
-handle_info({'DOWN', Mon, process, _Pid, _Reason}, S) ->
-    {noreply, on_subscriber_down(Mon, S)};
+handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
+    %% Two monitor sources land here: subscriber pids paired by
+    %% `subscribe/4', and stream pids tracked in `streams'. Probe
+    %% the streams map first by pid (cheap), fall back to the
+    %% subscriber path on miss.
+    {noreply, on_monitor_down(Pid, Mon, S)};
 
 handle_info(_Other, S) ->
     {noreply, S}.
@@ -612,6 +758,22 @@ on_frame(#{frame_type := event, topic := Topic, realm := Realm} = Frame, S) ->
 on_frame(#{frame_type := call} = Frame, S) ->
     handle_inbound_call(Frame, S),
     S;
+%% Inbound STREAM_OPEN — relay forwarded a streaming RPC opener.
+%% Look up the streaming handler; spawn a server-side stream_v1
+%% paired to this link plus a transient handler process.
+on_frame(#{frame_type := stream_open} = Frame, S) ->
+    handle_inbound_stream_open(Frame, S);
+%% STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY — chunk
+%% delivery on a previously-opened stream. Look up the local
+%% stream_v1 pid by stream_id and forward.
+on_frame(#{frame_type := stream_data} = Frame, S) ->
+    deliver_stream_data(Frame, S);
+on_frame(#{frame_type := stream_end} = Frame, S) ->
+    deliver_stream_end(Frame, S);
+on_frame(#{frame_type := stream_error} = Frame, S) ->
+    deliver_stream_error(Frame, S);
+on_frame(#{frame_type := stream_reply} = Frame, S) ->
+    deliver_stream_reply(Frame, S);
 %% HyParView / Plumtree / SWIM / content frames pass through here.
 %% This client cares only about call/result/error and event; the
 %% rest is for dedicated overlay modules.
@@ -632,7 +794,8 @@ on_timeout({{From, _OldTRef}, NewP}, S) ->
     gen_server:reply(From, {error, timeout}),
     {noreply, S#state{pending = NewP}}.
 
-fail_all_pending(Reason, #state{pending = P, subscriptions = Subs} = S) ->
+fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
+                                streams = Streams} = S) ->
     maps:foreach(fun(_CallId, {From, TRef}) ->
         _ = erlang:cancel_timer(TRef),
         gen_server:reply(From, {error, Reason})
@@ -641,7 +804,16 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs} = S) ->
         erlang:demonitor(Mon, [flush]),
         Subscriber ! {macula_event_gone, SubRef, Reason}
     end, Subs),
-    S#state{pending = #{}, subscriptions = #{}, topic_index = #{}}.
+    %% Abort every open stream with a `disconnected' STREAM_ERROR.
+    %% Caller waiters (recv / await_reply) unblock immediately;
+    %% transient handler processes see the abort and exit.
+    maps:foreach(fun(_Sid, {Pid, Mon}) ->
+        erlang:demonitor(Mon, [flush]),
+        catch macula_stream_v1:abort(Pid, <<"disconnected">>,
+                                     iolist_to_binary(io_lib:format("~p", [Reason])))
+    end, Streams),
+    S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
+            streams = #{}}.
 
 %%-------------------------------------------------------------------
 %% Subscription helpers
@@ -866,3 +1038,237 @@ parse_seed(Url) when is_list(Url) ->
         _ ->
             error({invalid_seed_url, Url})
     end.
+
+%%-------------------------------------------------------------------
+%% Streaming RPC — outbound CALL_STREAM (client-side)
+%%-------------------------------------------------------------------
+
+%% Spawn a client-side `macula_stream_v1' linked to this link, attach
+%% it as a `{remote_via_link, self(), Sid}' peer, then ship the
+%% STREAM_OPEN frame. The caller drives the stream from outside; the
+%% returned pid is bound to the requested `owner' (default = caller)
+%% so a crashing owner tears the stream down.
+open_client_stream(Realm, Proc, Args, Opts, Caller,
+                   #state{peer_pid = Pid, identity = Id} = S) ->
+    Sid       = crypto:strong_rand_bytes(16),
+    Mode      = maps:get(mode, Opts, server_stream),
+    Owner     = maps:get(owner, Opts, Caller),
+    DeadlineMs = maps:get(deadline_ms, Opts,
+                          erlang:system_time(millisecond) + 30_000),
+    {ok, StreamPid} = macula_stream_v1:start_link(#{
+        id    => Sid,
+        role  => client,
+        mode  => Mode,
+        owner => Owner
+    }),
+    ok = macula_stream_v1:attach_to_link(StreamPid, self(), Sid),
+    Mon = erlang:monitor(process, StreamPid),
+    Frame = macula_frame:stream_open(#{
+        stream_id   => Sid,
+        procedure   => Proc,
+        realm       => Realm,
+        mode        => Mode,
+        args        => Args,
+        deadline_ms => DeadlineMs,
+        caller      => macula_identity:public(Id)
+    }),
+    catch macula_peering:send_frame(Pid, Frame),
+    NewS = S#state{streams = (S#state.streams)#{Sid => {StreamPid, Mon}}},
+    {reply_value, {ok, StreamPid}, NewS}.
+
+%%-------------------------------------------------------------------
+%% Streaming RPC — outbound STREAM_DATA / END / ERROR / REPLY
+%%-------------------------------------------------------------------
+
+%% Each `macula_stream_v1' bound to this link via the
+%% `{remote_via_link, _, Sid}' peer shape casts an outbound frame
+%% spec here. Build the corresponding `macula_frame:stream_*' and
+%% ship through the peering connection. Outbound STREAM_END (full
+%% close), STREAM_ERROR, or STREAM_REPLY also drop the local
+%% routing entry — the stream is finished from our side.
+build_stream_frame(stream_data, Spec)  -> macula_frame:stream_data(Spec);
+build_stream_frame(stream_end, Spec)   -> macula_frame:stream_end(Spec);
+build_stream_frame(stream_error, Spec) -> macula_frame:stream_error(Spec);
+build_stream_frame(stream_reply, Spec) -> macula_frame:stream_reply(Spec).
+
+%% `stream_reply' carries `responded_by' (the link's own pubkey)
+%% which the v1 stream gen_server has no way to know. Stamp it on
+%% before frame construction; other types pass through untouched.
+finalise_stream_spec(stream_reply, Spec, Id) ->
+    Spec#{responded_by => macula_identity:public(Id)};
+finalise_stream_spec(_Type, Spec, _Id) ->
+    Spec.
+
+%% After sending an outbound terminal frame, drop the local routing
+%% entry. STREAM_DATA does not terminate; STREAM_END does only on
+%% `role = both'.
+on_outbound_stream_frame(stream_end, #{role := both, stream_id := Sid}, S) ->
+    drop_stream(Sid, S);
+on_outbound_stream_frame(stream_error, #{stream_id := Sid}, S) ->
+    drop_stream(Sid, S);
+on_outbound_stream_frame(stream_reply, #{stream_id := Sid}, S) ->
+    drop_stream(Sid, S);
+on_outbound_stream_frame(_Type, _Spec, S) ->
+    S.
+
+drop_stream(Sid, #state{streams = Streams} = S) ->
+    drop_stream_take(maps:take(Sid, Streams), S).
+
+drop_stream_take(error, S) ->
+    S;
+drop_stream_take({{_Pid, Mon}, NewStreams}, S) ->
+    erlang:demonitor(Mon, [flush]),
+    S#state{streams = NewStreams}.
+
+%%-------------------------------------------------------------------
+%% Streaming RPC — inbound STREAM_OPEN (server-side dispatch)
+%%-------------------------------------------------------------------
+
+%% The relay forwarded a STREAM_OPEN whose `(Realm, Procedure)' this
+%% link advertised. Spawn a server-side stream_v1 paired to this
+%% link, store it, then dispatch the registered handler in a
+%% transient process so a slow / crashing handler can't block the
+%% link's gen_server.
+handle_inbound_stream_open(#{stream_id := Sid, procedure := Proc,
+                              realm := Realm, args := Args} = Frame, S) ->
+    DeclaredMode = maps:get(mode, Frame, server_stream),
+    dispatch_stream_open(maps:find({Realm, Proc}, S#state.stream_procedures),
+                         Sid, Proc, DeclaredMode, Args, S).
+
+%% Unknown (Realm, Procedure) → ship a STREAM_ERROR back so the
+%% client unblocks immediately rather than waiting for its deadline.
+dispatch_stream_open(error, Sid, _Proc, _Declared, _Args,
+                     #state{peer_pid = Pid} = S) when is_pid(Pid) ->
+    Frame = macula_frame:stream_error(#{
+        stream_id => Sid,
+        code      => <<"not_found">>,
+        message   => <<"procedure not advertised">>
+    }),
+    catch macula_peering:send_frame(Pid, Frame),
+    S;
+dispatch_stream_open(error, _Sid, _Proc, _Declared, _Args, S) ->
+    S;
+dispatch_stream_open({ok, {AdvMode, Handler}}, Sid, Proc, _Declared, Args, S) ->
+    %% Advertised mode wins — the server declared the shape.
+    spawn_inbound_stream(Sid, Proc, AdvMode, Handler, Args, S).
+
+spawn_inbound_stream(Sid, Proc, Mode, Handler, Args,
+                     #state{streams = Streams} = S) ->
+    Host = spawn(fun() -> receive stop -> ok end end),
+    {ok, StreamPid} = macula_stream_v1:start_link(#{
+        id    => Sid,
+        role  => server,
+        mode  => Mode,
+        owner => Host
+    }),
+    ok = macula_stream_v1:attach_to_link(StreamPid, self(), Sid),
+    Mon = erlang:monitor(process, StreamPid),
+    _Worker = spawn_stream_handler(Handler, StreamPid, Args, Proc),
+    S#state{streams = Streams#{Sid => {StreamPid, Mon}}}.
+
+%% Handler runs in a transient process. A handler crash maps to a
+%% STREAM_ERROR abort with the crash class as the code — same shape
+%% as `macula_mesh_client' so handlers written for either carrier
+%% surface identical error semantics. The try/catch is justified
+%% (mirrors `safe_invoke_handler/4' for unary CALLs): without it a
+%% crash would silently leave the caller waiting on its deadline.
+spawn_stream_handler(Handler, Stream, Args, Proc) ->
+    spawn(fun() ->
+        try Handler(Stream, Args)
+        catch
+            Class:Reason:Stack ->
+                Code = atom_to_binary(Class, utf8),
+                Msg = iolist_to_binary(io_lib:format(
+                    "stream handler ~s crashed: ~p:~p~n~p",
+                    [Proc, Class, Reason, Stack])),
+                _ = macula_stream_v1:abort(Stream, Code, Msg)
+        end
+    end).
+
+%%-------------------------------------------------------------------
+%% Streaming RPC — inbound STREAM_DATA / END / ERROR / REPLY
+%%-------------------------------------------------------------------
+
+%% Unknown stream_id (race with terminal frame from our side) is
+%% silently dropped — same policy as `mesh_client'.
+deliver_stream_data(#{stream_id := Sid} = Frame, S) ->
+    deliver_to_stream(maps:find(Sid, S#state.streams),
+                      fun({Pid, _Mon}) ->
+                          macula_stream_v1:deliver_chunk(
+                            Pid,
+                            maps:get(encoding, Frame, raw),
+                            maps:get(body, Frame, <<>>))
+                      end),
+    S.
+
+deliver_stream_end(#{stream_id := Sid} = Frame, S) ->
+    Role = maps:get(role, Frame, both),
+    deliver_to_stream(maps:find(Sid, S#state.streams),
+                      fun({Pid, _Mon}) ->
+                          macula_stream_v1:deliver_end(Pid, Role)
+                      end),
+    %% Full close drops the routing entry; half close keeps it open
+    %% for outbound chunks back to the peer.
+    forget_on_full_close(Role, Sid, S).
+
+deliver_stream_error(#{stream_id := Sid} = Frame, S) ->
+    Code = maps:get(code, Frame, <<"error">>),
+    Message = maps:get(message, Frame, <<>>),
+    deliver_to_stream(maps:find(Sid, S#state.streams),
+                      fun({Pid, _Mon}) ->
+                          macula_stream_v1:deliver_error(Pid, Code, Message)
+                      end),
+    drop_stream(Sid, S).
+
+deliver_stream_reply(#{stream_id := Sid, payload := Payload}, S) ->
+    deliver_to_stream(maps:find(Sid, S#state.streams),
+                      fun({Pid, _Mon}) ->
+                          macula_stream_v1:deliver_reply(Pid, {ok, Payload})
+                      end),
+    S.
+
+deliver_to_stream(error, _Fun) ->
+    ok;
+deliver_to_stream({ok, Entry}, Fun) ->
+    _ = Fun(Entry),
+    ok.
+
+forget_on_full_close(both, Sid, S) -> drop_stream(Sid, S);
+forget_on_full_close(_, _, S)      -> S.
+
+%%-------------------------------------------------------------------
+%% Streaming RPC — replay on (re)connect
+%%-------------------------------------------------------------------
+
+%% Mirror `drain_pending_advertises/1' for streaming procedures. The
+%% wire frame is the existing `advertise' (no separate streaming
+%% advertise frame); the link's local `stream_procedures' map
+%% remains the source of truth for mode-aware dispatch.
+drain_pending_stream_advertises(#state{stream_procedures = SP} = S) ->
+    maps:foreach(fun({Realm, Procedure}, _Entry) ->
+        maybe_send_advertise(Realm, Procedure, S)
+    end, SP),
+    ok.
+
+%%-------------------------------------------------------------------
+%% Streaming RPC — DOWN routing (stream pid vs subscriber pid)
+%%-------------------------------------------------------------------
+
+%% Probe the streams map first by pid; fall back to the subscriber
+%% path. Stream pids are added by `open_client_stream/6' and
+%% `spawn_inbound_stream/6'.
+on_monitor_down(Pid, Mon, #state{streams = Streams} = S) ->
+    case find_stream_by_pid(Pid, Streams) of
+        {ok, Sid} ->
+            erlang:demonitor(Mon, [flush]),
+            S#state{streams = maps:remove(Sid, Streams)};
+        error ->
+            on_subscriber_down(Mon, S)
+    end.
+
+find_stream_by_pid(Pid, Streams) ->
+    Found = [Sid || {Sid, {P, _}} <- maps:to_list(Streams), P =:= Pid],
+    first_or_error(Found).
+
+first_or_error([H | _]) -> {ok, H};
+first_or_error([])      -> error.
