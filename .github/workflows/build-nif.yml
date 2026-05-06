@@ -32,8 +32,14 @@ jobs:
         # transitive `time@0.3.47` crate requires 1.88+. The rust
         # image tracks latest stable so this stays unstuck as the
         # ecosystem moves.
+        #
+        # `RUSTFLAGS=-C target-feature=-crt-static` is required because
+        # the rust:alpine image defaults `x86_64-unknown-linux-musl` to
+        # static crt linking, which forbids cdylib (NIFs need cdylib).
+        # Same flag macula-e2e's Dockerfile uses for the same reason.
         run: |
           docker run --rm -v ${{ github.workspace }}:/work -w /work/native/macula_quic \
+            -e RUSTFLAGS="-C target-feature=-crt-static" \
             rust:alpine sh -c '
               apk add --no-cache build-base &&
               cargo build --release &&
