@@ -256,3 +256,60 @@ publish_with_no_seeds_is_transient_test_() ->
          ok = macula_client:close(Pool),
          ok
      end}.
+
+%%------------------------------------------------------------------
+%% status/1
+%%------------------------------------------------------------------
+
+status_with_no_seeds_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         {ok, S} = macula_client:status(Pool),
+         ?assertEqual([], maps:get(seeds, S)),
+         ?assertEqual(0, maps:get(healthy_links, S)),
+         ?assertEqual(0, maps:get(failed_links, S)),
+         ?assertEqual(0, maps:get(subscriptions, S)),
+         ?assertMatch(<<_:256>>, maps:get(self_node_id, S)),
+         ok = macula_client:close(Pool)
+     end}.
+
+status_unreachable_seeds_count_as_failed_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([?SEED1, ?SEED2], #{}),
+         {ok, S} = macula_client:status(Pool),
+         ?assertEqual([?SEED1, ?SEED2], maps:get(seeds, S)),
+         %% Both links are spawned but stuck in connect — neither has
+         %% completed CONNECT/HELLO so both count as failed.
+         ?assertEqual(0, maps:get(healthy_links, S)),
+         ?assertEqual(2, maps:get(failed_links, S)),
+         ok = macula_client:close(Pool)
+     end}.
+
+status_tracks_subscription_count_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         {ok, _S1} = macula_client:subscribe(Pool, ?REALM,
+                                              <<"a.v1">>, self(), #{}),
+         {ok, _S2} = macula_client:subscribe(Pool, ?REALM,
+                                              <<"b.v1">>, self(), #{}),
+         {ok, S} = macula_client:status(Pool),
+         ?assertEqual(2, maps:get(subscriptions, S)),
+         ok = macula_client:close(Pool)
+     end}.
+
+facade_status_delegates_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([?SEED1], #{}),
+         {ok, ViaFacade} = macula:status(Pool),
+         {ok, Direct}    = macula_client:status(Pool),
+         ?assertEqual(Direct, ViaFacade),
+         ok = macula_client:close(Pool)
+     end}.

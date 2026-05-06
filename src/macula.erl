@@ -30,7 +30,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 %% Connection — V2 (pool)
--export([connect/2, close/1, child_spec/3]).
+-export([connect/2, close/1, child_spec/3, status/1]).
 %% Connection — V1 (legacy)
 -export([disconnect/1]).
 
@@ -129,6 +129,13 @@ close(Pool) when is_pid(Pool) ->
     supervisor:child_spec().
 child_spec(Id, Seeds, Opts) ->
     macula_client:child_spec(Id, Seeds, Opts).
+
+%% @doc Aggregate health snapshot of a V2 pool. Suitable for
+%% `/health' or `/status' endpoints; not for hot-loop polling. See
+%% `macula_client:status/1' for the full shape.
+-spec status(pool()) -> {ok, macula_client:status()}.
+status(Pool) when is_pid(Pool) ->
+    macula_client:status(Pool).
 
 %%%===================================================================
 %%% Connection — V1 (legacy)

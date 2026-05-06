@@ -50,16 +50,25 @@
 -module(macula_client).
 -behaviour(gen_server).
 
--export([connect/2, close/1, child_spec/3]).
+-export([connect/2, close/1, child_spec/3, status/1]).
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--export_type([pool/0, opts/0, seed/0]).
+-export_type([pool/0, opts/0, seed/0, status/0]).
 
 -type pool() :: pid().
+
+%% @doc Aggregate health snapshot of a pool. See `status/1'.
+-type status() :: #{
+    seeds         := [seed()],
+    healthy_links := non_neg_integer(),
+    failed_links  := non_neg_integer(),
+    self_node_id  := macula_identity:pubkey(),
+    subscriptions := non_neg_integer()
+}.
 -type seed() :: binary() | string()
               | #{host := binary() | string(),
                   port := inet:port_number()}.
@@ -145,6 +154,22 @@ child_spec(Id, Seeds, Opts) ->
       type     => worker,
       modules  => [?MODULE]}.
 
+%% @doc Aggregate health snapshot of the pool. Single round-trip to
+%% the pool's gen_server plus one `is_connected' probe per spawned
+%% link (each capped at 1s). Suitable for `/health' or
+%% `/status' endpoints; not for hot-loop polling.
+%%
+%% Counts:
+%% <ul>
+%%   <li>`healthy_links' — links whose worker pid is alive and whose
+%%       CONNECT/HELLO handshake has completed.</li>
+%%   <li>`failed_links' — every other configured seed (link not yet
+%%       spawned, dead, or still handshaking).</li>
+%% </ul>
+-spec status(pool()) -> {ok, status()}.
+status(Pool) when is_pid(Pool) ->
+    gen_server:call(Pool, status, 5_000).
+
 %% @doc Publish a frame to `replication_factor' currently-spawned
 %% links. Partial success = success. Realm is per-call (32 bytes).
 -spec publish(pool(), <<_:256>>, binary(), term(), map()) ->
@@ -229,6 +254,19 @@ handle_call({subscribe, Realm, Topic, Subscriber, _Opts}, _From, S) ->
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, drop_sub(SubRef, S)};
 
+handle_call(status, _From,
+            #state{seeds = Seeds, links = Links, subs = Subs,
+                   identity = Identity} = S) ->
+    {Healthy, Failed} = count_link_health(Seeds, Links),
+    Status = #{
+        seeds         => Seeds,
+        healthy_links => Healthy,
+        failed_links  => Failed,
+        self_node_id  => macula_identity:public(Identity),
+        subscriptions => map_size(Subs)
+    },
+    {reply, {ok, Status}, S};
+
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
@@ -300,6 +338,27 @@ after_link_start({error, Reason}, Seed, S) ->
 
 spawned_link_pids(#state{links = Links}) ->
     [P || #link_state{pid = P} <- maps:values(Links), is_pid(P)].
+
+%% Count `(healthy, failed)' links across configured seeds. A seed is
+%% healthy when its worker pid is alive AND its station_link reports
+%% `is_connected'. Anything else (no pid yet, dead pid, mid-handshake)
+%% counts as failed. Probes are sequential; cap at 1s per probe via
+%% `is_connected/1' so a hung station can't stall the whole
+%% `status/1' call past one second per stuck seed.
+count_link_health(Seeds, Links) ->
+    lists:foldl(fun(Seed, Acc) -> tally_seed(maps:find(Seed, Links), Acc) end,
+                {0, 0}, Seeds).
+
+tally_seed({ok, #link_state{pid = Pid}}, {H, F}) when is_pid(Pid) ->
+    bump(link_healthy(Pid), H, F);
+tally_seed(_, {H, F}) ->
+    {H, F + 1}.
+
+bump(true,  H, F) -> {H + 1, F};
+bump(false, H, F) -> {H, F + 1}.
+
+link_healthy(Pid) ->
+    is_process_alive(Pid) andalso macula_station_link:is_connected(Pid).
 
 on_respawn_link(Seed, S) ->
     NewS = start_link_for_seed(Seed, S),
