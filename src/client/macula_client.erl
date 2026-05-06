@@ -53,6 +53,8 @@
 -export([connect/2, close/1, child_spec/3, status/1]).
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
+%% RPC fan-out (since 3.16.0) — called by the `macula' facade.
+-export([call/5, advertise/4, unadvertise/3]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -121,6 +123,10 @@
     subs = #{}    :: #{reference() => #sub_spec{}},
     %% {realm, topic} → set of pool-owned SubRefs
     topic_index = #{} :: #{{<<_:256>>, binary()} => sets:set(reference())},
+    %% Advertised procedures — pool replays these on link respawn.
+    %% {realm, procedure} → handler
+    procs = #{}   :: #{{<<_:256>>, binary()} =>
+                           macula_station_link:handler()},
     dedup_tab     :: ets:tid()
 }).
 
@@ -153,6 +159,46 @@ child_spec(Id, Seeds, Opts) ->
       shutdown => 5_000,
       type     => worker,
       modules  => [?MODULE]}.
+
+%% @doc Issue a CALL frame against the pool. Tries each healthy link
+%% in turn and returns the first non-error reply. Returns
+%% `{error, no_healthy_station}' when no link has completed its
+%% CONNECT/HELLO handshake.
+%%
+%% Realm is per-call (32 bytes). Different realms can share a single
+%% pool with no extra plumbing.
+-spec call(pool(), <<_:256>>, binary(), term(), pos_integer()) ->
+    {ok, term()} | {error, term()}.
+call(Pool, Realm, Procedure, Payload, TimeoutMs)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       is_integer(TimeoutMs), TimeoutMs > 0 ->
+    gen_server:call(Pool, {rpc_call, Realm, Procedure, Payload, TimeoutMs},
+                    TimeoutMs + 1_000).
+
+%% @doc Advertise a procedure handler on every healthy link. Stored
+%% in pool state so links respawned later replay the advertisement.
+%% Returns `ok' when at least one link accepted the registration.
+-spec advertise(pool(), <<_:256>>, binary(),
+                macula_station_link:handler()) ->
+    ok | {error, term()}.
+advertise(Pool, Realm, Procedure, Handler)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (is_function(Handler, 1) orelse
+        (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)) ->
+    gen_server:call(Pool, {advertise, Realm, Procedure, Handler}, 5_000).
+
+%% @doc Drop a previously-advertised procedure on every healthy link
+%% and remove it from the pool's replay state. Idempotent.
+-spec unadvertise(pool(), <<_:256>>, binary()) -> ok.
+unadvertise(Pool, Realm, Procedure)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure) ->
+    gen_server:call(Pool, {unadvertise, Realm, Procedure}, 5_000).
 
 %% @doc Aggregate health snapshot of the pool. Single round-trip to
 %% the pool's gen_server plus one `is_connected' probe per spawned
@@ -254,6 +300,23 @@ handle_call({subscribe, Realm, Topic, Subscriber, _Opts}, _From, S) ->
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, drop_sub(SubRef, S)};
 
+handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, _From, S) ->
+    {reply,
+     call_first_success(spawned_link_pids(S),
+                        Realm, Procedure, Payload, TimeoutMs),
+     S};
+
+handle_call({advertise, Realm, Procedure, Handler}, _From,
+            #state{procs = P} = S) ->
+    Pids = spawned_link_pids(S),
+    Reply = fanout_advertise(Pids, Realm, Procedure, Handler),
+    {reply, Reply, S#state{procs = P#{{Realm, Procedure} => Handler}}};
+
+handle_call({unadvertise, Realm, Procedure}, _From,
+            #state{procs = P} = S) ->
+    _ = fanout_unadvertise(spawned_link_pids(S), Realm, Procedure),
+    {reply, ok, S#state{procs = maps:remove({Realm, Procedure}, P)}};
+
 handle_call(status, _From,
             #state{seeds = Seeds, links = Links, subs = Subs,
                    identity = Identity} = S) ->
@@ -339,6 +402,54 @@ after_link_start({error, Reason}, Seed, S) ->
 spawned_link_pids(#state{links = Links}) ->
     [P || #link_state{pid = P} <- maps:values(Links), is_pid(P)].
 
+%% First-success across the pool's healthy links. Tries each link in
+%% turn; the first non-error reply wins. Falls through on
+%% per-link errors (timeout, not_connected) so a single dead link does
+%% not block the call.
+call_first_success([], _Realm, _Proc, _Payload, _Tmo) ->
+    {error, no_healthy_station};
+call_first_success([Pid | Rest], Realm, Proc, Payload, Tmo) ->
+    next_or_first(macula_station_link:is_connected(Pid),
+                  Pid, Rest, Realm, Proc, Payload, Tmo).
+
+next_or_first(false, _Pid, Rest, Realm, Proc, Payload, Tmo) ->
+    call_first_success(Rest, Realm, Proc, Payload, Tmo);
+next_or_first(true, Pid, Rest, Realm, Proc, Payload, Tmo) ->
+    keep_or_next(macula_station_link:call(Pid, Realm, Proc, Payload, Tmo),
+                 Rest, Realm, Proc, Payload, Tmo).
+
+keep_or_next({ok, _} = R, _Rest, _Realm, _Proc, _Payload, _Tmo) -> R;
+keep_or_next({error, _} = E, [], _Realm, _Proc, _Payload, _Tmo) -> E;
+keep_or_next({error, _}, Rest, Realm, Proc, Payload, Tmo) ->
+    call_first_success(Rest, Realm, Proc, Payload, Tmo).
+
+%% Fan-out advertise: register on every healthy link. Returns ok if at
+%% least one link accepted; per-link errors are logged and discarded.
+fanout_advertise([], _Realm, _Proc, _Handler) ->
+    {error, no_healthy_station};
+fanout_advertise(Pids, Realm, Proc, Handler) ->
+    Results = [macula_station_link:advertise(P, Realm, Proc, Handler)
+               || P <- Pids,
+                  macula_station_link:is_connected(P)],
+    summarize_advertise(Results).
+
+summarize_advertise([]) ->
+    {error, no_healthy_station};
+summarize_advertise(Results) ->
+    Ok = lists:any(fun(ok) -> true; (_) -> false end, Results),
+    case Ok of
+        true  -> ok;
+        false -> {error, all_stations_failed}
+    end.
+
+%% Fan-out unadvertise: best-effort; ignored errors. The local pool
+%% state is dropped regardless so subsequent CALLs surface
+%% `unknown_next_peer' from the station.
+fanout_unadvertise(Pids, Realm, Proc) ->
+    [_ = macula_station_link:unadvertise(P, Realm, Proc)
+     || P <- Pids, macula_station_link:is_connected(P)],
+    ok.
+
 %% Count `(healthy, failed)' links across configured seeds. A seed is
 %% healthy when its worker pid is alive AND its station_link reports
 %% `is_connected'. Anything else (no pid yet, dead pid, mid-handshake)
@@ -366,6 +477,7 @@ on_respawn_link(Seed, S) ->
 
 replay_to_seed(#link_state{pid = Pid}, S) when is_pid(Pid) ->
     macula_client_replay:subs_to(Pid, S#state.topic_index),
+    macula_client_replay:advs_to(Pid, S#state.procs),
     S;
 replay_to_seed(_, S) ->
     S.

@@ -40,8 +40,10 @@
          unsubscribe/2,
          publish/3, publish/4, publish/5]).
 
-%% RPC
--export([call/3, call/4, advertise/3, advertise/4, unadvertise/2]).
+%% RPC — V1 (single-conn client) + V2 (pool, since 3.16.0)
+-export([call/3, call/4, call/5,
+         advertise/3, advertise/4, advertise/5,
+         unadvertise/2, unadvertise/3]).
 
 %% Signed DHT records (v3.2.0)
 -export([put_record/2,
@@ -243,10 +245,40 @@ advertise(Client, Procedure, Handler) ->
 advertise(Client, Procedure, Handler, _Opts) when is_pid(Client), is_binary(Procedure) ->
     macula_mesh_client:advertise(Client, Procedure, Handler).
 
-%% @doc Stop advertising a procedure.
+%% @doc Stop advertising a V1 procedure.
 -spec unadvertise(client(), procedure()) -> ok | {error, term()}.
 unadvertise(Client, Procedure) when is_pid(Client), is_binary(Procedure) ->
     macula_mesh_client:unadvertise(Client, Procedure).
+
+%%%===================================================================
+%%% RPC — V2 (pool, since 3.16.0)
+%%%===================================================================
+
+%% @doc Issue a CALL frame against a V2 pool. First-success across
+%% the pool's healthy links. See `macula_client:call/5'.
+-spec call(pool(), realm(), procedure(), term(), pos_integer()) ->
+    {ok, term()} | {error, term()}.
+call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
+    macula_client:call(Pool, Realm, Procedure, Payload, TimeoutMs).
+
+%% @doc Advertise a procedure handler on a V2 pool. Fans out to every
+%% healthy link and stores in pool state for replay on link respawn.
+%% See `macula_client:advertise/4'. Equivalent to `advertise/5' with
+%% empty opts.
+%%
+%% Arity 5 (not 4) so V2 calls do not collide with the legacy V1
+%% `advertise(Client, Procedure, Handler, Opts)' surface.
+-spec advertise(pool(), realm(), procedure(),
+                macula_station_link:handler(), map()) ->
+    ok | {error, term()}.
+advertise(Pool, Realm, Procedure, Handler, _Opts)
+  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32 ->
+    macula_client:advertise(Pool, Realm, Procedure, Handler).
+
+%% @doc Stop advertising a procedure on a V2 pool.
+-spec unadvertise(pool(), realm(), procedure()) -> ok.
+unadvertise(Pool, Realm, Procedure) ->
+    macula_client:unadvertise(Pool, Realm, Procedure).
 
 %%%===================================================================
 %%% Signed DHT records (v3.3.0)

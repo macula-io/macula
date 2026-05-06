@@ -313,3 +313,75 @@ facade_status_delegates_test_() ->
          ?assertEqual(Direct, ViaFacade),
          ok = macula_client:close(Pool)
      end}.
+
+%%------------------------------------------------------------------
+%% RPC fan-out — call/5, advertise/4, unadvertise/3
+%%------------------------------------------------------------------
+
+call_with_no_seeds_returns_no_healthy_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         R = macula_client:call(Pool, ?REALM, <<"ping.v1">>,
+                                 #{}, 1_000),
+         ?assertEqual({error, no_healthy_station}, R),
+         ok = macula_client:close(Pool)
+     end}.
+
+call_with_unreachable_seeds_returns_no_healthy_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([?SEED1, ?SEED2], #{}),
+         R = macula_client:call(Pool, ?REALM, <<"ping.v1">>,
+                                 #{}, 1_000),
+         ?assertEqual({error, no_healthy_station}, R),
+         ok = macula_client:close(Pool)
+     end}.
+
+advertise_no_seeds_returns_no_healthy_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         Handler = fun(_) -> {ok, pong} end,
+         R = macula_client:advertise(Pool, ?REALM,
+                                      <<"foo.v1">>, Handler),
+         ?assertEqual({error, no_healthy_station}, R),
+         ok = macula_client:close(Pool)
+     end}.
+
+unadvertise_is_idempotent_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         %% No matching advertise — unadvertise still returns ok.
+         ?assertEqual(ok, macula_client:unadvertise(
+                            Pool, ?REALM, <<"never.v1">>)),
+         ok = macula_client:close(Pool)
+     end}.
+
+facade_v2_rpc_delegates_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    {ok, Pool} = macula_client:connect([], #{}),
+    Handler = fun(_) -> {ok, ack} end,
+    %% V2 advertise/5 (Pool, Realm, Procedure, Handler, Opts)
+    ?assertEqual({error, no_healthy_station},
+                 macula:advertise(Pool, ?REALM, <<"x.v1">>, Handler, #{})),
+    %% V2 unadvertise/3
+    ?assertEqual(ok, macula:unadvertise(Pool, ?REALM, <<"x.v1">>)),
+    %% V2 call/5
+    ?assertEqual({error, no_healthy_station},
+                 macula:call(Pool, ?REALM, <<"y.v1">>, #{}, 500)),
+    ok = macula_client:close(Pool).
+
+advertise_rejects_wrong_handler_arity_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    {ok, Pool} = macula_client:connect([], #{}),
+    Three = fun(_, _, _) -> ok end,
+    ?assertError(function_clause,
+                 macula_client:advertise(Pool, ?REALM,
+                                          <<"a.v1">>, Three)),
+    ok = macula_client:close(Pool).

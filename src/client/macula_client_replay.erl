@@ -12,7 +12,7 @@
 %% on its state machine and so the replay path is independently
 %% testable.
 -module(macula_client_replay).
--export([subs_to/2]).
+-export([subs_to/2, advs_to/2]).
 
 %% @doc Re-issue a SUBSCRIBE frame for every distinct `{Realm, Topic}'
 %% in `TopicIndex' against `LinkPid'. The calling process (pool's
@@ -29,4 +29,21 @@ subs_to(LinkPid, TopicIndex) when is_pid(LinkPid), is_map(TopicIndex) ->
     Pairs = maps:keys(TopicIndex),
     [_ = macula_station_link:subscribe(LinkPid, R, T, PoolPid)
      || {R, T} <- Pairs],
+    ok.
+
+%% @doc Re-issue an ADVERTISE frame for every advertised procedure
+%% in `Procs' against `LinkPid'. Mirrors `subs_to/2' for the RPC
+%% surface — used by the pool to restore wire-level advertisement
+%% bindings whenever a station link respawns.
+%%
+%% Errors from individual link advertise calls are swallowed: the
+%% next link respawn cycle re-tries.
+-spec advs_to(pid(), #{{<<_:256>>, binary()} =>
+                        macula_station_link:handler()}) -> ok.
+advs_to(LinkPid, Procs) when is_pid(LinkPid), is_map(Procs) ->
+    maps:foreach(
+      fun({Realm, Procedure}, Handler) ->
+          _ = macula_station_link:advertise(LinkPid, Realm,
+                                             Procedure, Handler)
+      end, Procs),
     ok.
