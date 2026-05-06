@@ -3,25 +3,22 @@
 %%%
 %%% This is the main entry point for applications using the Macula SDK.
 %%%
-%%% == V2 (canonical, since 3.11.0) ==
-%%%
 %%% Apps connect via `connect/2', which returns a `macula_client'
 %%% pool that internally wraps N peering links to N stations.
-%%% `publish/4', `publish/5', `subscribe/4', `subscribe/5', and
-%%% `unsubscribe/2' route through the pool with realm-per-call
-%%% semantics. See `macula_pubsub' for the slice module of the same
-%%% surface.
+%%% `publish/4,5', `subscribe/4,5', `unsubscribe/2', `call/5',
+%%% `advertise/5', `unadvertise/3', `call_stream/5',
+%%% `advertise_stream/5', and `unadvertise_stream/3' route through
+%%% the pool with realm-per-call semantics. See `macula_pubsub' for
+%%% the slice module of the publish/subscribe surface.
 %%%
-%%% == V1 (legacy, retired at 4.0.0) ==
+%%% LOCAL streaming (`call_stream/2,3', `open_stream/3,4',
+%%% `advertise_stream/2,3', `unadvertise_stream/1') dispatches
+%%% in-process via `macula_stream_local' — for unit tests and
+%%% same-BEAM pairs.
 %%%
-%%% Older apps used a single-connection client (`macula_mesh_client').
-%%% V1 facade surfaces still here untouched: `subscribe/3',
-%%% `publish/3', `call/3,4', `advertise/3,4', `unadvertise/2',
-%%% `put_record/2', plus all stream and directed-RPC operations.
-%%% V1 callers wishing to keep V1 semantics for connect/publish/4/
-%%% unsubscribe/close after upgrading to 3.11.0 should call
-%%% `macula_mesh_client' / `macula_stream' directly — see the
-%%% migration guide.
+%%% Erlang distribution over the mesh ships via `join_mesh/1' (V2
+%%% pool carrier) or `join_dist_relay/1' (dedicated dist relay). See
+%%% `macula_dist_relay' / `macula_dist_system'.
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -113,25 +110,13 @@
 %%   <li>`dedup_window_ms', `dedup_sweep_ms' — inbound-EVENT dedup tunables.</li>
 %% </ul>
 %%
-%% V1-only opts that have NO V2 equivalent and are silently ignored
-%% (with a `logger:notice') for callers migrating from
-%% `macula_multi_relay':
-%% <ul>
-%%   <li>`relays' — superseded by the `Seeds' positional argument.</li>
-%%   <li>`realm' — V2 is realm-per-call; pass realm to each
-%%       `publish/4' / `subscribe/4' / `call/5' invocation instead.</li>
-%%   <li>`site' — V1 routing-affinity hint with no V2 analog.</li>
-%%   <li>`connections' — V1 was N connections per relay; V2 is one
-%%       link per seed (add more seeds to grow the pool).</li>
-%% </ul>
+%% Legacy opts silently dropped (with a one-shot `logger:notice'):
+%% `relays' (use the `Seeds' positional argument), `realm' (V2 is
+%% realm-per-call), `site' (no V2 analog), `connections' (one link
+%% per seed; add more seeds to grow the pool).
 %%
 %% See `macula_client' for the canonical pool implementation and
 %% `macula_pubsub' for the slice module.
-%%
-%% **Breaking change since 3.11.0**: this function previously
-%% returned a `macula_mesh_client' single-connection client. V1
-%% callers must now call `macula_mesh_client:start_link/1' directly
-%% to retain V1 semantics. See `CHANGELOG.md' / migration guide.
 -spec connect([macula_client:seed()], macula_client:opts()) ->
     {ok, pool()} | {error, term()}.
 connect(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
