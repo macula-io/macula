@@ -21,6 +21,7 @@
     start_link/1,
     pair/2,
     attach_remote/3,
+    attach_to_link/3,
     send/2,
     send/3,
     recv/1,
@@ -61,14 +62,21 @@
 -type result() :: {ok, term()} | {error, term()}.
 
 %% Peer shape (Phase 2+):
-%%   undefined             — unpaired
-%%   {local, Pid}          — Phase 1 in-process pairing
-%%   {remote, Client, Sid} — Phase 2 QUIC: peer lives on another node,
-%%                           deliveries are encoded as STREAM_* frames
-%%                           and sent out the mesh_client's QUIC stream.
+%%   undefined                — unpaired
+%%   {local, Pid}             — Phase 1 in-process pairing
+%%   {remote, Client, Sid}    — V1 mesh_client QUIC carrier: deliveries
+%%                              encoded as STREAM_* frames and sent out
+%%                              the mesh_client's single QUIC stream.
+%%   {remote_via_link, L, Sid}— V2 station_link carrier (SDK 3.17+):
+%%                              deliveries encoded as V2 STREAM_* frames
+%%                              and sent through the station_link's
+%%                              peering connection. The wire format is
+%%                              `macula_frame:stream_data/end/error/reply'
+%%                              rather than the V1 protocol_encoder shape.
 -type peer() :: undefined
               | {local, pid()}
-              | {remote, pid(), stream_id()}.
+              | {remote, pid(), stream_id()}
+              | {remote_via_link, pid(), stream_id()}.
 
 -export_type([role/0, mode/0, encoding/0, chunk/0, stream_id/0, result/0,
               peer/0]).
@@ -123,6 +131,16 @@ pair(A, B) when is_pid(A), is_pid(B) ->
 attach_remote(StreamPid, ClientPid, StreamId)
   when is_pid(StreamPid), is_pid(ClientPid), is_binary(StreamId) ->
     gen_server:call(StreamPid, {pair_remote, ClientPid, StreamId}).
+
+%% @doc Attach a V2 `macula_station_link' peer to this stream. The
+%% station_link carries deliveries as V2 `macula_frame:stream_*'
+%% frames over its peering connection (one per pool seed); inbound
+%% STREAM_* frames are decoded by the link and forwarded into this
+%% stream via the deliver_chunk / end / error / reply casts below.
+-spec attach_to_link(pid(), pid(), stream_id()) -> ok.
+attach_to_link(StreamPid, LinkPid, StreamId)
+  when is_pid(StreamPid), is_pid(LinkPid), is_binary(StreamId) ->
+    gen_server:call(StreamPid, {pair_via_link, LinkPid, StreamId}).
 
 %% @doc Send a binary chunk on the stream.
 -spec send(pid(), binary()) -> ok | {error, term()}.
@@ -250,6 +268,9 @@ handle_call({pair_local, Peer}, _From, State) ->
 handle_call({pair_remote, ClientPid, StreamId}, _From, State) ->
     _ = erlang:monitor(process, ClientPid),
     {reply, ok, State#state{peer = {remote, ClientPid, StreamId}}};
+handle_call({pair_via_link, LinkPid, StreamId}, _From, State) ->
+    _ = erlang:monitor(process, LinkPid),
+    {reply, ok, State#state{peer = {remote_via_link, LinkPid, StreamId}}};
 
 %% --- send --------------------------------------------------------------
 
@@ -439,7 +460,9 @@ forward_to_peer(#state{peer = {local, Pid}}, {error, Code, Message}) ->
 forward_to_peer(#state{peer = {local, Pid}}, {reply, Result}) ->
     deliver_reply(Pid, Result);
 forward_to_peer(#state{peer = {remote, Client, Sid}} = S, Action) ->
-    send_remote(Client, Sid, Action, S#state.seq_out).
+    send_remote(Client, Sid, Action, S#state.seq_out);
+forward_to_peer(#state{peer = {remote_via_link, Link, Sid}} = S, Action) ->
+    send_via_link(Link, Sid, Action, S#state.seq_out).
 
 send_remote(Client, Sid, {chunk, Encoding, Body}, Seq) ->
     macula_mesh_client:send_stream_frame(Client, stream_data, #{
@@ -471,6 +494,39 @@ send_remote(Client, Sid, {reply, {error, Reason}}, _Seq) ->
                    message => iolist_to_binary(io_lib:format("~p", [Reason]))}
     }).
 
+%% @private V2 carrier: hand off to `macula_station_link' which signs
+%% and ships a `macula_frame:stream_*' frame through its peering
+%% connection. Action shapes mirror `send_remote/4'; the link
+%% translates them to V2 frame specs internally.
+send_via_link(Link, Sid, {chunk, Encoding, Body}, Seq) ->
+    macula_station_link:send_stream_frame(Link, stream_data, #{
+        stream_id => Sid,
+        seq       => Seq,
+        encoding  => Encoding,
+        body      => Body
+    });
+send_via_link(Link, Sid, {end_stream, Role}, _Seq) ->
+    macula_station_link:send_stream_frame(Link, stream_end, #{
+        stream_id => Sid,
+        role      => Role
+    });
+send_via_link(Link, Sid, {error, Code, Message}, _Seq) ->
+    macula_station_link:send_stream_frame(Link, stream_error, #{
+        stream_id => Sid,
+        code      => Code,
+        message   => Message
+    });
+send_via_link(Link, Sid, {reply, {ok, Value}}, _Seq) ->
+    macula_station_link:send_stream_frame(Link, stream_reply, #{
+        stream_id => Sid,
+        payload   => Value
+    });
+send_via_link(Link, Sid, {reply, {error, _Reason} = Err}, _Seq) ->
+    macula_station_link:send_stream_frame(Link, stream_reply, #{
+        stream_id => Sid,
+        payload   => Err
+    }).
+
 %% @private Owner DOWN → stop. Otherwise check whether the dead pid
 %% was our peer (or our peer's mesh_client for remote peers) and, if
 %% so, surface as a stream error to any local readers / reply waiters.
@@ -479,6 +535,8 @@ handle_down(true, _Pid, State) ->
 handle_down(false, Pid, #state{peer = {local, Pid}} = State) ->
     propagate_peer_down(State);
 handle_down(false, Pid, #state{peer = {remote, Pid, _Sid}} = State) ->
+    propagate_peer_down(State);
+handle_down(false, Pid, #state{peer = {remote_via_link, Pid, _Sid}} = State) ->
     propagate_peer_down(State);
 handle_down(false, _Pid, State) ->
     {noreply, State}.
