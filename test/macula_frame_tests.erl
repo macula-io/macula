@@ -1201,3 +1201,225 @@ manifest_res_wire_roundtrip_test() ->
             manifest => #{name => <<"x">>, size => 42}}), Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
+
+%%------------------------------------------------------------------
+%% Streaming RPC frames — Part 6 §5.6
+%%------------------------------------------------------------------
+
+stream_id() -> crypto:strong_rand_bytes(16).
+
+%% -- STREAM_OPEN --------------------------------------------------
+
+stream_open_has_required_header_fields_test() ->
+    F = sample_stream_open(),
+    ?assertEqual(stream_open, macula_frame:frame_type(F)),
+    ?assertEqual(16, byte_size(maps:get(stream_id, F))),
+    ?assertEqual(32, byte_size(maps:get(realm, F))),
+    ?assertEqual(32, byte_size(maps:get(caller, F))),
+    ?assertEqual(server_stream, maps:get(mode, F)),
+    ?assertEqual(<<>>, maps:get(source_route, F)),
+    ?assertEqual(0,    maps:get(retry_budget, F)).
+
+stream_open_with_optional_fields_test() ->
+    Caller = crypto:strong_rand_bytes(32),
+    F = macula_frame:stream_open(#{
+        stream_id    => stream_id(),
+        procedure    => <<"foo.count">>,
+        realm        => crypto:strong_rand_bytes(32),
+        mode         => bidi,
+        args         => #{n => 5},
+        deadline_ms  => erlang:system_time(millisecond) + 5_000,
+        caller       => Caller,
+        source_route => <<1, 2, 3>>,
+        retry_budget => 2
+    }),
+    ?assertEqual(bidi,        maps:get(mode, F)),
+    ?assertEqual(<<1, 2, 3>>, maps:get(source_route, F)),
+    ?assertEqual(2,           maps:get(retry_budget, F)).
+
+stream_open_rejects_wrong_stream_id_size_test() ->
+    ?assertError(function_clause,
+                 macula_frame:stream_open(stream_open_spec_with(stream_id, <<0:64>>))).
+
+stream_open_rejects_unknown_mode_test() ->
+    ?assertError(function_clause,
+                 macula_frame:stream_open(stream_open_spec_with(mode, ohno))).
+
+stream_open_sign_verify_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F  = macula_frame:sign(sample_stream_open(macula_identity:public(Kp)), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(D, macula_identity:public(Kp))).
+
+%% -- STREAM_DATA --------------------------------------------------
+
+stream_data_carries_chunk_test() ->
+    Sid = stream_id(),
+    F = macula_frame:stream_data(#{
+        stream_id => Sid,
+        seq       => 7,
+        encoding  => raw,
+        body      => <<"chunk-bytes">>
+    }),
+    ?assertEqual(stream_data,    macula_frame:frame_type(F)),
+    ?assertEqual(Sid,            maps:get(stream_id, F)),
+    ?assertEqual(7,              maps:get(seq, F)),
+    ?assertEqual(raw,            maps:get(encoding, F)),
+    ?assertEqual(<<"chunk-bytes">>, maps:get(body, F)).
+
+stream_data_msgpack_accepts_term_body_test() ->
+    F = macula_frame:stream_data(#{
+        stream_id => stream_id(),
+        seq       => 0,
+        encoding  => msgpack,
+        body      => #{user => <<"alice">>, n => 3}
+    }),
+    ?assertEqual(msgpack, maps:get(encoding, F)),
+    ?assertEqual(#{user => <<"alice">>, n => 3}, maps:get(body, F)).
+
+stream_data_raw_rejects_non_binary_body_test() ->
+    ?assertError(function_clause,
+                 macula_frame:stream_data(#{
+                     stream_id => stream_id(),
+                     seq       => 0,
+                     encoding  => raw,
+                     body      => 42})).
+
+stream_data_rejects_negative_seq_test() ->
+    ?assertError(function_clause,
+                 macula_frame:stream_data(#{
+                     stream_id => stream_id(),
+                     seq       => -1,
+                     encoding  => raw,
+                     body      => <<>>})).
+
+stream_data_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:stream_data(#{
+            stream_id => stream_id(),
+            seq       => 1,
+            encoding  => raw,
+            body      => <<"hello">>}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+%% -- STREAM_END ---------------------------------------------------
+
+stream_end_half_close_test() ->
+    Sid = stream_id(),
+    F = macula_frame:stream_end(#{stream_id => Sid, role => send}),
+    ?assertEqual(stream_end, macula_frame:frame_type(F)),
+    ?assertEqual(Sid,        maps:get(stream_id, F)),
+    ?assertEqual(send,       maps:get(role, F)).
+
+stream_end_full_close_test() ->
+    F = macula_frame:stream_end(#{stream_id => stream_id(), role => both}),
+    ?assertEqual(both, maps:get(role, F)).
+
+stream_end_rejects_unknown_role_test() ->
+    ?assertError(function_clause,
+                 macula_frame:stream_end(#{stream_id => stream_id(),
+                                           role      => recv})).
+
+stream_end_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:stream_end(#{
+            stream_id => stream_id(),
+            role      => both}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+%% -- STREAM_ERROR -------------------------------------------------
+
+stream_error_carries_code_and_message_test() ->
+    Sid = stream_id(),
+    F = macula_frame:stream_error(#{
+        stream_id => Sid,
+        code      => <<"deadline_exceeded">>,
+        message   => <<"too slow">>
+    }),
+    ?assertEqual(stream_error,           macula_frame:frame_type(F)),
+    ?assertEqual(Sid,                    maps:get(stream_id, F)),
+    ?assertEqual(<<"deadline_exceeded">>, maps:get(code, F)),
+    ?assertEqual(<<"too slow">>,         maps:get(message, F)).
+
+stream_error_rejects_non_binary_code_test() ->
+    ?assertError(function_clause,
+                 macula_frame:stream_error(#{
+                     stream_id => stream_id(),
+                     code      => deadline_exceeded,
+                     message   => <<"x">>})).
+
+stream_error_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:stream_error(#{
+            stream_id => stream_id(),
+            code      => <<"aborted">>,
+            message   => <<"client gone">>}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D).
+
+%% -- STREAM_REPLY -------------------------------------------------
+
+stream_reply_carries_payload_test() ->
+    Sid = stream_id(),
+    Responded = crypto:strong_rand_bytes(32),
+    F = macula_frame:stream_reply(#{
+        stream_id    => Sid,
+        payload      => #{count => 12},
+        responded_by => Responded
+    }),
+    ?assertEqual(stream_reply, macula_frame:frame_type(F)),
+    ?assertEqual(Sid,          maps:get(stream_id, F)),
+    ?assertEqual(#{count => 12}, maps:get(payload, F)),
+    ?assertEqual(Responded,    maps:get(responded_by, F)).
+
+stream_reply_rejects_wrong_responded_by_size_test() ->
+    ?assertError(function_clause,
+                 macula_frame:stream_reply(#{
+                     stream_id    => stream_id(),
+                     payload      => ok,
+                     responded_by => <<0:64>>})).
+
+stream_reply_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:stream_reply(#{
+            stream_id    => stream_id(),
+            payload      => #{count => 12, last => <<"done">>},
+            responded_by => macula_identity:public(Kp)}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(D, macula_identity:public(Kp))).
+
+%%------------------------------------------------------------------
+%% Streaming RPC helpers
+%%------------------------------------------------------------------
+
+sample_stream_open() ->
+    sample_stream_open(crypto:strong_rand_bytes(32)).
+
+sample_stream_open(Caller) ->
+    macula_frame:stream_open(#{
+        stream_id   => stream_id(),
+        procedure   => <<"foo.count">>,
+        realm       => crypto:strong_rand_bytes(32),
+        mode        => server_stream,
+        args        => #{n => 5},
+        deadline_ms => erlang:system_time(millisecond) + 5_000,
+        caller      => Caller
+    }).
+
+stream_open_spec_with(Field, BadValue) ->
+    Base = #{
+        stream_id   => stream_id(),
+        procedure   => <<"foo">>,
+        realm       => crypto:strong_rand_bytes(32),
+        mode        => server_stream,
+        args        => ok,
+        deadline_ms => 0,
+        caller      => crypto:strong_rand_bytes(32)
+    },
+    Base#{Field => BadValue}.

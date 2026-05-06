@@ -67,6 +67,10 @@
     %% disconnect.
     advertise/1, unadvertise/1,
 
+    %% Constructors — Streaming RPC (Part 6 §5.6)
+    stream_open/1, stream_data/1, stream_end/1,
+    stream_error/1, stream_reply/1,
+
     %% Constructors — Content transfer (Part 6 §9)
     want/1, have/1, block/1,
     manifest_req/1, manifest_res/1, cancel/1,
@@ -113,6 +117,9 @@
     publish_spec/0, subscribe_spec/0, unsubscribe_spec/0, event_spec/0,
     advertise_spec/0, unadvertise_spec/0,
     delivery_channel/0,
+    stream_id/0, stream_mode/0, stream_encoding/0, stream_role/0,
+    stream_open_spec/0, stream_data_spec/0, stream_end_spec/0,
+    stream_error_spec/0, stream_reply_spec/0,
     mcid/0, want_priority/0, want_entry/0, have_entry/0,
     want_spec/0, have_spec/0, block_spec/0,
     manifest_req_spec/0, manifest_res_spec/0, cancel_spec/0
@@ -138,6 +145,8 @@
                     | plumtree_graft | plumtree_prune
                     | publish | subscribe | unsubscribe | event
                     | advertise | unadvertise
+                    | stream_open | stream_data | stream_end
+                    | stream_error | stream_reply
                     | want | have | block
                     | manifest_req | manifest_res | cancel.
 
@@ -444,6 +453,65 @@
     realm      := id256(),
     procedure  := binary(),
     advertiser := macula_identity:pubkey()
+}.
+
+%%------------------------------------------------------------------
+%% Streaming RPC frame specs (Part 6 §5.6)
+%%
+%% A streaming RPC threads chunks across a single logical stream
+%% identified by a 16-byte `stream_id'. STREAM_OPEN initiates;
+%% STREAM_DATA carries chunks in either direction; STREAM_END
+%% half-closes (`role = send') or fully closes (`role = both');
+%% STREAM_ERROR aborts; STREAM_REPLY delivers the terminal value for
+%% client-stream / bidi modes.
+%%
+%% Procedure registration reuses the unary `advertise' / `unadvertise'
+%% frames; the receiving link tracks `mode' locally per procedure and
+%% dispatches inbound STREAM_OPEN to the registered streaming handler.
+%%------------------------------------------------------------------
+
+-type stream_id() :: <<_:128>>.
+
+-type stream_mode() :: server_stream | client_stream | bidi.
+
+-type stream_encoding() :: raw | msgpack.
+
+-type stream_role() :: send | both.
+
+-type stream_open_spec() :: #{
+    stream_id    := stream_id(),
+    procedure    := binary(),
+    realm        := id256(),
+    mode         := stream_mode(),
+    args         := term(),
+    deadline_ms  := integer(),
+    caller       := macula_identity:pubkey(),
+    source_route => binary(),
+    retry_budget => non_neg_integer()
+}.
+
+-type stream_data_spec() :: #{
+    stream_id := stream_id(),
+    seq       := non_neg_integer(),
+    encoding  := stream_encoding(),
+    body      := term()
+}.
+
+-type stream_end_spec() :: #{
+    stream_id := stream_id(),
+    role      := stream_role()
+}.
+
+-type stream_error_spec() :: #{
+    stream_id := stream_id(),
+    code      := binary(),
+    message   := binary()
+}.
+
+-type stream_reply_spec() :: #{
+    stream_id    := stream_id(),
+    payload      := term(),
+    responded_by := macula_identity:pubkey()
 }.
 
 %%------------------------------------------------------------------
@@ -1064,6 +1132,94 @@ unadvertise(#{realm := R, procedure := Proc, advertiser := Adv})
         procedure  => Proc,
         advertiser => Adv
     }.
+
+%%------------------------------------------------------------------
+%% Streaming RPC constructors (Part 6 §5.6)
+%%
+%% STREAM_OPEN mirrors the CALL envelope (deadline, caller,
+%% source-route) so a stream's authentication and routing
+%% characteristics match the unary path. Subsequent STREAM_DATA /
+%% STREAM_END / STREAM_ERROR / STREAM_REPLY frames carry only the
+%% `stream_id' for correlation; the relay forwards them as opaque
+%% bytes between the two endpoints already bound by the OPEN.
+%%------------------------------------------------------------------
+
+-spec stream_open(stream_open_spec()) -> frame().
+stream_open(#{stream_id := Sid, procedure := Proc, realm := Realm,
+              mode := Mode, args := Args, deadline_ms := DeadlineMs,
+              caller := Caller} = Spec)
+  when is_binary(Sid),    byte_size(Sid)    =:= 16,
+       is_binary(Proc),
+       is_binary(Realm),  byte_size(Realm)  =:= 32,
+       is_binary(Caller), byte_size(Caller) =:= 32,
+       is_integer(DeadlineMs),
+       (Mode =:= server_stream orelse Mode =:= client_stream
+        orelse Mode =:= bidi) ->
+    SourceRoute = maps:get(source_route, Spec, <<>>),
+    RetryBudget = maps:get(retry_budget, Spec, 0),
+    validate_source_route(SourceRoute),
+    validate_retry_budget(RetryBudget),
+    Header = base(stream_open, 0),
+    Header#{
+        stream_id    => Sid,
+        procedure    => Proc,
+        realm        => Realm,
+        mode         => Mode,
+        args         => Args,
+        deadline_ms  => DeadlineMs,
+        caller       => Caller,
+        source_route => SourceRoute,
+        retry_budget => RetryBudget
+    }.
+
+-spec stream_data(stream_data_spec()) -> frame().
+stream_data(#{stream_id := Sid, seq := Seq,
+              encoding := Encoding, body := Body})
+  when is_binary(Sid), byte_size(Sid) =:= 16,
+       is_integer(Seq), Seq >= 0,
+       (Encoding =:= raw orelse Encoding =:= msgpack) ->
+    validate_stream_body(Encoding, Body),
+    (base(stream_data, 0))#{
+        stream_id => Sid,
+        seq       => Seq,
+        encoding  => Encoding,
+        body      => Body
+    }.
+
+-spec stream_end(stream_end_spec()) -> frame().
+stream_end(#{stream_id := Sid, role := Role})
+  when is_binary(Sid), byte_size(Sid) =:= 16,
+       (Role =:= send orelse Role =:= both) ->
+    (base(stream_end, 0))#{
+        stream_id => Sid,
+        role      => Role
+    }.
+
+-spec stream_error(stream_error_spec()) -> frame().
+stream_error(#{stream_id := Sid, code := Code, message := Msg})
+  when is_binary(Sid), byte_size(Sid) =:= 16,
+       is_binary(Code),
+       is_binary(Msg) ->
+    (base(stream_error, 0))#{
+        stream_id => Sid,
+        code      => Code,
+        message   => Msg
+    }.
+
+-spec stream_reply(stream_reply_spec()) -> frame().
+stream_reply(#{stream_id := Sid, payload := Payload,
+               responded_by := RespondedBy})
+  when is_binary(Sid), byte_size(Sid) =:= 16,
+       is_binary(RespondedBy), byte_size(RespondedBy) =:= 32 ->
+    (base(stream_reply, 0))#{
+        stream_id    => Sid,
+        payload      => Payload,
+        responded_by => RespondedBy
+    }.
+
+-spec validate_stream_body(stream_encoding(), term()) -> ok.
+validate_stream_body(raw, B) when is_binary(B) -> ok;
+validate_stream_body(msgpack, _Term)           -> ok.
 
 %%------------------------------------------------------------------
 %% Content transfer constructors (Part 6 §9)
