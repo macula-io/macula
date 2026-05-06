@@ -291,7 +291,7 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% Arity 5 (not 4) so V2 calls do not collide with the legacy V1
 %% `advertise(Client, Procedure, Handler, Opts)' surface.
 -spec advertise(pool(), realm(), procedure(),
-                macula_station_link:handler(), map()) ->
+                macula_client:handler(), map()) ->
     ok | {error, term()}.
 advertise(Pool, Realm, Procedure, Handler, _Opts)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32 ->

@@ -36,9 +36,9 @@
 
 -export_type([callback/0]).
 
-%% @doc Callback shape accepted by `subscribe_callback/4'.
-%% Invoked once per inbound event in a separate receiver process so a
-%% slow callback does not back-pressure the pool.
+%% Callback shape accepted by `subscribe_callback/4'. Invoked once
+%% per inbound event in a separate receiver process so a slow
+%% callback does not back-pressure the pool.
 -type callback() :: fun((Topic :: binary(),
                           Payload :: term(),
                           Meta :: map()) -> any()).

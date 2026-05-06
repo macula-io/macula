@@ -59,11 +59,18 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--export_type([pool/0, opts/0, seed/0, status/0]).
+-export_type([pool/0, opts/0, seed/0, status/0, handler/0]).
 
 -type pool() :: pid().
 
-%% @doc Aggregate health snapshot of a pool. See `status/1'.
+%% RPC handler — accepted by `advertise/4'. Either a 1-arg fun called
+%% with the inbound payload, or `{Module, Function}' invoked as
+%% `Module:Function(Payload)'. Re-exported here so consumers do not
+%% have to reach into the private `macula_station_link' module.
+-type handler() :: fun((term()) -> term())
+                 | {module(), atom()}.
+
+%% Aggregate health snapshot of a pool. See `status/1'.
 -type status() :: #{
     seeds         := [seed()],
     healthy_links := non_neg_integer(),
@@ -149,8 +156,7 @@
     topic_index = #{} :: #{{<<_:256>>, binary()} => sets:set(reference())},
     %% Advertised procedures — pool replays these on link respawn.
     %% {realm, procedure} → handler
-    procs = #{}   :: #{{<<_:256>>, binary()} =>
-                           macula_station_link:handler()},
+    procs = #{}   :: #{{<<_:256>>, binary()} => handler()},
     dedup_tab     :: ets:tid()
 }).
 
@@ -204,8 +210,7 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs)
 %% @doc Advertise a procedure handler on every healthy link. Stored
 %% in pool state so links respawned later replay the advertisement.
 %% Returns `ok' when at least one link accepted the registration.
--spec advertise(pool(), <<_:256>>, binary(),
-                macula_station_link:handler()) ->
+-spec advertise(pool(), <<_:256>>, binary(), handler()) ->
     ok | {error, term()}.
 advertise(Pool, Realm, Procedure, Handler)
   when is_pid(Pool),
