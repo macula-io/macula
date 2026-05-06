@@ -76,21 +76,45 @@
                   port := inet:port_number()}.
 
 -type opts() :: #{
-    %% Shared identity for every link in the pool. Auto-generated
-    %% when absent. Stations see the pool as a single peer (one
-    %% pubkey across N links).
-    identity         => macula_identity:key_pair(),
-    %% How many links accept a single PUBLISH frame. Default 1.
+    %% Shared Ed25519 keypair for every link in the pool. Stations see
+    %% the pool as a single peer (one pubkey across N links).
+    %% Auto-generated when absent.
+    identity           => macula_identity:key_pair(),
+
+    %% How many of the pool's currently-connected links accept a
+    %% single PUBLISH frame. Partial success counts as success
+    %% (`PLAN_V2_PARITY' §5.1.1). Default 1.
     replication_factor => pos_integer(),
-    %% Forwarded to every `macula_station_link' opt map.
-    capabilities     => non_neg_integer(),
-    alpn             => [binary()],
+
+    %% Per-link capability bitfield, forwarded to every
+    %% `macula_station_link'. Default 0. Reserved for future use.
+    capabilities       => non_neg_integer(),
+
+    %% ALPN identifiers offered to the QUIC handshake. Default
+    %% `[<<"macula">>]'.
+    alpn               => [binary()],
+
+    %% Per-link CONNECT/HELLO deadline in milliseconds. Default 30_000.
+    %% Applies to each link independently — total pool readiness
+    %% wallclock can be up to N×timeout for sequential dial fallback.
     connect_timeout_ms => pos_integer(),
-    %% Inbound-EVENT dedup window in milliseconds. Default 60_000.
-    dedup_window_ms  => non_neg_integer(),
-    %% How often the dedup table is swept. Default 30_000.
-    dedup_sweep_ms   => pos_integer()
+
+    %% Inbound-EVENT dedup window in milliseconds. The pool keys
+    %% inbound events on `(Realm, Publisher, Seq)' so duplicate
+    %% deliveries from multiple subscribed links collapse to one
+    %% emission per consumer. Default 60_000.
+    dedup_window_ms    => non_neg_integer(),
+
+    %% How often the dedup table is swept for entries older than
+    %% `dedup_window_ms'. Default 30_000.
+    dedup_sweep_ms     => pos_integer()
 }.
+
+%% V1 multi_relay options that have NO V2 equivalent. Callers passing
+%% these from a V1 migration get a one-shot warning and the opt is
+%% silently ignored. Keeping the names listed here so the warning
+%% can name them helpfully.
+-define(V1_LEGACY_OPTS, [relays, realm, site, connections]).
 
 -define(DEFAULT_REPLICATION, 1).
 -define(DEFAULT_DEDUP_WINDOW_MS, 60_000).
@@ -259,6 +283,7 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
 
 init({Seeds, Opts}) ->
     process_flag(trap_exit, true),
+    warn_legacy_opts(Opts),
     Identity = maps:get(identity, Opts, macula_identity:generate()),
     LinkOpts = #{
         identity           => Identity,
@@ -401,6 +426,21 @@ after_link_start({error, Reason}, Seed, S) ->
 
 spawned_link_pids(#state{links = Links}) ->
     [P || #link_state{pid = P} <- maps:values(Links), is_pid(P)].
+
+%% Surface a one-shot warning when a caller passes V1 multi_relay
+%% options that have no V2 equivalent. The opts are silently dropped
+%% (V2's `init/1' simply doesn't read them) but the warning gives a
+%% caller migrating from V1 a chance to spot the no-op.
+warn_legacy_opts(Opts) ->
+    Stale = [K || K <- ?V1_LEGACY_OPTS, maps:is_key(K, Opts)],
+    notify_legacy(Stale).
+
+notify_legacy([]) -> ok;
+notify_legacy(Keys) ->
+    logger:notice(
+      "[macula_client] ignoring V1-only opts ~p — V2 is realm-per-call "
+      "and one-link-per-seed. See macula:connect/2 docs.", [Keys]),
+    ok.
 
 %% First-success across the pool's healthy links. Tries each link in
 %% turn; the first non-error reply wins. Falls through on

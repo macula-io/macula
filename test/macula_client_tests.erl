@@ -385,3 +385,23 @@ advertise_rejects_wrong_handler_arity_test() ->
                  macula_client:advertise(Pool, ?REALM,
                                           <<"a.v1">>, Three)),
     ok = macula_client:close(Pool).
+
+%%------------------------------------------------------------------
+%% V1-legacy opt warning (A5)
+%%------------------------------------------------------------------
+
+connect_with_legacy_opts_starts_pool_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         %% V1 opts must not break startup — they're noticed and
+         %% ignored. Pool is fully functional with stock defaults.
+         {ok, Pool} = macula_client:connect(
+                        [],
+                        #{realm => <<"io.macula">>,
+                          site  => #{<<"site_id">> => <<"abc">>},
+                          connections => 4}),
+         {ok, S} = macula_client:status(Pool),
+         ?assertEqual(0, maps:get(healthy_links, S)),
+         ok = macula_client:close(Pool)
+     end}.

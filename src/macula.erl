@@ -108,6 +108,28 @@
 %% and routes ops with replication, replay, and event dedup. Returns
 %% immediately; link handshakes complete asynchronously.
 %%
+%% Honored opts (full reference: `macula_client:opts()'):
+%% <ul>
+%%   <li>`identity' — pool's Ed25519 keypair; auto-generated if absent.</li>
+%%   <li>`replication_factor' — links per PUBLISH (default 1).</li>
+%%   <li>`capabilities' — per-link bitfield (default 0).</li>
+%%   <li>`alpn' — QUIC ALPN list (default `[<<"macula">>]').</li>
+%%   <li>`connect_timeout_ms' — per-link CONNECT/HELLO deadline (default 30_000).</li>
+%%   <li>`dedup_window_ms', `dedup_sweep_ms' — inbound-EVENT dedup tunables.</li>
+%% </ul>
+%%
+%% V1-only opts that have NO V2 equivalent and are silently ignored
+%% (with a `logger:notice') for callers migrating from
+%% `macula_multi_relay':
+%% <ul>
+%%   <li>`relays' — superseded by the `Seeds' positional argument.</li>
+%%   <li>`realm' — V2 is realm-per-call; pass realm to each
+%%       `publish/4' / `subscribe/4' / `call/5' invocation instead.</li>
+%%   <li>`site' — V1 routing-affinity hint with no V2 analog.</li>
+%%   <li>`connections' — V1 was N connections per relay; V2 is one
+%%       link per seed (add more seeds to grow the pool).</li>
+%% </ul>
+%%
 %% See `macula_client' for the canonical pool implementation and
 %% `macula_pubsub' for the slice module.
 %%
