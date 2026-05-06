@@ -2,10 +2,9 @@
 %%% @doc Tests for macula_dist_relay + macula_dist_bridge.
 %%%
 %%% Tests cover:
-%%% - Public API: is_relay_mode, register/get mesh client
+%%% - Public API: is_relay_mode, register/get mesh pool
 %%% - Loopback pair creation and packet framing
 %%% - Bridge I/O: reader/writer loops via loopback
-%%% - Payload extraction
 %%% - Tunnel encryption (AES-256-GCM from cookie)
 %%% - Metrics counters
 %%% - Bridge supervisor
@@ -34,48 +33,36 @@ is_relay_mode_other_test() ->
     os:unsetenv("MACULA_DIST_MODE").
 
 %%%===================================================================
-%%% Tests — register/get mesh client
+%%% Tests — register/get mesh pool
 %%%===================================================================
 
-register_mesh_client_test() ->
+register_mesh_pool_test() ->
     Self = self(),
-    ok = macula_dist_relay:register_mesh_client(Self),
-    ?assertEqual(Self, macula_dist_relay:get_mesh_client()),
-    persistent_term:erase(macula_dist_mesh_client).
+    ok = macula_dist_relay:register_mesh_pool(Self),
+    ?assertEqual(Self, macula_dist_relay:get_mesh_pool()),
+    persistent_term:erase(macula_dist_mesh_pool).
 
-get_mesh_client_undefined_test() ->
-    persistent_term:erase(macula_dist_mesh_client),
-    ?assertEqual(undefined, macula_dist_relay:get_mesh_client()).
+get_mesh_pool_undefined_test() ->
+    persistent_term:erase(macula_dist_mesh_pool),
+    ?assertEqual(undefined, macula_dist_relay:get_mesh_pool()).
 
-get_mesh_client_dead_pid_test() ->
+get_mesh_pool_dead_pid_test() ->
     Pid = spawn(fun() -> ok end),
     timer:sleep(50),
-    persistent_term:put(macula_dist_mesh_client, Pid),
-    ?assertEqual(undefined, macula_dist_relay:get_mesh_client()),
-    persistent_term:erase(macula_dist_mesh_client).
+    persistent_term:put(macula_dist_mesh_pool, Pid),
+    ?assertEqual(undefined, macula_dist_relay:get_mesh_pool()),
+    persistent_term:erase(macula_dist_mesh_pool).
 
 %%%===================================================================
 %%% Tests — connect error paths
 %%%===================================================================
 
-connect_no_mesh_client_test() ->
-    persistent_term:erase(macula_dist_mesh_client),
+connect_no_mesh_pool_test() ->
+    persistent_term:erase(macula_dist_mesh_pool),
     os:putenv("MACULA_DIST_MODE", "relay"),
     ?assertEqual({error, no_mesh_connection},
                  macula_dist_relay:connect("test@host", "host", 4433)),
     os:unsetenv("MACULA_DIST_MODE").
-
-%%%===================================================================
-%%% Tests — extract_payload
-%%%===================================================================
-
-extract_payload_map_test() ->
-    ?assertEqual(<<"data">>,
-                 macula_dist_relay:extract_payload(#{payload => <<"data">>})).
-
-extract_payload_binary_test() ->
-    ?assertEqual(<<"raw">>,
-                 macula_dist_relay:extract_payload(<<"raw">>)).
 
 %%%===================================================================
 %%% Tests — loopback pair
@@ -241,8 +228,8 @@ bridge_sup_starts_test() ->
 %%% Tests — advertise_dist_accept
 %%%===================================================================
 
-advertise_no_mesh_client_test() ->
-    persistent_term:erase(macula_dist_mesh_client),
+advertise_no_mesh_pool_test() ->
+    persistent_term:erase(macula_dist_mesh_pool),
     ?assertEqual(ok, macula_dist_relay:advertise_dist_accept()).
 
 %%%===================================================================

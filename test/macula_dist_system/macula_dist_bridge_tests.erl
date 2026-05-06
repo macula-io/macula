@@ -130,8 +130,8 @@ bridge_init_and_tunnel_in_test_() ->
     {setup,
      fun setup_bridge/0,
      fun teardown_bridge/1,
-     fun(#{bridge := Bridge, bridge_sock_peer := BridgeSockPeer,
-           key := Key}) ->
+     fun(#{bridge := Bridge, sub_ref := SubRef,
+           bridge_sock_peer := BridgeSockPeer, key := Key}) ->
          [
           {"init succeeds and bridge is alive",
            fun() ->
@@ -142,7 +142,8 @@ bridge_init_and_tunnel_in_test_() ->
            fun() ->
                Plaintext = <<"hello from relay">>,
                Encrypted = encrypt(Key, Plaintext),
-               Bridge ! {tunnel_in, Encrypted},
+               Bridge ! {macula_event, SubRef, <<"_dist.data.x.in">>,
+                         Encrypted, #{}},
                %% Read from the other end of the bridge socket pair
                {ok, Received} = gen_tcp:recv(BridgeSockPeer, 0, 2000),
                ?assertEqual(Plaintext, Received)
@@ -152,7 +153,8 @@ bridge_init_and_tunnel_in_test_() ->
            fun() ->
                WrongKey = crypto:hash(sha256, <<"wrong-key">>),
                BadEncrypted = encrypt(WrongKey, <<"bad data">>),
-               Bridge ! {tunnel_in, BadEncrypted},
+               Bridge ! {macula_event, SubRef, <<"_dist.data.x.in">>,
+                         BadEncrypted, #{}},
                timer:sleep(100),
                ?assert(is_process_alive(Bridge))
            end},
@@ -191,7 +193,7 @@ bridge_init_and_tunnel_in_test_() ->
 
 bridge_metrics_updated_on_tunnel_in_test() ->
     process_flag(trap_exit, true),
-    {MockClient, _} = start_mock_relay_client(),
+    {MockPool, _} = start_mock_pool(),
     {BridgeSockA, BridgeSockB} = make_loopback_pair(),
     Key = crypto:hash(sha256, <<"metrics-test">>),
     TunnelId = unique_tunnel_id(),
@@ -199,7 +201,7 @@ bridge_metrics_updated_on_tunnel_in_test() ->
     persistent_term:put(macula_dist_tunnels, #{TunnelId => Metrics}),
 
     Args = #{
-        client => MockClient,
+        pool => MockPool,
         bridge_sock => BridgeSockA,
         send_topic => <<"_dist.data.", TunnelId/binary, ".out">>,
         recv_topic => <<"_dist.data.", TunnelId/binary, ".in">>,
@@ -209,10 +211,13 @@ bridge_metrics_updated_on_tunnel_in_test() ->
     },
     {ok, Bridge} = macula_dist_bridge:start_link(Args),
     ok = gen_tcp:controlling_process(BridgeSockA, Bridge),
+    {_, SubRef} = last_subscription(MockPool),
 
     Plaintext = <<"metrics payload">>,
     Encrypted = encrypt(Key, Plaintext),
-    Bridge ! {tunnel_in, Encrypted},
+    Bridge ! {macula_event, SubRef,
+              <<"_dist.data.", TunnelId/binary, ".in">>,
+              Encrypted, #{}},
 
     %% Drain the socket to ensure the bridge processed the message
     {ok, _} = gen_tcp:recv(BridgeSockB, 0, 2000),
@@ -223,39 +228,54 @@ bridge_metrics_updated_on_tunnel_in_test() ->
 
     exit(Bridge, kill),
     catch gen_tcp:close(BridgeSockB),
-    stop_mock_relay_client(MockClient),
+    stop_mock_pool(MockPool),
     flush_exits(),
     process_flag(trap_exit, false).
 
 %%%===================================================================
-%%% Mock relay client — simple gen_server for subscribe/unsubscribe
+%%% Mock V2 pool — minimal gen_server that answers the
+%%% `macula_client' API surface used by `macula_pubsub:subscribe/4',
+%%% `unsubscribe/2', and `publish/5'. Records the last (Subscriber,
+%%% SubRef) so the test can inject `macula_event' frames at the
+%%% right routing entry.
 %%%===================================================================
 
--record(mock_rc_state, {
-    subs = #{} :: #{reference() => {binary(), fun()}}
+-record(mock_pool, {
+    subs    = #{} :: #{reference() => {binary(), binary(), pid()}},
+    last_sub = undefined :: {pid(), reference()} | undefined
 }).
 
-start_mock_relay_client() ->
-    {ok, Pid} = gen_server:start(?MODULE, mock_relay_client, []),
+start_mock_pool() ->
+    {ok, Pid} = gen_server:start(?MODULE, mock_pool, []),
     {Pid, Pid}.
 
-stop_mock_relay_client(Pid) ->
+stop_mock_pool(Pid) ->
     catch gen_server:stop(Pid, normal, 1000).
 
-%% gen_server callbacks for mock relay client
-init(mock_relay_client) ->
-    {ok, #mock_rc_state{}}.
+last_subscription(Pool) ->
+    gen_server:call(Pool, last_subscription, 1_000).
 
-handle_call({subscribe, Topic, Callback}, _From, #mock_rc_state{subs = Subs} = State) ->
+%% gen_server callbacks for mock V2 pool.
+init(mock_pool) ->
+    {ok, #mock_pool{}}.
+
+handle_call({subscribe, Realm, Topic, Subscriber, _Opts}, _From,
+            #mock_pool{subs = Subs} = State) ->
     Ref = make_ref(),
-    {reply, {ok, Ref}, State#mock_rc_state{subs = Subs#{Ref => {Topic, Callback}}}};
-handle_call({unsubscribe, Ref}, _From, #mock_rc_state{subs = Subs} = State) ->
-    {reply, ok, State#mock_rc_state{subs = maps:remove(Ref, Subs)}};
+    NewState = State#mock_pool{
+        subs = Subs#{Ref => {Realm, Topic, Subscriber}},
+        last_sub = {Subscriber, Ref}
+    },
+    {reply, {ok, Ref}, NewState};
+handle_call({unsubscribe, Ref}, _From, #mock_pool{subs = Subs} = State) ->
+    {reply, ok, State#mock_pool{subs = maps:remove(Ref, Subs)}};
+handle_call({publish, _Realm, _Topic, _Payload, _Opts}, _From, State) ->
+    {reply, ok, State};
+handle_call(last_subscription, _From, #mock_pool{last_sub = LS} = State) ->
+    {reply, LS, State};
 handle_call(_Req, _From, State) ->
     {reply, {error, unknown}, State}.
 
-handle_cast({publish, _Topic, _Payload}, State) ->
-    {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -271,7 +291,7 @@ terminate(_Reason, _State) ->
 
 setup_bridge() ->
     process_flag(trap_exit, true),
-    {MockClient, _} = start_mock_relay_client(),
+    {MockPool, _} = start_mock_pool(),
     {BridgeSockA, BridgeSockB} = make_loopback_pair(),
     Key = crypto:hash(sha256, <<"test-bridge-key">>),
     TunnelId = unique_tunnel_id(),
@@ -279,7 +299,7 @@ setup_bridge() ->
     persistent_term:put(macula_dist_tunnels, #{TunnelId => Metrics}),
 
     Args = #{
-        client => MockClient,
+        pool => MockPool,
         bridge_sock => BridgeSockA,
         send_topic => <<"_dist.data.", TunnelId/binary, ".out">>,
         recv_topic => <<"_dist.data.", TunnelId/binary, ".in">>,
@@ -291,15 +311,21 @@ setup_bridge() ->
     %% Transfer socket ownership to the bridge
     ok = gen_tcp:controlling_process(BridgeSockA, Bridge),
 
+    %% Bridge subscribed during init/1 — fetch the SubRef the mock
+    %% handed back so tests can inject `macula_event' messages
+    %% addressed at the bridge's actual subscription.
+    {_Subscriber, SubRef} = last_subscription(MockPool),
+
     #{bridge => Bridge,
-      mock_client => MockClient,
+      mock_pool => MockPool,
+      sub_ref => SubRef,
       bridge_sock_a => BridgeSockA,
       bridge_sock_peer => BridgeSockB,
       key => Key,
       tunnel_id => TunnelId,
       metrics => Metrics}.
 
-teardown_bridge(#{bridge := Bridge, mock_client := MockClient,
+teardown_bridge(#{bridge := Bridge, mock_pool := MockPool,
                   bridge_sock_peer := BridgeSockB}) ->
     catch gen_tcp:close(BridgeSockB),
     MonRef = monitor(process, Bridge),
@@ -310,7 +336,7 @@ teardown_bridge(#{bridge := Bridge, mock_client := MockClient,
         catch exit(Bridge, kill),
         receive {'DOWN', MonRef, process, Bridge, _} -> ok after 1000 -> ok end
     end,
-    stop_mock_relay_client(MockClient),
+    stop_mock_pool(MockPool),
     persistent_term:erase(macula_dist_tunnels),
     %% Flush any EXIT messages from linked processes
     flush_exits(),

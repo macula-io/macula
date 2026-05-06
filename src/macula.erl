@@ -735,30 +735,39 @@ unmonitor_nodes() -> macula_cluster:unmonitor_nodes().
 %% @doc Join the Macula relay mesh with Erlang distribution.
 %%
 %% After calling this, standard OTP distribution works across firewalls.
-%% Options: relays (required list), realm, identity, site, tls_verify.
+%% `Opts' takes:
+%% <ul>
+%%   <li>`relays' (required) — list of seed URLs for the V2 pool.</li>
+%%   <li>`identity' — V2 pool's `macula_identity:key_pair()'.
+%%       Default: auto-generated.</li>
+%% </ul>
+%%
+%% Internally builds a V2 `macula_client:pool()' and registers it
+%% with `macula_dist_relay' as the carrier for `_dist.tunnel.*'
+%% traffic. Dist tunnel frames travel under the all-zeros realm
+%% (protocol-internal infrastructure, not bound to any user realm).
 -spec join_mesh(map()) -> ok | {error, term()}.
 join_mesh(Opts) ->
     Relays = maps:get(relays, Opts),
-    ClientOpts = #{
-        relays => Relays,
-        realm => maps:get(realm, Opts, <<"io.macula">>),
-        identity => maps:get(identity, Opts, atom_to_binary(node())),
-        tls_verify => maps:get(tls_verify, Opts, none),
-        site => maps:get(site, Opts, undefined)
-    },
-    case macula_mesh_client:start_link(ClientOpts) of
-        {ok, Client} ->
-            %% Wait for relay connection before advertising
-            wait_for_relay(Client, 30),
-            os:putenv("MACULA_DIST_MODE", "relay"),
-            macula_dist_relay:register_mesh_client(Client),
-            macula_dist_relay:advertise_dist_accept(),
-            ?LOG_INFO("[macula] Joined mesh — distribution enabled"),
-            ok;
-        {error, Reason} ->
-            ?LOG_ERROR("[macula] Failed to join mesh: ~p", [Reason]),
-            {error, Reason}
+    PoolOpts = pool_opts_for_join(Opts),
+    on_pool_for_join(macula_client:connect(Relays, PoolOpts)).
+
+pool_opts_for_join(Opts) ->
+    case maps:find(identity, Opts) of
+        {ok, Identity} -> #{identity => Identity};
+        error          -> #{}
     end.
+
+on_pool_for_join({ok, Pool}) ->
+    wait_for_pool(Pool, 30),
+    os:putenv("MACULA_DIST_MODE", "relay"),
+    macula_dist_relay:register_mesh_pool(Pool),
+    macula_dist_relay:advertise_dist_accept(),
+    ?LOG_INFO("[macula] Joined mesh — distribution enabled"),
+    ok;
+on_pool_for_join({error, Reason}) ->
+    ?LOG_ERROR("[macula] Failed to join mesh: ~p", [Reason]),
+    {error, Reason}.
 
 %% @doc Enable Erlang distribution over a dedicated dist relay
 %% (`macula-io/macula-dist-relay').
@@ -793,15 +802,17 @@ join_dist_relay(Opts) ->
             Err
     end.
 
-%% @private Wait until the mesh client has an active QUIC stream.
-wait_for_relay(_Client, 0) ->
-    ?LOG_WARNING("[macula] Relay connection not ready after timeout");
-wait_for_relay(Client, Retries) ->
-    case catch macula_mesh_client:is_connected(Client) of
-        true ->
-            ?LOG_INFO("[macula] Relay connected"),
-            ok;
-        _ ->
-            timer:sleep(1000),
-            wait_for_relay(Client, Retries - 1)
-    end.
+%% @private Wait until the V2 pool has at least one healthy
+%% station_link (CONNECT/HELLO completed). One-second polling, capped
+%% at `Retries' iterations.
+wait_for_pool(_Pool, 0) ->
+    ?LOG_WARNING("[macula] Mesh pool not ready after timeout");
+wait_for_pool(Pool, Retries) ->
+    on_pool_status(macula_client:status(Pool), Pool, Retries).
+
+on_pool_status({ok, #{healthy_links := N}}, _Pool, _Retries) when N > 0 ->
+    ?LOG_INFO("[macula] Mesh pool connected (~p healthy link(s))", [N]),
+    ok;
+on_pool_status(_Other, Pool, Retries) ->
+    timer:sleep(1000),
+    wait_for_pool(Pool, Retries - 1).

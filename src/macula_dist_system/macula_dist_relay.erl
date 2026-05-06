@@ -32,10 +32,9 @@
 -include_lib("kernel/include/logger.hrl").
 
 -export([connect/3]).
--export([is_relay_mode/0, get_mesh_client/0]).
--export([register_mesh_client/1]).
+-export([is_relay_mode/0, get_mesh_pool/0]).
+-export([register_mesh_pool/1]).
 -export([advertise_dist_accept/0]).
--export([extract_payload/1]).
 -export([get_tunnel_metrics/0, get_tunnel_metrics/1]).
 
 %% Must be shorter than OTP's SetupTime. Default SetupTime is 7000ms
@@ -46,6 +45,12 @@
 -define(DIST_TIMEOUT, 10000).
 -define(CONTROLLER_TIMEOUT, 30000).
 
+%% Realm tag stamped on every dist tunnel frame. Dist tunnel traffic
+%% is protocol-internal infrastructure (like the DHT) and not bound
+%% to any user realm; the all-zeros tag is the SDK convention for
+%% realm-agnostic infrastructure traffic.
+-define(DIST_REALM, <<0:256>>).
+
 -define(METRIC_BYTES_OUT, 1).
 -define(METRIC_BYTES_IN, 2).
 -define(METRIC_MSGS_OUT, 3).
@@ -55,11 +60,14 @@
 %%% Public API
 %%%===================================================================
 
-%% @doc Register a mesh relay client for distribution tunneling.
--spec register_mesh_client(pid()) -> ok.
-register_mesh_client(Pid) when is_pid(Pid) ->
-    persistent_term:put(macula_dist_mesh_client, Pid),
-    ?LOG_INFO("[dist_relay] Mesh client registered: ~p", [Pid]),
+%% @doc Register a Macula V2 pool (`macula_client:pool()') as the
+%% carrier for distribution tunnel traffic. Stored in `persistent_term'
+%% so the bridge processes (which run inside dist_util's setup process,
+%% not in any supervised tree) can pick it up.
+-spec register_mesh_pool(pid()) -> ok.
+register_mesh_pool(Pid) when is_pid(Pid) ->
+    persistent_term:put(macula_dist_mesh_pool, Pid),
+    ?LOG_INFO("[dist_relay] Mesh pool registered: ~p", [Pid]),
     ok.
 
 %% @doc Check if relay distribution mode is enabled.
@@ -71,26 +79,26 @@ is_relay_mode() ->
 -spec connect(string(), string(), integer()) -> {ok, port(), port()} | {error, term()}.
 connect(NodeStr, _Host, _Port) ->
     ?LOG_INFO("[dist_relay] Connecting to ~s via mesh", [NodeStr]),
-    case get_mesh_client() of
+    case get_mesh_pool() of
         undefined ->
             {error, no_mesh_connection};
-        MeshClient ->
-            request_tunnel(MeshClient, NodeStr)
+        Pool ->
+            request_tunnel(Pool, NodeStr)
     end.
 
 %% @doc Advertise this node as accepting distribution connections via relay.
 -spec advertise_dist_accept() -> ok.
 advertise_dist_accept() ->
     ensure_bridge_sup(),
-    case get_mesh_client() of
+    case get_mesh_pool() of
         undefined ->
-            ?LOG_WARNING("[dist_relay] Cannot advertise — no mesh client registered"),
+            ?LOG_WARNING("[dist_relay] Cannot advertise — no mesh pool registered"),
             ok;
-        Client ->
+        Pool ->
             NodeName = atom_to_binary(node()),
             Procedure = <<"_dist.tunnel.", NodeName/binary>>,
             Handler = fun(Args) -> handle_tunnel_request(Args) end,
-            macula_mesh_client:advertise(Client, Procedure, Handler),
+            macula_client:advertise(Pool, ?DIST_REALM, Procedure, Handler),
             ?LOG_INFO("[dist_relay] Advertised distribution accept: ~s", [Procedure]),
             ok
     end.
@@ -130,74 +138,47 @@ get_tunnel_metrics(TunnelId) ->
     end.
 
 %%%===================================================================
-%%% Internal — Mesh Client Lookup
+%%% Internal — Mesh Pool Lookup
 %%%===================================================================
 
--spec get_mesh_client() -> pid() | undefined.
-get_mesh_client() ->
-    case persistent_term:get(macula_dist_mesh_client, undefined) of
-        undefined -> undefined;
-        Pid when is_pid(Pid) ->
-            case is_process_alive(Pid) of
-                true -> Pid;
-                false -> undefined
-            end
-    end.
+-spec get_mesh_pool() -> pid() | undefined.
+get_mesh_pool() ->
+    pool_or_undef(persistent_term:get(macula_dist_mesh_pool, undefined)).
+
+pool_or_undef(undefined) -> undefined;
+pool_or_undef(Pid) when is_pid(Pid) ->
+    pool_alive(is_process_alive(Pid), Pid).
+
+pool_alive(true,  Pid) -> Pid;
+pool_alive(false, _Pid) -> undefined.
 
 %%%===================================================================
 %%% Internal — Tunnel Negotiation (connecting side)
 %%%===================================================================
 
-request_tunnel(MeshClient, NodeStr) ->
+request_tunnel(Pool, NodeStr) ->
     Procedure = <<"_dist.tunnel.", (list_to_binary(NodeStr))/binary>>,
     Args = #{<<"from_node">> => atom_to_binary(node()),
              <<"target_node">> => list_to_binary(NodeStr)},
-    ?LOG_INFO("[dist_relay] RPC ~s via ~p", [Procedure, MeshClient]),
-    RawResult = tunnel_rpc(MeshClient, Procedure, Args),
-    %% Normalize: mesh_client may return {ok, R, TraceMap} when relay
-    %% includes _trace in the call round-trip.  Strip the trace wrapper
-    %% so pattern matching below always sees a 2-tuple.
-    Result = normalize_rpc_result(RawResult),
-    case Result of
-        {ok, #{<<"tunnel_id">> := TunnelId}} ->
-            ?LOG_INFO("[dist_relay] Tunnel established: ~s", [TunnelId]),
-            create_dist_socket(MeshClient, TunnelId);
-        {ok, #{<<"error">> := ErrorInfo}} ->
-            ?LOG_WARNING("[dist_relay] Tunnel error: ~p", [ErrorInfo]),
-            {error, {tunnel_error, ErrorInfo}};
-        {error, Reason} ->
-            ?LOG_WARNING("[dist_relay] Tunnel request failed: ~p", [Reason]),
-            {error, {tunnel_failed, Reason}};
-        Other ->
-            ?LOG_WARNING("[dist_relay] Unexpected RPC result: ~p", [Other]),
-            {error, {unexpected_result, Other}}
-    end.
+    ?LOG_INFO("[dist_relay] RPC ~s via ~p", [Procedure, Pool]),
+    %% V2 pool: first-success across healthy links. The pool itself
+    %% does the multi-station fan-out the V1 multi_relay used to do.
+    Result = macula_client:call(Pool, ?DIST_REALM, Procedure, Args,
+                                ?DIST_TIMEOUT),
+    on_tunnel_rpc_reply(Result, Pool).
 
-normalize_rpc_result({ok, R, _Trace}) -> {ok, R};
-normalize_rpc_result(Other) -> Other.
-
-%% Use call_any for multi_relay (tries each connected relay).
-%% Fall back to direct call for single relay_client.
-tunnel_rpc(MeshClient, Procedure, Args) ->
-    case is_multi_relay(MeshClient) of
-        true ->
-            macula_multi_relay:call_any(MeshClient, Procedure, Args, ?DIST_TIMEOUT);
-        false ->
-            macula_mesh_client:call(MeshClient, Procedure, Args, ?DIST_TIMEOUT)
-    end.
-
-%% Check if the PID is a macula_multi_relay gen_server by inspecting
-%% the registered name or the initial call in process_info.
-is_multi_relay(Pid) ->
-    case erlang:process_info(Pid, dictionary) of
-        {dictionary, Dict} ->
-            case proplists:get_value('$initial_call', Dict) of
-                {macula_multi_relay, init, 1} -> true;
-                _ -> false
-            end;
-        _ ->
-            false
-    end.
+on_tunnel_rpc_reply({ok, #{<<"tunnel_id">> := TunnelId}}, Pool) ->
+    ?LOG_INFO("[dist_relay] Tunnel established: ~s", [TunnelId]),
+    create_dist_socket(Pool, TunnelId);
+on_tunnel_rpc_reply({ok, #{<<"error">> := ErrorInfo}}, _Pool) ->
+    ?LOG_WARNING("[dist_relay] Tunnel error: ~p", [ErrorInfo]),
+    {error, {tunnel_error, ErrorInfo}};
+on_tunnel_rpc_reply({error, Reason}, _Pool) ->
+    ?LOG_WARNING("[dist_relay] Tunnel request failed: ~p", [Reason]),
+    {error, {tunnel_failed, Reason}};
+on_tunnel_rpc_reply(Other, _Pool) ->
+    ?LOG_WARNING("[dist_relay] Unexpected RPC result: ~p", [Other]),
+    {error, {unexpected_result, Other}}.
 
 %%%===================================================================
 %%% Internal — Tunnel Negotiation (accepting side)
@@ -211,23 +192,23 @@ handle_tunnel_request(Args) ->
     SendTopic = <<"_dist.data.", TunnelId/binary, ".in">>,
     RecvTopic = <<"_dist.data.", TunnelId/binary, ".out">>,
 
-    case get_mesh_client() of
-        undefined ->
-            {error, <<"no_mesh_client">>};
-        Client ->
-            spawn_accept_bridge(Client, TunnelId, SendTopic, RecvTopic),
-            {ok, #{<<"tunnel_id">> => TunnelId,
-                   <<"send_topic">> => SendTopic,
-                   <<"recv_topic">> => RecvTopic}}
-    end.
+    on_tunnel_request_pool(get_mesh_pool(), TunnelId, SendTopic, RecvTopic).
+
+on_tunnel_request_pool(undefined, _TunnelId, _SendTopic, _RecvTopic) ->
+    {error, <<"no_mesh_pool">>};
+on_tunnel_request_pool(Pool, TunnelId, SendTopic, RecvTopic) ->
+    spawn_accept_bridge(Pool, TunnelId, SendTopic, RecvTopic),
+    {ok, #{<<"tunnel_id">> => TunnelId,
+           <<"send_topic">> => SendTopic,
+           <<"recv_topic">> => RecvTopic}}.
 
 %% The accept side has a setup phase (kernel negotiation) before the
 %% supervised bridge can start. This setup process is short-lived —
 %% it creates the loopback pair, negotiates with net_kernel, then
 %% hands off to the supervised bridge.
-spawn_accept_bridge(Client, TunnelId, SendTopic, RecvTopic) ->
+spawn_accept_bridge(Pool, TunnelId, SendTopic, RecvTopic) ->
     {Pid, _Ref} = spawn_monitor(fun() ->
-        dist_accept_setup(Client, TunnelId, SendTopic, RecvTopic)
+        dist_accept_setup(Pool, TunnelId, SendTopic, RecvTopic)
     end),
     ?LOG_INFO("[dist_relay] Accept setup ~p for ~s", [Pid, TunnelId]),
     Pid.
@@ -236,26 +217,31 @@ spawn_accept_bridge(Client, TunnelId, SendTopic, RecvTopic) ->
 %%% Internal — Accept-side Setup (short-lived, then hands to bridge)
 %%%===================================================================
 
-dist_accept_setup(Client, TunnelId, SendTopic, RecvTopic) ->
+dist_accept_setup(Pool, TunnelId, SendTopic, RecvTopic) ->
     Self = self(),
     Key = tunnel_key(),
 
-    %% Subscribe for buffering before kernel knows about us
-    {ok, BufferSubRef} = macula_mesh_client:subscribe(Client, RecvTopic,
-        fun(Msg) -> Self ! {dist_data_buffered, extract_payload(Msg)} end),
+    %% Subscribe for buffering before kernel knows about us. The V2
+    %% pool delivers `{macula_event, SubRef, Topic, Payload, Meta}'
+    %% to Self directly; no callback indirection.
+    {ok, BufferSubRef} = macula_pubsub:subscribe(Pool, ?DIST_REALM,
+                                                  RecvTopic, Self),
 
     {DistSock, BridgeSock} = create_loopback_pair(),
 
-    case whereis(net_kernel) of
-        undefined ->
-            ?LOG_WARNING("[dist_bridge] net_kernel not found"),
-            macula_mesh_client:unsubscribe(Client, BufferSubRef);
-        KernelPid ->
-            negotiate_with_kernel(Self, KernelPid, Client, DistSock, BridgeSock,
-                                  BufferSubRef, SendTopic, RecvTopic, TunnelId, Key)
-    end.
+    on_kernel_lookup(whereis(net_kernel), Self, Pool, DistSock, BridgeSock,
+                     BufferSubRef, SendTopic, RecvTopic, TunnelId, Key).
 
-negotiate_with_kernel(Self, KernelPid, Client, DistSock, BridgeSock,
+on_kernel_lookup(undefined, _Self, Pool, _DistSock, _BridgeSock, BufferSubRef,
+                 _SendTopic, _RecvTopic, _TunnelId, _Key) ->
+    ?LOG_WARNING("[dist_bridge] net_kernel not found"),
+    macula_pubsub:unsubscribe(Pool, BufferSubRef);
+on_kernel_lookup(KernelPid, Self, Pool, DistSock, BridgeSock, BufferSubRef,
+                 SendTopic, RecvTopic, TunnelId, Key) ->
+    negotiate_with_kernel(Self, KernelPid, Pool, DistSock, BridgeSock,
+                          BufferSubRef, SendTopic, RecvTopic, TunnelId, Key).
+
+negotiate_with_kernel(Self, KernelPid, Pool, DistSock, BridgeSock,
                       BufferSubRef, SendTopic, RecvTopic, TunnelId, Key) ->
     KernelPid ! {accept, Self, DistSock, inet, macula_dist},
     receive
@@ -264,30 +250,30 @@ negotiate_with_kernel(Self, KernelPid, Client, DistSock, BridgeSock,
             %% Transfer DistSock to the dist controller so it survives
             %% when this setup process exits.
             gen_tcp:controlling_process(DistSock, DistCtrl),
-            macula_mesh_client:unsubscribe(Client, BufferSubRef),
-            flush_buffered_to_socket(BridgeSock, Key),
-            start_supervised_bridge(Client, BridgeSock, SendTopic, RecvTopic,
+            macula_pubsub:unsubscribe(Pool, BufferSubRef),
+            flush_buffered_to_socket(BridgeSock, Key, BufferSubRef),
+            start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic,
                                      TunnelId, Key);
         {KernelPid, unsupported_protocol} ->
             ?LOG_WARNING("[dist_bridge] Unsupported protocol"),
-            macula_mesh_client:unsubscribe(Client, BufferSubRef)
+            macula_pubsub:unsubscribe(Pool, BufferSubRef)
     after ?CONTROLLER_TIMEOUT ->
         ?LOG_WARNING("[dist_bridge] Controller timeout"),
-        macula_mesh_client:unsubscribe(Client, BufferSubRef)
+        macula_pubsub:unsubscribe(Pool, BufferSubRef)
     end.
 
 %%%===================================================================
 %%% Internal — Connect-side Bridge Creation
 %%%===================================================================
 
-create_dist_socket(MeshClient, TunnelId) ->
+create_dist_socket(Pool, TunnelId) ->
     SendTopic = <<"_dist.data.", TunnelId/binary, ".out">>,
     RecvTopic = <<"_dist.data.", TunnelId/binary, ".in">>,
 
     {DistSock, BridgeSock} = create_loopback_pair(),
 
     Key = tunnel_key(),
-    start_supervised_bridge(MeshClient, BridgeSock, SendTopic, RecvTopic,
+    start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic,
                              TunnelId, Key),
 
     {ok, DistSock, DistSock}.
@@ -296,10 +282,10 @@ create_dist_socket(MeshClient, TunnelId) ->
 %%% Internal — Supervised Bridge Startup
 %%%===================================================================
 
-start_supervised_bridge(Client, BridgeSock, SendTopic, RecvTopic, TunnelId, Key) ->
+start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic, TunnelId, Key) ->
     Metrics = init_metrics(TunnelId),
     BridgeArgs = #{
-        client => Client,
+        pool => Pool,
         bridge_sock => BridgeSock,
         send_topic => SendTopic,
         recv_topic => RecvTopic,
@@ -358,26 +344,33 @@ create_loopback_pair() ->
     inet:setopts(ASock, [{packet, raw}, {nodelay, true}]),
     {CSock, ASock}.
 
-flush_buffered_to_socket(BridgeSock, Key) ->
+%% Drain the buffered events that arrived while net_kernel was still
+%% setting up the dist controller. The V2 pool delivers a tagged
+%% 5-tuple — match on the SubRef we used to subscribe so we don't
+%% accidentally consume unrelated events (the same process may host
+%% other subscriptions during setup). `macula_event_gone' is the
+%% terminal signal sent once the subscription tears down.
+flush_buffered_to_socket(BridgeSock, Key, SubRef) ->
     receive
-        {dist_data_buffered, EncData} ->
-            case decrypt(Key, EncData) of
-                {ok, Data} -> gen_tcp:send(BridgeSock, Data);
-                {error, _} -> gen_tcp:send(BridgeSock, EncData)
-            end,
-            flush_buffered_to_socket(BridgeSock, Key)
+        {macula_event, SubRef, _Topic, EncData, _Meta} ->
+            ship_buffered(BridgeSock, decrypt(Key, EncData), EncData),
+            flush_buffered_to_socket(BridgeSock, Key, SubRef);
+        {macula_event_gone, SubRef, _Reason} ->
+            ok
     after 0 ->
         ok
     end.
 
+ship_buffered(BridgeSock, {ok, Data}, _EncData) ->
+    gen_tcp:send(BridgeSock, Data);
+ship_buffered(BridgeSock, {error, _}, EncData) ->
+    gen_tcp:send(BridgeSock, EncData).
+
 decrypt(Key, <<Nonce:12/binary, Tag:16/binary, Ciphertext/binary>>) ->
-    case crypto:crypto_one_time_aead(
-            aes_256_gcm, Key, Nonce, Ciphertext, <<>>, Tag, false) of
-        error -> {error, decrypt_failed};
-        Plaintext -> {ok, Plaintext}
-    end;
+    aead_decrypt(crypto:crypto_one_time_aead(
+                   aes_256_gcm, Key, Nonce, Ciphertext, <<>>, Tag, false));
 decrypt(_Key, _Data) ->
     {error, decrypt_failed}.
 
-extract_payload(#{payload := P}) -> P;
-extract_payload(P) when is_binary(P) -> P.
+aead_decrypt(error)     -> {error, decrypt_failed};
+aead_decrypt(Plaintext) -> {ok, Plaintext}.
