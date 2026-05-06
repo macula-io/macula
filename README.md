@@ -22,7 +22,7 @@
 > (pool-aware RPC fan-out, replay on link respawn). V1-legacy opts on
 > `connect/2` now emit a `logger:notice` instead of being silently
 > ignored. See [CHANGELOG.md](CHANGELOG.md) for full details and
-> [docs/PLAN_SDK_3_17.md](docs/PLAN_SDK_3_17.md) for the deferred
+> [PLAN_SDK_3_17.md](https://codeberg.org/macula-io/macula/src/branch/main/docs/PLAN_SDK_3_17.md) for the deferred
 > streaming-RPC piece + full quality sweep coming in 3.17.
 
 ## What is Macula?
