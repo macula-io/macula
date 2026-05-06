@@ -114,22 +114,26 @@ Daemon Phase A2 (streaming RPC migration) is blocked on this.
 Largest piece of work in this release; new wire-level stream-frame plumbing in
 `macula_station_link`.
 
-### A5 — `connect/2` opts surface audit (was §3.4)
+### A5 — `connect/2` opts surface audit (was §3.4) — done in 9057110
 
-**Why:** V1's `macula_multi_relay:start_link` took `#{relays, realm, identity, site,
-connections}`. V2's `macula:connect(Seeds, Opts)` accepts a less-documented `Opts`
-map. Need to verify what's accepted; if `site` / `connections` (used by daemon today)
-have no V2 equivalent, surface as additional opts.
+Audit conclusion: V2 `connect/2` opts are functionally complete for daemon migration.
+V1-only `site` and `connections` have no V2 equivalent because V2 is one-link-per-seed
+and realm-per-call rather than multi-conn-per-relay-with-site-affinity.
 
-**Action:** read `macula_client:connect/2` thoroughly, add missing opts, document the
-full surface in module @doc.
+Changes:
+- `macula_client:opts()` type spec gained per-key explanation
+- V1-only opts (`relays`, `realm`, `site`, `connections`) trigger one-shot
+  `logger:notice` naming the keys when passed; pool boots normally
+- `macula:connect/2` doc gained a "V1-only opts" section with V2 equivalents
 
-### A6 — pool dedup config exposure (was §3.5)
+### A6 — pool dedup config exposure (was §3.5) — done in (this commit)
 
-**Why:** `macula_client` doc references `dedup_window_ms` / `dedup_sweep_ms`. Verify
-caller-tunable; expose if not.
-
-**Surface:** opts in `macula:connect/2` accepting these values; doc them.
+Audit conclusion: non-gap. `dedup_window_ms` and `dedup_sweep_ms` are already in the
+`opts()` type and consumed by `init/1` (since 3.11.0). Two new eunit tests verify the
+end-to-end tunability:
+- `dedup_zero_window_disables_dedup_test_` — window=0 + 50ms sweep drops dedup state
+  fast enough that resending `(Publisher, Seq)=1` reaches the consumer twice
+- `dedup_default_window_holds_duplicate_test_` — stock 60s window drops the second copy
 
 ## Group B — sanitization sweep
 

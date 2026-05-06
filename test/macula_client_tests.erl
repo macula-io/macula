@@ -405,3 +405,63 @@ connect_with_legacy_opts_starts_pool_test_() ->
          ?assertEqual(0, maps:get(healthy_links, S)),
          ok = macula_client:close(Pool)
      end}.
+
+%%------------------------------------------------------------------
+%% dedup_window_ms / dedup_sweep_ms tunable end-to-end (A6)
+%%------------------------------------------------------------------
+
+dedup_zero_window_disables_dedup_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         %% A 0-millisecond dedup window with a tight sweep means the
+         %% sweep tick will purge entries between two synthetic
+         %% events sharing the same (Realm, Publisher, Seq) — both
+         %% reach the consumer.
+         {ok, Pool} = macula_client:connect(
+                        [],
+                        #{dedup_window_ms => 0,
+                          dedup_sweep_ms  => 50}),
+         Topic = <<"dedup.zero_window_v1">>,
+         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
+                                                 Topic, self(), #{}),
+         Pub = <<9:256>>,
+         Pool ! {macula_event, make_ref(), Topic, first,
+                 #{realm => ?REALM, publisher => Pub,
+                   seq => 1, delivered_via => direct}},
+         receive {macula_event, SubRef, Topic, first, _} -> ok
+         after 1_000 -> erlang:error(no_first) end,
+         %% Wait for sweep to drop the dedup entry.
+         timer:sleep(120),
+         Pool ! {macula_event, make_ref(), Topic, again,
+                 #{realm => ?REALM, publisher => Pub,
+                   seq => 1, delivered_via => direct}},
+         receive {macula_event, SubRef, Topic, again, _} -> ok
+         after 1_000 -> erlang:error(dedup_swallowed_after_sweep) end,
+         ok = macula_client:close(Pool)
+     end}.
+
+dedup_default_window_holds_duplicate_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         %% Stock 60_000ms window — second copy of the same
+         %% (Publisher, Seq) is dropped.
+         {ok, Pool} = macula_client:connect([], #{}),
+         Topic = <<"dedup.default_window_v1">>,
+         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
+                                                 Topic, self(), #{}),
+         Pub = <<10:256>>,
+         Meta = #{realm => ?REALM, publisher => Pub,
+                  seq => 7, delivered_via => direct},
+         Pool ! {macula_event, make_ref(), Topic, hello, Meta},
+         Pool ! {macula_event, make_ref(), Topic, hello, Meta},
+         receive {macula_event, SubRef, Topic, hello, _} -> ok
+         after 1_000 -> erlang:error(no_event) end,
+         receive
+             {macula_event, SubRef, Topic, hello, _} ->
+                 erlang:error(duplicate_not_swallowed)
+         after 200 -> ok
+         end,
+         ok = macula_client:close(Pool)
+     end}.
