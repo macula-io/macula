@@ -1,12 +1,14 @@
-# Migration — V1 to V2 Pub/Sub (SDK 3.11.0)
+# Migration — V1 to V2 Pub/Sub
 
-**What broke, what changed, and how to migrate.**
+**Status (4.0.0):** V1 is gone. The V1 single-connection client
+(`macula_mesh_client`) and multi-relay wrapper (`macula_multi_relay`)
+were removed in 4.0.0 alongside every V1 facade entry point. Code
+that still calls the V1 surface will not compile against 4.x.
 
-> **Audience:** Applications that depended on the pre-3.11.0 SDK
-> facade (`macula:connect/2`, `macula:publish/4`, `macula:subscribe/3`,
-> etc.). If you are starting fresh on 3.11.0, read
-> [CONNECTING_GUIDE.md](../guides/CONNECTING_GUIDE.md) and
-> [PUBSUB_GUIDE.md](../guides/PUBSUB_GUIDE.md) instead.
+This guide documents the V1→V2 shape changes for anyone migrating
+across the boundary. If you are starting fresh on 4.0+, read
+[CONNECTING_GUIDE.md](../guides/CONNECTING_GUIDE.md) and
+[PUBSUB_GUIDE.md](../guides/PUBSUB_GUIDE.md) instead.
 
 ---
 
@@ -25,40 +27,33 @@ V2 makes the resilience model explicit:
 - Realm is **per call**, not connect-time. One pool serves any
   number of realms.
 
-The legacy single-connection client (`macula_mesh_client`) is still
-in the tree and still functional. The V1 facade surfaces still in
-use (`subscribe/3`, `publish/3`, `call/3,4`, advertise/streams/RPC,
-etc.) are unchanged. Only **four V1 facade functions changed
-shape**.
+---
+
+## What was removed at 4.0.0
+
+Every V1 facade entry point that took a V1 client pid as its first
+argument is gone:
+
+- `disconnect`
+- the client-pid forms of `subscribe`, `publish`, `unsubscribe`,
+  `call`, `advertise`, `unadvertise`
+- the V1 REMOTE forms of `call_stream` and `advertise_stream`
+  (LOCAL forms preserved at `call_stream/2,3`,
+  `open_stream/3,4`, `advertise_stream/2,3`)
+- the entire directed-RPC block (`call_node`, `resolve`,
+  `list_nodes`)
+- the client-pid forms of the DHT entries (`put_record`,
+  `find_record`, `find_records_by_type`, `subscribe_records`,
+  `unsubscribe_records`) — replaced with V2-shaped pool entries
+  under the same names (first argument is now a pool).
+
+Plus the underlying V1 modules `macula_mesh_client` and
+`macula_multi_relay`, plus the V1 carrier branch in
+`macula_stream` (`{remote, _, _}` peer shape and `attach_remote/3`).
 
 ---
 
-## What changed in the facade
-
-| Function | V1 (≤3.10.x) | V2 (≥3.11.0) | Change |
-|---|---|---|---|
-| `macula:connect/2` | Returns `client()` (single link) | Returns `pool()` | Return type |
-| `macula:publish/4` | `(Client, Topic, Data, Opts)` | `(Pool, Realm, Topic, Payload)` | **Argument shape** |
-| `macula:unsubscribe/2` | Drops V1 client sub | Drops V2 pool sub | Routing target |
-| `macula:close/1` | (Stream close) | V2 pool close | **Renamed**: V1 stream close is now `macula:close_stream/1` |
-
-Everything else is unchanged. The fully untouched V1 surfaces:
-
-- `macula:subscribe/3`
-- `macula:publish/3`
-- `macula:disconnect/1`
-- `macula:call/3,4`, `macula:advertise/3,4`, `macula:unadvertise/2`
-- `macula:put_record/2`, `macula:find_record/2`,
-  `macula:find_records_by_type/2`, `macula:subscribe_records/3`,
-  `macula:unsubscribe_records/2`
-- All streaming APIs except the renamed `close_stream/1`
-- Directed RPC (`call_node`, `resolve`, `list_nodes`)
-- Cluster + dist (`ensure_distributed/0`, `join_mesh/1`,
-  `join_dist_relay/1`, etc.)
-
----
-
-## Migration path A — adopt V2 (recommended)
+## Migration path
 
 ### Connect
 
@@ -156,35 +151,7 @@ grep -rn 'macula:close(' apps/ src/ test/
 
 ---
 
-## Migration path B — keep V1 semantics
-
-If you can't move to the pool right now, the V1 single-connection
-client is still in the tree at `macula_mesh_client`. Replace the
-facade callsites with direct module calls:
-
-```erlang
-%% V1 facade — was
-{ok, Client} = macula:connect([Url], #{realm => Realm}).
-ok = macula:publish(Client, Topic, Payload).
-ok = macula:unsubscribe(Client, Sub).
-
-%% V1 direct — now
-{ok, Client} = macula_mesh_client:start_link(#{relays => [Url], realm => Realm}).
-ok = macula_mesh_client:publish(Client, Topic, Payload).
-ok = macula_mesh_client:unsubscribe(Client, Sub).
-```
-
-The `subscribe/3`, `publish/3`, `call/3,4` facade surfaces are
-unchanged and continue to drive `macula_mesh_client` exactly as
-before. You only need to switch to direct-module calls for the
-four functions whose facade shape changed.
-
-V1 single-connection clients are slated for retirement at 4.0.0.
-Plan a migration to V2 by then.
-
----
-
-## Behaviour changes that survive the rename
+## Behaviour changes
 
 A few semantic differences apply regardless of which migration path
 you take.

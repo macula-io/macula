@@ -61,7 +61,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--export_type([pool/0, opts/0, seed/0, status/0, handler/0]).
+-export_type([pool/0, opts/0, seed/0, status/0, handler/0, stream_handler/0]).
 
 -type pool() :: pid().
 
@@ -71,6 +71,11 @@
 %% have to reach into the private `macula_station_link' module.
 -type handler() :: fun((term()) -> term())
                  | {module(), atom()}.
+
+%% Streaming RPC handler — accepted by `advertise_stream/5'. A 2-arg
+%% fun invoked as `Handler(StreamPid, Args)' where `StreamPid' is
+%% the local `macula_stream' bound to the inbound STREAM_OPEN.
+-type stream_handler() :: fun((pid(), term()) -> any()).
 
 %% Aggregate health snapshot of a pool. See `status/1'.
 -type status() :: #{
@@ -163,7 +168,7 @@
     %% alongside `procs'. {realm, procedure} → {mode, handler}
     stream_procs = #{} :: #{{<<_:256>>, binary()} =>
                             {macula_frame:stream_mode(),
-                             macula_station_link:stream_handler()}},
+                             stream_handler()}},
     dedup_tab     :: ets:tid()
 }).
 
@@ -264,7 +269,7 @@ call_stream(Pool, Realm, Procedure, Args, Opts)
 %% registration.
 -spec advertise_stream(pool(), <<_:256>>, binary(),
                         macula_frame:stream_mode(),
-                        macula_station_link:stream_handler()) ->
+                        stream_handler()) ->
     ok | {error, term()}.
 advertise_stream(Pool, Realm, Procedure, Mode, Handler)
   when is_pid(Pool),

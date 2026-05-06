@@ -89,7 +89,7 @@ io.macula/beam-campus/hecate/llm/model_detected_v1
 io.macula/acme-org/trader/portfolio/position_closed_v1
 ```
 
-Published via `macula:publish/3`. Subscribed via `macula:subscribe/3`.
+Published via `macula:publish/5`. Subscribed via `macula:subscribe/5`.
 
 ### Hopes (RPC — things we want to happen)
 
@@ -107,7 +107,7 @@ io.macula/beam-campus/hecate/mpong/join_game_v1
 io.macula/acme-org/trader/portfolio/open_position_v1
 ```
 
-Advertised via `macula:advertise/3`. Called via `macula:call/4`.
+Advertised via `macula:advertise/5`. Called via `macula:call/5`.
 
 ---
 

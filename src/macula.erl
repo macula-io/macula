@@ -438,8 +438,7 @@ advertise_stream(Procedure, Mode, Handler)
 %% every healthy link and stores in pool state for replay on link
 %% respawn. See `macula_client:advertise_stream/5'.
 -spec advertise_stream(pool(), realm(), procedure(),
-                        macula_frame:stream_mode(),
-                        macula_station_link:stream_handler()) ->
+                        stream_mode(), stream_handler()) ->
         ok | {error, term()}.
 advertise_stream(Pool, Realm, Procedure, Mode, Handler)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32,

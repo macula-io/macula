@@ -7,6 +7,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.0.0] - 2026-05-06
+
+Major release. **Breaking.** V1 surface fully retired; pool-aware
+streaming RPC ships; the `macula_stream_v1` module renamed.
+
+### Removed
+
+- **macula_mesh_client** — V1 single-connection client. Deleted.
+- **macula_multi_relay** — V1 multi-relay wrapper. Deleted.
+- **V1 facade entry points on macula.erl** — every form taking a
+  V1 client pid as its first argument:
+  - `disconnect`
+  - V1 client-pid forms of `subscribe`, `publish`,
+    `unsubscribe`, `call`, `advertise`, `unadvertise`
+  - V1 REMOTE forms of `call_stream` and `advertise_stream`
+    (LOCAL in-process forms preserved)
+  - V1 client-pid forms of `put_record`, `find_record`,
+    `find_records_by_type`, `subscribe_records`,
+    `unsubscribe_records` — replaced with V2-shaped entries on
+    the same names (see *Changed*)
+  - The entire V1 directed-RPC block: `call_node`, `resolve`,
+    `list_nodes`
+  - The `client/0` type alias
+- **V1 carrier branch in macula_stream** — the `{remote, _, _}`
+  peer shape, `attach_remote/3` export, and `send_remote/4`
+  dispatch path are gone. The module now spans only LOCAL
+  in-process pairs and V2 station-link carriers.
+- **V1 test files**: `macula_mesh_client_validate_tests.erl`,
+  `macula_multi_relay_tests.erl`, `macula_stream_remote_tests.erl`.
+
+Net deletion: ~2700 LOC.
+
+### Added — pool-aware streaming RPC (A4)
+
+Streaming RPC now rides the V2 pool. Five new STREAM_* wire frames
+(`stream_open`, `stream_data`, `stream_end`, `stream_error`,
+`stream_reply`) in `macula_frame`, plus per-station and pool
+surfaces:
+
+- `macula:call_stream/5` — open a stream against a V2 pool.
+  Sticky-to-link: the returned stream is bound to the link the
+  pool picked; if that link dies the stream errors with
+  `peer_down` and the caller re-opens.
+- `macula:advertise_stream/5` — fan-out streaming-procedure
+  registration across every healthy link in the pool. Replayed
+  on link respawn.
+- `macula:unadvertise_stream/3` — drop a streaming advertisement.
+- Per-link API on `macula_station_link`: `call_stream/5`,
+  `advertise_stream/5`, `unadvertise_stream/3`,
+  `send_stream_frame/3`.
+- Pool API on `macula_client`: `call_stream/5`,
+  `advertise_stream/5`, `unadvertise_stream/3`. Plus an internal
+  replay helper that re-issues stream advertisements when a link
+  respawns.
+
+29 new eunit tests cover frame round-trips, per-station gating,
+pool fan-out, replay, and disconnect cleanup.
+
+### Changed — DHT entries
+
+`put_record / find_record / find_records_by_type /
+subscribe_records / unsubscribe_records` keep their names but now
+take a V2 pool as the first argument (was a V1 client pid). DHT
+traffic travels under the all-zeros realm tag
+(`?DHT_REALM = <<0:256>>`), the SDK convention for
+protocol-internal infrastructure traffic.
+
+### Changed — macula_stream rename
+
+The `macula_stream_v1` module is renamed to `macula_stream`. The
+"v1" suffix referred to the V1 wire format the gen_server originally
+bridged via `macula_mesh_client`; A4 extended the same gen_server
+to carry V2 streams as well, and the V1 retirement removed the
+mesh_client carrier entirely. The module now spans LOCAL pairs and
+V2 station-link pairs only — the suffix had become misleading.
+
+External consumers using `macula_stream_v1:*` directly must rename
+to `macula_stream:*`. No semantic change.
+
+### Changed — macula_dist_relay ported to V2 pool
+
+Erlang-distribution-over-mesh stays. Its plumbing moves from V1
+`macula_mesh_client` / `macula_multi_relay` to the V2
+`macula_client` pool.
+
+- `register_mesh_client / get_mesh_client` on `macula_dist_relay`
+  renamed to `register_mesh_pool / get_mesh_pool`.
+- `persistent_term` key `macula_dist_mesh_client` →
+  `macula_dist_mesh_pool`.
+- `extract_payload` on `macula_dist_relay` deleted; V2 events
+  deliver Payload directly in the message tuple, no map-or-binary
+  unpacking needed.
+- `macula_dist_bridge` state field `client / client_mon` →
+  `pool / pool_mon`; args map key `client => Client` →
+  `pool => Pool`
+
+Realm tag: dist tunnel frames travel under the all-zeros realm
+(matches the DHT convention; protocol-internal infrastructure).
+
+### Migration
+
+Workspace consumers that referenced V1 (hecate-daemon,
+hecate-app-weather, mesh_chat) were ported in lockstep across
+their respective repositories before this release; nothing in the
+canonical workspace should break on the bump.
+
+External consumers must:
+
+1. Replace `macula:connect/2` call-sites that destructured the
+   result as a V1 client. The handle is now a pool.
+2. Add a 32-byte realm tag to every `subscribe`, `publish`,
+   `call`, `advertise`, `unadvertise`, `call_stream`,
+   `advertise_stream`, `unadvertise_stream` call-site. Use
+   `macula_realm:id(BinaryName)` (SHA-256) or your own derivation.
+3. Switch pubsub callbacks to pid-receivers. V2 delivers
+   `{macula_event, SubRef, Topic, Payload, Meta}` to a pid; the
+   former 1-arg callback shape is available via
+   `macula:subscribe_callback/4` if you need to keep callback
+   semantics.
+4. Rename `macula_stream_v1:*` → `macula_stream:*` if your code
+   reached past the facade.
+
+See `docs/migrations/V1_TO_V2_PUBSUB.md` for detailed examples.
+
+---
+
 ## [3.16.0] - 2026-05-06
 
 Daemon-driven additive release. Five SDK gaps surfaced during the

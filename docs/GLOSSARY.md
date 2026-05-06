@@ -35,10 +35,10 @@ Topic-based event distribution. Publishers send events to topics; all subscriber
 Request/response pattern. Providers advertise procedures; consumers call them. The relay mesh handles discovery via Kademlia DHT. Calls return `{ok, Result}` or `{error, Reason}`.
 
 ### Procedure
-A named RPC endpoint (e.g., `math.add`, `weather.get_current`). Registered via `macula:advertise/3`, invoked via `macula:call/4`.
+A named RPC endpoint (e.g., `math.add`, `weather.get_current`). Registered via `macula:advertise/5`, invoked via `macula:call/5`.
 
 ### Topic
-A named pub/sub channel (e.g., `orders.placed`). Subscribed via `macula:subscribe/3`, published via `macula:publish/3`.
+A named pub/sub channel (e.g., `orders.placed`). Subscribed via `macula:subscribe/5`, published via `macula:publish/5`.
 
 ---
 
