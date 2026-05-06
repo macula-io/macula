@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.1.0] - 2026-05-06
+
+### Added
+
+- **`accept_owner` opt on `macula_peering:accept/2` and `connect/1`** —
+  optional pid that receives a single
+  `{macula_peering, handshake_complete, ConnPid}` message the moment
+  the worker transitions from `handshaking` to `connected`. Distinct
+  from `controlling_pid`, which receives the
+  `connected`/`frame`/`disconnected` event stream. Lets an accept-side
+  listener cap concurrent *handshaking* workers separately from
+  healthy connected peers — the original intent of the cap, before
+  stub fan-out filled it with verified peers and starved
+  station↔station handshakes (see macula-station 4beb2f5 for the
+  matching cap-bump fallback).
+
+### Notes
+
+- Pure addition; no behaviour change for callers that don't pass
+  `accept_owner`.
+
+---
+
 ## [4.0.0] - 2026-05-06
 
 Major release. **Breaking.** V1 surface fully retired; pool-aware

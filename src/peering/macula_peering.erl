@@ -18,6 +18,12 @@
 %%   <li>`{macula_peering, frame, ConnPid, Frame}' (post-handshake)</li>
 %%   <li>`{macula_peering, disconnected, ConnPid, Reason}'</li>
 %% </ul>
+%%
+%% An optional `accept_owner' pid in opts receives a single
+%% `{macula_peering, handshake_complete, ConnPid}' message the
+%% moment the worker transitions from `handshaking' to `connected'.
+%% Used by accept-side listeners that cap concurrent handshaking
+%% workers separately from healthy connected peers.
 -module(macula_peering).
 
 -export([

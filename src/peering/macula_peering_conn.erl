@@ -33,7 +33,17 @@
     capabilities    := non_neg_integer(),
     controlling_pid := pid(),
     target          => connect_opts(),
-    quic_conn       => reference()
+    quic_conn       => reference(),
+    %% Optional pid notified once when the worker completes the
+    %% CONNECT/HELLO handshake and transitions to `connected'. Sent
+    %% as `{macula_peering, handshake_complete, self()}'. Used by
+    %% accept-side listeners that cap concurrent *handshaking*
+    %% workers and need to release a slot the moment a worker is
+    %% verified-and-connected (so healthy peers do not consume the
+    %% same pool as stuck handshakes). Distinct from
+    %% `controlling_pid', which receives the peer-node-id-bearing
+    %% `connected' / `frame' / `disconnected' stream.
+    accept_owner    => pid()
 }.
 
 -record(data, {
@@ -43,6 +53,7 @@
     realms          :: [macula_identity:pubkey()],
     capabilities    :: non_neg_integer(),
     controlling_pid :: pid(),
+    accept_owner    :: undefined | pid(),
     target          :: undefined | connect_opts(),
     quic_conn       :: undefined | reference(),
     quic_stream     :: undefined | reference(),
@@ -80,6 +91,7 @@ init(#{role := Role, identity := Identity, controlling_pid := Pid} = Opts)
         realms          = maps:get(realms, Opts, []),
         capabilities    = maps:get(capabilities, Opts, 0),
         controlling_pid = Pid,
+        accept_owner    = maps:get(accept_owner, Opts, undefined),
         target          = maps:get(target, Opts, undefined),
         quic_conn       = maps:get(quic_conn, Opts, undefined),
         quic_stream     = undefined,
@@ -259,7 +271,14 @@ absorb_peer_info(Frame, Data) ->
 
 transition_to_connected(Data) ->
     notify(connected, Data#data.peer_node_id, Data),
+    notify_handshake_complete(Data),
     {next_state, connected, Data}.
+
+notify_handshake_complete(#data{accept_owner = undefined}) ->
+    ok;
+notify_handshake_complete(#data{accept_owner = Pid}) when is_pid(Pid) ->
+    Pid ! {macula_peering, handshake_complete, self()},
+    ok.
 
 %%------------------------------------------------------------------
 %% State: connected
