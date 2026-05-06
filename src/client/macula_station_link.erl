@@ -172,11 +172,11 @@
                                  {macula_frame:stream_mode(),
                                   stream_handler()}},
     %% Open streams keyed by 16-byte stream_id. Each entry pairs the
-    %% local `macula_stream_v1' pid (client- or server-side) with the
+    %% local `macula_stream' pid (client- or server-side) with the
     %% monitor reference returned when this link started watching it.
     %% Inbound STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
     %% frames are dispatched into the matching stream pid via the
-    %% peer-to-peer protocol on `macula_stream_v1'.
+    %% peer-to-peer protocol on `macula_stream'.
     streams = #{} :: #{macula_frame:stream_id() => {pid(), reference()}}
 }).
 
@@ -403,7 +403,7 @@ unadvertise(Pid, Realm, Procedure)
 
 %% @doc Open a streaming RPC on this link. Returns `{ok, StreamPid}'
 %% bound to the caller; the caller drives the stream via
-%% `macula_stream_v1:send/2,3', `recv/1,2', `close_send/1', `close/1',
+%% `macula_stream:send/2,3', `recv/1,2', `close_send/1', `close/1',
 %% and `await_reply/1,2' (for client-stream / bidi modes).
 %%
 %% `Realm' and `Procedure' name the remote streaming endpoint.
@@ -442,7 +442,7 @@ call_stream(Pid, Realm, Procedure, Args, Opts)
 %% existing `advertise' frame; the receiving station routes inbound
 %% STREAM_OPEN frames for `(Realm, Procedure)' back over this peering
 %% connection where this link spawns a server-side
-%% `macula_stream_v1' and dispatches `Handler(StreamPid, Args)' in a
+%% `macula_stream' and dispatches `Handler(StreamPid, Args)' in a
 %% transient process.
 -spec advertise_stream(pid(), <<_:256>>, binary(),
                         macula_frame:stream_mode(), stream_handler()) ->
@@ -469,7 +469,7 @@ unadvertise_stream(Pid, Realm, Procedure)
                     {stream_unadvertise, Realm, Procedure},
                     5_000).
 
-%% @doc Cast a STREAM_* outbound frame. Called by `macula_stream_v1'
+%% @doc Cast a STREAM_* outbound frame. Called by `macula_stream'
 %% processes paired against this link via the
 %% `{remote_via_link, Pid, Sid}' peer shape — the stream invokes this
 %% to ship its STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
@@ -809,7 +809,7 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     %% transient handler processes see the abort and exit.
     maps:foreach(fun(_Sid, {Pid, Mon}) ->
         erlang:demonitor(Mon, [flush]),
-        catch macula_stream_v1:abort(Pid, <<"disconnected">>,
+        catch macula_stream:abort(Pid, <<"disconnected">>,
                                      iolist_to_binary(io_lib:format("~p", [Reason])))
     end, Streams),
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
@@ -1043,7 +1043,7 @@ parse_seed(Url) when is_list(Url) ->
 %% Streaming RPC — outbound CALL_STREAM (client-side)
 %%-------------------------------------------------------------------
 
-%% Spawn a client-side `macula_stream_v1' linked to this link, attach
+%% Spawn a client-side `macula_stream' linked to this link, attach
 %% it as a `{remote_via_link, self(), Sid}' peer, then ship the
 %% STREAM_OPEN frame. The caller drives the stream from outside; the
 %% returned pid is bound to the requested `owner' (default = caller)
@@ -1055,13 +1055,13 @@ open_client_stream(Realm, Proc, Args, Opts, Caller,
     Owner     = maps:get(owner, Opts, Caller),
     DeadlineMs = maps:get(deadline_ms, Opts,
                           erlang:system_time(millisecond) + 30_000),
-    {ok, StreamPid} = macula_stream_v1:start_link(#{
+    {ok, StreamPid} = macula_stream:start_link(#{
         id    => Sid,
         role  => client,
         mode  => Mode,
         owner => Owner
     }),
-    ok = macula_stream_v1:attach_to_link(StreamPid, self(), Sid),
+    ok = macula_stream:attach_to_link(StreamPid, self(), Sid),
     Mon = erlang:monitor(process, StreamPid),
     Frame = macula_frame:stream_open(#{
         stream_id   => Sid,
@@ -1080,7 +1080,7 @@ open_client_stream(Realm, Proc, Args, Opts, Caller,
 %% Streaming RPC — outbound STREAM_DATA / END / ERROR / REPLY
 %%-------------------------------------------------------------------
 
-%% Each `macula_stream_v1' bound to this link via the
+%% Each `macula_stream' bound to this link via the
 %% `{remote_via_link, _, Sid}' peer shape casts an outbound frame
 %% spec here. Build the corresponding `macula_frame:stream_*' and
 %% ship through the peering connection. Outbound STREAM_END (full
@@ -1155,13 +1155,13 @@ dispatch_stream_open({ok, {AdvMode, Handler}}, Sid, Proc, _Declared, Args, S) ->
 spawn_inbound_stream(Sid, Proc, Mode, Handler, Args,
                      #state{streams = Streams} = S) ->
     Host = spawn(fun() -> receive stop -> ok end end),
-    {ok, StreamPid} = macula_stream_v1:start_link(#{
+    {ok, StreamPid} = macula_stream:start_link(#{
         id    => Sid,
         role  => server,
         mode  => Mode,
         owner => Host
     }),
-    ok = macula_stream_v1:attach_to_link(StreamPid, self(), Sid),
+    ok = macula_stream:attach_to_link(StreamPid, self(), Sid),
     Mon = erlang:monitor(process, StreamPid),
     _Worker = spawn_stream_handler(Handler, StreamPid, Args, Proc),
     S#state{streams = Streams#{Sid => {StreamPid, Mon}}}.
@@ -1181,7 +1181,7 @@ spawn_stream_handler(Handler, Stream, Args, Proc) ->
                 Msg = iolist_to_binary(io_lib:format(
                     "stream handler ~s crashed: ~p:~p~n~p",
                     [Proc, Class, Reason, Stack])),
-                _ = macula_stream_v1:abort(Stream, Code, Msg)
+                _ = macula_stream:abort(Stream, Code, Msg)
         end
     end).
 
@@ -1194,7 +1194,7 @@ spawn_stream_handler(Handler, Stream, Args, Proc) ->
 deliver_stream_data(#{stream_id := Sid} = Frame, S) ->
     deliver_to_stream(maps:find(Sid, S#state.streams),
                       fun({Pid, _Mon}) ->
-                          macula_stream_v1:deliver_chunk(
+                          macula_stream:deliver_chunk(
                             Pid,
                             maps:get(encoding, Frame, raw),
                             maps:get(body, Frame, <<>>))
@@ -1205,7 +1205,7 @@ deliver_stream_end(#{stream_id := Sid} = Frame, S) ->
     Role = maps:get(role, Frame, both),
     deliver_to_stream(maps:find(Sid, S#state.streams),
                       fun({Pid, _Mon}) ->
-                          macula_stream_v1:deliver_end(Pid, Role)
+                          macula_stream:deliver_end(Pid, Role)
                       end),
     %% Full close drops the routing entry; half close keeps it open
     %% for outbound chunks back to the peer.
@@ -1216,14 +1216,14 @@ deliver_stream_error(#{stream_id := Sid} = Frame, S) ->
     Message = maps:get(message, Frame, <<>>),
     deliver_to_stream(maps:find(Sid, S#state.streams),
                       fun({Pid, _Mon}) ->
-                          macula_stream_v1:deliver_error(Pid, Code, Message)
+                          macula_stream:deliver_error(Pid, Code, Message)
                       end),
     drop_stream(Sid, S).
 
 deliver_stream_reply(#{stream_id := Sid, payload := Payload}, S) ->
     deliver_to_stream(maps:find(Sid, S#state.streams),
                       fun({Pid, _Mon}) ->
-                          macula_stream_v1:deliver_reply(Pid, {ok, Payload})
+                          macula_stream:deliver_reply(Pid, {ok, Payload})
                       end),
     S.
 

@@ -1328,7 +1328,7 @@ stream_data_delivers_chunk_to_stream_pid_test_() ->
          }},
          %% recv unblocks with the chunk.
          ?assertEqual({chunk, <<"chunk-bytes">>},
-                      macula_stream_v1:recv(StreamPid, 1_000)),
+                      macula_stream:recv(StreamPid, 1_000)),
          macula_station_link:stop(Pid),
          ok
      end}.
@@ -1354,7 +1354,7 @@ stream_reply_surfaces_terminal_payload_test_() ->
              responded_by => PeerNodeId
          }},
          ?assertEqual({ok, #{count => 12}},
-                      macula_stream_v1:await_reply(StreamPid, 1_000)),
+                      macula_stream:await_reply(StreamPid, 1_000)),
          macula_station_link:stop(Pid),
          ok
      end}.
@@ -1381,7 +1381,7 @@ stream_error_aborts_local_stream_test_() ->
          }},
          %% recv waiters surface the error.
          ?assertEqual({error, {<<"deadline_exceeded">>, <<"server too slow">>}},
-                      macula_stream_v1:recv(StreamPid, 1_000)),
+                      macula_stream:recv(StreamPid, 1_000)),
          macula_station_link:stop(Pid),
          ok
      end}.
@@ -1498,14 +1498,14 @@ disconnect_aborts_open_streams_test_() ->
          %% surfaces as a timeout.
          wait_until_closed(StreamPid, 20),
          ?assertMatch({error, {<<"disconnected">>, _}},
-                      macula_stream_v1:await_reply(StreamPid, 1_000)),
+                      macula_stream:await_reply(StreamPid, 1_000)),
          ok
      end}.
 
 wait_until_closed(_StreamPid, 0) ->
     erlang:error(stream_did_not_close);
 wait_until_closed(StreamPid, N) ->
-    case macula_stream_v1:info(StreamPid) of
+    case macula_stream:info(StreamPid) of
         #{closed_recv := true, closed_send := true} -> ok;
         _ ->
             timer:sleep(50),

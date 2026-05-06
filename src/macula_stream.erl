@@ -1,18 +1,31 @@
 %%%-------------------------------------------------------------------
 %%% @doc Macula streaming RPC — single-stream state machine.
 %%%
-%%% Owns one streaming RPC's state. Each call_stream, open_stream,
-%%% or server-side handler invocation gets its own macula_stream
-%%% gen_server. Phase 1 only supports the LOCAL dispatch path: the
-%%% client-side and server-side macula_stream processes live in the
-%%% same BEAM and are paired with pair/2. Phase 2 swaps the local
-%%% peer for a QUIC stream owned by macula_mesh_client; the public
-%%% API stays unchanged.
+%%% Owns one streaming RPC's state. Each `call_stream', `open_stream',
+%%% or server-side handler invocation gets its own `macula_stream'
+%%% gen_server. The state machine itself is carrier-agnostic; the
+%%% peer shape (`{local, _}', `{remote, _, _}', or
+%%% `{remote_via_link, _, _}') decides how chunks reach the wire.
 %%%
-%%% See PLAN_MACULA_STREAMING.md (macula-architecture/plans).
+%%% Three carriers route through `forward_to_peer/2':
+%%% <ul>
+%%%   <li>`{local, Pid}' — in-process pairing for unit tests and
+%%%       `macula_stream_local' dispatch.</li>
+%%%   <li>`{remote, Client, Sid}' — V1 wire format via
+%%%       `macula_mesh_client' (msgpack-shaped STREAM_* frames over
+%%%       a single QUIC stream).</li>
+%%%   <li>`{remote_via_link, Link, Sid}' — V2 wire format via
+%%%       `macula_station_link' (CBOR `macula_frame:stream_*' frames
+%%%       over a peering connection, SDK 3.17+).</li>
+%%% </ul>
+%%%
+%%% Renamed from `macula_stream_v1' in 3.17.0 — the `v1' suffix
+%%% referred to the V1 wire format the module originally bridged
+%%% but the gen_server now spans both wire formats and the LOCAL
+%%% carrier; the suffix had become misleading.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_stream_v1).
+-module(macula_stream).
 
 -behaviour(gen_server).
 
