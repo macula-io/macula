@@ -55,6 +55,8 @@
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
 -export([call/5, advertise/4, unadvertise/3]).
+%% Streaming RPC (since 3.17.0) — called by the `macula' facade.
+-export([call_stream/5, advertise_stream/5, unadvertise_stream/3]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -157,6 +159,11 @@
     %% Advertised procedures — pool replays these on link respawn.
     %% {realm, procedure} → handler
     procs = #{}   :: #{{<<_:256>>, binary()} => handler()},
+    %% Advertised streaming procedures — replayed on link respawn
+    %% alongside `procs'. {realm, procedure} → {mode, handler}
+    stream_procs = #{} :: #{{<<_:256>>, binary()} =>
+                            {macula_frame:stream_mode(),
+                             macula_station_link:stream_handler()}},
     dedup_tab     :: ets:tid()
 }).
 
@@ -228,6 +235,56 @@ unadvertise(Pool, Realm, Procedure)
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure) ->
     gen_server:call(Pool, {unadvertise, Realm, Procedure}, 5_000).
+
+%% @doc Open a streaming RPC against the pool. Picks the first
+%% currently-healthy link and opens the stream there; the returned
+%% stream pid is sticky — if the underlying link dies, the stream
+%% errors with `{error, peer_down}' and the caller must re-open.
+%%
+%% Returns `{error, no_healthy_station}' when no link has completed
+%% its CONNECT/HELLO handshake. `Realm' (32 bytes) and `Procedure'
+%% name the remote endpoint. `Args' is the opening payload; `Opts'
+%% accepts `mode' (default `server_stream'), `owner' (default the
+%% calling pid), and `deadline_ms'.
+-spec call_stream(pool(), <<_:256>>, binary(), term(), map()) ->
+    {ok, pid()} | {error, term()}.
+call_stream(Pool, Realm, Procedure, Args, Opts)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       is_map(Opts) ->
+    gen_server:call(Pool,
+                    {rpc_call_stream, Realm, Procedure, Args,
+                     Opts#{owner => maps:get(owner, Opts, self())}},
+                    5_000).
+
+%% @doc Advertise a streaming procedure handler on every healthy
+%% link. Stored in pool state so links respawned later replay the
+%% advertisement. Returns `ok' when at least one link accepted the
+%% registration.
+-spec advertise_stream(pool(), <<_:256>>, binary(),
+                        macula_frame:stream_mode(),
+                        macula_station_link:stream_handler()) ->
+    ok | {error, term()}.
+advertise_stream(Pool, Realm, Procedure, Mode, Handler)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (Mode =:= server_stream orelse Mode =:= client_stream
+        orelse Mode =:= bidi),
+       is_function(Handler, 2) ->
+    gen_server:call(Pool,
+                    {advertise_stream, Realm, Procedure, Mode, Handler},
+                    5_000).
+
+%% @doc Drop a streaming procedure on every healthy link and remove
+%% it from the pool's replay state. Idempotent.
+-spec unadvertise_stream(pool(), <<_:256>>, binary()) -> ok.
+unadvertise_stream(Pool, Realm, Procedure)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure) ->
+    gen_server:call(Pool, {unadvertise_stream, Realm, Procedure}, 5_000).
 
 %% @doc Aggregate health snapshot of the pool. Single round-trip to
 %% the pool's gen_server plus one `is_connected' probe per spawned
@@ -346,6 +403,24 @@ handle_call({unadvertise, Realm, Procedure}, _From,
             #state{procs = P} = S) ->
     _ = fanout_unadvertise(spawned_link_pids(S), Realm, Procedure),
     {reply, ok, S#state{procs = maps:remove({Realm, Procedure}, P)}};
+
+handle_call({rpc_call_stream, Realm, Procedure, Args, Opts}, _From, S) ->
+    {reply,
+     stream_first_healthy(spawned_link_pids(S), Realm, Procedure, Args, Opts),
+     S};
+
+handle_call({advertise_stream, Realm, Procedure, Mode, Handler}, _From,
+            #state{stream_procs = SP} = S) ->
+    Pids = spawned_link_pids(S),
+    Reply = fanout_advertise_stream(Pids, Realm, Procedure, Mode, Handler),
+    {reply, Reply,
+     S#state{stream_procs = SP#{{Realm, Procedure} => {Mode, Handler}}}};
+
+handle_call({unadvertise_stream, Realm, Procedure}, _From,
+            #state{stream_procs = SP} = S) ->
+    _ = fanout_unadvertise_stream(spawned_link_pids(S), Realm, Procedure),
+    {reply, ok,
+     S#state{stream_procs = maps:remove({Realm, Procedure}, SP)}};
 
 handle_call(status, _From,
             #state{seeds = Seeds, links = Links, subs = Subs,
@@ -495,6 +570,49 @@ fanout_unadvertise(Pids, Realm, Proc) ->
      || P <- Pids, macula_station_link:is_connected(P)],
     ok.
 
+%% Sticky-to-link selection for streams. Walk the healthy links in
+%% order; the first one that opens cleanly wins. The returned stream
+%% pid is bound to that link's `{remote_via_link, _, _}' peer; if
+%% the link dies, the stream errors and the caller re-opens.
+%% Per-link `{error, not_connected}' (handshake not done) falls
+%% through; any other error short-circuits and is returned to the
+%% caller, since it likely indicates a real problem (deadline,
+%% protocol mismatch) the next link would also hit.
+stream_first_healthy([], _Realm, _Proc, _Args, _Opts) ->
+    {error, no_healthy_station};
+stream_first_healthy([Pid | Rest], Realm, Proc, Args, Opts) ->
+    on_stream_link(macula_station_link:is_connected(Pid),
+                   Pid, Rest, Realm, Proc, Args, Opts).
+
+on_stream_link(false, _Pid, Rest, Realm, Proc, Args, Opts) ->
+    stream_first_healthy(Rest, Realm, Proc, Args, Opts);
+on_stream_link(true, Pid, Rest, Realm, Proc, Args, Opts) ->
+    keep_or_next_stream(macula_station_link:call_stream(
+                          Pid, Realm, Proc, Args, Opts),
+                        Rest, Realm, Proc, Args, Opts).
+
+keep_or_next_stream({ok, _Stream} = R, _Rest, _Realm, _Proc, _Args, _Opts) ->
+    R;
+keep_or_next_stream({error, not_connected}, Rest, Realm, Proc, Args, Opts) ->
+    stream_first_healthy(Rest, Realm, Proc, Args, Opts);
+keep_or_next_stream({error, _} = E, _Rest, _Realm, _Proc, _Args, _Opts) ->
+    E.
+
+%% Fan-out streaming advertise across every healthy link. Same shape
+%% as `fanout_advertise/4' for unary; partial success counts.
+fanout_advertise_stream([], _Realm, _Proc, _Mode, _Handler) ->
+    {error, no_healthy_station};
+fanout_advertise_stream(Pids, Realm, Proc, Mode, Handler) ->
+    Results = [macula_station_link:advertise_stream(P, Realm, Proc, Mode, Handler)
+               || P <- Pids,
+                  macula_station_link:is_connected(P)],
+    summarize_advertise(Results).
+
+fanout_unadvertise_stream(Pids, Realm, Proc) ->
+    [_ = macula_station_link:unadvertise_stream(P, Realm, Proc)
+     || P <- Pids, macula_station_link:is_connected(P)],
+    ok.
+
 %% Count `(healthy, failed)' links across configured seeds. A seed is
 %% healthy when its worker pid is alive AND its station_link reports
 %% `is_connected'. Anything else (no pid yet, dead pid, mid-handshake)
@@ -523,6 +641,7 @@ on_respawn_link(Seed, S) ->
 replay_to_seed(#link_state{pid = Pid}, S) when is_pid(Pid) ->
     macula_client_replay:subs_to(Pid, S#state.topic_index),
     macula_client_replay:advs_to(Pid, S#state.procs),
+    macula_client_replay:stream_advs_to(Pid, S#state.stream_procs),
     S;
 replay_to_seed(_, S) ->
     S.

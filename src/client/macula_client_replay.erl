@@ -12,7 +12,7 @@
 %% on its state machine and so the replay path is independently
 %% testable.
 -module(macula_client_replay).
--export([subs_to/2, advs_to/2]).
+-export([subs_to/2, advs_to/2, stream_advs_to/2]).
 
 %% @doc Re-issue a SUBSCRIBE frame for every distinct `{Realm, Topic}'
 %% in `TopicIndex' against `LinkPid'. The calling process (pool's
@@ -46,4 +46,25 @@ advs_to(LinkPid, Procs) when is_pid(LinkPid), is_map(Procs) ->
           _ = macula_station_link:advertise(LinkPid, Realm,
                                              Procedure, Handler)
       end, Procs),
+    ok.
+
+%% @doc Re-issue an ADVERTISE frame for every streaming procedure in
+%% `StreamProcs' against `LinkPid'. Mirrors `advs_to/2' for the
+%% streaming RPC surface (SDK 3.17+). Stored shape is
+%% `{Mode, Handler}' so the receiving link can dispatch inbound
+%% STREAM_OPEN frames with the correct mode.
+%%
+%% Errors are swallowed (same policy as `advs_to/2').
+-spec stream_advs_to(pid(),
+                     #{{<<_:256>>, binary()} =>
+                       {macula_frame:stream_mode(),
+                        macula_station_link:stream_handler()}}) -> ok.
+stream_advs_to(LinkPid, StreamProcs)
+  when is_pid(LinkPid), is_map(StreamProcs) ->
+    maps:foreach(
+      fun({Realm, Procedure}, {Mode, Handler}) ->
+          _ = macula_station_link:advertise_stream(LinkPid, Realm,
+                                                    Procedure, Mode,
+                                                    Handler)
+      end, StreamProcs),
     ok.

@@ -56,10 +56,11 @@
 %% NOTE: V1 stream `close/1' renamed to `close_stream/1' in 3.11.0
 %% to free `close/1' for the V2 pool surface.
 -export([
-    call_stream/2, call_stream/3, call_stream/4,
+    call_stream/2, call_stream/3, call_stream/4, call_stream/5,
     open_stream/3, open_stream/4,
     advertise_stream/2, advertise_stream/3, advertise_stream/4,
-    unadvertise_stream/1,
+    advertise_stream/5,
+    unadvertise_stream/1, unadvertise_stream/3,
     send/2, send/3,
     recv/1, recv/2,
     close_stream/1, close_send/1,
@@ -494,6 +495,20 @@ call_stream(Client, Procedure, Args, Opts)
   when is_pid(Client), is_binary(Procedure), is_map(Opts) ->
     macula_mesh_client:call_stream(Client, Procedure, Args, Opts).
 
+%% @doc Open a streaming RPC against a V2 pool. Picks the first
+%% currently-healthy link and opens the stream there; the returned
+%% stream is sticky-to-link (errors with `peer_down' if the link
+%% dies; caller re-opens). See `macula_client:call_stream/5'.
+%%
+%% Arity 5 (not 4) so V2 calls do not collide with the legacy V1
+%% `call_stream(Client, Procedure, Args, Opts)' surface.
+-spec call_stream(pool(), realm(), procedure(), term(), map()) ->
+        {ok, stream()} | {error, term()}.
+call_stream(Pool, Realm, Procedure, Args, Opts)
+  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure), is_map(Opts) ->
+    macula_client:call_stream(Pool, Realm, Procedure, Args, Opts).
+
 %% @doc Open a client-stream or bidi call.
 %%
 %% Two shapes:
@@ -564,10 +579,35 @@ advertise_stream(Client, Procedure, Mode, Handler)
        is_function(Handler, 2) ->
     macula_mesh_client:advertise_stream(Client, Procedure, Mode, Handler).
 
-%% @doc Stop advertising a streaming procedure.
+%% @doc Advertise a streaming procedure on a V2 pool. Fans out to
+%% every healthy link and stores in pool state for replay on link
+%% respawn. See `macula_client:advertise_stream/5'.
+%%
+%% Arity 5 (not 4) so V2 calls do not collide with the legacy V1
+%% `advertise_stream(Procedure, Mode, Handler, Opts)' surface.
+-spec advertise_stream(pool(), realm(), procedure(),
+                        macula_frame:stream_mode(),
+                        macula_station_link:stream_handler()) ->
+        ok | {error, term()}.
+advertise_stream(Pool, Realm, Procedure, Mode, Handler)
+  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (Mode =:= server_stream orelse Mode =:= client_stream
+        orelse Mode =:= bidi),
+       is_function(Handler, 2) ->
+    macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler).
+
+%% @doc Stop advertising a streaming procedure (LOCAL dispatch).
 -spec unadvertise_stream(procedure()) -> ok.
 unadvertise_stream(Procedure) when is_binary(Procedure) ->
     macula_stream_local:unadvertise(Procedure).
+
+%% @doc Stop advertising a streaming procedure on a V2 pool.
+-spec unadvertise_stream(pool(), realm(), procedure()) -> ok.
+unadvertise_stream(Pool, Realm, Procedure)
+  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure) ->
+    macula_client:unadvertise_stream(Pool, Realm, Procedure).
 
 %% @doc Send a binary chunk on the stream.
 -spec send(stream(), binary()) -> ok | {error, term()}.
