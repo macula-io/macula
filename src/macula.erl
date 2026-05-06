@@ -36,6 +36,7 @@
 
 %% Pub/Sub — V2 (realm-per-call) + V1 (no-realm)
 -export([subscribe/3, subscribe/4, subscribe/5,
+         subscribe_callback/4,
          unsubscribe/2,
          publish/3, publish/4, publish/5]).
 
@@ -198,6 +199,15 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
     {ok, reference()}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts) ->
     macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber, Opts).
+
+%% @doc Subscribe with a callback function. The SDK spawns a small
+%% receiver process internally and invokes the callback once per
+%% inbound event. See `macula_pubsub:subscribe_callback/4'.
+-spec subscribe_callback(pool(), realm(), topic(),
+                          macula_pubsub:callback()) ->
+    {ok, reference()} | {error, term()}.
+subscribe_callback(Pool, Realm, Topic, Callback) ->
+    macula_pubsub:subscribe_callback(Pool, Realm, Topic, Callback).
 
 %% @doc Drop a V2 pool subscription. Idempotent.
 %%

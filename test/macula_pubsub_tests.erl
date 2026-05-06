@@ -58,3 +58,109 @@ publish_no_links_returns_transient_test_() ->
          ok = macula_client:close(Pool),
          ok
      end}.
+
+%%------------------------------------------------------------------
+%% subscribe_callback/4
+%%------------------------------------------------------------------
+
+subscribe_callback_invokes_fun_per_event_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         Topic = <<"cb.smoke_v1">>,
+         Self = self(),
+         CB = fun(T, P, M) -> Self ! {got, T, P, M} end,
+         {ok, SubRef} = macula_pubsub:subscribe_callback(
+                           Pool, ?REALM, Topic, CB),
+         Pool ! {macula_event, make_ref(), Topic, hello,
+                 #{realm => ?REALM, publisher => <<2:256>>,
+                   seq => 1, delivered_via => direct}},
+         receive
+             {got, Topic, hello, #{publisher := <<2:256>>}} -> ok
+         after 2_000 -> erlang:error(no_callback)
+         end,
+         ok = macula_pubsub:unsubscribe(Pool, SubRef),
+         ok = macula_client:close(Pool)
+     end}.
+
+subscribe_callback_swallows_callback_crash_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         Topic = <<"cb.crash_v1">>,
+         Self = self(),
+         %% First event: crash. Second event: succeeds. Receiver
+         %% must survive the crash and deliver event 2.
+         Counter = counters:new(1, []),
+         CB = fun(T, P, M) ->
+             N = counters:get(Counter, 1),
+             counters:add(Counter, 1, 1),
+             case N of
+                 0 -> error(deliberate_crash);
+                 _ -> Self ! {got, T, P, M}
+             end
+         end,
+         {ok, SubRef} = macula_pubsub:subscribe_callback(
+                           Pool, ?REALM, Topic, CB),
+         Pool ! {macula_event, make_ref(), Topic, first,
+                 #{realm => ?REALM, publisher => <<3:256>>,
+                   seq => 1, delivered_via => direct}},
+         Pool ! {macula_event, make_ref(), Topic, second,
+                 #{realm => ?REALM, publisher => <<3:256>>,
+                   seq => 2, delivered_via => direct}},
+         receive
+             {got, Topic, second, _} -> ok
+         after 2_000 -> erlang:error(receiver_died_on_crash)
+         end,
+         ok = macula_pubsub:unsubscribe(Pool, SubRef),
+         ok = macula_client:close(Pool)
+     end}.
+
+subscribe_callback_rejects_wrong_arity_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    {ok, Pool} = macula_client:connect([], #{}),
+    Two = fun(_, _) -> ok end,
+    ?assertError(function_clause,
+                 macula_pubsub:subscribe_callback(Pool, ?REALM,
+                                                   <<"a.v1">>, Two)),
+    ok = macula_client:close(Pool).
+
+subscribe_callback_caller_death_cleans_up_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         Self = self(),
+         %% Run subscribe_callback in a child; capture its SubRef via
+         %% message; kill the child; assert pool's subscription
+         %% bookkeeping drops the entry.
+         Child = spawn(fun() ->
+             {ok, SR} = macula_pubsub:subscribe_callback(
+                          Pool, ?REALM, <<"cb.death_v1">>,
+                          fun(_, _, _) -> ok end),
+             Self ! {sub, self(), SR},
+             receive _ -> ok end %% wait forever; we'll be killed
+         end),
+         SubRef = receive {sub, Child, SR} -> SR
+                  after 2_000 -> erlang:error(no_subref) end,
+         {ok, S0} = macula_client:status(Pool),
+         ?assertEqual(1, maps:get(subscriptions, S0)),
+         exit(Child, kill),
+         %% Wait for the pool to process the subscriber-DOWN.
+         wait_subscriptions_eq(Pool, 0, 50),
+         {ok, S1} = macula_client:status(Pool),
+         ?assertEqual(0, maps:get(subscriptions, S1)),
+         _ = SubRef,
+         ok = macula_client:close(Pool)
+     end}.
+
+wait_subscriptions_eq(_Pool, _Target, 0) ->
+    erlang:error(subscriptions_did_not_drop);
+wait_subscriptions_eq(Pool, Target, N) ->
+    {ok, S} = macula_client:status(Pool),
+    case maps:get(subscriptions, S) of
+        Target -> ok;
+        _ -> timer:sleep(50), wait_subscriptions_eq(Pool, Target, N - 1)
+    end.
