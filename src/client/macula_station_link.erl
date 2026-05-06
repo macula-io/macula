@@ -1167,11 +1167,10 @@ spawn_inbound_stream(Sid, Proc, Mode, Handler, Args,
     S#state{streams = Streams#{Sid => {StreamPid, Mon}}}.
 
 %% Handler runs in a transient process. A handler crash maps to a
-%% STREAM_ERROR abort with the crash class as the code — same shape
-%% as `macula_mesh_client' so handlers written for either carrier
-%% surface identical error semantics. The try/catch is justified
-%% (mirrors `safe_invoke_handler/4' for unary CALLs): without it a
-%% crash would silently leave the caller waiting on its deadline.
+%% STREAM_ERROR abort with the crash class as the code so callers
+%% see a stable error taxonomy. The try/catch is justified (mirrors
+%% `safe_invoke_handler/4' for unary CALLs): without it a crash
+%% would silently leave the caller waiting on its deadline.
 spawn_stream_handler(Handler, Stream, Args, Proc) ->
     spawn(fun() ->
         try Handler(Stream, Args)

@@ -19,7 +19,7 @@
 %%%
 %%% The `put_fn' decoupling lets the same code drive co-located
 %%% deployments (where the relay's internal API is reachable) and
-%%% client-only deployments (where a `macula_mesh_client' Pid is the
+%%% client-only deployments (where a V2 `macula_client:pool()' is the
 %%% right primitive). PLAN_MACULA_NET_PHASE2.md §4.1 / §5.
 %%% @end
 %%%-------------------------------------------------------------------

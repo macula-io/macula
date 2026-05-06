@@ -29,37 +29,35 @@
 
 -include_lib("kernel/include/logger.hrl").
 
-%% Connection — V2 (pool)
+%% Connection
 -export([connect/2, close/1, child_spec/3, status/1]).
-%% Connection — V1 (legacy)
--export([disconnect/1]).
 
-%% Pub/Sub — V2 (realm-per-call) + V1 (no-realm)
--export([subscribe/3, subscribe/4, subscribe/5,
+%% Pub/Sub — realm-per-call against a V2 pool
+-export([subscribe/4, subscribe/5,
          subscribe_callback/4,
          unsubscribe/2,
-         publish/3, publish/4, publish/5]).
+         publish/4, publish/5]).
 
-%% RPC — V1 (single-conn client) + V2 (pool, since 3.16.0)
--export([call/3, call/4, call/5,
-         advertise/3, advertise/4, advertise/5,
-         unadvertise/2, unadvertise/3]).
+%% RPC — realm-per-call against a V2 pool
+-export([call/5,
+         advertise/5,
+         unadvertise/3]).
 
-%% Signed DHT records (v3.2.0)
+%% Signed DHT records — realm-agnostic infrastructure procedures
+%% (`_dht.put_record', `_dht.find_record', `_dht.find_records_by_type',
+%% `_dht.records.<type>.stored'). The all-zeros realm is the SDK
+%% convention for protocol-internal traffic.
 -export([put_record/2,
          find_record/2,
          find_records_by_type/2,
          subscribe_records/3,
          unsubscribe_records/2]).
 
-%% Streaming RPC (v1.5.0+ — see PLAN_MACULA_STREAMING.md)
-%% NOTE: V1 stream `close/1' renamed to `close_stream/1' in 3.11.0
-%% to free `close/1' for the V2 pool surface.
+%% Streaming RPC (LOCAL in-process + V2 pool, see PLAN_MACULA_STREAMING.md)
 -export([
-    call_stream/2, call_stream/3, call_stream/4, call_stream/5,
+    call_stream/2, call_stream/3, call_stream/5,
     open_stream/3, open_stream/4,
-    advertise_stream/2, advertise_stream/3, advertise_stream/4,
-    advertise_stream/5,
+    advertise_stream/2, advertise_stream/3, advertise_stream/5,
     unadvertise_stream/1, unadvertise_stream/3,
     send/2, send/3,
     recv/1, recv/2,
@@ -67,9 +65,6 @@
     await_reply/1, await_reply/2,
     set_reply/2, abort/3
 ]).
-
-%% Directed RPC (Mesh Name Service)
--export([call_node/4, call_node/5, resolve/2, list_nodes/1, list_nodes/2]).
 
 %% Cluster (LAN)
 -export([ensure_distributed/0, get_cookie/0, set_cookie/1,
@@ -79,14 +74,13 @@
 -export([join_mesh/1, join_dist_relay/1]).
 
 %% Types
--export_type([client/0, pool/0, realm/0,
+-export_type([pool/0, realm/0,
               topic/0, procedure/0,
               stream/0, stream_mode/0, stream_handler/0,
               record/0, record_type/0, record_key/0]).
 
--type client() :: pid().              %% V1 client (`macula_mesh_client').
--type pool()   :: macula_client:pool(). %% V2 pool (`macula_client').
--type realm()  :: <<_:256>>.            %% V2 32-byte realm tag.
+-type pool()   :: macula_client:pool().
+-type realm()  :: <<_:256>>.            %% 32-byte realm tag.
 -type topic() :: binary().
 -type procedure() :: binary().
 
@@ -164,43 +158,11 @@ status(Pool) when is_pid(Pool) ->
     macula_client:status(Pool).
 
 %%%===================================================================
-%%% Connection — V1 (legacy)
-%%%===================================================================
-
-%% @doc Disconnect a V1 `macula_mesh_client' client. **Legacy** —
-%% V2 pools use `close/1'.
--spec disconnect(client()) -> ok.
-disconnect(Client) when is_pid(Client) ->
-    macula_mesh_client:stop(Client).
-
-%%%===================================================================
-%%% Pub/Sub — V1 (legacy)
-%%%===================================================================
-
-%% @doc V1 subscribe — single-connection client, no realm. **Legacy**.
-%% V2 callers use `subscribe/4' or `subscribe/5'.
--spec subscribe(client(), topic(), fun((term()) -> ok) | pid()) ->
-    {ok, reference()} | {error, term()}.
-subscribe(Client, Topic, Callback) when is_pid(Client), is_binary(Topic) ->
-    macula_mesh_client:subscribe(Client, Topic, Callback).
-
-%% @doc V1 publish — single-connection client, no realm. **Legacy**.
-%% V2 callers use `publish/4' or `publish/5'.
--spec publish(client(), topic(), term()) -> ok.
-publish(Client, Topic, Data) when is_pid(Client), is_binary(Topic) ->
-    macula_mesh_client:publish(Client, Topic, Data).
-
-%%%===================================================================
-%%% Pub/Sub — V2 (pool, realm-per-call, since 3.11.0)
+%%% Pub/Sub — realm-per-call against a V2 pool
 %%%===================================================================
 
 %% @doc Publish to `(Realm, Topic)' on `Pool'. Equivalent to
 %% `publish/5' with empty opts.
-%%
-%% **Breaking change since 3.11.0**: this signature previously was
-%% `publish(Client, Topic, Data, Opts)' (V1). V1 callers using the
-%% 4-arg form must call `macula_mesh_client:publish/3' directly to
-%% retain V1 semantics.
 -spec publish(pool(), realm(), topic(), term()) -> ok | {error, term()}.
 publish(Pool, Realm, Topic, Payload) ->
     macula_pubsub:publish(Pool, Realm, Topic, Payload).
@@ -234,47 +196,13 @@ subscribe(Pool, Realm, Topic, Subscriber, Opts) ->
 subscribe_callback(Pool, Realm, Topic, Callback) ->
     macula_pubsub:subscribe_callback(Pool, Realm, Topic, Callback).
 
-%% @doc Drop a V2 pool subscription. Idempotent.
-%%
-%% **Breaking change since 3.11.0**: this routes to the V2 pool
-%% (`macula_client:unsubscribe/2'). V1 callers must call
-%% `macula_mesh_client:unsubscribe/2' directly to drop a V1 sub.
+%% @doc Drop a pool subscription. Idempotent.
 -spec unsubscribe(pool(), reference()) -> ok.
 unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
     macula_pubsub:unsubscribe(Pool, SubRef).
 
 %%%===================================================================
-%%% RPC
-%%%===================================================================
-
-%% @doc Call a remote procedure (default 5s timeout).
--spec call(client(), procedure(), term()) -> {ok, term()} | {error, term()}.
-call(Client, Procedure, Args) ->
-    call(Client, Procedure, Args, 5000).
-
-%% @doc Call a remote procedure with timeout.
--spec call(client(), procedure(), term(), pos_integer()) ->
-    {ok, term()} | {error, term()}.
-call(Client, Procedure, Args, Timeout) when is_pid(Client), is_binary(Procedure) ->
-    macula_mesh_client:call(Client, Procedure, Args, Timeout).
-
-%% @doc Advertise an RPC procedure handler.
--spec advertise(client(), procedure(), fun()) -> {ok, reference()} | {error, term()}.
-advertise(Client, Procedure, Handler) ->
-    advertise(Client, Procedure, Handler, #{}).
-
-%% @doc Advertise with options.
--spec advertise(client(), procedure(), fun(), map()) -> {ok, reference()} | {error, term()}.
-advertise(Client, Procedure, Handler, _Opts) when is_pid(Client), is_binary(Procedure) ->
-    macula_mesh_client:advertise(Client, Procedure, Handler).
-
-%% @doc Stop advertising a V1 procedure.
--spec unadvertise(client(), procedure()) -> ok | {error, term()}.
-unadvertise(Client, Procedure) when is_pid(Client), is_binary(Procedure) ->
-    macula_mesh_client:unadvertise(Client, Procedure).
-
-%%%===================================================================
-%%% RPC — V2 (pool, since 3.16.0)
+%%% RPC — realm-per-call against a V2 pool
 %%%===================================================================
 
 %% @doc Issue a CALL frame against a V2 pool. First-success across
@@ -286,11 +214,7 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 
 %% @doc Advertise a procedure handler on a V2 pool. Fans out to every
 %% healthy link and stores in pool state for replay on link respawn.
-%% See `macula_client:advertise/4'. Equivalent to `advertise/5' with
-%% empty opts.
-%%
-%% Arity 5 (not 4) so V2 calls do not collide with the legacy V1
-%% `advertise(Client, Procedure, Handler, Opts)' surface.
+%% See `macula_client:advertise/4'.
 -spec advertise(pool(), realm(), procedure(),
                 macula_client:handler(), map()) ->
     ok | {error, term()}.
@@ -335,13 +259,16 @@ unadvertise(Pool, Realm, Procedure) ->
 %% Procedure + topic shape — hidden from API consumers but exposed
 %% as documentation. The relay backend (hecate-station and successors)
 %% MUST advertise these procedures and publish on the per-type
-%% record-stored topic for the SDK to function.
+%% record-stored topic for the SDK to function. DHT traffic travels
+%% under the all-zeros realm tag (protocol-internal infrastructure;
+%% the same convention `macula_dist_relay' uses for tunnel frames).
+-define(DHT_REALM,                     <<0:256>>).
 -define(DHT_PUT_RECORD_PROC,           <<"_dht.put_record">>).
 -define(DHT_FIND_RECORD_PROC,          <<"_dht.find_record">>).
 -define(DHT_FIND_RECORDS_BY_TYPE_PROC, <<"_dht.find_records_by_type">>).
 -define(DHT_RECORD_TIMEOUT_MS,         5_000).
 
-%% @doc Store a signed record in the mesh DHT.
+%% @doc Store a signed record in the mesh DHT via a V2 pool.
 %%
 %% Build the record via the typed constructors in `macula_record'
 %% (`node_record/3,4', `content_announcement/3,4', `tombstone/3,4',
@@ -351,27 +278,30 @@ unadvertise(Pool, Realm, Procedure) ->
 %% `{error, bad_signature}'. Successful stores propagate to the
 %% K-nearest peers in the DHT under the record's
 %% `macula_record:storage_key/1'.
--spec put_record(client(), record()) -> ok | {error, term()}.
-put_record(Client, Record) when is_pid(Client), is_map(Record) ->
-    classify_put(macula_mesh_client:call(Client, ?DHT_PUT_RECORD_PROC,
-                                         Record, ?DHT_RECORD_TIMEOUT_MS)).
+-spec put_record(pool(), record()) -> ok | {error, term()}.
+put_record(Pool, Record) when is_pid(Pool), is_map(Record) ->
+    classify_put(macula_client:call(Pool, ?DHT_REALM,
+                                    ?DHT_PUT_RECORD_PROC,
+                                    Record, ?DHT_RECORD_TIMEOUT_MS)).
 
 classify_put({ok, ok})       -> ok;
 classify_put({ok, Reply})    -> {error, {unexpected_reply, Reply}};
 classify_put({error, _} = E) -> E.
 
-%% @doc Fetch a record by its `macula_record:storage_key/1'.
+%% @doc Fetch a record from the mesh DHT by its
+%% `macula_record:storage_key/1'.
 %%
 %% Returns `{error, not_found}' when no record exists at the key.
 %% The returned record's signature should be verified via
 %% `macula_record:verify/1' before its payload is trusted.
--spec find_record(client(), record_key()) ->
+-spec find_record(pool(), record_key()) ->
     {ok, record()} | {error, not_found | term()}.
-find_record(Client, Key)
-  when is_pid(Client), is_binary(Key), byte_size(Key) =:= 32 ->
-    classify_find(macula_mesh_client:call(Client, ?DHT_FIND_RECORD_PROC,
-                                          #{key => Key},
-                                          ?DHT_RECORD_TIMEOUT_MS)).
+find_record(Pool, Key)
+  when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32 ->
+    classify_find(macula_client:call(Pool, ?DHT_REALM,
+                                     ?DHT_FIND_RECORD_PROC,
+                                     #{key => Key},
+                                     ?DHT_RECORD_TIMEOUT_MS)).
 
 classify_find({ok, #{type := _, payload := _, sig := _} = Record}) ->
     {ok, Record};
@@ -380,20 +310,20 @@ classify_find({ok, Reply})         -> {error, {unexpected_reply, Reply}};
 classify_find({error, _} = E)      -> E.
 
 %% @doc Return every record of a given type currently visible from
-%% the connected relay.
+%% the pool's connected stations.
 %%
-%% Coverage depends on the relay's view of the DHT — a single relay
-%% sees its local replicas plus whatever its peers have gossiped.
-%% Aggregating across the full mesh requires querying multiple
-%% relays and deduplicating by record key.
--spec find_records_by_type(client(), record_type()) ->
+%% Coverage depends on each station's view of the DHT — a single
+%% station sees its local replicas plus whatever its peers have
+%% gossiped. Aggregating across the full mesh requires querying
+%% multiple stations and deduplicating by record key.
+-spec find_records_by_type(pool(), record_type()) ->
     {ok, [record()]} | {error, term()}.
-find_records_by_type(Client, Type)
-  when is_pid(Client), is_integer(Type), Type >= 0, Type =< 255 ->
-    classify_list(macula_mesh_client:call(Client,
-                                          ?DHT_FIND_RECORDS_BY_TYPE_PROC,
-                                          #{type => Type},
-                                          ?DHT_RECORD_TIMEOUT_MS)).
+find_records_by_type(Pool, Type)
+  when is_pid(Pool), is_integer(Type), Type >= 0, Type =< 255 ->
+    classify_list(macula_client:call(Pool, ?DHT_REALM,
+                                     ?DHT_FIND_RECORDS_BY_TYPE_PROC,
+                                     #{type => Type},
+                                     ?DHT_RECORD_TIMEOUT_MS)).
 
 classify_list({ok, Records}) when is_list(Records) -> {ok, Records};
 classify_list({ok, Reply})    -> {error, {unexpected_reply, Reply}};
@@ -401,36 +331,35 @@ classify_list({error, _} = E) -> E.
 
 %% @doc Subscribe to live record-stored events filtered by type.
 %%
-%% The callback (or pid) receives each newly-stored record of the
-%% given type as `{record, Record}' (pid form) or via direct
-%% invocation (fun form). Returns a subscription reference for
-%% `unsubscribe_records/2'. Topic shape is `_dht.records.<type>.stored',
-%% rendered with the type tag as a decimal integer for log
-%% friendliness.
--spec subscribe_records(client(), record_type(),
-                        fun((record()) -> any()) | pid()) ->
+%% The callback receives each newly-stored record of the given
+%% type. Returns a subscription reference for `unsubscribe_records/2'.
+%% Topic shape is `_dht.records.<type>.stored', rendered with the
+%% type tag as a decimal integer for log friendliness.
+-spec subscribe_records(pool(), record_type(),
+                        fun((record()) -> any())) ->
     {ok, reference()} | {error, term()}.
-subscribe_records(Client, Type, Callback)
-  when is_pid(Client), is_integer(Type), Type >= 0, Type =< 255 ->
+subscribe_records(Pool, Type, Callback)
+  when is_pid(Pool), is_integer(Type), Type >= 0, Type =< 255,
+       is_function(Callback, 1) ->
     Topic = record_stored_topic(Type),
-    macula_mesh_client:subscribe(Client, Topic,
-                                 wrap_record_callback(Callback)).
+    macula_pubsub:subscribe_callback(Pool, ?DHT_REALM, Topic,
+                                     wrap_record_callback(Callback)).
 
 %% @doc Cancel a `subscribe_records/3' subscription.
--spec unsubscribe_records(client(), reference()) -> ok | {error, term()}.
-unsubscribe_records(Client, Ref)
-  when is_pid(Client), is_reference(Ref) ->
-    macula_mesh_client:unsubscribe(Client, Ref).
+-spec unsubscribe_records(pool(), reference()) -> ok.
+unsubscribe_records(Pool, Ref)
+  when is_pid(Pool), is_reference(Ref) ->
+    macula_pubsub:unsubscribe(Pool, Ref).
 
 record_stored_topic(Type) ->
     iolist_to_binary([<<"_dht.records.">>,
                       integer_to_binary(Type),
                       <<".stored">>]).
 
-wrap_record_callback(Pid) when is_pid(Pid) ->
-    fun(Record) -> Pid ! {record, Record}, ok end;
-wrap_record_callback(Fun) when is_function(Fun, 1) ->
-    fun(Record) -> Fun(Record), ok end.
+%% Adapt a 1-arg `(Record) -> any()' user callback to the 3-arg
+%% `(Topic, Payload, Meta) -> any()' shape `macula_pubsub' delivers.
+wrap_record_callback(Fun) ->
+    fun(_Topic, Record, _Meta) -> Fun(Record), ok end.
 
 %%%===================================================================
 %%% Streaming RPC (v1.5.0+)
@@ -468,40 +397,22 @@ wrap_record_callback(Fun) when is_function(Fun, 1) ->
 %%%         eof -> ok
 %%%     end.
 
-%% @doc Open a server-stream call (default mode).
-%%
-%% Phase 1 shortcut — dispatches in-process via the local registry.
-%% For cross-node streaming use the `(Client, Procedure, Args)' form.
+%% @doc Open a LOCAL in-process server-stream call. Used for unit
+%% tests and same-BEAM dispatch via `macula_stream_local'.
 -spec call_stream(procedure(), term()) -> {ok, stream()} | {error, term()}.
 call_stream(Procedure, Args) when is_binary(Procedure) ->
     call_stream(Procedure, Args, #{}).
 
-%% @doc Open a server-stream call with options.
-%%
-%% Two shapes:
-%%   call_stream(Procedure, Args, Opts) — LOCAL dispatch only
-%%   call_stream(Client, Procedure, Args) — REMOTE via mesh client
--spec call_stream(procedure() | client(), procedure() | term(), term() | map()) ->
+%% @doc Open a LOCAL in-process server-stream call with options.
+-spec call_stream(procedure(), term(), map()) ->
         {ok, stream()} | {error, term()}.
 call_stream(Procedure, Args, Opts) when is_binary(Procedure), is_map(Opts) ->
-    macula_stream_local:call_stream(Procedure, Args, Opts);
-call_stream(Client, Procedure, Args) when is_pid(Client), is_binary(Procedure) ->
-    macula_mesh_client:call_stream(Client, Procedure, Args, #{}).
-
-%% @doc Open a remote server-stream call against a mesh client, with opts.
--spec call_stream(client(), procedure(), term(), map()) ->
-        {ok, stream()} | {error, term()}.
-call_stream(Client, Procedure, Args, Opts)
-  when is_pid(Client), is_binary(Procedure), is_map(Opts) ->
-    macula_mesh_client:call_stream(Client, Procedure, Args, Opts).
+    macula_stream_local:call_stream(Procedure, Args, Opts).
 
 %% @doc Open a streaming RPC against a V2 pool. Picks the first
 %% currently-healthy link and opens the stream there; the returned
 %% stream is sticky-to-link (errors with `peer_down' if the link
 %% dies; caller re-opens). See `macula_client:call_stream/5'.
-%%
-%% Arity 5 (not 4) so V2 calls do not collide with the legacy V1
-%% `call_stream(Client, Procedure, Args, Opts)' surface.
 -spec call_stream(pool(), realm(), procedure(), term(), map()) ->
         {ok, stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, Opts)
@@ -509,82 +420,38 @@ call_stream(Pool, Realm, Procedure, Args, Opts)
        is_binary(Procedure), is_map(Opts) ->
     macula_client:call_stream(Pool, Realm, Procedure, Args, Opts).
 
-%% @doc Open a client-stream or bidi call.
-%%
-%% Two shapes:
-%%   open_stream(Procedure, Args, Opts) — LOCAL dispatch
-%%   open_stream(Client, Procedure, Args) — REMOTE, default mode bidi
--spec open_stream(procedure() | client(), procedure() | term(), term() | map()) ->
+%% @doc Open a LOCAL in-process client-stream or bidi call. Used
+%% for unit tests and same-BEAM dispatch via `macula_stream_local'.
+-spec open_stream(procedure(), term(), map()) ->
         {ok, stream()} | {error, term()}.
-open_stream(Procedure, Args, Opts) when is_binary(Procedure), is_map(Opts) ->
-    macula_stream_local:open_stream(Procedure, Args, Opts);
-open_stream(Client, Procedure, Args) when is_pid(Client), is_binary(Procedure) ->
-    macula_mesh_client:open_stream(Client, Procedure, Args, #{}).
+open_stream(Procedure, Args, Opts)
+  when is_binary(Procedure), is_map(Opts) ->
+    macula_stream_local:open_stream(Procedure, Args, Opts).
 
-%% @doc Open a stream with explicit mode.
-%%
-%% Two shapes:
-%%   open_stream(Procedure, Args, Opts, Mode) — LOCAL dispatch, explicit mode
-%%   open_stream(Client, Procedure, Args, Opts) — REMOTE via mesh client
--spec open_stream(procedure() | client(), procedure() | term(),
-                  term() | map(), stream_mode() | map()) ->
+%% @doc Open a LOCAL in-process stream with explicit mode.
+-spec open_stream(procedure(), term(), map(), stream_mode()) ->
         {ok, stream()} | {error, term()}.
 open_stream(Procedure, Args, Opts, Mode)
   when is_binary(Procedure), is_map(Opts), is_atom(Mode) ->
-    macula_stream_local:open_stream(Procedure, Args, Opts#{mode => Mode});
-open_stream(Client, Procedure, Args, Opts)
-  when is_pid(Client), is_binary(Procedure), is_map(Opts) ->
-    macula_mesh_client:open_stream(Client, Procedure, Args, Opts).
+    macula_stream_local:open_stream(Procedure, Args, Opts#{mode => Mode}).
 
-%% @doc Advertise a streaming procedure (default: server_stream).
-%% LOCAL dispatch only — see `advertise_stream/3,4' for the Client form.
+%% @doc Advertise a LOCAL in-process streaming procedure
+%% (default: server_stream).
 -spec advertise_stream(procedure(), stream_handler()) -> ok | {error, term()}.
 advertise_stream(Procedure, Handler)
   when is_binary(Procedure), is_function(Handler, 2) ->
     advertise_stream(Procedure, server_stream, Handler).
 
-%% @doc Advertise a streaming procedure.
-%%
-%% Two shapes:
-%%   advertise_stream(Procedure, Mode, Handler)   — LOCAL dispatch
-%%   advertise_stream(Client, Procedure, Handler) — REMOTE, default
-%%                                                  mode server_stream
--spec advertise_stream(procedure() | client(),
-                       stream_mode() | procedure(),
-                       stream_handler()) ->
+%% @doc Advertise a LOCAL in-process streaming procedure with mode.
+-spec advertise_stream(procedure(), stream_mode(), stream_handler()) ->
         ok | {error, term()}.
 advertise_stream(Procedure, Mode, Handler)
   when is_binary(Procedure), is_atom(Mode), is_function(Handler, 2) ->
-    advertise_stream(Procedure, Mode, Handler, #{});
-advertise_stream(Client, Procedure, Handler)
-  when is_pid(Client), is_binary(Procedure), is_function(Handler, 2) ->
-    macula_mesh_client:advertise_stream(Client, Procedure, server_stream,
-                                        Handler).
-
-%% @doc Advertise with explicit mode / options.
-%%
-%% Two shapes:
-%%   advertise_stream(Procedure, Mode, Handler, Opts)   — LOCAL
-%%   advertise_stream(Client, Procedure, Mode, Handler) — REMOTE
--spec advertise_stream(procedure() | client(),
-                       stream_mode() | procedure(),
-                       stream_handler() | stream_mode(),
-                       map() | stream_handler()) ->
-        ok | {error, term()}.
-advertise_stream(Procedure, Mode, Handler, Opts)
-  when is_binary(Procedure), is_function(Handler, 2), is_map(Opts) ->
-    macula_stream_local:advertise(Procedure, Mode, Handler);
-advertise_stream(Client, Procedure, Mode, Handler)
-  when is_pid(Client), is_binary(Procedure), is_atom(Mode),
-       is_function(Handler, 2) ->
-    macula_mesh_client:advertise_stream(Client, Procedure, Mode, Handler).
+    macula_stream_local:advertise(Procedure, Mode, Handler).
 
 %% @doc Advertise a streaming procedure on a V2 pool. Fans out to
 %% every healthy link and stores in pool state for replay on link
 %% respawn. See `macula_client:advertise_stream/5'.
-%%
-%% Arity 5 (not 4) so V2 calls do not collide with the legacy V1
-%% `advertise_stream(Procedure, Mode, Handler, Opts)' surface.
 -spec advertise_stream(pool(), realm(), procedure(),
                         macula_frame:stream_mode(),
                         macula_station_link:stream_handler()) ->
@@ -597,7 +464,7 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler)
        is_function(Handler, 2) ->
     macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler).
 
-%% @doc Stop advertising a streaming procedure (LOCAL dispatch).
+%% @doc Stop advertising a LOCAL streaming procedure.
 -spec unadvertise_stream(procedure()) -> ok.
 unadvertise_stream(Procedure) when is_binary(Procedure) ->
     macula_stream_local:unadvertise(Procedure).
@@ -664,45 +531,6 @@ set_reply(Stream, Result) when is_pid(Stream) ->
 abort(Stream, Code, Message)
   when is_pid(Stream), is_binary(Code), is_binary(Message) ->
     macula_stream:abort(Stream, Code, Message).
-
-%%%===================================================================
-%%% Directed RPC (Mesh Name Service)
-%%%===================================================================
-
-%% @doc Call a remote procedure on a specific target node (default 5s timeout).
-%%
-%% Target can be a mesh name, site_id, or node_id (all binaries).
-%% The relay resolves the target and routes the CALL directly to that node.
--spec call_node(client(), binary(), procedure(), term()) ->
-    {ok, term()} | {error, term()}.
-call_node(Client, Target, Procedure, Args) ->
-    call_node(Client, Target, Procedure, Args, 5000).
-
-%% @doc Call a remote procedure on a specific target node with timeout.
--spec call_node(client(), binary(), procedure(), term(), pos_integer()) ->
-    {ok, term()} | {error, term()}.
-call_node(Client, Target, Procedure, Args, Timeout)
-  when is_pid(Client), is_binary(Target), is_binary(Procedure) ->
-    macula_mesh_client:call(Client, Procedure, Args, Timeout, #{target => Target}).
-
-%% @doc Resolve a mesh name to node identity information.
-%%
-%% Returns the node's identity including name, site_id, city, endpoint,
-%% and connected_at timestamp. Works for names, site_ids, or node_ids.
--spec resolve(client(), binary()) -> {ok, map()} | {error, term()}.
-resolve(Client, Name) when is_pid(Client), is_binary(Name) ->
-    macula_mesh_client:call(Client, <<"_mesh.resolve">>,
-                           #{<<"name">> => Name}, 5000).
-
-%% @doc List all nodes connected to the relay (default 5s timeout).
--spec list_nodes(client()) -> {ok, map()} | {error, term()}.
-list_nodes(Client) ->
-    list_nodes(Client, #{}).
-
-%% @doc List all nodes connected to the relay with options.
--spec list_nodes(client(), map()) -> {ok, map()} | {error, term()}.
-list_nodes(Client, _Opts) when is_pid(Client) ->
-    macula_mesh_client:call(Client, <<"_mesh.list_nodes">>, #{}, 5000).
 
 %%%===================================================================
 %%% Cluster (LAN)

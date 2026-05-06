@@ -13,6 +13,16 @@ See `PLAN_SDK_3_17.md` for the full plan.
 | 4 | `e66dcb8` | pool-aware streaming RPC |
 | 5 | `57b6b85` | streaming RPC integration tests |
 
+## V1 retirement ✅ CLOSED
+
+| Step | Commit (repo) | Subject |
+|---|---|---|
+| 1 | `dabafa9` (macula) | dist_relay + dist_bridge ported to V2 pool |
+| 1.5 | `091a4df` (macula-ecosystem) | mesh_chat presence ported to V2 |
+| 2 | `a3b7a5d` (hecate-daemon) | retire macula_multi_relay + macula_mesh_client |
+| 3 | `dfd495e` (hecate-app-weather) | retire macula_mesh_client |
+| 4 | this commit (macula) | strip V1 facade entries, V1 stream carrier, delete `src/v1/` |
+
 ## Group B — SDK style sweep
 
 Style rules (per CLAUDE.md):

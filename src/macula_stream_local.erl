@@ -1,16 +1,16 @@
 %%%-------------------------------------------------------------------
 %%% @doc Local registry + dispatcher for streaming RPC.
 %%%
-%%% Phase 1 of PLAN_MACULA_STREAMING.md ships LOCAL streaming only —
-%%% the client-side and server-side macula_stream processes both live
-%%% in the same BEAM and are paired with macula_stream:pair/2. This
-%%% module is the registry that lets call_stream find a locally-
-%%% advertised handler for a given procedure name.
+%%% LOCAL streaming only — the client-side and server-side
+%%% `macula_stream' processes both live in the same BEAM and are
+%%% paired with `macula_stream:pair/2'. This module is the registry
+%%% that lets `call_stream' find a locally-advertised handler for a
+%%% given procedure name.
 %%%
-%%% Phase 2 will add a parallel path through macula_mesh_client that
-%%% bridges streams to QUIC. The public SDK surface in macula.erl
-%%% stays the same; macula_stream_local becomes a fast in-process
-%%% short-circuit for procedures advertised on the same node.
+%%% Cross-node streaming travels through `macula_station_link' (V2
+%%% pool); the public SDK surface in `macula.erl' is identical
+%%% between the LOCAL and pool paths — only the entry point arity
+%%% differs (`call_stream/3' vs `call_stream/5').
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_stream_local).
