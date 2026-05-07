@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.1.1] - 2026-05-07
+
+### Fixed
+
+- **Handler returning `{error, _}` no longer crashes the peering
+  gen_statem.** Pre-4.1.1, `safe_invoke_handler/4` in
+  `macula_station_link` wrapped any non-crash return in a `RESULT`
+  frame whose `payload` was the raw return value. When a handler
+  returned `{error, Reason}` (e.g. `_dht.put_record` returning
+  `{error, bad_signature}` for a record that fails verification),
+  the resulting `RESULT` frame ended up at
+  `macula_record_cbor:encode/1` with a tuple as a payload value;
+  the encoder has no clause for raw tuples and the peering
+  state-machine terminated with `error:function_clause` at
+  frame-sign time. Every other multiplexed RPC on the same QUIC
+  connection died with it. This bit production immediately when
+  station↔station DHT replication started shipping records that
+  failed downstream verification: each replication attempt killed
+  the connection that any nearby caller (including realm
+  topology subscribers) was multiplexed onto.
+
+  Now `{error, Reason}` is funneled into a BOLT#4 `call_error`
+  frame with `code = 0x0F unknown_error` and `detail` set to the
+  `~p`-formatted Reason (capped at 256 bytes). Handler crashes
+  continue to map to `code = 0x02 temporary_relay_failure`. The
+  `normalise_reply/1` function lost its now-dead `{error, _}`
+  clause.
+
+  Existing test
+  `inbound_call_handler_error_tuple_passes_through_as_result_test_`
+  asserted the buggy shape and was renamed to
+  `inbound_call_handler_error_tuple_emits_call_error_test_` with
+  updated expectations: the test now demands a `call_error` frame
+  with code `0x0F` and a binary `detail` that includes the
+  formatted Reason. 35 station_link eunit tests still pass; full
+  suite parity (1622 passed / 10 pre-existing failures, unchanged).
+
+  Affected files:
+  - `src/client/macula_station_link.erl` — `safe_invoke_handler/4`,
+    `normalise_reply/1`, new helper `format_error_detail/1`
+  - `test/macula_station_link_tests.erl` — test rename + body
+
+---
+
 ## [4.1.0] - 2026-05-06
 
 ### Added

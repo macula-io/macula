@@ -1130,10 +1130,20 @@ inbound_call_handler_crash_returns_error_frame_test_() ->
          ok
      end}.
 
-inbound_call_handler_error_tuple_passes_through_as_result_test_() ->
-    %% Matches `hecate_handler_dispatch:normalise/1' contract:
-    %% `{error, Reason}' becomes a RESULT(payload={error, Reason}),
-    %% NOT a call_error frame. The error is application-level.
+inbound_call_handler_error_tuple_emits_call_error_test_() ->
+    %% Handler returning `{error, Reason}' MUST emit a BOLT#4
+    %% `call_error' frame, NOT a `result' frame. RESULT payloads go
+    %% through `macula_record_cbor:encode/1', which has no clause
+    %% for raw tuples — sending `{error, _}' inside a RESULT crashes
+    %% the peering gen_statem at frame-sign time and drops every
+    %% other multiplexed RPC on the connection. Pre-4.1.1 this bit
+    %% production every time `_dht.put_record' got a bad-signature
+    %% record from the replication path.
+    %%
+    %% The error is funneled into `code = 0x0F unknown_error' with
+    %% the formatted Reason in `detail'. Handlers that need a
+    %% specific BOLT#4 code can crash with a tagged error or use
+    %% the dedicated frame builders.
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
@@ -1165,11 +1175,16 @@ inbound_call_handler_error_tuple_passes_through_as_result_test_() ->
          }},
          receive
              {'$gen_cast', {send_frame,
-                            #{frame_type := result,
-                              payload    := Payload}}} ->
-                 ?assertEqual({error, invalid_token}, Payload)
+                            #{frame_type := error,
+                              call_id    := FrameCallId,
+                              code       := Code,
+                              detail     := Detail}}} ->
+                 ?assertEqual(CallId, FrameCallId),
+                 ?assertEqual(16#0F, Code),
+                 ?assert(is_binary(Detail)),
+                 ?assertNotEqual(nomatch, binary:match(Detail, <<"invalid_token">>))
          after 1_000 ->
-             erlang:error(no_result_frame_sent)
+             erlang:error(no_call_error_frame_sent)
          end,
          macula_station_link:stop(Pid),
          ok

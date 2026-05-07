@@ -989,13 +989,34 @@ build_inbound_call_reply(error, CallId, _Payload, SelfPub) ->
 build_inbound_call_reply({ok, Handler}, CallId, Payload, SelfPub) ->
     safe_invoke_handler(Handler, Payload, CallId, SelfPub).
 
-%% Handler dispatch with crash trap. The try/catch is justified:
-%% it converts otherwise-opaque process failures into a structured
-%% BOLT#4 error so the caller observes a reliable taxonomy rather
-%% than a `{disconnected, killed}' signal when a single bad CALL
-%% takes down the link.
+%% Handler dispatch with crash trap and error-return funnel.
+%%
+%% Two failure paths reach the wire as a BOLT#4 `call_error' frame
+%% so the caller observes a reliable taxonomy rather than either
+%%
+%%   * a `{disconnected, killed}' signal when a single bad CALL
+%%     takes the link down, or
+%%   * a successful-looking RESULT frame whose payload was an
+%%     `{error, _}' tuple — the CBOR encoder has no clause for raw
+%%     tuples and crashes the peering gen_statem at frame-sign
+%%     time, dropping every other multiplexed RPC on the same
+%%     connection.
+%%
+%% Mapping:
+%%   * handler returns `{error, Reason}' →
+%%     `call_error(code = 0x0F unknown_error,
+%%                 detail = format(Reason))'
+%%   * handler crashes →
+%%     `call_error(code = 0x02 temporary_relay_failure)'
+%%   * handler returns anything else →
+%%     `result(payload = normalise_reply(Reply))'
 safe_invoke_handler(Handler, Payload, CallId, SelfPub) ->
     try invoke_handler(Handler, Payload) of
+        {error, Reason} ->
+            macula_frame:call_error(#{call_id     => CallId,
+                                      code        => 16#0F,
+                                      reported_by => SelfPub,
+                                      detail      => format_error_detail(Reason)});
         Reply ->
             macula_frame:result(#{call_id      => CallId,
                                   payload      => normalise_reply(Reply),
@@ -1015,11 +1036,23 @@ invoke_handler(Fun, Args) when is_function(Fun, 1) ->
 invoke_handler({M, F}, Args) when is_atom(M), is_atom(F) ->
     M:F(Args).
 
-%% Match `hecate_handler_dispatch:normalise/1' so handlers writen
-%% against either side return the same shape.
-normalise_reply({ok, Value})        -> Value;
-normalise_reply({error, _} = Error) -> Error;
-normalise_reply(Other)              -> Other.
+%% Successful handler returns can be `{ok, Value}', `Value', or any
+%% legacy shape — strip the `{ok, _}' wrapper if present, otherwise
+%% pass through. `{error, _}' no longer reaches this function: the
+%% caller funnels error returns into `call_error' frames first.
+normalise_reply({ok, Value}) -> Value;
+normalise_reply(Other)       -> Other.
+
+%% BOLT#4 error frames carry an optional `detail' binary. Format the
+%% handler's `Reason' with `~p' so the caller sees a faithful, if
+%% Erlang-shaped, rendering. Capped at 256 bytes to keep CALL_ERROR
+%% frames bounded — bigger reasons are truncated with an ellipsis.
+format_error_detail(Reason) ->
+    Bin = iolist_to_binary(io_lib:format("~0p", [Reason])),
+    case byte_size(Bin) of
+        N when N =< 256 -> Bin;
+        _ -> <<(binary:part(Bin, 0, 253))/binary, "...">>
+    end.
 
 %%-------------------------------------------------------------------
 %% Helpers
