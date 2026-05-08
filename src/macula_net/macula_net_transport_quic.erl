@@ -212,8 +212,9 @@ handle_info({quic, new_stream, Stream, _StreamInfo},
     {noreply, State#state{in_streams = InStreams#{Stream => #in_state{}}}};
 
 %% Bytes arrived on an inbound stream. macula_quic delivers data as
-%% `{quic, Binary, StreamRef, Flags}' (mirroring quicer's shape), NOT
-%% `{quic, data, ...}'. See native/macula_quic/src/message.rs.
+%% `{quic, Binary, StreamRef, Flags}' — note the second element is
+%% the binary itself, NOT a `data' tag. See
+%% native/macula_quic/src/message.rs.
 handle_info({quic, Data, Stream, _Flags}, State)
   when is_binary(Data), is_reference(Stream) ->
     {noreply, deliver_buffered(Stream, Data, State)};

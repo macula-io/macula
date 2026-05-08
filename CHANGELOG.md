@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.0] - 2026-05-08
+
+### Changed
+
+- **`{macula_peering, handshake_complete, ...}` notification now
+  carries the verified `peer_node_id`.** The message sent to a
+  worker's `accept_owner' pid changed from
+  `{macula_peering, handshake_complete, ConnPid}` to
+  `{macula_peering, handshake_complete, ConnPid, PeerNodeId}`, where
+  `PeerNodeId` is the Ed25519 pubkey extracted (and signature-
+  verified) from the inbound CONNECT/HELLO frame.
+
+  Lets accept-side listeners dedupe duplicate dials from the same
+  peer identity. Without it, a peer that re-dials before its prior
+  connection has been torn down (by client-side handshake timeout,
+  network partition, or process restart) accumulates a fresh
+  `connected'-state worker on every retry. Production stations have
+  been observed at 99 stuck `connected' workers from a single
+  sister-station because each dial completes the handshake, the
+  prior worker holds its QUIC conn open until idle-timeout, and
+  nothing dedupes them.
+
+  See `macula-station' commit pairing this release for the
+  listener-side dedupe consumer.
+
+### Removed
+
+- **Yggdrasil module + sovereign-overlay `{pubkey, ...}` dial form.**
+  `macula_yggdrasil' and the `macula_quic:connect({pubkey, Pk}, ...)'
+  / `macula_peering_conn:do_connect(#{pubkey := Pk})' clauses are
+  gone. No callers remain in the codebase; `macula-net' replaces
+  yggdrasil as the routing substrate. Self-signed pubkey-anchored
+  cert generation (`macula_quic:generate_self_signed_cert/3') stays
+  — it has live consumers in `macula_net_transport_quic' and
+  `macula_station_listener' that wrap an Ed25519 keypair without
+  any Yggdrasil-derived address.
+- **Dead test files.**
+  - `test/macula_quic_tests.erl' — tested the retired `quicer'-style
+    API surface (`accept/2', `recv/2', `accept_stream/2', etc.) that
+    the Quinn NIF does not expose.
+  - `test/macula_quic_idle_timeout_tests.erl' — tested `quicer'
+    proplist option format.
+  - `test/macula_yggdrasil_tests.erl' — paired with the deleted
+    module above.
+  - `test/macula_client_test_server.erl' — helper used only by the
+    gateway tests below.
+  - `test/macula_gateway_system/' — entire directory, 13 test files,
+    targeted the V1 gateway surface fully retired in 4.0.0.
+
+### Breaking
+
+- **`accept_owner` consumers must update their pattern.** Any code
+  matching `{macula_peering, handshake_complete, Pid}` no longer
+  matches; the message is now a 4-tuple. Match on
+  `{macula_peering, handshake_complete, Pid, _PeerNodeId}` or use
+  the `PeerNodeId` for dedupe.
+
+  Only `macula_station_listener' in `macula-station' currently
+  consumes this message; that consumer is updated in the paired
+  release.
+
+  No other behaviour change for callers that don't pass
+  `accept_owner'.
+
+---
+
 ## [4.1.1] - 2026-05-07
 
 ### Fixed

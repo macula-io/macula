@@ -2,9 +2,8 @@
 %%% @doc Macula QUIC transport — Quinn-based Rust NIF.
 %%%
 %%% Provides QUIC listener, connection, and stream operations backed
-%%% by Quinn (Rust) instead of MsQuic. Key improvement: listeners
-%%% actually bind to specific IP addresses, enabling per-identity
-%%% IPv6 binding for virtual relay identities.
+%%% by Quinn (Rust). Listeners bind to specific IP addresses,
+%%% enabling per-identity IPv6 binding for virtual relay identities.
 %%%
 %%% Active-mode messages delivered to owning process:
 %%%   {quic, Data, StreamRef, Flags}       — stream data
@@ -33,7 +32,7 @@
     connect/4,
     open_stream/1,
 
-    %% Sovereign overlay (Yggdrasil) — self-signed cert generation
+    %% Self-signed cert generation (pubkey-anchored)
     generate_self_signed_cert/3,
     close_connection/1,
     async_accept_stream/1,
@@ -132,32 +131,11 @@ close_listener(Listener) ->
 %%% Connection API
 %%%===================================================================
 
-%% @doc Connect to a remote QUIC server.
-%%
-%% Target forms:
-%% <ul>
-%%   <li>`Host :: binary() | string()' — the existing hostname /
-%%       IP-string path. Validation depends on `verify' / `verify_pubkey'
-%%       opts.</li>
-%%   <li>`{pubkey, Pubkey :: binary()}' — sovereign-overlay path.
-%%       The 32-byte Ed25519 pubkey is the identity. The Yggdrasil
-%%       IPv6 is derived from it; the leaf cert is validated by SPKI
-%%       pin against the same pubkey. No DNS, no CA. See
-%%       PLAN_SOVEREIGN_OVERLAY_PHASE1 §4.4.</li>
-%% </ul>
--spec connect(Target, inet:port_number(), list(), timeout()) ->
+%% @doc Connect to a remote QUIC server. `Host' is a hostname or
+%% IP-string; validation depends on `verify' / `verify_pubkey' opts.
+-spec connect(Host, inet:port_number(), list(), timeout()) ->
     {ok, reference()} | {error, term()}
-        when Target :: binary() | string() | {pubkey, binary()}.
-connect({pubkey, Pubkey}, Port, Opts, Timeout)
-        when is_binary(Pubkey), byte_size(Pubkey) =:= 32 ->
-    Addr = macula_yggdrasil:address_for(Pubkey),
-    HostBin = <<"[", (macula_yggdrasil:format_address(Addr))/binary, "]">>,
-    %% Force pubkey-pin verification; override any conflicting opt.
-    Opts1 = lists:keystore(verify_pubkey, 1, Opts, {verify_pubkey, Pubkey}),
-    %% `verify' must stay falsy on this path — webpki would reject
-    %% the IP-form SNI server-name and refuse to load.
-    Opts2 = lists:keystore(verify, 1, Opts1, {verify, none}),
-    connect(HostBin, Port, Opts2, Timeout);
+        when Host :: binary() | string().
 connect(Host, Port, Opts, Timeout) ->
     HostBin = to_binary(Host),
     Alpn = [to_binary(A) || A <- proplists:get_value(alpn, Opts, ["macula"])],
@@ -172,17 +150,16 @@ connect(Host, Port, Opts, Timeout) ->
                 IdleTimeoutMs, KeepAliveMs, Timeout).
 
 %%%===================================================================
-%%% Sovereign overlay (Yggdrasil) — self-signed cert generation
+%%% Self-signed cert generation
 %%%===================================================================
 
 %% @doc Generate a self-signed X.509 cert from an Ed25519 keypair.
 %% Returns `{ok, {CertPem, KeyPem}}' as PEM-encoded binaries
-%% suitable for handing to `macula_quic:listen/3' via
-%% `cert' / `key' opts (after writing to disk).
-%%
-%% Used by `macula_yggdrasil:cert_for/1' for the sovereign-overlay
-%% listener path — the cert wraps the identity's macula pubkey,
-%% no CA chain required. See PLAN_SOVEREIGN_OVERLAY_PHASE1 §4.3.
+%% suitable for handing to `macula_quic:listen/3' via `cert' / `key'
+%% opts (after writing to disk). The cert wraps the identity's
+%% macula pubkey; no CA chain required. Used by station listeners
+%% running pubkey-anchored peering and by `macula-net' transport
+%% bring-up.
 -spec generate_self_signed_cert(Pubkey :: binary(),
                                 Privkey :: binary(),
                                 Sans :: [binary() | string()]) ->
@@ -283,12 +260,12 @@ close_as(Ref, [CloseFn | Rest]) ->
     catch _:_ -> close_as(Ref, Rest)
     end.
 
-%% @doc Async shutdown stream (compat with quicer flags).
+%% @doc Async shutdown stream.
 -spec async_shutdown_stream(reference(), integer(), integer()) -> ok.
 async_shutdown_stream(Stream, _Flag, _Code) ->
     nif_close_stream(Stream).
 
-%% @doc Async shutdown connection (compat with quicer flags).
+%% @doc Async shutdown connection.
 -spec async_shutdown_connection(reference(), integer(), integer()) -> ok.
 async_shutdown_connection(Conn, _Flag, _Code) ->
     nif_close_connection(Conn).

@@ -38,7 +38,7 @@ rustler::init!(
         stream::nif_close_stream,
         stream::nif_setopt_active,
         stream::nif_controlling_process,
-        // Sovereign overlay (Yggdrasil) helpers
+        // Self-signed pubkey-anchored cert helpers
         cert::nif_generate_self_signed_cert,
     ],
     load = on_load

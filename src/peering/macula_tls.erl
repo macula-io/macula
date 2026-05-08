@@ -335,7 +335,7 @@ ensure_parent_dir(FilePath) ->
 %% In production mode: Returns options with certificate verification enabled.
 %% In development mode: Returns options with verification disabled.
 %%
-%% @returns Proplist of QUIC TLS options suitable for quicer:connect/4
+%% @returns Proplist of QUIC TLS options for outbound connect.
 %% @end
 %%------------------------------------------------------------------------------
 -spec quic_client_opts() -> list().
@@ -403,7 +403,7 @@ merge_opts(BaseOpts, OverrideOpts) ->
 %% In production mode: Also verifies client certificates if presented.
 %% In development mode: Auto-generates self-signed certificate if needed.
 %%
-%% @returns Proplist of QUIC TLS options suitable for quicer:listen/2
+%% @returns Proplist of QUIC TLS options for the listener.
 %% @end
 %%------------------------------------------------------------------------------
 -spec quic_server_opts() -> list().
@@ -477,8 +477,6 @@ build_client_opts(production) ->
             error({tls_config_error, {cacertfile_not_found, CACertFile}})
     end,
 
-    %% NOTE: quicer conn_opts accepts 'peer' (not 'verify_peer')
-    %% quicer listen_opts accepts 'verify_peer' but conn_opts only accepts 'peer'
     Opts = [
         {verify, peer},
         {cacertfile, CACertFile},
@@ -711,10 +709,9 @@ get_verify_hostname() ->
 %% Certificate chain is valid, now verify hostname for leaf cert
 hostname_verify_fun(_Cert, valid_peer, #{hostname := Hostname} = State)
   when is_list(Hostname); is_binary(Hostname) ->
-    %% Use ssl:verify_hostname/2 with the certificate from the handshake
-    %% Note: For QUIC/quicer, the actual hostname verification is done
-    %% using server_name_indication option. This callback provides
-    %% additional verification if needed.
+    %% Hostname verification on the leaf cert. The QUIC peer is
+    %% identified via SNI; this callback adds an extra check on the
+    %% certificate's CN / SANs.
     {valid, State};
 
 hostname_verify_fun(_Cert, valid_peer, State) ->

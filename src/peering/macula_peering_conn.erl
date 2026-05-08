@@ -36,11 +36,13 @@
     quic_conn       => reference(),
     %% Optional pid notified once when the worker completes the
     %% CONNECT/HELLO handshake and transitions to `connected'. Sent
-    %% as `{macula_peering, handshake_complete, self()}'. Used by
-    %% accept-side listeners that cap concurrent *handshaking*
-    %% workers and need to release a slot the moment a worker is
-    %% verified-and-connected (so healthy peers do not consume the
-    %% same pool as stuck handshakes). Distinct from
+    %% as `{macula_peering, handshake_complete, self(), PeerNodeId}'
+    %% where `PeerNodeId' is the verified peer Ed25519 pubkey from
+    %% the inbound CONNECT/HELLO frame. Used by accept-side listeners
+    %% that (a) cap concurrent *handshaking* workers and need to
+    %% release a slot the moment a worker is verified-and-connected,
+    %% and (b) dedupe duplicate dials from the same peer identity by
+    %% closing prior workers for the same `PeerNodeId'. Distinct from
     %% `controlling_pid', which receives the peer-node-id-bearing
     %% `connected' / `frame' / `disconnected' stream.
     accept_owner    => pid()
@@ -276,8 +278,9 @@ transition_to_connected(Data) ->
 
 notify_handshake_complete(#data{accept_owner = undefined}) ->
     ok;
-notify_handshake_complete(#data{accept_owner = Pid}) when is_pid(Pid) ->
-    Pid ! {macula_peering, handshake_complete, self()},
+notify_handshake_complete(#data{accept_owner = Pid, peer_node_id = NodeId})
+        when is_pid(Pid) ->
+    Pid ! {macula_peering, handshake_complete, self(), NodeId},
     ok.
 
 %%------------------------------------------------------------------
@@ -379,16 +382,6 @@ close_quic(#data{quic_conn = Conn}) ->
 %% positional API.
 %%------------------------------------------------------------------
 
-%% Sovereign-overlay path: target carries a pinned Ed25519 pubkey
-%% (32 raw bytes). Derive the Yggdrasil IPv6 from the pubkey and
-%% pass the pubkey through to `macula_quic' as `verify_pubkey' so
-%% the leaf cert SPKI is pin-checked at handshake time. No DNS, no
-%% CA chain. See PLAN_SOVEREIGN_OVERLAY_PHASE1 §4.4.
-do_connect(#{pubkey := Pk, port := Port} = Target)
-        when is_binary(Pk), byte_size(Pk) =:= 32 ->
-    Timeout = maps:get(timeout_ms, Target, 30_000),
-    Alpn = maps:get(alpn, Target, [<<"macula">>]),
-    macula_quic:connect({pubkey, Pk}, Port, [{alpn, Alpn}], Timeout);
 do_connect(#{host := Host, port := Port} = Target) ->
     Timeout = maps:get(timeout_ms, Target, 30_000),
     Alpn = maps:get(alpn, Target, [<<"macula">>]),

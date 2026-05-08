@@ -20,10 +20,12 @@
 %% </ul>
 %%
 %% An optional `accept_owner' pid in opts receives a single
-%% `{macula_peering, handshake_complete, ConnPid}' message the
-%% moment the worker transitions from `handshaking' to `connected'.
-%% Used by accept-side listeners that cap concurrent handshaking
-%% workers separately from healthy connected peers.
+%% `{macula_peering, handshake_complete, ConnPid, PeerNodeId}'
+%% message the moment the worker transitions from `handshaking' to
+%% `connected'. Used by accept-side listeners that (a) cap concurrent
+%% handshaking workers separately from healthy connected peers, and
+%% (b) dedupe duplicate dials from the same peer identity by closing
+%% prior workers for the same `PeerNodeId'.
 -module(macula_peering).
 
 -export([

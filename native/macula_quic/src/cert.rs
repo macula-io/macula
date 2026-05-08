@@ -1,15 +1,13 @@
 //! Self-signed Ed25519 cert generation + pubkey-pin TLS verifier.
 //!
-//! Used by the sovereign-overlay path (PLAN_SOVEREIGN_OVERLAY_PHASE1
-//! §4.3, §4.4): a station presents a self-signed cert that wraps its
-//! macula identity Ed25519 pubkey; a client validates by comparing
-//! the cert's SubjectPublicKeyInfo to a pinned pubkey it was given
+//! A station presents a self-signed cert that wraps its macula
+//! identity Ed25519 pubkey; a client validates by comparing the
+//! cert's SubjectPublicKeyInfo to a pinned pubkey it was given
 //! out-of-band. No CA chain, no DNS-anchored trust.
 //!
-//! The cert generator is also used at runtime by stations seeding
-//! their Yggdrasil-bound listener — they materialize a cert from
-//! their existing identity keypair and hand the PEM bytes to the
-//! transport.
+//! Used by station listeners that materialize a cert from their
+//! existing identity keypair and hand the PEM bytes to the
+//! transport, and by `macula-net` transport bring-up.
 
 use std::sync::Arc;
 
@@ -30,10 +28,9 @@ use crate::atoms;
 /// what `crypto:generate_key(eddsa, ed25519)` returns on the Erlang
 /// side.
 ///
-/// `sans` is the Subject Alternative Names list — typically just
-/// the identity's hostname (`relay-fi-helsinki.macula.io`) or the
-/// derived Yggdrasil address. The latter is a valid IPAddress SAN
-/// when present; we autodetect by trying to parse as IP, falling
+/// `sans` is the Subject Alternative Names list — typically the
+/// identity's hostname (`relay-fi-helsinki.macula.io`) or an
+/// IPAddress SAN. We autodetect by trying to parse as IP, falling
 /// back to DNS.
 ///
 /// Returns `(cert_pem, key_pem)` — both PEM-encoded text suitable
@@ -65,7 +62,7 @@ pub fn generate_self_signed(
     params.distinguished_name = DistinguishedName::new();
     params
         .distinguished_name
-        .push(DnType::CommonName, "Macula Yggdrasil Identity");
+        .push(DnType::CommonName, "Macula Identity");
 
     let mut san_vec = Vec::with_capacity(sans.len());
     for s in sans {
@@ -83,9 +80,8 @@ pub fn generate_self_signed(
     }
     params.subject_alt_names = san_vec;
 
-    // 10-year validity. Yggdrasil-anchored identities are stable
-    // because the keypair is derived from the box-secret + hostname;
-    // the cert is just a TLS-format wrapper, not the identity.
+    // 10-year validity. Identity is the keypair; the cert is just a
+    // TLS-format wrapper around it.
     let not_before = time::OffsetDateTime::now_utc();
     params.not_before = not_before;
     params.not_after = not_before + time::Duration::days(3650);
