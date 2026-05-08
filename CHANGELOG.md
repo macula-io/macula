@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.3] - 2026-05-08
+
+### Fixed
+
+- **`macula_peering_conn` server-side `awaiting_start` no longer drops
+  racing QUIC events.** `macula_peering:accept/2' transfers conn
+  ownership and then casts `start_handshake'; if the QUIC NIF
+  redelivers a buffered `{quic, new_stream, ...}' or `{quic, Bin, ...}'
+  event to the worker before the cast lands in its mailbox, the
+  worker is still in `awaiting_start'. The previous wildcard clause
+  routed those events through `drop_unexpected/4' and the bytes were
+  lost; the worker then sat in `handshaking' with an empty buffer
+  until its 30s timeout, never reaching `transition_to_connected'.
+  The peer's client-side worker meanwhile stayed `connected' (it
+  received our HELLO) so QUIC keep-alive papered over the asymmetry,
+  but the listener-side never registered the peer in its `peers' map
+  and the controlling-pid's `connected' notification never fired —
+  cross-station SUBSCRIBE / EVENT routing dead-ended.
+
+  Verified live across the production Leuven mesh: every station had
+  several stuck workers (`peer_node_id = undefined, buf_size = 0'),
+  and three of centrum's outbound peers had no corresponding inbound
+  registration on the peer's `peer_observer'. The race was
+  particularly brutal under fleet-wide reconnect bursts (post-roll).
+
+  Fix: postpone QUIC events received in `awaiting_start' so they
+  re-deliver after the `start_handshake' transition into
+  `handshaking', where the real handler consumes them.
+
 ## [4.2.2] - 2026-05-08
 
 ### Fixed

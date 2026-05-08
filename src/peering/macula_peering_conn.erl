@@ -147,6 +147,22 @@ awaiting_start(cast, start_handshake, Data) ->
 awaiting_start(cast, {close, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, Data};
+%% QUIC events that race the `start_handshake' cast must NOT be
+%% dropped. `macula_peering:accept/2' transfers conn ownership before
+%% it casts `start_handshake', and the QUIC NIF redelivers any
+%% buffered `{quic, new_stream, ...}' / `{quic, Bin, Stream, _Flags}'
+%% events to the new owner. If those land in the worker's mailbox
+%% before the cast does, the old `drop_unexpected/4' clause sent them
+%% to the floor and the worker stayed in `handshaking' forever with
+%% an empty buffer — the peer's CONNECT frame never reached
+%% `consume_handshake/2'. Live-verified across the production
+%% Leuven fleet (every station had multiple stuck workers; vaartkom
+%% specifically lost its inbound from centrum because of this). The
+%% `[postpone]' action defers the message so it is re-delivered after
+%% `start_handshake' transitions us into `handshaking', where the
+%% real handler consumes it.
+awaiting_start(info, {quic, _, _, _}, _Data) ->
+    {keep_state_and_data, [postpone]};
 awaiting_start(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, awaiting_start, Data).
 
