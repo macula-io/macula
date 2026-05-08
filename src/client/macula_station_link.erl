@@ -300,7 +300,7 @@ find_record(Pid, Key, TimeoutMs)
     classify_find(call(Pid, ?DHT_REALM, <<"_dht.find_record">>,
                        #{key => Key}, TimeoutMs)).
 
-classify_find({ok, #{type := _, payload := _, sig := _} = R}) -> {ok, R};
+classify_find({ok, #{type := _, payload := _, signature := _} = R}) -> {ok, R};
 classify_find({ok, not_found})   -> {error, not_found};
 classify_find({ok, Other})       -> {error, {unexpected_reply, Other}};
 classify_find({error, _} = E)    -> E.

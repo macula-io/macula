@@ -288,7 +288,7 @@ find_record(Pool, Key)
                                      #{key => Key},
                                      ?DHT_RECORD_TIMEOUT_MS)).
 
-classify_find({ok, #{type := _, payload := _, sig := _} = Record}) ->
+classify_find({ok, #{type := _, payload := _, signature := _} = Record}) ->
     {ok, Record};
 classify_find({ok, not_found})     -> {error, not_found};
 classify_find({ok, Reply})         -> {error, {unexpected_reply, Reply}};

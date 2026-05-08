@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.2] - 2026-05-08
+
+### Fixed
+
+- **`macula:find_record/2` and `macula_station_link:find_record/3`** now
+  pattern-match the wire-canonical `signature` field instead of the
+  legacy `sig` field. The on-wire record format already used
+  `signature` (see `macula_record:verify/1`,
+  `macula_record:encode/1`, `macula_protocol_types:macula_record()`),
+  so the SDK was rejecting every successful DHT find with
+  `{error, {unexpected_reply, Record}}` even though the relay had
+  returned a perfectly valid record.
+
+  Found while standing up the macula-e2e suite against the Leuven
+  topology — `dht_put_find` round-tripped end-to-end on the wire
+  but the SDK swallowed the result.
+
 ## [4.2.1] - 2026-05-08
 
 ### Changed
