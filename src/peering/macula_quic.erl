@@ -103,8 +103,13 @@ listen(BindAddr, Port, Opts) when is_binary(BindAddr) ->
     CertFile = to_binary(proplists:get_value(cert, Opts)),
     KeyFile = to_binary(proplists:get_value(key, Opts)),
     Alpn = [to_binary(A) || A <- proplists:get_value(alpn, Opts, ["macula"])],
-    IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 120000),
-    KeepAliveMs = proplists:get_value(keep_alive_interval_ms, Opts, 30000),
+    %% idle_timeout=300s tolerates short snapshot-RPC gaps without
+    %% closing the conn; keep_alive=15s sends PING ~10× before any
+    %% idle deadline lands. Pre-4.2.1 defaults (120s/30s) were
+    %% triggering 50-60s peer_closed cycles on realm MeshSubscriber
+    %% clients between snapshot ticks.
+    IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 300_000),
+    KeepAliveMs = proplists:get_value(keep_alive_interval_ms, Opts, 15_000),
     BidiStreams = proplists:get_value(peer_bidi_stream_count, Opts, 100),
     UniStreams = proplists:get_value(peer_unidi_stream_count, Opts, 3),
     ?LOG_INFO("Starting listener on ~s:~p with idle_timeout=~pms, keep_alive=~pms",
@@ -144,8 +149,11 @@ connect(Host, Port, Opts, Timeout) ->
     %% leaf cert SPKI. Empty binary disables pinning. Sovereign
     %% overlay path uses this to validate by pubkey alone (no CA).
     VerifyPubkey = proplists:get_value(verify_pubkey, Opts, <<>>),
-    IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 60000),
-    KeepAliveMs = proplists:get_value(keep_alive_interval_ms, Opts, 20000),
+    %% Mirror the listener defaults: 300s idle + 15s keep-alive.
+    %% See the listen/3 doc above for why the previous 60s/20s pair
+    %% killed long-lived realm-side station_link clients.
+    IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 300_000),
+    KeepAliveMs = proplists:get_value(keep_alive_interval_ms, Opts, 15_000),
     nif_connect(HostBin, Port, Alpn, Verify, VerifyPubkey,
                 IdleTimeoutMs, KeepAliveMs, Timeout).
 

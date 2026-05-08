@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.1] - 2026-05-08
+
+### Changed
+
+- **Bumped QUIC `idle_timeout_ms` and `keep_alive_interval_ms` defaults.**
+  - `macula_quic:listen/3`: `idle 120_000 → 300_000`, `keep_alive 30_000 → 15_000`
+  - `macula_quic:connect/4`: `idle 60_000 → 300_000`, `keep_alive 20_000 → 15_000`
+
+  The realm's `MeshSubscriber` clients were dying with `:normal` every
+  50-60 s and respawning. Each cycle barely completed the
+  `find_records_by_type` snapshot RPC before the underlying QUIC
+  conn closed peer-side, which left the topology dashboard sparse
+  (3 of 10 stations advertised at any moment instead of all 10).
+
+  Root cause: client-side idle was 60 s and snapshot ticks happen on
+  a longer cadence, so post-snapshot the conn went idle long enough
+  for Quinn's idle-close to fire. Higher idle + more frequent PINGs
+  closes the loophole. PING traffic also resets the peer's idle
+  timer, so connections survive on either side's headroom.
+
+  Callers that explicitly pass `idle_timeout_ms` or
+  `keep_alive_interval_ms` are unaffected.
+
+---
+
 ## [4.2.0] - 2026-05-08
 
 ### Changed
