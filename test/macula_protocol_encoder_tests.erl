@@ -339,12 +339,14 @@ pubsub_route_accepts_binary_keys_test() ->
 %%% MessagePack Payload Tests
 %%%===================================================================
 
-payload_is_messagepack_encoded_test() ->
+payload_is_cbor_encoded_test() ->
     Msg = sample_ping_msg(),
     <<_Version:8, _TypeId:8, _Flags:8, _Reserved:8, _PayloadLen:32/big-unsigned, Payload/binary>> =
         macula_protocol_encoder:encode(ping, Msg),
-    %% Try to decode the payload with msgpack
-    {ok, Decoded} = msgpack:unpack(Payload, [{map_format, map}]),
+    %% Decode the payload with CBOR (the encoder switched from msgpack
+    %% to CBOR; see `macula_protocol_encoder:encode/2' →
+    %% `macula_cbor_nif:pack/1').
+    {ok, Decoded} = macula_cbor_nif:unpack(Payload),
     ?assert(is_map(Decoded)).
 
 payload_contains_original_data_test() ->
@@ -352,7 +354,7 @@ payload_contains_original_data_test() ->
     Msg = #{timestamp => Timestamp},
     <<_Version:8, _TypeId:8, _Flags:8, _Reserved:8, _PayloadLen:32/big-unsigned, Payload/binary>> =
         macula_protocol_encoder:encode(ping, Msg),
-    {ok, Decoded} = msgpack:unpack(Payload, [{map_format, map}]),
+    {ok, Decoded} = macula_cbor_nif:unpack(Payload),
     ?assertEqual(Timestamp, maps:get(<<"timestamp">>, Decoded)).
 
 %%%===================================================================
@@ -402,7 +404,7 @@ roundtrip_preserves_map_structure_test() ->
     },
     <<_Version:8, _TypeId:8, _Flags:8, _Reserved:8, _PayloadLen:32/big-unsigned, Payload/binary>> =
         macula_protocol_encoder:encode(ping, OrigMsg),
-    {ok, Decoded} = msgpack:unpack(Payload, [{map_format, map}]),
+    {ok, Decoded} = macula_cbor_nif:unpack(Payload),
     %% Check that timestamp is preserved
     ?assertEqual(1234567890, maps:get(<<"timestamp">>, Decoded)),
     %% Check nested structure

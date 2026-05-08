@@ -167,13 +167,16 @@ message_type_name_zero_test() ->
     ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(0)).
 
 message_type_name_unassigned_ids_test() ->
-    %% Test unassigned IDs in each range
-    %% Note: 0x13 is pubsub_route, 0x24/0x25 are rpc_request/rpc_reply
-    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#05)),  % After control
-    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#14)),  % After pub/sub (0x13 is pubsub_route)
-    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#26)),  % After RPC (0x25 is rpc_reply)
-    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#33)),  % After SWIM
-    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#45)).  % After Kademlia
+    %% Test unassigned IDs in each range. Each block has a tail of
+    %% unassigned slots; the test pins one ID per block as a tripwire
+    %% for accidental over-assignment. Update when the protocol grows.
+    %% Note: 0x13 is pubsub_route, 0x24/0x25 are rpc_request/rpc_reply,
+    %% 0x26 is register_procedure, 0x27-0x2B is the streaming block.
+    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#05)),  % After control (0x01-0x04)
+    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#14)),  % After pub/sub (0x10-0x13)
+    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#2C)),  % After streaming block (0x27-0x2B)
+    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#33)),  % After SWIM (0x30-0x32)
+    ?assertEqual({error, unknown_type}, macula_protocol_types:message_type_name(16#45)).  % After Kademlia (0x40-0x44)
 
 %%%===================================================================
 %%% Roundtrip Tests

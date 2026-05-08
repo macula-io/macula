@@ -429,7 +429,9 @@ find_record_ok_test_() ->
          after 1_000 ->
              erlang:error(no_find_record_cast)
          end,
-         FakeRecord = #{type => 1, payload => #{}, sig => <<>>},
+         %% `signature' (not legacy `sig') matches the wire-canonical
+         %% record shape — see commit 0b35f80 (4.2.2).
+         FakeRecord = #{type => 1, payload => #{}, signature => <<>>},
          Pid ! {macula_peering, frame, FakePeer, #{
              frame_type   => result,
              call_id      => CallId,
