@@ -176,6 +176,17 @@ handshaking(enter, _Old, #data{role = server, quic_conn = Conn} = Data) ->
     ok = macula_quic:async_accept_stream(Conn),
     {keep_state, Data, [handshake_state_timeout()]};
 handshaking(info, {quic, new_stream, Stream, _Info}, Data) ->
+    %% Take ownership of the stream so subsequent `{quic, Bin, ...}'
+    %% events route to us. The Quinn NIF stamps the stream's owner at
+    %% creation time using whatever owns the conn AT THAT MOMENT —
+    %% which on the server-side accept path can still be the listener
+    %% (the conn ownership transfer happens just after Quinn's accept
+    %% loop has already emitted `new_stream'). Without this call,
+    %% future inbound bytes go to the listener's mailbox and get
+    %% dropped by its wildcard `handle_info/2'. setopt(active, true)
+    %% on its own does NOT change ownership; it only enables active
+    %% delivery to the current owner.
+    _ = macula_quic:controlling_process(Stream, self()),
     ok = macula_quic:setopt(Stream, active, true),
     {keep_state, Data#data{quic_stream = Stream}};
 handshaking(info, {quic, Bin, Stream, _Flags},

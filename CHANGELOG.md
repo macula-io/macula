@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.4] - 2026-05-08
+
+### Fixed
+
+- **`macula_peering_conn` server-side handshaking now takes ownership
+  of inbound streams.** When a server accepts a new conn and the
+  client opens a stream, Quinn creates the `StreamResource' with its
+  owner field set to whatever owns the conn AT THAT MOMENT. On the
+  accept path that's still the listener — the conn-ownership transfer
+  hasn't fired yet. Calling `setopt(Stream, active, true)' on its
+  own does NOT change ownership; it only flips the active-delivery
+  flag. Future `{quic, Bin, Stream, _Flags}' events therefore went
+  to the listener's mailbox and got silently dropped by its wildcard
+  `handle_info/2'. The worker sat in `handshaking' with `buf_size = 0'
+  until its 30s timeout, even though 4.2.3's `awaiting_start'
+  postpone clause + macula-station's stray-event forwarder both
+  delivered the `new_stream' notification on time.
+
+  Fix: call `macula_quic:controlling_process(Stream, self())' in the
+  server-side `handshaking' new_stream handler before `setopt'. The
+  worker is now the explicit stream owner, so subsequent
+  `{quic, Bin, Stream, _}' events route to it directly.
+
+  Pairs with macula-station's listener forwarding fix (commit
+  `85dff3e' on macula-internal/macula-station): together they close
+  the cross-station handshake race that was leaving every station
+  with tens of stuck workers and partial bloom convergence.
+
 ## [4.2.3] - 2026-05-08
 
 ### Fixed
