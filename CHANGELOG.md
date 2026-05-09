@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.8] - 2026-05-09
+
+### Fixed
+
+- **`macula_blake3_nif:hash/1` now force-loads `macula_crypto_nif`
+  before checking the NIF-loaded flag.** Pre-fix the function read
+  `is_nif_loaded()` directly, which returns `false' until the
+  `macula_crypto_nif' module is referenced for the first time
+  (its `-on_load' callback writes the persistent_term flag). If a
+  caller's first-ever NIF use went through `macula_blake3_nif:hash/1'
+  rather than something that touched `macula_crypto_nif' first, the
+  Erlang fallback fired — and that fallback is NOT plain
+  `crypto:hash(sha256, _)': inputs over 1024 bytes are tree-hashed
+  (1024-byte chunks SHA-256'd individually, chunk hashes pair-
+  hashed), producing output that matches neither real BLAKE3 nor
+  plain SHA-256.
+
+  Surfaced by `macula:put_content/2' in v4.2.7: blobs > 1024 bytes
+  computed an SDK-side MCID that no relay could verify, so every
+  `_content.put_block' returned `hash_mismatch'. The four other
+  hash entry points (`hash_streaming/1', `verify/2', `hash_hex/1')
+  had the same bug; all are fixed in lock-step.
+
+  `is_nif_loaded/0' is retained for diagnostic use but its docstring
+  now warns that the answer reflects whatever has been observed so
+  far. New private helper `ensure_crypto_nif_loaded/0' is the
+  authoritative path.
+
 ## [4.2.7] - 2026-05-09
 
 ### Added

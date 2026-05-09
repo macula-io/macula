@@ -56,8 +56,8 @@
 %% Returns a 32-byte hash.
 -spec hash(binary()) -> binary().
 hash(Data) when is_binary(Data) ->
-    case is_nif_loaded() of
-        true -> macula_crypto_nif:nif_blake3(Data);
+    case ensure_crypto_nif_loaded() of
+        true  -> macula_crypto_nif:nif_blake3(Data);
         false -> erlang_blake3(Data)
     end.
 
@@ -65,31 +65,66 @@ hash(Data) when is_binary(Data) ->
 %% Streaming hash - processes chunks without concatenating them.
 -spec hash_streaming([binary()]) -> binary().
 hash_streaming(Chunks) when is_list(Chunks) ->
-    case is_nif_loaded() of
-        true -> macula_crypto_nif:nif_blake3_streaming(Chunks);
+    case ensure_crypto_nif_loaded() of
+        true  -> macula_crypto_nif:nif_blake3_streaming(Chunks);
         false -> erlang_blake3_streaming(Chunks)
     end.
 
 %% @doc Verify that data matches an expected BLAKE3 hash.
 -spec verify(binary(), binary()) -> boolean().
 verify(Data, ExpectedHash) when is_binary(Data), is_binary(ExpectedHash) ->
-    case is_nif_loaded() of
-        true -> macula_crypto_nif:nif_blake3_verify(Data, ExpectedHash);
+    case ensure_crypto_nif_loaded() of
+        true  -> macula_crypto_nif:nif_blake3_verify(Data, ExpectedHash);
         false -> erlang_blake3(Data) =:= ExpectedHash
     end.
 
 %% @doc Hash binary data and return hex-encoded string.
 -spec hash_hex(binary()) -> binary().
 hash_hex(Data) when is_binary(Data) ->
-    case is_nif_loaded() of
-        true -> macula_crypto_nif:nif_blake3_hex(Data);
+    case ensure_crypto_nif_loaded() of
+        true  -> macula_crypto_nif:nif_blake3_hex(Data);
         false -> hex_encode(erlang_blake3(Data))
     end.
 
-%% @doc Check if NIF is loaded.
+%% @doc Check if NIF is loaded. Note: returns the LAST observed
+%% state — a `false' here may mean the NIF hasn't been triggered to
+%% load yet (its `-on_load' fires only on first module reference).
+%% Callers that NEED the NIF status to be definitive should use
+%% `ensure_crypto_nif_loaded/0' which forces module-load first.
 -spec is_nif_loaded() -> boolean().
 is_nif_loaded() ->
     persistent_term:get(?NIF_LOADED_KEY, false).
+
+%% @private Force `macula_crypto_nif' to be code-loaded, which
+%% triggers its `-on_load' callback, which writes the
+%% `macula_crypto_nif_loaded' persistent_term flag if the .so
+%% loaded successfully.
+%%
+%% Pre-fix: `macula_blake3_nif:hash/1' read the flag without first
+%% ensuring the crypto-NIF module had been loaded. If no other path
+%% had referenced `macula_crypto_nif' yet (e.g. an SDK consumer that
+%% only ever calls `macula:put_content' / `get_content' on the way to
+%% computing an MCID), `is_nif_loaded()' returned `false' and the
+%% Erlang fallback fired. The fallback is NOT plain `crypto:hash(sha256, _)':
+%% inputs over 1024 bytes go through a tree-hash that compresses
+%% 1024-byte chunks individually with SHA-256, then pair-hashes the
+%% chunk hashes — producing an output that matches NEITHER real
+%% BLAKE3 (the relay's path) NOR plain SHA-256 (the relay's
+%% `match_any_hash' fallback). Result: any blob > 1024 bytes hit a
+%% spurious `hash_mismatch' on `_content.put_block'.
+%%
+%% Force-loading here makes the NIF status deterministic for every
+%% caller, regardless of module-reference order. If the NIF really
+%% can't load (e.g. .so missing), `code:ensure_loaded/1' still
+%% succeeds (it loaded the BEAM), `-on_load' raises, the BEAM is
+%% removed from the load table, and `is_nif_loaded()' returns false
+%% — at which point the Erlang fallback runs. That fallback is still
+%% buggy but the situation is genuinely unrecoverable; the calling
+%% layer's hash will mismatch any peer that has the real NIF, and
+%% surfacing that as `hash_mismatch' is correct behaviour.
+ensure_crypto_nif_loaded() ->
+    _ = code:ensure_loaded(macula_crypto_nif),
+    is_nif_loaded().
 
 
 %%%===================================================================
