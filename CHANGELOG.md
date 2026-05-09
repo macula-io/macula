@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.7] - 2026-05-09
+
+### Added
+
+- **`macula:put_content/2` and `macula:get_content/2'** — content-
+  addressed blob storage and retrieval over the relay. `put_content'
+  computes the BLAKE3 hash of the bytes, packages them into an MCID
+  (`<<1, 16#55, Hash:32/binary>>'), and ships the blob to the relay
+  via a single `_content.put_block' RPC; the relay verifies the
+  payload's hash matches the MCID before accepting. `get_content'
+  fetches the blob back via `_content.get_block', returning
+  `{error, not_found}' if no provider in the pool's reach holds a
+  copy.
+
+  v4.2.7 minimum-viable surface — single-block per blob, no
+  client-side chunking, single-station semantics. Suitable for
+  blobs in the kilobyte-to-low-megabyte range. Blobs larger than the
+  relay's per-call payload budget will surface as a CALL-deadline
+  timeout; chunked manifests + multi-provider parallel fetch land
+  in a follow-up release. Cross-station discovery (writer + reader
+  on different relays) requires the relay-side iterative-fetch
+  fallback that already lands for `_dht.find_record' (commit
+  c11226f in macula-station) — wire-symmetric for content once
+  exposed.
+
+  `mcid()' type added (`<<_:272>>' = 34 bytes). Hashing uses the
+  existing `macula_blake3_nif' that was previously only consumed
+  by the record-signing path.
+
 ## [4.2.6] - 2026-05-09
 
 ### Fixed

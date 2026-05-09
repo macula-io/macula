@@ -50,6 +50,14 @@
          subscribe_records/3,
          unsubscribe_records/2]).
 
+%% Content-addressed blob storage. `_content.put_block' /
+%% `_content.get_block' RPCs against the relay's local content
+%% store. MCID is a 34-byte binary: 1 codec byte, 1 algo byte
+%% (BLAKE3 = 16#55), 32-byte BLAKE3 hash. The relay validates the
+%% payload's hash on `put_block' and rejects mismatches.
+-export([put_content/2,
+         get_content/2]).
+
 %% Streaming RPC (LOCAL in-process + V2 pool, see PLAN_MACULA_STREAMING.md)
 -export([
     call_stream/2, call_stream/3, call_stream/5,
@@ -253,6 +261,13 @@ unadvertise(Pool, Realm, Procedure) ->
 -define(DHT_FIND_RECORDS_BY_TYPE_PROC, <<"_dht.find_records_by_type">>).
 -define(DHT_RECORD_TIMEOUT_MS,         5_000).
 
+-define(CONTENT_REALM,                 <<0:256>>).
+-define(CONTENT_PUT_BLOCK_PROC,        <<"_content.put_block">>).
+-define(CONTENT_GET_BLOCK_PROC,        <<"_content.get_block">>).
+%% Bigger timeout than DHT records — chunks are 256 KiB and a put
+%% writes through the file-backed store on the relay.
+-define(CONTENT_BLOCK_TIMEOUT_MS,      15_000).
+
 %% @doc Store a signed record in the mesh DHT via a V2 pool.
 %%
 %% Build the record via the typed constructors in `macula_record'
@@ -345,6 +360,59 @@ record_stored_topic(Type) ->
 %% `(Topic, Payload, Meta) -> any()' shape `macula_pubsub' delivers.
 wrap_record_callback(Fun) ->
     fun(_Topic, Record, _Meta) -> Fun(Record), ok end.
+
+%%%===================================================================
+%%% Content-addressed blob storage (v4.2.7+)
+%%%===================================================================
+
+-type mcid() :: <<_:272>>.
+
+
+%% @doc Store `Bytes' in the relay's content store and return its
+%% MCID (Macula Content ID — 34 bytes: codec, algo (BLAKE3 = 16#55),
+%% then the 32-byte BLAKE3 hash). The blob is sent as a single
+%% block; on receipt the relay verifies the payload's BLAKE3
+%% matches the MCID before accepting.
+%%
+%% This is the v4.2.7 minimum-viable shape — single-block per blob,
+%% no client-side chunking. A subsequent release will add chunked
+%% manifests so blobs larger than the per-call payload budget can be
+%% transferred via parallel `_content.put_block' calls. For blobs in
+%% the kilobyte-to-low-megabyte range a single block is sufficient
+%% (relay default chunk size is 256 KiB; oversized payloads will
+%% surface as a CALL-deadline timeout rather than silent truncation).
+-spec put_content(pool(), binary()) -> {ok, mcid()} | {error, term()}.
+put_content(Pool, Bytes) when is_pid(Pool), is_binary(Bytes) ->
+    Hash = macula_blake3_nif:hash(Bytes),
+    MCID = <<1, 16#55, Hash/binary>>,
+    classify_put_content(
+      macula_client:call(Pool, ?CONTENT_REALM,
+                         ?CONTENT_PUT_BLOCK_PROC,
+                         #{mcid => MCID, payload => Bytes},
+                         ?CONTENT_BLOCK_TIMEOUT_MS),
+      MCID).
+
+classify_put_content({ok, ok},     MCID) -> {ok, MCID};
+classify_put_content({ok, Reply}, _MCID) -> {error, {unexpected_reply, Reply}};
+classify_put_content({error, _} = E, _M) -> E.
+
+%% @doc Fetch the bytes for a previously-stored MCID. Returns
+%% `{error, not_found}' if no provider in the pool's reach holds a
+%% copy. The returned binary is BLAKE3-verified by the relay before
+%% it leaves the store, so the caller does not need to re-verify.
+-spec get_content(pool(), mcid()) ->
+    {ok, binary()} | {error, not_found | term()}.
+get_content(Pool, <<1, 16#55, _:32/binary>> = MCID) when is_pid(Pool) ->
+    classify_get_content(
+      macula_client:call(Pool, ?CONTENT_REALM,
+                         ?CONTENT_GET_BLOCK_PROC,
+                         #{mcid => MCID},
+                         ?CONTENT_BLOCK_TIMEOUT_MS)).
+
+classify_get_content({ok, not_found})           -> {error, not_found};
+classify_get_content({ok, Bin}) when is_binary(Bin) -> {ok, Bin};
+classify_get_content({ok, Reply})               -> {error, {unexpected_reply, Reply}};
+classify_get_content({error, _} = E)            -> E.
 
 %%%===================================================================
 %%% Streaming RPC (v1.5.0+)
