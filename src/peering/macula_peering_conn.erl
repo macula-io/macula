@@ -269,11 +269,28 @@ process_connect(_Frame, Data) ->
 
 on_connect_verified({ok, _Verified}, Frame, Stream, Data) ->
     NewData = absorb_peer_info(Frame, Data),
-    ok = send_hello(Stream, NewData),
-    transition_to_connected(NewData);
+    on_send_hello(send_hello(Stream, NewData), NewData);
 on_connect_verified({error, R}, _Frame, _Stream, Data) ->
     notify(disconnected, {connect_verify_failed, R}, Data),
     {stop, normal, Data}.
+
+%% Server-side handshake completion. `send_hello' wraps
+%% `macula_quic:send', which returns `{error, _}' when the underlying
+%% QUIC stream has been closed by the peer between our CONNECT-verify
+%% and our HELLO write — a real race during teardown bursts (peer's
+%% pool closed mid-handshake; many simultaneous closes during e2e
+%% suite end_per_suite). Pre-fix: `ok = send_hello(...)' badmatched
+%% the error and the peering_conn worker crashed. Under load that
+%% tripped the supervisor's restart-intensity threshold and forced a
+%% whole-station restart. Now mirrors the client-side
+%% `send_connect' handling — emit a structured disconnect notify
+%% and stop normally so the supervisor can clean up without
+%% counting it as a crash.
+on_send_hello(ok, NewData) ->
+    transition_to_connected(NewData);
+on_send_hello({error, _} = SendErr, NewData) ->
+    notify(disconnected, {send_hello_failed, SendErr}, NewData),
+    {stop, normal, NewData}.
 
 %% Client side: peer's HELLO
 process_hello(#{node_id := PeerNodeId} = Frame, #data{role = client} = Data) ->

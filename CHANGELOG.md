@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.6] - 2026-05-09
+
+### Fixed
+
+- **`macula_peering_conn:on_connect_verified/4` no longer crashes
+  when `send_hello` returns `{error, _}`.** Previously asserted
+  `ok = send_hello(Stream, NewData)' on the server-side handshake
+  completion path; under teardown bursts (multiple peers closing
+  pools simultaneously, e.g. e2e `end_per_suite' across a fleet),
+  `macula_quic:send' could legitimately return
+  `{error, "connection lost"}' between the CONNECT-verify and the
+  HELLO write — the peer's QUIC stream was already gone. The
+  badmatch crashed the peering_conn gen_statem worker; under
+  load enough concurrent crashes tripped the parent supervisor's
+  restart-intensity and forced a whole-station restart.
+
+  Now mirrors the existing graceful handling on the client-side
+  `send_connect' path (lines 232-240): emit a structured
+  `{send_hello_failed, _}' disconnect notify and stop normally,
+  so the supervisor cleans up without counting it as a crash.
+
+  Surfaced 2026-05-09 by macula-station eager-replication-on-put
+  load, which amplified the race; reverted at the station layer
+  and shipped here so eager replication can be re-enabled cleanly
+  after publishing.
+
 ## [4.2.5] - 2026-05-09
 
 ### Fixed
