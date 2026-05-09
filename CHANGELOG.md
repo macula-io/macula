@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.5] - 2026-05-09
+
+### Fixed
+
+- **Pool fan-out (`macula_client`) no longer filters by
+  `is_connected/1`.** The four fan-out helpers
+  (`fanout_advertise/4`, `fanout_unadvertise/3`,
+  `fanout_advertise_stream/5`, `fanout_unadvertise_stream/3`) used to
+  skip pre-handshake links, which left the link's local `procedures'
+  map out of sync with the pool's intent. A subsequent `unadvertise'
+  on the same key would skip the link too — its local map kept the
+  proc — and the link silently re-ADVERTISED on the next handshake,
+  causing the relay station to register a stale procedure that
+  nothing in the SDK would ever withdraw. The leak only resolved on
+  daemon disconnect, when the station's `purge_conn' fired.
+
+  Each fan-out now dispatches to every LIVE link (filtered by
+  `is_process_alive/1' only). The link gen_server's `advertise' /
+  `unadvertise' handlers update the local map regardless of
+  connection state; the wire frame is best-effort inside
+  `maybe_send_advertise' / `maybe_send_unadvertise' (no-op when
+  pre-handshake). On the next handshake, `drain_pending_advertises/1'
+  replays the now-correct map.
+
+  Surfaced by 2026-05-09 mesh torture: `e2e.cross.echo.{N}' entries
+  persisted on stations across rounds with `advertiser=PoolDaemonPubkey'
+  even though `unadvertise/3' had returned `ok'. Tombstones in
+  `macula_remote_advertise_registry' (macula-station `c7d8fe8') solve
+  the gossip-vs-unadvertise race; this commit closes the
+  pre-handshake-skip path that re-creates a fresh stale entry on
+  every reconnect.
+
+  Per-link errors are now wrapped in try/catch (`safe_link_advertise/4',
+  `safe_link_unadvertise/3', stream variants) so a single dead pid
+  cannot crash the whole pool gen_server.
+
 ## [4.2.4] - 2026-05-08
 
 ### Fixed

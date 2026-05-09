@@ -548,15 +548,30 @@ keep_or_next({error, _} = E, [], _Realm, _Proc, _Payload, _Tmo) -> E;
 keep_or_next({error, _}, Rest, Realm, Proc, Payload, Tmo) ->
     call_first_success(Rest, Realm, Proc, Payload, Tmo).
 
-%% Fan-out advertise: register on every healthy link. Returns ok if at
+%% Fan-out advertise: register on every live link. Returns ok if at
 %% least one link accepted; per-link errors are logged and discarded.
+%%
+%% Pre-handshake links MUST receive the call too — `advertise/4' on
+%% the link gen_server updates its local `procedures' map regardless
+%% of connection state, and `drain_pending_advertises/1' replays that
+%% map on the next handshake. Filtering by `is_connected/1' here
+%% leaves the link's map out of sync with the pool's intent: a later
+%% `unadvertise' that *also* gets filtered (still pre-handshake)
+%% never clears the link's map, and the link will silently re-ADVERTISE
+%% the dead procedure when it eventually handshakes — the station
+%% re-registers a stale entry that nothing in the SDK will ever
+%% withdraw.
 fanout_advertise([], _Realm, _Proc, _Handler) ->
     {error, no_healthy_station};
 fanout_advertise(Pids, Realm, Proc, Handler) ->
-    Results = [macula_station_link:advertise(P, Realm, Proc, Handler)
-               || P <- Pids,
-                  macula_station_link:is_connected(P)],
-    summarize_advertise(Results).
+    Results = [safe_link_advertise(P, Realm, Proc, Handler)
+               || P <- Pids, is_process_alive(P)],
+    summarize_advertise([R || R <- Results, R =/= skipped]).
+
+safe_link_advertise(Pid, Realm, Proc, Handler) ->
+    try macula_station_link:advertise(Pid, Realm, Proc, Handler)
+    catch _:_ -> skipped
+    end.
 
 summarize_advertise([]) ->
     {error, no_healthy_station};
@@ -570,10 +585,25 @@ summarize_advertise(Results) ->
 %% Fan-out unadvertise: best-effort; ignored errors. The local pool
 %% state is dropped regardless so subsequent CALLs surface
 %% `unknown_next_peer' from the station.
+%%
+%% MUST dispatch to every LIVE link (not just connected ones): the
+%% link gen_server's `unadvertise' handler clears its local
+%% `procedures' map unconditionally, and the wire UNADVERTISE is
+%% best-effort inside `maybe_send_unadvertise' (no-op when
+%% pre-handshake). Filtering by `is_connected/1' here leaks: a
+%% link that was disconnected at unadvertise time keeps the proc in
+%% its local map, and on the next handshake `drain_pending_advertises'
+%% replays a now-dead ADVERTISE — the station re-registers an entry
+%% that the pool already considers withdrawn.
 fanout_unadvertise(Pids, Realm, Proc) ->
-    [_ = macula_station_link:unadvertise(P, Realm, Proc)
-     || P <- Pids, macula_station_link:is_connected(P)],
+    [_ = safe_link_unadvertise(P, Realm, Proc)
+     || P <- Pids, is_process_alive(P)],
     ok.
+
+safe_link_unadvertise(Pid, Realm, Proc) ->
+    try macula_station_link:unadvertise(Pid, Realm, Proc)
+    catch _:_ -> skipped
+    end.
 
 %% Sticky-to-link selection for streams. Walk the healthy links in
 %% order; the first one that opens cleanly wins. The returned stream
@@ -603,20 +633,31 @@ keep_or_next_stream({error, not_connected}, Rest, Realm, Proc, Args, Opts) ->
 keep_or_next_stream({error, _} = E, _Rest, _Realm, _Proc, _Args, _Opts) ->
     E.
 
-%% Fan-out streaming advertise across every healthy link. Same shape
-%% as `fanout_advertise/4' for unary; partial success counts.
+%% Fan-out streaming advertise across every live link. Same shape
+%% as `fanout_advertise/4' for unary; partial success counts. Same
+%% rationale for dispatching to pre-handshake links — see the
+%% comment on `fanout_advertise/4'.
 fanout_advertise_stream([], _Realm, _Proc, _Mode, _Handler) ->
     {error, no_healthy_station};
 fanout_advertise_stream(Pids, Realm, Proc, Mode, Handler) ->
-    Results = [macula_station_link:advertise_stream(P, Realm, Proc, Mode, Handler)
-               || P <- Pids,
-                  macula_station_link:is_connected(P)],
-    summarize_advertise(Results).
+    Results = [safe_link_advertise_stream(P, Realm, Proc, Mode, Handler)
+               || P <- Pids, is_process_alive(P)],
+    summarize_advertise([R || R <- Results, R =/= skipped]).
+
+safe_link_advertise_stream(Pid, Realm, Proc, Mode, Handler) ->
+    try macula_station_link:advertise_stream(Pid, Realm, Proc, Mode, Handler)
+    catch _:_ -> skipped
+    end.
 
 fanout_unadvertise_stream(Pids, Realm, Proc) ->
-    [_ = macula_station_link:unadvertise_stream(P, Realm, Proc)
-     || P <- Pids, macula_station_link:is_connected(P)],
+    [_ = safe_link_unadvertise_stream(P, Realm, Proc)
+     || P <- Pids, is_process_alive(P)],
     ok.
+
+safe_link_unadvertise_stream(Pid, Realm, Proc) ->
+    try macula_station_link:unadvertise_stream(Pid, Realm, Proc)
+    catch _:_ -> skipped
+    end.
 
 %% Count `(healthy, failed)' links across configured seeds. A seed is
 %% healthy when its worker pid is alive AND its station_link reports
