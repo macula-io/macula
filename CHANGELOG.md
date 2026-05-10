@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.2.9] - 2026-05-10
+
+### Fixed
+
+- **`subscribe_records/3` now decodes the wire payload before
+  invoking the user callback.** Previously the callback received
+  the raw `macula_record:encode/1' binary; the documented contract
+  said it would receive the decoded record map. The probe pair
+  added in `macula-internal/macula-e2e@8831d1e` surfaced both
+  this and the substrate-side topic mismatch (substrate publishes
+  on `_dht.records.<type>.stored' as of `macula-internal/macula-station`
+  recipient commit). Together the two changes make
+  `subscribe_records/3` work end-to-end as documented.
+
+  The wrapper accepts either binary (encoded) or map (already
+  decoded) payloads — the latter for callers who feed records
+  through alternate channels.
+
+---
+
 ## [4.2.8] - 2026-05-09
 
 ### Fixed

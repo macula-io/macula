@@ -358,8 +358,28 @@ record_stored_topic(Type) ->
 
 %% Adapt a 1-arg `(Record) -> any()' user callback to the 3-arg
 %% `(Topic, Payload, Meta) -> any()' shape `macula_pubsub' delivers.
+%%
+%% PubSub delivers the payload as the wire-format encoded record
+%% binary (the substrate's `record_fanout' publishes
+%% `macula_record:encode/1' output on the `_dht.records.<type>.stored'
+%% topic). Decode here so the user-supplied callback receives the
+%% record map per the documented contract. Malformed payloads are
+%% dropped silently — surfacing them to the callback would force
+%% every user to handle decode errors for what is fundamentally a
+%% protocol-internal channel.
 wrap_record_callback(Fun) ->
-    fun(_Topic, Record, _Meta) -> Fun(Record), ok end.
+    fun(_Topic, Payload, _Meta) -> apply_callback_with_decode(Fun, Payload) end.
+
+apply_callback_with_decode(Fun, Payload) when is_binary(Payload) ->
+    case macula_record:decode(Payload) of
+        {ok, Record} -> Fun(Record), ok;
+        _            -> ok
+    end;
+apply_callback_with_decode(Fun, Payload) when is_map(Payload) ->
+    %% Already-decoded record (legacy callers / direct injection).
+    Fun(Payload), ok;
+apply_callback_with_decode(_Fun, _Other) ->
+    ok.
 
 %%%===================================================================
 %%% Content-addressed blob storage (v4.2.7+)
@@ -392,9 +412,10 @@ put_content(Pool, Bytes) when is_pid(Pool), is_binary(Bytes) ->
                          ?CONTENT_BLOCK_TIMEOUT_MS),
       MCID).
 
-classify_put_content({ok, ok},     MCID) -> {ok, MCID};
-classify_put_content({ok, Reply}, _MCID) -> {error, {unexpected_reply, Reply}};
-classify_put_content({error, _} = E, _M) -> E.
+classify_put_content({ok, ok},                MCID) -> {ok, MCID};
+classify_put_content({ok, hash_mismatch},     _MCID) -> {error, hash_mismatch};
+classify_put_content({ok, Reply},             _MCID) -> {error, {unexpected_reply, Reply}};
+classify_put_content({error, _} = E,          _MCID) -> E.
 
 %% @doc Fetch the bytes for a previously-stored MCID. Returns
 %% `{error, not_found}' if no provider in the pool's reach holds a
