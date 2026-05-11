@@ -124,6 +124,21 @@ path    = segment *("/" segment)
 | `class` | `{path}` | `mri:class:io.macula/edge-device/street-cabinet` |
 | `taxonomy` | `{org}/{name}` | `mri:taxonomy:io.macula/acme/device-classification` |
 
+### Self-Rooted Identifiers
+
+Stations carry their own root of trust (their Ed25519 pubkey). They have no
+reverse-domain realm and no path; the realm field of the MRI carries the pubkey
+directly, z-base-32 encoded (32 bytes → 52 chars; the canonical PKARR encoding).
+
+| Type | Path Schema | Example |
+|------|-------------|---------|
+| `station` | (none; realm = z32 pubkey) | `mri:station:n9h...xyz` (52-char z32) |
+
+Construct via `macula_mri:new(station, Z32Pubkey, [])`. Validation routes through
+`macula_z32:decode/1` rather than the reverse-domain regex; rejects non-empty
+paths, malformed encoding, wrong-length payloads, and uppercase characters
+(z-base-32 is lowercase only).
+
 ## Core API
 
 ### Parsing

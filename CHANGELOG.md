@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.3.0] - 2026-05-11
+
+### Added
+
+- **`macula_z32` codec module.** z-base-32 (Phil Zimmermann's
+  "Human-Oriented Base-32 Encoding"; alphabet
+  `ybndrfg8ejkmcpqxot1uwisza345h769`). Used for encoding 32-byte
+  Ed25519 pubkeys as DNS-label-friendly strings (32 bytes → 52
+  chars, fits the 63-char per-label cap). Same encoding used by
+  PKARR and Pubky for the same reason. API: `encode/1`,
+  `decode/1`, `is_valid_label/1`. Pure Erlang, no NIF; MSB-first
+  bit packing. 18 eunit cases covering empty/round-trip/length
+  contracts, hand-computed test vectors (zero32, ones32,
+  small-mixed, single-byte), property-based round-trip over 200
+  random samples per size class, alphabet-rejection, and
+  `is_valid_label/1` guard cases.
+
+- **`station` MRI type.** `mri:station:<52-char-z32-pubkey>`.
+  Self-rooted (the realm field carries the pubkey directly; no
+  reverse-domain notation; path must be empty). Validation routes
+  through the new z32 codec rather than the reverse-domain regex.
+  Required by `hecate-daemon`'s `serve_dns_over_mesh` slice for
+  synthesising station qnames (e.g.,
+  `<z32(pubkey)>._st.macula.io.`). Also added to
+  `macula_mri_registry` builtin types list. 9 eunit cases covering
+  parse/format/round-trip/new-via-general-constructor + four
+  rejection cases (path present, short pubkey, invalid z32,
+  uppercase pubkey).
+
+### Notes
+
+- 4.3.0 is purely additive over 4.2.x. No existing API changes;
+  downgrade compiles cleanly. Downstream consumers
+  (`hecate-daemon`, `macula-station`, `macula-realm`) can bump
+  `~> 4.2.9` to `~> 4.3.0` whenever convenient; no coordinated
+  upgrade required.
+
+- `dane_pin` (record type 0x15) and `coverage_proof` (0x16)
+  remain on the 4.4.0 candidate list. Neither is on the critical
+  path for `serve_dns_over_mesh` Phase 1 (which falls back to
+  SERVFAIL+EDE("coverage_unknown") for NXDOMAIN proofs and
+  NOTIMP+EDE("tlsa_unsupported") for TLSA queries) or
+  `serve_https_over_mesh` (which verifies station pubkeys via
+  the leaf cert SAN OtherName extension, not via TLSA).
+
+---
+
 ## [4.2.9] - 2026-05-10
 
 ### Fixed

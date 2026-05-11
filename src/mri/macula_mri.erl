@@ -399,6 +399,7 @@ binary_to_type(<<"dataset">>) -> {ok, dataset};
 binary_to_type(<<"config">>) -> {ok, config};
 binary_to_type(<<"class">>) -> {ok, class};
 binary_to_type(<<"taxonomy">>) -> {ok, taxonomy};
+binary_to_type(<<"station">>) -> {ok, station};
 binary_to_type(TypeBin) ->
     %% Check if it's a registered custom type
     case macula_mri_registry:is_valid_type(TypeBin) of
@@ -429,17 +430,35 @@ type_to_binary(dataset) -> <<"dataset">>;
 type_to_binary(config) -> <<"config">>;
 type_to_binary(class) -> <<"class">>;
 type_to_binary(taxonomy) -> <<"taxonomy">>;
+type_to_binary(station) -> <<"station">>;
 type_to_binary({custom, Bin}) -> Bin;
 type_to_binary(Atom) when is_atom(Atom) -> atom_to_binary(Atom, utf8).
 
 validate_parsed(#{type := Type, realm := Realm, path := Path}) ->
     validate_type(Type, Realm, Path).
 
+%% Station MRIs are self-rooted: the realm field carries an
+%% Ed25519 pubkey (z-base-32 encoded, 52 chars), there is no
+%% reverse-domain, and the path must be empty. Validate against
+%% the macula_z32 codec rather than the reverse-domain regex.
+validate_type(station, Realm, Path) ->
+    validate_station(Realm, Path);
 validate_type(Type, Realm, Path) ->
     case macula_mri_registry:is_valid_type(Type) of
         true -> validate_realm(Realm, Path);
         false -> {error, {invalid_type, Type}}
     end.
+
+validate_station(_Pubkey, [_ | _]) ->
+    {error, station_must_have_empty_path};
+validate_station(Pubkey, []) when is_binary(Pubkey) ->
+    case macula_z32:decode(Pubkey) of
+        {ok, <<_:32/binary>>} -> ok;
+        {ok, _Other}          -> {error, {invalid_station_pubkey_length, Pubkey}};
+        {error, invalid_z32}  -> {error, {invalid_station_pubkey_encoding, Pubkey}}
+    end;
+validate_station(_, _) ->
+    {error, station_pubkey_must_be_binary}.
 
 validate_realm(Realm, Path) when is_binary(Realm), byte_size(Realm) > 0 ->
     validate_realm_format(Realm, Path);

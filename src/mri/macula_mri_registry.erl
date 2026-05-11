@@ -33,7 +33,8 @@
     topic, proc, content,
     device, cluster, location, zone, network,
     model, dataset, config,
-    class, taxonomy
+    class, taxonomy,
+    station          %% v4.3.0: self-rooted by Ed25519 pubkey
 ]).
 
 -record(state, {}).
@@ -224,6 +225,7 @@ is_builtin_type_bin(<<"dataset">>) -> true;
 is_builtin_type_bin(<<"config">>) -> true;
 is_builtin_type_bin(<<"class">>) -> true;
 is_builtin_type_bin(<<"taxonomy">>) -> true;
+is_builtin_type_bin(<<"station">>) -> true;
 is_builtin_type_bin(_) -> false.
 
 is_registered_type(TypeBin) ->
