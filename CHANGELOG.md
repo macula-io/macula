@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.4.0] - 2026-05-12
+
+### Added
+
+- **Publisher-end-to-end pubsub signature (`publisher_sig`).** Step 1
+  of the pubsub Phase 2 redesign (see
+  `macula-station/plans/PLAN_PUBSUB_E2E_SIGNED_EVENTS.md`). PUBLISH and
+  EVENT frames may now carry an optional `publisher_sig` field — the
+  publisher's Ed25519 signature over the canonical, frame-type-
+  independent tuple `(topic, realm, publisher, seq, payload)`, signed
+  under the new `"macula-v2-event-pub\0"` domain. Because the signed
+  content excludes header fields, `delivered_via`, and `ttl_ms`, the
+  signature a publisher puts on its PUBLISH is still valid on the EVENT
+  a relay station derives from it — so a relay can stop re-signing and
+  consumers can verify authenticity against the *publisher* regardless
+  of which relay delivered the event. New API: `macula_frame:sign_publisher/2`,
+  `macula_frame:verify_publisher/1`. `macula_frame:publish/1` and
+  `event/1` accept an optional `publisher_sig` in their spec.
+
+  `publisher_sig` is excluded from the bytes covered by a frame's own
+  per-hop `signature` (`canonical_unsigned/1` now strips both), so
+  adding it never invalidates the per-hop signature.
+
+  **Wire-safety / rollout note.** This release does *not* emit
+  `publisher_sig` anywhere — the SDK's publish path is unchanged, so a
+  4.4.0 node produces byte-identical frames to 4.3.1. The field is
+  plumbed and ready; a later step has the publish path populate it.
+  **That later step must not ship until every relay (macula-station)
+  is on a 4.4.0-compatible build** — a pre-4.4.0 relay strips only
+  `signature` (not `publisher_sig`) when checking a frame's per-hop
+  signature, so a frame carrying `publisher_sig` would fail its
+  verification. Order: SDK 4.4.0 everywhere → stations updated → then
+  flip on `publisher_sig` emission.
+
 ## [4.3.1] - 2026-05-12
 
 ### Fixed

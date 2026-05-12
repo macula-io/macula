@@ -78,6 +78,9 @@
     %% Sign / verify frame
     sign/2, verify/2,
 
+    %% Publisher-end-to-end pubsub signature (PUBLISH / EVENT frames)
+    sign_publisher/2, verify_publisher/1,
+
     %% Wire codec — single frame
     encode/1, decode/1,
 
@@ -127,6 +130,11 @@
 
 -define(SIG_DOMAIN,        "macula-v2-frame\0").
 -define(SWIM_UPDATE_DOMAIN, "macula-v2-swim-update\0").
+%% Domain-separated signing context for the publisher-end-to-end
+%% pubsub signature (`publisher_sig'). Distinct from ?SIG_DOMAIN so a
+%% per-frame signature can never be replayed as a publisher signature
+%% or vice versa.
+-define(EVENT_PUBLISHER_DOMAIN, "macula-v2-event-pub\0").
 -define(PROTOCOL_VERSION,   2).
 -define(MAX_FRAME_BYTES,    16#FFFFFF).   %% 16 MiB cap (Part 6 §2.2).
 
@@ -405,7 +413,14 @@
     seq             := non_neg_integer(),
     payload         := term(),
     published_at_ms := non_neg_integer(),
-    ttl_ms          => non_neg_integer() | undefined
+    ttl_ms          => non_neg_integer() | undefined,
+    %% Optional publisher-end-to-end signature over the canonical
+    %% tuple (topic, realm, publisher, seq, payload) — see
+    %% `sign_publisher/2'. Carried verbatim through relay hops so any
+    %% consumer can verify authenticity against the publisher
+    %% regardless of which relay delivered it. Absent on legacy
+    %% frames; only emitted when the caller opts in.
+    publisher_sig   => binary()
 }.
 
 -type subscribe_spec() :: #{
@@ -428,7 +443,10 @@
     publisher     := macula_identity:pubkey(),
     seq           := non_neg_integer(),
     payload       := term(),
-    delivered_via := delivery_channel()
+    delivered_via := delivery_channel(),
+    %% See publish_spec()'s `publisher_sig'. Relay stations copy it
+    %% from the inbound PUBLISH onto the EVENT they fan out.
+    publisher_sig => binary()
 }.
 
 %%------------------------------------------------------------------
@@ -1043,7 +1061,7 @@ publish(#{topic := T, realm := R, publisher := Pub, seq := Seq,
        is_integer(PubAt), PubAt >= 0 ->
     Ttl = maps:get(ttl_ms, Spec, undefined),
     validate_optional_ttl(Ttl),
-    (base(publish, 0))#{
+    with_optional_publisher_sig(Spec, (base(publish, 0))#{
         topic           => T,
         realm           => R,
         publisher       => Pub,
@@ -1051,7 +1069,20 @@ publish(#{topic := T, realm := R, publisher := Pub, seq := Seq,
         payload         => Payload,
         published_at_ms => PubAt,
         ttl_ms          => Ttl
-    }.
+    }).
+
+%% @private Copy a caller-supplied `publisher_sig' (64-byte Ed25519)
+%% onto the frame, if present. Absent → frame unchanged (so legacy
+%% callers produce byte-identical frames). A malformed value is a
+%% caller bug — let it crash rather than ship a frame that won't
+%% verify downstream.
+with_optional_publisher_sig(Spec, Frame) ->
+    case maps:get(publisher_sig, Spec, undefined) of
+        undefined ->
+            Frame;
+        Sig when is_binary(Sig), byte_size(Sig) =:= 64 ->
+            Frame#{publisher_sig => Sig}
+    end.
 
 -spec subscribe(subscribe_spec()) -> frame().
 subscribe(#{topic := T, realm := R, subscriber := Sub} = Spec)
@@ -1082,20 +1113,20 @@ unsubscribe(#{topic := T, realm := R, subscriber := Sub})
 
 -spec event(event_spec()) -> frame().
 event(#{topic := T, realm := R, publisher := Pub, seq := Seq,
-        payload := Payload, delivered_via := Via})
+        payload := Payload, delivered_via := Via} = Spec)
   when is_binary(T),
        is_binary(R),   byte_size(R)   =:= 32,
        is_binary(Pub), byte_size(Pub) =:= 32,
        is_integer(Seq), Seq >= 0,
        (Via =:= plumtree orelse Via =:= dht orelse Via =:= direct) ->
-    (base(event, 0))#{
+    with_optional_publisher_sig(Spec, (base(event, 0))#{
         topic         => T,
         realm         => R,
         publisher     => Pub,
         seq           => Seq,
         payload       => Payload,
         delivered_via => Via
-    }.
+    }).
 
 -spec validate_optional_ttl(non_neg_integer() | undefined) -> ok.
 validate_optional_ttl(undefined)                             -> ok;
@@ -1310,6 +1341,79 @@ verify_result(true,  Frame) -> {ok, Frame};
 verify_result(false, _Frame) -> {error, signature_invalid}.
 
 %%------------------------------------------------------------------
+%% Publisher-end-to-end pubsub signature
+%%
+%% A PUBLISH / EVENT frame's own `signature' (above) is per-hop: it
+%% authenticates whoever last touched the frame (the publishing
+%% daemon on the daemon->station hop; the relay station on a
+%% station->station hop). That is enough for adjacent-hop checks but
+%% not for end-to-end authenticity once a frame is relayed beyond one
+%% hop.
+%%
+%% `publisher_sig' is the publisher's Ed25519 signature over the
+%% canonical tuple (topic, realm, publisher, seq, payload) — the
+%% frame-type-independent content that survives PUBLISH->EVENT
+%% conversion. It is computed once by the original publisher and
+%% carried verbatim through every relay. `verify_publisher/1' checks
+%% it against the frame's own `publisher' field, so any consumer can
+%% confirm "this daemon emitted this event" no matter which relay
+%% delivered it.
+%%
+%% (Authenticity, not authorization: this proves the publisher
+%% emitted it, not that the publisher is permitted to publish on the
+%% realm/topic — realm-level publish authz lives with membership
+%% credentials, not here.)
+%%------------------------------------------------------------------
+
+%% @doc Add `publisher_sig' to a PUBLISH or EVENT frame: the
+%% publisher's Ed25519 signature over (topic, realm, publisher, seq,
+%% payload). `Identity' must be the key pair / private key of the
+%% pubkey in the frame's `publisher' field.
+-spec sign_publisher(frame(),
+                     macula_identity:key_pair() | macula_identity:privkey()) ->
+    frame().
+sign_publisher(#{frame_type := FT} = Frame, Identity)
+  when FT =:= publish; FT =:= event ->
+    Bytes = publisher_signing_bytes(Frame),
+    Sig = macula_identity:sign([?EVENT_PUBLISHER_DOMAIN, Bytes], Identity),
+    Frame#{publisher_sig => Sig}.
+
+%% @doc Verify a frame's `publisher_sig' against its `publisher'
+%% field. Returns `{ok, Frame}' on success, `{error, Reason}'
+%% otherwise (`no_publisher_sig' when the field is absent —
+%% callers that want it MUST treat absence as a verification
+%% failure, not as "trusted").
+-spec verify_publisher(frame()) -> {ok, frame()} | {error, term()}.
+verify_publisher(#{publisher_sig := Sig, publisher := Pub} = Frame)
+  when is_binary(Sig), byte_size(Sig) =:= 64,
+       is_binary(Pub), byte_size(Pub) =:= 32 ->
+    Bytes = publisher_signing_bytes(Frame),
+    verify_publisher_result(
+        macula_identity:verify([?EVENT_PUBLISHER_DOMAIN, Bytes], Sig, Pub),
+        Frame);
+verify_publisher(#{publisher_sig := _}) ->
+    {error, bad_publisher_sig};
+verify_publisher(_Frame) ->
+    {error, no_publisher_sig}.
+
+verify_publisher_result(true,  Frame) -> {ok, Frame};
+verify_publisher_result(false, _Frame) -> {error, signature_invalid}.
+
+%% @private The canonical bytes the publisher signs — a fixed tuple,
+%% independent of frame type, header fields, `delivered_via', or
+%% `ttl_ms', so the same signature is valid on the PUBLISH the
+%% publisher sent and on the EVENT a relay derives from it.
+publisher_signing_bytes(#{topic := T, realm := R, publisher := Pub,
+                          seq := Seq, payload := Payload}) ->
+    macula_record_cbor:encode(to_wire(prepare_records(#{
+        topic     => T,
+        realm     => R,
+        publisher => Pub,
+        seq       => Seq,
+        payload   => Payload
+    }))).
+
+%%------------------------------------------------------------------
 %% Wire codec — CBOR (RFC 8949 §4.2.1 deterministic, Part 6 §3)
 %%------------------------------------------------------------------
 %%
@@ -1438,7 +1542,14 @@ base(FrameType, Caps) ->
     }.
 
 canonical_unsigned(Frame) ->
-    Unsigned = maps:without([signature], Frame),
+    %% `publisher_sig' is excluded alongside `signature': it is itself
+    %% a signature field, and it must be omittable so that adding it
+    %% to a frame does not change the bytes the frame's own per-hop
+    %% `signature' covers. (A pre-`publisher_sig' node strips only
+    %% `signature'; that is why the wire emitter must not add
+    %% `publisher_sig' to frames until every relay is on a build that
+    %% strips it here too — see CHANGELOG 4.4.0.)
+    Unsigned = maps:without([signature, publisher_sig], Frame),
     macula_record_cbor:encode(to_wire(prepare_records(Unsigned))).
 
 %%------------------------------------------------------------------

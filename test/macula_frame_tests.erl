@@ -996,6 +996,103 @@ event_rejects_unknown_delivery_channel_test() ->
                      payload       => ok,
                      delivered_via => carrier_pigeon})).
 
+%%------------------------------------------------------------------
+%% Publisher-end-to-end signature (publisher_sig)
+%%------------------------------------------------------------------
+
+%% A frame built without `publisher_sig' has no such key — byte-for-
+%% byte identical to a pre-4.4.0 frame. This is what makes the
+%% feature wire-safe to ship before the emitter populates it.
+publisher_sig_absent_by_default_test() ->
+    P = macula_frame:publish(#{
+        topic => <<"t">>, realm => crypto:strong_rand_bytes(32),
+        publisher => crypto:strong_rand_bytes(32), seq => 0,
+        payload => ok, published_at_ms => 1}),
+    E = macula_frame:event(#{
+        topic => <<"t">>, realm => crypto:strong_rand_bytes(32),
+        publisher => crypto:strong_rand_bytes(32), seq => 0,
+        payload => ok, delivered_via => direct}),
+    ?assertNot(maps:is_key(publisher_sig, P)),
+    ?assertNot(maps:is_key(publisher_sig, E)).
+
+sign_publisher_attaches_64_byte_sig_test() ->
+    Kp = macula_identity:generate(),
+    Signed = macula_frame:sign_publisher(sample_publish(Kp), Kp),
+    Sig = maps:get(publisher_sig, Signed),
+    ?assert(is_binary(Sig)),
+    ?assertEqual(64, byte_size(Sig)).
+
+verify_publisher_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    Signed = macula_frame:sign_publisher(sample_publish(Kp), Kp),
+    ?assertMatch({ok, _}, macula_frame:verify_publisher(Signed)).
+
+%% The publisher signature is over (topic, realm, publisher, seq,
+%% payload) only — frame-type-independent — so the signature a
+%% publisher put on its PUBLISH is still valid on the EVENT a relay
+%% derives from it.
+verify_publisher_survives_publish_to_event_conversion_test() ->
+    Kp = macula_identity:generate(),
+    P  = macula_frame:sign_publisher(sample_publish(Kp), Kp),
+    E  = macula_frame:event(#{
+        topic         => maps:get(topic, P),
+        realm         => maps:get(realm, P),
+        publisher     => maps:get(publisher, P),
+        seq           => maps:get(seq, P),
+        payload       => maps:get(payload, P),
+        delivered_via => direct,
+        publisher_sig => maps:get(publisher_sig, P)}),
+    ?assertMatch({ok, _}, macula_frame:verify_publisher(E)).
+
+verify_publisher_rejects_tampered_payload_test() ->
+    Kp = macula_identity:generate(),
+    Signed = macula_frame:sign_publisher(sample_publish(Kp), Kp),
+    Tampered = Signed#{payload => <<"evil">>},
+    ?assertEqual({error, signature_invalid},
+                 macula_frame:verify_publisher(Tampered)).
+
+verify_publisher_rejects_wrong_publisher_test() ->
+    Kp1 = macula_identity:generate(),
+    Kp2 = macula_identity:generate(),
+    %% Signed by Kp1 but the frame claims Kp2 published it.
+    F = (sample_publish(Kp1))#{publisher => macula_identity:public(Kp2)},
+    Signed = macula_frame:sign_publisher(F, Kp1),
+    ?assertEqual({error, signature_invalid},
+                 macula_frame:verify_publisher(Signed)).
+
+verify_publisher_reports_absence_test() ->
+    ?assertEqual({error, no_publisher_sig},
+                 macula_frame:verify_publisher(sample_publish(
+                     macula_identity:generate()))).
+
+%% `publisher_sig' must NOT be covered by the frame's own per-hop
+%% `signature' — adding it after signing must leave the per-hop
+%% signature valid.
+publisher_sig_outside_per_hop_signature_test() ->
+    Kp = macula_identity:generate(),
+    Signed = macula_frame:sign(sample_publish(Kp), Kp),
+    WithPubSig = macula_frame:sign_publisher(Signed, Kp),
+    ?assertMatch({ok, _},
+                 macula_frame:verify(WithPubSig, macula_identity:public(Kp))).
+
+publisher_sig_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    F = macula_frame:sign(
+          macula_frame:sign_publisher(sample_publish(Kp), Kp), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertMatch({ok, _}, macula_frame:verify_publisher(D)),
+    ?assertMatch({ok, _}, macula_frame:verify(D, macula_identity:public(Kp))).
+
+sample_publish(Kp) ->
+    macula_frame:publish(#{
+        topic           => <<"io.macula/demo/topic/v1">>,
+        realm           => crypto:strong_rand_bytes(32),
+        publisher       => macula_identity:public(Kp),
+        seq             => 7,
+        payload         => #{a => 1, b => <<"two">>},
+        published_at_ms => 1_000}).
+
 publish_wire_roundtrip_test() ->
     Kp = macula_identity:generate(),
     F = macula_frame:sign(macula_frame:publish(#{
