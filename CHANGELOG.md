@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.3.1] - 2026-05-12
+
+### Fixed
+
+- **`macula_client` publish now selects only connected links.** The
+  `{publish, ...}` pool handler took the first `replication`
+  *spawned* link pids and published to them — including links still
+  mid-handshake. A frame sent to a not-yet-connected link is dropped
+  (unlike ADVERTISE, which the link replays on connect), so
+  `macula_pubsub:publish/4,5` could return `{error, not_connected}`
+  while other links in the pool were healthy. Now filtered through
+  `macula_station_link:is_connected/1` (new `connected_link_pids/1`
+  helper), matching how RPC (`call_first_success`) and streams
+  (`stream_first_healthy`) already pick links. With no connected
+  link the result is the existing transient
+  `{error, {transient, no_healthy_station}}` (retryable) rather than
+  `{error, not_connected}`.
+
+---
+
 ## [4.3.0] - 2026-05-11
 
 ### Added

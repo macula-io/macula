@@ -371,7 +371,13 @@ init({Seeds, Opts}) ->
     {ok, State1}.
 
 handle_call({publish, Realm, Topic, Payload, _Opts}, _From, S) ->
-    Targets = spawned_link_pids(S),
+    %% Publish only to links that have completed CONNECT/HELLO. A
+    %% frame sent to a still-handshaking link is dropped on the floor
+    %% — unlike ADVERTISE, which the link replays on connect — so
+    %% selecting the first `replication' *spawned* links could report
+    %% `{error, not_connected}' while other links are healthy. RPC and
+    %% streams already filter by `is_connected/1'; publish must too.
+    Targets = connected_link_pids(S),
     N = min(length(Targets), S#state.replication),
     Selected = lists:sublist(Targets, N),
     Results = [macula_station_link:publish(P, Realm, Topic, Payload)
@@ -511,6 +517,14 @@ after_link_start({error, Reason}, Seed, S) ->
 
 spawned_link_pids(#state{links = Links}) ->
     [P || #link_state{pid = P} <- maps:values(Links), is_pid(P)].
+
+%% Live links that have completed CONNECT/HELLO. Used by publish,
+%% which (unlike advertise) gains nothing from dispatching to a
+%% mid-handshake link.
+connected_link_pids(#state{} = S) ->
+    [P || P <- spawned_link_pids(S),
+          is_process_alive(P),
+          macula_station_link:is_connected(P)].
 
 %% Surface a one-shot warning when a caller passes V1 multi_relay
 %% options that have no V2 equivalent. The opts are silently dropped
