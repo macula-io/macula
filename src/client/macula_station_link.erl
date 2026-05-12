@@ -550,7 +550,7 @@ handle_call({publish, Realm, Topic, Payload}, _From,
             #state{peer_pid = Pid, identity = Id,
                    publish_seq = Seq} = S) ->
     Pub = macula_identity:public(Id),
-    Frame = macula_frame:publish(#{
+    Frame0 = macula_frame:publish(#{
         topic           => Topic,
         realm           => Realm,
         publisher       => Pub,
@@ -558,6 +558,16 @@ handle_call({publish, Realm, Topic, Payload}, _From,
         payload         => Payload,
         published_at_ms => erlang:system_time(millisecond)
     }),
+    %% Optionally attach the publisher-end-to-end signature so a
+    %% relay station can carry it onto the EVENT it derives and any
+    %% downstream consumer can verify authenticity against the
+    %% publisher regardless of which relay delivered the event. Off
+    %% by default: a relay on a build that does not strip
+    %% `publisher_sig' from a frame's per-hop signing bytes would
+    %% reject the PUBLISH, so emission must not be enabled until
+    %% every relay is on macula >= 4.4.0. See CHANGELOG 4.4.1 and
+    %% macula-station/plans/PLAN_PUBSUB_E2E_SIGNED_EVENTS.md.
+    Frame = maybe_add_publisher_sig(Frame0, Id),
     ok = macula_peering:send_frame(Pid, Frame),
     {reply, ok, S#state{publish_seq = Seq + 1}};
 
@@ -722,6 +732,16 @@ code_change(_OldVsn, S, _Extra) -> {ok, S}.
 %%====================================================================
 %% Internals
 %%====================================================================
+
+%% Attach the publisher-end-to-end signature to an outbound PUBLISH
+%% iff `macula' env `pubsub_emit_publisher_sig' is true. Read per
+%% publish (a fast ETS lookup) so an operator can flip it without a
+%% restart once the relay fleet is confirmed on macula >= 4.4.0.
+maybe_add_publisher_sig(Frame, Identity) ->
+    case application:get_env(macula, pubsub_emit_publisher_sig, false) of
+        true  -> macula_frame:sign_publisher(Frame, Identity);
+        _     -> Frame
+    end.
 
 after_connect_request({ok, Pid}, S) ->
     link(Pid),

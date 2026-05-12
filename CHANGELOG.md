@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.4.1] - 2026-05-13
+
+### Added
+
+- **Opt-in `publisher_sig` emission on outbound PUBLISH frames.** Step
+  1b of the pubsub Phase 2 redesign (see
+  `macula-station/plans/PLAN_PUBSUB_E2E_SIGNED_EVENTS.md`).
+  `macula_station_link` now attaches a `publisher_sig`
+  (`macula_frame:sign_publisher/2`) to each PUBLISH frame it sends —
+  *only* when the `macula` application env `pubsub_emit_publisher_sig`
+  is `true`. **Default `false`** — i.e., unchanged on-wire behaviour
+  out of the box.
+
+  **Do not enable until every relay (macula-station) is on macula
+  >= 4.4.0.** A pre-4.4.0 relay's `canonical_unsigned/1` strips only
+  `signature` (not `publisher_sig`) when checking a frame's per-hop
+  signature, so it would reject a PUBLISH that carries `publisher_sig`.
+  Rollout: macula >= 4.4.0 on the whole fleet → confirm → set
+  `{macula, pubsub_emit_publisher_sig, true}` on the daemons → then
+  macula-station's relay path carries `publisher_sig` onto the EVENT
+  and verifies relayed EVENTs against the publisher (a later step).
+
+  Read per publish (a fast env lookup), so the flag can be flipped at
+  runtime without a daemon restart.
+
 ## [4.4.0] - 2026-05-12
 
 ### Added
