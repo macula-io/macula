@@ -45,7 +45,21 @@
     %% closing prior workers for the same `PeerNodeId'. Distinct from
     %% `controlling_pid', which receives the peer-node-id-bearing
     %% `connected' / `frame' / `disconnected' stream.
-    accept_owner    => pid()
+    accept_owner    => pid(),
+    %% Optional pid that receives DHT-class frames (`ping', `pong',
+    %% `find_node', `nodes', `find_value', `value', `store',
+    %% `store_ack', `replicate', `replicate_ack') directly, bypassing
+    %% `controlling_pid'. Sent as
+    %%     `{macula_peering, dht_frame, self(), PeerNodeId, Frame}'.
+    %% Stations set this to their `macula_dht' pid so DHT traffic
+    %% (which under load is 85%+ of all inbound frames — `_dht.put_record'
+    %% replication chatter) does not queue behind handler-dispatch and
+    %% sub/pub work in the observer's gen_server mailbox. When
+    %% unset (the default), DHT frames flow through `controlling_pid'
+    %% in the legacy `{macula_peering, frame, ...}' form. The peer's
+    %% verified `PeerNodeId' is included so the recipient does not have
+    %% to walk frame internals to decide routing.
+    dht_recipient   => pid()
 }.
 
 -record(data, {
@@ -56,6 +70,7 @@
     capabilities    :: non_neg_integer(),
     controlling_pid :: pid(),
     accept_owner    :: undefined | pid(),
+    dht_recipient   :: undefined | pid(),
     target          :: undefined | connect_opts(),
     quic_conn       :: undefined | reference(),
     quic_stream     :: undefined | reference(),
@@ -94,6 +109,7 @@ init(#{role := Role, identity := Identity, controlling_pid := Pid} = Opts)
         capabilities    = maps:get(capabilities, Opts, 0),
         controlling_pid = Pid,
         accept_owner    = maps:get(accept_owner, Opts, undefined),
+        dht_recipient   = maps:get(dht_recipient, Opts, undefined),
         target          = maps:get(target, Opts, undefined),
         quic_conn       = maps:get(quic_conn, Opts, undefined),
         quic_stream     = undefined,
@@ -336,7 +352,7 @@ connected(enter, _Old, Data) ->
 connected(info, {quic, Bin, Stream, _Flags},
           #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
     {Frames, Tail} = macula_frame:parse_stream(<<Buf/binary, Bin/binary>>),
-    [notify(frame, F, Data) || F <- Frames],
+    [route_frame(F, Data) || F <- Frames],
     {keep_state, Data#data{buf = Tail}};
 connected(info, {quic, closed, _Conn, _Detail}, Data) ->
     notify(disconnected, peer_closed, Data),
@@ -438,6 +454,41 @@ do_connect(#{host := Host, port := Port} = Target) ->
 notify(Event, Detail, #data{controlling_pid = Pid}) ->
     Pid ! {macula_peering, Event, self(), Detail},
     ok.
+
+%% Inbound-frame router. DHT-class frames bypass `controlling_pid'
+%% (the station observer) when `dht_recipient' is set — they go
+%% straight to the DHT process instead. All other frame types follow
+%% the legacy path. See the `dht_recipient' field docs on `opts()'.
+route_frame(Frame, #data{dht_recipient = DhtPid,
+                         peer_node_id  = NodeId} = Data)
+        when is_pid(DhtPid), is_binary(NodeId) ->
+    case is_dht_frame(Frame) of
+        true  -> DhtPid ! {macula_peering, dht_frame, self(), NodeId, Frame},
+                 ok;
+        false -> notify(frame, Frame, Data)
+    end;
+route_frame(Frame, Data) ->
+    notify(frame, Frame, Data).
+
+%% DHT-class frame types — must mirror the `dht' category in
+%% macula-station's `macula_station_peer_observer:classify/1'. Keep
+%% these two in sync; any frame type added to one side must be added
+%% to the other or DHT frames will leak through the controlling_pid
+%% path again.
+is_dht_frame(Frame) ->
+    case macula_frame:frame_type(Frame) of
+        ping           -> true;
+        pong           -> true;
+        find_node      -> true;
+        nodes          -> true;
+        find_value     -> true;
+        value          -> true;
+        store          -> true;
+        store_ack      -> true;
+        replicate      -> true;
+        replicate_ack  -> true;
+        _              -> false
+    end.
 
 drop_unexpected(EventType, Event, State, Data) ->
     macula_diagnostics:event(<<"_macula.peering.unexpected">>, #{

@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.4.3] - 2026-05-13
+
+### Added
+
+- **`dht_recipient` option on `macula_peering_conn`.** When set to a
+  pid, DHT-class frames (`ping`, `pong`, `find_node`, `nodes`,
+  `find_value`, `value`, `store`, `store_ack`, `replicate`,
+  `replicate_ack`) bypass `controlling_pid` and go straight to that
+  pid as `{macula_peering, dht_frame, ConnPid, PeerNodeId, Frame}`.
+  All other frame types continue to flow through `controlling_pid`
+  in the existing `{macula_peering, frame, ConnPid, Frame}` form.
+
+  Backward-compatible: when `dht_recipient` is unset (the default),
+  every frame goes through `controlling_pid` exactly as before.
+  No callers in the macula SDK itself set this; daemons and tests
+  are unaffected.
+
+  Motivation: in the deployed station fleet, ~85% of inbound frames
+  per peering connection are DHT `store`/`store_ack` chatter from
+  record replication. Funnelling them through the station's single
+  `macula_station_peer_observer` gen_server meant every other inbound
+  frame type (CALL, REPLY, ADVERTISE, SUBSCRIBE, PUBLISH, EVENT) sat
+  behind a 200-400-deep mailbox of DHT pass-through work, adding
+  700-1000 ms of dispatch latency per hop on the live Leuven fleet.
+  Stations can now route DHT frames directly to their `macula_dht`
+  server instead of stacking them in the observer's queue.
+
+  See macula-station's `macula_station_listener:peering_opts/1` and
+  `macula_station:compose_dial/2` for the station-side wire-up.
+
+---
+
 ## [4.4.2] - 2026-05-13
 
 ### Added
