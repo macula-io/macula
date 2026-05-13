@@ -59,25 +59,38 @@
     %% in the legacy `{macula_peering, frame, ...}' form. The peer's
     %% verified `PeerNodeId' is included so the recipient does not have
     %% to walk frame internals to decide routing.
-    dht_recipient   => pid()
+    dht_recipient   => pid(),
+    %% Optional pid that receives pubsub-class frames (`subscribe',
+    %% `unsubscribe', `publish', `event') directly, bypassing
+    %% `controlling_pid'. Sent as
+    %%     `{macula_peering, pubsub_frame, self(), PeerNodeId, Frame}'.
+    %% Mirrors `dht_recipient' for the pubsub category. After DHT was
+    %% bypassed (4.4.3), inbound EVENT became the dominant work on
+    %% station observers — multi-publisher cases fire bursts of
+    %% Ed25519-verify-per-event work that backs up the same gen_server
+    %% mailbox that handles handler dispatch and ADVERTISE / SUBSCRIBE
+    %% propagation. Stations on macula >= 4.4.4 set this to a dedicated
+    %% pubsub frame dispatcher.
+    pubsub_recipient => pid()
 }.
 
 -record(data, {
-    role            :: client | server,
-    identity        :: macula_identity:key_pair(),
-    node_id         :: macula_identity:pubkey(),
-    realms          :: [macula_identity:pubkey()],
-    capabilities    :: non_neg_integer(),
-    controlling_pid :: pid(),
-    accept_owner    :: undefined | pid(),
-    dht_recipient   :: undefined | pid(),
-    target          :: undefined | connect_opts(),
-    quic_conn       :: undefined | reference(),
-    quic_stream     :: undefined | reference(),
-    peer_node_id    :: undefined | macula_identity:pubkey(),
-    peer_station_id :: undefined | macula_identity:pubkey(),
-    peer_realms     :: [macula_identity:pubkey()],
-    buf             :: binary()
+    role             :: client | server,
+    identity         :: macula_identity:key_pair(),
+    node_id          :: macula_identity:pubkey(),
+    realms           :: [macula_identity:pubkey()],
+    capabilities     :: non_neg_integer(),
+    controlling_pid  :: pid(),
+    accept_owner     :: undefined | pid(),
+    dht_recipient    :: undefined | pid(),
+    pubsub_recipient :: undefined | pid(),
+    target           :: undefined | connect_opts(),
+    quic_conn        :: undefined | reference(),
+    quic_stream      :: undefined | reference(),
+    peer_node_id     :: undefined | macula_identity:pubkey(),
+    peer_station_id  :: undefined | macula_identity:pubkey(),
+    peer_realms      :: [macula_identity:pubkey()],
+    buf              :: binary()
 }).
 
 -define(DRAIN_TIMEOUT_MS, 5_000).
@@ -102,21 +115,22 @@ callback_mode() ->
 init(#{role := Role, identity := Identity, controlling_pid := Pid} = Opts)
   when Role =:= client; Role =:= server ->
     Data = #data{
-        role            = Role,
-        identity        = Identity,
-        node_id         = macula_identity:public(Identity),
-        realms          = maps:get(realms, Opts, []),
-        capabilities    = maps:get(capabilities, Opts, 0),
-        controlling_pid = Pid,
-        accept_owner    = maps:get(accept_owner, Opts, undefined),
-        dht_recipient   = maps:get(dht_recipient, Opts, undefined),
-        target          = maps:get(target, Opts, undefined),
-        quic_conn       = maps:get(quic_conn, Opts, undefined),
-        quic_stream     = undefined,
-        peer_node_id    = undefined,
-        peer_station_id = undefined,
-        peer_realms     = [],
-        buf             = <<>>
+        role             = Role,
+        identity         = Identity,
+        node_id          = macula_identity:public(Identity),
+        realms           = maps:get(realms, Opts, []),
+        capabilities     = maps:get(capabilities, Opts, 0),
+        controlling_pid  = Pid,
+        accept_owner     = maps:get(accept_owner, Opts, undefined),
+        dht_recipient    = maps:get(dht_recipient, Opts, undefined),
+        pubsub_recipient = maps:get(pubsub_recipient, Opts, undefined),
+        target           = maps:get(target, Opts, undefined),
+        quic_conn        = maps:get(quic_conn, Opts, undefined),
+        quic_stream      = undefined,
+        peer_node_id     = undefined,
+        peer_station_id  = undefined,
+        peer_realms      = [],
+        buf              = <<>>
     },
     {ok, initial_state(Role), Data}.
 
@@ -455,40 +469,51 @@ notify(Event, Detail, #data{controlling_pid = Pid}) ->
     Pid ! {macula_peering, Event, self(), Detail},
     ok.
 
-%% Inbound-frame router. DHT-class frames bypass `controlling_pid'
-%% (the station observer) when `dht_recipient' is set — they go
-%% straight to the DHT process instead. All other frame types follow
-%% the legacy path. See the `dht_recipient' field docs on `opts()'.
-route_frame(Frame, #data{dht_recipient = DhtPid,
-                         peer_node_id  = NodeId} = Data)
-        when is_pid(DhtPid), is_binary(NodeId) ->
-    case is_dht_frame(Frame) of
-        true  -> DhtPid ! {macula_peering, dht_frame, self(), NodeId, Frame},
-                 ok;
-        false -> notify(frame, Frame, Data)
-    end;
+%% Inbound-frame router. Category-bypass: DHT-class frames go to
+%% `dht_recipient' if set; pubsub-class frames go to `pubsub_recipient'
+%% if set; everything else (and any bypass with the recipient unset)
+%% flows through `controlling_pid' in the legacy form. See the
+%% `dht_recipient' / `pubsub_recipient' field docs on `opts()' for why.
+route_frame(Frame, #data{peer_node_id = NodeId} = Data)
+        when is_binary(NodeId) ->
+    route_by_category(category(Frame), Frame, NodeId, Data);
 route_frame(Frame, Data) ->
+    %% No verified peer node id yet (handshake edge), or it's a frame
+    %% type we don't classify. Fall back to controlling_pid.
     notify(frame, Frame, Data).
 
-%% DHT-class frame types — must mirror the `dht' category in
-%% macula-station's `macula_station_peer_observer:classify/1'. Keep
-%% these two in sync; any frame type added to one side must be added
-%% to the other or DHT frames will leak through the controlling_pid
-%% path again.
-is_dht_frame(Frame) ->
-    case macula_frame:frame_type(Frame) of
-        ping           -> true;
-        pong           -> true;
-        find_node      -> true;
-        nodes          -> true;
-        find_value     -> true;
-        value          -> true;
-        store          -> true;
-        store_ack      -> true;
-        replicate      -> true;
-        replicate_ack  -> true;
-        _              -> false
-    end.
+route_by_category(dht, Frame, NodeId,
+                  #data{dht_recipient = Pid}) when is_pid(Pid) ->
+    Pid ! {macula_peering, dht_frame, self(), NodeId, Frame},
+    ok;
+route_by_category(pubsub, Frame, NodeId,
+                  #data{pubsub_recipient = Pid}) when is_pid(Pid) ->
+    Pid ! {macula_peering, pubsub_frame, self(), NodeId, Frame},
+    ok;
+route_by_category(_, Frame, _NodeId, Data) ->
+    notify(frame, Frame, Data).
+
+%% Mirror macula-station's `macula_station_peer_observer:classify/1' —
+%% any frame type added to a category on one side must be added on the
+%% other or frames will leak through the legacy controlling_pid path.
+category(Frame) ->
+    classify(macula_frame:frame_type(Frame)).
+
+classify(ping)           -> dht;
+classify(pong)           -> dht;
+classify(find_node)      -> dht;
+classify(nodes)          -> dht;
+classify(find_value)     -> dht;
+classify(value)          -> dht;
+classify(store)          -> dht;
+classify(store_ack)      -> dht;
+classify(replicate)      -> dht;
+classify(replicate_ack)  -> dht;
+classify(subscribe)      -> pubsub;
+classify(unsubscribe)    -> pubsub;
+classify(publish)        -> pubsub;
+classify(event)          -> pubsub;
+classify(_)              -> other.
 
 drop_unexpected(EventType, Event, State, Data) ->
     macula_diagnostics:event(<<"_macula.peering.unexpected">>, #{

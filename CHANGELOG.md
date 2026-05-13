@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.4.4] - 2026-05-13
+
+### Added
+
+- **`pubsub_recipient` option on `macula_peering_conn`.** Mirror of
+  the 4.4.3 `dht_recipient` bypass — when set, pubsub-class frames
+  (`subscribe`, `unsubscribe`, `publish`, `event`) go directly to
+  that pid as `{macula_peering, pubsub_frame, ConnPid, PeerNodeId,
+  Frame}` instead of through `controlling_pid`. All other frame types
+  follow the existing path.
+
+  Backward-compatible: `pubsub_recipient` defaults to undefined; in
+  that case every frame keeps flowing through `controlling_pid`
+  exactly as before.
+
+  Motivation: after the DHT bypass shipped in 4.4.3, the dominant
+  load on a station's `macula_station_peer_observer` mailbox shifted
+  to pubsub `event` frames (suite measurement: 90% of post-bypass
+  mailbox sample = `{frame, event}`, vs 85% `{frame, store/store_ack}`
+  before). Each EVENT carries an Ed25519 publisher signature that
+  needs verification before fan-out; under multi-publisher bursts
+  the verify cost dominates and the same observer mailbox that
+  serializes handler-dispatch and ADVERTISE / SUBSCRIBE propagation
+  backs up again. Stations on macula >= 4.4.4 wire this opt to a
+  dedicated `macula_station_pubsub_dispatcher` gen_server.
+
+  See macula-station's `macula_station_pubsub_dispatcher` for the
+  receiver-side implementation, plus the `pubsub_recipient` plumbing
+  in `macula_station_listener:peering_opts/1` and
+  `macula_station:compose_dial/2`.
+
+### Internal
+
+- The frame router in `macula_peering_conn` (`route_frame/2` +
+  `route_by_category/4`) now classifies each parsed frame once and
+  dispatches by category, instead of a per-recipient inline check.
+  The category mapping (`dht` / `pubsub` / `other`) mirrors
+  `macula_station_peer_observer:classify/1` — any new frame type
+  added on the station side must be added on the SDK side too.
+
+---
+
 ## [4.4.3] - 2026-05-13
 
 ### Added
