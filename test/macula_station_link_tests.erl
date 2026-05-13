@@ -606,6 +606,66 @@ event_frame_delivered_to_subscriber_test_() ->
      end}.
 
 %%------------------------------------------------------------------
+%% Inbound EVENT with publisher_sig — verified; lenient vs strict
+%% (pubsub Phase 2 step 4)
+%%------------------------------------------------------------------
+
+event_publisher_sig_verify_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         application:unset_env(macula, pubsub_strict_publisher_sig),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             identity => macula_identity:generate()
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Topic = <<"io.macula/x/y/v1">>,
+         {ok, SubRef} = macula_station_link:subscribe(Pid, ?REALM, Topic, self()),
+         receive {'$gen_cast', {send_frame, #{frame_type := subscribe}}} -> ok
+         after 1_000 -> erlang:error(no_subscribe_frame) end,
+
+         PubKp = macula_identity:generate(),
+         MkEvent = fun(Seq, Payload) ->
+             macula_frame:event(#{
+                 topic => Topic, realm => ?REALM,
+                 publisher => macula_identity:public(PubKp),
+                 seq => Seq, payload => Payload, delivered_via => direct})
+         end,
+
+         %% 1. Valid publisher_sig → delivered.
+         Pid ! {macula_peering, frame, FakePeer,
+                macula_frame:sign_publisher(MkEvent(1, ok1), PubKp)},
+         receive {macula_event, SubRef, Topic, ok1, _} -> ok
+         after 2_000 -> erlang:error(valid_sig_event_not_delivered) end,
+
+         %% 2. Tampered publisher_sig, lenient (default) → still delivered.
+         Bad = (macula_frame:sign_publisher(MkEvent(2, ok2), PubKp))#{
+                 payload => tampered},
+         Pid ! {macula_peering, frame, FakePeer, Bad},
+         receive {macula_event, SubRef, Topic, tampered, _} -> ok
+         after 2_000 -> erlang:error(lenient_bad_sig_event_not_delivered) end,
+
+         %% 3. Tampered publisher_sig, strict → NOT delivered.
+         application:set_env(macula, pubsub_strict_publisher_sig, true),
+         Bad3 = (macula_frame:sign_publisher(MkEvent(3, ok3), PubKp))#{
+                  payload => tampered3},
+         Pid ! {macula_peering, frame, FakePeer, Bad3},
+         receive {macula_event, SubRef, Topic, tampered3, _} ->
+             erlang:error(strict_bad_sig_event_was_delivered)
+         after 800 -> ok end,
+         application:unset_env(macula, pubsub_strict_publisher_sig),
+
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%%------------------------------------------------------------------
 %% EVENT for a different realm is NOT delivered (realm-scoped index)
 %%------------------------------------------------------------------
 

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.4.2] - 2026-05-13
+
+### Added
+
+- **Subscriber-side `publisher_sig` verification.** Step 4 of the
+  pubsub Phase 2 redesign (see
+  `macula-station/plans/PLAN_PUBSUB_E2E_SIGNED_EVENTS.md`). When
+  `macula_station_link` delivers an inbound EVENT that carries a
+  `publisher_sig`, it now verifies it (`macula_frame:verify_publisher/1`)
+  against the EVENT's own `publisher` field before fanning it to
+  subscribers. An EVENT with no `publisher_sig` is delivered as
+  before (legacy / feature off everywhere). An EVENT whose
+  `publisher_sig` is *present but invalid* is always logged at
+  `warning`; it is **delivered anyway by default** (a relay bug
+  should surface, not silently lose events, during the Phase 2
+  rollout) and **dropped** only when the `macula` application env
+  `pubsub_strict_publisher_sig` is `true`.
+
+  No on-wire change: still nothing emits `publisher_sig` unless
+  `pubsub_emit_publisher_sig` is enabled (4.4.1), so by default this
+  is a no-op.
+
 ## [4.4.1] - 2026-05-13
 
 ### Added

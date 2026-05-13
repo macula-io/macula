@@ -770,7 +770,7 @@ on_frame(#{frame_type := error, call_id := CallId} = Frame,
 %% SUBSCRIBE on this connection (e.g. wildcard / catalog channels);
 %% silently drop those.
 on_frame(#{frame_type := event, topic := Topic, realm := Realm} = Frame, S) ->
-    deliver_event(Realm, Topic, Frame, S);
+    on_inbound_event(check_publisher_sig(Frame), Realm, Topic, Frame, S);
 %% Inbound CALL — relay forwarded a CALL whose (realm, procedure)
 %% this link advertised. Dispatch to the registered handler and ship
 %% the resulting RESULT or call_error frame back over the same
@@ -914,6 +914,45 @@ on_subscriber_down(Mon, #state{subscriptions = Subs} = S) ->
         (_, _, Acc) -> Acc
     end, [], Subs),
     lists:foldl(fun on_unsubscribe/2, S, Found).
+
+%% Pubsub Phase 2 — verify the publisher-end-to-end signature on an
+%% inbound EVENT if it carries one (a relay propagates `publisher_sig'
+%% when the original publisher had `pubsub_emit_publisher_sig'
+%% enabled). No `publisher_sig' on the frame → nothing to check
+%% (feature off everywhere, or a legacy relay).
+check_publisher_sig(#{publisher_sig := _} = Frame) ->
+    macula_frame:verify_publisher(Frame);
+check_publisher_sig(_Frame) ->
+    ok.
+
+%% `ok'           — no publisher_sig present → deliver as before.
+%% `{ok, _}'      — publisher_sig verified → deliver.
+%% `{error, Why}' — publisher_sig present but invalid: always warn;
+%%                  drop only if `pubsub_strict_publisher_sig' is set
+%%                  (default lenient — a relay bug should surface, not
+%%                  silently lose events, during the Phase 2 rollout).
+on_inbound_event(ok, Realm, Topic, Frame, S) ->
+    deliver_event(Realm, Topic, Frame, S);
+on_inbound_event({ok, _Verified}, Realm, Topic, Frame, S) ->
+    deliver_event(Realm, Topic, Frame, S);
+on_inbound_event({error, Why}, Realm, Topic, Frame, S) ->
+    logger:warning("[macula_pubsub] inbound EVENT publisher_sig invalid (~p)"
+                   " realm=~s topic=~s", [Why, hex_prefix(Realm), Topic]),
+    on_invalid_publisher_sig(
+      application:get_env(macula, pubsub_strict_publisher_sig, false),
+      Realm, Topic, Frame, S).
+
+on_invalid_publisher_sig(true, _Realm, _Topic, _Frame, S) ->
+    S;
+on_invalid_publisher_sig(_Lenient, Realm, Topic, Frame, S) ->
+    deliver_event(Realm, Topic, Frame, S).
+
+hex_prefix(B) when is_binary(B), byte_size(B) >= 4 ->
+    binary:encode_hex(binary:part(B, 0, 4));
+hex_prefix(B) when is_binary(B) ->
+    binary:encode_hex(B);
+hex_prefix(_) ->
+    <<"?">>.
 
 %% Fan an EVENT frame out to every subscriber for that (realm, topic).
 deliver_event(Realm, Topic, Frame, #state{topic_index = Idx} = S) ->
