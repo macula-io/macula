@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.4.6] - 2026-05-14
+
+### Fixed
+
+- **Same-pool streaming RPC, take two.** The 4.4.5 split of
+  `streams` into `client_streams` / `server_streams` was necessary
+  but not sufficient. The remaining failure: when the server-side
+  handler called `macula:close_stream/1`, the outbound STREAM_END
+  cast ran through `on_outbound_stream_frame/3` and called
+  `drop_stream/2`, which cleared the Sid from BOTH maps. The
+  relay's bounced-back STREAM_DATA chunks then arrived at the same
+  link, hit `find_stream/2` with no entry, and were silently
+  dropped. The caller's `recv` waiter timed out at 5s.
+
+  Fix: `maybe_drop_outbound/2` skips the drop when the same Sid
+  lives in both maps (the same-pool case). Inbound terminal frames
+  (`deliver_stream_end` / `deliver_stream_error` /
+  `deliver_stream_reply`) still call `drop_stream/2` and tear down
+  both entries when the bounced terminal arrives — so the lifecycle
+  closes cleanly without losing the chunks in between.
+
+  Different-pool streaming is unaffected: each link holds only one
+  side of the stream, so the same-Sid-in-both-maps test is always
+  false and the outbound drop still runs as before.
+
+---
+
 ## [4.4.5] - 2026-05-14
 
 ### Fixed

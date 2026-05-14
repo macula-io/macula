@@ -1204,16 +1204,33 @@ finalise_stream_spec(_Type, Spec, _Id) ->
     Spec.
 
 %% After sending an outbound terminal frame, drop the local routing
-%% entry. STREAM_DATA does not terminate; STREAM_END does only on
-%% `role = both'.
+%% entry — but ONLY when this link owns just one side of the stream.
+%% Same-pool streaming RPC keeps the same Sid in BOTH client_streams
+%% and server_streams (one link is both caller and advertiser, the
+%% relay bounces the frames back); the handler emits STREAM_END
+%% outbound on the server side, and the station then bounces back
+%% server-emitted STREAM_DATA chunks plus the STREAM_END itself.
+%% Dropping on the outbound here would clear the client_streams
+%% entry before any of those bounced inbound frames arrive, and the
+%% caller's recv waiter would silently miss every chunk. Defer to
+%% the inbound terminal handler (`deliver_stream_end' /
+%% `deliver_stream_error' / `deliver_stream_reply') which fires
+%% after the bounce and tears down both entries via `drop_stream'.
 on_outbound_stream_frame(stream_end, #{role := both, stream_id := Sid}, S) ->
-    drop_stream(Sid, S);
+    maybe_drop_outbound(Sid, S);
 on_outbound_stream_frame(stream_error, #{stream_id := Sid}, S) ->
-    drop_stream(Sid, S);
+    maybe_drop_outbound(Sid, S);
 on_outbound_stream_frame(stream_reply, #{stream_id := Sid}, S) ->
-    drop_stream(Sid, S);
+    maybe_drop_outbound(Sid, S);
 on_outbound_stream_frame(_Type, _Spec, S) ->
     S.
+
+maybe_drop_outbound(Sid, #state{client_streams = CS,
+                                server_streams = SS} = S) ->
+    case {maps:is_key(Sid, CS), maps:is_key(Sid, SS)} of
+        {true, true}  -> S;
+        _             -> drop_stream(Sid, S)
+    end.
 
 %% Terminal frames (stream_end role=both, stream_error, stream_reply)
 %% close the stream from both ends. Drop the Sid from whichever map
