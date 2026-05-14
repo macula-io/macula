@@ -172,12 +172,20 @@
                                  {macula_frame:stream_mode(),
                                   stream_handler()}},
     %% Open streams keyed by 16-byte stream_id. Each entry pairs the
-    %% local `macula_stream' pid (client- or server-side) with the
-    %% monitor reference returned when this link started watching it.
-    %% Inbound STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
-    %% frames are dispatched into the matching stream pid via the
-    %% peer-to-peer protocol on `macula_stream'.
-    streams = #{} :: #{macula_frame:stream_id() => {pid(), reference()}}
+    %% local `macula_stream' pid with the monitor reference returned
+    %% when this link started watching it. Split by role so a same-pool
+    %% streaming RPC — where the relay bounces the STREAM_OPEN back
+    %% over the SAME conn and `spawn_inbound_stream' would otherwise
+    %% overwrite the client entry under one shared map — keeps
+    %% client-side and server-side state disjoint. Inbound STREAM_DATA
+    %% / END / ERROR / REPLY dispatch tries `client_streams' first
+    %% (server_stream mode flows server→client; the common case),
+    %% then falls through to `server_streams' (client_stream / bidi
+    %% server-receive).
+    client_streams = #{} :: #{macula_frame:stream_id() =>
+                              {pid(), reference()}},
+    server_streams = #{} :: #{macula_frame:stream_id() =>
+                              {pid(), reference()}}
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
@@ -815,7 +823,8 @@ on_timeout({{From, _OldTRef}, NewP}, S) ->
     {noreply, S#state{pending = NewP}}.
 
 fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
-                                streams = Streams} = S) ->
+                                client_streams = CS,
+                                server_streams = SS} = S) ->
     maps:foreach(fun(_CallId, {From, TRef}) ->
         _ = erlang:cancel_timer(TRef),
         gen_server:reply(From, {error, Reason})
@@ -827,13 +836,15 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     %% Abort every open stream with a `disconnected' STREAM_ERROR.
     %% Caller waiters (recv / await_reply) unblock immediately;
     %% transient handler processes see the abort and exit.
-    maps:foreach(fun(_Sid, {Pid, Mon}) ->
+    AbortFun = fun(_Sid, {Pid, Mon}) ->
         erlang:demonitor(Mon, [flush]),
         catch macula_stream:abort(Pid, <<"disconnected">>,
                                      iolist_to_binary(io_lib:format("~p", [Reason])))
-    end, Streams),
+    end,
+    maps:foreach(AbortFun, CS),
+    maps:foreach(AbortFun, SS),
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
-            streams = #{}}.
+            client_streams = #{}, server_streams = #{}}.
 
 %%-------------------------------------------------------------------
 %% Subscription helpers
@@ -1165,7 +1176,8 @@ open_client_stream(Realm, Proc, Args, Opts, Caller,
         caller      => macula_identity:public(Id)
     }),
     catch macula_peering:send_frame(Pid, Frame),
-    NewS = S#state{streams = (S#state.streams)#{Sid => {StreamPid, Mon}}},
+    CS = S#state.client_streams,
+    NewS = S#state{client_streams = CS#{Sid => {StreamPid, Mon}}},
     {reply_value, {ok, StreamPid}, NewS}.
 
 %%-------------------------------------------------------------------
@@ -1203,14 +1215,23 @@ on_outbound_stream_frame(stream_reply, #{stream_id := Sid}, S) ->
 on_outbound_stream_frame(_Type, _Spec, S) ->
     S.
 
-drop_stream(Sid, #state{streams = Streams} = S) ->
-    drop_stream_take(maps:take(Sid, Streams), S).
+%% Terminal frames (stream_end role=both, stream_error, stream_reply)
+%% close the stream from both ends. Drop the Sid from whichever map
+%% holds it. Same-pool case has the same Sid in BOTH maps; drop both
+%% so the link doesn't leak entries.
+drop_stream(Sid, #state{client_streams = CS,
+                        server_streams = SS} = S) ->
+    {CS2, ClientMon} = drop_one(Sid, CS),
+    {SS2, ServerMon} = drop_one(Sid, SS),
+    _ = [erlang:demonitor(M, [flush])
+         || M <- [ClientMon, ServerMon], M =/= undefined],
+    S#state{client_streams = CS2, server_streams = SS2}.
 
-drop_stream_take(error, S) ->
-    S;
-drop_stream_take({{_Pid, Mon}, NewStreams}, S) ->
-    erlang:demonitor(Mon, [flush]),
-    S#state{streams = NewStreams}.
+drop_one(Sid, Map) ->
+    case maps:take(Sid, Map) of
+        error                -> {Map, undefined};
+        {{_Pid, Mon}, NewMap} -> {NewMap, Mon}
+    end.
 
 %%-------------------------------------------------------------------
 %% Streaming RPC — inbound STREAM_OPEN (server-side dispatch)
@@ -1245,7 +1266,7 @@ dispatch_stream_open({ok, {AdvMode, Handler}}, Sid, Proc, _Declared, Args, S) ->
     spawn_inbound_stream(Sid, Proc, AdvMode, Handler, Args, S).
 
 spawn_inbound_stream(Sid, Proc, Mode, Handler, Args,
-                     #state{streams = Streams} = S) ->
+                     #state{server_streams = SS} = S) ->
     Host = spawn(fun() -> receive stop -> ok end end),
     {ok, StreamPid} = macula_stream:start_link(#{
         id    => Sid,
@@ -1256,7 +1277,7 @@ spawn_inbound_stream(Sid, Proc, Mode, Handler, Args,
     ok = macula_stream:attach_to_link(StreamPid, self(), Sid),
     Mon = erlang:monitor(process, StreamPid),
     _Worker = spawn_stream_handler(Handler, StreamPid, Args, Proc),
-    S#state{streams = Streams#{Sid => {StreamPid, Mon}}}.
+    S#state{server_streams = SS#{Sid => {StreamPid, Mon}}}.
 
 %% Handler runs in a transient process. A handler crash maps to a
 %% STREAM_ERROR abort with the crash class as the code so callers
@@ -1281,9 +1302,13 @@ spawn_stream_handler(Handler, Stream, Args, Proc) ->
 %%-------------------------------------------------------------------
 
 %% Unknown stream_id (race with terminal frame from our side) is
-%% silently dropped — same policy as `mesh_client'.
+%% silently dropped — same policy as `mesh_client'. Lookup order:
+%% client_streams first (server_stream mode flows server→client, the
+%% common case; in same-pool both maps hold Sid and the bounced
+%% server-emitted STREAM_DATA must reach the caller's recv waiter),
+%% then server_streams (client_stream / bidi server-receive).
 deliver_stream_data(#{stream_id := Sid} = Frame, S) ->
-    deliver_to_stream(maps:find(Sid, S#state.streams),
+    deliver_to_stream(find_stream(Sid, S),
                       fun({Pid, _Mon}) ->
                           macula_stream:deliver_chunk(
                             Pid,
@@ -1294,7 +1319,7 @@ deliver_stream_data(#{stream_id := Sid} = Frame, S) ->
 
 deliver_stream_end(#{stream_id := Sid} = Frame, S) ->
     Role = maps:get(role, Frame, both),
-    deliver_to_stream(maps:find(Sid, S#state.streams),
+    deliver_to_stream(find_stream(Sid, S),
                       fun({Pid, _Mon}) ->
                           macula_stream:deliver_end(Pid, Role)
                       end),
@@ -1305,14 +1330,14 @@ deliver_stream_end(#{stream_id := Sid} = Frame, S) ->
 deliver_stream_error(#{stream_id := Sid} = Frame, S) ->
     Code = maps:get(code, Frame, <<"error">>),
     Message = maps:get(message, Frame, <<>>),
-    deliver_to_stream(maps:find(Sid, S#state.streams),
+    deliver_to_stream(find_stream(Sid, S),
                       fun({Pid, _Mon}) ->
                           macula_stream:deliver_error(Pid, Code, Message)
                       end),
     drop_stream(Sid, S).
 
 deliver_stream_reply(#{stream_id := Sid, payload := Payload}, S) ->
-    deliver_to_stream(maps:find(Sid, S#state.streams),
+    deliver_to_stream(find_stream(Sid, S),
                       fun({Pid, _Mon}) ->
                           macula_stream:deliver_reply(Pid, {ok, Payload})
                       end),
@@ -1345,16 +1370,34 @@ drain_pending_stream_advertises(#state{stream_procedures = SP} = S) ->
 %% Streaming RPC — DOWN routing (stream pid vs subscriber pid)
 %%-------------------------------------------------------------------
 
-%% Probe the streams map first by pid; fall back to the subscriber
-%% path. Stream pids are added by `open_client_stream/6' and
-%% `spawn_inbound_stream/6'.
-on_monitor_down(Pid, Mon, #state{streams = Streams} = S) ->
-    case find_stream_by_pid(Pid, Streams) of
+%% Probe the client_streams and server_streams maps by pid; fall back
+%% to the subscriber path. Stream pids are added by
+%% `open_client_stream/6' (client_streams) and `spawn_inbound_stream/6'
+%% (server_streams).
+on_monitor_down(Pid, Mon, #state{client_streams = CS,
+                                 server_streams = SS} = S) ->
+    case find_stream_by_pid(Pid, CS) of
         {ok, Sid} ->
             erlang:demonitor(Mon, [flush]),
-            S#state{streams = maps:remove(Sid, Streams)};
+            S#state{client_streams = maps:remove(Sid, CS)};
         error ->
-            on_subscriber_down(Mon, S)
+            case find_stream_by_pid(Pid, SS) of
+                {ok, Sid} ->
+                    erlang:demonitor(Mon, [flush]),
+                    S#state{server_streams = maps:remove(Sid, SS)};
+                error ->
+                    on_subscriber_down(Mon, S)
+            end
+    end.
+
+%% Lookup a stream by Sid across both maps. Client-side first (the
+%% common server_stream mode delivers server→client chunks to the
+%% client entry); fall back to server-side for client_stream / bidi
+%% server-receive.
+find_stream(Sid, #state{client_streams = CS, server_streams = SS}) ->
+    case maps:find(Sid, CS) of
+        {ok, _} = R -> R;
+        error       -> maps:find(Sid, SS)
     end.
 
 find_stream_by_pid(Pid, Streams) ->

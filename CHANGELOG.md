@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.4.5] - 2026-05-14
+
+### Fixed
+
+- **Same-pool streaming RPC.** Splits `macula_station_link`'s shared
+  `streams` map into `client_streams` and `server_streams` so an
+  `advertise_stream` + `call_stream` on the same pool no longer loses
+  the caller's recv waiter. Previously, the relay bounced the
+  STREAM_OPEN back over the same conn and `spawn_inbound_stream/6`
+  overwrote the client entry under the same Sid, routing subsequent
+  STREAM_DATA chunks to the server-side producer pid instead of the
+  client's recv waiter. Caller hit the recv timeout (8s) with no
+  chunks. After the split, inbound dispatch tries `client_streams`
+  first (server_stream mode, the common case), falling through to
+  `server_streams` for client_stream / bidi server-receive.
+
+  Affects: `macula_e2e_probe:streaming_rpc/4` and
+  `many_concurrent_streams` in the diagnostics harness — both were
+  timing out at exactly 8003ms before this fix.
+
+  Cross-station streaming (different pool, different bootstrap) is a
+  separate bug at the station level (multi-hop STREAM_DATA verify
+  fails against the inbound peer-link's NodeId rather than the
+  end-to-end signer); tracked separately and requires a frame-schema
+  bump on STREAM_DATA / END / ERROR / REPLY.
+
+---
+
 ## [4.4.4] - 2026-05-13
 
 ### Added
