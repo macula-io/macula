@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.4.8] - 2026-05-14
+
+### Fixed
+
+- **Pool gen_server serialisation under concurrent CALL/STREAM/PUBLISH.**
+  `macula_client`'s `handle_call/3` for `{rpc_call, ...}`, `{rpc_call_stream, ...}`
+  and `{publish, ...}` used to synchronously fan out to per-link
+  `gen_server:call/3` and block the pool until each link replied. N
+  concurrent callers all queued at the pool, capping concurrent
+  throughput at 1. The harness's `many_concurrent_calls`,
+  `many_concurrent_streams` and `multi_publisher_pubsub` cases were
+  the visible failures — N=5 callers serialised through one
+  gen_server with each link call timeoutable at 5s.
+
+  Each handler now spawns a one-shot worker that does the fanout
+  and replies via `gen_server:reply/2`. The pool returns to its
+  mailbox immediately. N concurrent callers run in parallel.
+
+  Behaviour from the caller's POV is unchanged — `macula:call/4` is
+  still a sync gen_server:call against the pool; only the path
+  inside the pool changed.
+
+  Advertise/unadvertise/subscribe/unsubscribe stay synchronous since
+  they mutate pool state (`procs` / `stream_procs` / `subs` map)
+  before reaching out to links. The harness only fires these once
+  per case so they're not on the contention path.
+
+---
+
 ## [4.4.7] - 2026-05-14
 
 ### Added

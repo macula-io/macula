@@ -370,19 +370,29 @@ init({Seeds, Opts}) ->
     erlang:send_after(DedupSweep, self(), dedup_sweep),
     {ok, State1}.
 
-handle_call({publish, Realm, Topic, Payload, _Opts}, _From, S) ->
+handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     %% Publish only to links that have completed CONNECT/HELLO. A
     %% frame sent to a still-handshaking link is dropped on the floor
     %% — unlike ADVERTISE, which the link replays on connect — so
     %% selecting the first `replication' *spawned* links could report
     %% `{error, not_connected}' while other links are healthy. RPC and
     %% streams already filter by `is_connected/1'; publish must too.
+    %%
+    %% Dispatch via a one-shot worker so concurrent publishes don't
+    %% serialise through this gen_server (the per-link `publish/4'
+    %% calls are sync 5s timeouts; under load they pile up at the pool
+    %% and the harness's `multi_publisher_pubsub' case fails with
+    %% empty receives).
     Targets = connected_link_pids(S),
     N = min(length(Targets), S#state.replication),
     Selected = lists:sublist(Targets, N),
-    Results = [macula_station_link:publish(P, Realm, Topic, Payload)
-               || P <- Selected],
-    {reply, summarize_publish(Results, Targets), S};
+    AllTargets = Targets,
+    _ = spawn(fun() ->
+        Results = [macula_station_link:publish(P, Realm, Topic, Payload)
+                   || P <- Selected],
+        gen_server:reply(From, summarize_publish(Results, AllTargets))
+    end),
+    {noreply, S};
 
 handle_call({subscribe, Realm, Topic, Subscriber, _Opts}, _From, S) ->
     SubRef = make_ref(),
@@ -398,11 +408,19 @@ handle_call({subscribe, Realm, Topic, Subscriber, _Opts}, _From, S) ->
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, drop_sub(SubRef, S)};
 
-handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, _From, S) ->
-    {reply,
-     call_first_success(spawned_link_pids(S),
-                        Realm, Procedure, Payload, TimeoutMs),
-     S};
+handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
+    %% Worker-spawn so concurrent CALLs don't serialise through the
+    %% pool gen_server. Each per-link `macula_station_link:call/5'
+    %% is a sync gen_server:call to the link; with the old
+    %% `{reply, ..., S}' shape every caller blocked the pool until
+    %% the link replied, capping concurrent CALL throughput at 1.
+    Pids = spawned_link_pids(S),
+    _ = spawn(fun() ->
+        Reply = call_first_success(Pids, Realm, Procedure, Payload,
+                                    TimeoutMs),
+        gen_server:reply(From, Reply)
+    end),
+    {noreply, S};
 
 handle_call({advertise, Realm, Procedure, Handler}, _From,
             #state{procs = P} = S) ->
@@ -415,10 +433,17 @@ handle_call({unadvertise, Realm, Procedure}, _From,
     _ = fanout_unadvertise(spawned_link_pids(S), Realm, Procedure),
     {reply, ok, S#state{procs = maps:remove({Realm, Procedure}, P)}};
 
-handle_call({rpc_call_stream, Realm, Procedure, Args, Opts}, _From, S) ->
-    {reply,
-     stream_first_healthy(spawned_link_pids(S), Realm, Procedure, Args, Opts),
-     S};
+handle_call({rpc_call_stream, Realm, Procedure, Args, Opts}, From, S) ->
+    %% Worker-spawn for the same reason as `rpc_call' — the harness's
+    %% `many_concurrent_streams' fires N parallel `call_stream/4' from
+    %% separate caller processes; without this each one queued behind
+    %% the pool gen_server.
+    Pids = spawned_link_pids(S),
+    _ = spawn(fun() ->
+        Reply = stream_first_healthy(Pids, Realm, Procedure, Args, Opts),
+        gen_server:reply(From, Reply)
+    end),
+    {noreply, S};
 
 handle_call({advertise_stream, Realm, Procedure, Mode, Handler}, _From,
             #state{stream_procs = SP} = S) ->
