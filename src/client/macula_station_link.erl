@@ -1203,11 +1203,21 @@ build_stream_frame(stream_end, Spec)   -> macula_frame:stream_end(Spec);
 build_stream_frame(stream_error, Spec) -> macula_frame:stream_error(Spec);
 build_stream_frame(stream_reply, Spec) -> macula_frame:stream_reply(Spec).
 
-%% `stream_reply' carries `responded_by' (the link's own pubkey)
-%% which the v1 stream gen_server has no way to know. Stamp it on
-%% before frame construction; other types pass through untouched.
+%% `stream_reply' carries `responded_by' (the link's own pubkey) which
+%% the v1 stream gen_server has no way to know. `stream_data',
+%% `stream_end' and `stream_error' carry `signer' (the emitter's
+%% pubkey) so the station-side verify path can authenticate non-OPEN
+%% stream frames end-to-end across multi-hop relays — same pattern as
+%% CALL's `caller'. Without it, station_B receiving a chunk forwarded
+%% by station_A would verify the signature against station_A's NodeId,
+%% but the frame was signed by the originating daemon, and verify
+%% would fail silently — every cross-station stream chunk dropped.
 finalise_stream_spec(stream_reply, Spec, Id) ->
     Spec#{responded_by => macula_identity:public(Id)};
+finalise_stream_spec(Type, Spec, Id) when Type =:= stream_data;
+                                          Type =:= stream_end;
+                                          Type =:= stream_error ->
+    Spec#{signer => macula_identity:public(Id)};
 finalise_stream_spec(_Type, Spec, _Id) ->
     Spec.
 

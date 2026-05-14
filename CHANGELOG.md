@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.4.9] - 2026-05-14
+
+### Added
+
+- **`signer` field on STREAM_DATA / STREAM_END / STREAM_ERROR frames.**
+  The emitter (a `macula_station_link` instance) now stamps its Ed25519
+  pubkey into the frame before signing. Stations can then verify the
+  signature end-to-end against the claimed signer instead of the
+  inbound conn's NodeId — necessary for multi-hop relays where the
+  inbound conn is a peer station, not the originating daemon.
+
+  Frame shape: `#{stream_id, seq, encoding, body, signer => <<_:256>>}'
+  (analogous to `stream_reply`'s `responded_by` and CALL's `caller`).
+
+  Wire-compat: `signer` is additive; old stations ignore it and keep
+  verifying against inbound NodeId (single-hop only). Old SDKs don't
+  emit it; new stations fall back to NodeId verify for frames missing
+  the field. The two ends meet correctly after a coordinated rollout.
+
+  Motivation: cross-station streaming RPC was failing because
+  STREAM_DATA chunks emitted by daemon-A and relayed via station-A →
+  station-B were verified at station-B against station-A's NodeId.
+  The signature was made by daemon-A, so verify failed and station-B
+  silently dropped every chunk. The chunks then never reached the
+  caller daemon-C connected to station-B, and the caller's recv hit
+  the 5s timeout. With `signer`, station-B verifies against daemon-A's
+  pubkey and the chunks flow correctly.
+
+  Stations on macula-station >= 4.4.9-aware will use claimed_signer
+  for stream_data/end/error and claimed_replier for stream_reply.
+
+---
+
 ## [4.4.8] - 2026-05-14
 
 ### Fixed

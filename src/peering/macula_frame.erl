@@ -1205,37 +1205,53 @@ stream_open(#{stream_id := Sid, procedure := Proc, realm := Realm,
 
 -spec stream_data(stream_data_spec()) -> frame().
 stream_data(#{stream_id := Sid, seq := Seq,
-              encoding := Encoding, body := Body})
+              encoding := Encoding, body := Body} = Spec)
   when is_binary(Sid), byte_size(Sid) =:= 16,
        is_integer(Seq), Seq >= 0,
        (Encoding =:= raw orelse Encoding =:= msgpack) ->
     validate_stream_body(Encoding, Body),
-    (base(stream_data, 0))#{
+    maybe_add_signer(
+      (base(stream_data, 0))#{
         stream_id => Sid,
         seq       => Seq,
         encoding  => Encoding,
         body      => Body
-    }.
+      }, Spec).
 
 -spec stream_end(stream_end_spec()) -> frame().
-stream_end(#{stream_id := Sid, role := Role})
+stream_end(#{stream_id := Sid, role := Role} = Spec)
   when is_binary(Sid), byte_size(Sid) =:= 16,
        (Role =:= send orelse Role =:= both) ->
-    (base(stream_end, 0))#{
+    maybe_add_signer(
+      (base(stream_end, 0))#{
         stream_id => Sid,
         role      => Role
-    }.
+      }, Spec).
 
 -spec stream_error(stream_error_spec()) -> frame().
-stream_error(#{stream_id := Sid, code := Code, message := Msg})
+stream_error(#{stream_id := Sid, code := Code, message := Msg} = Spec)
   when is_binary(Sid), byte_size(Sid) =:= 16,
        is_binary(Code),
        is_binary(Msg) ->
-    (base(stream_error, 0))#{
+    maybe_add_signer(
+      (base(stream_error, 0))#{
         stream_id => Sid,
         code      => Code,
         message   => Msg
-    }.
+      }, Spec).
+
+%% Optionally stamp the emitter's pubkey into the frame. Used by the
+%% station-side verify path to authenticate non-OPEN stream frames
+%% end-to-end across multi-hop relays. Without `signer`, the station
+%% can only verify against the inbound conn's NodeId — fine for the
+%% direct edge (daemon → first station) but it fails on every
+%% subsequent station-to-station hop, because the signature was made
+%% by the originating daemon, not the relaying station.
+maybe_add_signer(Frame, #{signer := Pub})
+  when is_binary(Pub), byte_size(Pub) =:= 32 ->
+    Frame#{signer => Pub};
+maybe_add_signer(Frame, _Spec) ->
+    Frame.
 
 -spec stream_reply(stream_reply_spec()) -> frame().
 stream_reply(#{stream_id := Sid, payload := Payload,
