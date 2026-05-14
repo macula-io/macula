@@ -71,7 +71,21 @@
     %% mailbox that handles handler dispatch and ADVERTISE / SUBSCRIBE
     %% propagation. Stations on macula >= 4.4.4 set this to a dedicated
     %% pubsub frame dispatcher.
-    pubsub_recipient => pid()
+    pubsub_recipient => pid(),
+    %% When true, every inbound-frame notification carries an extra
+    %% `RecvAtUs :: integer()' element captured the moment the frame
+    %% finished decoding (just before dispatch to the recipient). The
+    %% controlling_pid then receives the 5-tuple
+    %%   `{macula_peering, frame, ConnPid, Frame, RecvAtUs}'
+    %% and the dht/pubsub bypass paths receive the 6-tuple
+    %%   `{macula_peering, dht_frame, ConnPid, NodeId, Frame, RecvAtUs}'
+    %%   `{macula_peering, pubsub_frame, ConnPid, NodeId, Frame, RecvAtUs}'
+    %% RecvAtUs is `erlang:monotonic_time(microsecond)' on the receiving
+    %% BEAM. Stations subtract from their own monotonic clock to compute
+    %% mailbox wait time at the recipient. Defaults to false; recipients
+    %% MUST keep the legacy 4-/5-tuple match clause to remain compatible
+    %% with peers that have not opted in (cross-version rollout window).
+    timing_enabled  => boolean()
 }.
 
 -record(data, {
@@ -84,6 +98,7 @@
     accept_owner     :: undefined | pid(),
     dht_recipient    :: undefined | pid(),
     pubsub_recipient :: undefined | pid(),
+    timing_enabled   :: boolean(),
     target           :: undefined | connect_opts(),
     quic_conn        :: undefined | reference(),
     quic_stream      :: undefined | reference(),
@@ -122,6 +137,7 @@ init(#{role := Role, identity := Identity, controlling_pid := Pid} = Opts)
         capabilities     = maps:get(capabilities, Opts, 0),
         controlling_pid  = Pid,
         accept_owner     = maps:get(accept_owner, Opts, undefined),
+        timing_enabled   = maps:get(timing_enabled, Opts, false),
         dht_recipient    = maps:get(dht_recipient, Opts, undefined),
         pubsub_recipient = maps:get(pubsub_recipient, Opts, undefined),
         target           = maps:get(target, Opts, undefined),
@@ -474,24 +490,47 @@ notify(Event, Detail, #data{controlling_pid = Pid}) ->
 %% if set; everything else (and any bypass with the recipient unset)
 %% flows through `controlling_pid' in the legacy form. See the
 %% `dht_recipient' / `pubsub_recipient' field docs on `opts()' for why.
+%%
+%% When `timing_enabled' is true on this conn, the recipient receives
+%% an extra trailing `RecvAtUs' element holding
+%% `erlang:monotonic_time(microsecond)' captured here, so recipients
+%% can compute mailbox wait at the receiving gen_server.
 route_frame(Frame, #data{peer_node_id = NodeId} = Data)
         when is_binary(NodeId) ->
     route_by_category(category(Frame), Frame, NodeId, Data);
 route_frame(Frame, Data) ->
     %% No verified peer node id yet (handshake edge), or it's a frame
     %% type we don't classify. Fall back to controlling_pid.
-    notify(frame, Frame, Data).
+    notify_frame(Frame, Data).
 
 route_by_category(dht, Frame, NodeId,
-                  #data{dht_recipient = Pid}) when is_pid(Pid) ->
-    Pid ! {macula_peering, dht_frame, self(), NodeId, Frame},
+                  #data{dht_recipient = Pid,
+                        timing_enabled = Timing}) when is_pid(Pid) ->
+    notify_bypass(Pid, dht_frame, NodeId, Frame, Timing),
     ok;
 route_by_category(pubsub, Frame, NodeId,
-                  #data{pubsub_recipient = Pid}) when is_pid(Pid) ->
-    Pid ! {macula_peering, pubsub_frame, self(), NodeId, Frame},
+                  #data{pubsub_recipient = Pid,
+                        timing_enabled = Timing}) when is_pid(Pid) ->
+    notify_bypass(Pid, pubsub_frame, NodeId, Frame, Timing),
     ok;
 route_by_category(_, Frame, _NodeId, Data) ->
-    notify(frame, Frame, Data).
+    notify_frame(Frame, Data).
+
+notify_frame(Frame, #data{controlling_pid = Pid, timing_enabled = false}) ->
+    Pid ! {macula_peering, frame, self(), Frame},
+    ok;
+notify_frame(Frame, #data{controlling_pid = Pid, timing_enabled = true}) ->
+    T = erlang:monotonic_time(microsecond),
+    Pid ! {macula_peering, frame, self(), Frame, T},
+    ok.
+
+notify_bypass(Pid, Tag, NodeId, Frame, false) ->
+    Pid ! {macula_peering, Tag, self(), NodeId, Frame},
+    ok;
+notify_bypass(Pid, Tag, NodeId, Frame, true) ->
+    T = erlang:monotonic_time(microsecond),
+    Pid ! {macula_peering, Tag, self(), NodeId, Frame, T},
+    ok.
 
 %% Mirror macula-station's `macula_station_peer_observer:classify/1' —
 %% any frame type added to a category on one side must be added on the

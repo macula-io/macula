@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.4.7] - 2026-05-14
+
+### Added
+
+- **`timing_enabled` option on `macula_peering_conn`.** When set,
+  every inbound-frame notification carries an extra trailing
+  `RecvAtUs :: integer()` element — `erlang:monotonic_time(microsecond)'
+  captured the instant the frame finished decoding. Recipients can
+  subtract their own monotonic clock at dispatch time to compute
+  mailbox wait at the receiving gen_server.
+
+  Wire shapes when enabled:
+  ```
+  {macula_peering, frame,        ConnPid, Frame, RecvAtUs}
+  {macula_peering, dht_frame,    ConnPid, NodeId, Frame, RecvAtUs}
+  {macula_peering, pubsub_frame, ConnPid, NodeId, Frame, RecvAtUs}
+  ```
+
+  Default is `false` for backward compatibility — recipients that
+  have not been updated keep matching the legacy 4-/5-tuple shapes.
+  `macula_station_link' has been extended to match both shapes so
+  daemons receiving from a station that has opted in continue to
+  work.
+
+  Motivation: macula-station's `macula_station_peer_observer` runs a
+  persistent mailbox depth of 200-400 frames under DHT load. Without
+  a `RecvAtUs' stamp the mailbox wait is invisible to a downstream
+  observer — `process_info(self(), message_queue_len)` at dispatch
+  entry is a coarse proxy but doesn't tell you how old the frame at
+  the head of the queue actually is. With `timing_enabled' the
+  receiver gets per-frame wait + dispatch + forward latency, which
+  is what we need to know whether peer_observer is still the
+  bottleneck after 4.4.3/4.4.4's DHT and pubsub ETS bypasses.
+
+---
+
 ## [4.4.6] - 2026-05-14
 
 ### Fixed

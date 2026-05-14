@@ -703,6 +703,14 @@ handle_info({macula_peering, frame, Pid, Frame},
             #state{peer_pid = Pid} = S) ->
     {noreply, on_frame(Frame, S)};
 
+%% 5-tuple variant: peering_conn opted into `timing_enabled', appended
+%% the monotonic-microsecond timestamp captured the instant the frame
+%% finished decoding. station_link does not act on it yet (Phase 1
+%% telemetry is station-side); kept for forward compatibility.
+handle_info({macula_peering, frame, Pid, Frame, _RecvAtUs},
+            #state{peer_pid = Pid} = S) ->
+    {noreply, on_frame(Frame, S)};
+
 handle_info({macula_peering, disconnected, Pid, Reason},
             #state{peer_pid = Pid} = S) ->
     NewS = fail_all_pending({disconnected, Reason}, S),
