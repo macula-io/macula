@@ -777,12 +777,21 @@ code_change(_OldVsn, S, _Extra) -> {ok, S}.
 %% Internals
 %%====================================================================
 
-%% Attach the publisher-end-to-end signature to an outbound PUBLISH
-%% iff `macula' env `pubsub_emit_publisher_sig' is true. Read per
-%% publish (a fast ETS lookup) so an operator can flip it without a
-%% restart once the relay fleet is confirmed on macula >= 4.4.0.
+%% Attach the publisher-end-to-end signature to an outbound PUBLISH.
+%% Default flipped to `true' in 4.6.0 (was `false' since 4.4.0 when
+%% the field was introduced). Flipping enables multi-hop pubsub: the
+%% receiving station verifies against `publisher' via
+%% `macula_frame:verify_publisher/1' so the frame stays valid across
+%% any relay path, and the (publisher, seq) dedup cache on each
+%% station kills loops. See `macula_station_event_dedup' in the
+%% station repo for the dedup side. Wire-compat: the field has been
+%% carried verbatim through relay hops since macula 4.4.0; stations
+%% on >= 4.4.0 strip it from their canonical-signing bytes so adding
+%% it does not break the per-hop relay signature. Operators can
+%% override per-app via `application:set_env(macula,
+%% pubsub_emit_publisher_sig, false)` if a regression surfaces.
 maybe_add_publisher_sig(Frame, Identity) ->
-    case application:get_env(macula, pubsub_emit_publisher_sig, false) of
+    case application:get_env(macula, pubsub_emit_publisher_sig, true) of
         true  -> macula_frame:sign_publisher(Frame, Identity);
         _     -> Frame
     end.

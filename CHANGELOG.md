@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.6.0] - 2026-05-15
+
+### Changed
+
+- **`pubsub_emit_publisher_sig` default flipped from `false` to
+  `true`.** Publishers now attach an end-to-end publisher signature
+  to every outbound PUBLISH/EVENT by default. Wire-format change is
+  fully BC (the field has been parseable since 4.4.0 and excluded
+  from `canonical_unsigned/1` so the per-hop relay signature stays
+  valid). On the receiver side, stations on >= 4.4.0 already prefer
+  `verify_publisher/1` for EVENTs that carry the signature (so they
+  pass at any relay hop instead of only one), and the
+  `macula_station_event_dedup` cache drops `{publisher, seq}`
+  repeats.
+
+  Effect: **multi-hop pubsub now works end-to-end.** Previously
+  cross-station PubSub was bounded to 1 hop from origin because the
+  relay re-signed EVENTs and the verify-mismatch at hop 2+ doubled
+  as accidental loop kill. Publisher-end-to-end signatures + dedup
+  removes that bound; loops are killed structurally by `(publisher,
+  seq)` deduplication, not by signature failure.
+
+  Operators on a fleet that still has pre-4.4.0 stations can opt
+  back out: `application:set_env(macula, pubsub_emit_publisher_sig,
+  false)` per node. Our deployed fleet is on macula-station with
+  SDK 4.5.0 so this knob applies cleanly.
+
+  Four prior incremental attempts (per-hop re-sign, 1-hop cap, two
+  dedup variants) at this same problem all regressed cross-station
+  traffic and were reverted. The wire foundation (`publisher_sig`
+  field, dedup cache observe-only) was landed in 4.4.0; this
+  release just flips the default so the foundation is exercised.
+
 ## [4.5.0] - 2026-05-14
 
 ### Added
