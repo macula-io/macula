@@ -1588,3 +1588,126 @@ wait_until_closed(StreamPid, N) ->
             timer:sleep(50),
             wait_until_closed(StreamPid, N - 1)
     end.
+
+%%------------------------------------------------------------------
+%% Liveness probe — bounded zombie-connection detection
+%%
+%% These tests drive the `liveness_tick' info message directly rather
+%% than waiting `?LIVENESS_INTERVAL_MS' wallclock time. They cover:
+%%   1. A probe CALL goes out on the first tick after connect.
+%%   2. A matching ERROR reply clears the outstanding slot WITHOUT
+%%      leaking to user `pending' machinery (i.e. no spurious
+%%      caller-reply).
+%%   3. After `?LIVENESS_MAX_MISSES' consecutive ticks with no reply,
+%%      the link issues `macula_peering:close(PeerPid, ...)' which
+%%      our FakePeer (the test pid) receives as a gen_statem cast.
+%%------------------------------------------------------------------
+
+liveness_tick_emits_probe_call_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {Pid, _FakePeer, _PeerNodeId} = start_connected_link(),
+         %% Drive the tick.
+         Pid ! liveness_tick,
+         %% A CALL frame for `_macula.ping' must hit the test
+         %% mailbox as a send_frame cast.
+         CallId = receive
+             {'$gen_cast', {send_frame,
+                            #{frame_type := call,
+                              procedure  := <<"_macula.ping">>,
+                              call_id    := Id}}} -> Id
+         after 1_000 ->
+             erlang:error(no_probe_call_emitted)
+         end,
+         ?assertEqual(16, byte_size(CallId)),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+liveness_probe_reply_clears_outstanding_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {Pid, FakePeer, PeerNodeId} = start_connected_link(),
+         Pid ! liveness_tick,
+         CallId = receive
+             {'$gen_cast', {send_frame, #{frame_type := call,
+                                          call_id    := Id}}} -> Id
+         after 1_000 -> erlang:error(no_probe_call_emitted)
+         end,
+         %% Synthesise an ERROR reply (`unknown_next_peer' shape) for
+         %% the probe call_id — what a real station emits when it
+         %% has no handler for `_macula.ping'.
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type   => error,
+             call_id      => CallId,
+             code         => 16#01,
+             name         => unknown_next_peer,
+             responded_by => PeerNodeId
+         }},
+         %% Drive another tick — outstanding must have been cleared
+         %% (else this would be miss #1 → miss #2 → close).
+         Pid ! liveness_tick,
+         %% Should see a fresh probe go out, not a close.
+         receive
+             {'$gen_cast', {send_frame, #{frame_type := call,
+                                          procedure  := <<"_macula.ping">>}}} ->
+                 ok;
+             {'$gen_statem', _, {close, _}} ->
+                 erlang:error(unexpected_close_after_reply)
+         after 1_000 ->
+             erlang:error(no_second_probe)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+liveness_consecutive_misses_close_peer_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {Pid, _FakePeer, _PeerNodeId} = start_connected_link(),
+         %% Tick #1: outstanding=undefined → sends probe, sets outstanding.
+         Pid ! liveness_tick,
+         _ = consume_probe(Pid),
+         %% Tick #2: outstanding set (no reply received) → miss=1, then
+         %% send another probe (still under ?LIVENESS_MAX_MISSES=2).
+         Pid ! liveness_tick,
+         _ = consume_probe(Pid),
+         %% Tick #3: outstanding set again, miss=2 → triggers close.
+         Pid ! liveness_tick,
+         %% We expect a `{close, app_liveness_lost}' cast to our
+         %% FakePeer (the test pid).
+         receive
+             {'$gen_statem', _, {close, app_liveness_lost}} -> ok;
+             {'$gen_cast',   {close, app_liveness_lost}}    -> ok
+         after 1_000 ->
+             erlang:error(no_close_after_misses)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+start_connected_link() ->
+    Identity = macula_identity:generate(),
+    {ok, Pid} = macula_station_link:start_link(#{
+        seed     => #{host => <<"127.0.0.1">>, port => 1},
+        identity => Identity
+    }),
+    FakePeer = self(),
+    PeerNodeId = macula_identity:public(macula_identity:generate()),
+    _ = sys:replace_state(Pid, fun(S) ->
+        S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+        setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+    end),
+    {Pid, FakePeer, PeerNodeId}.
+
+consume_probe(_Pid) ->
+    receive
+        {'$gen_cast', {send_frame, #{frame_type := call,
+                                     procedure  := <<"_macula.ping">>,
+                                     call_id    := Id}}} -> Id
+    after 1_000 ->
+        erlang:error(no_probe_call_emitted)
+    end.

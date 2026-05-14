@@ -143,11 +143,22 @@ absorb_peer_info_populates_fields(Ctx) ->
     Realm = crypto:strong_rand_bytes(32),
     {ClientPid, ServerPid, _, Listener} = handshake_pair(Ctx, [{client_realms, [Realm]}]),
     expect_message({macula_peering, connected, ServerPid, '_'}, 5_000),
-    %% Inspect server-side data via sys:get_state. peer_realms is the
-    %% 14th element (record tag is element(1)). See macula_peering_conn.erl.
+    %% Inspect server-side data via sys:get_state. Search the tuple
+    %% for the peer_realms slot by shape rather than a hard-coded
+    %% offset — the #data record has grown (dht_recipient,
+    %% pubsub_recipient, timing_enabled, peer_capabilities ...) so a
+    %% fixed index ages badly. peer_realms is a *list* (and the only
+    %% list-of-binaries slot in the record), so structural match is
+    %% safe.
     {connected, Data} = sys:get_state(ServerPid, 1_000),
-    ?assertEqual([Realm], element(14, Data)),
+    ?assert(tuple_has_list(Data, [Realm])),
     cleanup_pair(ClientPid, ServerPid, Listener).
+
+%% True iff any element of `Tuple' equals `Expected'.
+tuple_has_list(Tuple, Expected) when is_tuple(Tuple) ->
+    lists:any(
+      fun(I) -> element(I, Tuple) =:= Expected end,
+      lists:seq(1, tuple_size(Tuple))).
 
 close_drains_then_disconnects(Ctx) ->
     {ClientPid, ServerPid, _, Listener} = handshake_pair(Ctx, []),

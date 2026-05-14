@@ -102,10 +102,14 @@
     target           :: undefined | connect_opts(),
     quic_conn        :: undefined | reference(),
     quic_stream      :: undefined | reference(),
-    peer_node_id     :: undefined | macula_identity:pubkey(),
-    peer_station_id  :: undefined | macula_identity:pubkey(),
-    peer_realms      :: [macula_identity:pubkey()],
-    buf              :: binary()
+    peer_node_id      :: undefined | macula_identity:pubkey(),
+    peer_station_id   :: undefined | macula_identity:pubkey(),
+    peer_realms       :: [macula_identity:pubkey()],
+    %% Counterpart's capabilities bitmask as carried in CONNECT
+    %% (server-side absorb) or HELLO (client-side absorb). Captured
+    %% in `absorb_peer_info/2'. Stays `undefined' until handshake.
+    peer_capabilities :: undefined | non_neg_integer(),
+    buf               :: binary()
 }).
 
 -define(DRAIN_TIMEOUT_MS, 5_000).
@@ -356,9 +360,10 @@ on_hello_verified({error, R}, _Frame, Data) ->
 
 absorb_peer_info(Frame, Data) ->
     Data#data{
-        peer_node_id    = maps:get(node_id, Frame),
-        peer_station_id = maps:get(station_id, Frame),
-        peer_realms     = maps:get(realms, Frame, [])
+        peer_node_id      = maps:get(node_id, Frame),
+        peer_station_id   = maps:get(station_id, Frame),
+        peer_realms       = maps:get(realms, Frame, []),
+        peer_capabilities = maps:get(capabilities, Frame, 0)
     }.
 
 transition_to_connected(Data) ->
@@ -393,6 +398,9 @@ connected(cast, {close, Reason}, Data) ->
 connected(cast, {send_frame, Frame}, Data) ->
     _ = send_application_frame(Frame, Data),
     {keep_state, Data};
+connected({call, From}, peer_capabilities, Data) ->
+    {keep_state, Data,
+     [{reply, From, {ok, Data#data.peer_capabilities}}]};
 connected(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, connected, Data).
 
@@ -554,6 +562,18 @@ classify(publish)        -> pubsub;
 classify(event)          -> pubsub;
 classify(_)              -> other.
 
+drop_unexpected({call, From}, Event, State, Data) ->
+    %% Synchronous call into a state that doesn't handle it. Reply
+    %% so the caller fails fast (e.g. `peer_capabilities/1' before
+    %% handshake completes) instead of blocking until its own
+    %% timeout — which would surface as `{timeout, ...}' to user
+    %% code and require defensive try/catch wrappers everywhere.
+    macula_diagnostics:event(<<"_macula.peering.unexpected">>, #{
+        state      => State,
+        event_type => call,
+        event      => safe_event(Event)
+    }),
+    {keep_state, Data, [{reply, From, not_connected}]};
 drop_unexpected(EventType, Event, State, Data) ->
     macula_diagnostics:event(<<"_macula.peering.unexpected">>, #{
         state      => State,

@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.5.0] - 2026-05-14
+
+### Added
+
+- **App-level liveness probe in `macula_station_link`.** Periodic
+  `_macula.ping' CALL every 30s (`?LIVENESS_INTERVAL_MS') with reply
+  tracking via `liveness_outstanding'. After
+  `?LIVENESS_MAX_MISSES` (=2) consecutive misses, the link issues
+  `macula_peering:close(PeerPid, app_liveness_lost)` which surfaces
+  through the normal `disconnected` notify path → station_link
+  stops → pool respawns with a fresh QUIC handshake.
+
+  Closes the zombie-connection window that previously lasted up to
+  the Quinn `max_idle_timeout' (5 minutes) — empirically observed
+  going much longer in production because the server's Quinn keeps
+  ACKing keep-alive PINGs at the transport layer even after the
+  application-level peer has been wiped (e.g. station container
+  restart). Reply matching consumes the call_id BEFORE the user-
+  pending CALL machinery, so probes do not show up in caller-visible
+  RESULT / ERROR streams.
+
+- **`macula_peering:peer_capabilities/1` getter** and
+  **`?CAP_STATION` capability bit** (1 bsl 0). Peers can now
+  introspect the counterpart's capability bitmask post-handshake,
+  letting relay stations tell direct daemon ADVERTISEs from
+  station-to-station gossip relays at frame-dispatch time. Daemons
+  leave the bit unset; relay stations OR it in. Existing peers
+  default to 0 (treated as daemons) — full BC.
+
+  Synchronous call into a non-`connected` state now replies
+  `not_connected` immediately rather than blocking until the
+  caller's own gen_statem timeout. Surfaced via the existing
+  `drop_unexpected/4` clause; one-line behavioural improvement.
+
+### Internal
+
+- `#data{peer_capabilities :: undefined | non_neg_integer()}` field
+  on `macula_peering_conn`. Populated in `absorb_peer_info/2' from
+  the CONNECT / HELLO frame. No wire change (the field was already
+  on the frame schema; we just record it).
+
+- Fixed `macula_peering_handshake_tests`'
+  `absorb_peer_info_populates_fields` test — was asserting
+  `element(14, Data) =:= [Realm]` (a hardcoded offset) but the
+  #data record grew several fields since the test was written, so
+  it had been silently picking up the `quic_stream' reference. Now
+  uses a structural search across all elements; resilient to
+  future record additions.
+
+---
+
 ## [4.4.9] - 2026-05-14
 
 ### Added

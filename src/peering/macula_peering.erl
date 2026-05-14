@@ -32,8 +32,16 @@
     connect/1,
     accept/2,
     close/1, close/2,
-    send_frame/2
+    send_frame/2,
+    peer_capabilities/1
 ]).
+
+%% Capability bit asserting the peer is a relay-station (i.e. it
+%% advertises on behalf of others via gossip). Daemons MUST leave this
+%% unset. Stations set this on outbound dial and inbound accept so the
+%% counterpart can tell direct daemon ADVERTISEs apart from station
+%% gossip relays.
+-define(CAP_STATION, 16#0000_0000_0000_0001).
 
 -type opts() :: macula_peering_conn:opts().
 -export_type([opts/0]).
@@ -80,3 +88,21 @@ close(Pid, Reason) ->
 -spec send_frame(pid(), macula_frame:frame()) -> ok.
 send_frame(Pid, Frame) when is_map(Frame) ->
     gen_statem:cast(Pid, {send_frame, Frame}).
+
+%% @doc Read the peer's capabilities bitmask as observed in their
+%% CONNECT/HELLO frame. Returns `{ok, NegotiatedCaps}' once the
+%% handshake has completed and `{error, not_connected}' otherwise.
+%%
+%% Used by relays to tell direct daemon ADVERTISEs from station-to-
+%% station gossip relays at frame-dispatch time (see `?CAP_STATION').
+%% Daemons send `0'; relay stations OR-in `?CAP_STATION'. Pre-version
+%% peers that don't set the bit are treated as daemons by callers,
+%% which matches their actual role.
+-spec peer_capabilities(pid()) ->
+    {ok, non_neg_integer()} | {error, not_connected}.
+peer_capabilities(Pid) when is_pid(Pid) ->
+    try gen_statem:call(Pid, peer_capabilities, 1_000) of
+        {ok, _Caps} = Ok -> Ok;
+        not_connected   -> {error, not_connected}
+    catch _:_ -> {error, not_connected}
+    end.

@@ -130,6 +130,21 @@
 -define(DEFAULT_DEADLINE_MS, 5_000).
 -define(CONNECT_RETRY_BACKOFF_MS, 1_000).
 
+%% App-level liveness probe. Sends a tiny CALL (`_macula.ping' on the
+%% DHT realm, no handler expected — station replies with
+%% `unknown_next_peer') every `?LIVENESS_INTERVAL_MS' and tracks the
+%% outstanding probe's call_id. On `?LIVENESS_MAX_MISSES' consecutive
+%% misses (i.e. no reply received within the next tick), close
+%% `peer_pid' to force the supervisor / pool layer to respawn a fresh
+%% link. Closes the "QUIC layer keeps connection alive but server
+%% application has no record of us" zombie window — empirically
+%% observed at 14+ minutes after a server-side container restart
+%% (idle_timeout=300s never fires because the server's Quinn still
+%% ACKs our keep-alive PINGs at the transport layer).
+-define(LIVENESS_INTERVAL_MS, 30_000).
+-define(LIVENESS_MAX_MISSES,  2).
+-define(LIVENESS_PROCEDURE,   <<"_macula.ping">>).
+
 -record(state, {
     seed             :: #{host := binary() | string(),
                           port := inet:port_number()},
@@ -185,7 +200,15 @@
     client_streams = #{} :: #{macula_frame:stream_id() =>
                               {pid(), reference()}},
     server_streams = #{} :: #{macula_frame:stream_id() =>
-                              {pid(), reference()}}
+                              {pid(), reference()}},
+    %% App-level liveness state. `liveness_timer' is the next-tick
+    %% reference (or undefined when not armed). `liveness_outstanding'
+    %% holds the call_id of an in-flight probe (or undefined when no
+    %% probe is awaiting reply). `liveness_misses' is the consecutive-
+    %% miss count; reaches `?LIVENESS_MAX_MISSES' → close peer_pid.
+    liveness_timer        :: undefined | reference(),
+    liveness_outstanding  :: undefined | <<_:128>>,
+    liveness_misses = 0   :: non_neg_integer()
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
@@ -693,7 +716,9 @@ handle_info(attempt_connect, #state{seed = Seed, identity = Id,
 
 handle_info({macula_peering, connected, Pid, PeerNodeId},
             #state{peer_pid = Pid} = S) ->
-    NewS = S#state{peer_node_id = PeerNodeId},
+    NewS = arm_liveness(S#state{peer_node_id = PeerNodeId,
+                                liveness_misses = 0,
+                                liveness_outstanding = undefined}),
     drain_pending_subscribes(NewS),
     drain_pending_advertises(NewS),
     drain_pending_stream_advertises(NewS),
@@ -713,7 +738,7 @@ handle_info({macula_peering, frame, Pid, Frame, _RecvAtUs},
 
 handle_info({macula_peering, disconnected, Pid, Reason},
             #state{peer_pid = Pid} = S) ->
-    NewS = fail_all_pending({disconnected, Reason}, S),
+    NewS = fail_all_pending({disconnected, Reason}, cancel_liveness(S)),
     %% Stop normally — the supervisor (or owning gen_server) decides
     %% whether to restart us.
     {stop, normal, NewS#state{peer_pid = undefined,
@@ -722,8 +747,11 @@ handle_info({macula_peering, disconnected, Pid, Reason},
 handle_info({call_timeout, CallId}, #state{pending = P} = S) ->
     on_timeout(maps:take(CallId, P), S);
 
+handle_info(liveness_tick, S) ->
+    {noreply, on_liveness_tick(S)};
+
 handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid} = S) ->
-    NewS = fail_all_pending({peering_exit, Reason}, S),
+    NewS = fail_all_pending({peering_exit, Reason}, cancel_liveness(S)),
     {stop, normal, NewS#state{peer_pid = undefined,
                               peer_node_id = undefined}};
 
@@ -773,14 +801,22 @@ after_connect_request({error, Reason}, S) ->
 %% RESULT
 on_frame(#{frame_type := result, call_id := CallId, payload := Payload},
          #state{pending = P} = S) ->
-    deliver_pending(maps:take(CallId, P), {ok, Payload}, S);
+    case maybe_clear_liveness(CallId, S) of
+        {true, NewS}  -> NewS;
+        {false, NewS} ->
+            deliver_pending(maps:take(CallId, P), {ok, Payload}, NewS)
+    end;
 %% ERROR
 on_frame(#{frame_type := error, call_id := CallId} = Frame,
          #state{pending = P} = S) ->
     Code = maps:get(code, Frame, 0),
     Name = maps:get(name, Frame, undefined),
-    deliver_pending(maps:take(CallId, P),
-                    {error, {call_error, Code, Name}}, S);
+    case maybe_clear_liveness(CallId, S) of
+        {true, NewS}  -> NewS;
+        {false, NewS} ->
+            deliver_pending(maps:take(CallId, P),
+                            {error, {call_error, Code, Name}}, NewS)
+    end;
 %% EVENT — pubsub delivery. Fan out to every subscriber whose
 %% (realm, topic) matches. Stations may push EVENTs without a prior
 %% SUBSCRIBE on this connection (e.g. wildcard / catalog channels);
@@ -853,6 +889,99 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     maps:foreach(AbortFun, SS),
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
             client_streams = #{}, server_streams = #{}}.
+
+%%-------------------------------------------------------------------
+%% Liveness probe — bounded zombie-connection detection
+%%-------------------------------------------------------------------
+%% On handshake-complete we arm a periodic tick. Each tick:
+%%   1. If a prior probe is still outstanding (no reply received in the
+%%      interval), increment misses. If misses >= MAX, close peer_pid
+%%      via macula_peering — emits `disconnected', station_link stops,
+%%      pool respawns.
+%%   2. Otherwise (or after counting the miss), send a fresh probe
+%%      (CALL with procedure `_macula.ping' on the DHT realm). The
+%%      station has no such handler, so it replies with an `error'
+%%      frame (`unknown_next_peer'). Either response shape clears the
+%%      outstanding slot via `maybe_clear_liveness/2'.
+%%   3. Re-arm the timer.
+arm_liveness(S) ->
+    cancel_liveness_timer(S),
+    Ref = erlang:send_after(?LIVENESS_INTERVAL_MS, self(), liveness_tick),
+    S#state{liveness_timer = Ref}.
+
+cancel_liveness(S) ->
+    cancel_liveness_timer(S#state{liveness_outstanding = undefined,
+                                  liveness_misses = 0}).
+
+cancel_liveness_timer(#state{liveness_timer = undefined} = S) ->
+    S;
+cancel_liveness_timer(#state{liveness_timer = Ref} = S) when is_reference(Ref) ->
+    _ = erlang:cancel_timer(Ref, [{async, true}, {info, false}]),
+    S#state{liveness_timer = undefined}.
+
+%% Called on every inbound RESULT / ERROR. If the call_id matches the
+%% outstanding liveness probe, reset miss counter; tells the caller
+%% (on_frame) not to deliver to user-pending logic.
+maybe_clear_liveness(CallId, #state{liveness_outstanding = CallId} = S)
+        when CallId =/= undefined ->
+    {true, S#state{liveness_outstanding = undefined,
+                   liveness_misses = 0}};
+maybe_clear_liveness(_CallId, S) ->
+    {false, S}.
+
+on_liveness_tick(#state{peer_pid = undefined} = S) ->
+    %% Not connected — don't probe, don't re-arm.
+    cancel_liveness(S);
+on_liveness_tick(#state{peer_node_id = undefined} = S) ->
+    %% Mid-handshake — defer probing until `connected' message
+    %% re-arms us.
+    arm_liveness(S);
+on_liveness_tick(S0) ->
+    S1 = on_outstanding_check(S0#state.liveness_outstanding, S0),
+    case is_pid(S1#state.peer_pid) of
+        true  -> arm_liveness(send_probe(S1));
+        false -> S1
+    end.
+
+on_outstanding_check(undefined, S) ->
+    %% No prior probe pending; nothing to count.
+    S;
+on_outstanding_check(_CallId, S) ->
+    %% Prior probe never got a reply within the tick interval.
+    Misses = S#state.liveness_misses + 1,
+    case Misses >= ?LIVENESS_MAX_MISSES of
+        true  -> trigger_zombie_close(S#state{liveness_misses = Misses});
+        false -> S#state{liveness_misses = Misses,
+                         liveness_outstanding = undefined}
+    end.
+
+trigger_zombie_close(#state{peer_pid = Pid} = S) when is_pid(Pid) ->
+    macula_diagnostics:event(<<"_macula.station_link.liveness_lost">>, #{
+        seed   => S#state.seed,
+        misses => S#state.liveness_misses
+    }),
+    catch macula_peering:close(Pid, app_liveness_lost),
+    S#state{liveness_outstanding = undefined};
+trigger_zombie_close(S) ->
+    S.
+
+send_probe(#state{peer_pid = Pid, identity = Id} = S) when is_pid(Pid) ->
+    CallId = crypto:strong_rand_bytes(16),
+    Caller = macula_identity:public(Id),
+    DeadlineMs = erlang:system_time(millisecond) + ?LIVENESS_INTERVAL_MS,
+    Frame = macula_frame:call(#{
+        call_id     => CallId,
+        procedure   => ?LIVENESS_PROCEDURE,
+        realm       => ?DHT_REALM,
+        payload     => #{},
+        deadline_ms => DeadlineMs,
+        caller      => Caller
+    }),
+    Signed = macula_frame:sign(Frame, Id),
+    catch macula_peering:send_frame(Pid, Signed),
+    S#state{liveness_outstanding = CallId};
+send_probe(S) ->
+    S.
 
 %%-------------------------------------------------------------------
 %% Subscription helpers
