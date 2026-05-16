@@ -396,7 +396,14 @@ connected(cast, {close, Reason}, Data) ->
     _ = send_goodbye(Data#data.quic_stream, Reason, Data),
     {next_state, draining, Data};
 connected(cast, {send_frame, Frame}, Data) ->
-    _ = send_application_frame(Frame, Data),
+    %% Coalesce: drain any other queued `{send_frame, _}' casts and
+    %% emit them in a single NIF write. Cuts per-NIF overhead +
+    %% gen_statem reduction-counter cost when many EVENT/PUBLISH
+    %% frames burst together (pubsub flood, DHT batch put). The
+    %% Quinn stream still handles MTU-level packetisation; this is
+    %% purely an Erlang-side amortization.
+    Frames = drain_send_frames([Frame]),
+    _ = send_application_frames(Frames, Data),
     {keep_state, Data};
 connected({call, From}, peer_capabilities, Data) ->
     {keep_state, Data,
@@ -465,6 +472,36 @@ send_application_frame(_Frame, #data{quic_stream = undefined}) ->
 send_application_frame(Frame, #data{quic_stream = Stream, identity = Id}) ->
     Signed = ensure_signed(Frame, Id),
     macula_quic:send(Stream, macula_frame:encode(Signed)).
+
+%% Encode N frames into one iolist, sign each, push as a single NIF
+%% call. Skips work entirely when the stream isn't yet up.
+send_application_frames(_Frames, #data{quic_stream = undefined}) ->
+    ok;
+send_application_frames([Frame], Data) ->
+    %% Single-frame fast path — avoid the iolist accumulation cost.
+    send_application_frame(Frame, Data);
+send_application_frames(Frames, #data{quic_stream = Stream, identity = Id}) ->
+    Encoded = [macula_frame:encode(ensure_signed(F, Id)) || F <- Frames],
+    macula_quic:send(Stream, Encoded).
+
+%% Drain queued send_frame casts. Capped at ?MAX_BATCH frames per
+%% pass so a runaway producer can't park us in the receive forever.
+%% A `cast' arrives in the gen_statem mailbox as
+%% `{'$gen_cast', {send_frame, F}}'. We pattern-match that exact
+%% shape so unrelated mailbox traffic stays untouched.
+-define(MAX_BATCH, 64).
+drain_send_frames(Acc) ->
+    drain_send_frames(Acc, ?MAX_BATCH - 1).
+
+drain_send_frames(Acc, 0) ->
+    lists:reverse(Acc);
+drain_send_frames(Acc, N) ->
+    receive
+        {'$gen_cast', {send_frame, F}} ->
+            drain_send_frames([F | Acc], N - 1)
+    after 0 ->
+        lists:reverse(Acc)
+    end.
 
 ensure_signed(#{signature := _} = Frame, _Id) -> Frame;
 ensure_signed(Frame, Id) -> macula_frame:sign(Frame, Id).

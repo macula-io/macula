@@ -726,7 +726,7 @@ handle_info({macula_peering, connected, Pid, PeerNodeId},
 
 handle_info({macula_peering, frame, Pid, Frame},
             #state{peer_pid = Pid} = S) ->
-    {noreply, on_frame(Frame, S)};
+    {noreply, fold_frames(drain_frames(Pid, [Frame]), S)};
 
 %% 5-tuple variant: peering_conn opted into `timing_enabled', appended
 %% the monotonic-microsecond timestamp captured the instant the frame
@@ -734,7 +734,7 @@ handle_info({macula_peering, frame, Pid, Frame},
 %% telemetry is station-side); kept for forward compatibility.
 handle_info({macula_peering, frame, Pid, Frame, _RecvAtUs},
             #state{peer_pid = Pid} = S) ->
-    {noreply, on_frame(Frame, S)};
+    {noreply, fold_frames(drain_frames(Pid, [Frame]), S)};
 
 handle_info({macula_peering, disconnected, Pid, Reason},
             #state{peer_pid = Pid} = S) ->
@@ -764,6 +764,31 @@ handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
 
 handle_info(_Other, S) ->
     {noreply, S}.
+
+%% Drain consecutive frame messages from the peering process so they
+%% process in one handle_info pass — fewer context switches, fewer
+%% reduction-counter resets, better data-cache locality across the
+%% verify/dispatch path. Frames remain in arrival order; we cap the
+%% batch so a continuous burst can't park us indefinitely.
+-define(MAX_FRAME_BATCH, 64).
+
+drain_frames(Pid, Acc) ->
+    drain_frames(Pid, Acc, ?MAX_FRAME_BATCH - 1).
+
+drain_frames(_Pid, Acc, 0) ->
+    lists:reverse(Acc);
+drain_frames(Pid, Acc, N) ->
+    receive
+        {macula_peering, frame, Pid, F} ->
+            drain_frames(Pid, [F | Acc], N - 1);
+        {macula_peering, frame, Pid, F, _RecvAtUs} ->
+            drain_frames(Pid, [F | Acc], N - 1)
+    after 0 ->
+        lists:reverse(Acc)
+    end.
+
+fold_frames(Frames, S) ->
+    lists:foldl(fun on_frame/2, S, Frames).
 
 terminate(_Reason, #state{peer_pid = Pid}) when is_pid(Pid) ->
     catch macula_peering:close(Pid, client_stop),

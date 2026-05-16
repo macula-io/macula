@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.7.0] - 2026-05-16
+
+### Performance
+
+- **Per-link send-frame batching in `macula_peering_conn`.** The
+  `connected` state's `cast {send_frame, _}` handler now drains
+  all queued `send_frame` casts (cap 64 per pass) and emits them
+  in a single `macula_quic:send/2` NIF call. Cuts per-NIF overhead
+  + gen_statem reduction-counter cost when many EVENT/PUBLISH
+  frames burst together (pubsub flood, DHT batch put). The Quinn
+  stream still handles MTU-level packetisation; this is purely an
+  Erlang-side amortization. Single-frame fast path preserved.
+
+- **SDK subscriber-side bulk fan-out in `macula_station_link`.**
+  `handle_info({macula_peering, frame, ...})` now drains
+  consecutive frame messages from the gen_server mailbox (cap 64
+  per pass) and folds them through `on_frame/2` in arrival order.
+  Removes per-frame context-switch + reduction-reset overhead on
+  bursty inbound traffic.
+
+- **Quinn flow-control window defaults bumped** (in
+  `native/macula_quic/src/config.rs`):
+  - `stream_receive_window`: default 1.25 MB → **16 MB**
+  - `receive_window`: default 1.25 MB × streams → **64 MB**
+  - `send_window`: default 8 MB → **64 MB**
+
+  Macula peering uses one long-lived bidi stream per connection
+  over which we multiplex pubsub EVENTs, CALL/REPLY, DHT records,
+  blob streams. With many small frames in flight and the receiver
+  doing per-frame Ed25519 verify (~200µs), the default 1.25 MB
+  window exhausts long before the receiver acks consumed bytes —
+  surfaces as receiver-bound throughput in pubsub flood torture.
+  16 MB stream window absorbs ~100k 150-byte EVENT frames before
+  backpressure. Applies symmetrically to client + server transport
+  configs.
+
+---
+
 ## [4.6.0] - 2026-05-15
 
 ### Changed

@@ -39,6 +39,7 @@ pub fn build_server_config(
     transport.keep_alive_interval(Some(Duration::from_millis(keep_alive_ms)));
     transport.max_concurrent_bidi_streams(bidi_streams.into());
     transport.max_concurrent_uni_streams(uni_streams.into());
+    apply_flow_control_defaults(&mut transport);
 
     let mut config =
         ServerConfig::with_crypto(Arc::new(
@@ -48,6 +49,25 @@ pub fn build_server_config(
     config.transport_config(Arc::new(transport));
 
     Ok(config)
+}
+
+/// Bump Quinn's per-stream and per-connection flow-control windows
+/// well above the conservative defaults (1.25MB stream, 1.25MB *
+/// streams connection). Macula peering uses ONE long-lived bidi
+/// stream per connection over which we multiplex pubsub EVENTs,
+/// CALL/REPLY, DHT records, blob streams. With many small frames
+/// in flight and the receiver doing per-frame verify (~200µs
+/// Ed25519), the default 1.25MB window exhausts long before the
+/// receiver acks consumed bytes — surfaces as receiver-bound
+/// throughput in pubsub flood torture.
+///
+/// 16 MB stream window absorbs ~100k 150-byte EVENT frames before
+/// backpressure; 64 MB connection window scales with our typical
+/// 1-2 streams per peering. send_window matches.
+fn apply_flow_control_defaults(transport: &mut TransportConfig) {
+    transport.stream_receive_window(16u32.checked_mul(1024 * 1024).unwrap().into());
+    transport.receive_window(64u32.checked_mul(1024 * 1024).unwrap().into());
+    transport.send_window(64u64.checked_mul(1024 * 1024).unwrap());
 }
 
 /// Build a Quinn ClientConfig.
@@ -95,6 +115,7 @@ pub fn build_client_config(
             .map_err(|e| format!("idle_timeout: {}", e))?,
     ));
     transport.keep_alive_interval(Some(Duration::from_millis(keep_alive_ms)));
+    apply_flow_control_defaults(&mut transport);
 
     let mut config = ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
