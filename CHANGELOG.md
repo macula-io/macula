@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.4.10] - 2026-05-17
+
+### Fixed
+
+- **`macula_record_cbor`: encode + decode CBOR major type 1 (negative
+  integers).** Both `encode/1` (line 53) and `decode_value/3` lacked
+  clauses for signed integers; any payload carrying a negative numeric
+  value crashed the encoder with `function_clause`, taking the
+  peering connection down with it. The new clauses mirror the
+  positive-integer path across the full int64 range.
+- **`macula_frame:to_wire/1` + `wire_key/1`: accept integers of any
+  sign.** `to_wire` only passed non-negative integers through; negatives
+  fell into the catch-all and reached the encoder unchanged (then
+  crashed there). `wire_key` had no clause for integer keys at all.
+  Both now accept integers, enabling payloads whose nested maps are
+  indexed by integer (e.g. per-wall sub-maps in mpong game state).
+
+### Test coverage
+
+- `macula_record_cbor_tests`: negative-int round-trip across the mirror
+  of the existing uint range, plus an int-key map round-trip.
+
+---
+
 ## [4.4.9] - 2026-05-14
 
 ### Added
