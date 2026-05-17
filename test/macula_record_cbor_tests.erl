@@ -12,6 +12,21 @@ uint_roundtrip_test_() ->
      || N <- [0, 1, 23, 24, 100, 255, 256, 65535, 65536,
               16#FFFFFFFF, 16#FFFFFFFF + 1, 16#FFFFFFFFFFFFFFFF]].
 
+neg_int_roundtrip_test_() ->
+    %% Boundaries match the encoder's MT-1 clause: the smallest legal
+    %% negative is `-(MAX_UINT64 + 1)' (encoded as head(1, MAX_UINT64)).
+    [?_assertEqual(N, roundtrip(N))
+     || N <- [-1, -24, -25, -100, -255, -256, -65535, -65536,
+              -16#FFFFFFFF, -16#FFFFFFFF - 1, -16#FFFFFFFFFFFFFFFF - 1]].
+
+int_key_roundtrip_test() ->
+    %% Map indexed by integer keys (both signs). Required for payloads
+    %% like mpong's per-wall sub-maps. Values stay round-trippable types
+    %% (ints, binaries, `{text, _}') — atoms encode as text strings here
+    %% and are re-atomized higher up by macula_frame:from_wire/1.
+    M = #{0 => 100, 1 => -50, -1 => 42, 7 => {text, <<"seven">>}},
+    ?assertEqual(M, roundtrip(M)).
+
 bytes_roundtrip_test() ->
     Bin = <<1, 2, 3, 4, 5>>,
     ?assertEqual(Bin, roundtrip(Bin)).

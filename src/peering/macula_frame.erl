@@ -1596,14 +1596,19 @@ to_wire(A) when is_atom(A) ->
     {text, atom_to_binary(A, utf8)};
 to_wire({text, B}) when is_binary(B) -> {text, B};
 to_wire(B) when is_binary(B) -> B;
-to_wire(I) when is_integer(I), I >= 0 -> I;
+to_wire(I) when is_integer(I) -> I;
 to_wire(F) when is_float(F) ->
     {text, float_to_binary(F, [{decimals, 6}, compact])};
 to_wire(Other) -> Other.
 
 wire_key(A) when is_atom(A)   -> {text, atom_to_binary(A, utf8)};
 wire_key({text, B})           -> {text, B};
-wire_key(B) when is_binary(B) -> {text, B}.
+wire_key(B) when is_binary(B) -> {text, B};
+%% Integer keys (any sign) pass through to macula_record_cbor:encode/1
+%% which renders them as major 0 or major 1 — both are valid CBOR map
+%% keys. Required for payloads whose nested maps are indexed by integer
+%% (e.g. per-wall sub-maps in mpong game state).
+wire_key(I) when is_integer(I) -> I.
 
 %% @private Walk the decoded CBOR term and restore atom keys/values
 %% via `binary_to_existing_atom'. Records (`record' / `records'
