@@ -14,6 +14,7 @@
 %% Internal value representation:
 %% <ul>
 %%   <li>`non_neg_integer()' — uint (major 0)</li>
+%%   <li>`neg_integer()' — negative integer (major 1)</li>
 %%   <li>`binary()' — byte string (major 2)</li>
 %%   <li>`{text, binary()}' — UTF-8 text string (major 3)</li>
 %%   <li>`atom()' — UTF-8 text string (major 3) via
@@ -35,7 +36,7 @@
 -export_type([value/0]).
 
 -type value() ::
-    non_neg_integer()
+    integer()
   | binary()
   | {text, binary()}
   | [value()]
@@ -52,6 +53,11 @@
 -spec encode(value()) -> binary().
 encode(N) when is_integer(N), N >= 0, N =< ?MAX_UINT64 ->
     head(0, N);
+%% Negative integers — CBOR major type 1. The encoded count is `-1 - N'
+%% (so -1 -> head(1, 0), -11 -> head(1, 10)). Bounded the same as the
+%% positive branch but mirrored on the negative side.
+encode(N) when is_integer(N), N < 0, N >= -(?MAX_UINT64 + 1) ->
+    head(1, -1 - N);
 encode({text, B}) when is_binary(B) ->
     <<(head(3, byte_size(B)))/binary, B/binary>>;
 encode(B) when is_binary(B) ->
@@ -120,6 +126,10 @@ decode_count(27, <<N:64, R/binary>>) -> {N, R}.
 
 decode_value(0, N, R) ->
     {N, R};
+%% Negative integer (major 1) — the encoded count `N' represents the
+%% integer `-1 - N'.
+decode_value(1, N, R) ->
+    {-1 - N, R};
 decode_value(2, Len, R) ->
     <<B:Len/binary, Rest/binary>> = R,
     {B, Rest};
