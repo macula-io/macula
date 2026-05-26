@@ -234,4 +234,4 @@ System topics (any leading-underscore prefix) bypass canonical validation: `_mes
 
 - `docs/guides/PUBSUB_GUIDE.md` — pub/sub usage, payload conventions
 - `docs/guides/RPC_GUIDE.md` — RPC usage, error handling
-- `hecate-social/hecate-agents/skills/MESH_TOPIC_TIERING.md` — Hecate-specific guidance, audit history, anti-patterns from real bugs
+- `hecate-social/hecate-corpus/skills/MESH_TOPIC_TIERING.md` — Hecate-specific guidance, audit history, anti-patterns from real bugs

@@ -212,7 +212,7 @@ Topic = macula_topic:app_fact(Realm, <<"beam-campus">>, <<"hecate">>,
 ```
 
 If the topic is realm- or org-owned, use the corresponding tier builder
-instead. See `hecate-social/hecate-agents/skills/MESH_TOPIC_TIERING.md`
+instead. See `hecate-social/hecate-corpus/skills/MESH_TOPIC_TIERING.md`
 for the decision tree and tier-classification policy.
 
 ### Tests
