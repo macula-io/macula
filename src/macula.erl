@@ -27,7 +27,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 %% Connection
--export([connect/2, close/1, child_spec/3, status/1]).
+-export([connect/2, close/1, child_spec/3, status/1, links/1]).
 
 %% Pub/Sub — realm-per-call against a V2 pool
 -export([subscribe/4, subscribe/5,
@@ -149,6 +149,15 @@ child_spec(Id, Seeds, Opts) ->
 -spec status(pool()) -> {ok, macula_client:status()}.
 status(Pool) when is_pid(Pool) ->
     macula_client:status(Pool).
+
+%% @doc Per-link snapshot of a V2 pool — one entry per spawned link
+%% with its peer station `node_id' (pubkey), dial `host', `pid', and
+%% `connected' flag. Use this to resolve a specific station (by pubkey
+%% or hostname) to its link for targeted, per-station operations. See
+%% `macula_client:links/1' for the `link_info()' shape.
+-spec links(pool()) -> {ok, [macula_client:link_info()]}.
+links(Pool) when is_pid(Pool) ->
+    macula_client:links(Pool).
 
 %%%===================================================================
 %%% Pub/Sub — realm-per-call against a V2 pool

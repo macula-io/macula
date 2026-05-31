@@ -315,6 +315,56 @@ facade_status_delegates_test_() ->
      end}.
 
 %%------------------------------------------------------------------
+%% links/1 — per-link snapshot (node_id / host / pid / connected)
+%%------------------------------------------------------------------
+
+links_empty_pool_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         ?assertEqual({ok, []}, macula_client:links(Pool)),
+         ok = macula_client:close(Pool)
+     end}.
+
+links_one_entry_per_spawned_link_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([?SEED1, ?SEED2], #{}),
+         {ok, Links} = macula_client:links(Pool),
+         ?assertEqual(2, length(Links)),
+         %% Nothing is listening on port 1/2, so every link is stuck in
+         %% connect: unconnected, no peer node_id yet — but the dial host
+         %% is still resolvable from the seed.
+         [?assertEqual(false, maps:get(connected, L)) || L <- Links],
+         [?assertEqual(undefined, maps:get(node_id, L)) || L <- Links],
+         [?assertEqual(<<"127.0.0.1">>, maps:get(host, L)) || L <- Links],
+         [?assert(is_pid(maps:get(pid, L))) || L <- Links],
+         ok = macula_client:close(Pool)
+     end}.
+
+links_host_from_url_seed_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect(
+                        [<<"https://relay.example:4433">>], #{}),
+         {ok, [Link]} = macula_client:links(Pool),
+         ?assertEqual(<<"relay.example">>, maps:get(host, Link)),
+         ok = macula_client:close(Pool)
+     end}.
+
+facade_links_delegates_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([?SEED1], #{}),
+         ?assertEqual(macula_client:links(Pool), macula:links(Pool)),
+         ok = macula_client:close(Pool)
+     end}.
+
+%%------------------------------------------------------------------
 %% RPC fan-out — call/5, advertise/4, unadvertise/3
 %%------------------------------------------------------------------
 

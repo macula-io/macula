@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.8.0] - 2026-05-31
+
+### Added
+
+- **`macula:links/1` (and `macula_client:links/1`) — per-link pool
+  snapshot.** Returns one `link_info()` map per spawned link, carrying
+  `seed`, `host`, `pid`, `connected`, and the peer station's `node_id`
+  (pubkey; `undefined` until CONNECT/HELLO completes). `status/1` only
+  aggregates counts — this exposes the individual links so a caller can
+  resolve a specific station (by pubkey or hostname) to its link for
+  targeted, per-station operations.
+
+### Test coverage
+
+- `macula_client_tests`: empty pool → `[]`; one entry per spawned link
+  with host parsed from URL and map seeds; unconnected links report
+  `connected=false` / `node_id=undefined`.
+
+---
+
 ## [4.7.1] - 2026-05-17
 
 ### Fixed

@@ -50,7 +50,7 @@
 -module(macula_client).
 -behaviour(gen_server).
 
--export([connect/2, close/1, child_spec/3, status/1]).
+-export([connect/2, close/1, child_spec/3, status/1, links/1]).
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
@@ -61,7 +61,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--export_type([pool/0, opts/0, seed/0, status/0, handler/0, stream_handler/0]).
+-export_type([pool/0, opts/0, seed/0, status/0, link_info/0, handler/0, stream_handler/0]).
 
 -type pool() :: pid().
 
@@ -84,6 +84,17 @@
     failed_links  := non_neg_integer(),
     self_node_id  := macula_identity:pubkey(),
     subscriptions := non_neg_integer()
+}.
+%% Per-link view returned by `links/1'. One entry per configured seed
+%% that currently has a spawned link worker. `node_id' is the peer
+%% station's pubkey (`undefined' until CONNECT/HELLO completes);
+%% `host' is the dial host parsed from the seed.
+-type link_info() :: #{
+    seed      := seed(),
+    host      := binary() | undefined,
+    pid       := pid(),
+    connected := boolean(),
+    node_id   := macula_identity:pubkey() | undefined
 }.
 -type seed() :: binary() | string()
               | #{host := binary() | string(),
@@ -307,6 +318,19 @@ unadvertise_stream(Pool, Realm, Procedure)
 status(Pool) when is_pid(Pool) ->
     gen_server:call(Pool, status, 5_000).
 
+%% @doc Per-link snapshot of the pool — one `link_info()' per
+%% configured seed that currently has a spawned link worker. Unlike
+%% `status/1' (which only aggregates counts), this exposes each link's
+%% `node_id' (peer station pubkey), dial `host', `pid', and
+%% `connected' flag, so a caller can resolve a specific station (by
+%% pubkey or hostname) to its link and address it directly.
+%%
+%% One `is_connected/1' + `peer_node_id/1' probe per spawned link
+%% (each capped at 1s). Not for hot-loop polling.
+-spec links(pool()) -> {ok, [link_info()]}.
+links(Pool) when is_pid(Pool) ->
+    gen_server:call(Pool, links, 5_000).
+
 %% @doc Publish a frame to `replication_factor' currently-spawned
 %% links. Partial success = success. Realm is per-call (32 bytes).
 -spec publish(pool(), <<_:256>>, binary(), term(), map()) ->
@@ -470,6 +494,9 @@ handle_call(status, _From,
         subscriptions => map_size(Subs)
     },
     {reply, {ok, Status}, S};
+
+handle_call(links, _From, #state{links = Links} = S) ->
+    {reply, {ok, link_infos(Links)}, S};
 
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
@@ -718,6 +745,44 @@ bump(false, H, F) -> {H, F + 1}.
 
 link_healthy(Pid) ->
     is_process_alive(Pid) andalso macula_station_link:is_connected(Pid).
+
+%% Build one `link_info()' per spawned link. Skips seeds whose link
+%% worker is not (yet) a live pid — those have no addressable station.
+link_infos(Links) ->
+    [link_info(Seed, Pid)
+     || {Seed, #link_state{pid = Pid}} <- maps:to_list(Links),
+        is_pid(Pid)].
+
+link_info(Seed, Pid) ->
+    Connected = link_healthy(Pid),
+    #{seed      => Seed,
+      host      => seed_host(Seed),
+      pid       => Pid,
+      connected => Connected,
+      node_id   => link_node_id(Pid, Connected)}.
+
+%% Only probe the peer pubkey on a connected link; a mid-handshake
+%% link answers `{error, not_connected}'.
+link_node_id(Pid, true) ->
+    case macula_station_link:peer_node_id(Pid) of
+        {ok, NodeId}             -> NodeId;
+        {error, not_connected}   -> undefined
+    end;
+link_node_id(_Pid, false) ->
+    undefined.
+
+%% Dial host parsed from a seed. Mirrors `macula_station_link:parse_seed/1'
+%% host extraction without re-dialing — URL form or pre-parsed map.
+seed_host(#{host := H}) when is_binary(H) -> H;
+seed_host(#{host := H}) when is_list(H)   -> list_to_binary(H);
+seed_host(Url) when is_binary(Url)        -> seed_host(binary_to_list(Url));
+seed_host(Url) when is_list(Url) ->
+    case uri_string:parse(Url) of
+        #{host := H} when H =/= "" -> list_to_binary(H);
+        _                          -> undefined
+    end;
+seed_host(_) ->
+    undefined.
 
 on_respawn_link(Seed, S) ->
     NewS = start_link_for_seed(Seed, S),
