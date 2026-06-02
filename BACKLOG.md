@@ -37,3 +37,30 @@ hands the fact term to subscribers (where it currently preserves the
 
 **Likely introduced:** a macula version between the realm's prior pinned build
 and 4.8.0 (the realm's ClankerCab worked with plain binaries before the bump).
+
+---
+
+## Per-station addressing for pub/sub (subscribe against a chosen station)
+
+**Filed:** 2026-06-02
+**Severity:** low (enhancement; unblocks a full god-module retirement downstream)
+
+The pool (`macula_client`) deliberately hides individual `macula_station_link`
+workers — `macula:subscribe/4` targets a (realm, topic) across all links, not a
+chosen station. But some diagnostics need to act on ONE specific station: e.g.
+`macula-realm`'s bloom-convergence demo subscribes a throwaway
+`diag.bloom.demo.*` topic against a single station's link to watch the topic
+propagate into peers' blooms. Today it reaches into the private
+`macula_station_link` via a bespoke per-relay pool
+(`MaculaRealm.Topology.MeshSubscriber.client_for_pubkey/1`).
+
+**Ask:** a public per-station handle on the pool, e.g.
+`macula:subscribe_on_station(Pool, StationPubkey, Realm, Topic, Subscriber)`
+(and/or `macula:station_link(Pool, StationPubkey) -> {ok, pid} | {error, ...}`),
+so consumers never reach into `macula_station_link`.
+
+**Why it matters downstream:** with this, `macula-realm` can delete its bespoke
+relay-link pool entirely and retire the `MeshSubscriber` god-module — the last
+thing keeping that pool alive is exactly this per-station subscribe. Until then,
+macula-realm keeps a thin `Topology.StationLinks` module (path B of
+`macula-internal/macula-realm/plans/PLAN_DEMOS_VERTICAL_SLICING.md`).
