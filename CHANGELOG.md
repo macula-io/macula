@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.0.0] - 2026-06-10
+
+Security release. Four findings from the 2026-06-10 transport-trust
+audit, the first of which changes a default and makes this a major
+version.
+
+### Security — BREAKING
+
+- **QUIC dials verify the server certificate by default.**
+  `macula_quic:connect/4` now defaults `verify` to `webpki` (webpki
+  roots + hostname check) instead of `none`. Previously every peering
+  dial silently accepted any server certificate, allowing a network
+  MITM to impersonate any peer. The production relay fleet serves
+  Let's Encrypt `*.macula.io` certs and is unaffected.
+  **Migration:** self-signed setups (local dev, lab clusters, e2e
+  harnesses) must either pin the peer identity (preferred — see
+  `expected_node_id` below) or opt out explicitly with
+  `{verify, none}` / `#{verify => none}` in the seed/target. Every
+  unverified dial now logs a warning.
+
+### Security
+
+- **Peer identity binding on the CONNECT/HELLO handshake.**
+  `macula_peering_conn` targets (and `macula_station_link` map seeds)
+  accept `expected_node_id => Pubkey`. When set, (a) the QUIC dial
+  pins the server cert's Ed25519 SPKI to that key, and (b) the HELLO
+  is rejected with `{peer_identity_mismatch, Expected, Got}` unless
+  the peer's verified `node_id` equals it. Previously the handshake
+  only proved the peer holds the key for whatever identity *it*
+  claimed — no binding to the dialed target existed.
+- **Topology bootstrap fetch now verifies TLS.**
+  `macula_relay_discovery` fetched `/topology` with
+  `{verify, verify_none}`, letting a MITM steer a bootstrapping node
+  onto attacker relays. Now `verify_peer` against the OS trust store
+  with wildcard-aware hostname checking.
+- **DHT-sourced node info decoded with `binary_to_term(_, [safe])`.**
+  `macula_dist_discovery` decoded DHT values (attacker-influenceable)
+  unsafely — a crafted record could exhaust the atom table or
+  allocate unbounded resources. Records are now shipped atom-free
+  (`name`/`protocol` as binaries), decoded `[safe]`, and
+  shape-validated; the node name is rebuilt from the caller's
+  argument, never atomized from DHT bytes. Mixed-fleet note: 5.0.0
+  nodes reject dist-discovery records written by older nodes (atom
+  `name` fails the safe decode) until those nodes re-register on
+  refresh with the new format.
+
+---
+
 ## [4.8.0] - 2026-05-31
 
 ### Added

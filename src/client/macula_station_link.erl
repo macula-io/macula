@@ -112,9 +112,16 @@
 
 -type opts() :: #{
     %% Endpoint to dial. Either a URL (https://host:port) or a
-    %% pre-parsed #{host, port} map.
+    %% pre-parsed #{host, port} map. The map form may carry the
+    %% optional `macula_peering_conn:connect_opts()' trust keys,
+    %% forwarded verbatim into the dial target:
+    %%   `expected_node_id' — pin the relay's Ed25519 identity (TLS
+    %%       SPKI pin + HELLO node_id binding), strongest;
+    %%   `verify' — `webpki' (default) or `none' (dev/self-signed
+    %%       only; logs a warning per dial).
     seed     := url() | #{host := binary() | string(),
-                          port := inet:port_number()},
+                          port := inet:port_number(),
+                          _    => _},
     %% Local Ed25519 keypair used to sign the CONNECT frame and any
     %% subsequent application frames. Auto-generated when absent.
     identity => macula_identity:key_pair(),
@@ -147,7 +154,8 @@
 
 -record(state, {
     seed             :: #{host := binary() | string(),
-                          port := inet:port_number()},
+                          port := inet:port_number(),
+                          _    => _},
     identity         :: macula_identity:key_pair(),
     capabilities     :: non_neg_integer(),
     alpn             :: [binary()],

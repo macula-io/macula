@@ -138,17 +138,33 @@ close_listener(Listener) ->
 
 %% @doc Connect to a remote QUIC server. `Host' is a hostname or
 %% IP-string; validation depends on `verify' / `verify_pubkey' opts.
+%%
+%% Trust modes (most to least authenticated):
+%% <ul>
+%%   <li>`{verify_pubkey, Pin}' — pin the leaf cert's Ed25519 SPKI to
+%%       `Pin' (32 bytes). No CA chain. Overrides `verify'.</li>
+%%   <li>`{verify, webpki}' — webpki roots + hostname check
+%%       (Let's Encrypt-anchored station certs). THE DEFAULT since
+%%       5.0.0; before that the default was `none'.</li>
+%%   <li>`{verify, none}' — skip all server-cert verification.
+%%       Development / self-signed labs only; a network MITM can
+%%       impersonate the peer. Must now be opted into explicitly,
+%%       and every such dial logs a warning.</li>
+%% </ul>
 -spec connect(Host, inet:port_number(), list(), timeout()) ->
     {ok, reference()} | {error, term()}
         when Host :: binary() | string().
 connect(Host, Port, Opts, Timeout) ->
     HostBin = to_binary(Host),
     Alpn = [to_binary(A) || A <- proplists:get_value(alpn, Opts, ["macula"])],
-    Verify = proplists:get_value(verify, Opts, none) =/= none,
+    %% Secure by default: webpki verification unless the caller
+    %% explicitly opts out with `{verify, none}' or pins a pubkey.
+    Verify = proplists:get_value(verify, Opts, webpki) =/= none,
     %% `verify_pubkey' is a 32-byte Ed25519 pubkey to pin against the
     %% leaf cert SPKI. Empty binary disables pinning. Sovereign
     %% overlay path uses this to validate by pubkey alone (no CA).
     VerifyPubkey = proplists:get_value(verify_pubkey, Opts, <<>>),
+    warn_if_unverified(Verify, VerifyPubkey, HostBin, Port),
     %% Mirror the listener defaults: 300s idle + 15s keep-alive.
     %% See the listen/3 doc above for why the previous 60s/20s pair
     %% killed long-lived realm-side station_link clients.
@@ -156,6 +172,18 @@ connect(Host, Port, Opts, Timeout) ->
     KeepAliveMs = proplists:get_value(keep_alive_interval_ms, Opts, 15_000),
     nif_connect(HostBin, Port, Alpn, Verify, VerifyPubkey,
                 IdleTimeoutMs, KeepAliveMs, Timeout).
+
+%% An unverified dial (no webpki, no pubkey pin) accepts any server
+%% certificate — a network MITM can impersonate the peer. Legitimate
+%% only for development and self-signed lab setups, so make every
+%% occurrence visible in the logs.
+warn_if_unverified(false, <<>>, Host, Port) ->
+    ?LOG_WARNING("[macula_quic] UNVERIFIED dial to ~s:~p — TLS server "
+                 "verification disabled ({verify, none}); vulnerable to "
+                 "MITM. Use webpki or verify_pubkey outside development.",
+                 [Host, Port]);
+warn_if_unverified(_, _, _, _) ->
+    ok.
 
 %%%===================================================================
 %%% Self-signed cert generation

@@ -23,6 +23,21 @@
     port        := inet:port_number(),
     alpn        => [binary()],
     timeout_ms  => timeout(),
+    %% TLS trust mode for the QUIC dial. `webpki' (the default since
+    %% 5.0.0) validates the server cert against webpki roots + the
+    %% dialed hostname. `none' skips TLS verification — development /
+    %% self-signed labs only; every such dial logs a warning.
+    %% Ignored when `expected_node_id' is set (pubkey pin wins).
+    verify      => webpki | none,
+    %% The peer's Ed25519 pubkey, when the dialer knows who it is
+    %% dialing (DHT node records, pre-shared relay identities). Two
+    %% enforcement points: (a) the QUIC dial pins the server cert's
+    %% SPKI to this key (no CA needed — station self-signed certs
+    %% wrap the node identity key), and (b) the HELLO handshake is
+    %% rejected unless the peer's verified `node_id' equals this key.
+    %% Without it, the handshake only proves the peer holds the key
+    %% for whatever identity IT claims (self-asserted).
+    expected_node_id => macula_identity:pubkey(),
     _           => _
 }.
 
@@ -100,6 +115,10 @@
     pubsub_recipient :: undefined | pid(),
     timing_enabled   :: boolean(),
     target           :: undefined | connect_opts(),
+    %% Pinned peer identity from the target's `expected_node_id'.
+    %% `undefined' on the server role and on dials where the peer
+    %% identity is not known up front (first-contact bootstrap).
+    expected_node_id :: undefined | macula_identity:pubkey(),
     quic_conn        :: undefined | reference(),
     quic_stream      :: undefined | reference(),
     peer_node_id      :: undefined | macula_identity:pubkey(),
@@ -145,6 +164,8 @@ init(#{role := Role, identity := Identity, controlling_pid := Pid} = Opts)
         dht_recipient    = maps:get(dht_recipient, Opts, undefined),
         pubsub_recipient = maps:get(pubsub_recipient, Opts, undefined),
         target           = maps:get(target, Opts, undefined),
+        expected_node_id = maps:get(expected_node_id,
+                                    maps:get(target, Opts, #{}), undefined),
         quic_conn        = maps:get(quic_conn, Opts, undefined),
         quic_stream      = undefined,
         peer_node_id     = undefined,
@@ -350,12 +371,34 @@ process_hello(_Frame, Data) ->
     {stop, normal, Data}.
 
 on_hello_verified({ok, _Verified}, #{accepted := true} = Frame, Data) ->
-    transition_to_connected(absorb_peer_info(Frame, Data));
+    on_peer_identity_bound(bind_peer_identity(maps:get(node_id, Frame), Data),
+                           Frame, Data);
 on_hello_verified({ok, _Verified}, #{accepted := false} = Frame, Data) ->
     notify(disconnected, {refused, maps:get(refusal_code, Frame, undefined)}, Data),
     {stop, normal, Data};
 on_hello_verified({error, R}, _Frame, Data) ->
     notify(disconnected, {hello_verify_failed, R}, Data),
+    {stop, normal, Data}.
+
+%% The frame-signature check above only proves the peer holds the key
+%% for whatever `node_id' IT claims (self-asserted). When the dialer
+%% pinned an `expected_node_id' in the target, require the verified
+%% identity to match it — otherwise a redirected/intercepted dial
+%% completes the handshake under the interceptor's own identity.
+bind_peer_identity(_PeerNodeId, #data{expected_node_id = undefined}) ->
+    ok;
+bind_peer_identity(PeerNodeId, #data{expected_node_id = PeerNodeId}) ->
+    ok;
+bind_peer_identity(PeerNodeId, #data{expected_node_id = Expected}) ->
+    {error, {peer_identity_mismatch, Expected, PeerNodeId}}.
+
+on_peer_identity_bound(ok, Frame, Data) ->
+    transition_to_connected(absorb_peer_info(Frame, Data));
+on_peer_identity_bound({error, Mismatch}, _Frame, Data) ->
+    macula_diagnostics:event(<<"_macula.peering.identity_mismatch">>, #{
+        role => Data#data.role
+    }),
+    notify(disconnected, Mismatch, Data),
     {stop, normal, Data}.
 
 absorb_peer_info(Frame, Data) ->
@@ -520,7 +563,21 @@ close_quic(#data{quic_conn = Conn}) ->
 do_connect(#{host := Host, port := Port} = Target) ->
     Timeout = maps:get(timeout_ms, Target, 30_000),
     Alpn = maps:get(alpn, Target, [<<"macula">>]),
-    macula_quic:connect(Host, Port, [{alpn, Alpn}], Timeout).
+    macula_quic:connect(Host, Port,
+                        [{alpn, Alpn} | dial_trust_opts(Target)], Timeout).
+
+%% TLS trust for the dial. A known peer identity pins the server
+%% cert's Ed25519 SPKI (strongest — no CA involved); otherwise the
+%% `verify' mode flows through, defaulting to webpki inside
+%% `macula_quic:connect/4'. `{verify, none}' must be an explicit
+%% caller choice and is warned about at the macula_quic layer.
+dial_trust_opts(#{expected_node_id := NodeId}) when is_binary(NodeId),
+                                                    byte_size(NodeId) =:= 32 ->
+    [{verify_pubkey, NodeId}];
+dial_trust_opts(#{verify := Mode}) ->
+    [{verify, Mode}];
+dial_trust_opts(_Target) ->
+    [].
 
 %%------------------------------------------------------------------
 %% Notifications

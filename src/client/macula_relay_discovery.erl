@@ -210,13 +210,25 @@ fetch_topologies(Urls) ->
 fetch_topology(Url) ->
     case httpc:request(get, {Url, []},
                        [{timeout, ?BOOTSTRAP_TIMEOUT_MS},
-                        {ssl, [{verify, verify_none}]}], []) of
+                        {ssl, topology_ssl_opts()}], []) of
         {ok, {{_, 200, _}, _, Body}} ->
             parse_topology_relays(Body);
         Other ->
             ?LOG_WARNING("[relay_discovery] Topology fetch failed ~s: ~p", [Url, Other]),
             {error, fetch_failed}
     end.
+
+%% The topology response decides which relays a bootstrapping node
+%% will dial — an unverified fetch lets a MITM steer the node onto
+%% attacker relays. Verify against the OS trust store; the
+%% `match_fun' is required for the fleet's wildcard (*.macula.io)
+%% certs, which the default ssl hostname check rejects.
+topology_ssl_opts() ->
+    [{verify, verify_peer},
+     {cacerts, public_key:cacerts_get()},
+     {depth, 3},
+     {customize_hostname_check,
+      [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]}].
 
 parse_topology_relays(Body) ->
     case json:decode(list_to_binary(Body)) of

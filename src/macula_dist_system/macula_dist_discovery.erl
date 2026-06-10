@@ -39,6 +39,8 @@
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([
     start_link/0,
@@ -376,8 +378,20 @@ store_in_dht(NodeName, NodeInfo) ->
     Key = make_dht_key(NodeName),
     case dht_available() of
         false -> store_in_local_cache(NodeName, NodeInfo);
-        true -> erlang:apply(macula_routing_dht, store, [Key, term_to_binary(NodeInfo)]), ok
+        true ->
+            Ext = externalize_node_info(NodeInfo),
+            erlang:apply(macula_routing_dht, store, [Key, term_to_binary(Ext)]),
+            ok
     end.
+
+%% Atom-free wire form. The consumer decodes DHT values with
+%% `binary_to_term(_, [safe])', which refuses terms containing atoms
+%% unknown to the decoding node — a remote node's name atom usually
+%% is. Ship `name'/`protocol' as binaries so the record stays
+%% decodable everywhere.
+externalize_node_info(#{name := Name, protocol := Proto} = NodeInfo) ->
+    NodeInfo#{name := atom_to_binary(Name, utf8),
+              protocol := atom_to_binary(Proto, utf8)}.
 
 %% @private Remove node info from DHT
 remove_from_dht(NodeName) ->
@@ -395,10 +409,43 @@ lookup_in_dht(NodeName) ->
         true -> lookup_in_dht_result(erlang:apply(macula_routing_dht, find, [Key]), NodeName)
     end.
 
-%% @private Handle DHT lookup result
-lookup_in_dht_result({ok, BinInfo}, _NodeName) ->
-    {ok, binary_to_term(BinInfo)};
+%% @private Handle DHT lookup result.
+%%
+%% DHT values are attacker-influenceable (any peer that can write the
+%% key controls the bytes), so the decode is `[safe]' — an unsafe
+%% `binary_to_term' here allows permanent atom-table exhaustion and
+%% crafted-term resource attacks. The try is required: `[safe]' has
+%% no non-throwing variant and a hostile payload must degrade to a
+%% lookup miss, not crash the discovery server.
+lookup_in_dht_result({ok, BinInfo}, NodeName) ->
+    Decoded = try
+                  {term, binary_to_term(BinInfo, [safe])}
+              catch
+                  error:badarg -> undecodable
+              end,
+    validated_node_info(Decoded, NodeName);
 lookup_in_dht_result({error, not_found}, NodeName) ->
+    lookup_in_local_cache(NodeName).
+
+%% Reconstruct the internal node-info map from the atom-free wire
+%% form, accepting only the expected shape. `name' is rebuilt from
+%% the CALLER's NodeName — never atomized from DHT bytes (that would
+%% reopen the atom-exhaustion vector via binary_to_atom).
+validated_node_info({term, #{port := Port, host := Host,
+                             registered_at := RegAt, ttl := Ttl} = Info},
+                    NodeName)
+        when is_integer(Port), Port >= 0, Port =< 65535,
+             is_integer(RegAt), is_integer(Ttl), Ttl >= 0 ->
+    {ok, #{name => NodeName,
+           port => Port,
+           host => Host,
+           ip => maps:get(ip, Info, undefined),
+           protocol => 'macula-dist',
+           registered_at => RegAt,
+           ttl => Ttl}};
+validated_node_info(_BadShape, NodeName) ->
+    ?LOG_WARNING("[dist_discovery] Rejected malformed DHT node info for ~p",
+                 [NodeName]),
     lookup_in_local_cache(NodeName).
 
 %% @private Make DHT key for node
