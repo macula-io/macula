@@ -91,27 +91,28 @@
     {ok, file:filename(), file:filename(), binary()} | {error, term()}.
 
 ensure_cert_exists(CertPath, KeyPath) ->
-    case {filelib:is_file(CertPath), filelib:is_file(KeyPath)} of
-        {true, true} ->
-            %% Both files exist - load and derive Node ID
-            case file:read_file(CertPath) of
-                {ok, CertPEM} ->
-                    NodeID = derive_node_id(CertPEM),
-                    {ok, CertPath, KeyPath, NodeID};
-                {error, Reason} ->
-                    {error, {read_cert_failed, Reason}}
-            end;
-        {false, false} ->
-            %% Neither exists - generate new certificate
-            case generate_and_save_cert(CertPath, KeyPath) of
-                {ok, NodeID} -> {ok, CertPath, KeyPath, NodeID};
-                {error, Reason} -> {error, Reason}
-            end;
-        {true, false} ->
-            {error, {missing_key, KeyPath}};
-        {false, true} ->
-            {error, {missing_cert, CertPath}}
-    end.
+    cert_files_state({filelib:is_file(CertPath), filelib:is_file(KeyPath)}, CertPath, KeyPath).
+
+cert_files_state({true, true}, CertPath, KeyPath) ->
+    %% Both files exist - load and derive Node ID
+    load_existing_cert(file:read_file(CertPath), CertPath, KeyPath);
+cert_files_state({false, false}, CertPath, KeyPath) ->
+    %% Neither exists - generate new certificate
+    generated_cert(generate_and_save_cert(CertPath, KeyPath), CertPath, KeyPath);
+cert_files_state({true, false}, _CertPath, KeyPath) ->
+    {error, {missing_key, KeyPath}};
+cert_files_state({false, true}, CertPath, _KeyPath) ->
+    {error, {missing_cert, CertPath}}.
+
+load_existing_cert({ok, CertPEM}, CertPath, KeyPath) ->
+    {ok, CertPath, KeyPath, derive_node_id(CertPEM)};
+load_existing_cert({error, Reason}, _CertPath, _KeyPath) ->
+    {error, {read_cert_failed, Reason}}.
+
+generated_cert({ok, NodeID}, CertPath, KeyPath) ->
+    {ok, CertPath, KeyPath, NodeID};
+generated_cert({error, Reason}, _CertPath, _KeyPath) ->
+    {error, Reason}.
 
 %%------------------------------------------------------------------------------
 %% @doc Generate self-signed TLS certificate using OpenSSL.
@@ -131,60 +132,11 @@ ensure_cert_exists(CertPath, KeyPath) ->
 
 generate_self_signed_cert(_Opts) ->
     try
-        %% Get configuration
         KeyBits = application:get_env(macula, cert_key_bits, ?DEFAULT_KEY_BITS),
         ValidityDays = application:get_env(macula, cert_validity_days, ?DEFAULT_VALIDITY_DAYS),
-
-        %% Create temporary files for OpenSSL
         TempKeyPath = "/tmp/macula_temp_key_" ++ integer_to_list(erlang:unique_integer([positive])) ++ ".pem",
         TempCertPath = "/tmp/macula_temp_cert_" ++ integer_to_list(erlang:unique_integer([positive])) ++ ".pem",
-
-        try
-            %% Generate private key
-            KeyCmd = lists:flatten(io_lib:format(
-                "openssl genrsa -out ~s ~p 2>&1",
-                [TempKeyPath, KeyBits]
-            )),
-            case os:cmd(KeyCmd) of
-                "" -> ok;  %% OpenSSL may return empty on success
-                KeyOutput ->
-                    %% Check if file was created (success)
-                    case filelib:is_file(TempKeyPath) of
-                        true -> ok;
-                        false ->
-                            logger:error("Failed to generate key: ~s", [KeyOutput]),
-                            throw({error, {key_generation_failed, KeyOutput}})
-                    end
-            end,
-
-            %% Generate self-signed certificate
-            CertCmd = lists:flatten(io_lib:format(
-                "openssl req -new -x509 -key ~s -out ~s -days ~p "
-                "-subj '/CN=macula-node' 2>&1",
-                [TempKeyPath, TempCertPath, ValidityDays]
-            )),
-            case os:cmd(CertCmd) of
-                "" -> ok;  %% OpenSSL may return empty on success
-                CertOutput ->
-                    %% Check if file was created (success)
-                    case filelib:is_file(TempCertPath) of
-                        true -> ok;
-                        false ->
-                            logger:error("Failed to generate certificate: ~s", [CertOutput]),
-                            throw({error, {cert_generation_failed, CertOutput}})
-                    end
-            end,
-
-            %% Read generated files
-            {ok, KeyPEM} = file:read_file(TempKeyPath),
-            {ok, CertPEM} = file:read_file(TempCertPath),
-
-            {ok, CertPEM, KeyPEM}
-        after
-            %% Cleanup temporary files
-            file:delete(TempKeyPath),
-            file:delete(TempCertPath)
-        end
+        run_openssl_with_cleanup(TempKeyPath, TempCertPath, KeyBits, ValidityDays)
     catch
         throw:{error, Reason} ->
             {error, Reason};
@@ -193,6 +145,45 @@ generate_self_signed_cert(_Opts) ->
                         [Type, Error, Stacktrace]),
             {error, {cert_generation_failed, Error}}
     end.
+
+%% @private Inner try/after isolates temp-file cleanup from the outer
+%% error-translation try — keeping the two `try' blocks in separate
+%% functions (no lexically-nested try/catch).
+run_openssl_with_cleanup(TempKeyPath, TempCertPath, KeyBits, ValidityDays) ->
+    try
+        generate_openssl_key(TempKeyPath, KeyBits),
+        generate_openssl_cert(TempKeyPath, TempCertPath, ValidityDays),
+        {ok, KeyPEM} = file:read_file(TempKeyPath),
+        {ok, CertPEM} = file:read_file(TempCertPath),
+        {ok, CertPEM, KeyPEM}
+    after
+        %% Cleanup temporary files
+        file:delete(TempKeyPath),
+        file:delete(TempCertPath)
+    end.
+
+generate_openssl_key(TempKeyPath, KeyBits) ->
+    KeyCmd = lists:flatten(io_lib:format("openssl genrsa -out ~s ~p 2>&1", [TempKeyPath, KeyBits])),
+    check_openssl(os:cmd(KeyCmd), TempKeyPath, key_generation_failed).
+
+generate_openssl_cert(TempKeyPath, TempCertPath, ValidityDays) ->
+    CertCmd = lists:flatten(io_lib:format(
+        "openssl req -new -x509 -key ~s -out ~s -days ~p -subj '/CN=macula-node' 2>&1",
+        [TempKeyPath, TempCertPath, ValidityDays])),
+    check_openssl(os:cmd(CertCmd), TempCertPath, cert_generation_failed).
+
+%% @private OpenSSL may print to stderr yet still succeed; trust file
+%% existence over output. Throw a tagged error on genuine failure.
+check_openssl("", _Path, _ErrTag) ->
+    ok;
+check_openssl(Output, Path, ErrTag) ->
+    check_openssl_file(filelib:is_file(Path), Output, ErrTag).
+
+check_openssl_file(true, _Output, _ErrTag) ->
+    ok;
+check_openssl_file(false, Output, ErrTag) ->
+    logger:error("openssl ~p: ~s", [ErrTag, Output]),
+    throw({error, {ErrTag, Output}}).
 
 %%------------------------------------------------------------------------------
 %% @doc Derive Node ID from certificate public key.
@@ -278,36 +269,34 @@ generate_and_save_cert(CertPath, KeyPath) ->
     end,
 
     %% Generate certificate
-    case generate_self_signed_cert(#{}) of
-        {ok, CertPEM, KeyPEM} ->
-            %% Save certificate
-            case file:write_file(CertPath, CertPEM) of
-                ok ->
-                    %% Save private key with restricted permissions
-                    case file:write_file(KeyPath, KeyPEM) of
-                        ok ->
-                            %% Set permissions: 0600 (owner read/write only)
-                            case file:change_mode(KeyPath, 8#0600) of
-                                ok ->
-                                    NodeID = derive_node_id(CertPEM),
-                                    logger:info("TLS certificate generated successfully. Node ID: ~s",
-                                               [binary:encode_hex(NodeID)]),
-                                    {ok, NodeID};
-                                {error, Reason} ->
-                                    logger:error("Failed to set key permissions: ~p", [Reason]),
-                                    {error, {chmod_failed, Reason}}
-                            end;
-                        {error, Reason} ->
-                            logger:error("Failed to write key file: ~p", [Reason]),
-                            {error, {write_key_failed, Reason}}
-                    end;
-                {error, Reason} ->
-                    logger:error("Failed to write cert file: ~p", [Reason]),
-                    {error, {write_cert_failed, Reason}}
-            end;
-        {error, Reason} ->
-            {error, Reason}
-    end.
+    save_generated_cert(generate_self_signed_cert(#{}), CertPath, KeyPath).
+
+save_generated_cert({error, Reason}, _CertPath, _KeyPath) ->
+    {error, Reason};
+save_generated_cert({ok, CertPEM, KeyPEM}, CertPath, KeyPath) ->
+    write_cert(file:write_file(CertPath, CertPEM), CertPEM, KeyPEM, KeyPath).
+
+write_cert({error, Reason}, _CertPEM, _KeyPEM, _KeyPath) ->
+    logger:error("Failed to write cert file: ~p", [Reason]),
+    {error, {write_cert_failed, Reason}};
+write_cert(ok, CertPEM, KeyPEM, KeyPath) ->
+    write_key(file:write_file(KeyPath, KeyPEM), CertPEM, KeyPath).
+
+write_key({error, Reason}, _CertPEM, _KeyPath) ->
+    logger:error("Failed to write key file: ~p", [Reason]),
+    {error, {write_key_failed, Reason}};
+write_key(ok, CertPEM, KeyPath) ->
+    %% Set permissions: 0600 (owner read/write only)
+    chmod_key(file:change_mode(KeyPath, 8#0600), CertPEM).
+
+chmod_key({error, Reason}, _CertPEM) ->
+    logger:error("Failed to set key permissions: ~p", [Reason]),
+    {error, {chmod_failed, Reason}};
+chmod_key(ok, CertPEM) ->
+    NodeID = derive_node_id(CertPEM),
+    logger:info("TLS certificate generated successfully. Node ID: ~s",
+               [binary:encode_hex(NodeID)]),
+    {ok, NodeID}.
 
 %%------------------------------------------------------------------------------
 %% @doc Ensure parent directory exists, create if needed.
@@ -368,19 +357,18 @@ quic_client_opts(Overrides) ->
 -spec quic_client_opts_with_hostname(Hostname :: string() | binary()) -> list().
 quic_client_opts_with_hostname(Hostname) ->
     BaseOpts = quic_client_opts(),
-    case get_tls_mode() of
-        production ->
-            case get_verify_hostname() of
-                true ->
-                    HostnameOpts = build_hostname_verify_opts(Hostname),
-                    merge_opts(BaseOpts, HostnameOpts);
-                false ->
-                    BaseOpts
-            end;
-        development ->
-            %% In development mode, skip hostname verification
-            BaseOpts
-    end.
+    hostname_opts(get_tls_mode(), BaseOpts, Hostname).
+
+hostname_opts(production, BaseOpts, Hostname) ->
+    maybe_verify_hostname(get_verify_hostname(), BaseOpts, Hostname);
+hostname_opts(development, BaseOpts, _Hostname) ->
+    %% In development mode, skip hostname verification
+    BaseOpts.
+
+maybe_verify_hostname(true, BaseOpts, Hostname) ->
+    merge_opts(BaseOpts, build_hostname_verify_opts(Hostname));
+maybe_verify_hostname(false, BaseOpts, _Hostname) ->
+    BaseOpts.
 
 %%------------------------------------------------------------------------------
 %% @doc Merge two proplists, second takes precedence.
@@ -591,15 +579,15 @@ apply_overrides(Opts, Overrides) ->
 %%------------------------------------------------------------------------------
 -spec get_cacertfile() -> string().
 get_cacertfile() ->
-    case os:getenv("MACULA_TLS_CACERTFILE") of
-        false ->
-            case application:get_env(macula, tls_cacertfile) of
-                {ok, Path} -> Path;
-                undefined -> find_system_ca_bundle()
-            end;
-        Path ->
-            Path
-    end.
+    cacertfile_env(os:getenv("MACULA_TLS_CACERTFILE")).
+
+cacertfile_env(false) ->
+    cacertfile_app(application:get_env(macula, tls_cacertfile));
+cacertfile_env(Path) ->
+    Path.
+
+cacertfile_app({ok, Path}) -> Path;
+cacertfile_app(undefined)  -> find_system_ca_bundle().
 
 %%------------------------------------------------------------------------------
 %% @doc Get TLS certificate file path.
@@ -607,15 +595,15 @@ get_cacertfile() ->
 %%------------------------------------------------------------------------------
 -spec get_tls_certfile() -> string().
 get_tls_certfile() ->
-    case os:getenv("MACULA_TLS_CERTFILE") of
-        false ->
-            case application:get_env(macula, tls_certfile) of
-                {ok, Path} -> Path;
-                undefined -> ""
-            end;
-        Path ->
-            Path
-    end.
+    certfile_env(os:getenv("MACULA_TLS_CERTFILE")).
+
+certfile_env(false) ->
+    certfile_app(application:get_env(macula, tls_certfile));
+certfile_env(Path) ->
+    Path.
+
+certfile_app({ok, Path}) -> Path;
+certfile_app(undefined)  -> "".
 
 %%------------------------------------------------------------------------------
 %% @doc Get TLS private key file path.
@@ -623,15 +611,15 @@ get_tls_certfile() ->
 %%------------------------------------------------------------------------------
 -spec get_tls_keyfile() -> string().
 get_tls_keyfile() ->
-    case os:getenv("MACULA_TLS_KEYFILE") of
-        false ->
-            case application:get_env(macula, tls_keyfile) of
-                {ok, Path} -> Path;
-                undefined -> ""
-            end;
-        Path ->
-            Path
-    end.
+    keyfile_env(os:getenv("MACULA_TLS_KEYFILE")).
+
+keyfile_env(false) ->
+    keyfile_app(application:get_env(macula, tls_keyfile));
+keyfile_env(Path) ->
+    Path.
+
+keyfile_app({ok, Path}) -> Path;
+keyfile_app(undefined)  -> "".
 
 %%------------------------------------------------------------------------------
 %% @doc Find system CA certificate bundle.

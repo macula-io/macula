@@ -121,30 +121,28 @@ generate_instance_cert(InstanceDID, InstancePubKey, RealmCert, RealmPrivKey) ->
                              ValidityDays :: pos_integer()) ->
     {ok, macula_cert()} | {error, term()}.
 generate_instance_cert(InstanceDID, InstancePubKey, RealmCert, RealmPrivKey, ValidityDays) ->
-    #macula_cert{subject_did = RealmDID, public_key = RealmPubKey} = RealmCert,
+    %% Verify the realm certificate is valid, then the namespace, then the keypair.
+    gen_instance_step1(verify_self_signed(RealmCert),
+                       InstanceDID, InstancePubKey, RealmCert, RealmPrivKey, ValidityDays).
 
-    %% Verify the realm certificate is valid
-    case verify_self_signed(RealmCert) of
-        ok ->
-            %% Verify instance DID is under realm namespace
-            case is_did_under_realm(InstanceDID, RealmDID) of
-                true ->
-                    %% Verify realm private key matches public key
-                    case verify_keypair(RealmPubKey, RealmPrivKey) of
-                        ok ->
-                            do_generate_instance_cert(
-                                InstanceDID, InstancePubKey, RealmCert,
-                                RealmPrivKey, ValidityDays
-                            );
-                        {error, _} = Error ->
-                            Error
-                    end;
-                false ->
-                    {error, {did_not_under_realm, InstanceDID, RealmDID}}
-            end;
-        {error, _} = Error ->
-            Error
-    end.
+gen_instance_step1({error, _} = E, _IID, _IPK, _RC, _RPK, _VD) ->
+    E;
+gen_instance_step1(ok, InstanceDID, InstancePubKey, RealmCert, RealmPrivKey, ValidityDays) ->
+    #macula_cert{subject_did = RealmDID} = RealmCert,
+    gen_instance_step2(is_did_under_realm(InstanceDID, RealmDID),
+                       InstanceDID, InstancePubKey, RealmCert, RealmPrivKey, ValidityDays, RealmDID).
+
+gen_instance_step2(false, InstanceDID, _IPK, _RC, _RPK, _VD, RealmDID) ->
+    {error, {did_not_under_realm, InstanceDID, RealmDID}};
+gen_instance_step2(true, InstanceDID, InstancePubKey, RealmCert, RealmPrivKey, ValidityDays, _RealmDID) ->
+    #macula_cert{public_key = RealmPubKey} = RealmCert,
+    gen_instance_step3(verify_keypair(RealmPubKey, RealmPrivKey),
+                       InstanceDID, InstancePubKey, RealmCert, RealmPrivKey, ValidityDays).
+
+gen_instance_step3({error, _} = E, _IID, _IPK, _RC, _RPK, _VD) ->
+    E;
+gen_instance_step3(ok, InstanceDID, InstancePubKey, RealmCert, RealmPrivKey, ValidityDays) ->
+    do_generate_instance_cert(InstanceDID, InstancePubKey, RealmCert, RealmPrivKey, ValidityDays).
 
 %% @private
 do_generate_instance_cert(InstanceDID, InstancePubKey, RealmCert, RealmPrivKey, ValidityDays) ->
@@ -204,24 +202,26 @@ verify_cert(InstanceCert, IssuerCert) ->
         public_key = IssuerPubKey
     } = IssuerCert,
 
-    %% Verify issuer matches
-    case IssuerDID =:= ExpectedIssuerDID of
-        true ->
-            %% Verify signature
-            Canonical = canonical_form(InstanceCert),
-            case verify_signature(Canonical, Signature, IssuerPubKey) of
-                ok ->
-                    %% Verify not expired
-                    case is_valid_now(InstanceCert) of
-                        true -> ok;
-                        false -> {error, certificate_expired}
-                    end;
-                {error, _} = Error ->
-                    Error
-            end;
-        false ->
-            {error, {issuer_mismatch, IssuerDID, ExpectedIssuerDID}}
-    end.
+    %% Verify issuer matches, then signature, then validity.
+    verify_issuer_match(IssuerDID =:= ExpectedIssuerDID,
+                        InstanceCert, Signature, IssuerPubKey, IssuerDID, ExpectedIssuerDID).
+
+verify_issuer_match(false, _InstanceCert, _Signature, _IssuerPubKey, IssuerDID, ExpectedIssuerDID) ->
+    {error, {issuer_mismatch, IssuerDID, ExpectedIssuerDID}};
+verify_issuer_match(true, InstanceCert, Signature, IssuerPubKey, _IssuerDID, _ExpectedIssuerDID) ->
+    verify_sig_and_validity(canonical_form(InstanceCert), Signature, IssuerPubKey, InstanceCert).
+
+%% @private Verify a signature, then the certificate's validity window.
+verify_sig_and_validity(Canonical, Signature, PubKey, Cert) ->
+    verify_sig_then_validity(verify_signature(Canonical, Signature, PubKey), Cert).
+
+verify_sig_then_validity({error, _} = Error, _Cert) ->
+    Error;
+verify_sig_then_validity(ok, Cert) ->
+    validity_result(is_valid_now(Cert)).
+
+validity_result(true)  -> ok;
+validity_result(false) -> {error, certificate_expired}.
 
 %% @doc Verify a self-signed (realm) certificate
 -spec verify_self_signed(Cert :: macula_cert()) -> ok | {error, term()}.
@@ -233,22 +233,13 @@ verify_self_signed(Cert) ->
         signature = Signature
     } = Cert,
 
-    %% Self-signed means subject == issuer
-    case SubjectDID =:= IssuerDID of
-        true ->
-            Canonical = canonical_form(Cert),
-            case verify_signature(Canonical, Signature, PubKey) of
-                ok ->
-                    case is_valid_now(Cert) of
-                        true -> ok;
-                        false -> {error, certificate_expired}
-                    end;
-                {error, _} = Error ->
-                    Error
-            end;
-        false ->
-            {error, not_self_signed}
-    end.
+    %% Self-signed means subject == issuer.
+    verify_self_match(SubjectDID =:= IssuerDID, Cert, Signature, PubKey).
+
+verify_self_match(false, _Cert, _Signature, _PubKey) ->
+    {error, not_self_signed};
+verify_self_match(true, Cert, Signature, PubKey) ->
+    verify_sig_and_validity(canonical_form(Cert), Signature, PubKey, Cert).
 
 %% @doc Check if a certificate is expired
 -spec is_expired(Cert :: macula_cert()) -> boolean().
@@ -406,15 +397,12 @@ extract_realm_did(DID) ->
 -spec validate_keys(PublicKey :: binary(), PrivateKey :: binary()) ->
     ok | {error, term()}.
 validate_keys(PublicKey, PrivateKey) ->
-    case byte_size(PublicKey) of
-        ?ED25519_PUBLIC_KEY_SIZE ->
-            case validate_private_key_size(PrivateKey) of
-                ok -> ok;
-                Error -> Error
-            end;
-        _ ->
-            {error, invalid_public_key}
-    end.
+    validate_pubkey_size(byte_size(PublicKey), PrivateKey).
+
+validate_pubkey_size(?ED25519_PUBLIC_KEY_SIZE, PrivateKey) ->
+    validate_private_key_size(PrivateKey);
+validate_pubkey_size(_, _PrivateKey) ->
+    {error, invalid_public_key}.
 
 %% @private
 validate_private_key_size(PrivKey) when byte_size(PrivKey) =:= 64 -> ok;
