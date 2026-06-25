@@ -77,28 +77,30 @@
 %%====================================================================
 
 init() ->
-    PrivDir = case code:priv_dir(macula) of
-        {error, _} ->
-            case code:which(?MODULE) of
-                Filename when is_list(Filename) ->
-                    filename:join(filename:dirname(filename:dirname(Filename)), "priv");
-                _ ->
-                    "priv"
-            end;
-        Dir ->
-            Dir
-    end,
-    Path = filename:join(PrivDir, "macula_ucan_nif"),
-    case erlang:load_nif(Path, 0) of
-        ok ->
-            persistent_term:put(?NIF_LOADED_KEY, true),
-            ok;
-        {error, {reload, _}} ->
-            persistent_term:put(?NIF_LOADED_KEY, true),
-            ok;
-        {error, _Reason} ->
-            ok
-    end.
+    Path = filename:join(priv_dir(), "macula_ucan_nif"),
+    load_nif_result(erlang:load_nif(Path, 0)).
+
+priv_dir() ->
+    priv_dir_or_fallback(code:priv_dir(macula)).
+
+priv_dir_or_fallback({error, _}) ->
+    priv_dir_from_module(code:which(?MODULE));
+priv_dir_or_fallback(Dir) ->
+    Dir.
+
+priv_dir_from_module(Filename) when is_list(Filename) ->
+    filename:join(filename:dirname(filename:dirname(Filename)), "priv");
+priv_dir_from_module(_) ->
+    "priv".
+
+load_nif_result(ok) ->
+    persistent_term:put(?NIF_LOADED_KEY, true),
+    ok;
+load_nif_result({error, {reload, _}}) ->
+    persistent_term:put(?NIF_LOADED_KEY, true),
+    ok;
+load_nif_result({error, _Reason}) ->
+    ok.
 
 %%====================================================================
 %% API
@@ -129,18 +131,17 @@ create(Issuer, Audience, Capabilities, PrivateKey) ->
              PrivateKey :: binary(), Opts :: ucan_opts()) ->
     {ok, Token :: binary()} | {error, term()}.
 create(Issuer, Audience, Capabilities, PrivateKey, Opts) ->
-    case is_nif_loaded() of
-        true ->
-            CapsJson = encode_json(Capabilities),
-            OptsJson = encode_json(Opts),
-            case nif_create(Issuer, Audience, CapsJson, PrivateKey, OptsJson) of
-                {ok, Token} -> {ok, Token};
-                {invalid_private_key, _} -> {error, invalid_private_key};
-                {malformed_json, _} -> {error, malformed_json}
-            end;
-        false ->
-            erlang_create(Issuer, Audience, Capabilities, PrivateKey, Opts)
-    end.
+    create_dispatch(is_nif_loaded(), Issuer, Audience, Capabilities, PrivateKey, Opts).
+
+create_dispatch(true, Issuer, Audience, Capabilities, PrivateKey, Opts) ->
+    create_nif_result(
+        nif_create(Issuer, Audience, encode_json(Capabilities), PrivateKey, encode_json(Opts)));
+create_dispatch(false, Issuer, Audience, Capabilities, PrivateKey, Opts) ->
+    erlang_create(Issuer, Audience, Capabilities, PrivateKey, Opts).
+
+create_nif_result({ok, Token}) -> {ok, Token};
+create_nif_result({invalid_private_key, _}) -> {error, invalid_private_key};
+create_nif_result({malformed_json, _}) -> {error, malformed_json}.
 
 %% @doc Verify a UCAN token.
 %% Checks signature, expiration, and not-before.
@@ -148,33 +149,33 @@ create(Issuer, Audience, Capabilities, PrivateKey, Opts) ->
 -spec verify(Token :: binary(), PublicKey :: binary()) ->
     {ok, Payload :: map()} | {error, term()}.
 verify(Token, PublicKey) ->
-    case is_nif_loaded() of
-        true ->
-            case nif_verify(Token, PublicKey) of
-                {ok, PayloadJson} -> {ok, decode_json(PayloadJson)};
-                {invalid_token, _} -> {error, invalid_token};
-                {invalid_signature, _} -> {error, invalid_signature};
-                {invalid_public_key, _} -> {error, invalid_public_key};
-                {expired, _} -> {error, expired};
-                {not_yet_valid, _} -> {error, not_yet_valid}
-            end;
-        false ->
-            erlang_verify(Token, PublicKey)
-    end.
+    verify_dispatch(is_nif_loaded(), Token, PublicKey).
+
+verify_dispatch(true, Token, PublicKey) ->
+    verify_nif_result(nif_verify(Token, PublicKey));
+verify_dispatch(false, Token, PublicKey) ->
+    erlang_verify(Token, PublicKey).
+
+verify_nif_result({ok, PayloadJson}) -> {ok, decode_json(PayloadJson)};
+verify_nif_result({invalid_token, _}) -> {error, invalid_token};
+verify_nif_result({invalid_signature, _}) -> {error, invalid_signature};
+verify_nif_result({invalid_public_key, _}) -> {error, invalid_public_key};
+verify_nif_result({expired, _}) -> {error, expired};
+verify_nif_result({not_yet_valid, _}) -> {error, not_yet_valid}.
 
 %% @doc Decode a UCAN token without verification.
 %% WARNING: This does NOT verify the signature!
 -spec decode(Token :: binary()) -> {ok, Payload :: map()} | {error, term()}.
 decode(Token) ->
-    case is_nif_loaded() of
-        true ->
-            case nif_decode(Token) of
-                {ok, PayloadJson} -> {ok, decode_json(PayloadJson)};
-                {invalid_token, _} -> {error, invalid_token}
-            end;
-        false ->
-            erlang_decode(Token)
-    end.
+    decode_dispatch(is_nif_loaded(), Token).
+
+decode_dispatch(true, Token) ->
+    decode_nif_result(nif_decode(Token));
+decode_dispatch(false, Token) ->
+    erlang_decode(Token).
+
+decode_nif_result({ok, PayloadJson}) -> {ok, decode_json(PayloadJson)};
+decode_nif_result({invalid_token, _}) -> {error, invalid_token}.
 
 %% @doc Compute the CID (Content ID) of a UCAN token.
 %% Used for proof chains.
@@ -188,26 +189,26 @@ compute_cid(Token) ->
 %% @doc Get the issuer DID from a UCAN token.
 -spec get_issuer(Token :: binary()) -> {ok, did()} | {error, term()}.
 get_issuer(Token) ->
-    case is_nif_loaded() of
-        true ->
-            case nif_get_issuer(Token) of
-                {ok, Issuer} -> {ok, Issuer};
-                {invalid_token, _} -> {error, invalid_token}
-            end;
-        false -> erlang_get_field(Token, <<"iss">>)
-    end.
+    get_issuer_dispatch(is_nif_loaded(), Token).
+
+get_issuer_dispatch(true, Token) ->
+    token_field_result(nif_get_issuer(Token));
+get_issuer_dispatch(false, Token) ->
+    erlang_get_field(Token, <<"iss">>).
+
+%% @private Shared NIF token-field result mapping ({ok,_} | {invalid_token,_}).
+token_field_result({ok, Value}) -> {ok, Value};
+token_field_result({invalid_token, _}) -> {error, invalid_token}.
 
 %% @doc Get the audience DID from a UCAN token.
 -spec get_audience(Token :: binary()) -> {ok, did()} | {error, term()}.
 get_audience(Token) ->
-    case is_nif_loaded() of
-        true ->
-            case nif_get_audience(Token) of
-                {ok, Audience} -> {ok, Audience};
-                {invalid_token, _} -> {error, invalid_token}
-            end;
-        false -> erlang_get_field(Token, <<"aud">>)
-    end.
+    get_audience_dispatch(is_nif_loaded(), Token).
+
+get_audience_dispatch(true, Token) ->
+    token_field_result(nif_get_audience(Token));
+get_audience_dispatch(false, Token) ->
+    erlang_get_field(Token, <<"aud">>).
 
 %% @doc Get capabilities from a UCAN token.
 -spec get_capabilities(Token :: binary()) -> {ok, [capability()]} | {error, term()}.
@@ -301,32 +302,34 @@ erlang_create(_Issuer, _Audience, _Capabilities, _PrivateKey, _Opts) ->
 
 %% @private
 erlang_verify(Token, PublicKey) when byte_size(PublicKey) =:= 32 ->
-    case split_token(Token) of
-        {ok, HeaderB64, PayloadB64, SignatureB64} ->
-            %% Decode payload for checks
-            case base64_url_decode(PayloadB64) of
-                {ok, PayloadJson} ->
-                    Payload = decode_json(PayloadJson),
-                    Now = erlang:system_time(second),
-
-                    %% Check expiration
-                    case check_expiration(Payload, Now) of
-                        ok ->
-                            %% Check not-before
-                            case check_not_before(Payload, Now) of
-                                ok ->
-                                    %% Verify signature
-                                    verify_signature(HeaderB64, PayloadB64, SignatureB64, PublicKey, Payload);
-                                Error -> Error
-                            end;
-                        Error -> Error
-                    end;
-                _ -> {error, invalid_token}
-            end;
-        _ -> {error, invalid_token}
-    end;
+    verify_split(split_token(Token), PublicKey);
 erlang_verify(_Token, _PublicKey) ->
     {error, invalid_public_key}.
+
+verify_split({ok, HeaderB64, PayloadB64, SignatureB64}, PublicKey) ->
+    verify_payload(base64_url_decode(PayloadB64), HeaderB64, PayloadB64, SignatureB64, PublicKey);
+verify_split(_, _PublicKey) ->
+    {error, invalid_token}.
+
+verify_payload({ok, PayloadJson}, HeaderB64, PayloadB64, SignatureB64, PublicKey) ->
+    Payload = decode_json(PayloadJson),
+    Now = erlang:system_time(second),
+    verify_exp(check_expiration(Payload, Now), Now,
+               HeaderB64, PayloadB64, SignatureB64, PublicKey, Payload);
+verify_payload(_, _HeaderB64, _PayloadB64, _SignatureB64, _PublicKey) ->
+    {error, invalid_token}.
+
+%% @private Short-circuit: only check not-before if expiration passed.
+verify_exp({error, _} = Error, _Now, _H, _P, _S, _PK, _Payload) ->
+    Error;
+verify_exp(ok, Now, HeaderB64, PayloadB64, SignatureB64, PublicKey, Payload) ->
+    verify_nbf(check_not_before(Payload, Now),
+               HeaderB64, PayloadB64, SignatureB64, PublicKey, Payload).
+
+verify_nbf({error, _} = Error, _H, _P, _S, _PK, _Payload) ->
+    Error;
+verify_nbf(ok, HeaderB64, PayloadB64, SignatureB64, PublicKey, Payload) ->
+    verify_signature(HeaderB64, PayloadB64, SignatureB64, PublicKey, Payload).
 
 %% @private Check token expiration
 check_expiration(Payload, Now) ->
@@ -347,25 +350,27 @@ check_not_before(Payload, Now) ->
 %% @private Verify signature
 verify_signature(HeaderB64, PayloadB64, SignatureB64, PublicKey, Payload) ->
     SigningInput = <<HeaderB64/binary, ".", PayloadB64/binary>>,
-    case base64_url_decode(SignatureB64) of
-        {ok, Signature} ->
-            case macula_crypto_nif:verify(SigningInput, Signature, PublicKey) of
-                true -> {ok, Payload};
-                false -> {error, invalid_signature}
-            end;
-        _ -> {error, invalid_signature}
-    end.
+    verify_sig_decoded(base64_url_decode(SignatureB64), SigningInput, PublicKey, Payload).
+
+verify_sig_decoded({ok, Signature}, SigningInput, PublicKey, Payload) ->
+    verify_sig_check(macula_crypto_nif:verify(SigningInput, Signature, PublicKey), Payload);
+verify_sig_decoded(_, _SigningInput, _PublicKey, _Payload) ->
+    {error, invalid_signature}.
+
+verify_sig_check(true, Payload)   -> {ok, Payload};
+verify_sig_check(false, _Payload) -> {error, invalid_signature}.
 
 %% @private
 erlang_decode(Token) ->
-    case split_token(Token) of
-        {ok, _HeaderB64, PayloadB64, _SignatureB64} ->
-            case base64_url_decode(PayloadB64) of
-                {ok, PayloadJson} -> {ok, decode_json(PayloadJson)};
-                _ -> {error, invalid_token}
-            end;
-        _ -> {error, invalid_token}
-    end.
+    decode_split(split_token(Token)).
+
+decode_split({ok, _HeaderB64, PayloadB64, _SignatureB64}) ->
+    decode_payload(base64_url_decode(PayloadB64));
+decode_split(_) ->
+    {error, invalid_token}.
+
+decode_payload({ok, PayloadJson}) -> {ok, decode_json(PayloadJson)};
+decode_payload(_) -> {error, invalid_token}.
 
 %% @private
 erlang_compute_cid(Token) ->
@@ -374,14 +379,15 @@ erlang_compute_cid(Token) ->
 
 %% @private
 erlang_get_field(Token, Field) ->
-    case erlang_decode(Token) of
-        {ok, Payload} ->
-            case maps:find(Field, Payload) of
-                {ok, Value} -> {ok, Value};
-                error -> {ok, null}
-            end;
-        Error -> Error
-    end.
+    get_field_decoded(erlang_decode(Token), Field).
+
+get_field_decoded({ok, Payload}, Field) ->
+    field_value(maps:find(Field, Payload));
+get_field_decoded(Error, _Field) ->
+    Error.
+
+field_value({ok, Value}) -> {ok, Value};
+field_value(error)       -> {ok, null}.
 
 %%====================================================================
 %% Helpers
@@ -427,10 +433,7 @@ encode_json(Term) ->
     encode_json_term(Term).
 
 encode_json_term(Map) when is_map(Map) ->
-    Pairs = maps:fold(fun(K, V, Acc) ->
-        Key = if is_atom(K) -> atom_to_binary(K); true -> K end,
-        [encode_json_pair(Key, V) | Acc]
-    end, [], Map),
+    Pairs = maps:fold(fun encode_json_fold/3, [], Map),
     <<"{", (iolist_to_binary(lists:join(<<",">>, Pairs)))/binary, "}">>;
 encode_json_term(List) when is_list(List) ->
     Items = [encode_json_term(I) || I <- List],
@@ -446,6 +449,12 @@ encode_json_term(false) -> <<"false">>;
 encode_json_term(null) -> <<"null">>;
 encode_json_term(Atom) when is_atom(Atom) ->
     encode_json_term(atom_to_binary(Atom)).
+
+encode_json_fold(K, V, Acc) ->
+    [encode_json_pair(json_key(K), V) | Acc].
+
+json_key(K) when is_atom(K) -> atom_to_binary(K);
+json_key(K)                 -> K.
 
 encode_json_pair(Key, Value) ->
     <<(encode_json_term(Key))/binary, ":", (encode_json_term(Value))/binary>>.

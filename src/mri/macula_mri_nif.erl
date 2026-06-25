@@ -107,29 +107,31 @@
 %%====================================================================
 
 init() ->
-    PrivDir = case code:priv_dir(macula) of
-        {error, _} ->
-            case code:which(?MODULE) of
-                Filename when is_list(Filename) ->
-                    filename:join(filename:dirname(filename:dirname(Filename)), "priv");
-                _ ->
-                    "priv"
-            end;
-        Dir ->
-            Dir
-    end,
-    Path = filename:join(PrivDir, "macula_mri_nif"),
-    case erlang:load_nif(Path, 0) of
-        ok ->
-            persistent_term:put(?NIF_LOADED_KEY, true),
-            ok;
-        {error, {reload, _}} ->
-            persistent_term:put(?NIF_LOADED_KEY, true),
-            ok;
-        {error, _Reason} ->
-            %% NIF not available, will use Erlang fallbacks
-            ok
-    end.
+    Path = filename:join(priv_dir(), "macula_mri_nif"),
+    load_nif_result(erlang:load_nif(Path, 0)).
+
+priv_dir() ->
+    priv_dir_or_fallback(code:priv_dir(macula)).
+
+priv_dir_or_fallback({error, _}) ->
+    priv_dir_from_module(code:which(?MODULE));
+priv_dir_or_fallback(Dir) ->
+    Dir.
+
+priv_dir_from_module(Filename) when is_list(Filename) ->
+    filename:join(filename:dirname(filename:dirname(Filename)), "priv");
+priv_dir_from_module(_) ->
+    "priv".
+
+load_nif_result(ok) ->
+    persistent_term:put(?NIF_LOADED_KEY, true),
+    ok;
+load_nif_result({error, {reload, _}}) ->
+    persistent_term:put(?NIF_LOADED_KEY, true),
+    ok;
+load_nif_result({error, _Reason}) ->
+    %% NIF not available, will use Erlang fallbacks
+    ok.
 
 %%====================================================================
 %% API
@@ -153,20 +155,20 @@ is_nif_loaded() ->
     {ok, #{type := binary(), realm := binary(), path := [binary()]}} |
     {error, invalid_format | invalid_realm | invalid_segment}.
 parse_mri(MRI) when is_binary(MRI) ->
-    case is_nif_loaded() of
-        true ->
-            %% NIF returns {ok, {Type, Realm, Path}} - convert to map
-            case nif_parse_mri(MRI) of
-                {ok, {Type, Realm, Path}} ->
-                    {ok, #{type => Type, realm => Realm, path => Path}};
-                {error, Reason} ->
-                    {error, Reason}
-            end;
-        false ->
-            erlang_parse_mri(MRI)
-    end;
+    parse_mri_dispatch(is_nif_loaded(), MRI);
 parse_mri(_) ->
     {error, invalid_format}.
+
+%% @private NIF returns {ok, {Type, Realm, Path}} — convert to map.
+parse_mri_dispatch(true, MRI) ->
+    parse_mri_nif_result(nif_parse_mri(MRI));
+parse_mri_dispatch(false, MRI) ->
+    erlang_parse_mri(MRI).
+
+parse_mri_nif_result({ok, {Type, Realm, Path}}) ->
+    {ok, #{type => Type, realm => Realm, path => Path}};
+parse_mri_nif_result({error, Reason}) ->
+    {error, Reason}.
 
 %% @doc Validate realm format.
 %%
@@ -451,30 +453,30 @@ erlang_parse_mri(MRI) ->
 
 %% @private Parse realm and optional path
 parse_realm_and_path(Type, RealmAndPath) ->
-    case binary:split(RealmAndPath, <<"/">>) of
-        [Realm] when Realm =/= <<>> ->
-            case erlang_validate_realm_format(Realm) of
-                true ->
-                    {ok, #{type => Type, realm => Realm, path => []}};
-                false ->
-                    {error, invalid_realm}
-            end;
-        [Realm, PathPart] when Realm =/= <<>> ->
-            case erlang_validate_realm_format(Realm) of
-                true ->
-                    Segments = binary:split(PathPart, <<"/">>, [global]),
-                    case validate_all_segments(Segments) of
-                        true ->
-                            {ok, #{type => Type, realm => Realm, path => Segments}};
-                        false ->
-                            {error, invalid_segment}
-                    end;
-                false ->
-                    {error, invalid_realm}
-            end;
-        _ ->
-            {error, invalid_format}
-    end.
+    parse_split(binary:split(RealmAndPath, <<"/">>), Type).
+
+parse_split([Realm], Type) when Realm =/= <<>> ->
+    realm_no_path(erlang_validate_realm_format(Realm), Type, Realm);
+parse_split([Realm, PathPart], Type) when Realm =/= <<>> ->
+    realm_with_path(erlang_validate_realm_format(Realm), Type, Realm, PathPart);
+parse_split(_, _Type) ->
+    {error, invalid_format}.
+
+realm_no_path(true, Type, Realm) ->
+    {ok, #{type => Type, realm => Realm, path => []}};
+realm_no_path(false, _Type, _Realm) ->
+    {error, invalid_realm}.
+
+realm_with_path(false, _Type, _Realm, _PathPart) ->
+    {error, invalid_realm};
+realm_with_path(true, Type, Realm, PathPart) ->
+    Segments = binary:split(PathPart, <<"/">>, [global]),
+    path_segments(validate_all_segments(Segments), Type, Realm, Segments).
+
+path_segments(true, Type, Realm, Segments) ->
+    {ok, #{type => Type, realm => Realm, path => Segments}};
+path_segments(false, _Type, _Realm, _Segments) ->
+    {error, invalid_segment}.
 
 %% @private Validate all segments in a list
 validate_all_segments([]) ->
@@ -545,32 +547,27 @@ erlang_format_mri(Type, Realm, Path) ->
 %% @private Find children using pure Erlang
 erlang_find_children(ParentRealm, ParentPath, AllMRIs) ->
     ParentDepth = length(ParentPath),
-    lists:filtermap(
-        fun({Realm, Path, MRI}) ->
-            case Realm =:= ParentRealm andalso
-                 length(Path) =:= ParentDepth + 1 andalso
-                 lists:prefix(ParentPath, Path) of
-                true -> {true, MRI};
-                false -> false
-            end
-        end,
-        AllMRIs
-    ).
+    lists:filtermap(fun(Entry) -> child_match(Entry, ParentRealm, ParentPath, ParentDepth) end,
+                    AllMRIs).
+
+child_match({Realm, Path, MRI}, ParentRealm, ParentPath, ParentDepth) ->
+    keep_if(Realm =:= ParentRealm andalso
+            length(Path) =:= ParentDepth + 1 andalso
+            lists:prefix(ParentPath, Path), MRI).
 
 %% @private Find descendants using pure Erlang
 erlang_find_descendants(ParentRealm, ParentPath, AllMRIs) ->
     ParentDepth = length(ParentPath),
-    lists:filtermap(
-        fun({Realm, Path, MRI}) ->
-            case Realm =:= ParentRealm andalso
-                 length(Path) > ParentDepth andalso
-                 lists:prefix(ParentPath, Path) of
-                true -> {true, MRI};
-                false -> false
-            end
-        end,
-        AllMRIs
-    ).
+    lists:filtermap(fun(Entry) -> descendant_match(Entry, ParentRealm, ParentPath, ParentDepth) end,
+                    AllMRIs).
+
+descendant_match({Realm, Path, MRI}, ParentRealm, ParentPath, ParentDepth) ->
+    keep_if(Realm =:= ParentRealm andalso
+            length(Path) > ParentDepth andalso
+            lists:prefix(ParentPath, Path), MRI).
+
+keep_if(true, MRI)  -> {true, MRI};
+keep_if(false, _MRI) -> false.
 
 %%====================================================================
 %% Erlang Fallback - Trie Index Operations
@@ -596,49 +593,44 @@ erlang_build_path_index(MRIs) ->
 
 %% @private Find children using map-based index
 erlang_index_find_children(Index, Realm, Path) when is_map(Index) ->
-    case maps:get(Realm, Index, undefined) of
-        undefined ->
-            {ok, []};
-        RealmTree ->
-            case navigate_to_node(RealmTree, Path) of
-                undefined ->
-                    {ok, []};
-                Node when is_map(Node) ->
-                    %% Collect MRIs from immediate children (not grandchildren)
-                    Children = maps:fold(
-                        fun(?MRI_KEY, _, Acc) -> Acc;
-                           (?COUNT_KEY, _, Acc) -> Acc;
-                           (_Segment, ChildNode, Acc) ->
-                               case maps:get(?MRI_KEY, ChildNode, undefined) of
-                                   undefined -> Acc;
-                                   MRI -> [MRI | Acc]
-                               end
-                        end,
-                        [],
-                        Node
-                    ),
-                    {ok, Children}
-            end
-    end;
+    find_children_realm(maps:get(Realm, Index, undefined), Path);
 erlang_index_find_children(_, _, _) ->
     {ok, []}.
 
+find_children_realm(undefined, _Path) ->
+    {ok, []};
+find_children_realm(RealmTree, Path) ->
+    find_children_node(navigate_to_node(RealmTree, Path)).
+
+find_children_node(undefined) ->
+    {ok, []};
+find_children_node(Node) when is_map(Node) ->
+    %% Collect MRIs from immediate children (not grandchildren)
+    {ok, maps:fold(fun collect_immediate_child/3, [], Node)}.
+
+collect_immediate_child(?MRI_KEY, _, Acc)   -> Acc;
+collect_immediate_child(?COUNT_KEY, _, Acc) -> Acc;
+collect_immediate_child(_Segment, ChildNode, Acc) ->
+    prepend_mri(maps:get(?MRI_KEY, ChildNode, undefined), Acc).
+
+prepend_mri(undefined, Acc) -> Acc;
+prepend_mri(MRI, Acc)       -> [MRI | Acc].
+
 %% @private Find descendants using map-based index
 erlang_index_find_descendants(Index, Realm, Path) when is_map(Index) ->
-    case maps:get(Realm, Index, undefined) of
-        undefined ->
-            {ok, []};
-        RealmTree ->
-            case navigate_to_node(RealmTree, Path) of
-                undefined ->
-                    {ok, []};
-                Node when is_map(Node) ->
-                    Descendants = collect_all_mris(Node, []),
-                    {ok, Descendants}
-            end
-    end;
+    find_descendants_realm(maps:get(Realm, Index, undefined), Path);
 erlang_index_find_descendants(_, _, _) ->
     {ok, []}.
+
+find_descendants_realm(undefined, _Path) ->
+    {ok, []};
+find_descendants_realm(RealmTree, Path) ->
+    find_descendants_node(navigate_to_node(RealmTree, Path)).
+
+find_descendants_node(undefined) ->
+    {ok, []};
+find_descendants_node(Node) when is_map(Node) ->
+    {ok, collect_all_mris(Node, [])}.
 
 %% @private Insert into map-based index
 erlang_index_insert(Index, Realm, Path, MRI) when is_map(Index) ->
@@ -685,22 +677,24 @@ insert_into_tree(Tree, [Segment | Rest], MRI) ->
 
 %% @private Remove implementation
 erlang_index_remove_impl(Index, Realm, Path) ->
-    case maps:get(Realm, Index, undefined) of
-        undefined ->
-            {error, not_found};
-        RealmTree ->
-            case remove_from_tree(RealmTree, Path) of
-                {ok, NewRealmTree} ->
-                    Count = maps:get(?COUNT_KEY, Index, 1),
-                    NewIndex = case maps:size(NewRealmTree) of
-                        0 -> maps:remove(Realm, Index);
-                        _ -> Index#{Realm => NewRealmTree}
-                    end,
-                    {ok, NewIndex#{?COUNT_KEY => Count - 1}};
-                {error, not_found} ->
-                    {error, not_found}
-            end
-    end.
+    remove_impl_realm(maps:get(Realm, Index, undefined), Index, Realm, Path).
+
+remove_impl_realm(undefined, _Index, _Realm, _Path) ->
+    {error, not_found};
+remove_impl_realm(RealmTree, Index, Realm, Path) ->
+    remove_impl_result(remove_from_tree(RealmTree, Path), Index, Realm).
+
+remove_impl_result({error, not_found}, _Index, _Realm) ->
+    {error, not_found};
+remove_impl_result({ok, NewRealmTree}, Index, Realm) ->
+    Count = maps:get(?COUNT_KEY, Index, 1),
+    NewIndex = reindex_realm(maps:size(NewRealmTree), Index, Realm, NewRealmTree),
+    {ok, NewIndex#{?COUNT_KEY => Count - 1}}.
+
+reindex_realm(0, Index, Realm, _NewRealmTree) ->
+    maps:remove(Realm, Index);
+reindex_realm(_, Index, Realm, NewRealmTree) ->
+    Index#{Realm => NewRealmTree}.
 
 %% @private Remove path from tree
 remove_from_tree(Tree, []) ->
@@ -712,21 +706,22 @@ remove_from_tree(Tree, []) ->
             {error, not_found}
     end;
 remove_from_tree(Tree, [Segment | Rest]) ->
-    case maps:get(Segment, Tree, undefined) of
-        undefined ->
-            {error, not_found};
-        Child ->
-            case remove_from_tree(Child, Rest) of
-                {ok, NewChild} ->
-                    NewTree = case maps:size(NewChild) of
-                        0 -> maps:remove(Segment, Tree);
-                        _ -> Tree#{Segment => NewChild}
-                    end,
-                    {ok, NewTree};
-                {error, not_found} ->
-                    {error, not_found}
-            end
-    end.
+    remove_child(maps:get(Segment, Tree, undefined), Tree, Segment, Rest).
+
+remove_child(undefined, _Tree, _Segment, _Rest) ->
+    {error, not_found};
+remove_child(Child, Tree, Segment, Rest) ->
+    remove_child_result(remove_from_tree(Child, Rest), Tree, Segment).
+
+remove_child_result({error, not_found}, _Tree, _Segment) ->
+    {error, not_found};
+remove_child_result({ok, NewChild}, Tree, Segment) ->
+    {ok, prune_child(maps:size(NewChild), Tree, Segment, NewChild)}.
+
+prune_child(0, Tree, Segment, _NewChild) ->
+    maps:remove(Segment, Tree);
+prune_child(_, Tree, Segment, NewChild) ->
+    Tree#{Segment => NewChild}.
 
 %% @private Navigate to a node in the tree
 navigate_to_node(Tree, []) ->
@@ -739,18 +734,11 @@ navigate_to_node(Tree, [Segment | Rest]) ->
 
 %% @private Collect all MRIs in subtree (excluding the node itself)
 collect_all_mris(Node, Acc) ->
-    maps:fold(
-        fun(?MRI_KEY, _, InnerAcc) -> InnerAcc;  %% Skip self
-           (?COUNT_KEY, _, InnerAcc) -> InnerAcc;
-           (_Segment, ChildNode, InnerAcc) ->
-               %% Add child's MRI if present
-               Acc1 = case maps:get(?MRI_KEY, ChildNode, undefined) of
-                   undefined -> InnerAcc;
-                   MRI -> [MRI | InnerAcc]
-               end,
-               %% Recurse into grandchildren
-               collect_all_mris(ChildNode, Acc1)
-        end,
-        Acc,
-        Node
-    ).
+    maps:fold(fun collect_mri_step/3, Acc, Node).
+
+collect_mri_step(?MRI_KEY, _, InnerAcc)   -> InnerAcc;  %% Skip self
+collect_mri_step(?COUNT_KEY, _, InnerAcc) -> InnerAcc;
+collect_mri_step(_Segment, ChildNode, InnerAcc) ->
+    %% Add child's MRI if present, then recurse into grandchildren.
+    Acc1 = prepend_mri(maps:get(?MRI_KEY, ChildNode, undefined), InnerAcc),
+    collect_all_mris(ChildNode, Acc1).
