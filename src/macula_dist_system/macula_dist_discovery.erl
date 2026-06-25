@@ -224,34 +224,7 @@ handle_call({unregister_node, NodeName}, _From, State) ->
 
 handle_call({lookup_node, NodeName}, _From, State) ->
     %% First check local cache
-    case maps:get(NodeName, State#state.nodes, undefined) of
-        undefined ->
-            %% Query DHT
-            case lookup_in_dht(NodeName) of
-                {ok, NodeInfo} ->
-                    %% Cache the result
-                    NewNodes = maps:put(NodeName, NodeInfo, State#state.nodes),
-                    {reply, {ok, NodeInfo}, State#state{nodes = NewNodes}};
-                {error, Reason} ->
-                    {reply, {error, Reason}, State}
-            end;
-        NodeInfo ->
-            %% Check if cached entry is still valid
-            case is_entry_valid(NodeInfo) of
-                true ->
-                    {reply, {ok, NodeInfo}, State};
-                false ->
-                    %% Expired, refresh from DHT
-                    case lookup_in_dht(NodeName) of
-                        {ok, FreshInfo} ->
-                            NewNodes = maps:put(NodeName, FreshInfo, State#state.nodes),
-                            {reply, {ok, FreshInfo}, State#state{nodes = NewNodes}};
-                        {error, Reason} ->
-                            NewNodes = maps:remove(NodeName, State#state.nodes),
-                            {reply, {error, Reason}, State#state{nodes = NewNodes}}
-                    end
-            end
-    end;
+    lookup_cached(maps:get(NodeName, State#state.nodes, undefined), NodeName, State);
 
 handle_call(list_nodes, _From, State) ->
     Nodes = maps:keys(State#state.nodes),
@@ -269,6 +242,34 @@ handle_call({unsubscribe, Pid}, _From, State) ->
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
+
+%% @private Cache miss -> query DHT; cache hit -> validate
+lookup_cached(undefined, NodeName, State) ->
+    %% Query DHT
+    lookup_miss_result(lookup_in_dht(NodeName), NodeName, State);
+lookup_cached(NodeInfo, NodeName, State) ->
+    %% Check if cached entry is still valid
+    lookup_valid(is_entry_valid(NodeInfo), NodeInfo, NodeName, State).
+
+lookup_miss_result({ok, NodeInfo}, NodeName, State) ->
+    %% Cache the result
+    NewNodes = maps:put(NodeName, NodeInfo, State#state.nodes),
+    {reply, {ok, NodeInfo}, State#state{nodes = NewNodes}};
+lookup_miss_result({error, Reason}, _NodeName, State) ->
+    {reply, {error, Reason}, State}.
+
+lookup_valid(true, NodeInfo, _NodeName, State) ->
+    {reply, {ok, NodeInfo}, State};
+lookup_valid(false, _NodeInfo, NodeName, State) ->
+    %% Expired, refresh from DHT
+    lookup_refresh_result(lookup_in_dht(NodeName), NodeName, State).
+
+lookup_refresh_result({ok, FreshInfo}, NodeName, State) ->
+    NewNodes = maps:put(NodeName, FreshInfo, State#state.nodes),
+    {reply, {ok, FreshInfo}, State#state{nodes = NewNodes}};
+lookup_refresh_result({error, Reason}, NodeName, State) ->
+    NewNodes = maps:remove(NodeName, State#state.nodes),
+    {reply, {error, Reason}, State#state{nodes = NewNodes}}.
 
 %% @private
 handle_cast(_Msg, State) ->

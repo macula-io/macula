@@ -236,28 +236,22 @@ is_registered_type(TypeBin) ->
 
 is_registered_type_for_realm(TypeBin, Realm) ->
     case ets:info(?TABLE) of
-        undefined ->
-            false;
-        _ ->
-            case ets:lookup(?TABLE, TypeBin) of
-                [#type_schema{realm = undefined}] -> true;  %% Global type
-                [#type_schema{realm = Realm}] -> true;      %% Realm-specific match
-                _ -> false
-            end
+        undefined -> false;
+        _ -> registered_for_realm(ets:lookup(?TABLE, TypeBin), Realm)
     end.
+
+registered_for_realm([#type_schema{realm = undefined}], _Realm) -> true;  %% Global type
+registered_for_realm([#type_schema{realm = Realm}], Realm) -> true;       %% Realm-specific match
+registered_for_realm(_, _Realm) -> false.
 
 lookup_custom_schema(TypeBin) ->
     case ets:info(?TABLE) of
-        undefined ->
-            {error, not_found};
-        _ ->
-            case ets:lookup(?TABLE, TypeBin) of
-                [#type_schema{} = Schema] ->
-                    {ok, schema_to_map(Schema)};
-                [] ->
-                    {error, not_found}
-            end
+        undefined -> {error, not_found};
+        _ -> custom_schema_result(ets:lookup(?TABLE, TypeBin))
     end.
+
+custom_schema_result([#type_schema{} = Schema]) -> {ok, schema_to_map(Schema)};
+custom_schema_result([]) -> {error, not_found}.
 
 schema_to_map(#type_schema{
     name = Name,

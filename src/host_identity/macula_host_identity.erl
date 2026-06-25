@@ -108,20 +108,20 @@ hosted(DaemonAddr) ->
 lookup(DaemonAddr) ->
     case ets:info(?TABLE) of
         undefined -> not_found;
-        _ ->
-            case ets:lookup(?TABLE, DaemonAddr) of
-                [{_, #entry{attach_conn = C}}] -> {ok, C};
-                []                              -> not_found
-            end
+        _ -> lookup_entry(ets:lookup(?TABLE, DaemonAddr))
     end.
+
+lookup_entry([{_, #entry{attach_conn = C}}]) -> {ok, C};
+lookup_entry([])                             -> not_found.
 
 -spec hosted_addresses() -> [<<_:128>>].
 hosted_addresses() ->
     case ets:info(?TABLE) of
         undefined -> [];
-        _ ->
-            ets:foldl(fun({A, _}, Acc) -> [A | Acc] end, [], ?TABLE)
+        _ -> ets:foldl(fun collect_address/2, [], ?TABLE)
     end.
+
+collect_address({A, _}, Acc) -> [A | Acc].
 
 %% @doc Snapshot the current set of hosted_address_map records (signed).
 -spec hosted_records() -> [macula_record:record()].

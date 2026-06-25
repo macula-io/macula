@@ -205,28 +205,27 @@ terminate(_Reason, _State) ->
     ok | {error, term()}.
 do_add_trusted(RealmDID, Cert, Notes) ->
     #macula_cert{subject_did = SubjectDID} = Cert,
-
     %% Verify the certificate is for the claimed realm
-    case SubjectDID =:= RealmDID of
-        true ->
-            %% Verify it's a valid self-signed certificate
-            case macula_cert:verify_self_signed(Cert) of
-                ok ->
-                    Entry = #trust_entry{
-                        realm_did = RealmDID,
-                        cert = Cert,
-                        added_at = erlang:system_time(second),
-                        verified = true,
-                        notes = Notes
-                    },
-                    ets:insert(?TABLE, {RealmDID, Entry}),
-                    ok;
-                {error, _} = Error ->
-                    Error
-            end;
-        false ->
-            {error, {did_mismatch, RealmDID, SubjectDID}}
-    end.
+    add_trusted_matched(SubjectDID =:= RealmDID, RealmDID, SubjectDID, Cert, Notes).
+
+add_trusted_matched(false, RealmDID, SubjectDID, _Cert, _Notes) ->
+    {error, {did_mismatch, RealmDID, SubjectDID}};
+add_trusted_matched(true, RealmDID, _SubjectDID, Cert, Notes) ->
+    %% Verify it's a valid self-signed certificate
+    add_trusted_verified(macula_cert:verify_self_signed(Cert), RealmDID, Cert, Notes).
+
+add_trusted_verified(ok, RealmDID, Cert, Notes) ->
+    Entry = #trust_entry{
+        realm_did = RealmDID,
+        cert = Cert,
+        added_at = erlang:system_time(second),
+        verified = true,
+        notes = Notes
+    },
+    ets:insert(?TABLE, {RealmDID, Entry}),
+    ok;
+add_trusted_verified({error, _} = Error, _RealmDID, _Cert, _Notes) ->
+    Error.
 
 %% @private Load persisted trust entries from disk
 -spec load_persisted_entries(Opts :: map()) -> ok.

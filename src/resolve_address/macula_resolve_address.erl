@@ -180,26 +180,26 @@ extract_endpoint(_Other, _PubKey) ->
 
 %% Same extraction with an optional `hosted_daemon' tag for Phase 3.
 extract_endpoint_payload(P, PubKey, X, HostedDaemon) ->
-    case maps:get({text, <<"quic_port">>}, P, undefined) of
-        Port when is_integer(Port), Port >= 1, Port =< 65535 ->
-            Hosts = case maps:get({text, <<"host_advertised">>}, P, []) of
-                Bins when is_list(Bins) -> Bins;
-                _ -> []
-            end,
-            Alpn = case maps:get({text, <<"alpn">>}, P, undefined) of
-                {text, A} -> A;
-                A when is_binary(A) -> A;
-                _ -> undefined
-            end,
-            Base = #{station_pubkey  => PubKey,
-                     quic_port       => Port,
-                     host_advertised => Hosts,
-                     alpn            => Alpn,
-                     expires_at      => X},
-            {ok, attach_hosted_daemon(Base, HostedDaemon)};
-        _ ->
-            {error, malformed_record}
-    end.
+    endpoint_with_port(maps:get({text, <<"quic_port">>}, P, undefined),
+                       P, PubKey, X, HostedDaemon).
+
+endpoint_with_port(Port, P, PubKey, X, HostedDaemon)
+  when is_integer(Port), Port >= 1, Port =< 65535 ->
+    Base = #{station_pubkey  => PubKey,
+             quic_port       => Port,
+             host_advertised => endpoint_hosts(maps:get({text, <<"host_advertised">>}, P, [])),
+             alpn            => endpoint_alpn(maps:get({text, <<"alpn">>}, P, undefined)),
+             expires_at      => X},
+    {ok, attach_hosted_daemon(Base, HostedDaemon)};
+endpoint_with_port(_, _P, _PubKey, _X, _HostedDaemon) ->
+    {error, malformed_record}.
+
+endpoint_hosts(Bins) when is_list(Bins) -> Bins;
+endpoint_hosts(_) -> [].
+
+endpoint_alpn({text, A}) -> A;
+endpoint_alpn(A) when is_binary(A) -> A;
+endpoint_alpn(_) -> undefined.
 
 attach_hosted_daemon(Map, undefined) -> Map;
 attach_hosted_daemon(Map, DaemonPk) when is_binary(DaemonPk) ->
@@ -263,20 +263,20 @@ hosted_endpoint_lookup(HRec, DaemonPk, FindFn) ->
 
 finish_hosted_endpoint({error, _} = E, _HostPk, _DaemonPk) -> E;
 finish_hosted_endpoint({ok, ERec}, HostPk, DaemonPk) ->
-    case macula_record:verify(ERec) of
-        {ok, _} ->
-            case macula_record:key(ERec) of
-                HostPk ->
-                    extract_endpoint_payload(macula_record:payload(ERec),
-                                             HostPk,
-                                             macula_record:expires_at(ERec),
-                                             DaemonPk);
-                _Other ->
-                    {error, bad_address_binding}
-            end;
-        {error, _} ->
-            {error, bad_signature}
-    end.
+    hosted_endpoint_verified(macula_record:verify(ERec), ERec, HostPk, DaemonPk).
+
+hosted_endpoint_verified({ok, _}, ERec, HostPk, DaemonPk) ->
+    hosted_endpoint_owned(macula_record:key(ERec), ERec, HostPk, DaemonPk);
+hosted_endpoint_verified({error, _}, _ERec, _HostPk, _DaemonPk) ->
+    {error, bad_signature}.
+
+hosted_endpoint_owned(HostPk, ERec, HostPk, DaemonPk) ->
+    extract_endpoint_payload(macula_record:payload(ERec),
+                             HostPk,
+                             macula_record:expires_at(ERec),
+                             DaemonPk);
+hosted_endpoint_owned(_Other, _ERec, _HostPk, _DaemonPk) ->
+    {error, bad_address_binding}.
 
 %% Pull the embedded delegation back out of the CBOR map representation.
 parse_delegation(#{ {text, <<"d">>}  := DaemonPk,

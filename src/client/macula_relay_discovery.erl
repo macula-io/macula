@@ -200,12 +200,13 @@ extract_hostname(Url) ->
     re:replace(Stripped, ":\\d+.*", "", [{return, binary}]).
 
 fetch_topologies(Urls) ->
-    lists:filtermap(fun(Url) ->
-        case fetch_topology(Url) of
-            {ok, Relays} -> {true, Relays};
-            _ -> false
-        end
-    end, Urls).
+    lists:filtermap(fun fetch_topology_filtered/1, Urls).
+
+fetch_topology_filtered(Url) ->
+    case fetch_topology(Url) of
+        {ok, Relays} -> {true, Relays};
+        _ -> false
+    end.
 
 fetch_topology(Url) ->
     case httpc:request(get, {Url, []},

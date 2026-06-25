@@ -170,23 +170,25 @@ spawn_pair(Procedure, Mode, Handler, Args, Opts) ->
 %% Using self() would cause the registry gen_server to exit if the
 %% client linked to it; spawn a dedicated host instead.
 self_host_pid() ->
-    spawn(fun() ->
-                  receive stop -> ok end
-          end).
+    spawn(fun host_loop/0).
+
+host_loop() ->
+    receive stop -> ok end.
 
 spawn_link_handler(Handler, Stream, Args, Procedure) ->
-    spawn(fun() ->
-                  try Handler(Stream, Args)
-                  catch
-                      Class:Reason:Stack ->
-                          ErrCode = atom_to_binary(Class, utf8),
-                          ErrMsg = list_to_binary(io_lib:format(
-                              "handler ~s crashed: ~p:~p~n~p",
-                              [Procedure, Class, Reason, Stack])),
-                          _ = macula_stream:abort(Stream, ErrCode, ErrMsg),
-                          ok
-                  end
-          end).
+    spawn(fun() -> run_handler(Handler, Stream, Args, Procedure) end).
+
+run_handler(Handler, Stream, Args, Procedure) ->
+    try Handler(Stream, Args)
+    catch
+        Class:Reason:Stack ->
+            ErrCode = atom_to_binary(Class, utf8),
+            ErrMsg = list_to_binary(io_lib:format(
+                "handler ~s crashed: ~p:~p~n~p",
+                [Procedure, Class, Reason, Stack])),
+            _ = macula_stream:abort(Stream, ErrCode, ErrMsg),
+            ok
+    end.
 
 %% @private 16-byte unique stream id.
 stream_id() ->

@@ -382,24 +382,24 @@ parse_gossip_packet(Packet, undefined) ->
     end;
 parse_gossip_packet(Packet, Secret) ->
     %% Verify HMAC - uses "|" as delimiter since ":" appears in node names
+    verify_gossip_hmac(binary:split(Packet, <<"|">>), Secret).
+
+verify_gossip_hmac([Data, HexHMAC], Secret) ->
+    ExpectedHMAC = crypto:mac(hmac, sha256, Secret, Data),
+    ReceivedHMAC = binary:decode_hex(HexHMAC),
+    gossip_hmac_result(crypto:hash_equals(ExpectedHMAC, ReceivedHMAC), Data);
+verify_gossip_hmac(_, _Secret) ->
+    %% No HMAC but we expect one - could be from a node without secret
+    %% Depending on policy, either accept or reject
+    {error, no_hmac}.
+
+gossip_hmac_result(true, Data) ->
     Prefix = ?HEARTBEAT_PREFIX,
     PrefixLen = ?HEARTBEAT_PREFIX_LEN,
-    case binary:split(Packet, <<"|">>) of
-        [Data, HexHMAC] ->
-            ExpectedHMAC = crypto:mac(hmac, sha256, Secret, Data),
-            ReceivedHMAC = binary:decode_hex(HexHMAC),
-            case crypto:hash_equals(ExpectedHMAC, ReceivedHMAC) of
-                true ->
-                    <<Prefix:PrefixLen/binary, NodeNameBin/binary>> = Data,
-                    {ok, binary_to_atom(NodeNameBin, utf8)};
-                false ->
-                    {error, hmac_mismatch}
-            end;
-        _ ->
-            %% No HMAC but we expect one - could be from a node without secret
-            %% Depending on policy, either accept or reject
-            {error, no_hmac}
-    end.
+    <<Prefix:PrefixLen/binary, NodeNameBin/binary>> = Data,
+    {ok, binary_to_atom(NodeNameBin, utf8)};
+gossip_hmac_result(false, _Data) ->
+    {error, hmac_mismatch}.
 
 %% @private Strip HMAC suffix if present (uses "|" as delimiter)
 -spec strip_hmac(binary()) -> binary().
@@ -428,26 +428,26 @@ handle_discovered_node(Node, State) ->
 %% @private Try to connect to a node
 -spec try_connect(atom(), #state{}) -> #state{}.
 try_connect(Node, State) ->
-    case sets:is_element(Node, State#state.connected) of
-        true ->
-            %% Already connected
-            State;
-        false ->
-            ?LOG_DEBUG("[macula_cluster_gossip] Attempting connection to ~p", [Node]),
-            case net_kernel:connect_node(Node) of
-                true ->
-                    ?LOG_INFO("[macula_cluster_gossip] Connected to ~p", [Node]),
-                    NewConnected = sets:add_element(Node, State#state.connected),
-                    notify_callback(State#state.callback, nodeup, Node),
-                    State#state{connected = NewConnected};
-                false ->
-                    ?LOG_DEBUG("[macula_cluster_gossip] Failed to connect to ~p", [Node]),
-                    State;
-                ignored ->
-                    ?LOG_WARNING("[macula_cluster_gossip] net_kernel not running"),
-                    State
-            end
-    end.
+    try_connect_unconnected(sets:is_element(Node, State#state.connected), Node, State).
+
+try_connect_unconnected(true, _Node, State) ->
+    %% Already connected
+    State;
+try_connect_unconnected(false, Node, State) ->
+    ?LOG_DEBUG("[macula_cluster_gossip] Attempting connection to ~p", [Node]),
+    connect_result(net_kernel:connect_node(Node), Node, State).
+
+connect_result(true, Node, State) ->
+    ?LOG_INFO("[macula_cluster_gossip] Connected to ~p", [Node]),
+    NewConnected = sets:add_element(Node, State#state.connected),
+    notify_callback(State#state.callback, nodeup, Node),
+    State#state{connected = NewConnected};
+connect_result(false, Node, State) ->
+    ?LOG_DEBUG("[macula_cluster_gossip] Failed to connect to ~p", [Node]),
+    State;
+connect_result(ignored, _Node, State) ->
+    ?LOG_WARNING("[macula_cluster_gossip] net_kernel not running"),
+    State.
 
 %%%===================================================================
 %%% Internal Functions - Configuration
@@ -466,17 +466,17 @@ resolve_multicast_addr(Opts) ->
 %% @private Parse multicast address from env var
 -spec parse_env_addr() -> inet:ip4_address().
 parse_env_addr() ->
-    case os:getenv("MACULA_GOSSIP_ADDR") of
-        false ->
-            ?DEFAULT_MULTICAST_ADDR;
-        "" ->
-            ?DEFAULT_MULTICAST_ADDR;
-        AddrStr ->
-            case inet:parse_ipv4_address(AddrStr) of
-                {ok, Addr} -> Addr;
-                {error, _} -> ?DEFAULT_MULTICAST_ADDR
-            end
-    end.
+    parse_env_addr(os:getenv("MACULA_GOSSIP_ADDR")).
+
+parse_env_addr(false) ->
+    ?DEFAULT_MULTICAST_ADDR;
+parse_env_addr("") ->
+    ?DEFAULT_MULTICAST_ADDR;
+parse_env_addr(AddrStr) ->
+    parsed_addr(inet:parse_ipv4_address(AddrStr)).
+
+parsed_addr({ok, Addr}) -> Addr;
+parsed_addr({error, _}) -> ?DEFAULT_MULTICAST_ADDR.
 
 %% @private Resolve port from options or env
 -spec resolve_port(map()) -> inet:port_number().

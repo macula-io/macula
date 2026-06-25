@@ -45,16 +45,18 @@ validate(<<>>) ->
     {error, empty_realm};
 validate(RealmName) when is_binary(RealmName) ->
     %% Check for leading/trailing dots
-    case binary:first(RealmName) of
-        $. -> {error, invalid_realm};
-        _ ->
-            case binary:last(RealmName) of
-                $. -> {error, invalid_realm};
-                _ ->
-                    %% Check for double dots and invalid characters
-                    validate_segments(RealmName)
-            end
-    end.
+    validate_first(binary:first(RealmName), RealmName).
+
+validate_first($., _RealmName) ->
+    {error, invalid_realm};
+validate_first(_, RealmName) ->
+    validate_last(binary:last(RealmName), RealmName).
+
+validate_last($., _RealmName) ->
+    {error, invalid_realm};
+validate_last(_, RealmName) ->
+    %% Check for double dots and invalid characters
+    validate_segments(RealmName).
 
 %% @doc Normalize realm name (lowercase, trim).
 -spec normalize(realm_name()) -> realm_name().

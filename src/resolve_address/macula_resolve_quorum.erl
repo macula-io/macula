@@ -104,12 +104,14 @@ decide(Responses, Threshold) ->
     end.
 
 tally_records(Records, Threshold) ->
-    Tally = lists:foldl(
-        fun(Rec, Acc) ->
-            Sig = macula_record:signature(Rec),
-            maps:update_with(Sig, fun(V) -> V + 1 end, 1, Acc)
-        end, #{}, Records),
+    Tally = lists:foldl(fun tally_record/2, #{}, Records),
     pick_winner(Tally, Records, Threshold).
+
+tally_record(Rec, Acc) ->
+    Sig = macula_record:signature(Rec),
+    maps:update_with(Sig, fun inc_count/1, 1, Acc).
+
+inc_count(V) -> V + 1.
 
 pick_winner(Tally, Records, Threshold) ->
     {WinnerSig, Count} =

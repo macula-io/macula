@@ -123,15 +123,14 @@ deliver_via({error, _})    -> {error, tun_write_failed}.
 lookup_config() ->
     case ets:info(?TABLE) of
         undefined -> {error, not_configured};
-        _ ->
-            case {ets:lookup(?TABLE, ?LOCAL_ADDRS_KEY),
-                  ets:lookup(?TABLE, ?TUN_WRITER_KEY)} of
-                {[{_, Addrs}], [{_, Writer}]} ->
-                    {ok, Addrs, Writer};
-                _ ->
-                    {error, not_configured}
-            end
+        _ -> lookup_config_entries(ets:lookup(?TABLE, ?LOCAL_ADDRS_KEY),
+                                   ets:lookup(?TABLE, ?TUN_WRITER_KEY))
     end.
+
+lookup_config_entries([{_, Addrs}], [{_, Writer}]) ->
+    {ok, Addrs, Writer};
+lookup_config_entries(_, _) ->
+    {error, not_configured}.
 
 ensure_table() ->
     case ets:info(?TABLE) of

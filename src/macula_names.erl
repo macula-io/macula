@@ -45,14 +45,17 @@ validate(<<>>, _Opts) ->
     {error, invalid_name};
 validate(Name, Opts) ->
     %% Check for leading/trailing dots
-    case binary:first(Name) of
-        $. -> {error, invalid_name};
-        _ ->
-            case binary:last(Name) of
-                $. -> {error, invalid_name};
-                _ -> validate_segments(Name, Opts)
-            end
-    end.
+    validate_first(binary:first(Name), Name, Opts).
+
+validate_first($., _Name, _Opts) ->
+    {error, invalid_name};
+validate_first(_, Name, Opts) ->
+    validate_last(binary:last(Name), Name, Opts).
+
+validate_last($., _Name, _Opts) ->
+    {error, invalid_name};
+validate_last(_, Name, Opts) ->
+    validate_segments(Name, Opts).
 
 %% @doc Normalize name (lowercase, trim, remove double dots).
 -spec normalize(name()) -> name().
@@ -107,10 +110,11 @@ local_node_id() ->
 %% @doc Validate all segments contain valid characters.
 validate_segments(Name, Opts) ->
     Segments = binary:split(Name, <<".">>, [global]),
-    case lists:all(fun(Seg) -> is_valid_segment(Seg, Opts) end, Segments) of
-        true -> ok;
-        false -> {error, invalid_name}
-    end.
+    AllValid = lists:all(fun(Seg) -> is_valid_segment(Seg, Opts) end, Segments),
+    valid_segments_result(AllValid).
+
+valid_segments_result(true) -> ok;
+valid_segments_result(false) -> {error, invalid_name}.
 
 %% @doc Check if segment contains only valid characters.
 is_valid_segment(<<>>, _Opts) ->

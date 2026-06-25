@@ -97,8 +97,8 @@ advertise_dist_accept() ->
         Pool ->
             NodeName = atom_to_binary(node()),
             Procedure = <<"_dist.tunnel.", NodeName/binary>>,
-            Handler = fun(Args) -> handle_tunnel_request(Args) end,
-            macula_client:advertise(Pool, ?DIST_REALM, Procedure, Handler),
+            macula_client:advertise(Pool, ?DIST_REALM, Procedure,
+                                    fun handle_tunnel_request/1),
             ?LOG_INFO("[dist_relay] Advertised distribution accept: ~s", [Procedure]),
             ok
     end.
@@ -119,23 +119,24 @@ ensure_bridge_sup() ->
 get_tunnel_metrics() ->
     case persistent_term:get(macula_dist_tunnels, undefined) of
         undefined -> [];
-        Tunnels ->
-            maps:fold(fun(TunnelId, Ref, Acc) ->
-                [{TunnelId, read_metrics(Ref)} | Acc]
-            end, [], Tunnels)
+        Tunnels -> maps:fold(fun collect_tunnel_metric/3, [], Tunnels)
     end.
+
+collect_tunnel_metric(TunnelId, Ref, Acc) ->
+    [{TunnelId, read_metrics(Ref)} | Acc].
 
 %% @doc Get metrics for a specific tunnel.
 -spec get_tunnel_metrics(binary()) -> map() | undefined.
 get_tunnel_metrics(TunnelId) ->
-    case persistent_term:get(macula_dist_tunnels, undefined) of
-        undefined -> undefined;
-        Tunnels ->
-            case maps:get(TunnelId, Tunnels, undefined) of
-                undefined -> undefined;
-                Ref -> read_metrics(Ref)
-            end
-    end.
+    tunnel_metrics(persistent_term:get(macula_dist_tunnels, undefined), TunnelId).
+
+tunnel_metrics(undefined, _TunnelId) ->
+    undefined;
+tunnel_metrics(Tunnels, TunnelId) ->
+    tunnel_metrics_ref(maps:get(TunnelId, Tunnels, undefined)).
+
+tunnel_metrics_ref(undefined) -> undefined;
+tunnel_metrics_ref(Ref) -> read_metrics(Ref).
 
 %%%===================================================================
 %%% Internal — Mesh Pool Lookup

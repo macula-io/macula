@@ -280,16 +280,15 @@ get_first_env_var([Var | Rest]) ->
 -spec read_cookie_file() -> {ok, atom()} | {error, term()}.
 read_cookie_file() ->
     CookieFile = cookie_file_path(),
-    case file:read_file(CookieFile) of
-        {ok, Content} ->
-            Cookie = string:trim(binary_to_list(Content)),
-            case Cookie of
-                "" -> {error, empty_cookie};
-                _ -> {ok, list_to_atom(Cookie)}
-            end;
-        {error, Reason} ->
-            {error, {cookie_file_read_failed, Reason}}
-    end.
+    cookie_from_file(file:read_file(CookieFile)).
+
+cookie_from_file({ok, Content}) ->
+    cookie_value(string:trim(binary_to_list(Content)));
+cookie_from_file({error, Reason}) ->
+    {error, {cookie_file_read_failed, Reason}}.
+
+cookie_value("") -> {error, empty_cookie};
+cookie_value(Cookie) -> {ok, list_to_atom(Cookie)}.
 
 %% @doc Get the path to the cookie file.
 -spec cookie_file_path() -> file:filename().
@@ -453,120 +452,115 @@ is_clustered() ->
 %% @private Start clustering with resolved strategy
 -spec do_start_cluster(map()) -> ok | {error, term()}.
 do_start_cluster(Opts) ->
-    Strategy = resolve_strategy(Opts),
-    case Strategy of
-        gossip ->
-            start_gossip_strategy(Opts);
-        static ->
-            start_static_strategy(Opts);
-        mdns ->
-            start_discovery_strategy(Opts#{discovery_type => mdns});
-        dht ->
-            start_discovery_strategy(Opts#{discovery_type => dht});
-        auto ->
-            %% Auto-select: use static if nodes configured, else gossip
-            case resolve_cluster_nodes(Opts) of
-                [] ->
-                    %% No static nodes configured, use gossip for zero-config
-                    start_gossip_strategy(Opts);
-                _Nodes ->
-                    start_static_strategy(Opts)
-            end
-    end.
+    start_with_strategy(resolve_strategy(Opts), Opts).
+
+start_with_strategy(gossip, Opts) ->
+    start_gossip_strategy(Opts);
+start_with_strategy(static, Opts) ->
+    start_static_strategy(Opts);
+start_with_strategy(mdns, Opts) ->
+    start_discovery_strategy(Opts#{discovery_type => mdns});
+start_with_strategy(dht, Opts) ->
+    start_discovery_strategy(Opts#{discovery_type => dht});
+start_with_strategy(auto, Opts) ->
+    %% Auto-select: use static if nodes configured, else gossip
+    start_auto_strategy(resolve_cluster_nodes(Opts), Opts).
+
+start_auto_strategy([], Opts) ->
+    %% No static nodes configured, use gossip for zero-config
+    start_gossip_strategy(Opts);
+start_auto_strategy(_Nodes, Opts) ->
+    start_static_strategy(Opts).
 
 %% @private Resolve which strategy to use
 -spec resolve_strategy(map()) -> gossip | static | mdns | dht | auto.
 resolve_strategy(Opts) ->
-    case maps:get(strategy, Opts, undefined) of
-        undefined ->
-            %% Check application env
-            case application:get_env(macula, cluster_strategy) of
-                {ok, Strategy} -> Strategy;
-                undefined -> auto
-            end;
-        Strategy ->
-            Strategy
-    end.
+    resolve_strategy_opt(maps:get(strategy, Opts, undefined)).
+
+resolve_strategy_opt(undefined) ->
+    %% Check application env
+    resolve_strategy_env(application:get_env(macula, cluster_strategy));
+resolve_strategy_opt(Strategy) ->
+    Strategy.
+
+resolve_strategy_env({ok, Strategy}) -> Strategy;
+resolve_strategy_env(undefined) -> auto.
 
 %% @private Resolve cluster nodes from various sources
 -spec resolve_cluster_nodes(map()) -> [atom()].
 resolve_cluster_nodes(Opts) ->
-    case maps:get(nodes, Opts, undefined) of
-        undefined ->
-            %% Check application env
-            case application:get_env(macula, cluster_nodes) of
-                {ok, Nodes} when is_list(Nodes) ->
-                    Nodes;
-                undefined ->
-                    %% Fall back to env var (handled by macula_cluster_static)
-                    []
-            end;
-        Nodes when is_list(Nodes) ->
-            Nodes
-    end.
+    resolve_nodes_opt(maps:get(nodes, Opts, undefined)).
+
+resolve_nodes_opt(undefined) ->
+    %% Check application env
+    resolve_nodes_env(application:get_env(macula, cluster_nodes));
+resolve_nodes_opt(Nodes) when is_list(Nodes) ->
+    Nodes.
+
+resolve_nodes_env({ok, Nodes}) when is_list(Nodes) ->
+    Nodes;
+resolve_nodes_env(undefined) ->
+    %% Fall back to env var (handled by macula_cluster_static)
+    [].
 
 %% @private Start the gossip cluster strategy
 -spec start_gossip_strategy(map()) -> ok | {error, term()}.
 start_gossip_strategy(Opts) ->
-    case whereis(macula_cluster_gossip) of
-        undefined ->
-            case macula_cluster_gossip:start_link(Opts) of
-                {ok, _Pid} ->
-                    ?LOG_INFO("[macula_cluster] Started gossip strategy (UDP multicast)"),
-                    ok;
-                {error, Reason} ->
-                    ?LOG_ERROR("[macula_cluster] Failed to start gossip strategy: ~p",
-                               [Reason]),
-                    {error, {gossip_strategy_failed, Reason}}
-            end;
-        _Pid ->
-            ?LOG_INFO("[macula_cluster] Gossip strategy already running"),
-            ok
-    end.
+    start_gossip_running(whereis(macula_cluster_gossip), Opts).
+
+start_gossip_running(undefined, Opts) ->
+    gossip_start_result(macula_cluster_gossip:start_link(Opts));
+start_gossip_running(_Pid, _Opts) ->
+    ?LOG_INFO("[macula_cluster] Gossip strategy already running"),
+    ok.
+
+gossip_start_result({ok, _Pid}) ->
+    ?LOG_INFO("[macula_cluster] Started gossip strategy (UDP multicast)"),
+    ok;
+gossip_start_result({error, Reason}) ->
+    ?LOG_ERROR("[macula_cluster] Failed to start gossip strategy: ~p", [Reason]),
+    {error, {gossip_strategy_failed, Reason}}.
 
 %% @private Start the static cluster strategy
 -spec start_static_strategy(map()) -> ok | {error, term()}.
 start_static_strategy(Opts) ->
     Nodes = resolve_cluster_nodes(Opts),
     StrategyOpts = Opts#{nodes => Nodes},
-    case whereis(macula_cluster_static) of
-        undefined ->
-            case macula_cluster_static:start_link(StrategyOpts) of
-                {ok, _Pid} ->
-                    ?LOG_INFO("[macula_cluster] Started static strategy "
-                              "with ~p configured node(s)", [length(Nodes)]),
-                    ok;
-                {error, Reason} ->
-                    ?LOG_ERROR("[macula_cluster] Failed to start static strategy: ~p",
-                               [Reason]),
-                    {error, {static_strategy_failed, Reason}}
-            end;
-        _Pid ->
-            ?LOG_INFO("[macula_cluster] Static strategy already running"),
-            ok
-    end.
+    start_static_running(whereis(macula_cluster_static), StrategyOpts, Nodes).
+
+start_static_running(undefined, StrategyOpts, Nodes) ->
+    static_start_result(macula_cluster_static:start_link(StrategyOpts), Nodes);
+start_static_running(_Pid, _StrategyOpts, _Nodes) ->
+    ?LOG_INFO("[macula_cluster] Static strategy already running"),
+    ok.
+
+static_start_result({ok, _Pid}, Nodes) ->
+    ?LOG_INFO("[macula_cluster] Started static strategy "
+              "with ~p configured node(s)", [length(Nodes)]),
+    ok;
+static_start_result({error, Reason}, _Nodes) ->
+    ?LOG_ERROR("[macula_cluster] Failed to start static strategy: ~p", [Reason]),
+    {error, {static_strategy_failed, Reason}}.
 
 %% @private Start the DHT/mDNS discovery strategy
 -spec start_discovery_strategy(map()) -> ok | {error, term()}.
 start_discovery_strategy(Opts) ->
-    case whereis(macula_cluster) of
-        undefined ->
-            StrategyOpts = #{
-                topology => macula_cluster,
-                config => Opts
-            },
-            case macula_cluster_strategy:start_link(StrategyOpts) of
-                {ok, _Pid} ->
-                    DiscoveryType = maps:get(discovery_type, Opts, both),
-                    ?LOG_INFO("[macula_cluster] Started discovery strategy (~p)",
-                              [DiscoveryType]),
-                    ok;
-                {error, Reason} ->
-                    ?LOG_ERROR("[macula_cluster] Failed to start discovery strategy: ~p",
-                               [Reason]),
-                    {error, {discovery_strategy_failed, Reason}}
-            end;
-        _Pid ->
-            ?LOG_INFO("[macula_cluster] Discovery strategy already running"),
-            ok
-    end.
+    start_discovery_running(whereis(macula_cluster), Opts).
+
+start_discovery_running(undefined, Opts) ->
+    StrategyOpts = #{
+        topology => macula_cluster,
+        config => Opts
+    },
+    discovery_start_result(macula_cluster_strategy:start_link(StrategyOpts), Opts);
+start_discovery_running(_Pid, _Opts) ->
+    ?LOG_INFO("[macula_cluster] Discovery strategy already running"),
+    ok.
+
+discovery_start_result({ok, _Pid}, Opts) ->
+    DiscoveryType = maps:get(discovery_type, Opts, both),
+    ?LOG_INFO("[macula_cluster] Started discovery strategy (~p)", [DiscoveryType]),
+    ok;
+discovery_start_result({error, Reason}, _Opts) ->
+    ?LOG_ERROR("[macula_cluster] Failed to start discovery strategy: ~p", [Reason]),
+    {error, {discovery_strategy_failed, Reason}}.

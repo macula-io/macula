@@ -70,22 +70,23 @@ decode_chars(<<>>, BitAcc) ->
     BitLen = bit_size(BitAcc),
     ByteLen = BitLen div 8,
     PadBits = BitLen rem 8,
-    case PadBits =< 4 of
-        false -> {error, invalid_z32};
-        true ->
-            <<Bytes:ByteLen/binary, Pad:PadBits>> = BitAcc,
-            case Pad of
-                0 -> {ok, Bytes};
-                _ -> {error, invalid_z32}
-            end
-    end;
+    decode_padded(PadBits =< 4, BitAcc, ByteLen, PadBits);
 decode_chars(<<Char, Rest/binary>>, BitAcc) ->
-    case char_to_value(Char) of
-        {ok, Value} ->
-            decode_chars(Rest, <<BitAcc/bitstring, Value:5>>);
-        error ->
-            {error, invalid_z32}
-    end.
+    decode_char(char_to_value(Char), Rest, BitAcc).
+
+decode_padded(false, _BitAcc, _ByteLen, _PadBits) ->
+    {error, invalid_z32};
+decode_padded(true, BitAcc, ByteLen, PadBits) ->
+    <<Bytes:ByteLen/binary, Pad:PadBits>> = BitAcc,
+    decode_pad_value(Pad, Bytes).
+
+decode_pad_value(0, Bytes) -> {ok, Bytes};
+decode_pad_value(_, _Bytes) -> {error, invalid_z32}.
+
+decode_char({ok, Value}, Rest, BitAcc) ->
+    decode_chars(Rest, <<BitAcc/bitstring, Value:5>>);
+decode_char(error, _Rest, _BitAcc) ->
+    {error, invalid_z32}.
 
 %% @doc Check whether a binary is a syntactically valid DNS label
 %% under the z-base-32 alphabet (every character is in the

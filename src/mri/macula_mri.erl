@@ -151,19 +151,23 @@ parent(#{type := Type, realm := Realm, path := []}) ->
         ParentType -> format(#{type => ParentType, realm => Realm, path => []})
     end;
 parent(#{type := Type, realm := Realm, path := Path}) ->
-    case drop_last(Path) of
-        [] ->
-            %% Path becomes empty - check if parent type exists
-            case parent_type(Type) of
-                undefined -> format(#{type => realm, realm => Realm, path => []});
-                ParentType -> format(#{type => ParentType, realm => Realm, path => []})
-            end;
-        ShorterPath ->
-            case parent_type(Type) of
-                undefined -> format(#{type => Type, realm => Realm, path => ShorterPath});
-                ParentType -> format(#{type => ParentType, realm => Realm, path => ShorterPath})
-            end
-    end.
+    parent_with_path(drop_last(Path), Type, Realm).
+
+parent_with_path([], Type, Realm) ->
+    %% Path becomes empty - check if parent type exists
+    parent_empty_path(parent_type(Type), Realm);
+parent_with_path(ShorterPath, Type, Realm) ->
+    parent_shorter_path(parent_type(Type), Type, Realm, ShorterPath).
+
+parent_empty_path(undefined, Realm) ->
+    format(#{type => realm, realm => Realm, path => []});
+parent_empty_path(ParentType, Realm) ->
+    format(#{type => ParentType, realm => Realm, path => []}).
+
+parent_shorter_path(undefined, Type, Realm, ShorterPath) ->
+    format(#{type => Type, realm => Realm, path => ShorterPath});
+parent_shorter_path(ParentType, _Type, Realm, ShorterPath) ->
+    format(#{type => ParentType, realm => Realm, path => ShorterPath}).
 
 %% @doc Get the parent type for a given type.
 -spec parent_type(mri_type()) -> mri_type() | undefined.
@@ -474,22 +478,22 @@ validate_realm_format(Realm, Path) ->
 
 is_valid_realm_format(Realm) ->
     %% Use NIF when available (avoids binary_to_list conversion)
-    case nif_available() of
-        true -> macula_mri_nif:validate_realm_format(Realm);
-        false ->
-            case binary:match(Realm, <<".">>) of
-                nomatch -> false;
-                _ ->
-                    lists:all(
-                        fun(C) ->
-                            (C >= $a andalso C =< $z) orelse
-                            (C >= $0 andalso C =< $9) orelse
-                            C =:= $.
-                        end,
-                        binary_to_list(Realm)
-                    )
-            end
-    end.
+    realm_format_check(nif_available(), Realm).
+
+realm_format_check(true, Realm) ->
+    macula_mri_nif:validate_realm_format(Realm);
+realm_format_check(false, Realm) ->
+    realm_format_dotted(binary:match(Realm, <<".">>), Realm).
+
+realm_format_dotted(nomatch, _Realm) ->
+    false;
+realm_format_dotted(_, Realm) ->
+    lists:all(fun is_realm_char/1, binary_to_list(Realm)).
+
+is_realm_char(C) ->
+    (C >= $a andalso C =< $z) orelse
+    (C >= $0 andalso C =< $9) orelse
+    C =:= $..
 
 validate_path(Path) when length(Path) > ?MAX_PATH_DEPTH ->
     {error, {path_too_deep, length(Path)}};
@@ -525,19 +529,18 @@ is_valid_segment_format(Segment) ->
     end.
 
 validate_segment_chars(Segment) ->
-    case nif_available() of
-        true -> macula_mri_nif:validate_segment_chars(Segment);
-        false ->
-            lists:all(
-                fun(C) ->
-                    (C >= $a andalso C =< $z) orelse
-                    (C >= $0 andalso C =< $9) orelse
-                    C =:= $- orelse
-                    C =:= $_
-                end,
-                binary_to_list(Segment)
-            )
-    end.
+    segment_chars_check(nif_available(), Segment).
+
+segment_chars_check(true, Segment) ->
+    macula_mri_nif:validate_segment_chars(Segment);
+segment_chars_check(false, Segment) ->
+    lists:all(fun is_segment_char/1, binary_to_list(Segment)).
+
+is_segment_char(C) ->
+    (C >= $a andalso C =< $z) orelse
+    (C >= $0 andalso C =< $9) orelse
+    C =:= $- orelse
+    C =:= $_.
 
 drop_last([]) -> [];
 drop_last([_]) -> [];

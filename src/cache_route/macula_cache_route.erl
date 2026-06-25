@@ -76,12 +76,11 @@ stop() ->
 lookup(Addr) when is_binary(Addr), byte_size(Addr) =:= 16 ->
     case ets:info(?TABLE) of
         undefined -> miss;
-        _ ->
-            case ets:lookup(?TABLE, Addr) of
-                [{_, Entry}] -> check_expiry(Addr, Entry);
-                []           -> miss
-            end
+        _ -> lookup_entry(Addr, ets:lookup(?TABLE, Addr))
     end.
+
+lookup_entry(Addr, [{_, Entry}]) -> check_expiry(Addr, Entry);
+lookup_entry(_Addr, [])          -> miss.
 
 -spec insert(<<_:128>>, route_entry()) -> ok.
 insert(Addr, #{expires_at := X} = Entry)
@@ -173,15 +172,17 @@ check_expiry(Addr, #{expires_at := X} = Entry) ->
 sweep_table() ->
     case ets:info(?TABLE) of
         undefined -> ok;
-        _ ->
-            Now = erlang:system_time(millisecond),
-            ets:foldl(
-              fun({Addr, #{expires_at := X}}, _Acc) when X =< Now ->
-                      _ = ets:delete(?TABLE, Addr),
-                      ok;
-                 (_, _Acc) -> ok
-              end, ok, ?TABLE)
+        _ -> sweep_now(erlang:system_time(millisecond))
     end.
+
+sweep_now(Now) ->
+    ets:foldl(fun(E, Acc) -> sweep_entry(E, Now, Acc) end, ok, ?TABLE).
+
+sweep_entry({Addr, #{expires_at := X}}, Now, _Acc) when X =< Now ->
+    _ = ets:delete(?TABLE, Addr),
+    ok;
+sweep_entry(_, _Now, _Acc) ->
+    ok.
 
 cancel(undefined) -> ok;
 cancel(T) when is_reference(T) ->

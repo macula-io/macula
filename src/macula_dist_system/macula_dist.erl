@@ -218,18 +218,18 @@ is_node_name(Name) ->
 splitname(NodeName) when is_atom(NodeName) ->
     splitname(atom_to_list(NodeName));
 splitname(NodeName) when is_list(NodeName) ->
-    case string:tokens(NodeName, "@") of
-        [NameOrPort, Host] ->
-            case catch list_to_integer(NameOrPort) of
-                Port when is_integer(Port), Port > 0, Port < 65536 ->
-                    {Port, Host};
-                _ ->
-                    DefaultPort = application:get_env(kernel, macula_dist_port, ?DEFAULT_PORT),
-                    {DefaultPort, Host}
-            end;
-        _ ->
-            false
-    end.
+    splitname_tokens(string:tokens(NodeName, "@")).
+
+splitname_tokens([NameOrPort, Host]) ->
+    splitname_port(catch list_to_integer(NameOrPort), Host);
+splitname_tokens(_) ->
+    false.
+
+splitname_port(Port, Host) when is_integer(Port), Port > 0, Port < 65536 ->
+    {Port, Host};
+splitname_port(_, Host) ->
+    DefaultPort = application:get_env(kernel, macula_dist_port, ?DEFAULT_PORT),
+    {DefaultPort, Host}.
 
 %% @doc Return address information for this distribution.
 -spec address() -> #net_address{}.
@@ -376,18 +376,18 @@ connect_quic(Host, Port) ->
         {idle_timeout_ms, 60000}
     ],
     ConnOpts = merge_dist_opts(BaseOpts, TlsOpts),
-    case macula_quic:connect(Host, Port, ConnOpts, ?CONNECT_TIMEOUT) of
-        {ok, Conn} ->
-            case macula_quic:open_stream(Conn, #{active => false}) of
-                {ok, Stream} ->
-                    {ok, Conn, Stream};
-                {error, Reason} ->
-                    macula_quic:close_connection(Conn),
-                    {error, {stream_failed, Reason}}
-            end;
-        {error, Reason} ->
-            {error, Reason}
-    end.
+    connect_quic_result(macula_quic:connect(Host, Port, ConnOpts, ?CONNECT_TIMEOUT)).
+
+connect_quic_result({ok, Conn}) ->
+    open_quic_stream(macula_quic:open_stream(Conn, #{active => false}), Conn);
+connect_quic_result({error, Reason}) ->
+    {error, Reason}.
+
+open_quic_stream({ok, Stream}, Conn) ->
+    {ok, Conn, Stream};
+open_quic_stream({error, Reason}, Conn) ->
+    macula_quic:close_connection(Conn),
+    {error, {stream_failed, Reason}}.
 
 %%%===================================================================
 %%% Internal — Shared hs_data construction
@@ -764,15 +764,17 @@ merge_dist_opts(BaseOpts, TlsOpts) ->
 get_dist_port(NodeName) when is_atom(NodeName) ->
     get_dist_port(atom_to_list(NodeName));
 get_dist_port(NodeName) when is_list(NodeName) ->
-    case splitname(NodeName) of
-        {Port, _Host} ->
-            Port;
-        false ->
-            case catch list_to_integer(NodeName) of
-                Port when is_integer(Port), Port > 0, Port < 65536 -> Port;
-                _ -> application:get_env(kernel, macula_dist_port, ?DEFAULT_PORT)
-            end
-    end.
+    get_dist_port_split(splitname(NodeName), NodeName).
+
+get_dist_port_split({Port, _Host}, _NodeName) ->
+    Port;
+get_dist_port_split(false, NodeName) ->
+    get_dist_port_int(catch list_to_integer(NodeName)).
+
+get_dist_port_int(Port) when is_integer(Port), Port > 0, Port < 65536 ->
+    Port;
+get_dist_port_int(_) ->
+    application:get_env(kernel, macula_dist_port, ?DEFAULT_PORT).
 
 get_tls_certs() ->
     CertDir = application:get_env(kernel, macula_dist_cert_dir, "/tmp/macula_dist"),

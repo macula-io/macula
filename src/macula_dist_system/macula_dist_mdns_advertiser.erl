@@ -98,16 +98,16 @@ node_to_string(NodeName) when is_binary(NodeName) ->
 
 %% @private Get the hostname without domain.
 get_hostname() ->
-    case net_adm:localhost() of
-        Hostname when is_list(Hostname) ->
-            %% Remove domain suffix if present
-            case string:split(Hostname, ".") of
-                [Short | _] -> Short;
-                _ -> Hostname
-            end;
-        _ ->
-            "localhost"
-    end.
+    hostname_short(net_adm:localhost()).
+
+hostname_short(Hostname) when is_list(Hostname) ->
+    %% Remove domain suffix if present
+    hostname_head(string:split(Hostname, "."), Hostname);
+hostname_short(_) ->
+    "localhost".
+
+hostname_head([Short | _], _Hostname) -> Short;
+hostname_head(_, Hostname) -> Hostname.
 
 %% @private Get macula version.
 get_version() ->

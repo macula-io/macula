@@ -1473,7 +1473,7 @@ dispatch_stream_open({ok, {AdvMode, Handler}}, Sid, Proc, _Declared, Args, S) ->
 
 spawn_inbound_stream(Sid, Proc, Mode, Handler, Args,
                      #state{server_streams = SS} = S) ->
-    Host = spawn(fun() -> receive stop -> ok end end),
+    Host = spawn(fun stream_host_loop/0),
     {ok, StreamPid} = macula_stream:start_link(#{
         id    => Sid,
         role  => server,
@@ -1485,23 +1485,27 @@ spawn_inbound_stream(Sid, Proc, Mode, Handler, Args,
     _Worker = spawn_stream_handler(Handler, StreamPid, Args, Proc),
     S#state{server_streams = SS#{Sid => {StreamPid, Mon}}}.
 
+stream_host_loop() ->
+    receive stop -> ok end.
+
 %% Handler runs in a transient process. A handler crash maps to a
 %% STREAM_ERROR abort with the crash class as the code so callers
 %% see a stable error taxonomy. The try/catch is justified (mirrors
 %% `safe_invoke_handler/4' for unary CALLs): without it a crash
 %% would silently leave the caller waiting on its deadline.
 spawn_stream_handler(Handler, Stream, Args, Proc) ->
-    spawn(fun() ->
-        try Handler(Stream, Args)
-        catch
-            Class:Reason:Stack ->
-                Code = atom_to_binary(Class, utf8),
-                Msg = iolist_to_binary(io_lib:format(
-                    "stream handler ~s crashed: ~p:~p~n~p",
-                    [Proc, Class, Reason, Stack])),
-                _ = macula_stream:abort(Stream, Code, Msg)
-        end
-    end).
+    spawn(fun() -> run_stream_handler(Handler, Stream, Args, Proc) end).
+
+run_stream_handler(Handler, Stream, Args, Proc) ->
+    try Handler(Stream, Args)
+    catch
+        Class:Reason:Stack ->
+            Code = atom_to_binary(Class, utf8),
+            Msg = iolist_to_binary(io_lib:format(
+                "stream handler ~s crashed: ~p:~p~n~p",
+                [Proc, Class, Reason, Stack])),
+            _ = macula_stream:abort(Stream, Code, Msg)
+    end.
 
 %%-------------------------------------------------------------------
 %% Streaming RPC — inbound STREAM_DATA / END / ERROR / REPLY
@@ -1580,21 +1584,20 @@ drain_pending_stream_advertises(#state{stream_procedures = SP} = S) ->
 %% to the subscriber path. Stream pids are added by
 %% `open_client_stream/6' (client_streams) and `spawn_inbound_stream/6'
 %% (server_streams).
-on_monitor_down(Pid, Mon, #state{client_streams = CS,
-                                 server_streams = SS} = S) ->
-    case find_stream_by_pid(Pid, CS) of
-        {ok, Sid} ->
-            erlang:demonitor(Mon, [flush]),
-            S#state{client_streams = maps:remove(Sid, CS)};
-        error ->
-            case find_stream_by_pid(Pid, SS) of
-                {ok, Sid} ->
-                    erlang:demonitor(Mon, [flush]),
-                    S#state{server_streams = maps:remove(Sid, SS)};
-                error ->
-                    on_subscriber_down(Mon, S)
-            end
-    end.
+on_monitor_down(Pid, Mon, #state{client_streams = CS} = S) ->
+    on_client_stream_down(find_stream_by_pid(Pid, CS), Pid, Mon, S).
+
+on_client_stream_down({ok, Sid}, _Pid, Mon, #state{client_streams = CS} = S) ->
+    erlang:demonitor(Mon, [flush]),
+    S#state{client_streams = maps:remove(Sid, CS)};
+on_client_stream_down(error, Pid, Mon, #state{server_streams = SS} = S) ->
+    on_server_stream_down(find_stream_by_pid(Pid, SS), Mon, S).
+
+on_server_stream_down({ok, Sid}, Mon, #state{server_streams = SS} = S) ->
+    erlang:demonitor(Mon, [flush]),
+    S#state{server_streams = maps:remove(Sid, SS)};
+on_server_stream_down(error, Mon, S) ->
+    on_subscriber_down(Mon, S).
 
 %% Lookup a stream by Sid across both maps. Client-side first (the
 %% common server_stream mode delivers server→client chunks to the

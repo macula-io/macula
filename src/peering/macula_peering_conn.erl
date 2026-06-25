@@ -298,23 +298,21 @@ on_handshake_enter_client({ok, Stream}, Data) ->
     %% Prior to 3.15.3 the `ok = ...` matches turned every such
     %% race into a crash; now we surface a structured disconnect
     %% and let the caller schedule a reconnect.
-    case macula_quic:setopt(Stream, active, true) of
-        ok ->
-            case send_connect(Stream, Data) of
-                ok ->
-                    {keep_state,
-                     Data#data{quic_stream = Stream},
-                     [handshake_state_timeout()]};
-                {error, _} = SendErr ->
-                    notify(disconnected, {send_connect_failed, SendErr}, Data),
-                    {stop, normal, Data}
-            end;
-        {error, _} = SetoptErr ->
-            notify(disconnected, {setopt_failed, SetoptErr}, Data),
-            {stop, normal, Data}
-    end;
+    handshake_setopt(macula_quic:setopt(Stream, active, true), Stream, Data);
 on_handshake_enter_client(Err, Data) ->
     notify(disconnected, {open_stream_failed, Err}, Data),
+    {stop, normal, Data}.
+
+handshake_setopt(ok, Stream, Data) ->
+    handshake_send(send_connect(Stream, Data), Stream, Data);
+handshake_setopt({error, _} = SetoptErr, _Stream, Data) ->
+    notify(disconnected, {setopt_failed, SetoptErr}, Data),
+    {stop, normal, Data}.
+
+handshake_send(ok, Stream, Data) ->
+    {keep_state, Data#data{quic_stream = Stream}, [handshake_state_timeout()]};
+handshake_send({error, _} = SendErr, _Stream, Data) ->
+    notify(disconnected, {send_connect_failed, SendErr}, Data),
     {stop, normal, Data}.
 
 consume_handshake(Buf, Data) ->

@@ -157,49 +157,42 @@ exists(MRI) when is_binary(MRI) ->
 
 -spec list_children(binary()) -> [binary()].
 list_children(MRI) when is_binary(MRI) ->
-    case macula_mri:parse(MRI) of
-        {ok, #{realm := Realm, path := Path}} ->
-            ParentDepth = length(Path),
-            %% Find all MRIs that have this as parent
-            ets:foldl(
-                fun(#mri_entry{mri = ChildMRI, realm = R, path = P}, Acc)
-                    when R =:= Realm, length(P) =:= ParentDepth + 1 ->
-                        case lists:prefix(Path, P) of
-                            true -> [ChildMRI | Acc];
-                            false -> Acc
-                        end;
-                   (_, Acc) ->
-                        Acc
-                end,
-                [],
-                ?MRI_TABLE
-            );
-        {error, _} ->
-            []
-    end.
+    children_for(macula_mri:parse(MRI)).
+
+children_for({ok, #{realm := Realm, path := Path}}) ->
+    ParentDepth = length(Path),
+    %% Find all MRIs that have this as parent
+    ets:foldl(fun(E, Acc) -> collect_child(E, Realm, Path, ParentDepth, Acc) end,
+              [], ?MRI_TABLE);
+children_for({error, _}) ->
+    [].
+
+collect_child(#mri_entry{mri = ChildMRI, realm = R, path = P}, Realm, Path, ParentDepth, Acc)
+  when R =:= Realm, length(P) =:= ParentDepth + 1 ->
+    prefix_keep(lists:prefix(Path, P), ChildMRI, Acc);
+collect_child(_, _Realm, _Path, _ParentDepth, Acc) ->
+    Acc.
+
+prefix_keep(true, MRI, Acc) -> [MRI | Acc];
+prefix_keep(false, _MRI, Acc) -> Acc.
 
 -spec list_descendants(binary()) -> [binary()].
 list_descendants(MRI) when is_binary(MRI) ->
-    case macula_mri:parse(MRI) of
-        {ok, #{realm := Realm, path := Path}} ->
-            ParentDepth = length(Path),
-            %% Find all MRIs that have this as ancestor
-            ets:foldl(
-                fun(#mri_entry{mri = DescMRI, realm = R, path = P}, Acc)
-                    when R =:= Realm, length(P) > ParentDepth ->
-                        case lists:prefix(Path, P) of
-                            true -> [DescMRI | Acc];
-                            false -> Acc
-                        end;
-                   (_, Acc) ->
-                        Acc
-                end,
-                [],
-                ?MRI_TABLE
-            );
-        {error, _} ->
-            []
-    end.
+    descendants_for(macula_mri:parse(MRI)).
+
+descendants_for({ok, #{realm := Realm, path := Path}}) ->
+    ParentDepth = length(Path),
+    %% Find all MRIs that have this as ancestor
+    ets:foldl(fun(E, Acc) -> collect_descendant(E, Realm, Path, ParentDepth, Acc) end,
+              [], ?MRI_TABLE);
+descendants_for({error, _}) ->
+    [].
+
+collect_descendant(#mri_entry{mri = DescMRI, realm = R, path = P}, Realm, Path, ParentDepth, Acc)
+  when R =:= Realm, length(P) > ParentDepth ->
+    prefix_keep(lists:prefix(Path, P), DescMRI, Acc);
+collect_descendant(_, _Realm, _Path, _ParentDepth, Acc) ->
+    Acc.
 
 -spec list_by_type(atom(), binary()) -> [binary()].
 list_by_type(Type, Realm) when is_atom(Type), is_binary(Realm) ->
@@ -297,24 +290,25 @@ traverse_transitive(Start, Predicate, Direction) when is_binary(Start) ->
     traverse_transitive(Start, Predicate, Direction, sets:new(), []).
 
 traverse_transitive(Current, Predicate, Direction, Visited, Acc) ->
-    case sets:is_element(Current, Visited) of
-        true ->
-            Acc;
-        false ->
-            NewVisited = sets:add_element(Current, Visited),
-            Neighbors = case Direction of
-                forward -> related_to(Current, Predicate);
-                reverse -> related_from(Current, Predicate)
-            end,
-            NewAcc = Neighbors ++ Acc,
-            lists:foldl(
-                fun(Next, AccIn) ->
-                    traverse_transitive(Next, Predicate, Direction, NewVisited, AccIn)
-                end,
-                NewAcc,
-                Neighbors
-            )
-    end.
+    traverse_visited(sets:is_element(Current, Visited),
+                     Current, Predicate, Direction, Visited, Acc).
+
+traverse_visited(true, _Current, _Predicate, _Direction, _Visited, Acc) ->
+    Acc;
+traverse_visited(false, Current, Predicate, Direction, Visited, Acc) ->
+    NewVisited = sets:add_element(Current, Visited),
+    Neighbors = traverse_neighbors(Direction, Current, Predicate),
+    NewAcc = Neighbors ++ Acc,
+    lists:foldl(
+        fun(Next, AccIn) ->
+            traverse_transitive(Next, Predicate, Direction, NewVisited, AccIn)
+        end,
+        NewAcc,
+        Neighbors
+    ).
+
+traverse_neighbors(forward, Current, Predicate) -> related_to(Current, Predicate);
+traverse_neighbors(reverse, Current, Predicate) -> related_from(Current, Predicate).
 
 -spec get_relationship(binary(), atom() | {custom, binary()}, binary()) ->
     {ok, map()} | {error, not_found | term()}.

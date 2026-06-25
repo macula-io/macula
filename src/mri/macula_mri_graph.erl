@@ -200,18 +200,16 @@ instances_of(Class) ->
 -spec instances_of_transitive(macula_mri:mri()) -> [macula_mri:mri()].
 instances_of_transitive(Class) ->
     Adapter = adapter(),
-    case erlang:function_exported(Adapter, instances_of_transitive, 1) of
-        true ->
-            Adapter:instances_of_transitive(Class);
-        false ->
-            %% Default implementation: collect instances from class and all subclasses
-            DirectInstances = instances_of(Class),
-            SubclassInstances = lists:flatmap(
-                fun(Subclass) -> instances_of_transitive(Subclass) end,
-                subclasses(Class)
-            ),
-            lists:usort(DirectInstances ++ SubclassInstances)
-    end.
+    Exported = erlang:function_exported(Adapter, instances_of_transitive, 1),
+    instances_transitive(Exported, Adapter, Class).
+
+instances_transitive(true, Adapter, Class) ->
+    Adapter:instances_of_transitive(Class);
+instances_transitive(false, _Adapter, Class) ->
+    %% Default implementation: collect instances from class and all subclasses
+    DirectInstances = instances_of(Class),
+    SubclassInstances = lists:flatmap(fun instances_of_transitive/1, subclasses(Class)),
+    lists:usort(DirectInstances ++ SubclassInstances).
 
 %% @doc Get the classes an instance belongs to.
 -spec classes_of(macula_mri:mri()) -> [macula_mri:mri()].

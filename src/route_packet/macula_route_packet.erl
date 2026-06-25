@@ -111,25 +111,24 @@ configure(#{own_address := OwnAddr,
 mode() ->
     case ets:info(?TABLE) of
         undefined -> undefined;
-        _ ->
-            case ets:lookup(?TABLE, ?MODE_KEY) of
-                [{_, M}] -> M;
-                []       -> undefined
-            end
+        _ -> mode_entry(ets:lookup(?TABLE, ?MODE_KEY))
     end.
+
+mode_entry([{_, M}]) -> M;
+mode_entry([])       -> undefined.
 
 %% @doc Return the configured static stations (diagnostics; empty in dht mode).
 -spec routes() -> [#{address := <<_:128>>, station := binary()}].
 routes() ->
     case ets:info(?TABLE) of
         undefined -> [];
-        _ ->
-            ets:foldl(
-                fun({{addr, A}, S, _F}, Acc) ->
-                        [#{address => A, station => S} | Acc];
-                   (_, Acc) -> Acc
-                end, [], ?TABLE)
+        _ -> ets:foldl(fun collect_route/2, [], ?TABLE)
     end.
+
+collect_route({{addr, A}, S, _F}, Acc) ->
+    [#{address => A, station => S} | Acc];
+collect_route(_, Acc) ->
+    Acc.
 
 %% @doc Look up the route for `Address'.
 %%
@@ -223,22 +222,23 @@ install_and_send(#{station_pubkey  := Pk,
                    host_advertised := Hosts,
                    expires_at      := X} = _Endpoint,
                  Dst, Envelope, Send, ConnFn) ->
-    case pick_host(Hosts) of
-        {error, _} = Err -> Err;
-        {ok, Host} ->
-            case ConnFn(Pk, Host, Port) of
-                ok ->
-                    ok = macula_cache_route:insert(Dst, #{
-                        station_pubkey => Pk,
-                        host           => Host,
-                        port           => Port,
-                        expires_at     => X
-                    }),
-                    send_via(Send(Pk, Envelope), Pk);
-                {error, _} = Err ->
-                    Err
-            end
-    end.
+    install_with_host(pick_host(Hosts), Pk, Port, X, Dst, Envelope, Send, ConnFn).
+
+install_with_host({error, _} = Err, _Pk, _Port, _X, _Dst, _Envelope, _Send, _ConnFn) ->
+    Err;
+install_with_host({ok, Host}, Pk, Port, X, Dst, Envelope, Send, ConnFn) ->
+    install_connected(ConnFn(Pk, Host, Port), Host, Pk, Port, X, Dst, Envelope, Send).
+
+install_connected(ok, Host, Pk, Port, X, Dst, Envelope, Send) ->
+    ok = macula_cache_route:insert(Dst, #{
+        station_pubkey => Pk,
+        host           => Host,
+        port           => Port,
+        expires_at     => X
+    }),
+    send_via(Send(Pk, Envelope), Pk);
+install_connected({error, _} = Err, _Host, _Pk, _Port, _X, _Dst, _Envelope, _Send) ->
+    Err.
 
 pick_host([]) -> {error, no_route};
 pick_host([H | _]) when is_binary(H) -> {ok, H};

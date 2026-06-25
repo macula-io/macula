@@ -209,36 +209,27 @@ maybe_connect_node(Node, State) when Node =:= node() ->
     %% Don't connect to ourselves
     State;
 maybe_connect_node(Node, State) ->
-    case maps:get(Node, State#state.connected, false) of
-        true ->
-            %% Already connected
-            State;
-        false ->
-            %% Try to connect
-            ?LOG_INFO(
-                "macula_cluster_strategy: attempting to connect to ~p",
-                [Node]
-            ),
-            case net_kernel:connect_node(Node) of
-                true ->
-                    ?LOG_INFO(
-                        "macula_cluster_strategy: connected to ~p",
-                        [Node]
-                    ),
-                    Connected = maps:put(Node, true, State#state.connected),
-                    notify_callback(State, {connected, Node}),
-                    State#state{connected = Connected};
-                false ->
-                    ?LOG_WARNING(
-                        "macula_cluster_strategy: failed to connect to ~p",
-                        [Node]
-                    ),
-                    State;
-                ignored ->
-                    %% net_kernel not running
-                    State
-            end
-    end.
+    maybe_connect_unconnected(maps:get(Node, State#state.connected, false), Node, State).
+
+maybe_connect_unconnected(true, _Node, State) ->
+    %% Already connected
+    State;
+maybe_connect_unconnected(false, Node, State) ->
+    %% Try to connect
+    ?LOG_INFO("macula_cluster_strategy: attempting to connect to ~p", [Node]),
+    connect_result(net_kernel:connect_node(Node), Node, State).
+
+connect_result(true, Node, State) ->
+    ?LOG_INFO("macula_cluster_strategy: connected to ~p", [Node]),
+    Connected = maps:put(Node, true, State#state.connected),
+    notify_callback(State, {connected, Node}),
+    State#state{connected = Connected};
+connect_result(false, Node, State) ->
+    ?LOG_WARNING("macula_cluster_strategy: failed to connect to ~p", [Node]),
+    State;
+connect_result(ignored, _Node, State) ->
+    %% net_kernel not running
+    State.
 
 %% @private Disconnect from a node that's no longer in discovery
 maybe_disconnect_node(Node, State) ->
@@ -258,24 +249,20 @@ maybe_disconnect_node(Node, State) ->
 
 %% @private Poll discovered nodes
 poll_discovered_nodes(State) ->
-    case macula_dist_discovery:list_nodes() of
-        Nodes when is_list(Nodes) ->
-            lists:foldl(
-                fun(NodeName, AccState) ->
-                    case macula_dist_discovery:lookup_node(NodeName) of
-                        {ok, #{ip := IP, port := Port}} ->
-                            Node = make_node_name(Port, IP),
-                            maybe_connect_node(Node, AccState);
-                        {error, _} ->
-                            AccState
-                    end
-                end,
-                State,
-                Nodes
-            );
-        _ ->
-            State
-    end.
+    poll_nodes(macula_dist_discovery:list_nodes(), State).
+
+poll_nodes(Nodes, State) when is_list(Nodes) ->
+    lists:foldl(fun connect_discovered_node/2, State, Nodes);
+poll_nodes(_, State) ->
+    State.
+
+connect_discovered_node(NodeName, AccState) ->
+    connect_looked_up(macula_dist_discovery:lookup_node(NodeName), AccState).
+
+connect_looked_up({ok, #{ip := IP, port := Port}}, AccState) ->
+    maybe_connect_node(make_node_name(Port, IP), AccState);
+connect_looked_up({error, _}, AccState) ->
+    AccState.
 
 %% @private Make node name from port and IP
 %% Format: port@ip (e.g., '4433@192.168.1.100')

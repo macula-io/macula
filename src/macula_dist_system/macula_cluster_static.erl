@@ -342,28 +342,28 @@ try_connect(Node, State) when Node =:= node() ->
     %% Don't connect to ourselves
     State;
 try_connect(Node, State) ->
-    case sets:is_element(Node, State#state.connected) of
-        true ->
-            %% Already connected
-            State;
-        false ->
-            ?LOG_DEBUG("[macula_cluster_static] Attempting connection to ~p", [Node]),
-            case net_kernel:connect_node(Node) of
-                true ->
-                    ?LOG_INFO("[macula_cluster_static] Connected to ~p", [Node]),
-                    NewConnected = sets:add_element(Node, State#state.connected),
-                    notify_callback(State#state.callback, nodeup, Node),
-                    State#state{connected = NewConnected};
-                false ->
-                    ?LOG_DEBUG("[macula_cluster_static] Failed to connect to ~p", [Node]),
-                    State;
-                ignored ->
-                    %% net_kernel not running
-                    ?LOG_WARNING("[macula_cluster_static] net_kernel not running, "
-                                 "cannot connect to ~p", [Node]),
-                    State
-            end
-    end.
+    try_connect_unconnected(sets:is_element(Node, State#state.connected), Node, State).
+
+try_connect_unconnected(true, _Node, State) ->
+    %% Already connected
+    State;
+try_connect_unconnected(false, Node, State) ->
+    ?LOG_DEBUG("[macula_cluster_static] Attempting connection to ~p", [Node]),
+    connect_result(net_kernel:connect_node(Node), Node, State).
+
+connect_result(true, Node, State) ->
+    ?LOG_INFO("[macula_cluster_static] Connected to ~p", [Node]),
+    NewConnected = sets:add_element(Node, State#state.connected),
+    notify_callback(State#state.callback, nodeup, Node),
+    State#state{connected = NewConnected};
+connect_result(false, Node, State) ->
+    ?LOG_DEBUG("[macula_cluster_static] Failed to connect to ~p", [Node]),
+    State;
+connect_result(ignored, Node, State) ->
+    %% net_kernel not running
+    ?LOG_WARNING("[macula_cluster_static] net_kernel not running, "
+                 "cannot connect to ~p", [Node]),
+    State.
 
 %% @private Schedule reconnection timer
 -spec schedule_reconnect(pos_integer()) -> reference().
