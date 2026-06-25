@@ -61,17 +61,7 @@
 %%====================================================================
 
 init() ->
-    PrivDir = case code:priv_dir(macula) of
-        {error, _} ->
-            case code:which(?MODULE) of
-                Filename when is_list(Filename) ->
-                    filename:join(filename:dirname(filename:dirname(Filename)), "priv");
-                _ ->
-                    "priv"
-            end;
-        Dir ->
-            Dir
-    end,
+    PrivDir = priv_dir(),
     Path = filename:join(PrivDir, "macula_crypto_nif"),
     case erlang:load_nif(Path, 0) of
         ok ->
@@ -84,6 +74,19 @@ init() ->
             %% NIF not available, will use Erlang fallbacks
             ok
     end.
+
+priv_dir() ->
+    priv_dir(code:priv_dir(macula)).
+
+priv_dir({error, _}) ->
+    priv_dir_from_module(code:which(?MODULE));
+priv_dir(Dir) ->
+    Dir.
+
+priv_dir_from_module(Filename) when is_list(Filename) ->
+    filename:join(filename:dirname(filename:dirname(Filename)), "priv");
+priv_dir_from_module(_) ->
+    "priv".
 
 %%====================================================================
 %% API
@@ -110,13 +113,12 @@ generate_keypair() ->
     {ok, Signature :: binary()} | {error, invalid_private_key}.
 sign(Message, PrivateKey) ->
     case is_nif_loaded() of
-        true ->
-            case nif_sign(Message, PrivateKey) of
-                {ok, Sig} -> {ok, Sig};
-                {invalid_private_key, _} -> {error, invalid_private_key}
-            end;
+        true -> sign_result(nif_sign(Message, PrivateKey));
         false -> erlang_sign(Message, PrivateKey)
     end.
+
+sign_result({ok, Sig}) -> {ok, Sig};
+sign_result({invalid_private_key, _}) -> {error, invalid_private_key}.
 
 %% @doc Verify an Ed25519 signature.
 %% Returns `true' if valid, `false' otherwise.
@@ -193,13 +195,12 @@ base64_encode(Data) ->
 -spec base64_decode(Encoded :: binary()) -> {ok, binary()} | {error, atom()}.
 base64_decode(Encoded) ->
     case is_nif_loaded() of
-        true ->
-            case nif_base64_decode(Encoded) of
-                {ok, Data} -> {ok, Data};
-                {error, _} -> {error, invalid_base64}
-            end;
+        true -> base64_decode_result(nif_base64_decode(Encoded));
         false -> erlang_base64_decode(Encoded)
     end.
+
+base64_decode_result({ok, Data}) -> {ok, Data};
+base64_decode_result({error, _}) -> {error, invalid_base64}.
 
 %% @doc Constant-time comparison of two binaries.
 %% Important for security - prevents timing attacks.

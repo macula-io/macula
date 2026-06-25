@@ -62,29 +62,31 @@
 %%====================================================================
 
 init() ->
-    PrivDir = case code:priv_dir(macula) of
-        {error, _} ->
-            case code:which(?MODULE) of
-                Filename when is_list(Filename) ->
-                    filename:join(filename:dirname(filename:dirname(Filename)), "priv");
-                _ ->
-                    "priv"
-            end;
-        Dir ->
-            Dir
-    end,
-    Path = filename:join(PrivDir, "macula_did_nif"),
-    case erlang:load_nif(Path, 0) of
-        ok ->
-            persistent_term:put(?NIF_LOADED_KEY, true),
-            ok;
-        {error, {reload, _}} ->
-            persistent_term:put(?NIF_LOADED_KEY, true),
-            ok;
-        {error, _Reason} ->
-            %% NIF not available, will use Erlang fallbacks
-            ok
-    end.
+    Path = filename:join(priv_dir(), "macula_did_nif"),
+    load_nif_result(erlang:load_nif(Path, 0)).
+
+priv_dir() ->
+    priv_dir_or_fallback(code:priv_dir(macula)).
+
+priv_dir_or_fallback({error, _}) ->
+    priv_dir_from_module(code:which(?MODULE));
+priv_dir_or_fallback(Dir) ->
+    Dir.
+
+priv_dir_from_module(Filename) when is_list(Filename) ->
+    filename:join(filename:dirname(filename:dirname(Filename)), "priv");
+priv_dir_from_module(_) ->
+    "priv".
+
+load_nif_result(ok) ->
+    persistent_term:put(?NIF_LOADED_KEY, true),
+    ok;
+load_nif_result({error, {reload, _}}) ->
+    persistent_term:put(?NIF_LOADED_KEY, true),
+    ok;
+load_nif_result({error, _Reason}) ->
+    %% NIF not available, will use Erlang fallbacks
+    ok.
 
 %%====================================================================
 %% API
@@ -147,30 +149,30 @@ get_controller(DocumentJson) ->
 -spec verify_controller(DocumentJson :: binary(), ExpectedController :: binary()) ->
     ok | {error, atom()}.
 verify_controller(DocumentJson, ExpectedController) ->
-    case is_nif_loaded() of
-        true ->
-            case nif_verify_controller(DocumentJson, ExpectedController) of
-                ok -> ok;
-                Err -> {error, Err}
-            end;
-        false ->
-            erlang_verify_controller(DocumentJson, ExpectedController)
-    end.
+    verify_controller_dispatch(is_nif_loaded(), DocumentJson, ExpectedController).
+
+verify_controller_dispatch(true, DocumentJson, ExpectedController) ->
+    verify_controller_result(nif_verify_controller(DocumentJson, ExpectedController));
+verify_controller_dispatch(false, DocumentJson, ExpectedController) ->
+    erlang_verify_controller(DocumentJson, ExpectedController).
+
+verify_controller_result(ok)  -> ok;
+verify_controller_result(Err) -> {error, Err}.
 
 %% @doc Parse a DID string and extract its components.
 %% Returns a map with method, identity, parts, and depth.
 -spec parse_did(Did :: binary()) ->
     {ok, Components :: map()} | {error, atom()}.
 parse_did(Did) ->
-    case is_nif_loaded() of
-        true ->
-            case nif_parse_did(Did) of
-                {ok, Json} -> {ok, json_decode(Json)};
-                {invalid_did, _} -> {error, invalid_did}
-            end;
-        false ->
-            erlang_parse_did(Did)
-    end.
+    parse_did_dispatch(is_nif_loaded(), Did).
+
+parse_did_dispatch(true, Did) ->
+    parse_did_result(nif_parse_did(Did));
+parse_did_dispatch(false, Did) ->
+    erlang_parse_did(Did).
+
+parse_did_result({ok, Json}) -> {ok, json_decode(Json)};
+parse_did_result({invalid_did, _}) -> {error, invalid_did}.
 
 %% @private Transform NIF result to standard format
 transform_nif_result({ok, Result}) -> {ok, Result};
@@ -252,17 +254,16 @@ erlang_create_document(Did, PublicKey) when byte_size(PublicKey) =:= 32 ->
             },
 
             %% Remove null controller for root
-            Doc2 = case Controller of
-                null -> maps:remove(<<"controller">>, Doc);
-                _ -> Doc
-            end,
-
+            Doc2 = strip_null_controller(Controller, Doc),
             {ok, json_encode(Doc2)};
         _ ->
             {error, invalid_did}
     end;
 erlang_create_document(_Did, _PublicKey) ->
     {error, invalid_public_key}.
+
+strip_null_controller(null, Doc) -> maps:remove(<<"controller">>, Doc);
+strip_null_controller(_, Doc)    -> Doc.
 
 %% @private Parse DID document
 erlang_parse_document(DocumentJson) ->
@@ -333,38 +334,40 @@ erlang_parse_did(Did) ->
 
 %% @private Check if child is descendant of parent
 erlang_is_descendant(ChildDid, ParentDid) ->
-    case {binary:match(ChildDid, <<"did:macula:">>),
-          binary:match(ParentDid, <<"did:macula:">>)} of
-        {{0, 11}, {0, 11}} ->
-            ChildIdentity = binary:part(ChildDid, 11, byte_size(ChildDid) - 11),
-            ParentIdentity = binary:part(ParentDid, 11, byte_size(ParentDid) - 11),
-            case ChildIdentity =:= ParentIdentity of
-                true -> false; % Same DID
-                false ->
-                    Prefix = <<ParentIdentity/binary, ".">>,
-                    case binary:match(ChildIdentity, Prefix) of
-                        {0, _} -> true;
-                        _ -> false
-                    end
-            end;
-        _ ->
-            false
-    end.
+    descendant_match({binary:match(ChildDid, <<"did:macula:">>),
+                      binary:match(ParentDid, <<"did:macula:">>)}, ChildDid, ParentDid).
+
+descendant_match({{0, 11}, {0, 11}}, ChildDid, ParentDid) ->
+    ChildIdentity = binary:part(ChildDid, 11, byte_size(ChildDid) - 11),
+    ParentIdentity = binary:part(ParentDid, 11, byte_size(ParentDid) - 11),
+    descendant_identity(ChildIdentity =:= ParentIdentity, ChildIdentity, ParentIdentity);
+descendant_match(_, _ChildDid, _ParentDid) ->
+    false.
+
+descendant_identity(true, _ChildIdentity, _ParentIdentity) ->
+    false;  % Same DID
+descendant_identity(false, ChildIdentity, ParentIdentity) ->
+    descendant_prefix(binary:match(ChildIdentity, <<ParentIdentity/binary, ".">>)).
+
+descendant_prefix({0, _}) -> true;
+descendant_prefix(_)      -> false.
 
 %% @private Get parent DID
 get_parent_did_erlang(DidStr) ->
-    case string:prefix(DidStr, "did:macula:") of
-        nomatch -> null;
-        Identity ->
-            Parts = string:split(Identity, ".", all),
-            case length(Parts) of
-                N when N =< 2 -> null; % Root realm has no parent
-                _ ->
-                    ParentParts = lists:droplast(Parts),
-                    ParentIdentity = string:join(ParentParts, "."),
-                    list_to_binary("did:macula:" ++ ParentIdentity)
-            end
-    end.
+    parent_did_prefix(string:prefix(DidStr, "did:macula:")).
+
+parent_did_prefix(nomatch) ->
+    null;
+parent_did_prefix(Identity) ->
+    Parts = string:split(Identity, ".", all),
+    parent_did_parts(length(Parts), Parts).
+
+parent_did_parts(N, _Parts) when N =< 2 ->
+    null;  % Root realm has no parent
+parent_did_parts(_, Parts) ->
+    ParentParts = lists:droplast(Parts),
+    ParentIdentity = string:join(ParentParts, "."),
+    list_to_binary("did:macula:" ++ ParentIdentity).
 
 %%====================================================================
 %% JSON Helpers (minimal implementation)

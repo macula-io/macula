@@ -35,17 +35,19 @@ nif_start_reader(_Handle, _Pid) -> erlang:nif_error(nif_not_loaded).
 %% =============================================================================
 
 init() ->
-    PrivDir = case code:priv_dir(macula) of
-        {error, _} ->
-            case code:which(?MODULE) of
-                Filename when is_list(Filename) ->
-                    filename:join(filename:dirname(filename:dirname(Filename)),
-                                  "priv");
-                _ ->
-                    "priv"
-            end;
-        Dir ->
-            Dir
-    end,
+    PrivDir = priv_dir(),
     Path = filename:join(PrivDir, "macula_tun_nif"),
     erlang:load_nif(Path, 0).
+
+priv_dir() ->
+    priv_dir(code:priv_dir(macula)).
+
+priv_dir({error, _}) ->
+    priv_dir_from_module(code:which(?MODULE));
+priv_dir(Dir) ->
+    Dir.
+
+priv_dir_from_module(Filename) when is_list(Filename) ->
+    filename:join(filename:dirname(filename:dirname(Filename)), "priv");
+priv_dir_from_module(_) ->
+    "priv".
