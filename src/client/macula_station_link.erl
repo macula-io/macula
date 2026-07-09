@@ -152,6 +152,14 @@
 -define(LIVENESS_MAX_MISSES,  2).
 -define(LIVENESS_PROCEDURE,   <<"_macula.ping">>).
 
+%% Grace added on top of `connect_timeout_ms' before the connect
+%% watchdog fires. The dial NIF is meant to bound itself at
+%% `connect_timeout_ms'; the grace covers CONNECT/HELLO frame exchange
+%% after the QUIC layer is up. If the whole thing hasn't produced a
+%% `connected' message by `connect_timeout_ms + grace', the worker is
+%% wedged and we recycle the link.
+-define(CONNECT_WATCHDOG_GRACE_MS, 10_000).
+
 -record(state, {
     seed             :: #{host := binary() | string(),
                           port := inet:port_number(),
@@ -216,7 +224,24 @@
     %% miss count; reaches `?LIVENESS_MAX_MISSES' → close peer_pid.
     liveness_timer        :: undefined | reference(),
     liveness_outstanding  :: undefined | <<_:128>>,
-    liveness_misses = 0   :: non_neg_integer()
+    liveness_misses = 0   :: non_neg_integer(),
+    %% Connect/handshake watchdog. Armed the moment the peering worker
+    %% is spawned (peer_pid set) and cancelled on `connected'. If it
+    %% fires while `peer_node_id' is still undefined the CONNECT/HELLO
+    %% handshake never completed within the deadline — the peering
+    %% worker is wedged (e.g. a QUIC dial NIF that hangs past its own
+    %% timeout, or a stalled handshake that emitted no `disconnected').
+    %% We kill the worker and stop so the owner (pool / subscriber)
+    %% respawns a fresh link. This is the ONLY bound on the
+    %% un-connected phase: the app-liveness probe only arms AFTER
+    %% `connected', so without this a link that never finishes
+    %% handshaking sits alive-but-dead forever with no self-heal.
+    connect_watchdog      :: undefined | reference(),
+    %% Optional explicit watchdog deadline. When unset it is derived
+    %% as `connect_timeout_ms + ?CONNECT_WATCHDOG_GRACE_MS'. Exposed as
+    %% the `connect_watchdog_ms' start opt for operational tuning and
+    %% for tests that need a short deadline.
+    connect_watchdog_ms   :: undefined | non_neg_integer()
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
@@ -542,9 +567,11 @@ init(Opts) ->
     Caps     = maps:get(capabilities, Opts, 0),
     Alpn     = maps:get(alpn, Opts, [<<"macula">>]),
     Tmo      = maps:get(connect_timeout_ms, Opts, 30_000),
+    WdMs     = maps:get(connect_watchdog_ms, Opts, undefined),
     State    = #state{seed = Seed, identity = Identity,
                       capabilities = Caps, alpn = Alpn,
-                      connect_timeout_ms = Tmo},
+                      connect_timeout_ms = Tmo,
+                      connect_watchdog_ms = WdMs},
     process_flag(trap_exit, true),
     self() ! attempt_connect,
     {ok, State}.
@@ -724,9 +751,12 @@ handle_info(attempt_connect, #state{seed = Seed, identity = Id,
 
 handle_info({macula_peering, connected, Pid, PeerNodeId},
             #state{peer_pid = Pid} = S) ->
-    NewS = arm_liveness(S#state{peer_node_id = PeerNodeId,
-                                liveness_misses = 0,
-                                liveness_outstanding = undefined}),
+    %% Handshake completed — cancel the connect watchdog and hand over
+    %% to the steady-state app-liveness probe.
+    S1 = cancel_connect_watchdog(S),
+    NewS = arm_liveness(S1#state{peer_node_id = PeerNodeId,
+                                 liveness_misses = 0,
+                                 liveness_outstanding = undefined}),
     drain_pending_subscribes(NewS),
     drain_pending_advertises(NewS),
     drain_pending_stream_advertises(NewS),
@@ -757,6 +787,29 @@ handle_info({call_timeout, CallId}, #state{pending = P} = S) ->
 
 handle_info(liveness_tick, S) ->
     {noreply, on_liveness_tick(S)};
+
+%% Connect watchdog fired. If we are connected by now the timer was a
+%% late straggler (we cancel on `connected', but async cancels can
+%% race) — ignore it. Otherwise the handshake never completed: recycle.
+handle_info(connect_watchdog, #state{peer_node_id = NodeId} = S)
+        when NodeId =/= undefined ->
+    {noreply, S#state{connect_watchdog = undefined}};
+handle_info(connect_watchdog, #state{peer_pid = Pid, seed = Seed} = S) ->
+    macula_diagnostics:event(<<"_macula.station_link.connect_watchdog">>, #{
+        seed          => Seed,
+        peer_pid      => Pid,
+        timeout_ms    => connect_watchdog_ms(S)
+    }),
+    %% Best-effort kill of the wedged peering worker. If it is blocked
+    %% in a non-yielding dirty NIF the kill is deferred until the NIF
+    %% returns, but stopping here still frees the owner to respawn a
+    %% fresh link (fresh dial) immediately — the bounded self-heal.
+    kill_peer(Pid),
+    {stop, normal, fail_all_pending(connect_timeout,
+                                    cancel_liveness(
+                                      S#state{connect_watchdog = undefined,
+                                              peer_pid = undefined,
+                                              peer_node_id = undefined}))};
 
 handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid} = S) ->
     NewS = fail_all_pending({peering_exit, Reason}, cancel_liveness(S)),
@@ -831,7 +884,10 @@ maybe_add_publisher_sig(Frame, Identity) ->
 
 after_connect_request({ok, Pid}, S) ->
     link(Pid),
-    {noreply, S#state{peer_pid = Pid}};
+    %% Arm the connect watchdog now: from here we are waiting for the
+    %% peering worker's `connected' message. If it never arrives (dial
+    %% NIF hangs, handshake stalls) the watchdog recycles the link.
+    {noreply, arm_connect_watchdog(S#state{peer_pid = Pid})};
 after_connect_request({error, Reason}, S) ->
     macula_diagnostics:event(<<"_macula.station_link.connect_failed">>, #{
         reason => Reason,
@@ -946,6 +1002,32 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
 %%      frame (`unknown_next_peer'). Either response shape clears the
 %%      outstanding slot via `maybe_clear_liveness/2'.
 %%   3. Re-arm the timer.
+%% Connect watchdog helpers. Bounds the time from "peering worker
+%% spawned" to "handshake complete". See the record field docs.
+connect_watchdog_ms(#state{connect_watchdog_ms = Ms}) when is_integer(Ms) ->
+    Ms;
+connect_watchdog_ms(#state{connect_timeout_ms = Tmo}) ->
+    Tmo + ?CONNECT_WATCHDOG_GRACE_MS.
+
+arm_connect_watchdog(S) ->
+    S1 = cancel_connect_watchdog(S),
+    Ref = erlang:send_after(connect_watchdog_ms(S1), self(), connect_watchdog),
+    S1#state{connect_watchdog = Ref}.
+
+cancel_connect_watchdog(#state{connect_watchdog = undefined} = S) ->
+    S;
+cancel_connect_watchdog(#state{connect_watchdog = Ref} = S)
+        when is_reference(Ref) ->
+    _ = erlang:cancel_timer(Ref, [{async, true}, {info, false}]),
+    S#state{connect_watchdog = undefined}.
+
+kill_peer(Pid) when is_pid(Pid) ->
+    _ = (catch unlink(Pid)),
+    _ = (catch exit(Pid, kill)),
+    ok;
+kill_peer(_) ->
+    ok.
+
 arm_liveness(S) ->
     cancel_liveness_timer(S),
     Ref = erlang:send_after(?LIVENESS_INTERVAL_MS, self(), liveness_tick),

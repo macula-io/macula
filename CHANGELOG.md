@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.1.0] - 2026-07-09
+
+Connect-reliability release. Fixes the root cause of the
+`macula.io/clankercab` outage: on a long-lived client that holds many
+station-links (the realm ran ~64 across several subsystems), every
+`macula_quic:connect` would eventually hang forever, leaving the client
+with zero live links. Two independent NIF defects plus a client-side
+self-heal gap.
+
+### Fixed — QUIC connect NIF (native/macula_quic)
+
+- **The dial timeout now always fires.** `nif_connect` only wrapped the
+  handshake in `tokio::time::timeout`, leaving `lookup_host` unbounded,
+  and under runtime pressure even the handshake timeout would not fire —
+  so a stalled/black-holed dial parked forever. The whole operation
+  (DNS + endpoint + handshake) is now under a single deadline; a dial to
+  an unreachable peer returns `{error, connection_timeout}` at
+  `timeout_ms` instead of hanging. Verified: reachable station connects
+  in ~75 ms; black-hole address returns `connection_timeout` at the
+  deadline.
+- **One shared client `Endpoint` per address family, not one per dial.**
+  Each `connect` used to build a fresh `quinn::Endpoint` — a new UDP
+  socket + a new endpoint-driver task on the shared 4-worker tokio
+  runtime. On a client that reconnects continuously these accumulated
+  hundreds of driver tasks/sockets and starved the runtime's
+  reactor/timer (which is why the timeout stopped firing). Connections
+  now multiplex over a single shared endpoint per family.
+- **Blocking network NIFs moved to dirty-IO schedulers.** `nif_connect`,
+  `nif_open_stream` and `nif_send` were scheduled `DirtyCpu` — there is
+  one dirty-CPU scheduler per core (two on the realm box), so a couple of
+  blocking dials pinned them all and starved every other QUIC operation.
+  These are IO-bound and now run on the dirty-IO pool (far larger),
+  matching their nature.
+
+### Fixed — connect self-heal
+
+- **`macula_station_link` connect watchdog.** A link whose peering
+  worker connects at the transport layer but never delivers
+  `{macula_peering, connected, ...}` — e.g. a QUIC dial NIF that hangs
+  past its own `timeout_ms`, or a stalled CONNECT/HELLO exchange — used
+  to sit `alive-but-not-connected` indefinitely: `peer_pid` set,
+  `peer_node_id` undefined, subscriptions queued, no `disconnected`, no
+  owner `:DOWN`, no retry. The app-liveness probe did not cover this
+  (it only arms *after* `connected`), so there was no bound on the
+  un-connected phase and no self-heal after mesh churn. A watchdog is
+  now armed the moment the peering worker is spawned and cancelled on
+  `connected`; if it fires while still un-connected it kills the wedged
+  worker and stops the link so the owner respawns a fresh dial —
+  bounded, automatic self-heal. Deadline is `connect_timeout_ms +
+  10s`, overridable via the `connect_watchdog_ms` start opt.
+  Live-diagnosed on the `macula.io/clankercab` outage (2026-07-09),
+  where every realm subscriber link was wedged this way.
+
 ## [5.0.0] - 2026-06-10
 
 Security release. Four findings from the 2026-06-10 transport-trust

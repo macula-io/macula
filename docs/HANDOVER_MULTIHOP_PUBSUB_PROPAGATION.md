@@ -1,5 +1,47 @@
 # HANDOVER — Multi-hop PubSub propagation (self-healing) is broken across the relay mesh
 
+> ## ⚠️ UPDATE 2026-07-09 — ROOT CAUSE FOUND. This is NOT a propagation/matching bug.
+>
+> Live triage (the §6-step-1 co-location check + realm-side probes) proved the
+> routing layer is **healthy** and the failure is **connection establishment on
+> the realm host**:
+>
+> 1. **Routing/matching WORKS.** On the Paris relay `heverlee` station the realm
+>    (`ABB81B5A`) is materialised and `fleet/leuven/summary` IS registered with
+>    live subscribers (0 stale). Matching would deliver. mpong flows. 873 topics.
+> 2. **Edge publishing WORKS.** parksim-leuven publishes `ok`. (Note pool
+>    `replication_factor` default = **1** → publishes to ONE station only, so a
+>    trace on the *wrong* co-located station sees nothing — not a bug.)
+> 3. **THE BUG: the realm's `macula_quic:connect` NIF hangs on every dial.** A
+>    direct `macula_quic:connect(host,4433,[{verify,none}],3000)` from the realm
+>    did NOT return after 5s — to `heverlee` **and** to `arenberg`, a station on
+>    macula.io's OWN host (so it is not the network). ALL 24 realm peering
+>    workers (ClankerCab.Subscriber + Mesh.RpcAdvertiser) are `connected:false`
+>    and sys-unresponsive (blocked in the dirty NIF). The realm holds ZERO live
+>    links → receives nothing. Stations (CI image) peer fine; the realm runs a
+>    **locally-built image** (see §8) → suspect that build's Quinn NIF.
+> 4. **No self-heal:** `macula_peering_conn`'s `connecting` state calls the
+>    blocking dial NIF with no state_timeout (the handshake timeout only covers
+>    `handshaking`); a hung dial wedges the worker with no `disconnected`, no
+>    owner `:DOWN`, no retry. `macula_station_link`'s liveness probe only arms
+>    AFTER `connected`, so nothing bounded the un-connected phase.
+>
+> **Shipped this session (macula 5.1.0):** a **connect watchdog** in
+> `macula_station_link` — bounds the un-connected phase and recycles a wedged
+> link so the owner respawns (bounded, automatic self-heal). Regression test:
+> `test/macula_pubsub_system/macula_pubsub_connect_selfheal_tests.erl`.
+>
+> **Still needed for the outage:** the realm must run an image whose QUIC dial
+> NIF works (rebuild from CI, or fix the NIF — wrap the whole `nif_connect`
+> async block in a hard timeout / verify the local build). The reproducer below
+> stays red until the realm holds ≥1 connected link. Full detail in memory
+> `project_multihop_pubsub_propagation_broken`.
+>
+> _Everything below is the ORIGINAL (pre-root-cause) handover, kept for the
+> diagnostic trail. Its "propagation/matching" framing is superseded._
+
+---
+
 **Status:** OPEN — foundational bug. A subscriber on one relay does **not**
 receive facts published by a producer on a **different** relay, and the mesh
 does not self-heal subscription routing after producer churn (redeploy/restart).

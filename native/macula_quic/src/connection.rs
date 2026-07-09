@@ -52,7 +52,7 @@ impl Drop for ConnectionResource {
 /// rustler's `Vec<u8>` decoder requires a list term and rejects
 /// Erlang binaries (which is how every caller passes pubkeys).
 /// See cert.rs:nif_generate_self_signed_cert for the same pattern.
-#[rustler::nif(schedule = "DirtyCpu")]
+#[rustler::nif(schedule = "DirtyIo")]
 fn nif_connect<'a>(
     env: Env<'a>,
     host: String,
@@ -76,51 +76,53 @@ fn nif_connect<'a>(
         config::build_client_config(&alpn, verify, pinned, idle_timeout_ms, keep_alive_ms)
             .map_err(|e| rustler::Error::Term(Box::new(e)))?;
 
-    let result = runtime::rt().block_on(async {
-        // Strip square brackets if the caller passed `[ipv6]` form
-        // (used by the pubkey-pin path where the host string is a
-        // synthetic `[ipv6]` derived from the target pubkey). The
-        // bare IP works for both DNS resolution and SNI.
-        let host_str: &str = host
-            .trim_start_matches('[')
-            .trim_end_matches(']');
+    let result: Result<quinn::Connection, String> = runtime::rt().block_on(async {
+        // One deadline covers the WHOLE operation — DNS resolution,
+        // endpoint acquisition and the CONNECT/HELLO handshake — so a
+        // stall in any stage (a hung resolver, a black-holed handshake)
+        // always returns within `timeout_ms` instead of parking the
+        // scheduler forever. The old code only wrapped the handshake,
+        // leaving `lookup_host` unbounded.
+        let fut = async {
+            // Strip square brackets if the caller passed `[ipv6]` form
+            // (used by the pubkey-pin path where the host string is a
+            // synthetic `[ipv6]` derived from the target pubkey). The
+            // bare IP works for both DNS resolution and SNI.
+            let host_str: &str = host.trim_start_matches('[').trim_end_matches(']');
 
-        // Two-arg lookup_host avoids the bracket+colon parsing the
-        // single-string form requires for IPv6.
-        let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host_str, port as u16))
-            .await
-            .map_err(|e| format!("resolve {}:{}: {}", host_str, port, e))?
-            .collect();
+            // Two-arg lookup_host avoids the bracket+colon parsing the
+            // single-string form requires for IPv6.
+            let addrs: Vec<std::net::SocketAddr> =
+                tokio::net::lookup_host((host_str, port as u16))
+                    .await
+                    .map_err(|e| format!("resolve {}:{}: {}", host_str, port, e))?
+                    .collect();
 
-        let remote_addr = addrs
-            .first()
-            .ok_or_else(|| format!("no addresses for {}:{}", host_str, port))?;
+            let remote_addr = *addrs
+                .first()
+                .ok_or_else(|| format!("no addresses for {}:{}", host_str, port))?;
 
-        // Create client endpoint — match address family to remote
-        let local_bind: std::net::SocketAddr = if remote_addr.is_ipv6() {
-            "[::]:0".parse().unwrap()
-        } else {
-            "0.0.0.0:0".parse().unwrap()
+            // Shared client endpoint per address family (see
+            // `runtime::client_endpoint`) — reused across all dials so we
+            // don't leak a socket + driver task per connection.
+            let endpoint = runtime::client_endpoint(remote_addr.is_ipv6())?;
+
+            // Per-dial client config (verify / ALPN / pubkey-pin) via
+            // `connect_with`; SNI = bare host string (rustls ServerName
+            // accepts a literal IP address as a valid name).
+            let connection = endpoint
+                .connect_with(client_config, remote_addr, host_str)
+                .map_err(|e| format!("connect: {}", e))?
+                .await
+                .map_err(|e| format!("handshake: {}", e))?;
+
+            Ok::<quinn::Connection, String>(connection)
         };
-        let mut endpoint = quinn::Endpoint::client(local_bind)
-            .map_err(|e| format!("client endpoint: {}", e))?;
-        endpoint.set_default_client_config(client_config);
 
-        // Connect with timeout. SNI = bare host string (rustls
-        // ServerName accepts a literal IP address as a valid name).
-        let connecting = endpoint
-            .connect(*remote_addr, host_str)
-            .map_err(|e| format!("connect: {}", e))?;
-
-        let connection = tokio::time::timeout(
-            std::time::Duration::from_millis(timeout_ms),
-            connecting,
-        )
-        .await
-        .map_err(|_| "connection_timeout".to_string())?
-        .map_err(|e| format!("handshake: {}", e))?;
-
-        Ok::<quinn::Connection, String>(connection)
+        match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), fut).await {
+            Ok(inner) => inner,
+            Err(_) => Err("connection_timeout".to_string()),
+        }
     });
 
     match result {
@@ -133,7 +135,12 @@ fn nif_connect<'a>(
 }
 
 /// NIF: open_stream(ConnRef) -> {ok, StreamRef} | {error, Reason}
-#[rustler::nif(schedule = "DirtyCpu")]
+///
+/// Network-IO bound (`open_bi` awaits stream flow-control credit), so it
+/// runs on a dirty-IO scheduler — not dirty-CPU. Dirty-CPU schedulers are
+/// scarce (one per core) and a blocking wait there starves everything;
+/// dirty-IO is the correct class and there are far more of them.
+#[rustler::nif(schedule = "DirtyIo")]
 fn nif_open_stream<'a>(
     env: Env<'a>,
     conn: ResourceArc<ConnectionResource>,

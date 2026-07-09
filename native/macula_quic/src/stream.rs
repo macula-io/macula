@@ -113,7 +113,11 @@ impl Drop for StreamResource {
 }
 
 /// NIF: send(StreamRef, Data) -> ok | {error, Reason}
-#[rustler::nif(schedule = "DirtyCpu")]
+///
+/// `write_all` awaits stream flow-control credit — network-IO bound, so
+/// it belongs on a dirty-IO scheduler, not one of the scarce dirty-CPU
+/// schedulers (see `nif_open_stream`).
+#[rustler::nif(schedule = "DirtyIo")]
 fn nif_send<'a>(
     env: Env<'a>,
     stream: ResourceArc<StreamResource>,

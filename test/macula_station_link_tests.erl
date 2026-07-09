@@ -41,6 +41,7 @@ seed_url_https_with_port_test() ->
     Identity = macula_identity:generate(),
     {ok, Pid} = macula_station_link:start_link(#{
         seed     => <<"https://localhost:4433">>,
+        connect_timeout_ms => 2000,
         identity => Identity
     }),
     ?assert(is_process_alive(Pid)),
@@ -52,6 +53,7 @@ seed_map_test() ->
     Identity = macula_identity:generate(),
     {ok, Pid} = macula_station_link:start_link(#{
         seed     => #{host => <<"127.0.0.1">>, port => 65000},
+        connect_timeout_ms => 2000,
         identity => Identity
     }),
     ?assert(is_process_alive(Pid)),
@@ -69,6 +71,7 @@ result_frame_resolves_pending_caller_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -128,6 +131,7 @@ error_frame_surfaces_to_caller_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -188,6 +192,7 @@ disconnect_fails_pending_callers_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -239,6 +244,7 @@ call_times_out_when_no_reply_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -275,6 +281,7 @@ put_record_ok_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -337,6 +344,7 @@ put_record_unexpected_reply_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -396,6 +404,7 @@ find_record_ok_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -458,6 +467,7 @@ find_record_not_found_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -514,6 +524,7 @@ subscribe_sends_frame_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -557,6 +568,7 @@ event_frame_delivered_to_subscriber_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -617,6 +629,7 @@ event_publisher_sig_verify_test_() ->
          application:unset_env(macula, pubsub_strict_publisher_sig),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => macula_identity:generate()
          }),
          FakePeer = self(),
@@ -676,6 +689,7 @@ event_in_other_realm_not_delivered_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -732,6 +746,7 @@ publish_sends_frame_and_increments_seq_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -778,6 +793,7 @@ publish_not_connected_returns_error_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          %% Do NOT mark connected. Publish should error out.
@@ -799,6 +815,7 @@ unsubscribe_sends_frame_and_clears_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -863,6 +880,7 @@ subscriber_down_drops_subscription_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -914,6 +932,7 @@ disconnect_notifies_subscribers_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -960,6 +979,7 @@ subscribe_before_connect_drains_on_connected_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          {ok, SubRef} = macula_station_link:subscribe(
@@ -999,6 +1019,7 @@ advertise_sends_frame_when_connected_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -1034,6 +1055,7 @@ advertise_before_connect_drains_on_connected_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          Procedure = <<"_realm.membership.join_with_token_v1">>,
@@ -1070,6 +1092,7 @@ inbound_call_dispatches_to_handler_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -1115,6 +1138,7 @@ inbound_call_unknown_procedure_returns_error_frame_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -1155,6 +1179,7 @@ inbound_call_handler_crash_returns_error_frame_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -1212,6 +1237,7 @@ inbound_call_handler_error_tuple_emits_call_error_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -1259,6 +1285,7 @@ unadvertise_clears_handler_and_sends_frame_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          FakePeer = self(),
@@ -1324,6 +1351,7 @@ setup_link_for_streams() ->
     Identity = macula_identity:generate(),
     {ok, Pid} = macula_station_link:start_link(#{
         seed     => #{host => <<"127.0.0.1">>, port => 1},
+        connect_timeout_ms => 2000,
         identity => Identity
     }),
     FakePeer = self(),
@@ -1370,6 +1398,7 @@ call_stream_returns_not_connected_before_handshake_test_() ->
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
              identity => Identity
          }),
          %% No peer_node_id injection — handshake "incomplete".
@@ -1693,6 +1722,7 @@ start_connected_link() ->
     Identity = macula_identity:generate(),
     {ok, Pid} = macula_station_link:start_link(#{
         seed     => #{host => <<"127.0.0.1">>, port => 1},
+        connect_timeout_ms => 2000,
         identity => Identity
     }),
     FakePeer = self(),
