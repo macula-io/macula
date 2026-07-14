@@ -130,7 +130,13 @@
     %% ALPN list passed through to QUIC (default [&lt;&lt;"macula"&gt;&gt;]).
     alpn         => [binary()],
     %% Connect timeout in ms (default 30_000).
-    connect_timeout_ms => non_neg_integer()
+    connect_timeout_ms => non_neg_integer(),
+    %% App-liveness probe interval in ms (default 30_000) and the
+    %% consecutive-miss count that recycles the link (default 2). Widen
+    %% both for a pool of links to busy stations that answer the probe
+    %% slowly; keep the tight default where fast zombie detection matters.
+    liveness_interval_ms => non_neg_integer(),
+    liveness_max_misses  => non_neg_integer()
 }.
 
 -define(DHT_REALM, <<0:256>>).
@@ -225,6 +231,14 @@
     liveness_timer        :: undefined | reference(),
     liveness_outstanding  :: undefined | <<_:128>>,
     liveness_misses = 0   :: non_neg_integer(),
+    %% Tunable liveness thresholds (start opts `liveness_interval_ms' /
+    %% `liveness_max_misses', each defaulting to the module `?LIVENESS_*'
+    %% value). A consumer holding many links to variously-loaded stations
+    %% (the realm's station pool) can widen these so a slow-but-alive
+    %% station is not recycled on a transient probe miss; the daemon keeps
+    %% the tight default for fast zombie detection.
+    liveness_interval_ms  :: non_neg_integer(),
+    liveness_max_misses   :: non_neg_integer(),
     %% Connect/handshake watchdog. Armed the moment the peering worker
     %% is spawned (peer_pid set) and cancelled on `connected'. If it
     %% fires while `peer_node_id' is still undefined the CONNECT/HELLO
@@ -568,10 +582,14 @@ init(Opts) ->
     Alpn     = maps:get(alpn, Opts, [<<"macula">>]),
     Tmo      = maps:get(connect_timeout_ms, Opts, 30_000),
     WdMs     = maps:get(connect_watchdog_ms, Opts, undefined),
+    LiveMs   = maps:get(liveness_interval_ms, Opts, ?LIVENESS_INTERVAL_MS),
+    LiveMiss = maps:get(liveness_max_misses, Opts, ?LIVENESS_MAX_MISSES),
     State    = #state{seed = Seed, identity = Identity,
                       capabilities = Caps, alpn = Alpn,
                       connect_timeout_ms = Tmo,
-                      connect_watchdog_ms = WdMs},
+                      connect_watchdog_ms = WdMs,
+                      liveness_interval_ms = LiveMs,
+                      liveness_max_misses = LiveMiss},
     process_flag(trap_exit, true),
     self() ! attempt_connect,
     {ok, State}.
@@ -1030,7 +1048,7 @@ kill_peer(_) ->
 
 arm_liveness(S) ->
     cancel_liveness_timer(S),
-    Ref = erlang:send_after(?LIVENESS_INTERVAL_MS, self(), liveness_tick),
+    Ref = erlang:send_after(S#state.liveness_interval_ms, self(), liveness_tick),
     S#state{liveness_timer = Ref}.
 
 cancel_liveness(S) ->
@@ -1073,7 +1091,7 @@ on_outstanding_check(undefined, S) ->
 on_outstanding_check(_CallId, S) ->
     %% Prior probe never got a reply within the tick interval.
     Misses = S#state.liveness_misses + 1,
-    case Misses >= ?LIVENESS_MAX_MISSES of
+    case Misses >= S#state.liveness_max_misses of
         true  -> trigger_zombie_close(S#state{liveness_misses = Misses});
         false -> S#state{liveness_misses = Misses,
                          liveness_outstanding = undefined}
@@ -1092,7 +1110,7 @@ trigger_zombie_close(S) ->
 send_probe(#state{peer_pid = Pid, identity = Id} = S) when is_pid(Pid) ->
     CallId = crypto:strong_rand_bytes(16),
     Caller = macula_identity:public(Id),
-    DeadlineMs = erlang:system_time(millisecond) + ?LIVENESS_INTERVAL_MS,
+    DeadlineMs = erlang:system_time(millisecond) + S#state.liveness_interval_ms,
     Frame = macula_frame:call(#{
         call_id     => CallId,
         procedure   => ?LIVENESS_PROCEDURE,

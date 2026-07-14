@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.2.0] - 2026-07-15
+
+Tunable station-link liveness. The app-level liveness probe in
+`macula_station_link` was hardcoded at a 30 s interval with a 2-miss
+teardown, so a client holding many links to variously-loaded stations
+would recycle a link whenever a *busy-but-alive* station failed to answer
+two consecutive `_macula.ping` CALLs in time — observed as ~1 link
+flap/45 s on the realm's station pool when relay boxes ran hot (load ~6 on
+2 vCPU), each flap triggering a full re-subscribe storm.
+
+### Added
+- `macula_station_link` `start_link/1` opts `liveness_interval_ms` and
+  `liveness_max_misses`, each defaulting to the previous constants
+  (30 000 / 2). A consumer with a pool of links to busy stations (the
+  realm) can widen the tolerance so a slow-but-alive link is not recycled;
+  the daemon and wardens keep the tight default for fast zombie detection.
+  Backward compatible — unset opts preserve the prior behaviour exactly.
+
 ## [5.1.0] - 2026-07-09
 
 Connect-reliability release. Fixes the root cause of the
