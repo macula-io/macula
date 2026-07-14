@@ -136,7 +136,14 @@
     %% both for a pool of links to busy stations that answer the probe
     %% slowly; keep the tight default where fast zombie detection matters.
     liveness_interval_ms => non_neg_integer(),
-    liveness_max_misses  => non_neg_integer()
+    liveness_max_misses  => non_neg_integer(),
+    %% Backoff in ms before re-dialling after a failed connect (default
+    %% 1_000). Raise on a pool that cycles links to soften reconnect storms.
+    connect_retry_backoff_ms => non_neg_integer()
+    %% QUIC transport knobs (`idle_timeout_ms' default 300_000,
+    %% `keep_alive_interval_ms' default 15_000, `peer_bidi_stream_count',
+    %% `peer_unidi_stream_count') may additionally be carried in the `seed'
+    %% map — station_link merges it into the dial target verbatim.
 }.
 
 -define(DHT_REALM, <<0:256>>).
@@ -239,6 +246,10 @@
     %% the tight default for fast zombie detection.
     liveness_interval_ms  :: non_neg_integer(),
     liveness_max_misses   :: non_neg_integer(),
+    %% Backoff before re-attempting a connect after a failed dial (start
+    %% opt `connect_retry_backoff_ms', default `?CONNECT_RETRY_BACKOFF_MS').
+    %% A busy pool cycling links raises this to soften reconnect storms.
+    connect_retry_backoff_ms :: non_neg_integer(),
     %% Connect/handshake watchdog. Armed the moment the peering worker
     %% is spawned (peer_pid set) and cancelled on `connected'. If it
     %% fires while `peer_node_id' is still undefined the CONNECT/HELLO
@@ -584,12 +595,14 @@ init(Opts) ->
     WdMs     = maps:get(connect_watchdog_ms, Opts, undefined),
     LiveMs   = maps:get(liveness_interval_ms, Opts, ?LIVENESS_INTERVAL_MS),
     LiveMiss = maps:get(liveness_max_misses, Opts, ?LIVENESS_MAX_MISSES),
+    RetryMs  = maps:get(connect_retry_backoff_ms, Opts, ?CONNECT_RETRY_BACKOFF_MS),
     State    = #state{seed = Seed, identity = Identity,
                       capabilities = Caps, alpn = Alpn,
                       connect_timeout_ms = Tmo,
                       connect_watchdog_ms = WdMs,
                       liveness_interval_ms = LiveMs,
-                      liveness_max_misses = LiveMiss},
+                      liveness_max_misses = LiveMiss,
+                      connect_retry_backoff_ms = RetryMs},
     process_flag(trap_exit, true),
     self() ! attempt_connect,
     {ok, State}.
@@ -911,7 +924,7 @@ after_connect_request({error, Reason}, S) ->
         reason => Reason,
         seed   => S#state.seed
     }),
-    erlang:send_after(?CONNECT_RETRY_BACKOFF_MS, self(), attempt_connect),
+    erlang:send_after(S#state.connect_retry_backoff_ms, self(), attempt_connect),
     {noreply, S}.
 
 %% RESULT

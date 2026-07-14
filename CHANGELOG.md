@@ -23,6 +23,12 @@ flap/45 s on the realm's station pool when relay boxes ran hot (load ~6 on
   (30 000 / 2). A consumer with a pool of links to busy stations (the
   realm) can widen the tolerance so a slow-but-alive link is not recycled;
   the daemon and wardens keep the tight default for fast zombie detection.
+- `macula_station_link` `start_link/1` opt `connect_retry_backoff_ms`
+  (default 1_000) — the wait before re-dialling after a failed connect.
+  Raise it on a pool that cycles links so torn links don't reconnect in
+  lockstep and hammer the station with re-subscribe storms. Also documented
+  the QUIC transport knobs (`idle_timeout_ms`, `keep_alive_interval_ms`,
+  stream counts) already forwardable via the `seed` map.
   Backward compatible — unset opts preserve the prior behaviour exactly.
 
 ## [5.1.0] - 2026-07-09
