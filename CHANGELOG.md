@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.2.1] - 2026-07-15
+
+Liveness/backoff tuning now falls back to the `macula` application env. 5.2.0
+exposed the knobs as `start_link/1` opts, but a consumer creates links from
+several places (the realm holds ~64 across its Mesh pool, DHT/directory
+subscribers, and the topology pool), and only the explicitly-wired call site
+picked up the widened values -- the rest kept the tight 30s/2 default and kept
+flapping on overloaded stations. Now `macula_station_link` reads the `macula`
+application env as the default when an opt is unset, so one line --
+`config :macula, liveness_max_misses: N, liveness_interval_ms: Ms` -- widens
+EVERY link regardless of which subsystem spawned it, and stays tunable from the
+deployment (env-driven sys.config) without a code change. Explicit `start_link`
+opts still win; the module `?DEFINE`s stay the ground default.
+
 ## [5.2.0] - 2026-07-15
 
 Tunable station-link liveness. The app-level liveness probe in

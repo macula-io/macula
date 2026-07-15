@@ -593,9 +593,9 @@ init(Opts) ->
     Alpn     = maps:get(alpn, Opts, [<<"macula">>]),
     Tmo      = maps:get(connect_timeout_ms, Opts, 30_000),
     WdMs     = maps:get(connect_watchdog_ms, Opts, undefined),
-    LiveMs   = maps:get(liveness_interval_ms, Opts, ?LIVENESS_INTERVAL_MS),
-    LiveMiss = maps:get(liveness_max_misses, Opts, ?LIVENESS_MAX_MISSES),
-    RetryMs  = maps:get(connect_retry_backoff_ms, Opts, ?CONNECT_RETRY_BACKOFF_MS),
+    LiveMs   = maps:get(liveness_interval_ms, Opts, app_env(liveness_interval_ms, ?LIVENESS_INTERVAL_MS)),
+    LiveMiss = maps:get(liveness_max_misses, Opts, app_env(liveness_max_misses, ?LIVENESS_MAX_MISSES)),
+    RetryMs  = maps:get(connect_retry_backoff_ms, Opts, app_env(connect_retry_backoff_ms, ?CONNECT_RETRY_BACKOFF_MS)),
     State    = #state{seed = Seed, identity = Identity,
                       capabilities = Caps, alpn = Alpn,
                       connect_timeout_ms = Tmo,
@@ -606,6 +606,15 @@ init(Opts) ->
     process_flag(trap_exit, true),
     self() ! attempt_connect,
     {ok, State}.
+
+%% Fall back to the `macula' application environment when a tuning opt is not
+%% passed explicitly in `start_link/1'. A consumer with many links spread across
+%% subsystems (the realm holds ~64 via its Mesh pool, subscribers, and the
+%% topology pool) can then widen liveness/backoff GLOBALLY from one config point
+%% -- `config :macula, liveness_max_misses: N' -- instead of threading the opt
+%% through every link-creation site. The `?DEFINE' stays the ground default.
+app_env(Key, Default) ->
+    application:get_env(macula, Key, Default).
 
 handle_call({call, _Realm, _Proc, _Payload, _Tmo}, _From,
             #state{peer_node_id = undefined} = S) ->
