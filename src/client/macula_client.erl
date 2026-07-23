@@ -166,6 +166,16 @@
     replication   :: pos_integer(),
     dedup_window  :: non_neg_integer(),
     dedup_sweep   :: pos_integer(),
+    %% Pool-owned monotonic publish sequence. Stamped onto every
+    %% outbound PUBLISH (via `macula_station_link:publish/5') so the
+    %% station-side `(publisher, seq)' dedup stays stable across link
+    %% respawns — the publisher pubkey is the pool's, shared by all
+    %% links, so the seq must be owned by the pool, not the link.
+    %% Seeded from wall-clock µs at init so a pool restart does not
+    %% re-issue seqs that collide with the pre-restart tail still in a
+    %% station's dedup window (see
+    %% macula-station/plans/PLAN_PUBSUB_E2E_SIGNED_EVENTS.md).
+    publish_seq   :: non_neg_integer(),
     %% seed → link_state
     links = #{}   :: #{seed() => #link_state{}},
     %% pool-owned SubRef → sub_spec
@@ -389,7 +399,8 @@ init({Seeds, Opts}) ->
     State0 = #state{seeds = Seeds, identity = Identity,
                     link_opts = LinkOpts, replication = Replication,
                     dedup_window = DedupWindow, dedup_sweep = DedupSweep,
-                    dedup_tab = DedupTab},
+                    dedup_tab = DedupTab,
+                    publish_seq = erlang:system_time(microsecond)},
     State1 = lists:foldl(fun start_link_for_seed/2, State0, Seeds),
     erlang:send_after(DedupSweep, self(), dedup_sweep),
     {ok, State1}.
@@ -411,12 +422,16 @@ handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     N = min(length(Targets), S#state.replication),
     Selected = lists:sublist(Targets, N),
     AllTargets = Targets,
+    %% One pool-monotone seq per fact, reused across every replicated
+    %% link so `{publisher, seq}' identifies the fact regardless of
+    %% which station relayed it.
+    Seq = S#state.publish_seq,
     _ = spawn(fun() ->
-        Results = [macula_station_link:publish(P, Realm, Topic, Payload)
+        Results = [macula_station_link:publish(P, Realm, Topic, Payload, Seq)
                    || P <- Selected],
         gen_server:reply(From, summarize_publish(Results, AllTargets))
     end),
-    {noreply, S};
+    {noreply, S#state{publish_seq = Seq + 1}};
 
 handle_call({subscribe, Realm, Topic, Subscriber, _Opts}, _From, S) ->
     SubRef = make_ref(),

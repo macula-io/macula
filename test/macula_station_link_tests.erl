@@ -783,6 +783,69 @@ publish_sends_frame_and_increments_seq_test_() ->
      end}.
 
 %%------------------------------------------------------------------
+%% publish/5 stamps the caller's seq verbatim and leaves the per-link
+%% counter untouched — the pool owns the sequence so it survives a
+%% link respawn (the reset-to-0 bug the pool-owned seq fixes).
+%%------------------------------------------------------------------
+
+publish5_uses_caller_seq_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Topic = <<"weather.measured_v1">>,
+         ok = macula_station_link:publish(Pid, ?REALM, Topic, #{n => 1}, 4242),
+         F1 = receive
+             {'$gen_cast', {send_frame, #{frame_type := publish} = A}} -> A
+         after 1_000 -> erlang:error(no_publish_frame_1)
+         end,
+         ?assertEqual(4242, maps:get(seq, F1)),
+         ok = macula_station_link:publish(Pid, ?REALM, Topic, #{n => 2}, 4243),
+         F2 = receive
+             {'$gen_cast', {send_frame, #{frame_type := publish} = B}} -> B
+         after 1_000 -> erlang:error(no_publish_frame_2)
+         end,
+         ?assertEqual(4243, maps:get(seq, F2)),
+         %% publish/5 must NOT advance the per-link counter: a later
+         %% pool-less publish/4 still starts from 0.
+         ok = macula_station_link:publish(Pid, ?REALM, Topic, #{n => 3}),
+         F3 = receive
+             {'$gen_cast', {send_frame, #{frame_type := publish} = C}} -> C
+         after 1_000 -> erlang:error(no_publish_frame_3)
+         end,
+         ?assertEqual(0, maps:get(seq, F3)),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+publish5_not_connected_returns_error_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => Identity
+         }),
+         R = macula_station_link:publish(Pid, ?REALM, <<"x">>, hello, 7),
+         ?assertEqual({error, not_connected}, R),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%%------------------------------------------------------------------
 %% publish/4 returns {error, not_connected} when peering is down
 %%------------------------------------------------------------------
 

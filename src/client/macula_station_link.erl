@@ -85,6 +85,7 @@
     stop/1,
     call/5,
     publish/4,
+    publish/5,
     put_record/2, put_record/3,
     find_record/2, find_record/3,
     find_records_by_type/2, find_records_by_type/3,
@@ -346,6 +347,20 @@ publish(Pid, Realm, Topic, Payload)
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Topic) ->
     gen_server:call(Pid, {publish, Realm, Topic, Payload}, 5_000).
+
+%% @doc Publish with a caller-supplied monotonic `Seq'. The pool
+%% (`macula_client') owns the sequence so the station-side
+%% `{publisher, seq}' dedup stays stable across link respawns; the
+%% per-link `publish/4' counter is only for standalone (pool-less)
+%% link use.
+-spec publish(pid(), <<_:256>>, binary(), term(), non_neg_integer()) ->
+    ok | {error, not_connected | term()}.
+publish(Pid, Realm, Topic, Payload, Seq)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Topic),
+       is_integer(Seq), Seq >= 0 ->
+    gen_server:call(Pid, {publish, Realm, Topic, Payload, Seq}, 5_000).
 
 %% @doc Convenience wrapper for `_dht.put_record'. The record must be
 %% a fully-signed `macula_record:record()' map (build via
@@ -652,30 +667,19 @@ handle_call({publish, _Realm, _Topic, _Payload}, _From,
     %% peering worker may exist mid-handshake while the wire is not
     %% yet ready for application frames. Matches `is_connected/1'.
     {reply, {error, not_connected}, S};
+handle_call({publish, _Realm, _Topic, _Payload, _Seq}, _From,
+            #state{peer_node_id = undefined} = S) ->
+    {reply, {error, not_connected}, S};
 handle_call({publish, Realm, Topic, Payload}, _From,
-            #state{peer_pid = Pid, identity = Id,
-                   publish_seq = Seq} = S) ->
-    Pub = macula_identity:public(Id),
-    Frame0 = macula_frame:publish(#{
-        topic           => Topic,
-        realm           => Realm,
-        publisher       => Pub,
-        seq             => Seq,
-        payload         => Payload,
-        published_at_ms => erlang:system_time(millisecond)
-    }),
-    %% Optionally attach the publisher-end-to-end signature so a
-    %% relay station can carry it onto the EVENT it derives and any
-    %% downstream consumer can verify authenticity against the
-    %% publisher regardless of which relay delivered the event. Off
-    %% by default: a relay on a build that does not strip
-    %% `publisher_sig' from a frame's per-hop signing bytes would
-    %% reject the PUBLISH, so emission must not be enabled until
-    %% every relay is on macula >= 4.4.0. See CHANGELOG 4.4.1 and
-    %% macula-station/plans/PLAN_PUBSUB_E2E_SIGNED_EVENTS.md.
-    Frame = maybe_add_publisher_sig(Frame0, Id),
-    ok = macula_peering:send_frame(Pid, Frame),
+            #state{publish_seq = Seq} = S) ->
+    %% Standalone (pool-less) publish: fall back to the per-link
+    %% counter. Pool-driven publishes use `publish/5' with the pool's
+    %% own monotone seq (see `macula_client').
+    ok = send_publish_frame(Realm, Topic, Payload, Seq, S),
     {reply, ok, S#state{publish_seq = Seq + 1}};
+handle_call({publish, Realm, Topic, Payload, Seq}, _From, S) ->
+    ok = send_publish_frame(Realm, Topic, Payload, Seq, S),
+    {reply, ok, S};
 
 handle_call(is_connected, _From, #state{peer_pid = undefined} = S) ->
     {reply, false, S};
@@ -902,6 +906,25 @@ code_change(_OldVsn, S, _Extra) -> {ok, S}.
 %%====================================================================
 %% Internals
 %%====================================================================
+
+%% Build, optionally publisher-sign, and send a PUBLISH frame stamped
+%% with `Seq'. Shared by `publish/4' (per-link fallback seq) and
+%% `publish/5' (pool-owned monotone seq).
+-spec send_publish_frame(<<_:256>>, binary(), term(), non_neg_integer(),
+                         #state{}) -> ok.
+send_publish_frame(Realm, Topic, Payload, Seq,
+                   #state{peer_pid = Pid, identity = Id}) ->
+    Pub = macula_identity:public(Id),
+    Frame0 = macula_frame:publish(#{
+        topic           => Topic,
+        realm           => Realm,
+        publisher       => Pub,
+        seq             => Seq,
+        payload         => Payload,
+        published_at_ms => erlang:system_time(millisecond)
+    }),
+    Frame = maybe_add_publisher_sig(Frame0, Id),
+    macula_peering:send_frame(Pid, Frame).
 
 %% Attach the publisher-end-to-end signature to an outbound PUBLISH.
 %% Default flipped to `true' in 4.6.0 (was `false' since 4.4.0 when

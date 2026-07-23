@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.2.2] - 2026-07-23
+
+Fixed: pool-owned publish sequence. The outbound PUBLISH `seq` was a *per-link*
+counter that reset to 0 whenever a station link respawned, while the publisher
+identity (the pool's Ed25519 pubkey) stayed constant. The station-side
+`(publisher, seq)` dedup keys on that pair, so a link flap re-issued seqs that
+had already been seen — a latent duplicate/false-drop once that dedup becomes
+authoritative (Phase 3 of `macula-station` `PLAN_PUBSUB_E2E_SIGNED_EVENTS`).
+`macula_client` now owns a monotonic `publish_seq`, seeded from wall-clock
+microseconds at init so a pool restart cannot re-issue seqs that collide with
+the pre-restart tail still inside a station's dedup window, and stamps the same
+seq on every replicated link via the new `macula_station_link:publish/5`.
+`publish/4` retains its per-link counter for standalone (pool-less) link use.
+No wire-format or public-API break. This lands the "add a per-pool seq counter
+to `macula_client`" prerequisite the pubsub-e2e-signed-events plan calls for.
+
 ## [5.2.1] - 2026-07-15
 
 Liveness/backoff tuning now falls back to the `macula` application env. 5.2.0
