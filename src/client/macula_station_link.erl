@@ -679,11 +679,16 @@ handle_call({publish, Realm, Topic, Payload}, _From,
     %% Standalone (pool-less) publish: fall back to the per-link
     %% counter. Pool-driven publishes use `publish/5' with the pool's
     %% own monotone seq (see `macula_client').
-    ok = send_publish_frame(Realm, Topic, Payload, Seq, S),
-    {reply, ok, S#state{publish_seq = Seq + 1}};
+    %% NOT `ok = ...'. send_publish_frame/5 returns the seam's verdict,
+    %% so a hard match here kills this link's gen_server — subscriptions,
+    %% pending calls and streams with it — over one caller's bad payload.
+    %% A refused frame also does NOT consume a seq: nothing reached the
+    %% wire, and burning the number would fake a gap in the
+    %% (publisher, seq) sequence the station dedup keys on.
+    publish_reply(send_publish_frame(Realm, Topic, Payload, Seq, S), Seq, S);
 handle_call({publish, Realm, Topic, Payload, Seq}, _From, S) ->
-    ok = send_publish_frame(Realm, Topic, Payload, Seq, S),
-    {reply, ok, S};
+    %% Pool-driven: the pool owns the seq, so there is none to advance.
+    {reply, send_publish_frame(Realm, Topic, Payload, Seq, S), S};
 
 handle_call(is_connected, _From, #state{peer_pid = undefined} = S) ->
     {reply, false, S};
@@ -917,6 +922,11 @@ code_change(_OldVsn, S, _Extra) -> {ok, S}.
 %% Returns whatever the seam decided: `ok', or the structured reason the
 %% frame was refused, which flows back through `summarize_publish/2' to
 %% the caller of `macula_client:publish/5'.
+publish_reply(ok, Seq, S) ->
+    {reply, ok, S#state{publish_seq = Seq + 1}};
+publish_reply({error, _} = Refused, _Seq, S) ->
+    {reply, Refused, S}.
+
 await_call_reply(ok, CallId, From, Tmo, Pending, S) ->
     TRef = erlang:send_after(Tmo, self(), {call_timeout, CallId}),
     {noreply, S#state{pending = Pending#{CallId => {From, TRef}}}};
@@ -1382,10 +1392,30 @@ handle_inbound_call(#{call_id := CallId, procedure := Proc, realm := Realm,
     SelfPub = macula_identity:public(Id),
     Reply   = build_inbound_call_reply(maps:find({Realm, Proc}, Procs),
                                        CallId, Payload, SelfPub),
-    macula_peering:send_frame(Pid, Reply),
-    ok;
+    sent_or_faulted(macula_peering:send_frame(Pid, Reply),
+                    Pid, CallId, SelfPub);
 handle_inbound_call(_Frame, _State) ->
     ok.
+
+%% A RESULT the wire refuses must not simply vanish. Dropping it leaves
+%% the remote caller burning its entire deadline waiting for a frame
+%% that died here, which is a timeout where a taxonomy was available:
+%% the handler's return value was the problem and BOLT#4 can say so.
+%% A `call_error' frame is all binaries and small integers, so it is
+%% sendable by construction and cannot recurse into this path.
+sent_or_faulted(ok, _Pid, _CallId, _SelfPub) ->
+    ok;
+sent_or_faulted({error, Reason}, Pid, CallId, SelfPub) ->
+    logger:error("[macula_station_link] handler result unsendable, "
+                 "faulting the call: ~ts", [macula_frame:explain(Reason)]),
+    _ = macula_peering:send_frame(
+          Pid, macula_frame:call_error(#{call_id     => CallId,
+                                         code        => refusal_code(Reason),
+                                         reported_by => SelfPub})),
+    ok.
+
+refusal_code({unsupported_payload_type, payload_too_large, _Path}) -> 16#0D;
+refusal_code(_Other)                                               -> 16#0F.
 
 %% Handler not registered locally — synthesise a signed
 %% `unknown_next_peer' BOLT#4 error.

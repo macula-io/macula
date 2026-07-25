@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [6.0.0] - 2026-07-26
+
+**Breaking: `macula:publish/4,5` can now return `{error, Reason}` where it
+previously returned `ok`.** The spec always allowed it; the behaviour is new.
+Callers publishing raw floats, tuples, colliding map keys or oversized payloads
+will see errors where they used to see success. Those publishes were not
+working before, they were failing silently, so the error is the fix rather than
+a regression. Major rather than minor because consumers pin `~> 5.x`: shipping
+this as 5.3.0 would auto-upgrade a running fleet into publish rejections nobody
+chose.
+
+`macula_peering:send_frame/2` is a cast, so frames were encoded later, inside
+the shared peering connection, with no try/catch around the encode. A term the
+codec could not represent therefore did not fail its sender. It killed the
+connection, took up to `?MAX_BATCH` queued frames from unrelated producers with
+it, and the sender had already been told `ok`. That unfalsifiable `ok` is why
+services downstream wrap publish in defensive catch-alls: it is the only sane
+response to a success value that cannot fail.
+
+The check now runs in `send_frame/2`, the last synchronous point before the cast
+and the one seam every producer passes through: pubsub, RPC calls and results,
+streaming, advertise and content. Guarding only `macula_client:publish/5` would
+have left five of six verbs able to kill the link. `macula_frame:check_frame/1`
+and `check_payload/1` return `{unsupported_payload_type, Type, Path}` naming the
+offending value and its location, and `macula_frame:explain/1` renders that with
+its remedy for logs. `encode_or_drop/2` in the connection is the backstop for
+what cannot be known without encoding: one dropped frame and a loud log instead
+of a dead connection.
+
+Rejected, each for a demonstrated reason rather than on principle:
+
+- **Floats.** `to_wire/1` silently rewrote them as six-decimal text, so a
+  published `52.34` arrived as the string `"52.34"`, rounded, type changed, no
+  error anywhere. `float_to_binary/2` also raises `badarg` at large magnitudes,
+  so this closes a crash as well as a corruption. Scale to integers (micro-units)
+  or send binary strings. This is not a CBOR limitation: RFC 8949 major type 7 is
+  floats and `macula_cbor_nif` handles them natively. It is a limitation of the
+  canonical envelope encoder, which payloads should not be traversing at all, and
+  fixing that properly is a wire-format change.
+- **Colliding wire keys.** An atom, a binary and a `{text, Binary}` of the same
+  name are one key on the wire, so `#{foo => 1, <<"foo">> => 2}` shipped as two
+  pairs and arrived as one, the loser chosen by sort order.
+- **Oversized payloads**, via a lower-bound size estimate, sound for rejection.
+- Tuples, bitstrings, out-of-range integers, improper lists, pids, refs, funs and
+  ports, all of which crashed the encoder.
+
+Also: `macula_record_cbor:is_encodable_int/1` is exported so the 64-bit bound
+lives only where the constant does; RPC results the wire refuses now fault the
+call with a BOLT#4 `call_error` instead of leaving the remote caller to burn its
+deadline; and a refused publish no longer consumes a sequence number, which
+would have faked a gap in the `(publisher, seq)` sequence station dedup keys on.
+
+Known limits, stated rather than papered over. `check_frame/1` excludes
+`record` / `records`, which go through `macula_record:encode/1`, so
+record-bearing frames (STORE, REPLICATE, VALUE) are protected by the backstop
+but do not get a structured reason. The receive side still wedges on a malformed
+frame: `drain_step/2` returns the buffer unadvanced, so the prefix is re-parsed
+forever. `{text, B}` is not validated as UTF-8, which is a deviation a strict
+non-Erlang peer would reject.
+
 ## [5.2.2] - 2026-07-23
 
 Fixed: pool-owned publish sequence. The outbound PUBLISH `seq` was a *per-link*

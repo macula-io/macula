@@ -1623,6 +1623,17 @@ check_payload(Payload) ->
 %% `record' / `records' are excluded: `prepare_records/1' hands those to
 %% `macula_record:encode/1', a different encoder with its own rules, so
 %% judging them by payload rules would reject frames that encode fine.
+%%
+%% KNOWN LIMIT, stated rather than papered over. That exclusion means
+%% record-bearing frames (STORE, REPLICATE, VALUE) get weaker
+%% guarantees than payload-bearing ones: an unsigned record passes here
+%% and then fails in `macula_record:encode/1', and `byte_floor/1' never
+%% sees record bytes, so an oversized record is not caught synchronously.
+%% Neither can kill the connection — `encode_or_drop/2' catches both —
+%% but the caller is told `ok' and the frame is dropped. So "callers get
+%% a structured reason" is true for payload-bearing frames and NOT for
+%% record-bearing ones. Closing it means teaching this function the
+%% record shape and folding record size into the floor.
 -spec check_frame(frame()) ->
     ok | {error, {unsupported_payload_type, atom(), [term()]}}.
 check_frame(Frame) when is_map(Frame) ->

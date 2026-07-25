@@ -1665,11 +1665,32 @@ contains_float(_Other)             -> false.
 %% aliasing and still changes the moment a map pair is swallowed.
 survives(Term) ->
     try macula_frame:decode(macula_frame:encode(#{payload => Term})) of
-        {ok, Frame, <<>>} -> node_count(Term) =:= node_count(maps:get(payload, Frame));
+        {ok, Frame, <<>>} -> intact(Term, maps:get(payload, Frame));
         _Other            -> false
     catch
         _:_ -> false
     end.
+
+%% Structure AND leaves. Node count alone was not enough: it cannot see
+%% 52.34 arrive as {text, <<"52.34">>}, so survives(52.34) was true and
+%% the generated suite would never have caught the float rewrite that
+%% started all of this. Leaves are canonicalised first, because the wire
+%% aliases an atom and a {text, Binary} of the same name deliberately,
+%% and that aliasing is not corruption.
+intact(Sent, Got) ->
+    node_count(Sent) =:= node_count(Got) andalso leaves(Sent) =:= leaves(Got).
+
+leaves(Term) -> lists:sort(collect(Term, [])).
+
+collect(M, Acc) when is_map(M) ->
+    maps:fold(fun(K, V, A) -> collect(K, collect(V, A)) end, Acc, M);
+collect([], Acc)      -> Acc;
+collect([H | T], Acc) -> collect(H, collect(T, Acc));
+collect(Leaf, Acc)    -> [canon(Leaf) | Acc].
+
+canon(A) when is_atom(A)           -> atom_to_binary(A, utf8);
+canon({text, B}) when is_binary(B) -> B;
+canon(Other)                       -> Other.
 
 node_count(M) when is_map(M) ->
     maps:fold(fun(K, V, Acc) -> Acc + node_count(K) + node_count(V) end, 1, M);
@@ -1757,3 +1778,13 @@ explain_names_the_remedy_test() ->
                     [<<"battery">>, <<"voltage">>]})),
     ?assert(binary:match(Sentence, <<"battery.voltage">>) =/= nomatch),
     ?assert(binary:match(Sentence, <<"micro-units">>) =/= nomatch).
+
+%% Regression for Fable's finding that the old predicate was blind to
+%% leaf rewrites: the float bug itself must be detectable by the test
+%% machinery, not only fenced off by the policy clause in check_value/2.
+survives_detects_the_float_rewrite_test() ->
+    ?assertNot(survives(52.34)),
+    ?assertNot(survives(#{<<"v">> => 52.34})),
+    %% ...while the wire's deliberate atom/text aliasing is NOT flagged.
+    ?assert(survives(an_atom)),
+    ?assert(survives(#{<<"k">> => [1, <<"two">>, undefined]})).
