@@ -343,6 +343,18 @@ links(Pool) when is_pid(Pool) ->
 
 %% @doc Publish a frame to `replication_factor' currently-spawned
 %% links. Partial success = success. Realm is per-call (32 bytes).
+%%
+%% The payload is checked for wire admissibility HERE, in the caller's
+%% process, before the pool is touched. Downstream the send is a
+%% `gen_statem:cast' into a shared peering connection that encodes
+%% without a try/catch, so an unrepresentable term would kill that
+%% connection and every other producer's in-flight traffic with it,
+%% asynchronously, after this function had already answered `ok'.
+%% Checking first is what makes the `ok' falsifiable.
+%%
+%% Returns `{error, {unsupported_payload_type, Type, Path}}' naming the
+%% offending value and where it sits in the term. Floats are the common
+%% case: scale them to integers (micro-units) or send binary strings.
 -spec publish(pool(), <<_:256>>, binary(), term(), map()) ->
     ok | {error, term()}.
 publish(Pool, Realm, Topic, Payload, Opts)
@@ -350,9 +362,15 @@ publish(Pool, Realm, Topic, Payload, Opts)
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Topic),
        is_map(Opts) ->
+    publish_checked(macula_frame:check_payload(Payload),
+                    Pool, Realm, Topic, Payload, Opts).
+
+publish_checked(ok, Pool, Realm, Topic, Payload, Opts) ->
     Timeout = maps:get(timeout_ms, Opts, 5_000),
     gen_server:call(Pool, {publish, Realm, Topic, Payload, Opts},
-                    Timeout + 500).
+                    Timeout + 500);
+publish_checked({error, _} = Rejected, _Pool, _Realm, _Topic, _Payload, _Opts) ->
+    Rejected.
 
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)'. The pool
 %% subscribes every currently-spawned link and dedupes inbound

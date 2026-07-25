@@ -32,7 +32,7 @@
 %% </ul>
 -module(macula_record_cbor).
 
--export([encode/1, decode/1]).
+-export([encode/1, decode/1, is_encodable_int/1]).
 -export_type([value/0]).
 
 -type value() ::
@@ -49,6 +49,20 @@
 %%------------------------------------------------------------------
 %% Encode
 %%------------------------------------------------------------------
+
+%% @doc Can this integer be rendered as major 0 / major 1?
+%%
+%% Exported so callers that must decide admissibility BEFORE encoding
+%% (see `macula_frame:check_payload/1') can ask rather than restate the
+%% bound. A bignum past 64 bits matches no `encode/1' clause and would
+%% otherwise crash whichever process happens to be encoding.
+-spec is_encodable_int(integer()) -> boolean().
+is_encodable_int(N) when is_integer(N), N >= 0, N =< ?MAX_UINT64 ->
+    true;
+is_encodable_int(N) when is_integer(N), N < 0, N >= -(?MAX_UINT64 + 1) ->
+    true;
+is_encodable_int(N) when is_integer(N) ->
+    false.
 
 -spec encode(value()) -> binary().
 encode(N) when is_integer(N), N >= 0, N =< ?MAX_UINT64 ->

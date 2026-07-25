@@ -84,6 +84,10 @@
     %% Wire codec — single frame
     encode/1, decode/1,
 
+    %% Sendability, checked before a frame is cast at a peering
+    %% connection. Mirrors `to_wire/1' + `macula_record_cbor'.
+    check_payload/1, check_frame/1, explain/1,
+
     %% Stream parser — drain frames from a buffer
     parse_stream/1,
 
@@ -1578,6 +1582,194 @@ canonical_unsigned(Frame) ->
 %% on the decode path. Binaries (signatures, node ids, payloads,
 %% nonces) stay as binaries on the wire.
 %%------------------------------------------------------------------
+
+%% @doc Is this term admissible as a frame payload?
+%%
+%% Returns `ok', or `{error, {unsupported_payload_type, Type, Path}}'
+%% where `Path' locates the offending value inside the term (map keys
+%% and zero-based list indices, outermost first).
+%%
+%% WHY THIS EXISTS. `macula_peering:send_frame/2' is a cast, so the
+%% frame is encoded later, in the shared peering connection process,
+%% with no try/catch around it. A term the codec cannot represent
+%% therefore does not fail the publisher — it kills the connection,
+%% taking every other producer's in-flight traffic with it, while the
+%% publisher was told `ok'. Checking here, in the caller's process
+%% before the cast, is what makes that `ok' mean something.
+%%
+%% This function must agree exactly with `to_wire/1' followed by
+%% `macula_record_cbor:encode/1'. That is why it lives beside them
+%% rather than in a validation module: the two cannot drift apart
+%% without the agreement property test in `macula_frame_tests' going
+%% red.
+%%
+%% FLOATS ARE REJECTED, deliberately. `to_wire/1' silently rewrites a
+%% float as a six-decimal text string, so a float published today
+%% arrives as a *string*, rounded, with no error anywhere. Rejecting
+%% is not a limitation of CBOR — RFC 8949 major type 7 is floats, and
+%% `macula_cbor_nif' handles them natively. It is a limitation of the
+%% canonical envelope encoder, which the payload should not be passing
+%% through at all. Until payloads travel as opaque packed bytes, the
+%% honest answer to a float is a loud error naming the fix: scale to
+%% an integer (micro-units) or send it as a binary string.
+-spec check_payload(term()) ->
+    ok | {error, {unsupported_payload_type, atom(), [term()]}}.
+check_payload(Payload) ->
+    sized(check_value(Payload, []), Payload).
+
+%% @doc Is this whole frame sendable? Used by `macula_peering:send_frame/2',
+%% which is the single seam every producer passes through.
+%%
+%% `record' / `records' are excluded: `prepare_records/1' hands those to
+%% `macula_record:encode/1', a different encoder with its own rules, so
+%% judging them by payload rules would reject frames that encode fine.
+-spec check_frame(frame()) ->
+    ok | {error, {unsupported_payload_type, atom(), [term()]}}.
+check_frame(Frame) when is_map(Frame) ->
+    check_payload(maps:without([record, records], Frame)).
+
+%% @doc Render a rejection as a sentence, with the remedy where there is
+%% one. The operator reading a log at 03:00 is not reading edoc.
+-spec explain(term()) -> unicode:chardata().
+explain({unsupported_payload_type, float, Path}) ->
+    ["float at ", fmt_path(Path),
+     ": the mesh cannot carry raw floats; scale to an integer "
+     "(e.g. micro-units) or send a binary string"];
+explain({unsupported_payload_type, duplicate_wire_key, Path}) ->
+    ["two keys in the map at ", fmt_path(Path),
+     " collapse to the same wire key: an atom, a binary and a "
+     "{text, Binary} of the same name are one key on the wire, so one "
+     "would silently overwrite the other"];
+explain({unsupported_payload_type, payload_too_large, Path}) ->
+    ["value at ", fmt_path(Path), " exceeds the ",
+     integer_to_list(?MAX_FRAME_BYTES), "-byte frame cap"];
+explain({unsupported_payload_type, Type, Path}) ->
+    [atom_to_list(Type), " at ", fmt_path(Path), " cannot be encoded"];
+explain(Other) ->
+    io_lib:format("~p", [Other]).
+
+fmt_path([])   -> "the payload root";
+fmt_path(Path) -> lists:join(".", [fmt_seg(S) || S <- Path]).
+
+fmt_seg(S) when is_binary(S)  -> S;
+fmt_seg(S) when is_atom(S)    -> atom_to_list(S);
+fmt_seg(S) when is_integer(S) -> ["[", integer_to_list(S), "]"];
+fmt_seg(S)                    -> io_lib:format("~p", [S]).
+
+%% Size is checked only after the structure is known good, so the walk
+%% below can assume proper lists and encodable scalars.
+sized(ok, Payload)             -> within_cap(byte_floor(Payload));
+sized({error, _} = Error, _P)  -> Error.
+
+within_cap(Floor) when Floor > ?MAX_FRAME_BYTES ->
+    unsupported(payload_too_large, []);
+within_cap(_Floor) ->
+    ok.
+
+%% A LOWER bound on encoded size: every binary and text string costs at
+%% least its own bytes, and the CBOR head only adds to that. Sound for
+%% rejection — if the floor is over the cap the real encoding certainly
+%% is — and deliberately not an upper bound, so a payload sitting just
+%% under still reaches the connection, where `encode_or_drop/2' now
+%% turns `frame_too_large' into a dropped frame instead of a dead link.
+byte_floor(B) when is_binary(B)          -> byte_size(B);
+byte_floor({text, B}) when is_binary(B)  -> byte_size(B);
+byte_floor(L) when is_list(L)            -> sum_floor(L, 0);
+byte_floor(M) when is_map(M)             ->
+    maps:fold(fun(K, V, Acc) -> Acc + byte_floor(K) + byte_floor(V) end, 0, M);
+byte_floor(_Scalar)                      -> 1.
+
+sum_floor([], Acc)      -> Acc;
+sum_floor([H | T], Acc) -> sum_floor(T, Acc + byte_floor(H)).
+
+%% Integers: the codec renders major 0 / major 1 and bounds both at 64
+%% bits. The bound is NOT restated here — a bignum past it matches no
+%% clause in `macula_record_cbor:encode/1', so the codec is asked.
+check_value(I, Path) when is_integer(I) ->
+    int_ok(macula_record_cbor:is_encodable_int(I), Path);
+check_value(B, _Path) when is_binary(B) ->
+    ok;
+%% `{text, Binary}' is the codec's own major-3 marker, not a user tuple.
+check_value({text, B}, _Path) when is_binary(B) ->
+    ok;
+%% Every atom survives: `undefined' becomes null, the rest become text
+%% and are restored via `binary_to_existing_atom'.
+check_value(A, _Path) when is_atom(A) ->
+    ok;
+check_value(F, Path) when is_float(F) ->
+    unsupported(float, Path);
+check_value(L, Path) when is_list(L) ->
+    check_list(L, 0, Path);
+check_value(M, Path) when is_map(M) ->
+    then_keys_distinct(check_map(maps:to_list(M), Path), M, Path);
+check_value(T, Path) when is_tuple(T) ->
+    unsupported(tuple, Path);
+%% Pids, refs, funs, ports.
+check_value(_Other, Path) ->
+    unsupported(unsupported_term, Path).
+
+%% An improper tail matches neither `[]' nor `[H | T]' as a list, and
+%% `encode_array/1' calls `length/1', which would crash on it.
+check_list([], _Index, _Path) ->
+    ok;
+check_list([H | T], Index, Path) ->
+    check_next(check_value(H, [Index | Path]), T, Index + 1, Path);
+check_list(_Improper, _Index, Path) ->
+    unsupported(improper_list, Path).
+
+check_next(ok, T, Index, Path) ->
+    check_list(T, Index, Path);
+check_next({error, _} = Error, _T, _Index, _Path) ->
+    Error.
+
+check_map([], _Path) ->
+    ok;
+check_map([{K, V} | T], Path) ->
+    check_pair(check_key(K, Path), K, V, T, Path).
+
+check_pair(ok, K, V, T, Path) ->
+    check_map_tail(check_value(V, [K | Path]), T, Path);
+check_pair({error, _} = Error, _K, _V, _T, _Path) ->
+    Error.
+
+check_map_tail(ok, T, Path) ->
+    check_map(T, Path);
+check_map_tail({error, _} = Error, _T, _Path) ->
+    Error.
+
+%% `wire_key/1' accepts atoms, `{text, _}', binaries and integers of
+%% either sign, and nothing else — a float or nested key crashes it.
+check_key(A, _Path) when is_atom(A) ->
+    ok;
+check_key({text, B}, _Path) when is_binary(B) ->
+    ok;
+check_key(B, _Path) when is_binary(B) ->
+    ok;
+check_key(I, Path) when is_integer(I) ->
+    check_value(I, Path);
+check_key(_Other, Path) ->
+    unsupported(unsupported_map_key, Path).
+
+int_ok(true, _Path)  -> ok;
+int_ok(false, Path)  -> unsupported(integer_out_of_range, Path).
+
+%% `to_wire/1' projects an atom, a binary and a `{text, Binary}' of the
+%% same name onto ONE wire key, and folds them into one map. Two distinct
+%% Erlang keys therefore ship as a single pair and the loser vanishes,
+%% silently, chosen by sort order. That is the same class of failure as
+%% the float rewrite, so it is rejected the same way rather than
+%% certified.
+then_keys_distinct(ok, M, Path) ->
+    distinct(length(lists:usort([wire_key(K) || K <- maps:keys(M)])) =:= maps:size(M),
+             Path);
+then_keys_distinct({error, _} = Error, _M, _Path) ->
+    Error.
+
+distinct(true, _Path) -> ok;
+distinct(false, Path) -> unsupported(duplicate_wire_key, Path).
+
+unsupported(Type, Path) ->
+    {error, {unsupported_payload_type, Type, lists:reverse(Path)}}.
 
 %% @private Convert a frame map (atom keys, atom values where used)
 %% into the shape `macula_record_cbor:encode/1' understands. Booleans

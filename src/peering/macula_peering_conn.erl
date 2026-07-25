@@ -511,8 +511,7 @@ send_goodbye(Stream, Reason, Data) ->
 send_application_frame(_Frame, #data{quic_stream = undefined}) ->
     ok;
 send_application_frame(Frame, #data{quic_stream = Stream, identity = Id}) ->
-    Signed = ensure_signed(Frame, Id),
-    macula_quic:send(Stream, macula_frame:encode(Signed)).
+    send_encoded(encode_or_drop(Frame, Id), Stream).
 
 %% Encode N frames into one iolist, sign each, push as a single NIF
 %% call. Skips work entirely when the stream isn't yet up.
@@ -522,8 +521,32 @@ send_application_frames([Frame], Data) ->
     %% Single-frame fast path — avoid the iolist accumulation cost.
     send_application_frame(Frame, Data);
 send_application_frames(Frames, #data{quic_stream = Stream, identity = Id}) ->
-    Encoded = [macula_frame:encode(ensure_signed(F, Id)) || F <- Frames],
-    macula_quic:send(Stream, Encoded).
+    macula_quic:send(Stream, [B || {true, B} <- [encode_or_drop(F, Id) || F <- Frames]]).
+
+send_encoded({true, Bytes}, Stream) -> macula_quic:send(Stream, Bytes);
+send_encoded(false, _Stream)        -> ok.
+
+%% @private Encode one frame, or drop it loudly.
+%%
+%% A frame that cannot be encoded is the SENDER's bug, but the process
+%% that dies for it is this connection — shared by every producer on the
+%% link — and `drain_send_frames/1' means it takes up to ?MAX_BATCH
+%% innocent frames from unrelated producers down with it. Let-it-crash
+%% is the wrong instinct in exactly this shape, where the process that
+%% crashes is not the one that was guilty.
+%%
+%% This is the backstop, not the guard. `macula_peering:send_frame/2'
+%% rejects unencodable frames synchronously, where the caller can be
+%% told. What reaches here is what the checker cannot know without
+%% encoding — chiefly total frame size — and the honest response to that
+%% is to lose one frame with a loud log rather than a whole connection.
+encode_or_drop(Frame, Id) ->
+    try {true, macula_frame:encode(ensure_signed(Frame, Id))}
+    catch Class:Reason ->
+        logger:error("[macula_peering_conn] dropped unencodable ~p frame: ~p:~p",
+                     [maps:get(frame_type, Frame, unknown), Class, Reason]),
+        false
+    end.
 
 %% Drain queued send_frame casts. Capped at ?MAX_BATCH frames per
 %% pass so a runaway producer can't park us in the receive forever.

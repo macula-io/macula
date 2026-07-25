@@ -84,10 +84,31 @@ close(Pid, Reason) ->
     gen_statem:cast(Pid, {close, Reason}).
 
 %% @doc Send a frame through the peer connection. Signs the frame with
-%% the local identity if it isn't already signed. Fire-and-forget.
--spec send_frame(pid(), macula_frame:frame()) -> ok.
+%% the local identity if it isn't already signed.
+%%
+%% The send is a cast, so encoding happens later, inside the shared
+%% connection process. This is therefore the LAST synchronous point at
+%% which a caller can be told its frame is unsendable, and every
+%% producer — pubsub, RPC calls and results, streaming, advertise,
+%% content — funnels through here. Guarding one verb upstream (publish)
+%% left the other five able to kill the connection, so the check lives
+%% here, where it covers all of them at one seam.
+%%
+%% Returns `{error, {unsupported_payload_type, Type, Path}}' without
+%% casting when the frame cannot be encoded. Callers that ignore the
+%% return at least no longer take the connection down; callers that
+%% check get a structured reason and a path to the offending value.
+-spec send_frame(pid(), macula_frame:frame()) -> ok | {error, term()}.
 send_frame(Pid, Frame) when is_map(Frame) ->
-    gen_statem:cast(Pid, {send_frame, Frame}).
+    cast_checked(macula_frame:check_frame(Frame), Pid, Frame).
+
+cast_checked(ok, Pid, Frame) ->
+    gen_statem:cast(Pid, {send_frame, Frame});
+cast_checked({error, Reason} = Rejected, _Pid, Frame) ->
+    logger:error("[macula_peering] refused unsendable ~p frame: ~ts",
+                 [maps:get(frame_type, Frame, unknown),
+                  macula_frame:explain(Reason)]),
+    Rejected.
 
 %% @doc Read the peer's capabilities bitmask as observed in their
 %% CONNECT/HELLO frame. Returns `{ok, NegotiatedCaps}' once the

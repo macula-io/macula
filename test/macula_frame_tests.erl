@@ -1520,3 +1520,240 @@ stream_open_spec_with(Field, BadValue) ->
         caller      => crypto:strong_rand_bytes(32)
     },
     Base#{Field => BadValue}.
+
+%%------------------------------------------------------------------
+%% check_payload/1 — wire admissibility
+%%
+%% The agreement test at the bottom is the one that matters. Everything
+%% above it documents intent; that one stops the checker and the encoder
+%% from drifting apart, which is the only way this guard can rot.
+%%------------------------------------------------------------------
+
+check_payload_accepts_scalars_test() ->
+    ?assertEqual(ok, macula_frame:check_payload(0)),
+    ?assertEqual(ok, macula_frame:check_payload(42)),
+    ?assertEqual(ok, macula_frame:check_payload(-1)),
+    ?assertEqual(ok, macula_frame:check_payload(-42)),
+    ?assertEqual(ok, macula_frame:check_payload(<<"bytes">>)),
+    ?assertEqual(ok, macula_frame:check_payload({text, <<"utf8">>})),
+    ?assertEqual(ok, macula_frame:check_payload(undefined)),
+    ?assertEqual(ok, macula_frame:check_payload(an_atom)),
+    ?assertEqual(ok, macula_frame:check_payload(true)),
+    ?assertEqual(ok, macula_frame:check_payload([])),
+    ?assertEqual(ok, macula_frame:check_payload(#{})).
+
+check_payload_accepts_nested_structures_test() ->
+    Payload = #{<<"type">> => observation,
+                <<"rows">> => [#{<<"seq">> => 1}, #{<<"seq">> => -2}],
+                42         => [<<"int keys are legal">>]},
+    ?assertEqual(ok, macula_frame:check_payload(Payload)).
+
+check_payload_rejects_float_test() ->
+    ?assertMatch({error, {unsupported_payload_type, float, []}},
+                 macula_frame:check_payload(52.34)).
+
+%% The whole point of the error shape: say WHERE, so a service that
+%% publishes one bad field in a large map is told which field.
+check_payload_reports_path_to_offender_test() ->
+    Payload = #{<<"battery">> => #{<<"voltage">> => 52.34}},
+    ?assertEqual({error, {unsupported_payload_type, float,
+                          [<<"battery">>, <<"voltage">>]}},
+                 macula_frame:check_payload(Payload)),
+    ?assertEqual({error, {unsupported_payload_type, float, [1, 0]}},
+                 macula_frame:check_payload([#{}, [1.5]])).
+
+check_payload_rejects_tuple_test() ->
+    ?assertMatch({error, {unsupported_payload_type, tuple, []}},
+                 macula_frame:check_payload({a, b})),
+    %% {text, _} is the codec's own marker and stays legal; a lookalike
+    %% carrying a non-binary is not.
+    ?assertMatch({error, {unsupported_payload_type, tuple, []}},
+                 macula_frame:check_payload({text, not_a_binary})).
+
+check_payload_rejects_out_of_range_integer_test() ->
+    TooBig = 16#FFFFFFFFFFFFFFFF + 1,
+    ?assertMatch({error, {unsupported_payload_type, integer_out_of_range, []}},
+                 macula_frame:check_payload(TooBig)),
+    ?assertMatch({error, {unsupported_payload_type, integer_out_of_range, []}},
+                 macula_frame:check_payload(-TooBig - 1)).
+
+check_payload_rejects_improper_list_test() ->
+    ?assertMatch({error, {unsupported_payload_type, improper_list, []}},
+                 macula_frame:check_payload([1 | 2])).
+
+check_payload_rejects_unsupported_terms_test() ->
+    ?assertMatch({error, {unsupported_payload_type, unsupported_term, []}},
+                 macula_frame:check_payload(self())),
+    ?assertMatch({error, {unsupported_payload_type, unsupported_term, []}},
+                 macula_frame:check_payload(make_ref())).
+
+check_payload_rejects_bad_map_key_test() ->
+    ?assertMatch({error, {unsupported_payload_type, unsupported_map_key, []}},
+                 macula_frame:check_payload(#{1.5 => ok})),
+    ?assertMatch({error, {unsupported_payload_type, unsupported_map_key, []}},
+                 macula_frame:check_payload(#{#{} => ok})).
+
+%% AGREEMENT, in the two directions that matter. Note these are NOT
+%% "check_payload says ok exactly when encode/1 does not raise". The
+%% first draft of this test asserted that and went red on 52.34,
+%% correctly: the encoder does not raise on a float, it silently
+%% rewrites it as text. "Did not crash" is precisely the wrong
+%% definition of agreement for a bug about silent corruption.
+sample_terms() ->
+    [0, 42, -1, -42, 16#FFFFFFFFFFFFFFFF, 16#FFFFFFFFFFFFFFFF + 1,
+     -16#10000000000000000, -16#10000000000000001,
+     <<>>, <<"bytes">>, {text, <<"utf8">>}, {text, not_a_binary},
+     undefined, an_atom, true, false,
+     [], [1, 2, 3], [1 | 2], #{}, #{<<"k">> => 1}, #{1.5 => ok},
+     #{<<"nested">> => #{<<"deep">> => [1, <<"two">>]}},
+     52.34, {a, b}, self(), make_ref(),
+     #{<<"battery">> => #{<<"voltage">> => 52.34}},
+     %% Edge cases from walking to_wire/1 clause by clause. A bitstring
+     %% is NOT a binary, so is_binary/1 rejects it and the encoder has no
+     %% clause; an Erlang string is a list of integers and legitimately
+     %% becomes an array; nesting hides an improper tail one level down;
+     %% and {text, _} with a non-binary slips past wire_key/1's missing
+     %% guard, so only the checker stops it.
+     <<1:3>>, "a string", [[1 | 2]], #{<<"k">> => [1 | 2]},
+     {text, <<>>}, #{{text, not_a_binary} => ok}, #{[] => ok}].
+
+%% SOUNDNESS, the safety-critical direction: anything the checker
+%% green-lights must encode. A false ok here is a killed peering
+%% connection in production.
+check_payload_never_admits_an_unencodable_term_test() ->
+    Admitted = [T || T <- sample_terms(), macula_frame:check_payload(T) =:= ok],
+    [?assert(survives(T)) || T <- Admitted],
+    ?assert(length(Admitted) > 0).
+
+%% COMPLETENESS: anything the checker rejects either genuinely cannot be
+%% encoded, or is a float, which is rejected as policy rather than as
+%% incapacity. Nothing else may be rejected, or the checker is refusing
+%% traffic the mesh could have carried faithfully.
+check_payload_rejects_only_the_unencodable_or_floats_test() ->
+    Rejected = [T || T <- sample_terms(), macula_frame:check_payload(T) =/= ok],
+    [?assert(contains_float(T) orelse not survives(T)) || T <- Rejected],
+    ?assert(length(Rejected) > 0).
+
+%% Pins the corruption that justifies the float policy. When payloads
+%% move to opaque packed bytes this test SHOULD go red — that is its
+%% second job: forcing the policy to be revisited at exactly the moment
+%% it stops being necessary.
+float_payload_is_silently_rewritten_as_text_test() ->
+    Encoded = macula_frame:encode(#{payload => 52.34}),
+    {ok, Frame, <<>>} = macula_frame:decode(Encoded),
+    ?assertNotEqual(52.34, maps:get(payload, Frame)),
+    ?assertEqual({text, <<"52.34">>}, maps:get(payload, Frame)).
+
+%% Walks improper lists too — [1 | 2] is one of the sample terms, and
+%% lists:any/2 crashes on it.
+contains_float(F) when is_float(F) -> true;
+contains_float([])                 -> false;
+contains_float([H | T])            -> contains_float(H) orelse contains_float(T);
+contains_float(M) when is_map(M)   ->
+    contains_float(lists:flatmap(fun({K, V}) -> [K, V] end, maps:to_list(M)));
+contains_float(_Other)             -> false.
+
+%% SURVIVES = encodes, decodes, and comes back with its structure
+%% intact. NOT "did not raise": that predicate is blind to silent
+%% corruption, which is the entire bug class here, and it let two false
+%% oks (oversized payloads, colliding wire keys) sit in a green suite.
+%%
+%% Leaf identity is deliberately NOT asserted, because the wire aliases
+%% leaves by design: an atom, and a `{text, Binary}' of the same name,
+%% are the same bytes, and which one you get back depends on whether the
+%% receiving node knows the atom. Node count is invariant under that
+%% aliasing and still changes the moment a map pair is swallowed.
+survives(Term) ->
+    try macula_frame:decode(macula_frame:encode(#{payload => Term})) of
+        {ok, Frame, <<>>} -> node_count(Term) =:= node_count(maps:get(payload, Frame));
+        _Other            -> false
+    catch
+        _:_ -> false
+    end.
+
+node_count(M) when is_map(M) ->
+    maps:fold(fun(K, V, Acc) -> Acc + node_count(K) + node_count(V) end, 1, M);
+node_count([])      -> 1;
+node_count([H | T]) -> node_count(H) + node_count(T);
+node_count(_Leaf)   -> 1.
+
+%%------------------------------------------------------------------
+%% Generated terms. A curated list cannot stop drift — it only contains
+%% the mistakes already known. Both false oks Fable found were absent
+%% from the curated list and are reachable by this generator.
+%%------------------------------------------------------------------
+
+check_payload_soundness_holds_on_generated_terms_test_() ->
+    {timeout, 120,
+     fun() ->
+         _ = rand:seed(exsss, {20260726, 1, 1}),
+         [?assert(sound(gen_term(3))) || _ <- lists:seq(1, 3000)],
+         ok
+     end}.
+
+%% The only invariant that must never break: admitted implies survives.
+sound(Term) ->
+    macula_frame:check_payload(Term) =/= ok orelse survives(Term).
+
+gen_term(0) -> gen_leaf();
+gen_term(D) -> gen_node(rand:uniform(6), D).
+
+gen_node(1, D) -> [gen_term(D - 1) || _ <- lists:seq(1, rand:uniform(4) - 1)];
+gen_node(2, D) -> maps:from_list([{gen_key(), gen_term(D - 1)}
+                                  || _ <- lists:seq(1, rand:uniform(4))]);
+gen_node(_N, _D) -> gen_leaf().
+
+%% Drawn from a deliberately tiny pool so that `foo', `<<"foo">>' and
+%% `{text, <<"foo">>}' collide often — that is the point.
+gen_key() ->
+    lists:nth(rand:uniform(6),
+              [foo, <<"foo">>, {text, <<"foo">>}, bar, <<"bar">>, 1]).
+
+gen_leaf() ->
+    lists:nth(rand:uniform(12),
+              [0, 42, -7, 16#FFFFFFFFFFFFFFFF + 1, <<>>, <<"bytes">>,
+               {text, <<"t">>}, an_atom, undefined, 52.34, {a, b}, <<1:3>>]).
+
+%%------------------------------------------------------------------
+%% Regressions for the two false oks. Both passed a green suite before
+%% the predicate was fixed: the checker said ok and the connection died
+%% (oversize) or the data was silently swallowed (key collision).
+%%------------------------------------------------------------------
+
+check_payload_rejects_oversized_payload_test() ->
+    TooBig = binary:copy(<<"x">>, 16#FFFFFF + 1),
+    ?assertMatch({error, {unsupported_payload_type, payload_too_large, []}},
+                 macula_frame:check_payload(TooBig)).
+
+%% #{foo => 1, <<"foo">> => 2} both project onto {text, <<"foo">>}, so
+%% the frame ships one pair and the loser vanishes by sort order.
+check_payload_rejects_colliding_wire_keys_test() ->
+    ?assertMatch({error, {unsupported_payload_type, duplicate_wire_key, []}},
+                 macula_frame:check_payload(#{foo => 1, <<"foo">> => 2})),
+    ?assertMatch({error, {unsupported_payload_type, duplicate_wire_key, []}},
+                 macula_frame:check_payload(#{bar => 1, {text, <<"bar">>} => 2})),
+    ?assertEqual(ok, macula_frame:check_payload(#{foo => 1, bar => 2})).
+
+collision_actually_loses_data_test() ->
+    Colliding = #{foo => 1, <<"foo">> => 2},
+    {ok, Frame, <<>>} =
+        macula_frame:decode(macula_frame:encode(#{payload => Colliding})),
+    ?assertEqual(2, maps:size(Colliding)),
+    ?assertEqual(1, maps:size(maps:get(payload, Frame))).
+
+%% check_frame/1 guards the whole frame at the send_frame seam, but must
+%% not judge record fields — those go through macula_record:encode/1.
+check_frame_ignores_record_fields_test() ->
+    ?assertEqual(ok, macula_frame:check_frame(
+                       #{frame_type => publish, record => #{f => 1.5}})),
+    ?assertMatch({error, {unsupported_payload_type, float, [payload]}},
+                 macula_frame:check_frame(
+                   #{frame_type => publish, payload => 1.5})).
+
+explain_names_the_remedy_test() ->
+    Sentence = iolist_to_binary(
+                 macula_frame:explain(
+                   {unsupported_payload_type, float,
+                    [<<"battery">>, <<"voltage">>]})),
+    ?assert(binary:match(Sentence, <<"battery.voltage">>) =/= nomatch),
+    ?assert(binary:match(Sentence, <<"micro-units">>) =/= nomatch).

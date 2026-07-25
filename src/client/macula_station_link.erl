@@ -657,9 +657,13 @@ handle_call({call, Realm, Proc, Payload, Tmo}, From,
         deadline_ms => DeadlineMs,
         caller      => Caller
     }),
-    ok = macula_peering:send_frame(Pid, Frame),
-    TRef = erlang:send_after(Tmo, self(), {call_timeout, CallId}),
-    {noreply, S#state{pending = P#{CallId => {From, TRef}}}};
+    %% NOT `ok = send_frame(...)'. Since the frame is now checked before
+    %% the cast, an unsendable RPC payload comes back as an error, and a
+    %% hard match on `ok' would badmatch here and take this link's
+    %% gen_server down — turning a caller's bad argument into an outage
+    %% for every other caller on the link. Reply with the reason instead.
+    await_call_reply(macula_peering:send_frame(Pid, Frame),
+                     CallId, From, Tmo, P, S);
 
 handle_call({publish, _Realm, _Topic, _Payload}, _From,
             #state{peer_node_id = undefined} = S) ->
@@ -910,8 +914,17 @@ code_change(_OldVsn, S, _Extra) -> {ok, S}.
 %% Build, optionally publisher-sign, and send a PUBLISH frame stamped
 %% with `Seq'. Shared by `publish/4' (per-link fallback seq) and
 %% `publish/5' (pool-owned monotone seq).
+%% Returns whatever the seam decided: `ok', or the structured reason the
+%% frame was refused, which flows back through `summarize_publish/2' to
+%% the caller of `macula_client:publish/5'.
+await_call_reply(ok, CallId, From, Tmo, Pending, S) ->
+    TRef = erlang:send_after(Tmo, self(), {call_timeout, CallId}),
+    {noreply, S#state{pending = Pending#{CallId => {From, TRef}}}};
+await_call_reply({error, _} = Refused, _CallId, _From, _Tmo, _Pending, S) ->
+    {reply, Refused, S}.
+
 -spec send_publish_frame(<<_:256>>, binary(), term(), non_neg_integer(),
-                         #state{}) -> ok.
+                         #state{}) -> ok | {error, term()}.
 send_publish_frame(Realm, Topic, Payload, Seq,
                    #state{peer_pid = Pid, identity = Id}) ->
     Pub = macula_identity:public(Id),
