@@ -1603,15 +1603,12 @@ canonical_unsigned(Frame) ->
 %% without the agreement property test in `macula_frame_tests' going
 %% red.
 %%
-%% FLOATS ARE REJECTED, deliberately. `to_wire/1' silently rewrites a
-%% float as a six-decimal text string, so a float published today
-%% arrives as a *string*, rounded, with no error anywhere. Rejecting
-%% is not a limitation of CBOR — RFC 8949 major type 7 is floats, and
-%% `macula_cbor_nif' handles them natively. It is a limitation of the
-%% canonical envelope encoder, which the payload should not be passing
-%% through at all. Until payloads travel as opaque packed bytes, the
-%% honest answer to a float is a loud error naming the fix: scale to
-%% an integer (micro-units) or send it as a binary string.
+%% FLOATS ARE CARRIED, as of the float support in `macula_record_cbor'.
+%% They used to be rejected here, and before that `to_wire/1' silently
+%% rewrote them as six-decimal text. Both were workarounds for the canonical
+%% encoder lacking a float clause, which was never a CBOR limitation: RFC
+%% 8949 major type 7 is floats. The encoder now emits binary64, so callers
+%% no longer scale to integers to get a number across.
 -spec check_payload(term()) ->
     ok | {error, {unsupported_payload_type, atom(), [term()]}}.
 check_payload(Payload) ->
@@ -1642,16 +1639,6 @@ check_frame(Frame) when is_map(Frame) ->
 %% @doc Render a rejection as a sentence, with the remedy where there is
 %% one. The operator reading a log at 03:00 is not reading edoc.
 -spec explain(term()) -> unicode:chardata().
-%% Deliberately does NOT say "the mesh cannot carry floats". It can: RFC 8949
-%% major type 7 is floats and macula_cbor_nif handles them natively. What
-%% cannot is `macula_record_cbor', the deterministic encoder built for signing
-%% the frame envelope, which payloads should not be traversing at all. Saying
-%% otherwise spreads a wrong diagnosis into every log line an operator reads.
-explain({unsupported_payload_type, float, Path}) ->
-    ["float at ", fmt_path(Path),
-     ": payloads are encoded by the canonical envelope encoder, which "
-     "implements only a subset of CBOR and has no float clause; scale to an "
-     "integer (e.g. micro-units) or send a binary string"];
 explain({unsupported_payload_type, duplicate_wire_key, Path}) ->
     ["two keys in the map at ", fmt_path(Path),
      " collapse to the same wire key: an atom, a binary and a "
@@ -1704,6 +1691,8 @@ sum_floor([H | T], Acc) -> sum_floor(T, Acc + byte_floor(H)).
 %% clause in `macula_record_cbor:encode/1', so the codec is asked.
 check_value(I, Path) when is_integer(I) ->
     int_ok(macula_record_cbor:is_encodable_int(I), Path);
+check_value(F, _Path) when is_float(F) ->
+    ok;
 check_value(B, _Path) when is_binary(B) ->
     ok;
 %% `{text, Binary}' is the codec's own major-3 marker, not a user tuple.
@@ -1713,8 +1702,6 @@ check_value({text, B}, _Path) when is_binary(B) ->
 %% and are restored via `binary_to_existing_atom'.
 check_value(A, _Path) when is_atom(A) ->
     ok;
-check_value(F, Path) when is_float(F) ->
-    unsupported(float, Path);
 check_value(L, Path) when is_list(L) ->
     check_list(L, 0, Path);
 check_value(M, Path) when is_map(M) ->
@@ -1806,8 +1793,6 @@ to_wire(A) when is_atom(A) ->
 to_wire({text, B}) when is_binary(B) -> {text, B};
 to_wire(B) when is_binary(B) -> B;
 to_wire(I) when is_integer(I) -> I;
-to_wire(F) when is_float(F) ->
-    {text, float_to_binary(F, [{decimals, 6}, compact])};
 to_wire(Other) -> Other.
 
 wire_key(A) when is_atom(A)   -> {text, atom_to_binary(A, utf8)};

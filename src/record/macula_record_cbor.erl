@@ -1,7 +1,8 @@
 %% @doc Deterministic CBOR encoder/decoder.
 %%
 %% Implements the subset of RFC 8949 needed by Macula records:
-%% unsigned ints, byte strings, text strings, arrays, maps, and `null'.
+%% unsigned ints, negative ints, floats, byte strings, text strings,
+%% arrays, maps, and `null'.
 %%
 %% Encoding follows RFC 8949 §4.2.1 (deterministic):
 %% <ul>
@@ -29,6 +30,7 @@
 %%   <li>`[value()]' — array (major 4)</li>
 %%   <li>`#{value() => value()}' — map (major 5)</li>
 %%   <li>`null' — simple null (major 7, value 22)</li>
+%%   <li>`float()' — IEEE 754 binary64 (major 7, value 27)</li>
 %% </ul>
 -module(macula_record_cbor).
 
@@ -37,6 +39,7 @@
 
 -type value() ::
     integer()
+  | float()
   | binary()
   | {text, binary()}
   | [value()]
@@ -72,6 +75,19 @@ encode(N) when is_integer(N), N >= 0, N =< ?MAX_UINT64 ->
 %% positive branch but mirrored on the negative side.
 encode(N) when is_integer(N), N < 0, N >= -(?MAX_UINT64 + 1) ->
     head(1, -1 - N);
+%% Floats: major 7, additional info 27, IEEE 754 binary64 (§3.3).
+%%
+%% ALWAYS binary64, never the shorter half or single forms. Determinism
+%% requires one canonical encoding per value, not the shortest one, and
+%% picking "shortest that round-trips" would make the signed bytes depend on
+%% a width-selection rule that every peer must reproduce bit-for-bit. Nine
+%% bytes per float is the price of not having that argument.
+%%
+%% An Erlang float is always finite (arithmetic raises badarith rather than
+%% producing NaN or infinity), so there is no NaN canonicalisation question
+%% on the encode side.
+encode(F) when is_float(F) ->
+    <<7:3, 27:5, F:64/float>>;
 encode({text, B}) when is_binary(B) ->
     <<(head(3, byte_size(B)))/binary, B/binary>>;
 encode(B) when is_binary(B) ->
@@ -125,9 +141,20 @@ decode(Bin) when is_binary(Bin) ->
     {V, <<>>} = decode_one(Bin),
     V.
 
-%% Major 7, value 22 = null. Anything else with major 7 is unsupported.
+%% Major 7, value 22 = null.
 decode_one(<<7:3, 22:5, R/binary>>) ->
     {null, R};
+%% Floats. We only ever EMIT binary64, but a conforming peer may send the
+%% shorter forms, so all three are accepted. NaN and the infinities have no
+%% Erlang float representation and match no clause here; the frame decoder
+%% already turns that into `bad_frame' rather than a crash, which is the
+%% right answer for a value this codec cannot faithfully hand to a caller.
+decode_one(<<7:3, 25:5, Half:16/bitstring, R/binary>>) ->
+    {half_to_float(Half), R};
+decode_one(<<7:3, 26:5, F:32/float, R/binary>>) ->
+    {F, R};
+decode_one(<<7:3, 27:5, F:64/float, R/binary>>) ->
+    {F, R};
 decode_one(<<MT:3, AI:5, Rest/binary>>) ->
     {N, R} = decode_count(AI, Rest),
     decode_value(MT, N, R).
@@ -167,3 +194,14 @@ decode_map(N, R, Acc) ->
     {K, R1} = decode_one(R),
     {V, R2} = decode_one(R1),
     decode_map(N - 1, R2, Acc#{K => V}).
+
+%% IEEE 754 binary16 -> Erlang float. Subnormals and zero fall out of the
+%% same arithmetic; exponent 31 is NaN/infinity, which has no Erlang
+%% representation, so it is left to fail the match above.
+half_to_float(<<S:1, 0:5, Frac:10>>) ->
+    sign(S) * math:pow(2, -14) * (Frac / 1024);
+half_to_float(<<S:1, Exp:5, Frac:10>>) when Exp < 31 ->
+    sign(S) * math:pow(2, Exp - 15) * (1 + Frac / 1024).
+
+sign(0) -> 1.0;
+sign(1) -> -1.0.

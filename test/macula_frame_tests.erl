@@ -1548,19 +1548,21 @@ check_payload_accepts_nested_structures_test() ->
                 42         => [<<"int keys are legal">>]},
     ?assertEqual(ok, macula_frame:check_payload(Payload)).
 
-check_payload_rejects_float_test() ->
-    ?assertMatch({error, {unsupported_payload_type, float, []}},
-                 macula_frame:check_payload(52.34)).
+%% Floats are CARRIED now. This test used to assert the opposite, which was
+%% correct only while the canonical encoder had no float clause.
+check_payload_accepts_float_test() ->
+    ?assertEqual(ok, macula_frame:check_payload(52.34)),
+    ?assertEqual(ok, macula_frame:check_payload(#{<<"v">> => -1234.5})).
 
 %% The whole point of the error shape: say WHERE, so a service that
 %% publishes one bad field in a large map is told which field.
 check_payload_reports_path_to_offender_test() ->
-    Payload = #{<<"battery">> => #{<<"voltage">> => 52.34}},
-    ?assertEqual({error, {unsupported_payload_type, float,
+    Payload = #{<<"battery">> => #{<<"voltage">> => {volts, 52}}},
+    ?assertEqual({error, {unsupported_payload_type, tuple,
                           [<<"battery">>, <<"voltage">>]}},
                  macula_frame:check_payload(Payload)),
-    ?assertEqual({error, {unsupported_payload_type, float, [1, 0]}},
-                 macula_frame:check_payload([#{}, [1.5]])).
+    ?assertEqual({error, {unsupported_payload_type, tuple, [1, 0]}},
+                 macula_frame:check_payload([#{}, [{a, b}]])).
 
 check_payload_rejects_tuple_test() ->
     ?assertMatch({error, {unsupported_payload_type, tuple, []}},
@@ -1625,33 +1627,23 @@ check_payload_never_admits_an_unencodable_term_test() ->
     [?assert(survives(T)) || T <- Admitted],
     ?assert(length(Admitted) > 0).
 
-%% COMPLETENESS: anything the checker rejects either genuinely cannot be
-%% encoded, or is a float, which is rejected as policy rather than as
-%% incapacity. Nothing else may be rejected, or the checker is refusing
-%% traffic the mesh could have carried faithfully.
-check_payload_rejects_only_the_unencodable_or_floats_test() ->
+%% COMPLETENESS: anything the checker rejects must genuinely be unable to
+%% survive. There is no longer a policy exemption, because the float
+%% restriction it existed for is gone.
+check_payload_rejects_only_what_cannot_survive_test() ->
     Rejected = [T || T <- sample_terms(), macula_frame:check_payload(T) =/= ok],
-    [?assert(contains_float(T) orelse not survives(T)) || T <- Rejected],
+    [?assert(not survives(T)) || T <- Rejected],
     ?assert(length(Rejected) > 0).
 
-%% Pins the corruption that justifies the float policy. When payloads
-%% move to opaque packed bytes this test SHOULD go red — that is its
-%% second job: forcing the policy to be revisited at exactly the moment
-%% it stops being necessary.
-float_payload_is_silently_rewritten_as_text_test() ->
-    Encoded = macula_frame:encode(#{payload => 52.34}),
-    {ok, Frame, <<>>} = macula_frame:decode(Encoded),
-    ?assertNotEqual(52.34, maps:get(payload, Frame)),
-    ?assertEqual({text, <<"52.34">>}, maps:get(payload, Frame)).
+%% This test used to pin the corruption: a float went in and
+%% {text, <<"52.34">>} came out. It was written to go red the moment that
+%% stopped being true, and it did. Now it pins the fix.
+float_payload_round_trips_exactly_test() ->
+    [begin
+         {ok, Frame, <<>>} = macula_frame:decode(macula_frame:encode(#{payload => F})),
+         ?assertEqual(F, maps:get(payload, Frame))
+     end || F <- [52.34, -1234.5, 0.0, 1.0e300, 1.0e-300, 3.141592653589793]].
 
-%% Walks improper lists too — [1 | 2] is one of the sample terms, and
-%% lists:any/2 crashes on it.
-contains_float(F) when is_float(F) -> true;
-contains_float([])                 -> false;
-contains_float([H | T])            -> contains_float(H) orelse contains_float(T);
-contains_float(M) when is_map(M)   ->
-    contains_float(lists:flatmap(fun({K, V}) -> [K, V] end, maps:to_list(M)));
-contains_float(_Other)             -> false.
 
 %% SURVIVES = encodes, decodes, and comes back with its structure
 %% intact. NOT "did not raise": that predicate is blind to silent
@@ -1766,25 +1758,29 @@ collision_actually_loses_data_test() ->
 %% not judge record fields — those go through macula_record:encode/1.
 check_frame_ignores_record_fields_test() ->
     ?assertEqual(ok, macula_frame:check_frame(
-                       #{frame_type => publish, record => #{f => 1.5}})),
-    ?assertMatch({error, {unsupported_payload_type, float, [payload]}},
+                       #{frame_type => publish, record => #{f => {a, b}}})),
+    ?assertMatch({error, {unsupported_payload_type, tuple, [payload]}},
                  macula_frame:check_frame(
-                   #{frame_type => publish, payload => 1.5})).
+                   #{frame_type => publish, payload => {a, b}})).
 
-explain_names_the_remedy_test() ->
+explain_names_the_offender_and_its_place_test() ->
     Sentence = iolist_to_binary(
                  macula_frame:explain(
-                   {unsupported_payload_type, float,
+                   {unsupported_payload_type, tuple,
                     [<<"battery">>, <<"voltage">>]})),
     ?assert(binary:match(Sentence, <<"battery.voltage">>) =/= nomatch),
-    ?assert(binary:match(Sentence, <<"micro-units">>) =/= nomatch).
+    ?assert(binary:match(Sentence, <<"tuple">>) =/= nomatch),
+    Collision = iolist_to_binary(
+                  macula_frame:explain(
+                    {unsupported_payload_type, duplicate_wire_key, []})),
+    ?assert(binary:match(Collision, <<"same wire key">>) =/= nomatch).
 
 %% Regression for Fable's finding that the old predicate was blind to
 %% leaf rewrites: the float bug itself must be detectable by the test
 %% machinery, not only fenced off by the policy clause in check_value/2.
 survives_detects_the_float_rewrite_test() ->
-    ?assertNot(survives(52.34)),
-    ?assertNot(survives(#{<<"v">> => 52.34})),
+    ?assert(survives(52.34)),
+    ?assert(survives(#{<<"v">> => 52.34})),
     %% ...while the wire's deliberate atom/text aliasing is NOT flagged.
     ?assert(survives(an_atom)),
     ?assert(survives(#{<<"k">> => [1, <<"two">>, undefined]})).

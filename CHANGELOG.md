@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.0.0] - 2026-07-26
+
+**The canonical encoder now carries floats, so callers stop scaling around it.**
+`macula_record_cbor` emits IEEE 754 binary64 (RFC 8949 major type 7, additional
+info 27) and decodes all three widths a conforming peer may send. `to_wire/1`
+no longer rewrites a float as six-decimal text, and `check_payload/1` no longer
+rejects one.
+
+This is a WIRE change and therefore a major: a 6.x peer decoding a float payload
+finds no clause for major 7 and rejects the frame, so both ends must be on 7.x
+before floats appear on a topic they share.
+
+Why it took two majors to get here is the useful part. 6.0.0 rejected floats
+loudly, which was right at the time and wrong as a destination: it left every
+producer of real telemetry (hecate-victron publishes Victron voltages, currents
+and state of charge, almost all floats) scaling to integers to smuggle a number
+past our own codec. That is a workaround in consuming code for a gap in a
+library we own. The gap was never CBOR's — RFC 8949 has had floats since 2013 —
+it was that this encoder implemented a subset and nobody had needed the rest
+yet.
+
+Always binary64, never the shorter half or single forms. Determinism needs one
+canonical encoding per value, not the shortest one; "shortest that round-trips"
+would make the signed bytes depend on a width-selection rule every peer must
+reproduce bit for bit. Nine bytes per float is the price of not having that
+argument. Erlang floats are always finite, so there is no NaN canonicalisation
+question on encode; NaN or infinity arriving from a foreign peer has no Erlang
+representation, matches no clause, and is rejected as a bad frame.
+
+`explain/1` no longer tells operators the mesh cannot carry floats. It can. The
+6.0.0 text said otherwise and was itself a restatement of the wrong diagnosis
+this release finishes correcting.
+
 ## [6.0.0] - 2026-07-26
 
 **Breaking: `macula:publish/4,5` can now return `{error, Reason}` where it
