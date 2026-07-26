@@ -18,6 +18,13 @@
 
 -export_type([opts/0, connect_opts/0]).
 
+-ifdef(TEST).
+%% Exports for unit tests — pure helpers that are otherwise private.
+-export([
+    resolve_recipient/1
+]).
+-endif.
+
 -type connect_opts() :: #{
     host        := binary() | string(),
     port        := inet:port_number(),
@@ -74,7 +81,13 @@
     %% in the legacy `{macula_peering, frame, ...}' form. The peer's
     %% verified `PeerNodeId' is included so the recipient does not have
     %% to walk frame internals to decide routing.
-    dht_recipient   => pid(),
+    %%
+    %% Prefer a REGISTERED NAME over a raw pid. A name is re-resolved
+    %% on every frame, so a recipient crash-restart is transparent: the
+    %% supervisor re-registers the name to the new pid and the next
+    %% frame lands there. A raw pid is captured once for the life of
+    %% this connection and cannot follow a restart.
+    dht_recipient   => pid() | atom(),
     %% Optional pid that receives pubsub-class frames (`subscribe',
     %% `unsubscribe', `publish', `event') directly, bypassing
     %% `controlling_pid'. Sent as
@@ -86,7 +99,13 @@
     %% mailbox that handles handler dispatch and ADVERTISE / SUBSCRIBE
     %% propagation. Stations on macula >= 4.4.4 set this to a dedicated
     %% pubsub frame dispatcher.
-    pubsub_recipient => pid(),
+    %%
+    %% As with `dht_recipient', prefer a registered name — see the
+    %% note there. Stations pass
+    %% `macula_station_pubsub_dispatcher' so that a dispatcher
+    %% restart does not silently strand every pre-existing peering
+    %% connection on a dead pid.
+    pubsub_recipient => pid() | atom(),
     %% When true, every inbound-frame notification carries an extra
     %% `RecvAtUs :: integer()' element captured the moment the frame
     %% finished decoding (just before dispatch to the recipient). The
@@ -111,8 +130,8 @@
     capabilities     :: non_neg_integer(),
     controlling_pid  :: pid(),
     accept_owner     :: undefined | pid(),
-    dht_recipient    :: undefined | pid(),
-    pubsub_recipient :: undefined | pid(),
+    dht_recipient    :: undefined | pid() | atom(),
+    pubsub_recipient :: undefined | pid() | atom(),
     timing_enabled   :: boolean(),
     target           :: undefined | connect_opts(),
     %% Pinned peer identity from the target's `expected_node_id'.
@@ -610,8 +629,10 @@ notify(Event, Detail, #data{controlling_pid = Pid}) ->
 
 %% Inbound-frame router. Category-bypass: DHT-class frames go to
 %% `dht_recipient' if set; pubsub-class frames go to `pubsub_recipient'
-%% if set; everything else (and any bypass with the recipient unset)
-%% flows through `controlling_pid' in the legacy form. See the
+%% if set; everything else (and any bypass whose recipient is unset,
+%% unregistered or dead) flows through `controlling_pid' in the
+%% legacy form. Recipients are resolved per frame — see
+%% `resolve_recipient/1'. See the
 %% `dht_recipient' / `pubsub_recipient' field docs on `opts()' for why.
 %%
 %% When `timing_enabled' is true on this conn, the recipient receives
@@ -626,18 +647,52 @@ route_frame(Frame, Data) ->
     %% type we don't classify. Fall back to controlling_pid.
     notify_frame(Frame, Data).
 
-route_by_category(dht, Frame, NodeId,
-                  #data{dht_recipient = Pid,
-                        timing_enabled = Timing}) when is_pid(Pid) ->
-    notify_bypass(Pid, dht_frame, NodeId, Frame, Timing),
-    ok;
-route_by_category(pubsub, Frame, NodeId,
-                  #data{pubsub_recipient = Pid,
-                        timing_enabled = Timing}) when is_pid(Pid) ->
-    notify_bypass(Pid, pubsub_frame, NodeId, Frame, Timing),
-    ok;
+route_by_category(dht, Frame, NodeId, #data{dht_recipient = R} = Data) ->
+    bypass_or_legacy(resolve_recipient(R), dht_frame, Frame, NodeId, Data);
+route_by_category(pubsub, Frame, NodeId, #data{pubsub_recipient = R} = Data) ->
+    bypass_or_legacy(resolve_recipient(R), pubsub_frame, Frame, NodeId, Data);
 route_by_category(_, Frame, _NodeId, Data) ->
     notify_frame(Frame, Data).
+
+%% Resolve a bypass recipient on EVERY frame rather than trusting the
+%% value captured at `init/1'.
+%%
+%% A registered name is re-resolved per frame, so a recipient
+%% crash-restart is transparent: the supervisor re-registers the name
+%% to the new pid and the next frame lands there. A raw pid cannot be
+%% re-resolved, so it is liveness-checked instead — before this,
+%% `is_pid/1' alone guarded the bypass, and `is_pid/1' is true for a
+%% DEAD pid. A recipient restart therefore stranded every
+%% already-established connection: frames were posted to a dead pid
+%% and silently vanished, with no error at either end, for the whole
+%% remaining life of the connection.
+%%
+%% `is_process_alive/1' raises `badarg' for a remote pid, so locality
+%% is a guard rather than a check. Recipients are same-BEAM by design;
+%% a remote one is passed through untested.
+resolve_recipient(undefined) ->
+    undefined;
+resolve_recipient(Name) when is_atom(Name) ->
+    erlang:whereis(Name);
+resolve_recipient(Pid) when is_pid(Pid), node(Pid) =:= node() ->
+    live_pid(Pid, erlang:is_process_alive(Pid));
+resolve_recipient(Pid) when is_pid(Pid) ->
+    Pid.
+
+live_pid(Pid, true)   -> Pid;
+live_pid(_Pid, false) -> undefined.
+
+%% No live bypass recipient — fall back to `controlling_pid' in the
+%% legacy form. That is the documented pre-4.4.3/4.4.4 route and the
+%% consumer still handles every frame category there, so an absent or
+%% restarting recipient degrades to the slower path instead of
+%% dropping traffic on the floor.
+bypass_or_legacy(undefined, _Tag, Frame, _NodeId, Data) ->
+    notify_frame(Frame, Data);
+bypass_or_legacy(Pid, Tag, Frame, NodeId,
+                 #data{timing_enabled = Timing}) ->
+    notify_bypass(Pid, Tag, NodeId, Frame, Timing),
+    ok.
 
 notify_frame(Frame, #data{controlling_pid = Pid, timing_enabled = false}) ->
     Pid ! {macula_peering, frame, self(), Frame},

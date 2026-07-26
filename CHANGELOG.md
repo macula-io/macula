@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.1.0] - 2026-07-26
+
+**A restarting frame recipient no longer silently black-holes a connection's
+pubsub and DHT traffic.** `dht_recipient` and `pubsub_recipient` now accept a
+registered name as well as a pid, and the recipient is resolved on every frame
+instead of being captured once in `init/1`.
+
+The category-bypass guard was `is_pid(Pid)`, and `is_pid/1` is true for a
+**dead** pid. When a station's frame dispatcher crash-restarted, every peering
+connection established before the restart kept posting frames to the dead pid.
+Messages to a dead pid are discarded by the VM, so those connections went
+pubsub-silent (and DHT-silent) for the whole rest of their lives, with no error
+logged at either end, no `disconnected` event, and no reconnect to trigger
+recovery. The only cure was tearing the connection down.
+
+Resolution now happens per frame:
+
+- a registered name is re-resolved every time, so a supervisor restart is
+  transparent — the name is re-pointed at the new pid and the next frame lands
+  there;
+- a local pid is liveness-checked;
+- an unset, unregistered or dead recipient falls back to `controlling_pid` in
+  the legacy pre-4.4.3/4.4.4 frame form, which still handles every category, so
+  the bypass degrades to the slower path instead of dropping traffic.
+
+Consumers should pass the registered name. Passing a pid keeps working and is
+now liveness-checked, but a pid cannot follow a restart.
+
 ## [7.0.0] - 2026-07-26
 
 **The canonical encoder now carries floats, so callers stop scaling around it.**
