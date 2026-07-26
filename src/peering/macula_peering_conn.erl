@@ -102,7 +102,7 @@
     %%
     %% As with `dht_recipient', prefer a registered name — see the
     %% note there. Stations pass
-    %% `macula_station_pubsub_dispatcher' so that a dispatcher
+    %% `macula_station_route_pubsub_frames' so that a recipient
     %% restart does not silently strand every pre-existing peering
     %% connection on a dead pid.
     pubsub_recipient => pid() | atom(),
