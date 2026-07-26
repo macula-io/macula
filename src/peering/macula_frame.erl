@@ -1642,10 +1642,16 @@ check_frame(Frame) when is_map(Frame) ->
 %% @doc Render a rejection as a sentence, with the remedy where there is
 %% one. The operator reading a log at 03:00 is not reading edoc.
 -spec explain(term()) -> unicode:chardata().
+%% Deliberately does NOT say "the mesh cannot carry floats". It can: RFC 8949
+%% major type 7 is floats and macula_cbor_nif handles them natively. What
+%% cannot is `macula_record_cbor', the deterministic encoder built for signing
+%% the frame envelope, which payloads should not be traversing at all. Saying
+%% otherwise spreads a wrong diagnosis into every log line an operator reads.
 explain({unsupported_payload_type, float, Path}) ->
     ["float at ", fmt_path(Path),
-     ": the mesh cannot carry raw floats; scale to an integer "
-     "(e.g. micro-units) or send a binary string"];
+     ": payloads are encoded by the canonical envelope encoder, which "
+     "implements only a subset of CBOR and has no float clause; scale to an "
+     "integer (e.g. micro-units) or send a binary string"];
 explain({unsupported_payload_type, duplicate_wire_key, Path}) ->
     ["two keys in the map at ", fmt_path(Path),
      " collapse to the same wire key: an atom, a binary and a "
