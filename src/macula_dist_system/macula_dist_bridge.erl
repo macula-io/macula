@@ -129,8 +129,8 @@ handle_info(socket_ready, #state{reader_pid = undefined, pool = Pool,
     {noreply, State#state{reader_pid = ReaderPid}};
 
 %% --- Reader exited (linked process) ---
-%% Clean exits (peer closed the dist tunnel, `global` disconnected, reader
-%% finished draining, supervisor shutdown) are not crashes — `{stop, normal}`
+%% Clean exits (peer closed the dist tunnel, `global' disconnected, reader
+%% finished draining, supervisor shutdown) are not crashes — `{stop, normal}'
 %% so the gen_server terminates without a CRASH REPORT.
 handle_info({'EXIT', Pid, normal}, #state{reader_pid = Pid,
                                            tunnel_id = TunnelId} = State) ->

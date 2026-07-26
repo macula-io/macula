@@ -408,15 +408,15 @@ version.
 ### Added
 
 - **App-level liveness probe in `macula_station_link`.** Periodic
-  `_macula.ping' CALL every 30s (`?LIVENESS_INTERVAL_MS') with reply
-  tracking via `liveness_outstanding'. After
+  `_macula.ping` CALL every 30s (`?LIVENESS_INTERVAL_MS`) with reply
+  tracking via `liveness_outstanding`. After
   `?LIVENESS_MAX_MISSES` (=2) consecutive misses, the link issues
   `macula_peering:close(PeerPid, app_liveness_lost)` which surfaces
   through the normal `disconnected` notify path → station_link
   stops → pool respawns with a fresh QUIC handshake.
 
   Closes the zombie-connection window that previously lasted up to
-  the Quinn `max_idle_timeout' (5 minutes) — empirically observed
+  the Quinn `max_idle_timeout` (5 minutes) — empirically observed
   going much longer in production because the server's Quinn keeps
   ACKing keep-alive PINGs at the transport layer even after the
   application-level peer has been wiped (e.g. station container
@@ -440,7 +440,7 @@ version.
 ### Internal
 
 - `#data{peer_capabilities :: undefined | non_neg_integer()}` field
-  on `macula_peering_conn`. Populated in `absorb_peer_info/2' from
+  on `macula_peering_conn`. Populated in `absorb_peer_info/2` from
   the CONNECT / HELLO frame. No wire change (the field was already
   on the frame schema; we just record it).
 
@@ -448,7 +448,7 @@ version.
   `absorb_peer_info_populates_fields` test — was asserting
   `element(14, Data) =:= [Realm]` (a hardcoded offset) but the
   #data record grew several fields since the test was written, so
-  it had been silently picking up the `quic_stream' reference. Now
+  it had been silently picking up the `quic_stream` reference. Now
   uses a structural search across all elements; resilient to
   future record additions.
 
@@ -465,7 +465,7 @@ version.
   inbound conn's NodeId — necessary for multi-hop relays where the
   inbound conn is a peer station, not the originating daemon.
 
-  Frame shape: `#{stream_id, seq, encoding, body, signer => <<_:256>>}'
+  Frame shape: `#{stream_id, seq, encoding, body, signer => <<_:256>>}`
   (analogous to `stream_reply`'s `responded_by` and CALL's `caller`).
 
   Wire-compat: `signer` is additive; old stations ignore it and keep
@@ -522,7 +522,7 @@ version.
 
 - **`timing_enabled` option on `macula_peering_conn`.** When set,
   every inbound-frame notification carries an extra trailing
-  `RecvAtUs :: integer()` element — `erlang:monotonic_time(microsecond)'
+  `RecvAtUs :: integer()` element — `erlang:monotonic_time(microsecond)`
   captured the instant the frame finished decoding. Recipients can
   subtract their own monotonic clock at dispatch time to compute
   mailbox wait at the receiving gen_server.
@@ -536,16 +536,16 @@ version.
 
   Default is `false` for backward compatibility — recipients that
   have not been updated keep matching the legacy 4-/5-tuple shapes.
-  `macula_station_link' has been extended to match both shapes so
+  `macula_station_link` has been extended to match both shapes so
   daemons receiving from a station that has opted in continue to
   work.
 
   Motivation: macula-station's `macula_station_peer_observer` runs a
   persistent mailbox depth of 200-400 frames under DHT load. Without
-  a `RecvAtUs' stamp the mailbox wait is invisible to a downstream
+  a `RecvAtUs` stamp the mailbox wait is invisible to a downstream
   observer — `process_info(self(), message_queue_len)` at dispatch
   entry is a coarse proxy but doesn't tell you how old the frame at
-  the head of the queue actually is. With `timing_enabled' the
+  the head of the queue actually is. With `timing_enabled` the
   receiver gets per-frame wait + dispatch + forward latency, which
   is what we need to know whether peer_observer is still the
   bottleneck after 4.4.3/4.4.4's DHT and pubsub ETS bypasses.
@@ -835,11 +835,11 @@ version.
 
 - **`subscribe_records/3` now decodes the wire payload before
   invoking the user callback.** Previously the callback received
-  the raw `macula_record:encode/1' binary; the documented contract
+  the raw `macula_record:encode/1` binary; the documented contract
   said it would receive the decoded record map. The probe pair
   added in `macula-internal/macula-e2e@8831d1e` surfaced both
   this and the substrate-side topic mismatch (substrate publishes
-  on `_dht.records.<type>.stored' as of `macula-internal/macula-station`
+  on `_dht.records.<type>.stored` as of `macula-internal/macula-station`
   recipient commit). Together the two changes make
   `subscribe_records/3` work end-to-end as documented.
 
@@ -855,40 +855,40 @@ version.
 
 - **`macula_blake3_nif:hash/1` now force-loads `macula_crypto_nif`
   before checking the NIF-loaded flag.** Pre-fix the function read
-  `is_nif_loaded()` directly, which returns `false' until the
-  `macula_crypto_nif' module is referenced for the first time
-  (its `-on_load' callback writes the persistent_term flag). If a
-  caller's first-ever NIF use went through `macula_blake3_nif:hash/1'
-  rather than something that touched `macula_crypto_nif' first, the
+  `is_nif_loaded()` directly, which returns `false` until the
+  `macula_crypto_nif` module is referenced for the first time
+  (its `-on_load` callback writes the persistent_term flag). If a
+  caller's first-ever NIF use went through `macula_blake3_nif:hash/1`
+  rather than something that touched `macula_crypto_nif` first, the
   Erlang fallback fired — and that fallback is NOT plain
-  `crypto:hash(sha256, _)': inputs over 1024 bytes are tree-hashed
+  `crypto:hash(sha256, _)`: inputs over 1024 bytes are tree-hashed
   (1024-byte chunks SHA-256'd individually, chunk hashes pair-
   hashed), producing output that matches neither real BLAKE3 nor
   plain SHA-256.
 
-  Surfaced by `macula:put_content/2' in v4.2.7: blobs > 1024 bytes
+  Surfaced by `macula:put_content/2` in v4.2.7: blobs > 1024 bytes
   computed an SDK-side MCID that no relay could verify, so every
-  `_content.put_block' returned `hash_mismatch'. The four other
-  hash entry points (`hash_streaming/1', `verify/2', `hash_hex/1')
+  `_content.put_block` returned `hash_mismatch`. The four other
+  hash entry points (`hash_streaming/1`, `verify/2`, `hash_hex/1`)
   had the same bug; all are fixed in lock-step.
 
-  `is_nif_loaded/0' is retained for diagnostic use but its docstring
+  `is_nif_loaded/0` is retained for diagnostic use but its docstring
   now warns that the answer reflects whatever has been observed so
-  far. New private helper `ensure_crypto_nif_loaded/0' is the
+  far. New private helper `ensure_crypto_nif_loaded/0` is the
   authoritative path.
 
 ## [4.2.7] - 2026-05-09
 
 ### Added
 
-- **`macula:put_content/2` and `macula:get_content/2'** — content-
-  addressed blob storage and retrieval over the relay. `put_content'
+- **`macula:put_content/2` and `macula:get_content/2`** — content-
+  addressed blob storage and retrieval over the relay. `put_content`
   computes the BLAKE3 hash of the bytes, packages them into an MCID
-  (`<<1, 16#55, Hash:32/binary>>'), and ships the blob to the relay
-  via a single `_content.put_block' RPC; the relay verifies the
-  payload's hash matches the MCID before accepting. `get_content'
-  fetches the blob back via `_content.get_block', returning
-  `{error, not_found}' if no provider in the pool's reach holds a
+  (`<<1, 16#55, Hash:32/binary>>`), and ships the blob to the relay
+  via a single `_content.put_block` RPC; the relay verifies the
+  payload's hash matches the MCID before accepting. `get_content`
+  fetches the blob back via `_content.get_block`, returning
+  `{error, not_found}` if no provider in the pool's reach holds a
   copy.
 
   v4.2.7 minimum-viable surface — single-block per blob, no
@@ -898,12 +898,12 @@ version.
   timeout; chunked manifests + multi-provider parallel fetch land
   in a follow-up release. Cross-station discovery (writer + reader
   on different relays) requires the relay-side iterative-fetch
-  fallback that already lands for `_dht.find_record' (commit
+  fallback that already lands for `_dht.find_record` (commit
   c11226f in macula-station) — wire-symmetric for content once
   exposed.
 
-  `mcid()' type added (`<<_:272>>' = 34 bytes). Hashing uses the
-  existing `macula_blake3_nif' that was previously only consumed
+  `mcid()` type added (`<<_:272>>` = 34 bytes). Hashing uses the
+  existing `macula_blake3_nif` that was previously only consumed
   by the record-signing path.
 
 ## [4.2.6] - 2026-05-09
@@ -912,19 +912,19 @@ version.
 
 - **`macula_peering_conn:on_connect_verified/4` no longer crashes
   when `send_hello` returns `{error, _}`.** Previously asserted
-  `ok = send_hello(Stream, NewData)' on the server-side handshake
+  `ok = send_hello(Stream, NewData)` on the server-side handshake
   completion path; under teardown bursts (multiple peers closing
-  pools simultaneously, e.g. e2e `end_per_suite' across a fleet),
-  `macula_quic:send' could legitimately return
-  `{error, "connection lost"}' between the CONNECT-verify and the
+  pools simultaneously, e.g. e2e `end_per_suite` across a fleet),
+  `macula_quic:send` could legitimately return
+  `{error, "connection lost"}` between the CONNECT-verify and the
   HELLO write — the peer's QUIC stream was already gone. The
   badmatch crashed the peering_conn gen_statem worker; under
   load enough concurrent crashes tripped the parent supervisor's
   restart-intensity and forced a whole-station restart.
 
   Now mirrors the existing graceful handling on the client-side
-  `send_connect' path (lines 232-240): emit a structured
-  `{send_hello_failed, _}' disconnect notify and stop normally,
+  `send_connect` path (lines 232-240): emit a structured
+  `{send_hello_failed, _}` disconnect notify and stop normally,
   so the supervisor cleans up without counting it as a crash.
 
   Surfaced 2026-05-09 by macula-station eager-replication-on-put
@@ -940,32 +940,32 @@ version.
   `is_connected/1`.** The four fan-out helpers
   (`fanout_advertise/4`, `fanout_unadvertise/3`,
   `fanout_advertise_stream/5`, `fanout_unadvertise_stream/3`) used to
-  skip pre-handshake links, which left the link's local `procedures'
-  map out of sync with the pool's intent. A subsequent `unadvertise'
+  skip pre-handshake links, which left the link's local `procedures`
+  map out of sync with the pool's intent. A subsequent `unadvertise`
   on the same key would skip the link too — its local map kept the
   proc — and the link silently re-ADVERTISED on the next handshake,
   causing the relay station to register a stale procedure that
   nothing in the SDK would ever withdraw. The leak only resolved on
-  daemon disconnect, when the station's `purge_conn' fired.
+  daemon disconnect, when the station's `purge_conn` fired.
 
   Each fan-out now dispatches to every LIVE link (filtered by
-  `is_process_alive/1' only). The link gen_server's `advertise' /
-  `unadvertise' handlers update the local map regardless of
+  `is_process_alive/1` only). The link gen_server's `advertise` /
+  `unadvertise` handlers update the local map regardless of
   connection state; the wire frame is best-effort inside
-  `maybe_send_advertise' / `maybe_send_unadvertise' (no-op when
-  pre-handshake). On the next handshake, `drain_pending_advertises/1'
+  `maybe_send_advertise` / `maybe_send_unadvertise` (no-op when
+  pre-handshake). On the next handshake, `drain_pending_advertises/1`
   replays the now-correct map.
 
-  Surfaced by 2026-05-09 mesh torture: `e2e.cross.echo.{N}' entries
-  persisted on stations across rounds with `advertiser=PoolDaemonPubkey'
-  even though `unadvertise/3' had returned `ok'. Tombstones in
-  `macula_remote_advertise_registry' (macula-station `c7d8fe8') solve
+  Surfaced by 2026-05-09 mesh torture: `e2e.cross.echo.{N}` entries
+  persisted on stations across rounds with `advertiser=PoolDaemonPubkey`
+  even though `unadvertise/3` had returned `ok`. Tombstones in
+  `macula_remote_advertise_registry` (macula-station `c7d8fe8`) solve
   the gossip-vs-unadvertise race; this commit closes the
   pre-handshake-skip path that re-creates a fresh stale entry on
   every reconnect.
 
-  Per-link errors are now wrapped in try/catch (`safe_link_advertise/4',
-  `safe_link_unadvertise/3', stream variants) so a single dead pid
+  Per-link errors are now wrapped in try/catch (`safe_link_advertise/4`,
+  `safe_link_unadvertise/3`, stream variants) so a single dead pid
   cannot crash the whole pool gen_server.
 
 ## [4.2.4] - 2026-05-08
@@ -974,25 +974,25 @@ version.
 
 - **`macula_peering_conn` server-side handshaking now takes ownership
   of inbound streams.** When a server accepts a new conn and the
-  client opens a stream, Quinn creates the `StreamResource' with its
+  client opens a stream, Quinn creates the `StreamResource` with its
   owner field set to whatever owns the conn AT THAT MOMENT. On the
   accept path that's still the listener — the conn-ownership transfer
-  hasn't fired yet. Calling `setopt(Stream, active, true)' on its
+  hasn't fired yet. Calling `setopt(Stream, active, true)` on its
   own does NOT change ownership; it only flips the active-delivery
-  flag. Future `{quic, Bin, Stream, _Flags}' events therefore went
+  flag. Future `{quic, Bin, Stream, _Flags}` events therefore went
   to the listener's mailbox and got silently dropped by its wildcard
-  `handle_info/2'. The worker sat in `handshaking' with `buf_size = 0'
-  until its 30s timeout, even though 4.2.3's `awaiting_start'
+  `handle_info/2`. The worker sat in `handshaking` with `buf_size = 0`
+  until its 30s timeout, even though 4.2.3's `awaiting_start`
   postpone clause + macula-station's stray-event forwarder both
-  delivered the `new_stream' notification on time.
+  delivered the `new_stream` notification on time.
 
-  Fix: call `macula_quic:controlling_process(Stream, self())' in the
-  server-side `handshaking' new_stream handler before `setopt'. The
+  Fix: call `macula_quic:controlling_process(Stream, self())` in the
+  server-side `handshaking` new_stream handler before `setopt`. The
   worker is now the explicit stream owner, so subsequent
-  `{quic, Bin, Stream, _}' events route to it directly.
+  `{quic, Bin, Stream, _}` events route to it directly.
 
   Pairs with macula-station's listener forwarding fix (commit
-  `85dff3e' on macula-internal/macula-station): together they close
+  `85dff3e` on macula-internal/macula-station): together they close
   the cross-station handshake race that was leaving every station
   with tens of stuck workers and partial bloom convergence.
 
@@ -1001,29 +1001,29 @@ version.
 ### Fixed
 
 - **`macula_peering_conn` server-side `awaiting_start` no longer drops
-  racing QUIC events.** `macula_peering:accept/2' transfers conn
-  ownership and then casts `start_handshake'; if the QUIC NIF
-  redelivers a buffered `{quic, new_stream, ...}' or `{quic, Bin, ...}'
+  racing QUIC events.** `macula_peering:accept/2` transfers conn
+  ownership and then casts `start_handshake`; if the QUIC NIF
+  redelivers a buffered `{quic, new_stream, ...}` or `{quic, Bin, ...}`
   event to the worker before the cast lands in its mailbox, the
-  worker is still in `awaiting_start'. The previous wildcard clause
-  routed those events through `drop_unexpected/4' and the bytes were
-  lost; the worker then sat in `handshaking' with an empty buffer
-  until its 30s timeout, never reaching `transition_to_connected'.
-  The peer's client-side worker meanwhile stayed `connected' (it
+  worker is still in `awaiting_start`. The previous wildcard clause
+  routed those events through `drop_unexpected/4` and the bytes were
+  lost; the worker then sat in `handshaking` with an empty buffer
+  until its 30s timeout, never reaching `transition_to_connected`.
+  The peer's client-side worker meanwhile stayed `connected` (it
   received our HELLO) so QUIC keep-alive papered over the asymmetry,
-  but the listener-side never registered the peer in its `peers' map
-  and the controlling-pid's `connected' notification never fired —
+  but the listener-side never registered the peer in its `peers` map
+  and the controlling-pid's `connected` notification never fired —
   cross-station SUBSCRIBE / EVENT routing dead-ended.
 
   Verified live across the production Leuven mesh: every station had
-  several stuck workers (`peer_node_id = undefined, buf_size = 0'),
+  several stuck workers (`peer_node_id = undefined, buf_size = 0`),
   and three of centrum's outbound peers had no corresponding inbound
-  registration on the peer's `peer_observer'. The race was
+  registration on the peer's `peer_observer`. The race was
   particularly brutal under fleet-wide reconnect bursts (post-roll).
 
-  Fix: postpone QUIC events received in `awaiting_start' so they
-  re-deliver after the `start_handshake' transition into
-  `handshaking', where the real handler consumes them.
+  Fix: postpone QUIC events received in `awaiting_start` so they
+  re-deliver after the `start_handshake` transition into
+  `handshaking`, where the real handler consumes them.
 
 ## [4.2.2] - 2026-05-08
 
@@ -1073,7 +1073,7 @@ version.
 
 - **`{macula_peering, handshake_complete, ...}` notification now
   carries the verified `peer_node_id`.** The message sent to a
-  worker's `accept_owner' pid changed from
+  worker's `accept_owner` pid changed from
   `{macula_peering, handshake_complete, ConnPid}` to
   `{macula_peering, handshake_complete, ConnPid, PeerNodeId}`, where
   `PeerNodeId` is the Ed25519 pubkey extracted (and signature-
@@ -1083,37 +1083,37 @@ version.
   peer identity. Without it, a peer that re-dials before its prior
   connection has been torn down (by client-side handshake timeout,
   network partition, or process restart) accumulates a fresh
-  `connected'-state worker on every retry. Production stations have
-  been observed at 99 stuck `connected' workers from a single
+  `connected`-state worker on every retry. Production stations have
+  been observed at 99 stuck `connected` workers from a single
   sister-station because each dial completes the handshake, the
   prior worker holds its QUIC conn open until idle-timeout, and
   nothing dedupes them.
 
-  See `macula-station' commit pairing this release for the
+  See `macula-station` commit pairing this release for the
   listener-side dedupe consumer.
 
 ### Removed
 
 - **Yggdrasil module + sovereign-overlay `{pubkey, ...}` dial form.**
-  `macula_yggdrasil' and the `macula_quic:connect({pubkey, Pk}, ...)'
-  / `macula_peering_conn:do_connect(#{pubkey := Pk})' clauses are
-  gone. No callers remain in the codebase; `macula-net' replaces
+  `macula_yggdrasil` and the `macula_quic:connect({pubkey, Pk}, ...)`
+  / `macula_peering_conn:do_connect(#{pubkey := Pk})` clauses are
+  gone. No callers remain in the codebase; `macula-net` replaces
   yggdrasil as the routing substrate. Self-signed pubkey-anchored
-  cert generation (`macula_quic:generate_self_signed_cert/3') stays
-  — it has live consumers in `macula_net_transport_quic' and
-  `macula_station_listener' that wrap an Ed25519 keypair without
+  cert generation (`macula_quic:generate_self_signed_cert/3`) stays
+  — it has live consumers in `macula_net_transport_quic` and
+  `macula_station_listener` that wrap an Ed25519 keypair without
   any Yggdrasil-derived address.
 - **Dead test files.**
-  - `test/macula_quic_tests.erl' — tested the retired `quicer'-style
-    API surface (`accept/2', `recv/2', `accept_stream/2', etc.) that
+  - `test/macula_quic_tests.erl` — tested the retired `quicer`-style
+    API surface (`accept/2`, `recv/2`, `accept_stream/2`, etc.) that
     the Quinn NIF does not expose.
-  - `test/macula_quic_idle_timeout_tests.erl' — tested `quicer'
+  - `test/macula_quic_idle_timeout_tests.erl` — tested `quicer`
     proplist option format.
-  - `test/macula_yggdrasil_tests.erl' — paired with the deleted
+  - `test/macula_yggdrasil_tests.erl` — paired with the deleted
     module above.
-  - `test/macula_client_test_server.erl' — helper used only by the
+  - `test/macula_client_test_server.erl` — helper used only by the
     gateway tests below.
-  - `test/macula_gateway_system/' — entire directory, 13 test files,
+  - `test/macula_gateway_system/` — entire directory, 13 test files,
     targeted the V1 gateway surface fully retired in 4.0.0.
 
 ### Breaking
@@ -1124,12 +1124,12 @@ version.
   `{macula_peering, handshake_complete, Pid, _PeerNodeId}` or use
   the `PeerNodeId` for dedupe.
 
-  Only `macula_station_listener' in `macula-station' currently
+  Only `macula_station_listener` in `macula-station` currently
   consumes this message; that consumer is updated in the paired
   release.
 
   No other behaviour change for callers that don't pass
-  `accept_owner'.
+  `accept_owner`.
 
 ---
 
