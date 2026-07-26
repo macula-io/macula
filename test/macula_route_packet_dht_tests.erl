@@ -77,16 +77,33 @@ route_packet_dht_test_() ->
         ?_test(connect_failure_propagates())
     ]}.
 
+%% These tests share one eunit process (the generator is `inorder' over
+%% plain `?_test's), `?TEST_SINK' is registered to that process, and
+%% `drain/1' + `drain_now/0' read its mailbox. So mailbox and sink
+%% registration are shared state exactly like the ETS tables are, and
+%% must be torn down with them.
+%%
+%% Without this, a `send_fn' closure from a resolver configured in an
+%% earlier test (the resolver is global, installed by
+%% `macula_route_packet:configure/1') can post into a LATER test's
+%% mailbox, and `?assertEqual([], drain_now())' fails against sends it
+%% never made. That surfaced only when the whole suite ran, because the
+%% stray sender needs another module to drive a dispatch.
 cleanup_state() ->
     catch macula_cache_route:stop(),
-    case ets:info(macula_route_packet_table) of
-        undefined -> ok;
-        _ -> ets:delete(macula_route_packet_table)
-    end,
-    case ets:info(macula_cache_route_table) of
-        undefined -> ok;
-        _ -> ets:delete(macula_cache_route_table)
-    end.
+    delete_table(macula_route_packet_table),
+    delete_table(macula_cache_route_table),
+    catch unregister(?TEST_SINK),
+    flush_mailbox().
+
+delete_table(Name) ->
+    drop_table(Name, ets:info(Name)).
+
+drop_table(_Name, undefined) -> ok;
+drop_table(Name, _Info)      -> ets:delete(Name), ok.
+
+flush_mailbox() ->
+    receive _M -> flush_mailbox() after 0 -> ok end.
 
 start_cache() ->
     {ok, _} = macula_cache_route:start_link(#{sweep_ms => 60_000}).
