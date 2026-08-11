@@ -73,6 +73,7 @@
 %%   <tr><th>Inbound frame</th><th>`call/5' returns</th></tr>
 %%   <tr><td>RESULT(payload=`{error, Reason}')</td><td>`{ok, {error, Reason}}'</td></tr>
 %%   <tr><td>RESULT(payload=Value)</td><td>`{ok, Value}'</td></tr>
+%%   <tr><td>ERROR(code=0x0F, detail=D)</td><td>`{error, D}' — the handler's own reason</td></tr>
 %%   <tr><td>ERROR(code=C, name=N)</td><td>`{error, {call_error, C, N}}'</td></tr>
 %%   <tr><td>(deadline elapses)</td><td>`{error, timeout}'</td></tr>
 %%   <tr><td>(connection drops)</td><td>`{error, {disconnected, Reason}}'</td></tr>
@@ -993,13 +994,12 @@ on_frame(#{frame_type := result, call_id := CallId, payload := Payload},
 %% ERROR
 on_frame(#{frame_type := error, call_id := CallId} = Frame,
          #state{pending = P} = S) ->
-    Code = maps:get(code, Frame, 0),
-    Name = maps:get(name, Frame, undefined),
+    Failure = call_failure(maps:get(code, Frame, 0),
+                           maps:get(name, Frame, undefined),
+                           maps:get(detail, Frame, undefined)),
     case maybe_clear_liveness(CallId, S) of
         {true, NewS}  -> NewS;
-        {false, NewS} ->
-            deliver_pending(maps:take(CallId, P),
-                            {error, {call_error, Code, Name}}, NewS)
+        {false, NewS} -> deliver_pending(maps:take(CallId, P), Failure, NewS)
     end;
 %% EVENT — pubsub delivery. Fan out to every subscriber whose
 %% (realm, topic) matches. Stations may push EVENTs without a prior
@@ -1480,16 +1480,51 @@ invoke_handler({M, F}, Args) when is_atom(M), is_atom(F) ->
 normalise_reply({ok, Value}) -> Value;
 normalise_reply(Other)       -> Other.
 
-%% BOLT#4 error frames carry an optional `detail' binary. Format the
-%% handler's `Reason' with `~p' so the caller sees a faithful, if
-%% Erlang-shaped, rendering. Capped at 256 bytes to keep CALL_ERROR
-%% frames bounded — bigger reasons are truncated with an ellipsis.
+%% BOLT#4 error frames carry an optional `detail' binary, and it is the
+%% only way a handler's refusal reaches the caller who provoked it.
+%%
+%% A reason that is ALREADY a binary crosses verbatim, so a handler
+%% answering `{error, <<"hold_full">>}' gives its caller
+%% `{error, <<"hold_full">>}' and the caller can match on it. Before
+%% 8.0.0 every reason went through `~0p' and that same handler produced
+%% `<<"<<\"hold_full\">>">>', a rendering of a binary rather than the
+%% binary, which no caller could sensibly compare against.
+%%
+%% Anything that is not a binary is still rendered with `~0p'. It is
+%% faithful but it is a printed form and not the term: a reason that
+%% crosses a wire crosses it as bytes, and a handler that wants its
+%% caller to match on the reason should say it in a binary.
+%%
+%% Capped at 256 bytes to keep CALL_ERROR frames bounded. A reason long
+%% enough to be truncated is a reason nobody can match on, which is one
+%% more argument for short ones.
+format_error_detail(Reason) when is_binary(Reason) ->
+    capped(Reason);
 format_error_detail(Reason) ->
-    Bin = iolist_to_binary(io_lib:format("~0p", [Reason])),
-    case byte_size(Bin) of
-        N when N =< 256 -> Bin;
-        _ -> <<(binary:part(Bin, 0, 253))/binary, "...">>
-    end.
+    capped(iolist_to_binary(io_lib:format("~0p", [Reason]))).
+
+capped(Bin) when byte_size(Bin) =< 256 -> Bin;
+capped(Bin) -> <<(binary:part(Bin, 0, 253))/binary, "...">>.
+
+%% What an inbound ERROR frame means to the caller who is waiting.
+%%
+%% `0x0F' is the code THIS SDK puts on the wire when a handler answered
+%% `{error, Reason}' (see safe_invoke_handler/4). So it is not an unknown
+%% error at all: it is the handler refusing, and what the caller wants is
+%% the refusal, not a constant that means "something went wrong".
+%%
+%% Every other code is the transport failing rather than a handler
+%% speaking, so it keeps the `{call_error, Code, Name}' shape.
+%%
+%% This also settles the retry question where it is asked. BOLT#4 rates
+%% `0x0F' `log_and_caution', so `macula_bolt4:is_retryable/1' answers
+%% `true' for it, which is right for a genuinely unknown error and wrong
+%% for a handler that has just said no. The spec table is the spec's and
+%% is left alone; a caller who gets the reason back does not need to ask.
+call_failure(16#0F, _Name, Detail) when is_binary(Detail) ->
+    {error, Detail};
+call_failure(Code, Name, _Detail) ->
+    {error, {call_error, Code, Name}}.
 
 %%-------------------------------------------------------------------
 %% Helpers

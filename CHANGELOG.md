@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.0.0] - 2026-08-11
+
+**A service can now say why it refused.**
+
+### Breaking
+
+`macula_station_link:call/5` no longer answers `{error, {call_error, 16#0F,
+unknown_error}}` when a handler refuses. It answers the handler's own reason.
+
+`0x0F` is the code this SDK stamps on the wire when a handler returns
+`{error, Reason}`, so it never meant "unknown error" in practice: it meant a
+handler had said no. The ERROR clause of `on_frame/2` read `code` and `name`
+and dropped `detail` on the floor, so **every refusal in the world arrived as
+the same three words** and no service could tell a caller anything.
+
+```erlang
+%% handler
+handle(_) -> {error, <<"hold_full">>}.
+
+%% caller, before
+{error, {call_error, 15, unknown_error}}
+%% caller, now
+{error, <<"hold_full">>}
+```
+
+Every other code is the transport failing rather than a handler speaking, and
+keeps the `{call_error, Code, Name}` shape. An ERROR frame with no `detail`,
+from an older peer or from the two frames this SDK sends without one, falls
+back to the tuple.
+
+A binary reason now crosses the wire **verbatim**. Before, `format_error_detail/1`
+put every reason through `~0p`, so `{error, <<"hold_full">>}` reached the frame
+as `<<"<<\"hold_full\">>">>`, a rendering of a binary rather than the binary, and
+no caller could compare against it. Reasons that are not binaries are still
+rendered: a reason that crosses a wire crosses it as bytes, so a handler that
+wants its caller to match on the reason should say it in a binary. Still capped
+at 256 bytes.
+
+This also settles a contradiction at the call site rather than in the spec
+table. BOLT#4 rates `0x0F` `log_and_caution`, so `macula_bolt4:is_retryable/1`
+answers `true` for it, which is right for a genuinely unknown error and wrong
+for a handler that has just said no. The table is the spec's and is untouched; a
+caller who gets the reason back does not have to ask.
+
+Found by four services built against this SDK, none of which could tell a user
+why an order was refused.
+
+---
+
 ## [7.1.0] - 2026-07-26
 
 **A restarting frame recipient no longer silently black-holes a connection's

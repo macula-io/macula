@@ -1341,6 +1341,127 @@ inbound_call_handler_error_tuple_emits_call_error_test_() ->
          ok
      end}.
 
+%%------------------------------------------------------------------
+%% A handler's refusal reaches the caller who provoked it
+%%------------------------------------------------------------------
+
+%% Before 8.0.0 the ERROR clause of on_frame/2 read `code' and `name'
+%% and threw `detail' away, so every handler refusal in the world
+%% arrived as the same three words: {error, {call_error, 15,
+%% unknown_error}}. A service could refuse and could not say why.
+handler_reason_reaches_the_caller_test_() ->
+    {timeout, 5,
+     fun() ->
+         Reply = inject_error_frame(#{code   => 16#0F,
+                                      name   => <<"unknown_error">>,
+                                      detail => <<"hold_full">>}),
+         ?assertEqual({error, <<"hold_full">>}, Reply)
+     end}.
+
+%% 0x0F is what THIS SDK stamps on a handler refusal, so it is the one
+%% code that means "a handler spoke". Everything else is the transport
+%% failing and keeps the tuple, detail or no detail.
+transport_failures_keep_the_call_error_tuple_test_() ->
+    {timeout, 5,
+     fun() ->
+         Reply = inject_error_frame(#{code   => 16#02,
+                                      name   => <<"temporary_relay_failure">>,
+                                      detail => <<"upstream went away">>}),
+         ?assertMatch({error, {call_error, 16#02, _}}, Reply)
+     end}.
+
+%% An older peer, or one of the two frames this SDK sends without a
+%% detail, must still be answerable. Fall back rather than crash.
+error_without_detail_falls_back_test_() ->
+    {timeout, 5,
+     fun() ->
+         Reply = inject_error_frame(#{code => 16#0F,
+                                      name => <<"unknown_error">>}),
+         ?assertMatch({error, {call_error, 16#0F, _}}, Reply)
+     end}.
+
+%% The other half of the round trip. A binary reason must reach the wire
+%% as itself: `~0p' would put <<"<<\"hold_full\">>">> in the frame, and
+%% no caller can compare against a rendering of a binary.
+binary_reason_crosses_the_wire_verbatim_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Procedure = <<"_test.refusal">>,
+         Handler = fun(_Args) -> {error, <<"hold_full">>} end,
+         ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
+         flush_send_frame_casts(),
+         CallId = <<7:128>>,
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type  => call,
+             call_id     => CallId,
+             realm       => ?REALM,
+             procedure   => Procedure,
+             payload     => #{},
+             deadline_ms => erlang:system_time(millisecond) + 5_000,
+             caller      => macula_identity:public(macula_identity:generate())
+         }},
+         receive
+             {'$gen_cast', {send_frame, #{frame_type := error,
+                                          detail     := Detail}}} ->
+                 ?assertEqual(<<"hold_full">>, Detail)
+         after 1_000 ->
+             erlang:error(no_call_error_frame_sent)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%% Drive one ERROR frame back at a caller and hand back what it saw.
+inject_error_frame(Fields) ->
+    {ok, _} = application:ensure_all_started(macula),
+    Identity = macula_identity:generate(),
+    {ok, Pid} = macula_station_link:start_link(#{
+        seed     => #{host => <<"127.0.0.1">>, port => 1},
+        connect_timeout_ms => 2000,
+        identity => Identity
+    }),
+    FakePeer = self(),
+    PeerNodeId = macula_identity:public(macula_identity:generate()),
+    _ = sys:replace_state(Pid, fun(S) ->
+        S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+        setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+    end),
+    CallerRef = make_ref(),
+    Test = self(),
+    spawn_link(fun() ->
+        R = macula_station_link:call(Pid, ?REALM, <<"_test.anything">>,
+                                     #{}, 1_000),
+        Test ! {CallerRef, R}
+    end),
+    CallId = receive
+        {'$gen_cast', {send_frame, #{frame_type := call, call_id := Id}}} -> Id
+    after 1_000 ->
+        erlang:error(no_send_frame_cast)
+    end,
+    Pid ! {macula_peering, frame, FakePeer,
+           Fields#{frame_type => error, call_id => CallId,
+                   reported_by => PeerNodeId}},
+    Reply = receive
+        {CallerRef, R2} -> R2
+    after 2_000 ->
+        erlang:error(no_caller_reply)
+    end,
+    macula_station_link:stop(Pid),
+    Reply.
+
 unadvertise_clears_handler_and_sends_frame_test_() ->
     {timeout, 5,
      fun() ->
