@@ -306,14 +306,38 @@ async_shutdown_stream(Stream, _Flag, _Code) ->
 async_shutdown_connection(Conn, _Flag, _Code) ->
     nif_close_connection(Conn).
 
-%% @doc Get connection stats. Currently returns zeros for all
-%% requested counters — Quinn exposes per-connection stats but the
-%% NIF binding hasn't surfaced them yet. Used by macula_dist for
-%% telemetry; zeroed values are harmless (dist_util only uses these
-%% for liveness signals).
--spec getstat(reference(), [atom()]) -> {ok, [{atom(), integer()}]} | {error, term()}.
-getstat(_Conn, Stats) ->
-    {ok, [{S, 0} || S <- Stats]}.
+%% @doc Get connection stats. NOT IMPLEMENTED — answers
+%% `{error, not_implemented}'.
+%%
+%% ⚠ This used to answer `{ok, [{S, 0} || S <- Stats]}' — plausible,
+%% well-formed, permanently zero — and excuse itself with "zeroed values
+%% are harmless (dist_util only uses these for liveness signals)". That
+%% is precisely the use a hardcoded zero destroys. A counter that always
+%% reads zero makes "nothing is moving" indistinguishable from "nobody
+%% implemented the counter", so any liveness check built on it is green
+%% forever and its author cannot tell.
+%%
+%% That is not hypothetical. On 2026-08-13 `station-it-milan' received
+%% every packet sent to it, answered none for thirty hours, and every
+%% signal derived from the BEAM read healthy. Anyone reaching for a
+%% send-side counter to catch that would have found this one, and it
+%% would have lied. Failing loudly is the only honest answer until the
+%% NIF surfaces the real thing.
+%%
+%% Quinn HAS the numbers: `quinn::Connection::stats()' carries
+%% `udp_tx{datagrams,bytes}', `udp_rx{...}' and
+%% `path{rtt,lost_packets,black_holes_detected}', and
+%% `nif_max_datagram_size' already calls `stats()' and discards all but
+%% `path.current_mtu'. Surfacing the rest is an extension of a working
+%% function — see macula-station `plans/PLAN_WIRE_LIVENESS_TRIPWIRE.md'
+%% commit 5.
+%%
+%% The sole consumer, `macula_dist:quic_getstat/1', already has an
+%% `{error, _} -> {ok, 0, 0, 0}' branch, so this changes no behaviour
+%% there. It changes what the next caller is told.
+-spec getstat(reference(), [atom()]) -> {error, not_implemented}.
+getstat(_Conn, _Stats) ->
+    {error, not_implemented}.
 
 %%%===================================================================
 %%% Dist Compat API

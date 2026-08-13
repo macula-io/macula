@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+**A counter that always answers zero is worse than no counter.**
+
+### Fixed
+
+`macula_quic:getstat/2` answered `{ok, [{send_cnt, 0}, {recv_cnt, 0}, ...]}` —
+well-formed, plausible, and permanently zero, because the NIF binding was never
+written. It now answers `{error, not_implemented}`.
+
+Its own doc excused the zeros: *"harmless (dist_util only uses these for
+liveness signals)"*. Liveness is exactly the use a hardcoded zero destroys. A
+counter frozen at zero makes **"nothing is moving"** indistinguishable from
+**"nobody implemented the counter"**, so a liveness check built on it reads
+green forever and its author has no way to notice.
+
+Not hypothetical. On 2026-08-13 a station received every packet sent to it,
+answered none for thirty hours, and every signal derived from BEAM state read
+healthy. Anyone reaching for a send-side counter to catch that would have found
+this function, and it would have lied to them.
+
+**No behaviour change for the only consumer.** `macula_dist:quic_getstat/1`
+already had an `{error, _} -> {ok, 0, 0, 0}` branch, so it takes the same path
+and produces the same result it did before. What changes is what the *next*
+caller is told.
+
+Quinn has the real numbers — `Connection::stats()` carries `udp_tx`, `udp_rx`
+and `path{rtt, lost_packets, black_holes_detected}` — and `nif_max_datagram_size`
+already calls `stats()` and keeps only `path.current_mtu`. Surfacing the rest is
+an extension of a working function, tracked as commit 5 of
+`macula-station/plans/PLAN_WIRE_LIVENESS_TRIPWIRE.md`.
+
+---
+
 ## [8.0.0] - 2026-08-11
 
 **A service can now say why it refused.**
