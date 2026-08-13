@@ -242,8 +242,14 @@ ok = macula:publish(Pool, Realm, Topic, Payload, #{timeout_ms => 1000}).
 
 - **At-most-once** — fire and forget. No publisher-visible ack from
   subscribers.
-- **Per-publisher ordering** — `seq` is monotonic per publisher per
-  pool. Subscribers can detect gaps if they care.
+- **Per-publisher delivery order** — none. `seq` is monotonic per
+  publisher per pool, but events are **not delivered in `seq` order**.
+  A relay spreads one publisher's burst across concurrent verify
+  workers for throughput, and a receiver may admit an event by more
+  than one path, so two events from one publisher can arrive in either
+  order. Use `seq` to detect gaps, dedup, or reorder yourself — the
+  mesh will not reorder for you. (Measured: 25 in-order events from one
+  publisher arrive with dozens of inverted pairs.)
 - **Cross-publisher ordering** — none. Two publishers' events arrive
   in arbitrary interleaving.
 - **Cross-link dedup** — the pool dedupes by `(Realm, Publisher,
