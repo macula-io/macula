@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.0.2] - 2026-08-13
+
+**Identical code to 8.0.1. Republished because 8.0.1 never became
+resolvable.**
+
+8.0.1 published successfully by every measure hex offers: the API lists
+it, `has_docs` is true, and the tarball at
+`repo.hex.pm/tarballs/macula-8.0.1.tar` downloads and is a valid hex
+archive. But no resolver can see it — a throwaway project asking for
+`{macula, "8.0.1"}` gets `Package not found in any repo`, more than an
+hour after publication, from a clean cache.
+
+It is specific to this package rather than hex being slow: `hecate_om
+0.10.0`, published three minutes later, resolved normally in the same
+clean-room test.
+
+Rather than wait on a stuck registry entry with no ETA, this is the same
+code under a version that gets a fresh one. **If you are already running
+8.0.1 somehow, there is no reason to move.** Everything below is the
+8.0.1 changelog, unchanged.
+
+### Fixed
+
+- `macula_quic:getstat/2` answered `{ok, [{send_cnt, 0}, ...]}` —
+  well-formed, plausible and permanently zero, because the NIF binding
+  was never written. It now answers `{error, not_implemented}`. Its own
+  doc excused the zeros as "harmless (dist_util only uses these for
+  liveness signals)", which is exactly the use a hardcoded zero
+  destroys: frozen at zero, "nothing is moving" and "nobody implemented
+  this" are the same reading.
+
+- **A sick link can no longer kill the pool.** `macula_client`'s
+  `status/1`, `links/1` and publish path each probed every link with
+  `is_connected/1` or `peer_node_id/1` — both 1s `gen_server:call`s —
+  from inside the pool's own process. `gen_server:call` exits its
+  CALLER on both `{noproc, _}` and `{timeout, _}`, and the pool is the
+  caller, so probing one sick link destroyed every subscription,
+  advertisement and pending call the client held. The timeout path
+  needs no race at all: a link merely alive and unresponsive for one
+  second was enough, which is what a wedged station looks like from a
+  client.
+
+  `link_node_id/2` was worse than the other two — it called
+  `peer_node_id/1` with no liveness guard at all, and matched only
+  `{ok, _}` and `{error, not_connected}`, so a third reply shape was a
+  `case_clause` in the pool. Same fatality, third route.
+
+  Both guards answer `false` / `undefined`, so an unreachable link is
+  reported truthfully and conservatively and can never read as healthy.
+
 ## [8.0.1] - 2026-08-13
 
 **A counter that always answers zero is worse than no counter.**
