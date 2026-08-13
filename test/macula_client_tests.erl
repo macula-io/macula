@@ -515,3 +515,63 @@ dedup_default_window_holds_duplicate_test_() ->
          end,
          ok = macula_client:close(Pool)
      end}.
+
+%%====================================================================
+%% Link probes must never kill the pool
+%%
+%% `is_connected/1' and `peer_node_id/1' are 1s gen_server:calls issued
+%% from INSIDE the pool process. A gen_server:call exits its CALLER on
+%% both {noproc,_} and {timeout,_}, and the pool is the caller — so
+%% probing one sick link used to destroy every subscription,
+%% advertisement and pending call the pool was holding.
+%%
+%% The timeout path is the reachable one: it needs no race, just a link
+%% that is alive and does not answer for a second. That is what a wedged
+%% station looks like.
+%%====================================================================
+
+%% A process that accepts messages and answers nothing, i.e. exactly a
+%% link whose station has stopped responding.
+spawn_mute() ->
+    spawn(fun Loop() -> receive _ -> Loop() end end).
+
+safe_is_connected_survives_a_mute_link_test_() ->
+    {timeout, 10, fun() ->
+        Pid = spawn_mute(),
+        %% Unguarded this exits the caller with {timeout, {gen_server,call,...}}
+        %% after 1s. The test process IS the stand-in for the pool here.
+        ?assertEqual(false, macula_client:safe_is_connected(Pid)),
+        exit(Pid, kill)
+    end}.
+
+safe_is_connected_survives_a_dead_link_test() ->
+    Pid = spawn_mute(),
+    exit(Pid, kill),
+    timer:sleep(10),
+    %% {noproc, _} — the narrow race, still fatal unguarded.
+    ?assertEqual(false, macula_client:safe_is_connected(Pid)).
+
+safe_peer_node_id_survives_a_mute_link_test_() ->
+    {timeout, 10, fun() ->
+        Pid = spawn_mute(),
+        ?assertEqual(undefined, macula_client:safe_peer_node_id(Pid)),
+        exit(Pid, kill)
+    end}.
+
+safe_peer_node_id_survives_a_dead_link_test() ->
+    Pid = spawn_mute(),
+    exit(Pid, kill),
+    timer:sleep(10),
+    ?assertEqual(undefined, macula_client:safe_peer_node_id(Pid)).
+
+%% The old code matched only {ok,_} and {error,not_connected}, so a third
+%% reply shape was a case_clause in the pool — the same fatality by
+%% another route.
+safe_peer_node_id_absorbs_an_unexpected_reply_test() ->
+    Pid = spawn(fun Loop() ->
+                    receive {'$gen_call', From, peer_node_id} ->
+                        gen_server:reply(From, {error, something_new}), Loop()
+                    ; _ -> Loop() end
+                end),
+    ?assertEqual(undefined, macula_client:safe_peer_node_id(Pid)),
+    exit(Pid, kill).

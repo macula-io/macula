@@ -61,6 +61,12 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
+-ifdef(TEST).
+%% Probe guards — exported so a test can hang a link and prove the pool
+%% survives it. See the note above safe_is_connected/1.
+-export([safe_is_connected/1, safe_peer_node_id/1]).
+-endif.
+
 -export_type([pool/0, opts/0, seed/0, status/0, link_info/0, handler/0, stream_handler/0]).
 
 -type pool() :: pid().
@@ -609,7 +615,7 @@ spawned_link_pids(#state{links = Links}) ->
 connected_link_pids(#state{} = S) ->
     [P || P <- spawned_link_pids(S),
           is_process_alive(P),
-          macula_station_link:is_connected(P)].
+          safe_is_connected(P)].
 
 %% Surface a one-shot warning when a caller passes V1 multi_relay
 %% options that have no V2 equivalent. The opts are silently dropped
@@ -777,7 +783,7 @@ bump(true,  H, F) -> {H + 1, F};
 bump(false, H, F) -> {H, F + 1}.
 
 link_healthy(Pid) ->
-    is_process_alive(Pid) andalso macula_station_link:is_connected(Pid).
+    is_process_alive(Pid) andalso safe_is_connected(Pid).
 
 %% Build one `link_info()' per spawned link. Skips seeds whose link
 %% worker is not (yet) a live pid — those have no addressable station.
@@ -797,12 +803,51 @@ link_info(Seed, Pid) ->
 %% Only probe the peer pubkey on a connected link; a mid-handshake
 %% link answers `{error, not_connected}'.
 link_node_id(Pid, true) ->
-    case macula_station_link:peer_node_id(Pid) of
-        {ok, NodeId}             -> NodeId;
-        {error, not_connected}   -> undefined
-    end;
+    safe_peer_node_id(Pid);
 link_node_id(_Pid, false) ->
     undefined.
+
+%%--------------------------------------------------------------------
+%% Link probes that cannot kill the pool
+%%
+%% `is_connected/1' and `peer_node_id/1' are both `gen_server:call' with
+%% a 1s cap, and every caller below runs INSIDE the pool's own process.
+%% A `gen_server:call' exits the CALLER two ways, and the pool is the
+%% caller:
+%%
+%%   - `{noproc, _}'  — the link died since the `is_process_alive/1'
+%%     check. Narrow, microseconds wide.
+%%   - `{timeout, _}' — the link is merely alive and UNRESPONSIVE for a
+%%     second. No race required at all, and a wedged station produces
+%%     exactly this.
+%%
+%% The second is the reachable one and it was unguarded. Either takes
+%% the pool down, and with it every subscription, advertisement and
+%% pending call the process is holding — so probing one sick link
+%% destroyed the client's entire connection to the mesh.
+%%
+%% ⚠ Deviation from let-it-crash, deliberate, per this repo's rule that
+%% try/catch is permitted where it preserves a signal that would
+%% otherwise be lost: without it, one failed probe and a genuinely
+%% unhealthy pool are indistinguishable, because there is no pool left
+%% to report either. An unreachable link answers `false' / `undefined'
+%% here — truthful, conservative, and never mistakable for healthy.
+%%--------------------------------------------------------------------
+
+safe_is_connected(Pid) ->
+    try macula_station_link:is_connected(Pid)
+    catch _:_ -> false
+    end.
+
+%% Also absorbs an unexpected reply shape. The previous `case' matched
+%% only `{ok, _}' and `{error, not_connected}', so any third answer was
+%% a `case_clause' in the pool — the same fatality by another route.
+safe_peer_node_id(Pid) ->
+    try macula_station_link:peer_node_id(Pid) of
+        {ok, NodeId} -> NodeId;
+        _Other       -> undefined
+    catch _:_ -> undefined
+    end.
 
 %% Dial host parsed from a seed. Mirrors `macula_station_link:parse_seed/1'
 %% host extraction without re-dialing — URL form or pre-parsed map.
