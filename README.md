@@ -170,10 +170,11 @@ tuning (`order_timeout_ms`, `order_max_buffer`, the `pubsub_gap_skips` telemetry
   <img src="assets/content_sharing.svg" alt="Content Sharing (MCID)" width="100%">
 </p>
 
-A host announces content by its **MCID** (a 34-byte content hash). A fetcher
-resolves the MCID in the DHT, dials a host, and pulls the chunks — verifying each
-against the hash. Content is addressed by *what it is*, so any host with the
-bytes is interchangeable and integrity is self-verifying.
+Content is addressed by an **MCID** — a 34-byte hash of the bytes — so any host
+with the bytes serves the same MCID and integrity is self-verifying. Today the
+SDK exposes the minimal single-block form (`put_content` / `get_content`); the
+diagram shows the target content-addressed model (multi-host announce + chunked
+fetch), which is the direction. See the [Content Guide](docs/guides/CONTENT_GUIDE.md).
 
 ```erlang
 {ok, MCID}  = macula:put_content(Pool, <<"the bytes">>),
@@ -189,10 +190,11 @@ bytes is interchangeable and integrity is self-verifying.
 Same resolve-then-dial shape, but instead of a finite blob it opens an ordered
 QUIC stream: frames flow as produced, paced by QUIC per-stream flow control,
 ending when the source stops. Re-resolve on a stall — a listed source can be
-dead.
+dead. Server-push, client-push, and bidirectional modes are supported; see the
+[Streaming Guide](docs/guides/STREAMING_GUIDE.md).
 
 ```erlang
-{ok, Stream} = macula:call_stream(Pool, Realm, <<"live.feed">>, Request, 5_000),
+{ok, Stream} = macula:call_stream(Pool, Realm, <<"live.feed">>, Request, #{}),
 loop_recv(Stream).  %% macula:recv/1 until eof
 ```
 
@@ -275,6 +277,8 @@ MRI = macula_mri:new_app(<<"io.macula">>, <<"acme">>, <<"counter">>),
 | [PubSub Guide](docs/guides/PUBSUB_GUIDE.md) | Fan-out + per-publisher delivery ordering |
 | [Topic Naming](docs/guides/TOPIC_NAMING_GUIDE.md) | Event-type topics, IDs in payloads |
 | [RPC Guide](docs/guides/RPC_GUIDE.md) | Direct-dial request/response |
+| [Content Guide](docs/guides/CONTENT_GUIDE.md) | Content-addressed blobs (MCID) |
+| [Streaming Guide](docs/guides/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi) |
 | [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Erlang dist through the mesh |
 | [Clustering](docs/guides/CLUSTERING_GUIDE.md) | LAN gossip clustering |
 | [Authorization](docs/guides/AUTHORIZATION_GUIDE.md) | DID / UCAN / cert-chain trust |
