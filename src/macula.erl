@@ -46,6 +46,7 @@
 %% convention for protocol-internal traffic.
 -export([put_record/2,
          find_record/2,
+         find_records/2,
          find_records_by_type/2,
          subscribe_records/3,
          unsubscribe_records/2]).
@@ -267,6 +268,7 @@ unadvertise(Pool, Realm, Procedure) ->
 -define(DHT_REALM,                     <<0:256>>).
 -define(DHT_PUT_RECORD_PROC,           <<"_dht.put_record">>).
 -define(DHT_FIND_RECORD_PROC,          <<"_dht.find_record">>).
+-define(DHT_FIND_RECORDS_PROC,         <<"_dht.find_records">>).
 -define(DHT_FIND_RECORDS_BY_TYPE_PROC, <<"_dht.find_records_by_type">>).
 -define(DHT_RECORD_TIMEOUT_MS,         5_000).
 
@@ -317,6 +319,29 @@ classify_find({ok, #{type := _, payload := _, signature := _} = Record}) ->
 classify_find({ok, not_found})     -> {error, not_found};
 classify_find({ok, Reply})         -> {error, {unexpected_reply, Reply}};
 classify_find({error, _} = E)      -> E.
+
+%% @doc Fetch EVERY record stored at `Key' — the full multi-value
+%% set, e.g. every `procedure_advertisement' under one procedure's
+%% storage key. Where `find_record/2' returns the first record (or
+%% `not_found'), this returns the whole list, empty when none.
+%%
+%% The relay's local store is a signer-deduped multiset: one record
+%% per signing key at a storage key, so N providers of one procedure
+%% return N records. Each returned record's signature should be
+%% verified via `macula_record:verify/1' before its payload is
+%% trusted.
+-spec find_records(pool(), record_key()) ->
+    {ok, [record()]} | {error, term()}.
+find_records(Pool, Key)
+  when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32 ->
+    classify_find_list(macula_client:call(Pool, ?DHT_REALM,
+                                          ?DHT_FIND_RECORDS_PROC,
+                                          #{key => Key},
+                                          ?DHT_RECORD_TIMEOUT_MS)).
+
+classify_find_list({ok, Records}) when is_list(Records) -> {ok, Records};
+classify_find_list({ok, Reply})    -> {error, {unexpected_reply, Reply}};
+classify_find_list({error, _} = E) -> E.
 
 %% @doc Return every record of a given type currently visible from
 %% the pool's connected stations.
