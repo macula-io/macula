@@ -14,10 +14,19 @@
 
 A plain `macula:call/5` is one request and one reply. A **streaming RPC** keeps
 the channel open so either side (or both) can send a sequence of chunks before a
-final result. It rides the same direct-dial path as RPC — resolve the provider,
-dial its station, open an ordered QUIC stream — so a stream is one hop,
-point-to-point, with QUIC per-stream flow control pacing the sender to the
-receiver.
+final result, over an ordered QUIC stream with per-stream flow control pacing the
+sender to the receiver.
+
+> **Routing — current shape vs. direction.** Today streaming is **station-routed**:
+> a provider advertises the streaming procedure on its station links (an in-band
+> ADVERTISE, not a DHT record), and a consumer's `call_stream` opens the stream on
+> its own healthy station link, which the station routes to the advertiser. This
+> is the pre-direct-dial model — unary RPC (`call` / `call_station`) has since
+> moved to direct-dial (resolve a DHT record, dial the serving station), but
+> **streaming has not made that move yet.** The diagram above shows the
+> direct-dial target for streams; the shipped path routes through the station.
+> Functionally the API is complete either way — only the discovery/routing shape
+> changes when streaming adopts direct-dial.
 
 There are three modes:
 
@@ -110,15 +119,17 @@ macula:abort(Stream, <<"0F">>, <<"source unavailable">>).
 ## Content streaming
 
 "Content streaming" is the `server_stream` mode applied to a live source: the
-provider advertises a stream endpoint (a DHT record with a live TTL and
-republish), a viewer resolves it, dials the serving station, and reads frames
-until the source stops. Unlike [content sharing](CONTENT_GUIDE.md) there is no
-fixed size or `chunk_count` — the stream is open-ended and ordered, and QUIC
-flow control paces the source to the viewer's consumption.
+provider advertises the stream procedure, a viewer opens it with `call_stream`,
+and reads frames until the source stops. Unlike
+[content sharing](CONTENT_GUIDE.md) there is no fixed size or `chunk_count` — the
+stream is open-ended and ordered, and QUIC flow control paces the source to the
+viewer's consumption. (Discovery is station-routed today; see the routing note in
+the Overview. When streaming adopts direct-dial, the viewer will resolve the
+source's DHT record and dial its serving station, as the diagram shows.)
 
-**Freshness is not optional.** A listed stream source can be dead. Treat a
-`recv` stall or `{error, peer_down}` as a signal to **re-resolve** the source and
-re-open, exactly as a direct-dial caller re-resolves on a dial failure.
+**Freshness is not optional.** A live source can go away. Treat a `recv` stall or
+`{error, peer_down}` as a signal to re-open the stream (and, once streaming is
+direct-dial, to re-resolve the source first).
 
 ---
 

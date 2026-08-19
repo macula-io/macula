@@ -107,12 +107,14 @@ ok = macula:advertise(Pool, Realm, <<"math.add">>,
 
 ## The Four Interaction Patterns
 
-Macula gives you four ways for two parties to interact over the mesh. Three of
-them — RPC, content sharing, and content streaming — share one shape:
-**resolve in the DHT, then dial the serving station directly** (point-to-point,
-one hop). Pub/Sub is the exception: it fans out *through* the stations, because
-broadcasting to many interested parties is a different problem than a two-party
-exchange.
+Macula gives you four ways for two parties to interact over the mesh. The
+point-to-point ones — RPC, content, and streaming — are converging on one shape:
+**resolve in the DHT, then dial the serving station directly** (one hop).
+**RPC has adopted direct-dial today**; content and streaming still route through
+stations and are moving toward it (see each guide's "current shape vs. direction"
+note). Pub/Sub is the deliberate exception: it fans out *through* the stations,
+because broadcasting to many interested parties is a different problem than a
+two-party exchange.
 
 ### 1. RPC — direct-dial
 
