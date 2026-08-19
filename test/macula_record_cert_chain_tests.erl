@@ -21,6 +21,14 @@ valid_chain_verifies_test() ->
     ?assertEqual(ok,
                  macula_record:verify_advertisement_cert_chain(RealmCaPem, Adv, ?ORG)).
 
+%% The running realm signs its CAs with P-256 (secp256r1), not Ed25519.
+%% The leaf still binds the service's Ed25519 key. Confirms the verifier
+%% handles the real mixed-key chain, not just the all-Ed25519 test shape.
+valid_p256_ca_chain_verifies_test() ->
+    #{realm_ca := RealmCaPem, adv := Adv} = fixture_p256(?ORG),
+    ?assertEqual(ok,
+                 macula_record:verify_advertisement_cert_chain(RealmCaPem, Adv, ?ORG)).
+
 wrong_org_dropped_test() ->
     %% Leaf is issued under org "eve"; the consumer expects "rgfaber".
     #{realm_ca := RealmCaPem, adv := Adv} = fixture(<<"eve">>, <<"eve">>),
@@ -90,6 +98,15 @@ fixture_key_mismatch(UriOrg) ->
     Adv = signed_advertisement(Kp, UriOrg, #{cert_chain => ChainPem}),
     #{realm_ca => RealmCaPem, adv => Adv}.
 
+%% Like fixture/2 but the CAs sign with P-256 (the realm's real key type).
+fixture_p256(Org) ->
+    Kp = macula_identity:generate(),
+    AdvKey = macula_identity:public(Kp),
+    #{realm_ca_pem := RealmCaPem, chain_pem := ChainPem} =
+        issue_chain_p256(AdvKey, Org),
+    Adv = signed_advertisement(Kp, Org, #{cert_chain => ChainPem}),
+    #{realm_ca => RealmCaPem, adv => Adv}.
+
 signed_advertisement(Kp, Org, Opts) ->
     AdvKey  = macula_identity:public(Kp),
     Station = macula_identity:public(macula_identity:generate()),
@@ -123,6 +140,30 @@ ca_key() ->
                           parameters = {namedCurve, ?'id-Ed25519'},
                           publicKey = Pub}}.
 
+%% P-256 CA (the realm's real CA key type, from key_gen.ex secp256r1).
+issue_chain_p256(LeafPub, Org) ->
+    {RealmPub, RealmPriv} = p256_ca_key(),
+    {OrgPub, OrgPriv}     = p256_ca_key(),
+    RealmSubj = subject(<<"io.macula">>, <<"io.macula">>),
+    OrgSubj   = subject(<<"io.macula.", Org/binary>>, Org),
+    LeafSubj  = subject(<<"mri:app:io.macula/", Org/binary, "/svc">>, Org),
+    RealmDer = sign_cert(RealmSubj, p256_spki(RealmPub), RealmSubj, RealmPriv, true),
+    OrgDer   = sign_cert(OrgSubj, p256_spki(OrgPub), RealmSubj, RealmPriv, true),
+    LeafDer  = sign_cert(LeafSubj, ed_spki(LeafPub), OrgSubj, OrgPriv, false),
+    #{realm_ca_pem => pem([RealmDer]), chain_pem => pem([LeafDer, OrgDer])}.
+
+p256_ca_key() ->
+    {Pub, Priv} = crypto:generate_key(ecdh, secp256r1),
+    {Pub, #'ECPrivateKey'{version = 1, privateKey = Priv,
+                          parameters = {namedCurve, ?'secp256r1'},
+                          publicKey = Pub}}.
+
+p256_spki(Pub) ->
+    #'OTPSubjectPublicKeyInfo'{
+       algorithm = #'PublicKeyAlgorithm'{algorithm = ?'id-ecPublicKey',
+                                         parameters = {namedCurve, ?'secp256r1'}},
+       subjectPublicKey = #'ECPoint'{point = Pub}}.
+
 ed_spki(Pub) ->
     #'OTPSubjectPublicKeyInfo'{
        algorithm = #'PublicKeyAlgorithm'{algorithm = ?'id-Ed25519',
@@ -140,8 +181,7 @@ sign_cert(Subject, Spki, IssuerSubject, IssuerKey, IsCA) ->
     TBS = #'OTPTBSCertificate'{
              version = v3,
              serialNumber = rand:uniform(1 bsl 60),
-             signature = #'SignatureAlgorithm'{algorithm = ?'id-Ed25519',
-                                               parameters = asn1_NOVALUE},
+             signature = sig_alg(IssuerKey),
              issuer = IssuerSubject,
              validity = #'Validity'{notBefore = {utcTime, "230101000000Z"},
                                     notAfter  = {utcTime, "330101000000Z"}},
@@ -149,6 +189,13 @@ sign_cert(Subject, Spki, IssuerSubject, IssuerKey, IsCA) ->
              subjectPublicKeyInfo = Spki,
              extensions = [basic_constraints(IsCA)]},
     public_key:pkix_sign(TBS, IssuerKey).
+
+%% The signature algorithm matching the issuer's key type.
+sig_alg(#'ECPrivateKey'{parameters = {namedCurve, ?'id-Ed25519'}}) ->
+    #'SignatureAlgorithm'{algorithm = ?'id-Ed25519', parameters = asn1_NOVALUE};
+sig_alg(#'ECPrivateKey'{parameters = {namedCurve, ?'secp256r1'}}) ->
+    #'SignatureAlgorithm'{algorithm = ?'ecdsa-with-SHA256',
+                          parameters = asn1_NOVALUE}.
 
 basic_constraints(IsCA) ->
     #'Extension'{extnID = ?'id-ce-basicConstraints', critical = true,
