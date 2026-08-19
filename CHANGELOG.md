@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.6.0] - 2026-08-19
+
+### Added
+
+- Direct-dial dual-trust, consumer side (Slice 7c) — the realm → org → server
+  delegation chain:
+  - `macula_record:org_directory/3,4` (realm-signed `org-name → org-key`) and
+    `procedure_delegation/2,3` (org-signed `server may serve org`).
+  - `org_directory_key/2`, `procedure_delegation_key/2`, `read_org_directory/1`,
+    `read_procedure_delegation/1`.
+  - `verify_delegation_chain/4` — confirm an advertisement is legitimately
+    authorized (realm signs the org key, org signs the server); any break is a squat.
+
+### Fixed
+
+- `macula_record:storage_key/1` for payload-field-keyed record types
+  (`procedure_advertisement`, `realm_member_endorsement`, `foundation_parameter` /
+  `t3_attestation`, address / hosted-address maps, plus the new 7c records) now
+  reads the field via the robust getter, so it no longer **crashes when a record is
+  put over the SDK** (`put_record/2`) and arrives wire-decoded with atomised keys.
+  Previously such a put crashed the station's store handler with
+  `temporary_relay_failure` — SDK `put_record` of these types was silently broken and
+  had only ever been exercised via direct erpc puts (canonical keys). Found by the
+  7c e2e; also fixes `procedure_advertisement` publishing from hecate-om (Slice 2).
+
+---
+
 ## [8.5.0] - 2026-08-19
 
 ### Added

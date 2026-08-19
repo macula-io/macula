@@ -21,6 +21,8 @@
     realm_directory/3, realm_directory/4,
     realm_stations/2, realm_stations/3,
     realm_member_endorsement/2, realm_member_endorsement/3,
+    org_directory/3, org_directory/4,
+    procedure_delegation/2, procedure_delegation/3,
     procedure_advertisement/3, procedure_advertisement/4,
     content_announcement/3, content_announcement/4,
     foundation_seed_list/2, foundation_seed_list/3,
@@ -58,11 +60,18 @@
     payload/1, signature/1,
     read_procedure_advertisement/1,
     read_station_endpoint/1,
+    read_org_directory/1,
+    read_procedure_delegation/1,
+
+    %% Direct-dial dual-trust (Slice 7c)
+    verify_delegation_chain/4,
 
     %% DHT storage-key derivation (Part 3 §3.3)
     storage_key/1,
     procedure_key/1,
-    station_endpoint_key/1
+    station_endpoint_key/1,
+    org_directory_key/2,
+    procedure_delegation_key/2
 ]).
 
 -export_type([
@@ -131,6 +140,9 @@
 -define(TYPE_FOUNDATION_REALM_TRUST_LIST,  16#0F).
 -define(TYPE_FOUNDATION_T3_ATTESTATION,    16#10).
 -define(TYPE_CONTENT_ANNOUNCEMENT,         16#11).
+%% Direct-dial dual-trust (Slice 7c): the realm→org→server delegation chain.
+-define(TYPE_ORG_DIRECTORY,                16#15). %% realm-signed: org-name -> org-key
+-define(TYPE_PROCEDURE_DELEGATION,         16#16). %% org-signed: server may serve org
 -define(TYPE_STATION_ENDPOINT,             16#12). %% macula-net Phase 2
 -define(TYPE_ADDRESS_PUBKEY_MAP,           16#13). %% macula-net Phase 2 (redirect)
 -define(TYPE_HOSTED_ADDRESS_MAP,           16#14). %% macula-net Phase 3 (host-signed redirect)
@@ -143,6 +155,8 @@
 -define(STORAGE_DOMAIN_FOUND_PARAM,    <<"foundation_parameter">>).
 -define(STORAGE_DOMAIN_FOUND_TRUST,    <<"foundation_realm_trust_list">>).
 -define(STORAGE_DOMAIN_FOUND_ATTEST,   <<"foundation_t3_attestation">>).
+-define(STORAGE_DOMAIN_ORG_DIRECTORY,    <<"org_directory">>).
+-define(STORAGE_DOMAIN_PROC_DELEGATION,  <<"procedure_delegation">>).
 -define(STORAGE_DOMAIN_STATION_ENDPOINT, <<"station_endpoint">>).
 -define(STORAGE_DOMAIN_ADDRESS_PUBKEY,   <<"address_pubkey_map">>).
 -define(STORAGE_DOMAIN_HOSTED_ADDRESS,   <<"hosted_address_map">>).
@@ -378,6 +392,59 @@ realm_member_endorsement(RealmId,
     Payload = realm_member_endorsement_payload(RealmId, Member, Roles,
                                                ValidFrom, ValidUntil),
     envelope(?TYPE_REALM_MEMBER_ENDORSEMENT, RealmId, Payload, Opts).
+
+%%------------------------------------------------------------------
+%% Constructors — org_directory (direct-dial dual-trust, Slice 7c)
+%%
+%% Realm-signed statement that org `OrgName' (a segment of a
+%% procedure_uri) is owned by `OrgKey'. Storage key
+%% `SHA-256("org_directory" || RealmId || OrgName)' so a consumer can
+%% resolve org name -> org key knowing only its realm. Envelope key is
+%% the RealmId (the realm signs).
+%%------------------------------------------------------------------
+
+-spec org_directory(macula_identity:pubkey(), binary(),
+                    macula_identity:pubkey()) -> record().
+org_directory(RealmId, OrgName, OrgKey) ->
+    org_directory(RealmId, OrgName, OrgKey, #{}).
+
+-spec org_directory(macula_identity:pubkey(), binary(),
+                    macula_identity:pubkey(), map()) -> record().
+org_directory(RealmId, OrgName, OrgKey, Opts)
+  when is_binary(RealmId), byte_size(RealmId) =:= 32,
+       is_binary(OrgName),
+       is_binary(OrgKey),  byte_size(OrgKey)  =:= 32 ->
+    Payload = #{
+        {text, <<"realm">>}    => RealmId,
+        {text, <<"org_name">>} => {text, OrgName},
+        {text, <<"org_key">>}  => OrgKey
+    },
+    envelope(?TYPE_ORG_DIRECTORY, RealmId, Payload, Opts).
+
+%%------------------------------------------------------------------
+%% Constructors — procedure_delegation (direct-dial dual-trust, Slice 7c)
+%%
+%% Org-signed grant that `Advertiser' may serve procedures under the org.
+%% Stored once, shared across all the advertiser's procedures. Storage
+%% key `SHA-256("procedure_delegation" || OrgKey || Advertiser)'.
+%% Envelope key is the OrgKey (the org signs).
+%%------------------------------------------------------------------
+
+-spec procedure_delegation(macula_identity:pubkey(),
+                           macula_identity:pubkey()) -> record().
+procedure_delegation(OrgKey, Advertiser) ->
+    procedure_delegation(OrgKey, Advertiser, #{}).
+
+-spec procedure_delegation(macula_identity:pubkey(),
+                           macula_identity:pubkey(), map()) -> record().
+procedure_delegation(OrgKey, Advertiser, Opts)
+  when is_binary(OrgKey),     byte_size(OrgKey)     =:= 32,
+       is_binary(Advertiser), byte_size(Advertiser) =:= 32 ->
+    Payload = #{
+        {text, <<"org_key">>}    => OrgKey,
+        {text, <<"advertiser">>} => Advertiser
+    },
+    envelope(?TYPE_PROCEDURE_DELEGATION, OrgKey, Payload, Opts).
 
 %%------------------------------------------------------------------
 %% Constructors — procedure_advertisement (Part 6 §9.7)
@@ -912,6 +979,78 @@ read_station_endpoint(#{type := ?TYPE_STATION_ENDPOINT, payload := P}) ->
 host_list(undefined)          -> [];
 host_list(L) when is_list(L)  -> [unwrap_text(H) || H <- L];
 host_list(V)                  -> [unwrap_text(V)].
+
+%%------------------------------------------------------------------
+%% Direct-dial dual-trust (Slice 7c) — key derivation, readers, and the
+%% realm -> org -> server delegation-chain verifier.
+%%------------------------------------------------------------------
+
+%% @doc Storage key for an `org_directory' by `(RealmId, OrgName)'.
+-spec org_directory_key(macula_identity:pubkey(), binary()) -> <<_:256>>.
+org_directory_key(RealmId, OrgName)
+  when is_binary(RealmId), byte_size(RealmId) =:= 32, is_binary(OrgName) ->
+    crypto:hash(sha256, <<?STORAGE_DOMAIN_ORG_DIRECTORY/binary,
+                          RealmId/binary, OrgName/binary>>).
+
+%% @doc Storage key for a `procedure_delegation' by `(OrgKey, Advertiser)'.
+-spec procedure_delegation_key(macula_identity:pubkey(),
+                               macula_identity:pubkey()) -> <<_:256>>.
+procedure_delegation_key(OrgKey, Advertiser)
+  when is_binary(OrgKey), byte_size(OrgKey) =:= 32,
+       is_binary(Advertiser), byte_size(Advertiser) =:= 32 ->
+    crypto:hash(sha256, <<?STORAGE_DOMAIN_PROC_DELEGATION/binary,
+                          OrgKey/binary, Advertiser/binary>>).
+
+-spec read_org_directory(record()) ->
+    #{realm := macula_identity:pubkey(), org_name := binary(),
+      org_key := macula_identity:pubkey()}.
+read_org_directory(#{type := ?TYPE_ORG_DIRECTORY, payload := P}) ->
+    #{realm    => payload_field(P, <<"realm">>),
+      org_name => payload_field(P, <<"org_name">>),
+      org_key  => payload_field(P, <<"org_key">>)}.
+
+-spec read_procedure_delegation(record()) ->
+    #{org_key := macula_identity:pubkey(),
+      advertiser := macula_identity:pubkey()}.
+read_procedure_delegation(#{type := ?TYPE_PROCEDURE_DELEGATION, payload := P}) ->
+    #{org_key    => payload_field(P, <<"org_key">>),
+      advertiser => payload_field(P, <<"advertiser">>)}.
+
+%% @doc Verify the realm -> org -> server delegation chain for an
+%% advertisement from `Advertiser' in `RealmId': the `org_directory' is
+%% signed by the realm and names the org key, and the `procedure_delegation'
+%% is signed by that org key and grants `Advertiser'. `ok' means the
+%% advertisement is legitimately authorized; any failure is a squat.
+-spec verify_delegation_chain(macula_identity:pubkey(), record(), record(),
+                              macula_identity:pubkey()) ->
+    ok | {error, atom()}.
+verify_delegation_chain(RealmId, OrgDir, Delegation, Advertiser) ->
+    chain_step_org(verify(OrgDir), RealmId, OrgDir, Delegation, Advertiser).
+
+chain_step_org({ok, _}, RealmId, OrgDir, Delegation, Advertiser) ->
+    org_dir_matches(key(OrgDir) =:= RealmId, OrgDir, Delegation, Advertiser);
+chain_step_org(_BadSig, _RealmId, _OrgDir, _Delegation, _Advertiser) ->
+    {error, org_directory_bad_signature}.
+
+org_dir_matches(true, OrgDir, Delegation, Advertiser) ->
+    #{org_key := OrgKey} = read_org_directory(OrgDir),
+    chain_step_delegation(verify(Delegation), OrgKey, Delegation, Advertiser);
+org_dir_matches(false, _OrgDir, _Delegation, _Advertiser) ->
+    {error, org_directory_wrong_realm}.
+
+chain_step_delegation({ok, _}, OrgKey, Delegation, Advertiser) ->
+    delegation_grants(read_procedure_delegation(Delegation),
+                      key(Delegation), OrgKey, Advertiser);
+chain_step_delegation(_BadSig, _OrgKey, _Delegation, _Advertiser) ->
+    {error, delegation_bad_signature}.
+
+delegation_grants(#{org_key := DOrg, advertiser := DAdv}, DelKey,
+                  OrgKey, Advertiser) ->
+    grant_ok(DelKey =:= OrgKey andalso DOrg =:= OrgKey
+             andalso DAdv =:= Advertiser).
+
+grant_ok(true)  -> ok;
+grant_ok(false) -> {error, delegation_mismatch}.
 signature(#{signature := S}) -> S.
 
 %%------------------------------------------------------------------
@@ -1156,22 +1295,29 @@ storage_key(#{type := ?TYPE_REALM_STATIONS, key := RealmId}) ->
     crypto:hash(sha256, <<?STORAGE_DOMAIN_STATION_SET/binary, RealmId/binary>>);
 storage_key(#{type := ?TYPE_REALM_MEMBER_ENDORSEMENT,
               key := RealmId, payload := P}) ->
-    Member = maps:get({text, <<"member_node">>}, P),
+    Member = payload_field(P, <<"member_node">>),
     crypto:hash(sha256, <<?STORAGE_DOMAIN_MEMBER_ENDORSE/binary,
                           RealmId/binary, Member/binary>>);
+storage_key(#{type := ?TYPE_ORG_DIRECTORY, key := RealmId, payload := P}) ->
+    OrgName = payload_field(P, <<"org_name">>),
+    org_directory_key(RealmId, OrgName);
+storage_key(#{type := ?TYPE_PROCEDURE_DELEGATION, key := OrgKey,
+              payload := P}) ->
+    Advertiser = payload_field(P, <<"advertiser">>),
+    procedure_delegation_key(OrgKey, Advertiser);
 storage_key(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT, payload := P}) ->
-    {text, Uri} = maps:get({text, <<"procedure_uri">>}, P),
+    Uri = payload_field(P, <<"procedure_uri">>),
     crypto:hash(sha256, Uri);
 storage_key(#{type := ?TYPE_FOUNDATION_SEED_LIST, key := Fk}) ->
     crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_SEED/binary, Fk/binary>>);
 storage_key(#{type := ?TYPE_FOUNDATION_PARAMETER, key := Fk, payload := P}) ->
-    {text, Name} = maps:get({text, <<"param_name">>}, P),
+    Name = payload_field(P, <<"param_name">>),
     crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_PARAM/binary,
                           Fk/binary, Name/binary>>);
 storage_key(#{type := ?TYPE_FOUNDATION_REALM_TRUST_LIST, key := Fk}) ->
     crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_TRUST/binary, Fk/binary>>);
 storage_key(#{type := ?TYPE_FOUNDATION_T3_ATTESTATION, payload := P}) ->
-    Sid = maps:get({text, <<"station_id">>}, P),
+    Sid = payload_field(P, <<"station_id">>),
     crypto:hash(sha256, <<?STORAGE_DOMAIN_FOUND_ATTEST/binary, Sid/binary>>);
 %% station_endpoint: keyed by station pubkey under its own domain so
 %% it doesn't collide with node_record (which keys on the same
@@ -1182,7 +1328,7 @@ storage_key(#{type := ?TYPE_STATION_ENDPOINT, key := StationPubkey}) ->
 %% address_pubkey_map: keyed by the macula-net address itself so a
 %% bare-IPv6 query can find it without already knowing the pubkey.
 storage_key(#{type := ?TYPE_ADDRESS_PUBKEY_MAP, payload := P}) ->
-    Addr = maps:get({text, <<"addr">>}, P),
+    Addr = payload_field(P, <<"addr">>),
     crypto:hash(sha256, <<?STORAGE_DOMAIN_ADDRESS_PUBKEY/binary,
                           Addr/binary>>);
 %% hosted_address_map: keyed by the daemon's address. Resolvers query
@@ -1191,7 +1337,7 @@ storage_key(#{type := ?TYPE_ADDRESS_PUBKEY_MAP, payload := P}) ->
 %% (Phase 3) by replacing the record. Phase 3 forbids the two records
 %% to coexist for the same address (loop risk).
 storage_key(#{type := ?TYPE_HOSTED_ADDRESS_MAP, payload := P}) ->
-    Addr = maps:get({text, <<"addr">>}, P),
+    Addr = payload_field(P, <<"addr">>),
     crypto:hash(sha256, <<?STORAGE_DOMAIN_HOSTED_ADDRESS/binary,
                           Addr/binary>>);
 %% Domain-defined types (0x20-0xFF). When the envelope carries a

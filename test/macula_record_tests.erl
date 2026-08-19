@@ -849,3 +849,79 @@ read_station_endpoint_atom_keys_test() ->
             payload => #{quic_port => 4433, host_advertised => [<<"::1">>]}},
     ?assertEqual(#{quic_port => 4433, host_advertised => [<<"::1">>]},
                  macula_record:read_station_endpoint(Rec)).
+
+%%------------------------------------------------------------------
+%% Slice 7c — realm -> org -> server delegation chain
+%%------------------------------------------------------------------
+
+kp() ->
+    Kp = macula_identity:generate(),
+    {macula_identity:public(Kp), Kp}.
+
+org_directory_round_trips_test() ->
+    {RealmId, _} = kp(),
+    {OrgKey, _}  = kp(),
+    R = macula_record:org_directory(RealmId, <<"acme">>, OrgKey),
+    ?assertEqual(#{realm => RealmId, org_name => <<"acme">>, org_key => OrgKey},
+                 macula_record:read_org_directory(R)),
+    ?assertEqual(macula_record:storage_key(R),
+                 macula_record:org_directory_key(RealmId, <<"acme">>)).
+
+procedure_delegation_round_trips_test() ->
+    {OrgKey, _} = kp(),
+    {Adv, _}    = kp(),
+    R = macula_record:procedure_delegation(OrgKey, Adv),
+    ?assertEqual(#{org_key => OrgKey, advertiser => Adv},
+                 macula_record:read_procedure_delegation(R)),
+    ?assertEqual(macula_record:storage_key(R),
+                 macula_record:procedure_delegation_key(OrgKey, Adv)).
+
+valid_delegation_chain_verifies_test() ->
+    {RealmId, RealmKp} = kp(),
+    {OrgKey, OrgKp}    = kp(),
+    {Adv, _}           = kp(),
+    OrgDir = macula_record:sign(
+               macula_record:org_directory(RealmId, <<"acme">>, OrgKey), RealmKp),
+    Del    = macula_record:sign(
+               macula_record:procedure_delegation(OrgKey, Adv), OrgKp),
+    ?assertEqual(ok,
+                 macula_record:verify_delegation_chain(RealmId, OrgDir, Del, Adv)).
+
+delegation_chain_rejects_wrong_realm_test() ->
+    {RealmId, RealmKp} = kp(),
+    {OtherRealm, _}    = kp(),
+    {OrgKey, OrgKp}    = kp(),
+    {Adv, _}           = kp(),
+    OrgDir = macula_record:sign(
+               macula_record:org_directory(RealmId, <<"acme">>, OrgKey), RealmKp),
+    Del    = macula_record:sign(
+               macula_record:procedure_delegation(OrgKey, Adv), OrgKp),
+    ?assertEqual({error, org_directory_wrong_realm},
+                 macula_record:verify_delegation_chain(OtherRealm, OrgDir, Del, Adv)).
+
+delegation_chain_rejects_squatter_advertiser_test() ->
+    {RealmId, RealmKp} = kp(),
+    {OrgKey, OrgKp}    = kp(),
+    {Adv, _}           = kp(),
+    {Squatter, _}      = kp(),
+    OrgDir = macula_record:sign(
+               macula_record:org_directory(RealmId, <<"acme">>, OrgKey), RealmKp),
+    %% delegation grants Adv, but a squatter advertised
+    Del    = macula_record:sign(
+               macula_record:procedure_delegation(OrgKey, Adv), OrgKp),
+    ?assertEqual({error, delegation_mismatch},
+                 macula_record:verify_delegation_chain(RealmId, OrgDir, Del,
+                                                       Squatter)).
+
+delegation_chain_rejects_forged_delegation_test() ->
+    {RealmId, RealmKp} = kp(),
+    {OrgKey, _OrgKp}   = kp(),
+    {Adv, _}           = kp(),
+    {_Forger, ForgerKp} = kp(),
+    OrgDir = macula_record:sign(
+               macula_record:org_directory(RealmId, <<"acme">>, OrgKey), RealmKp),
+    %% delegation claims OrgKey but is signed by someone else
+    Del    = macula_record:sign(
+               macula_record:procedure_delegation(OrgKey, Adv), ForgerKp),
+    ?assertEqual({error, delegation_bad_signature},
+                 macula_record:verify_delegation_chain(RealmId, OrgDir, Del, Adv)).
