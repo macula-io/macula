@@ -603,7 +603,11 @@ peer_node_id(Pid) ->
 %%====================================================================
 
 init(Opts) ->
-    Seed     = parse_seed(maps:get(seed, Opts)),
+    %% TLS policy (`verify' / `expected_node_id') rides in the seed map,
+    %% which is spread into the peering target at connect — so a caller
+    %% can dial a self-signed or pubkey-pinned station, same as the
+    %% station-side outbound link.
+    Seed     = add_tls_opts(parse_seed(maps:get(seed, Opts)), Opts),
     Identity = maps:get(identity, Opts, macula_identity:generate()),
     Caps     = maps:get(capabilities, Opts, 0),
     Alpn     = maps:get(alpn, Opts, [<<"macula">>]),
@@ -1529,6 +1533,18 @@ call_failure(Code, Name, _Detail) ->
 %%-------------------------------------------------------------------
 %% Helpers
 %%-------------------------------------------------------------------
+
+%% Fold TLS-policy opts (`verify' / `expected_node_id') from the link
+%% opts into the seed map, so they reach the peering target at connect.
+add_tls_opts(Seed, Opts) ->
+    lists:foldl(fun(K, Acc) -> copy_opt(K, Opts, Acc) end,
+                Seed, [verify, expected_node_id]).
+
+copy_opt(K, Opts, Seed) ->
+    case maps:find(K, Opts) of
+        {ok, V} -> Seed#{K => V};
+        error   -> Seed
+    end.
 
 parse_seed(#{host := _, port := _} = Map) ->
     Map;

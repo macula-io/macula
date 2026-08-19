@@ -433,12 +433,18 @@ init({Seeds, Opts}) ->
     process_flag(trap_exit, true),
     warn_legacy_opts(Opts),
     Identity = maps:get(identity, Opts, macula_identity:generate()),
-    LinkOpts = #{
-        identity           => Identity,
-        capabilities       => maps:get(capabilities, Opts, 0),
-        alpn               => maps:get(alpn, Opts, [<<"macula">>]),
-        connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000)
-    },
+    LinkOpts = maps:merge(
+        #{
+            identity           => Identity,
+            capabilities       => maps:get(capabilities, Opts, 0),
+            alpn               => maps:get(alpn, Opts, [<<"macula">>]),
+            connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000)
+        },
+        %% TLS policy for the links this pool dials (seeds AND
+        %% `call_station' targets): `verify' (webpki | none) and
+        %% `expected_node_id' (pin the station's Ed25519 identity).
+        %% Forwarded only when the caller set them.
+        maps:with([verify, expected_node_id], Opts)),
     DedupWindow = maps:get(dedup_window_ms, Opts, ?DEFAULT_DEDUP_WINDOW_MS),
     DedupSweep  = maps:get(dedup_sweep_ms, Opts, ?DEFAULT_DEDUP_SWEEP_MS),
     Replication = maps:get(replication_factor, Opts, ?DEFAULT_REPLICATION),

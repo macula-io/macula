@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.4.0] - 2026-08-19
+
+### Added
+
+- `macula:connect/2` now forwards `verify` (`webpki` | `none`) and
+  `expected_node_id` from its opts to every link the pool dials — seeds AND
+  `call_station/6` targets. A pool can therefore dial a self-signed station
+  (`verify => none`, dev/loopback) or pin a station's Ed25519 identity
+  (`expected_node_id`, production). Direct-dial to a resolved serving_station
+  needs this TLS-policy control; previously links were always `webpki`. Additive,
+  default unchanged.
+
+---
+
 ## [8.3.0] - 2026-08-19
 
 ### Added
