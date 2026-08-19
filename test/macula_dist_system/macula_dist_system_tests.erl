@@ -4,8 +4,12 @@
 %%% Tests cover:
 %%% - Supervisor start/stop
 %%% - Child process management
-%%% - Configuration options (discovery_type, auto_cluster)
+%%% - Configuration options (discovery_type)
 %%% - Restart strategy behavior
+%%%
+%%% LAN cluster formation moved to `macula_cluster_system' and is no
+%%% longer a child of this supervisor — see macula_cluster_strategy_tests
+%%% for its own coverage.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_dist_system_tests).
@@ -24,7 +28,6 @@ dist_system_test_() ->
       fun start_with_defaults_test_/1,
       fun start_with_mdns_discovery_test_/1,
       fun start_with_dht_discovery_test_/1,
-      fun start_with_auto_cluster_test_/1,
       fun child_restart_test_/1,
       fun supervisor_flags_test_/1
      ]}.
@@ -117,22 +120,6 @@ start_with_dht_discovery_test_(_) ->
         ?assertNotEqual(false, DiscChild)
     end}.
 
-start_with_auto_cluster_test_(_) ->
-    {"supervisor starts with auto_cluster enabled", fun() ->
-        Opts = #{auto_cluster => true},
-        {ok, Pid} = macula_dist_system:start_link(Opts),
-        ?assert(is_pid(Pid)),
-
-        %% Should have both discovery and cluster_strategy children
-        Children = supervisor:which_children(macula_dist_system),
-
-        DiscChild = lists:keyfind(macula_dist_discovery, 1, Children),
-        ?assertNotEqual(false, DiscChild),
-
-        ClusterChild = lists:keyfind(macula_cluster_strategy, 1, Children),
-        ?assertNotEqual(false, ClusterChild)
-    end}.
-
 %%------------------------------------------------------------------------------
 %% Child Management Tests
 %%------------------------------------------------------------------------------
@@ -171,20 +158,19 @@ child_restart_test_(_) ->
 
 supervisor_flags_test_(_) ->
     {"supervisor uses one_for_one strategy", fun() ->
-        Opts = #{auto_cluster => true},
-        {ok, _SupPid} = macula_dist_system:start_link(Opts),
+        {ok, _SupPid} = macula_dist_system:start_link(),
         timer:sleep(100),
 
         Children = supervisor:which_children(macula_dist_system),
 
         %% Get two different children
         {macula_dist_discovery, DiscPid, _, _} = lists:keyfind(macula_dist_discovery, 1, Children),
-        {macula_cluster_strategy, ClusterPid, _, _} = lists:keyfind(macula_cluster_strategy, 1, Children),
+        {macula_dist_bridge_sup, BridgeSupPid, _, _} = lists:keyfind(macula_dist_bridge_sup, 1, Children),
 
         %% Kill discovery
         exit(DiscPid, kill),
         timer:sleep(100),
 
-        %% Cluster strategy should still be the same PID (one_for_one strategy)
-        ?assert(is_process_alive(ClusterPid))
+        %% Bridge supervisor should still be the same PID (one_for_one strategy)
+        ?assert(is_process_alive(BridgeSupPid))
     end}.

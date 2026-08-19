@@ -6,7 +6,7 @@
 %%% between Erlang nodes. Each tunnel is backed by a raw QUIC stream —
 %%% no framing, no pub/sub, no application-level encryption.
 %%%
-%%% This replaces the pub/sub bridge approach in `macula_dist_relay'
+%%% This replaces the pub/sub bridge approach in `macula_dist_pool'
 %%% (the SDK's previous dist-over-mesh implementation) which forced
 %%% dist bytes through the station's MessagePack/handler pipeline.
 %%%

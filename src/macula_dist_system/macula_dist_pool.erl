@@ -27,7 +27,7 @@
 %%% The default 60s may cause spurious node-DOWN on high-latency relays.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_dist_relay).
+-module(macula_dist_pool).
 
 -include_lib("kernel/include/logger.hrl").
 
@@ -67,7 +67,7 @@
 -spec register_mesh_pool(pid()) -> ok.
 register_mesh_pool(Pid) when is_pid(Pid) ->
     persistent_term:put(macula_dist_mesh_pool, Pid),
-    ?LOG_INFO("[dist_relay] Mesh pool registered: ~p", [Pid]),
+    ?LOG_INFO("[dist_pool] Mesh pool registered: ~p", [Pid]),
     ok.
 
 %% @doc Check if relay distribution mode is enabled.
@@ -78,7 +78,7 @@ is_relay_mode() ->
 %% @doc Connect to a remote node via relay mesh.
 -spec connect(string(), string(), integer()) -> {ok, port(), port()} | {error, term()}.
 connect(NodeStr, _Host, _Port) ->
-    ?LOG_INFO("[dist_relay] Connecting to ~s via mesh", [NodeStr]),
+    ?LOG_INFO("[dist_pool] Connecting to ~s via mesh", [NodeStr]),
     case get_mesh_pool() of
         undefined ->
             {error, no_mesh_connection};
@@ -92,14 +92,14 @@ advertise_dist_accept() ->
     ensure_bridge_sup(),
     case get_mesh_pool() of
         undefined ->
-            ?LOG_WARNING("[dist_relay] Cannot advertise — no mesh pool registered"),
+            ?LOG_WARNING("[dist_pool] Cannot advertise — no mesh pool registered"),
             ok;
         Pool ->
             NodeName = atom_to_binary(node()),
             Procedure = <<"_dist.tunnel.", NodeName/binary>>,
             macula_client:advertise(Pool, ?DIST_REALM, Procedure,
                                     fun handle_tunnel_request/1),
-            ?LOG_INFO("[dist_relay] Advertised distribution accept: ~s", [Procedure]),
+            ?LOG_INFO("[dist_pool] Advertised distribution accept: ~s", [Procedure]),
             ok
     end.
 
@@ -109,7 +109,7 @@ advertise_dist_accept() ->
 ensure_bridge_sup() ->
     case whereis(macula_dist_bridge_sup) of
         undefined ->
-            ?LOG_WARNING("[dist_relay] Bridge sup not running — macula app may not be started");
+            ?LOG_WARNING("[dist_pool] Bridge sup not running — macula app may not be started");
         _Pid ->
             ok
     end.
@@ -161,7 +161,7 @@ request_tunnel(Pool, NodeStr) ->
     Procedure = <<"_dist.tunnel.", (list_to_binary(NodeStr))/binary>>,
     Args = #{<<"from_node">> => atom_to_binary(node()),
              <<"target_node">> => list_to_binary(NodeStr)},
-    ?LOG_INFO("[dist_relay] RPC ~s via ~p", [Procedure, Pool]),
+    ?LOG_INFO("[dist_pool] RPC ~s via ~p", [Procedure, Pool]),
     %% V2 pool: first-success across healthy links. The pool itself
     %% does the multi-station fan-out the V1 multi_relay used to do.
     Result = macula_client:call(Pool, ?DIST_REALM, Procedure, Args,
@@ -169,16 +169,16 @@ request_tunnel(Pool, NodeStr) ->
     on_tunnel_rpc_reply(Result, Pool).
 
 on_tunnel_rpc_reply({ok, #{<<"tunnel_id">> := TunnelId}}, Pool) ->
-    ?LOG_INFO("[dist_relay] Tunnel established: ~s", [TunnelId]),
+    ?LOG_INFO("[dist_pool] Tunnel established: ~s", [TunnelId]),
     create_dist_socket(Pool, TunnelId);
 on_tunnel_rpc_reply({ok, #{<<"error">> := ErrorInfo}}, _Pool) ->
-    ?LOG_WARNING("[dist_relay] Tunnel error: ~p", [ErrorInfo]),
+    ?LOG_WARNING("[dist_pool] Tunnel error: ~p", [ErrorInfo]),
     {error, {tunnel_error, ErrorInfo}};
 on_tunnel_rpc_reply({error, Reason}, _Pool) ->
-    ?LOG_WARNING("[dist_relay] Tunnel request failed: ~p", [Reason]),
+    ?LOG_WARNING("[dist_pool] Tunnel request failed: ~p", [Reason]),
     {error, {tunnel_failed, Reason}};
 on_tunnel_rpc_reply(Other, _Pool) ->
-    ?LOG_WARNING("[dist_relay] Unexpected RPC result: ~p", [Other]),
+    ?LOG_WARNING("[dist_pool] Unexpected RPC result: ~p", [Other]),
     {error, {unexpected_result, Other}}.
 
 %%%===================================================================
@@ -188,7 +188,7 @@ on_tunnel_rpc_reply(Other, _Pool) ->
 handle_tunnel_request(Args) ->
     FromNode = maps:get(<<"from_node">>, Args, <<>>),
     TunnelId = base64:encode(crypto:strong_rand_bytes(16)),
-    ?LOG_INFO("[dist_relay] Tunnel request from ~s, id: ~s", [FromNode, TunnelId]),
+    ?LOG_INFO("[dist_pool] Tunnel request from ~s, id: ~s", [FromNode, TunnelId]),
 
     SendTopic = <<"_dist.data.", TunnelId/binary, ".in">>,
     RecvTopic = <<"_dist.data.", TunnelId/binary, ".out">>,
@@ -211,7 +211,7 @@ spawn_accept_bridge(Pool, TunnelId, SendTopic, RecvTopic) ->
     {Pid, _Ref} = spawn_monitor(fun() ->
         dist_accept_setup(Pool, TunnelId, SendTopic, RecvTopic)
     end),
-    ?LOG_INFO("[dist_relay] Accept setup ~p for ~s", [Pid, TunnelId]),
+    ?LOG_INFO("[dist_pool] Accept setup ~p for ~s", [Pid, TunnelId]),
     Pid.
 
 %%%===================================================================
@@ -298,10 +298,10 @@ start_supervised_bridge(Pool, BridgeSock, SendTopic, RecvTopic, TunnelId, Key) -
         {ok, Pid} ->
             gen_tcp:controlling_process(BridgeSock, Pid),
             Pid ! socket_ready,
-            ?LOG_INFO("[dist_relay] Supervised bridge ~p for ~s", [Pid, TunnelId]),
+            ?LOG_INFO("[dist_pool] Supervised bridge ~p for ~s", [Pid, TunnelId]),
             {ok, Pid};
         {error, Reason} ->
-            ?LOG_ERROR("[dist_relay] Failed to start bridge for ~s: ~p",
+            ?LOG_ERROR("[dist_pool] Failed to start bridge for ~s: ~p",
                         [TunnelId, Reason]),
             {error, Reason}
     end.

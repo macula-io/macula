@@ -1,6 +1,6 @@
 # Macula Clustering Guide
 
-This guide covers Macula's LAN clustering capabilities, including gossip-based discovery, the Cluster API, distribution management, and cookie management.
+This guide covers Macula's LAN clustering capabilities, including gossip-based discovery, the Cluster API, distribution management, and cookie management. The modules live in `src/macula_cluster_system/`, separate from `macula_dist_system` (distribution-over-mesh) — the two do not depend on each other.
 
 **Note:** Clustering via gossip/mDNS is designed for **LAN environments** (same subnet). For WAN connectivity across networks, use the relay mesh (see the Dist Over Mesh guide).
 
@@ -361,7 +361,7 @@ rebar3 eunit --module=macula_cluster_gossip_tests
 rebar3 eunit --module=macula_cluster_tests
 
 # Run full cluster test suite
-rebar3 eunit --dir=test/macula_dist_system
+rebar3 eunit --dir=test/macula_cluster_system
 ```
 
 ---

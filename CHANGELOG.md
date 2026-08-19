@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.0.0] - 2026-08-20
+
+**LAN clustering and distribution-over-mesh split into separate concerns.**
+They were tangled together in one supervision tree and one source directory,
+despite not depending on each other — one is same-subnet gossip/mDNS cluster
+formation, the other is `net_adm:ping/1` across firewalls over the mesh. Now:
+`macula_cluster_system/` (gossip, static, libcluster strategy) and
+`macula_dist_system/` (the three dist-over-mesh transports: direct QUIC,
+pool-tunneled via `join_mesh/1`, and the dedicated freight relay via
+`join_dist_relay/1`) are independent. See `src/macula_cluster_system/README.md`
+and `src/macula_dist_system/README.md`.
+
+### Breaking
+
+- **`macula_dist_relay` renamed to `macula_dist_pool`.** The DIST_OVER_MESH_GUIDE
+  told readers to run `macula_dist_relay:get_tunnel_metrics()` directly for
+  troubleshooting — that call now needs `macula_dist_pool:get_tunnel_metrics()`.
+  `macula:join_mesh/1` and `macula:join_dist_relay/1` (the facade, what almost
+  everyone should be calling) are unaffected — this only breaks code that
+  called the renamed module directly.
+- **The `auto_cluster` sys.config option is removed**, along with the
+  `macula_dist_system` supervisor code that read it and conditionally started
+  `macula_cluster_strategy` as one of its children. This was a **silent**
+  behavior change before this release note: a consumer with `auto_cluster =>
+  true` (or `application:set_env(macula, auto_cluster, true)`) simply stopped
+  getting automatic LAN clustering, no crash, no warning. Start clustering
+  explicitly instead: `macula_cluster:start_cluster/1` (see the
+  [Clustering Guide](docs/guides/CLUSTERING_GUIDE.md)).
+- `macula_cluster`, `macula_cluster_gossip`, `macula_cluster_static`,
+  `macula_cluster_strategy` moved from `src/macula_dist_system/` to
+  `src/macula_cluster_system/` (and their tests from `test/macula_dist_system/`
+  to `test/macula_cluster_system/`). Module names are unchanged — this only
+  affects anyone with a build script or `rebar3 eunit --dir=` command
+  hard-coded to the old path.
+
+---
+
 ## [8.10.0] - 2026-08-19
 
 ### Added

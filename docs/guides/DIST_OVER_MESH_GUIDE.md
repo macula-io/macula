@@ -132,9 +132,12 @@ macula_dist_system (one_for_one)
   │           ├── handle_info: tunnel_in → decrypt → gen_tcp:send
   │           ├── monitors relay client (reconnects on DOWN)
   │           └── per-tunnel counters (bytes/msgs in/out)
-  ├── macula_dist_discovery (DHT node discovery)
-  └── macula_cluster_strategy (optional auto-clustering)
+  └── macula_dist_discovery (DHT node discovery)
 ```
+
+LAN clustering (`macula_cluster_strategy` and friends) is a separate module,
+`macula_cluster_system`, not a child of this supervisor. See the
+[Clustering Guide](CLUSTERING_GUIDE.md).
 
 ### Encryption
 
@@ -165,7 +168,7 @@ the distribution connection survives transparently.
 ## Metrics
 
 ```erlang
-macula_dist_relay:get_tunnel_metrics().
+macula_dist_pool:get_tunnel_metrics().
 %% => [{<<"abc123">>, #{bytes_out => 4096, bytes_in => 2048,
 %%                       msgs_out => 12, msgs_in => 8}}]
 ```
@@ -190,7 +193,7 @@ macula_dist_relay:get_tunnel_metrics().
 ### Connection drops after handshake
 
 1. Increase `net_ticktime` to 120+ (`-kernel net_ticktime 120`)
-2. Check `macula_dist_relay:get_tunnel_metrics()` for active tunnels
+2. Check `macula_dist_pool:get_tunnel_metrics()` for active tunnels
 
 ## Configuration Reference
 

@@ -11,7 +11,7 @@
 %%% application is responsible for re-pinging if desired.
 %%%
 %%% Part of the `macula_dist_system' supervision tree. Also started
-%%% on demand by `macula_dist_relay:ensure_bridge_sup/0' when the
+%%% on demand by `macula_dist_pool:ensure_bridge_sup/0' when the
 %%% full dist_system is not running (standalone relay mode).
 %%% @end
 %%%-------------------------------------------------------------------

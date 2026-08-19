@@ -1,164 +1,74 @@
 # Distribution System
 
-The Distribution System provides QUIC-based distributed Erlang node discovery and communication, replacing EPMD with decentralized discovery mechanisms.
+Erlang distribution over the Macula mesh: three transports, one goal — `net_adm:ping/1` and the rest of OTP's distribution primitives working across NATs and firewalls with no VPN.
+
+**LAN clustering (gossip/static/libcluster strategy) is a separate concern.** See `../macula_cluster_system/README.md` and `docs/guides/CLUSTERING_GUIDE.md`.
 
 ## Module Table
 
-| Module | Purpose | LOC |
-|--------|---------|-----|
-| `macula_dist_system` | Supervisor for distribution subsystem | 4k |
-| `macula_dist` | QUIC carrier for Erlang distribution | 8k |
-| `macula_dist_discovery` | Decentralized node discovery (replaces EPMD) | 12k |
-| `macula_dist_mdns_advertiser` | mDNS service advertisement for local discovery | 6k |
-| `macula_cluster_strategy` | libcluster-compatible cluster formation strategy | 5k |
+| Module | Purpose |
+|--------|---------|
+| `macula_dist_system` | Supervisor for the dist-over-mesh subsystem (bridge_sup, discovery, optional dist-relay client) |
+| `macula_dist` | `-proto_dist macula` driver — implements the OTP dist-carrier callback set (`listen/1`, `accept/1`, `accept_connection/5`, `setup/5`, `select/1`, ...) for all three transports below |
+| `macula_dist_discovery` | Decentralized node discovery via DHT/mDNS (replaces EPMD) |
+| `macula_dist_mdns_advertiser` | mDNS service advertisement for local discovery |
+| `macula_dist_pool` | Pool-tunneled transport — rides the ordinary mesh pool (stations) via pub/sub. Used by `macula:join_mesh/1` |
+| `macula_dist_bridge` / `macula_dist_bridge_sup` | Per-tunnel gen_tcp loopback bridge + its supervisor, for the pool-tunneled transport |
+| `macula_dist_relay_client` / `macula_dist_relay_protocol` | Client + wire protocol for the dedicated freight relay. Used by `macula:join_dist_relay/1`, talks to the separate `macula-dist-relay` server (raw QUIC stream forwarding, no pub/sub in the hot path) |
 
-## Overview
+## The Three Transports
 
-Traditional Erlang distribution uses EPMD (Erlang Port Mapper Daemon) and TCP for inter-node communication. Macula replaces this with:
+| Transport | Entry point | Data path |
+|-----------|-------------|-----------|
+| **Direct QUIC** | `-proto_dist macula` (no extra call) | Node to node directly, no relay |
+| **Pool-tunneled** | `macula:join_mesh/1` | Rides the general mesh pool (stations), pub/sub-framed |
+| **Freight relay** | `macula:join_dist_relay/1` | Dedicated `macula-dist-relay` server, raw QUIC stream forwarding |
 
-- **QUIC transport**: Single UDP port, built-in TLS 1.3, connection migration
-- **DHT discovery**: Decentralized node discovery via Kademlia DHT
-- **mDNS discovery**: Local network discovery without central registry
-- **Automatic clustering**: libcluster-compatible automatic cluster formation
+Node discovery (DHT/mDNS, replacing EPMD) is shared across all three.
 
-## Architecture
+## Quick Start
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     QUIC Distribution                           │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐     │
-│  │ macula_dist │  │ dist_discovery│  │ cluster_strategy   │     │
-│  │ (transport) │  │ (DHT/mDNS)   │  │ (libcluster)       │     │
-│  └──────┬──────┘  └───────┬──────┘  └─────────┬──────────┘     │
-│         │                 │                    │                │
-│         └────────┬────────┴────────────────────┘                │
-│                  │                                              │
-│         ┌────────▼────────┐                                     │
-│         │ Single QUIC Port │ (default: 4433)                    │
-│         │    UDP/TLS 1.3   │                                    │
-│         └──────────────────┘                                    │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Node Discovery Mechanisms
-
-### DHT Discovery (Default)
-Uses the Kademlia DHT to register and discover nodes:
-```erlang
-%% Node registers itself in DHT with node name and endpoint
-macula_dist_discovery:register_node(NodeName, Endpoint).
-
-%% Find other nodes via DHT lookup
-{ok, Nodes} = macula_dist_discovery:find_nodes(ClusterName).
-```
-
-### mDNS Discovery
-For local network discovery without internet access:
-```erlang
-%% Enable mDNS advertisement
-macula_dist_mdns_advertiser:start_link(#{
-    service_name => <<"macula">>,
-    service_type => <<"_macula._udp">>,
-    port => 4433
-}).
-```
-
-### Combined Discovery
-Both mechanisms can run simultaneously (default: `both`):
-```erlang
-macula_dist_system:start_link(#{
-    discovery_type => both  %% dht | mdns | both
-}).
-```
-
-## Configuration
-
-### vm.args Configuration
+### Pool-tunneled (most common — works through NATs/firewalls)
 
 ```erlang
-%% Enable QUIC distribution (deferred until v1.1.0+)
--proto_dist macula
--no_epmd
--start_epmd false
--macula_dist_port 4433
+%% vm.args
+-proto_dist macula -no_epmd -start_epmd false -kernel net_ticktime 120
 ```
-
-### sys.config Configuration
 
 ```erlang
-{macula, [
-    {dist_port, 4433},
-    {discovery_type, both},        %% dht | mdns | both
-    {auto_cluster, true},          %% Enable automatic clustering
-    {cluster_config, #{
-        topology => macula_cluster,
-        connect_timeout => 5000
-    }}
-]}
+ok = macula:join_mesh(#{relays => [<<"https://relay-de-berlin.macula.io:4433">>]}).
+pong = net_adm:ping('othernode@otherhost').
 ```
 
-### Environment Variables
+See `docs/guides/DIST_OVER_MESH_GUIDE.md` for the full guide, options, architecture details, and troubleshooting.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MACULA_DIST_PORT` | 4433 | QUIC distribution port |
-| `MACULA_DISCOVERY_TYPE` | both | Discovery mechanism (dht/mdns/both) |
-| `MACULA_AUTO_CLUSTER` | false | Enable automatic cluster formation |
-
-## Supervision Tree
-
-```
-macula_dist_system (supervisor)
-├── macula_dist_discovery (worker)
-│   ├── DHT registration
-│   └── mDNS advertisement (if enabled)
-└── macula_cluster_strategy (worker, if auto_cluster=true)
-    └── libcluster topology management
-```
-
-## libcluster Integration
-
-The `macula_cluster_strategy` module implements the libcluster strategy behavior:
+### Direct QUIC (same LAN, lowest latency)
 
 ```erlang
-%% In your cluster config
-[
-    {libcluster, [
-        {topologies, [
-            {macula_cluster, [
-                {strategy, macula_cluster_strategy},
-                {config, [
-                    {bootstrap_nodes, [<<"boot1.example.com:4433">>]},
-                    {poll_interval, 5000}
-                ]}
-            ]}
-        ]}
-    ]}
-]
+-proto_dist macula -no_epmd -start_epmd false
 ```
 
-## Benefits vs EPMD/TCP Distribution
+No `join_mesh/1` call needed — nodes dial each other directly.
 
-| Feature | EPMD/TCP | Macula QUIC |
-|---------|----------|-------------|
-| Port requirements | Multiple (4369 + dynamic range) | Single UDP port |
-| NAT traversal | Poor | Excellent |
-| TLS encryption | Optional add-on | Built-in TLS 1.3 |
-| Discovery | Centralized (EPMD) | Decentralized (DHT/mDNS) |
-| Connection migration | No | Yes (QUIC feature) |
-| Firewall friendly | No | Yes |
+### Freight relay (dedicated tunnel, no pub/sub overhead)
+
+```erlang
+ok = macula:join_dist_relay(#{url => <<"https://dist-relay.macula.io:4434">>}).
+```
+
+Talks to a `macula-io/macula-dist-relay` server instance, not an ordinary station.
 
 ## Status
 
-**Current Status**: Implemented, deferred for production use until v1.1.0+
+**Live.** `-proto_dist macula` and `macula:join_mesh/1` ship in the published `macula` hex package and are exercised in CI by `hecate-social/hecate-stub`'s dist integration harness.
 
-The distribution system is fully implemented but the `-proto_dist macula` integration is deferred until after v1.0.0 proves stable. Currently:
-- Discovery mechanisms work
-- Cluster strategy integrates with libcluster
-- QUIC transport layer is functional
-- Full integration testing pending
+## Testing
+
+```bash
+rebar3 eunit --dir=test/macula_dist_system
+```
 
 ## Related Documentation
 
-- [QUIC Distribution Architecture](../../architecture/v0.11.0-QUIC_DISTRIBUTION.md)
-- [Cluster Strategy Guide](../../docs/operator/CLUSTER_STRATEGY.md)
+- [Dist Over Mesh Guide](../../docs/guides/DIST_OVER_MESH_GUIDE.md) — pool-tunneled transport, options, architecture, troubleshooting
+- [Clustering Guide](../../docs/guides/CLUSTERING_GUIDE.md) — LAN clustering (separate module, `macula_cluster_system/`)

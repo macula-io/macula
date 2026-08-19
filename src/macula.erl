@@ -18,7 +18,7 @@
 %%%
 %%% Erlang distribution over the mesh ships via `join_mesh/1' (V2
 %%% pool carrier) or `join_dist_relay/1' (dedicated dist relay). See
-%%% `macula_dist_relay' / `macula_dist_system'.
+%%% `macula_dist_pool' / `macula_dist_system'.
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -305,7 +305,7 @@ unadvertise(Pool, Realm, Procedure) ->
 %% MUST advertise these procedures and publish on the per-type
 %% record-stored topic for the SDK to function. DHT traffic travels
 %% under the all-zeros realm tag (protocol-internal infrastructure;
-%% the same convention `macula_dist_relay' uses for tunnel frames).
+%% the same convention `macula_dist_pool' uses for tunnel frames).
 -define(DHT_REALM,                     <<0:256>>).
 -define(DHT_PUT_RECORD_PROC,           <<"_dht.put_record">>).
 -define(DHT_FIND_RECORD_PROC,          <<"_dht.find_record">>).
@@ -907,7 +907,7 @@ unmonitor_nodes() -> macula_cluster:unmonitor_nodes().
 %% </ul>
 %%
 %% Internally builds a V2 `macula_client:pool()' and registers it
-%% with `macula_dist_relay' as the carrier for `_dist.tunnel.*'
+%% with `macula_dist_pool' as the carrier for `_dist.tunnel.*'
 %% traffic. Dist tunnel frames travel under the all-zeros realm
 %% (protocol-internal infrastructure, not bound to any user realm).
 -spec join_mesh(map()) -> ok | {error, term()}.
@@ -925,8 +925,8 @@ pool_opts_for_join(Opts) ->
 on_pool_for_join({ok, Pool}) ->
     wait_for_pool(Pool, 30),
     os:putenv("MACULA_DIST_MODE", "relay"),
-    macula_dist_relay:register_mesh_pool(Pool),
-    macula_dist_relay:advertise_dist_accept(),
+    macula_dist_pool:register_mesh_pool(Pool),
+    macula_dist_pool:advertise_dist_accept(),
     ?LOG_INFO("[macula] Joined mesh — distribution enabled"),
     ok;
 on_pool_for_join({error, Reason}) ->

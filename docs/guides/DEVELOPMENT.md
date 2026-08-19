@@ -46,7 +46,8 @@ macula/
 │   ├── macula_did_nif.erl       # DID document operations (Rust NIF + Erlang fallback)
 │   ├── macula_mri.erl           # Resource identifiers (parse, format, hierarchy, trie index)
 │   ├── macula_cert_system/      # Ed25519 keypairs, cert generation, trust store
-│   ├── macula_dist_system/      # Erlang distribution over relay mesh
+│   ├── macula_dist_system/      # Erlang distribution over relay mesh (3 transports)
+│   ├── macula_cluster_system/   # LAN clustering (gossip/static/libcluster) — separate from dist
 │   └── macula_*.erl             # Utilities (id, names, node, realm, time, uri, cache)
 ├── native/                       # Rust NIF source (Quinn QUIC + crypto/UCAN/DID/MRI)
 ├── test/                         # EUnit tests

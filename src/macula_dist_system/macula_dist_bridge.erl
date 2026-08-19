@@ -47,7 +47,7 @@
 -define(PUBLISH_RETRIES, 3).
 
 %% Realm tag stamped on every dist tunnel frame. Mirrors
-%% `macula_dist_relay:?DIST_REALM' (the all-zeros realm SDK
+%% `macula_dist_pool:?DIST_REALM' (the all-zeros realm SDK
 %% convention for protocol-internal infrastructure traffic).
 -define(DIST_REALM, <<0:256>>).
 
@@ -187,7 +187,7 @@ attempt_reconnect(#state{reconnect_count = N, tunnel_id = TunnelId} = State)
     {stop, relay_reconnect_failed, State};
 attempt_reconnect(#state{recv_topic = RecvTopic, tunnel_id = TunnelId,
                           reconnect_count = N} = State) ->
-    on_reacquire_pool(macula_dist_relay:get_mesh_pool(), RecvTopic, TunnelId,
+    on_reacquire_pool(macula_dist_pool:get_mesh_pool(), RecvTopic, TunnelId,
                       N, State).
 
 on_reacquire_pool(undefined, _RecvTopic, TunnelId, N, State) ->

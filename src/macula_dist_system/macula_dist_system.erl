@@ -1,21 +1,26 @@
 %%%-------------------------------------------------------------------
 %%% @doc Macula Distribution System Supervisor.
 %%%
-%%% This supervisor manages the distribution subsystem components:
+%%% This supervisor manages the distribution-over-mesh subsystem
+%%% components:
 %%%
 %%% - macula_dist_bridge_sup - Supervisor for relay tunnel bridges
 %%% - macula_dist_discovery - Decentralized node discovery (replaces EPMD)
-%%% - macula_cluster_strategy - Automatic cluster formation (optional)
+%%%
+%%% LAN cluster formation (gossip/static/libcluster strategy) is a
+%%% separate concern — see `macula_cluster_system' — and is not started
+%%% by this supervisor. Consumers that want LAN clustering start
+%%% `macula_cluster:start_cluster/1' (or the underlying strategy module)
+%%% themselves.
 %%%
 %%% The bridge supervisor hosts `macula_dist_bridge' gen_server children
 %%% (one per relay tunnel). When `macula_dist_system' is not started
-%%% (standalone relay mode), `macula_dist_relay:advertise_dist_accept/0'
+%%% (standalone relay mode), `macula_dist_pool:advertise_dist_accept/0'
 %%% starts the bridge supervisor on demand.
 %%%
 %%% Configuration options (in sys.config):
 %%%   dist_port - QUIC port (default 4433)
 %%%   discovery_type - mdns, dht, or both
-%%%   auto_cluster - automatically form cluster
 %%%
 %%% @copyright 2025 Macula.io Apache-2.0
 %%% @end
@@ -81,9 +86,6 @@ init(Opts) ->
     DiscoveryType = maps:get(discovery_type, Opts,
         application:get_env(macula, discovery_type, both)),
 
-    AutoCluster = maps:get(auto_cluster, Opts,
-        application:get_env(macula, auto_cluster, false)),
-
     %% Child specifications
     Children = [
         %% Bridge supervisor for relay distribution tunnels
@@ -106,32 +108,13 @@ init(Opts) ->
             type => worker,
             modules => [macula_dist_discovery]
         }
-    ] ++ maybe_cluster_strategy(AutoCluster, Opts)
-      ++ maybe_dist_relay_client(Opts),
+    ] ++ maybe_dist_relay_client(Opts),
 
     {ok, {SupFlags, Children}}.
 
 %%%===================================================================
 %%% Internal Functions
 %%%===================================================================
-
-%% @private Add cluster strategy child if auto_cluster is enabled
-maybe_cluster_strategy(false, _Opts) ->
-    [];
-maybe_cluster_strategy(true, Opts) ->
-    [
-        #{
-            id => macula_cluster_strategy,
-            start => {macula_cluster_strategy, start_link, [#{
-                topology => macula_cluster,
-                config => maps:get(cluster_config, Opts, #{})
-            }]},
-            restart => permanent,
-            shutdown => 5000,
-            type => worker,
-            modules => [macula_cluster_strategy]
-        }
-    ].
 
 %% @private Start the dist relay client if a dist_relay URL is configured.
 %% The client maintains a persistent QUIC connection to a dist relay and

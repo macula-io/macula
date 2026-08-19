@@ -13,7 +13,7 @@
 %%%
 %%% When MACULA_DIST_MODE=relay, distribution is tunneled through the
 %%% Macula relay mesh via gen_tcp loopback pairs bridged to pub/sub.
-%%% See `macula_dist_relay' for relay tunnel details.
+%%% See `macula_dist_pool' for relay tunnel details.
 %%%
 %%% == Usage ==
 %%%
@@ -342,7 +342,7 @@ do_setup_connect(Kernel, Node, Type, MyNode, Timer, Host, Port) ->
                           Kernel, Node, Type, MyNode, Timer).
 
 connect_by_mode(relay, Node, Host, Port) ->
-    macula_dist_relay:connect(atom_to_list(Node), Host, Port);
+    macula_dist_pool:connect(atom_to_list(Node), Host, Port);
 connect_by_mode(dist_relay, Node, _Host, _Port) ->
     connect_via_dist_relay(Node);
 connect_by_mode(direct, _Node, Host, Port) ->

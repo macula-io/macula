@@ -15,13 +15,14 @@
 
 ---
 
-> **Latest — 8.10.0**: **Chunked content sharing** — `put_content`/`get_content`
-> now handle blobs of any size (single block unchanged since v4.2.7; larger
-> content splits into a Merkle-verified manifest, transparently), plus
-> `find_content_providers/2` to resolve every host announcing an MCID and dial
-> one directly. 8.9.0 added streaming direct-dial
-> (`call_stream_station`); 8.8.0 added per-publisher pubsub delivery ordering.
-> See [CHANGELOG.md](CHANGELOG.md).
+> **Latest — 9.0.0 (breaking)**: LAN clustering and distribution-over-mesh split
+> into independent concerns — `macula_cluster_system/` vs. `macula_dist_system/`.
+> `macula_dist_relay` is renamed `macula_dist_pool` (the facade,
+> `join_mesh/1` / `join_dist_relay/1`, is unaffected); the `auto_cluster`
+> sys.config option is removed (start clustering explicitly via
+> `macula_cluster:start_cluster/1`). See [CHANGELOG.md](CHANGELOG.md) for the
+> full Breaking section. 8.10.0 added chunked content sharing; 8.9.0 added
+> streaming direct-dial; 8.8.0 added per-publisher pubsub delivery ordering.
 
 ## What is Macula?
 
