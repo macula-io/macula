@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.5.0] - 2026-08-19
+
+### Added
+
+- Provider-side capability authorization (direct-dial dual-trust, Slice 7b):
+  - `macula:advertise/5` honors an `auth` opt: `open` (default, serve any
+    identified caller) or `{ucan_required, Issuer}` (gate the procedure). A gated
+    procedure verifies the CALL's `ucan_token` against `Issuer` via
+    `macula_ucan_nif:verify/2`, refusing absent/invalid with BOLT#4 `unauthorized`.
+  - `macula:call_station/7` presents a `ucan_token` to a gated provider.
+  - BOLT#4 code `unauthorized` (0x10). The wire already encodes the code as a full
+    byte, so the code field is unchanged.
+  - The CALL frame gains an optional `ucan_token` field (rides the generic codec).
+- `macula_client:auth_policy/0` type.
+
+All additive: `advertise/4`, `call_station/6`, `call/5` are unchanged and the
+default policy is `open`.
+
+---
+
 ## [8.4.1] - 2026-08-19
 
 ### Fixed

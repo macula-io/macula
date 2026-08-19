@@ -39,12 +39,13 @@ subs_to(LinkPid, TopicIndex) when is_pid(LinkPid), is_map(TopicIndex) ->
 %% Errors from individual link advertise calls are swallowed: the
 %% next link respawn cycle re-tries.
 -spec advs_to(pid(), #{{<<_:256>>, binary()} =>
-                        macula_station_link:handler()}) -> ok.
+                        {macula_station_link:handler(),
+                         macula_client:auth_policy()}}) -> ok.
 advs_to(LinkPid, Procs) when is_pid(LinkPid), is_map(Procs) ->
     maps:foreach(
-      fun({Realm, Procedure}, Handler) ->
+      fun({Realm, Procedure}, {Handler, Policy}) ->
           _ = macula_station_link:advertise(LinkPid, Realm,
-                                             Procedure, Handler)
+                                             Procedure, Handler, Policy)
       end, Procs),
     ok.
 

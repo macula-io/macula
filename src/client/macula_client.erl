@@ -54,7 +54,8 @@
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
--export([call/5, call_station/6, advertise/4, unadvertise/3]).
+-export([call/5, call_station/6, call_station/7,
+         advertise/4, advertise/5, unadvertise/3]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
 -export([call_stream/5, advertise_stream/5, unadvertise_stream/3]).
 
@@ -67,7 +68,14 @@
 -export([safe_is_connected/1, safe_peer_node_id/1]).
 -endif.
 
--export_type([pool/0, opts/0, seed/0, status/0, link_info/0, handler/0, stream_handler/0]).
+-export_type([pool/0, opts/0, seed/0, status/0, link_info/0, handler/0,
+              stream_handler/0, auth_policy/0]).
+
+%% Per-procedure auth policy for `advertise'. `open' (default) serves any
+%% identified caller; `{ucan_required, Issuer}' gates the procedure on a
+%% valid capability token chaining from `Issuer'. Direct-dial dual-trust
+%% (Slice 7b).
+-type auth_policy() :: open | {ucan_required, macula_identity:pubkey()}.
 
 -type pool() :: pid().
 
@@ -190,7 +198,7 @@
     topic_index = #{} :: #{{<<_:256>>, binary()} => sets:set(reference())},
     %% Advertised procedures — pool replays these on link respawn.
     %% {realm, procedure} → handler
-    procs = #{}   :: #{{<<_:256>>, binary()} => handler()},
+    procs = #{}   :: #{{<<_:256>>, binary()} => {handler(), auth_policy()}},
     %% Advertised streaming procedures — replayed on link respawn
     %% alongside `procs'. {realm, procedure} → {mode, handler}
     stream_procs = #{} :: #{{<<_:256>>, binary()} =>
@@ -259,14 +267,22 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs)
 %% handshake before the deadline.
 -spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
                    pos_integer()) -> {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs)
+call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs) ->
+    call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, <<>>).
+
+%% @doc As `call_station/6', presenting a capability token (UCAN) to a
+%% gated provider. Empty token = none. Slice 7b.
+-spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
+                   pos_integer(), binary()) -> {ok, term()} | {error, term()}.
+call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
-       is_integer(TimeoutMs), TimeoutMs > 0 ->
+       is_integer(TimeoutMs), TimeoutMs > 0,
+       is_binary(UcanToken) ->
     gen_server:call(Pool,
                     {call_station, Station, Realm, Procedure, Payload,
-                     TimeoutMs},
+                     TimeoutMs, UcanToken},
                     TimeoutMs + 2_000).
 
 %% @doc Advertise a procedure handler on every healthy link. Stored
@@ -274,13 +290,20 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs)
 %% Returns `ok' when at least one link accepted the registration.
 -spec advertise(pool(), <<_:256>>, binary(), handler()) ->
     ok | {error, term()}.
-advertise(Pool, Realm, Procedure, Handler)
+advertise(Pool, Realm, Procedure, Handler) ->
+    advertise(Pool, Realm, Procedure, Handler, open).
+
+%% @doc Advertise with an auth policy (`open' | `{ucan_required, Issuer}').
+-spec advertise(pool(), <<_:256>>, binary(), handler(), auth_policy()) ->
+    ok | {error, term()}.
+advertise(Pool, Realm, Procedure, Handler, Policy)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)) ->
-    gen_server:call(Pool, {advertise, Realm, Procedure, Handler}, 5_000).
+    gen_server:call(Pool, {advertise, Realm, Procedure, Handler, Policy},
+                    5_000).
 
 %% @doc Drop a previously-advertised procedure on every healthy link
 %% and remove it from the pool's replay state. Idempotent.
@@ -514,24 +537,25 @@ handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     end),
     {noreply, S};
 
-handle_call({call_station, Station, Realm, Procedure, Payload, TimeoutMs},
-            From, S) ->
+handle_call({call_station, Station, Realm, Procedure, Payload, TimeoutMs,
+             Ucan}, From, S) ->
     %% Ensure (reuse or dial) a link to the specific station, then hand
     %% the wait-for-handshake + call to a worker so the pool gen_server
     %% is never blocked (same rationale as rpc_call).
     {Pid, S1} = ensure_link(Station, S),
     _ = spawn(fun() ->
         Reply = call_when_connected(Pid, Realm, Procedure, Payload,
-                                    TimeoutMs),
+                                    TimeoutMs, Ucan),
         gen_server:reply(From, Reply)
     end),
     {noreply, S1};
 
-handle_call({advertise, Realm, Procedure, Handler}, _From,
+handle_call({advertise, Realm, Procedure, Handler, Policy}, _From,
             #state{procs = P} = S) ->
     Pids = spawned_link_pids(S),
-    Reply = fanout_advertise(Pids, Realm, Procedure, Handler),
-    {reply, Reply, S#state{procs = P#{{Realm, Procedure} => Handler}}};
+    Reply = fanout_advertise(Pids, Realm, Procedure, Handler, Policy),
+    {reply, Reply,
+     S#state{procs = P#{{Realm, Procedure} => {Handler, Policy}}}};
 
 handle_call({unadvertise, Realm, Procedure}, _From,
             #state{procs = P} = S) ->
@@ -672,12 +696,12 @@ link_pid(Station, #state{links = Links}) ->
 %% Wait for a freshly-dialed link's handshake within the deadline, then
 %% call over it with whatever time remains. A reused, already-connected
 %% link calls immediately.
-call_when_connected(undefined, _Realm, _Proc, _Payload, _TimeoutMs) ->
+call_when_connected(undefined, _Realm, _Proc, _Payload, _TimeoutMs, _Ucan) ->
     {error, not_connected};
-call_when_connected(Pid, Realm, Proc, Payload, TimeoutMs) ->
+call_when_connected(Pid, Realm, Proc, Payload, TimeoutMs, Ucan) ->
     Deadline = erlang:monotonic_time(millisecond) + TimeoutMs,
     call_after_connect(await_connected(Pid, Deadline), Pid, Realm, Proc,
-                       Payload, Deadline).
+                       Payload, Deadline, Ucan).
 
 await_connected(Pid, Deadline) ->
     connected_or_wait(safe_is_connected(Pid), Pid, Deadline).
@@ -693,10 +717,10 @@ wait_or_give_up(true, Pid, Deadline) ->
 wait_or_give_up(false, _Pid, _Deadline) ->
     false.
 
-call_after_connect(true, Pid, Realm, Proc, Payload, Deadline) ->
+call_after_connect(true, Pid, Realm, Proc, Payload, Deadline, Ucan) ->
     Remaining = max(100, Deadline - erlang:monotonic_time(millisecond)),
-    macula_station_link:call(Pid, Realm, Proc, Payload, Remaining);
-call_after_connect(false, _Pid, _Realm, _Proc, _Payload, _Deadline) ->
+    macula_station_link:call(Pid, Realm, Proc, Payload, Remaining, Ucan);
+call_after_connect(false, _Pid, _Realm, _Proc, _Payload, _Deadline, _Ucan) ->
     {error, not_connected}.
 
 %% Live links that have completed CONNECT/HELLO. Used by publish,
@@ -756,15 +780,15 @@ keep_or_next({error, _}, Rest, Realm, Proc, Payload, Tmo) ->
 %% the dead procedure when it eventually handshakes — the station
 %% re-registers a stale entry that nothing in the SDK will ever
 %% withdraw.
-fanout_advertise([], _Realm, _Proc, _Handler) ->
+fanout_advertise([], _Realm, _Proc, _Handler, _Policy) ->
     {error, no_healthy_station};
-fanout_advertise(Pids, Realm, Proc, Handler) ->
-    Results = [safe_link_advertise(P, Realm, Proc, Handler)
+fanout_advertise(Pids, Realm, Proc, Handler, Policy) ->
+    Results = [safe_link_advertise(P, Realm, Proc, Handler, Policy)
                || P <- Pids, is_process_alive(P)],
     summarize_advertise([R || R <- Results, R =/= skipped]).
 
-safe_link_advertise(Pid, Realm, Proc, Handler) ->
-    try macula_station_link:advertise(Pid, Realm, Proc, Handler)
+safe_link_advertise(Pid, Realm, Proc, Handler, Policy) ->
+    try macula_station_link:advertise(Pid, Realm, Proc, Handler, Policy)
     catch _:_ -> skipped
     end.
 

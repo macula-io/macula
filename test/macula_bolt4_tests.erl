@@ -7,8 +7,9 @@
 %% Table shape
 %%---------------------------------------------------------------------
 
-table_has_sixteen_entries_test() ->
-    ?assertEqual(16, length(macula_bolt4:table())).
+table_has_seventeen_entries_test() ->
+    %% 0x00-0x0F (the original nibble) plus 0x10 = unauthorized (Slice 7b).
+    ?assertEqual(17, length(macula_bolt4:table())).
 
 every_entry_has_distinct_code_test() ->
     Codes = [maps:get(code, E) || E <- macula_bolt4:table()],
@@ -18,9 +19,9 @@ every_entry_has_distinct_name_test() ->
     Names = [maps:get(name, E) || E <- macula_bolt4:table()],
     ?assertEqual(length(Names), length(lists:usort(Names))).
 
-codes_are_dense_zero_through_15_test() ->
+codes_are_dense_zero_through_16_test() ->
     Codes = lists:sort([maps:get(code, E) || E <- macula_bolt4:table()]),
-    ?assertEqual(lists:seq(16#00, 16#0F), Codes).
+    ?assertEqual(lists:seq(16#00, 16#10), Codes).
 
 %%---------------------------------------------------------------------
 %% code/1 ↔ name/1 round-trip
@@ -78,3 +79,9 @@ transient_failures_are_retryable_test() ->
     ?assert(macula_bolt4:is_retryable(temporary_relay_failure)),
     ?assert(macula_bolt4:is_retryable(upstream_congestion)),
     ?assert(macula_bolt4:is_retryable(unknown_error)).
+
+unauthorized_code_round_trips_test() ->
+    ?assertEqual(16#10, macula_bolt4:code(unauthorized)),
+    ?assertEqual(unauthorized, macula_bolt4:name(16#10)),
+    %% a gated refusal is the caller's problem, not retryable as-is
+    ?assertNot(macula_bolt4:is_retryable(unauthorized)).

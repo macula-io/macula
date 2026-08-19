@@ -85,6 +85,7 @@
     start_link/1,
     stop/1,
     call/5,
+    call/6,
     publish/4,
     publish/5,
     put_record/2, put_record/3,
@@ -93,6 +94,7 @@
     subscribe/4,
     unsubscribe/2,
     advertise/4,
+    advertise/5,
     unadvertise/3,
     %% Streaming RPC (SDK 3.17+, Part 6 §5.6)
     call_stream/5,
@@ -207,6 +209,12 @@
     %% RESULT or call_error frame is shipped back over the same
     %% peering connection.
     procedures = #{} :: #{{<<_:256>>, binary()} => handler()},
+    %% Per-procedure auth policy. Absent = `open' (serve any identified
+    %% caller). `{ucan_required, Issuer}' gates the procedure: an inbound
+    %% CALL must carry a `ucan_token' that verifies against `Issuer', else
+    %% the link refuses with BOLT#4 `unauthorized'. Direct-dial dual-trust
+    %% (Slice 7b).
+    policies   = #{} :: #{{<<_:256>>, binary()} => macula_client:auth_policy()},
     %% Advertised streaming procedures. Same wire shape as `procedures'
     %% (one `advertise' frame per entry replayed on reconnect); the
     %% stored value carries the declared mode (`server_stream' /
@@ -310,17 +318,26 @@ stop(Pid) ->
 %% `macula_frame:call/1' accepts (typically a map).
 -spec call(pid(), <<_:256>>, binary(), term(), pos_integer()) ->
     {ok, term()} | {error, term()}.
-call(Pid, Realm, Procedure, Payload, TimeoutMs)
+call(Pid, Realm, Procedure, Payload, TimeoutMs) ->
+    call(Pid, Realm, Procedure, Payload, TimeoutMs, <<>>).
+
+%% @doc As `call/5', presenting a capability token (UCAN) to a gated
+%% provider. Empty token = none. Slice 7b.
+-spec call(pid(), <<_:256>>, binary(), term(), pos_integer(), binary()) ->
+    {ok, term()} | {error, term()}.
+call(Pid, Realm, Procedure, Payload, TimeoutMs, UcanToken)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
-       is_integer(TimeoutMs), TimeoutMs > 0 ->
+       is_integer(TimeoutMs), TimeoutMs > 0,
+       is_binary(UcanToken) ->
     %% gen_server timeout = TimeoutMs + 500 to give the server time to
     %% report a clean `{error, timeout}' rather than the caller seeing
     %% a hard `exit({timeout, ...})'.
     GenTimeout = TimeoutMs + 500,
     try
-        gen_server:call(Pid, {call, Realm, Procedure, Payload, TimeoutMs},
+        gen_server:call(Pid,
+                        {call, Realm, Procedure, Payload, TimeoutMs, UcanToken},
                         GenTimeout)
     catch
         %% try/catch retained: collapses the three distinct gen_server
@@ -488,13 +505,19 @@ unsubscribe(Client, SubRef)
 %% as `{ok, Other}' shorthand). A handler crash is mapped to a
 %% structured `temporary_relay_failure' BOLT#4 error.
 -spec advertise(pid(), <<_:256>>, binary(), handler()) -> ok | {error, term()}.
-advertise(Pid, Realm, Procedure, Handler)
+advertise(Pid, Realm, Procedure, Handler) ->
+    advertise(Pid, Realm, Procedure, Handler, open).
+
+%% @doc Advertise with an auth policy (`open' | `{ucan_required, Issuer}').
+-spec advertise(pid(), <<_:256>>, binary(), handler(),
+                macula_client:auth_policy()) -> ok.
+advertise(Pid, Realm, Procedure, Handler, Policy)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)) ->
-    gen_server:call(Pid, {advertise, Realm, Procedure, Handler}, 5_000).
+    gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000).
 
 %% @doc Drop a previously-advertised procedure. Sends a best-effort
 %% UNADVERTISE frame to the station and clears the local handler
@@ -636,7 +659,7 @@ init(Opts) ->
 app_env(Key, Default) ->
     application:get_env(macula, Key, Default).
 
-handle_call({call, _Realm, _Proc, _Payload, _Tmo}, _From,
+handle_call({call, _Realm, _Proc, _Payload, _Tmo, _Ucan}, _From,
             #state{peer_node_id = undefined} = S) ->
     %% Gate CALL on the full CONNECT/HELLO handshake (mirrors the
     %% `{publish, ...}' clause below). `peer_pid' is set the moment
@@ -649,7 +672,7 @@ handle_call({call, _Realm, _Proc, _Payload, _Tmo}, _From,
     %% `{error, not_connected}' here lets the caller back off and
     %% retry once the handshake completes.
     {reply, {error, not_connected}, S};
-handle_call({call, Realm, Proc, Payload, Tmo}, From,
+handle_call({call, Realm, Proc, Payload, Tmo, Ucan}, From,
             #state{peer_pid = Pid, identity = Id, pending = P} = S) ->
     CallId = crypto:strong_rand_bytes(16),
     Caller = macula_identity:public(Id),
@@ -660,7 +683,8 @@ handle_call({call, Realm, Proc, Payload, Tmo}, From,
         realm       => Realm,
         payload     => Payload,
         deadline_ms => DeadlineMs,
-        caller      => Caller
+        caller      => Caller,
+        ucan_token  => Ucan
     }),
     %% NOT `ok = send_frame(...)'. Since the frame is now checked before
     %% the cast, an unsendable RPC payload comes back as an error, and a
@@ -727,21 +751,23 @@ handle_call({subscribe, Realm, Topic, Subscriber}, _From,
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, on_unsubscribe(SubRef, S)};
 
-handle_call({advertise, Realm, Proc, Handler}, _From,
-            #state{procedures = P} = S) ->
+handle_call({advertise, Realm, Proc, Handler, Policy}, _From,
+            #state{procedures = P, policies = Pols} = S) ->
     %% Register locally first so that any CALL frame arriving in the
     %% same scheduler tick as the ADVERTISE round-trips correctly.
     %% Replays from the post-HELLO drain pick up the same map.
-    NewS = S#state{procedures = P#{{Realm, Proc} => Handler}},
+    NewS = S#state{procedures = P#{{Realm, Proc} => Handler},
+                   policies   = set_policy({Realm, Proc}, Policy, Pols)},
     maybe_send_advertise(Realm, Proc, NewS),
     {reply, ok, NewS};
 
 handle_call({unadvertise, Realm, Proc}, _From,
-            #state{procedures = P} = S) ->
+            #state{procedures = P, policies = Pols} = S) ->
     %% Best-effort UNADVERTISE on the wire; ignore disconnected.
     %% Local clear happens regardless so subsequent inbound CALLs for
     %% this procedure surface as `unknown_next_peer' from the relay.
-    NewS = S#state{procedures = maps:remove({Realm, Proc}, P)},
+    NewS = S#state{procedures = maps:remove({Realm, Proc}, P),
+                   policies   = maps:remove({Realm, Proc}, Pols)},
     maybe_send_unadvertise(Realm, Proc, S),
     {reply, ok, NewS};
 
@@ -1390,16 +1416,49 @@ drain_pending_advertises(#state{procedures = Procs} = S) ->
 %% flight and a stale forwarded CALL) maps to `unknown_next_peer'
 %% (0x01) — same taxonomy as `hecate_handler_dispatch'.
 handle_inbound_call(#{call_id := CallId, procedure := Proc, realm := Realm,
-                      payload := Payload} = _Frame,
-                    #state{procedures = Procs, identity = Id,
+                      payload := Payload} = Frame,
+                    #state{procedures = Procs, policies = Pols, identity = Id,
                            peer_pid = Pid}) when is_pid(Pid) ->
     SelfPub = macula_identity:public(Id),
-    Reply   = build_inbound_call_reply(maps:find({Realm, Proc}, Procs),
-                                       CallId, Payload, SelfPub),
+    %% Gate first (Slice 7b): an `open' procedure serves any identified
+    %% caller; a gated one requires a valid `ucan_token', else refuse
+    %% with BOLT#4 `unauthorized' instead of invoking the handler.
+    Reply   = authorized_reply(authorize({Realm, Proc}, Frame, Pols),
+                               maps:find({Realm, Proc}, Procs),
+                               CallId, Payload, SelfPub),
     sent_or_faulted(macula_peering:send_frame(Pid, Reply),
                     Pid, CallId, SelfPub);
 handle_inbound_call(_Frame, _State) ->
     ok.
+
+authorized_reply(ok, Found, CallId, Payload, SelfPub) ->
+    build_inbound_call_reply(Found, CallId, Payload, SelfPub);
+authorized_reply(unauthorized, _Found, CallId, _Payload, SelfPub) ->
+    macula_frame:call_error(#{call_id     => CallId,
+                              code        => macula_bolt4:code(unauthorized),
+                              reported_by => SelfPub}).
+
+authorize(Key, Frame, Pols) ->
+    authorize_policy(maps:get(Key, Pols, open), Frame).
+
+authorize_policy(open, _Frame) ->
+    ok;
+authorize_policy({ucan_required, Issuer}, Frame) ->
+    check_ucan(maps:get(ucan_token, Frame, <<>>), Issuer).
+
+check_ucan(<<>>, _Issuer) ->
+    unauthorized;
+check_ucan(Token, Issuer) when is_binary(Token) ->
+    ucan_verdict(macula_ucan_nif:verify(Token, Issuer));
+check_ucan(_Other, _Issuer) ->
+    unauthorized.
+
+ucan_verdict({ok, _Payload}) -> ok;
+ucan_verdict(_Error)         -> unauthorized.
+
+%% `open' is the default, so store it as absence to keep the map small.
+set_policy(Key, open, Pols)   -> maps:remove(Key, Pols);
+set_policy(Key, Policy, Pols) -> Pols#{Key => Policy}.
 
 %% A RESULT the wire refuses must not simply vanish. Dropping it leaves
 %% the remote caller burning its entire deadline waiting for a frame

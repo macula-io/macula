@@ -25,7 +25,10 @@
 
 -export_type([code/0, name/0, retry_policy/0, info/0]).
 
--type code() :: 16#00..16#0F.
+%% The wire encodes the code as a full byte (see macula_frame:call_error/1,
+%% `Code =< 255'), so the taxonomy can grow past the original 16 without a
+%% wire change. 16#10 = `unauthorized' (direct-dial dual-trust, Slice 7b).
+-type code() :: 16#00..16#FF.
 
 -type name() ::
       ok
@@ -43,7 +46,8 @@
     | tombstoned
     | payload_too_large
     | signature_invalid
-    | unknown_error.
+    | unknown_error
+    | unauthorized.
 
 -type retry_policy() ::
       none
@@ -102,7 +106,12 @@ table() ->
         #{code => 16#0E, name => signature_invalid,
           retry => crypto_drop},
         #{code => 16#0F, name => unknown_error,
-          retry => log_and_caution}
+          retry => log_and_caution},
+        %% A gated provider refused: the caller lacked a valid capability
+        %% (UCAN) for this procedure. Not retryable as-is — the caller must
+        %% present valid authorization, so this is an application concern.
+        #{code => 16#10, name => unauthorized,
+          retry => application}
     ].
 
 %% @doc Resolve a name to its integer code.

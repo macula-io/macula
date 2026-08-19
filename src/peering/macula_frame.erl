@@ -316,7 +316,10 @@
     deadline_ms  := integer(),
     caller       := macula_identity:pubkey(),
     source_route => binary(),
-    retry_budget => non_neg_integer()
+    retry_budget => non_neg_integer(),
+    %% Optional capability token (UCAN) presented to a gated provider.
+    %% Empty = none. Rides through the generic wire codec. Slice 7b.
+    ucan_token   => binary()
 }.
 
 -type result_spec() :: #{
@@ -901,7 +904,8 @@ call(#{call_id := CallId, procedure := Proc, realm := Realm,
         deadline_ms  => DeadlineMs,
         caller       => Caller,
         source_route => SourceRoute,
-        retry_budget => RetryBudget
+        retry_budget => RetryBudget,
+        ucan_token   => maps:get(ucan_token, Spec, <<>>)
     }.
 
 -spec result(result_spec()) -> frame().

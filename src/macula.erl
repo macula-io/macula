@@ -38,6 +38,7 @@
 %% RPC — realm-per-call against a V2 pool
 -export([call/5,
          call_station/6,
+         call_station/7,
          advertise/5,
          unadvertise/3]).
 
@@ -228,15 +229,29 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs) ->
     macula_client:call_station(Pool, Station, Realm, Procedure, Payload,
                                TimeoutMs).
 
+%% @doc As `call_station/6', presenting a capability token to a gated
+%% provider via `Opts' (`#{ucan_token => Token}'). Empty/absent = none.
+%% Slice 7b dual-trust.
+-spec call_station(pool(), macula_client:seed(), realm(), procedure(),
+                   term(), pos_integer(), map()) ->
+    {ok, term()} | {error, term()}.
+call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, Opts) ->
+    Ucan = maps:get(ucan_token, Opts, <<>>),
+    macula_client:call_station(Pool, Station, Realm, Procedure, Payload,
+                               TimeoutMs, Ucan).
+
 %% @doc Advertise a procedure handler on a V2 pool. Fans out to every
 %% healthy link and stores in pool state for replay on link respawn.
 %% See `macula_client:advertise/4'.
 -spec advertise(pool(), realm(), procedure(),
                 macula_client:handler(), map()) ->
     ok | {error, term()}.
-advertise(Pool, Realm, Procedure, Handler, _Opts)
+advertise(Pool, Realm, Procedure, Handler, Opts)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32 ->
-    macula_client:advertise(Pool, Realm, Procedure, Handler).
+    %% `auth' opt sets the procedure's policy: `open' (default, serve any
+    %% identified caller) or `{ucan_required, Issuer}' (gated). Slice 7b.
+    Policy = maps:get(auth, Opts, open),
+    macula_client:advertise(Pool, Realm, Procedure, Handler, Policy).
 
 %% @doc Stop advertising a procedure on a V2 pool.
 -spec unadvertise(pool(), realm(), procedure()) -> ok.
