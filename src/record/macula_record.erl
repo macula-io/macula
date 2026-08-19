@@ -64,6 +64,7 @@
     read_station_endpoint/1,
     read_org_directory/1,
     read_procedure_delegation/1,
+    read_content_announcement/1,
 
     %% Direct-dial dual-trust (Slice 7c, Ed25519 delegation records)
     verify_delegation_chain/4,
@@ -79,7 +80,8 @@
     procedure_key/1,
     station_endpoint_key/1,
     org_directory_key/2,
-    procedure_delegation_key/2
+    procedure_delegation_key/2,
+    content_key/1
 ]).
 
 -export_type([
@@ -936,6 +938,29 @@ read_procedure_advertisement(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT,
       serving_station => payload_field(P, <<"serving_station">>),
       cert_chain      => payload_field(P, <<"cert_chain">>)}.
 
+%% @doc Read a `content_announcement' record — robust to every key
+%% shape (see `payload_field/2'). `announcer_node' is the host's
+%% pubkey (also the envelope `key' — the announcer signs its own
+%% announcement), `endpoint' the dialable `quic://host:port' to fetch
+%% from, `name' / `size' / `chunk_count' the metadata a resolver uses
+%% to prioritise without fetching the manifest first (unset fields
+%% read back as `undefined').
+-spec read_content_announcement(record()) ->
+    #{announcer_node := macula_identity:pubkey(),
+      mcid           := <<_:272>>,
+      endpoint       := binary(),
+      name           := binary() | undefined,
+      size           := non_neg_integer() | undefined,
+      chunk_count    := non_neg_integer() | undefined}.
+read_content_announcement(#{type := ?TYPE_CONTENT_ANNOUNCEMENT,
+                            payload := P}) ->
+    #{announcer_node => payload_field(P, <<"announcer_node">>),
+      mcid           => payload_field(P, <<"mcid">>),
+      endpoint       => payload_field(P, <<"endpoint">>),
+      name           => payload_field(P, <<"name">>),
+      size           => payload_field(P, <<"size">>),
+      chunk_count    => payload_field(P, <<"chunk_count">>)}.
+
 %% A payload field, robust to every key shape a record arrives in:
 %%   - `{text, <<"k">>}' — canonical record CBOR (built locally)
 %%   - `<<"k">>'         — bare binary (some wire-decoded paths)
@@ -969,6 +994,16 @@ unwrap_text(V)         -> V.
 -spec procedure_key(binary()) -> <<_:256>>.
 procedure_key(ProcedureUri) when is_binary(ProcedureUri) ->
     crypto:hash(sha256, ProcedureUri).
+
+%% @doc The DHT storage key for a content_announcement by its MCID,
+%% without a record in hand: `SHA-256(MCID)', identical to
+%% `storage_key/1' for a `content_announcement' and to
+%% macula-station's independent `macula_content_dht:dht_key/1'.
+%% Consumers use this to `find_records/2' every host announcing an
+%% MCID before holding any record.
+-spec content_key(<<_:272>>) -> <<_:256>>.
+content_key(MCID) when is_binary(MCID), byte_size(MCID) =:= 34 ->
+    crypto:hash(sha256, MCID).
 
 %% @doc The DHT storage key for a station's endpoint by its pubkey,
 %% without a record in hand: identical to `storage_key/1' for a
@@ -1446,6 +1481,21 @@ storage_key(#{type := ?TYPE_REALM_MEMBER_ENDORSEMENT,
     Member = payload_field(P, <<"member_node">>),
     crypto:hash(sha256, <<?STORAGE_DOMAIN_MEMBER_ENDORSE/binary,
                           RealmId/binary, Member/binary>>);
+%% content_announcement: keyed by SHA256(MCID), NOT the envelope key
+%% (the announcer's own pubkey) — multiple hosts announcing the SAME
+%% MCID must land in the SAME bag slot so a consumer's find_records
+%% sees every provider, mirroring procedure_advertisement's keying by
+%% SHA256(procedure_uri) rather than by advertiser. Matches
+%% macula-station's independent `macula_content_dht:dht_key/1', which
+%% computes the identical SHA256(MCID) — the two sides must agree since
+%% content_key/1 lets a consumer resolve before holding a record.
+%% Before this clause, this type had NO storage_key/1 match at all
+%% (content_announcement is a built-in type, 0x11 < DOMAIN_TYPE_MIN, so
+%% it never reached the generic domain-type clauses below) — every
+%% `put_record` of a content_announcement raised `function_clause'.
+storage_key(#{type := ?TYPE_CONTENT_ANNOUNCEMENT, payload := P}) ->
+    MCID = payload_field(P, <<"mcid">>),
+    content_key(MCID);
 storage_key(#{type := ?TYPE_ORG_DIRECTORY, key := RealmId, payload := P}) ->
     OrgName = payload_field(P, <<"org_name">>),
     org_directory_key(RealmId, OrgName);

@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.10.0] - 2026-08-19
+
+### Added
+
+- **Chunked content sharing**, closing the "single block only" gap in
+  `put_content/2` / `get_content/2` (unchanged since v4.2.7 for blobs that fit
+  in one 256 KiB block — same MCID, same wire calls, fully backward compatible).
+  Larger blobs now split client-side into fixed-size chunks
+  (`macula_manifest:create/1`, a byte-for-byte port of macula-station's own
+  chunking/Merkle/MCID algorithm — same BLAKE3 NIF, same deterministic CBOR
+  encoder, so the two sides agree without either side changing), upload each
+  chunk, then a `content_manifest` via the station's existing (unmodified)
+  `_content.put_manifest` / `_content.get_manifest`; `get_content/2` fetches
+  every chunk, reassembles, and Merkle-verifies against the manifest before
+  returning.
+- `macula:find_content_providers/2` — resolve every host currently announcing
+  an MCID (`content_announcement` records, `macula_record:content_key/1`).
+  Combine with the existing `call_station/6` to dial a specific announced host
+  directly, guaranteeing reach regardless of the connected station's relay hop
+  budget — the same value `call_station` already gives unary RPC.
+- `macula_record`: fixed a real crash bug — `storage_key/1` had **no clause**
+  for `content_announcement` (0x11, below `DOMAIN_TYPE_MIN`, so it never
+  reached the generic domain-type fallback), so every `put_record` of one
+  raised `function_clause`. macula-station's own `macula_content_announcer`
+  auto-publishes a `content_announcement` on every stored manifest and has
+  since it shipped — this crash silently broke that publish path end to end.
+  Fixed by keying on `SHA-256(MCID)` (`content_key/1`, matching
+  macula-station's independent `macula_content_dht:dht_key/1` formula) so
+  multiple hosts announcing the same MCID land in one resolvable bag slot.
+  Added `read_content_announcement/1`.
+- Bounded, BOLT#4-aware retry for `_content.*` CALLs
+  (`macula_bolt4:is_retryable/1` — e.g. `temporary_relay_failure` is rated
+  `same_path_after_backoff`, its own documented retry contract). `_content.put_manifest`
+  was observed to fail its first attempt against a freshly-started content
+  store and succeed on retry; the station-side root cause is not yet
+  diagnosed, but retrying is what the CALL's own error code prescribes
+  regardless, so all four content operations do it uniformly (3 attempts,
+  200ms linear backoff).
+
+Verified end-to-end against a real station (macula-station
+`macula_station_content_SUITE`): single-block regression, multi-chunk put/get
+(including out-of-order-reassembly and empty-content edge cases), and
+discovery (a chunked put's announcement resolves via `find_content_providers/2`;
+single-block content, which is not announced, resolves to `{ok, []}` rather
+than an error).
+
+---
+
 ## [8.9.0] - 2026-08-19
 
 ### Added

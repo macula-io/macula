@@ -5,8 +5,9 @@
 ![Content Sharing (MCID)](assets/content_sharing.svg)
 
 > **Audience:** applications that store and fetch immutable blobs — files,
-> snapshots, artifacts — and want integrity for free. Available since SDK 4.2.7.
-> For a live, open-ended feed instead of a fixed blob, see the
+> snapshots, artifacts — and want integrity for free. Single-block storage
+> since SDK 4.2.7; chunked content, discovery, and direct-host fetch since
+> 8.10.0. For a live, open-ended feed instead of a fixed blob, see the
 > [Streaming Guide](STREAMING_GUIDE.md).
 
 ---
@@ -17,21 +18,23 @@ Macula content is **content-addressed**: a blob is named by the hash of its
 bytes, not by where it lives. That name is an **MCID** (Macula Content ID). Two
 consequences follow directly, and they are the whole point:
 
-- **Integrity is self-verifying.** The name *is* the hash, so a fetched blob can
-  be checked against its own MCID — a corrupted or substituted blob fails the
-  check by construction.
-- **Location stops mattering.** Any host holding the bytes serves the same MCID,
-  so hosts are interchangeable and content deduplicates naturally.
+- **Integrity is self-verifying.** The name *is* the hash (or, for larger
+  content, a Merkle root over chunk hashes), so a fetched blob can be checked
+  against its own MCID — a corrupted or substituted blob fails the check by
+  construction.
+- **Location stops mattering.** Any host holding the bytes serves the same
+  MCID, so hosts are interchangeable and content deduplicates naturally.
 
 ```erlang
-{ok, MCID}  = macula:put_content(Pool, <<"the bytes">>),
+{ok, MCID}  = macula:put_content(Pool, Bytes),
 {ok, Bytes} = macula:get_content(Pool, MCID).
 ```
 
-`put_content/2` stores the blob and returns its MCID. `get_content/2` fetches the
-bytes for an MCID, or `{error, not_found}` if no reachable host holds a copy. The
-store verifies BLAKE3 against the MCID on both put and get, so the caller does not
-re-verify.
+`put_content/2` stores `Bytes` and returns its MCID — transparently as one
+block for small content, or as a chunked, Merkle-verified manifest for large
+content (see below). `get_content/2` fetches the bytes back for either shape,
+or `{error, not_found}` if no reachable host holds a copy. Integrity is
+verified before the bytes are returned, so the caller does not re-verify.
 
 ---
 
@@ -40,44 +43,92 @@ re-verify.
 An MCID is a **34-byte** binary:
 
 ```
-<<Codec:8, Algo:8, Hash:32/binary>>
-   1        16#55   BLAKE3(bytes)
+<<Version:8, Codec:8, Hash:32/binary>>
+    1         1        32
 ```
 
-- byte 0 — codec tag (`1`)
-- byte 1 — hash algorithm (`16#55` = BLAKE3)
-- bytes 2..33 — the 32-byte BLAKE3 hash of the content
+- byte 0 — version (`1`)
+- byte 1 — codec: `16#55` (raw) for a single block, `16#56` (manifest) for
+  chunked content
+- bytes 2..33 — the 32-byte hash: BLAKE3 of the bytes (raw), or BLAKE3 over a
+  canonical encoding of the manifest's metadata (manifest — see below)
 
-Because the MCID is derived purely from the bytes, `put_content` of identical
-bytes always yields the same MCID — that is what makes it a content address.
-
-```erlang
-%% the MCID is BLAKE3 of the bytes, tagged
-Hash = macula_blake3_nif:hash(Bytes),
-MCID = <<1, 16#55, Hash/binary>>.
-```
+Because the MCID is derived purely from the content, storing identical bytes
+always yields the same MCID — that is what makes it a content address.
 
 ---
 
-## Current shape and direction
+## Single block vs. chunked
 
-The diagram above shows the content-addressed **model**: hosts announce content,
-a fetcher resolves an MCID in the DHT, dials a host, and pulls the chunks. Today
-the SDK exposes the minimum-viable form of that model:
+`put_content/2` picks the shape for you, by size, against
+`macula_manifest:default_chunk_size/0` (256 KiB):
 
-- **Single block.** `put_content` sends the blob as one block to the content
-  store and `get_content` fetches it back as one block. There is no client-side
-  chunking yet, so it suits blobs in the kilobyte-to-low-megabyte range (the
-  store's default block size is 256 KiB). An oversized payload surfaces as a
-  CALL-deadline timeout, not silent truncation.
-- **Store-mediated fetch.** Retrieval goes through the content store rather than
-  dialing a specific announcing host directly.
+| Size | Shape | MCID codec | Wire calls |
+|---|---|---|---|
+| `=< 256 KiB` | single block | `16#55` | one `_content.put_block` / `_content.get_block` |
+| `> 256 KiB` | chunked manifest | `16#56` | N `_content.put_block` + one `_content.put_manifest`; symmetric on get |
 
-Planned, and reflected in the diagram: **chunked manifests** (so blobs larger
-than one block transfer via parallel block calls), **`content_announcement` DHT
-records** (so many hosts can advertise the same MCID), and **direct host
-selection** on fetch. When those land, large-blob and multi-host sharing become
-first-class; the MCID and its integrity guarantee do not change.
+The single-block shape is unchanged since v4.2.7 — same MCID formula
+(`<<1, 16#55, BLAKE3(Bytes)>>`), same single RPC round trip. It is not a
+special case bolted on top of chunking; a one-chunk manifest's chunk MCID is
+*identical* to the single-block MCID, so the two shapes agree at the boundary.
+
+For content over the chunk size, `put_content/2`:
+
+1. splits `Bytes` into fixed-size chunks (`macula_manifest:create/1`);
+2. uploads each chunk via `_content.put_block` (BLAKE3-verified by the station,
+   same as single-block);
+3. builds a **manifest** — chunk count, per-chunk offsets/sizes/hashes, and a
+   Merkle root over the chunk hashes — and uploads it via `_content.put_manifest`;
+4. returns the manifest's own MCID (codec `16#56`).
+
+`get_content/2` on a manifest MCID fetches the manifest, then every chunk in
+order, reassembles, and verifies the whole against the manifest's size and
+Merkle root before returning — a tampered or truncated chunk is caught before
+the caller ever sees the bytes.
+
+A chunk failure during put stops immediately without uploading the manifest —
+a manifest naming missing chunks would resolve but never reassemble, which is
+worse than a clean error.
+
+---
+
+## Discovery: who has this MCID?
+
+Chunked content gets **announced** automatically: when a station stores a
+manifest, it publishes a signed `content_announcement` DHT record naming
+itself as a host, the same way a station announces its endpoint. Resolve every
+host currently announcing an MCID:
+
+```erlang
+{ok, Providers} = macula:find_content_providers(Pool, MCID),
+%% [#{announcer_node := StationPubkey, endpoint := <<"quic://host:443">>,
+%%    name := ..., size := ..., chunk_count := ...}, ...]
+```
+
+Each entry's record signature is verified before its `endpoint` is trusted;
+unverifiable or malformed records are dropped silently, never surfaced as an
+error. **Single-block content is not announced** (there is no manifest-stored
+event to trigger it) — resolving its MCID returns `{ok, []}`, not an error.
+
+### Dialing a specific host directly
+
+`get_content/2` already reaches a copy via the connected station's own 1-hop
+peer relay — for most topologies that is enough. When it is not (a
+partial-mesh pair with no mutual peer, or you want to route around a specific
+host deliberately), dial an announced host **directly**, the same way
+[direct-dial RPC](RPC_GUIDE.md) reaches a specific provider — `call_station/6`
+is procedure-agnostic, so no new primitive is needed:
+
+```erlang
+{ok, [#{endpoint := Url} | _]} = macula:find_content_providers(Pool, MCID),
+{ok, Manifest} = macula:call_station(Pool, Url, <<0:256>>,
+                                     <<"_content.get_manifest">>,
+                                     #{mcid => MCID}, 5_000).
+```
+
+Guarantees reach in one hop regardless of the connected station's relay hop
+budget — the same value `call_station` already gives unary RPC calls.
 
 ---
 
@@ -99,6 +150,12 @@ known in advance.
 
 | Function | Role |
 |---|---|
-| `put_content(Pool, Bytes)` | store a blob, return its MCID |
+| `put_content(Pool, Bytes)` | store a blob (single-block or chunked, by size), return its MCID |
 | `get_content(Pool, MCID)` | fetch the bytes for an MCID (`{error, not_found}` if none reachable) |
-| `macula_blake3_nif:hash(Bytes)` | the BLAKE3 hash an MCID wraps |
+| `find_content_providers(Pool, MCID)` | resolve every host currently announcing an MCID |
+| `macula_manifest:default_chunk_size()` | the single-block / chunked threshold (256 KiB) |
+| `macula_blake3_nif:hash(Bytes)` | the BLAKE3 hash a single-block MCID wraps |
+
+`_content.*` CALLs retry on a BOLT#4-retryable error (e.g.
+`temporary_relay_failure`) up to 3 attempts with a short backoff, per that
+error's own documented retry contract.

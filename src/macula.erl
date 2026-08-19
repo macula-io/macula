@@ -59,7 +59,8 @@
 %% (BLAKE3 = 16#55), 32-byte BLAKE3 hash. The relay validates the
 %% payload's hash on `put_block' and rejects mismatches.
 -export([put_content/2,
-         get_content/2]).
+         get_content/2,
+         find_content_providers/2]).
 
 %% Streaming RPC (LOCAL in-process + V2 pool, see PLAN_MACULA_STREAMING.md)
 -export([
@@ -315,9 +316,13 @@ unadvertise(Pool, Realm, Procedure) ->
 -define(CONTENT_REALM,                 <<0:256>>).
 -define(CONTENT_PUT_BLOCK_PROC,        <<"_content.put_block">>).
 -define(CONTENT_GET_BLOCK_PROC,        <<"_content.get_block">>).
+-define(CONTENT_PUT_MANIFEST_PROC,     <<"_content.put_manifest">>).
+-define(CONTENT_GET_MANIFEST_PROC,     <<"_content.get_manifest">>).
 %% Bigger timeout than DHT records — chunks are 256 KiB and a put
 %% writes through the file-backed store on the relay.
 -define(CONTENT_BLOCK_TIMEOUT_MS,      15_000).
+-define(CONTENT_MANIFEST_TIMEOUT_MS,   5_000).
+-define(CONTENT_RETRY_BACKOFF_MS,      200).
 
 %% @doc Store a signed record in the mesh DHT via a V2 pool.
 %%
@@ -462,52 +467,222 @@ apply_callback_with_decode(_Fun, _Other) ->
 -type mcid() :: <<_:272>>.
 
 
-%% @doc Store `Bytes' in the relay's content store and return its
-%% MCID (Macula Content ID — 34 bytes: codec, algo (BLAKE3 = 16#55),
-%% then the 32-byte BLAKE3 hash). The blob is sent as a single
-%% block; on receipt the relay verifies the payload's BLAKE3
-%% matches the MCID before accepting.
-%%
-%% This is the v4.2.7 minimum-viable shape — single-block per blob,
-%% no client-side chunking. A subsequent release will add chunked
-%% manifests so blobs larger than the per-call payload budget can be
-%% transferred via parallel `_content.put_block' calls. For blobs in
-%% the kilobyte-to-low-megabyte range a single block is sufficient
-%% (relay default chunk size is 256 KiB; oversized payloads will
-%% surface as a CALL-deadline timeout rather than silent truncation).
+%% @doc Store `Bytes' in the mesh's content store and return its MCID
+%% (Macula Content ID — 34 bytes: version, codec, then a 32-byte hash).
+%% Content that fits in one block (`byte_size(Bytes) =&lt;
+%% macula_manifest:default_chunk_size/0', 256 KiB) is sent as a
+%% single `_content.put_block' — the MCID is `&lt;&lt;1, 16#55,
+%% BLAKE3(Bytes)&gt;&gt;', unchanged since v4.2.7. Larger content is split
+%% into chunks (`macula_manifest:create/1'), each chunk sent
+%% via its own `_content.put_block', then a `content_manifest' via
+%% `_content.put_manifest'; the returned MCID is the manifest's
+%% (`&lt;&lt;1, 16#56, _/binary&gt;&gt;'), Merkle-rooted over every chunk. Either
+%% way the station verifies each block's hash before accepting it.
 -spec put_content(pool(), binary()) -> {ok, mcid()} | {error, term()}.
 put_content(Pool, Bytes) when is_pid(Pool), is_binary(Bytes) ->
+    put_content_by_size(byte_size(Bytes) =< macula_manifest:default_chunk_size(),
+                        Pool, Bytes).
+
+put_content_by_size(true, Pool, Bytes) ->
+    put_single_block(Pool, Bytes);
+put_content_by_size(false, Pool, Bytes) ->
+    put_chunked(Pool, Bytes).
+
+put_single_block(Pool, Bytes) ->
     Hash = macula_blake3_nif:hash(Bytes),
     MCID = <<1, 16#55, Hash/binary>>,
-    classify_put_content(
-      macula_client:call(Pool, ?CONTENT_REALM,
-                         ?CONTENT_PUT_BLOCK_PROC,
-                         #{mcid => MCID, payload => Bytes},
-                         ?CONTENT_BLOCK_TIMEOUT_MS),
-      MCID).
+    classify_put_content(put_block(Pool, MCID, Bytes), MCID).
+
+put_block(Pool, MCID, Bytes) ->
+    call_with_retry(Pool, ?CONTENT_PUT_BLOCK_PROC,
+                    #{mcid => MCID, payload => Bytes},
+                    ?CONTENT_BLOCK_TIMEOUT_MS).
 
 classify_put_content({ok, ok},                MCID) -> {ok, MCID};
 classify_put_content({ok, hash_mismatch},     _MCID) -> {error, hash_mismatch};
 classify_put_content({ok, Reply},             _MCID) -> {error, {unexpected_reply, Reply}};
 classify_put_content({error, _} = E,          _MCID) -> E.
 
+%% Split into chunks, upload each block, then the manifest. A chunk
+%% failure short-circuits WITHOUT putting the manifest — a manifest
+%% naming missing chunks would resolve but never reassemble, which is
+%% worse than a clean error now.
+put_chunked(Pool, Bytes) ->
+    {ok, Manifest, Chunks} = macula_manifest:create(Bytes),
+    put_chunks(Pool, Manifest, Chunks, 0).
+
+put_chunks(Pool, Manifest, [], _Index) ->
+    put_manifest(Pool, Manifest);
+put_chunks(Pool, Manifest, [Chunk | Rest], Index) ->
+    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
+    chunk_put_result(put_block(Pool, ChunkMcid, Chunk), Pool, Manifest, Rest,
+                     Index + 1).
+
+chunk_put_result({ok, ok}, Pool, Manifest, Rest, NextIndex) ->
+    put_chunks(Pool, Manifest, Rest, NextIndex);
+chunk_put_result({ok, hash_mismatch}, _Pool, _Manifest, _Rest, _NextIndex) ->
+    {error, hash_mismatch};
+chunk_put_result({ok, Reply}, _Pool, _Manifest, _Rest, _NextIndex) ->
+    {error, {unexpected_reply, Reply}};
+chunk_put_result({error, _} = E, _Pool, _Manifest, _Rest, _NextIndex) ->
+    E.
+
+put_manifest(Pool, #{mcid := MCID} = Manifest) ->
+    classify_put_manifest(
+      call_with_retry(Pool, ?CONTENT_PUT_MANIFEST_PROC,
+                      #{manifest => Manifest}, ?CONTENT_MANIFEST_TIMEOUT_MS),
+      MCID).
+
+classify_put_manifest({ok, ok},      MCID) -> {ok, MCID};
+classify_put_manifest({ok, Reply},  _MCID) -> {error, {unexpected_reply, Reply}};
+classify_put_manifest({error, _} = E, _MCID) -> E.
+
 %% @doc Fetch the bytes for a previously-stored MCID. Returns
 %% `{error, not_found}' if no provider in the pool's reach holds a
-%% copy. The returned binary is BLAKE3-verified by the relay before
-%% it leaves the store, so the caller does not need to re-verify.
+%% copy (for chunked content, if any single chunk is unreachable).
+%% Dispatches on the MCID's codec byte: `16#55' (raw/single-block)
+%% fetches one block, BLAKE3-verified by the station before it leaves
+%% the store; `16#56' (manifest) fetches the manifest, then every
+%% chunk in order, reassembles, and verifies the whole against the
+%% manifest's size and Merkle root before returning.
 -spec get_content(pool(), mcid()) ->
     {ok, binary()} | {error, not_found | term()}.
 get_content(Pool, <<1, 16#55, _:32/binary>> = MCID) when is_pid(Pool) ->
-    classify_get_content(
-      macula_client:call(Pool, ?CONTENT_REALM,
-                         ?CONTENT_GET_BLOCK_PROC,
-                         #{mcid => MCID},
-                         ?CONTENT_BLOCK_TIMEOUT_MS)).
+    classify_get_content(get_block(Pool, MCID));
+get_content(Pool, <<1, 16#56, _:32/binary>> = MCID) when is_pid(Pool) ->
+    get_chunked(Pool, MCID).
+
+%% @doc Resolve every host currently announcing an MCID: hosts that
+%% stored a chunked put (`_content.put_manifest') and got
+%% `content_announcement'd automatically by the station on receipt
+%% (`macula_content_announcer'). `get_content/2' already reaches a
+%% copy via the connected station's own 1-hop peer relay, so this is
+%% for a caller that wants to know WHO holds an MCID, or to dial a
+%% specific one directly with `call_station/6' — e.g. when the
+%% connected station's relay hop budget does not reach the host (a
+%% partial-mesh pair with no mutual peer), or to route around a
+%% specific host deliberately.
+%%
+%% Each entry's signature is verified before its `endpoint' is
+%% trusted; unverifiable or malformed records are dropped, not
+%% surfaced as errors. Single-block content (put via `_content.put_block'
+%% alone) is not announced — resolving its MCID returns `{ok, []}'.
+-spec find_content_providers(pool(), mcid()) -> {ok, [map()]} | {error, term()}.
+find_content_providers(Pool, MCID)
+  when is_pid(Pool), is_binary(MCID), byte_size(MCID) =:= 34 ->
+    classify_find_providers(
+      macula_client:call(Pool, ?DHT_REALM, ?DHT_FIND_RECORDS_PROC,
+                         #{key => macula_record:content_key(MCID)},
+                         ?DHT_RECORD_TIMEOUT_MS)).
+
+classify_find_providers({ok, Records}) when is_list(Records) ->
+    {ok, decode_providers(Records)};
+classify_find_providers({ok, Reply}) ->
+    {error, {unexpected_reply, Reply}};
+classify_find_providers({error, _} = E) ->
+    E.
+
+decode_providers(Records) ->
+    lists:filtermap(fun decode_provider/1, Records).
+
+decode_provider(Record) ->
+    provider_verified(macula_record:verify(Record), Record).
+
+provider_verified({ok, _}, Record) ->
+    try macula_record:read_content_announcement(Record) of
+        #{announcer_node := _, endpoint := _} = Provider -> {true, Provider}
+    catch _:_ -> false
+    end;
+provider_verified({error, _}, _Record) ->
+    false.
+
+get_block(Pool, MCID) ->
+    call_with_retry(Pool, ?CONTENT_GET_BLOCK_PROC,
+                    #{mcid => MCID}, ?CONTENT_BLOCK_TIMEOUT_MS).
 
 classify_get_content({ok, not_found})           -> {error, not_found};
 classify_get_content({ok, Bin}) when is_binary(Bin) -> {ok, Bin};
 classify_get_content({ok, Reply})               -> {error, {unexpected_reply, Reply}};
 classify_get_content({error, _} = E)            -> E.
+
+get_chunked(Pool, MCID) ->
+    classify_get_manifest(
+      call_with_retry(Pool, ?CONTENT_GET_MANIFEST_PROC,
+                      #{mcid => MCID}, ?CONTENT_MANIFEST_TIMEOUT_MS),
+      Pool).
+
+classify_get_manifest({ok, not_found}, _Pool) ->
+    {error, not_found};
+classify_get_manifest({ok, Wire}, Pool) when is_map(Wire) ->
+    manifest_decoded(macula_manifest:from_wire(Wire), Pool);
+classify_get_manifest({ok, Reply}, _Pool) ->
+    {error, {unexpected_reply, Reply}};
+classify_get_manifest({error, _} = E, _Pool) ->
+    E.
+
+manifest_decoded({error, invalid_manifest}, _Pool) ->
+    {error, invalid_manifest};
+manifest_decoded({ok, #{chunk_count := N} = Manifest}, Pool) ->
+    get_chunks(Pool, Manifest, 0, N, []).
+
+get_chunks(_Pool, Manifest, Index, N, Acc) when Index >= N ->
+    reassembled(Manifest, iolist_to_binary(lists:reverse(Acc)));
+get_chunks(Pool, Manifest, Index, N, Acc) ->
+    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
+    chunk_get_result(get_block(Pool, ChunkMcid), Pool, Manifest, Index, N, Acc).
+
+chunk_get_result({ok, Bin}, Pool, Manifest, Index, N, Acc) when is_binary(Bin) ->
+    get_chunks(Pool, Manifest, Index + 1, N, [Bin | Acc]);
+chunk_get_result({ok, not_found}, _Pool, _Manifest, _Index, _N, _Acc) ->
+    {error, not_found};
+chunk_get_result({ok, Reply}, _Pool, _Manifest, _Index, _N, _Acc) ->
+    {error, {unexpected_reply, Reply}};
+chunk_get_result({error, _} = E, _Pool, _Manifest, _Index, _N, _Acc) ->
+    E.
+
+reassembled(Manifest, Reassembled) ->
+    verify_result(macula_manifest:verify(Manifest, Reassembled),
+                  Reassembled).
+
+verify_result(ok, Reassembled)      -> {ok, Reassembled};
+verify_result({error, _} = E, _Bin) -> E.
+
+%% A `_content.*' CALL, retried on a BOLT#4 error whose OWN retry policy
+%% says to (`macula_bolt4:is_retryable/1' — e.g. `temporary_relay_failure'
+%% is rated `same_path_after_backoff'). This is the spec's documented
+%% contract, not a blind retry: a non-retryable error (or a transport
+%% `{error, _}' outside the BOLT#4 taxonomy, e.g. `not_connected')
+%% returns immediately. Bounded to 3 attempts total with a short linear
+%% backoff — enough to absorb a transient relay hiccup without masking a
+%% genuine, persistent failure as a hang.
+%%
+%% Content puts are the first CALL callers in this SDK to hit this in
+%% practice: `_content.put_manifest' was observed to fail the first
+%% attempt against a freshly-started content store and succeed on retry
+%% (`_content.put_block' has not shown this). The station-side root
+%% cause is not yet diagnosed; retrying is what the CALL's own error
+%% code prescribes regardless, so content operations do it uniformly.
+call_with_retry(Pool, Procedure, Payload, TimeoutMs) ->
+    call_with_retry(Pool, Procedure, Payload, TimeoutMs, 3).
+
+call_with_retry(Pool, Procedure, Payload, TimeoutMs, AttemptsLeft) ->
+    retry_result(macula_client:call(Pool, ?CONTENT_REALM, Procedure, Payload,
+                                    TimeoutMs),
+                Pool, Procedure, Payload, TimeoutMs, AttemptsLeft).
+
+retry_result({error, {call_error, Code, _Name}} = E, Pool, Procedure, Payload,
+            TimeoutMs, AttemptsLeft) when AttemptsLeft > 1 ->
+    retry_if_retryable(macula_bolt4:is_retryable(Code), E, Pool, Procedure,
+                       Payload, TimeoutMs, AttemptsLeft);
+retry_result(Result, _Pool, _Procedure, _Payload, _TimeoutMs, _AttemptsLeft) ->
+    Result.
+
+retry_if_retryable(true, _E, Pool, Procedure, Payload, TimeoutMs, AttemptsLeft) ->
+    timer:sleep(?CONTENT_RETRY_BACKOFF_MS),
+    call_with_retry(Pool, Procedure, Payload, TimeoutMs, AttemptsLeft - 1);
+retry_if_retryable(false, E, _Pool, _Procedure, _Payload, _TimeoutMs,
+                   _AttemptsLeft) ->
+    E.
 
 %%%===================================================================
 %%% Streaming RPC (v1.5.0+)

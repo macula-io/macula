@@ -15,13 +15,13 @@
 
 ---
 
-> **Latest — 8.8.0**: Per-publisher pubsub **delivery ordering**. A publisher
-> stamps every fact with a pool-monotonic seq, but the mesh sends copies down
-> several links and the pool deduped to the first arrival — which reordered a
-> single publisher's stream. `subscribe/5` now takes a `delivery` option:
-> `ordered` (the new default, per-publisher FIFO), `latest_only` (drop stale),
-> or `as_arrives` (raw). `status/1` reports `pubsub_gap_skips`. See
-> [CHANGELOG.md](CHANGELOG.md).
+> **Latest — 8.10.0**: **Chunked content sharing** — `put_content`/`get_content`
+> now handle blobs of any size (single block unchanged since v4.2.7; larger
+> content splits into a Merkle-verified manifest, transparently), plus
+> `find_content_providers/2` to resolve every host announcing an MCID and dial
+> one directly. 8.9.0 added streaming direct-dial
+> (`call_stream_station`); 8.8.0 added per-publisher pubsub delivery ordering.
+> See [CHANGELOG.md](CHANGELOG.md).
 
 ## What is Macula?
 
@@ -109,12 +109,12 @@ ok = macula:advertise(Pool, Realm, <<"math.add">>,
 
 Macula gives you four ways for two parties to interact over the mesh. The
 point-to-point ones — RPC, content, and streaming — share one shape:
-**resolve in the DHT, then dial the serving station directly** (one hop). **RPC
-and streaming both support direct-dial today** (`call_station`,
-`call_stream_station`); content sharing still fetches through the store rather
-than dialing an announcing host directly (see the
-[Content Guide](docs/guides/CONTENT_GUIDE.md)'s "current shape vs. direction").
-Pub/Sub is the deliberate exception: it fans out *through* the stations, because
+**resolve in the DHT, then dial the serving station directly** (one hop). RPC
+and streaming resolve+dial directly by default (`call_station`,
+`call_stream_station`); content sharing reaches a copy via the connected
+station's own relay by default and can dial a specific announced host directly
+(`find_content_providers` + `call_station`) when that is not enough. Pub/Sub is
+the deliberate exception: it fans out *through* the stations, because
 broadcasting to many interested parties is a different problem than a two-party
 exchange.
 
@@ -174,15 +174,18 @@ tuning (`order_timeout_ms`, `order_max_buffer`, the `pubsub_gap_skips` telemetry
   <img src="assets/content_sharing.svg" alt="Content Sharing (MCID)" width="100%">
 </p>
 
-Content is addressed by an **MCID** — a 34-byte hash of the bytes — so any host
-with the bytes serves the same MCID and integrity is self-verifying. Today the
-SDK exposes the minimal single-block form (`put_content` / `get_content`); the
-diagram shows the target content-addressed model (multi-host announce + chunked
-fetch), which is the direction. See the [Content Guide](docs/guides/CONTENT_GUIDE.md).
+Content is addressed by an **MCID** — a hash of the bytes — so any host with the
+bytes serves the same MCID and integrity is self-verifying. Content that fits
+in one 256 KiB block round-trips as a single block (unchanged since v4.2.7);
+larger content is split into chunks and a Merkle-verified manifest,
+transparently. Chunked content is announced automatically, so a consumer can
+resolve every host serving an MCID and dial a specific one directly. See the
+[Content Guide](docs/guides/CONTENT_GUIDE.md).
 
 ```erlang
-{ok, MCID}  = macula:put_content(Pool, <<"the bytes">>),
-{ok, Bytes} = macula:get_content(Pool, MCID).
+{ok, MCID}  = macula:put_content(Pool, Bytes),        %% any size
+{ok, Bytes} = macula:get_content(Pool, MCID),
+{ok, Hosts} = macula:find_content_providers(Pool, MCID).
 ```
 
 ### 4. Content Streaming — live QUIC stream
