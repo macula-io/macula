@@ -774,3 +774,42 @@ domain_envelope_rejects_bad_key_size_test() ->
     ShortKey = <<1, 2, 3>>,
     ?assertError(function_clause,
                  macula_record:envelope(16#20, ShortKey, #{}, #{})).
+
+%%------------------------------------------------------------------
+%% procedure_advertisement reader + key derivation (direct-dial)
+%%------------------------------------------------------------------
+
+read_procedure_advertisement_canonical_test() ->
+    Kp  = macula_identity:generate(),
+    Adv = macula_identity:public(Kp),
+    Sta = crypto:strong_rand_bytes(32),
+    Uri = <<"realm42/org/app/checkout_v1">>,
+    R   = macula_record:procedure_advertisement(Adv, Uri, Sta),
+    ?assertEqual(#{procedure_uri   => Uri,
+                   advertiser_node => Adv,
+                   serving_station => Sta},
+                 macula_record:read_procedure_advertisement(R)).
+
+%% A record that arrived over the wire presents bare binary payload
+%% keys (as macula-realm's Topology.Directory sees them), not the
+%% canonical {text, _} keys. The reader must handle both.
+read_procedure_advertisement_wire_shape_test() ->
+    Adv = crypto:strong_rand_bytes(32),
+    Sta = crypto:strong_rand_bytes(32),
+    Uri = <<"realm42/org/app/checkout_v1">>,
+    WireRecord = #{type => 16#06,
+                   payload => #{<<"procedure_uri">>   => Uri,
+                                <<"advertiser_node">> => Adv,
+                                <<"serving_station">> => Sta}},
+    ?assertEqual(#{procedure_uri   => Uri,
+                   advertiser_node => Adv,
+                   serving_station => Sta},
+                 macula_record:read_procedure_advertisement(WireRecord)).
+
+procedure_key_matches_storage_key_test() ->
+    Adv = crypto:strong_rand_bytes(32),
+    Sta = crypto:strong_rand_bytes(32),
+    Uri = <<"realm42/org/app/checkout_v1">>,
+    R   = macula_record:procedure_advertisement(Adv, Uri, Sta),
+    ?assertEqual(macula_record:storage_key(R),
+                 macula_record:procedure_key(Uri)).

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.2.0] - 2026-08-19
+
+### Added
+
+- `macula_record:read_procedure_advertisement/1` — read a procedure_advertisement
+  record's fields (`procedure_uri`, `advertiser_node`, `serving_station`) as a
+  typed map, robust to both canonical (`{text, _}`) and wire-decoded (bare binary)
+  payload keying, so consumers never parse the CBOR shape themselves.
+- `macula_record:procedure_key/1` — derive a procedure's DHT storage key
+  (`SHA-256(procedure_uri)`) from the URI alone, for `find_records/2` before
+  holding any record.
+
+Both are the consumer-resolution surface for direct-dial discovery (macula-station
+`DESIGN_DIRECT_DIAL_DISCOVERY` / plan Slice 2).
+
+---
+
 ## [8.1.0] - 2026-08-19
 
 ### Added

@@ -56,9 +56,11 @@
     %% Accessors
     type/1, key/1, version/1, created_at/1, expires_at/1,
     payload/1, signature/1,
+    read_procedure_advertisement/1,
 
     %% DHT storage-key derivation (Part 3 §3.3)
-    storage_key/1
+    storage_key/1,
+    procedure_key/1
 ]).
 
 -export_type([
@@ -831,6 +833,48 @@ version(#{version := V}) -> V.
 created_at(#{created_at := C}) -> C.
 expires_at(#{expires_at := X}) -> X.
 payload(#{payload := P}) -> P.
+
+%% @doc Read a `procedure_advertisement' record's fields as a typed
+%% map, hiding the payload's wire keying from consumers. Pairs with
+%% the `procedure_advertisement/3,4' constructors.
+%%
+%% Robust to both shapes a record can arrive in: the canonical form
+%% (`{text, <<"k">>}' keys, `{text, V}' text values, as built locally)
+%% AND the wire-decoded form (bare `<<"k">>' keys, bare values, as a
+%% record returned over an RPC like `find_records/2'). Consumers get
+%% the same map either way, so they never touch the CBOR keying.
+-spec read_procedure_advertisement(record()) ->
+    #{procedure_uri   := binary(),
+      advertiser_node := macula_identity:pubkey(),
+      serving_station := macula_identity:pubkey()}.
+read_procedure_advertisement(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT,
+                               payload := P}) ->
+    #{procedure_uri   => payload_field(P, <<"procedure_uri">>),
+      advertiser_node => payload_field(P, <<"advertiser_node">>),
+      serving_station => payload_field(P, <<"serving_station">>)}.
+
+%% A payload field, robust to canonical vs wire-decoded key/value shapes.
+payload_field(P, Name) ->
+    unwrap_text(first_present([{text, Name}, Name], P)).
+
+first_present([K | Ks], P) ->
+    case maps:find(K, P) of
+        {ok, V} -> V;
+        error   -> first_present(Ks, P)
+    end;
+first_present([], _P) ->
+    undefined.
+
+unwrap_text({text, B}) -> B;
+unwrap_text(V)         -> V.
+
+%% @doc The DHT storage key for a procedure by its URI, without a
+%% record in hand: `SHA-256(procedure_uri)', identical to
+%% `storage_key/1' for a `procedure_advertisement' (Part 3 §3.3).
+%% Consumers use this to `find_records/2' before holding any record.
+-spec procedure_key(binary()) -> <<_:256>>.
+procedure_key(ProcedureUri) when is_binary(ProcedureUri) ->
+    crypto:hash(sha256, ProcedureUri).
 signature(#{signature := S}) -> S.
 
 %%------------------------------------------------------------------
