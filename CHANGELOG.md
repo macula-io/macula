@@ -7,15 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [8.1.0] - 2026-08-19
 
 ### Added
 
 - `macula:find_records/2` — multi-value DHT read returning EVERY record at a
   storage key (e.g. every provider that advertised one procedure_uri), where
   `find_record/2` returns only the first. Calls the new `_dht.find_records`
-  relay procedure. Part of direct-dial discovery (macula-station
+  relay procedure (served by macula-station). Additive; `find_record/2` is
+  unchanged. Part of direct-dial discovery (macula-station
   `DESIGN_DIRECT_DIAL_DISCOVERY` §8.1 / plan Slice 1).
+
+### Docs
+
+- Clarified that pubsub does not preserve per-publisher delivery order.
 
 ---
 
