@@ -63,7 +63,7 @@
 
 %% Streaming RPC (LOCAL in-process + V2 pool, see PLAN_MACULA_STREAMING.md)
 -export([
-    call_stream/2, call_stream/3, call_stream/5,
+    call_stream/2, call_stream/3, call_stream/5, call_stream_station/6,
     open_stream/3, open_stream/4,
     advertise_stream/2, advertise_stream/3, advertise_stream/5,
     unadvertise_stream/1, unadvertise_stream/3,
@@ -567,6 +567,20 @@ call_stream(Pool, Realm, Procedure, Args, Opts)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure), is_map(Opts) ->
     macula_client:call_stream(Pool, Realm, Procedure, Args, Opts).
+
+%% @doc Open a streaming RPC by DIALING a specific station directly
+%% (direct-dial), instead of routing through an existing pool link — the
+%% streaming analogue of `call_station/6'. Compose it with DHT resolution
+%% (`find_records' -> `read_procedure_advertisement' -> `station_endpoint')
+%% to reach a stream provider in one hop, exactly as a unary caller does.
+%% `Opts' may set `dial_timeout_ms' (default 10_000) and a `mode'.
+-spec call_stream_station(pool(), macula_client:seed(), realm(), procedure(),
+                          term(), map()) -> {ok, stream()} | {error, term()}.
+call_stream_station(Pool, Station, Realm, Procedure, Args, Opts)
+  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure), is_map(Opts) ->
+    macula_client:call_stream_station(Pool, Station, Realm, Procedure, Args,
+                                      Opts).
 
 %% @doc Open a LOCAL in-process client-stream or bidi call. Used
 %% for unit tests and same-BEAM dispatch via `macula_stream_local'.

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.9.0] - 2026-08-19
+
+### Added
+
+- **Streaming direct-dial**: `macula_client:call_stream_station/6` and
+  `macula:call_stream_station/6` — open a streaming RPC by dialing a *specific*
+  station directly (ensure/reuse or dial the link, await the handshake, open the
+  stream), the streaming analogue of `call_station/6` for unary RPC. Composes with
+  DHT resolution (`find_records` → `read_procedure_advertisement` →
+  `station_endpoint`) so a stream reaches its provider in one hop, exactly like a
+  unary caller. `Opts` may set `dial_timeout_ms` (default 10_000).
+
+Verified end-to-end against a real station (macula-station
+`macula_station_call_stream_station_SUITE`): a provider advertises a
+`server_stream`; a consumer pool seeded to nothing dials the station directly and
+reads the pushed chunks to `eof`. A companion control case proves the pre-existing
+station-routed `call_stream/5` path over the same setup — cross-connection
+streaming relay was already correct; this release only adds the direct-dial entry
+point on top of it.
+
+---
+
 ## [8.8.0] - 2026-08-19
 
 ### Added

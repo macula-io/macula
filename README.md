@@ -108,13 +108,15 @@ ok = macula:advertise(Pool, Realm, <<"math.add">>,
 ## The Four Interaction Patterns
 
 Macula gives you four ways for two parties to interact over the mesh. The
-point-to-point ones — RPC, content, and streaming — are converging on one shape:
-**resolve in the DHT, then dial the serving station directly** (one hop).
-**RPC has adopted direct-dial today**; content and streaming still route through
-stations and are moving toward it (see each guide's "current shape vs. direction"
-note). Pub/Sub is the deliberate exception: it fans out *through* the stations,
-because broadcasting to many interested parties is a different problem than a
-two-party exchange.
+point-to-point ones — RPC, content, and streaming — share one shape:
+**resolve in the DHT, then dial the serving station directly** (one hop). **RPC
+and streaming both support direct-dial today** (`call_station`,
+`call_stream_station`); content sharing still fetches through the store rather
+than dialing an announcing host directly (see the
+[Content Guide](docs/guides/CONTENT_GUIDE.md)'s "current shape vs. direction").
+Pub/Sub is the deliberate exception: it fans out *through* the stations, because
+broadcasting to many interested parties is a different problem than a two-party
+exchange.
 
 ### 1. RPC — direct-dial
 
@@ -196,7 +198,10 @@ dead. Server-push, client-push, and bidirectional modes are supported; see the
 [Streaming Guide](docs/guides/STREAMING_GUIDE.md).
 
 ```erlang
-{ok, Stream} = macula:call_stream(Pool, Realm, <<"live.feed">>, Request, #{}),
+%% resolve the source (find_records -> read_procedure_advertisement ->
+%% station_endpoint, as in RPC), then dial its station directly
+{ok, Stream} = macula:call_stream_station(Pool, StationUrl, Realm,
+                                          <<"live.feed">>, Request, #{}),
 loop_recv(Stream).  %% macula:recv/1 until eof
 ```
 

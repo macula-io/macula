@@ -57,7 +57,8 @@
 -export([call/5, call_station/6, call_station/7,
          advertise/4, advertise/5, unadvertise/3]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
--export([call_stream/5, advertise_stream/5, unadvertise_stream/3]).
+-export([call_stream/5, call_stream_station/6,
+         advertise_stream/5, unadvertise_stream/3]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -351,6 +352,25 @@ call_stream(Pool, Realm, Procedure, Args, Opts)
                      Opts#{owner => maps:get(owner, Opts, self())}},
                     5_000).
 
+%% @doc Open a streaming RPC by DIALING a specific station directly
+%% (direct-dial), instead of routing through an existing pool link.
+%% The streaming analogue of `call_station/7': ensure (reuse or dial) a
+%% link to `Station', await the handshake, then open the stream there.
+%% `Opts' may set `dial_timeout_ms' (default 10_000) for the dial +
+%% handshake, plus any `call_stream' option (e.g. `mode').
+-spec call_stream_station(pool(), seed(), <<_:256>>, binary(), term(),
+                          map()) -> {ok, pid()} | {error, term()}.
+call_stream_station(Pool, Station, Realm, Procedure, Args, Opts)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       is_map(Opts) ->
+    DialTimeout = maps:get(dial_timeout_ms, Opts, 10_000),
+    gen_server:call(Pool,
+                    {call_stream_station, Station, Realm, Procedure, Args,
+                     Opts#{owner => maps:get(owner, Opts, self())}},
+                    DialTimeout + 2_000).
+
 %% @doc Advertise a streaming procedure handler on every healthy
 %% link. Stored in pool state so links respawned later replay the
 %% advertisement. Returns `ok' when at least one link accepted the
@@ -594,6 +614,19 @@ handle_call({rpc_call_stream, Realm, Procedure, Args, Opts}, From, S) ->
         gen_server:reply(From, Reply)
     end),
     {noreply, S};
+
+handle_call({call_stream_station, Station, Realm, Procedure, Args, Opts},
+            From, S) ->
+    %% Direct-dial streaming: ensure (reuse or dial) a link to the
+    %% specific station, then open the stream there. Same worker-spawn
+    %% rationale as call_station — the pool gen_server never blocks on
+    %% the dial + handshake.
+    {Pid, S1} = ensure_link(Station, S),
+    _ = spawn(fun() ->
+        Reply = stream_when_connected(Pid, Realm, Procedure, Args, Opts),
+        gen_server:reply(From, Reply)
+    end),
+    {noreply, S1};
 
 handle_call({advertise_stream, Realm, Procedure, Mode, Handler}, _From,
             #state{stream_procs = SP} = S) ->
@@ -862,6 +895,21 @@ safe_link_unadvertise(Pid, Realm, Proc) ->
 %% through; any other error short-circuits and is returned to the
 %% caller, since it likely indicates a real problem (deadline,
 %% protocol mismatch) the next link would also hit.
+%% Direct-dial streaming: wait for the ensured link's handshake, then
+%% open the stream there. Mirrors `call_when_connected' for streams.
+stream_when_connected(undefined, _Realm, _Proc, _Args, _Opts) ->
+    {error, not_connected};
+stream_when_connected(Pid, Realm, Proc, Args, Opts) ->
+    DialTimeout = maps:get(dial_timeout_ms, Opts, 10_000),
+    Deadline = erlang:monotonic_time(millisecond) + DialTimeout,
+    stream_after_connect(await_connected(Pid, Deadline), Pid, Realm, Proc,
+                         Args, Opts).
+
+stream_after_connect(true, Pid, Realm, Proc, Args, Opts) ->
+    macula_station_link:call_stream(Pid, Realm, Proc, Args, Opts);
+stream_after_connect(false, _Pid, _Realm, _Proc, _Args, _Opts) ->
+    {error, not_connected}.
+
 stream_first_healthy([], _Realm, _Proc, _Args, _Opts) ->
     {error, no_healthy_station};
 stream_first_healthy([Pid | Rest], Realm, Proc, Args, Opts) ->

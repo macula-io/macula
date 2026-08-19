@@ -17,16 +17,23 @@ the channel open so either side (or both) can send a sequence of chunks before a
 final result, over an ordered QUIC stream with per-stream flow control pacing the
 sender to the receiver.
 
-> **Routing — current shape vs. direction.** Today streaming is **station-routed**:
-> a provider advertises the streaming procedure on its station links (an in-band
-> ADVERTISE, not a DHT record), and a consumer's `call_stream` opens the stream on
-> its own healthy station link, which the station routes to the advertiser. This
-> is the pre-direct-dial model — unary RPC (`call` / `call_station`) has since
-> moved to direct-dial (resolve a DHT record, dial the serving station), but
-> **streaming has not made that move yet.** The diagram above shows the
-> direct-dial target for streams; the shipped path routes through the station.
-> Functionally the API is complete either way — only the discovery/routing shape
-> changes when streaming adopts direct-dial.
+Two ways to open one, mirroring unary RPC:
+
+- **`call_stream/5`** — opens on the pool's own healthy link; the station routes
+  the STREAM_OPEN to whichever connection advertised the procedure. Good when you
+  don't know or care which station serves it.
+- **`call_stream_station/6`** (direct-dial) — dials a *specific* station and opens
+  the stream there in one hop, exactly like `call_station/6` for unary RPC. Use it
+  after resolving a provider's `procedure_advertisement` and `station_endpoint` in
+  the DHT (see the [RPC Guide](RPC_GUIDE.md)), so a stream reaches its provider the
+  same way a unary call does.
+
+```erlang
+{ok, Stream} = macula:call_stream_station(Pool, StationUrl, Realm, Procedure,
+                                          Args, #{}).
+```
+
+`Opts` may set `dial_timeout_ms` (default 10_000) for the dial + handshake.
 
 There are three modes:
 
@@ -84,12 +91,14 @@ The handler drives the stream with the same `send` / `recv` primitives, and ends
 it with `set_reply` (a final result) or `abort` (an error).
 
 ```erlang
-%% server_stream: push N chunks, then a final result
+%% server_stream: push N chunks, then CLOSE — that is what produces `eof'
+%% for a consumer looping on `recv'. `set_reply' is for client_stream /
+%% bidi (see below); a pure push-only server_stream does not use it.
 ok = macula:advertise_stream(
        Pool, Realm, <<"live.feed">>, server_stream,
        fun(Stream, _Args) ->
            lists:foreach(fun(Frame) -> macula:send(Stream, Frame) end, frames()),
-           macula:set_reply(Stream, #{frames => length(frames())})
+           macula:close_stream(Stream)
        end),
 
 %% client_stream: drain the consumer's chunks, then reply
@@ -108,6 +117,15 @@ drain(Stream, N) ->
     end.
 ```
 
+> **`close_stream` vs. `set_reply` — do not mix them for `server_stream`.**
+> `close_stream/1` is what makes a consumer's `recv` loop see `eof`.
+> `set_reply/2` only resolves `await_reply/1,2`; it does **not** close the
+> stream. A `server_stream` handler that calls `set_reply` without also
+> closing leaves a consumer's `recv`-until-`eof` loop waiting forever — use
+> `close_stream` for a pure push, and reserve `set_reply` + `await_reply`
+> for `client_stream` / `bidi`, where the consumer already knows to stop
+> sending and ask for the result instead of draining chunks.
+
 Abort with a BOLT#4-style code and message when something goes wrong:
 
 ```erlang
@@ -119,17 +137,16 @@ macula:abort(Stream, <<"0F">>, <<"source unavailable">>).
 ## Content streaming
 
 "Content streaming" is the `server_stream` mode applied to a live source: the
-provider advertises the stream procedure, a viewer opens it with `call_stream`,
-and reads frames until the source stops. Unlike
-[content sharing](CONTENT_GUIDE.md) there is no fixed size or `chunk_count` — the
-stream is open-ended and ordered, and QUIC flow control paces the source to the
-viewer's consumption. (Discovery is station-routed today; see the routing note in
-the Overview. When streaming adopts direct-dial, the viewer will resolve the
-source's DHT record and dial its serving station, as the diagram shows.)
+provider advertises the stream procedure and its `procedure_advertisement` in the
+DHT; a viewer resolves it, dials the serving station directly with
+`call_stream_station` (as the diagram shows), and reads frames until the source
+stops. Unlike [content sharing](CONTENT_GUIDE.md) there is no fixed size or
+`chunk_count` — the stream is open-ended and ordered, and QUIC flow control paces
+the source to the viewer's consumption.
 
 **Freshness is not optional.** A live source can go away. Treat a `recv` stall or
-`{error, peer_down}` as a signal to re-open the stream (and, once streaming is
-direct-dial, to re-resolve the source first).
+`{error, peer_down}` as a signal to **re-resolve** the source and re-open, exactly
+as a direct-dial caller re-resolves on a dial failure.
 
 ---
 
@@ -146,7 +163,8 @@ They are for unit tests and same-node dispatch. The pool forms
 
 | Function | Role |
 |---|---|
-| `call_stream(Pool, Realm, Proc, Args, Opts)` | consumer: open a stream (`Opts` may set `mode`) |
+| `call_stream(Pool, Realm, Proc, Args, Opts)` | consumer: open a stream on the pool's own link (`Opts` may set `mode`) |
+| `call_stream_station(Pool, Station, Realm, Proc, Args, Opts)` | consumer: **direct-dial** — dial `Station` and open the stream there in one hop |
 | `advertise_stream(Pool, Realm, Proc, Mode, Handler)` | provider: serve a streaming procedure |
 | `send(Stream, Bin)` / `send(Stream, Body, Enc)` | send a chunk (`Enc` = `raw` \| `msgpack`) |
 | `recv(Stream)` / `recv(Stream, Timeout)` | read the next `{chunk,_}` / `{data,_}` / `eof` |
