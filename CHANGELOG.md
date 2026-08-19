@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.8.0] - 2026-08-19
+
+### Added
+
+- Per-subscription pubsub **delivery ordering** (`macula_pubsub_order`). A
+  publisher stamps every fact with a pool-monotonic `seq`, but the mesh sends
+  copies down several links and `macula_client` deduped to the first arrival —
+  which scrambled a single publisher's stream (diagnosed: per-publisher order was
+  lost, not just total order). `subscribe/5` now takes a `delivery` option:
+  - `ordered` (**new default**) — per-publisher FIFO by seq: out-of-order arrivals
+    are buffered and released in order; a genuinely missing seq is skipped after
+    `order_timeout_ms` (default 250ms). Buffer bounded in time (timeout) and count
+    (`order_max_buffer`, default 1024) — over the cap, the head gap is skipped early.
+  - `latest_only` — deliver only seqs newer than the highest seen for that
+    publisher (drop stale); no buffering, no head-of-line delay. For state snapshots.
+  - `as_arrives` — the previous behaviour: raw arrival order, consumer orders itself.
+- `connect/2` options `order_timeout_ms` and `order_max_buffer`.
+- `status/1` reports `pubsub_gap_skips` — the count of per-publisher gaps given up
+  on after timeout, i.e. the genuine loss rate an `ordered` subscriber could not
+  fill. Instruments whether eventual-delivery (Plumtree lazy-repair) hardening is
+  warranted, from live data.
+
+### Changed
+
+- **Default pubsub delivery is now `ordered`** (was raw arrival order). A
+  publish/subscribe API implies per-publisher order; consumers that assumed it no
+  longer break quietly. Consumers that want the old behaviour pass
+  `#{delivery => as_arrives}`; latency-sensitive state consumers pass
+  `#{delivery => latest_only}`.
+
+---
+
 ## [8.7.0] - 2026-08-19
 
 ### Added

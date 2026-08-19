@@ -93,11 +93,12 @@
 
 %% Aggregate health snapshot of a pool. See `status/1'.
 -type status() :: #{
-    seeds         := [seed()],
-    healthy_links := non_neg_integer(),
-    failed_links  := non_neg_integer(),
-    self_node_id  := macula_identity:pubkey(),
-    subscriptions := non_neg_integer()
+    seeds            := [seed()],
+    healthy_links    := non_neg_integer(),
+    failed_links     := non_neg_integer(),
+    self_node_id     := macula_identity:pubkey(),
+    subscriptions    := non_neg_integer(),
+    pubsub_gap_skips := non_neg_integer()
 }.
 %% Per-link view returned by `links/1'. One entry per configured seed
 %% that currently has a spawned link worker. `node_id' is the peer
@@ -158,6 +159,12 @@
 -define(DEFAULT_REPLICATION, 1).
 -define(DEFAULT_DEDUP_WINDOW_MS, 60_000).
 -define(DEFAULT_DEDUP_SWEEP_MS, 30_000).
+%% How long an `ordered' subscription waits for a missing seq before
+%% skipping the gap (a genuinely lost fact). Bounds head-of-line delay.
+-define(DEFAULT_ORDER_TIMEOUT_MS, 250).
+%% Per-publisher reorder-buffer count cap (bounds memory for a publisher
+%% gapping under a high rate; the timeout bounds it in time).
+-define(DEFAULT_ORDER_MAX_BUFFER, 1024).
 -define(LINK_RESPAWN_DELAY_MS, 1_000).
 
 -record(link_state, {
@@ -170,7 +177,10 @@
     realm      :: <<_:256>>,
     topic      :: binary(),
     subscriber :: pid(),
-    mon        :: reference()
+    mon        :: reference(),
+    %% Per-publisher delivery ordering for this subscription (the
+    %% `delivery' mode: ordered | latest_only | as_arrives).
+    order      :: macula_pubsub_order:t()
 }).
 
 -record(state, {
@@ -204,7 +214,12 @@
     stream_procs = #{} :: #{{<<_:256>>, binary()} =>
                             {macula_frame:stream_mode(),
                              stream_handler()}},
-    dedup_tab     :: ets:tid()
+    dedup_tab     :: ets:tid(),
+    %% Per-`ordered'-subscription reorder-buffer timeout + count cap, and
+    %% a lazily armed one-shot timer that fires to release timed-out gaps.
+    order_timeout    :: non_neg_integer(),
+    order_max_buffer :: pos_integer(),
+    flush_timer      :: reference() | undefined
 }).
 
 %%====================================================================
@@ -472,10 +487,14 @@ init({Seeds, Opts}) ->
     DedupSweep  = maps:get(dedup_sweep_ms, Opts, ?DEFAULT_DEDUP_SWEEP_MS),
     Replication = maps:get(replication_factor, Opts, ?DEFAULT_REPLICATION),
     DedupTab    = macula_client_dedup:new(),
+    OrderTimeout = maps:get(order_timeout_ms, Opts, ?DEFAULT_ORDER_TIMEOUT_MS),
+    OrderMaxBuf  = maps:get(order_max_buffer, Opts, ?DEFAULT_ORDER_MAX_BUFFER),
     State0 = #state{seeds = Seeds, identity = Identity,
                     link_opts = LinkOpts, replication = Replication,
                     dedup_window = DedupWindow, dedup_sweep = DedupSweep,
                     dedup_tab = DedupTab,
+                    order_timeout = OrderTimeout, order_max_buffer = OrderMaxBuf,
+                    flush_timer = undefined,
                     publish_seq = erlang:system_time(microsecond)},
     State1 = lists:foldl(fun start_link_for_seed/2, State0, Seeds),
     erlang:send_after(DedupSweep, self(), dedup_sweep),
@@ -509,11 +528,13 @@ handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     end),
     {noreply, S#state{publish_seq = Seq + 1}};
 
-handle_call({subscribe, Realm, Topic, Subscriber, _Opts}, _From, S) ->
+handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From, S) ->
     SubRef = make_ref(),
     Mon = erlang:monitor(process, Subscriber),
     Spec = #sub_spec{realm = Realm, topic = Topic,
-                     subscriber = Subscriber, mon = Mon},
+                     subscriber = Subscriber, mon = Mon,
+                     order = macula_pubsub_order:new(delivery_mode(Opts),
+                                                     S#state.order_max_buffer)},
     Key = {Realm, Topic},
     AlreadyTracked = maps:is_key(Key, S#state.topic_index),
     NewS = register_sub(SubRef, Spec, S),
@@ -592,11 +613,14 @@ handle_call(status, _From,
                    identity = Identity} = S) ->
     {Healthy, Failed} = count_link_health(Seeds, Links),
     Status = #{
-        seeds         => Seeds,
-        healthy_links => Healthy,
-        failed_links  => Failed,
-        self_node_id  => macula_identity:public(Identity),
-        subscriptions => map_size(Subs)
+        seeds            => Seeds,
+        healthy_links    => Healthy,
+        failed_links     => Failed,
+        self_node_id     => macula_identity:public(Identity),
+        subscriptions    => map_size(Subs),
+        %% Per-publisher gaps given up on after the reorder timeout —
+        %% the genuine loss rate an `ordered' subscriber could not fill.
+        pubsub_gap_skips => total_skips(Subs)
     },
     {reply, {ok, Status}, S};
 
@@ -632,6 +656,12 @@ handle_info(dedup_sweep, S) ->
     _ = macula_client_dedup:sweep(S#state.dedup_tab, S#state.dedup_window),
     erlang:send_after(S#state.dedup_sweep, self(), dedup_sweep),
     {noreply, S};
+
+handle_info(order_flush, S) ->
+    %% Release timed-out gaps, then re-arm only if something is still
+    %% buffered (a fresh gap opened while this timer was pending).
+    S1 = flush_all_subs(S#state{flush_timer = undefined}),
+    {noreply, ensure_flush_timer(S1)};
 
 handle_info({'EXIT', _Pid, _Reason}, S) ->
     %% Links are linked to us via gen_server:start_link in
@@ -1060,28 +1090,84 @@ issue_wire_subs(false, Realm, Topic, S) ->
 on_inbound_event(duplicate, _Realm, _Topic, _Payload, _Meta, S) ->
     {noreply, S};
 on_inbound_event(new, Realm, Topic, Payload, Meta, S) ->
-    fan_to_local(Realm, Topic, Payload, Meta, S),
-    {noreply, S}.
+    {noreply, ensure_flush_timer(fan_to_local(Realm, Topic, Payload, Meta, S))}.
 
-fan_to_local(Realm, Topic, Payload, Meta,
-             #state{topic_index = Idx, subs = Subs}) ->
-    fan_to_set(maps:find({Realm, Topic}, Idx), Topic, Payload, Meta, Subs).
+fan_to_local(Realm, Topic, Payload, Meta, S) ->
+    fan_to_set(maps:find({Realm, Topic}, S#state.topic_index),
+               Topic, Payload, Meta, S).
 
-fan_to_set(error, _Topic, _Payload, _Meta, _Subs) ->
-    ok;
-fan_to_set({ok, Set}, Topic, Payload, Meta, Subs) ->
-    sets:fold(fun(SubRef, _) ->
-        deliver_one(SubRef, Topic, Payload, Meta, Subs)
-    end, ok, Set).
+fan_to_set(error, _Topic, _Payload, _Meta, S) ->
+    S;
+fan_to_set({ok, Set}, Topic, Payload, Meta, S) ->
+    sets:fold(fun(SubRef, Acc) ->
+        deliver_one(SubRef, Topic, Payload, Meta, Acc)
+    end, S, Set).
 
-deliver_one(SubRef, Topic, Payload, Meta, Subs) ->
-    deliver_to(maps:find(SubRef, Subs), SubRef, Topic, Payload, Meta).
+deliver_one(SubRef, Topic, Payload, Meta, S) ->
+    deliver_to(maps:find(SubRef, S#state.subs), SubRef, Topic, Payload, Meta, S).
 
-deliver_to(error, _SubRef, _Topic, _Payload, _Meta) ->
-    ok;
-deliver_to({ok, #sub_spec{subscriber = Pid}}, SubRef, Topic, Payload, Meta) ->
-    Pid ! {macula_event, SubRef, Topic, Payload, Meta},
+deliver_to(error, _SubRef, _Topic, _Payload, _Meta, S) ->
+    S;
+deliver_to({ok, #sub_spec{subscriber = Pid, order = Order} = Spec}, SubRef,
+           Topic, Payload, Meta, S) ->
+    %% Run the fact through this subscription's delivery ordering; send
+    %% whatever it releases now, and keep the updated per-publisher state.
+    {Events, Order2} = macula_pubsub_order:offer(
+                         Order, maps:get(publisher, Meta), maps:get(seq, Meta),
+                         {Payload, Meta}, now_ms()),
+    send_events(Pid, SubRef, Topic, Events),
+    S#state{subs = maps:put(SubRef, Spec#sub_spec{order = Order2},
+                            S#state.subs)}.
+
+send_events(Pid, SubRef, Topic, Events) ->
+    _ = [Pid ! {macula_event, SubRef, Topic, P, M} || {P, M} <- Events],
     ok.
+
+now_ms() -> erlang:monotonic_time(millisecond).
+
+total_skips(Subs) ->
+    lists:sum([macula_pubsub_order:skips(O)
+               || #sub_spec{order = O} <- maps:values(Subs)]).
+
+%% Delivery mode from subscribe opts; `ordered' is the default (a
+%% publish/subscribe API implies per-publisher order).
+delivery_mode(#{delivery := M})
+  when M =:= ordered; M =:= latest_only; M =:= as_arrives ->
+    M;
+delivery_mode(_Opts) ->
+    ordered.
+
+%% One-shot flush timer, armed lazily: only when an `ordered' buffer is
+%% actually holding an out-of-order fact. Re-armed by the handler while
+%% anything is still buffered; never runs when idle.
+ensure_flush_timer(#state{flush_timer = undefined} = S) ->
+    arm_flush_timer(any_buffered(S), S);
+ensure_flush_timer(S) ->
+    S.
+
+arm_flush_timer(false, S) ->
+    S;
+arm_flush_timer(true, S) ->
+    Ref = erlang:send_after(S#state.order_timeout, self(), order_flush),
+    S#state{flush_timer = Ref}.
+
+any_buffered(#state{subs = Subs}) ->
+    lists:any(fun(#sub_spec{order = O}) ->
+                  macula_pubsub_order:buffered(O) > 0
+              end, maps:values(Subs)).
+
+%% Release any gaps that have waited past the timeout, across every
+%% subscription, sending what each frees.
+flush_all_subs(#state{subs = Subs, order_timeout = Timeout} = S) ->
+    Now = now_ms(),
+    Subs2 = maps:map(
+              fun(SubRef, #sub_spec{order = O, subscriber = Pid,
+                                    topic = Topic} = Spec) ->
+                  {Events, O2} = macula_pubsub_order:flush(O, Now, Timeout),
+                  send_events(Pid, SubRef, Topic, Events),
+                  Spec#sub_spec{order = O2}
+              end, Subs),
+    S#state{subs = Subs2}.
 
 %%====================================================================
 %% Internals — publish summary

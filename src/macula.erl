@@ -186,7 +186,19 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
     macula_pubsub:subscribe(Pool, Realm, Topic, Subscriber).
 
 %% @doc Subscribe `Subscriber' to `(Realm, Topic)' on `Pool' with
-%% options. See `macula_pubsub:subscribe/5'.
+%% options. The `delivery' option chooses how a single publisher's
+%% out-of-order arrivals are handled:
+%% <ul>
+%%   <li>`ordered' (default) — per-publisher FIFO by seq; out-of-order
+%%       arrivals are buffered and released in order, a genuinely
+%%       missing seq skipped after `order_timeout_ms' (a `connect/2'
+%%       option, default 250ms).</li>
+%%   <li>`latest_only' — deliver only seqs newer than the highest seen
+%%       for that publisher (drop stale); no buffering, no delay.</li>
+%%   <li>`as_arrives' — deliver in raw arrival order; the consumer
+%%       orders it itself.</li>
+%% </ul>
+%% See `macula_pubsub:subscribe/5'.
 -spec subscribe(pool(), realm(), topic(), pid(), map()) ->
     {ok, reference()}.
 subscribe(Pool, Realm, Topic, Subscriber, Opts) ->

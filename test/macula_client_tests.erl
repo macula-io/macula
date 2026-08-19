@@ -488,8 +488,12 @@ dedup_zero_window_disables_dedup_test_() ->
                         #{dedup_window_ms => 0,
                           dedup_sweep_ms  => 50}),
          Topic = <<"dedup.zero_window_v1">>,
+         %% `as_arrives': isolate the dedup LAYER. `ordered' (the
+         %% default) also drops a repeated seq, which would mask what
+         %% this test measures.
          {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                                 Topic, self(), #{}),
+                                                 Topic, self(),
+                                                 #{delivery => as_arrives}),
          Pub = <<9:256>>,
          Pool ! {macula_event, make_ref(), Topic, first,
                  #{realm => ?REALM, publisher => Pub,
@@ -514,8 +518,10 @@ dedup_default_window_holds_duplicate_test_() ->
          %% (Publisher, Seq) is dropped.
          {ok, Pool} = macula_client:connect([], #{}),
          Topic = <<"dedup.default_window_v1">>,
+         %% `as_arrives' so the dedup LAYER is the only filter under test.
          {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
-                                                 Topic, self(), #{}),
+                                                 Topic, self(),
+                                                 #{delivery => as_arrives}),
          Pub = <<10:256>>,
          Meta = #{realm => ?REALM, publisher => Pub,
                   seq => 7, delivered_via => direct},
