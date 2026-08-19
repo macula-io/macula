@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.0.1] - 2026-08-20
+
+### Fixed
+
+- PUBSUB_GUIDE.md was missing its `pubsub_two_stations.svg` diagram — RPC,
+  Content, and Streaming guides all embed their matching interaction-pattern
+  diagram at the top; PubSub's was left out when those were added. Docs-only,
+  no code change.
+
+---
+
 ## [9.0.0] - 2026-08-20
 
 **LAN clustering and distribution-over-mesh split into separate concerns.**

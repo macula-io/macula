@@ -2,6 +2,8 @@
 
 **Topic-based messaging over the relay mesh.**
 
+![PubSub across Two Stations](assets/pubsub_two_stations.svg)
+
 > **Audience:** Erlang/OTP applications publishing or subscribing to
 > events. Since v3.11.0 (V2 surface). For the V1 (pre-3.11.0)
 > single-connection surface, see
