@@ -813,3 +813,16 @@ procedure_key_matches_storage_key_test() ->
     R   = macula_record:procedure_advertisement(Adv, Uri, Sta),
     ?assertEqual(macula_record:storage_key(R),
                  macula_record:procedure_key(Uri)).
+
+read_station_endpoint_test() ->
+    Pub = crypto:strong_rand_bytes(32),
+    R   = macula_record:station_endpoint(Pub, 4433,
+                                         #{host_advertised => [<<"::1">>]}),
+    ?assertEqual(#{quic_port => 4433, host_advertised => [<<"::1">>]},
+                 macula_record:read_station_endpoint(R)).
+
+station_endpoint_key_matches_storage_key_test() ->
+    Pub = crypto:strong_rand_bytes(32),
+    R   = macula_record:station_endpoint(Pub, 4433),
+    ?assertEqual(macula_record:storage_key(R),
+                 macula_record:station_endpoint_key(Pub)).

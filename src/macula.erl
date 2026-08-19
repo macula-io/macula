@@ -37,6 +37,7 @@
 
 %% RPC — realm-per-call against a V2 pool
 -export([call/5,
+         call_station/6,
          advertise/5,
          unadvertise/3]).
 
@@ -214,6 +215,18 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
     {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
     macula_client:call(Pool, Realm, Procedure, Payload, TimeoutMs).
+
+%% @doc Issue a CALL to ONE specific station, dialing it directly even
+%% if it is not in the pool's seed set. `Station' is a seed URL (e.g.
+%% `<<"quic://[::1]:4433">>'). The pool reuses an existing link or dials
+%% and monitors a new one, waits for the handshake, and calls there.
+%% This is the direct-dial data path: resolve a serving_station and its
+%% endpoint, then reach it in one hop. See `macula_client:call_station/6'.
+-spec call_station(pool(), macula_client:seed(), realm(), procedure(),
+                   term(), pos_integer()) -> {ok, term()} | {error, term()}.
+call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs) ->
+    macula_client:call_station(Pool, Station, Realm, Procedure, Payload,
+                               TimeoutMs).
 
 %% @doc Advertise a procedure handler on a V2 pool. Fans out to every
 %% healthy link and stores in pool state for replay on link respawn.

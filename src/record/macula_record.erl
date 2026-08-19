@@ -57,10 +57,12 @@
     type/1, key/1, version/1, created_at/1, expires_at/1,
     payload/1, signature/1,
     read_procedure_advertisement/1,
+    read_station_endpoint/1,
 
     %% DHT storage-key derivation (Part 3 §3.3)
     storage_key/1,
-    procedure_key/1
+    procedure_key/1,
+    station_endpoint_key/1
 ]).
 
 -export_type([
@@ -875,6 +877,30 @@ unwrap_text(V)         -> V.
 -spec procedure_key(binary()) -> <<_:256>>.
 procedure_key(ProcedureUri) when is_binary(ProcedureUri) ->
     crypto:hash(sha256, ProcedureUri).
+
+%% @doc The DHT storage key for a station's endpoint by its pubkey,
+%% without a record in hand: identical to `storage_key/1' for a
+%% `station_endpoint'. Consumers use this to `find_record/2' a
+%% serving_station's dialable host:port.
+-spec station_endpoint_key(macula_identity:pubkey()) -> <<_:256>>.
+station_endpoint_key(Pubkey)
+  when is_binary(Pubkey), byte_size(Pubkey) =:= 32 ->
+    crypto:hash(sha256, <<?STORAGE_DOMAIN_STATION_ENDPOINT/binary,
+                          Pubkey/binary>>).
+
+%% @doc Read a `station_endpoint' record's fields as a typed map,
+%% hiding the payload keying (robust to canonical vs wire-decoded, like
+%% `read_procedure_advertisement/1'). `host_advertised' is a possibly
+%% empty list of host binaries.
+-spec read_station_endpoint(record()) ->
+    #{quic_port := 1..65535, host_advertised := [binary()]}.
+read_station_endpoint(#{type := ?TYPE_STATION_ENDPOINT, payload := P}) ->
+    #{quic_port       => payload_field(P, <<"quic_port">>),
+      host_advertised => host_list(payload_field(P, <<"host_advertised">>))}.
+
+host_list(undefined)          -> [];
+host_list(L) when is_list(L)  -> [unwrap_text(H) || H <- L];
+host_list(V)                  -> [unwrap_text(V)].
 signature(#{signature := S}) -> S.
 
 %%------------------------------------------------------------------

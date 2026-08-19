@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.3.0] - 2026-08-19
+
+### Added
+
+- `macula:call_station/6` — issue a CALL to ONE specific station by seed URL,
+  dialing it directly even if it is not in the pool's seed set. The pool reuses an
+  existing link or dials + monitors a new one, waits for the handshake within the
+  deadline, and calls there; returns `{error, not_connected}` if the handshake
+  does not complete in time. This is the direct-dial data path (resolve a
+  serving_station + endpoint, then reach it in one hop, no mesh relay).
+- `macula_record:station_endpoint_key/1` — derive a station's endpoint storage key
+  from its pubkey (for `find_record/2` before holding a record).
+- `macula_record:read_station_endpoint/1` — read a `station_endpoint` record's
+  `quic_port` + `host_advertised` as a typed map (robust to canonical vs
+  wire-decoded payload keying).
+
+Direct-dial discovery Slices 3 (station endpoints) + 4 (dynamic dial). See
+macula-station `DESIGN_DIRECT_DIAL_DISCOVERY`.
+
+---
+
 ## [8.2.0] - 2026-08-19
 
 ### Added

@@ -54,7 +54,7 @@
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
--export([call/5, advertise/4, unadvertise/3]).
+-export([call/5, call_station/6, advertise/4, unadvertise/3]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
 -export([call_stream/5, advertise_stream/5, unadvertise_stream/3]).
 
@@ -245,6 +245,29 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs)
        is_integer(TimeoutMs), TimeoutMs > 0 ->
     gen_server:call(Pool, {rpc_call, Realm, Procedure, Payload, TimeoutMs},
                     TimeoutMs + 1_000).
+
+%% @doc Issue a CALL to ONE specific station, dialing it directly even
+%% if it is not in the pool's seed set. `Station' is a seed URL (e.g.
+%% `<<"quic://[::1]:4433">>'). The pool ensures a link to it (reusing an
+%% existing one, or dialing and monitoring a new one exactly like a
+%% seed), waits for the handshake within the deadline, and calls through
+%% that link. This is the direct-dial data path: resolve a
+%% serving_station (Slice 2) to its endpoint (Slice 3), then reach it in
+%% one hop here — no mesh relay.
+%%
+%% Returns `{error, not_connected}' if the link does not complete its
+%% handshake before the deadline.
+-spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
+                   pos_integer()) -> {ok, term()} | {error, term()}.
+call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs)
+  when is_pid(Pool),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       is_integer(TimeoutMs), TimeoutMs > 0 ->
+    gen_server:call(Pool,
+                    {call_station, Station, Realm, Procedure, Payload,
+                     TimeoutMs},
+                    TimeoutMs + 2_000).
 
 %% @doc Advertise a procedure handler on every healthy link. Stored
 %% in pool state so links respawned later replay the advertisement.
@@ -485,6 +508,19 @@ handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     end),
     {noreply, S};
 
+handle_call({call_station, Station, Realm, Procedure, Payload, TimeoutMs},
+            From, S) ->
+    %% Ensure (reuse or dial) a link to the specific station, then hand
+    %% the wait-for-handshake + call to a worker so the pool gen_server
+    %% is never blocked (same rationale as rpc_call).
+    {Pid, S1} = ensure_link(Station, S),
+    _ = spawn(fun() ->
+        Reply = call_when_connected(Pid, Realm, Procedure, Payload,
+                                    TimeoutMs),
+        gen_server:reply(From, Reply)
+    end),
+    {noreply, S1};
+
 handle_call({advertise, Realm, Procedure, Handler}, _From,
             #state{procs = P} = S) ->
     Pids = spawned_link_pids(S),
@@ -608,6 +644,54 @@ after_link_start({error, Reason}, Seed, S) ->
 
 spawned_link_pids(#state{links = Links}) ->
     [P || #link_state{pid = P} <- maps:values(Links), is_pid(P)].
+
+%% Reuse a live link to `Station', else dial a new one and add it to the
+%% pool exactly like a seed link (monitored, respawn-on-DOWN). Returns
+%% the link pid (or `undefined' if the dial failed to spawn) + new state.
+ensure_link(Station, #state{links = Links} = S) ->
+    ensure_link_for(maps:find(Station, Links), Station, S).
+
+ensure_link_for({ok, #link_state{pid = Pid}}, _Station, S) when is_pid(Pid) ->
+    {Pid, S};
+ensure_link_for(_Missing, Station, S) ->
+    S1 = start_link_for_seed(Station, S),
+    {link_pid(Station, S1), S1}.
+
+link_pid(Station, #state{links = Links}) ->
+    case maps:find(Station, Links) of
+        {ok, #link_state{pid = Pid}} -> Pid;
+        _                            -> undefined
+    end.
+
+%% Wait for a freshly-dialed link's handshake within the deadline, then
+%% call over it with whatever time remains. A reused, already-connected
+%% link calls immediately.
+call_when_connected(undefined, _Realm, _Proc, _Payload, _TimeoutMs) ->
+    {error, not_connected};
+call_when_connected(Pid, Realm, Proc, Payload, TimeoutMs) ->
+    Deadline = erlang:monotonic_time(millisecond) + TimeoutMs,
+    call_after_connect(await_connected(Pid, Deadline), Pid, Realm, Proc,
+                       Payload, Deadline).
+
+await_connected(Pid, Deadline) ->
+    connected_or_wait(safe_is_connected(Pid), Pid, Deadline).
+
+connected_or_wait(true, _Pid, _Deadline) ->
+    true;
+connected_or_wait(false, Pid, Deadline) ->
+    wait_or_give_up(erlang:monotonic_time(millisecond) < Deadline, Pid, Deadline).
+
+wait_or_give_up(true, Pid, Deadline) ->
+    timer:sleep(50),
+    await_connected(Pid, Deadline);
+wait_or_give_up(false, _Pid, _Deadline) ->
+    false.
+
+call_after_connect(true, Pid, Realm, Proc, Payload, Deadline) ->
+    Remaining = max(100, Deadline - erlang:monotonic_time(millisecond)),
+    macula_station_link:call(Pid, Realm, Proc, Payload, Remaining);
+call_after_connect(false, _Pid, _Realm, _Proc, _Payload, _Deadline) ->
+    {error, not_connected}.
 
 %% Live links that have completed CONNECT/HELLO. Used by publish,
 %% which (unlike advertise) gains nothing from dispatching to a

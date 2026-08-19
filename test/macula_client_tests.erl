@@ -39,6 +39,21 @@ connect_with_unreachable_seed_returns_pool_test() ->
     ok = macula_client:close(Pool),
     ok.
 
+%% call_station dials a station outside the seed set. Against an
+%% unreachable one the handshake never completes, so within the deadline
+%% we get a clean `not_connected' (not a hang or a crash) and the pool
+%% survives. The happy path (a real station answering) is the
+%% macula-station cross-station suite.
+call_station_unreachable_returns_not_connected_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    {ok, Pool} = macula_client:connect([], #{}),
+    Result = macula_client:call_station(Pool, ?SEED1, ?REALM,
+                                        <<"x.y">>, #{}, 300),
+    ?assertEqual({error, not_connected}, Result),
+    ?assert(is_process_alive(Pool)),
+    ok = macula_client:close(Pool),
+    ok.
+
 %%------------------------------------------------------------------
 %% subscribe/5 + unsubscribe/2 bookkeeping
 %%------------------------------------------------------------------
