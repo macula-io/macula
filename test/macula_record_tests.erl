@@ -787,7 +787,8 @@ read_procedure_advertisement_canonical_test() ->
     R   = macula_record:procedure_advertisement(Adv, Uri, Sta),
     ?assertEqual(#{procedure_uri   => Uri,
                    advertiser_node => Adv,
-                   serving_station => Sta},
+                   serving_station => Sta,
+                   cert_chain      => undefined},
                  macula_record:read_procedure_advertisement(R)).
 
 %% A record that arrived over the wire presents bare binary payload
@@ -803,7 +804,8 @@ read_procedure_advertisement_wire_shape_test() ->
                                 <<"serving_station">> => Sta}},
     ?assertEqual(#{procedure_uri   => Uri,
                    advertiser_node => Adv,
-                   serving_station => Sta},
+                   serving_station => Sta,
+                   cert_chain      => undefined},
                  macula_record:read_procedure_advertisement(WireRecord)).
 
 procedure_key_matches_storage_key_test() ->
@@ -841,7 +843,8 @@ read_procedure_advertisement_atom_keys_test() ->
                          serving_station => Sta}},
     ?assertEqual(#{procedure_uri   => Uri,
                    advertiser_node => Adv,
-                   serving_station => Sta},
+                   serving_station => Sta,
+                   cert_chain      => undefined},
                  macula_record:read_procedure_advertisement(Rec)).
 
 read_station_endpoint_atom_keys_test() ->

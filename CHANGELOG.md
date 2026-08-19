@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.7.0] - 2026-08-19
+
+### Added
+
+- Direct-dial dual-trust, Direction B (Slice 7c) — managed-realm consumer→provider
+  trust rooted in the realm CA via the X.509 service-cert chain, instead of the
+  keyless realm tag. Findings that forced the pivot: the realm tag is
+  `SHA-256(realm_name)` (no private key), and the realm holds no stable Ed25519
+  signing key, so `verify_delegation_chain/4` could never be published against a
+  real realm. The realm CA is the authority that actually exists and is already
+  delivered to every member at issuance.
+  - `macula_record:verify_advertisement_cert_chain/3` — verify a resolved
+    `procedure_advertisement`'s embedded X.509 chain (leaf → org CA → realm CA)
+    to a trusted realm CA: advertisement signature valid, leaf binds the
+    advertiser's Ed25519 key, chain validates (`public_key:pkix_path_validation`),
+    and the leaf's organization (O) RDN equals the URI's `<org>`. Any failure
+    drops the advertisement as a squat.
+  - `procedure_advertisement/4` gains a `cert_chain` opt (leaf ++ org CA, PEM),
+    carried in the record payload and surfaced by `read_procedure_advertisement/1`,
+    so verification is offline and rides the record's TTL — no side lookup.
+- The 8.6.0 Ed25519 delegation records (`org_directory` / `procedure_delegation` /
+  `verify_delegation_chain`) are retained but go unused on the live managed-realm
+  path (superseded by the cert chain; not deleted).
+
+---
+
 ## [8.6.0] - 2026-08-19
 
 ### Added

@@ -15,6 +15,8 @@
 %% Signatures are Ed25519 over `"macula-v2-record\0" ++ canonical_cbor(unsigned)'.
 -module(macula_record).
 
+-include_lib("public_key/include/public_key.hrl").
+
 -export([
     %% Constructors
     node_record/3, node_record/4,
@@ -63,8 +65,14 @@
     read_org_directory/1,
     read_procedure_delegation/1,
 
-    %% Direct-dial dual-trust (Slice 7c)
+    %% Direct-dial dual-trust (Slice 7c, Ed25519 delegation records)
     verify_delegation_chain/4,
+
+    %% Direct-dial dual-trust (Slice 7c Direction B, X.509 cert chain).
+    %% Managed realms: verify an advertisement's embedded service-cert
+    %% chain to the trusted realm CA. See the plan's "7c publishing —
+    %% Direction B" note.
+    verify_advertisement_cert_chain/3,
 
     %% DHT storage-key derivation (Part 3 §3.3)
     storage_key/1,
@@ -241,6 +249,10 @@
     session_token_hint => binary(),
     rate_limit_qps     => non_neg_integer(),
     max_concurrency    => non_neg_integer(),
+    %% Direction B (managed realms): the advertiser's own service-cert
+    %% chain (leaf ++ org CA, PEM), so a verifying consumer can chain it
+    %% to the realm CA offline without a second lookup.
+    cert_chain         => binary(),
     ttl_ms             => pos_integer()
 }.
 
@@ -915,12 +927,14 @@ payload(#{payload := P}) -> P.
 -spec read_procedure_advertisement(record()) ->
     #{procedure_uri   := binary(),
       advertiser_node := macula_identity:pubkey(),
-      serving_station := macula_identity:pubkey()}.
+      serving_station := macula_identity:pubkey(),
+      cert_chain      := binary() | undefined}.
 read_procedure_advertisement(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT,
                                payload := P}) ->
     #{procedure_uri   => payload_field(P, <<"procedure_uri">>),
       advertiser_node => payload_field(P, <<"advertiser_node">>),
-      serving_station => payload_field(P, <<"serving_station">>)}.
+      serving_station => payload_field(P, <<"serving_station">>),
+      cert_chain      => payload_field(P, <<"cert_chain">>)}.
 
 %% A payload field, robust to every key shape a record arrives in:
 %%   - `{text, <<"k">>}' — canonical record CBOR (built locally)
@@ -1052,6 +1066,138 @@ delegation_grants(#{org_key := DOrg, advertiser := DAdv}, DelKey,
 grant_ok(true)  -> ok;
 grant_ok(false) -> {error, delegation_mismatch}.
 signature(#{signature := S}) -> S.
+
+%%------------------------------------------------------------------
+%% Direct-dial dual-trust (Slice 7c Direction B) — X.509 cert chain.
+%%
+%% Managed realms root trust in the realm CA, not in the (keyless)
+%% realm tag. A provider embeds its own service-cert chain (leaf ++
+%% org CA, PEM) in its `procedure_advertisement'; a verifying consumer
+%% chains it to the realm CA it received at its own issuance. No
+%% publisher records, no live authority — the trust material already
+%% travels with the advertisement.
+%%------------------------------------------------------------------
+
+%% @doc Verify an advertisement's embedded X.509 service-cert chain to a
+%% trusted realm CA. `RealmCaPem' is the realm CA the consumer already
+%% trusts; `Advertisement' is a resolved `procedure_advertisement' whose
+%% payload carries `cert_chain' (leaf ++ org CA, PEM); `ExpectedOrg' is
+%% the `&lt;org&gt;' segment of the procedure_uri. Passes when the
+%% advertisement signature is valid, the leaf binds the advertiser's
+%% Ed25519 key, the leaf chains to the realm CA, and the leaf's
+%% organization (O) RDN equals `ExpectedOrg'. Any failure = drop as a
+%% squat (or as unmanaged/self-signed).
+-spec verify_advertisement_cert_chain(binary(), record(), binary()) ->
+    ok | {error, atom()}.
+verify_advertisement_cert_chain(RealmCaPem, Advertisement, ExpectedOrg)
+  when is_binary(RealmCaPem), is_map(Advertisement), is_binary(ExpectedOrg) ->
+    cert_chain_step_sig(verify(Advertisement), RealmCaPem, Advertisement,
+                        ExpectedOrg).
+
+cert_chain_step_sig({ok, _}, RealmCaPem, Adv, ExpectedOrg) ->
+    #{cert_chain := ChainPem} = read_procedure_advertisement(Adv),
+    cert_chain_step_decode(decode_cert_chain(ChainPem), RealmCaPem,
+                           key(Adv), ExpectedOrg);
+cert_chain_step_sig(_BadSig, _RealmCaPem, _Adv, _ExpectedOrg) ->
+    {error, advertisement_bad_signature}.
+
+%% ChainDers is leaf-first `[LeafDer, OrgCaDer, ...]' (as embedded).
+cert_chain_step_decode({ok, [LeafDer | _] = ChainDers}, RealmCaPem,
+                       AdvKey, ExpectedOrg) ->
+    cert_chain_step_key(cert_subject_pubkey(LeafDer) =:= {ok, AdvKey},
+                        RealmCaPem, ChainDers, LeafDer, ExpectedOrg);
+cert_chain_step_decode({error, Reason}, _RealmCaPem, _AdvKey, _ExpectedOrg) ->
+    {error, Reason}.
+
+cert_chain_step_key(true, RealmCaPem, ChainDers, LeafDer, ExpectedOrg) ->
+    cert_chain_step_path(validate_path(RealmCaPem, ChainDers), LeafDer,
+                         ExpectedOrg);
+cert_chain_step_key(false, _RealmCaPem, _ChainDers, _LeafDer, _ExpectedOrg) ->
+    {error, cert_key_mismatch}.
+
+cert_chain_step_path(ok, LeafDer, ExpectedOrg) ->
+    cert_chain_step_org(cert_org(LeafDer) =:= {ok, ExpectedOrg});
+cert_chain_step_path({error, _}, _LeafDer, _ExpectedOrg) ->
+    {error, cert_chain_untrusted}.
+
+cert_chain_step_org(true)  -> ok;
+cert_chain_step_org(false) -> {error, cert_org_mismatch}.
+
+%% Decode a PEM bundle (>= 1 cert) into a leaf-first DER list.
+decode_cert_chain(Pem) when is_binary(Pem) ->
+    decode_cert_chain_result(pem_cert_ders(Pem));
+decode_cert_chain(_) ->
+    {error, no_cert_chain}.
+
+decode_cert_chain_result([]) -> {error, cert_chain_undecodable};
+decode_cert_chain_result(Ders) -> {ok, Ders}.
+
+pem_cert_ders(Pem) ->
+    [Der || {'Certificate', Der, not_encrypted} <- public_key:pem_decode(Pem)].
+
+%% Raw 32-byte Ed25519 subject pubkey from a leaf cert DER. The plain
+%% `der_decode' path yields the subjectPublicKey as a bit string whose
+%% content is the raw key (mirrors `macula_tls:derive_node_id/1').
+cert_subject_pubkey(Der) ->
+    #'Certificate'{
+       tbsCertificate = #'TBSCertificate'{
+         subjectPublicKeyInfo = #'SubjectPublicKeyInfo'{
+           subjectPublicKey = Spk}}} = public_key:der_decode('Certificate', Der),
+    cert_pubkey_bytes(Spk).
+
+cert_pubkey_bytes({0, Bin}) when byte_size(Bin) =:= 32 -> {ok, Bin};
+cert_pubkey_bytes(Bin) when is_binary(Bin), byte_size(Bin) =:= 32 -> {ok, Bin};
+cert_pubkey_bytes(_) -> {error, not_ed25519}.
+
+%% Validate leaf -> ... -> realm CA. `pkix_path_validation' wants the
+%% chain ordered from the anchor's direct child down to the leaf, so
+%% reverse the leaf-first embedded order.
+validate_path(RealmCaPem, ChainDers) ->
+    validate_path_anchor(realm_ca_der(RealmCaPem), ChainDers).
+
+validate_path_anchor({ok, AnchorDer}, ChainDers) ->
+    validate_path_result(
+      public_key:pkix_path_validation(AnchorDer, lists:reverse(ChainDers), []));
+validate_path_anchor({error, _} = Error, _ChainDers) ->
+    Error.
+
+validate_path_result({ok, _}) -> ok;
+validate_path_result({error, Reason}) -> {error, {bad_cert, Reason}}.
+
+realm_ca_der(Pem) ->
+    realm_ca_der_result(pem_cert_ders(Pem)).
+
+realm_ca_der_result([Der | _]) -> {ok, Der};
+realm_ca_der_result([])        -> {error, no_realm_ca}.
+
+%% Organization (O) RDN of a leaf cert. OTP decode resolves the RDN
+%% value to a friendly `{utf8String, Bin}' / string shape.
+cert_org(Der) ->
+    #'OTPCertificate'{
+       tbsCertificate = #'OTPTBSCertificate'{
+         subject = Subject}} = public_key:pkix_decode_cert(Der, otp),
+    subject_org(Subject).
+
+subject_org({rdnSequence, RDNs}) ->
+    org_from_rdns(lists:append(RDNs));
+subject_org(_) ->
+    {error, no_subject}.
+
+%% id-at-organizationName = OID {2,5,4,10}.
+org_from_rdns([#'AttributeTypeAndValue'{type = {2, 5, 4, 10}, value = V} | _]) ->
+    {ok, rdn_string(V)};
+org_from_rdns([_ | Rest]) ->
+    org_from_rdns(Rest);
+org_from_rdns([]) ->
+    {error, no_org_rdn}.
+
+rdn_string({utf8String, S})      -> to_bin(S);
+rdn_string({printableString, S}) -> to_bin(S);
+rdn_string(S) when is_binary(S)  -> S;
+rdn_string(S) when is_list(S)    -> list_to_binary(S).
+
+to_bin(B) when is_binary(B) -> B;
+to_bin(L) when is_list(L)   -> unicode:characters_to_binary(L).
 
 %%------------------------------------------------------------------
 %% Internals
@@ -1205,8 +1351,10 @@ procedure_advertisement_payload(AdvertiserNode, ProcedureUri,
                    maps:get(session_token_hint, Opts, undefined)),
     M2 = with_uint(M1, <<"rate_limit_qps">>,
                    maps:get(rate_limit_qps, Opts, undefined)),
-    with_uint(M2, <<"max_concurrency">>,
-              maps:get(max_concurrency, Opts, undefined)).
+    M3 = with_uint(M2, <<"max_concurrency">>,
+                   maps:get(max_concurrency, Opts, undefined)),
+    with_text(M3, <<"cert_chain">>,
+              maps:get(cert_chain, Opts, undefined)).
 
 with_uint(Map, _Key, undefined) -> Map;
 with_uint(Map,  Key, N) when is_integer(N), N >= 0 ->
