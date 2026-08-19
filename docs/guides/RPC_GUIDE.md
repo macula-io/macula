@@ -1,16 +1,28 @@
 # Macula SDK - RPC Guide
 
-**Request/response over the relay mesh with DHT-based service discovery**
+**Request/response over the mesh: DHT discovery, then a direct dial.**
 
-![RPC Architecture](assets/rpc_flow.svg)
+![Direct-Dial RPC across Two Stations](assets/rpc_two_stations.svg)
 
 ---
 
 ## Overview
 
-Macula provides decentralized RPC (remote procedure call). SDK clients advertise procedures and call procedures through their relay connection. Relays handle cross-relay routing via Kademlia DHT procedure discovery.
+Macula provides decentralized RPC (remote procedure call). A provider advertises
+a procedure as a signed `procedure_advertisement` in the Kademlia DHT, naming the
+station it is reachable through (`serving_station`). A caller resolves that record
+`O(log N)` in the DHT and then **dials the serving station directly** for the
+call — one hop, point-to-point over QUIC, not relayed across the mesh.
 
 From the SDK perspective: advertise a handler, call a procedure, get a result.
+`macula:call/5` composes the whole resolve → dial → call path for you;
+`macula:call_station/6` dials a station URL you already know.
+
+> **Note on the model.** Earlier Macula relayed every CALL through the mesh
+> ("nodes never connect directly"). That was a stopgap; discovery was always
+> meant to resolve a record and then dial the provider's station directly. The
+> direct-dial path is the current default. See
+> [macula-station `DESIGN_DIRECT_DIAL_DISCOVERY.md`](https://github.com/macula-io/macula-station).
 
 ---
 

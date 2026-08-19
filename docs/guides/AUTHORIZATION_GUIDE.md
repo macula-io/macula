@@ -310,6 +310,62 @@ TrustedRealms = macula_trust_store:list_trusted().
 
 ---
 
+## Direct-Dial Dual-Trust
+
+Direct-dial RPC (a consumer resolves a `procedure_advertisement` and dials the
+provider's station) collapses the path to one QUIC/TLS session between two
+sovereign identities — the natural place for a **mutual** check. Trust is
+bidirectional, unlike the one-directional server-authenticates-client of classic
+RPC:
+
+- **consumer → provider** — is this the legitimate server of the procedure, not a
+  squatter who wrote an advertisement next to the real one?
+- **provider → consumer** — should I serve *this* caller at all? Direct-dial makes
+  every station a public front door, so the provider decides who it answers.
+
+Both stay compatible with fully-open, permissionless discovery: the discovery
+layer is always open, and each endpoint independently chooses what it checks.
+
+### consumer → provider (managed realms): realm-CA cert chain
+
+In a managed realm the trust root is the **realm CA**, and it already reaches
+every member: a service is issued an Ed25519 leaf cert chaining
+`realm CA → org CA → leaf`, and receives the realm CA at issuance. A provider
+**embeds its cert chain** (leaf + org CA) in its `procedure_advertisement`. A
+verifying consumer holds the realm CA and checks a resolved advertisement:
+
+1. the advertisement signature is valid for the advertiser key;
+2. the leaf cert binds that same advertiser key;
+3. the leaf chains `leaf → org CA → realm CA` (X.509 path validation);
+4. the leaf's organization matches the `<org>` in the procedure URI.
+
+Any failure drops the advertisement as a squat — a squatter cannot obtain a
+realm-CA-issued cert binding their key to someone else's org.
+
+```erlang
+%% consumer side (the SDK helper the resolution runs)
+ok = macula_record:verify_advertisement_cert_chain(RealmCaPem, Advertisement, Org).
+```
+
+> Note on the realm tag: the 32-byte realm tag is `SHA-256(realm_name)` — a
+> keyless label, not a signing key. Trust therefore roots in the realm **CA**
+> (a real key the realm holds and distributes at issuance), not the tag.
+
+### provider → consumer: UCAN-gated procedures
+
+A bare advertisement serves any *identified* caller (every QUIC session is
+Ed25519 peer-bound, so "open" is not "anonymous"). A provider can instead require
+a UCAN per procedure; a caller presents a `ucan_token` on the CALL, and a caller
+without a valid one is refused with a BOLT#4 `unauthorized` code rather than a
+timeout. The token is verified offline against the chain the provider recognises —
+no live authority in the path.
+
+Managed realms are the first target for this model; the fully-open public realm
+keeps discovery permissionless and layers authorization on top only where a
+provider opts in.
+
+---
+
 ## UCAN-Based Licensing
 
 Macula uses UCAN tokens for software licensing in the marketplace, providing decentralized, capability-based license management.

@@ -280,7 +280,7 @@ subscribes via raw station-links, bypassing the pool
 
 - `macula-realm` `ClankerCab.Subscriber` → raw `macula_station_link`s
   (RpcAdvertiser pattern). Committed `de89276` (GitHub-canonical). Image built
-  **locally and pushed** to `codeberg.org/macula-internal/macula-realm:main`
+  **locally and pushed** to `github.com/macula-internal/macula-realm:main`
   (digest `sha256:0b328d16…`) because the macula-io GitHub org's **hosted Actions
   runners were unavailable** (jobs queued then failed "not acquired by Runner" —
   looks like an Actions minutes/billing quota; worked at 07:15, dead by 12:23).

@@ -161,15 +161,82 @@ The subscriber receives **exactly one** terminal message:
 
 After `event_gone` arrives, no further events come for that `SubRef`.
 
-### Subscribing with options
+### Subscribing with options — delivery ordering
 
 ```erlang
 {ok, SubRef} = macula:subscribe(Pool, Realm, Topic, Subscriber, Opts).
 ```
 
-`Opts` is a forward-compatible map. Phase 1 honors no subscribe-time
-options. Future phases (server-side filters, history replay) will
-add named keys.
+The `delivery` option chooses how a **single publisher's** stream is
+ordered on the way to your subscriber. This matters because the mesh
+sends copies of a fact down several links at once, and the pool dedups
+to the *first* arrival — so without ordering, a single publisher's
+`seq 1, 2, 3` can reach you as `1, 3, 2`. Each publisher's `seq` is
+pool-monotonic and contiguous, which is exactly what makes ordered
+delivery possible.
+
+| Mode | Behaviour | Use when |
+|---|---|---|
+| `ordered` (**default**) | Per-publisher FIFO by `seq`. Out-of-order arrivals are buffered and released in order; a genuinely missing seq is skipped after `order_timeout_ms`. | Event / delta streams where order matters. |
+| `latest_only` | Deliver only seqs newer than the highest seen for that publisher (drop stale). No buffering, no head-of-line delay. | State snapshots — you want the freshest value, not every value. |
+| `as_arrives` | Raw arrival order. Zero added latency; you order it yourself. | You have your own versioning, or you truly do not care. |
+
+```erlang
+%% default — per-publisher FIFO
+{ok, R1} = macula:subscribe(Pool, Realm, Topic, self()),
+
+%% newest-wins, drop stale
+{ok, R2} = macula:subscribe(Pool, Realm, Topic, self(),
+                            #{delivery => latest_only}),
+
+%% raw arrival order (the pre-8.8 behaviour)
+{ok, R3} = macula:subscribe(Pool, Realm, Topic, self(),
+                            #{delivery => as_arrives}).
+```
+
+**Ordered mode and loss.** `ordered` trades a bounded delay for order:
+if `seq 2` never arrives, the buffer holds `3, 4, …` only until
+`order_timeout_ms` elapses, then skips the gap and releases them. That
+skip is the accepted "order-not-guaranteed delivery" trade for a lost
+fact — a reorder buffer cannot invent a message the mesh dropped. Design
+mesh facts to be **idempotent and version-stamped** so an occasional
+skip washes out.
+
+**Total order is not offered, by design.** `ordered` restores a *single*
+publisher's order (cheap, over ordered transport). It does not impose a
+total order across *different* publishers — that would need a single
+sequencer (a consensus log) that the mesh deliberately does not have.
+Cross-publisher order is not something a decentralised broadcast can give
+you; carry a version or timestamp in the fact if a consumer needs to
+relate two publishers' events.
+
+#### Pool-level tuning (`connect/2` options)
+
+| Option | Default | Meaning |
+|---|---|---|
+| `order_timeout_ms` | `250` | How long an `ordered` sub waits for a missing seq before skipping the gap. Bounds head-of-line delay. |
+| `order_max_buffer` | `1024` | Per-publisher reorder-buffer count cap. Over it, the head gap is skipped early (memory guard for a high-rate publisher gapping). |
+
+#### Telemetry — is loss real?
+
+`macula:status/1` reports `pubsub_gap_skips`: the number of per-publisher
+gaps given up on after the timeout, i.e. the genuine loss rate an
+`ordered` subscriber could not fill. A near-zero value means the mesh is
+delivering and `ordered` costs you almost nothing; a rising value is the
+signal to look at delivery, not ordering.
+
+```erlang
+{ok, #{pubsub_gap_skips := Skips}} = macula:status(Pool).
+```
+
+### `(publisher, seq)` and dedup
+
+`{publisher, seq}` is also the dedup key. The pool sees each
+`(Realm, Publisher, Seq)` tuple **at most once**, even when the same
+EVENT arrives via multiple links (e.g. `replication_factor > 1`). In
+`ordered` and `latest_only` modes the delivery layer additionally uses
+the seq to order or drop; in `as_arrives` the dedup layer is the only
+filter.
 
 ### Subscribing in a callback module
 

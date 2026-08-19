@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 360">
+  <defs>
+    <marker id="a-out" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#6b7280"/></marker>
+    <marker id="a-dht" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#8b5cf6"/></marker>
+    <marker id="a-call" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" fill="#3b82f6"/></marker>
+    <marker id="a-reply" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" fill="#10b981"/></marker>
+    <linearGradient id="hg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#8b5cf6"/></linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="1" dy="1" stdDeviation="2" flood-opacity="0.12"/></filter>
+  </defs>
+
+  <rect width="820" height="360" rx="6" fill="#f8fafc"/>
+  <rect x="0" y="0" width="820" height="40" fill="url(#hg)"/>
+  <text x="410" y="26" text-anchor="middle" fill="white" font-family="system-ui" font-size="15" font-weight="bold">Direct-Dial RPC across Two Stations</text>
+
+  <!-- Legend -->
+  <rect x="628" y="50" width="182" height="70" rx="5" fill="white" stroke="#e5e7eb" filter="url(#sh)"/>
+  <line x1="638" y1="66" x2="664" y2="66" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#a-dht)"/>
+  <text x="672" y="69" font-family="system-ui" font-size="9" fill="#6b7280">Resolve (DHT)</text>
+  <line x1="638" y1="84" x2="664" y2="84" stroke="#3b82f6" stroke-width="2" marker-end="url(#a-call)"/>
+  <text x="672" y="87" font-family="system-ui" font-size="9" fill="#6b7280">Direct dial + CALL</text>
+  <line x1="638" y1="102" x2="664" y2="102" stroke="#10b981" stroke-width="2" marker-end="url(#a-reply)"/>
+  <text x="672" y="105" font-family="system-ui" font-size="9" fill="#6b7280">Reply</text>
+
+  <!-- Consumer C on Station A -->
+  <rect x="40" y="150" width="150" height="44" rx="8" fill="white" stroke="#3b82f6" stroke-width="2" filter="url(#sh)"/>
+  <text x="115" y="169" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#1d4ed8">Consumer C</text>
+  <text x="115" y="185" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#6b7280">service / daemon</text>
+  <rect x="40" y="232" width="150" height="52" rx="10" fill="#fef9c3" stroke="#f59e0b" stroke-width="2" filter="url(#sh)"/>
+  <text x="115" y="253" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="700" fill="#b45309">Station A</text>
+  <text x="115" y="270" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#a16207">DHT / routing</text>
+  <line x1="115" y1="232" x2="115" y2="196" stroke="#6b7280" stroke-width="1.5" marker-end="url(#a-out)"/>
+  <text x="122" y="216" font-family="system-ui" font-size="8" fill="#6b7280">outbound QUIC</text>
+
+  <!-- Producer P on Station B -->
+  <rect x="630" y="150" width="150" height="44" rx="8" fill="white" stroke="#f97316" stroke-width="2" filter="url(#sh)"/>
+  <text x="705" y="169" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#c2410c">Producer P</text>
+  <text x="705" y="185" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#6b7280">serves the procedure</text>
+  <rect x="630" y="232" width="150" height="52" rx="10" fill="#fef9c3" stroke="#f59e0b" stroke-width="2" filter="url(#sh)"/>
+  <text x="705" y="253" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="700" fill="#b45309">Station B</text>
+  <text x="705" y="270" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#a16207">serving_station</text>
+  <line x1="705" y1="232" x2="705" y2="196" stroke="#6b7280" stroke-width="1.5" marker-end="url(#a-out)"/>
+
+  <!-- DHT resolve band between stations -->
+  <line x1="192" y1="258" x2="628" y2="258" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#a-dht)"/>
+  <rect x="330" y="248" width="160" height="20" rx="4" fill="#ede9fe" stroke="#c4b5fd"/>
+  <text x="410" y="262" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="500" fill="#6d28d9">DHT: resolve advertisement</text>
+
+  <!-- Direct dial call (C -> B, one hop) -->
+  <path d="M 190 165 C 380 120, 470 120, 630 165" fill="none" stroke="#3b82f6" stroke-width="2" marker-end="url(#a-call)"/>
+  <text x="410" y="120" text-anchor="middle" font-family="system-ui" font-size="9.5" font-weight="600" fill="#1d4ed8">dial Station B directly + CALL  (one hop)</text>
+  <path d="M 630 178 C 470 150, 380 150, 190 178" fill="none" stroke="#10b981" stroke-width="2" marker-end="url(#a-reply)"/>
+  <text x="410" y="146" text-anchor="middle" font-family="system-ui" font-size="9" fill="#059669">reply — never relayed back through A</text>
+
+  <!-- Steps -->
+  <text x="410" y="303" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">1. P puts a signed procedure_advertisement (uri, serving_station=B, cert_chain) into the DHT</text>
+  <text x="410" y="318" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">2. C resolves it via A→B, verifies the cert chain to the realm CA, resolves B's station_endpoint</text>
+  <text x="410" y="333" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">3. C dials Station B directly and issues the CALL — discovery is O(log N) DHT, the call is one hop</text>
+  <text x="410" y="351" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#9ca3af">A squatter advertisement whose cert does not chain to the realm CA is dropped and never dialed.</text>
+</svg>

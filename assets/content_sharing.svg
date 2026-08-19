@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 360">
+  <defs>
+    <marker id="c-out" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#6b7280"/></marker>
+    <marker id="c-dht" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#8b5cf6"/></marker>
+    <marker id="c-chunk" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" fill="#0ea5e9"/></marker>
+    <linearGradient id="hg3" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#8b5cf6"/></linearGradient>
+    <filter id="sh3" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="1" dy="1" stdDeviation="2" flood-opacity="0.12"/></filter>
+  </defs>
+
+  <rect width="820" height="360" rx="6" fill="#f8fafc"/>
+  <rect x="0" y="0" width="820" height="40" fill="url(#hg3)"/>
+  <text x="410" y="26" text-anchor="middle" fill="white" font-family="system-ui" font-size="15" font-weight="bold">Content Sharing — Content-Addressed Fetch (MCID)</text>
+
+  <!-- Legend -->
+  <rect x="628" y="50" width="182" height="70" rx="5" fill="white" stroke="#e5e7eb" filter="url(#sh3)"/>
+  <line x1="638" y1="66" x2="664" y2="66" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#c-dht)"/>
+  <text x="672" y="69" font-family="system-ui" font-size="9" fill="#6b7280">Resolve MCID (DHT)</text>
+  <line x1="638" y1="84" x2="664" y2="84" stroke="#0ea5e9" stroke-width="2" marker-end="url(#c-chunk)"/>
+  <text x="672" y="87" font-family="system-ui" font-size="9" fill="#6b7280">Chunk transfer</text>
+  <text x="638" y="105" font-family="system-ui" font-size="8.5" fill="#9ca3af">MCID = hash of content</text>
+
+  <!-- Fetcher C on Station A -->
+  <rect x="40" y="150" width="150" height="44" rx="8" fill="white" stroke="#3b82f6" stroke-width="2" filter="url(#sh3)"/>
+  <text x="115" y="169" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#1d4ed8">Fetcher C</text>
+  <text x="115" y="185" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#6b7280">wants MCID</text>
+  <rect x="40" y="232" width="150" height="52" rx="10" fill="#fef9c3" stroke="#f59e0b" stroke-width="2" filter="url(#sh3)"/>
+  <text x="115" y="253" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="700" fill="#b45309">Station A</text>
+  <text x="115" y="270" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#a16207">DHT / routing</text>
+  <line x1="115" y1="232" x2="115" y2="196" stroke="#6b7280" stroke-width="1.5" marker-end="url(#c-out)"/>
+
+  <!-- Host H on Station B -->
+  <rect x="630" y="150" width="150" height="44" rx="8" fill="white" stroke="#f97316" stroke-width="2" filter="url(#sh3)"/>
+  <text x="705" y="169" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#c2410c">Host H</text>
+  <text x="705" y="185" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#6b7280">holds the bytes</text>
+  <rect x="630" y="232" width="150" height="52" rx="10" fill="#fef9c3" stroke="#f59e0b" stroke-width="2" filter="url(#sh3)"/>
+  <text x="705" y="253" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="700" fill="#b45309">Station B</text>
+  <text x="705" y="270" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#a16207">serving endpoint</text>
+  <line x1="705" y1="232" x2="705" y2="196" stroke="#6b7280" stroke-width="1.5" marker-end="url(#c-out)"/>
+
+  <!-- DHT resolve band -->
+  <line x1="192" y1="258" x2="628" y2="258" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#c-dht)"/>
+  <rect x="322" y="248" width="176" height="20" rx="4" fill="#ede9fe" stroke="#c4b5fd"/>
+  <text x="410" y="262" text-anchor="middle" font-family="system-ui" font-size="9" font-weight="500" fill="#6d28d9">DHT: resolve content_announcement</text>
+
+  <!-- Chunk transfer H -> C (finite blob) -->
+  <path d="M 630 168 C 440 128, 380 128, 190 168" fill="none" stroke="#0ea5e9" stroke-width="2" marker-end="url(#c-chunk)"/>
+  <text x="410" y="122" text-anchor="middle" font-family="system-ui" font-size="9.5" font-weight="600" fill="#0369a1">dial H, pull chunk[0..n] — finite, known size</text>
+  <text x="410" y="140" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#6b7280">verify every chunk against the MCID hash</text>
+
+  <!-- Steps -->
+  <text x="410" y="303" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">1. H puts a content_announcement (MCID, endpoint=H, size, chunk_count) into the DHT — MCID is a 34-byte content hash</text>
+  <text x="410" y="318" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">2. C resolves the MCID (many hosts may announce the same one), picks a host, dials it, and pulls the chunks</text>
+  <text x="410" y="333" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">3. Integrity is self-verifying: content is addressed by WHAT it is, so any host with the bytes is interchangeable</text>
+  <text x="410" y="351" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#9ca3af">Same resolve-then-dial shape as RPC, but the address is the content hash and the transfer is a finite, hash-checked blob.</text>
+</svg>

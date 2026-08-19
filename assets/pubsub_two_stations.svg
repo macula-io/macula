@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 360">
+  <defs>
+    <marker id="p-out" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#6b7280"/></marker>
+    <marker id="p-sub" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#8b5cf6"/></marker>
+    <marker id="p-evt" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" fill="#10b981"/></marker>
+    <linearGradient id="hg2" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#8b5cf6"/></linearGradient>
+    <filter id="sh2" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="1" dy="1" stdDeviation="2" flood-opacity="0.12"/></filter>
+  </defs>
+
+  <rect width="820" height="360" rx="6" fill="#f8fafc"/>
+  <rect x="0" y="0" width="820" height="40" fill="url(#hg2)"/>
+  <text x="410" y="26" text-anchor="middle" fill="white" font-family="system-ui" font-size="15" font-weight="bold">PubSub across Two Stations (Plumtree fan-out)</text>
+
+  <!-- Legend -->
+  <rect x="628" y="50" width="182" height="70" rx="5" fill="white" stroke="#e5e7eb" filter="url(#sh2)"/>
+  <line x1="638" y1="66" x2="664" y2="66" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#p-sub)"/>
+  <text x="672" y="69" font-family="system-ui" font-size="9" fill="#6b7280">Subscribe / membership</text>
+  <line x1="638" y1="84" x2="664" y2="84" stroke="#10b981" stroke-width="2" marker-end="url(#p-evt)"/>
+  <text x="672" y="87" font-family="system-ui" font-size="9" fill="#6b7280">Event fan-out</text>
+  <text x="638" y="105" font-family="system-ui" font-size="8.5" fill="#9ca3af">tree edge = eager push</text>
+
+  <!-- Subscriber S on Station A -->
+  <rect x="40" y="150" width="150" height="44" rx="8" fill="white" stroke="#3b82f6" stroke-width="2" filter="url(#sh2)"/>
+  <text x="115" y="169" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#1d4ed8">Subscriber S</text>
+  <text x="115" y="185" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#6b7280">delivery: ordered</text>
+  <rect x="40" y="232" width="150" height="52" rx="10" fill="#fef9c3" stroke="#f59e0b" stroke-width="2" filter="url(#sh2)"/>
+  <text x="115" y="253" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="700" fill="#b45309">Station A</text>
+  <text x="115" y="270" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#a16207">records interest</text>
+  <line x1="115" y1="196" x2="115" y2="230" stroke="#10b981" stroke-width="1.5" marker-end="url(#p-evt)"/>
+  <text x="122" y="216" font-family="system-ui" font-size="8" fill="#6b7280">deliver in order</text>
+
+  <!-- Publisher Pub on Station B -->
+  <rect x="630" y="150" width="150" height="44" rx="8" fill="white" stroke="#f97316" stroke-width="2" filter="url(#sh2)"/>
+  <text x="705" y="169" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#c2410c">Publisher</text>
+  <text x="705" y="185" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#6b7280">stamps (publisher, seq)</text>
+  <rect x="630" y="232" width="150" height="52" rx="10" fill="#fef9c3" stroke="#f59e0b" stroke-width="2" filter="url(#sh2)"/>
+  <text x="705" y="253" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="700" fill="#b45309">Station B</text>
+  <text x="705" y="270" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#a16207">origin of the event</text>
+  <line x1="705" y1="232" x2="705" y2="196" stroke="#6b7280" stroke-width="1.5" marker-end="url(#p-out)"/>
+  <text x="712" y="216" font-family="system-ui" font-size="8" fill="#6b7280">publish</text>
+
+  <!-- Membership gossip (dashed, both ways) -->
+  <line x1="628" y1="252" x2="192" y2="252" stroke="#8b5cf6" stroke-width="1.3" stroke-dasharray="4 2"/>
+  <text x="410" y="248" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#7c3aed">subscription membership gossips across stations</text>
+
+  <!-- Event fan-out B -> A (eager tree edge) -->
+  <path d="M 630 168 C 440 128, 380 128, 190 168" fill="none" stroke="#10b981" stroke-width="2" marker-end="url(#p-evt)"/>
+  <text x="410" y="122" text-anchor="middle" font-family="system-ui" font-size="9.5" font-weight="600" fill="#059669">event fans out B → A along the Plumtree eager tree</text>
+  <text x="410" y="140" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#6b7280">lazy IHAVE / GRAFT gossip repairs a missed message</text>
+
+  <!-- Steps / footer -->
+  <text x="410" y="303" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">Topic names an EVENT TYPE ("energy.home.measured") — entity IDs go in the payload, never in the topic</text>
+  <text x="410" y="318" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">One subscriber, one connection: the mesh delivers from every publisher, wherever they are (fan-in stays O(1))</text>
+  <text x="410" y="333" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">Delivery is per-publisher ordered by seq (macula 8.8): buffered + released in order, gap skipped after a timeout</text>
+  <text x="410" y="351" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#9ca3af">PubSub stays find-stations-then-Plumtree — it is not direct-dial. Broadcast to many is a different problem than a two-party call.</text>
+</svg>

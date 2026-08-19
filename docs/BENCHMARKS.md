@@ -6,7 +6,7 @@ handshake, no DHT round-trips. Numbers represent the substrate's
 floor contribution; end-to-end latency adds whatever the operator's
 RTT/DHT stack contributes on top.
 
-See [PLAN_MACULA_NET_PHASE4_6_BENCHMARKS.md](https://codeberg.org/macula-internal/macula-architecture/src/branch/main/plans/PLAN_MACULA_NET_PHASE4_6_BENCHMARKS.md)
+See [PLAN_MACULA_NET_PHASE4_6_BENCHMARKS.md](https://github.com/macula-internal/macula-architecture/src/branch/main/plans/PLAN_MACULA_NET_PHASE4_6_BENCHMARKS.md)
 for scope rationale.
 
 ## Spec targets
