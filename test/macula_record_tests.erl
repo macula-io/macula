@@ -826,3 +826,26 @@ station_endpoint_key_matches_storage_key_test() ->
     R   = macula_record:station_endpoint(Pub, 4433),
     ?assertEqual(macula_record:storage_key(R),
                  macula_record:station_endpoint_key(Pub)).
+
+%% The shape a record actually arrives in over the SDK find_records/2
+%% path: payload keys atomised by the frame decoder. The readers must
+%% handle it (they did not before — this regressed silently through
+%% Slice 2's find_value-based test).
+read_procedure_advertisement_atom_keys_test() ->
+    Adv = crypto:strong_rand_bytes(32),
+    Sta = crypto:strong_rand_bytes(32),
+    Uri = <<"realm/org/app/x">>,
+    Rec = #{type    => 16#06,
+            payload => #{procedure_uri   => {text, Uri},
+                         advertiser_node => Adv,
+                         serving_station => Sta}},
+    ?assertEqual(#{procedure_uri   => Uri,
+                   advertiser_node => Adv,
+                   serving_station => Sta},
+                 macula_record:read_procedure_advertisement(Rec)).
+
+read_station_endpoint_atom_keys_test() ->
+    Rec = #{type    => 16#12,
+            payload => #{quic_port => 4433, host_advertised => [<<"::1">>]}},
+    ?assertEqual(#{quic_port => 4433, host_advertised => [<<"::1">>]},
+                 macula_record:read_station_endpoint(Rec)).

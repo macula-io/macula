@@ -855,9 +855,20 @@ read_procedure_advertisement(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT,
       advertiser_node => payload_field(P, <<"advertiser_node">>),
       serving_station => payload_field(P, <<"serving_station">>)}.
 
-%% A payload field, robust to canonical vs wire-decoded key/value shapes.
+%% A payload field, robust to every key shape a record arrives in:
+%%   - `{text, <<"k">>}' — canonical record CBOR (built locally)
+%%   - `<<"k">>'         — bare binary (some wire-decoded paths)
+%%   - `k' (atom)        — the frame decoder atomises payload keys via
+%%                         `binary_to_existing_atom' when a record is
+%%                         returned inside an RPC result (e.g. the SDK
+%%                         `find_records/2' path).
 payload_field(P, Name) ->
-    unwrap_text(first_present([{text, Name}, Name], P)).
+    unwrap_text(first_present([{text, Name}, Name, safe_atom(Name)], P)).
+
+safe_atom(Name) ->
+    try binary_to_existing_atom(Name, utf8)
+    catch _:_ -> undefined
+    end.
 
 first_present([K | Ks], P) ->
     case maps:find(K, P) of

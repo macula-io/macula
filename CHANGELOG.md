@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.4.1] - 2026-08-19
+
+### Fixed
+
+- `macula_record:read_procedure_advertisement/1` and `read_station_endpoint/1`
+  now read payload fields whose keys were **atomised by the frame decoder** — the
+  shape a record actually arrives in over the `find_records/2` / RPC-result path
+  (`#{serving_station => ..., procedure_uri => {text, ...}}`). They previously
+  handled only `{text, _}` and bare-binary keys, so a consumer resolving via the
+  SDK got `undefined` fields and direct-dial resolution silently failed. Earlier
+  tests used `find_value` over erpc (which keeps canonical `{text, _}` keys) and
+  missed it; the Slice 5 `find_records` e2e caught it. Consumers on 8.2.0-8.4.0
+  should upgrade.
+
+---
+
 ## [8.4.0] - 2026-08-19
 
 ### Added
