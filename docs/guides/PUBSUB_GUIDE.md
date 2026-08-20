@@ -365,6 +365,38 @@ ok = macula:publish(Pool, Realm, Topic, Payload, #{timeout_ms => 1000}).
   `(publisher, seq)` dedup at each hop is what makes this safe past
   one hop.
 
+### Publishing with `macula_publisher` (supervised)
+
+`macula:publish/4` is a plain blocking call with no addressable pid to
+cancel or observe from outside. `macula_publisher` (9.4.0+) is the
+supervised counterpart — same relationship `macula_subscriber` has to a
+hand-rolled receive loop, or `macula_feeder` has to `put_content/2`:
+
+```erlang
+-module(status_publisher).
+-behaviour(macula_publisher).
+-export([init/1, handle_published/2]).
+
+init(Parent) -> {ok, Parent}.
+
+handle_published(Result, Parent) ->
+    Parent ! {published, Result},
+    {stop, normal, Parent}.
+```
+
+```erlang
+{ok, Pid} = macula_publisher:start_link(status_publisher, Pool, Realm,
+                                        Topic, Payload, self()).
+```
+
+`start_link/5,6` returns immediately with a pid; the publish runs in a
+linked worker and the outcome (`ok | {error, term()}`) reaches
+`Module:handle_published/2`. `macula_publisher:cancel/1` stops it before
+the publish resolves, delivering `outcome => cancelled` in the
+`pubsub.publish_completed_v1` mesh fact published around the transfer
+(paired with `pubsub.publish_started_v1` at the start) — same shape as
+`macula_feeder`'s `sharing.put_started_v1` / `sharing.put_completed_v1`.
+
 ---
 
 ## Unsubscribing

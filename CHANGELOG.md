@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.4.0] - 2026-08-20
+
+### Added
+
+- **`macula_publisher`** — the missing supervised behaviour for pubsub
+  publishers. Every other primitive pair already had a supervised behaviour on
+  both sides (`macula_request`/`macula_response` for RPC, `macula_streamer`/
+  `macula_stream_sink` for streaming RPC, `macula_feeder`/`macula_download`
+  for content sharing); pubsub had only the consumer side (`macula_subscriber`).
+  `macula:publish/4` remains a plain blocking call with no addressable pid to
+  cancel or observe from outside. `macula_publisher:start_link/5,6` returns
+  immediately with a pid, runs the publish in a linked worker, delivers the
+  outcome to `Module:handle_published/2`, and publishes
+  `pubsub.publish_started_v1` / `pubsub.publish_completed_v1` mesh facts
+  around the transfer — mirroring `macula_feeder`'s shape exactly.
+
 ## [9.3.1] - 2026-08-20
 
 ### Fixed
