@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.7.0] - 2026-08-20
+
+### Added
+
+- **Direct-dial for content upload** (`macula_feeder:start_link_direct/5,6`,
+  `macula_direct_dial:put_content/4`, `resolve_station_endpoint/2`,
+  `macula:put_content_station/4,5`). The PUT-side counterpart to
+  download direct-dial. Unlike a GET, a PUT has no discovery step — the
+  caller already knows (or is choosing) which station to seed, so it
+  names `Station' directly rather than resolving one from an
+  announcement. Reuses the exact `station_endpoint' resolve machinery
+  RPC direct-dial already built for `serving_station' (same signer
+  check, same stale-record retry), just exposed as a standalone public
+  `resolve_station_endpoint/2'.
+- **`macula:put_content_station/4,5`** — the content-transfer
+  counterpart to `get_content_station/4,5`, symmetric in shape.
+
 ## [9.6.0] - 2026-08-20
 
 ### Added

@@ -59,6 +59,7 @@
 %% (BLAKE3 = 16#55), 32-byte BLAKE3 hash. The relay validates the
 %% payload's hash on `put_block' and rejects mismatches.
 -export([put_content/2,
+         put_content_station/4, put_content_station/5,
          get_content/2,
          get_content_station/4, get_content_station/5,
          find_content_providers/2]).
@@ -578,6 +579,33 @@ put_manifest(LinkPid, Stream, #{mcid := MCID} = Manifest) ->
 classify_put_manifest({ok, ok},      MCID) -> {ok, MCID};
 classify_put_manifest({ok, Reply},  _MCID) -> {error, {unexpected_reply, Reply}};
 classify_put_manifest({error, _} = E, _MCID) -> E.
+
+%% @doc As `put_content/2', dialing `Station' directly (reusing a live
+%% link or dialing + waiting up to `TimeoutMs' for one) instead of
+%% picking from the pool's existing links — the content-transfer
+%% counterpart to `call_station/6'. `Station' and `TimeoutMs' mean
+%% exactly what they do there; the underlying block/manifest transfer
+%% has its own internal timeouts regardless of `TimeoutMs', which
+%% bounds only the connect wait. See `macula_direct_dial:put_content/4'
+%% to resolve a station by identity and put in one call.
+-spec put_content_station(pool(), macula_client:seed(), binary(),
+                          pos_integer()) -> {ok, mcid()} | {error, term()}.
+put_content_station(Pool, Station, Bytes, TimeoutMs) ->
+    put_content_station(Pool, Station, Bytes, TimeoutMs, #{}).
+
+%% @doc As `put_content_station/4', with a per-call TLS trust override
+%% for this dial — `verify', `expected_node_id', `pin_tls_cert' (see
+%% `call_station/8').
+-spec put_content_station(pool(), macula_client:seed(), binary(),
+                          pos_integer(), map()) ->
+    {ok, mcid()} | {error, term()}.
+put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
+    LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
+    with_content_stream_station(Pool, Station, TimeoutMs, LinkOpts,
+                                fun(LinkPid, Stream) ->
+        put_content_by_size(byte_size(Bytes) =< macula_manifest:default_chunk_size(),
+                            LinkPid, Stream, Bytes)
+    end).
 
 %% @doc Fetch the bytes for a previously-stored MCID. Returns
 %% `{error, not_found}' if no provider in the pool's reach holds a

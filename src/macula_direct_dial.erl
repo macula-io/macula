@@ -57,6 +57,12 @@
 %%%
 %%% == Content ==
 %%%
+%%% `put_content/4' has no resolve step at all — unlike a GET, a PUT
+%%% names its OWN target: the caller already knows (or is choosing)
+%%% which station to seed, so it takes `Station' directly and resolves
+%%% only that station's own `station_endpoint' (`resolve_station_endpoint/2',
+%%% the same machinery `call/6' uses internally for `serving_station').
+%%%
 %%% `get_content/3' resolves and fetches deliberately WITHOUT the
 %%% cert-chain machinery above — content's threat model genuinely
 %%% differs from RPC's. An RPC reply is opaque and unverifiable except
@@ -77,7 +83,8 @@
 -module(macula_direct_dial).
 
 -export([call/5, call/6, publish_advertisement/4, publish_advertisement/5,
-        get_content/3, resolve_content_provider/2]).
+        get_content/3, resolve_content_provider/2,
+        put_content/4, resolve_station_endpoint/2]).
 
 -ifdef(TEST).
 %% Exports for unit tests — pure helpers that are otherwise private.
@@ -214,6 +221,39 @@ on_providers_found({ok, []}, Pool, MCID, N) ->
     resolve_content_provider(Pool, MCID, N - 1);
 on_providers_found({error, _} = Error, _Pool, _MCID, _N) ->
     Error.
+
+%% @doc Resolve `Station''s dialable `quic://' URL from its own signed
+%% `station_endpoint' record and put `Bytes' there directly. Same
+%% return shape as `macula:put_content/2'; resolve failures surface as
+%% `{error, {unresolved, Reason}}'. `TimeoutMs' bounds only the QUIC
+%% handshake if a fresh link must be dialed
+%% (`macula:put_content_station/5') — the underlying block/manifest
+%% transfer has its own internal timeouts.
+-spec put_content(macula:pool(), macula_identity:pubkey(), binary(),
+                  pos_integer()) -> {ok, macula:mcid()} | {error, term()}.
+put_content(Pool, Station, Bytes, TimeoutMs) ->
+    case resolve_station_endpoint(Pool, Station) of
+        {ok, DialUrl} ->
+            macula:put_content_station(Pool, DialUrl, Bytes, TimeoutMs,
+                                       #{expected_node_id => Station,
+                                         pin_tls_cert => false,
+                                         verify => none});
+        {error, Reason} ->
+            {error, {unresolved, Reason}}
+    end.
+
+%% @doc Resolve `Station''s dialable `quic://' URL from its own signed
+%% `station_endpoint' record, verifying the record's signer is exactly
+%% `Station' and retrying past a stale/expired replica — the same
+%% discipline `call/6' applies internally once it has resolved a
+%% procedure's `serving_station'.
+-spec resolve_station_endpoint(macula:pool(), macula_identity:pubkey()) ->
+    {ok, binary()} | {error, term()}.
+resolve_station_endpoint(Pool, Station) ->
+    case resolve_endpoint(Pool, Station) of
+        {ok, {Station, DialUrl}} -> {ok, DialUrl};
+        {error, _} = Error -> Error
+    end.
 
 %%%===================================================================
 %%% Internal

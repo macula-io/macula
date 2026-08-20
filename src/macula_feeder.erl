@@ -14,6 +14,19 @@
 %%% `macula_streamer' / `macula_stream_sink' for that (`streaming.*'
 %%% facts belong to that pair).
 %%%
+%%% == Direct-dial ==
+%%%
+%%% `start_link/4,5' puts through the pool's own connected link
+%%% (whichever `pick_connected_link/1' picks). `start_link_direct/4,5'
+%%% is the direct-dial counterpart: unlike `macula_download''s (which
+%%% resolves an MCID to find out WHO has it), a PUT already knows its
+%%% own target — the caller names `Station' directly, and it is
+%%% resolved to a dialable endpoint via that station's own signed
+%%% `station_endpoint' record and dialed in one hop, deliberately
+%%% seeding that specific station instead of whichever the pool picks.
+%%% See `macula_direct_dial''s module doc, "Content" section, for the
+%%% trust model.
+%%%
 %%% == Example ==
 %%%
 %%% ```
@@ -39,6 +52,7 @@
 -behaviour(gen_server).
 
 -export([start_link/4, start_link/5]).
+-export([start_link_direct/5, start_link_direct/6]).
 -export([cancel/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -50,6 +64,11 @@
 
 -define(PUT_STARTED, <<"sharing.put_started_v1">>).
 -define(PUT_COMPLETED, <<"sharing.put_completed_v1">>).
+%% Bounds only the QUIC handshake wait when `start_link_direct/5,6'
+%% must dial a fresh link — matches `macula_client:connect/2''s own
+%% `connect_timeout_ms' default. The block/manifest transfer that
+%% follows has its own separate, internal timeouts regardless.
+-define(DIRECT_DIAL_CONNECT_TIMEOUT_MS, 30_000).
 
 -record(fstate, {
     module    :: module(),
@@ -72,7 +91,25 @@ start_link(Module, Pool, Realm, Bytes) ->
 -spec start_link(module(), macula:pool(), macula:realm(), binary(), term()) ->
     {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Bytes, Args) ->
-    gen_server:start_link(?MODULE, {Module, Pool, Realm, Bytes, true, Args}, []).
+    gen_server:start_link(?MODULE,
+        {pooled, Module, Pool, Realm, Bytes, true, Args}, []).
+
+%% @doc As `start_link/4', but resolves `Station''s own
+%% `station_endpoint' and dials it directly instead of putting through
+%% the pool's existing links. See the "Direct-dial" section above.
+-spec start_link_direct(module(), macula:pool(), macula_identity:pubkey(),
+                        macula:realm(), binary()) ->
+    {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Station, Realm, Bytes) ->
+    start_link_direct(Module, Pool, Station, Realm, Bytes, undefined).
+
+%% @doc As `start_link_direct/5', with `Args' passed to `Module:init/1'.
+-spec start_link_direct(module(), macula:pool(), macula_identity:pubkey(),
+                        macula:realm(), binary(), term()) ->
+    {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Station, Realm, Bytes, Args) ->
+    gen_server:start_link(?MODULE,
+        {direct, Module, Pool, Station, Realm, Bytes, true, Args}, []).
 
 %% @doc Cancel an in-flight feed. Publishes `sharing.put_completed_v1'
 %% with `outcome => cancelled' if the put had not resolved yet.
@@ -84,14 +121,21 @@ cancel(Pid) -> gen_server:stop(Pid).
 %%%===================================================================
 
 %% @private
-init({Module, Pool, Realm, Bytes, Announce, InitArgs}) ->
+init({pooled, Module, Pool, Realm, Bytes, Announce, InitArgs}) ->
+    start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce,
+                fun() -> spawn_worker(pooled, Pool, Bytes) end);
+init({direct, Module, Pool, Station, Realm, Bytes, Announce, InitArgs}) ->
+    start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce,
+                fun() -> spawn_worker(direct, Pool, Station, Bytes) end).
+
+start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce, SpawnFun) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
             ShareId = crypto:strong_rand_bytes(16),
             publish(Announce, Pool, Realm, ?PUT_STARTED,
                     #{share_id => ShareId, size => byte_size(Bytes)}),
-            Worker = spawn_worker(Pool, Bytes),
+            Worker = SpawnFun(),
             {ok, #fstate{module = Module, pool = Pool, realm = Realm,
                         announce = Announce, share_id = ShareId,
                         worker = Worker, completed = false, user = UserState}};
@@ -99,10 +143,18 @@ init({Module, Pool, Realm, Bytes, Announce, InitArgs}) ->
             {stop, Reason}
     end.
 
-spawn_worker(Pool, Bytes) ->
+spawn_worker(pooled, Pool, Bytes) ->
     Parent = self(),
     spawn_link(fun() ->
         Result = macula:put_content(Pool, Bytes),
+        Parent ! {feed_result, Result}
+    end).
+
+spawn_worker(direct, Pool, Station, Bytes) ->
+    Parent = self(),
+    spawn_link(fun() ->
+        Result = macula_direct_dial:put_content(Pool, Station, Bytes,
+                                                 ?DIRECT_DIAL_CONNECT_TIMEOUT_MS),
         Parent ! {feed_result, Result}
     end).
 
