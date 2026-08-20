@@ -278,10 +278,11 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs)
 %% @doc Pick one currently-connected link and return its pid, without
 %% issuing a call. For a caller that needs to pin ONE link across a
 %% sequence of related calls — a dedicated QUIC stream, opened once
-%% via `macula_station_link:open_content_stream/1' on the returned
-%% pid, only isolates one link's traffic, so every call in the
-%% sequence must go over that same link. `call/5' picks fresh per
-%% call (`call_first_success/5') and is the wrong primitive for that.
+%% on the returned pid (via the internal station-link module's
+%% content-stream API), only isolates one link's traffic, so every
+%% call in the sequence must go over that same link. `call/5' picks
+%% fresh per call (`call_first_success/5') and is the wrong primitive
+%% for that.
 %%
 %% Selection matches `call_first_success/5''s ordering (first
 %% connected link wins) so behaviour is unsurprising relative to the

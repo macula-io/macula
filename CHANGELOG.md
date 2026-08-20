@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.3.0] - 2026-08-20
+
+**Streaming RPC and content transfer now genuinely ride their own dedicated QUIC
+streams, closing a real gap between the docs and the implementation.** Prior
+releases' `STREAMING_GUIDE.md` claimed RPC, PubSub, streaming, and content each
+used "independent multiplexed QUIC streams" with "per-stream flow control" — that
+was false. `macula_peering_conn.erl` opened exactly one QUIC stream per peering
+connection, and every frame type (CALL, RESULT, PUBLISH, STREAM_OPEN, content
+put/get blocks, ...) was multiplexed onto it via application-level IDs. QUIC's
+actual per-stream isolation was unused. This release wires the two workloads
+where it matters most — streaming and content — onto real, separate QUIC streams.
+See `plans/PLAN_PER_STREAM_QUIC_ISOLATION.md` for the full design record.
+
+### Added
+
+- **Streaming RPC dedicated streams.** `advertise_stream`/`call_stream` sessions
+  each get their own QUIC stream, opened via new `macula_peering:
+  open_dedicated_stream/1` and `send_on_stream/3` primitives. STREAM_OPEN/DATA/
+  END/ERROR/REPLY no longer travel the shared control stream.
+- **Content transfer dedicated streams.** `put_content`/`get_content` (both
+  single-block and chunked) now pin one healthy pool link
+  (`macula_client:pick_connected_link/1`, new) and run the whole transfer's
+  block + manifest calls over one dedicated stream
+  (`macula_station_link:open_content_stream/1` / `call_on_stream/6` /
+  `close_content_stream/2`, new), instead of letting the pool re-pick a link
+  per underlying CALL. A large blob transfer no longer head-of-line-blocks
+  other RPC/PubSub traffic on the same connection.
+- `CONTENT_GUIDE.md` documents the new per-transfer stream isolation.
+
+### Fixed
+
+- **`macula_peering_conn.erl`: the client role never started the QUIC bidi-
+  stream accept loop** (`macula_quic:async_accept_stream/1`), only the server
+  role did. Harmless in the pre-dedicated-stream world (a client only ever
+  opened the one stream it used itself), but meant any client-role connection
+  — a daemon dialing a station, or a station dialing another station — could
+  open a dedicated stream outward but could never receive one opened *at* it.
+  Found via live testing (`macula_station_call_stream_station_SUITE` in
+  `macula-station`), not by inspection: the failure mode was total silence,
+  since nothing errors when a peer simply never calls `accept_bi()`.
+- **`macula_station_link.erl`: `fail_all_pending/2` still pattern-matched the
+  pre-dedicated-stream 2-tuple shape** (`{Pid, Mon}`) for `client_streams` /
+  `server_streams` entries, which had already grown a third element (the
+  dedicated stream reference). Every disconnect would have crashed the link's
+  gen_server instead of cleanly aborting open streams.
+
 ## [9.2.0] - 2026-08-20
 
 **A supervised, fact-announcing primitive family sits on top of the four raw

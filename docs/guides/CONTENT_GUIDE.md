@@ -132,6 +132,11 @@ A chunk failure during put stops immediately without uploading the manifest —
 a manifest naming missing chunks would resolve but never reassemble, which is
 worse than a clean error.
 
+The whole transfer — every `_content.put_block`/`_content.get_block` call plus
+the manifest call for chunked content — rides one dedicated QUIC stream, opened
+once and reused for the sequence, isolating a large blob transfer from other
+RPC/PubSub traffic on the same connection.
+
 ---
 
 ## Discovery: who has this MCID?
