@@ -4,10 +4,10 @@ This guide covers setting up a development environment for contributing to Macul
 
 ## Prerequisites
 
-- **Erlang/OTP 26+** - [Installation Guide](https://www.erlang.org/downloads)
+- **Erlang/OTP 28** (pinned in `.tool-versions`) - [Installation Guide](https://www.erlang.org/downloads)
 - **Rebar3** - Erlang build tool ([Installation](https://rebar3.org/docs/getting-started/))
 - **Git** - Version control
-- **Docker** (optional) - For multi-node testing
+- **Docker** (optional) - `Dockerfile` / `Dockerfile.gateway` build deployment images; not required for local development or `rebar3 eunit`
 
 ## Quick Setup
 
@@ -31,29 +31,36 @@ rebar3 shell
 
 ## Project Structure
 
-Macula SDK is organized as a single Erlang/OTP library with 48 modules:
+Macula SDK is a single Erlang/OTP library, vertical-sliced by capability
+rather than by technical layer — most `src/` subdirectories are one small
+feature, not a horizontal `services/`/`utils/` split:
 
 ```
 macula/
-├── src/                          # Source code (48 .erl files)
-│   ├── macula.erl               # Public facade (connect, subscribe, publish, call, advertise)
-│   ├── macula_relay_client.erl  # QUIC relay connection
-│   ├── macula_multi_relay.erl   # Multi-homed connections
-│   ├── macula_quic.erl          # QUIC transport abstraction
-│   ├── macula_protocol_*.erl    # Wire protocol encoding/decoding
-│   ├── macula_crypto_nif.erl    # Ed25519, BLAKE3, SHA-256 (Rust NIF + Erlang fallback)
-│   ├── macula_ucan_nif.erl      # UCAN token operations (Rust NIF + Erlang fallback)
-│   ├── macula_did_nif.erl       # DID document operations (Rust NIF + Erlang fallback)
-│   ├── macula_mri.erl           # Resource identifiers (parse, format, hierarchy, trie index)
-│   ├── macula_cert_system/      # Ed25519 keypairs, cert generation, trust store
+├── src/
+│   ├── macula.erl               # Public facade (connect, subscribe, publish, call, advertise, ...)
+│   ├── macula_topic.erl         # Topic/procedure naming builders (realm/org/app tiers)
+│   ├── macula_realm.erl         # Realm tag derivation
+│   ├── macula_id.erl, macula_names.erl, macula_node.erl, macula_time.erl, macula_uri.erl, macula_cache.erl
+│   │                             # Small top-level utility modules
+│   ├── client/                  # macula_client (pool), macula_station_link (per-seed worker)
+│   ├── peering/                 # QUIC transport, wire frames, BOLT#4 error taxonomy, peer state machine
+│   ├── pubsub/                  # Pub/sub delivery ordering
+│   ├── record/                  # Signed DHT records (macula_record), CBOR codec
+│   ├── content/                 # Content chunking/manifests (macula_manifest)
+│   ├── mri/                     # Resource identifiers — parse, hierarchy, trie index
+│   ├── identity/, auth/         # Ed25519 keys, UCAN tokens (Rust NIFs + Erlang fallback)
+│   ├── macula_cert_system/      # Self-sovereign certs, trust store
 │   ├── macula_dist_system/      # Erlang distribution over relay mesh (3 transports)
 │   ├── macula_cluster_system/   # LAN clustering (gossip/static/libcluster) — separate from dist
-│   └── macula_*.erl             # Utilities (id, names, node, realm, time, uri, cache)
-├── native/                       # Rust NIF source (Quinn QUIC + crypto/UCAN/DID/MRI)
-├── test/                         # EUnit tests
+│   └── (advertise_station/, host_identity/, resolve_address/, ...)
+│                                 # Smaller single-purpose slices — one module or two each
+├── native/                       # Rust NIF crates (macula_quic, macula_crypto_nif, macula_ucan_nif,
+│                                 # macula_did_nif, macula_mri_nif, macula_cbor_nif, macula_tun_nif)
+├── test/                         # EUnit tests, one file per module under test
 ├── include/                      # Header files (.hrl)
 ├── docs/                         # SDK guides
-├── priv/                         # Build scripts, precompiled NIFs
+├── priv/                         # build-nifs.sh, precompiled .so fallbacks
 └── rebar.config                  # Build configuration
 ```
 
@@ -77,12 +84,9 @@ rebar3 eunit --module=macula_crypto_nif_tests
 rebar3 do eunit, cover
 ```
 
-### Multi-Node Integration Tests
-```bash
-cd docker
-docker compose -f docker-compose.multi-node-test.yml build --no-cache
-docker compose -f docker-compose.multi-node-test.yml up
-```
+Test files live under `test/`, plus `test/macula_dist_system/` and
+`test/macula_cluster_system/` — both directories are registered in
+`rebar.config`'s `eunit_opts` so a plain `rebar3 eunit` covers them too.
 
 ## Code Quality Standards
 
@@ -155,6 +159,8 @@ The SDK includes Rust NIFs for performance-critical operations. They build autom
 | `native/macula_ucan_nif/` | UCAN token create/verify |
 | `native/macula_did_nif/` | DID document operations |
 | `native/macula_mri_nif/` | MRI parsing, trie index |
+| `native/macula_cbor_nif/` | CBOR encode/decode |
+| `native/macula_tun_nif/` | TUN device I/O |
 
 ## Contributing Workflow
 
@@ -200,7 +206,7 @@ The SDK includes Rust NIFs for performance-critical operations. They build autom
 ## Getting Help
 
 - **Issues**: [GitHub Issues](https://github.com/macula-io/macula/issues)
-- **Documentation**: See `architecture/` directory for detailed architecture docs
+- **Documentation**: `docs/guides/` — see the README's guide table for the full index
 
 ---
 
