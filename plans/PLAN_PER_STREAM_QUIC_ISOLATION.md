@@ -1,8 +1,9 @@
 # Per-Stream QUIC Isolation
 
 **Status:** Phase 1 (streaming RPC) COMPLETE. Phase 2 (content transfer) COMPLETE.
-Remaining: update `STREAMING_GUIDE.md` + forum post; the sharper live head-of-line
-demonstration; the pre-existing `macula-station` `ex_doc` blocker.
+`STREAMING_GUIDE.md` and the forum post updated (9.3.1). `macula-station`'s
+`rebar3 ex_doc` blocker fixed (was six chained, pre-existing EDoc bugs, not one).
+Remaining: the sharper live head-of-line demonstration.
 **Created:** 2026-08-20
 **Last Updated:** 2026-08-20
 
@@ -349,17 +350,27 @@ isolation question, and remains explicitly deferred (see Non-goals).
       daemon-facing AND station-to-station — verified live (not mocked) end to end,
       both the eager-replicate (put) and iterative-fanout (get) code paths.
 - [x] `STREAMING_GUIDE.md`'s and the forum post's "own QUIC stream" / "per-stream flow
-      control" claims are now fully true in the implementation. The docs themselves
-      have not been edited yet — tracked below, not blocked on anything further.
+      control" claims are fully true in the implementation, stated explicitly (not just
+      technically-true-but-ambiguous wording) in both documents, and live: SDK 9.3.1
+      published, hexdocs verified rendering the exact corrected sentence, forum post
+      committed and pushed (it had never been committed at all until this pass).
 - [ ] A slow/stalled streaming session does not delay a concurrent unary RPC reply on
       the same connection, demonstrated live. Still not attempted for either phase —
       the sharper, not-yet-tested version of the isolation claim.
 - [x] `rebar3 eunit`, `rebar3 dialyzer` clean on both `macula` and `macula-station` for
       both phases' scope, each verified against a stashed pre-change baseline.
-- [ ] `rebar3 ex_doc` clean — `macula` is; `macula-station` still fails on the same
-      pre-existing, unrelated `hecate_overlay_view.erl` EDoc XML error from Phase 1,
-      untouched by Phase 2 either. Needs fixing separately before this box can be
-      checked for the station repo.
-- [ ] `docs/guides/STREAMING_GUIDE.md` and the `macula-comm-docs` forum post updated
-      to state the now-true claims plainly, and drop the caveats/TODOs that described
-      the false state. Not started.
+- [x] `rebar3 ex_doc` clean on both repos. `macula-station` needed six distinct,
+      pre-existing EDoc bugs fixed, not the one originally flagged — `ex_doc` stops at
+      the first fatal error, so fixing `hecate_overlay_view.erl` only revealed the next
+      one in the chain (an empty `hecate_realm` app, an `@doc` before a `-callback`, raw
+      binary syntax in a `<pre>` block, a quoted `==` heading, two stacked `@doc` blocks
+      on one function). Also swept and fixed the same matching-backtick anti-pattern in
+      16 files while there, having found and corrected a self-inflicted regression
+      (corrupted triple-backtick code fences) from the first blanket-fix attempt before
+      committing. `rebar3 ex_doc` now exits 0 for all 10 apps in the umbrella.
+- [x] `docs/guides/STREAMING_GUIDE.md` and the `macula-comm-docs` forum post updated to
+      state the now-true claims plainly. The forum post's actual false claim was
+      different from the guide's: it said independent multiplexed QUIC streams were why
+      RPC, pub/sub, streaming, *and* OTP distribution could all share one dial-out —
+      false for three of the four, since only streaming and content transfer get a
+      genuine dedicated stream. Corrected to state that split explicitly.
