@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.8.1] - 2026-08-21
+
+### Fixed
+
+- **Peer-initiated dedicated stream: notify before enabling active
+  delivery, not after** (`macula_peering_conn.erl`, `connected/3`'s
+  `{quic, new_stream, ...}` clause). A new stream resource is created
+  passive (`StreamResource::active: AtomicBool::new(false)` in the
+  Rust NIF; its recv loop blocks on a `Notify` until `setopt(active,
+  true)` wakes it), so nothing can be delivered to `controlling_pid`
+  before that NIF call runs — except the old code called `setopt`
+  *before* sending the `{macula_peering, new_dedicated_stream, ...}`
+  notification. On a fast/near-zero-RTT path the peer's first frame
+  (sent the instant it finishes opening the stream) could then reach
+  `controlling_pid`'s mailbox before the notification did, and every
+  dedicated-stream consumer keys its buffer off that notification
+  (`stream_bufs` / `content_stream_bufs`), so the data landed nowhere
+  and was silently dropped by whichever catch-all the consumer had.
+  Reordering the two calls closes the race structurally: passive mode
+  guarantees zero delivery until `setopt` runs, and by then the
+  notification is already in the mailbox. Found via macula-station's
+  cross-station streaming-RPC relay (a station relaying a STREAM_OPEN
+  onto the next hop by opening a fresh dedicated stream), where it
+  surfaced as a deterministic-then-intermittent timeout depending on
+  which side of the relay owned the connection; local reproduction
+  went from 100% failure (pre-existing bug this uncovered, see below)
+  to 0% deterministic / ~11% intermittent after this fix alone. A
+  second, independent bug on the macula-station side (outbound_link
+  had no handling for the notification at all) accounted for the rest
+  of the original 100% failure rate and is fixed separately, in
+  macula-station.
+
 ## [9.8.0] - 2026-08-20
 
 ### Added

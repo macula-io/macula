@@ -494,11 +494,37 @@ connected(info, {quic, Bin, Stream, _Flags},
 %% ownership-transfer pattern already used for the handshake stream
 %% in `handshaking/3', just handing off to a third party instead of
 %% keeping it for `self()'.
+%%
+%% ⚠ NOTIFY BEFORE ENABLING ACTIVE MODE — not the other way around.
+%% Every new stream resource is created passive
+%% (`StreamResource::active: AtomicBool::new(false)'; its recv loop
+%% literally blocks on a `Notify' until `setopt(active, true)' wakes
+%% it — see native/macula_quic/src/stream.rs), so nothing can be
+%% delivered to `Pid' before that NIF call runs. `Pid ! Msg' is a
+%% direct send from THIS process and lands in `Pid''s mailbox
+%% synchronously; `setopt/2' triggers an independent async Rust task
+%% that starts delivering the moment it runs. Enabling active mode
+%% BEFORE sending the notification (the order this used to be in) left
+%% a real window: the peer sends its first frame the instant IT
+%% finishes opening the stream, so on a fast/local path the NIF's recv
+%% task can start delivering `{quic, Bin, Stream, Flags}' to `Pid'
+%% before `Pid' has any idea `Stream' exists — every consumer's
+%% dedicated-stream handling keys off already knowing the stream
+%% (`stream_bufs' / `content_stream_bufs', seeded only by THIS
+%% notification), so that data had nowhere to land and was silently
+%% dropped by whichever catch-all `Pid' happened to have. Reordering
+%% closes the window structurally: passive mode guarantees zero
+%% delivery until `setopt' below runs, and by then the notification is
+%% already sitting in `Pid''s mailbox. Found via
+%% macula-station's `stream_relays_through_outbound_dialled_hop' CT
+%% case, ~40% flaky on localhost (near-zero RTT maximizes the race);
+%% same root cause as the live `stream_order_and_eof' timeout on the
+%% production fleet.
 connected(info, {quic, new_stream, Stream, _Info},
           #data{controlling_pid = Pid} = Data) ->
     _ = macula_quic:controlling_process(Stream, Pid),
-    ok = macula_quic:setopt(Stream, active, true),
     Pid ! {macula_peering, new_dedicated_stream, self(), Stream},
+    ok = macula_quic:setopt(Stream, active, true),
     {keep_state, Data};
 %% Open a dedicated QUIC stream and hand it straight to `Owner' — no
 %% custody window, unlike the inbound case above, since here we are
