@@ -7,6 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.1.1] - 2026-08-20
+
+**Every guide and the README, checked line-by-line against real source — not
+a proofread, an audit.** 9.1.0 already fixed one stale README hero diagram;
+publishing it surfaced a live `~> 8.8` dependency pin in the README's own
+install snippet, which turned into a full sweep of every published guide.
+The scope kept growing because the method kept finding real bugs: for every
+function call, grep the real `-export()` list and arity; for every "the SDK
+does X automatically" claim, grep for the actual call site rather than
+trust the prose; for every return-shape example, read the function body,
+not just its `-spec` (several were generic `term()` hiding a more specific
+real shape). No runtime behavior changed anywhere in this release — every
+fix is documentation catching up to code that was already correct.
+
+### Fixed — fabricated or superseded content removed
+
+- **`RPC_GUIDE.md` fully rewritten.** Described a nonexistent legacy API
+  (`advertise/3` returning `{ok, Ref}`, `unadvertise/2`, `call/3`) and a
+  "Call Flow" matching WAMP/Bondy-era relay-routed RPC with `gproc` local
+  lookup — contradicting the guide's own callout that direct-dial is
+  current. Rewritten against the real facade, including the handler-return
+  contract traced from `macula_station_link:safe_invoke_handler/4`'s actual
+  body and a verified `call_station/6` resolve-then-dial recipe.
+- **`AUTHORIZATION_GUIDE.md`** invented four entire modules with zero code
+  backing them (`macula_did_cache`, `macula_authorization`,
+  `macula_ucan_revocation`, `macula_authorization_audit`) — DID-namespace
+  gating, automatic `.public.` topic gating, UCAN revocation with a
+  fabricated rate limit, audit logging with a fabricated LRU policy. None
+  of it is real; the SDK's only enforced authorization is `advertise/5`'s
+  per-procedure `{ucan_required, Issuer}`. Rewritten to only what's real.
+  A second independent pass caught two more return-shape bugs: `encode/1`
+  and `to_map/1` are bare `binary()`/`map()`, not `{ok, _}`-wrapped.
+- **`PROTOCOL_GATEKEEPER_GUIDE.md` deleted.** Its entire premise —
+  a `macula_protocol` behaviour, a `macula_gatekeeper` validator, a
+  Portal/Console certificate hierarchy — belongs to the old, archived
+  `macula-console`/`macula-portal` product, not this SDK.
+- **`PUBSUB_GUIDE.md`** described the pre-8.8.0 ordering bug as current
+  behavior ("no per-publisher order... dozens of inverted pairs"),
+  contradicting the correct `ordered`-by-default content earlier in the
+  same file. Also claimed a dead link sends `{macula_event_gone, SubRef,
+  {disconnected, _}}`; the real behavior is a silent respawn + resubscribe,
+  never an event.
+- **`DIST_OVER_MESH_GUIDE.md`**: `join_mesh/1`'s options table claimed
+  `realm` and `tls_verify` options that don't exist (only `relays` and
+  `identity` are real); `DIST_TIMEOUT` was documented as 25000ms, the real
+  value is 10000ms.
+- **`CLUSTERING_GUIDE.md`**: the `mdns` strategy was documented as doing
+  real mDNS/Bonjour discovery; it's accepted and logged but never branched
+  on — `mdns` and `dht` currently do the identical DHT-based thing. An
+  "Integration with bc_gitops" section referenced an unrelated external
+  project, same contamination pattern found in `AUTHORIZATION_GUIDE.md`.
+- **`CONNECTING_GUIDE.md`**, **`TOPIC_NAMING_GUIDE.md`**, **`DEVELOPMENT.md`**,
+  **`docs/GLOSSARY.md`**, and **`docs/README.md`** all referenced a phantom
+  `macula_mesh_client` module as current behavior — it's real, but v2.1.0-era
+  history, superseded by the V2 pool (`macula_client`) well before 3.11.0.
+  `TOPIC_NAMING_GUIDE.md` also falsely claimed topic validation is enforced
+  automatically at publish/subscribe (it isn't — `macula_topic:validate/1`
+  is never called on the SDK's send path) and had a fabricated "Wildcard
+  Subscriptions" section with no supporting code anywhere.
+- **Ten SVGs deleted**, each depicting one of the above rather than being
+  merely unreferenced: `mesh-architecture.svg`, `pubsub_flow.svg`,
+  `rpc_flow.svg`, `revocation_flow.svg`, `audit_system.svg`,
+  `lru_eviction.svg`, `namespace_hierarchy.svg`,
+  `gatekeeper_security_model.svg`, `protocol_callbacks.svg`,
+  `gatekeeper_flow.svg`, `cluster_integration.svg`, `relay_failover.svg`.
+  Three more still-embedded SVGs (`connect_flow.svg`, `dist_over_mesh.svg`,
+  `mri-architecture.svg`) had the same phantom module or a wrong function
+  name and were fixed in place rather than removed.
+- **README.md**: the `rebar.config`/`mix.exs` install snippets pinned
+  `{macula, "~> 8.8"}` — the actual code a new user copies, resolving to
+  the 8.8.x line, not this package's current version. Also trimmed ~150
+  lines that duplicated guides verbatim (the Four Interaction Patterns
+  walkthroughs, Distribution, Clustering, MRI sections) down to the
+  capability list + guide table that already did this job — the
+  duplication is exactly why the stale hero diagram and the dependency
+  pin went unnoticed for as long as they did.
+
+### Added
+
+- `docs/guides/RECORDS_GUIDE.md` — the raw DHT record API
+  (`put_record/2`, `find_records_by_type/2`, `macula_record:envelope/4`
+  for a custom record type) was exported, public API with no guide.
+
+### Clarified
+
+- Seed URL scheme (`quic://` vs `https://`) is a label, not a switch —
+  `macula_station_link:parse_seed/1` dials over QUIC regardless of the
+  scheme text, and both are genuinely seen in production. Documented
+  instead of silently picking one.
+
+---
+
 ## [9.1.0] - 2026-08-20
 
 **OTP 29 readiness, plus a records guide and a stale-docs cleanup.**

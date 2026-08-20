@@ -15,11 +15,14 @@
 
 ---
 
-> **Latest — 9.1.0**: OTP 29 readiness (bare `catch` rewritten to
-> `try/catch/end`; `macula_record`'s `record()` type renamed `m_record()` —
-> a reserved built-in type name in OTP 29) plus a new
-> [Records Guide](docs/guides/RECORDS_GUIDE.md) for the raw DHT record API.
-> No behavior change. **9.0.0 was breaking**: LAN clustering and
+> **Latest — 9.1.1**: every guide and this README checked line-by-line
+> against real source — fabricated modules, a nonexistent legacy RPC API,
+> a dead dependency pin, and a dozen other doc bugs found and fixed. No
+> behavior change. See [CHANGELOG.md](CHANGELOG.md) for the full list.
+> 9.1.0 added OTP 29 readiness (bare `catch` rewritten to `try/catch/end`;
+> `macula_record`'s `record()` type renamed `m_record()`) and the
+> [Records Guide](docs/guides/RECORDS_GUIDE.md). **9.0.0 was breaking**: LAN
+> clustering and
 > distribution-over-mesh split into independent concerns —
 > `macula_cluster_system/` vs. `macula_dist_system/`. `macula_dist_relay` is
 > renamed `macula_dist_pool` (the facade, `join_mesh/1` / `join_dist_relay/1`,
