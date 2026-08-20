@@ -1,6 +1,7 @@
 # Macula Mesh — Topic Naming Convention
 
-**Status:** Normative (enforced by `macula_topic` module + `macula_mesh_client` validation)
+**Status:** Convention, built via the `macula_topic` module. Not automatically
+enforced by the SDK — see "Validation" below.
 
 ---
 
@@ -126,21 +127,6 @@ Advertised via `macula:advertise/5`. Called via `macula:call/5`.
 
 ---
 
-## Wildcard Subscriptions
-
-The hierarchical structure enables wildcards:
-
-```
-io.macula/#                                     — everything on realm
-io.macula/_realm/#                              — every realm-tier topic
-io.macula/beam-campus/#                         — everything from one org
-io.macula/beam-campus/hecate/#                  — all hecate topics
-io.macula/beam-campus/hecate/mpong/#            — all mpong topics
-io.macula/beam-campus/*/llm/#                   — all llm topics from any beam-campus app
-```
-
----
-
 ## API
 
 The `macula_topic` module exposes one builder per tier, plus the parser:
@@ -205,13 +191,29 @@ Do NOT write `MaculaRealm.Topics` or similar wrapper modules. Call the Erlang bu
 
 ---
 
-## Validation enforced at publish/subscribe
+## Validation
 
-`macula_mesh_client:publish/3`, `subscribe/3`, `advertise/3`, and `call/4` validate the topic against `macula_topic:validate/1` and reject any non-canonical form. The only exception is the `_mesh.*` system topic prefix used by infrastructure.
+**`macula:publish/4,5`, `subscribe/4,5`, `advertise/5`, and `call/5` do NOT
+call `macula_topic:validate/1` for you.** They take `Topic`/`Procedure` as an
+opaque binary and send whatever you pass — an inline, malformed string
+publishes and subscribes exactly like a canonical one; the two sides just
+never match if they disagree on the string. Validation is available, not
+automatic:
 
-This means inline string construction will **fail at runtime**, not silently publish to a dead topic. The previous failure mode — where one side built `io.macula.membership.revoked` (4 dot-separated tokens) and the other built `io.macula/beam-campus/hecate/membership/revoked_v1` (5 slash-separated tokens) and they never matched — is no longer possible.
+```erlang
+ok      = macula_topic:validate(<<"io.macula/beam-campus/hecate/mpong/lobby_opened_v1">>),
+{error, _} = macula_topic:validate(<<"io.macula.mpong.lobby_opened">>).
+```
 
-System topics (any leading-underscore prefix) bypass canonical validation: `_mesh.node.up`, `_dist.tunnel.X`, `_dht.list_gateways` etc. all pass through.
+Always building topics via a `macula_topic` constructor (never inline) means
+a typo or wrong tier is a wrong *value* your own tests can catch, rather than
+two hand-written strings silently drifting apart. If you want it enforced,
+call `validate/1` at your own publish/subscribe call sites, or in your own
+project's tests/CI — it's not wired into the SDK's send path.
+
+System topics (any leading-underscore prefix) bypass canonical validation
+entirely: `_mesh.node.up`, `_dist.tunnel.X`, `_dht.list_gateways` etc. are
+dot-separated infrastructure topics, out of scope for this validator.
 
 ---
 

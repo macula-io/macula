@@ -11,8 +11,8 @@
 
 ```erlang
 %% 1. Pick relay seeds.
-Seeds = [<<"https://relay-1.example.com:4433">>,
-         <<"https://relay-2.example.com:4433">>].
+Seeds = [<<"quic://relay-1.example.com:4433">>,
+         <<"quic://relay-2.example.com:4433">>].
 
 %% 2. Connect — returns a *pool*.
 {ok, Pool} = macula:connect(Seeds, #{}).
@@ -54,10 +54,10 @@ A **seed** is a relay endpoint. Three accepted shapes:
 
 ```erlang
 %% URL binary (preferred)
-<<"https://relay-1.example.com:4433">>
+<<"quic://relay-1.example.com:4433">>
 
 %% URL string
-"https://relay-1.example.com:4433"
+"quic://relay-1.example.com:4433"
 
 %% Map form (when you already have host + port)
 #{host => <<"relay-1.example.com">>, port => 4433}
@@ -66,9 +66,9 @@ A **seed** is a relay endpoint. Three accepted shapes:
 Pass a list. Order is not significant — every seed gets a link.
 
 ```erlang
-Seeds = [<<"https://relay-eu.example.com:4433">>,
-         <<"https://relay-us.example.com:4433">>,
-         <<"https://relay-asia.example.com:4433">>].
+Seeds = [<<"quic://relay-eu.example.com:4433">>,
+         <<"quic://relay-us.example.com:4433">>,
+         <<"quic://relay-asia.example.com:4433">>].
 {ok, Pool} = macula:connect(Seeds, #{}).
 ```
 
@@ -155,8 +155,8 @@ handshake completes asynchronously. `publish/4` and `subscribe/4` issued
 before any link finishes handshake will succeed (subscribe is queued)
 or fail with `{error, {transient, no_healthy_station}}` (publish, if
 literally zero links are usable). Apps that need to await readiness
-should poll `macula_mesh_client:is_connected/1` on a representative
-link or pause briefly between connect and first publish.
+should poll `macula:links(Pool)` for an entry with `connected => true`,
+or pause briefly between connect and first publish.
 
 **Link death.** When a link's worker process dies, the pool monitor
 fires. The pool:
