@@ -1,15 +1,15 @@
 %%%-------------------------------------------------------------------
-%%% @doc Factory supervisor for `macula_downloader' children.
+%%% @doc Factory supervisor for `macula_download' children.
 %%%
 %%% Meant to be embedded in the caller's own supervision tree: the
 %%% application decides when to start a new download and when to
 %%% cancel one via `supervisor:terminate_child/2' (or
-%%% `macula_downloader:cancel/1' on the child pid directly). Children
+%%% `macula_download:cancel/1' on the child pid directly). Children
 %%% are `temporary' — a finished or crashed download is never
 %%% restarted.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_downloader_sup).
+-module(macula_download_sup).
 
 -behaviour(supervisor).
 
@@ -23,12 +23,12 @@ start_link() ->
 %% @private
 init([]) ->
     ChildSpec = #{
-        id => macula_downloader,
-        start => {macula_downloader, start_link, []},
+        id => macula_download,
+        start => {macula_download, start_link, []},
         restart => temporary,
         shutdown => 5_000,
         type => worker,
-        modules => [macula_downloader]
+        modules => [macula_download]
     },
     {ok, {#{strategy => simple_one_for_one, intensity => 10, period => 10},
           [ChildSpec]}}.

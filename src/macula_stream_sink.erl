@@ -14,13 +14,13 @@
 %%% This is the general-purpose RPC streaming feature (`call_stream/5',
 %%% e.g. a `logs.tail_v1'-style procedure) — unrelated to content
 %%% sharing's own chunked-transfer protocol; see `macula_feeder' /
-%%% `macula_downloader' for that.
+%%% `macula_download' for that.
 %%%
 %%% Publishes `streaming.started_v1' / `streaming.completed_v1' mesh
 %%% facts around the stream's lifetime, from the consumer's own
 %%% perspective — the provider side (`macula_streamer') publishes its
 %%% own copy from its perspective; the two are not deduplicated,
-%%% mirroring how `macula_feeder' / `macula_downloader' each announce
+%%% mirroring how `macula_feeder' / `macula_download' each announce
 %%% their own side of a content transfer.
 %%%
 %%% == Example ==

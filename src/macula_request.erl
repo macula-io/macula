@@ -1,20 +1,20 @@
 %%%-------------------------------------------------------------------
-%%% @doc Behaviour for supervised RPC requesters.
+%%% @doc Behaviour for supervised RPC requests.
 %%%
 %%% `call/5' is a plain blocking call in the caller's own process —
 %%% there is no addressable pid to cancel it from outside. This is the
-%%% consumer-side counterpart to `macula_responder': `start_link/6,7'
+%%% consumer-side counterpart to `macula_response': `start_link/6,7'
 %%% returns immediately with a pid, runs `macula:call/5' in a linked
 %%% worker, delivers the outcome to `Module:handle_reply/2', and
 %%% publishes `rpc.sent_v1' / `rpc.completed_v1' mesh facts around the
-%%% request — including `outcome => cancelled' if the requester is
-%%% stopped before a reply arrives.
+%%% request — including `outcome => cancelled' if the request is
+%%% cancelled before a reply arrives.
 %%%
 %%% == Example ==
 %%%
 %%% ```
 %%% -module(add_caller).
-%%% -behaviour(macula_requester).
+%%% -behaviour(macula_request).
 %%% -export([init/1, handle_reply/2]).
 %%%
 %%% init(Parent) -> {ok, Parent}.
@@ -25,12 +25,12 @@
 %%% '''
 %%%
 %%% ```
-%%% {ok, Pid} = macula_requester:start_link(add_caller, Pool, Realm,
+%%% {ok, Pid} = macula_request:start_link(add_caller, Pool, Realm,
 %%%     <<"math.add_v1">>, #{a => 2, b => 3}, 30_000, self()).
 %%% '''
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_requester).
+-module(macula_request).
 
 -behaviour(gen_server).
 
@@ -60,7 +60,7 @@
     user       :: term()
 }).
 
-%% @doc Start a requester. Calls `Procedure' on `(Pool, Realm)' with
+%% @doc Start a request. Calls `Procedure' on `(Pool, Realm)' with
 %% `Payload', timing out after `TimeoutMs'; `Args' is passed to
 %% `Module:init/1'.
 -spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),

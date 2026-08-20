@@ -1,18 +1,18 @@
 %%%-------------------------------------------------------------------
-%%% @doc Behaviour for supervised RPC responders.
+%%% @doc Behaviour for supervised RPC responses.
 %%%
 %%% `advertise/5' on the raw SDK takes a bare handler fun invoked in a
 %%% transient process spawned per inbound CALL (see the internal
 %%% macula_station_link advertise/5 — "Handlers run in a transient
 %%% process spawned per CALL"). This module gives that transient
 %%% process a proper shape: each inbound call starts one supervised
-%%% `macula_responder' child (under a `simple_one_for_one' factory
+%%% `macula_response' child (under a `simple_one_for_one' factory
 %%% this module owns), threading state through `Module:init/1' and
 %%% `Module:handle_request/2', and publishing `rpc.received_v1' /
 %%% `rpc.replied_v1' mesh facts around the request. This is the
-%%% provider-side counterpart to `macula_requester'.
+%%% provider-side counterpart to `macula_request'.
 %%%
-%%% A crashing `Module:handle_request/2' kills the responder child;
+%%% A crashing `Module:handle_request/2' kills the response child;
 %%% that composes with the SDK's own crash mapping unchanged, since
 %%% `gen_server:call/3' against a dead callee raises the same way a
 %%% crashing bare handler fun already does.
@@ -21,7 +21,7 @@
 %%%
 %%% ```
 %%% -module(math_service).
-%%% -behaviour(macula_responder).
+%%% -behaviour(macula_response).
 %%% -export([init/1, handle_request/2]).
 %%%
 %%% init(_Args) -> {ok, []}.
@@ -31,12 +31,12 @@
 %%% '''
 %%%
 %%% ```
-%%% {ok, _Sup} = macula_responder:advertise(Pool, Realm,
+%%% {ok, _Sup} = macula_response:advertise(Pool, Realm,
 %%%     <<"math.add_v1">>, math_service, []).
 %%% '''
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_responder).
+-module(macula_response).
 
 -behaviour(gen_server).
 
@@ -70,7 +70,7 @@
 }).
 
 %% @doc Advertise `Procedure' on `Pool'/`Realm'. Starts a private
-%% factory supervisor for per-request responder children and registers
+%% factory supervisor for per-request response children and registers
 %% a dispatch handler with `macula:advertise/5'. Returns the
 %% supervisor pid so the caller can supervise it (or ignore it).
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
@@ -83,7 +83,7 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
                 module(), term(), map()) -> {ok, pid()} | {error, term()}.
 advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
-    {ok, Sup} = macula_responder_sup:start_link(),
+    {ok, Sup} = macula_response_sup:start_link(),
     Announce = maps:get(announce, Opts, true),
     Handler = fun(Payload) ->
         dispatch(Sup, Module, Pool, Realm, Announce, Args, Payload)

@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @doc Behaviour for supervised content downloaders (the get/fetch side).
+%%% @doc Behaviour for supervised content downloads (the get/fetch side).
 %%%
 %%% `get_content/2' is a plain blocking call — no addressable pid to
 %%% cancel it from outside. This is the consumer-side counterpart to
@@ -8,7 +8,7 @@
 %%% outcome to `Module:handle_downloaded/2', and publishes
 %%% `sharing.get_started_v1' / `sharing.get_completed_v1' mesh facts
 %%% around the transfer — including `outcome => cancelled' if the
-%%% downloader is stopped before the get resolves.
+%%% download is cancelled before the get resolves.
 %%%
 %%% This is content sharing, not general-purpose RPC streaming — see
 %%% `macula_streamer' / `macula_stream_sink' for that (`streaming.*'
@@ -17,8 +17,8 @@
 %%% == Example ==
 %%%
 %%% ```
-%%% -module(doc_downloader).
-%%% -behaviour(macula_downloader).
+%%% -module(doc_download).
+%%% -behaviour(macula_download).
 %%% -export([init/1, handle_downloaded/2]).
 %%%
 %%% init(Parent) -> {ok, Parent}.
@@ -29,12 +29,12 @@
 %%% '''
 %%%
 %%% ```
-%%% {ok, Pid} = macula_downloader:start_link(doc_downloader, Pool, Realm,
+%%% {ok, Pid} = macula_download:start_link(doc_download, Pool, Realm,
 %%%     Mcid, self()).
 %%% '''
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_downloader).
+-module(macula_download).
 
 -behaviour(gen_server).
 
@@ -62,7 +62,7 @@
     user      :: term()
 }).
 
-%% @doc Start a downloader. Fetches `Mcid' via `Pool'.
+%% @doc Start a download. Fetches `Mcid' via `Pool'.
 -spec start_link(module(), macula:pool(), macula:realm(), macula:mcid()) ->
     {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Mcid) ->

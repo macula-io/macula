@@ -16,8 +16,8 @@
 ---
 
 > **Latest — 9.2.0**: three new supervised primitive pairs —
-> `macula_feeder`/`macula_downloader` (content), `macula_streamer`/
-> `macula_stream_sink` (RPC streaming), `macula_responder`/`macula_requester`
+> `macula_feeder`/`macula_download` (content), `macula_streamer`/
+> `macula_stream_sink` (RPC streaming), `macula_response`/`macula_request`
 > (unary RPC) — plus `macula_subscriber` for pub/sub. Each wraps its raw
 > SDK primitive as an OTP behaviour with a `simple_one_for_one` factory
 > supervisor, and publishes mesh-visible protocol facts (`sharing.*_v1`,

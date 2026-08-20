@@ -58,21 +58,21 @@ always yields the same MCID — that is what makes it a content address.
 
 ---
 
-## Supervised wrappers: `macula_feeder` / `macula_downloader`
+## Supervised wrappers: `macula_feeder` / `macula_download`
 
 `put_content/2` and `get_content/2` are plain blocking calls — no
 addressable pid to cancel one from outside. `macula_feeder` and
-`macula_downloader` wrap them as proper OTP behaviours: `start_link/4,5`
+`macula_download` wrap them as proper OTP behaviours: `start_link/4,5`
 returns immediately with a pid, runs the put/get in a linked worker, and
 delivers the outcome to your callback. Each publishes its own
 `sharing.put_started_v1` / `sharing.put_completed_v1` (feeder) or
-`sharing.get_started_v1` / `sharing.get_completed_v1` (downloader) mesh
+`sharing.get_started_v1` / `sharing.get_completed_v1` (download) mesh
 fact, carrying `chunked => true | false` so an observer can tell single-block
 transfers from manifest ones without decoding the MCID itself.
 
 ```erlang
--module(doc_downloader).
--behaviour(macula_downloader).
+-module(doc_download).
+-behaviour(macula_download).
 -export([init/1, handle_downloaded/2]).
 
 init(Parent) -> {ok, Parent}.
@@ -83,17 +83,17 @@ handle_downloaded(Result, Parent) ->
 ```
 
 ```erlang
-{ok, Pid} = macula_downloader:start_link(doc_downloader, Pool, Realm,
-                                         Mcid, self()).
+{ok, Pid} = macula_download:start_link(doc_download, Pool, Realm,
+                                       Mcid, self()).
 
 %% cancel before the get resolves — publishes sharing.get_completed_v1
 %% with outcome => cancelled
-ok = macula_downloader:cancel(Pid).
+ok = macula_download:cancel(Pid).
 ```
 
 `macula_feeder` is the symmetric put-side counterpart (`Module:handle_fed/2`
 in place of `handle_downloaded/2`). Embed `macula_feeder_sup` /
-`macula_downloader_sup` (each a `simple_one_for_one` factory) in your own
+`macula_download_sup` (each a `simple_one_for_one` factory) in your own
 supervision tree to enumerate or cancel in-flight transfers via
 `supervisor:which_children/1` / `terminate_child/2`.
 
@@ -197,7 +197,7 @@ known in advance.
 | `macula_manifest:default_chunk_size()` | the single-block / chunked threshold (256 KiB) |
 | `macula_blake3_nif:hash(Bytes)` | the BLAKE3 hash a single-block MCID wraps |
 | `macula_feeder:start_link/4,5` | supervised, `sharing.put_*_v1`-announcing wrapper around `put_content/2` |
-| `macula_downloader:start_link/4,5` | supervised, `sharing.get_*_v1`-announcing wrapper around `get_content/2` |
+| `macula_download:start_link/4,5` | supervised, `sharing.get_*_v1`-announcing wrapper around `get_content/2` |
 
 `_content.*` CALLs retry on a BOLT#4-retryable error (e.g.
 `temporary_relay_failure`) up to 3 attempts with a short backoff, per that

@@ -23,7 +23,7 @@
 %%% This is the general-purpose RPC streaming feature (`call_stream/5',
 %%% `advertise_stream/5', e.g. a `logs.tail_v1'-style procedure) —
 %%% unrelated to content sharing's own chunked-transfer protocol; see
-%%% `macula_feeder' / `macula_downloader' for that.
+%%% `macula_feeder' / `macula_download' for that.
 %%%
 %%% == Example ==
 %%%

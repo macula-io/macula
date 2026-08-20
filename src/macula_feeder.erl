@@ -3,7 +3,7 @@
 %%%
 %%% `put_content/2' is a plain blocking call — no addressable pid to
 %%% cancel it from outside. This is the provider-side counterpart to
-%%% `macula_downloader': `start_link/4,5' returns immediately with a
+%%% `macula_download': `start_link/4,5' returns immediately with a
 %%% pid, runs `macula:put_content/2' in a linked worker, delivers the
 %%% outcome to `Module:handle_fed/2', and publishes
 %%% `sharing.put_started_v1' / `sharing.put_completed_v1' mesh facts

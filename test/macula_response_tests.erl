@@ -1,12 +1,12 @@
 %%%-------------------------------------------------------------------
-%%% @doc Tests for macula_responder.
+%%% @doc Tests for macula_response.
 %%% @end
 %%%-------------------------------------------------------------------
--module(macula_responder_tests).
+-module(macula_response_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
--behaviour(macula_responder).
+-behaviour(macula_response).
 -export([init/1, handle_request/2]).
 
 %%%===================================================================
@@ -48,7 +48,7 @@ captured_handler() ->
 %%% Tests
 %%%===================================================================
 
-responder_test_() ->
+response_test_() ->
     {foreach, fun setup/0, fun teardown/1,
      [fun replies_and_publishes_lifecycle/0,
       fun error_reply_is_surfaced/0,
@@ -56,21 +56,21 @@ responder_test_() ->
       fun advertise_failure_is_surfaced/0]}.
 
 replies_and_publishes_lifecycle() ->
-    {ok, _Sup} = macula_responder:advertise(pool, <<0:256>>, <<"math.add_v1">>,
+    {ok, _Sup} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
                                             ?MODULE, []),
     Handler = captured_handler(),
     ?assertEqual({ok, #{result => 5}}, Handler(#{a => 2, b => 3})),
     ?assertEqual([<<"rpc.received_v1">>, <<"rpc.replied_v1">>], topics()).
 
 error_reply_is_surfaced() ->
-    {ok, _Sup} = macula_responder:advertise(pool, <<0:256>>, <<"math.add_v1">>,
+    {ok, _Sup} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
                                             ?MODULE, []),
     Handler = captured_handler(),
     ?assertEqual({error, invalid_payload}, Handler(bad)),
     ?assertMatch(#{outcome := failed, reason := invalid_payload}, replied_payload()).
 
 crash_propagates_to_caller() ->
-    {ok, _Sup} = macula_responder:advertise(pool, <<0:256>>, <<"math.add_v1">>,
+    {ok, _Sup} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
                                             ?MODULE, []),
     Handler = captured_handler(),
     ?assertExit(_, Handler(#{boom => true})).
@@ -79,7 +79,7 @@ advertise_failure_is_surfaced() ->
     meck:expect(macula, advertise,
                 fun(_Pool, _Realm, _Proc, _Handler, _Opts) -> {error, no_healthy_link} end),
     ?assertEqual({error, no_healthy_link},
-                 macula_responder:advertise(pool, <<0:256>>, <<"math.add_v1">>,
+                 macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
                                             ?MODULE, [])).
 
 %%%===================================================================
