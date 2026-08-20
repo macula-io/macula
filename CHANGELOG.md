@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.3.1] - 2026-08-20
+
+### Fixed
+
+- `STREAMING_GUIDE.md`'s dedicated-stream claim (accurate since 9.3.0) was worded
+  ambiguously enough to still read as the old shared-control-stream behavior it was
+  meant to have moved past. States explicitly now that each streaming session gets
+  its own QUIC stream, not multiplexed onto the connection's shared stream the way
+  an ordinary CALL or PUBLISH is. Docs-only; no code changes.
+
 ## [9.3.0] - 2026-08-20
 
 **Streaming RPC and content transfer now genuinely ride their own dedicated QUIC
