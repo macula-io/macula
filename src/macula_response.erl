@@ -34,13 +34,25 @@
 %%% {ok, _Sup} = macula_response:advertise(Pool, Realm,
 %%%     <<"math.add_v1">>, math_service, []).
 %%% '''
+%%%
+%%% == Direct-dial ==
+%%%
+%%% `advertise/5,6' registers the handler with the pool's advertise-
+%%% gossip mechanism only — nothing published lets a caller on another
+%%% station find this procedure without a route having propagated
+%%% between the two stations first. `advertise_direct/6' does that
+%%% AND publishes a signed `procedure_advertisement' DHT record naming
+%%% this pool's currently-connected station as the server, so a caller
+%%% using `macula_request:start_link_direct/6,7' can resolve and dial
+%%% here directly, in one hop, regardless of whether the two stations
+%%% have a routing edge between them.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_response).
 
 -behaviour(gen_server).
 
--export([advertise/5, advertise/6, unadvertise/3]).
+-export([advertise/5, advertise/6, advertise_direct/6, unadvertise/3]).
 -export([start_link/6]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -91,6 +103,30 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
     case macula:advertise(Pool, Realm, Procedure, Handler, Opts) of
         ok -> {ok, Sup};
         {error, Reason} -> {error, Reason}
+    end.
+
+%% @doc As `advertise/5', and additionally publishes a signed
+%% `procedure_advertisement' DHT record naming this pool's connected
+%% station as the server, so `macula_request:start_link_direct/6,7'
+%% can resolve and dial here directly. `Identity' signs the
+%% advertisement — reuse the same one across re-advertises so each one
+%% doesn't mint a fresh advertiser identity.
+%%
+%% The DHT publish is best-effort: if it fails (e.g. no healthy link
+%% at that instant), the handler is still advertised and reachable via
+%% the ordinary pooled path — direct-dial callers just won't be able
+%% to resolve it until a later publish succeeds.
+-spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
+                       module(), term(), macula_identity:key_pair()) ->
+    {ok, pid()} | {error, term()}.
+advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
+    case advertise(Pool, Realm, Procedure, Module, Args) of
+        {ok, Sup} ->
+            _ = macula_direct_dial:publish_advertisement(Pool, Realm,
+                                                          Procedure, Identity),
+            {ok, Sup};
+        {error, _} = Error ->
+            Error
     end.
 
 %% @doc Stop advertising. Does not stop the factory supervisor

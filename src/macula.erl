@@ -251,8 +251,9 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs) ->
     {ok, term()} | {error, term()}.
 call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Ucan = maps:get(ucan_token, Opts, <<>>),
+    LinkOpts = maps:with([verify, expected_node_id], Opts),
     macula_client:call_station(Pool, Station, Realm, Procedure, Payload,
-                               TimeoutMs, Ucan).
+                               TimeoutMs, Ucan, LinkOpts).
 
 %% @doc Advertise a procedure handler on a V2 pool. Fans out to every
 %% healthy link and stores in pool state for replay on link respawn.

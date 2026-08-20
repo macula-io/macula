@@ -28,6 +28,22 @@
 %%% {ok, Pid} = macula_request:start_link(add_caller, Pool, Realm,
 %%%     <<"math.add_v1">>, #{a => 2, b => 3}, 30_000, self()).
 %%% '''
+%%%
+%%% == Direct-dial ==
+%%%
+%%% `start_link/6,7' routes through the pool's existing links — first
+%%% success across whichever are healthy, the same gossip-propagated
+%%% routing `call/5' always used. `start_link_direct/6,7' is the
+%%% direct-dial counterpart: it resolves the procedure's
+%%% `procedure_advertisement' from the DHT (published by
+%%% `macula_response:advertise_direct/6' on the provider side),
+%%% resolves that record's `serving_station' to a dialable endpoint via
+%%% the station's own `station_endpoint' record (every macula-station
+%%% publishes its own automatically), and calls there in one hop via
+%%% `macula:call_station/6' — instead of depending on advertise-gossip
+%%% having propagated a route between arbitrary stations. Requires the
+%%% provider to have advertised via `advertise_direct/6', not plain
+%%% `advertise/5' — a plain advertise publishes no discoverable record.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_request).
@@ -35,6 +51,7 @@
 -behaviour(gen_server).
 
 -export([start_link/6, start_link/7]).
+-export([start_link_direct/6, start_link_direct/7]).
 -export([cancel/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -73,7 +90,24 @@ start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs) ->
                  term(), pos_integer(), term()) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
     gen_server:start_link(?MODULE,
-        {Module, Pool, Realm, Procedure, Payload, TimeoutMs, true, Args}, []).
+        {pooled, Module, Pool, Realm, Procedure, Payload, TimeoutMs, true, Args}, []).
+
+%% @doc As `start_link/6', but resolves and dials the serving station
+%% directly instead of routing through the pool's existing links. See
+%% the "Direct-dial" section above.
+-spec start_link_direct(module(), macula:pool(), macula:realm(),
+                        macula:procedure(), term(), pos_integer()) ->
+    {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs) ->
+    start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, undefined).
+
+%% @doc As `start_link_direct/6', with `Args' passed to `Module:init/1'.
+-spec start_link_direct(module(), macula:pool(), macula:realm(),
+                        macula:procedure(), term(), pos_integer(), term()) ->
+    {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
+    gen_server:start_link(?MODULE,
+        {direct, Module, Pool, Realm, Procedure, Payload, TimeoutMs, true, Args}, []).
 
 %% @doc Cancel an in-flight request. Publishes `rpc.completed_v1' with
 %% `outcome => cancelled' if no reply had arrived yet.
@@ -85,14 +119,16 @@ cancel(Pid) -> gen_server:stop(Pid).
 %%%===================================================================
 
 %% @private
-init({Module, Pool, Realm, Procedure, Payload, TimeoutMs, Announce, InitArgs}) ->
+init({DialMode, Module, Pool, Realm, Procedure, Payload, TimeoutMs, Announce,
+      InitArgs}) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
             RequestId = crypto:strong_rand_bytes(16),
             publish(Announce, Pool, Realm, ?REQUEST_SENT,
                     #{request_id => RequestId}),
-            Worker = spawn_worker(Pool, Realm, Procedure, Payload, TimeoutMs),
+            Worker = spawn_worker(DialMode, Pool, Realm, Procedure, Payload,
+                                  TimeoutMs),
             {ok, #qstate{module = Module, pool = Pool, realm = Realm,
                         announce = Announce, request_id = RequestId,
                         worker = Worker, completed = false, user = UserState}};
@@ -100,10 +136,17 @@ init({Module, Pool, Realm, Procedure, Payload, TimeoutMs, Announce, InitArgs}) -
             {stop, Reason}
     end.
 
-spawn_worker(Pool, Realm, Procedure, Payload, TimeoutMs) ->
+spawn_worker(pooled, Pool, Realm, Procedure, Payload, TimeoutMs) ->
     Parent = self(),
     spawn_link(fun() ->
         Result = macula:call(Pool, Realm, Procedure, Payload, TimeoutMs),
+        Parent ! {request_result, Result}
+    end);
+spawn_worker(direct, Pool, Realm, Procedure, Payload, TimeoutMs) ->
+    Parent = self(),
+    spawn_link(fun() ->
+        Result = macula_direct_dial:call(Pool, Realm, Procedure, Payload,
+                                         TimeoutMs),
         Parent ! {request_result, Result}
     end).
 

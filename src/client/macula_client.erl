@@ -54,7 +54,7 @@
 %% Internal API — called by `macula_pubsub' (and future surfaces).
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
--export([call/5, call_station/6, call_station/7,
+-export([call/5, call_station/6, call_station/7, call_station/8,
          advertise/4, advertise/5, unadvertise/3]).
 %% Dedicated-stream content transfer (see
 %% PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2) — called by the
@@ -311,15 +311,36 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs) ->
 %% gated provider. Empty token = none. Slice 7b.
 -spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
                    pos_integer(), binary()) -> {ok, term()} | {error, term()}.
-call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken)
+call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken) ->
+    call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs,
+                UcanToken, #{}).
+
+%% @doc As `call_station/7', with a per-call TLS trust override for
+%% THIS dial only — `verify' (webpki | none) and/or `expected_node_id'
+%% (pin the station's Ed25519 identity) in `LinkOpts'. The pool's own
+%% `connect/2'-time `verify'/`expected_node_id' are fixed at connect
+%% time and apply uniformly to every link the pool dials (seeds and
+%% every `call_station' target alike) — unworkable for direct-dial,
+%% whose whole point is reaching a station not known until resolved at
+%% call time. This lets a direct-dial caller pin trust to the specific
+%% pubkey a signed DHT record just resolved, without weakening (or
+%% needing to know in advance) the pool's default verification for its
+%% other links. Only applies when a NEW link is dialed for `Station' —
+%% an already-connected link keeps whatever trust it was dialed under.
+-spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
+                   pos_integer(), binary(), map()) ->
+    {ok, term()} | {error, term()}.
+call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
+            LinkOpts)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        is_integer(TimeoutMs), TimeoutMs > 0,
-       is_binary(UcanToken) ->
+       is_binary(UcanToken),
+       is_map(LinkOpts) ->
     gen_server:call(Pool,
                     {call_station, Station, Realm, Procedure, Payload,
-                     TimeoutMs, UcanToken},
+                     TimeoutMs, UcanToken, LinkOpts},
                     TimeoutMs + 2_000).
 
 %% @doc Advertise a procedure handler on every healthy link. Stored
@@ -603,11 +624,11 @@ handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     {noreply, S};
 
 handle_call({call_station, Station, Realm, Procedure, Payload, TimeoutMs,
-             Ucan}, From, S) ->
+             Ucan, LinkOpts}, From, S) ->
     %% Ensure (reuse or dial) a link to the specific station, then hand
     %% the wait-for-handshake + call to a worker so the pool gen_server
     %% is never blocked (same rationale as rpc_call).
-    {Pid, S1} = ensure_link(Station, S),
+    {Pid, S1} = ensure_link(Station, LinkOpts, S),
     _ = spawn(fun() ->
         Reply = call_when_connected(Pid, Realm, Procedure, Payload,
                                     TimeoutMs, Ucan),
@@ -744,8 +765,10 @@ code_change(_OldVsn, S, _Extra) -> {ok, S}.
 %% Internals — link lifecycle
 %%====================================================================
 
-start_link_for_seed(Seed, S) ->
-    LinkOpts = (S#state.link_opts)#{seed => Seed},
+start_link_for_seed(Seed, S) -> start_link_for_seed(Seed, #{}, S).
+
+start_link_for_seed(Seed, ExtraOpts, S) ->
+    LinkOpts = maps:merge(S#state.link_opts, ExtraOpts#{seed => Seed}),
     after_link_start(macula_station_link:start_link(LinkOpts), Seed, S).
 
 after_link_start({ok, Pid}, Seed, S) ->
@@ -765,13 +788,21 @@ spawned_link_pids(#state{links = Links}) ->
 %% Reuse a live link to `Station', else dial a new one and add it to the
 %% pool exactly like a seed link (monitored, respawn-on-DOWN). Returns
 %% the link pid (or `undefined' if the dial failed to spawn) + new state.
-ensure_link(Station, #state{links = Links} = S) ->
-    ensure_link_for(maps:find(Station, Links), Station, S).
+ensure_link(Station, S) -> ensure_link(Station, #{}, S).
 
-ensure_link_for({ok, #link_state{pid = Pid}}, _Station, S) when is_pid(Pid) ->
+%% As `ensure_link/2', but a FRESH dial (only) is made with `ExtraOpts'
+%% merged on top of the pool's own `link_opts' — e.g. a direct-dial
+%% caller's per-call `expected_node_id'. An already-connected, reused
+%% link keeps whatever trust it was originally dialed under; `ExtraOpts'
+%% only shapes a dial that happens as a result of THIS call.
+ensure_link(Station, ExtraOpts, #state{links = Links} = S) ->
+    ensure_link_for(maps:find(Station, Links), Station, ExtraOpts, S).
+
+ensure_link_for({ok, #link_state{pid = Pid}}, _Station, _ExtraOpts, S)
+        when is_pid(Pid) ->
     {Pid, S};
-ensure_link_for(_Missing, Station, S) ->
-    S1 = start_link_for_seed(Station, S),
+ensure_link_for(_Missing, Station, ExtraOpts, S) ->
+    S1 = start_link_for_seed(Station, ExtraOpts, S),
     {link_pid(Station, S1), S1}.
 
 link_pid(Station, #state{links = Links}) ->
