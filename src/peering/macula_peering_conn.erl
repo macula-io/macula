@@ -261,6 +261,18 @@ awaiting_start(EventType, Event, Data) ->
 %%------------------------------------------------------------------
 
 handshaking(enter, _Old, #data{role = client, quic_conn = Conn} = Data) ->
+    %% Start the accept loop on this side too, not just server's —
+    %% `?nif_async_accept_stream' is what turns a peer's later
+    %% `open_bi()' into a `{quic, new_stream, ...}' event HERE. QUIC
+    %% streams can be opened by either endpoint after the handshake
+    %% regardless of who dialed; a dedicated stream opened BY THE
+    %% SERVER side toward a peer that only ever dialed out (the
+    %% common case: a daemon that dials a station, then the station
+    %% relays a streaming session back toward it) would sit
+    %% unaccepted forever without this. Before dedicated streams
+    %% existed this was fine — the client role never needed to accept
+    %% anything, since it always opened the one stream it used itself.
+    ok = macula_quic:async_accept_stream(Conn),
     on_handshake_enter_client(macula_quic:open_stream(Conn), Data);
 handshaking(enter, _Old, #data{role = server, quic_conn = Conn} = Data) ->
     ok = macula_quic:async_accept_stream(Conn),
@@ -449,6 +461,34 @@ connected(info, {quic, Bin, Stream, _Flags},
     {Frames, Tail} = macula_frame:parse_stream(<<Buf/binary, Bin/binary>>),
     [route_frame(F, Data) || F <- Frames],
     {keep_state, Data#data{buf = Tail}};
+%% Peer opened a new stream on this connection, outside the control
+%% stream — a dedicated stream for a streaming RPC session or a
+%% content transfer (see PLAN_PER_STREAM_QUIC_ISOLATION.md). This
+%% connection process is not the intended long-term owner: it exists
+%% only to take custody long enough to hand the stream to
+%% `controlling_pid' (`macula_station_link' on the SDK side,
+%% `macula_station_peer_observer' on the station side), which reads
+%% the stream's own first frame to learn what it's for. Mirrors the
+%% ownership-transfer pattern already used for the handshake stream
+%% in `handshaking/3', just handing off to a third party instead of
+%% keeping it for `self()'.
+connected(info, {quic, new_stream, Stream, _Info},
+          #data{controlling_pid = Pid} = Data) ->
+    _ = macula_quic:controlling_process(Stream, Pid),
+    ok = macula_quic:setopt(Stream, active, true),
+    Pid ! {macula_peering, new_dedicated_stream, self(), Stream},
+    {keep_state, Data};
+%% Open a dedicated QUIC stream and hand it straight to `Owner' — no
+%% custody window, unlike the inbound case above, since here we are
+%% the one calling `open_stream/1' and the stream has no other owner
+%% yet. `Owner' drives it directly via `macula_quic:send/2' /
+%% `macula_peering:send_on_stream/3' and receives its
+%% `{quic, Bin, Stream, Flags}' events straight into its own mailbox
+%% from here on.
+connected({call, From}, {open_dedicated_stream, Owner},
+          #data{quic_conn = Conn} = Data) ->
+    Reply = open_and_handoff(macula_quic:open_stream(Conn), Owner),
+    {keep_state, Data, [{reply, From, Reply}]};
 connected(info, {quic, closed, _Conn, _Detail}, Data) ->
     notify(disconnected, peer_closed, Data),
     {stop, normal, Data};
@@ -492,6 +532,17 @@ draining(cast, {close, _Reason}, Data) ->
     {keep_state, Data};
 draining(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, draining, Data).
+
+%%------------------------------------------------------------------
+%% Dedicated stream open
+%%------------------------------------------------------------------
+
+open_and_handoff({ok, Stream}, Owner) ->
+    ok = macula_quic:controlling_process(Stream, Owner),
+    ok = macula_quic:setopt(Stream, active, true),
+    {ok, Stream};
+open_and_handoff({error, _} = Err, _Owner) ->
+    Err.
 
 %%------------------------------------------------------------------
 %% Frame send helpers

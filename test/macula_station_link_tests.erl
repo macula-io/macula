@@ -1527,11 +1527,28 @@ flush_send_frame_casts() ->
 %%==================================================================
 
 %% Boilerplate: start a link, force-inject peer_pid + peer_node_id,
-%% return {Pid, FakePeer, PeerNodeId}. The test pid acts as the wire
-%% — outbound frames from the link arrive as `{'$gen_cast', {send_frame, _}}`
-%% and inbound frames are synthesised as `{macula_peering, frame, ...}`.
+%% and mock `macula_peering' so dedicated-stream opens/sends are
+%% observable without a real QUIC connection (session frames no
+%% longer travel over the fake-peer-as-cast-target wire the way
+%% ADVERTISE / CALL / EVENT still do — see
+%% PLAN_PER_STREAM_QUIC_ISOLATION.md). `open_dedicated_stream/1`
+%% hands back a fresh `make_ref/0' standing in for a QUIC stream
+%% reference and notifies the test process; `send_on_stream/3`
+%% captures what was written to it as `{sent_on_stream, Stream, Frame}'
+%% instead of performing a real NIF send.
 setup_link_for_streams() ->
     {ok, _} = application:ensure_all_started(macula),
+    meck:new(macula_peering, [passthrough]),
+    Test = self(),
+    meck:expect(macula_peering, open_dedicated_stream, fun(_ConnPid) ->
+        Stream = make_ref(),
+        Test ! {opened_dedicated_stream, Stream},
+        {ok, Stream}
+    end),
+    meck:expect(macula_peering, send_on_stream, fun(Stream, Frame, _Id) ->
+        Test ! {sent_on_stream, Stream, Frame},
+        ok
+    end),
     Identity = macula_identity:generate(),
     {ok, Pid} = macula_station_link:start_link(#{
         seed     => #{host => <<"127.0.0.1">>, port => 1},
@@ -1546,31 +1563,55 @@ setup_link_for_streams() ->
     end),
     {Pid, FakePeer, PeerNodeId}.
 
+teardown_link_for_streams(_) ->
+    meck:unload(macula_peering).
+
+%% Simulate a peer opening a dedicated stream toward us and writing
+%% `Frame' as its first bytes — the inbound STREAM_OPEN path.
+inject_dedicated_stream_open(Pid, FakePeer, Stream, Frame) ->
+    Pid ! {macula_peering, new_dedicated_stream, FakePeer, Stream},
+    Pid ! {quic, macula_frame:encode(Frame), Stream, undefined}.
+
+%% Simulate more bytes arriving on an already-open dedicated stream
+%% (STREAM_DATA / END / ERROR / REPLY on a session we opened).
+inject_on_stream(Pid, Stream, Frame) ->
+    Pid ! {quic, macula_frame:encode(Frame), Stream, undefined}.
+
+await_opened_stream() ->
+    receive
+        {opened_dedicated_stream, Stream} -> Stream
+    after 1_000 -> erlang:error(no_dedicated_stream_opened)
+    end.
+
 %% -- call_stream sends a STREAM_OPEN frame ------------------------
 
 call_stream_emits_stream_open_frame_test_() ->
     {timeout, 5,
      fun() ->
          {Pid, _Peer, _PeerNodeId} = setup_link_for_streams(),
-         {ok, StreamPid} = macula_station_link:call_stream(
-                             Pid, ?REALM, <<"foo.count">>,
-                             #{n => 5}, #{mode => server_stream}),
-         ?assert(is_pid(StreamPid)),
-         receive
-             {'$gen_cast', {send_frame,
-                            #{frame_type := stream_open,
-                              procedure  := P, mode := M,
-                              args       := A,
-                              stream_id  := Sid}}} ->
-                 ?assertEqual(<<"foo.count">>, P),
-                 ?assertEqual(server_stream,   M),
-                 ?assertEqual(#{n => 5},       A),
-                 ?assertEqual(16, byte_size(Sid))
-         after 1_000 ->
-             erlang:error(no_stream_open_frame)
-         end,
-         macula_station_link:stop(Pid),
-         ok
+         try
+             {ok, StreamPid} = macula_station_link:call_stream(
+                                 Pid, ?REALM, <<"foo.count">>,
+                                 #{n => 5}, #{mode => server_stream}),
+             ?assert(is_pid(StreamPid)),
+             Stream = await_opened_stream(),
+             receive
+                 {sent_on_stream, Stream,
+                  #{frame_type := stream_open,
+                    procedure  := P, mode := M,
+                    args       := A,
+                    stream_id  := Sid}} ->
+                     ?assertEqual(<<"foo.count">>, P),
+                     ?assertEqual(server_stream,   M),
+                     ?assertEqual(#{n => 5},       A),
+                     ?assertEqual(16, byte_size(Sid))
+             after 1_000 ->
+                 erlang:error(no_stream_open_frame)
+             end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
      end}.
 
 %% -- call_stream gates on peer_node_id ----------------------------
@@ -1598,29 +1639,27 @@ call_stream_returns_not_connected_before_handshake_test_() ->
 stream_data_delivers_chunk_to_stream_pid_test_() ->
     {timeout, 5,
      fun() ->
-         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
-         {ok, StreamPid} = macula_station_link:call_stream(
-                             Pid, ?REALM, <<"foo">>, #{}, #{}),
-         %% Drain the outbound STREAM_OPEN cast and capture the Sid.
-         Sid = receive
-             {'$gen_cast', {send_frame,
-                            #{frame_type := stream_open,
-                              stream_id  := S}}} -> S
-         after 1_000 -> erlang:error(no_stream_open)
-         end,
-         %% Inject inbound STREAM_DATA.
-         Pid ! {macula_peering, frame, FakePeer, #{
-             frame_type => stream_data,
-             stream_id  => Sid,
-             seq        => 0,
-             encoding   => raw,
-             body       => <<"chunk-bytes">>
-         }},
-         %% recv unblocks with the chunk.
-         ?assertEqual({chunk, <<"chunk-bytes">>},
-                      macula_stream:recv(StreamPid, 1_000)),
-         macula_station_link:stop(Pid),
-         ok
+         {Pid, _FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             {ok, StreamPid} = macula_station_link:call_stream(
+                                 Pid, ?REALM, <<"foo">>, #{}, #{}),
+             Stream = await_opened_stream(),
+             %% Inject inbound STREAM_DATA on the session's own dedicated
+             %% stream.
+             inject_on_stream(Pid, Stream, #{
+                 frame_type => stream_data,
+                 stream_id  => any_stream_id(),
+                 seq        => 0,
+                 encoding   => raw,
+                 body       => <<"chunk-bytes">>
+             }),
+             %% recv unblocks with the chunk.
+             ?assertEqual({chunk, <<"chunk-bytes">>},
+                          macula_stream:recv(StreamPid, 1_000)),
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
      end}.
 
 %% -- inbound STREAM_REPLY surfaces terminal payload ---------------
@@ -1628,25 +1667,23 @@ stream_data_delivers_chunk_to_stream_pid_test_() ->
 stream_reply_surfaces_terminal_payload_test_() ->
     {timeout, 5,
      fun() ->
-         {Pid, FakePeer, PeerNodeId} = setup_link_for_streams(),
-         {ok, StreamPid} = macula_station_link:call_stream(
-                             Pid, ?REALM, <<"foo">>, #{}, #{mode => bidi}),
-         Sid = receive
-             {'$gen_cast', {send_frame,
-                            #{frame_type := stream_open,
-                              stream_id  := S}}} -> S
-         after 1_000 -> erlang:error(no_stream_open)
-         end,
-         Pid ! {macula_peering, frame, FakePeer, #{
-             frame_type   => stream_reply,
-             stream_id    => Sid,
-             payload      => #{count => 12},
-             responded_by => PeerNodeId
-         }},
-         ?assertEqual({ok, #{count => 12}},
-                      macula_stream:await_reply(StreamPid, 1_000)),
-         macula_station_link:stop(Pid),
-         ok
+         {Pid, _FakePeer, PeerNodeId} = setup_link_for_streams(),
+         try
+             {ok, StreamPid} = macula_station_link:call_stream(
+                                 Pid, ?REALM, <<"foo">>, #{}, #{mode => bidi}),
+             Stream = await_opened_stream(),
+             inject_on_stream(Pid, Stream, #{
+                 frame_type   => stream_reply,
+                 stream_id    => any_stream_id(),
+                 payload      => #{count => 12},
+                 responded_by => PeerNodeId
+             }),
+             ?assertEqual({ok, #{count => 12}},
+                          macula_stream:await_reply(StreamPid, 1_000)),
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
      end}.
 
 %% -- inbound STREAM_ERROR aborts local stream --------------------
@@ -1654,26 +1691,24 @@ stream_reply_surfaces_terminal_payload_test_() ->
 stream_error_aborts_local_stream_test_() ->
     {timeout, 5,
      fun() ->
-         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
-         {ok, StreamPid} = macula_station_link:call_stream(
-                             Pid, ?REALM, <<"foo">>, #{}, #{}),
-         Sid = receive
-             {'$gen_cast', {send_frame,
-                            #{frame_type := stream_open,
-                              stream_id  := S}}} -> S
-         after 1_000 -> erlang:error(no_stream_open)
-         end,
-         Pid ! {macula_peering, frame, FakePeer, #{
-             frame_type => stream_error,
-             stream_id  => Sid,
-             code       => <<"deadline_exceeded">>,
-             message    => <<"server too slow">>
-         }},
-         %% recv waiters surface the error.
-         ?assertEqual({error, {<<"deadline_exceeded">>, <<"server too slow">>}},
-                      macula_stream:recv(StreamPid, 1_000)),
-         macula_station_link:stop(Pid),
-         ok
+         {Pid, _FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             {ok, StreamPid} = macula_station_link:call_stream(
+                                 Pid, ?REALM, <<"foo">>, #{}, #{}),
+             Stream = await_opened_stream(),
+             inject_on_stream(Pid, Stream, #{
+                 frame_type => stream_error,
+                 stream_id  => any_stream_id(),
+                 code       => <<"deadline_exceeded">>,
+                 message    => <<"server too slow">>
+             }),
+             %% recv waiters surface the error.
+             ?assertEqual({error, {<<"deadline_exceeded">>, <<"server too slow">>}},
+                          macula_stream:recv(StreamPid, 1_000)),
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
      end}.
 
 %% -- inbound STREAM_OPEN unknown procedure → STREAM_ERROR --------
@@ -1682,30 +1717,34 @@ inbound_stream_open_unknown_procedure_returns_error_test_() ->
     {timeout, 5,
      fun() ->
          {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
-         CallerPub = macula_identity:public(macula_identity:generate()),
-         Sid = crypto:strong_rand_bytes(16),
-         Pid ! {macula_peering, frame, FakePeer, #{
-             frame_type  => stream_open,
-             stream_id   => Sid,
-             procedure   => <<"unknown.proc">>,
-             realm       => ?REALM,
-             mode        => server_stream,
-             args        => #{},
-             deadline_ms => erlang:system_time(millisecond) + 5_000,
-             caller      => CallerPub
-         }},
-         receive
-             {'$gen_cast', {send_frame,
-                            #{frame_type := stream_error,
-                              stream_id  := S2,
-                              code       := Code}}} ->
-                 ?assertEqual(Sid, S2),
-                 ?assertEqual(<<"not_found">>, Code)
-         after 1_000 ->
-             erlang:error(no_stream_error_emitted)
-         end,
-         macula_station_link:stop(Pid),
-         ok
+         try
+             CallerPub = macula_identity:public(macula_identity:generate()),
+             Sid = crypto:strong_rand_bytes(16),
+             Stream = make_ref(),
+             inject_dedicated_stream_open(Pid, FakePeer, Stream, #{
+                 frame_type  => stream_open,
+                 stream_id   => Sid,
+                 procedure   => <<"unknown.proc">>,
+                 realm       => ?REALM,
+                 mode        => server_stream,
+                 args        => #{},
+                 deadline_ms => erlang:system_time(millisecond) + 5_000,
+                 caller      => CallerPub
+             }),
+             receive
+                 {sent_on_stream, Stream,
+                  #{frame_type := stream_error,
+                    stream_id  := S2,
+                    code       := Code}} ->
+                     ?assertEqual(Sid, S2),
+                     ?assertEqual(<<"not_found">>, Code)
+             after 1_000 ->
+                 erlang:error(no_stream_error_emitted)
+             end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
      end}.
 
 %% -- advertise_stream emits an ADVERTISE frame -------------------
@@ -1714,20 +1753,23 @@ advertise_stream_emits_advertise_frame_test_() ->
     {timeout, 5,
      fun() ->
          {Pid, _Peer, _PeerNodeId} = setup_link_for_streams(),
-         Procedure = <<"foo.echo">>,
-         Handler = fun(_Stream, _Args) -> ok end,
-         ok = macula_station_link:advertise_stream(
-                Pid, ?REALM, Procedure, server_stream, Handler),
-         receive
-             {'$gen_cast', {send_frame,
-                            #{frame_type := advertise,
-                              procedure  := P}}} ->
-                 ?assertEqual(Procedure, P)
-         after 1_000 ->
-             erlang:error(no_advertise_frame_sent)
-         end,
-         macula_station_link:stop(Pid),
-         ok
+         try
+             Procedure = <<"foo.echo">>,
+             Handler = fun(_Stream, _Args) -> ok end,
+             ok = macula_station_link:advertise_stream(
+                    Pid, ?REALM, Procedure, server_stream, Handler),
+             receive
+                 {'$gen_cast', {send_frame,
+                                #{frame_type := advertise,
+                                  procedure  := P}}} ->
+                     ?assertEqual(Procedure, P)
+             after 1_000 ->
+                 erlang:error(no_advertise_frame_sent)
+             end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
      end}.
 
 %% -- inbound STREAM_OPEN dispatches advertised handler -----------
@@ -1736,35 +1778,39 @@ inbound_stream_open_invokes_handler_test_() ->
     {timeout, 5,
      fun() ->
          {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
-         Test = self(),
-         Procedure = <<"foo.invoked">>,
-         Handler = fun(_Stream, Args) ->
-             Test ! {handler_invoked, Args},
-             ok
-         end,
-         ok = macula_station_link:advertise_stream(
-                Pid, ?REALM, Procedure, server_stream, Handler),
-         flush_send_frame_casts(),
-         CallerPub = macula_identity:public(macula_identity:generate()),
-         Sid = crypto:strong_rand_bytes(16),
-         Pid ! {macula_peering, frame, FakePeer, #{
-             frame_type  => stream_open,
-             stream_id   => Sid,
-             procedure   => Procedure,
-             realm       => ?REALM,
-             mode        => server_stream,
-             args        => #{n => 7},
-             deadline_ms => erlang:system_time(millisecond) + 5_000,
-             caller      => CallerPub
-         }},
-         receive
-             {handler_invoked, Args} ->
-                 ?assertEqual(#{n => 7}, Args)
-         after 1_000 ->
-             erlang:error(handler_not_invoked)
-         end,
-         macula_station_link:stop(Pid),
-         ok
+         try
+             Test = self(),
+             Procedure = <<"foo.invoked">>,
+             Handler = fun(_Stream, Args) ->
+                 Test ! {handler_invoked, Args},
+                 ok
+             end,
+             ok = macula_station_link:advertise_stream(
+                    Pid, ?REALM, Procedure, server_stream, Handler),
+             flush_send_frame_casts(),
+             CallerPub = macula_identity:public(macula_identity:generate()),
+             Sid = crypto:strong_rand_bytes(16),
+             Stream = make_ref(),
+             inject_dedicated_stream_open(Pid, FakePeer, Stream, #{
+                 frame_type  => stream_open,
+                 stream_id   => Sid,
+                 procedure   => Procedure,
+                 realm       => ?REALM,
+                 mode        => server_stream,
+                 args        => #{n => 7},
+                 deadline_ms => erlang:system_time(millisecond) + 5_000,
+                 caller      => CallerPub
+             }),
+             receive
+                 {handler_invoked, Args} ->
+                     ?assertEqual(#{n => 7}, Args)
+             after 1_000 ->
+                 erlang:error(handler_not_invoked)
+             end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
      end}.
 
 %% -- disconnect aborts open streams -------------------------------
@@ -1773,24 +1819,43 @@ disconnect_aborts_open_streams_test_() ->
     {timeout, 5,
      fun() ->
          {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
-         {ok, StreamPid} = macula_station_link:call_stream(
-                             Pid, ?REALM, <<"foo">>, #{}, #{mode => bidi}),
-         %% Drain the STREAM_OPEN cast.
-         receive {'$gen_cast', {send_frame, _}} -> ok after 1_000 -> ok end,
-         %% Synthesise a peering disconnect; the link's
-         %% `fail_all_pending/2' aborts every open stream. The
-         %% stream pid stays alive (its owner is still up) but
-         %% surfaces a `disconnected' error to readers and reply
-         %% waiters, then closes both sides.
-         Pid ! {macula_peering, disconnected, FakePeer, peer_gone},
-         %% Wait for the abort to settle by polling info/1 until
-         %% the closed flags trip. Bounded retry so a real failure
-         %% surfaces as a timeout.
-         wait_until_closed(StreamPid, 20),
-         ?assertMatch({error, {<<"disconnected">>, _}},
-                      macula_stream:await_reply(StreamPid, 1_000)),
-         ok
+         try
+             {ok, StreamPid} = macula_station_link:call_stream(
+                                 Pid, ?REALM, <<"foo">>, #{}, #{mode => bidi}),
+             _Stream = await_opened_stream(),
+             %% Synthesise a peering disconnect; the link's
+             %% `fail_all_pending/2' aborts every open stream. The
+             %% stream pid stays alive (its owner is still up) but
+             %% surfaces a `disconnected' error to readers and reply
+             %% waiters, then closes both sides.
+             Pid ! {macula_peering, disconnected, FakePeer, peer_gone},
+             %% Wait for the abort to settle by polling info/1 until
+             %% the closed flags trip. Bounded retry so a real failure
+             %% surfaces as a timeout.
+             wait_until_closed(StreamPid, 20),
+             ?assertMatch({error, {<<"disconnected">>, _}},
+                          macula_stream:await_reply(StreamPid, 1_000))
+         after
+             teardown_link_for_streams(ok)
+         end
      end}.
+
+%% `deliver_stream_data/2' etc. look a session up by `stream_id' via
+%% `find_stream/2', so an injected reply frame's `stream_id' has to
+%% match what `call_stream/5' actually generated (a random 16 bytes,
+%% not known in advance). `await_opened_stream/0' already consumed
+%% the `{opened_dedicated_stream, Stream}' notification; the STREAM_OPEN
+%% frame itself is still sitting in the mailbox as the `sent_on_stream'
+%% that followed it — read the real Sid off that instead of inventing
+%% one, so these tests exercise the real lookup rather than
+%% coincidentally matching on an unused field.
+any_stream_id() ->
+    receive
+        {sent_on_stream, _Stream, #{frame_type := stream_open, stream_id := Sid}} ->
+            Sid
+    after 1_000 ->
+        erlang:error(no_stream_open_captured)
+    end.
 
 wait_until_closed(_StreamPid, 0) ->
     erlang:error(stream_did_not_close);

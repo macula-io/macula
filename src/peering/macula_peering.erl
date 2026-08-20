@@ -33,7 +33,9 @@
     accept/2,
     close/1, close/2,
     send_frame/2,
-    peer_capabilities/1
+    peer_capabilities/1,
+    open_dedicated_stream/1,
+    send_on_stream/3
 ]).
 
 %% Capability bit asserting the peer is a relay-station (i.e. it
@@ -109,6 +111,42 @@ cast_checked({error, Reason} = Rejected, _Pid, Frame) ->
                  [maps:get(frame_type, Frame, unknown),
                   macula_frame:explain(Reason)]),
     Rejected.
+
+%% @doc Open a QUIC stream on this connection dedicated to one
+%% session (a streaming RPC call, a content transfer) instead of
+%% sharing the connection's control stream. Ownership transfers to
+%% the calling process immediately: it drives the stream directly via
+%% `send_on_stream/3' and `macula_quic:*', and receives the stream's
+%% `{quic, Bin, Stream, Flags}' events straight into its own mailbox
+%% — the peering connection process is not in this stream's path at
+%% all once this call returns. See PLAN_PER_STREAM_QUIC_ISOLATION.md.
+-spec open_dedicated_stream(pid()) -> {ok, reference()} | {error, term()}.
+open_dedicated_stream(Pid) ->
+    gen_statem:call(Pid, {open_dedicated_stream, self()}, 10_000).
+
+%% @doc Encode, sign, and write one frame directly onto a dedicated
+%% stream obtained from `open_dedicated_stream/1' — no peering
+%% connection process involved, unlike `send_frame/2'. `Identity' is
+%% the caller's own key pair (the connection process is not asked to
+%% sign on the caller's behalf here, since it is not a party to this
+%% stream). Synchronous: the underlying NIF write can block briefly
+%% on QUIC flow-control credit, same as any other `macula_quic:send/2'
+%% call.
+-spec send_on_stream(reference(), macula_frame:frame(),
+                     macula_identity:key_pair()) -> ok | {error, term()}.
+send_on_stream(Stream, Frame, Identity) when is_map(Frame) ->
+    send_checked_on_stream(macula_frame:check_frame(Frame), Stream, Frame, Identity).
+
+send_checked_on_stream(ok, Stream, Frame, Identity) ->
+    macula_quic:send(Stream, macula_frame:encode(ensure_signed(Frame, Identity)));
+send_checked_on_stream({error, Reason} = Rejected, _Stream, Frame, _Identity) ->
+    logger:error("[macula_peering] refused unsendable ~p frame: ~ts",
+                 [maps:get(frame_type, Frame, unknown),
+                  macula_frame:explain(Reason)]),
+    Rejected.
+
+ensure_signed(#{signature := _} = Frame, _Id) -> Frame;
+ensure_signed(Frame, Id) -> macula_frame:sign(Frame, Id).
 
 %% @doc Read the peer's capabilities bitmask as observed in their
 %% CONNECT/HELLO frame. Returns `{ok, NegotiatedCaps}' once the

@@ -236,10 +236,23 @@
     %% (server_stream mode flows server→client; the common case),
     %% then falls through to `server_streams' (client_stream / bidi
     %% server-receive).
+    %% Third element is the dedicated QUIC stream this session's
+    %% frames travel on (see PLAN_PER_STREAM_QUIC_ISOLATION.md) —
+    %% opened via `macula_peering:open_dedicated_stream/1' on the
+    %% outbound (client) side, handed off from a `new_dedicated_stream'
+    %% notification on the inbound (server) side. Every session has
+    %% one; there is no shared-control-stream fallback.
     client_streams = #{} :: #{macula_frame:stream_id() =>
-                              {pid(), reference()}},
+                              {pid(), reference(), reference()}},
     server_streams = #{} :: #{macula_frame:stream_id() =>
-                              {pid(), reference()}},
+                              {pid(), reference(), reference()}},
+    %% Inbound byte buffer per dedicated QUIC stream, keyed by the
+    %% QUIC stream reference itself (stable for the stream's life,
+    %% known before any frame — let alone its `stream_id' — has been
+    %% decoded off it). Entries are created the moment a
+    %% `new_dedicated_stream' notification arrives and removed when
+    %% the session tears down.
+    stream_bufs = #{} :: #{reference() => binary()},
     %% App-level liveness state. `liveness_timer' is the next-tick
     %% reference (or undefined when not armed). `liveness_outstanding'
     %% holds the call_id of an in-flight probe (or undefined when no
@@ -804,10 +817,10 @@ handle_call(_Req, _From, S) ->
 handle_cast({send_stream_frame, _Type, _Spec},
             #state{peer_pid = undefined} = S) ->
     {noreply, S};
-handle_cast({send_stream_frame, Type, Spec},
-            #state{peer_pid = Pid, identity = Id} = S) ->
+handle_cast({send_stream_frame, Type, #{stream_id := Sid} = Spec},
+            #state{identity = Id} = S) ->
     Frame = build_stream_frame(Type, finalise_stream_spec(Type, Spec, Id)),
-    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
+    send_on_dedicated_stream(find_stream(Sid, S), Frame, Id),
     {noreply, on_outbound_stream_frame(Type, Spec, S)};
 
 handle_cast(_Msg, S) -> {noreply, S}.
@@ -865,6 +878,31 @@ handle_info({macula_peering, disconnected, Pid, Reason},
     %% whether to restart us.
     {stop, normal, NewS#state{peer_pid = undefined,
                               peer_node_id = undefined}};
+
+%% Peer opened a dedicated stream toward us — a streaming RPC session
+%% we didn't initiate. `macula_peering_conn' already handed off
+%% controlling_process and enabled active mode; open this stream's
+%% buffer and wait for its first frame (expected: STREAM_OPEN). See
+%% PLAN_PER_STREAM_QUIC_ISOLATION.md.
+handle_info({macula_peering, new_dedicated_stream, Pid, Stream},
+            #state{peer_pid = Pid, stream_bufs = Bufs} = S) ->
+    {noreply, S#state{stream_bufs = Bufs#{Stream => <<>>}}};
+handle_info({macula_peering, new_dedicated_stream, _OtherPid, _Stream}, S) ->
+    %% Stale notification from a link that is no longer `peer_pid'
+    %% (respawned mid-flight) — nothing to attach it to.
+    {noreply, S};
+
+%% Bytes on one of our dedicated streams. Decode whatever complete
+%% frames are available and dispatch each; the tail (a partial frame)
+%% stays buffered for the next chunk, same as the shared-stream case
+%% in `macula_peering_conn:connected/3'.
+handle_info({quic, Bin, Stream, _Flags}, #state{stream_bufs = Bufs} = S)
+        when is_binary(Bin), is_map_key(Stream, Bufs) ->
+    Buf = maps:get(Stream, Bufs),
+    {Frames, Tail} = macula_frame:parse_stream(<<Buf/binary, Bin/binary>>),
+    NewS = lists:foldl(fun(F, Acc) -> dispatch_dedicated_frame(F, Stream, Acc) end,
+                       S#state{stream_bufs = Bufs#{Stream => Tail}}, Frames),
+    {noreply, NewS};
 
 handle_info({call_timeout, CallId}, #state{pending = P} = S) ->
     on_timeout(maps:take(CallId, P), S);
@@ -1044,22 +1082,13 @@ on_frame(#{frame_type := event, topic := Topic, realm := Realm} = Frame, S) ->
 on_frame(#{frame_type := call} = Frame, S) ->
     handle_inbound_call(Frame, S),
     S;
-%% Inbound STREAM_OPEN — relay forwarded a streaming RPC opener.
-%% Look up the streaming handler; spawn a server-side stream_v1
-%% paired to this link plus a transient handler process.
-on_frame(#{frame_type := stream_open} = Frame, S) ->
-    handle_inbound_stream_open(Frame, S);
-%% STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY — chunk
-%% delivery on a previously-opened stream. Look up the local
-%% stream_v1 pid by stream_id and forward.
-on_frame(#{frame_type := stream_data} = Frame, S) ->
-    deliver_stream_data(Frame, S);
-on_frame(#{frame_type := stream_end} = Frame, S) ->
-    deliver_stream_end(Frame, S);
-on_frame(#{frame_type := stream_error} = Frame, S) ->
-    deliver_stream_error(Frame, S);
-on_frame(#{frame_type := stream_reply} = Frame, S) ->
-    deliver_stream_reply(Frame, S);
+%% STREAM_OPEN / STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
+%% no longer arrive here — every streaming session travels on its
+%% own dedicated QUIC stream (see PLAN_PER_STREAM_QUIC_ISOLATION.md
+%% and `dispatch_dedicated_frame/3'), not the shared control stream
+%% `on_frame/2' decodes. A stream frame reaching this function is a
+%% protocol violation and falls through to the catch-all below.
+%%
 %% HyParView / Plumtree / SWIM / content frames pass through here.
 %% This client cares only about call/result/error and event; the
 %% rest is for dedicated overlay modules.
@@ -1091,11 +1120,15 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
         erlang:demonitor(Mon, [flush]),
         Subscriber ! {macula_event_gone, SubRef, Reason}
     end, Subs),
-    %% Abort every open stream with a `disconnected' STREAM_ERROR.
+    %% Abort every open stream with a `disconnected' STREAM_ERROR, and
+    %% close its dedicated QUIC stream — the peering connection this
+    %% stream belonged to is already gone or going, but the stream
+    %% resource itself is independent and won't be reclaimed on its own.
     %% Caller waiters (recv / await_reply) unblock immediately;
     %% transient handler processes see the abort and exit.
-    AbortFun = fun(_Sid, {Pid, Mon}) ->
+    AbortFun = fun(_Sid, {Pid, Mon, Stream}) ->
         erlang:demonitor(Mon, [flush]),
+        close_dedicated_stream(Stream),
         try
             macula_stream:abort(Pid, <<"disconnected">>,
                                  iolist_to_binary(io_lib:format("~p", [Reason])))
@@ -1104,7 +1137,7 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     maps:foreach(AbortFun, CS),
     maps:foreach(AbortFun, SS),
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
-            client_streams = #{}, server_streams = #{}}.
+            client_streams = #{}, server_streams = #{}, stream_bufs = #{}}.
 
 %%-------------------------------------------------------------------
 %% Liveness probe — bounded zombie-connection detection
@@ -1654,10 +1687,35 @@ open_client_stream(Realm, Proc, Args, Opts, Caller,
         deadline_ms => DeadlineMs,
         caller      => macula_identity:public(Id)
     }),
-    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
-    CS = S#state.client_streams,
-    NewS = S#state{client_streams = CS#{Sid => {StreamPid, Mon}}},
+    NewS = open_client_stream_dedicated(Pid, Frame, Sid, StreamPid, Mon, Id, S),
     {reply_value, {ok, StreamPid}, NewS}.
+
+%% Open this session's dedicated QUIC stream and write STREAM_OPEN as
+%% the first bytes on it — not the shared control stream. If the
+%% dedicated stream can't be opened (connection gone, flow-control
+%% credit exhausted), the `macula_stream' already spawned above gets
+%% a clean error the same way an unknown procedure does on the
+%% inbound side, instead of hanging until its deadline.
+open_client_stream_dedicated(Pid, Frame, Sid, StreamPid, Mon, Id, S) ->
+    dedicated_open_result(macula_peering:open_dedicated_stream(Pid),
+                          Frame, Sid, StreamPid, Mon, Id, S).
+
+dedicated_open_result({ok, Stream}, Frame, Sid, StreamPid, Mon, Id,
+                      #state{stream_bufs = Bufs} = S) ->
+    try macula_peering:send_on_stream(Stream, Frame, Id) catch _:_ -> ok end,
+    CS = S#state.client_streams,
+    S#state{client_streams = CS#{Sid => {StreamPid, Mon, Stream}},
+            %% This stream is bidirectional (`open_bi/1`) — the
+            %% provider's STREAM_DATA/END/ERROR/REPLY arrives back on
+            %% this same stream, so its inbound buffer needs to exist
+            %% now, not just for peer-initiated streams (see the
+            %% `new_dedicated_stream' handler).
+            stream_bufs = Bufs#{Stream => <<>>}};
+dedicated_open_result({error, _Reason}, _Frame, _Sid, StreamPid, Mon, _Id, S) ->
+    erlang:demonitor(Mon, [flush]),
+    catch macula_stream:deliver_error(StreamPid, <<"unavailable">>,
+                                      <<"failed to open dedicated stream">>),
+    S.
 
 %%-------------------------------------------------------------------
 %% Streaming RPC — outbound STREAM_DATA / END / ERROR / REPLY
@@ -1673,6 +1731,15 @@ build_stream_frame(stream_data, Spec)  -> macula_frame:stream_data(Spec);
 build_stream_frame(stream_end, Spec)   -> macula_frame:stream_end(Spec);
 build_stream_frame(stream_error, Spec) -> macula_frame:stream_error(Spec);
 build_stream_frame(stream_reply, Spec) -> macula_frame:stream_reply(Spec).
+
+%% Every open stream session has its own dedicated QUIC stream by
+%% the time anything is outbound on it — `find_stream/2' returning
+%% `error' here means the session already tore down (peer closed,
+%% monitor DOWN raced this cast); nothing to send to.
+send_on_dedicated_stream(error, _Frame, _Id) ->
+    ok;
+send_on_dedicated_stream({ok, {_Pid, _Mon, Stream}}, Frame, Id) ->
+    try macula_peering:send_on_stream(Stream, Frame, Id) catch _:_ -> ok end.
 
 %% `stream_reply' carries `responded_by' (the link's own pubkey) which
 %% the v1 stream gen_server has no way to know. `stream_data',
@@ -1723,55 +1790,101 @@ maybe_drop_outbound(Sid, #state{client_streams = CS,
 
 %% Terminal frames (stream_end role=both, stream_error, stream_reply)
 %% close the stream from both ends. Drop the Sid from whichever map
-%% holds it. Same-pool case has the same Sid in BOTH maps; drop both
-%% so the link doesn't leak entries.
-drop_stream(Sid, #state{client_streams = CS,
-                        server_streams = SS} = S) ->
-    {CS2, ClientMon} = drop_one(Sid, CS),
-    {SS2, ServerMon} = drop_one(Sid, SS),
+%% holds it, and the dedicated QUIC stream's inbound buffer along
+%% with it — otherwise `stream_bufs' leaks one entry per finished
+%% session. Same-pool case has the same Sid in BOTH maps (and, in
+%% principle, the same dedicated stream); drop both so the link
+%% doesn't leak entries.
+drop_stream(Sid, #state{client_streams = CS, server_streams = SS,
+                        stream_bufs = Bufs} = S) ->
+    {CS2, ClientMon, ClientStream} = drop_one(Sid, CS),
+    {SS2, ServerMon, ServerStream} = drop_one(Sid, SS),
     _ = [erlang:demonitor(M, [flush])
          || M <- [ClientMon, ServerMon], M =/= undefined],
-    S#state{client_streams = CS2, server_streams = SS2}.
+    %% Same-pool sessions share one dedicated stream across both
+    %% maps; closing it twice is harmless (`nif_close_stream` is
+    %% idempotent against an already-finished send half).
+    _ = [close_dedicated_stream(Stream)
+         || Stream <- lists:usort([ClientStream, ServerStream]),
+            Stream =/= undefined],
+    Bufs2 = drop_bufs([ClientStream, ServerStream], Bufs),
+    S#state{client_streams = CS2, server_streams = SS2, stream_bufs = Bufs2}.
 
 drop_one(Sid, Map) ->
     case maps:take(Sid, Map) of
-        error                -> {Map, undefined};
-        {{_Pid, Mon}, NewMap} -> {NewMap, Mon}
+        error -> {Map, undefined, undefined};
+        {{_Pid, Mon, Stream}, NewMap} -> {NewMap, Mon, Stream}
     end.
+
+drop_bufs(Streams, Bufs) ->
+    lists:foldl(fun(undefined, Acc) -> Acc;
+                   (Stream, Acc) -> maps:remove(Stream, Acc)
+                end, Bufs, Streams).
+
+%%-------------------------------------------------------------------
+%% Streaming RPC — dispatch for frames decoded off a dedicated stream
+%%-------------------------------------------------------------------
+
+%% Every stream-related frame type this link ever needs to act on,
+%% now sourced from a session's own dedicated QUIC stream instead of
+%% the shared control stream's `on_frame/2'. STREAM_OPEN is the only
+%% one that can legitimately be the *first* frame on a freshly
+%% handed-off inbound stream; the rest belong to a session already
+%% tracked in `client_streams' / `server_streams'.
+dispatch_dedicated_frame(#{frame_type := stream_open} = Frame, Stream, S) ->
+    handle_inbound_stream_open(Frame, Stream, S);
+dispatch_dedicated_frame(#{frame_type := stream_data} = Frame, _Stream, S) ->
+    deliver_stream_data(Frame, S);
+dispatch_dedicated_frame(#{frame_type := stream_end} = Frame, _Stream, S) ->
+    deliver_stream_end(Frame, S);
+dispatch_dedicated_frame(#{frame_type := stream_error} = Frame, _Stream, S) ->
+    deliver_stream_error(Frame, S);
+dispatch_dedicated_frame(#{frame_type := stream_reply} = Frame, _Stream, S) ->
+    deliver_stream_reply(Frame, S);
+dispatch_dedicated_frame(_Frame, _Stream, S) ->
+    %% Anything else arriving first on a dedicated stream is a
+    %% protocol violation — nothing but our own peer code opens one
+    %% of these, and only for a stream session.
+    S.
 
 %%-------------------------------------------------------------------
 %% Streaming RPC — inbound STREAM_OPEN (server-side dispatch)
 %%-------------------------------------------------------------------
 
-%% The relay forwarded a STREAM_OPEN whose `(Realm, Procedure)' this
-%% link advertised. Spawn a server-side stream_v1 paired to this
-%% link, store it, then dispatch the registered handler in a
-%% transient process so a slow / crashing handler can't block the
-%% link's gen_server.
+%% STREAM_OPEN arrives as the first frame decoded off a freshly
+%% handed-off dedicated QUIC stream (see `dispatch_dedicated_frame/3'
+%% below) — `Stream' is that stream's reference, and every frame
+%% this session sends or receives from here on travels on it.
+%% Look up `(Realm, Procedure)' this link advertised, spawn a
+%% server-side stream_v1 paired to this link, then dispatch the
+%% registered handler in a transient process so a slow / crashing
+%% handler can't block the link's gen_server.
 handle_inbound_stream_open(#{stream_id := Sid, procedure := Proc,
-                              realm := Realm, args := Args} = Frame, S) ->
+                              realm := Realm, args := Args} = Frame,
+                           Stream, S) ->
     DeclaredMode = maps:get(mode, Frame, server_stream),
     dispatch_stream_open(maps:find({Realm, Proc}, S#state.stream_procedures),
-                         Sid, Proc, DeclaredMode, Args, S).
+                         Sid, Proc, DeclaredMode, Args, Stream, S).
 
-%% Unknown (Realm, Procedure) → ship a STREAM_ERROR back so the
-%% client unblocks immediately rather than waiting for its deadline.
-dispatch_stream_open(error, Sid, _Proc, _Declared, _Args,
-                     #state{peer_pid = Pid} = S) when is_pid(Pid) ->
+%% Unknown (Realm, Procedure) → ship a STREAM_ERROR back on the
+%% caller's own dedicated stream so it unblocks immediately rather
+%% than waiting for its deadline. The shared control stream is not
+%% in this session's path at all, so the reply has to go here.
+dispatch_stream_open(error, Sid, _Proc, _Declared, _Args, Stream,
+                     #state{identity = Id} = S) ->
     Frame = macula_frame:stream_error(#{
         stream_id => Sid,
         code      => <<"not_found">>,
         message   => <<"procedure not advertised">>
     }),
-    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
+    try macula_peering:send_on_stream(Stream, Frame, Id) catch _:_ -> ok end,
     S;
-dispatch_stream_open(error, _Sid, _Proc, _Declared, _Args, S) ->
-    S;
-dispatch_stream_open({ok, {AdvMode, Handler}}, Sid, Proc, _Declared, Args, S) ->
+dispatch_stream_open({ok, {AdvMode, Handler}}, Sid, Proc, _Declared, Args,
+                     Stream, S) ->
     %% Advertised mode wins — the server declared the shape.
-    spawn_inbound_stream(Sid, Proc, AdvMode, Handler, Args, S).
+    spawn_inbound_stream(Sid, Proc, AdvMode, Handler, Args, Stream, S).
 
-spawn_inbound_stream(Sid, Proc, Mode, Handler, Args,
+spawn_inbound_stream(Sid, Proc, Mode, Handler, Args, Stream,
                      #state{server_streams = SS} = S) ->
     Host = spawn(fun stream_host_loop/0),
     {ok, StreamPid} = macula_stream:start_link(#{
@@ -1783,7 +1896,7 @@ spawn_inbound_stream(Sid, Proc, Mode, Handler, Args,
     ok = macula_stream:attach_to_link(StreamPid, self(), Sid),
     Mon = erlang:monitor(process, StreamPid),
     _Worker = spawn_stream_handler(Handler, StreamPid, Args, Proc),
-    S#state{server_streams = SS#{Sid => {StreamPid, Mon}}}.
+    S#state{server_streams = SS#{Sid => {StreamPid, Mon, Stream}}}.
 
 stream_host_loop() ->
     receive stop -> ok end.
@@ -1819,7 +1932,7 @@ run_stream_handler(Handler, Stream, Args, Proc) ->
 %% then server_streams (client_stream / bidi server-receive).
 deliver_stream_data(#{stream_id := Sid} = Frame, S) ->
     deliver_to_stream(find_stream(Sid, S),
-                      fun({Pid, _Mon}) ->
+                      fun({Pid, _Mon, _Stream}) ->
                           macula_stream:deliver_chunk(
                             Pid,
                             maps:get(encoding, Frame, raw),
@@ -1830,7 +1943,7 @@ deliver_stream_data(#{stream_id := Sid} = Frame, S) ->
 deliver_stream_end(#{stream_id := Sid} = Frame, S) ->
     Role = maps:get(role, Frame, both),
     deliver_to_stream(find_stream(Sid, S),
-                      fun({Pid, _Mon}) ->
+                      fun({Pid, _Mon, _Stream}) ->
                           macula_stream:deliver_end(Pid, Role)
                       end),
     %% Full close drops the routing entry; half close keeps it open
@@ -1841,14 +1954,14 @@ deliver_stream_error(#{stream_id := Sid} = Frame, S) ->
     Code = maps:get(code, Frame, <<"error">>),
     Message = maps:get(message, Frame, <<>>),
     deliver_to_stream(find_stream(Sid, S),
-                      fun({Pid, _Mon}) ->
+                      fun({Pid, _Mon, _Stream}) ->
                           macula_stream:deliver_error(Pid, Code, Message)
                       end),
     drop_stream(Sid, S).
 
 deliver_stream_reply(#{stream_id := Sid, payload := Payload}, S) ->
     deliver_to_stream(find_stream(Sid, S),
-                      fun({Pid, _Mon}) ->
+                      fun({Pid, _Mon, _Stream}) ->
                           macula_stream:deliver_reply(Pid, {ok, Payload})
                       end),
     S.
@@ -1887,17 +2000,35 @@ drain_pending_stream_advertises(#state{stream_procedures = SP} = S) ->
 on_monitor_down(Pid, Mon, #state{client_streams = CS} = S) ->
     on_client_stream_down(find_stream_by_pid(Pid, CS), Pid, Mon, S).
 
-on_client_stream_down({ok, Sid}, _Pid, Mon, #state{client_streams = CS} = S) ->
+on_client_stream_down({ok, Sid}, _Pid, Mon, #state{client_streams = CS,
+                                                   stream_bufs = Bufs} = S) ->
     erlang:demonitor(Mon, [flush]),
-    S#state{client_streams = maps:remove(Sid, CS)};
+    {CS2, Stream} = take_dedicated_stream(Sid, CS),
+    close_dedicated_stream(Stream),
+    S#state{client_streams = CS2, stream_bufs = drop_bufs([Stream], Bufs)};
 on_client_stream_down(error, Pid, Mon, #state{server_streams = SS} = S) ->
     on_server_stream_down(find_stream_by_pid(Pid, SS), Mon, S).
 
-on_server_stream_down({ok, Sid}, Mon, #state{server_streams = SS} = S) ->
+on_server_stream_down({ok, Sid}, Mon, #state{server_streams = SS,
+                                             stream_bufs = Bufs} = S) ->
     erlang:demonitor(Mon, [flush]),
-    S#state{server_streams = maps:remove(Sid, SS)};
+    {SS2, Stream} = take_dedicated_stream(Sid, SS),
+    close_dedicated_stream(Stream),
+    S#state{server_streams = SS2, stream_bufs = drop_bufs([Stream], Bufs)};
 on_server_stream_down(error, Mon, S) ->
     on_subscriber_down(Mon, S).
+
+take_dedicated_stream(Sid, Map) ->
+    case maps:take(Sid, Map) of
+        error -> {Map, undefined};
+        {{_Pid, _Mon, Stream}, NewMap} -> {NewMap, Stream}
+    end.
+
+%% The owning `macula_stream' died — nothing is driving this
+%% dedicated QUIC stream anymore. Close it rather than leaking a live
+%% stream resource for a session that will never resume.
+close_dedicated_stream(undefined) -> ok;
+close_dedicated_stream(Stream) -> catch macula_quic:close_stream(Stream), ok.
 
 %% Lookup a stream by Sid across both maps. Client-side first (the
 %% common server_stream mode delivers server→client chunks to the
@@ -1910,7 +2041,7 @@ find_stream(Sid, #state{client_streams = CS, server_streams = SS}) ->
     end.
 
 find_stream_by_pid(Pid, Streams) ->
-    Found = [Sid || {Sid, {P, _}} <- maps:to_list(Streams), P =:= Pid],
+    Found = [Sid || {Sid, {P, _, _}} <- maps:to_list(Streams), P =:= Pid],
     first_or_error(Found).
 
 first_or_error([H | _]) -> {ok, H};
