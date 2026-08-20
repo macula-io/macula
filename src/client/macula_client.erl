@@ -61,6 +61,10 @@
 %% `macula' facade to pin one link for a whole put_content/get_content
 %% transfer instead of letting `call/5' pick per underlying block CALL.
 -export([pick_connected_link/1]).
+%% Direct-dial content transfer — called by the `macula' facade to pin
+%% a link to a SPECIFIC (resolved) station rather than picking from the
+%% pool's existing links.
+-export([ensure_content_link/4]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
 -export([call_stream/5, call_stream_station/6,
          advertise_stream/5, unadvertise_stream/3]).
@@ -290,6 +294,23 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs)
 -spec pick_connected_link(pool()) -> {ok, pid()} | {error, no_healthy_station}.
 pick_connected_link(Pool) when is_pid(Pool) ->
     gen_server:call(Pool, pick_connected_link).
+
+%% @doc As `pick_connected_link/1', but for a SPECIFIC station — reuse
+%% a live link to `Station' or dial (and wait up to `TimeoutMs' for the
+%% handshake on) a fresh one, per-call trust-overridable via `LinkOpts'
+%% (`verify' / `expected_node_id' / `pin_tls_cert', mirroring
+%% `call_station/8'). This is direct-dial's content-transfer primitive:
+%% the returned pid is pinned for a whole `put_content'/`get_content'
+%% dedicated-stream transfer exactly like `pick_connected_link/1', just
+%% against a caller-resolved station instead of whichever pool link is
+%% already up.
+-spec ensure_content_link(pool(), seed(), map(), pos_integer()) ->
+    {ok, pid()} | {error, term()}.
+ensure_content_link(Pool, Station, LinkOpts, TimeoutMs)
+  when is_pid(Pool), is_map(LinkOpts),
+       is_integer(TimeoutMs), TimeoutMs > 0 ->
+    gen_server:call(Pool, {ensure_content_link, Station, LinkOpts, TimeoutMs},
+                    TimeoutMs + 2_000).
 
 %% @doc Issue a CALL to ONE specific station, dialing it directly even
 %% if it is not in the pool's seed set. `Station' is a seed URL (e.g.
@@ -643,6 +664,19 @@ handle_call({call_station, Station, Realm, Procedure, Payload, TimeoutMs,
     end),
     {noreply, S1};
 
+handle_call({ensure_content_link, Station, LinkOpts, TimeoutMs}, From, S) ->
+    %% Same shape as call_station: ensure the link, wait for its
+    %% handshake in a worker so the pool never blocks. Unlike
+    %% call_station this hands back the connected pid itself rather
+    %% than making a call over it — the caller opens a dedicated
+    %% content stream on it directly (see macula:with_content_stream/2).
+    {Pid, S1} = ensure_link(Station, LinkOpts, S),
+    _ = spawn(fun() ->
+        Reply = content_link_when_connected(Pid, TimeoutMs),
+        gen_server:reply(From, Reply)
+    end),
+    {noreply, S1};
+
 handle_call({advertise, Realm, Procedure, Handler, Policy}, _From,
             #state{procs = P} = S) ->
     Pids = spawned_link_pids(S),
@@ -847,6 +881,18 @@ call_after_connect(true, Pid, Realm, Proc, Payload, Deadline, Ucan) ->
     macula_station_link:call(Pid, Realm, Proc, Payload, Remaining, Ucan);
 call_after_connect(false, _Pid, _Realm, _Proc, _Payload, _Deadline, _Ucan) ->
     {error, not_connected}.
+
+%% As `call_when_connected/6', but for `ensure_content_link/4': waits
+%% for a freshly-dialed link's handshake, then hands back the pid
+%% itself rather than making a call over it.
+content_link_when_connected(undefined, _TimeoutMs) ->
+    {error, not_connected};
+content_link_when_connected(Pid, TimeoutMs) ->
+    Deadline = erlang:monotonic_time(millisecond) + TimeoutMs,
+    content_link_after_connect(await_connected(Pid, Deadline), Pid).
+
+content_link_after_connect(true, Pid)   -> {ok, Pid};
+content_link_after_connect(false, _Pid) -> {error, not_connected}.
 
 %% Live links that have completed CONNECT/HELLO. Used by publish,
 %% which (unlike advertise) gains nothing from dispatching to a

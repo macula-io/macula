@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.6.0] - 2026-08-20
+
+### Added
+
+- **Direct-dial for content download** (`macula_download:start_link_direct/4,5`,
+  `macula_direct_dial:get_content/3`, `macula:get_content_station/4,5`,
+  `macula_client:ensure_content_link/4`). Resolves a chunked MCID's
+  provider from its signed `content_announcement` (published
+  automatically by the provider's station on receipt — nothing new to
+  advertise, no `macula_feeder`-side change needed) and dials that
+  station directly for the fetch, instead of depending on the caller's
+  own station being able to reach it via relay. Content's trust model is
+  deliberately lighter than RPC's direct-dial: content is
+  content-addressed and independently re-hashed client-side regardless
+  of which peer serves it, so there is no cert-chain-equivalent opt here
+  — see `macula_direct_dial`'s module doc, "Content" section, for why.
+- **`macula:get_content_station/4,5`** — the content-transfer
+  counterpart to `call_station/6,7`: dial a specific, already-resolved
+  station directly for a `put_content`/`get_content`-shaped dedicated-
+  stream transfer, with the same per-call `verify`/`expected_node_id`/
+  `pin_tls_cert` trust override.
+
+### Fixed
+
+- **`find_content_providers/2` now checks the announcement's signer
+  against its own claimed `announcer_node`**, not just that SOME valid
+  signature is present. The public `content_announcement/3,4`
+  constructor always keeps the two consistent, so this could only
+  diverge via a hand-crafted record — exactly the malicious/non-SDK
+  publisher case the check exists for. Same class of fix as
+  `macula_direct_dial:verify_and_build/2` already applies to
+  `station_endpoint`.
+- **Single-block `get_content/2` now verifies the fetched bytes'
+  BLAKE3 hash against the MCID client-side.** Chunked content already
+  got this via `macula_manifest:verify/2` over the reassembled whole;
+  single-block content had no client-side check at all, relying
+  entirely on whichever station served the request having verified it
+  once, at PUT time — not necessarily the station being fetched FROM,
+  especially once `get_content_station/5` lets a caller deliberately
+  dial a resolved, third-party provider.
+
 ## [9.5.0] - 2026-08-20
 
 ### Added

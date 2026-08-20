@@ -14,6 +14,22 @@
 %%% `macula_streamer' / `macula_stream_sink' for that (`streaming.*'
 %%% facts belong to that pair).
 %%%
+%%% == Direct-dial ==
+%%%
+%%% `start_link/4,5' fetches through the pool's own connected link
+%%% (whichever `pick_connected_link/1' picks), reaching a copy via that
+%%% station's 1-hop peer relay. `start_link_direct/4,5' is the
+%%% direct-dial counterpart: it resolves `Mcid''s provider from its
+%%% signed `content_announcement' (published automatically by the
+%%% provider's station on receipt — nothing to advertise explicitly, no
+%%% direct-dial counterpart needed on the `macula_feeder' side) and
+%%% dials that station directly, in one hop, instead of depending on the
+%%% caller's own station being able to reach it via relay. Only chunked
+%%% content is discoverable this way — see
+%%% `macula:find_content_providers/2'. See `macula_direct_dial''s module
+%%% doc, "Content" section, for the trust model (deliberately lighter
+%%% than RPC's — content is self-verifying by hash).
+%%%
 %%% == Example ==
 %%%
 %%% ```
@@ -39,6 +55,7 @@
 -behaviour(gen_server).
 
 -export([start_link/4, start_link/5]).
+-export([start_link_direct/4, start_link_direct/5]).
 -export([cancel/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -50,6 +67,11 @@
 
 -define(GET_STARTED, <<"sharing.get_started_v1">>).
 -define(GET_COMPLETED, <<"sharing.get_completed_v1">>).
+%% Bounds only the QUIC handshake wait when `start_link_direct/4,5'
+%% must dial a fresh link — matches `macula_client:connect/2''s own
+%% `connect_timeout_ms' default. The block/manifest transfer that
+%% follows has its own separate, internal timeouts regardless.
+-define(DIRECT_DIAL_CONNECT_TIMEOUT_MS, 30_000).
 
 -record(dstate, {
     module    :: module(),
@@ -72,7 +94,23 @@ start_link(Module, Pool, Realm, Mcid) ->
 -spec start_link(module(), macula:pool(), macula:realm(), macula:mcid(), term()) ->
     {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Mcid, Args) ->
-    gen_server:start_link(?MODULE, {Module, Pool, Realm, Mcid, true, Args}, []).
+    gen_server:start_link(?MODULE,
+        {pooled, Module, Pool, Realm, Mcid, true, Args}, []).
+
+%% @doc As `start_link/4', but resolves and dials the MCID's provider
+%% directly instead of fetching through the pool's existing links. See
+%% the "Direct-dial" section above.
+-spec start_link_direct(module(), macula:pool(), macula:realm(),
+                        macula:mcid()) -> {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Realm, Mcid) ->
+    start_link_direct(Module, Pool, Realm, Mcid, undefined).
+
+%% @doc As `start_link_direct/4', with `Args' passed to `Module:init/1'.
+-spec start_link_direct(module(), macula:pool(), macula:realm(),
+                        macula:mcid(), term()) -> {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Realm, Mcid, Args) ->
+    gen_server:start_link(?MODULE,
+        {direct, Module, Pool, Realm, Mcid, true, Args}, []).
 
 %% @doc Cancel an in-flight download. Publishes `sharing.get_completed_v1'
 %% with `outcome => cancelled' if the get had not resolved yet.
@@ -84,7 +122,7 @@ cancel(Pid) -> gen_server:stop(Pid).
 %%%===================================================================
 
 %% @private
-init({Module, Pool, Realm, Mcid, Announce, InitArgs}) ->
+init({DialMode, Module, Pool, Realm, Mcid, Announce, InitArgs}) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
@@ -92,7 +130,7 @@ init({Module, Pool, Realm, Mcid, Announce, InitArgs}) ->
             publish(Announce, Pool, Realm, ?GET_STARTED,
                     #{share_id => ShareId, mcid => Mcid,
                       chunked => is_chunked_mcid(Mcid)}),
-            Worker = spawn_worker(Pool, Mcid),
+            Worker = spawn_worker(DialMode, Pool, Mcid),
             {ok, #dstate{module = Module, pool = Pool, realm = Realm,
                         announce = Announce, share_id = ShareId,
                         worker = Worker, completed = false, user = UserState}};
@@ -100,10 +138,17 @@ init({Module, Pool, Realm, Mcid, Announce, InitArgs}) ->
             {stop, Reason}
     end.
 
-spawn_worker(Pool, Mcid) ->
+spawn_worker(pooled, Pool, Mcid) ->
     Parent = self(),
     spawn_link(fun() ->
         Result = macula:get_content(Pool, Mcid),
+        Parent ! {download_result, Result}
+    end);
+spawn_worker(direct, Pool, Mcid) ->
+    Parent = self(),
+    spawn_link(fun() ->
+        Result = macula_direct_dial:get_content(Pool, Mcid,
+                                                 ?DIRECT_DIAL_CONNECT_TIMEOUT_MS),
         Parent ! {download_result, Result}
     end).
 

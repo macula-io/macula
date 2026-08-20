@@ -1,16 +1,18 @@
 %%%-------------------------------------------------------------------
 %%% @doc Direct-dial resolve-and-call: shared internals for
-%%% `macula_request'/`macula_response' (and, when they grow a
-%%% direct-dial mode, `macula_streamer'/`macula_stream_sink').
+%%% `macula_request'/`macula_response' and `macula_download' (and, when
+%%% it grows a direct-dial mode, `macula_streamer'/`macula_stream_sink').
 %%%
-%%% Not a public API on its own — `macula_request:start_link_direct/6,7,8'
-%%% and `macula_response:advertise_direct/6,7' are the entry points.
-%%% Factored out because both the RPC and streaming supervised pairs
-%%% need the identical resolve sequence (`find_records' ->
-%%% verify -> `read_procedure_advertisement' -> `find_record' ->
-%%% `read_station_endpoint' -> build a `quic://' dial URL), and the
+%%% Not a public API on its own — `macula_request:start_link_direct/6,7,8',
+%%% `macula_response:advertise_direct/6,7', and
+%%% `macula_download:start_link_direct/4,5' are the entry points.
+%%% Factored out because the RPC and content-download paths need the
+%%% same shape of resolve sequence (`find_records' -> verify -> read
+%%% the record -> build a `quic://' dial URL, retrying past DHT
+%%% propagation lag throughout), and RPC additionally needs the
 %%% identical provider-side publish (sign + `put_record' a
-%%% `procedure_advertisement').
+%%% `procedure_advertisement'; content has no publish step here at
+%%% all — see "Content" below).
 %%%
 %%% The resolve side retries: a record just published on the provider's
 %%% station has not necessarily replicated to the caller's station yet,
@@ -52,11 +54,30 @@
 %%% unauthorized (if self-consistent) identity; unmanaged realms have
 %%% no realm CA to check against, so this stays opt-in rather than
 %%% mandatory.
+%%%
+%%% == Content ==
+%%%
+%%% `get_content/3' resolves and fetches deliberately WITHOUT the
+%%% cert-chain machinery above — content's threat model genuinely
+%%% differs from RPC's. An RPC reply is opaque and unverifiable except
+%%% by trusting whoever answered, so proving the ADVERTISER is
+%%% authorized matters. Content is content-addressed: the fetched bytes
+%%% are independently re-hashed against the MCID client-side
+%%% (`macula:verify_block_hash/2' for single-block,
+%%% `macula_manifest:verify/2' for chunked) regardless of which peer
+%%% served them, so a rogue or unauthorized announcer can at most
+%%% refuse to serve or waste a dial — it cannot make a caller accept
+%%% content that does not hash to the MCID it asked for. What still
+%%% matters, and is still mandatory, is (1)'s analogue for
+%%% `content_announcement': the signer must equal the `announcer_node'
+%%% it claims (`macula:decode_provider/1'), so an attacker cannot at
+%%% least misattribute who is claiming to serve what.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_direct_dial).
 
--export([call/5, call/6, publish_advertisement/4, publish_advertisement/5]).
+-export([call/5, call/6, publish_advertisement/4, publish_advertisement/5,
+        get_content/3, resolve_content_provider/2]).
 
 -ifdef(TEST).
 %% Exports for unit tests — pure helpers that are otherwise private.
@@ -146,6 +167,53 @@ connected_station(Links) ->
         [Station | _] -> {ok, Station};
         [] -> {error, no_healthy_link}
     end.
+
+%% @doc Resolve `MCID''s provider via its signed `content_announcement'
+%% and fetch it there directly, retrying past DHT propagation lag the
+%% same way `call/6' does for procedures. Same return shape as
+%% `macula:get_content/2'; resolve failures surface as
+%% `{error, {unresolved, Reason}}'. `TimeoutMs' bounds only the QUIC
+%% handshake if a fresh link must be dialed
+%% (`macula:get_content_station/5') — the underlying block/manifest
+%% transfer has its own internal timeouts. See the module doc's
+%% "Content" section for why this has no `verify_cert_chain'-equivalent
+%% opt, unlike `call/6'. Only chunked content is discoverable this way
+%% — see `macula:find_content_providers/2'.
+-spec get_content(macula:pool(), macula:mcid(), pos_integer()) ->
+    {ok, binary()} | {error, term()}.
+get_content(Pool, MCID, TimeoutMs) ->
+    case resolve_content_provider(Pool, MCID) of
+        {ok, #{announcer_node := Node, endpoint := Endpoint}} ->
+            macula:get_content_station(Pool, Endpoint, MCID, TimeoutMs,
+                                       #{expected_node_id => Node,
+                                         pin_tls_cert => false,
+                                         verify => none});
+        {error, Reason} ->
+            {error, {unresolved, Reason}}
+    end.
+
+%% @doc Resolve `MCID''s provider via a signed `content_announcement',
+%% retrying past a not-yet-replicated announcement. Returns the first
+%% candidate `macula:find_content_providers/2' finds — that function
+%% already discards unsigned or signer-mismatched announcements before
+%% this ever sees them.
+-spec resolve_content_provider(macula:pool(), macula:mcid()) ->
+    {ok, map()} | {error, term()}.
+resolve_content_provider(Pool, MCID) ->
+    resolve_content_provider(Pool, MCID, ?RESOLVE_RETRIES).
+
+resolve_content_provider(_Pool, _MCID, 0) ->
+    {error, content_not_announced};
+resolve_content_provider(Pool, MCID, N) ->
+    on_providers_found(macula:find_content_providers(Pool, MCID), Pool, MCID, N).
+
+on_providers_found({ok, [Provider | _]}, _Pool, _MCID, _N) ->
+    {ok, Provider};
+on_providers_found({ok, []}, Pool, MCID, N) ->
+    timer:sleep(?RESOLVE_RETRY_MS),
+    resolve_content_provider(Pool, MCID, N - 1);
+on_providers_found({error, _} = Error, _Pool, _MCID, _N) ->
+    Error.
 
 %%%===================================================================
 %%% Internal

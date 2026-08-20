@@ -60,6 +60,7 @@
 %% payload's hash on `put_block' and rejects mismatches.
 -export([put_content/2,
          get_content/2,
+         get_content_station/4, get_content_station/5,
          find_content_providers/2]).
 
 %% Streaming RPC (LOCAL in-process + V2 pool, see PLAN_MACULA_STREAMING.md)
@@ -81,6 +82,11 @@
 
 %% Mesh Distribution
 -export([join_mesh/1, join_dist_relay/1]).
+
+-ifdef(TEST).
+%% Exports for unit tests — pure helpers that are otherwise private.
+-export([verify_block_hash/2, decode_provider/1]).
+-endif.
 
 %% Types
 -export_type([pool/0, realm/0,
@@ -583,14 +589,50 @@ classify_put_manifest({error, _} = E, _MCID) -> E.
 %% manifest's size and Merkle root before returning.
 -spec get_content(pool(), mcid()) ->
     {ok, binary()} | {error, not_found | term()}.
-get_content(Pool, <<1, 16#55, _:32/binary>> = MCID) when is_pid(Pool) ->
+get_content(Pool, MCID) when is_pid(Pool) ->
     with_content_stream(Pool, fun(LinkPid, Stream) ->
-        classify_get_content(get_block(LinkPid, Stream, MCID))
-    end);
-get_content(Pool, <<1, 16#56, _:32/binary>> = MCID) when is_pid(Pool) ->
-    with_content_stream(Pool, fun(LinkPid, Stream) ->
-        get_chunked(LinkPid, Stream, MCID)
+        get_content_via(LinkPid, Stream, MCID)
     end).
+
+%% @doc As `get_content/2', dialing `Station' directly (reusing a live
+%% link or dialing + waiting up to `TimeoutMs' for one) instead of
+%% picking from the pool's existing links — the content-transfer
+%% counterpart to `call_station/6'. `Station' and `TimeoutMs' mean
+%% exactly what they do there; the underlying block/manifest transfer
+%% has its own internal timeouts regardless of `TimeoutMs', which
+%% bounds only the connect wait. See `find_content_providers/2' to
+%% resolve a station to dial, or `macula_direct_dial:get_content/3' to
+%% resolve-and-fetch in one call.
+-spec get_content_station(pool(), macula_client:seed(), mcid(),
+                          pos_integer()) ->
+    {ok, binary()} | {error, not_found | term()}.
+get_content_station(Pool, Station, MCID, TimeoutMs) ->
+    get_content_station(Pool, Station, MCID, TimeoutMs, #{}).
+
+%% @doc As `get_content_station/4', with a per-call TLS trust override
+%% for this dial — `verify', `expected_node_id', `pin_tls_cert' (see
+%% `call_station/8').
+-spec get_content_station(pool(), macula_client:seed(), mcid(),
+                          pos_integer(), map()) ->
+    {ok, binary()} | {error, not_found | term()}.
+get_content_station(Pool, Station, MCID, TimeoutMs, Opts) ->
+    LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
+    with_content_stream_station(Pool, Station, TimeoutMs, LinkOpts,
+                                fun(LinkPid, Stream) ->
+        get_content_via(LinkPid, Stream, MCID)
+    end).
+
+get_content_via(LinkPid, Stream, <<1, 16#55, _:32/binary>> = MCID) ->
+    classify_get_content(get_block(LinkPid, Stream, MCID), MCID);
+get_content_via(LinkPid, Stream, <<1, 16#56, _:32/binary>> = MCID) ->
+    get_chunked(LinkPid, Stream, MCID).
+
+%% As `with_content_stream/2', but pins a link to a specific,
+%% resolved station rather than picking from the pool's existing links.
+with_content_stream_station(Pool, Station, TimeoutMs, LinkOpts, Fun) ->
+    on_content_link_picked(
+      macula_client:ensure_content_link(Pool, Station, LinkOpts, TimeoutMs),
+      Fun).
 
 %% @doc Resolve every host currently announcing an MCID: hosts that
 %% stored a chunked put (`_content.put_manifest') and got
@@ -598,15 +640,17 @@ get_content(Pool, <<1, 16#56, _:32/binary>> = MCID) when is_pid(Pool) ->
 %% (`macula_content_announcer'). `get_content/2' already reaches a
 %% copy via the connected station's own 1-hop peer relay, so this is
 %% for a caller that wants to know WHO holds an MCID, or to dial a
-%% specific one directly with `call_station/6' — e.g. when the
+%% specific one directly with `get_content_station/4,5' — e.g. when the
 %% connected station's relay hop budget does not reach the host (a
 %% partial-mesh pair with no mutual peer), or to route around a
 %% specific host deliberately.
 %%
-%% Each entry's signature is verified before its `endpoint' is
-%% trusted; unverifiable or malformed records are dropped, not
-%% surfaced as errors. Single-block content (put via `_content.put_block'
-%% alone) is not announced — resolving its MCID returns `{ok, []}'.
+%% Each entry's signature is verified, AND its signer must equal the
+%% `announcer_node' it claims — same discipline as `station_endpoint'
+%% resolution — before its `endpoint' is trusted; unverifiable,
+%% signer-mismatched, or malformed records are dropped, not surfaced as
+%% errors. Single-block content (put via `_content.put_block' alone) is
+%% not announced — resolving its MCID returns `{ok, []}'.
 -spec find_content_providers(pool(), mcid()) -> {ok, [map()]} | {error, term()}.
 find_content_providers(Pool, MCID)
   when is_pid(Pool), is_binary(MCID), byte_size(MCID) =:= 34 ->
@@ -625,25 +669,47 @@ classify_find_providers({error, _} = E) ->
 decode_providers(Records) ->
     lists:filtermap(fun decode_provider/1, Records).
 
-decode_provider(Record) ->
-    provider_verified(macula_record:verify(Record), Record).
+decode_provider(#{key := Key} = Record) ->
+    provider_verified(macula_record:verify(Record), Key, Record).
 
-provider_verified({ok, _}, Record) ->
+%% The record's own signature proves SOME identity signed it; the
+%% signer must also equal the `announcer_node' the payload claims — a
+%% record merely stored under the right key but self-signed by someone
+%% else's identity would otherwise still be trusted (same class of gap
+%% `macula_direct_dial:verify_and_build/2' closes for `station_endpoint').
+provider_verified({ok, _}, Key, Record) ->
     try macula_record:read_content_announcement(Record) of
-        #{announcer_node := _, endpoint := _} = Provider -> {true, Provider}
+        #{announcer_node := Key, endpoint := _} = Provider -> {true, Provider};
+        _Mismatched -> false
     catch _:_ -> false
     end;
-provider_verified({error, _}, _Record) ->
+provider_verified({error, _}, _Key, _Record) ->
     false.
 
 get_block(LinkPid, Stream, MCID) ->
     call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_BLOCK_PROC,
                               #{mcid => MCID}, ?CONTENT_BLOCK_TIMEOUT_MS).
 
-classify_get_content({ok, not_found})           -> {error, not_found};
-classify_get_content({ok, Bin}) when is_binary(Bin) -> {ok, Bin};
-classify_get_content({ok, Reply})               -> {error, {unexpected_reply, Reply}};
-classify_get_content({error, _} = E)            -> E.
+classify_get_content({ok, not_found}, _MCID)        -> {error, not_found};
+classify_get_content({ok, Bin}, MCID) when is_binary(Bin) ->
+    verify_block_hash(MCID, Bin);
+classify_get_content({ok, Reply}, _MCID)            -> {error, {unexpected_reply, Reply}};
+classify_get_content({error, _} = E, _MCID)         -> E.
+
+%% The station verified this block's hash at PUT time; a station
+%% fetched FROM (especially via `get_content_station/5', deliberately
+%% dialing a caller-chosen peer) is not necessarily the one that stored
+%% it, so re-verify client-side rather than trusting whoever answered.
+%% Chunked content already gets this from `macula_manifest:verify/2'
+%% over the reassembled whole; single-block content had no client-side
+%% check at all before this.
+verify_block_hash(<<1, 16#55, Hash:32/binary>>, Bin) ->
+    hash_result(macula_blake3_nif:hash(Bin) =:= Hash, Bin);
+verify_block_hash(_MCID, _Bin) ->
+    {error, invalid_mcid}.
+
+hash_result(true, Bin)   -> {ok, Bin};
+hash_result(false, _Bin) -> {error, hash_mismatch}.
 
 get_chunked(LinkPid, Stream, MCID) ->
     classify_get_manifest(
