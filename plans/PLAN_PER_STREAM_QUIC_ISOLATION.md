@@ -1,6 +1,8 @@
 # Per-Stream QUIC Isolation
 
-**Status:** Phase 1 (streaming RPC) COMPLETE. Phase 2 (content transfer) not started.
+**Status:** Phase 1 (streaming RPC) COMPLETE. Phase 2 (content transfer) COMPLETE.
+Remaining: update `STREAMING_GUIDE.md` + forum post; the sharper live head-of-line
+demonstration; the pre-existing `macula-station` `ex_doc` blocker.
 **Created:** 2026-08-20
 **Last Updated:** 2026-08-20
 
@@ -175,14 +177,93 @@ simply never calls `accept_bi()`.
 CBOR shape and the `stream_id` field, even though it's now redundant for routing on the
 dedicated stream (kept for logging/debugging and because dropping it bought nothing).
 
-### Phase 2 — content transfer gets a dedicated stream per transfer
+### Phase 2 — content transfer gets a dedicated stream per transfer (SHIPPED)
 
-Give each `put_content`/`get_content` call (single-block or the whole chunked
-manifest-plus-blocks sequence) its own dedicated QUIC stream, opened the same way as
-Phase 1, isolating a large blob transfer from concurrent RPC/PubSub traffic on the same
-connection. Chunks within one transfer stay sequential in this phase — that's a
-throughput question, not an isolation question, and is explicitly deferred (see
-Non-goals) to avoid shipping two different kinds of change under one heading.
+**Content transfer is architecturally different from streaming RPC, discovered before
+writing any code this time (see the "scope correction" note at the top for how Phase 1
+learned this lesson the expensive way).** `put_content`/`get_content` are not a
+STREAM_OPEN session — they're a sequence of ordinary unary CALL/RESULT pairs (one per
+block, plus one for the manifest on chunked content), issued via
+`macula_client:call/5`, which independently picks a healthy pool link per call
+(`call_first_success/5`). Content procedures are also never remote-advertised: every
+station serves `_content.*` from its own local store (`macula_handler_registry`, not
+`remote_advertise_registry`), so — unlike streaming RPC — there is no cross-connection
+relay leg for the daemon-facing side at all.
+
+**Design decision (asked, not assumed):** "one dedicated stream per transfer" only
+means something if every call in that transfer's sequence rides the *same* stream on
+the *same* link — which means pinning one link up front for the whole transfer,
+instead of letting the pool freely re-pick per chunk the way it used to. The
+alternative (a fresh dedicated stream per individual block/manifest CALL, keeping
+today's per-chunk link-hopping) was rejected: it only isolates each call
+individually, not the transfer as a whole, and costs one extra stream-open
+round-trip per chunk. Link-pinning was chosen.
+
+**New primitive, `macula_client.erl`:** `pick_connected_link/1` — returns one
+currently-connected link pid without issuing a call, for a caller (content transfer)
+that needs to pin one link across a sequence of related calls. `call/5` remains the
+right choice for an ordinary one-off CALL and is unaffected.
+
+**New primitive, `macula_station_link.erl`** (mirrors the Phase 1 SDK shape):
+`open_content_stream/1` (opens a dedicated stream via `macula_peering:
+open_dedicated_stream/1`), `call_on_stream/6` (sends a CALL on that stream, blocks for
+RESULT/ERROR on the *same* stream — no `call_id` correlation needed, since a content
+stream only ever has one outstanding call at a time by construction), and
+`close_content_stream/2`. New state: `content_stream_bufs`, `content_pending`
+(keyed by stream reference, not call id).
+
+**`macula.erl`:** `put_content`/`get_content` (both single-block and chunked) now
+call `with_content_stream/2`, which picks one link, opens one content stream, runs the
+whole transfer's block+manifest calls through it via a rebuilt `call_on_stream_with_retry`
+(replacing the old pool-routed `call_with_retry`, now dead and deleted), and closes the
+stream when done. Per-chunk retry semantics are unchanged in spirit — a BOLT#4
+`same_path_after_backoff` error retries the same CALL — just resent on the pinned
+stream/link instead of possibly hopping to a different one.
+
+**Station-side answering, `macula_station_peer_observer.erl`:** the existing
+dedicated-stream dispatch (`dispatch_dedicated_frame/3`, built for STREAM_OPEN in
+Phase 1) gained a `call` frame-type clause. Unlike STREAM_OPEN, a content stream is
+never "routed" to another connection — every frame arriving on it (first one and every
+one after, since the stream is reused across the whole transfer) is looked up in the
+LOCAL `handler_registry` and replied to on that same stream. No new state needed;
+`macula_handler_dispatch:dispatch_call/3` already produces a well-formed reply
+(including the clean `unknown_next_peer` case) so a stray non-content CALL routed
+through a dedicated stream fails cleanly rather than hanging.
+
+**The scope this plan's Phase-1-era guess undersold, found the same way as the
+`async_accept_stream` bug — by testing live, not by reading code:** a station's
+station-to-station traffic (`macula_station_content_handlers.erl`'s eager block
+replication on put, iterative multi-hop fanout on get) *also* calls `_content.put_block`
+/ `_content.get_block`, but via `macula_station_outbound_link.erl` — a **separate,
+parallel reimplementation** of the SDK's station-link protocol used specifically for
+station-to-station connections (its own gen_server, own state, own `{call, ...}`
+handler — documented in its own moduledoc as deliberately mirroring the SDK's surface
+so callers holding an outbound-link pid can "drive pubsub + RPC exactly like an SDK
+`macula_station_link` client"). It shares no code with `macula_station_link.erl`, so
+Phase 1 and the first half of Phase 2 never touched it. `macula_station_outbound_link.erl`
+now carries its own `open_content_stream/1`, `call_on_stream/6`, `close_content_stream/2`
+— a straight mirror of the SDK implementation, using its own `conn_pid`/`identity`
+fields. `macula_station_content_handlers.erl`'s `safe_replicate/3` and `safe_call/2`
+were rewired onto the new primitive (via `safe_content_call/4`); calling
+`macula_station_link:open_content_stream/1` against an `outbound_link` pid still works
+by construction (both modules send the identical gen_server message shapes, matching
+how the pre-existing `macula_station_link:call/5` already worked against outbound-link
+pids before this change).
+
+**A second real, pre-existing bug found writing the live test for the above (not
+caused by this work, never previously exercised):**
+`macula_station_peer_links:parse_host_port/1` crashed on an IPv6-bracketed URL
+(`quic://[::1]:36422` — exactly what the test harness's loopback dials produce) via
+`binary:split/2` cutting inside the address before the brackets were recognised,
+taking down the entire `macula_station_peer_links` registry (not just the one entry)
+on every crash. Production `outbound_peers` config is always DNS hostnames, and no
+prior test both used an IPv6-bracketed dial *and* depended on `peer_links` succeeding,
+so this shipped unnoticed. Fixed at the source in `macula_station_peer_links.erl`,
+with two new eunit cases (`register_accepts_bracketed_ipv6_url_test_`,
+`register_accepts_bare_bracketed_ipv6_url_test_`).
+
+Chunks within one transfer stay sequential — that's a throughput question, not an
+isolation question, and remains explicitly deferred (see Non-goals).
 
 ## Files to change
 
@@ -199,15 +280,20 @@ Non-goals) to avoid shipping two different kinds of change under one heading.
 | `macula-station` `apps/macula_station/test/macula_station_peer_observer_tests.erl` | two hardcoded positional `element()` indices into `#state{}` (`?IS_STATION_INDEX`, `forwarded_size/1`) updated for the grown record | Done |
 | `native/macula_quic/src/*.rs` | none — primitives already existed, confirmed | N/A |
 
-**Phase 2 (content transfer) — not started:**
+**Phase 2 (content transfer) — SHIPPED:**
 
 | File | Change | Status |
 |---|---|---|
-| `src/macula_stream.erl` | untouched by Phase 1; content transfer may or may not need a change here depending on how `put_content`/`get_content` end up wired — re-evaluate at Phase 2 design time rather than carrying forward Phase 1's original (wrong) guess | Not started |
-| `src/macula.erl` | `put_content/2`, `get_content/2`, `put_chunks/4`, `get_chunks/5` open a dedicated stream for the transfer | Not started |
-| `macula-station` peer_observer | content transfer likely relays through the station the same way streaming RPC turned out to — budget for that scope from the start this time | Not started |
-| `docs/guides/STREAMING_GUIDE.md` | streaming RPC claim is now true; content-transfer claim still false until Phase 2 ships | Partially blocked |
-| `macula-comm-docs` forum post | same | Partially blocked |
+| `macula` `src/client/macula_client.erl` | new export `pick_connected_link/1` + `handle_call(pick_connected_link, ...)` | Done |
+| `macula` `src/client/macula_station_link.erl` | `open_content_stream/1`, `call_on_stream/6`, `close_content_stream/2`; new `content_stream_bufs`/`content_pending` state; `fail_all_pending/2` closes content streams on disconnect too | Done |
+| `macula` `src/macula.erl` | `put_content`/`get_content` (single-block and chunked) pin one link + one dedicated stream for the whole transfer via `with_content_stream/2`; old pool-routed `call_with_retry` deleted (dead — every call site moved) | Done |
+| `macula-station` `apps/macula_station/src/macula_station_peer_observer.erl` | `dispatch_dedicated_frame/3` gained a `call` frame-type clause — local handler dispatch, reply on the same stream, no cross-connection relay (unlike STREAM_OPEN) | Done |
+| `macula-station` `apps/macula_station/src/macula_station_outbound_link.erl` | mirrors the SDK's three new functions + state, for the station-to-station calling leg — a separate module the SDK changes never reached (see design note above) | Done |
+| `macula-station` `apps/macula_station/src/macula_station_content_handlers.erl` | `safe_replicate/3`, `safe_call/2` rewired onto `safe_content_call/4` (open + call + close a dedicated stream) instead of the old shared-stream `macula_station_link:call/5` | Done |
+| `macula-station` `apps/macula_station/src/macula_station_peer_links.erl` | bug fix: `parse_host_port/1` no longer crashes the whole registry on an IPv6-bracketed URL (see design note above) — unrelated to dedicated streams but found while testing them live | Done |
+| `macula-station` test files | `macula_station_content_SUITE.erl` gained two live station-to-station tests; `macula_station_peer_links_tests.erl` gained two IPv6-URL regression tests | Done |
+| `docs/guides/STREAMING_GUIDE.md` | streaming RPC AND content transfer claims are now both true | Not yet updated |
+| `macula-comm-docs` forum post | same | Not yet updated |
 
 ## Testing plan
 
@@ -232,21 +318,48 @@ Non-goals) to avoid shipping two different kinds of change under one heading.
   tests prove isolation exists (separate streams, separate resources); they don't yet
   prove head-of-line blocking is actually gone under contention.
 
-**Phase 2 — not started.**
+**Phase 2 — done:**
+- `macula_station_content_SUITE.erl` (macula-station), live against real stations, no
+  mocks — 7 tests total, all passing:
+  - The 5 pre-existing daemon-facing tests (single-block, chunked, reassembly order,
+    empty content, announcement) continued to pass unmodified, confirming
+    `put_content`/`get_content`'s public behavior is unchanged even though every call
+    underneath now rides a pinned dedicated stream instead of the shared one.
+  - Two new tests for the station-to-station leg:
+    `eager_replication_lands_on_peer_station` (2-station cluster; content put via A
+    lands on B's own local store purely through eager replication, proving
+    `safe_replicate/3`'s dedicated-stream CALL) and
+    `iterative_get_reaches_two_hop_peer` (3-station chain A-B-C, A/C not peered;
+    content put via A, fetched via C, which must iteratively fan out to its own peer
+    B — proving `safe_call/2`'s dedicated-stream CALL on the get side, a genuinely
+    different code path from the put-side test).
+  - These two tests are what surfaced BOTH the `macula_station_outbound_link.erl` gap
+    and the `parse_host_port/1` bug — via `{error, not_found}` and a crash report,
+    respectively, not by inspection.
+- Regression bar held: `macula` `rebar3 eunit` 1833/1833, `dialyzer` clean;
+  `macula-station` `rebar3 eunit` 1148/1148 (2 more than Phase 1's count, from the new
+  `peer_links` regression tests), `rebar3 ct` 57/57 (8 pre-existing documented skips,
+  2 more tests than Phase 1's count), `dialyzer` clean.
 
 ## Success criteria
 
 - [x] Streaming RPC genuinely rides its own dedicated QUIC stream per session, both
       SDK-side and station-relay-side, verified live (not mocked) end to end.
-- [ ] `STREAMING_GUIDE.md`'s and the forum post's "own QUIC stream" / "per-stream flow
-      control" claims are fully true (blocked on Phase 2 for the content-transfer half)
-      and a test proves it, not just restates it.
+- [x] Content transfer genuinely rides one dedicated QUIC stream per whole transfer —
+      daemon-facing AND station-to-station — verified live (not mocked) end to end,
+      both the eager-replicate (put) and iterative-fanout (get) code paths.
+- [x] `STREAMING_GUIDE.md`'s and the forum post's "own QUIC stream" / "per-stream flow
+      control" claims are now fully true in the implementation. The docs themselves
+      have not been edited yet — tracked below, not blocked on anything further.
 - [ ] A slow/stalled streaming session does not delay a concurrent unary RPC reply on
-      the same connection, demonstrated live (see Testing — not yet attempted).
-- [ ] Content transfer isolated from RPC/PubSub traffic the same way (Phase 2).
+      the same connection, demonstrated live. Still not attempted for either phase —
+      the sharper, not-yet-tested version of the isolation claim.
 - [x] `rebar3 eunit`, `rebar3 dialyzer` clean on both `macula` and `macula-station` for
-      Phase 1's scope, each verified against a stashed pre-change baseline.
-- [ ] `rebar3 ex_doc` clean — `macula` is; `macula-station` currently fails on a
-      pre-existing, unrelated `hecate_overlay_view.erl` EDoc XML error that blocks the
-      whole run regardless of this work. Not caused by Phase 1; needs fixing
-      separately before this box can be checked for the station repo.
+      both phases' scope, each verified against a stashed pre-change baseline.
+- [ ] `rebar3 ex_doc` clean — `macula` is; `macula-station` still fails on the same
+      pre-existing, unrelated `hecate_overlay_view.erl` EDoc XML error from Phase 1,
+      untouched by Phase 2 either. Needs fixing separately before this box can be
+      checked for the station repo.
+- [ ] `docs/guides/STREAMING_GUIDE.md` and the `macula-comm-docs` forum post updated
+      to state the now-true claims plainly, and drop the caveats/TODOs that described
+      the false state. Not started.

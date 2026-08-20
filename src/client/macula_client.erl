@@ -56,6 +56,11 @@
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
 -export([call/5, call_station/6, call_station/7,
          advertise/4, advertise/5, unadvertise/3]).
+%% Dedicated-stream content transfer (see
+%% PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2) — called by the
+%% `macula' facade to pin one link for a whole put_content/get_content
+%% transfer instead of letting `call/5' pick per underlying block CALL.
+-export([pick_connected_link/1]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
 -export([call_stream/5, call_stream_station/6,
          advertise_stream/5, unadvertise_stream/3]).
@@ -269,6 +274,21 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs)
        is_integer(TimeoutMs), TimeoutMs > 0 ->
     gen_server:call(Pool, {rpc_call, Realm, Procedure, Payload, TimeoutMs},
                     TimeoutMs + 1_000).
+
+%% @doc Pick one currently-connected link and return its pid, without
+%% issuing a call. For a caller that needs to pin ONE link across a
+%% sequence of related calls — a dedicated QUIC stream, opened once
+%% via `macula_station_link:open_content_stream/1' on the returned
+%% pid, only isolates one link's traffic, so every call in the
+%% sequence must go over that same link. `call/5' picks fresh per
+%% call (`call_first_success/5') and is the wrong primitive for that.
+%%
+%% Selection matches `call_first_success/5''s ordering (first
+%% connected link wins) so behaviour is unsurprising relative to the
+%% existing pool-routed path.
+-spec pick_connected_link(pool()) -> {ok, pid()} | {error, no_healthy_station}.
+pick_connected_link(Pool) when is_pid(Pool) ->
+    gen_server:call(Pool, pick_connected_link).
 
 %% @doc Issue a CALL to ONE specific station, dialing it directly even
 %% if it is not in the pool's seed set. `Station' is a seed URL (e.g.
@@ -564,6 +584,9 @@ handle_call({subscribe, Realm, Topic, Subscriber, Opts}, _From, S) ->
 handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, drop_sub(SubRef, S)};
 
+handle_call(pick_connected_link, _From, S) ->
+    {reply, first_connected_link(connected_link_pids(S)), S};
+
 handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     %% Worker-spawn so concurrent CALLs don't serialise through the
     %% pool gen_server. Each per-link `macula_station_link:call/5'
@@ -793,6 +816,9 @@ connected_link_pids(#state{} = S) ->
     [P || P <- spawned_link_pids(S),
           is_process_alive(P),
           safe_is_connected(P)].
+
+first_connected_link([Pid | _]) -> {ok, Pid};
+first_connected_link([])        -> {error, no_healthy_station}.
 
 %% Surface a one-shot warning when a caller passes V1 multi_relay
 %% options that have no V2 equivalent. The opts are silently dropped

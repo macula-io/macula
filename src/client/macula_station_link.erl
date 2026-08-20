@@ -102,7 +102,13 @@
     unadvertise_stream/3,
     send_stream_frame/3,
     is_connected/1,
-    peer_node_id/1
+    peer_node_id/1,
+    %% Dedicated-stream content transfer (PLAN_PER_STREAM_QUIC_ISOLATION.md
+    %% Phase 2). Not for general RPC use — see the moduledoc on
+    %% `open_content_stream/1'.
+    open_content_stream/1,
+    call_on_stream/6,
+    close_content_stream/2
 ]).
 
 -export_type([handler/0, stream_handler/0]).
@@ -253,6 +259,20 @@
     %% `new_dedicated_stream' notification arrives and removed when
     %% the session tears down.
     stream_bufs = #{} :: #{reference() => binary()},
+    %% Dedicated content-transfer streams (PLAN_PER_STREAM_QUIC_ISOLATION.md
+    %% Phase 2). One `put_content'/`get_content' call pins one link and
+    %% opens one of these via `open_content_stream/1', then issues every
+    %% block/manifest CALL for that transfer on it via `call_on_stream/6'
+    %% — sequentially, never concurrently, so unlike `pending' (keyed by
+    %% CALL id, many outstanding at once) this needs no per-call id: at
+    %% most one entry per stream reference at any time.
+    %% `content_stream_bufs' buffers partial frames the same way
+    %% `stream_bufs' does for streaming-RPC dedicated streams; a content
+    %% stream is a wholly separate reference space from `client_streams'
+    %% / `server_streams' even though the underlying primitive
+    %% (`macula_peering:open_dedicated_stream/1') is the same one.
+    content_stream_bufs = #{} :: #{reference() => binary()},
+    content_pending = #{}     :: #{reference() => {gen_server:from(), reference()}},
     %% App-level liveness state. `liveness_timer' is the next-tick
     %% reference (or undefined when not armed). `liveness_outstanding'
     %% holds the call_id of an in-flight probe (or undefined when no
@@ -361,6 +381,54 @@ call(Pid, Realm, Procedure, Payload, TimeoutMs, UcanToken)
         exit:{noproc, _}       -> {error, noproc};
         exit:{normal, _}       -> {error, gone}
     end.
+
+%% @doc Open a dedicated QUIC stream for a sequence of related unary
+%% CALLs — content transfer's one purpose so far (see
+%% PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2). NOT a general-purpose
+%% "any RPC can have its own stream" facility: `call/5,6' remains the
+%% right choice for an ordinary one-off CALL, and this link's pool
+%% caller is expected to have already picked ONE link for the whole
+%% sequence (`macula_client:pick_connected_link/1') before opening a
+%% stream on it, since a dedicated stream only isolates traffic on
+%% the link it was opened on.
+-spec open_content_stream(pid()) -> {ok, reference()} | {error, term()}.
+open_content_stream(Pid) when is_pid(Pid) ->
+    gen_server:call(Pid, open_content_stream, 10_000).
+
+%% @doc Send a CALL on `Stream' (from `open_content_stream/1') and
+%% block for its RESULT/ERROR on that same stream. Sequential by
+%% design — sending a second CALL on `Stream' before the first
+%% replies is a caller bug (undefined which reply matches which
+%% call), so this link only ever tracks one outstanding call per
+%% content stream.
+-spec call_on_stream(pid(), reference(), <<_:256>>, binary(), term(),
+                     pos_integer()) -> {ok, term()} | {error, term()}.
+call_on_stream(Pid, Stream, Realm, Procedure, Payload, TimeoutMs)
+  when is_pid(Pid), is_reference(Stream),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       is_integer(TimeoutMs), TimeoutMs > 0 ->
+    GenTimeout = TimeoutMs + 500,
+    try
+        gen_server:call(Pid,
+                        {call_on_stream, Stream, Realm, Procedure, Payload,
+                         TimeoutMs},
+                        GenTimeout)
+    catch
+        exit:{timeout, _} -> {error, timeout};
+        exit:{noproc, _}  -> {error, noproc};
+        exit:{normal, _}  -> {error, gone}
+    end.
+
+%% @doc Close a content stream opened via `open_content_stream/1'.
+%% Idempotent; a stream already closed by disconnect cleanup is a
+%% no-op. Any pending call on `Stream' is failed with
+%% `{error, closed}' first, so a caller that closes out from under
+%% its own in-flight `call_on_stream/6' gets a clean reply instead of
+%% a hang.
+-spec close_content_stream(pid(), reference()) -> ok.
+close_content_stream(Pid, Stream) when is_pid(Pid), is_reference(Stream) ->
+    gen_server:cast(Pid, {close_content_stream, Stream}).
 
 %% @doc Send a PUBLISH frame fire-and-forget. The link stamps a
 %% monotonic per-link `seq' onto the frame and the local
@@ -707,6 +775,35 @@ handle_call({call, Realm, Proc, Payload, Tmo, Ucan}, From,
     await_call_reply(macula_peering:send_frame(Pid, Frame),
                      CallId, From, Tmo, P, S);
 
+handle_call(open_content_stream, _From, #state{peer_node_id = undefined} = S) ->
+    {reply, {error, not_connected}, S};
+handle_call(open_content_stream, _From,
+            #state{peer_pid = Pid, content_stream_bufs = Bufs} = S) ->
+    open_content_stream_result(macula_peering:open_dedicated_stream(Pid), Bufs, S);
+
+handle_call({call_on_stream, _Stream, _Realm, _Proc, _Payload, _Tmo}, _From,
+            #state{peer_node_id = undefined} = S) ->
+    {reply, {error, not_connected}, S};
+handle_call({call_on_stream, Stream, Realm, Proc, Payload, Tmo}, From,
+            #state{identity = Id, content_pending = CP,
+                   content_stream_bufs = Bufs} = S)
+        when is_map_key(Stream, Bufs) ->
+    Caller = macula_identity:public(Id),
+    DeadlineMs = erlang:system_time(millisecond) + Tmo,
+    Frame = macula_frame:call(#{
+        call_id     => crypto:strong_rand_bytes(16),
+        procedure   => Proc,
+        realm       => Realm,
+        payload     => Payload,
+        deadline_ms => DeadlineMs,
+        caller      => Caller,
+        ucan_token  => <<>>
+    }),
+    await_content_call_reply(
+      send_on_content_stream(Stream, Frame, Id), Stream, From, Tmo, CP, S);
+handle_call({call_on_stream, _Stream, _Realm, _Proc, _Payload, _Tmo}, _From, S) ->
+    {reply, {error, invalid_stream}, S};
+
 handle_call({publish, _Realm, _Topic, _Payload}, _From,
             #state{peer_node_id = undefined} = S) ->
     %% Require the full HELLO handshake before publishing — the
@@ -823,6 +920,9 @@ handle_cast({send_stream_frame, Type, #{stream_id := Sid} = Spec},
     send_on_dedicated_stream(find_stream(Sid, S), Frame, Id),
     {noreply, on_outbound_stream_frame(Type, Spec, S)};
 
+handle_cast({close_content_stream, Stream}, S) ->
+    {noreply, close_content_stream_state(Stream, S)};
+
 handle_cast(_Msg, S) -> {noreply, S}.
 
 %%-------------------------------------------------------------------
@@ -904,8 +1004,26 @@ handle_info({quic, Bin, Stream, _Flags}, #state{stream_bufs = Bufs} = S)
                        S#state{stream_bufs = Bufs#{Stream => Tail}}, Frames),
     {noreply, NewS};
 
+%% Bytes on one of our content-transfer streams (opened via
+%% `open_content_stream/1', always by us — content is never
+%% peer-initiated, unlike streaming RPC's inbound STREAM_OPEN case,
+%% so there is no `new_dedicated_stream' seeding clause to match this
+%% one).
+handle_info({quic, Bin, Stream, _Flags},
+            #state{content_stream_bufs = Bufs} = S)
+        when is_binary(Bin), is_map_key(Stream, Bufs) ->
+    Buf = maps:get(Stream, Bufs),
+    {Frames, Tail} = macula_frame:parse_stream(<<Buf/binary, Bin/binary>>),
+    NewS = lists:foldl(fun(F, Acc) -> dispatch_content_frame(F, Stream, Acc) end,
+                       S#state{content_stream_bufs = Bufs#{Stream => Tail}},
+                       Frames),
+    {noreply, NewS};
+
 handle_info({call_timeout, CallId}, #state{pending = P} = S) ->
     on_timeout(maps:take(CallId, P), S);
+
+handle_info({content_call_timeout, Stream}, #state{content_pending = CP} = S) ->
+    on_content_timeout(maps:take(Stream, CP), S);
 
 handle_info(liveness_tick, S) ->
     {noreply, on_liveness_tick(S)};
@@ -1109,13 +1227,81 @@ on_timeout({{From, _OldTRef}, NewP}, S) ->
     gen_server:reply(From, {error, timeout}),
     {noreply, S#state{pending = NewP}}.
 
+%% -- Content-transfer dedicated streams (Phase 2) -------------------
+
+open_content_stream_result({ok, Stream}, Bufs, S) ->
+    {reply, {ok, Stream}, S#state{content_stream_bufs = Bufs#{Stream => <<>>}}};
+open_content_stream_result({error, _} = E, _Bufs, S) ->
+    {reply, E, S}.
+
+send_on_content_stream(Stream, Frame, Id) ->
+    try macula_peering:send_on_stream(Stream, Frame, Id)
+    catch C:R -> {error, {C, R}}
+    end.
+
+await_content_call_reply(ok, Stream, From, Tmo, Pending, S) ->
+    TRef = erlang:send_after(Tmo, self(), {content_call_timeout, Stream}),
+    {noreply, S#state{content_pending = Pending#{Stream => {From, TRef}}}};
+await_content_call_reply({error, _} = Refused, _Stream, _From, _Tmo, _Pending, S) ->
+    {reply, Refused, S}.
+
+on_content_timeout(error, S) ->
+    {noreply, S};
+on_content_timeout({{From, _OldTRef}, NewCP}, S) ->
+    gen_server:reply(From, {error, timeout}),
+    {noreply, S#state{content_pending = NewCP}}.
+
+dispatch_content_frame(#{frame_type := result, payload := Payload}, Stream, S) ->
+    deliver_content_reply(Stream, {ok, Payload}, S);
+dispatch_content_frame(#{frame_type := error} = Frame, Stream, S) ->
+    deliver_content_reply(Stream, call_failure(maps:get(code, Frame, 0),
+                                               maps:get(name, Frame, undefined),
+                                               maps:get(detail, Frame, undefined)),
+                          S);
+dispatch_content_frame(_Frame, _Stream, S) ->
+    %% Anything else arriving on a content stream is a protocol
+    %% violation — this side only ever sends CALL on one, so the only
+    %% legitimate replies are RESULT/ERROR.
+    S.
+
+deliver_content_reply(Stream, Reply, #state{content_pending = CP} = S) ->
+    reply_content_pending(maps:take(Stream, CP), Reply, S).
+
+reply_content_pending(error, _Reply, S) ->
+    %% No caller waiting (race with timeout, or a stray reply after
+    %% `close_content_stream/2' already failed it).
+    S;
+reply_content_pending({{From, TRef}, NewCP}, Reply, S) ->
+    _ = erlang:cancel_timer(TRef),
+    gen_server:reply(From, Reply),
+    S#state{content_pending = NewCP}.
+
+close_content_stream_state(Stream, #state{content_pending = CP,
+                                          content_stream_bufs = Bufs} = S) ->
+    NewCP = fail_content_pending(maps:take(Stream, CP), CP),
+    catch macula_quic:close_stream(Stream),
+    S#state{content_pending = NewCP,
+            content_stream_bufs = maps:remove(Stream, Bufs)}.
+
+fail_content_pending(error, CP) ->
+    CP;
+fail_content_pending({{From, TRef}, NewCP}, _CP) ->
+    _ = erlang:cancel_timer(TRef),
+    gen_server:reply(From, {error, closed}),
+    NewCP.
+
 fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
                                 client_streams = CS,
-                                server_streams = SS} = S) ->
+                                server_streams = SS,
+                                content_pending = ContentP} = S) ->
     maps:foreach(fun(_CallId, {From, TRef}) ->
         _ = erlang:cancel_timer(TRef),
         gen_server:reply(From, {error, Reason})
     end, P),
+    maps:foreach(fun(_Stream, {From, TRef}) ->
+        _ = erlang:cancel_timer(TRef),
+        gen_server:reply(From, {error, Reason})
+    end, ContentP),
     maps:foreach(fun(SubRef, {_Realm, _Topic, Subscriber, Mon}) ->
         erlang:demonitor(Mon, [flush]),
         Subscriber ! {macula_event_gone, SubRef, Reason}
@@ -1136,8 +1322,14 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     end,
     maps:foreach(AbortFun, CS),
     maps:foreach(AbortFun, SS),
+    %% Content streams have no paired process to abort — just reclaim
+    %% the QUIC resource, same as `close_content_stream_state/2' does
+    %% on a normal close.
+    maps:foreach(fun(Stream, _Buf) -> close_dedicated_stream(Stream) end,
+                S#state.content_stream_bufs),
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
-            client_streams = #{}, server_streams = #{}, stream_bufs = #{}}.
+            client_streams = #{}, server_streams = #{}, stream_bufs = #{},
+            content_pending = #{}, content_stream_bufs = #{}}.
 
 %%-------------------------------------------------------------------
 %% Liveness probe — bounded zombie-connection detection

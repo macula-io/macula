@@ -479,25 +479,55 @@ apply_callback_with_decode(_Fun, _Other) ->
 %% `_content.put_manifest'; the returned MCID is the manifest's
 %% (`&lt;&lt;1, 16#56, _/binary&gt;&gt;'), Merkle-rooted over every chunk. Either
 %% way the station verifies each block's hash before accepting it.
+%%
+%% The whole transfer — every block call plus the manifest call for
+%% chunked content — rides one dedicated QUIC stream on one pinned
+%% pool link (see PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2), so a
+%% large blob transfer no longer head-of-line-blocks other RPC/PubSub
+%% traffic on the same connection. Unlike the old per-block
+%% `macula_client:call/5' routing, chunks of one transfer can no
+%% longer land on different links — the link is chosen once, up
+%% front, for the whole call.
 -spec put_content(pool(), binary()) -> {ok, mcid()} | {error, term()}.
 put_content(Pool, Bytes) when is_pid(Pool), is_binary(Bytes) ->
-    put_content_by_size(byte_size(Bytes) =< macula_manifest:default_chunk_size(),
-                        Pool, Bytes).
+    with_content_stream(Pool, fun(LinkPid, Stream) ->
+        put_content_by_size(byte_size(Bytes) =< macula_manifest:default_chunk_size(),
+                            LinkPid, Stream, Bytes)
+    end).
 
-put_content_by_size(true, Pool, Bytes) ->
-    put_single_block(Pool, Bytes);
-put_content_by_size(false, Pool, Bytes) ->
-    put_chunked(Pool, Bytes).
+%% Pin one connected link and open a dedicated content stream on it
+%% for the duration of `Fun', closing the stream afterwards
+%% regardless of outcome.
+with_content_stream(Pool, Fun) ->
+    on_content_link_picked(macula_client:pick_connected_link(Pool), Fun).
 
-put_single_block(Pool, Bytes) ->
+on_content_link_picked({error, _} = E, _Fun) ->
+    E;
+on_content_link_picked({ok, LinkPid}, Fun) ->
+    on_content_stream_opened(
+      macula_station_link:open_content_stream(LinkPid), LinkPid, Fun).
+
+on_content_stream_opened({error, _} = E, _LinkPid, _Fun) ->
+    E;
+on_content_stream_opened({ok, Stream}, LinkPid, Fun) ->
+    Result = Fun(LinkPid, Stream),
+    macula_station_link:close_content_stream(LinkPid, Stream),
+    Result.
+
+put_content_by_size(true, LinkPid, Stream, Bytes) ->
+    put_single_block(LinkPid, Stream, Bytes);
+put_content_by_size(false, LinkPid, Stream, Bytes) ->
+    put_chunked(LinkPid, Stream, Bytes).
+
+put_single_block(LinkPid, Stream, Bytes) ->
     Hash = macula_blake3_nif:hash(Bytes),
     MCID = <<1, 16#55, Hash/binary>>,
-    classify_put_content(put_block(Pool, MCID, Bytes), MCID).
+    classify_put_content(put_block(LinkPid, Stream, MCID, Bytes), MCID).
 
-put_block(Pool, MCID, Bytes) ->
-    call_with_retry(Pool, ?CONTENT_PUT_BLOCK_PROC,
-                    #{mcid => MCID, payload => Bytes},
-                    ?CONTENT_BLOCK_TIMEOUT_MS).
+put_block(LinkPid, Stream, MCID, Bytes) ->
+    call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_PUT_BLOCK_PROC,
+                              #{mcid => MCID, payload => Bytes},
+                              ?CONTENT_BLOCK_TIMEOUT_MS).
 
 classify_put_content({ok, ok},                MCID) -> {ok, MCID};
 classify_put_content({ok, hash_mismatch},     _MCID) -> {error, hash_mismatch};
@@ -508,30 +538,32 @@ classify_put_content({error, _} = E,          _MCID) -> E.
 %% failure short-circuits WITHOUT putting the manifest — a manifest
 %% naming missing chunks would resolve but never reassemble, which is
 %% worse than a clean error now.
-put_chunked(Pool, Bytes) ->
+put_chunked(LinkPid, Stream, Bytes) ->
     {ok, Manifest, Chunks} = macula_manifest:create(Bytes),
-    put_chunks(Pool, Manifest, Chunks, 0).
+    put_chunks(LinkPid, Stream, Manifest, Chunks, 0).
 
-put_chunks(Pool, Manifest, [], _Index) ->
-    put_manifest(Pool, Manifest);
-put_chunks(Pool, Manifest, [Chunk | Rest], Index) ->
+put_chunks(LinkPid, Stream, Manifest, [], _Index) ->
+    put_manifest(LinkPid, Stream, Manifest);
+put_chunks(LinkPid, Stream, Manifest, [Chunk | Rest], Index) ->
     {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
-    chunk_put_result(put_block(Pool, ChunkMcid, Chunk), Pool, Manifest, Rest,
-                     Index + 1).
+    chunk_put_result(put_block(LinkPid, Stream, ChunkMcid, Chunk), LinkPid,
+                     Stream, Manifest, Rest, Index + 1).
 
-chunk_put_result({ok, ok}, Pool, Manifest, Rest, NextIndex) ->
-    put_chunks(Pool, Manifest, Rest, NextIndex);
-chunk_put_result({ok, hash_mismatch}, _Pool, _Manifest, _Rest, _NextIndex) ->
+chunk_put_result({ok, ok}, LinkPid, Stream, Manifest, Rest, NextIndex) ->
+    put_chunks(LinkPid, Stream, Manifest, Rest, NextIndex);
+chunk_put_result({ok, hash_mismatch}, _LinkPid, _Stream, _Manifest, _Rest,
+                 _NextIndex) ->
     {error, hash_mismatch};
-chunk_put_result({ok, Reply}, _Pool, _Manifest, _Rest, _NextIndex) ->
+chunk_put_result({ok, Reply}, _LinkPid, _Stream, _Manifest, _Rest, _NextIndex) ->
     {error, {unexpected_reply, Reply}};
-chunk_put_result({error, _} = E, _Pool, _Manifest, _Rest, _NextIndex) ->
+chunk_put_result({error, _} = E, _LinkPid, _Stream, _Manifest, _Rest, _NextIndex) ->
     E.
 
-put_manifest(Pool, #{mcid := MCID} = Manifest) ->
+put_manifest(LinkPid, Stream, #{mcid := MCID} = Manifest) ->
     classify_put_manifest(
-      call_with_retry(Pool, ?CONTENT_PUT_MANIFEST_PROC,
-                      #{manifest => Manifest}, ?CONTENT_MANIFEST_TIMEOUT_MS),
+      call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_PUT_MANIFEST_PROC,
+                                #{manifest => Manifest},
+                                ?CONTENT_MANIFEST_TIMEOUT_MS),
       MCID).
 
 classify_put_manifest({ok, ok},      MCID) -> {ok, MCID};
@@ -549,9 +581,13 @@ classify_put_manifest({error, _} = E, _MCID) -> E.
 -spec get_content(pool(), mcid()) ->
     {ok, binary()} | {error, not_found | term()}.
 get_content(Pool, <<1, 16#55, _:32/binary>> = MCID) when is_pid(Pool) ->
-    classify_get_content(get_block(Pool, MCID));
+    with_content_stream(Pool, fun(LinkPid, Stream) ->
+        classify_get_content(get_block(LinkPid, Stream, MCID))
+    end);
 get_content(Pool, <<1, 16#56, _:32/binary>> = MCID) when is_pid(Pool) ->
-    get_chunked(Pool, MCID).
+    with_content_stream(Pool, fun(LinkPid, Stream) ->
+        get_chunked(LinkPid, Stream, MCID)
+    end).
 
 %% @doc Resolve every host currently announcing an MCID: hosts that
 %% stored a chunked put (`_content.put_manifest') and got
@@ -597,48 +633,52 @@ provider_verified({ok, _}, Record) ->
 provider_verified({error, _}, _Record) ->
     false.
 
-get_block(Pool, MCID) ->
-    call_with_retry(Pool, ?CONTENT_GET_BLOCK_PROC,
-                    #{mcid => MCID}, ?CONTENT_BLOCK_TIMEOUT_MS).
+get_block(LinkPid, Stream, MCID) ->
+    call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_BLOCK_PROC,
+                              #{mcid => MCID}, ?CONTENT_BLOCK_TIMEOUT_MS).
 
 classify_get_content({ok, not_found})           -> {error, not_found};
 classify_get_content({ok, Bin}) when is_binary(Bin) -> {ok, Bin};
 classify_get_content({ok, Reply})               -> {error, {unexpected_reply, Reply}};
 classify_get_content({error, _} = E)            -> E.
 
-get_chunked(Pool, MCID) ->
+get_chunked(LinkPid, Stream, MCID) ->
     classify_get_manifest(
-      call_with_retry(Pool, ?CONTENT_GET_MANIFEST_PROC,
-                      #{mcid => MCID}, ?CONTENT_MANIFEST_TIMEOUT_MS),
-      Pool).
+      call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_MANIFEST_PROC,
+                                #{mcid => MCID}, ?CONTENT_MANIFEST_TIMEOUT_MS),
+      LinkPid, Stream).
 
-classify_get_manifest({ok, not_found}, _Pool) ->
+classify_get_manifest({ok, not_found}, _LinkPid, _Stream) ->
     {error, not_found};
-classify_get_manifest({ok, Wire}, Pool) when is_map(Wire) ->
-    manifest_decoded(macula_manifest:from_wire(Wire), Pool);
-classify_get_manifest({ok, Reply}, _Pool) ->
+classify_get_manifest({ok, Wire}, LinkPid, Stream) when is_map(Wire) ->
+    manifest_decoded(macula_manifest:from_wire(Wire), LinkPid, Stream);
+classify_get_manifest({ok, Reply}, _LinkPid, _Stream) ->
     {error, {unexpected_reply, Reply}};
-classify_get_manifest({error, _} = E, _Pool) ->
+classify_get_manifest({error, _} = E, _LinkPid, _Stream) ->
     E.
 
-manifest_decoded({error, invalid_manifest}, _Pool) ->
+manifest_decoded({error, invalid_manifest}, _LinkPid, _Stream) ->
     {error, invalid_manifest};
-manifest_decoded({ok, #{chunk_count := N} = Manifest}, Pool) ->
-    get_chunks(Pool, Manifest, 0, N, []).
+manifest_decoded({ok, #{chunk_count := N} = Manifest}, LinkPid, Stream) ->
+    get_chunks(LinkPid, Stream, Manifest, 0, N, []).
 
-get_chunks(_Pool, Manifest, Index, N, Acc) when Index >= N ->
+get_chunks(_LinkPid, _Stream, Manifest, Index, N, Acc) when Index >= N ->
     reassembled(Manifest, iolist_to_binary(lists:reverse(Acc)));
-get_chunks(Pool, Manifest, Index, N, Acc) ->
+get_chunks(LinkPid, Stream, Manifest, Index, N, Acc) ->
     {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
-    chunk_get_result(get_block(Pool, ChunkMcid), Pool, Manifest, Index, N, Acc).
+    chunk_get_result(get_block(LinkPid, Stream, ChunkMcid), LinkPid, Stream,
+                     Manifest, Index, N, Acc).
 
-chunk_get_result({ok, Bin}, Pool, Manifest, Index, N, Acc) when is_binary(Bin) ->
-    get_chunks(Pool, Manifest, Index + 1, N, [Bin | Acc]);
-chunk_get_result({ok, not_found}, _Pool, _Manifest, _Index, _N, _Acc) ->
+chunk_get_result({ok, Bin}, LinkPid, Stream, Manifest, Index, N, Acc)
+        when is_binary(Bin) ->
+    get_chunks(LinkPid, Stream, Manifest, Index + 1, N, [Bin | Acc]);
+chunk_get_result({ok, not_found}, _LinkPid, _Stream, _Manifest, _Index, _N,
+                 _Acc) ->
     {error, not_found};
-chunk_get_result({ok, Reply}, _Pool, _Manifest, _Index, _N, _Acc) ->
+chunk_get_result({ok, Reply}, _LinkPid, _Stream, _Manifest, _Index, _N, _Acc) ->
     {error, {unexpected_reply, Reply}};
-chunk_get_result({error, _} = E, _Pool, _Manifest, _Index, _N, _Acc) ->
+chunk_get_result({error, _} = E, _LinkPid, _Stream, _Manifest, _Index, _N,
+                 _Acc) ->
     E.
 
 reassembled(Manifest, Reassembled) ->
@@ -648,9 +688,10 @@ reassembled(Manifest, Reassembled) ->
 verify_result(ok, Reassembled)      -> {ok, Reassembled};
 verify_result({error, _} = E, _Bin) -> E.
 
-%% A `_content.*' CALL, retried on a BOLT#4 error whose OWN retry policy
-%% says to (`macula_bolt4:is_retryable/1' — e.g. `temporary_relay_failure'
-%% is rated `same_path_after_backoff'). This is the spec's documented
+%% A `_content.*' CALL on the transfer's pinned dedicated stream,
+%% retried on a BOLT#4 error whose OWN retry policy says to
+%% (`macula_bolt4:is_retryable/1' — e.g. `temporary_relay_failure' is
+%% rated `same_path_after_backoff'). This is the spec's documented
 %% contract, not a blind retry: a non-retryable error (or a transport
 %% `{error, _}' outside the BOLT#4 taxonomy, e.g. `not_connected')
 %% returns immediately. Bounded to 3 attempts total with a short linear
@@ -663,26 +704,39 @@ verify_result({error, _} = E, _Bin) -> E.
 %% (`_content.put_block' has not shown this). The station-side root
 %% cause is not yet diagnosed; retrying is what the CALL's own error
 %% code prescribes regardless, so content operations do it uniformly.
-call_with_retry(Pool, Procedure, Payload, TimeoutMs) ->
-    call_with_retry(Pool, Procedure, Payload, TimeoutMs, 3).
+%%
+%% Retries resend on the SAME stream/link, never re-picking a link the
+%% way the old pool-routed `call_with_retry' could — a link healthy
+%% enough to answer BOLT#4 `same_path_after_backoff' in the first
+%% place is the right target to retry against, and switching links
+%% mid-transfer would defeat the point of pinning one.
+call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs) ->
+    call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs, 3).
 
-call_with_retry(Pool, Procedure, Payload, TimeoutMs, AttemptsLeft) ->
-    retry_result(macula_client:call(Pool, ?CONTENT_REALM, Procedure, Payload,
-                                    TimeoutMs),
-                Pool, Procedure, Payload, TimeoutMs, AttemptsLeft).
+call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs,
+                          AttemptsLeft) ->
+    retry_stream_result(
+      macula_station_link:call_on_stream(LinkPid, Stream, ?CONTENT_REALM,
+                                         Procedure, Payload, TimeoutMs),
+      LinkPid, Stream, Procedure, Payload, TimeoutMs, AttemptsLeft).
 
-retry_result({error, {call_error, Code, _Name}} = E, Pool, Procedure, Payload,
-            TimeoutMs, AttemptsLeft) when AttemptsLeft > 1 ->
-    retry_if_retryable(macula_bolt4:is_retryable(Code), E, Pool, Procedure,
-                       Payload, TimeoutMs, AttemptsLeft);
-retry_result(Result, _Pool, _Procedure, _Payload, _TimeoutMs, _AttemptsLeft) ->
+retry_stream_result({error, {call_error, Code, _Name}} = E, LinkPid, Stream,
+                    Procedure, Payload, TimeoutMs, AttemptsLeft)
+        when AttemptsLeft > 1 ->
+    retry_stream_if_retryable(macula_bolt4:is_retryable(Code), E, LinkPid,
+                              Stream, Procedure, Payload, TimeoutMs,
+                              AttemptsLeft);
+retry_stream_result(Result, _LinkPid, _Stream, _Procedure, _Payload,
+                    _TimeoutMs, _AttemptsLeft) ->
     Result.
 
-retry_if_retryable(true, _E, Pool, Procedure, Payload, TimeoutMs, AttemptsLeft) ->
+retry_stream_if_retryable(true, _E, LinkPid, Stream, Procedure, Payload,
+                          TimeoutMs, AttemptsLeft) ->
     timer:sleep(?CONTENT_RETRY_BACKOFF_MS),
-    call_with_retry(Pool, Procedure, Payload, TimeoutMs, AttemptsLeft - 1);
-retry_if_retryable(false, E, _Pool, _Procedure, _Payload, _TimeoutMs,
-                   _AttemptsLeft) ->
+    call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs,
+                              AttemptsLeft - 1);
+retry_stream_if_retryable(false, E, _LinkPid, _Stream, _Procedure, _Payload,
+                          _TimeoutMs, _AttemptsLeft) ->
     E.
 
 %%%===================================================================
