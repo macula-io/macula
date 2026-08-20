@@ -184,6 +184,18 @@ true = macula_mri:is_ancestor(
 ).
 ```
 
+For repeated child/descendant lookups over a large MRI set, build a trie
+index once and query it in `O(d)` (tree depth) instead of scanning:
+
+![MRI Trie Index](assets/mri_trie_index.svg)
+
+```erlang
+{ok, Idx}  = macula_mri:build_index(All),
+{ok, Kids} = macula_mri:index_children(
+    Idx, <<"io.macula">>, [<<"acme">>]).
+%% => [counter, weather]
+```
+
 ### Construction
 
 ```erlang

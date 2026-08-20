@@ -101,8 +101,9 @@ create(Data, Opts) when is_binary(Data), is_map(Opts) ->
     },
     {ok, Body#{mcid => compute_mcid(Body, Algorithm)}, Chunks}.
 
-%% @doc The MCID a chunk at `Index' is stored/fetched under (matches
-%% `macula_manifest:get_chunk_mcid/2' on the station).
+%% @doc The MCID a chunk at `Index' is stored/fetched under. The
+%% station derives this same value independently when serving the
+%% chunk, so both sides agree on its address without exchanging it.
 -spec chunk_mcid(manifest(), non_neg_integer(), algorithm()) ->
         {ok, mcid()} | {error, invalid_index}.
 chunk_mcid(#{chunks := Chunks}, Index, _Algorithm)
@@ -132,9 +133,9 @@ root_hash_result(false) -> {error, root_hash_mismatch}.
 
 %% @doc Read a manifest as it arrives over `_content.get_manifest': the
 %% station stores + returns the map exactly as its RPC layer decoded
-%% it, with no re-encode through `macula_manifest:decode/1' on
-%% either side — so the shape depends on the general CALL-result
-%% codec, not the canonical `{text,_}' record shape. Robust to atom
+%% it, with no dedicated re-encode/decode round trip on either side
+%% — so the shape depends on the general CALL-result codec, not the
+%% canonical `{text,_}' record shape. Robust to atom
 %% keys (the happy path — the field names are atoms defined in this
 %% module, so `binary_to_existing_atom' in the frame decoder resolves
 %% them) and to binary-string keys (a defensive fallback, mirroring

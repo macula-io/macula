@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.1.0] - 2026-08-20
+
+**OTP 29 readiness, plus a records guide and a stale-docs cleanup.**
+
+### Added
+
+- **`docs/guides/RECORDS_GUIDE.md`.** The raw DHT record API
+  (`put_record/2`, `find_record/2`, `find_records/2`,
+  `find_records_by_type/2`, `subscribe_records/3`,
+  `unsubscribe_records/2`, and `macula_record:envelope/4` for defining
+  your own record type in the `0x20`-`0xFF` tag range) was public,
+  exported API with no guide — one line in a CONTENT_GUIDE comparison
+  table was the only mention. Documents storage-key derivation
+  (including `subject_id`) and the built-in-vs-domain-defined type split.
+- `MRI_GUIDE.md` now embeds `mri_trie_index.svg` (previously README-only)
+  next to the `build_index/1` / `index_children/3` example it illustrates.
+
+### Changed
+
+- **`assets/sdk_architecture.svg` regenerated.** The README's hero
+  diagram still said "Macula SDK v1.0.0 — 48 Modules" and named modules
+  that no longer exist (`macula_mesh_client`, `macula_multi_relay`,
+  `macula_local_client`) — current is 9.x with 89 modules across a
+  vertical-sliced tree that's been reorganized several times since that
+  image was drawn. A module-inventory diagram tied to internal layout
+  drifts every time a slice gets renamed or moved, which is often by
+  design in this codebase. Replaced with a capability map keyed to the
+  public facade and the guide table instead (PubSub, RPC, Content,
+  Records, Streaming, Distribution over Mesh, Clustering, Authorization,
+  MRI, over an Identity/Crypto + Wire Protocol substrate) — no module
+  count, no version number baked into the image, so it can't go stale
+  the same way. Restyled to match the light theme already used by the
+  four interaction diagrams instead of its previous, inconsistent dark
+  theme.
+
+### Fixed
+
+- **132 bare `catch Expr` sites rewritten to `try Expr catch _:_ -> ok
+  end`** across 41 files. OTP 29 deprecates the bare form; combined with
+  this project's `warnings_as_errors`, it was a hard compile failure.
+  6 sites relied on `catch`'s special `{'EXIT', Reason}` return value
+  being pattern-matched by the caller (hex/port/binary decoding in
+  `macula_uri`, `macula_cert`, `macula_trust_store`, `macula_dist`,
+  `macula_dist_relay_client`, `macula_cluster_gossip`) and were rewritten
+  to preserve that exact shape rather than collapsing to `ok`.
+- **`macula_record`'s `record()` type renamed to `m_record()`**
+  (`macula:m_record()` in the facade). OTP 29 made `record()` a reserved
+  built-in type name; a module declaring `-type record() :: ...` now
+  fails to compile with "local redefinition of built-in type". Updated
+  every consuming `-spec` across `macula_foundation`, `macula_frame`,
+  `macula_advertise_station`, `macula_resolve_address`,
+  `macula_host_identity`, and `macula_station_link`.
+- `macula_manifest.erl`'s moduledoc referenced `macula_manifest:get_chunk_mcid/2`
+  and `macula_manifest:decode/1`, neither of which exists (the real
+  names are `chunk_mcid/3` and `from_wire/1`) — caught by `rebar3 ex_doc`
+  while auditing docs for this release.
+- Deleted three orphaned SVGs that no guide or the README ever
+  referenced: `mesh-architecture.svg`, `pubsub_flow.svg`, `rpc_flow.svg`.
+  Not just unused — actively wrong for the current architecture:
+  `rpc_flow.svg` claimed "nodes never connect directly, all traffic
+  flows through the relay mesh" (contradicted by the direct-dial
+  `call_station/6` path this guide's own two-station diagram documents),
+  and `pubsub_flow.svg` named three modules that don't exist
+  (`macula_pubsub_handler`, `macula_gateway_pubsub`, `macula_pubsub_dht`)
+  and cited unmeasured metrics ("Cache hit: ~98%").
+
+None of this changes runtime behavior — the catch rewrite is a pure
+syntax swap, `m_record()` is a type-only rename, and everything else is
+documentation. OTP is still pinned to 28 in `.tool-versions`; this
+clears the specific compile blocker for a future OTP 29 move but does
+not make that move itself — a separate `record()`-built-in-type
+collision in `-type record() :: #{...}` (now fixed) was the other half
+of that blocker, also cleared here.
+
+---
+
 ## [9.0.1] - 2026-08-20
 
 ### Fixed

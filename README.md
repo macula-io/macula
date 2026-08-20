@@ -15,19 +15,22 @@
 
 ---
 
-> **Latest — 9.0.0 (breaking)**: LAN clustering and distribution-over-mesh split
-> into independent concerns — `macula_cluster_system/` vs. `macula_dist_system/`.
-> `macula_dist_relay` is renamed `macula_dist_pool` (the facade,
-> `join_mesh/1` / `join_dist_relay/1`, is unaffected); the `auto_cluster`
-> sys.config option is removed (start clustering explicitly via
-> `macula_cluster:start_cluster/1`). See [CHANGELOG.md](CHANGELOG.md) for the
-> full Breaking section. 8.10.0 added chunked content sharing; 8.9.0 added
-> streaming direct-dial; 8.8.0 added per-publisher pubsub delivery ordering.
+> **Latest — 9.1.0**: OTP 29 readiness (bare `catch` rewritten to
+> `try/catch/end`; `macula_record`'s `record()` type renamed `m_record()` —
+> a reserved built-in type name in OTP 29) plus a new
+> [Records Guide](docs/guides/RECORDS_GUIDE.md) for the raw DHT record API.
+> No behavior change. **9.0.0 was breaking**: LAN clustering and
+> distribution-over-mesh split into independent concerns —
+> `macula_cluster_system/` vs. `macula_dist_system/`. `macula_dist_relay` is
+> renamed `macula_dist_pool` (the facade, `join_mesh/1` / `join_dist_relay/1`,
+> is unaffected); the `auto_cluster` sys.config option is removed (start
+> clustering explicitly via `macula_cluster:start_cluster/1`). See
+> [CHANGELOG.md](CHANGELOG.md) for the full history.
 
 ## What is Macula?
 
 <p align="center">
-  <img src="assets/sdk_architecture.svg" alt="Macula SDK Architecture" width="100%">
+  <img src="assets/sdk_architecture.svg" alt="Macula SDK Component and Feature Model" width="100%">
 </p>
 
 Macula is an **Erlang/OTP client SDK** for building applications on a mesh of
@@ -289,6 +292,7 @@ MRI = macula_mri:new_app(<<"io.macula">>, <<"acme">>, <<"counter">>),
 | [Topic Naming](docs/guides/TOPIC_NAMING_GUIDE.md) | Event-type topics, IDs in payloads |
 | [RPC Guide](docs/guides/RPC_GUIDE.md) | Direct-dial request/response |
 | [Content Guide](docs/guides/CONTENT_GUIDE.md) | Content-addressed blobs (MCID) |
+| [Records Guide](docs/guides/RECORDS_GUIDE.md) | Signed, TTL'd facts in the DHT — your own record types |
 | [Streaming Guide](docs/guides/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi) |
 | [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Erlang dist through the mesh |
 | [Clustering](docs/guides/CLUSTERING_GUIDE.md) | LAN gossip clustering |
