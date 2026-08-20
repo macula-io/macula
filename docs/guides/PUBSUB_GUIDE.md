@@ -272,6 +272,35 @@ handle_info({macula_event_gone, Sub, Reason},
 Pattern-match the `Sub` reference into the function head — that
 keeps a process subscribing to multiple topics readable.
 
+### Subscribing with `macula_subscriber` (supervised)
+
+`macula_subscriber` is the same pattern as above, packaged as a behaviour —
+it links to `Pool`, subscribes in its own `init/1`, and threads
+`macula_event` / `macula_event_gone` dispatch into `Module:handle_event/4`
+for you:
+
+```erlang
+-module(my_orders_listener).
+-behaviour(macula_subscriber).
+-export([init/1, handle_event/4]).
+
+init(_Args) -> {ok, #{}}.
+
+handle_event(_Topic, Payload, _Meta, State) ->
+    on_order_placed(Payload),
+    {noreply, State}.
+```
+
+```erlang
+Topic = macula_topic:app_fact(Realm, my_org, my_app,
+                              <<"orders">>, <<"placed">>, 1),
+{ok, Pid} = macula_subscriber:start_link(my_orders_listener, Pool, Realm,
+                                         Topic, []).
+```
+
+A `macula_event_gone` for this subscription stops the sink with that
+reason — same as returning `{stop, {pool_gone, Reason}, S}` by hand above.
+
 ---
 
 ## Publishing
@@ -471,3 +500,4 @@ rest.
 - [Authorization Guide](AUTHORIZATION_GUIDE.md) — UCAN/DID identity
 - [`macula_pubsub`](https://hexdocs.pm/macula/macula_pubsub.html) — slice module
 - [`macula_client`](https://hexdocs.pm/macula/macula_client.html) — pool implementation
+- [`macula_subscriber`](https://hexdocs.pm/macula/macula_subscriber.html) — supervised subscriber behaviour

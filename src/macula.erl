@@ -86,7 +86,8 @@
 -export_type([pool/0, realm/0,
               topic/0, procedure/0,
               stream/0, stream_mode/0, stream_handler/0,
-              m_record/0, record_type/0, record_key/0]).
+              m_record/0, record_type/0, record_key/0,
+              mcid/0]).
 
 -type pool()   :: macula_client:pool().
 -type realm()  :: <<_:256>>.            %% 32-byte realm tag.

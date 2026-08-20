@@ -178,6 +178,69 @@ own moduledoc.
 
 ---
 
+## Supervised wrappers: `macula_responder` / `macula_requester`
+
+`advertise/5`'s handler runs in a transient process spawned per inbound
+call, and `call/5` blocks the calling process on its own `gen_server:call`
+— neither has an addressable pid you can supervise, monitor, or cancel from
+outside. `macula_responder` and `macula_requester` wrap the same two
+primitives as proper OTP behaviours, and publish `rpc.received_v1` /
+`rpc.replied_v1` (provider) or `rpc.sent_v1` / `rpc.completed_v1` (consumer)
+mesh facts around each call — useful when something else on the mesh wants
+to observe RPC traffic, not just participate in it.
+
+Provider side — each inbound call starts one supervised child under a
+factory supervisor this module owns:
+
+```erlang
+-module(math_service).
+-behaviour(macula_responder).
+-export([init/1, handle_request/2]).
+
+init(_Args) -> {ok, []}.
+
+handle_request(#{<<"a">> := A, <<"b">> := B}, State) ->
+    {reply, A + B, State}.
+```
+
+```erlang
+{ok, _Sup} = macula_responder:advertise(Pool, Realm, Procedure,
+                                        math_service, []).
+```
+
+Consumer side — `start_link/6,7` returns immediately with a pid; the call
+itself runs in a linked worker, and the outcome is delivered to
+`Module:handle_reply/2`:
+
+```erlang
+-module(add_caller).
+-behaviour(macula_requester).
+-export([init/1, handle_reply/2]).
+
+init(Parent) -> {ok, Parent}.
+
+handle_reply(Result, Parent) ->
+    Parent ! {add_result, Result},
+    {stop, normal, Parent}.
+```
+
+```erlang
+{ok, Pid} = macula_requester:start_link(add_caller, Pool, Realm, Procedure,
+                                        #{<<"a">> => 2, <<"b">> => 3},
+                                        5_000, self()).
+
+%% cancel before a reply arrives — publishes rpc.completed_v1 with
+%% outcome => cancelled
+ok = macula_requester:cancel(Pid).
+```
+
+Embed `macula_requester_sup` (a `simple_one_for_one` factory) in your own
+supervision tree if you want to enumerate or cancel in-flight requests via
+`supervisor:which_children/1` / `terminate_child/2` — that is what backs a
+`cancel_*` RPC command in an application built on top of the SDK.
+
+---
+
 ## Procedure naming
 
 **See the [Topic Naming Guide](TOPIC_NAMING_GUIDE.md)** — RPC procedures and
@@ -194,3 +257,6 @@ never inline strings.
   `{ucan_required, Issuer}` and presenting a UCAN token to call it.
 - [Records Guide](RECORDS_GUIDE.md) — the DHT record primitive
   `procedure_advertisement` is built on.
+- [`macula_responder`](https://hexdocs.pm/macula/macula_responder.html) /
+  [`macula_requester`](https://hexdocs.pm/macula/macula_requester.html) —
+  supervised, fact-announcing wrappers around `advertise/5` and `call/5`.

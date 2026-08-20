@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.2.0] - 2026-08-20
+
+**A supervised, fact-announcing primitive family sits on top of the four raw
+mesh operations.** Every one of `advertise/5`, `call/5`, `advertise_stream/5`
+/ `call_stream/5`, `put_content/2` / `get_content/2`, and `subscribe/5`
+already spawns or blocks a bare process with no addressable pid — nothing to
+cancel, nothing to supervise, nothing to observe from outside. This release
+adds four symmetric provider/consumer pairs, each a proper `gen_server`
+behaviour with a `simple_one_for_one` factory supervisor, publishing mesh
+protocol facts around its own side of the operation:
+
+### Added
+
+- **`macula_feeder` / `macula_downloader`** — supervised wrappers around
+  `put_content/2` / `get_content/2`. Publish `sharing.put_started_v1` /
+  `sharing.put_completed_v1` and `sharing.get_started_v1` /
+  `sharing.get_completed_v1`, carrying `chunked => true | false`. Replaces
+  the unreleased, unpublished `macula_content_sharing` (deleted — nothing
+  depended on it outside this repo).
+- **`macula_streamer` / `macula_stream_sink`** — supervised wrappers around
+  `advertise_stream/5` / `call_stream/5`. Publish `streaming.started_v1` /
+  `streaming.completed_v1` from each side independently. `macula_streamer`
+  is push-based: `Module:handle_open/2` registers `self()` however the
+  application discovers it, then any process holding that pid drives the
+  stream via `macula_streamer:send/2,3` / `close/1`.
+- **`macula_responder` / `macula_requester`** — supervised wrappers around
+  `advertise/5` / `call/5`. Publish `rpc.received_v1` / `rpc.replied_v1`
+  (provider) and `rpc.sent_v1` / `rpc.completed_v1` (consumer, including
+  `outcome => cancelled` when cancelled before a reply arrives).
+- **`macula_subscriber`** — supervised wrapper around `subscribe/5`,
+  threading `macula_event` / `macula_event_gone` dispatch into
+  `Module:handle_event/4`.
+- Every pair has a `_sup` factory (`macula_feeder_sup`,
+  `macula_downloader_sup`, `macula_streamer_sup`, `macula_responder_sup`,
+  `macula_requester_sup`): provider-side ones are started internally by
+  `advertise/5,6` and hidden from the caller; consumer-side ones are meant
+  to be embedded in the *caller's* own supervision tree, so a `cancel_*`
+  command becomes `supervisor:terminate_child/2` (or `cancel/1` on the
+  child pid directly) against a child the application already owns.
+- `RPC_GUIDE.md`, `STREAMING_GUIDE.md`, `CONTENT_GUIDE.md`, and
+  `PUBSUB_GUIDE.md` each gained a section introducing their pair, plus a
+  `Reference` / `See also` row.
+
+### Fixed
+
+- `mcid/0` was used in three exported `-spec`s (`put_content/2`,
+  `get_content/2`, `find_content_providers/2`) but never in
+  `-export_type` — any external consumer's dialyzer run saw an unknown
+  type. Now exported.
+- `macula.app.src`'s `links` entry was labeled `"GitHub"` but pointed at
+  `codeberg.org` — a leftover from the pre-2026-07-26 hosting arrangement.
+  Now points at `github.com/macula-io/macula`.
+
+No breaking changes — every addition is a new module; nothing existing
+changed shape.
+
+---
+
 ## [9.1.1] - 2026-08-20
 
 **Every guide and the README, checked line-by-line against real source — not

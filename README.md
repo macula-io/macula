@@ -15,11 +15,18 @@
 
 ---
 
-> **Latest — 9.1.1**: every guide and this README checked line-by-line
-> against real source — fabricated modules, a nonexistent legacy RPC API,
-> a dead dependency pin, and a dozen other doc bugs found and fixed. No
-> behavior change. See [CHANGELOG.md](CHANGELOG.md) for the full list.
-> 9.1.0 added OTP 29 readiness (bare `catch` rewritten to `try/catch/end`;
+> **Latest — 9.2.0**: three new supervised primitive pairs —
+> `macula_feeder`/`macula_downloader` (content), `macula_streamer`/
+> `macula_stream_sink` (RPC streaming), `macula_responder`/`macula_requester`
+> (unary RPC) — plus `macula_subscriber` for pub/sub. Each wraps its raw
+> SDK primitive as an OTP behaviour with a `simple_one_for_one` factory
+> supervisor, and publishes mesh-visible protocol facts (`sharing.*_v1`,
+> `streaming.*_v1`, `rpc.*_v1`) around its own side of the operation. Fully
+> additive, no breaking changes. See [CHANGELOG.md](CHANGELOG.md).
+> 9.1.1 checked every guide and this README line-by-line against real
+> source — fabricated modules, a nonexistent legacy RPC API, a dead
+> dependency pin, and a dozen other doc bugs found and fixed, no behavior
+> change. 9.1.0 added OTP 29 readiness (bare `catch` rewritten to `try/catch/end`;
 > `macula_record`'s `record()` type renamed `m_record()`) and the
 > [Records Guide](docs/guides/RECORDS_GUIDE.md). **9.0.0 was breaking**: LAN
 > clustering and

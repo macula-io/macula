@@ -134,6 +134,66 @@ macula:abort(Stream, <<"0F">>, <<"source unavailable">>).
 
 ---
 
+## Supervised wrappers: `macula_streamer` / `macula_stream_sink`
+
+The bare handler fun above runs in a transient process per inbound
+STREAM_OPEN, and a consumer has to hand-write its own `recv/2` loop around
+`call_stream/5`'s raw stream pid. `macula_streamer` and `macula_stream_sink`
+wrap the same two primitives as proper OTP behaviours, and each publishes
+its own `streaming.started_v1` / `streaming.completed_v1` mesh fact — from
+its own side's perspective, not deduplicated against the other side's copy.
+
+Provider side — each inbound stream starts one supervised child under a
+factory supervisor this module owns. Sending is push-based: once
+`handle_open/2` has stashed `self()` somewhere discoverable (a registry, an
+ETS table, a message to a known process), any code holding that pid can
+call `macula_streamer:send/2,3` and `close/1` on it from outside:
+
+```erlang
+-module(log_tailer_provider).
+-behaviour(macula_streamer).
+-export([init/1, handle_open/2]).
+
+init(Registry) -> {ok, Registry}.
+
+handle_open(#{<<"topic">> := Topic}, Registry) ->
+    Registry ! {tailer_ready, Topic, self()},
+    {ok, Registry}.
+```
+
+```erlang
+{ok, _Sup} = macula_streamer:advertise(Pool, Realm, <<"logs.tail">>,
+                                       log_tailer_provider, self()).
+
+%% elsewhere, once the provider has announced its pid:
+ok = macula_streamer:send(TailerPid, <<"a log line\n">>).
+```
+
+Consumer side — `start_link/5,6` opens the stream and drives the `recv/2`
+loop in a linked reader process, delivering each chunk to
+`Module:handle_chunk/2`:
+
+```erlang
+-module(log_tailer).
+-behaviour(macula_stream_sink).
+-export([init/1, handle_chunk/2, handle_close/2]).
+
+init(_Args) -> {ok, []}.
+
+handle_chunk(Line, Lines) ->
+    io:format("~s", [Line]),
+    {noreply, [Line | Lines]}.
+
+handle_close(_Reason, _Lines) -> ok.
+```
+
+```erlang
+{ok, Pid} = macula_stream_sink:start_link(log_tailer, Pool, Realm,
+                                          <<"logs.tail">>, []).
+```
+
+---
+
 ## Content streaming
 
 "Content streaming" is the `server_stream` mode applied to a live source: the
@@ -167,6 +227,8 @@ They are for unit tests and same-node dispatch. The pool forms
 | `call_stream_station(Pool, Station, Realm, Proc, Args, Opts)` | consumer: **direct-dial** — dial `Station` and open the stream there in one hop |
 | `advertise_stream(Pool, Realm, Proc, Mode, Handler)` | provider: serve a streaming procedure |
 | `unadvertise_stream(Pool, Realm, Proc)` | provider: stop serving it |
+| `macula_streamer:advertise/5,6` | provider: supervised, `streaming.*_v1`-announcing wrapper |
+| `macula_stream_sink:start_link/5,6` | consumer: supervised, `streaming.*_v1`-announcing wrapper |
 | `send(Stream, Bin)` / `send(Stream, Body, Enc)` | send a chunk (`Enc` = `raw` \| `msgpack`) |
 | `recv(Stream)` / `recv(Stream, Timeout)` | read the next `{chunk,_}` / `{data,_}` / `eof` |
 | `close_send(Stream)` | half-close your send direction |
