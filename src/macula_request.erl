@@ -51,7 +51,7 @@
 -behaviour(gen_server).
 
 -export([start_link/6, start_link/7]).
--export([start_link_direct/6, start_link_direct/7]).
+-export([start_link_direct/6, start_link_direct/7, start_link_direct/8]).
 -export([cancel/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -90,7 +90,8 @@ start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs) ->
                  term(), pos_integer(), term()) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
     gen_server:start_link(?MODULE,
-        {pooled, Module, Pool, Realm, Procedure, Payload, TimeoutMs, true, Args}, []).
+        {pooled, Module, Pool, Realm, Procedure, Payload, TimeoutMs, true,
+         Args, #{}}, []).
 
 %% @doc As `start_link/6', but resolves and dials the serving station
 %% directly instead of routing through the pool's existing links. See
@@ -106,8 +107,21 @@ start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs) ->
                         macula:procedure(), term(), pos_integer(), term()) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
+    start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs,
+                      Args, #{}).
+
+%% @doc As `start_link_direct/7', with `Opts' forwarded to
+%% `macula_direct_dial:call/6' — e.g. `verify_cert_chain =>
+%% {RealmCaPem, Org}' (Slice 7c Direction B; managed realms only. See
+%% `macula_direct_dial''s module doc, "Trust model").
+-spec start_link_direct(module(), macula:pool(), macula:realm(),
+                        macula:procedure(), term(), pos_integer(), term(),
+                        map()) -> {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args,
+                  Opts) ->
     gen_server:start_link(?MODULE,
-        {direct, Module, Pool, Realm, Procedure, Payload, TimeoutMs, true, Args}, []).
+        {direct, Module, Pool, Realm, Procedure, Payload, TimeoutMs, true,
+         Args, Opts}, []).
 
 %% @doc Cancel an in-flight request. Publishes `rpc.completed_v1' with
 %% `outcome => cancelled' if no reply had arrived yet.
@@ -120,7 +134,7 @@ cancel(Pid) -> gen_server:stop(Pid).
 
 %% @private
 init({DialMode, Module, Pool, Realm, Procedure, Payload, TimeoutMs, Announce,
-      InitArgs}) ->
+      InitArgs, Opts}) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
@@ -128,7 +142,7 @@ init({DialMode, Module, Pool, Realm, Procedure, Payload, TimeoutMs, Announce,
             publish(Announce, Pool, Realm, ?REQUEST_SENT,
                     #{request_id => RequestId}),
             Worker = spawn_worker(DialMode, Pool, Realm, Procedure, Payload,
-                                  TimeoutMs),
+                                  TimeoutMs, Opts),
             {ok, #qstate{module = Module, pool = Pool, realm = Realm,
                         announce = Announce, request_id = RequestId,
                         worker = Worker, completed = false, user = UserState}};
@@ -136,17 +150,17 @@ init({DialMode, Module, Pool, Realm, Procedure, Payload, TimeoutMs, Announce,
             {stop, Reason}
     end.
 
-spawn_worker(pooled, Pool, Realm, Procedure, Payload, TimeoutMs) ->
+spawn_worker(pooled, Pool, Realm, Procedure, Payload, TimeoutMs, _Opts) ->
     Parent = self(),
     spawn_link(fun() ->
         Result = macula:call(Pool, Realm, Procedure, Payload, TimeoutMs),
         Parent ! {request_result, Result}
     end);
-spawn_worker(direct, Pool, Realm, Procedure, Payload, TimeoutMs) ->
+spawn_worker(direct, Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Parent = self(),
     spawn_link(fun() ->
         Result = macula_direct_dial:call(Pool, Realm, Procedure, Payload,
-                                         TimeoutMs),
+                                         TimeoutMs, Opts),
         Parent ! {request_result, Result}
     end).
 

@@ -1820,11 +1820,12 @@ call_failure(Code, Name, _Detail) ->
 %% Helpers
 %%-------------------------------------------------------------------
 
-%% Fold TLS-policy opts (`verify' / `expected_node_id') from the link
-%% opts into the seed map, so they reach the peering target at connect.
+%% Fold TLS-policy opts (`verify' / `expected_node_id' / `pin_tls_cert')
+%% from the link opts into the seed map, so they reach the peering
+%% target at connect.
 add_tls_opts(Seed, Opts) ->
     lists:foldl(fun(K, Acc) -> copy_opt(K, Opts, Acc) end,
-                Seed, [verify, expected_node_id]).
+                Seed, [verify, expected_node_id, pin_tls_cert]).
 
 copy_opt(K, Opts, Seed) ->
     case maps:find(K, Opts) of

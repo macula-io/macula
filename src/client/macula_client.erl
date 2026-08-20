@@ -316,8 +316,12 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken) ->
                 UcanToken, #{}).
 
 %% @doc As `call_station/7', with a per-call TLS trust override for
-%% THIS dial only — `verify' (webpki | none) and/or `expected_node_id'
-%% (pin the station's Ed25519 identity) in `LinkOpts'. The pool's own
+%% THIS dial only — `verify' (webpki | none), `expected_node_id' (pin
+%% the station's Ed25519 identity), and/or `pin_tls_cert' (`false' to
+%% enforce that pin at the application layer only — see
+%% `macula_peering_conn:connect_opts()' — needed against a station
+%% whose TLS is terminated by a PKI unrelated to its macula identity,
+%% e.g. production behind Let's Encrypt) in `LinkOpts'. The pool's own
 %% `connect/2'-time `verify'/`expected_node_id' are fixed at connect
 %% time and apply uniformly to every link the pool dials (seeds and
 %% every `call_station' target alike) — unworkable for direct-dial,
@@ -541,10 +545,13 @@ init({Seeds, Opts}) ->
             connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000)
         },
         %% TLS policy for the links this pool dials (seeds AND
-        %% `call_station' targets): `verify' (webpki | none) and
-        %% `expected_node_id' (pin the station's Ed25519 identity).
-        %% Forwarded only when the caller set them.
-        maps:with([verify, expected_node_id], Opts)),
+        %% `call_station' targets): `verify' (webpki | none),
+        %% `expected_node_id' (pin the station's Ed25519 identity), and
+        %% `pin_tls_cert' (whether that pin also applies at the TLS
+        %% layer, vs. application-layer-only — see
+        %% `macula_peering_conn:connect_opts()'). Forwarded only when
+        %% the caller set them.
+        maps:with([verify, expected_node_id, pin_tls_cert], Opts)),
     DedupWindow = maps:get(dedup_window_ms, Opts, ?DEFAULT_DEDUP_WINDOW_MS),
     DedupSweep  = maps:get(dedup_sweep_ms, Opts, ?DEFAULT_DEDUP_SWEEP_MS),
     Replication = maps:get(replication_factor, Opts, ?DEFAULT_REPLICATION),

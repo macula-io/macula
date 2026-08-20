@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.5.0] - 2026-08-20
+
+### Added
+
+- **Direct-dial for RPC** (`macula_direct_dial`, `macula_request:start_link_direct/6,7,8`,
+  `macula_response:advertise_direct/6,7`, `macula_client:call_station/8`,
+  `macula:call_station/7`). An alternative to the gossip-routed
+  `macula:call/5` path: the caller resolves a procedure's
+  `procedure_advertisement` from the DHT, resolves and verifies that
+  advertisement's `serving_station` to a dialable `station_endpoint`
+  record, and dials it directly over one QUIC hop instead of depending on
+  advertise-gossip having propagated a route between arbitrary stations.
+- **`pin_tls_cert` connect/link opt** (`macula_peering_conn`,
+  `macula_station_link`, `macula_client:call_station/8`,
+  `macula:call_station/7`). Decouples `expected_node_id`'s two
+  enforcement points, previously fused: pinning the QUIC/TLS
+  certificate's own SPKI (`pin_tls_cert => true`, the default —
+  correct only when the peer's TLS cert genuinely IS its macula
+  identity, e.g. self-signed test clusters) versus the application-
+  layer CONNECT/HELLO signature check (`bind_peer_identity/2`, always
+  enforced when `expected_node_id` is set, regardless of
+  `pin_tls_cert`). `pin_tls_cert => false` is required to direct-dial
+  any station whose TLS is terminated by a PKI unrelated to its macula
+  identity — a production station behind Let's Encrypt, for instance,
+  where the cert's key has no relationship to the station's Ed25519
+  identity and the pin can never succeed. Trust for such a dial rests
+  entirely on the signed HELLO handshake instead, checked against the
+  same pubkey the DHT chain resolved. Direct-dial (`macula_direct_dial`)
+  always dials this way.
+- **Mandatory advertisement signature verification + opt-in cert-chain
+  check for direct-dial** (`macula_direct_dial`). Resolving a
+  `procedure_advertisement` now discards any candidate record that
+  fails Ed25519 signature verification before trusting its
+  `serving_station` at all — previously the first DHT record found was
+  trusted unconditionally, so any identity able to sign SOME record
+  could point a caller at a real, legitimate station it had no
+  authority to name. `call/6` and `publish_advertisement/5` additionally
+  accept an opt-in `verify_cert_chain => {RealmCaPem, Org}` /
+  `cert_chain => ChainPem` pair (managed realms only) that requires the
+  advertisement's embedded X.509 service-cert chain to verify to the
+  realm CA under the given org (Slice 7c Direction B, via the existing
+  `macula_record:verify_advertisement_cert_chain/3`), proving the
+  advertiser itself — not just the station it names — is an
+  org/realm-authorized identity.
+
 ## [9.4.0] - 2026-08-20
 
 ### Added

@@ -21,7 +21,8 @@
 -ifdef(TEST).
 %% Exports for unit tests — pure helpers that are otherwise private.
 -export([
-    resolve_recipient/1
+    resolve_recipient/1,
+    dial_trust_opts/1
 ]).
 -endif.
 
@@ -34,17 +35,38 @@
     %% 5.0.0) validates the server cert against webpki roots + the
     %% dialed hostname. `none' skips TLS verification — development /
     %% self-signed labs only; every such dial logs a warning.
-    %% Ignored when `expected_node_id' is set (pubkey pin wins).
+    %% Ignored when `expected_node_id' is set (pubkey pin wins), unless
+    %% `pin_tls_cert => false' — see below.
     verify      => webpki | none,
     %% The peer's Ed25519 pubkey, when the dialer knows who it is
     %% dialing (DHT node records, pre-shared relay identities). Two
-    %% enforcement points: (a) the QUIC dial pins the server cert's
-    %% SPKI to this key (no CA needed — station self-signed certs
-    %% wrap the node identity key), and (b) the HELLO handshake is
-    %% rejected unless the peer's verified `node_id' equals this key.
-    %% Without it, the handshake only proves the peer holds the key
-    %% for whatever identity IT claims (self-asserted).
+    %% independent enforcement points, both keyed off this field:
+    %% (a) when `pin_tls_cert' is `true' (the default), the QUIC dial
+    %% pins the server cert's SPKI to this key (no CA needed — correct
+    %% when the peer's TLS cert genuinely IS its macula identity, e.g.
+    %% self-signed test clusters); (b) always, regardless of
+    %% `pin_tls_cert': the HELLO handshake is rejected unless the
+    %% peer's verified `node_id' equals this key. (b) is a real
+    %% cryptographic proof independent of (a) or of TLS at all — the
+    %% CONNECT/HELLO frame carries the peer's self-claimed `node_id'
+    %% signed by the matching Ed25519 key, checked by
+    %% `macula_frame:verify/2' before `bind_peer_identity/2' ever runs.
+    %% Without `expected_node_id' set at all, the handshake only proves
+    %% the peer holds the key for whatever identity IT claims
+    %% (self-asserted, no expectation to check against).
     expected_node_id => macula_identity:pubkey(),
+    %% Whether `expected_node_id' also pins the QUIC/TLS certificate's
+    %% own SPKI. Defaults to `true'. Set to `false' when the peer's TLS
+    %% is terminated by a PKI unrelated to its macula identity (e.g. a
+    %% production station behind Let's Encrypt) — pinning the cert key
+    %% there can never succeed, since the cert's key has no relationship
+    %% to the station's Ed25519 identity at all. With `pin_tls_cert =>
+    %% false', trust is enforced ENTIRELY at the application layer (the
+    %% HELLO-frame check above); `verify' governs the otherwise-
+    %% unauthenticated QUIC/TLS layer and should normally be `none' in
+    %% that case (a bare-IP direct-dial has no hostname for `webpki' to
+    %% validate against anyway).
+    pin_tls_cert => boolean(),
     _           => _
 }.
 
@@ -657,11 +679,21 @@ do_connect(#{host := Host, port := Port} = Target) ->
     macula_quic:connect(Host, Port,
                         [{alpn, Alpn} | dial_trust_opts(Target)], Timeout).
 
-%% TLS trust for the dial. A known peer identity pins the server
-%% cert's Ed25519 SPKI (strongest — no CA involved); otherwise the
-%% `verify' mode flows through, defaulting to webpki inside
-%% `macula_quic:connect/4'. `{verify, none}' must be an explicit
+%% TLS trust for the dial. A known peer identity normally pins the
+%% server cert's Ed25519 SPKI (strongest — no CA involved). When the
+%% caller has explicitly said the cert cannot be pinned
+%% (`pin_tls_cert => false' — the peer's TLS is a PKI unrelated to its
+%% macula identity), trust for THIS dial rests entirely on the
+%% application-layer HELLO check instead (`bind_peer_identity/2', still
+%% armed via `expected_node_id' in `#data{}' regardless of this
+%% clause); the QUIC layer just needs a `verify' mode, defaulting to
+%% `none' since there is nothing meaningful for it to check. Otherwise
+%% the `verify' mode flows through as before, defaulting to webpki
+%% inside `macula_quic:connect/4'. `{verify, none}' must be an explicit
 %% caller choice and is warned about at the macula_quic layer.
+dial_trust_opts(#{expected_node_id := NodeId, pin_tls_cert := false} = Target)
+        when is_binary(NodeId), byte_size(NodeId) =:= 32 ->
+    [{verify, maps:get(verify, Target, none)}];
 dial_trust_opts(#{expected_node_id := NodeId}) when is_binary(NodeId),
                                                     byte_size(NodeId) =:= 32 ->
     [{verify_pubkey, NodeId}];

@@ -245,13 +245,15 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs) ->
 
 %% @doc As `call_station/6', presenting a capability token to a gated
 %% provider via `Opts' (`#{ucan_token => Token}'). Empty/absent = none.
-%% Slice 7b dual-trust.
+%% Slice 7b dual-trust. `Opts' also carries the per-call TLS trust
+%% override for this dial: `verify', `expected_node_id', and
+%% `pin_tls_cert' (see `macula_client:call_station/8').
 -spec call_station(pool(), macula_client:seed(), realm(), procedure(),
                    term(), pos_integer(), map()) ->
     {ok, term()} | {error, term()}.
 call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Ucan = maps:get(ucan_token, Opts, <<>>),
-    LinkOpts = maps:with([verify, expected_node_id], Opts),
+    LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
     macula_client:call_station(Pool, Station, Realm, Procedure, Payload,
                                TimeoutMs, Ucan, LinkOpts).
 
