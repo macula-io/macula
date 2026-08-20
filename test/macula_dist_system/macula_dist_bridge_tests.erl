@@ -227,7 +227,7 @@ bridge_metrics_updated_on_tunnel_in_test() ->
     ?assertEqual(1, counters:get(Metrics, 4)),
 
     exit(Bridge, kill),
-    catch gen_tcp:close(BridgeSockB),
+    try gen_tcp:close(BridgeSockB) catch _:_ -> ok end,
     stop_mock_pool(MockPool),
     flush_exits(),
     process_flag(trap_exit, false).
@@ -250,7 +250,7 @@ start_mock_pool() ->
     {Pid, Pid}.
 
 stop_mock_pool(Pid) ->
-    catch gen_server:stop(Pid, normal, 1000).
+    try gen_server:stop(Pid, normal, 1000) catch _:_ -> ok end.
 
 last_subscription(Pool) ->
     gen_server:call(Pool, last_subscription, 1_000).
@@ -327,13 +327,13 @@ setup_bridge() ->
 
 teardown_bridge(#{bridge := Bridge, mock_pool := MockPool,
                   bridge_sock_peer := BridgeSockB}) ->
-    catch gen_tcp:close(BridgeSockB),
+    try gen_tcp:close(BridgeSockB) catch _:_ -> ok end,
     MonRef = monitor(process, Bridge),
-    catch exit(Bridge, shutdown),
+    try exit(Bridge, shutdown) catch _:_ -> ok end,
     receive
         {'DOWN', MonRef, process, Bridge, _} -> ok
     after 2000 ->
-        catch exit(Bridge, kill),
+        try exit(Bridge, kill) catch _:_ -> ok end,
         receive {'DOWN', MonRef, process, Bridge, _} -> ok after 1000 -> ok end
     end,
     stop_mock_pool(MockPool),

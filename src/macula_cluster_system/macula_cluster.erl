@@ -416,11 +416,11 @@ start_cluster(Opts) ->
 -spec stop_cluster() -> ok.
 stop_cluster() ->
     %% Try to stop gossip strategy
-    catch macula_cluster_gossip:stop(),
+    try macula_cluster_gossip:stop() catch _:_ -> ok end,
     %% Try to stop static strategy
-    catch macula_cluster_static:stop(),
+    try macula_cluster_static:stop() catch _:_ -> ok end,
     %% Try to stop DHT-based strategy
-    catch macula_cluster_strategy:stop(macula_cluster),
+    try macula_cluster_strategy:stop(macula_cluster) catch _:_ -> ok end,
     ok.
 
 %% @doc Get list of connected cluster nodes.

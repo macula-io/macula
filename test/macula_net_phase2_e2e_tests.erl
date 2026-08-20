@@ -94,7 +94,7 @@ dht_find(Key) ->
 setup() ->
     ensure_dist(),
     Tab = ets:new(phase2_dht_table, [set, public]),
-    catch unregister(?DHT_NAME),
+    try unregister(?DHT_NAME) catch _:_ -> ok end,
     DhtPid = spawn(fun() -> mock_dht_loop(Tab) end),
     register(?DHT_NAME, DhtPid),
 
@@ -170,10 +170,10 @@ setup() ->
       dht_pid => DhtPid}.
 
 cleanup(#{peer_a := PA, peer_b := PB, dht_pid := Dht}) ->
-    catch peer:stop(PA),
-    catch peer:stop(PB),
-    catch (Dht ! stop),
-    catch unregister(?DHT_NAME),
+    try peer:stop(PA) catch _:_ -> ok end,
+    try peer:stop(PB) catch _:_ -> ok end,
+    try (Dht ! stop) catch _:_ -> ok end,
+    try unregister(?DHT_NAME) catch _:_ -> ok end,
     ok.
 
 holder_loop() ->
@@ -185,7 +185,7 @@ holder_loop() ->
 
 resolves_and_delivers(#{node_a := NodeA, station_a := StationA,
                          station_b := StationB} = _Ctx) ->
-    catch unregister(?SINK_NAME),
+    try unregister(?SINK_NAME) catch _:_ -> ok end,
     true = register(?SINK_NAME, self()),
 
     %% Both peers' identities advertise into the shared DHT (we just

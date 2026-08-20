@@ -62,7 +62,7 @@ setup() ->
 
 cleanup(_) ->
     %% Stop gossip if running
-    catch macula_cluster_gossip:stop(),
+    try macula_cluster_gossip:stop() catch _:_ -> ok end,
     %% Clean up env vars
     os:unsetenv("MACULA_GOSSIP_ADDR"),
     os:unsetenv("MACULA_GOSSIP_PORT"),

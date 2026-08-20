@@ -28,8 +28,8 @@ setup() ->
     #{kp => Kp, pk => Pk, addr => Addr}.
 
 cleanup(_) ->
-    catch macula_advertise_station:stop(),
-    catch unregister(?SINK),
+    try macula_advertise_station:stop() catch _:_ -> ok end,
+    try unregister(?SINK) catch _:_ -> ok end,
     flush_mailbox().
 
 flush_mailbox() ->
@@ -38,7 +38,7 @@ flush_mailbox() ->
 %% Called inside each test body — registers the body's pid as the
 %% sink and returns a put_fn that delivers there.
 register_sink_fn() ->
-    catch unregister(?SINK),
+    try unregister(?SINK) catch _:_ -> ok end,
     true = register(?SINK, self()),
     fun(R) -> ?SINK ! {put, R}, ok end.
 
@@ -164,7 +164,7 @@ refresh_republishes(Ctx) ->
 
 put_fn_failure_does_not_crash(#{kp := Kp, pk := Pk, addr := Addr}) ->
     fun() ->
-        catch unregister(?SINK),
+        try unregister(?SINK) catch _:_ -> ok end,
         true = register(?SINK, self()),
         BadPut = fun(R) ->
             ?SINK ! {tried, R},

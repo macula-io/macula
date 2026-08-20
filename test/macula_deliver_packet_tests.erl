@@ -33,7 +33,7 @@ envelope_to(Dst, Payload) ->
 %% =============================================================================
 
 handle_without_configure_returns_not_configured_test() ->
-    catch ets:delete(macula_deliver_packet_table),
+    try ets:delete(macula_deliver_packet_table) catch _:_ -> ok end,
     ?assertEqual({error, not_configured},
                  macula_deliver_packet:handle_envelope(<<>>)).
 

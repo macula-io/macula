@@ -67,7 +67,7 @@ setup_listener() ->
       pubkey   => Pub}.
 
 cleanup(#{listener := L, cert := Cert, key := Key}) ->
-    catch macula_quic:close_listener(L),
+    try macula_quic:close_listener(L) catch _:_ -> ok end,
     file:delete(Cert),
     file:delete(Key),
     %% Drain any leftover {quic, new_conn, ...} the accepts produced.
@@ -131,7 +131,7 @@ connect_station_style(#{port := Port}) ->
 %% =============================================================================
 
 assert_connected({ok, ConnRef}) when is_reference(ConnRef) ->
-    catch macula_quic:close_connection(ConnRef),
+    try macula_quic:close_connection(ConnRef) catch _:_ -> ok end,
     ok;
 assert_connected(Other) ->
     erlang:error({connect_failed_at_nif_boundary, Other}).

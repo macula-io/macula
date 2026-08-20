@@ -100,8 +100,8 @@ setup() ->
       addr_a => AddrA, addr_b => AddrB}.
 
 cleanup(#{peer := PeerPid}) ->
-    catch macula_net_transport_quic:stop(),
-    catch peer:stop(PeerPid),
+    try macula_net_transport_quic:stop() catch _:_ -> ok end,
+    try peer:stop(PeerPid) catch _:_ -> ok end,
     ok.
 
 holder_loop() ->
@@ -113,7 +113,7 @@ holder_loop() ->
 
 run_full_stack(#{addr_a := AddrA, addr_b := AddrB}) ->
     fun() ->
-        catch unregister(?PAYLOAD_SINK),
+        try unregister(?PAYLOAD_SINK) catch _:_ -> ok end,
         true = register(?PAYLOAD_SINK, self()),
 
         Payload = ipv6_packet(AddrA, AddrB, <<"phase-1-acceptance">>),

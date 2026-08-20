@@ -807,7 +807,7 @@ handle_cast({send_stream_frame, _Type, _Spec},
 handle_cast({send_stream_frame, Type, Spec},
             #state{peer_pid = Pid, identity = Id} = S) ->
     Frame = build_stream_frame(Type, finalise_stream_spec(Type, Spec, Id)),
-    catch macula_peering:send_frame(Pid, Frame),
+    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
     {noreply, on_outbound_stream_frame(Type, Spec, S)};
 
 handle_cast(_Msg, S) -> {noreply, S}.
@@ -936,7 +936,7 @@ fold_frames(Frames, S) ->
     lists:foldl(fun on_frame/2, S, Frames).
 
 terminate(_Reason, #state{peer_pid = Pid}) when is_pid(Pid) ->
-    catch macula_peering:close(Pid, client_stop),
+    try macula_peering:close(Pid, client_stop) catch _:_ -> ok end,
     ok;
 terminate(_Reason, _S) ->
     ok.
@@ -1096,8 +1096,10 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     %% transient handler processes see the abort and exit.
     AbortFun = fun(_Sid, {Pid, Mon}) ->
         erlang:demonitor(Mon, [flush]),
-        catch macula_stream:abort(Pid, <<"disconnected">>,
-                                     iolist_to_binary(io_lib:format("~p", [Reason])))
+        try
+            macula_stream:abort(Pid, <<"disconnected">>,
+                                 iolist_to_binary(io_lib:format("~p", [Reason])))
+        catch _:_ -> ok end
     end,
     maps:foreach(AbortFun, CS),
     maps:foreach(AbortFun, SS),
@@ -1138,8 +1140,8 @@ cancel_connect_watchdog(#state{connect_watchdog = Ref} = S)
     S#state{connect_watchdog = undefined}.
 
 kill_peer(Pid) when is_pid(Pid) ->
-    _ = (catch unlink(Pid)),
-    _ = (catch exit(Pid, kill)),
+    _ = (try unlink(Pid) catch _:_ -> ok end),
+    _ = (try exit(Pid, kill) catch _:_ -> ok end),
     ok;
 kill_peer(_) ->
     ok.
@@ -1200,7 +1202,7 @@ trigger_zombie_close(#state{peer_pid = Pid} = S) when is_pid(Pid) ->
         seed   => S#state.seed,
         misses => S#state.liveness_misses
     }),
-    catch macula_peering:close(Pid, app_liveness_lost),
+    try macula_peering:close(Pid, app_liveness_lost) catch _:_ -> ok end,
     S#state{liveness_outstanding = undefined};
 trigger_zombie_close(S) ->
     S.
@@ -1218,7 +1220,7 @@ send_probe(#state{peer_pid = Pid, identity = Id} = S) when is_pid(Pid) ->
         caller      => Caller
     }),
     Signed = macula_frame:sign(Frame, Id),
-    catch macula_peering:send_frame(Pid, Signed),
+    try macula_peering:send_frame(Pid, Signed) catch _:_ -> ok end,
     S#state{liveness_outstanding = CallId};
 send_probe(S) ->
     S.
@@ -1267,7 +1269,7 @@ send_unsubscribe(Pid, Realm, Topic, Id) ->
     Frame  = macula_frame:unsubscribe(#{topic      => Topic,
                                         realm      => Realm,
                                         subscriber => SubKey}),
-    catch macula_peering:send_frame(Pid, Frame),
+    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
     ok.
 
 %% Send a SUBSCRIBE frame for `(Realm, Topic)' iff peering is connected.
@@ -1278,7 +1280,7 @@ maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, identity = Id}) ->
     Frame  = macula_frame:subscribe(#{topic      => Topic,
                                       realm      => Realm,
                                       subscriber => SubKey}),
-    catch macula_peering:send_frame(Pid, Frame),
+    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
     ok.
 
 %% On handshake completion, send a SUBSCRIBE frame for every stored
@@ -1382,7 +1384,7 @@ maybe_send_advertise(Realm, Procedure,
     Frame = macula_frame:advertise(#{realm      => Realm,
                                      procedure  => Procedure,
                                      advertiser => Pub}),
-    catch macula_peering:send_frame(Pid, Frame),
+    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
     ok.
 
 %% Best-effort UNADVERTISE on the wire. Disconnected → no-op (the
@@ -1395,7 +1397,7 @@ maybe_send_unadvertise(Realm, Procedure,
     Frame = macula_frame:unadvertise(#{realm      => Realm,
                                        procedure  => Procedure,
                                        advertiser => Pub}),
-    catch macula_peering:send_frame(Pid, Frame),
+    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
     ok.
 
 %% On handshake completion, send an ADVERTISE frame for every stored
@@ -1652,7 +1654,7 @@ open_client_stream(Realm, Proc, Args, Opts, Caller,
         deadline_ms => DeadlineMs,
         caller      => macula_identity:public(Id)
     }),
-    catch macula_peering:send_frame(Pid, Frame),
+    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
     CS = S#state.client_streams,
     NewS = S#state{client_streams = CS#{Sid => {StreamPid, Mon}}},
     {reply_value, {ok, StreamPid}, NewS}.
@@ -1761,7 +1763,7 @@ dispatch_stream_open(error, Sid, _Proc, _Declared, _Args,
         code      => <<"not_found">>,
         message   => <<"procedure not advertised">>
     }),
-    catch macula_peering:send_frame(Pid, Frame),
+    try macula_peering:send_frame(Pid, Frame) catch _:_ -> ok end,
     S;
 dispatch_stream_open(error, _Sid, _Proc, _Declared, _Args, S) ->
     S;

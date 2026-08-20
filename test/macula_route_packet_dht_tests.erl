@@ -90,10 +90,10 @@ route_packet_dht_test_() ->
 %% never made. That surfaced only when the whole suite ran, because the
 %% stray sender needs another module to drive a dispatch.
 cleanup_state() ->
-    catch macula_cache_route:stop(),
+    try macula_cache_route:stop() catch _:_ -> ok end,
     delete_table(macula_route_packet_table),
     delete_table(macula_cache_route_table),
-    catch unregister(?TEST_SINK),
+    try unregister(?TEST_SINK) catch _:_ -> ok end,
     flush_mailbox().
 
 delete_table(Name) ->
@@ -126,7 +126,7 @@ configure_dht(Tab) ->
     OwnAddr.
 
 register_test_sink() ->
-    catch unregister(?TEST_SINK),
+    try unregister(?TEST_SINK) catch _:_ -> ok end,
     true = register(?TEST_SINK, self()).
 
 drain(N) -> drain(N, []).

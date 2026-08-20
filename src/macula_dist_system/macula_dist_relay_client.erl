@@ -226,7 +226,7 @@ handle_setup_down(error, _Reason, State) ->
     {noreply, State}.
 
 terminate(_Reason, #state{conn = Conn}) when Conn =/= undefined ->
-    catch macula_quic:close_connection(Conn),
+    try macula_quic:close_connection(Conn) catch _:_ -> ok end,
     ok;
 terminate(_Reason, _State) ->
     ok.
@@ -257,7 +257,7 @@ handle_open_control({ok, Ctrl}, Conn, State) ->
     send_identify(Ctrl, State#state.node_name),
     {ok, State#state{conn = Conn, control = Ctrl}};
 handle_open_control({error, Reason}, Conn, _State) ->
-    catch macula_quic:close_connection(Conn),
+    try macula_quic:close_connection(Conn) catch _:_ -> ok end,
     {stop, {control_stream_failed, Reason}}.
 
 send_identify(Ctrl, NodeName) ->
@@ -428,7 +428,7 @@ match_inbound({_Source, Rest}, TunnelId, Stream,
               _Leftover, #state{kernel_pid = undefined} = State) ->
     ?LOG_WARNING("[dist_relay_client] Inbound tunnel ~s arrived before "
                  "kernel_pid set — dropping stream ~p", [TunnelId, Stream]),
-    catch macula_quic:close_stream(Stream),
+    try macula_quic:close_stream(Stream) catch _:_ -> ok end,
     {noreply, State#state{pending_inbound = Rest}};
 match_inbound({_Source, Rest}, TunnelId, Stream, Leftover,
               #state{kernel_pid = Kernel, conn = Conn, setups = Setups} = State) ->
@@ -569,7 +569,7 @@ parse_url(Other) -> parse_host_port(Other).
 parse_host_port(Str) ->
     case string:tokens(Str, ":") of
         [Host, PortStr] ->
-            parse_port(Host, catch list_to_integer(PortStr));
+            parse_port(Host, try list_to_integer(PortStr) catch _:_ -> error end);
         [Host] ->
             {ok, Host, 4434};
         _ ->

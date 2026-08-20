@@ -186,10 +186,10 @@ handle_info(_Info, State) ->
 %% @private
 terminate(_Reason, State) ->
     %% Unsubscribe from discovery
-    catch macula_dist_discovery:unsubscribe(self()),
+    try macula_dist_discovery:unsubscribe(self()) catch _:_ -> ok end,
 
     %% Stop node monitoring
-    catch net_kernel:monitor_nodes(false),
+    try net_kernel:monitor_nodes(false) catch _:_ -> ok end,
 
     %% Cancel timer
     cancel_timer(State#state.poll_timer),
@@ -282,7 +282,7 @@ ensure_atom(Value) when is_binary(Value) -> binary_to_atom(Value, utf8).
 notify_callback(#state{callback_module = undefined}, _Event) ->
     ok;
 notify_callback(#state{callback_module = Mod, topology = Topology}, Event) ->
-    _ = catch Mod:handle_event(Topology, Event),
+    _ = (try Mod:handle_event(Topology, Event) catch _:_ -> ok end),
     ok.
 
 %% @private Cancel timer if defined

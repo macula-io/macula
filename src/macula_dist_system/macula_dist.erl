@@ -176,16 +176,16 @@ setup(Node, Type, MyNode, LongOrShortNames, SetupTime) ->
 %% @doc Close a distribution connection.
 -spec close(term()) -> ok.
 close(Socket) when is_port(Socket) ->
-    catch gen_tcp:close(Socket),
+    try gen_tcp:close(Socket) catch _:_ -> ok end,
     ok;
 close({S, S}) when is_port(S) ->
-    catch gen_tcp:close(S),
+    try gen_tcp:close(S) catch _:_ -> ok end,
     ok;
 close({QuicConn, _Stream}) ->
-    catch macula_quic:close_connection(QuicConn),
+    try macula_quic:close_connection(QuicConn) catch _:_ -> ok end,
     ok;
 close(QuicConn) when is_reference(QuicConn) ->
-    catch macula_quic:close_connection(QuicConn),
+    try macula_quic:close_connection(QuicConn) catch _:_ -> ok end,
     ok;
 close(_) ->
     ok.
@@ -221,7 +221,8 @@ splitname(NodeName) when is_list(NodeName) ->
     splitname_tokens(string:tokens(NodeName, "@")).
 
 splitname_tokens([NameOrPort, Host]) ->
-    splitname_port(catch list_to_integer(NameOrPort), Host);
+    splitname_port(
+        try list_to_integer(NameOrPort) catch _:_ -> error end, Host);
 splitname_tokens(_) ->
     false.
 
@@ -769,7 +770,7 @@ get_dist_port(NodeName) when is_list(NodeName) ->
 get_dist_port_split({Port, _Host}, _NodeName) ->
     Port;
 get_dist_port_split(false, NodeName) ->
-    get_dist_port_int(catch list_to_integer(NodeName)).
+    get_dist_port_int(try list_to_integer(NodeName) catch _:_ -> error end).
 
 get_dist_port_int(Port) when is_integer(Port), Port > 0, Port < 65536 ->
     Port;

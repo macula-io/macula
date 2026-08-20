@@ -90,7 +90,7 @@ start_listener(#{cert := Cert, key := Key}) ->
     {Listener, Port}.
 
 stop_listener(Listener) ->
-    catch macula_quic:close_listener(Listener),
+    try macula_quic:close_listener(Listener) catch _:_ -> ok end,
     ok.
 
 %%====================================================================
@@ -263,7 +263,7 @@ do_handshake_pair(Port, Opts) ->
     {ClientPid, ServerPid, ClientId}.
 
 cleanup_pair(ClientPid, ServerPid, Listener) ->
-    [catch macula_peering:close(P, test_cleanup)
+    [try macula_peering:close(P, test_cleanup) catch _:_ -> ok end
      || P <- [ClientPid, ServerPid], is_pid(P)],
     stop_listener(Listener),
     drain_peering_messages().

@@ -37,7 +37,7 @@ setup() ->
     case whereis(macula_dist_system) of
         undefined -> ok;
         Pid ->
-            catch unlink(Pid),
+            try unlink(Pid) catch _:_ -> ok end,
             Ref = monitor(process, Pid),
             exit(Pid, shutdown),
             receive
@@ -49,7 +49,7 @@ setup() ->
     case whereis(macula_dist_discovery) of
         undefined -> ok;
         DiscPid ->
-            catch unlink(DiscPid),
+            try unlink(DiscPid) catch _:_ -> ok end,
             DiscRef = monitor(process, DiscPid),
             exit(DiscPid, shutdown),
             receive
@@ -64,7 +64,7 @@ cleanup(_) ->
     case whereis(macula_dist_system) of
         undefined -> ok;
         Pid ->
-            catch unlink(Pid),
+            try unlink(Pid) catch _:_ -> ok end,
             Ref = monitor(process, Pid),
             exit(Pid, shutdown),
             receive

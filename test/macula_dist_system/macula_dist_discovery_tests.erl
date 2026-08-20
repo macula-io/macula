@@ -21,9 +21,9 @@ setup() ->
 
 cleanup(Pid) ->
     %% Stop the discovery server
-    catch gen_server:stop(Pid),
+    try gen_server:stop(Pid) catch _:_ -> ok end,
     %% Clean up ETS table if it exists
-    catch ets:delete(macula_dist_discovery_cache),
+    try ets:delete(macula_dist_discovery_cache) catch _:_ -> ok end,
     ok.
 
 %%%===================================================================

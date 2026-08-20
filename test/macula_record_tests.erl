@@ -174,7 +174,7 @@ encode_decode_roundtrip_test() ->
 
 decode_rejects_garbage_test() ->
     %% A non-CBOR sequence either fails to decode or yields a non-record value.
-    Result = catch macula_record:decode(<<255, 255, 255, 255>>),
+    Result = try macula_record:decode(<<255, 255, 255, 255>>) catch _:_ -> error end,
     case Result of
         {ok, _} -> ?assert(false);
         _       -> ok

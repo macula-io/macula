@@ -67,7 +67,7 @@ start(ConnOpts, SubOpts) ->
     {Pool, Ref, Topic}.
 
 stop(Pool, Ref) ->
-    catch macula_client:unsubscribe(Pool, Ref),
+    try macula_client:unsubscribe(Pool, Ref) catch _:_ -> ok end,
     ok = macula_client:close(Pool).
 
 inject(Pool, Topic, Pub, Seq) ->

@@ -81,7 +81,7 @@ dht_loop(Tab) ->
             From ! {find_reply, Reply},
             dht_loop(Tab);
         stop ->
-            catch ets:delete(Tab),
+            try ets:delete(Tab) catch _:_ -> ok end,
             ok
     end.
 
@@ -107,7 +107,7 @@ peer_send_envelope(Handle, Cbor, _Marker) when is_pid(Handle) ->
 setup() ->
     ensure_dist(),
     Tab = ets:new(macula_net_phase3_alicebob_dht_table, [set, public]),
-    catch unregister(?DHT_NAME),
+    try unregister(?DHT_NAME) catch _:_ -> ok end,
     DhtPid = spawn(fun() -> dht_loop(Tab) end),
     register(?DHT_NAME, DhtPid),
 
@@ -175,14 +175,14 @@ setup() ->
 
 cleanup(#{peer_h := PH, peer_n := PN, peer_a := PA, peer_b := PB,
           dht_pid := Dht}) ->
-    catch peer:stop(PH),
-    catch peer:stop(PN),
-    catch peer:stop(PA),
-    catch peer:stop(PB),
-    catch (Dht ! stop),
-    catch unregister(?DHT_NAME),
-    catch unregister(?SINK_ALICE),
-    catch unregister(?SINK_BOB),
+    try peer:stop(PH) catch _:_ -> ok end,
+    try peer:stop(PN) catch _:_ -> ok end,
+    try peer:stop(PA) catch _:_ -> ok end,
+    try peer:stop(PB) catch _:_ -> ok end,
+    try (Dht ! stop) catch _:_ -> ok end,
+    try unregister(?DHT_NAME) catch _:_ -> ok end,
+    try unregister(?SINK_ALICE) catch _:_ -> ok end,
+    try unregister(?SINK_BOB) catch _:_ -> ok end,
     flush(),
     ok.
 
@@ -334,14 +334,14 @@ safe_register(Name) ->
     %% process can only hold one registered name at a time, so drop
     %% the previous test's name before claiming this one.
     drop_my_existing_registration(),
-    catch unregister(Name),
+    try unregister(Name) catch _:_ -> ok end,
     flush(),
     true = register(Name, self()),
     ok.
 
 drop_my_existing_registration() ->
     case erlang:process_info(self(), registered_name) of
-        {registered_name, OldName} -> catch unregister(OldName), ok;
+        {registered_name, OldName} -> try unregister(OldName) catch _:_ -> ok end, ok;
         _                           -> ok
     end.
 

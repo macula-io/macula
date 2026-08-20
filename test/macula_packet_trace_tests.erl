@@ -118,7 +118,7 @@ install_capture() ->
     ok.
 
 uninstall_capture() ->
-    catch logger:remove_handler(?HANDLER),
+    try logger:remove_handler(?HANDLER) catch _:_ -> ok end,
     case persistent_term:get({?MODULE, old_primary}, undefined) of
         undefined -> ok;
         #{level := L} ->

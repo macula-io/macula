@@ -145,10 +145,10 @@ setup() ->
       host => Host, daemon => Daemon, sender => Sender}.
 
 cleanup(#{peer_h := PH, peer_d := PD}) ->
-    catch peer:stop(PH),
-    catch peer:stop(PD),
-    catch macula_net_transport_quic:stop(),
-    catch unregister(?SINK),
+    try peer:stop(PH) catch _:_ -> ok end,
+    try peer:stop(PD) catch _:_ -> ok end,
+    try macula_net_transport_quic:stop() catch _:_ -> ok end,
+    try unregister(?SINK) catch _:_ -> ok end,
     flush(),
     ok.
 
@@ -163,11 +163,11 @@ holder_loop() ->
 %% =============================================================================
 
 envelope_routes_to_daemon(#{daemon := Daemon} = _Ctx) ->
-    catch unregister(?SINK),
+    try unregister(?SINK) catch _:_ -> ok end,
     true = register(?SINK, self()),
 
     %% Sender's transport on the test node.
-    catch macula_net_transport_quic:stop(),
+    try macula_net_transport_quic:stop() catch _:_ -> ok end,
     {ok, _} = macula_net_transport_quic:start_link(
                 #{port => ?SENDER_PORT}),
     %% Sender doesn't expect inbound traffic; install a no-op handler

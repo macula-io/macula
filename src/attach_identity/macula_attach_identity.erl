@@ -83,7 +83,7 @@ attach(HostEndpoint, RealmPubkey, KeyPair, Opts) ->
 
 -spec detach(handle()) -> ok.
 detach(Handle) when is_pid(Handle) ->
-    catch gen_server:stop(Handle, normal, 5000),
+    try gen_server:stop(Handle, normal, 5000) catch _:_ -> ok end,
     ok.
 
 %% @doc Send a macula-net envelope over the attach stream.
@@ -167,7 +167,7 @@ handle_info(_Msg, State) ->
     {noreply, State}.
 
 terminate(_Reason, #state{station_id = SId}) ->
-    catch macula_net_transport_quic:disconnect(SId),
+    try macula_net_transport_quic:disconnect(SId) catch _:_ -> ok end,
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

@@ -79,7 +79,7 @@ setup_quic_mocks() ->
 
 do_setup_quic_mocks() ->
     %% Clean up any existing mocks first
-    catch meck:unload(macula_quic),
+    try meck:unload(macula_quic) catch _:_ -> ok end,
 
     %% Create new mock
     meck:new(macula_quic, [passthrough]),
@@ -120,7 +120,7 @@ do_setup_quic_mocks() ->
 cleanup_quic_mocks() ->
     case code:is_loaded(meck) of
         {file, _} ->
-            catch meck:unload(macula_quic),
+            try meck:unload(macula_quic) catch _:_ -> ok end,
             ok;
         false ->
             ok

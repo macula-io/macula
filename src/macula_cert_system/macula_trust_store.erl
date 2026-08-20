@@ -244,7 +244,8 @@ handle_file_read({error, _}) ->
     ok;
 %% @private File read succeeded - decode entries
 handle_file_read({ok, Binary}) ->
-    insert_decoded_entries(catch binary_to_term(Binary, [safe])).
+    insert_decoded_entries(
+        try binary_to_term(Binary, [safe]) catch _:Reason -> {'EXIT', Reason} end).
 
 %% @private Decoding failed
 insert_decoded_entries({'EXIT', _}) ->

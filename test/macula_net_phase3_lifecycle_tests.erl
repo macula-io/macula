@@ -44,15 +44,15 @@ lifecycle_test_() ->
 %% =============================================================================
 
 start_dht() ->
-    catch unregister(?DHT),
+    try unregister(?DHT) catch _:_ -> ok end,
     Tab = ets:new(?DHT, [set, public]),
     Pid = spawn(fun() -> dht_loop(Tab) end),
     register(?DHT, Pid),
     Pid.
 
 stop_dht(Pid) ->
-    catch (Pid ! stop),
-    catch unregister(?DHT),
+    try (Pid ! stop) catch _:_ -> ok end,
+    try unregister(?DHT) catch _:_ -> ok end,
     ok.
 
 dht_loop(Tab) ->
@@ -69,7 +69,7 @@ dht_loop(Tab) ->
             From ! {find_reply, Reply},
             dht_loop(Tab);
         stop ->
-            catch ets:delete(Tab),
+            try ets:delete(Tab) catch _:_ -> ok end,
             ok
     end.
 
@@ -102,7 +102,7 @@ start_host(Host) ->
     ok.
 
 stop_host() ->
-    catch macula_host_identity:stop(),
+    try macula_host_identity:stop() catch _:_ -> ok end,
     case ets:info(macula_host_identity_table) of
         undefined -> ok;
         _         -> ets:delete(macula_host_identity_table)

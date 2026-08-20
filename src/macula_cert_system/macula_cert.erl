@@ -265,7 +265,8 @@ encode(Cert) ->
 %% @doc Decode certificate from binary format
 -spec decode(Binary :: binary()) -> {ok, macula_cert()} | {error, term()}.
 decode(Binary) ->
-    handle_binary_decode(catch binary_to_term(Binary, [safe])).
+    handle_binary_decode(
+        try binary_to_term(Binary, [safe]) catch _:Reason -> {'EXIT', Reason} end).
 
 %% @private Handle binary decode result
 handle_binary_decode({'EXIT', _}) ->
@@ -295,7 +296,8 @@ to_map(#macula_cert{} = Cert) ->
 %% @doc Convert map to certificate record
 -spec from_map(Map :: map()) -> {ok, macula_cert()} | {error, term()}.
 from_map(Map) when is_map(Map) ->
-    build_cert_from_map(catch build_cert_record(Map));
+    build_cert_from_map(
+        try build_cert_record(Map) catch _:Reason -> {'EXIT', Reason} end);
 from_map(_) ->
     {error, invalid_map}.
 

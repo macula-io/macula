@@ -74,7 +74,7 @@ ranking_test_() ->
     {setup,
      fun() ->
          %% Stop if already running from a previous test
-         catch gen_server:stop(macula_relay_discovery),
+         try gen_server:stop(macula_relay_discovery) catch _:_ -> ok end,
          timer:sleep(50),
          {ok, Pid} = macula_relay_discovery:start_link(#{
              seeds => [], lat => 50.8503, lng => 4.3517
@@ -86,7 +86,7 @@ ranking_test_() ->
          insert_test_relay(<<"relay-gb-london.macula.io">>, 51.5074, -0.1278, online),
          Pid
      end,
-     fun(Pid) -> catch gen_server:stop(Pid) end,
+     fun(Pid) -> try gen_server:stop(Pid) catch _:_ -> ok end end,
      fun(_) -> [
         {"ranked by distance: Paris < London < Berlin", fun() ->
             Ranked = macula_relay_discovery:ranked_relays(),

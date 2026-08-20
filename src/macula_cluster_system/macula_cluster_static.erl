@@ -282,7 +282,7 @@ terminate(_Reason, State) ->
     %% Cancel reconnect timer
     cancel_timer(State#state.reconnect_timer),
     %% Unsubscribe from node events
-    catch net_kernel:monitor_nodes(false),
+    try net_kernel:monitor_nodes(false) catch _:_ -> ok end,
     ok.
 
 %%%===================================================================
@@ -392,5 +392,5 @@ notify_callback(Pid, Event, Node) when is_pid(Pid) ->
     Pid ! {macula_cluster, Event, Node},
     ok;
 notify_callback({Module, Function}, Event, Node) ->
-    _ = catch Module:Function(Event, Node),
+    _ = (try Module:Function(Event, Node) catch _:_ -> ok end),
     ok.

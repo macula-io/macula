@@ -296,7 +296,7 @@ handle_info(_Info, State) ->
 %% @private
 terminate(_Reason, State) ->
     cancel_timer(State#state.broadcast_timer),
-    catch net_kernel:monitor_nodes(false),
+    try net_kernel:monitor_nodes(false) catch _:_ -> ok end,
     close_socket(State#state.socket),
     ok.
 
@@ -499,7 +499,8 @@ parse_port_from_env(false) ->
 parse_port_from_env("") ->
     ?DEFAULT_PORT;
 parse_port_from_env(PortStr) ->
-    handle_port_int_parse(catch list_to_integer(PortStr)).
+    handle_port_int_parse(
+        try list_to_integer(PortStr) catch _:Reason -> {'EXIT', Reason} end).
 
 %% @private Handle port parse result
 handle_port_int_parse({'EXIT', _}) ->
@@ -555,5 +556,5 @@ notify_callback(Pid, Event, Node) when is_pid(Pid) ->
     Pid ! {macula_cluster, Event, Node},
     ok;
 notify_callback({Module, Function}, Event, Node) ->
-    _ = catch Module:Function(Event, Node),
+    _ = (try Module:Function(Event, Node) catch _:_ -> ok end),
     ok.

@@ -126,7 +126,7 @@ start(#{realm_pubkey    := Realm,
 %% @doc Bring everything down.
 -spec stop() -> ok.
 stop() ->
-    catch macula_net_transport_quic:stop(),
+    try macula_net_transport_quic:stop() catch _:_ -> ok end,
     persistent_term:erase(?OWN_ADDR),
     ok.
 

@@ -65,8 +65,8 @@ setup() ->
     #{peer => PeerPid, peer_node => PeerNode, holder => Holder}.
 
 cleanup(#{peer := PeerPid}) ->
-    catch macula_net_transport_quic:stop(),
-    catch peer:stop(PeerPid),
+    try macula_net_transport_quic:stop() catch _:_ -> ok end,
+    try peer:stop(PeerPid) catch _:_ -> ok end,
     ok.
 
 holder_loop() ->
@@ -83,7 +83,7 @@ run_envelope_roundtrip(#{peer_node := PeerNode}) ->
     fun() ->
         %% Register the test body pid as the envelope sink so the peer's
         %% handler can deliver via `{Name, Node} ! Msg`.
-        catch unregister(?ENVELOPE_SINK),
+        try unregister(?ENVELOPE_SINK) catch _:_ -> ok end,
         true = register(?ENVELOPE_SINK, self()),
 
         %% First sanity-check: can we receive a message at all from the

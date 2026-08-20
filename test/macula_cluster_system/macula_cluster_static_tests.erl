@@ -23,13 +23,13 @@
 
 setup() ->
     %% Ensure no previous instance is running
-    catch macula_cluster_static:stop(),
+    try macula_cluster_static:stop() catch _:_ -> ok end,
     %% Clean environment
     os:unsetenv("CLUSTER_NODES"),
     ok.
 
 cleanup(_) ->
-    catch macula_cluster_static:stop(),
+    try macula_cluster_static:stop() catch _:_ -> ok end,
     os:unsetenv("CLUSTER_NODES"),
     ok.
 
@@ -218,8 +218,8 @@ macula_cluster_is_clustered_exports_test() ->
 
 macula_cluster_is_clustered_false_initially_test() ->
     %% Stop any running strategies first
-    catch macula_cluster_static:stop(),
-    catch macula_cluster_strategy:stop(macula_cluster),
+    try macula_cluster_static:stop() catch _:_ -> ok end,
+    try macula_cluster_strategy:stop(macula_cluster) catch _:_ -> ok end,
     timer:sleep(100),
     ?assertEqual(false, macula_cluster:is_clustered()).
 

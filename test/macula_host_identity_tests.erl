@@ -28,8 +28,8 @@ setup() ->
     #{host => Host}.
 
 cleanup(_) ->
-    catch macula_host_identity:stop(),
-    catch unregister(?SINK),
+    try macula_host_identity:stop() catch _:_ -> ok end,
+    try unregister(?SINK) catch _:_ -> ok end,
     flush(),
     case ets:info(macula_host_identity_table) of
         undefined -> ok;
@@ -40,7 +40,7 @@ flush() ->
     receive _ -> flush() after 0 -> ok end.
 
 register_sink_fn() ->
-    catch unregister(?SINK),
+    try unregister(?SINK) catch _:_ -> ok end,
     true = register(?SINK, self()),
     fun(R) -> ?SINK ! {put, R}, ok end.
 

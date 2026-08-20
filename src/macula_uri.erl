@@ -64,7 +64,9 @@ parse_path(_) ->
 
 %% @private Convert hex to node ID (external URIs may have invalid hex)
 convert_node_id(NodeIdHex, Realm) ->
-    handle_hex_conversion(catch macula_id:from_hex(NodeIdHex), Realm).
+    handle_hex_conversion(
+        try macula_id:from_hex(NodeIdHex) catch _:Reason -> {'EXIT', Reason} end,
+        Realm).
 
 %% @private Handle hex conversion result
 handle_hex_conversion({'EXIT', _}, _Realm) ->

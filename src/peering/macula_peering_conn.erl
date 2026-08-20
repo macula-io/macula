@@ -592,7 +592,7 @@ ensure_signed(Frame, Id) -> macula_frame:sign(Frame, Id).
 close_quic(#data{quic_conn = undefined}) ->
     ok;
 close_quic(#data{quic_conn = Conn}) ->
-    catch macula_quic:close_connection(Conn),
+    try macula_quic:close_connection(Conn) catch _:_ -> ok end,
     ok.
 
 %%------------------------------------------------------------------

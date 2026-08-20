@@ -14,14 +14,14 @@ setup() ->
     ok.
 
 cleanup(_) ->
-    catch unregister(?SINK),
+    try unregister(?SINK) catch _:_ -> ok end,
     flush().
 
 flush() ->
     receive _ -> flush() after 0 -> ok end.
 
 register_sink() ->
-    catch unregister(?SINK),
+    try unregister(?SINK) catch _:_ -> ok end,
     true = register(?SINK, self()),
     ok.
 

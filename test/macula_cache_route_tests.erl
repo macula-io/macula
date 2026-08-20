@@ -33,7 +33,7 @@ cache_route_test_() ->
     ]}.
 
 cleanup() ->
-    catch macula_cache_route:stop(),
+    try macula_cache_route:stop() catch _:_ -> ok end,
     case ets:info(macula_cache_route_table) of
         undefined -> ok;
         _ -> ets:delete(macula_cache_route_table)

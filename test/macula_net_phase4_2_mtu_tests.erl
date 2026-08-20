@@ -152,9 +152,9 @@ setup_loopback_pair() ->
         error(no_server_conn)
     end,
     Cleanup = fun() ->
-        catch macula_quic:close_connection(ClientConn),
-        catch macula_quic:close_connection(ServerConn),
-        catch macula_quic:close_listener(Listener),
+        try macula_quic:close_connection(ClientConn) catch _:_ -> ok end,
+        try macula_quic:close_connection(ServerConn) catch _:_ -> ok end,
+        try macula_quic:close_listener(Listener) catch _:_ -> ok end,
         file:delete(Cert),
         file:delete(Key),
         Self ! cleaned,

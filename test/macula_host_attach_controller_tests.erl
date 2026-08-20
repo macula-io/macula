@@ -38,8 +38,8 @@ setup() ->
     #{host => Host}.
 
 cleanup(_) ->
-    catch macula_host_attach_controller:stop(),
-    catch unregister(?SINK),
+    try macula_host_attach_controller:stop() catch _:_ -> ok end,
+    try unregister(?SINK) catch _:_ -> ok end,
     drop_lookup_table(ets:info(?LOOKUP_TABLE)),
     flush().
 
@@ -67,7 +67,7 @@ flush() ->
     receive _ -> flush() after 0 -> ok end.
 
 start_controller(#{host := #{pk := HPk}}) ->
-    catch unregister(?SINK),
+    try unregister(?SINK) catch _:_ -> ok end,
     true = register(?SINK, self()),
     AttachSendFn = fun(StreamRef, Frame) ->
                        ?SINK ! {sent, StreamRef, Frame}, ok
@@ -235,7 +235,7 @@ data_for_unhosted_dst_falls_through_when_no_forward_fn(#{host := Host} = _Ctx) -
         %% Bring up a controller WITHOUT forward_fn — Phase 3.5
         %% behaviour. Non-hosted-non-local data must drop into
         %% fallback_fn since nothing else can route it.
-        catch unregister(?SINK),
+        try unregister(?SINK) catch _:_ -> ok end,
         true = register(?SINK, self()),
         ensure_lookup_table(),
         AttachSendFn = fun(_S, _F) -> ok end,

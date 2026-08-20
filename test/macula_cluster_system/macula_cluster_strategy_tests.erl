@@ -28,11 +28,11 @@ setup() ->
 
 cleanup({DiscoveryPid, StrategyPid}) ->
     %% Stop strategy first
-    catch gen_server:stop(StrategyPid),
+    try gen_server:stop(StrategyPid) catch _:_ -> ok end,
     %% Then discovery
-    catch gen_server:stop(DiscoveryPid),
+    try gen_server:stop(DiscoveryPid) catch _:_ -> ok end,
     %% Clean up ETS
-    catch ets:delete(macula_dist_discovery_cache),
+    try ets:delete(macula_dist_discovery_cache) catch _:_ -> ok end,
     ok.
 
 %%%===================================================================
@@ -92,6 +92,6 @@ start_link_test_() ->
             %% Cleanup
             ok = macula_cluster_strategy:stop(Pid),
             gen_server:stop(DiscoveryPid),
-            catch ets:delete(macula_dist_discovery_cache)
+            try ets:delete(macula_dist_discovery_cache) catch _:_ -> ok end
         end)
     ]}.

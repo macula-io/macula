@@ -171,9 +171,9 @@ terminate(_Reason, #state{bridge_sock = BridgeSock, tunnel_id = TunnelId,
                            pool = Pool, sub_ref = SubRef,
                            pool_mon = MonRef}) ->
     ?LOG_INFO("[dist_bridge] Cleaning up tunnel ~s", [TunnelId]),
-    catch demonitor_if_set(MonRef),
-    catch unsubscribe_if_set(Pool, SubRef),
-    catch gen_tcp:close(BridgeSock),
+    try demonitor_if_set(MonRef) catch _:_ -> ok end,
+    try unsubscribe_if_set(Pool, SubRef) catch _:_ -> ok end,
+    try gen_tcp:close(BridgeSock) catch _:_ -> ok end,
     remove_metrics(TunnelId),
     ok.
 
@@ -198,7 +198,7 @@ on_reacquire_pool(NewPool, RecvTopic, TunnelId, _N, State) ->
     ?LOG_INFO("[dist_bridge] Re-acquired mesh pool for ~s", [TunnelId]),
     MonRef = erlang:monitor(process, NewPool),
     {ok, SubRef} = subscribe_to_tunnel(NewPool, RecvTopic),
-    catch exit(State#state.reader_pid, kill),
+    try exit(State#state.reader_pid, kill) catch _:_ -> ok end,
     NewReader = start_reader(NewPool, State#state.bridge_sock,
                               State#state.send_topic, TunnelId,
                               State#state.key, State#state.metrics),
