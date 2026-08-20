@@ -31,10 +31,10 @@ Macula SDK is an Erlang/OTP client library for connecting to a **federated relay
 | [Connecting](guides/CONNECTING_GUIDE.md) | Pool model, seeds, identity, replication, lifecycle |
 | [PubSub](guides/PUBSUB_GUIDE.md) | Topic-based messaging through the relay mesh |
 | [Topic Naming](guides/TOPIC_NAMING_GUIDE.md) | Canonical 5-segment topic shape |
-| [RPC](guides/RPC_GUIDE.md) | Request/response, direct-dial via `call_station/6` |
-| [Content](guides/CONTENT_GUIDE.md) | Content-addressed blobs (MCID), single-block or chunked |
+| [RPC](guides/RPC_GUIDE.md) | Request/response; direct-dial via `call_station/6,7` or the supervised `start_link_direct`/`advertise_direct` |
+| [Content](guides/CONTENT_GUIDE.md) | Content-addressed blobs (MCID), single-block or chunked; direct-dial fetch/seed |
 | [Records](guides/RECORDS_GUIDE.md) | Signed, TTL'd facts in the DHT — your own record types |
-| [Streaming](guides/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi) |
+| [Streaming](guides/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi); direct-dial via `call_stream_station/6` |
 | [Distribution Over Mesh](guides/DIST_OVER_MESH_GUIDE.md) | Erlang distribution tunneled through relays |
 | [Clustering](guides/CLUSTERING_GUIDE.md) | LAN cluster formation via gossip |
 | [Authorization](guides/AUTHORIZATION_GUIDE.md) | DID identities and UCAN capability tokens |

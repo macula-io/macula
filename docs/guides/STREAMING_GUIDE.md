@@ -36,7 +36,11 @@ Two ways to open one, mirroring unary RPC:
                                           Args, #{}).
 ```
 
-`Opts` may set `dial_timeout_ms` (default 10_000) for the dial + handshake.
+`Opts` may set `dial_timeout_ms` (default 10_000) for the dial + handshake,
+plus the same per-call TLS trust override as `call_station/8`: `verify`,
+`expected_node_id`, `pin_tls_cert` (see the [RPC Guide](RPC_GUIDE.md)) — a
+fresh dial from `call_stream_station/6` had no way to set these at all
+before macula 9.8.0.
 
 There are three modes:
 
@@ -195,6 +199,35 @@ handle_close(_Reason, _Lines) -> ok.
                                           <<"logs.tail">>, []).
 ```
 
+### Direct-dial: `advertise_direct` / `start_link_direct`
+
+The direct-dial counterparts — resolve the procedure's
+`procedure_advertisement` from the DHT and dial the serving station in one
+hop, instead of routing through the pool's existing links. A
+`procedure_advertisement` does not distinguish RPC from streaming, so this
+is the exact same resolve-and-trust mechanism as [RPC direct-dial](RPC_GUIDE.md) —
+see that guide for the full trust-model writeup.
+
+Provider — `advertise_direct/6,7` does everything `advertise/5,6` does, and
+additionally publishes the discoverable record:
+
+```erlang
+Identity = macula_identity:generate(),
+{ok, _Sup} = macula_streamer:advertise_direct(Pool, Realm, <<"logs.tail">>,
+                                              log_tailer_provider, self(),
+                                              Identity).
+```
+
+Consumer — `start_link_direct/5,6` resolves and dials in one hop:
+
+```erlang
+{ok, Pid} = macula_stream_sink:start_link_direct(log_tailer, Pool, Realm,
+                                                 <<"logs.tail">>, []).
+```
+
+Requires the provider to have advertised via `advertise_direct/6,7`, not
+plain `advertise/5,6` — a plain advertise publishes no discoverable record.
+
 ---
 
 ## Content streaming
@@ -233,7 +266,9 @@ They are for unit tests and same-node dispatch. The pool forms
 | `advertise_stream(Pool, Realm, Proc, Mode, Handler)` | provider: serve a streaming procedure |
 | `unadvertise_stream(Pool, Realm, Proc)` | provider: stop serving it |
 | `macula_streamer:advertise/5,6` | provider: supervised, `streaming.*_v1`-announcing wrapper |
+| `macula_streamer:advertise_direct/6,7` | provider: as above, and publishes a `procedure_advertisement` for direct-dial |
 | `macula_stream_sink:start_link/5,6` | consumer: supervised, `streaming.*_v1`-announcing wrapper |
+| `macula_stream_sink:start_link_direct/5,6` | consumer: **direct-dial** — resolve the provider and dial in one hop |
 | `send(Stream, Bin)` / `send(Stream, Body, Enc)` | send a chunk (`Enc` = `raw` \| `msgpack`) |
 | `recv(Stream)` / `recv(Stream, Timeout)` | read the next `{chunk,_}` / `{data,_}` / `eof` |
 | `close_send(Stream)` | half-close your send direction |

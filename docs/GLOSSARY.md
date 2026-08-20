@@ -34,10 +34,13 @@ Topic-based event distribution. Publishers send events to topics; all subscriber
 Request/response pattern. Providers advertise procedures; consumers call them. The relay mesh handles discovery via Kademlia DHT. Calls return `{ok, Result}` or `{error, Reason}`.
 
 ### Procedure
-A named RPC endpoint (e.g., `math.add`, `weather.get_current`). Registered via `macula:advertise/5`, invoked via `macula:call/5`.
+A named RPC endpoint (e.g., `math.add`, `weather.get_current`). Registered via `macula:advertise/5`, invoked via `macula:call/5` (any of the caller's own connected stations) or `macula:call_station/6,7` (**direct-dial** — a specific, resolved station, one hop; see below).
 
 ### Topic
 A named pub/sub channel (e.g., `orders.placed`). Subscribed via `macula:subscribe/5`, published via `macula:publish/5`.
+
+### Direct-Dial
+Resolving a specific provider's station from a signed DHT record (`procedure_advertisement` for RPC/streaming, `content_announcement` for content) and dialing it directly in one hop, instead of relying on advertise-gossip having propagated a route between arbitrary stations. Available for all four supervised primitive pairs — `macula_request`/`macula_response`, `macula_stream_sink`/`macula_streamer`, `macula_download`/`macula_feeder` — via each pair's `start_link_direct`/`advertise_direct`. Trust is enforced at the application layer, not by pinning the TLS connection: a production station's certificate is terminated by an unrelated PKI (e.g. Let's Encrypt) and cannot be pinned, so the CONNECT/HELLO handshake's own signature check does the real work instead. See the [RPC Guide](guides/RPC_GUIDE.md).
 
 ---
 

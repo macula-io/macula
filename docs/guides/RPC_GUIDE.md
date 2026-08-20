@@ -91,44 +91,81 @@ instead.
 -spec call_station(pool(), seed(), realm(), procedure(), term(), timeout_ms()) ->
     {ok, term()} | {error, term()}.
 -spec call_station(pool(), seed(), realm(), procedure(), term(), timeout_ms(), opts()) ->
-    {ok, term()} | {error, term()}.  %% opts: #{ucan_token => Token}
+    {ok, term()} | {error, term()}.
+%% opts: #{ucan_token => Token,
+%%         verify => webpki | none,     %% TLS trust for a fresh dial
+%%         expected_node_id => Pubkey,  %% pin app-layer identity to this key
+%%         pin_tls_cert => boolean()}   %% also pin the TLS cert itself (default true)
 ```
 
 `call_station/6` dials a specific station URL directly — reusing an existing
 link or opening and monitoring a new one, waiting for the handshake, then
 calling through it. One hop, no dependency on your pool's own seed set. Use
-it once you've resolved *which* station serves the procedure:
+it when you already know *which* station's URL to dial.
+
+**Recommended: let `macula_request` / `macula_response` resolve it for
+you.** Knowing a procedure's URL up front is the exception — normally you
+know the *procedure*, not which station serves it.
+`macula_request:start_link_direct/6,7,8` and
+`macula_response:advertise_direct/6,7` (see
+[Supervised wrappers](#supervised-wrappers-macula_response--macula_request)
+below) do the resolve, verify, and dial for you, with the right trust model
+already wired in — most callers should reach for those, not the raw steps
+below.
+
+### What resolution does, if you need it raw
+
+Building something outside the supervised wrappers (custom retry logic,
+observability, an SDK for another language)? This is the sequence
+`macula_request:start_link_direct` runs internally:
+
+1. Find every `procedure_advertisement` for `Procedure` in the DHT, and keep
+   only the ones whose signature verifies — an unsigned or badly-signed
+   record is never trusted, however plausible its `serving_station` claim
+   looks.
+2. Read the first trusted advertisement's `serving_station`, then resolve
+   *that* station's own `station_endpoint` record — verified, and its
+   signer checked to be exactly the station it claims (not just anyone).
+3. Dial the resolved `quic://[Host]:Port` (note the brackets — required for
+   the IPv6 hosts most stations advertise) with the TLS certificate itself
+   **unpinned** (`pin_tls_cert => false`): a production station's TLS is
+   terminated by an unrelated PKI (Let's Encrypt), so pinning the cert's
+   own key can never succeed there. Trust instead rests on the
+   application-layer CONNECT/HELLO handshake, which independently,
+   cryptographically proves the peer holds the private key for the exact
+   pubkey step 2 resolved — real trust, just enforced above the TLS layer
+   rather than at it.
 
 ```erlang
-%% 1. Resolve the procedure_advertisement from the DHT.
-Key = macula_record:procedure_key(Procedure),
-{ok, Records} = macula:find_records(Pool, Key),
+{ok, Records} = macula:find_records(Pool, macula_record:procedure_key(Procedure)),
+[Advertisement | _] = [R || R <- Records, {ok, _} =:= macula_record:verify(R)],
+#{serving_station := Station} = macula_record:read_procedure_advertisement(Advertisement),
 
-%% 2. Read it, optionally verifying the provider's cert chain to the realm
-%%    CA first -- drops advertisements from a squatter who doesn't chain.
-[Advertisement | _] = Records,
-#{serving_station := StationNodeId} = macula_record:read_procedure_advertisement(Advertisement),
-ok = macula_record:verify_advertisement_cert_chain(RealmCaPem, Advertisement, ExpectedOrg),
-
-%% 3. Resolve that station's dialable endpoint.
-EndpointKey = macula_record:station_endpoint_key(StationNodeId),
-{ok, EndpointRecord} = macula:find_record(Pool, EndpointKey),
+{ok, EndpointRecord} = macula:find_record(Pool, macula_record:station_endpoint_key(Station)),
+#{key := Station} = EndpointRecord,          %% signer must be the station itself
+{ok, _} = macula_record:verify(EndpointRecord),
 #{quic_port := Port, host_advertised := [Host | _]} =
     macula_record:read_station_endpoint(EndpointRecord),
-StationUrl = <<"quic://", Host/binary, ":", (integer_to_binary(Port))/binary>>,
+StationUrl = <<"quic://[", Host/binary, "]:", (integer_to_binary(Port))/binary>>,
 
-%% 4. Dial it directly.
-{ok, Result} = macula:call_station(Pool, StationUrl, Realm, Procedure, Payload, 5_000).
+{ok, Result} = macula:call_station(Pool, StationUrl, Realm, Procedure, Payload, 5_000,
+                                   #{expected_node_id => Station,
+                                     pin_tls_cert => false, verify => none}).
 ```
 
-This is the same resolve done for [content](CONTENT_GUIDE.md)'s
-`find_content_providers/2` and [streaming](STREAMING_GUIDE.md)'s
-`call_stream_station/6` — one shape, three call sites. A squatter's
-advertisement — signed, but whose cert doesn't chain to the realm CA — is
-dropped by step 2 and never dialed.
+A fourth, **opt-in** check exists for managed realms: pass
+`verify_cert_chain => {RealmCaPem, Org}` to
+`macula_request:start_link_direct/8` (or `cert_chain => ChainPem` to
+`macula_response:advertise_direct/7` on the provider side) to additionally
+require the advertisement's embedded X.509 service-cert chain to verify to
+the realm CA — proving the *advertiser*, not just the station it names, is
+an org/realm-authorized identity. Unmanaged realms have no realm CA to check
+against, so this stays opt-in rather than mandatory.
 
-`call_station/7`'s `Opts` map takes `ucan_token` to present a capability
-token to a gated (`{ucan_required, _}`) procedure.
+This is the same resolve shape used by [content](CONTENT_GUIDE.md)'s
+`get_content_station/4,5` and [streaming](STREAMING_GUIDE.md)'s
+`macula_stream_sink:start_link_direct/5,6` — one mechanism, reused across
+every primitive pair.
 
 ---
 
@@ -238,6 +275,40 @@ Embed `macula_request_sup` (a `simple_one_for_one` factory) in your own
 supervision tree if you want to enumerate or cancel in-flight requests via
 `supervisor:which_children/1` / `terminate_child/2` — that is what backs a
 `cancel_*` RPC command in an application built on top of the SDK.
+
+### Direct-dial: `start_link_direct` / `advertise_direct`
+
+The direct-dial counterparts to `start_link/6,7` and `advertise/5,6` above —
+same callback modules, same behaviour, but resolving and dialing the
+provider's station directly instead of routing through the pool's existing
+links. See [Direct-dial](#direct-dial-call_station-6-7) above for the trust
+model.
+
+Provider — `advertise_direct/6,7` does everything `advertise/5,6` does, and
+additionally publishes a signed `procedure_advertisement` naming this pool's
+connected station as the server, so a direct-dial consumer can find it:
+
+```erlang
+Identity = macula_identity:generate(),  %% reuse the same one across re-advertises
+{ok, _Sup} = macula_response:advertise_direct(Pool, Realm, Procedure,
+                                              math_service, [], Identity).
+```
+
+Consumer — `start_link_direct/6,7,8` resolves the advertisement, resolves
+and verifies the serving station's endpoint, and dials it in one hop:
+
+```erlang
+{ok, Pid} = macula_request:start_link_direct(add_caller, Pool, Realm, Procedure,
+                                             #{<<"a">> => 2, <<"b">> => 3},
+                                             5_000, self()).
+```
+
+Resolve failures are distinguishable from call failures:
+`{error, {unresolved, Reason}}` means nobody has advertised the procedure via
+direct-dial yet (or the DHT record hasn't replicated to your station), not
+that the call itself failed. Requires the provider to have advertised via
+`advertise_direct/6,7`, not plain `advertise/5,6` — a plain advertise
+publishes no discoverable record.
 
 ---
 

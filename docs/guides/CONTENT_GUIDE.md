@@ -6,8 +6,10 @@
 
 > **Audience:** applications that store and fetch immutable blobs — files,
 > snapshots, artifacts — and want integrity for free. Single-block storage
-> since SDK 4.2.7; chunked content, discovery, and direct-host fetch since
-> 8.10.0. For a live, open-ended feed instead of a fixed blob, see the
+> since SDK 4.2.7; chunked content and discovery since 8.10.0; direct-dial
+> fetch and seed (`get_content_station`/`put_content_station`,
+> `macula_download`/`macula_feeder`'s `start_link_direct`) since 9.6.0/9.7.0.
+> For a live, open-ended feed instead of a fixed blob, see the
 > [Streaming Guide](STREAMING_GUIDE.md).
 
 ---
@@ -97,6 +99,28 @@ in place of `handle_downloaded/2`). Embed `macula_feeder_sup` /
 supervision tree to enumerate or cancel in-flight transfers via
 `supervisor:which_children/1` / `terminate_child/2`.
 
+### Direct-dial: `start_link_direct`
+
+`macula_download:start_link_direct/4,5` resolves a chunked MCID's provider
+from its `content_announcement` and dials that station directly — no change
+needed on the `macula_feeder` side, since `content_announcement` is
+published automatically (see Discovery below). `macula_feeder:start_link_direct/5,6`
+is the put-side counterpart: a PUT has no discovery step, so it takes the
+target `Station` (a pubkey) directly instead of resolving one — deliberately
+seeding that specific station rather than whichever the pool would pick.
+
+```erlang
+{ok, Pid} = macula_download:start_link_direct(doc_download, Pool, Realm,
+                                              Mcid, self()),
+
+{ok, FeedPid} = macula_feeder:start_link_direct(doc_feeder, Pool, StationPubkey,
+                                                Realm, Bytes, self()).
+```
+
+Only chunked content is discoverable this way — a single-block put is never
+announced (see Discovery below), so `start_link_direct` has nothing to
+resolve for one.
+
 ---
 
 ## Single block vs. chunked
@@ -152,9 +176,11 @@ host currently announcing an MCID:
 %%    name := ..., size := ..., chunk_count := ...}, ...]
 ```
 
-Each entry's record signature is verified before its `endpoint` is trusted;
-unverifiable or malformed records are dropped silently, never surfaced as an
-error. **Single-block content is not announced** (there is no manifest-stored
+Each entry's record signature is verified, AND its signer checked to be
+exactly the `announcer_node` it claims — not just any valid signature —
+before its `endpoint` is trusted; unverifiable, signer-mismatched, or
+malformed records are dropped silently, never surfaced as an error.
+**Single-block content is not announced** (there is no manifest-stored
 event to trigger it) — resolving its MCID returns `{ok, []}`, not an error.
 
 ### Dialing a specific host directly
@@ -162,15 +188,46 @@ event to trigger it) — resolving its MCID returns `{ok, []}`, not an error.
 `get_content/2` already reaches a copy via the connected station's own 1-hop
 peer relay — for most topologies that is enough. When it is not (a
 partial-mesh pair with no mutual peer, or you want to route around a specific
-host deliberately), dial an announced host **directly**, the same way
-[direct-dial RPC](RPC_GUIDE.md) reaches a specific provider — `call_station/6`
-is procedure-agnostic, so no new primitive is needed:
+host deliberately), dial an announced host **directly** with
+`get_content_station/4,5` — the content-transfer counterpart to
+[direct-dial RPC](RPC_GUIDE.md)'s `call_station/6,7`:
 
 ```erlang
-{ok, [#{endpoint := Url} | _]} = macula:find_content_providers(Pool, MCID),
-{ok, Manifest} = macula:call_station(Pool, Url, <<0:256>>,
-                                     <<"_content.get_manifest">>,
-                                     #{mcid => MCID}, 5_000).
+{ok, [#{announcer_node := Node, endpoint := Url} | _]} =
+    macula:find_content_providers(Pool, MCID),
+{ok, Bytes} = macula:get_content_station(Pool, Url, MCID, 30_000,
+                                         #{expected_node_id => Node,
+                                           pin_tls_cert => false,
+                                           verify => none}).
+```
+
+Or resolve and fetch in one call with `macula_direct_dial:get_content/3`,
+which does exactly the above — retrying past DHT propagation lag the same
+way `find_content_providers/2` returning an empty list means "not yet
+replicated," not "doesn't exist":
+
+```erlang
+{ok, Bytes} = macula_direct_dial:get_content(Pool, MCID, 30_000).
+```
+
+`pin_tls_cert => false` matters against a real production station: its TLS
+is terminated by an unrelated PKI (Let's Encrypt), so pinning the cert's own
+key can never succeed there — trust instead rests on the application-layer
+CONNECT/HELLO handshake (see the [RPC Guide](RPC_GUIDE.md) for the full
+mechanism). Unlike RPC, content direct-dial has **no cert-chain-equivalent
+opt-in**: content is content-addressed and independently re-hashed
+client-side regardless of which peer serves it, so a rogue or unauthorized
+announcer can at most refuse to serve or waste a dial — never make a caller
+accept content that doesn't hash to the MCID it asked for.
+
+Seeding a specific station directly — the put-side counterpart, with no
+discovery step since you already know which station you're choosing — uses
+`put_content_station/4,5` or `macula_direct_dial:put_content/4`, resolving
+`Station`'s own `station_endpoint` the same way RPC resolves a
+`serving_station`:
+
+```erlang
+{ok, MCID} = macula_direct_dial:put_content(Pool, StationPubkey, Bytes, 30_000).
 ```
 
 Guarantees reach in one hop regardless of the connected station's relay hop
@@ -197,12 +254,18 @@ known in advance.
 | Function | Role |
 |---|---|
 | `put_content(Pool, Bytes)` | store a blob (single-block or chunked, by size), return its MCID |
-| `get_content(Pool, MCID)` | fetch the bytes for an MCID (`{error, not_found}` if none reachable) |
-| `find_content_providers(Pool, MCID)` | resolve every host currently announcing an MCID |
+| `get_content(Pool, MCID)` | fetch the bytes for an MCID (`{error, not_found}` if none reachable); single-block bytes are re-verified against the MCID's BLAKE3 hash client-side |
+| `get_content_station(Pool, Station, MCID, TimeoutMs, Opts)` | **direct-dial**: fetch from a specific, already-resolved station |
+| `put_content_station(Pool, Station, Bytes, TimeoutMs, Opts)` | **direct-dial**: seed a specific station directly |
+| `find_content_providers(Pool, MCID)` | resolve every host currently announcing an MCID (signature- and signer-verified) |
+| `macula_direct_dial:get_content(Pool, MCID, TimeoutMs)` | **direct-dial**: resolve a provider and fetch, in one call |
+| `macula_direct_dial:put_content(Pool, Station, Bytes, TimeoutMs)` | **direct-dial**: resolve `Station`'s endpoint and put, in one call |
 | `macula_manifest:default_chunk_size()` | the single-block / chunked threshold (256 KiB) |
 | `macula_blake3_nif:hash(Bytes)` | the BLAKE3 hash a single-block MCID wraps |
 | `macula_feeder:start_link/4,5` | supervised, `sharing.put_*_v1`-announcing wrapper around `put_content/2` |
+| `macula_feeder:start_link_direct/5,6` | **direct-dial** supervised wrapper — names its own target `Station` |
 | `macula_download:start_link/4,5` | supervised, `sharing.get_*_v1`-announcing wrapper around `get_content/2` |
+| `macula_download:start_link_direct/4,5` | **direct-dial** supervised wrapper — resolves the provider automatically |
 
 `_content.*` CALLs retry on a BOLT#4-retryable error (e.g.
 `temporary_relay_failure`) up to 3 attempts with a short backoff, per that

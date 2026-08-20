@@ -7,37 +7,58 @@
 
 # Macula SDK Roadmap
 
-> **Last Updated:** 2026-04-09
-> **Current Version:** v1.0.0
-> **Status:** SDK/Relay split complete. 48-module client SDK published to hex.pm.
+> **See [CHANGELOG.md](../CHANGELOG.md) for the authoritative, up-to-date
+> version history.** This file tracks forward-looking plans, not shipped
+> versions — it drifts out of sync with actual releases faster than the
+> changelog does, and had drifted badly before this rewrite (it previously
+> claimed "Current Version: v1.0.0" and "48-module client SDK" long after
+> the SDK had passed v9.0 and 100 modules). Current at time of this rewrite:
+> v9.8.0, 103 modules under `src/`.
 
 ---
 
-## v1.0.0 (Current) -- SDK/Relay Separation
+## Recently completed (moved out of "planned")
 
-- [x] Split macula into lean SDK (48 modules) + macula-relay (119 modules)
-- [x] Absorb macula-nifs (crypto, UCAN, DID, MRI Rust NIFs) into SDK
-- [x] Consolidate MRI into single canonical definition with NIF-accelerated trie index
-- [x] Publish to hex.pm, archive macula-nifs and macula-ex
-- [x] Update all consumers (hecate-daemon, hecate-stub, hecate-app-weather)
+- **Direct-dial across all four supervised primitive pairs** — RPC
+  (`macula_request`/`macula_response`), content download/upload
+  (`macula_download`/`macula_feeder`), and streaming RPC
+  (`macula_stream_sink`/`macula_streamer`) each gained a
+  `start_link_direct`/`advertise_direct` mode: resolve a provider from a
+  signed DHT record and dial it in one hop, instead of depending on
+  advertise-gossip having propagated a route between arbitrary stations.
+  Trust is enforced at the application layer — a production station's TLS
+  cannot be pinned, since it's terminated by an unrelated PKI — with an
+  opt-in X.509 cert-chain check available for managed realms. See the
+  [RPC](guides/RPC_GUIDE.md), [Content](guides/CONTENT_GUIDE.md), and
+  [Streaming](guides/STREAMING_GUIDE.md) guides.
+- **Connection health / metrics API** — `macula_diagnostics`,
+  `macula_metrics` (+ HTTP exporter) ship in the SDK.
+- **Subscription persistence across reconnects** — `macula_client_replay`
+  re-issues every tracked `(Realm, Topic)` subscription against a
+  respawned link.
+- **Multi-homed connections** — the pool model dials every configured seed
+  simultaneously (N links per pool), not just one relay at a time.
+- **Relay/station discovery** — `macula_relay_discovery` exists.
 
-## v1.1.0 -- SDK Polish
+## Open / status unconfirmed
 
-- [ ] Precompiled NIF binaries for crypto/UCAN/DID/MRI (like Quinn QUIC NIF)
-- [ ] Improve SDK documentation with more examples
-- [ ] Connection health monitoring API
-- [ ] Subscription persistence across reconnects
+Carried over from an earlier version of this file. Nobody re-verified these
+against current code as part of this rewrite — treat as genuinely open, not
+as "probably done" just because other nearby items turned out to be done:
 
-## v1.2.0 -- Multi-Relay Resilience
+- [ ] Precompiled NIF binaries for crypto/UCAN/DID/MRI — the QUIC NIF
+  deliberately builds from source rather than shipping a precompiled
+  artifact (a bad one once hung every connect fleet-wide); unclear whether
+  that reasoning extends to the other NIFs or whether they're precompiled
+  today.
+- [ ] RTT-based relay selection with periodic re-evaluation.
+- [ ] Failover to the *nearest* relay specifically, as opposed to the
+  existing first-healthy-link fan-out, which already provides failover —
+  just not distance-aware.
 
-- [ ] Automatic failover to nearest relay on disconnect
-- [ ] Multi-homed connections (connect to N relays simultaneously)
-- [ ] RTT-based relay selection with periodic re-evaluation
-- [ ] Connection quality metrics API
+## Future (unchanged, still not started)
 
-## Future
-
-- [ ] Language-specific SDKs (Go, Rust, Python) via macula wire protocol
+- [ ] Language-specific SDKs (Go, Rust, Python) via the macula wire protocol
 - [ ] WebSocket transport option (browser clients)
 - [ ] End-to-end encryption (relay cannot read payload)
 
