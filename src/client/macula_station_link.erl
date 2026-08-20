@@ -381,7 +381,7 @@ publish(Pid, Realm, Topic, Payload, Seq)
     gen_server:call(Pid, {publish, Realm, Topic, Payload, Seq}, 5_000).
 
 %% @doc Convenience wrapper for `_dht.put_record'. The record must be
-%% a fully-signed `macula_record:record()' map (build via
+%% a fully-signed `macula_record:m_record()' map (build via
 %% `macula_record:envelope/3,4' + `macula_record:sign/2'). Returns
 %% `ok' on success, `{error, Reason}' on RPC failure or unexpected
 %% reply.

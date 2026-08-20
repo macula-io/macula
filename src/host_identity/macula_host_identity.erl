@@ -124,7 +124,7 @@ hosted_addresses() ->
 collect_address({A, _}, Acc) -> [A | Acc].
 
 %% @doc Snapshot the current set of hosted_address_map records (signed).
--spec hosted_records() -> [macula_record:record()].
+-spec hosted_records() -> [macula_record:m_record()].
 hosted_records() ->
     gen_server:call(?SERVER, hosted_records).
 

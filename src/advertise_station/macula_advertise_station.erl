@@ -43,7 +43,7 @@
 -define(SERVER, ?MODULE).
 -define(DEFAULT_REFRESH_MS, 60_000). %% 1 minute (TTL is 5 minutes).
 
--type put_fn() :: fun((macula_record:record()) -> ok | {error, term()}).
+-type put_fn() :: fun((macula_record:m_record()) -> ok | {error, term()}).
 
 -type config() :: #{
     realm_pubkey     := <<_:256>>,
@@ -61,7 +61,7 @@
     config       :: config(),
     refresh_ms   :: pos_integer(),
     timer        :: reference() | undefined,
-    last_records :: [macula_record:record()]
+    last_records :: [macula_record:m_record()]
 }).
 
 %% =============================================================================
@@ -85,7 +85,7 @@ refresh_now() ->
     gen_server:call(?SERVER, refresh_now).
 
 %% @doc Return the most recently published record set.
--spec current_records() -> [macula_record:record()].
+-spec current_records() -> [macula_record:m_record()].
 current_records() ->
     gen_server:call(?SERVER, current_records).
 

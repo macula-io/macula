@@ -85,7 +85,7 @@
 ]).
 
 -export_type([
-    record/0,
+    m_record/0,
     type_tag/0,
     version/0,
     node_record_opts/0,
@@ -190,7 +190,7 @@
 -type type_tag() :: 1..16#FF.
 -type version()  :: <<_:128>>.
 
--type record() :: #{
+-type m_record() :: #{
     type       := type_tag(),
     key        := <<_:256>>,
     version    := version(),
@@ -310,14 +310,14 @@
 
 -spec node_record(macula_identity:pubkey(),
                   [macula_identity:pubkey()],
-                  non_neg_integer()) -> record().
+                  non_neg_integer()) -> m_record().
 node_record(NodeId, Realms, Capabilities) ->
     node_record(NodeId, Realms, Capabilities, #{}).
 
 -spec node_record(macula_identity:pubkey(),
                   [macula_identity:pubkey()],
                   non_neg_integer(),
-                  node_record_opts()) -> record().
+                  node_record_opts()) -> m_record().
 node_record(NodeId, Realms, Capabilities, Opts)
   when is_binary(NodeId), byte_size(NodeId) =:= 32,
        is_list(Realms),
@@ -334,13 +334,13 @@ node_record(NodeId, Realms, Capabilities, Opts)
 %%------------------------------------------------------------------
 
 -spec realm_directory(macula_identity:pubkey(), binary(),
-                      macula_identity:pubkey()) -> record().
+                      macula_identity:pubkey()) -> m_record().
 realm_directory(RealmId, Name, AdminKey) ->
     realm_directory(RealmId, Name, AdminKey, #{}).
 
 -spec realm_directory(macula_identity:pubkey(), binary(),
                       macula_identity:pubkey(),
-                      realm_directory_opts()) -> record().
+                      realm_directory_opts()) -> m_record().
 realm_directory(RealmId, Name, AdminKey, Opts)
   when is_binary(RealmId),  byte_size(RealmId)  =:= 32,
        is_binary(Name),
@@ -358,13 +358,13 @@ realm_directory(RealmId, Name, AdminKey, Opts)
 %%------------------------------------------------------------------
 
 -spec realm_stations(macula_identity:pubkey(),
-                     [realm_station_entry()]) -> record().
+                     [realm_station_entry()]) -> m_record().
 realm_stations(RealmId, Entries) ->
     realm_stations(RealmId, Entries, #{}).
 
 -spec realm_stations(macula_identity:pubkey(),
                      [realm_station_entry()],
-                     realm_stations_opts()) -> record().
+                     realm_stations_opts()) -> m_record().
 realm_stations(RealmId, Entries, Opts)
   when is_binary(RealmId), byte_size(RealmId) =:= 32,
        is_list(Entries) ->
@@ -384,7 +384,7 @@ realm_stations(RealmId, Entries, Opts)
 -spec realm_member_endorsement(macula_identity:pubkey(),
                                #{realm      := macula_identity:pubkey(),
                                  member_node := macula_identity:pubkey(),
-                                 roles       := [binary()]}) -> record().
+                                 roles       := [binary()]}) -> m_record().
 realm_member_endorsement(RealmId, Spec) ->
     realm_member_endorsement(RealmId, Spec, #{}).
 
@@ -392,7 +392,7 @@ realm_member_endorsement(RealmId, Spec) ->
                                #{realm       := macula_identity:pubkey(),
                                  member_node := macula_identity:pubkey(),
                                  roles       := [binary()]},
-                               realm_member_endorsement_opts()) -> record().
+                               realm_member_endorsement_opts()) -> m_record().
 realm_member_endorsement(RealmId,
                          #{realm := RealmId, member_node := Member,
                            roles := Roles} = _Spec, Opts)
@@ -418,12 +418,12 @@ realm_member_endorsement(RealmId,
 %%------------------------------------------------------------------
 
 -spec org_directory(macula_identity:pubkey(), binary(),
-                    macula_identity:pubkey()) -> record().
+                    macula_identity:pubkey()) -> m_record().
 org_directory(RealmId, OrgName, OrgKey) ->
     org_directory(RealmId, OrgName, OrgKey, #{}).
 
 -spec org_directory(macula_identity:pubkey(), binary(),
-                    macula_identity:pubkey(), map()) -> record().
+                    macula_identity:pubkey(), map()) -> m_record().
 org_directory(RealmId, OrgName, OrgKey, Opts)
   when is_binary(RealmId), byte_size(RealmId) =:= 32,
        is_binary(OrgName),
@@ -445,12 +445,12 @@ org_directory(RealmId, OrgName, OrgKey, Opts)
 %%------------------------------------------------------------------
 
 -spec procedure_delegation(macula_identity:pubkey(),
-                           macula_identity:pubkey()) -> record().
+                           macula_identity:pubkey()) -> m_record().
 procedure_delegation(OrgKey, Advertiser) ->
     procedure_delegation(OrgKey, Advertiser, #{}).
 
 -spec procedure_delegation(macula_identity:pubkey(),
-                           macula_identity:pubkey(), map()) -> record().
+                           macula_identity:pubkey(), map()) -> m_record().
 procedure_delegation(OrgKey, Advertiser, Opts)
   when is_binary(OrgKey),     byte_size(OrgKey)     =:= 32,
        is_binary(Advertiser), byte_size(Advertiser) =:= 32 ->
@@ -468,13 +468,13 @@ procedure_delegation(OrgKey, Advertiser, Opts)
 %%------------------------------------------------------------------
 
 -spec procedure_advertisement(macula_identity:pubkey(), binary(),
-                              macula_identity:pubkey()) -> record().
+                              macula_identity:pubkey()) -> m_record().
 procedure_advertisement(AdvertiserNode, ProcedureUri, ServingStation) ->
     procedure_advertisement(AdvertiserNode, ProcedureUri, ServingStation, #{}).
 
 -spec procedure_advertisement(macula_identity:pubkey(), binary(),
                               macula_identity:pubkey(),
-                              procedure_advertisement_opts()) -> record().
+                              procedure_advertisement_opts()) -> m_record().
 procedure_advertisement(AdvertiserNode, ProcedureUri, ServingStation, Opts)
   when is_binary(AdvertiserNode), byte_size(AdvertiserNode) =:= 32,
        is_binary(ProcedureUri),
@@ -493,12 +493,12 @@ procedure_advertisement(AdvertiserNode, ProcedureUri, ServingStation, Opts)
 %% can prioritise without fetching the manifest first.
 %%------------------------------------------------------------------
 
--spec content_announcement(macula_identity:pubkey(), binary(), binary()) -> record().
+-spec content_announcement(macula_identity:pubkey(), binary(), binary()) -> m_record().
 content_announcement(AnnouncerNode, MCID, Endpoint) ->
     content_announcement(AnnouncerNode, MCID, Endpoint, #{}).
 
 -spec content_announcement(macula_identity:pubkey(), binary(), binary(),
-                            content_announcement_opts()) -> record().
+                            content_announcement_opts()) -> m_record().
 content_announcement(AnnouncerNode, MCID, Endpoint, Opts)
   when is_binary(AnnouncerNode), byte_size(AnnouncerNode) =:= 32,
        is_binary(MCID), byte_size(MCID) =:= 34,
@@ -515,13 +515,13 @@ content_announcement(AnnouncerNode, MCID, Endpoint, Opts)
 %%------------------------------------------------------------------
 
 -spec foundation_seed_list(macula_identity:pubkey(),
-                           [foundation_seed()]) -> record().
+                           [foundation_seed()]) -> m_record().
 foundation_seed_list(FoundationKey, Seeds) ->
     foundation_seed_list(FoundationKey, Seeds, #{}).
 
 -spec foundation_seed_list(macula_identity:pubkey(),
                            [foundation_seed()],
-                           foundation_seed_list_opts()) -> record().
+                           foundation_seed_list_opts()) -> m_record().
 foundation_seed_list(FoundationKey, Seeds, Opts)
   when is_binary(FoundationKey), byte_size(FoundationKey) =:= 32,
        is_list(Seeds) ->
@@ -540,13 +540,13 @@ foundation_seed_list(FoundationKey, Seeds, Opts)
 %%------------------------------------------------------------------
 
 -spec foundation_parameter(macula_identity:pubkey(), binary(),
-                           foundation_parameter_value()) -> record().
+                           foundation_parameter_value()) -> m_record().
 foundation_parameter(FoundationKey, Name, Value) ->
     foundation_parameter(FoundationKey, Name, Value, #{}).
 
 -spec foundation_parameter(macula_identity:pubkey(), binary(),
                            foundation_parameter_value(),
-                           foundation_parameter_opts()) -> record().
+                           foundation_parameter_opts()) -> m_record().
 foundation_parameter(FoundationKey, Name, Value, Opts)
   when is_binary(FoundationKey), byte_size(FoundationKey) =:= 32,
        is_binary(Name) ->
@@ -566,14 +566,14 @@ foundation_parameter(FoundationKey, Name, Value, Opts)
 %%------------------------------------------------------------------
 
 -spec foundation_realm_trust_list(macula_identity:pubkey(),
-                                  [macula_identity:pubkey()]) -> record().
+                                  [macula_identity:pubkey()]) -> m_record().
 foundation_realm_trust_list(FoundationKey, Trusted) ->
     foundation_realm_trust_list(FoundationKey, Trusted, #{}).
 
 -spec foundation_realm_trust_list(macula_identity:pubkey(),
                                   [macula_identity:pubkey()],
                                   foundation_realm_trust_list_opts()) ->
-          record().
+          m_record().
 foundation_realm_trust_list(FoundationKey, Trusted, Opts)
   when is_binary(FoundationKey), byte_size(FoundationKey) =:= 32,
        is_list(Trusted) ->
@@ -593,7 +593,7 @@ foundation_realm_trust_list(FoundationKey, Trusted, Opts)
 
 -spec foundation_t3_attestation(macula_identity:pubkey(),
                                 macula_identity:pubkey(),
-                                pos_integer()) -> record().
+                                pos_integer()) -> m_record().
 foundation_t3_attestation(FoundationKey, StationId, AuditDate) ->
     foundation_t3_attestation(FoundationKey, StationId, AuditDate, #{}).
 
@@ -601,7 +601,7 @@ foundation_t3_attestation(FoundationKey, StationId, AuditDate) ->
                                 macula_identity:pubkey(),
                                 pos_integer(),
                                 foundation_t3_attestation_opts()) ->
-          record().
+          m_record().
 foundation_t3_attestation(FoundationKey, StationId, AuditDate, Opts)
   when is_binary(FoundationKey), byte_size(FoundationKey) =:= 32,
        is_binary(StationId),     byte_size(StationId)     =:= 32,
@@ -620,12 +620,12 @@ foundation_t3_attestation(FoundationKey, StationId, AuditDate, Opts)
 %% Constructors — tombstone (Part 6 §9.13)
 %%------------------------------------------------------------------
 
--spec tombstone(macula_identity:pubkey(), type_tag(), atom()) -> record().
+-spec tombstone(macula_identity:pubkey(), type_tag(), atom()) -> m_record().
 tombstone(SupersededKey, SupersededType, Reason) ->
     tombstone(SupersededKey, SupersededType, Reason, #{}).
 
 -spec tombstone(macula_identity:pubkey(), type_tag(), atom(), tombstone_opts()) ->
-    record().
+    m_record().
 tombstone(SupersededKey, SupersededType, Reason, Opts)
   when is_binary(SupersededKey), byte_size(SupersededKey) =:= 32,
        is_integer(SupersededType), SupersededType > 0,
@@ -645,13 +645,13 @@ tombstone(SupersededKey, SupersededType, Reason, Opts)
 %%------------------------------------------------------------------
 
 -spec station_endpoint(macula_identity:pubkey(),
-                       QuicPort :: 1..65535) -> record().
+                       QuicPort :: 1..65535) -> m_record().
 station_endpoint(StationPubkey, QuicPort) ->
     station_endpoint(StationPubkey, QuicPort, #{}).
 
 -spec station_endpoint(macula_identity:pubkey(),
                        QuicPort :: 1..65535,
-                       station_endpoint_opts()) -> record().
+                       station_endpoint_opts()) -> m_record().
 station_endpoint(StationPubkey, QuicPort, Opts)
   when is_binary(StationPubkey), byte_size(StationPubkey) =:= 32,
        is_integer(QuicPort), QuicPort > 0, QuicPort =< 65535 ->
@@ -672,13 +672,13 @@ station_endpoint(StationPubkey, QuicPort, Opts)
 %%------------------------------------------------------------------
 
 -spec address_pubkey_map(macula_identity:pubkey(),
-                         Addr :: <<_:128>>) -> record().
+                         Addr :: <<_:128>>) -> m_record().
 address_pubkey_map(StationPubkey, Addr) ->
     address_pubkey_map(StationPubkey, Addr, #{}).
 
 -spec address_pubkey_map(macula_identity:pubkey(),
                          Addr :: <<_:128>>,
-                         address_pubkey_map_opts()) -> record().
+                         address_pubkey_map_opts()) -> m_record().
 address_pubkey_map(StationPubkey, Addr, Opts)
   when is_binary(StationPubkey), byte_size(StationPubkey) =:= 32,
        is_binary(Addr), byte_size(Addr) =:= 16 ->
@@ -775,13 +775,13 @@ canonical_unsigned_delegation(#{daemon_pubkey := DaemonPk,
 %% delegation that's already been daemon-signed.
 -spec hosted_address_map(HostPk :: <<_:256>>,
                          DaemonAddr :: <<_:128>>,
-                         Delegation :: host_delegation()) -> record().
+                         Delegation :: host_delegation()) -> m_record().
 hosted_address_map(HostPk, DaemonAddr, Delegation) ->
     hosted_address_map(HostPk, DaemonAddr, Delegation, #{}).
 
 -spec hosted_address_map(<<_:256>>, <<_:128>>,
                          host_delegation(),
-                         hosted_address_map_opts()) -> record().
+                         hosted_address_map_opts()) -> m_record().
 hosted_address_map(HostPk, DaemonAddr,
                    #{daemon_pubkey := DaemonPk,
                      daemon_sig    := _} = Delegation,
@@ -813,14 +813,14 @@ delegation_to_cbor(#{daemon_pubkey := DaemonPk,
 %% Sign / verify
 %%------------------------------------------------------------------
 
--spec sign(record(), macula_identity:key_pair() | macula_identity:privkey()) ->
-    record().
+-spec sign(m_record(), macula_identity:key_pair() | macula_identity:privkey()) ->
+    m_record().
 sign(Record, Identity) ->
     Bytes = canonical_unsigned(Record),
     Sig = macula_identity:sign([?SIG_DOMAIN, Bytes], Identity),
     Record#{signature => Sig}.
 
--spec verify(record()) -> {ok, record()} | {error, term()}.
+-spec verify(m_record()) -> {ok, m_record()} | {error, term()}.
 verify(#{signature := Sig, key := Pub} = Record)
   when is_binary(Sig), byte_size(Sig) =:= 64,
        is_binary(Pub), byte_size(Pub) =:= 32 ->
@@ -844,9 +844,9 @@ verify_signature(false, _Record) ->
 %% The new signature replaces any prior signature; callers can
 %% safely pass an already-signed record — the prior signature is
 %% stripped before re-signing.
--spec refresh(record(),
+-spec refresh(m_record(),
               macula_identity:key_pair() | macula_identity:privkey()) ->
-          record().
+          m_record().
 refresh(Record, Identity) ->
     NowMs = erlang:system_time(millisecond),
     TtlMs = maps:get(expires_at, Record) - maps:get(created_at, Record),
@@ -870,11 +870,11 @@ expiry_check(#{expires_at := X} = Record) ->
 %% Wire codec
 %%------------------------------------------------------------------
 
--spec encode(record()) -> binary().
+-spec encode(m_record()) -> binary().
 encode(#{signature := Sig} = Record) when is_binary(Sig), byte_size(Sig) =:= 64 ->
     macula_record_cbor:encode(to_envelope_map(Record)).
 
--spec decode(binary()) -> {ok, record()} | {error, term()}.
+-spec decode(binary()) -> {ok, m_record()} | {error, term()}.
 decode(Bin) when is_binary(Bin) ->
     decode_value(macula_record_cbor:decode(Bin)).
 
@@ -926,7 +926,7 @@ payload(#{payload := P}) -> P.
 %% AND the wire-decoded form (bare `<<"k">>' keys, bare values, as a
 %% record returned over an RPC like `find_records/2'). Consumers get
 %% the same map either way, so they never touch the CBOR keying.
--spec read_procedure_advertisement(record()) ->
+-spec read_procedure_advertisement(m_record()) ->
     #{procedure_uri   := binary(),
       advertiser_node := macula_identity:pubkey(),
       serving_station := macula_identity:pubkey(),
@@ -945,7 +945,7 @@ read_procedure_advertisement(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT,
 %% from, `name' / `size' / `chunk_count' the metadata a resolver uses
 %% to prioritise without fetching the manifest first (unset fields
 %% read back as `undefined').
--spec read_content_announcement(record()) ->
+-spec read_content_announcement(m_record()) ->
     #{announcer_node := macula_identity:pubkey(),
       mcid           := <<_:272>>,
       endpoint       := binary(),
@@ -1019,7 +1019,7 @@ station_endpoint_key(Pubkey)
 %% hiding the payload keying (robust to canonical vs wire-decoded, like
 %% `read_procedure_advertisement/1'). `host_advertised' is a possibly
 %% empty list of host binaries.
--spec read_station_endpoint(record()) ->
+-spec read_station_endpoint(m_record()) ->
     #{quic_port := 1..65535, host_advertised := [binary()]}.
 read_station_endpoint(#{type := ?TYPE_STATION_ENDPOINT, payload := P}) ->
     #{quic_port       => payload_field(P, <<"quic_port">>),
@@ -1050,7 +1050,7 @@ procedure_delegation_key(OrgKey, Advertiser)
     crypto:hash(sha256, <<?STORAGE_DOMAIN_PROC_DELEGATION/binary,
                           OrgKey/binary, Advertiser/binary>>).
 
--spec read_org_directory(record()) ->
+-spec read_org_directory(m_record()) ->
     #{realm := macula_identity:pubkey(), org_name := binary(),
       org_key := macula_identity:pubkey()}.
 read_org_directory(#{type := ?TYPE_ORG_DIRECTORY, payload := P}) ->
@@ -1058,7 +1058,7 @@ read_org_directory(#{type := ?TYPE_ORG_DIRECTORY, payload := P}) ->
       org_name => payload_field(P, <<"org_name">>),
       org_key  => payload_field(P, <<"org_key">>)}.
 
--spec read_procedure_delegation(record()) ->
+-spec read_procedure_delegation(m_record()) ->
     #{org_key := macula_identity:pubkey(),
       advertiser := macula_identity:pubkey()}.
 read_procedure_delegation(#{type := ?TYPE_PROCEDURE_DELEGATION, payload := P}) ->
@@ -1070,7 +1070,7 @@ read_procedure_delegation(#{type := ?TYPE_PROCEDURE_DELEGATION, payload := P}) -
 %% signed by the realm and names the org key, and the `procedure_delegation'
 %% is signed by that org key and grants `Advertiser'. `ok' means the
 %% advertisement is legitimately authorized; any failure is a squat.
--spec verify_delegation_chain(macula_identity:pubkey(), record(), record(),
+-spec verify_delegation_chain(macula_identity:pubkey(), m_record(), m_record(),
                               macula_identity:pubkey()) ->
     ok | {error, atom()}.
 verify_delegation_chain(RealmId, OrgDir, Delegation, Advertiser) ->
@@ -1122,7 +1122,7 @@ signature(#{signature := S}) -> S.
 %% Ed25519 key, the leaf chains to the realm CA, and the leaf's
 %% organization (O) RDN equals `ExpectedOrg'. Any failure = drop as a
 %% squat (or as unmanaged/self-signed).
--spec verify_advertisement_cert_chain(binary(), record(), binary()) ->
+-spec verify_advertisement_cert_chain(binary(), m_record(), binary()) ->
     ok | {error, atom()}.
 verify_advertisement_cert_chain(RealmCaPem, Advertisement, ExpectedOrg)
   when is_binary(RealmCaPem), is_map(Advertisement), is_binary(ExpectedOrg) ->
@@ -1254,7 +1254,7 @@ to_bin(L) when is_list(L)   -> unicode:characters_to_binary(L).
 %% Domain code names its own payload fields. Single-letter wire keys
 %% (Part 6 §9) are an envelope-level concern; payloads use whatever
 %% naming makes sense in the domain.
--spec envelope(type_tag(), <<_:256>>, map(), map()) -> record().
+-spec envelope(type_tag(), <<_:256>>, map(), map()) -> m_record().
 envelope(Type, Key, Payload, Opts)
   when is_integer(Type), Type > 0, Type =< 16#FF,
        is_binary(Key), byte_size(Key) =:= 32,
@@ -1468,7 +1468,7 @@ foundation_t3_attestation_payload(StationId, AuditDate, ValidUntil, Notes) ->
 %% DHT storage-key derivation (Part 3 §3.3)
 %%------------------------------------------------------------------
 
--spec storage_key(record()) -> <<_:256>>.
+-spec storage_key(m_record()) -> <<_:256>>.
 storage_key(#{type := Type, key := K})
   when Type =:= ?TYPE_NODE_RECORD;
        Type =:= ?TYPE_REALM_DIRECTORY;

@@ -33,7 +33,7 @@
 
 -type find_fn() ::
     fun((Key :: <<_:256>>) ->
-        {ok, macula_record:record()} | {error, not_found | term()}).
+        {ok, macula_record:m_record()} | {error, not_found | term()}).
 
 -type endpoint() :: #{
     station_pubkey  := <<_:256>>,

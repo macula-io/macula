@@ -281,10 +281,10 @@
 
 -type value_spec()         :: #{
     key     := id256(),
-    records := [macula_record:record()]
+    records := [macula_record:m_record()]
 }.
 
--type store_spec()         :: #{record := macula_record:record()}.
+-type store_spec()         :: #{record := macula_record:m_record()}.
 
 -type store_ack_spec()     :: #{
     key    := id256(),
@@ -293,7 +293,7 @@
 }.
 
 -type replicate_spec()     :: #{
-    record        := macula_record:record(),
+    record        := macula_record:m_record(),
     new_custodian := boolean()
 }.
 
@@ -862,7 +862,7 @@ validate_asn(N) when is_integer(N), N >= 0 -> ok.
 validate_addresses([])                        -> ok;
 validate_addresses([A | Rest]) when is_map(A) -> validate_addresses(Rest).
 
--spec validate_record(macula_record:record()) -> ok.
+-spec validate_record(macula_record:m_record()) -> ok.
 validate_record(#{type := _, key := <<_:256>>, payload := P}) when is_map(P) ->
     ok.
 

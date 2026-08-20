@@ -109,8 +109,8 @@ is_foundation(_) ->
 %% (`0x0D–0x10'), the envelope `k' field is a trusted foundation
 %% pubkey, and the signature + expiry pass
 %% `macula_record:verify/1'.
--spec verify_record(macula_record:record()) ->
-        {ok, macula_record:record()} | {error, verify_error()}.
+-spec verify_record(macula_record:m_record()) ->
+        {ok, macula_record:m_record()} | {error, verify_error()}.
 verify_record(Record) ->
     check_type(Record).
 

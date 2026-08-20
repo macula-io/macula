@@ -86,7 +86,7 @@
 -export_type([pool/0, realm/0,
               topic/0, procedure/0,
               stream/0, stream_mode/0, stream_handler/0,
-              record/0, record_type/0, record_key/0]).
+              m_record/0, record_type/0, record_key/0]).
 
 -type pool()   :: macula_client:pool().
 -type realm()  :: <<_:256>>.            %% 32-byte realm tag.
@@ -97,7 +97,7 @@
 -type stream_mode() :: server_stream | client_stream | bidi.
 -type stream_handler() :: fun((stream(), term()) -> any()).
 
--type record()      :: macula_record:record().
+-type m_record()    :: macula_record:m_record().
 -type record_type() :: macula_record:type_tag().
 -type record_key()  :: <<_:256>>.   %% DHT storage key — `macula_record:storage_key/1' output.
 
@@ -334,7 +334,7 @@ unadvertise(Pool, Realm, Procedure) ->
 %% `{error, bad_signature}'. Successful stores propagate to the
 %% K-nearest peers in the DHT under the record's
 %% `macula_record:storage_key/1'.
--spec put_record(pool(), record()) -> ok | {error, term()}.
+-spec put_record(pool(), m_record()) -> ok | {error, term()}.
 put_record(Pool, Record) when is_pid(Pool), is_map(Record) ->
     classify_put(macula_client:call(Pool, ?DHT_REALM,
                                     ?DHT_PUT_RECORD_PROC,
@@ -351,7 +351,7 @@ classify_put({error, _} = E) -> E.
 %% The returned record's signature should be verified via
 %% `macula_record:verify/1' before its payload is trusted.
 -spec find_record(pool(), record_key()) ->
-    {ok, record()} | {error, not_found | term()}.
+    {ok, m_record()} | {error, not_found | term()}.
 find_record(Pool, Key)
   when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32 ->
     classify_find(macula_client:call(Pool, ?DHT_REALM,
@@ -376,7 +376,7 @@ classify_find({error, _} = E)      -> E.
 %% verified via `macula_record:verify/1' before its payload is
 %% trusted.
 -spec find_records(pool(), record_key()) ->
-    {ok, [record()]} | {error, term()}.
+    {ok, [m_record()]} | {error, term()}.
 find_records(Pool, Key)
   when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32 ->
     classify_find_list(macula_client:call(Pool, ?DHT_REALM,
@@ -396,7 +396,7 @@ classify_find_list({error, _} = E) -> E.
 %% gossiped. Aggregating across the full mesh requires querying
 %% multiple stations and deduplicating by record key.
 -spec find_records_by_type(pool(), record_type()) ->
-    {ok, [record()]} | {error, term()}.
+    {ok, [m_record()]} | {error, term()}.
 find_records_by_type(Pool, Type)
   when is_pid(Pool), is_integer(Type), Type >= 0, Type =< 255 ->
     classify_list(macula_client:call(Pool, ?DHT_REALM,
@@ -415,7 +415,7 @@ classify_list({error, _} = E) -> E.
 %% Topic shape is `_dht.records.<type>.stored', rendered with the
 %% type tag as a decimal integer for log friendliness.
 -spec subscribe_records(pool(), record_type(),
-                        fun((record()) -> any())) ->
+                        fun((m_record()) -> any())) ->
     {ok, reference()} | {error, term()}.
 subscribe_records(Pool, Type, Callback)
   when is_pid(Pool), is_integer(Type), Type >= 0, Type =< 255,
