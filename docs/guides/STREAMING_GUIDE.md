@@ -14,8 +14,11 @@
 
 A plain `macula:call/5` is one request and one reply. A **streaming RPC** keeps
 the channel open so either side (or both) can send a sequence of chunks before a
-final result, over an ordered QUIC stream with per-stream flow control pacing the
-sender to the receiver.
+final result. Each session gets its own dedicated QUIC stream, opened for that
+session alone — not multiplexed onto the connection's shared control stream the
+way an ordinary CALL or a PUBLISH is — so QUIC's own per-stream flow control
+paces the sender to the receiver, and a slow or stalled stream cannot
+head-of-line-block other RPC/PubSub traffic on the same connection.
 
 Two ways to open one, mirroring unary RPC:
 
@@ -201,8 +204,10 @@ provider advertises the stream procedure and its `procedure_advertisement` in th
 DHT; a viewer resolves it, dials the serving station directly with
 `call_stream_station` (as the diagram shows), and reads frames until the source
 stops. Unlike [content sharing](CONTENT_GUIDE.md) there is no fixed size or
-`chunk_count` — the stream is open-ended and ordered, and QUIC flow control paces
-the source to the viewer's consumption.
+`chunk_count` — the stream is open-ended and ordered, riding its own dedicated
+QUIC stream (see Overview above), and QUIC's per-stream flow control paces the
+source to the viewer's consumption without contending with anything else on the
+connection.
 
 **Freshness is not optional.** A live source can go away. Treat a `recv` stall or
 `{error, peer_down}` as a signal to **re-resolve** the source and re-open, exactly
