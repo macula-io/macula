@@ -63,6 +63,15 @@ A **seed** is a relay endpoint. Three accepted shapes:
 #{host => <<"relay-1.example.com">>, port => 4433}
 ```
 
+The URL scheme is a label, not a switch — `macula_station_link:parse_seed/1`
+extracts `host`/`port` from any scheme with an explicit port and dials over
+QUIC regardless of what the scheme text says. `https://relay-1.example.com:4433`
+parses and dials identically to the `quic://` form above. Both are seen in
+the wild — the SDK's own examples use `quic://` since that's the actual wire
+protocol, but don't be surprised to find `https://` in an existing
+`MACULA_STATION_SEEDS`-style deployment config; it isn't wrong, it's just a
+different label on the same dial.
+
 Pass a list. Order is not significant — every seed gets a link.
 
 ```erlang
