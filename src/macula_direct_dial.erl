@@ -1,18 +1,25 @@
 %%%-------------------------------------------------------------------
 %%% @doc Direct-dial resolve-and-call: shared internals for
-%%% `macula_request'/`macula_response' and `macula_download' (and, when
-%%% it grows a direct-dial mode, `macula_streamer'/`macula_stream_sink').
+%%% `macula_request'/`macula_response', `macula_streamer'/
+%%% `macula_stream_sink', and `macula_feeder'/`macula_download'.
 %%%
 %%% Not a public API on its own — `macula_request:start_link_direct/6,7,8',
-%%% `macula_response:advertise_direct/6,7', and
-%%% `macula_download:start_link_direct/4,5' are the entry points.
-%%% Factored out because the RPC and content-download paths need the
-%%% same shape of resolve sequence (`find_records' -> verify -> read
+%%% `macula_response:advertise_direct/6,7',
+%%% `macula_stream_sink:start_link_direct/5,6',
+%%% `macula_streamer:advertise_direct/6,7',
+%%% `macula_download:start_link_direct/4,5', and
+%%% `macula_feeder:start_link_direct/5,6' are the entry points.
+%%% Factored out because RPC, streaming, and content-download all need
+%%% the same shape of resolve sequence (`find_records' -> verify -> read
 %%% the record -> build a `quic://' dial URL, retrying past DHT
-%%% propagation lag throughout), and RPC additionally needs the
-%%% identical provider-side publish (sign + `put_record' a
-%%% `procedure_advertisement'; content has no publish step here at
-%%% all — see "Content" below).
+%%% propagation lag throughout). Streaming and RPC share the IDENTICAL
+%%% discovery mechanism — a `procedure_advertisement' does not
+%%% distinguish RPC from streaming, only the eventual dial
+%%% (`call_station/7' vs `call_stream_station/6') does — so
+%%% `publish_advertisement/4,5' is reused as-is by both providers, and
+%%% `call/6'/`call_stream/6' share the same `resolve_dial_url/4' and
+%%% "Trust model" below. Content has no publish step here at all — see
+%%% "Content" further down.
 %%%
 %%% The resolve side retries: a record just published on the provider's
 %%% station has not necessarily replicated to the caller's station yet,
@@ -82,7 +89,8 @@
 %%%-------------------------------------------------------------------
 -module(macula_direct_dial).
 
--export([call/5, call/6, publish_advertisement/4, publish_advertisement/5,
+-export([call/5, call/6, call_stream/5, call_stream/6,
+        publish_advertisement/4, publish_advertisement/5,
         get_content/3, resolve_content_provider/2,
         put_content/4, resolve_station_endpoint/2]).
 
@@ -120,6 +128,31 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
                                 TimeoutMs, #{expected_node_id => Station,
                                              pin_tls_cert => false,
                                              verify => none});
+        {error, Reason} ->
+            {error, {unresolved, Reason}}
+    end.
+
+%% @doc As `call_stream/6' with no cert-chain verification.
+-spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
+                  map()) -> {ok, macula:stream()} | {error, term()}.
+call_stream(Pool, Realm, Procedure, Args, StreamOpts) ->
+    call_stream(Pool, Realm, Procedure, Args, StreamOpts, #{}).
+
+%% @doc As `call/6', but opens a stream (`macula:call_stream_station/6''s
+%% shape) instead of making a single-reply call, built on the exact
+%% same resolve+trust machinery — see the module doc. `StreamOpts' is
+%% forwarded to `call_stream_station/6' alongside the resolved trust
+%% override (`mode', `owner', `dial_timeout_ms', etc); `Opts' is the
+%% resolve-side `verify_cert_chain' opt, same as `call/6'.
+-spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
+                  map(), map()) -> {ok, macula:stream()} | {error, term()}.
+call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
+    case resolve_dial_url(Pool, Realm, Procedure, Opts) of
+        {ok, {Station, DialUrl}} ->
+            macula:call_stream_station(Pool, DialUrl, Realm, Procedure, Args,
+                                       StreamOpts#{expected_node_id => Station,
+                                                   pin_tls_cert => false,
+                                                   verify => none});
         {error, Reason} ->
             {error, {unresolved, Reason}}
     end.

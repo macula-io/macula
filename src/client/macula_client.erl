@@ -425,6 +425,11 @@ call_stream(Pool, Realm, Procedure, Args, Opts)
 %% link to `Station', await the handshake, then open the stream there.
 %% `Opts' may set `dial_timeout_ms' (default 10_000) for the dial +
 %% handshake, plus any `call_stream' option (e.g. `mode').
+%% `Opts' also carries the per-call TLS trust override for this dial —
+%% `verify', `expected_node_id', `pin_tls_cert' — same as
+%% `call_station/8'; extracted into a separate `LinkOpts' internally so
+%% they reach `ensure_link/3' without also leaking into the eventual
+%% underlying stream-open call's own options.
 -spec call_stream_station(pool(), seed(), <<_:256>>, binary(), term(),
                           map()) -> {ok, pid()} | {error, term()}.
 call_stream_station(Pool, Station, Realm, Procedure, Args, Opts)
@@ -433,9 +438,10 @@ call_stream_station(Pool, Station, Realm, Procedure, Args, Opts)
        is_binary(Procedure),
        is_map(Opts) ->
     DialTimeout = maps:get(dial_timeout_ms, Opts, 10_000),
+    LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
     gen_server:call(Pool,
                     {call_stream_station, Station, Realm, Procedure, Args,
-                     Opts#{owner => maps:get(owner, Opts, self())}},
+                     Opts#{owner => maps:get(owner, Opts, self())}, LinkOpts},
                     DialTimeout + 2_000).
 
 %% @doc Advertise a streaming procedure handler on every healthy
@@ -701,13 +707,14 @@ handle_call({rpc_call_stream, Realm, Procedure, Args, Opts}, From, S) ->
     end),
     {noreply, S};
 
-handle_call({call_stream_station, Station, Realm, Procedure, Args, Opts},
-            From, S) ->
+handle_call({call_stream_station, Station, Realm, Procedure, Args, Opts,
+             LinkOpts}, From, S) ->
     %% Direct-dial streaming: ensure (reuse or dial) a link to the
     %% specific station, then open the stream there. Same worker-spawn
     %% rationale as call_station — the pool gen_server never blocks on
-    %% the dial + handshake.
-    {Pid, S1} = ensure_link(Station, S),
+    %% the dial + handshake. LinkOpts (verify/expected_node_id/
+    %% pin_tls_cert) shapes a fresh dial only, same as call_station.
+    {Pid, S1} = ensure_link(Station, LinkOpts, S),
     _ = spawn(fun() ->
         Reply = stream_when_connected(Pid, Realm, Procedure, Args, Opts),
         gen_server:reply(From, Reply)
@@ -828,12 +835,10 @@ spawned_link_pids(#state{links = Links}) ->
 
 %% Reuse a live link to `Station', else dial a new one and add it to the
 %% pool exactly like a seed link (monitored, respawn-on-DOWN). Returns
-%% the link pid (or `undefined' if the dial failed to spawn) + new state.
-ensure_link(Station, S) -> ensure_link(Station, #{}, S).
-
-%% As `ensure_link/2', but a FRESH dial (only) is made with `ExtraOpts'
-%% merged on top of the pool's own `link_opts' — e.g. a direct-dial
-%% caller's per-call `expected_node_id'. An already-connected, reused
+%% the link pid (or `undefined' if the dial failed to spawn) + new
+%% state. A FRESH dial (only) is made with `ExtraOpts' merged on top of
+%% the pool's own `link_opts' — e.g. a direct-dial caller's per-call
+%% `expected_node_id'. An already-connected, reused
 %% link keeps whatever trust it was originally dialed under; `ExtraOpts'
 %% only shapes a dial that happens as a result of THIS call.
 ensure_link(Station, ExtraOpts, #state{links = Links} = S) ->

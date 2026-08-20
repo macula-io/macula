@@ -23,6 +23,19 @@
 %%% mirroring how `macula_feeder' / `macula_download' each announce
 %%% their own side of a content transfer.
 %%%
+%%% == Direct-dial ==
+%%%
+%%% `start_link/5,6' opens through the pool's existing links — the same
+%%% gossip-propagated routing `call_stream/5' always used.
+%%% `start_link_direct/5,6' is the direct-dial counterpart: it resolves
+%%% the procedure's `procedure_advertisement' from the DHT (published by
+%%% `macula_streamer:advertise_direct/6,7' on the provider side) and
+%%% opens the stream there directly, in one hop, instead of depending on
+%%% advertise-gossip having propagated a route between arbitrary
+%%% stations. Requires the provider to have advertised via
+%%% `advertise_direct/6,7', not plain `advertise/5,6'. See
+%%% `macula_direct_dial''s module doc, "Trust model".
+%%%
 %%% == Example ==
 %%%
 %%% ```
@@ -50,6 +63,7 @@
 -behaviour(gen_server).
 
 -export([start_link/5, start_link/6]).
+-export([start_link_direct/5, start_link_direct/6]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -callback init(Args :: term()) ->
@@ -90,24 +104,43 @@ start_link(Module, Pool, Realm, Procedure, Args) ->
                   term(), term()) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Procedure, Args, CallArgs) ->
     gen_server:start_link(?MODULE,
-        {Module, Pool, Realm, Procedure, Args, CallArgs}, []).
+        {pooled, Module, Pool, Realm, Procedure, Args, CallArgs}, []).
+
+%% @doc As `start_link/5', but resolves and dials the procedure's
+%% provider directly instead of routing through the pool's existing
+%% links. See the "Direct-dial" section above.
+-spec start_link_direct(module(), macula:pool(), macula:realm(),
+                        macula:procedure(), term()) ->
+    {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Realm, Procedure, Args) ->
+    start_link_direct(Module, Pool, Realm, Procedure, Args, undefined).
+
+%% @doc As `start_link_direct/5', with `CallArgs' passed to
+%% `macula_direct_dial:call_stream/5' as the RPC argument payload.
+-spec start_link_direct(module(), macula:pool(), macula:realm(),
+                        macula:procedure(), term(), term()) ->
+    {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Realm, Procedure, Args, CallArgs) ->
+    gen_server:start_link(?MODULE,
+        {direct, Module, Pool, Realm, Procedure, Args, CallArgs}, []).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 %% @private
-init({Module, Pool, Realm, Procedure, InitArgs, CallArgs}) ->
+init({DialMode, Module, Pool, Realm, Procedure, InitArgs, CallArgs}) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
-            open_stream(Module, Pool, Realm, Procedure, CallArgs, UserState);
+            open_stream(DialMode, Module, Pool, Realm, Procedure, CallArgs,
+                       UserState);
         {stop, Reason} ->
             {stop, Reason}
     end.
 
-open_stream(Module, Pool, Realm, Procedure, CallArgs, UserState) ->
-    case macula:call_stream(Pool, Realm, Procedure, CallArgs, #{}) of
+open_stream(DialMode, Module, Pool, Realm, Procedure, CallArgs, UserState) ->
+    case dial_stream(DialMode, Pool, Realm, Procedure, CallArgs) of
         {ok, Stream} ->
             Reader = spawn_reader(Stream),
             StreamId = crypto:strong_rand_bytes(16),
@@ -119,6 +152,11 @@ open_stream(Module, Pool, Realm, Procedure, CallArgs, UserState) ->
         {error, Reason} ->
             {stop, Reason}
     end.
+
+dial_stream(pooled, Pool, Realm, Procedure, CallArgs) ->
+    macula:call_stream(Pool, Realm, Procedure, CallArgs, #{});
+dial_stream(direct, Pool, Realm, Procedure, CallArgs) ->
+    macula_direct_dial:call_stream(Pool, Realm, Procedure, CallArgs, #{}).
 
 spawn_reader(Stream) ->
     Parent = self(),

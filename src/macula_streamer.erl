@@ -25,6 +25,21 @@
 %%% unrelated to content sharing's own chunked-transfer protocol; see
 %%% `macula_feeder' / `macula_download' for that.
 %%%
+%%% == Direct-dial ==
+%%%
+%%% `advertise/5,6' registers the handler with the pool's advertise-
+%%% gossip mechanism only — nothing published lets a caller on another
+%%% station find this procedure without a route having propagated
+%%% between the two stations first. `advertise_direct/6,7' does that
+%%% AND publishes a signed `procedure_advertisement' DHT record naming
+%%% this pool's currently-connected station as the server — the exact
+%%% same record type and publish function `macula_response:advertise_direct/6,7'
+%%% uses for plain RPC (a `procedure_advertisement' does not distinguish
+%%% RPC from streaming), so a caller using
+%%% `macula_stream_sink:start_link_direct/5,6' can resolve and dial
+%%% here directly, in one hop, regardless of whether the two stations
+%%% have a routing edge between them.
+%%%
 %%% == Example ==
 %%%
 %%% ```
@@ -52,7 +67,8 @@
 
 -behaviour(gen_server).
 
--export([advertise/5, advertise/6, unadvertise/3]).
+-export([advertise/5, advertise/6, advertise_direct/6, advertise_direct/7,
+        unadvertise/3]).
 -export([send/2, send/3, close/1]).
 -export([start_link/7]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -103,6 +119,40 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
     case macula:advertise_stream(Pool, Realm, Procedure, Mode, Handler) of
         ok -> {ok, Sup};
         {error, Reason} -> {error, Reason}
+    end.
+
+%% @doc As `advertise/5', and additionally publishes a signed
+%% `procedure_advertisement' DHT record naming this pool's connected
+%% station as the server, so `macula_stream_sink:start_link_direct/5,6'
+%% can resolve and dial here directly. `Identity' signs it — reuse the
+%% same one across re-advertises so each one doesn't mint a fresh
+%% advertiser identity.
+%%
+%% The DHT publish is best-effort: if it fails, the handler is still
+%% advertised and reachable via the ordinary pooled path — direct-dial
+%% callers just won't be able to resolve it until a later publish
+%% succeeds.
+-spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
+                       module(), term(), macula_identity:key_pair()) ->
+    {ok, pid()} | {error, term()}.
+advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
+    advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
+
+%% @doc As `advertise_direct/6', with `Opts' forwarded to
+%% `macula_direct_dial:publish_advertisement/5' — e.g. `cert_chain =>
+%% ChainPem' (Slice 7c Direction B, managed realms only).
+-spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
+                       module(), term(), macula_identity:key_pair(), map()) ->
+    {ok, pid()} | {error, term()}.
+advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
+    case advertise(Pool, Realm, Procedure, Module, Args) of
+        {ok, Sup} ->
+            _ = macula_direct_dial:publish_advertisement(Pool, Realm,
+                                                          Procedure, Identity,
+                                                          Opts),
+            {ok, Sup};
+        {error, _} = Error ->
+            Error
     end.
 
 %% @doc Stop advertising. Does not stop the factory supervisor

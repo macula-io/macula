@@ -901,6 +901,9 @@ call_stream(Pool, Realm, Procedure, Args, Opts)
 %% (`find_records' -> `read_procedure_advertisement' -> `station_endpoint')
 %% to reach a stream provider in one hop, exactly as a unary caller does.
 %% `Opts' may set `dial_timeout_ms' (default 10_000) and a `mode'.
+%% `Opts' also carries the per-call TLS trust override for this dial:
+%% `verify', `expected_node_id', `pin_tls_cert' (see
+%% `macula_client:call_station/8').
 -spec call_stream_station(pool(), macula_client:seed(), realm(), procedure(),
                           term(), map()) -> {ok, stream()} | {error, term()}.
 call_stream_station(Pool, Station, Realm, Procedure, Args, Opts)

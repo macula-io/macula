@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.8.0] - 2026-08-20
+
+### Added
+
+- **Direct-dial for streaming RPC** (`macula_stream_sink:start_link_direct/5,6`,
+  `macula_streamer:advertise_direct/6,7`,
+  `macula_direct_dial:call_stream/5,6`). The streaming counterpart to
+  RPC direct-dial — and it turns out to need almost no new machinery:
+  a `procedure_advertisement' does not distinguish RPC from streaming,
+  only the eventual dial (`call_station/7' vs `call_stream_station/6')
+  does, so `publish_advertisement/4,5' and `resolve_dial_url/4' are
+  reused as-is by both. `macula_streamer:advertise_direct/6,7' is
+  `advertise/5,6' plus the identical publish step
+  `macula_response:advertise_direct/6,7' already does for plain RPC.
+
+### Fixed
+
+- **`macula_client:call_stream_station/6` now threads the per-call TLS
+  trust override** (`verify`/`expected_node_id`/`pin_tls_cert`) through
+  to the underlying dial, same as `call_station/8` — it predated that
+  work and had no way to specify per-call trust at all, so a fresh dial
+  from it always fell back to the pool's connect-time defaults. Against
+  production this had the same TLS-pin problem the RPC family had
+  before `pin_tls_cert` existed; now it can actually be direct-dialed.
+  Removed `macula_client:ensure_link/2`, left unused once its only
+  remaining caller moved to the 3-arity form that carries `LinkOpts`.
+
 ## [9.7.0] - 2026-08-20
 
 ### Added
