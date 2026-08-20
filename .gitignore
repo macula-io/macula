@@ -35,3 +35,4 @@ dist/
 # Rebar3 stale NIF build outputs (older layout)
 /apps/
 rebar3.crashdump
+mix.lock
