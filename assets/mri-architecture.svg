@@ -57,7 +57,7 @@
     <rect x="620" y="55" width="160" height="70" rx="6" fill="white" fill-opacity="0.95"/>
     <text x="700" y="75" text-anchor="middle" font-size="11" font-weight="600" fill="#0369a1">macula_mri_graph</text>
     <text x="700" y="90" text-anchor="middle" font-size="9" fill="#64748b">Behaviour (Interface)</text>
-    <text x="630" y="108" font-size="8" fill="#475569">relate/3, related_to/2</text>
+    <text x="630" y="108" font-size="8" fill="#475569">create_relationship/3, related_to/2</text>
     <text x="630" y="118" font-size="8" fill="#475569">traverse_transitive/3</text>
   </g>
 

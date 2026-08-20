@@ -23,13 +23,13 @@
   <text x="120" y="117" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula:connect/2</text>
 
   <rect x="45" y="136" width="150" height="28" rx="4" fill="#161b22" stroke="#30363d"/>
-  <text x="120" y="155" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula_mesh_client</text>
+  <text x="120" y="155" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula_client (pool)</text>
 
   <rect x="45" y="174" width="150" height="28" rx="4" fill="#161b22" stroke="#30363d"/>
   <text x="120" y="193" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="10">macula_quic (Quinn NIF)</text>
 
   <rect x="45" y="220" width="150" height="28" rx="4" fill="#161b22" stroke="#a371f7" stroke-width="0.8"/>
-  <text x="120" y="239" text-anchor="middle" fill="#a371f7" font-family="monospace" font-size="10">macula_cert (Ed25519)</text>
+  <text x="120" y="239" text-anchor="middle" fill="#a371f7" font-family="monospace" font-size="10">macula_identity (Ed25519)</text>
 
   <text x="120" y="280" text-anchor="middle" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">subscribe / publish</text>
   <text x="120" y="294" text-anchor="middle" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">advertise / call</text>
@@ -52,19 +52,19 @@
   <!-- Relay -->
   <rect x="320" y="60" width="160" height="260" rx="10" fill="#21262d" stroke="#f97316" stroke-width="1.5"/>
   <text x="400" y="84" text-anchor="middle" fill="#f97316" font-family="system-ui, sans-serif" font-size="13" font-weight="bold">Relay</text>
-  <text x="400" y="100" text-anchor="middle" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">(macula-relay)</text>
+  <text x="400" y="100" text-anchor="middle" fill="#6e7681" font-family="system-ui, sans-serif" font-size="9">(macula-station)</text>
 
   <rect x="335" y="114" width="130" height="24" rx="4" fill="#161b22" stroke="#30363d"/>
   <text x="400" y="131" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">QUIC listener</text>
 
   <rect x="335" y="148" width="130" height="24" rx="4" fill="#161b22" stroke="#30363d"/>
-  <text x="400" y="165" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">relay_handler</text>
+  <text x="400" y="165" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">frame router</text>
 
   <rect x="335" y="182" width="130" height="24" rx="4" fill="#161b22" stroke="#30363d"/>
-  <text x="400" y="199" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">gproc (PubSub)</text>
+  <text x="400" y="199" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">pub/sub routing</text>
 
   <rect x="335" y="216" width="130" height="24" rx="4" fill="#161b22" stroke="#30363d"/>
-  <text x="400" y="233" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">gproc (RPC)</text>
+  <text x="400" y="233" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">RPC routing</text>
 
   <rect x="335" y="250" width="130" height="24" rx="4" fill="#161b22" stroke="#30363d"/>
   <text x="400" y="267" text-anchor="middle" fill="#c9d1d9" font-family="monospace" font-size="9">Kademlia DHT</text>

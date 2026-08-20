@@ -13,8 +13,6 @@ The Macula Cluster API (`macula_cluster.erl`) provides a standardized interface 
 - **Cookie Management** - Resolving, setting, and persisting cluster cookies
 - **Node Monitoring** - Subscribing to node join/leave events
 
-![Cluster API Integration](assets/cluster_integration.svg)
-
 ---
 
 ## Cluster Strategies
@@ -23,7 +21,16 @@ The Macula Cluster API (`macula_cluster.erl`) provides a standardized interface 
 |----------|-----------|---------------|---------|----------|
 | **gossip** | Automatic (UDP multicast) | Zero-config | LAN multicast | Development, same-subnet production |
 | **static** | Manual | Node list required | Any | Known node sets, cross-subnet |
-| **mdns** | Automatic (mDNS/Bonjour) | Zero-config | LAN mDNS | macOS/Linux local development |
+| **mdns**, **dht** | Automatic, via `macula_dist_discovery` (the mesh DHT) | Zero-config | Internet-scale | Discovery across the relay mesh, not just LAN |
+| **auto** | Static if `nodes` is set, else gossip | — | — | Let `start_cluster/1` pick |
+
+`mdns` and `dht` are both accepted `strategy` values and both currently
+dispatch to the same DHT-based discovery
+(`macula_cluster_strategy`/`macula_dist_discovery`) — `discovery_type`
+is accepted in `Opts` and logged, but nothing in the module branches on
+it yet, so passing `discovery_type => mdns` does not get you actual
+mDNS/Bonjour discovery today despite the naming. If you specifically
+need LAN-local zero-config discovery, use `gossip`.
 
 ---
 
@@ -225,33 +232,6 @@ end.
     callback => {my_module, handle_cluster_event}
 }).
 ```
-
----
-
-## Integration with bc_gitops
-
-bc_gitops uses an optional dependency pattern to delegate to Macula when available:
-
-```erlang
-%% In bc_gitops_cluster.erl
-ensure_distributed() ->
-    case macula_exports(ensure_distributed, 0) of
-        true -> apply(macula, ensure_distributed, []);
-        false -> do_ensure_distributed()
-    end.
-
-macula_exports(Function, Arity) ->
-    macula_available() andalso
-    erlang:function_exported(macula, Function, Arity).
-
-macula_available() ->
-    case code:ensure_loaded(macula) of
-        {module, macula} -> true;
-        {error, _} -> false
-    end.
-```
-
-This ensures bc_gitops works standalone (without Macula) and delegates when Macula is present.
 
 ---
 

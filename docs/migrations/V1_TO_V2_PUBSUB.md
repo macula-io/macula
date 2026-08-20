@@ -312,7 +312,7 @@ ship a major.
 - [Pub/Sub Guide](../guides/PUBSUB_GUIDE.md) — V2 surface in detail
 - [`macula` facade](https://hexdocs.pm/macula/macula.html) — every
   function (V1 and V2)
-- [`macula_mesh_client`](https://hexdocs.pm/macula/macula_mesh_client.html)
-  — V1 single-connection client (still in the tree)
+- `macula_mesh_client` — the V1 single-connection client this migration
+  replaces. Removed from the tree since; not published in current docs.
 - [`macula_client`](https://hexdocs.pm/macula/macula_client.html) —
   V2 pool

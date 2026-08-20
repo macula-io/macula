@@ -166,6 +166,7 @@ They are for unit tests and same-node dispatch. The pool forms
 | `call_stream(Pool, Realm, Proc, Args, Opts)` | consumer: open a stream on the pool's own link (`Opts` may set `mode`) |
 | `call_stream_station(Pool, Station, Realm, Proc, Args, Opts)` | consumer: **direct-dial** — dial `Station` and open the stream there in one hop |
 | `advertise_stream(Pool, Realm, Proc, Mode, Handler)` | provider: serve a streaming procedure |
+| `unadvertise_stream(Pool, Realm, Proc)` | provider: stop serving it |
 | `send(Stream, Bin)` / `send(Stream, Body, Enc)` | send a chunk (`Enc` = `raw` \| `msgpack`) |
 | `recv(Stream)` / `recv(Stream, Timeout)` | read the next `{chunk,_}` / `{data,_}` / `eof` |
 | `close_send(Stream)` | half-close your send direction |

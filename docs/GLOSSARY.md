@@ -2,8 +2,7 @@
 
 **Terminology reference for the Macula SDK**
 
-**Last Updated:** 2026-04-09
-**Applies to:** Macula SDK v1.0.0+
+**Applies to:** the current SDK — see [CHANGELOG.md](../CHANGELOG.md) for version history
 
 ---
 
@@ -22,14 +21,14 @@ Any BEAM application using the Macula SDK. Connects outbound to a relay over QUI
 An isolated namespace for multi-tenant applications. Format: reverse domain notation (e.g., `io.macula`, `io.example.myapp`). All communication is scoped to a realm.
 
 ### Cluster
-A logical group of nodes that form an Erlang cluster. Can be formed via gossip (UDP multicast), static configuration, or mDNS. LAN clustering works independently of relay connections.
+A logical group of nodes that form an Erlang cluster. Can be formed via gossip (UDP multicast), static configuration, or DHT-based discovery (`strategy => dht` or `mdns` — both currently route through the same DHT-based discovery; see the [Clustering Guide](guides/CLUSTERING_GUIDE.md)). LAN clustering works independently of relay connections.
 
 ---
 
 ## Communication
 
 ### Pub/Sub
-Topic-based event distribution. Publishers send events to topics; all subscribers on the mesh receive them. Topics are dot-separated strings (e.g., `sensors.temperature`). Entity IDs go in payloads, not topic names.
+Topic-based event distribution. Publishers send events to topics; all subscribers on the mesh receive them. Topics are the canonical five-segment slash-separated shape (`{realm}/{org}/{app}/{domain}/{name}_v{N}`, e.g. `io.macula/acme/counter/orders/placed_v1`), built via `macula_topic`, never hand-typed. Entity IDs go in payloads, not topic names. See the [Topic Naming Guide](guides/TOPIC_NAMING_GUIDE.md).
 
 ### RPC (Remote Procedure Call)
 Request/response pattern. Providers advertise procedures; consumers call them. The relay mesh handles discovery via Kademlia DHT. Calls return `{ok, Result}` or `{error, Reason}`.
@@ -68,7 +67,7 @@ Examples:
 - `mri:app:io.macula/acme/counter` -- an application
 - `mri:device:io.macula/acme/sensor-1` -- a device
 
-23 built-in types: realm, org, user, app, service, artifact, instance, license, cert, key, topic, proc, content, device, cluster, location, zone, network, model, dataset, config, class, taxonomy.
+24 built-in types: realm, org, user, app, service, artifact, instance, license, cert, key, topic, proc, content, device, cluster, location, zone, network, model, dataset, config, class, taxonomy, station (the last is self-rooted by Ed25519 pubkey, not realm-scoped).
 
 ### MRI Type Registry
 Runtime registry for MRI types. Built-in types are always valid. Custom types can be registered per-realm via `macula_mri_registry`.
@@ -81,7 +80,7 @@ Runtime registry for MRI types. Built-in types are always valid. Custom types ca
 UDP-based transport protocol (RFC 9000) with built-in TLS 1.3. NAT-friendly (single UDP port), firewall-friendly (outbound only). Macula uses Quinn (Rust NIF) for QUIC transport.
 
 ### Wire Protocol
-Binary message format using MessagePack encoding. Message types: CONNECT, SUBSCRIBE, PUBLISH, CALL, REPLY, REGISTER_PROCEDURE, PING/PONG.
+Binary message format using MessagePack encoding. Message types include CONNECT, HELLO, SUBSCRIBE, PUBLISH, EVENT, CALL, RESULT, CALL_ERROR, ADVERTISE/UNADVERTISE, and PING/PONG — see `macula_frame` for the full set, including stream and SWIM/HyParView frames.
 
 ### Tunnel
 An encrypted Erlang distribution channel between two nodes routed through the relay mesh. Uses AES-256-GCM encryption (key derived from distribution cookie). The relay cannot read ETF content.

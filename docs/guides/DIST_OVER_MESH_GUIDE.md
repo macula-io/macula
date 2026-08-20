@@ -63,22 +63,28 @@ The relay sees encrypted bytes — it cannot read your Erlang terms.
 
 ## join_mesh Options
 
+`join_mesh/1` honors exactly two keys — anything else in the map is
+simply ignored, there's no validation error for a stray key:
+
 ```erlang
 macula:join_mesh(#{
-    relays => [<<"https://relay-de-berlin.macula.io:4433">>,
-               <<"https://relay-fi-helsinki.macula.io:4433">>],
-    realm => <<"io.macula">>,           %% default
-    identity => <<"myapp-prod-1">>,     %% default: node name
-    tls_verify => none                  %% default: none (dev mode)
+    relays   => [<<"https://relay-de-berlin.macula.io:4433">>,
+                 <<"https://relay-fi-helsinki.macula.io:4433">>],
+    identity => MyKeyPair                %% optional
 }).
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `relays` | required | List of relay URLs to connect to |
-| `realm` | `<<"io.macula">>` | Mesh realm (nodes must share a realm) |
-| `identity` | node name | How this node identifies itself |
-| `tls_verify` | `none` | `none` for dev, `verify_peer` for production |
+| `relays` | required | List of relay URLs to connect to (the V2 pool's seeds) |
+| `identity` | auto-generated | `macula_identity:key_pair()` — the pool's shared Ed25519 identity |
+
+There is no `realm` option — dist tunnel frames travel under the
+protocol-internal all-zeros realm regardless of any user realm. There
+is no `tls_verify` option either, at `join_mesh/1` or anywhere in the
+pool's `connect/2` options (see the [Connecting Guide](CONNECTING_GUIDE.md)
+for the real option set) — QUIC's TLS 1.3 is mandatory and not
+independently togglable from the SDK side.
 
 ## What Nodes Need to Share
 
@@ -153,8 +159,6 @@ A wrong cookie produces `decrypt_failed` warnings.
 
 ### Relay Reconnection
 
-![Relay Failover](assets/relay_failover.svg)
-
 If the relay drops (QUIC disconnect, relay restart), the bridge:
 
 1. Detects `DOWN` monitor signal
@@ -203,7 +207,7 @@ macula_dist_pool:get_tunnel_metrics().
 
 | Module Define | Value | Description |
 |---------------|-------|-------------|
-| `DIST_TIMEOUT` | 25000ms | Tunnel negotiation timeout |
+| `DIST_TIMEOUT` | 10000ms | Tunnel RPC timeout |
 | `BRIDGE_RECV_TIMEOUT` | 60000ms | Bridge reader/writer timeout |
 | `CONTROLLER_TIMEOUT` | 30000ms | Kernel controller timeout |
 | `BACKPRESSURE_HWM` | 64 | Relay client queue depth before pause |

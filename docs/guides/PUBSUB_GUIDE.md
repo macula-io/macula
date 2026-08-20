@@ -148,18 +148,20 @@ same EVENT arrives via multiple links (e.g. with
 
 ### When the subscription ends
 
-The subscriber receives **exactly one** terminal message:
+The only way a live subscription produces a terminal message today is
+the pool closing:
 
 ```erlang
-{macula_event_gone, SubRef, Reason}
+{macula_event_gone, SubRef, pool_closed}
 ```
 
-`Reason` is one of:
-
-| Reason | Cause |
-|---|---|
-| `pool_closed` | `macula:close(Pool)` was called |
-| `{disconnected, _}` | The link supplying this sub was torn down (Phase 4 may quiet this when replay is in-flight) |
+A link dying does **not** send this — the pool logs
+`_macula.client.link_down`, schedules a respawn, and silently
+re-issues the subscription against the new link once it's up (see
+[Connecting Guide](CONNECTING_GUIDE.md#lifecycle)). A subscriber sees
+no gap-signaling message for that case, only a possible gap in
+delivery itself, which `ordered` mode's `order_timeout_ms` skip
+handles the same way it handles any other loss.
 
 After `event_gone` arrives, no further events come for that `SubRef`.
 
@@ -311,23 +313,28 @@ ok = macula:publish(Pool, Realm, Topic, Payload, #{timeout_ms => 1000}).
 
 - **At-most-once** — fire and forget. No publisher-visible ack from
   subscribers.
-- **Per-publisher delivery order** — none. `seq` is monotonic per
-  publisher per pool, but events are **not delivered in `seq` order**.
-  A relay spreads one publisher's burst across concurrent verify
-  workers for throughput, and a receiver may admit an event by more
-  than one path, so two events from one publisher can arrive in either
-  order. Use `seq` to detect gaps, dedup, or reorder yourself — the
-  mesh will not reorder for you. (Measured: 25 in-order events from one
-  publisher arrive with dozens of inverted pairs.)
-- **Cross-publisher ordering** — none. Two publishers' events arrive
-  in arbitrary interleaving.
+- **Per-publisher delivery order** — `ordered` by default at the
+  subscriber (see [Subscribing with options](#subscribing-with-options--delivery-ordering)
+  above): out-of-order arrivals are buffered and released in `seq`
+  order, with a genuinely missing `seq` skipped after
+  `order_timeout_ms`. The mesh itself does not guarantee arrival
+  order — a relay spreads one publisher's burst across concurrent
+  verify workers, and a receiver may admit an event by more than one
+  path — the subscriber-side `ordered` buffer is what turns that into
+  in-order delivery. Opt into `as_arrives` if you'd rather see raw
+  arrival order and reorder yourself.
+- **Cross-publisher ordering** — none, by design. Two publishers'
+  events arrive in arbitrary interleaving; see "Total order is not
+  offered, by design" above.
 - **Cross-link dedup** — the pool dedupes by `(Realm, Publisher,
   Seq)` over a 60-second window (configurable; see
   `dedup_window_ms` in [CONNECTING_GUIDE.md](CONNECTING_GUIDE.md)).
-- **Cross-station gossip** — Phase 1 ships single-station fan-out
-  only. A daemon connected to station A and a daemon connected to
-  station B see each other only after Plumtree gossip lands (Phase 2
-  / Plan C.2).
+- **Cross-station gossip** — default since 4.5.0. A daemon connected
+  to station A and a daemon connected to station B see each other's
+  publishes once subscription interest and the fact itself have
+  gossiped between the stations; publisher-end-to-end signatures plus
+  `(publisher, seq)` dedup at each hop is what makes this safe past
+  one hop.
 
 ---
 
