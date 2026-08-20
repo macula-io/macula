@@ -24,9 +24,14 @@ Then join the mesh:
 
 ```erlang
 ok = macula:join_mesh(#{
-    relays => [<<"https://relay-de-berlin.macula.io:4433">>]
+    relays => [<<"https://relay-a.macula.io:4433">>]
 }).
 ```
+
+`relay-a` here is illustrative — see the live, current station list at
+[macula.io/stations](https://macula.io/stations) rather than hardcoding a
+specific hostname; city-coded relay names have not reliably matched the
+box's actual physical location.
 
 That's it. Now ping any other node on the mesh:
 
@@ -68,8 +73,8 @@ simply ignored, there's no validation error for a stray key:
 
 ```erlang
 macula:join_mesh(#{
-    relays   => [<<"https://relay-de-berlin.macula.io:4433">>,
-                 <<"https://relay-fi-helsinki.macula.io:4433">>],
+    relays   => [<<"https://relay-a.macula.io:4433">>,
+                 <<"https://relay-b.macula.io:4433">>],
     identity => MyKeyPair                %% optional
 }).
 ```
@@ -109,13 +114,13 @@ That's it. No shared network, no VPN, no port forwarding.
 
 ## Cross-Relay Distribution
 
-Nodes don't need to be on the same relay. If Node A is on
-`relay-it-milan` (Nuremberg box) and Node B is on `relay-se-stockholm`
-(Helsinki box), the relays forward tunnel traffic through their
-peering connections.
+Nodes don't need to be on the same relay. If Node A is on Relay A and
+Node B is on a different, peered Relay B, the relays forward tunnel
+traffic through their peering connection — see
+[macula.io/stations](https://macula.io/stations) for the live topology.
 
 ```
-Node A → relay-it-milan ──peering──► relay-se-stockholm → Node B
+Node A → Relay A ──peering──► Relay B → Node B
 ```
 
 SWIM protocol detects relay health. Bloom filter routing ensures

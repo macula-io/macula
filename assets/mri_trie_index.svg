@@ -74,7 +74,7 @@
   <text x="30" y="318" fill="#c9d1d9" font-family="monospace" font-size="10">{ok, Idx} = macula_mri:build_index(All),</text>
   <text x="30" y="336" fill="#c9d1d9" font-family="monospace" font-size="10">{ok, Kids} = macula_mri:index_children(</text>
   <text x="30" y="352" fill="#c9d1d9" font-family="monospace" font-size="10">    Idx, &lt;&lt;"io.macula"&gt;&gt;, [&lt;&lt;"acme"&gt;&gt;]).</text>
-  <text x="30" y="372" fill="#3fb950" font-family="monospace" font-size="10">%% => [counter, weather]</text>
+  <text x="30" y="372" fill="#3fb950" font-family="monospace" font-size="10">%% => [&lt;&lt;"...counter"&gt;&gt;, &lt;&lt;"...weather"&gt;&gt;]</text>
 
   <!-- Performance comparison -->
   <rect x="350" y="275" width="310" height="110" rx="8" fill="#21262d" stroke="#a371f7" stroke-width="1"/>

@@ -193,7 +193,7 @@ index once and query it in `O(d)` (tree depth) instead of scanning:
 {ok, Idx}  = macula_mri:build_index(All),
 {ok, Kids} = macula_mri:index_children(
     Idx, <<"io.macula">>, [<<"acme">>]).
-%% => [counter, weather]
+%% => [<<"mri:app:io.macula/acme/counter">>, <<"mri:app:io.macula/acme/weather">>]
 ```
 
 ### Construction
@@ -208,12 +208,12 @@ index once and query it in `O(d)` (tree depth) instead of scanning:
 <<"mri:app:io.macula/acme/counter">> =
     macula_mri:new_app(<<"io.macula">>, <<"acme">>, <<"counter">>).
 
-%% Generic constructor
-<<"mri:device:io.macula/citypower/cabinet-001">> =
-    macula_mri:new(device, #{
-        realm => <<"io.macula">>,
-        path => [<<"citypower">>, <<"cabinet-001">>]
-    }).
+%% Generic constructor — for a type with no dedicated new_*/N helper.
+%% Unlike new_realm/1, new_org/2, etc. (which return a bare mri()),
+%% new/3 returns {ok, mri()} | {error, term()} (it validates first).
+{ok, <<"mri:device:io.macula/citypower/cabinet-001">>} =
+    macula_mri:new(device, <<"io.macula">>,
+                   [<<"citypower">>, <<"cabinet-001">>]).
 ```
 
 ## Hierarchical Relationships

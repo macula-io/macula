@@ -70,14 +70,14 @@ the client you build against.
 Add to `rebar.config`:
 
 ```erlang
-{deps, [{macula, "~> 9.1"}]}.
+{deps, [{macula, "~> 9.2"}]}.
 ```
 
 Or in Elixir `mix.exs`:
 
 ```elixir
 defp deps do
-  [{:macula, "~> 9.1"}]
+  [{:macula, "~> 9.2"}]
 end
 ```
 
