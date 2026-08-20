@@ -199,10 +199,10 @@ true = macula_cert:is_valid_now(InstanceCert).
 #### Encode/decode
 
 ```erlang
-{ok, Binary} = macula_cert:encode(Cert),
-{ok, Cert}   = macula_cert:decode(Binary),
-Map          = macula_cert:to_map(Cert),
-{ok, Cert}   = macula_cert:from_map(Map).
+Binary     = macula_cert:encode(Cert),      %% bare binary(), not {ok, _}
+{ok, Cert} = macula_cert:decode(Binary),
+Map        = macula_cert:to_map(Cert),      %% bare map(), not {ok, _}
+{ok, Cert} = macula_cert:from_map(Map).
 ```
 
 ### Trust store
