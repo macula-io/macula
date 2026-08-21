@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.13.4] - 2026-08-21
+
+### Changed (documentation)
+
+- **The RPC, PubSub, Content, and Streaming guides now lead with the
+  supervised wrappers, not the raw wire primitives.** Prompted by the design
+  question "devs will use the high-level stuff — why do the guides teach the
+  raw APIs first?" Checked the actual heading order rather than assuming:
+  three of four guides buried their `macula_response`/`macula_publisher`/
+  `macula_streamer`/`macula_feeder`-family sections 40-70% of the way
+  through, after extensive raw-primitive walkthroughs, even though every
+  guide's own `> **Audience:**` line says "applications" — not SDK
+  contributors. Root cause: the raw primitives are original, the supervised
+  behaviours arrived later in stages (macula_streamer/macula_feeder at
+  9.2.0, macula_publisher as late as 9.4.0, macula_pusher/macula_upload
+  today), and each got appended as a trailing section rather than
+  triggering a reorder.
+  - `RPC_GUIDE.md` — moved "Supervised wrappers: macula_response /
+    macula_request" (plus its own direct-dial subsection) to right after
+    Overview; the raw `advertise`/`call`/`call_station` walkthroughs now
+    follow, explicitly marked as "reach for this directly only if you're
+    building something the wrapper doesn't fit."
+  - `PUBSUB_GUIDE.md` — moved "Subscribing with macula_subscriber
+    (supervised)" and "Publishing with macula_publisher (supervised)" to
+    immediately follow their raw call's signature, ahead of the deeper
+    protocol mechanics (delivery ordering, dedup) and the hand-rolled
+    gen_server pattern, which stayed in place with a "the raw pattern
+    macula_subscriber wraps" framing note.
+  - `STREAMING_GUIDE.md` — moved "Supervised wrappers: macula_streamer /
+    macula_stream_sink" (and the "Push/upload" section that was already
+    correctly positioned right after it) ahead of "Consumer side"/"Provider
+    side"'s raw `call_stream`/`advertise_stream` walkthroughs.
+  - `CONTENT_GUIDE.md` — already led with its wrapper section (added during
+    this session's own PLAN_PUSH_UPLOAD.md work); only a short consistency
+    callout added, matching the other three guides' framing.
+  - Every heading's TEXT was left unchanged specifically to keep anchor IDs
+    stable — verified with a repo-wide scan for cross-references into these
+    four guides' sections (README.md, other guides, `.erl` moduledocs,
+    `plans/`) before and after: zero external references existed to any of
+    the moved sections, and the load-bearing internal ones were spot-checked
+    against their real heading text after the move.
+- **`rebar.config` gained `groups_for_modules`**, clustering the 10
+  supervised-wrapper modules (`macula_request`, `macula_response`,
+  `macula_publisher`, `macula_subscriber`, `macula_feeder`,
+  `macula_download`, `macula_pusher`, `macula_upload`, `macula_streamer`,
+  `macula_stream_sink`) under a "Supervised Wrappers" group on hexdocs'
+  module sidebar — previously flat/alphabetical, with no signal
+  distinguishing them from `macula_client`/`macula_station_link`/
+  `macula_stream`/`macula_quic` and the rest of the ~60 other modules an
+  application almost never touches directly. Confirmed rendering by
+  inspecting the built `doc/dist/sidebar_items-*.js` output directly, not
+  just a clean build exit code.
+
+### Notes
+
+- A deliberate alternative NOT taken: physically splitting the wrappers
+  into a separate hex package (`macula-sdk`) or a `macula/sdk/`
+  subdirectory. This codebase has tried variants of that split twice
+  before and reverted both times — a standalone `macula-sdk` repo
+  (deprecated, folded back in) and a `macula-v2` umbrella of separate apps
+  (fully absorbed as of 3.7.0). Checked why: the wrappers reach past
+  `macula.erl`'s facade into internal modules inconsistently even among
+  themselves (`macula_streamer` calls `macula_stream` directly;
+  `macula_stream_sink` goes through the `macula:` facade for the same
+  kind of call; `macula_content_transfer` calls `macula_station_link` and
+  `macula_quic` directly; `macula_upload` IS a `macula_streamer` callback
+  module, not just a caller of its public API) — there is no clean
+  dependency line to cut without first hardening an internal public
+  boundary, which is real, separate work, not a file move. The
+  `groups_for_modules` change above gets the actual discoverability
+  benefit without that risk.
+- No code behavior changes — documentation and `rebar.config` only. Full
+  eunit suite unchanged at 1902/0 failed; `rebar3 xref`/`dialyzer` clean
+  (same pre-existing warnings as before); `rebar3 ex_doc` exit 0, no new
+  warnings, confirmed by building and inspecting the actual generated
+  output, not just the exit code, for both the module grouping and every
+  reordered guide.
+- Every guide reorder was verified content-preserving before commit: every
+  original heading still present exactly once, and every original code
+  block byte-for-byte present somewhere in the new file (a scripted diff,
+  not a visual skim) — matching this project's own "never delete
+  features" rule applied to documentation, not just code.
+
+---
+
 ## [9.13.3] - 2026-08-21
 
 ### Fixed (documentation)

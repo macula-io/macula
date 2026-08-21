@@ -43,6 +43,12 @@ content (see below). `get_content/2` fetches the bytes back for either shape,
 or `{error, not_found}` if no reachable host holds a copy. Integrity is
 verified before the bytes are returned, so the caller does not re-verify.
 
+`put_content/2`/`get_content/2` above are the raw primitives. Most
+applications want the supervised counterparts instead — an addressable pid
+you can monitor and cancel, `sharing.*_v1` mesh facts around each transfer:
+see [Supervised wrappers](#supervised-wrappers-macula_feeder--macula_download),
+right below.
+
 ---
 
 ## MCID format

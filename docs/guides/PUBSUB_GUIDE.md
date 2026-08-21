@@ -36,6 +36,13 @@ ok = macula:publish(Pool, Realm, Topic,
 ok = macula:unsubscribe(Pool, Sub).
 ```
 
+The calls above are the raw primitives. Most applications want the
+supervised counterparts instead — an addressable pid you can monitor and
+cancel, `pubsub.*_v1` mesh facts around each operation: see
+[Subscribing with `macula_subscriber`](#subscribing-with-macula_subscriber-supervised)
+and [Publishing with `macula_publisher`](#publishing-with-macula_publisher-supervised)
+below.
+
 ---
 
 ## Three core ideas
@@ -146,6 +153,38 @@ each `(Realm, Publisher, Seq)` tuple **at most once**, even when the
 same EVENT arrives via multiple links (e.g. with
 `replication_factor > 1`).
 
+### Subscribing with `macula_subscriber` (supervised)
+
+`macula_subscriber` packages a gen_server that subscribes in its own
+`init/1` and threads `macula_event` / `macula_event_gone` dispatch into
+`Module:handle_event/4` for you — no hand-rolled `handle_info` clauses
+needed (see [Subscribing in a callback module](#subscribing-in-a-callback-module)
+below for the manual pattern this replaces, if you're building something
+the wrapper doesn't fit):
+
+```erlang
+-module(my_orders_listener).
+-behaviour(macula_subscriber).
+-export([init/1, handle_event/4]).
+
+init(_Args) -> {ok, #{}}.
+
+handle_event(_Topic, Payload, _Meta, State) ->
+    on_order_placed(Payload),
+    {noreply, State}.
+```
+
+```erlang
+Topic = macula_topic:app_fact(Realm, my_org, my_app,
+                              <<"orders">>, <<"placed">>, 1),
+{ok, Pid} = macula_subscriber:start_link(my_orders_listener, Pool, Realm,
+                                         Topic, []).
+```
+
+A `macula_event_gone` for this subscription stops the sink with that
+reason — same as the manual `{stop, {pool_gone, Reason}, S}` shown for the
+raw pattern below.
+
 ### When the subscription ends
 
 The only way a live subscription produces a terminal message today is
@@ -244,8 +283,10 @@ filter.
 
 ### Subscribing in a callback module
 
-A common pattern: a `gen_server` subscribes in `init/1`, handles
-events in `handle_info/2`.
+The raw pattern [`macula_subscriber` wraps](#subscribing-with-macula_subscriber-supervised),
+above: a `gen_server` subscribes in `init/1`, handles events in
+`handle_info/2` by hand. Reach for this directly only if you're building
+something the wrapper doesn't fit.
 
 ```erlang
 -module(my_orders_listener).
@@ -271,35 +312,6 @@ handle_info({macula_event_gone, Sub, Reason},
 
 Pattern-match the `Sub` reference into the function head — that
 keeps a process subscribing to multiple topics readable.
-
-### Subscribing with `macula_subscriber` (supervised)
-
-`macula_subscriber` is the same pattern as above, packaged as a behaviour —
-it links to `Pool`, subscribes in its own `init/1`, and threads
-`macula_event` / `macula_event_gone` dispatch into `Module:handle_event/4`
-for you:
-
-```erlang
--module(my_orders_listener).
--behaviour(macula_subscriber).
--export([init/1, handle_event/4]).
-
-init(_Args) -> {ok, #{}}.
-
-handle_event(_Topic, Payload, _Meta, State) ->
-    on_order_placed(Payload),
-    {noreply, State}.
-```
-
-```erlang
-Topic = macula_topic:app_fact(Realm, my_org, my_app,
-                              <<"orders">>, <<"placed">>, 1),
-{ok, Pid} = macula_subscriber:start_link(my_orders_listener, Pool, Realm,
-                                         Topic, []).
-```
-
-A `macula_event_gone` for this subscription stops the sink with that
-reason — same as returning `{stop, {pool_gone, Reason}, S}` by hand above.
 
 ---
 
@@ -327,6 +339,38 @@ Returns:
 > **Partial success counts as success.** With `replication_factor > 1`,
 > `publish/4` returns `ok` as soon as the first selected link accepts
 > the frame. Subsequent links are best-effort.
+
+### Publishing with `macula_publisher` (supervised)
+
+`macula:publish/4` above is a plain blocking call with no addressable pid
+to cancel or observe from outside. `macula_publisher` (9.4.0+) is the
+supervised counterpart — same relationship `macula_subscriber` has to a
+hand-rolled receive loop, or `macula_feeder` has to `put_content/2`:
+
+```erlang
+-module(status_publisher).
+-behaviour(macula_publisher).
+-export([init/1, handle_published/2]).
+
+init(Parent) -> {ok, Parent}.
+
+handle_published(Result, Parent) ->
+    Parent ! {published, Result},
+    {stop, normal, Parent}.
+```
+
+```erlang
+{ok, Pid} = macula_publisher:start_link(status_publisher, Pool, Realm,
+                                        Topic, Payload, self()).
+```
+
+`start_link/5,6` returns immediately with a pid; the publish runs in a
+linked worker and the outcome (`ok | {error, term()}`) reaches
+`Module:handle_published/2`. `macula_publisher:cancel/1` stops it before
+the publish resolves, delivering `outcome => cancelled` in the
+`pubsub.publish_completed_v1` mesh fact published around the transfer
+(paired with `pubsub.publish_started_v1` at the start) — same shape as
+`macula_feeder`'s `sharing.put_started_v1` / `sharing.put_completed_v1`.
 
 ### Publishing with options
 
@@ -364,38 +408,6 @@ ok = macula:publish(Pool, Realm, Topic, Payload, #{timeout_ms => 1000}).
   gossiped between the stations; publisher-end-to-end signatures plus
   `(publisher, seq)` dedup at each hop is what makes this safe past
   one hop.
-
-### Publishing with `macula_publisher` (supervised)
-
-`macula:publish/4` is a plain blocking call with no addressable pid to
-cancel or observe from outside. `macula_publisher` (9.4.0+) is the
-supervised counterpart — same relationship `macula_subscriber` has to a
-hand-rolled receive loop, or `macula_feeder` has to `put_content/2`:
-
-```erlang
--module(status_publisher).
--behaviour(macula_publisher).
--export([init/1, handle_published/2]).
-
-init(Parent) -> {ok, Parent}.
-
-handle_published(Result, Parent) ->
-    Parent ! {published, Result},
-    {stop, normal, Parent}.
-```
-
-```erlang
-{ok, Pid} = macula_publisher:start_link(status_publisher, Pool, Realm,
-                                        Topic, Payload, self()).
-```
-
-`start_link/5,6` returns immediately with a pid; the publish runs in a
-linked worker and the outcome (`ok | {error, term()}`) reaches
-`Module:handle_published/2`. `macula_publisher:cancel/1` stops it before
-the publish resolves, delivering `outcome => cancelled` in the
-`pubsub.publish_completed_v1` mesh fact published around the transfer
-(paired with `pubsub.publish_started_v1` at the start) — same shape as
-`macula_feeder`'s `sharing.put_started_v1` / `sharing.put_completed_v1`.
 
 ---
 
