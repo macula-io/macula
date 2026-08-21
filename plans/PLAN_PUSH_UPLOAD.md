@@ -51,6 +51,35 @@ this plan's actual deliverable.
   cases (log tail, query-yields-rows, batch upload) order is the entire point — losing
   or reordering a chunk corrupts the result. Do not "fix" this by adding an index; it's
   the correct shape for what streaming RPC is actually for.
+  - **"But what about media streaming" was raised and is worth writing down so it
+    doesn't get re-litigated:** it's tempting to think live video/audio justifies
+    loss-tolerant, parallelizable, reorderable delivery for `macula_streamer`/
+    `macula_stream_sink` — real RTP/WebRTC-style media transport does work that way.
+    But `macula_stream` rides a QUIC *stream*, and QUIC streams are reliable and
+    ordered by the protocol itself (the same guarantee class as a single TCP
+    connection) — a "lost" packet triggers retransmission, never a gap the
+    application sees. There is no glitch-and-move-on available at this layer; either
+    the byte arrives, in order, or the stream/connection dies outright. So "media
+    streaming" was actually a bad example to reach for either direction of this
+    argument — as this SDK is built today, streaming a video over
+    `macula_streamer`/`macula_stream_sink` would behave like piping it through TCP,
+    not like RTP. The more useful, generalizable question this exchange surfaced:
+    *does this workload need strict order and guaranteed delivery of every event,
+    with potentially more than one interested consumer?* When yes, and the data
+    represents a standalone fact rather than a private session, that's **pubsub's**
+    job, not streaming RPC's — pubsub already has `macula_pubsub_order` (a
+    per-publisher FIFO reorder buffer) precisely because its substrate is
+    best-effort multi-hop relay and ordering gets layered back on top for
+    consumers that want it, with multi-subscriber fan-out built in from the start.
+    Streaming RPC's honest remaining niche, once "live lossy media" is taken out of
+    it (because it can't do that anyway, today): point-to-point, session-scoped,
+    reliable, ordered continuous data tied to one connection (a log tail for one
+    debugging client, a query's rows for one caller, a batch upload for one
+    transfer) — pubsub's mesh-wide relay/dedup overhead would be the wrong shape for
+    something inherently private to one session. If genuine loss-tolerant real-time
+    media transport is ever wanted, see the out-of-scope note below — it needs a
+    transport capability this SDK doesn't have, not a change to how streaming RPC's
+    existing chunks are ordered.
 - **Streaming RPC probably doesn't need an explicit pause primitive.** `macula_stream`
   rides a QUIC *stream* (reliable, ordered, retransmission not gaps — verified: the SDK
   exposes no application-level unreliable-datagram API, `macula_quic:max_datagram_size/1`
@@ -77,6 +106,30 @@ this plan's actual deliverable.
   would silently degrade them to direct-links-only reach — the same failure mode that
   cost `macula-realm`'s fleet dashboard an hour earlier this same session
   (`_mesh.health.v1` never registering as a subscriber anywhere). Do not rename these.
+
+## Related finding, deliberately out of scope here
+
+The design conversation that produced this plan started from a broader question: given
+all four primitive pairs are now complete, does **hecate-om** (the shared Hecate service
+scaffold, separate repo `hecate-services/hecate-om`) need extending to use them? Answer:
+no, not structurally — `hecate_om:macula_client/0` already hands any service the raw
+pool, and every behaviour module here just takes a `Pool`, so a service can call
+`macula_subscriber:start_link/5` or `macula_feeder:start_link_direct/5` against it today
+with zero hecate-om changes.
+
+One real thing surfaced along the way, worth keeping so it isn't lost, but genuinely a
+separate piece of work in a separate repo: `hecate_om_capabilities:call_capability/7`
+(hecate-om's *one* existing RPC convenience — resolve providers from the DHT, verify
+cert chains, resolve the serving station's endpoint, `macula:call_station/7`, manual
+provider failover) is a hand-rolled, blocking, non-cancellable direct-dial
+implementation that predates, and duplicates in spirit, what
+`macula_request:start_link_direct/6,7` + `macula_response:advertise_direct/6,7` now
+give for free — supervised, cancellable (once Phase 1's abort-based cancel exists),
+and observable via `rpc.sent_v1`/`rpc.completed_v1` mesh facts. It carries real
+hecate-specific logic worth preserving (cert-chain verification, UCAN gating,
+multi-provider failover), so refactoring it onto `macula_request` is a genuine
+redesign, not a drop-in swap — and it's not blocking anything here. Flagging it as a
+candidate follow-up plan in `hecate-services/hecate-om/plans/`, not a phase of this one.
 
 ## Architecture before this work (verified 2026-08-21)
 
