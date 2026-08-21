@@ -11,7 +11,9 @@
 > `macula_download`/`macula_feeder`'s `start_link_direct`) since 9.6.0/9.7.0;
 > addressable transfers with a real, peer-visible cancel
 > (`macula_content_transfer`) since 9.9.0, real pause/resume for chunked
-> transfers since 9.10.0, parallel multi-stream chunk transfer since 9.11.0.
+> transfers since 9.10.0, parallel multi-stream chunk transfer since 9.11.0;
+> `macula_feeder`/`macula_download`'s own `cancel/1` reaching that same real
+> abort (not just killing their local worker) since 9.11.1.
 > For a live, open-ended feed instead of a fixed blob, see the
 > [Streaming Guide](STREAMING_GUIDE.md).
 
@@ -68,12 +70,14 @@ always yields the same MCID — that is what makes it a content address.
 `put_content/2` and `get_content/2` are plain blocking calls — no
 addressable pid to cancel one from outside. `macula_feeder` and
 `macula_download` wrap them as proper OTP behaviours: `start_link/4,5`
-returns immediately with a pid, runs the put/get in a linked worker, and
-delivers the outcome to your callback. Each publishes its own
-`sharing.put_started_v1` / `sharing.put_completed_v1` (feeder) or
-`sharing.get_started_v1` / `sharing.get_completed_v1` (download) mesh
-fact, carrying `chunked => true | false` so an observer can tell single-block
-transfers from manifest ones without decoding the MCID itself.
+returns immediately with a pid and delivers the outcome to your callback.
+Each publishes its own `sharing.put_started_v1` / `sharing.put_completed_v1`
+(feeder) or `sharing.get_started_v1` / `sharing.get_completed_v1` (download)
+mesh fact, carrying `chunked => true | false` so an observer can tell
+single-block transfers from manifest ones without decoding the MCID itself.
+Internally each drives `macula_content_transfer` directly (not a blocking
+call in a plain linked worker), so `cancel/1` is a real, peer-visible abort
+— see "Real cancel" below.
 
 ```erlang
 -module(doc_download).
@@ -91,8 +95,9 @@ handle_downloaded(Result, Parent) ->
 {ok, Pid} = macula_download:start_link(doc_download, Pool, Realm,
                                        Mcid, self()).
 
-%% cancel before the get resolves — publishes sharing.get_completed_v1
-%% with outcome => cancelled
+%% cancel before the get resolves — resets the open content stream for
+%% real (macula_content_transfer:cancel/1 underneath, since 9.11.1) and
+%% publishes sharing.get_completed_v1 with outcome => cancelled
 ok = macula_download:cancel(Pid).
 ```
 
@@ -142,14 +147,18 @@ end,
 macula_content_transfer:cancel(Pid).   % reap the handle when done
 ```
 
-`cancel/1,3` is a **real, peer-visible abort**, not the blunt local kill
-`macula_feeder`/`macula_download`'s own `cancel/1` (`gen_server:stop/1`) still
-is: if a content stream is already open, `cancel/3` resets it with
-`macula_quic:reset_stream/2` — a QUIC RESET_STREAM frame the peer's own read
-genuinely observes, not merely a connection that went away. `Message` is
-local-only (QUIC RESET_STREAM carries just the numeric `Code` on the wire);
-`cancel/1` defaults to `Code = 0`. A transfer cancelled before it has picked a
-link yet has nothing to reset — the worker is simply killed, same as today.
+`cancel/1,3` is a **real, peer-visible abort**: if a content stream is
+already open, `cancel/3` resets it with `macula_quic:reset_stream/2` — a
+QUIC RESET_STREAM frame the peer's own read genuinely observes, not merely
+a connection that went away. `Message` is local-only (QUIC RESET_STREAM
+carries just the numeric `Code` on the wire); `cancel/1` defaults to
+`Code = 0`. A transfer cancelled before it has picked a link yet has
+nothing to reset — the worker is simply killed. `macula_feeder`/
+`macula_download`'s own `cancel/1` (still `gen_server:stop/1` — same public
+API as always) reaches all the way down to this same real abort too, since
+9.11.1 (PLAN_PUSH_UPLOAD.md Phase 4) — before that it could only kill their
+own local worker, orphaning the `macula_content_transfer` underneath rather
+than actually cancelling it.
 
 Each transfer mints a `share_id` (override via `Opts`'s `share_id` key), kept
 in `macula_content_transfer_registry` with monitor-based cleanup, so a caller
@@ -345,9 +354,9 @@ known in advance.
 | `macula_direct_dial:put_content(Pool, Station, Bytes, TimeoutMs)` | **direct-dial**: resolve `Station`'s endpoint and put, in one call |
 | `macula_manifest:default_chunk_size()` | the single-block / chunked threshold (256 KiB) |
 | `macula_blake3_nif:hash(Bytes)` | the BLAKE3 hash a single-block MCID wraps |
-| `macula_feeder:start_link/4,5` | supervised, `sharing.put_*_v1`-announcing wrapper around `put_content/2` |
+| `macula_feeder:start_link/4,5` | supervised, `sharing.put_*_v1`-announcing wrapper around `macula_content_transfer`, real `cancel/1` |
 | `macula_feeder:start_link_direct/5,6` | **direct-dial** supervised wrapper — names its own target `Station` |
-| `macula_download:start_link/4,5` | supervised, `sharing.get_*_v1`-announcing wrapper around `get_content/2` |
+| `macula_download:start_link/4,5` | supervised, `sharing.get_*_v1`-announcing wrapper around `macula_content_transfer`, real `cancel/1` |
 | `macula_download:start_link_direct/4,5` | **direct-dial** supervised wrapper — resolves the provider automatically |
 | `macula_content_transfer:start_put/2,3`, `start_get/2,3` | addressable put/get — `put_content`/`get_content`'s foundation, real `cancel/1,3` |
 | `macula_content_transfer:start_put_station/4,5`, `start_get_station/4,5` | **direct-dial** addressable variants |

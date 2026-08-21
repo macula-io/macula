@@ -1,10 +1,7 @@
 %%%-------------------------------------------------------------------
 %%% @doc Behaviour for supervised content feeders (the put/share side).
 %%%
-%%% `put_content/2' is a plain blocking call — no addressable pid to
-%%% cancel it from outside. This is the provider-side counterpart to
-%%% `macula_download': `start_link/4,5' returns immediately with a
-%%% pid, runs `macula:put_content/2' in a linked worker, delivers the
+%%% `start_link/4,5' returns immediately with a pid, delivers the
 %%% outcome to `Module:handle_fed/2', and publishes
 %%% `sharing.put_started_v1' / `sharing.put_completed_v1' mesh facts
 %%% around the transfer — including `outcome => cancelled' if the
@@ -14,6 +11,29 @@
 %%% `macula_streamer' / `macula_stream_sink' for that (`streaming.*'
 %%% facts belong to that pair).
 %%%
+%%% == Real cancel, real underneath ==
+%%%
+%%% Internally this drives `macula_content_transfer' (PLAN_PUSH_UPLOAD.md
+%%% Phase 4) rather than a blocking `macula:put_content/2' call run in
+%%% a linked worker — that blocking shape had no addressable handle to
+%%% the actual transfer, so `cancel/1' (`gen_server:stop/1') could only
+%%% ever kill the local worker process waiting on it, never touch the
+%%% underlying stream. A `macula_content_transfer' cancelled that way
+%%% doesn't even notice: nothing links a `gen_server:call' caller's
+%%% death to the callee, so it would run to completion, or sit
+%%% resolved-but-never-reaped, forever — orphaned, leaking its
+%%% `content_stream_bufs' entry on the link and its
+%%% `macula_content_transfer_registry' entry, for no purpose. This
+%%% module now holds the `macula_content_transfer' pid directly (a
+%%% `content_transfer' state field, alongside the lightweight resolve
+%%% + await proxy `worker' that reports it back) so `cancel/1' can call
+%%% `macula_content_transfer:cancel/1' on it for real — the same
+%%% peer-visible QUIC RESET_STREAM abort described there, not a local
+%%% kill with nothing downstream the wiser. The share_id this module
+%%% already minted for its own `sharing.*' mesh facts is threaded
+%%% through as `macula_content_transfer''s own `share_id' too, so both
+%%% layers resolve to the same id.
+%%%
 %%% == Direct-dial ==
 %%%
 %%% `start_link/4,5' puts through the pool's own connected link
@@ -22,10 +42,13 @@
 %%% resolves an MCID to find out WHO has it), a PUT already knows its
 %%% own target — the caller names `Station' directly, and it is
 %%% resolved to a dialable endpoint via that station's own signed
-%%% `station_endpoint' record and dialed in one hop, deliberately
-%%% seeding that specific station instead of whichever the pool picks.
-%%% See `macula_direct_dial''s module doc, "Content" section, for the
-%%% trust model.
+%%% `station_endpoint' record (`macula_direct_dial:resolve_station_endpoint/2',
+%%% a fast, non-addressable DHT lookup that stays a plain blocking call
+%%% inside the resolve+await proxy — nothing has ever needed to cancel
+%%% mid-resolve) and dialed in one hop via `macula_content_transfer:
+%%% start_put_station/5', deliberately seeding that specific station
+%%% instead of whichever the pool picks. See `macula_direct_dial''s
+%%% module doc, "Content" section, for the trust model.
 %%%
 %%% == Example ==
 %%%
@@ -71,14 +94,15 @@
 -define(DIRECT_DIAL_CONNECT_TIMEOUT_MS, 30_000).
 
 -record(fstate, {
-    module    :: module(),
-    pool      :: macula:pool(),
-    realm     :: macula:realm(),
-    announce  :: boolean(),
-    share_id  :: binary(),
-    worker    :: pid(),
-    completed :: boolean(),
-    user      :: term()
+    module           :: module(),
+    pool             :: macula:pool(),
+    realm            :: macula:realm(),
+    announce         :: boolean(),
+    share_id         :: binary(),
+    worker           :: pid(),
+    content_transfer :: pid() | undefined,
+    completed        :: boolean(),
+    user             :: term()
 }).
 
 %% @doc Start a feeder. Puts `Bytes' into content storage via `Pool'.
@@ -123,10 +147,10 @@ cancel(Pid) -> gen_server:stop(Pid).
 %% @private
 init({pooled, Module, Pool, Realm, Bytes, Announce, InitArgs}) ->
     start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce,
-                fun() -> spawn_worker(pooled, Pool, Bytes) end);
+                fun(ShareId) -> spawn_worker(pooled, Pool, Bytes, ShareId) end);
 init({direct, Module, Pool, Station, Realm, Bytes, Announce, InitArgs}) ->
     start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce,
-                fun() -> spawn_worker(direct, Pool, Station, Bytes) end).
+                fun(ShareId) -> spawn_worker(direct, Pool, Station, Bytes, ShareId) end).
 
 start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce, SpawnFun) ->
     process_flag(trap_exit, true),
@@ -135,27 +159,49 @@ start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce, SpawnFun) ->
             ShareId = crypto:strong_rand_bytes(16),
             publish(Announce, Pool, Realm, ?PUT_STARTED,
                     #{share_id => ShareId, size => byte_size(Bytes)}),
-            Worker = SpawnFun(),
+            Worker = SpawnFun(ShareId),
             {ok, #fstate{module = Module, pool = Pool, realm = Realm,
                         announce = Announce, share_id = ShareId,
-                        worker = Worker, completed = false, user = UserState}};
+                        worker = Worker, content_transfer = undefined,
+                        completed = false, user = UserState}};
         {stop, Reason} ->
             {stop, Reason}
     end.
 
-spawn_worker(pooled, Pool, Bytes) ->
+%% The lightweight proxy: start the addressable transfer, report its
+%% pid back immediately (so `terminate/2' can reach it even if this
+%% proxy itself gets killed mid-flight), block for the outcome, reap
+%% the transfer (a no-op if it's already being cancelled from outside
+%% — see `reap_content_transfer/1'), report the outcome.
+spawn_worker(pooled, Pool, Bytes, ShareId) ->
     Parent = self(),
     spawn_link(fun() ->
-        Result = macula:put_content(Pool, Bytes),
+        {ok, CTPid} = macula_content_transfer:start_put(Pool, Bytes, #{share_id => ShareId}),
+        Parent ! {content_transfer, CTPid},
+        Result = macula_content_transfer:await(CTPid),
+        catch macula_content_transfer:cancel(CTPid),
         Parent ! {feed_result, Result}
     end).
 
-spawn_worker(direct, Pool, Station, Bytes) ->
+%% Resolving `Station''s endpoint stays a plain blocking DHT lookup
+%% here (matches what `macula_direct_dial:put_content/4' already did)
+%% — only the transfer itself becomes addressable.
+spawn_worker(direct, Pool, Station, Bytes, ShareId) ->
     Parent = self(),
     spawn_link(fun() ->
-        Result = macula_direct_dial:put_content(Pool, Station, Bytes,
-                                                 ?DIRECT_DIAL_CONNECT_TIMEOUT_MS),
-        Parent ! {feed_result, Result}
+        case macula_direct_dial:resolve_station_endpoint(Pool, Station) of
+            {ok, DialUrl} ->
+                Opts = #{share_id => ShareId, expected_node_id => Station,
+                        pin_tls_cert => false, verify => none},
+                {ok, CTPid} = macula_content_transfer:start_put_station(
+                    Pool, DialUrl, Bytes, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts),
+                Parent ! {content_transfer, CTPid},
+                Result = macula_content_transfer:await(CTPid),
+                catch macula_content_transfer:cancel(CTPid),
+                Parent ! {feed_result, Result};
+            {error, Reason} ->
+                Parent ! {feed_result, {error, {unresolved, Reason}}}
+        end
     end).
 
 %% @private
@@ -166,10 +212,12 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) -> {noreply, State}.
 
 %% @private
+handle_info({content_transfer, CTPid}, State) ->
+    {noreply, State#fstate{content_transfer = CTPid}};
 handle_info({feed_result, Result}, State) ->
     NewState = announce_completed(State, Result),
     #fstate{module = Module, user = User} = NewState,
-    deliver(Module:handle_fed(Result, User), NewState);
+    deliver(Module:handle_fed(Result, User), NewState#fstate{content_transfer = undefined});
 handle_info({'EXIT', Worker, Reason}, #fstate{worker = Worker} = State)
         when Reason =/= normal ->
     {stop, {worker_crashed, Reason}, State};
@@ -184,11 +232,27 @@ terminate(_Reason, #fstate{worker = Worker, completed = true}) ->
     unlink(Worker),
     exit(Worker, kill),
     ok;
-terminate(_Reason, State) ->
+terminate(_Reason, #fstate{content_transfer = CTPid} = State) ->
     unlink(State#fstate.worker),
     exit(State#fstate.worker, kill),
+    reap_content_transfer(CTPid),
     _ = announce_completed(State, {error, cancelled}),
     ok.
+
+%% Killing the proxy `worker' does NOT cascade into stopping the
+%% `macula_content_transfer' it started — that gen_server traps exits
+%% and doesn't recognize the proxy as one of ITS OWN tracked workers,
+%% so an incoming `{'EXIT', Proxy, killed}' just falls through its
+%% catch-all `handle_info' clause, unnoticed. This is the actual fix:
+%% reach in and cancel it explicitly. `undefined' covers the window
+%% before `{content_transfer, CTPid}' has arrived yet (still resolving,
+%% for direct-dial) — nothing addressable exists to cancel there,
+%% same as before this phase. `catch' covers the benign race where the
+%% proxy's own natural reap (in `spawn_worker/4') and an external
+%% `cancel/1' land at the same time — the second `cancel/1' call
+%% reaches an already-dead pid.
+reap_content_transfer(undefined) -> ok;
+reap_content_transfer(CTPid) -> catch macula_content_transfer:cancel(CTPid), ok.
 
 announce_completed(#fstate{completed = true} = State, _Result) ->
     State;

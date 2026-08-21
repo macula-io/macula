@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.11.1] - 2026-08-21
+
+### Fixed
+
+- **`macula_feeder`/`macula_download`'s `cancel/1` now reaches the real,
+  underlying transfer — previously it orphaned it.** PLAN_PUSH_UPLOAD.md
+  Phase 4. Both modules used to run a blocking `macula:put_content/2`/
+  `get_content/2` call in a linked worker; `cancel/1` (`gen_server:stop/1`)
+  could only kill that local worker, never the `macula_content_transfer`
+  it was blocked inside `await/1` on. Nothing links a `gen_server:call`
+  caller's death to the callee, so a cancelled transfer kept running to
+  completion — or, once resolved, sat alive forever, never reaped, leaking
+  its `content_stream_bufs` entry on the link and its
+  `macula_content_transfer_registry` entry for no purpose. Both modules now
+  call `macula_content_transfer:start_put/3` (or `start_get/3`,
+  `start_put_station/5`, `start_get_station/5` for direct-dial) directly
+  from a lightweight resolve + await proxy, hold the resulting pid in their
+  own state, and `terminate/2` cancels it for real — the same peer-visible
+  QUIC RESET_STREAM abort `macula_content_transfer:cancel/1` always gave a
+  direct caller, not a local kill with nothing downstream the wiser. The
+  `share_id` each module already minted for its own `sharing.*` mesh facts
+  is threaded through as `macula_content_transfer`'s own `share_id` too, so
+  both layers resolve to the same id.
+- Direct-dial (`start_link_direct/5,6` / `start_link_direct/4,5`) gets the
+  same real-cancel fix — the resolve step (`macula_direct_dial:
+  resolve_station_endpoint/2` / `resolve_content_provider/2`) stays a
+  plain blocking DHT lookup exactly as before (nothing has ever needed to
+  cancel mid-resolve), but the transfer itself is now addressable the same
+  way pooled mode's is.
+
+### Notes
+
+- No public API changes — same `start_link/4,5`, `start_link_direct/5,6`
+  (feeder) / `start_link_direct/4,5` (download), `cancel/1`, same
+  `init/1`/`handle_fed/2`/`handle_downloaded/2` callback contract. PATCH,
+  not MINOR: this fixes existing behavior rather than adding capability.
+- `macula_feeder_tests.erl`/`macula_download_tests.erl` now mock at the
+  `macula_client`/`macula_station_link` boundary (the same layer
+  `macula_content_transfer_tests` mocks) instead of `macula:put_content/2`/
+  `get_content/2` directly — a mechanical necessity, not a design choice:
+  the internals no longer call those functions at all, so the old mocks
+  would simply never fire. `Pool` is now a real pid in these tests (it's
+  threaded down to `macula_content_transfer:start_put/3`'s own `is_pid`
+  guard), not the placeholder atom `pool` the pre-Phase-4 suite used.
+  Two new cases per module cover what Phase 4 actually fixes (asserting
+  `abort_content_stream` is genuinely called on cancel, not just that the
+  feeder/download reports `outcome => cancelled`) and direct-dial
+  (previously untested).
+
 ## [9.11.0] - 2026-08-21
 
 ### Added

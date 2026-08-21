@@ -1,8 +1,8 @@
 # Content Push/Upload (`macula_pusher` / `macula_upload`)
 
-**Status:** Phases 1-3 SHIPPED (macula 9.11.0). Phases 4-6 not started.
+**Status:** Phases 1-4 SHIPPED (macula 9.11.1). Phases 5-6 not started.
 **Created:** 2026-08-21
-**Last Updated:** 2026-08-21 (Phases 1, 2, and 3 all landed same day, in three
+**Last Updated:** 2026-08-21 (Phases 1 through 4 all landed same day, in four
 follow-up sessions to the one that wrote this plan)
 
 ## Why this exists
@@ -342,13 +342,77 @@ consequence of the state machine's own structure, not code relying on timing, an
 a guard for a scenario that provably can't produce a wrong answer would be exactly the
 kind of defensive code this project's own conventions warn against.
 
-### Phase 4 — Retrofit `macula_feeder`/`macula_download`
+### Phase 4 — Retrofit `macula_feeder`/`macula_download` — SHIPPED (9.11.1)
 
-Same public behaviour contract (`init/1`, `handle_fed/2` / `handle_downloaded/2`
-unchanged) — internals now drive `macula_content_transfer` instead of spawning a
-worker around the old blocking call. Existing consumers of the *behaviour* (not the
-removed blocking functions) see no API change, just real pause/resume/cancel and
-multi-stream underneath.
+Same public behaviour contract as planned (`init/1`, `handle_fed/2` /
+`handle_downloaded/2` unchanged, same `start_link/4,5` and `start_link_direct/5,6`
+/ `start_link_direct/4,5` signatures) — internals now call
+`macula_content_transfer:start_put/3` (or `start_get/3`, `start_put_station/5`,
+`start_get_station/5` for direct-dial) directly from a lightweight resolve + await
+proxy, instead of spawning a worker around the old blocking `macula:put_content/2`/
+`get_content/2` call.
+
+**Correction from the plan's success criterion, found only once actually building
+this — the SAME kind of mismatch Phase 1's design had, worth flagging the same way:**
+"existing behaviour tests pass unmodified" turned out to be impossible to satisfy
+literally, and shipping it as written would have meant NOT fixing the actual bug
+Phase 4 exists to fix. Traced why: the old tests mocked `macula:put_content/2`/
+`get_content/2` directly, passing a placeholder atom `pool` (not a real pid) as
+`Pool` — safe only because the mock intercepted the call before any real guard ran.
+Once the internals call `macula_content_transfer:start_put/3` directly, its own
+`is_pid(Pool)` guard is real and reachable, so a placeholder atom `Pool` crashes with
+`function_clause` — confirmed this is genuinely mechanical, not a matter of
+interpretation, by running the OLD test files unmodified against the new internals
+first: all 8 cases failed identically. Fixed by mocking at the `macula_client`/
+`macula_station_link` boundary instead (the same layer `macula_content_transfer_tests`
+already mocks) and using a real pid for `Pool` — the ASSERTIONS (`outcome`, `mcid`,
+`chunked`, topics) stayed conceptually identical, only the mock target and `Pool`
+shape moved to match what's actually being called now.
+
+**The bug this phase actually fixes, more precisely than the plan's own text stated
+it:** `macula_feeder`/`macula_download`'s pre-Phase-4 `cancel/1` (`gen_server:stop/1`)
+could only ever kill their OWN local worker process — the one blocked inside
+`macula:put_content/2`'s call to `macula_content_transfer:await/1`. Since nothing
+links a `gen_server:call` caller's death to the callee it was calling, killing that
+worker left the underlying `macula_content_transfer` completely unaffected: it kept
+running to completion, or — once resolved — sat alive forever, since nothing ever
+called `cancel/1` on IT specifically (that call was the very next line after `await`,
+inside the same now-dead worker, never reached). A cancelled feed/download was
+silently leaking an orphaned `macula_content_transfer` process (with its
+`content_stream_bufs` entry on the link and its `macula_content_transfer_registry`
+entry) every single time, not just occasionally. Fixed by having both modules hold
+the `macula_content_transfer` pid directly in their own state (reported back by the
+resolve+await proxy as soon as it's known) and calling `macula_content_transfer:
+cancel/1` on it explicitly from `terminate/2` — verified RED before GREEN: neutering
+that one call reproduces exactly the "no abort reaches the stream" gap the new
+`cancel_reaches_the_real_content_transfer_not_just_the_local_worker` test exists to
+catch, for both modules.
+
+**Direct-dial got the same fix, extending slightly beyond the plan's literal text:**
+`macula_content_transfer` (Phases 1-3) only has a "dial an already-resolved station"
+primitive (`start_put_station`/`start_get_station`), not the "resolve a pubkey/MCID
+into a dialable endpoint, then dial" two-step `macula_direct_dial:put_content/4`/
+`get_content/3` do. Rather than leave direct-dial mode on the old blocking path (which
+would have meant Phase 4 quietly not applying to half of `macula_feeder`/
+`macula_download`'s surface), split the two steps: the resolve step
+(`macula_direct_dial:resolve_station_endpoint/2` / `resolve_content_provider/2`, both
+already public exports, reused as-is) stays a plain blocking DHT lookup inside the
+proxy — nothing has ever needed to cancel mid-resolve, and moving it into `init/1`
+would have changed `start_link_direct`'s own blocking-ness, a real behavior change
+this phase has no reason to make — and only the actual transfer afterward goes
+through the addressable primitive. No previous test coverage existed for direct-dial
+at all (checked before assuming otherwise); added one case per module.
+
+Each module's own `share_id` (already minted for its `sharing.*_started_v1` mesh
+fact, published before the transfer even starts) is now passed through as
+`macula_content_transfer`'s own `share_id` too — exactly the cross-referencing
+Phase 1's registry design anticipated ("a wrapper that already publishes it... can
+keep the same id"), so `macula_content_transfer_registry:whereis_share/1` resolves
+to the same id these mesh facts already carry.
+
+Checked (again) for direct callers of `macula_feeder`/`macula_download` in
+macula-station, macula-realm, and hecate-om before touching internals: none found —
+consistent with Phase 1's earlier check of `put_content`/`get_content` itself.
 
 ### Phase 5 — `macula_streamer` client_stream receive-loop
 
@@ -392,23 +456,23 @@ multi-stream from day one, nothing to retrofit later.
 | `src/client/macula_station_link.erl` | Phase 1 shipped: new `abort_content_stream/4`, `close_content_stream_state/2` refactored to share the teardown path with it. Untouched by Phases 2-3 — cancel's granularity (per-chunk-step, then per-lane) changed entirely inside `macula_content_transfer`, no change needed here. |
 | `src/peering/macula_quic.erl` | Phase 1 shipped: new `reset_stream/2`; `async_shutdown_stream/3`'s previously-discarded `Code` param now genuinely used |
 | `native/macula_quic/src/{atoms,lib,stream}.rs` | Phase 1 shipped: new `nif_reset_stream` NIF (Quinn `SendStream::reset`); recv loop distinguishes a peer reset from every other read error |
-| `src/macula_feeder.erl` | Phase 4 retrofit (not started — no phase so far has touched this file; `put_content/2`'s public shape is unchanged so no retrofit was needed yet) |
-| `src/macula_download.erl` | Phase 4 retrofit (not started, same reasoning) |
+| `src/macula_feeder.erl` | Phase 4 shipped: internals call `macula_content_transfer:start_put/3`/`start_put_station/5` directly via a lightweight resolve+await proxy; `terminate/2` now reaps the real transfer, fixing the orphan-on-cancel bug |
+| `src/macula_download.erl` | Phase 4 shipped, symmetric — `start_get/3`/`start_get_station/5` |
 | `src/macula_streamer.erl` | Phase 5 — `handle_chunk/2`, abort-wired cancel (not started) |
 | `src/macula_stream_sink.erl` | Phase 5 — abort-wired cancel (not started) |
 | `src/macula_pusher.erl` | New — Phase 6 (not started) |
 | `src/macula_upload.erl` | New — Phase 6 (not started) |
 | `test/macula_content_transfer_tests.erl` | Phase 1 shipped: new, 7 cases, meck-based. Phase 2 shipped: +5 cases (pause/resume put and get, single-block no-op, cancel-while-paused). Phase 3: existing chunked cases pinned to `stream_count => 1` (the new default of 4 changed their behavior — they're specifically about single-stream sequential ordering) |
 | `test/macula_content_transfer_multi_stream_tests.erl` | New — Phase 3 shipped, 6 cases: concurrent dispatch, order-independent reassembly, stream-count capping, degraded-stream fallback, failure kills other lanes, cancel aborts every stream |
-| `test/macula_quic_stream_reset_tests.erl` | New — Phase 1 shipped, 3 cases, real two-endpoint loopback. Untouched by Phases 2-3. |
+| `test/macula_quic_stream_reset_tests.erl` | New — Phase 1 shipped, 3 cases, real two-endpoint loopback. Untouched since. |
 | `test/macula_content_block_hash_tests.erl` | Phase 1 shipped: updated to call `macula_content_transfer:verify_block_hash/2` (moved from `macula:verify_block_hash/2`) |
-| `test/macula_feeder_tests.erl`, `macula_download_tests.erl` | Phase 4 retrofit — untouched by Phases 1-3, still mock `macula:put_content`/`get_content` directly and pass unmodified |
+| `test/macula_feeder_tests.erl`, `macula_download_tests.erl` | Phase 4 shipped: rewritten to mock `macula_client`/`macula_station_link` (mechanical necessity, not a design choice — see the corrected Phase 4 section); `Pool` is now a real pid, not the placeholder atom `pool`; +2 cases per module (real-cancel-reaches-the-stream, direct-dial — previously uncovered) |
 | `test/macula_streamer_tests.erl`, `macula_stream_sink_tests.erl` | Updated for abort + receive-loop (Phase 5, not started) |
 | `test/macula_pusher_tests.erl`, `macula_upload_tests.erl` | New (Phase 6, not started) |
-| `CHANGELOG.md`, `macula.app.src`, `CLAUDE.md` (version header) | Phase 1 shipped as 9.9.0, Phase 2 as 9.10.0, Phase 3 as 9.11.0 (all MINOR — new capability, no breaking change) |
-| `docs/guides/CONTENT_GUIDE.md` | Phase 1: new "Real cancel: macula_content_transfer" section + Reference table rows. Phase 2: new "Real pause/resume for chunked transfers" section + row. Phase 3: new "Parallel multi-stream chunk transfer" section + rows. |
-| `docs/guides/STREAMING_GUIDE.md` | Not touched — nothing in Phases 1-3 changes streaming RPC; revisit at Phase 5 |
-| `macula-station`, `macula-realm`, `hecate-om` (separate repos) | Checked for direct `put_content`/`get_content` callers before Phase 1 landed — none found in any of the three, nothing to update. Not re-checked for Phases 2-3 — same public functions, same signatures, nothing downstream could see a difference. |
+| `CHANGELOG.md`, `macula.app.src`, `CLAUDE.md` (version header) | Phase 1 as 9.9.0, Phase 2 as 9.10.0, Phase 3 as 9.11.0 (all MINOR — new capability), Phase 4 as 9.11.1 (PATCH — fixes existing behavior, no new public API) |
+| `docs/guides/CONTENT_GUIDE.md` | Phase 1: new "Real cancel: macula_content_transfer" section + Reference table rows. Phase 2: new "Real pause/resume for chunked transfers" section + row. Phase 3: new "Parallel multi-stream chunk transfer" section + rows. Phase 4: corrected the now-stale "not the blunt local kill macula_feeder/download's cancel/1 still is" line; Reference table rows updated to say `macula_content_transfer` instead of `put_content/2`/`get_content/2`. |
+| `docs/guides/STREAMING_GUIDE.md` | Not touched — nothing in Phases 1-4 changes streaming RPC; revisit at Phase 5 |
+| `macula-station`, `macula-realm`, `hecate-om` (separate repos) | Checked for direct `put_content`/`get_content` callers before Phase 1 landed, and for direct `macula_feeder`/`macula_download` callers before Phase 4 — none found in any of the three, either time, nothing to update. |
 
 ## Testing plan
 
@@ -447,8 +511,16 @@ of this work, but re-verify per phase rather than assuming).
       (`get_reassembles_correctly_regardless_of_arrival_order`, releasing chunks in the
       reverse of their arrival order; RED-verified against an arrival-order-keyed
       accumulator, which fails with `root_hash_mismatch` as expected).
-- [ ] Phase 4: `macula_feeder`/`macula_download`'s existing behaviour tests pass
-      unmodified against the new internals (same callback contract).
+- [x] Phase 4: same callback contract, same public `start_link`/`start_link_direct`/
+      `cancel` signatures, verified with the SAME assertions the pre-Phase-4 tests
+      made (outcome/mcid/chunked/topics) — but not literally the same test FILES
+      unmodified, which turned out to be impossible without leaving the phase's
+      actual bug unfixed (see the corrected Phase 4 section above for why). More
+      important than the letter of the original criterion: added a test per module
+      that asserts `cancel/1` genuinely calls `abort_content_stream` on the open
+      stream, not just that `outcome => cancelled` gets published — RED-verified
+      (neutering the new reap call reproduces exactly the gap this phase fixes) for
+      both `macula_feeder` and `macula_download`.
 - [ ] Phase 5: a `client_stream`-mode provider using `handle_chunk/2` receives every
       chunk a consumer sends, in order, with no hand-rolled `recv` loop in application
       code.
