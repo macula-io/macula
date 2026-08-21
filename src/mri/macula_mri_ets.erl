@@ -261,15 +261,26 @@ delete_relationship(Subject, Predicate, Object)
     true = ets:delete(?REL_REVERSE_TABLE, ReverseKey),
     ok.
 
+%% `'_'`/`'$1'` are ets:match/2 wildcard/capture atoms, not real field
+%% values — building the pattern via `#rel_entry{...}` construction
+%% syntax makes dialyzer check it against the record's own typed
+%% fields (`object :: binary()`, etc), which `'_'`/`'$1'` can never
+%% satisfy; it then infers the enclosing function's success typing as
+%% `none()` (provably never returns), and that propagates into every
+%% caller. A plain tagged tuple, in the record's own field order
+%% (`key, subject, predicate, object, metadata, created_at` — see
+%% `-record(rel_entry, ...)` above), is the exact same term at
+%% runtime (records ARE tagged tuples) without going through that
+%% type check.
 -spec related_to(binary(), atom() | {custom, binary()}) -> [binary()].
 related_to(Subject, Predicate) when is_binary(Subject) ->
-    Pattern = #rel_entry{key = {Subject, Predicate, '_'}, object = '$1', _ = '_'},
+    Pattern = {rel_entry, {Subject, Predicate, '_'}, '_', '_', '$1', '_', '_'},
     [Object || [Object] <- ets:match(?REL_FORWARD_TABLE, Pattern)].
 
 -spec related_from(binary(), atom() | {custom, binary()}) -> [binary()].
 related_from(Object, Predicate) when is_binary(Object) ->
     %% Use reverse index: find all subjects that relate to this object
-    Pattern = #rel_entry{key = {Object, Predicate, '_'}, subject = '$1', _ = '_'},
+    Pattern = {rel_entry, {Object, Predicate, '_'}, '$1', '_', '_', '_', '_'},
     [Subject || [Subject] <- ets:match(?REL_REVERSE_TABLE, Pattern)].
 
 -spec all_related(binary()) -> [{atom() | {custom, binary()}, binary()}].

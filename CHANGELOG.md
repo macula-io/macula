@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.13.1] - 2026-08-21
+
+### Fixed
+
+- **`macula_mri_ets:related_to/2` and `related_from/2` no longer defeat their
+  own type specs for dialyzer.** Both built their `ets:match/2` pattern via
+  `#rel_entry{...}` record-construction syntax with ETS wildcard/capture
+  atoms (`'_'`, `'$1'`) in fields the record declares as `binary()`/`map()`/
+  `integer()` — e.g. `object = '$1'` where `object :: binary()`. Dialyzer
+  checks a record construction against its own declared field types, finds
+  no value can ever satisfy them, and concludes the function can never
+  return normally (`success typing is (_,_) -> none()`), which then
+  propagates into every caller: `instances_of/1`, `classes_of/1`,
+  `subclasses/1`, `superclasses/1`, and transitively `instances_of_transitive/1`
+  — 7 warnings from 2 root-cause functions. Fixed by building the pattern as
+  a plain tagged tuple in the record's own field order instead of via
+  `#rel_entry{...}` — the exact same term at runtime (records ARE tagged
+  tuples; this changes nothing about matching behavior, confirmed by the
+  existing `macula_mri_ets_tests`/`macula_mri_graph_tests` suites passing
+  unmodified), just not run through dialyzer's record-field type check.
+  RED-verified: reverting `related_to/2` alone reintroduced its own warning
+  plus the two callers that depend solely on it (`classes_of/1`,
+  `superclasses/1`), confirming both functions were independently
+  necessary, not just one.
+
+---
+
 ## [9.13.0] - 2026-08-21
 
 ### Added
