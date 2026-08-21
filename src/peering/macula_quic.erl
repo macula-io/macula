@@ -11,6 +11,10 @@
 %%%   {quic, new_stream, StreamRef, Props} — new stream accepted
 %%%   {quic, peer_send_shutdown, StreamRef, undefined}
 %%%   {quic, stream_closed, StreamRef, Flags}
+%%%     Flags is `{reset, ErrorCode}' when the read failed because
+%%%     the peer called `reset_stream/2' on their send side (a
+%%%     deliberate, peer-visible abort) — `none' for every other
+%%%     read failure (connection loss, zero-RTT rejection, ...).
 %%%   {quic, shutdown, Handle, Reason}
 %%% @end
 %%%-------------------------------------------------------------------
@@ -45,6 +49,7 @@
     send/2,
     async_send/2,
     close_stream/1,
+    reset_stream/2,
     setopt/3,
     controlling_process/2,
 
@@ -260,10 +265,24 @@ send(Stream, Data) ->
 async_send(Stream, Data) ->
     nif_async_send(Stream, iolist_to_binary(Data)).
 
-%% @doc Close a stream.
+%% @doc Close a stream. Graceful: sends a QUIC FIN (clean EOF), the
+%% peer's `RecvStream::read' resolves `{ok, none}'. For a deliberate,
+%% peer-visible abort see `reset_stream/2'.
 -spec close_stream(reference()) -> ok.
 close_stream(Stream) ->
     nif_close_stream(Stream).
+
+%% @doc Abruptly reset a stream's send side with `ErrorCode' — a QUIC
+%% RESET_STREAM frame, genuinely peer-visible at the transport level:
+%% the peer's `RecvStream::read' fails with `{quic, stream_closed,
+%% PeerStream, {reset, ErrorCode}}' instead of the clean EOF
+%% `close_stream/1' produces. `ErrorCode' must fit a QUIC VarInt
+%% (`&lt; 2^62'); out-of-range values answer `{error,
+%% error_code_out_of_range}'.
+-spec reset_stream(reference(), non_neg_integer()) -> ok | {error, term()}.
+reset_stream(Stream, ErrorCode)
+  when is_reference(Stream), is_integer(ErrorCode), ErrorCode >= 0 ->
+    nif_reset_stream(Stream, ErrorCode).
 
 %% @doc Set active mode on a stream handle.
 -spec setopt(reference(), active, boolean()) -> ok | {error, term()}.
@@ -296,10 +315,14 @@ close_as(Ref, [CloseFn | Rest]) ->
     catch _:_ -> close_as(Ref, Rest)
     end.
 
-%% @doc Async shutdown stream.
--spec async_shutdown_stream(reference(), integer(), integer()) -> ok.
-async_shutdown_stream(Stream, _Flag, _Code) ->
-    nif_close_stream(Stream).
+%% @doc Async shutdown stream. `Code' now genuinely reaches the wire
+%% via `reset_stream/2' — previously a stub that silently discarded
+%% both `Flag' and `Code' and always did a graceful `close_stream/1'.
+%% `Flag' is unused (reserved; no caller has ever needed it, kept for
+%% signature compatibility).
+-spec async_shutdown_stream(reference(), integer(), integer()) -> ok | {error, term()}.
+async_shutdown_stream(Stream, _Flag, Code) ->
+    reset_stream(Stream, Code).
 
 %% @doc Async shutdown connection.
 -spec async_shutdown_connection(reference(), integer(), integer()) -> ok.
@@ -401,6 +424,9 @@ nif_async_send(_Stream, _Data) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_close_stream(_Stream) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_reset_stream(_Stream, _ErrorCode) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_setopt_active(_Stream, _Value) ->

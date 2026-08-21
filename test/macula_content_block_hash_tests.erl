@@ -19,7 +19,7 @@ matching_bytes_are_accepted_test() ->
     Bytes = <<"hello direct-dial world">>,
     Hash  = macula_blake3_nif:hash(Bytes),
     MCID  = <<1, 16#55, Hash/binary>>,
-    ?assertEqual({ok, Bytes}, macula:verify_block_hash(MCID, Bytes)).
+    ?assertEqual({ok, Bytes}, macula_content_transfer:verify_block_hash(MCID, Bytes)).
 
 tampered_bytes_are_rejected_test() ->
     Bytes    = <<"hello direct-dial world">>,
@@ -27,7 +27,7 @@ tampered_bytes_are_rejected_test() ->
     MCID     = <<1, 16#55, Hash/binary>>,
     Tampered = <<"HELLO direct-dial world">>,
     ?assertEqual({error, hash_mismatch},
-                 macula:verify_block_hash(MCID, Tampered)).
+                 macula_content_transfer:verify_block_hash(MCID, Tampered)).
 
 wrong_length_hash_is_not_a_single_block_mcid_test() ->
     %% A 34-byte MCID with the right codec bytes and a full 32-byte
@@ -35,7 +35,7 @@ wrong_length_hash_is_not_a_single_block_mcid_test() ->
     %% malformed (too-short) MCID is refused outright rather than
     %% silently matching a truncated hash.
     ?assertEqual({error, invalid_mcid},
-                 macula:verify_block_hash(<<1, 16#55, "short">>, <<"x">>)).
+                 macula_content_transfer:verify_block_hash(<<1, 16#55, "short">>, <<"x">>)).
 
 manifest_codec_is_not_single_block_test() ->
     %% Chunked content's own codec byte (16#56) must never be routed
@@ -43,4 +43,4 @@ manifest_codec_is_not_single_block_test() ->
     %% entirely (verified via macula_manifest:verify/2 instead).
     Hash = crypto:strong_rand_bytes(32),
     ?assertEqual({error, invalid_mcid},
-                 macula:verify_block_hash(<<1, 16#56, Hash/binary>>, <<"x">>)).
+                 macula_content_transfer:verify_block_hash(<<1, 16#56, Hash/binary>>, <<"x">>)).

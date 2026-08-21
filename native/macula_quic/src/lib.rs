@@ -36,6 +36,7 @@ rustler::init!(
         stream::nif_send,
         stream::nif_async_send,
         stream::nif_close_stream,
+        stream::nif_reset_stream,
         stream::nif_setopt_active,
         stream::nif_controlling_process,
         // Self-signed pubkey-anchored cert helpers

@@ -1,9 +1,9 @@
 # Content Push/Upload (`macula_pusher` / `macula_upload`)
 
-**Status:** Planning. Nothing implemented yet — this document is the output of a design
-conversation, not a progress report.
+**Status:** Phase 1 SHIPPED (macula 9.9.0). Phases 2-6 not started.
 **Created:** 2026-08-21
-**Last Updated:** 2026-08-21
+**Last Updated:** 2026-08-21 (Phase 1 landed same day, in a follow-up session
+to the one that wrote this plan)
 
 ## Why this exists
 
@@ -170,32 +170,72 @@ Read directly from `src/macula.erl`, `src/macula_feeder.erl`, `src/macula_downlo
 Each phase ships independently: full RED/GREEN on new tests, full `rebar3 eunit`, `rebar3
 xref`, `rebar3 dialyzer`, CHANGELOG entry + version bump, before starting the next phase.
 
-### Phase 1 — Addressable content transfer + real abort-based cancel
+### Phase 1 — Addressable content transfer + real abort-based cancel — SHIPPED (9.9.0)
 
 New module `macula_content_transfer` (`gen_server`, matching this codebase's existing
 convention over `gen_statem` — every sibling primitive, `macula_feeder` through
 `macula_stream_sink`, is a plain `gen_server`). Owns the picked link and the open
-content stream directly (unlike today, where the stream is opened and closed entirely
-inside the blocking worker call and never surfaced to a supervisor).
+content stream directly (unlike before, where the stream was opened and closed
+entirely inside the blocking worker call and never surfaced to a supervisor — that
+gap was real: killing the blocking caller never ran `close_content_stream`, so
+`content_stream_bufs`/`content_pending` leaked on the link until the eventual
+`content_call_timeout` fired against an already-dead caller).
 
-- `start_put(Pool, Bytes, Opts) -> {ok, Pid}` / `start_put_station/station-direct
-  variant` / `start_get(Pool, Mcid, Opts) -> {ok, Pid}` / direct-dial variants —
-  returns immediately, holding the pid gives you the live handle.
-- `cancel(Pid, Code, Message)` calls `macula_stream:abort(Stream, Code, Message)` on
-  the actual open stream before tearing the process down — the peer gets an explicit
-  signal, not a dropped connection to infer from.
-- `put_content/2`/`get_content/2` (and the `_station` variants) become — per the "no
-  backward-compat constraint" scope decision above — `start_*` followed by a blocking
-  `await/1,2`, OR are removed entirely in favor of always returning the pid, whichever
-  reads cleaner once written. Update every real caller (macula-station's tests,
-  `macula_feeder`/`macula_download`'s own worker spawn, anywhere else `put_content`/
-  `get_content` is called) in the same commit wave.
-- Correlation-id control registry: each transfer already mints a `share_id`
-  (`crypto:strong_rand_bytes(16)`, already published in `sharing.put_started_v1` etc.)
-  — add a small ETS-backed registry (`{share_id, pid}`, monitor-based cleanup on the
-  owning process's exit, same idiom as `macula_station_peer_links` in the
-  **macula-station** repo) so `cancel/pause/resume` are reachable by id, not just by
-  pid, for a caller that only knows the id from a published mesh fact.
+- `start_put/2,3`, `start_put_station/4,5`, `start_get/2,3`, `start_get_station/4,5`
+  return `{ok, Pid}` immediately — holding the pid gives you the live handle. The
+  connect (pick/dial link, open stream) and the transfer itself both run in a linked
+  worker, which reports the opened `{LinkPid, Stream}` back to the gen_server as soon
+  as it has them — so the gen_server stays free to answer `cancel` throughout, even
+  while the worker is blocked mid-connect or mid-transfer.
+- **Correction from the original design above, found only once actually building this:
+  `cancel/3` does NOT call `macula_stream:abort/3`.** That targets a `macula_stream`
+  gen_server's own STREAM_ERROR application framing (used by `macula_streamer`/
+  `macula_stream_sink`, streaming RPC's pair). A content-transfer stream is a
+  completely different thing — a raw QUIC dedicated stream (a `reference()` from
+  `macula_station_link:open_content_stream/1`), wired for exactly two frame types
+  (`result`/`error`, plain CALL/RESPONSE — verified in `dispatch_content_frame/3`).
+  There is no `macula_stream` process to call `abort/3` on. Verified further: no
+  peer-visible abort existed anywhere for content streams before this phase, at any
+  layer — `macula_quic:async_shutdown_stream/3` already had the right shape
+  (`Stream, Flag, Code`) but was a stub that silently discarded `Code` and always did
+  a graceful Quinn `finish()`, and the Rust recv loop collapsed every read error
+  (finish or reset alike) into one undifferentiated `none` reason. Real work landed
+  instead: a new Rust NIF, `nif_reset_stream` (Quinn's `SendStream::reset`), wired
+  through a new `macula_quic:reset_stream/2`; the recv loop now distinguishes
+  `Err(ReadError::Reset(Code))` and delivers `{quic, stream_closed, PeerStream,
+  {reset, Code}}` — genuinely peer-visible at the QUIC transport level, no
+  application-layer framing needed. `macula_station_link:abort_content_stream/4` is
+  the new counterpart to `close_content_stream/2` that calls it. Verified RED→GREEN
+  with a real two-endpoint loopback test (`macula_quic_stream_reset_tests`, three
+  cases: reset delivers the code, a graceful close is never confused with a reset,
+  an out-of-range code is rejected before touching the wire) — confirmed the specific
+  assertion fails (`{wrong_reset_detail, none}`) against the pre-fix recv loop, not
+  just reasoned about it.
+- `put_content/2`/`get_content/2` (and the `_station` variants) are now thin blocking
+  wrappers — `start_*` + `await/1` + `cancel/1` to reap — over `macula_content_transfer`,
+  same public signature as before. Checked macula-station, macula-realm, and hecate-om
+  for direct callers of the old blocking shape per the plan's own checklist: none
+  found in any of the three, so nothing needed updating downstream.
+- Correlation-id control registry: **shipped as designed** — new
+  `macula_content_transfer_registry` (ETS-backed, `{share_id, pid}`, monitor-based
+  cleanup on the owning process's exit), started under `macula_root`. Each transfer
+  mints a `share_id` (`crypto:strong_rand_bytes(16)`, overridable via `Opts` so a
+  future wrapper — e.g. Phase 4's retrofitted `macula_feeder` — can keep the same id
+  it already publishes in `sharing.put_started_v1`) so `cancel/1,3` is reachable by
+  id, not just by pid, for a caller that only knows the id from a published mesh
+  fact. `pause`/`resume` are NOT part of Phase 1 — that machinery doesn't exist until
+  Phase 2's chunk loop restructuring; the registry itself is already general enough
+  to carry them once Phase 2 adds the calls.
+
+**A genuinely dumb bug worth recording so it isn't repeated:** the worker was
+originally spawned as `spawn_link(fun() -> run(self(), ...) end)` — `self()` evaluated
+*inside* the closure, which runs in the **new** process, so `Parent` was the worker's
+own pid, not the gen_server's. Every message the worker sent went nowhere anyone was
+listening; `await/1` hung until the caller's own timeout. Classic Erlang closure
+gotcha — capture `Self = self()` *before* `spawn_link`, pass `Self` in. Caught by the
+RED-before-GREEN discipline: the content_transfer eunit suite hung instead of failing
+cleanly, which was itself the tell that something more fundamental than a wrong
+assertion was wrong.
 
 ### Phase 2 — Pause/resume (content-sharing only)
 
@@ -259,22 +299,29 @@ multi-stream from day one, nothing to retrofit later.
 
 | File | Change |
 |---|---|
-| `src/macula_content_transfer.erl` | New — Phases 1-3 |
-| `src/macula.erl` | `put_content`/`get_content` (+ `_station` variants) reshaped onto `macula_content_transfer` |
-| `src/macula_feeder.erl` | Phase 4 retrofit |
-| `src/macula_download.erl` | Phase 4 retrofit |
-| `src/macula_streamer.erl` | Phase 5 — `handle_chunk/2`, abort-wired cancel |
-| `src/macula_stream_sink.erl` | Phase 5 — abort-wired cancel |
-| `src/macula_pusher.erl` | New — Phase 6 |
-| `src/macula_upload.erl` | New — Phase 6 |
-| `test/macula_content_transfer_tests.erl` | New |
-| `test/macula_feeder_tests.erl`, `macula_download_tests.erl` | Updated for retrofit |
-| `test/macula_streamer_tests.erl`, `macula_stream_sink_tests.erl` | Updated for abort + receive-loop |
-| `test/macula_pusher_tests.erl`, `macula_upload_tests.erl` | New |
-| `CHANGELOG.md`, `macula.app.src`, `CLAUDE.md` (version header) | Bumped per phase |
-| `docs/guides/CONTENT_GUIDE.md`, `STREAMING_GUIDE.md` | Updated once the shipping phases land |
-| `macula-station` (separate repo) | Any test/consumer callers of the old blocking `put_content`/`get_content` shape |
-| `macula-realm`, `hecate-om` (separate repos) | Only if either turns out to call `put_content`/`get_content` directly — check before Phase 1 lands |
+| `src/macula_content_transfer.erl` | New — Phases 1-3. Phase 1 shipped: addressable put/get, real cancel |
+| `src/macula_content_transfer_registry.erl` | New — Phase 1 shipped: share_id → pid registry |
+| `src/macula.erl` | Phase 1 shipped: `put_content`/`get_content` (+ `_station` variants) reshaped onto `macula_content_transfer` as thin wrappers; ~200 lines of transfer internals moved out |
+| `src/macula_root.erl` | Phase 1 shipped: `macula_content_transfer_registry` added as a supervised child |
+| `src/client/macula_station_link.erl` | Phase 1 shipped: new `abort_content_stream/4`, `close_content_stream_state/2` refactored to share the teardown path with it |
+| `src/peering/macula_quic.erl` | Phase 1 shipped: new `reset_stream/2`; `async_shutdown_stream/3`'s previously-discarded `Code` param now genuinely used |
+| `native/macula_quic/src/{atoms,lib,stream}.rs` | Phase 1 shipped: new `nif_reset_stream` NIF (Quinn `SendStream::reset`); recv loop distinguishes a peer reset from every other read error |
+| `src/macula_feeder.erl` | Phase 4 retrofit (not started — Phase 1 did NOT touch this file; `put_content/2`'s public shape is unchanged so no retrofit was needed yet) |
+| `src/macula_download.erl` | Phase 4 retrofit (not started, same reasoning) |
+| `src/macula_streamer.erl` | Phase 5 — `handle_chunk/2`, abort-wired cancel (not started) |
+| `src/macula_stream_sink.erl` | Phase 5 — abort-wired cancel (not started) |
+| `src/macula_pusher.erl` | New — Phase 6 (not started) |
+| `src/macula_upload.erl` | New — Phase 6 (not started) |
+| `test/macula_content_transfer_tests.erl` | New — Phase 1 shipped, 7 cases, meck-based |
+| `test/macula_quic_stream_reset_tests.erl` | New — Phase 1 shipped, 3 cases, real two-endpoint loopback |
+| `test/macula_content_block_hash_tests.erl` | Phase 1 shipped: updated to call `macula_content_transfer:verify_block_hash/2` (moved from `macula:verify_block_hash/2`) |
+| `test/macula_feeder_tests.erl`, `macula_download_tests.erl` | Phase 4 retrofit — untouched by Phase 1, still mock `macula:put_content`/`get_content` directly and pass unmodified |
+| `test/macula_streamer_tests.erl`, `macula_stream_sink_tests.erl` | Updated for abort + receive-loop (Phase 5, not started) |
+| `test/macula_pusher_tests.erl`, `macula_upload_tests.erl` | New (Phase 6, not started) |
+| `CHANGELOG.md`, `macula.app.src`, `CLAUDE.md` (version header) | Phase 1 shipped as 9.9.0 (MINOR — new capability, no breaking change) |
+| `docs/guides/CONTENT_GUIDE.md` | Phase 1 shipped: new "Real cancel: macula_content_transfer" section + Reference table rows |
+| `docs/guides/STREAMING_GUIDE.md` | Not touched — nothing in Phase 1 changes streaming RPC; revisit at Phase 5 |
+| `macula-station`, `macula-realm`, `hecate-om` (separate repos) | Checked for direct `put_content`/`get_content` callers before Phase 1 landed — none found in any of the three, nothing to update |
 
 ## Testing plan
 
@@ -287,9 +334,13 @@ of this work, but re-verify per phase rather than assuming).
 
 ## Success criteria
 
-- [ ] Phase 1: `macula_content_transfer` addressable, `cancel/3` provably calls
-      `macula_stream:abort/3` (test asserts the peer sees an abort frame, not just a
-      closed connection).
+- [x] Phase 1: `macula_content_transfer` addressable, `cancel/3` provably resets the
+      open content stream (`macula_quic:reset_stream/2`, not `macula_stream:abort/3` —
+      see the corrected Phase 1 section above). Verified two ways: a meck-based test
+      asserting `cancel/3` calls `macula_station_link:abort_content_stream/4` with the
+      right stream/code/message, and a real two-endpoint loopback test asserting the
+      PEER genuinely observes `{quic, stream_closed, _, {reset, Code}}`, not just a
+      closed connection.
 - [ ] Phase 2: a paused transfer sends zero further chunks until resumed; resume
       continues from the correct next chunk, not from the start.
 - [ ] Phase 3: a large chunked transfer measurably completes faster with N>1 streams

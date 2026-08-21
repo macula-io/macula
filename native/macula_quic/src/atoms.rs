@@ -14,6 +14,7 @@ rustler::atoms! {
     peer_send_aborted,
     send_shutdown_complete,
     stream_closed,
+    reset,
 
     // Connection lifecycle
     shutdown,
@@ -40,6 +41,7 @@ rustler::atoms! {
     already_closed,
     stream_finished,
     unknown_error,
+    error_code_out_of_range,
 
     // Stat keys
     rtt,

@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.9.0] - 2026-08-21
+
+### Added
+
+- **`macula_content_transfer`** — addressable content-store put/get
+  with a real, peer-visible cancel. PLAN_PUSH_UPLOAD.md Phase 1.
+  `macula:put_content/2`/`get_content/2` (and the `_station` variants)
+  were one opaque blocking call each: pick a link, open a dedicated
+  content stream, run the transfer, close it — no handle existed
+  mid-transfer, so cancelling meant killing whatever process was
+  blocked in the call, which never touched the stream itself
+  (`macula_station_link` owns it, not the killed caller) — leaking
+  `content_stream_bufs`/`content_pending` state on the link until the
+  next `content_call_timeout` fired against an already-dead caller.
+  `start_put/2,3`, `start_put_station/4,5`, `start_get/2,3`,
+  `start_get_station/4,5` return `{ok, Pid}` immediately; `await/1,2`
+  blocks for the outcome; `cancel/1,3` tears the transfer down from
+  any point in its lifecycle, resetting the open stream if one exists.
+  `put_content/2`/`get_content/2` (+ `_station` variants) are now thin
+  blocking wrappers over this — same public signature, no caller
+  changes needed (verified: no direct callers in macula-station,
+  macula-realm, or hecate-om).
+- **`macula_quic:reset_stream/2`** — a genuine QUIC RESET_STREAM abort,
+  new Rust NIF (`nif_reset_stream`, Quinn's `SendStream::reset`).
+  Content-transfer's `cancel/3` needed a real, peer-visible signal —
+  `macula_stream:abort/3` (streaming RPC's abort) doesn't apply here,
+  it targets a `macula_stream` gen_server's own STREAM_ERROR framing,
+  and a content-transfer stream is a raw QUIC dedicated stream with no
+  such process. The peer's `RecvStream::read` now distinguishes a
+  reset from every other read failure: `{quic, stream_closed,
+  PeerStream, {reset, ErrorCode}}` instead of the same undifferentiated
+  `none` reason every read error used to collapse into. Along the way,
+  fixed a real pre-existing stub: `async_shutdown_stream/3` has taken
+  `(Stream, Flag, Code)` since this module's msquic-era design but
+  silently discarded `Code` and always did a graceful `close_stream/1`
+  — it now genuinely resets with `Code` (zero callers anywhere in
+  macula-station/macula-realm/hecate-om, confirmed before changing its
+  behavior).
+- **`macula_station_link:abort_content_stream/4`** — the real-abort
+  counterpart to `close_content_stream/2`, used by
+  `macula_content_transfer:cancel/3`.
+- **`macula_content_transfer_registry`** — correlation-id → pid lookup
+  for content transfers (ETS-backed, monitor-based cleanup), so a
+  caller that only knows a transfer's `share_id` (from a published
+  `sharing.*_started_v1` mesh fact) can still resolve it to `cancel/1,3`.
+
 ## [9.8.2] - 2026-08-21
 
 ### Fixed

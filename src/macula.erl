@@ -86,7 +86,10 @@
 
 -ifdef(TEST).
 %% Exports for unit tests — pure helpers that are otherwise private.
--export([verify_block_hash/2, decode_provider/1]).
+%% `verify_block_hash/2' moved to `macula_content_transfer' (Phase 1,
+%% PLAN_PUSH_UPLOAD.md) along with the rest of the content-stream
+%% transfer internals — see `macula_content_transfer:verify_block_hash/2'.
+-export([decode_provider/1]).
 -endif.
 
 %% Types
@@ -324,16 +327,9 @@ unadvertise(Pool, Realm, Procedure) ->
 -define(DHT_FIND_RECORDS_BY_TYPE_PROC, <<"_dht.find_records_by_type">>).
 -define(DHT_RECORD_TIMEOUT_MS,         5_000).
 
--define(CONTENT_REALM,                 <<0:256>>).
--define(CONTENT_PUT_BLOCK_PROC,        <<"_content.put_block">>).
--define(CONTENT_GET_BLOCK_PROC,        <<"_content.get_block">>).
--define(CONTENT_PUT_MANIFEST_PROC,     <<"_content.put_manifest">>).
--define(CONTENT_GET_MANIFEST_PROC,     <<"_content.get_manifest">>).
-%% Bigger timeout than DHT records — chunks are 256 KiB and a put
-%% writes through the file-backed store on the relay.
--define(CONTENT_BLOCK_TIMEOUT_MS,      15_000).
--define(CONTENT_MANIFEST_TIMEOUT_MS,   5_000).
--define(CONTENT_RETRY_BACKOFF_MS,      200).
+%% `_content.*' procedure names, realm, and timeouts moved to
+%% `macula_content_transfer' (Phase 1, PLAN_PUSH_UPLOAD.md) along with
+%% the transfer logic that used them.
 
 %% @doc Store a signed record in the mesh DHT via a V2 pool.
 %%
@@ -494,91 +490,18 @@ apply_callback_with_decode(_Fun, _Other) ->
 %% chunked content — rides one dedicated QUIC stream on one pinned
 %% pool link (see PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2), so a
 %% large blob transfer no longer head-of-line-blocks other RPC/PubSub
-%% traffic on the same connection. Unlike the old per-block
-%% `macula_client:call/5' routing, chunks of one transfer can no
-%% longer land on different links — the link is chosen once, up
-%% front, for the whole call.
+%% traffic on the same connection.
+%%
+%% A thin blocking wrapper over `macula_content_transfer:start_put/2' +
+%% `await/1' — see that module for the addressable form (a live pid,
+%% real cancel with a peer-visible abort, pause/resume/multi-stream as
+%% later phases land). PLAN_PUSH_UPLOAD.md Phase 1.
 -spec put_content(pool(), binary()) -> {ok, mcid()} | {error, term()}.
 put_content(Pool, Bytes) when is_pid(Pool), is_binary(Bytes) ->
-    with_content_stream(Pool, fun(LinkPid, Stream) ->
-        put_content_by_size(byte_size(Bytes) =< macula_manifest:default_chunk_size(),
-                            LinkPid, Stream, Bytes)
-    end).
-
-%% Pin one connected link and open a dedicated content stream on it
-%% for the duration of `Fun', closing the stream afterwards
-%% regardless of outcome.
-with_content_stream(Pool, Fun) ->
-    on_content_link_picked(macula_client:pick_connected_link(Pool), Fun).
-
-on_content_link_picked({error, _} = E, _Fun) ->
-    E;
-on_content_link_picked({ok, LinkPid}, Fun) ->
-    on_content_stream_opened(
-      macula_station_link:open_content_stream(LinkPid), LinkPid, Fun).
-
-on_content_stream_opened({error, _} = E, _LinkPid, _Fun) ->
-    E;
-on_content_stream_opened({ok, Stream}, LinkPid, Fun) ->
-    Result = Fun(LinkPid, Stream),
-    macula_station_link:close_content_stream(LinkPid, Stream),
+    {ok, Pid} = macula_content_transfer:start_put(Pool, Bytes),
+    Result = macula_content_transfer:await(Pid),
+    macula_content_transfer:cancel(Pid),
     Result.
-
-put_content_by_size(true, LinkPid, Stream, Bytes) ->
-    put_single_block(LinkPid, Stream, Bytes);
-put_content_by_size(false, LinkPid, Stream, Bytes) ->
-    put_chunked(LinkPid, Stream, Bytes).
-
-put_single_block(LinkPid, Stream, Bytes) ->
-    Hash = macula_blake3_nif:hash(Bytes),
-    MCID = <<1, 16#55, Hash/binary>>,
-    classify_put_content(put_block(LinkPid, Stream, MCID, Bytes), MCID).
-
-put_block(LinkPid, Stream, MCID, Bytes) ->
-    call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_PUT_BLOCK_PROC,
-                              #{mcid => MCID, payload => Bytes},
-                              ?CONTENT_BLOCK_TIMEOUT_MS).
-
-classify_put_content({ok, ok},                MCID) -> {ok, MCID};
-classify_put_content({ok, hash_mismatch},     _MCID) -> {error, hash_mismatch};
-classify_put_content({ok, Reply},             _MCID) -> {error, {unexpected_reply, Reply}};
-classify_put_content({error, _} = E,          _MCID) -> E.
-
-%% Split into chunks, upload each block, then the manifest. A chunk
-%% failure short-circuits WITHOUT putting the manifest — a manifest
-%% naming missing chunks would resolve but never reassemble, which is
-%% worse than a clean error now.
-put_chunked(LinkPid, Stream, Bytes) ->
-    {ok, Manifest, Chunks} = macula_manifest:create(Bytes),
-    put_chunks(LinkPid, Stream, Manifest, Chunks, 0).
-
-put_chunks(LinkPid, Stream, Manifest, [], _Index) ->
-    put_manifest(LinkPid, Stream, Manifest);
-put_chunks(LinkPid, Stream, Manifest, [Chunk | Rest], Index) ->
-    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
-    chunk_put_result(put_block(LinkPid, Stream, ChunkMcid, Chunk), LinkPid,
-                     Stream, Manifest, Rest, Index + 1).
-
-chunk_put_result({ok, ok}, LinkPid, Stream, Manifest, Rest, NextIndex) ->
-    put_chunks(LinkPid, Stream, Manifest, Rest, NextIndex);
-chunk_put_result({ok, hash_mismatch}, _LinkPid, _Stream, _Manifest, _Rest,
-                 _NextIndex) ->
-    {error, hash_mismatch};
-chunk_put_result({ok, Reply}, _LinkPid, _Stream, _Manifest, _Rest, _NextIndex) ->
-    {error, {unexpected_reply, Reply}};
-chunk_put_result({error, _} = E, _LinkPid, _Stream, _Manifest, _Rest, _NextIndex) ->
-    E.
-
-put_manifest(LinkPid, Stream, #{mcid := MCID} = Manifest) ->
-    classify_put_manifest(
-      call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_PUT_MANIFEST_PROC,
-                                #{manifest => Manifest},
-                                ?CONTENT_MANIFEST_TIMEOUT_MS),
-      MCID).
-
-classify_put_manifest({ok, ok},      MCID) -> {ok, MCID};
-classify_put_manifest({ok, Reply},  _MCID) -> {error, {unexpected_reply, Reply}};
-classify_put_manifest({error, _} = E, _MCID) -> E.
 
 %% @doc As `put_content/2', dialing `Station' directly (reusing a live
 %% link or dialing + waiting up to `TimeoutMs' for one) instead of
@@ -600,12 +523,11 @@ put_content_station(Pool, Station, Bytes, TimeoutMs) ->
                           pos_integer(), map()) ->
     {ok, mcid()} | {error, term()}.
 put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
-    LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
-    with_content_stream_station(Pool, Station, TimeoutMs, LinkOpts,
-                                fun(LinkPid, Stream) ->
-        put_content_by_size(byte_size(Bytes) =< macula_manifest:default_chunk_size(),
-                            LinkPid, Stream, Bytes)
-    end).
+    {ok, Pid} = macula_content_transfer:start_put_station(
+                  Pool, Station, Bytes, TimeoutMs, Opts),
+    Result = macula_content_transfer:await(Pid),
+    macula_content_transfer:cancel(Pid),
+    Result.
 
 %% @doc Fetch the bytes for a previously-stored MCID. Returns
 %% `{error, not_found}' if no provider in the pool's reach holds a
@@ -615,12 +537,16 @@ put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
 %% the store; `16#56' (manifest) fetches the manifest, then every
 %% chunk in order, reassembles, and verifies the whole against the
 %% manifest's size and Merkle root before returning.
+%%
+%% A thin blocking wrapper over `macula_content_transfer:start_get/2' +
+%% `await/1' — see the note on `put_content/2'.
 -spec get_content(pool(), mcid()) ->
     {ok, binary()} | {error, not_found | term()}.
 get_content(Pool, MCID) when is_pid(Pool) ->
-    with_content_stream(Pool, fun(LinkPid, Stream) ->
-        get_content_via(LinkPid, Stream, MCID)
-    end).
+    {ok, Pid} = macula_content_transfer:start_get(Pool, MCID),
+    Result = macula_content_transfer:await(Pid),
+    macula_content_transfer:cancel(Pid),
+    Result.
 
 %% @doc As `get_content/2', dialing `Station' directly (reusing a live
 %% link or dialing + waiting up to `TimeoutMs' for one) instead of
@@ -644,23 +570,11 @@ get_content_station(Pool, Station, MCID, TimeoutMs) ->
                           pos_integer(), map()) ->
     {ok, binary()} | {error, not_found | term()}.
 get_content_station(Pool, Station, MCID, TimeoutMs, Opts) ->
-    LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
-    with_content_stream_station(Pool, Station, TimeoutMs, LinkOpts,
-                                fun(LinkPid, Stream) ->
-        get_content_via(LinkPid, Stream, MCID)
-    end).
-
-get_content_via(LinkPid, Stream, <<1, 16#55, _:32/binary>> = MCID) ->
-    classify_get_content(get_block(LinkPid, Stream, MCID), MCID);
-get_content_via(LinkPid, Stream, <<1, 16#56, _:32/binary>> = MCID) ->
-    get_chunked(LinkPid, Stream, MCID).
-
-%% As `with_content_stream/2', but pins a link to a specific,
-%% resolved station rather than picking from the pool's existing links.
-with_content_stream_station(Pool, Station, TimeoutMs, LinkOpts, Fun) ->
-    on_content_link_picked(
-      macula_client:ensure_content_link(Pool, Station, LinkOpts, TimeoutMs),
-      Fun).
+    {ok, Pid} = macula_content_transfer:start_get_station(
+                  Pool, Station, MCID, TimeoutMs, Opts),
+    Result = macula_content_transfer:await(Pid),
+    macula_content_transfer:cancel(Pid),
+    Result.
 
 %% @doc Resolve every host currently announcing an MCID: hosts that
 %% stored a chunked put (`_content.put_manifest') and got
@@ -713,128 +627,6 @@ provider_verified({ok, _}, Key, Record) ->
     end;
 provider_verified({error, _}, _Key, _Record) ->
     false.
-
-get_block(LinkPid, Stream, MCID) ->
-    call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_BLOCK_PROC,
-                              #{mcid => MCID}, ?CONTENT_BLOCK_TIMEOUT_MS).
-
-classify_get_content({ok, not_found}, _MCID)        -> {error, not_found};
-classify_get_content({ok, Bin}, MCID) when is_binary(Bin) ->
-    verify_block_hash(MCID, Bin);
-classify_get_content({ok, Reply}, _MCID)            -> {error, {unexpected_reply, Reply}};
-classify_get_content({error, _} = E, _MCID)         -> E.
-
-%% The station verified this block's hash at PUT time; a station
-%% fetched FROM (especially via `get_content_station/5', deliberately
-%% dialing a caller-chosen peer) is not necessarily the one that stored
-%% it, so re-verify client-side rather than trusting whoever answered.
-%% Chunked content already gets this from `macula_manifest:verify/2'
-%% over the reassembled whole; single-block content had no client-side
-%% check at all before this.
-verify_block_hash(<<1, 16#55, Hash:32/binary>>, Bin) ->
-    hash_result(macula_blake3_nif:hash(Bin) =:= Hash, Bin);
-verify_block_hash(_MCID, _Bin) ->
-    {error, invalid_mcid}.
-
-hash_result(true, Bin)   -> {ok, Bin};
-hash_result(false, _Bin) -> {error, hash_mismatch}.
-
-get_chunked(LinkPid, Stream, MCID) ->
-    classify_get_manifest(
-      call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_MANIFEST_PROC,
-                                #{mcid => MCID}, ?CONTENT_MANIFEST_TIMEOUT_MS),
-      LinkPid, Stream).
-
-classify_get_manifest({ok, not_found}, _LinkPid, _Stream) ->
-    {error, not_found};
-classify_get_manifest({ok, Wire}, LinkPid, Stream) when is_map(Wire) ->
-    manifest_decoded(macula_manifest:from_wire(Wire), LinkPid, Stream);
-classify_get_manifest({ok, Reply}, _LinkPid, _Stream) ->
-    {error, {unexpected_reply, Reply}};
-classify_get_manifest({error, _} = E, _LinkPid, _Stream) ->
-    E.
-
-manifest_decoded({error, invalid_manifest}, _LinkPid, _Stream) ->
-    {error, invalid_manifest};
-manifest_decoded({ok, #{chunk_count := N} = Manifest}, LinkPid, Stream) ->
-    get_chunks(LinkPid, Stream, Manifest, 0, N, []).
-
-get_chunks(_LinkPid, _Stream, Manifest, Index, N, Acc) when Index >= N ->
-    reassembled(Manifest, iolist_to_binary(lists:reverse(Acc)));
-get_chunks(LinkPid, Stream, Manifest, Index, N, Acc) ->
-    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
-    chunk_get_result(get_block(LinkPid, Stream, ChunkMcid), LinkPid, Stream,
-                     Manifest, Index, N, Acc).
-
-chunk_get_result({ok, Bin}, LinkPid, Stream, Manifest, Index, N, Acc)
-        when is_binary(Bin) ->
-    get_chunks(LinkPid, Stream, Manifest, Index + 1, N, [Bin | Acc]);
-chunk_get_result({ok, not_found}, _LinkPid, _Stream, _Manifest, _Index, _N,
-                 _Acc) ->
-    {error, not_found};
-chunk_get_result({ok, Reply}, _LinkPid, _Stream, _Manifest, _Index, _N, _Acc) ->
-    {error, {unexpected_reply, Reply}};
-chunk_get_result({error, _} = E, _LinkPid, _Stream, _Manifest, _Index, _N,
-                 _Acc) ->
-    E.
-
-reassembled(Manifest, Reassembled) ->
-    verify_result(macula_manifest:verify(Manifest, Reassembled),
-                  Reassembled).
-
-verify_result(ok, Reassembled)      -> {ok, Reassembled};
-verify_result({error, _} = E, _Bin) -> E.
-
-%% A `_content.*' CALL on the transfer's pinned dedicated stream,
-%% retried on a BOLT#4 error whose OWN retry policy says to
-%% (`macula_bolt4:is_retryable/1' — e.g. `temporary_relay_failure' is
-%% rated `same_path_after_backoff'). This is the spec's documented
-%% contract, not a blind retry: a non-retryable error (or a transport
-%% `{error, _}' outside the BOLT#4 taxonomy, e.g. `not_connected')
-%% returns immediately. Bounded to 3 attempts total with a short linear
-%% backoff — enough to absorb a transient relay hiccup without masking a
-%% genuine, persistent failure as a hang.
-%%
-%% Content puts are the first CALL callers in this SDK to hit this in
-%% practice: `_content.put_manifest' was observed to fail the first
-%% attempt against a freshly-started content store and succeed on retry
-%% (`_content.put_block' has not shown this). The station-side root
-%% cause is not yet diagnosed; retrying is what the CALL's own error
-%% code prescribes regardless, so content operations do it uniformly.
-%%
-%% Retries resend on the SAME stream/link, never re-picking a link the
-%% way the old pool-routed `call_with_retry' could — a link healthy
-%% enough to answer BOLT#4 `same_path_after_backoff' in the first
-%% place is the right target to retry against, and switching links
-%% mid-transfer would defeat the point of pinning one.
-call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs) ->
-    call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs, 3).
-
-call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs,
-                          AttemptsLeft) ->
-    retry_stream_result(
-      macula_station_link:call_on_stream(LinkPid, Stream, ?CONTENT_REALM,
-                                         Procedure, Payload, TimeoutMs),
-      LinkPid, Stream, Procedure, Payload, TimeoutMs, AttemptsLeft).
-
-retry_stream_result({error, {call_error, Code, _Name}} = E, LinkPid, Stream,
-                    Procedure, Payload, TimeoutMs, AttemptsLeft)
-        when AttemptsLeft > 1 ->
-    retry_stream_if_retryable(macula_bolt4:is_retryable(Code), E, LinkPid,
-                              Stream, Procedure, Payload, TimeoutMs,
-                              AttemptsLeft);
-retry_stream_result(Result, _LinkPid, _Stream, _Procedure, _Payload,
-                    _TimeoutMs, _AttemptsLeft) ->
-    Result.
-
-retry_stream_if_retryable(true, _E, LinkPid, Stream, Procedure, Payload,
-                          TimeoutMs, AttemptsLeft) ->
-    timer:sleep(?CONTENT_RETRY_BACKOFF_MS),
-    call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs,
-                              AttemptsLeft - 1);
-retry_stream_if_retryable(false, E, _LinkPid, _Stream, _Procedure, _Payload,
-                          _TimeoutMs, _AttemptsLeft) ->
-    E.
 
 %%%===================================================================
 %%% Streaming RPC (v1.5.0+)

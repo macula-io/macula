@@ -8,7 +8,9 @@
 > snapshots, artifacts — and want integrity for free. Single-block storage
 > since SDK 4.2.7; chunked content and discovery since 8.10.0; direct-dial
 > fetch and seed (`get_content_station`/`put_content_station`,
-> `macula_download`/`macula_feeder`'s `start_link_direct`) since 9.6.0/9.7.0.
+> `macula_download`/`macula_feeder`'s `start_link_direct`) since 9.6.0/9.7.0;
+> addressable transfers with a real, peer-visible cancel
+> (`macula_content_transfer`) since 9.9.0.
 > For a live, open-ended feed instead of a fixed blob, see the
 > [Streaming Guide](STREAMING_GUIDE.md).
 
@@ -120,6 +122,38 @@ seeding that specific station rather than whichever the pool would pick.
 Only chunked content is discoverable this way — a single-block put is never
 announced (see Discovery below), so `start_link_direct` has nothing to
 resolve for one.
+
+### Real cancel: `macula_content_transfer`
+
+`put_content/2`/`get_content/2` (and their `_station` variants) are thin
+blocking wrappers over **`macula_content_transfer`** — the module that
+actually picks the link, opens the dedicated content stream, and drives the
+block/manifest exchange. Call it directly when you want the addressable
+handle yourself, without a `macula_feeder`/`macula_download` behaviour
+module:
+
+```erlang
+{ok, Pid} = macula_content_transfer:start_put(Pool, Bytes),
+case macula_content_transfer:await(Pid) of
+    {ok, MCID}      -> ok;
+    {error, Reason} -> handle_error(Reason)
+end,
+macula_content_transfer:cancel(Pid).   % reap the handle when done
+```
+
+`cancel/1,3` is a **real, peer-visible abort**, not the blunt local kill
+`macula_feeder`/`macula_download`'s own `cancel/1` (`gen_server:stop/1`) still
+is: if a content stream is already open, `cancel/3` resets it with
+`macula_quic:reset_stream/2` — a QUIC RESET_STREAM frame the peer's own read
+genuinely observes, not merely a connection that went away. `Message` is
+local-only (QUIC RESET_STREAM carries just the numeric `Code` on the wire);
+`cancel/1` defaults to `Code = 0`. A transfer cancelled before it has picked a
+link yet has nothing to reset — the worker is simply killed, same as today.
+
+Each transfer mints a `share_id` (override via `Opts`'s `share_id` key), kept
+in `macula_content_transfer_registry` with monitor-based cleanup, so a caller
+that only saw the id in a published `sharing.*_started_v1` mesh fact — not the
+pid — can still resolve it: `macula_content_transfer_registry:whereis_share/1`.
 
 ---
 
@@ -266,6 +300,11 @@ known in advance.
 | `macula_feeder:start_link_direct/5,6` | **direct-dial** supervised wrapper — names its own target `Station` |
 | `macula_download:start_link/4,5` | supervised, `sharing.get_*_v1`-announcing wrapper around `get_content/2` |
 | `macula_download:start_link_direct/4,5` | **direct-dial** supervised wrapper — resolves the provider automatically |
+| `macula_content_transfer:start_put/2,3`, `start_get/2,3` | addressable put/get — `put_content`/`get_content`'s foundation, real `cancel/1,3` |
+| `macula_content_transfer:start_put_station/4,5`, `start_get_station/4,5` | **direct-dial** addressable variants |
+| `macula_content_transfer:await/1,2` | block for an addressable transfer's outcome, repeatable, cacheable |
+| `macula_content_transfer:cancel/1,3` | real, peer-visible abort (QUIC RESET_STREAM) if a stream is open; pure reap otherwise |
+| `macula_content_transfer_registry:whereis_share/1` | resolve a transfer's `share_id` (from a mesh fact) to its pid |
 
 `_content.*` CALLs retry on a BOLT#4-retryable error (e.g.
 `temporary_relay_failure`) up to 3 attempts with a short backoff, per that

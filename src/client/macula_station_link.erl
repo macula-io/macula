@@ -108,7 +108,8 @@
     %% `open_content_stream/1'.
     open_content_stream/1,
     call_on_stream/6,
-    close_content_stream/2
+    close_content_stream/2,
+    abort_content_stream/4
 ]).
 
 -export_type([handler/0, stream_handler/0]).
@@ -429,6 +430,25 @@ call_on_stream(Pid, Stream, Realm, Procedure, Payload, TimeoutMs)
 -spec close_content_stream(pid(), reference()) -> ok.
 close_content_stream(Pid, Stream) when is_pid(Pid), is_reference(Stream) ->
     gen_server:cast(Pid, {close_content_stream, Stream}).
+
+%% @doc Abort a content stream opened via `open_content_stream/1' —
+%% the cancel-with-a-real-signal counterpart to `close_content_stream/2'.
+%% Resets `Stream''s send side with `Code' via
+%% `macula_quic:reset_stream/2', a QUIC RESET_STREAM frame the PEER's
+%% own read genuinely observes (`{quic, stream_closed, PeerStream,
+%% {reset, Code}}' — see `macula_content_transfer', PLAN_PUSH_UPLOAD.md
+%% Phase 1), not merely a dropped connection to infer from the way
+%% `close_content_stream/2''s graceful FIN is. Any pending call on
+%% `Stream' is failed with `{error, cancelled}' (distinct from
+%% `close_content_stream/2''s `{error, closed}' — the caller asked for
+%% this one, it didn't just lose its connection). `Message' is local
+%% diagnostics only; QUIC RESET_STREAM carries only the numeric `Code'
+%% on the wire, no string.
+-spec abort_content_stream(pid(), reference(), non_neg_integer(), binary()) -> ok.
+abort_content_stream(Pid, Stream, Code, Message)
+  when is_pid(Pid), is_reference(Stream), is_integer(Code), Code >= 0,
+       is_binary(Message) ->
+    gen_server:cast(Pid, {abort_content_stream, Stream, Code, Message}).
 
 %% @doc Send a PUBLISH frame fire-and-forget. The link stamps a
 %% monotonic per-link `seq' onto the frame and the local
@@ -923,6 +943,12 @@ handle_cast({send_stream_frame, Type, #{stream_id := Sid} = Spec},
 handle_cast({close_content_stream, Stream}, S) ->
     {noreply, close_content_stream_state(Stream, S)};
 
+handle_cast({abort_content_stream, Stream, Code, Message}, S) ->
+    macula_diagnostics:event(<<"_macula.station_link.content_abort">>,
+                             #{stream => Stream, code => Code,
+                               message => Message}),
+    {noreply, abort_content_stream_state(Stream, Code, S)};
+
 handle_cast(_Msg, S) -> {noreply, S}.
 
 %%-------------------------------------------------------------------
@@ -1276,18 +1302,28 @@ reply_content_pending({{From, TRef}, NewCP}, Reply, S) ->
     gen_server:reply(From, Reply),
     S#state{content_pending = NewCP}.
 
-close_content_stream_state(Stream, #state{content_pending = CP,
-                                          content_stream_bufs = Bufs} = S) ->
-    NewCP = fail_content_pending(maps:take(Stream, CP), CP),
-    catch macula_quic:close_stream(Stream),
+close_content_stream_state(Stream, S) ->
+    teardown_content_stream_state(Stream, {error, closed},
+                                  fun macula_quic:close_stream/1, S).
+
+abort_content_stream_state(Stream, Code, S) ->
+    teardown_content_stream_state(Stream, {error, cancelled},
+                                  fun(St) -> macula_quic:reset_stream(St, Code) end,
+                                  S).
+
+teardown_content_stream_state(Stream, LocalFailReason, CloseFun,
+                              #state{content_pending = CP,
+                                     content_stream_bufs = Bufs} = S) ->
+    NewCP = fail_content_pending(maps:take(Stream, CP), CP, LocalFailReason),
+    catch CloseFun(Stream),
     S#state{content_pending = NewCP,
             content_stream_bufs = maps:remove(Stream, Bufs)}.
 
-fail_content_pending(error, CP) ->
+fail_content_pending(error, CP, _Reason) ->
     CP;
-fail_content_pending({{From, TRef}, NewCP}, _CP) ->
+fail_content_pending({{From, TRef}, NewCP}, _CP, Reason) ->
     _ = erlang:cancel_timer(TRef),
-    gen_server:reply(From, {error, closed}),
+    gen_server:reply(From, Reason),
     NewCP.
 
 fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,

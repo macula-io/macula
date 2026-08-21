@@ -79,6 +79,22 @@ impl StreamResource {
                         );
                         break;
                     }
+                    Err(quinn::ReadError::Reset(code)) => {
+                        // Peer called reset() on their send side (see
+                        // `nif_reset_stream` below) — a deliberate,
+                        // peer-visible abort with an application error
+                        // code, distinct from every other read error
+                        // (connection loss, zero-RTT rejection, ...),
+                        // which stay collapsed into `none()` below.
+                        let owner = *stream_arc.owner.read().unwrap();
+                        message::send_event(
+                            &owner,
+                            atoms::stream_closed(),
+                            stream_arc.clone(),
+                            (atoms::reset(), code.into_inner()),
+                        );
+                        break;
+                    }
                     Err(_e) => {
                         let owner = *stream_arc.owner.read().unwrap();
                         message::send_event(
@@ -191,6 +207,44 @@ fn nif_close_stream<'a>(
         let _ = send_stream.finish();
     }
     Ok(atoms::ok().encode(env))
+}
+
+/// NIF: reset_stream(StreamRef, ErrorCode) -> ok | {error, Reason}
+///
+/// Abruptly aborts OUR send side with a QUIC RESET_STREAM frame
+/// carrying `ErrorCode` — genuinely peer-visible at the transport
+/// level: the far end's `RecvStream::read` returns
+/// `Err(ReadError::Reset(ErrorCode))` (see the recv loop above)
+/// instead of the clean EOF `nif_close_stream`'s graceful `finish()`
+/// produces. Local teardown (recv task abort, `closed` flag) mirrors
+/// `nif_close_stream` exactly; only the send-side shutdown differs.
+#[rustler::nif]
+fn nif_reset_stream<'a>(
+    env: Env<'a>,
+    stream: ResourceArc<StreamResource>,
+    error_code: u64,
+) -> NifResult<Term<'a>> {
+    let code = match quinn::VarInt::from_u64(error_code) {
+        Ok(c) => c,
+        Err(_) => return Ok((atoms::error(), atoms::error_code_out_of_range()).encode(env)),
+    };
+
+    stream.closed.store(true, Ordering::SeqCst);
+    if let Some(task) = stream.recv_task.lock().unwrap().take() {
+        task.abort();
+    }
+
+    let mut guard = stream.send.lock().unwrap();
+    let result = match guard.take() {
+        Some(mut send_stream) => send_stream.reset(code).map_err(|e| format!("{}", e)),
+        None => Ok(()), // already finished/reset — idempotent
+    };
+    drop(guard);
+
+    match result {
+        Ok(()) => Ok(atoms::ok().encode(env)),
+        Err(e) => Ok((atoms::error(), e).encode(env)),
+    }
 }
 
 /// NIF: setopt(StreamRef, active, true|false) -> ok

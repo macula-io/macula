@@ -53,6 +53,18 @@ init([]) ->
             type => worker
         },
 
+        %% Correlation-id registry for macula_content_transfer handles
+        %% (PLAN_PUSH_UPLOAD.md Phase 1) — a caller that only knows a
+        %% transfer's share_id (from a published sharing.*_started_v1
+        %% mesh fact) resolves it to a cancellable pid here.
+        #{
+            id => macula_content_transfer_registry,
+            start => {macula_content_transfer_registry, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
         %% Local registry + dispatcher for streaming RPC (v1.5.0+).
         %% In-process pairing of client/server stream halves; the QUIC-
         %% backed cross-node path lands in Phase 2 of
