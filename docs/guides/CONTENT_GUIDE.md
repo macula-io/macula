@@ -10,7 +10,8 @@
 > fetch and seed (`get_content_station`/`put_content_station`,
 > `macula_download`/`macula_feeder`'s `start_link_direct`) since 9.6.0/9.7.0;
 > addressable transfers with a real, peer-visible cancel
-> (`macula_content_transfer`) since 9.9.0.
+> (`macula_content_transfer`) since 9.9.0, real pause/resume for chunked
+> transfers since 9.10.0.
 > For a live, open-ended feed instead of a fixed blob, see the
 > [Streaming Guide](STREAMING_GUIDE.md).
 
@@ -154,6 +155,29 @@ Each transfer mints a `share_id` (override via `Opts`'s `share_id` key), kept
 in `macula_content_transfer_registry` with monitor-based cleanup, so a caller
 that only saw the id in a published `sharing.*_started_v1` mesh fact — not the
 pid — can still resolve it: `macula_content_transfer_registry:whereis_share/1`.
+
+### Real pause/resume for chunked transfers
+
+For content over the chunk threshold, `pause/1` genuinely stops the transfer
+between chunks — the chunk already in flight, if any, still completes (a
+chunk's own round trip stays one uninterrupted blocking call: pausing
+mid-chunk would leave a half-sent block the station can't verify), but the
+next one does not start until `resume/1`, which continues from exactly the
+next un-sent/un-fetched chunk, never from the beginning:
+
+```erlang
+{ok, Pid} = macula_content_transfer:start_put(Pool, LargeBytes),
+ok = macula_content_transfer:pause(Pid),
+%% ... later ...
+ok = macula_content_transfer:resume(Pid),
+{ok, MCID} = macula_content_transfer:await(Pid).
+```
+
+Single-block content has no "between chunks" to pause at, so `pause/1` there
+is a harmless no-op — the transfer just runs to completion regardless.
+`cancel/1,3` still works at any point, paused or not: mid-chunk it kills that
+chunk's worker and resets the stream exactly as above; paused between chunks
+(no worker in flight) it just resets the stream directly.
 
 ---
 
@@ -304,6 +328,7 @@ known in advance.
 | `macula_content_transfer:start_put_station/4,5`, `start_get_station/4,5` | **direct-dial** addressable variants |
 | `macula_content_transfer:await/1,2` | block for an addressable transfer's outcome, repeatable, cacheable |
 | `macula_content_transfer:cancel/1,3` | real, peer-visible abort (QUIC RESET_STREAM) if a stream is open; pure reap otherwise |
+| `macula_content_transfer:pause/1`/`resume/1` | real pause/resume between chunks (chunked content only — a no-op on single-block) |
 | `macula_content_transfer_registry:whereis_share/1` | resolve a transfer's `share_id` (from a mesh fact) to its pid |
 
 `_content.*` CALLs retry on a BOLT#4-retryable error (e.g.

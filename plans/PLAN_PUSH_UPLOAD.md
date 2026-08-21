@@ -1,9 +1,9 @@
 # Content Push/Upload (`macula_pusher` / `macula_upload`)
 
-**Status:** Phase 1 SHIPPED (macula 9.9.0). Phases 2-6 not started.
+**Status:** Phases 1-2 SHIPPED (macula 9.10.0). Phases 3-6 not started.
 **Created:** 2026-08-21
-**Last Updated:** 2026-08-21 (Phase 1 landed same day, in a follow-up session
-to the one that wrote this plan)
+**Last Updated:** 2026-08-21 (Phases 1 and 2 both landed same day, in two
+follow-up sessions to the one that wrote this plan)
 
 ## Why this exists
 
@@ -237,15 +237,45 @@ RED-before-GREEN discipline: the content_transfer eunit suite hung instead of fa
 cleanly, which was itself the tell that something more fundamental than a wrong
 assertion was wrong.
 
-### Phase 2 — Pause/resume (content-sharing only)
+### Phase 2 — Pause/resume (content-sharing only) — SHIPPED (9.10.0)
 
-Convert the chunk loop from a tight recursive function into a step the
-`macula_content_transfer` process re-triggers itself between chunks (e.g. via
-`handle_continue/2`), checking a `paused` flag before each step. `pause/1`/`resume/1`
-become real: pause stops the loop between chunks without closing the stream; resume
-re-triggers it from the next un-sent/un-fetched chunk. One chunk's own round-trip stays
-a single blocking call underneath — the *loop between chunks* becomes controllable, not
-each chunk's own transfer.
+Shipped as designed, no scope corrections needed this time (unlike Phase 1's
+abort mechanism). Converted the chunk loop from a tight recursive function
+into a step `macula_content_transfer` (the gen_server itself) re-triggers via
+`handle_continue/2`, checking a `paused` flag before each step. `pause/1`/
+`resume/1` are real: pause stops the loop from advancing to the next chunk
+without closing the stream — the chunk already in flight, if any, is NOT
+interrupted (its own round trip stays one uninterrupted blocking call,
+consistent with content's "verified whole or not at all" model — pausing
+mid-chunk would leave a half-sent block the station can't verify); resume
+re-triggers the loop from exactly the next un-sent/un-fetched chunk, never
+from the start.
+
+Went further than a bare flag flip: each chunk step (one `_content.put_block`/
+`get_block`, or the manifest's `put_manifest`/`get_manifest`) now runs in its
+own short-lived linked worker, spawned fresh by `dispatch_next_step/1` for
+that one step and nothing more, instead of one long-lived worker running the
+whole multi-chunk loop to completion. This is what makes `paused` actually
+enforceable at every chunk boundary — the gen_server itself decides whether
+to spawn the next step's worker, rather than a loop already running inside
+one worker deciding for itself — and it keeps `cancel/3`'s existing
+guarantee (kill whatever's in flight, reset the stream) granular to
+whichever single chunk is currently in flight, not the whole transfer.
+
+Found one real gap this introduced that Phase 1's cancel path never had to
+handle: paused between chunks means NO step worker is alive at all
+(`worker = undefined` in state) — the original `unlink(Worker), exit(Worker,
+kill)` call would `badarg` on that. Fixed (`kill_worker/1` treats `undefined`
+as nothing to kill) and verified RED before GREEN: reverting the fix
+reproduces the exact `{badarg, [{erlang,unlink,[undefined]...` crash it
+prevents, via a dedicated test
+(`cancel_while_paused_between_chunks_still_resets_the_stream`).
+
+Single-block put/get is completely untouched by this phase — still one
+worker, connect through completion, exactly as Phase 1 shipped it. There is
+no "between chunks" for a one-round-trip transfer to participate in, so
+`pause/1` on one is a harmless no-op (verified:
+`pause_on_single_block_put_is_a_harmless_noop`).
 
 ### Phase 3 — Multi-stream parallel chunk transfer (content-sharing only)
 
@@ -299,29 +329,29 @@ multi-stream from day one, nothing to retrofit later.
 
 | File | Change |
 |---|---|
-| `src/macula_content_transfer.erl` | New — Phases 1-3. Phase 1 shipped: addressable put/get, real cancel |
+| `src/macula_content_transfer.erl` | New — Phases 1-3. Phase 1 shipped: addressable put/get, real cancel. Phase 2 shipped: chunk loop restructured onto `handle_continue/2` + per-step workers, real `pause/1`/`resume/1` |
 | `src/macula_content_transfer_registry.erl` | New — Phase 1 shipped: share_id → pid registry |
-| `src/macula.erl` | Phase 1 shipped: `put_content`/`get_content` (+ `_station` variants) reshaped onto `macula_content_transfer` as thin wrappers; ~200 lines of transfer internals moved out |
+| `src/macula.erl` | Phase 1 shipped: `put_content`/`get_content` (+ `_station` variants) reshaped onto `macula_content_transfer` as thin wrappers; ~200 lines of transfer internals moved out. Untouched by Phase 2. |
 | `src/macula_root.erl` | Phase 1 shipped: `macula_content_transfer_registry` added as a supervised child |
-| `src/client/macula_station_link.erl` | Phase 1 shipped: new `abort_content_stream/4`, `close_content_stream_state/2` refactored to share the teardown path with it |
+| `src/client/macula_station_link.erl` | Phase 1 shipped: new `abort_content_stream/4`, `close_content_stream_state/2` refactored to share the teardown path with it. Untouched by Phase 2 — cancel's granularity changed (per-chunk-step instead of whole-transfer) entirely inside `macula_content_transfer`, no change needed here. |
 | `src/peering/macula_quic.erl` | Phase 1 shipped: new `reset_stream/2`; `async_shutdown_stream/3`'s previously-discarded `Code` param now genuinely used |
 | `native/macula_quic/src/{atoms,lib,stream}.rs` | Phase 1 shipped: new `nif_reset_stream` NIF (Quinn `SendStream::reset`); recv loop distinguishes a peer reset from every other read error |
-| `src/macula_feeder.erl` | Phase 4 retrofit (not started — Phase 1 did NOT touch this file; `put_content/2`'s public shape is unchanged so no retrofit was needed yet) |
+| `src/macula_feeder.erl` | Phase 4 retrofit (not started — neither Phase 1 nor Phase 2 touched this file; `put_content/2`'s public shape is unchanged so no retrofit was needed yet) |
 | `src/macula_download.erl` | Phase 4 retrofit (not started, same reasoning) |
 | `src/macula_streamer.erl` | Phase 5 — `handle_chunk/2`, abort-wired cancel (not started) |
 | `src/macula_stream_sink.erl` | Phase 5 — abort-wired cancel (not started) |
 | `src/macula_pusher.erl` | New — Phase 6 (not started) |
 | `src/macula_upload.erl` | New — Phase 6 (not started) |
-| `test/macula_content_transfer_tests.erl` | New — Phase 1 shipped, 7 cases, meck-based |
-| `test/macula_quic_stream_reset_tests.erl` | New — Phase 1 shipped, 3 cases, real two-endpoint loopback |
+| `test/macula_content_transfer_tests.erl` | Phase 1 shipped: new, 7 cases, meck-based. Phase 2 shipped: +5 cases (pause/resume put and get, single-block no-op, cancel-while-paused) |
+| `test/macula_quic_stream_reset_tests.erl` | New — Phase 1 shipped, 3 cases, real two-endpoint loopback. Untouched by Phase 2. |
 | `test/macula_content_block_hash_tests.erl` | Phase 1 shipped: updated to call `macula_content_transfer:verify_block_hash/2` (moved from `macula:verify_block_hash/2`) |
-| `test/macula_feeder_tests.erl`, `macula_download_tests.erl` | Phase 4 retrofit — untouched by Phase 1, still mock `macula:put_content`/`get_content` directly and pass unmodified |
+| `test/macula_feeder_tests.erl`, `macula_download_tests.erl` | Phase 4 retrofit — untouched by Phases 1-2, still mock `macula:put_content`/`get_content` directly and pass unmodified |
 | `test/macula_streamer_tests.erl`, `macula_stream_sink_tests.erl` | Updated for abort + receive-loop (Phase 5, not started) |
 | `test/macula_pusher_tests.erl`, `macula_upload_tests.erl` | New (Phase 6, not started) |
-| `CHANGELOG.md`, `macula.app.src`, `CLAUDE.md` (version header) | Phase 1 shipped as 9.9.0 (MINOR — new capability, no breaking change) |
-| `docs/guides/CONTENT_GUIDE.md` | Phase 1 shipped: new "Real cancel: macula_content_transfer" section + Reference table rows |
-| `docs/guides/STREAMING_GUIDE.md` | Not touched — nothing in Phase 1 changes streaming RPC; revisit at Phase 5 |
-| `macula-station`, `macula-realm`, `hecate-om` (separate repos) | Checked for direct `put_content`/`get_content` callers before Phase 1 landed — none found in any of the three, nothing to update |
+| `CHANGELOG.md`, `macula.app.src`, `CLAUDE.md` (version header) | Phase 1 shipped as 9.9.0, Phase 2 as 9.10.0 (both MINOR — new capability, no breaking change) |
+| `docs/guides/CONTENT_GUIDE.md` | Phase 1 shipped: new "Real cancel: macula_content_transfer" section + Reference table rows. Phase 2 shipped: new "Real pause/resume for chunked transfers" section + Reference table row. |
+| `docs/guides/STREAMING_GUIDE.md` | Not touched — nothing in Phases 1-2 changes streaming RPC; revisit at Phase 5 |
+| `macula-station`, `macula-realm`, `hecate-om` (separate repos) | Checked for direct `put_content`/`get_content` callers before Phase 1 landed — none found in any of the three, nothing to update. Not re-checked for Phase 2 — same public functions, same signatures, nothing downstream could see a difference. |
 
 ## Testing plan
 
@@ -341,8 +371,14 @@ of this work, but re-verify per phase rather than assuming).
       right stream/code/message, and a real two-endpoint loopback test asserting the
       PEER genuinely observes `{quic, stream_closed, _, {reset, Code}}`, not just a
       closed connection.
-- [ ] Phase 2: a paused transfer sends zero further chunks until resumed; resume
-      continues from the correct next chunk, not from the start.
+- [x] Phase 2: a paused transfer sends zero further chunks until resumed
+      (`pause_stops_chunked_put_between_chunks`, `pause_stops_chunked_get_between_chunks`);
+      resume continues from the correct next chunk, not from the start
+      (`resume_continues_from_the_next_chunk_not_the_start` — asserts distinct
+      chunk MCIDs per call, in order, ending at the correct final manifest MCID).
+      Verified RED before GREEN on the `paused` gate itself (all 4 pause-dependent
+      tests fail identically — `{unexpected_call_started, ...}` — with the gate
+      removed) and on the `worker = undefined` cancel fix separately.
 - [ ] Phase 3: a large chunked transfer measurably completes faster with N>1 streams
       than with 1, and reassembly still verifies correctly regardless of which stream
       delivers which chunk first.

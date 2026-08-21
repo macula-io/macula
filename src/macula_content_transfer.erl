@@ -1,8 +1,8 @@
 %%%-------------------------------------------------------------------
 %%% @doc Addressable content-store put/get, with a real, peer-visible
-%%% abort — the foundation `macula_feeder'/`macula_download' (and,
-%%% later, `macula_pusher'/`macula_upload') build on. See
-%%% PLAN_PUSH_UPLOAD.md, Phase 1.
+%%% abort and (for chunked content) real pause/resume — the foundation
+%%% `macula_feeder'/`macula_download' (and, later, `macula_pusher'/
+%%% `macula_upload') build on. See PLAN_PUSH_UPLOAD.md, Phases 1-2.
 %%%
 %%% `macula:put_content/2'/`get_content/2' are ONE opaque blocking
 %%% call each: pick a link, open a dedicated content stream, run the
@@ -41,14 +41,32 @@
 %%%
 %%% `start_put/2,3', `start_put_station/4,5', `start_get/2,3',
 %%% `start_get_station/4,5' return `{ok, Pid}' immediately; the
-%%% resolve/dial/transfer sequence runs in a linked worker. `await/1,2'
-%%% blocks for the outcome (`{ok, Mcid}' / `{ok, Bytes}' /
-%%% `{error, Reason}') — repeatable and from any process; the result
-%%% is cached once known. The process does NOT self-terminate on
-%%% completion (a second `await/1' after success must still answer) —
-%%% call `cancel/1' when done with the handle, whether the transfer
-%%% succeeded, failed, or is still in flight; on an already-resolved
-%%% transfer this is a pure reap (nothing left to abort).
+%%% resolve/dial sequence runs in a linked worker. `await/1,2' blocks
+%%% for the outcome (`{ok, Mcid}' / `{ok, Bytes}' / `{error, Reason}')
+%%% — repeatable and from any process; the result is cached once
+%%% known. The process does NOT self-terminate on completion (a second
+%%% `await/1' after success must still answer) — call `cancel/1' when
+%%% done with the handle, whether the transfer succeeded, failed, or
+%%% is still in flight; on an already-resolved transfer this is a pure
+%%% reap (nothing left to abort).
+%%%
+%%% == Pause/resume (chunked content only) ==
+%%%
+%%% Single-block content is one wire round trip — there is no "between
+%%% chunks" for it to pause at, so `pause/1' on a single-block transfer
+%%% is a harmless no-op (the transfer just runs to completion). For
+%%% chunked content, each chunk's own put/get is still ONE uninterrupted
+%%% blocking call underneath (pausing mid-chunk would leave a half-sent
+%%% block the station can't verify) — what `pause/1' actually controls
+%%% is whether the NEXT chunk starts once the current one finishes.
+%%% Internally this is a `handle_continue/2' step the gen_server
+%%% re-triggers itself between chunks, checking `paused' each time;
+%%% `resume/1' re-arms it from exactly the next un-sent/un-fetched
+%%% chunk, never from the start. `cancel/1,3' still works at any point,
+%%% paused or not — if a chunk step happens to be in flight it is
+%%% killed and the stream reset exactly as Phase 1 describes above; if
+%%% paused between chunks (no step in flight), there is simply nothing
+%%% to kill and `cancel' resets the stream directly.
 %%%
 %%% == Correlation-id registry ==
 %%%
@@ -69,9 +87,9 @@
          start_put_station/4, start_put_station/5,
          start_get/2, start_get/3,
          start_get_station/4, start_get_station/5]).
--export([await/1, await/2, cancel/1, cancel/3, share_id/1]).
+-export([await/1, await/2, cancel/1, cancel/3, pause/1, resume/1, share_id/1]).
 
--export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, handle_continue/2]).
 
 -ifdef(TEST).
 -export([verify_block_hash/2]).
@@ -92,15 +110,38 @@
 -type dial() :: {pooled, macula:pool()}
               | {station, macula:pool(), macula_client:seed(), pos_integer(), map()}.
 
+%% Chunked-transfer driving state — `undefined` in `#state.chunk` for a
+%% single-block transfer (nothing to drive between chunks) and for a
+%% chunked one until its content stream is open.
+%%
+%% put: `manifest'/`remaining' are both known upfront (pure,
+%% `macula_manifest:create/1', no network) — `remaining' shrinks by one
+%% chunk per successful step until `[]', which triggers the final
+%% put_manifest step.
+%%
+%% get: `manifest' starts `undefined' — fetching it IS the first step.
+%% Once known, `chunk_count' bounds the loop and `acc' accumulates
+%% fetched chunks in REVERSE order (cheap `[H|T]`, reversed once at
+%% reassembly).
+-record(chunk, {
+    manifest    :: map() | undefined,
+    remaining   :: [binary()],
+    next_index  :: non_neg_integer(),
+    chunk_count :: non_neg_integer() | undefined,
+    acc         :: [binary()]
+}).
+
 -record(state, {
     kind     :: kind(),
     payload  :: binary(),         % put: Bytes; get: Mcid
     share_id :: binary(),
     link_pid :: pid() | undefined,
     stream   :: reference() | undefined,
-    worker   :: pid(),
+    worker   :: pid() | undefined,
     result   :: {ok, term()} | {error, term()} | undefined,
-    waiters  :: [gen_server:from()]
+    waiters  :: [gen_server:from()],
+    paused   :: boolean(),
+    chunk    :: #chunk{} | undefined
 }).
 
 %%%===================================================================
@@ -194,6 +235,19 @@ cancel(Pid, Code, Message)
   when is_integer(Code), Code >= 0, is_binary(Message) ->
     gen_server:call(Pid, {cancel, Code, Message}).
 
+%% @doc Pause a chunked transfer between chunks — the in-flight chunk
+%% (if any) still completes, the stream stays open, but the next chunk
+%% does not start until `resume/1'. A no-op on a single-block transfer
+%% or one that has already resolved (nothing to pause either way).
+-spec pause(pid()) -> ok.
+pause(Pid) -> gen_server:call(Pid, pause).
+
+%% @doc Resume a transfer paused via `pause/1', continuing from the
+%% next un-sent/un-fetched chunk. A no-op if not actually paused, not
+%% chunked, or already resolved.
+-spec resume(pid()) -> ok.
+resume(Pid) -> gen_server:call(Pid, resume).
+
 %% @doc This transfer's `share_id', for publishing in a mesh fact or
 %% looking itself up later via `macula_content_transfer_registry'.
 -spec share_id(pid()) -> binary().
@@ -209,9 +263,9 @@ init({Kind, Dial, Payload, Opts}) ->
     ShareId = maps:get(share_id, Opts, crypto:strong_rand_bytes(16)),
     ok = macula_content_transfer_registry:register_share(ShareId, self()),
     Self = self(),
-    Worker = spawn_link(fun() -> run(Self, Kind, Dial, Payload) end),
+    Worker = spawn_link(fun() -> connect_and_run(Self, Kind, Dial, Payload) end),
     {ok, #state{kind = Kind, payload = Payload, share_id = ShareId,
-               worker = Worker, waiters = []}}.
+               worker = Worker, waiters = [], paused = false, chunk = undefined}}.
 
 %% @private
 handle_call(await, From, #state{result = undefined, waiters = Waiters} = State) ->
@@ -220,14 +274,20 @@ handle_call(await, _From, #state{result = Result} = State) ->
     {reply, Result, State};
 handle_call(share_id, _From, #state{share_id = Id} = State) ->
     {reply, Id, State};
+handle_call(pause, _From, State) ->
+    {reply, ok, State#state{paused = true}};
+handle_call(resume, _From, #state{paused = true, chunk = Chunk, result = undefined} = State)
+        when Chunk =/= undefined ->
+    {reply, ok, State#state{paused = false}, {continue, next_step}};
+handle_call(resume, _From, State) ->
+    {reply, ok, State#state{paused = false}};
 handle_call({cancel, _Code, _Message}, _From, #state{result = Result} = State)
         when Result =/= undefined ->
     {stop, normal, ok, State};
 handle_call({cancel, Code, Message}, _From,
             #state{worker = Worker, link_pid = LinkPid, stream = Stream,
                   waiters = Waiters} = State) ->
-    unlink(Worker),
-    exit(Worker, kill),
+    kill_worker(Worker),
     abort_stream_if_open(LinkPid, Stream, Code, Message),
     [gen_server:reply(From, {error, cancelled}) || From <- Waiters],
     {stop, normal, ok, State#state{result = {error, cancelled}, waiters = []}};
@@ -238,16 +298,42 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) -> {noreply, State}.
 
 %% @private
-handle_info({content_link, LinkPid, Stream}, State) ->
-    {noreply, State#state{link_pid = LinkPid, stream = Stream}};
+%% The connect worker's link/stream — for a single-block transfer it
+%% keeps running (unchanged since Phase 1: transfers, closes, reports
+%% `content_result' itself). For chunked content it stops here and
+%% hands off: this process starts driving the chunk-by-chunk loop.
+handle_info({content_link, LinkPid, Stream}, #state{kind = Kind, payload = Payload} = State) ->
+    NewState = State#state{link_pid = LinkPid, stream = Stream},
+    case is_chunked(Kind, Payload) of
+        true  -> {noreply, NewState#state{chunk = init_chunk(Kind, Payload)}, {continue, next_step}};
+        false -> {noreply, NewState}
+    end;
+%% Single-block path only (chunked finalizes via `finalize/2' instead).
 handle_info({content_result, Result}, #state{waiters = Waiters} = State) ->
     [gen_server:reply(From, Result) || From <- Waiters],
     {noreply, State#state{result = Result, waiters = []}};
+%% One chunk step's outcome. Which step it was is inferred from
+%% `chunk''s current shape — there is only ever one step in flight.
+handle_info({step_result, Outcome}, #state{worker = Worker} = State)
+        when is_pid(Worker) ->
+    step_result(Outcome, State#state{worker = undefined});
 handle_info({'EXIT', Worker, Reason}, #state{worker = Worker, result = undefined} = State)
         when Reason =/= normal ->
     {stop, {worker_crashed, Reason}, State};
 handle_info(_Msg, State) ->
     {noreply, State}.
+
+%% @private
+handle_continue(next_step, #state{paused = true} = State) ->
+    {noreply, State};
+handle_continue(next_step, State) ->
+    dispatch_next_step(State).
+
+kill_worker(Worker) when is_pid(Worker) ->
+    unlink(Worker),
+    exit(Worker, kill);
+kill_worker(undefined) ->
+    ok.
 
 abort_stream_if_open(LinkPid, Stream, Code, Message)
   when is_pid(LinkPid), is_reference(Stream) ->
@@ -256,20 +342,28 @@ abort_stream_if_open(_LinkPid, _Stream, _Code, _Message) ->
     ok.
 
 %%%===================================================================
-%%% Worker — resolve link, open stream, run the transfer
+%%% Connect worker — resolve link, open stream. A single-block
+%%% transfer keeps running in this same process; a chunked one hands
+%%% off to the gen_server as soon as `content_link' is sent (see
+%%% `handle_info/2' above) and this function returns right after.
 %%%===================================================================
 
--spec run(pid(), kind(), dial(), binary()) -> term().
-run(Parent, Kind, Dial, Payload) ->
+-spec connect_and_run(pid(), kind(), dial(), binary()) -> term().
+connect_and_run(Parent, Kind, Dial, Payload) ->
     case connect(Dial) of
         {ok, LinkPid, Stream} ->
             Parent ! {content_link, LinkPid, Stream},
-            Result = transfer(Kind, LinkPid, Stream, Payload),
-            catch macula_station_link:close_content_stream(LinkPid, Stream),
-            Parent ! {content_result, Result};
+            run_if_single_block(is_chunked(Kind, Payload), Parent, Kind, LinkPid, Stream, Payload);
         {error, _} = E ->
             Parent ! {content_result, E}
     end.
+
+run_if_single_block(true, _Parent, _Kind, _LinkPid, _Stream, _Payload) ->
+    ok;
+run_if_single_block(false, Parent, Kind, LinkPid, Stream, Payload) ->
+    Result = transfer(Kind, LinkPid, Stream, Payload),
+    catch macula_station_link:close_content_stream(LinkPid, Stream),
+    Parent ! {content_result, Result}.
 
 connect({pooled, Pool}) ->
     open_on_link(macula_client:pick_connected_link(Pool));
@@ -283,22 +377,20 @@ open_on_link({ok, LinkPid}) ->
 stream_opened({ok, Stream}, LinkPid) -> {ok, LinkPid, Stream};
 stream_opened({error, _} = E, _LinkPid) -> E.
 
-transfer(put, LinkPid, Stream, Bytes) -> run_put(LinkPid, Stream, Bytes);
-transfer(get, LinkPid, Stream, Mcid)  -> run_get(LinkPid, Stream, Mcid).
+%% @doc Known upfront, no network needed: put by size against the
+%% chunk threshold, get by the MCID's own codec byte.
+is_chunked(put, Bytes) -> byte_size(Bytes) > macula_manifest:default_chunk_size();
+is_chunked(get, <<1, 16#56, _/binary>>) -> true;
+is_chunked(get, <<1, 16#55, _/binary>>) -> false.
+
+transfer(put, LinkPid, Stream, Bytes) -> put_single_block(LinkPid, Stream, Bytes);
+transfer(get, LinkPid, Stream, Mcid)  -> get_single_block(LinkPid, Stream, Mcid).
 
 %%%===================================================================
-%%% Put — single block or chunked (mirrors macula:put_content/2's
-%%% former internals byte-for-byte; see PLAN_PUSH_UPLOAD.md Phase 1)
+%%% Single block — one wire round trip, runs entirely in the connect
+%%% worker exactly as Phase 1 shipped it. Untouched by Phase 2: there
+%%% is no "between chunks" for pause/resume to mean anything here.
 %%%===================================================================
-
-run_put(LinkPid, Stream, Bytes) ->
-    put_content_by_size(byte_size(Bytes) =< macula_manifest:default_chunk_size(),
-                        LinkPid, Stream, Bytes).
-
-put_content_by_size(true, LinkPid, Stream, Bytes) ->
-    put_single_block(LinkPid, Stream, Bytes);
-put_content_by_size(false, LinkPid, Stream, Bytes) ->
-    put_chunked(LinkPid, Stream, Bytes).
 
 put_single_block(LinkPid, Stream, Bytes) ->
     Hash = macula_blake3_nif:hash(Bytes),
@@ -315,50 +407,8 @@ classify_put_content({ok, hash_mismatch},     _MCID) -> {error, hash_mismatch};
 classify_put_content({ok, Reply},             _MCID) -> {error, {unexpected_reply, Reply}};
 classify_put_content({error, _} = E,          _MCID) -> E.
 
-%% Split into chunks, upload each block, then the manifest. A chunk
-%% failure short-circuits WITHOUT putting the manifest — a manifest
-%% naming missing chunks would resolve but never reassemble, which is
-%% worse than a clean error now.
-put_chunked(LinkPid, Stream, Bytes) ->
-    {ok, Manifest, Chunks} = macula_manifest:create(Bytes),
-    put_chunks(LinkPid, Stream, Manifest, Chunks, 0).
-
-put_chunks(LinkPid, Stream, Manifest, [], _Index) ->
-    put_manifest(LinkPid, Stream, Manifest);
-put_chunks(LinkPid, Stream, Manifest, [Chunk | Rest], Index) ->
-    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
-    chunk_put_result(put_block(LinkPid, Stream, ChunkMcid, Chunk), LinkPid,
-                     Stream, Manifest, Rest, Index + 1).
-
-chunk_put_result({ok, ok}, LinkPid, Stream, Manifest, Rest, NextIndex) ->
-    put_chunks(LinkPid, Stream, Manifest, Rest, NextIndex);
-chunk_put_result({ok, hash_mismatch}, _LinkPid, _Stream, _Manifest, _Rest,
-                 _NextIndex) ->
-    {error, hash_mismatch};
-chunk_put_result({ok, Reply}, _LinkPid, _Stream, _Manifest, _Rest, _NextIndex) ->
-    {error, {unexpected_reply, Reply}};
-chunk_put_result({error, _} = E, _LinkPid, _Stream, _Manifest, _Rest, _NextIndex) ->
-    E.
-
-put_manifest(LinkPid, Stream, #{mcid := MCID} = Manifest) ->
-    classify_put_manifest(
-      call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_PUT_MANIFEST_PROC,
-                                #{manifest => Manifest},
-                                ?CONTENT_MANIFEST_TIMEOUT_MS),
-      MCID).
-
-classify_put_manifest({ok, ok},      MCID) -> {ok, MCID};
-classify_put_manifest({ok, Reply},  _MCID) -> {error, {unexpected_reply, Reply}};
-classify_put_manifest({error, _} = E, _MCID) -> E.
-
-%%%===================================================================
-%%% Get — single block or chunked
-%%%===================================================================
-
-run_get(LinkPid, Stream, <<1, 16#55, _:32/binary>> = MCID) ->
-    classify_get_content(get_block(LinkPid, Stream, MCID), MCID);
-run_get(LinkPid, Stream, <<1, 16#56, _:32/binary>> = MCID) ->
-    get_chunked(LinkPid, Stream, MCID).
+get_single_block(LinkPid, Stream, MCID) ->
+    classify_get_content(get_block(LinkPid, Stream, MCID), MCID).
 
 get_block(LinkPid, Stream, MCID) ->
     call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_BLOCK_PROC,
@@ -374,10 +424,11 @@ classify_get_content({error, _} = E, _MCID)         -> E.
 %% fetched FROM (especially via `start_get_station/5', deliberately
 %% dialing a caller-chosen peer) is not necessarily the one that stored
 %% it, so re-verify client-side rather than trusting whoever answered.
-%% Chunked content already gets this from `macula_manifest:verify/2'
-%% over the reassembled whole; single-block content had no client-side
-%% check at all before this (fixed pre-Phase-1, carried forward here
-%% unchanged — see `macula_content_block_hash_tests').
+%% Chunked content gets the equivalent check from `macula_manifest:
+%% verify/2' over the reassembled whole (see `dispatch_next_step/1''s
+%% get-reassembly clause below); single-block content had no
+%% client-side check at all before this (fixed pre-Phase-1, carried
+%% forward here unchanged — see `macula_content_block_hash_tests').
 -spec verify_block_hash(macula:mcid(), binary()) ->
         {ok, binary()} | {error, hash_mismatch | invalid_mcid}.
 verify_block_hash(<<1, 16#55, Hash:32/binary>>, Bin) ->
@@ -388,47 +439,140 @@ verify_block_hash(_MCID, _Bin) ->
 hash_result(true, Bin)   -> {ok, Bin};
 hash_result(false, _Bin) -> {error, hash_mismatch}.
 
-get_chunked(LinkPid, Stream, MCID) ->
-    classify_get_manifest(
-      call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_MANIFEST_PROC,
-                                #{mcid => MCID}, ?CONTENT_MANIFEST_TIMEOUT_MS),
-      LinkPid, Stream).
+%%%===================================================================
+%%% Chunked — driven step by step by THIS process (the gen_server),
+%%% not the connect worker. Each step (one chunk put/get, or the
+%%% manifest put/get) runs in its own short-lived linked worker, so
+%%% `cancel/3' can always kill whichever one is currently in flight;
+%%% between steps `dispatch_next_step/1' checks `paused' before
+%%% starting the next one — that check is Phase 2's entire pause/resume
+%%% mechanism. PLAN_PUSH_UPLOAD.md Phase 2.
+%%%===================================================================
 
-classify_get_manifest({ok, not_found}, _LinkPid, _Stream) ->
-    {error, not_found};
-classify_get_manifest({ok, Wire}, LinkPid, Stream) when is_map(Wire) ->
-    manifest_decoded(macula_manifest:from_wire(Wire), LinkPid, Stream);
-classify_get_manifest({ok, Reply}, _LinkPid, _Stream) ->
-    {error, {unexpected_reply, Reply}};
-classify_get_manifest({error, _} = E, _LinkPid, _Stream) ->
-    E.
+init_chunk(put, Bytes) ->
+    {ok, Manifest, Chunks} = macula_manifest:create(Bytes),
+    #chunk{manifest = Manifest, remaining = Chunks, next_index = 0, acc = []};
+init_chunk(get, _Mcid) ->
+    %% Manifest not known yet — fetching it IS the first step.
+    #chunk{manifest = undefined, remaining = [], next_index = 0, acc = []}.
 
-manifest_decoded({error, invalid_manifest}, _LinkPid, _Stream) ->
-    {error, invalid_manifest};
-manifest_decoded({ok, #{chunk_count := N} = Manifest}, LinkPid, Stream) ->
-    get_chunks(LinkPid, Stream, Manifest, 0, N, []).
+%% get: manifest not fetched yet.
+dispatch_next_step(#state{kind = get, payload = Mcid,
+                          chunk = #chunk{manifest = undefined}} = State) ->
+    start_step(State, fun(Self, LinkPid, Stream) ->
+        step_get_manifest(Self, LinkPid, Stream, Mcid)
+    end);
+%% get: every chunk fetched — reassemble + verify. Pure, no network,
+%% so this runs inline rather than in a worker.
+dispatch_next_step(#state{kind = get,
+                          chunk = #chunk{manifest = Manifest, next_index = Index,
+                                        chunk_count = N, acc = Acc}} = State)
+        when N =/= undefined, Index >= N ->
+    Reassembled = iolist_to_binary(lists:reverse(Acc)),
+    finalize(State, verify_result(macula_manifest:verify(Manifest, Reassembled), Reassembled));
+%% get: fetch the next chunk.
+dispatch_next_step(#state{kind = get,
+                          chunk = #chunk{manifest = Manifest, next_index = Index}} = State) ->
+    start_step(State, fun(Self, LinkPid, Stream) ->
+        step_get_chunk(Self, LinkPid, Stream, Manifest, Index)
+    end);
+%% put: every chunk sent — put the manifest. Finalizes via its own
+%% step_result (unlike get's reassembly, this one IS a network call).
+dispatch_next_step(#state{kind = put, chunk = #chunk{manifest = Manifest, remaining = []}} = State) ->
+    start_step(State, fun(Self, LinkPid, Stream) ->
+        step_put_manifest(Self, LinkPid, Stream, Manifest)
+    end);
+%% put: send the next chunk.
+dispatch_next_step(#state{kind = put,
+                          chunk = #chunk{manifest = Manifest, remaining = [Chunk | _],
+                                        next_index = Index}} = State) ->
+    start_step(State, fun(Self, LinkPid, Stream) ->
+        step_put_chunk(Self, LinkPid, Stream, Manifest, Chunk, Index)
+    end).
 
-get_chunks(_LinkPid, _Stream, Manifest, Index, N, Acc) when Index >= N ->
-    reassembled(Manifest, iolist_to_binary(lists:reverse(Acc)));
-get_chunks(LinkPid, Stream, Manifest, Index, N, Acc) ->
+start_step(#state{link_pid = LinkPid, stream = Stream} = State, StepFun) ->
+    Self = self(),
+    Worker = spawn_link(fun() -> StepFun(Self, LinkPid, Stream) end),
+    {noreply, State#state{worker = Worker}}.
+
+step_put_chunk(Self, LinkPid, Stream, Manifest, Chunk, Index) ->
     {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
-    chunk_get_result(get_block(LinkPid, Stream, ChunkMcid), LinkPid, Stream,
-                     Manifest, Index, N, Acc).
+    Outcome = put_chunk_outcome(classify_put_content(put_block(LinkPid, Stream, ChunkMcid, Chunk), ChunkMcid)),
+    Self ! {step_result, Outcome}.
 
-chunk_get_result({ok, Bin}, LinkPid, Stream, Manifest, Index, N, Acc)
-        when is_binary(Bin) ->
-    get_chunks(LinkPid, Stream, Manifest, Index + 1, N, [Bin | Acc]);
-chunk_get_result({ok, not_found}, _LinkPid, _Stream, _Manifest, _Index, _N,
-                 _Acc) ->
-    {error, not_found};
-chunk_get_result({ok, Reply}, _LinkPid, _Stream, _Manifest, _Index, _N, _Acc) ->
-    {error, {unexpected_reply, Reply}};
-chunk_get_result({error, _} = E, _LinkPid, _Stream, _Manifest, _Index, _N,
-                 _Acc) ->
-    E.
+put_chunk_outcome({ok, _})       -> ok;
+put_chunk_outcome({error, _} = E) -> E.
 
-reassembled(Manifest, Reassembled) ->
-    verify_result(macula_manifest:verify(Manifest, Reassembled), Reassembled).
+step_put_manifest(Self, LinkPid, Stream, #{mcid := MCID} = Manifest) ->
+    Outcome = classify_put_manifest(
+      call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_PUT_MANIFEST_PROC,
+                                #{manifest => Manifest}, ?CONTENT_MANIFEST_TIMEOUT_MS),
+      MCID),
+    Self ! {step_result, Outcome}.
+
+classify_put_manifest({ok, ok},      MCID) -> {ok, MCID};
+classify_put_manifest({ok, Reply},  _MCID) -> {error, {unexpected_reply, Reply}};
+classify_put_manifest({error, _} = E, _MCID) -> E.
+
+step_get_manifest(Self, LinkPid, Stream, Mcid) ->
+    Outcome = classify_get_manifest_step(
+      call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_MANIFEST_PROC,
+                                #{mcid => Mcid}, ?CONTENT_MANIFEST_TIMEOUT_MS)),
+    Self ! {step_result, Outcome}.
+
+classify_get_manifest_step({ok, not_found})          -> {error, not_found};
+classify_get_manifest_step({ok, Wire}) when is_map(Wire) -> macula_manifest:from_wire(Wire);
+classify_get_manifest_step({ok, Reply})              -> {error, {unexpected_reply, Reply}};
+classify_get_manifest_step({error, _} = E)            -> E.
+
+step_get_chunk(Self, LinkPid, Stream, Manifest, Index) ->
+    {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
+    Outcome = classify_get_content(get_block(LinkPid, Stream, ChunkMcid), ChunkMcid),
+    Self ! {step_result, Outcome}.
+
+%% A step worker's outcome. Which step it was is inferred from
+%% `chunk''s current shape — same discriminants `dispatch_next_step/1'
+%% just used to decide what to dispatch, since there is only ever one
+%% step in flight at a time.
+step_result(Outcome, #state{kind = get, chunk = #chunk{manifest = undefined}} = State) ->
+    get_manifest_result(Outcome, State);
+step_result(Outcome, #state{kind = get,
+                            chunk = #chunk{next_index = Index, acc = Acc} = Chunk} = State) ->
+    get_chunk_result(Outcome, Index, Acc, Chunk, State);
+step_result(Outcome, #state{kind = put, chunk = #chunk{remaining = []}} = State) ->
+    finalize(State, Outcome);
+step_result(Outcome, #state{kind = put,
+                            chunk = #chunk{remaining = [_ | Rest], next_index = Index} = Chunk} = State) ->
+    put_chunk_result(Outcome, Rest, Index, Chunk, State).
+
+get_manifest_result({ok, Manifest}, State) ->
+    #{chunk_count := N} = Manifest,
+    NewChunk = #chunk{manifest = Manifest, remaining = [], next_index = 0,
+                      chunk_count = N, acc = []},
+    {noreply, State#state{chunk = NewChunk}, {continue, next_step}};
+get_manifest_result({error, _} = E, State) ->
+    finalize(State, E).
+
+get_chunk_result({ok, Bin}, Index, Acc, Chunk, State) when is_binary(Bin) ->
+    NewChunk = Chunk#chunk{next_index = Index + 1, acc = [Bin | Acc]},
+    {noreply, State#state{chunk = NewChunk}, {continue, next_step}};
+get_chunk_result({error, _} = E, _Index, _Acc, _Chunk, State) ->
+    finalize(State, E).
+
+put_chunk_result(ok, Rest, Index, Chunk, State) ->
+    NewChunk = Chunk#chunk{remaining = Rest, next_index = Index + 1},
+    {noreply, State#state{chunk = NewChunk}, {continue, next_step}};
+put_chunk_result({error, _} = E, _Rest, _Index, _Chunk, State) ->
+    finalize(State, E).
+
+%% Chunked terminal outcome — mirrors `content_result''s job for the
+%% single-block path, but the close happens here instead of in a
+%% worker (Phase 2's step workers never held the stream open past
+%% their own one call).
+finalize(#state{link_pid = LinkPid, stream = Stream, waiters = Waiters} = State, Outcome) ->
+    catch macula_station_link:close_content_stream(LinkPid, Stream),
+    [gen_server:reply(From, Outcome) || From <- Waiters],
+    {noreply, State#state{result = Outcome, waiters = [], worker = undefined}}.
 
 verify_result(ok, Reassembled)      -> {ok, Reassembled};
 verify_result({error, _} = E, _Bin) -> E.

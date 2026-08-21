@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.10.0] - 2026-08-21
+
+### Added
+
+- **`macula_content_transfer:pause/1`/`resume/1`** — real pause/resume for
+  chunked put/get. PLAN_PUSH_UPLOAD.md Phase 2. The per-chunk step loop
+  (put a chunk / get a chunk / put or get the manifest) now runs as a
+  `handle_continue/2` step the gen_server re-triggers itself between
+  chunks, checking a `paused` flag each time — `pause/1` stops the loop
+  from advancing to the next chunk (the chunk already in flight, if any,
+  still completes uninterrupted — its own round trip stays one blocking
+  call, matching content's existing "a chunk is verified whole or not at
+  all" model); `resume/1` re-arms it from exactly the next un-sent/
+  un-fetched chunk, never from the start. Single-block content has no
+  "between chunks" to pause at, so `pause/1` there is a harmless no-op —
+  the transfer just runs to completion regardless.
+- Each chunk step (one `_content.put_block`/`get_block`, or the
+  manifest's `_content.put_manifest`/`get_manifest`) now runs in its own
+  short-lived linked worker rather than inside one long recursive loop,
+  so `cancel/1,3` can always kill whichever step is currently in flight —
+  same guarantee Phase 1 gave the whole transfer, now granular to each
+  chunk. Closed a real gap this uncovered: cancelling while genuinely
+  paused between chunks means no step worker is alive at all
+  (`worker = undefined`), which the Phase 1 cancel path didn't handle —
+  fixed (`kill_worker/1` now treats `undefined` as nothing to kill,
+  verified RED before GREEN: reverting the fix reproduces the exact
+  `{badarg, [{erlang,unlink,[undefined]...` crash it prevents).
+
+### Changed
+
+- `macula_content_transfer`'s internal chunk-loop functions
+  (`put_chunks`/`chunk_put_result`/`put_manifest`/`get_chunks`/
+  `chunk_get_result`/etc., moved verbatim from `macula.erl` in 9.9.0)
+  are replaced by the step-driven design above. Single-block put/get is
+  untouched — still one worker, connect through completion, exactly as
+  9.9.0 shipped it; there is no "between chunks" for it to participate in.
+
 ## [9.9.0] - 2026-08-21
 
 ### Added
