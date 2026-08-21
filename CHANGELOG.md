@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.13.2] - 2026-08-21
+
+### Fixed
+
+- **`macula_response:advertise_direct/7` now actually forwards `Opts` to
+  the underlying advertise call — it silently didn't before.** Found while
+  auditing release readiness against the identical bug just fixed in
+  `macula_streamer:advertise_direct/7` (9.13.0) — checked every
+  `advertise_direct/7` implementation in the SDK for the same pattern and
+  found `macula_response` still had it. It called the arity-5 `advertise/5`
+  (which always defaults `Opts` to `#{}`) instead of `advertise/6`, so
+  `Opts => #{announce => false}` — or `auth`, or ANY override — was
+  silently discarded for every direct-dial-advertised RPC procedure, with
+  no error anywhere to say so. Fixed at the source, same one-line shape as
+  the `macula_streamer` fix (`advertise(Pool, Realm, Procedure, Module,
+  Args)` → `advertise(Pool, Realm, Procedure, Module, Args, Opts)`),
+  confirmed safe for `macula_direct_dial:publish_advertisement/5` (already
+  ignores option keys it doesn't recognize).
+
+### Notes
+
+- No public API changes — same signature, now honors `Opts` correctly.
+  PATCH, not MINOR.
+- `test/macula_response_tests.erl` gained a regression case
+  (`advertise_direct_forwards_opts_to_advertise`), RED-verified against the
+  reverted code before being confirmed to pass with the fix.
+- Confirmed via `grep` that no other `advertise_direct/7` implementation in
+  the SDK has this bug — `macula_streamer` (fixed 9.13.0), `macula_upload`
+  (correct from the start, forwards to `macula_streamer:advertise_direct/7`),
+  and now `macula_response` are the only three, all correct.
+
+---
+
 ## [9.13.1] - 2026-08-21
 
 ### Fixed

@@ -39,6 +39,7 @@ setup() ->
 
 teardown(_) ->
     persistent_term:erase({?MODULE, handler}),
+    catch persistent_term:erase({?MODULE, advertised_opts}),
     meck:unload(macula).
 
 captured_handler() ->
@@ -53,7 +54,33 @@ response_test_() ->
      [fun replies_and_publishes_lifecycle/0,
       fun error_reply_is_surfaced/0,
       fun crash_propagates_to_caller/0,
-      fun advertise_failure_is_surfaced/0]}.
+      fun advertise_failure_is_surfaced/0,
+      fun advertise_direct_forwards_opts_to_advertise/0]}.
+
+%% Regression test for a real bug found while auditing `macula_streamer'
+%% for the same pattern (PLAN_PUSH_UPLOAD.md Phase 6 fixed it there;
+%% `macula_response' had the identical bug, unfixed): `advertise_direct/7'
+%% used to call the arity-5 `advertise/5' (which always defaults `Opts' to
+%% `#{}'), silently discarding whatever `announce'/`auth' the caller passed
+%% in `Opts' — a direct-dial-advertised procedure could never override
+%% either, with no error anywhere to say so.
+advertise_direct_forwards_opts_to_advertise() ->
+    meck:expect(macula, advertise,
+                fun(_Pool, _Realm, _Proc, Handler, Opts) ->
+                    persistent_term:put({?MODULE, handler}, Handler),
+                    persistent_term:put({?MODULE, advertised_opts}, Opts),
+                    ok
+                end),
+    meck:new(macula_direct_dial, [passthrough]),
+    meck:expect(macula_direct_dial, publish_advertisement,
+                fun(_Pool, _Realm, _Proc, _Identity, _Opts) -> ok end),
+    Identity = macula_identity:generate(),
+
+    {ok, _Sup} = macula_response:advertise_direct(pool, <<0:256>>, <<"math.add_v1">>,
+                                                   ?MODULE, [], Identity,
+                                                   #{announce => false}),
+    ?assertEqual(#{announce => false}, persistent_term:get({?MODULE, advertised_opts})),
+    meck:unload(macula_direct_dial).
 
 replies_and_publishes_lifecycle() ->
     {ok, _Sup} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,

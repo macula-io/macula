@@ -123,17 +123,19 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
 advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
     advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
 
-%% @doc As `advertise_direct/6', with `Opts' forwarded to
+%% @doc As `advertise_direct/6', with `Opts' forwarded BOTH to
+%% `advertise/6' (so `announce'/`auth' apply here too) and to
 %% `macula_direct_dial:publish_advertisement/5' — e.g. `cert_chain =>
 %% ChainPem' (leaf ++ org CA, PEM), so a verifying consumer's
 %% `verify_cert_chain' opt can check this advertiser's org/realm
 %% authorization (Slice 7c Direction B, managed realms only. See
-%% `macula_direct_dial''s module doc, "Trust model").
+%% `macula_direct_dial''s module doc, "Trust model") — each side reads
+%% only the keys it recognizes, so one `Opts' map serves both.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
                        module(), term(), macula_identity:key_pair(), map()) ->
     {ok, pid()} | {error, term()}.
 advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
-    case advertise(Pool, Realm, Procedure, Module, Args) of
+    case advertise(Pool, Realm, Procedure, Module, Args, Opts) of
         {ok, Sup} ->
             _ = macula_direct_dial:publish_advertisement(Pool, Realm,
                                                           Procedure, Identity,
