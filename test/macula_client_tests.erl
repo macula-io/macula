@@ -39,6 +39,31 @@ connect_with_unreachable_seed_returns_pool_test() ->
     ok = macula_client:close(Pool),
     ok.
 
+%% A caller who doesn't pass `identity' must not silently get one that
+%% fails puzzle validation — that identity looks fine locally (the
+%% connection reports healthy, subscribe returns ok) while every
+%% puzzle-enforcing station rejects its handshake and delivers nothing.
+%% See `macula_client:resolve_identity/1'.
+connect_with_no_identity_opt_defaults_to_puzzle_hardened_test_() ->
+    {timeout, 20, fun() ->
+        {ok, _} = application:ensure_all_started(macula),
+        {ok, Pool} = macula_client:connect([], #{}),
+        {ok, #{self_node_id := NodeId}} = macula_client:status(Pool),
+        ?assert(macula_identity:puzzle_valid(NodeId)),
+        ok = macula_client:close(Pool)
+    end}.
+
+%% An explicitly-supplied identity must be used as-is, unhardened or
+%% not — the pool's default only fills the gap when the caller gave it
+%% nothing, it never overrides a caller's own choice.
+connect_with_explicit_identity_opt_is_used_verbatim_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    Identity = macula_identity:generate(),
+    {ok, Pool} = macula_client:connect([], #{identity => Identity}),
+    {ok, #{self_node_id := NodeId}} = macula_client:status(Pool),
+    ?assertEqual(macula_identity:public(Identity), NodeId),
+    ok = macula_client:close(Pool).
+
 %% call_station dials a station outside the seed set. Against an
 %% unreachable one the handshake never completes, so within the deadline
 %% we get a clean `not_connected' (not a hang or a crash) and the pool

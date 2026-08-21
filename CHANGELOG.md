@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.8.2] - 2026-08-21
+
+### Fixed
+
+- **`macula_client:connect/2` with no `identity` opt now defaults to a
+  puzzle-hardened identity, not a plain one** (`macula_client.erl`,
+  `init/1` + new `resolve_identity/1`). Stations may run
+  `puzzle_enforcement: enforce` (S/Kademlia identity puzzle, rejects
+  any peer whose `SHA-256(pubkey)` lacks the configured leading-zero
+  bits). A caller who didn't pass `identity` used to get
+  `macula_identity:generate()` — no puzzle grind — which fails that
+  check. The failure is silent by construction: the QUIC/TLS transport
+  still reports the link healthy, and `subscribe/5` still returns
+  `{ok, _}` locally, because both succeed before the station's
+  handshake rejection closes the connection. Confirmed live: a
+  production consumer (`macula-realm`'s `MaculaRealm.Mesh`, connecting
+  with `%{}` opts) sat fully connected-looking with zero events
+  delivered on any subscription, across all 5 of its station links,
+  for over an hour, before the identity itself turned out to be the
+  cause. `resolve_identity/1` only changes the pool's own default
+  identity resolution; it does not touch `macula_identity:generate/0`
+  itself (still documented as "does not grind a puzzle" — callers who
+  want a plain identity can still ask for one directly), and it's
+  lazy where the old `maps:get/3` call was not (that evaluated its
+  default argument, and therefore generated a throwaway keypair, on
+  every single `connect/2` call regardless of whether the caller
+  passed an identity).
+
 ## [9.8.1] - 2026-08-21
 
 ### Fixed
