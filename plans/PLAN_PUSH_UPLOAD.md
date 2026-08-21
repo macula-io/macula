@@ -1,8 +1,8 @@
 # Content Push/Upload (`macula_pusher` / `macula_upload`)
 
-**Status:** Phases 1-5 SHIPPED (macula 9.12.0). Phase 6 not started.
+**Status:** ALL 6 PHASES SHIPPED (macula 9.13.0). Plan complete.
 **Created:** 2026-08-21
-**Last Updated:** 2026-08-21 (Phases 1 through 5 all landed same day, in five
+**Last Updated:** 2026-08-21 (all six phases landed same day, in six
 follow-up sessions to the one that wrote this plan)
 
 ## Why this exists
@@ -477,25 +477,96 @@ own OWN synchronization, not shared mock state.
 
 No pause work added, per the scope decision above — no concrete need surfaced.
 
-### Phase 6 — `macula_pusher` / `macula_upload`
+### Phase 6 — `macula_pusher` / `macula_upload` — SHIPPED (9.13.0)
 
-Built on the now-complete foundation — inherits addressable pause/resume/cancel and
-multi-stream from day one, nothing to retrofit later.
+Built on the now-complete foundation, mostly as designed — but two parts of this
+section's own literal wording didn't survive tracing the actual codebase, the same
+kind of mismatch every earlier phase in this plan has hit at least once. Both
+corrections are recorded in full in the two modules' own doc comments; summarized
+here.
 
-- **`macula_pusher`** (sender): `macula_manifest:create/2` to chunk+hash, opens a
-  `client_stream` to the target's advertised upload procedure with the manifest passed
-  as `Args` (the open-time out-of-band channel, not an in-band header chunk), sends
-  chunks via the Phase 3 multi-stream engine, delivers `{ok, Mcid} | {error, _}` to
-  `handle_pushed/2`. `start_link`/`start_link_direct`, mirroring `macula_feeder`'s
-  shape exactly. Publishes `sharing.push_started_v1`/`sharing.push_completed_v1`.
-- **`macula_upload`** (receiver): advertises a `client_stream` procedure (built on
-  Phase 5's now-complete receive-loop), reads the manifest from `StreamArgs` at open,
-  accumulates chunks, reassembles, verifies with `macula_manifest:verify/2` —
-  receiver-side verification, never sender-trusted, matching content-sharing's existing
-  "content is self-verifying by hash" model exactly. Delivers
-  `{ok, Mcid, Bytes} | {error, _}` to `handle_uploaded/2`. `advertise`/`advertise_direct`,
-  mirroring `macula_download`'s shape. Publishes
-  `sharing.upload_started_v1`/`sharing.upload_completed_v1`.
+**Correction 1 — no multi-stream parallelism.** "Sends chunks via the Phase 3
+multi-stream engine" contradicts this plan's OWN scope-decision section (written
+before Phase 1 even started): "Multi-stream parallel chunk transfer is a
+content-sharing-only concern. It does NOT extend to `macula_streamer`/
+`macula_stream_sink`." Confirmed by tracing, not just citing the contradiction:
+Phase 3's multi-stream engine lives entirely inside `macula_content_transfer`, built
+on content-sharing's own dedicated content-stream bookkeeping
+(`macula_station_link`'s `content_stream_bufs`/`open_content_stream`) — a wire
+mechanism `client_stream`/`macula_stream` doesn't have. `macula_pusher` sends chunks
+sequentially over the one stream `macula:call_stream/5`/`macula_direct_dial:
+call_stream/5` opens, exactly the shape a hand-written `client_stream` caller would
+use, just chunked and hashed for you.
+
+**Correction 2 — `macula_upload` mirrors `macula_streamer`'s shape, not
+`macula_download`'s.** The plan's own sentence was self-contradictory: it said
+"mirroring `macula_download`'s shape" while, in the same sentence, also saying the
+public API is `advertise`/`advertise_direct` — `macula_download` doesn't have those,
+it has `start_link/4,5` (a one-shot, caller-initiated fetch). What `macula_upload`
+actually is — a long-lived, advertised provider spawning one ephemeral child per
+inbound push — mirrors `macula_streamer`'s shape. Built directly on top of it:
+`macula_upload` IS a `macula_streamer` callback module internally (`?MODULE` passed
+as `macula_streamer:advertise/6`'s own `Module` argument, closing over the caller's
+`Module`/`Args` in its own state), reusing Phase 5's supervision, `client_stream`
+receive loop, and abort-wired cancel for free — "inherits... cancel from day one,
+nothing to retrofit later" held, once corrected to the right module to inherit from.
+
+**A new `macula_streamer` capability this phase needed, not anticipated by the
+plan's text: `handle_eof/1`.** The terminal-reply mechanism `client_stream` already
+has (`macula_stream:set_reply/2`/`set_error/2`, `macula:await_reply/1,2`) is exactly
+how `macula_upload` was always going to hand `macula_pusher` a verified outcome — the
+plan's own "How this started" section even names `client_stream` mode as "the
+mechanism for exactly this" before any phase began. But the raw stream pid needed to
+call `set_reply`/`set_error` is never exposed to a `macula_streamer` callback module
+by design (same encapsulation `macula_stream_sink` already has) — and calling a NEW
+public wrapper function for it from `terminate/2` would self-deadlock exactly the way
+Phase 5's own sink test discovered (`gen_server:call` on `self()` from inside your own
+`terminate/2` — OTP's `calling_self` guard fires immediately, `gen_server:cast` would
+just queue a message nobody's left alive to process). Traced through the options and
+extended `macula_streamer` itself with an optional `handle_eof/1` callback: called
+once when eof arrives, in place of the previous unconditional `{stop, normal, State}`
+— the wrapper's OWN code has `Stream` in its state at that exact point, so it's a
+plain function call, not a self-call. A module that doesn't export it keeps the exact
+prior behavior.
+
+**A real bug found and fixed at the source, not specific to this phase but found
+while building it:** `macula_streamer:advertise_direct/7` called the arity-5
+`advertise/5` instead of `advertise/6`, silently discarding whatever `mode`/
+`announce` `Opts` carried — meaning EVERY direct-dial-advertised `client_stream`
+procedure (not just `macula_upload`'s), before this fix, would have been served as
+`server_stream` instead, with no error anywhere to say so. `macula_upload`'s own
+direct-dial path would have been silently broken by it. Fixed in `macula_streamer.erl`
+itself per this project's "fix bugs in owned libraries immediately" rule — one-line
+fix (`advertise(Pool, Realm, Procedure, Module, Args)` → `advertise(Pool, Realm,
+Procedure, Module, Args, Opts)`), confirmed safe for `macula_direct_dial:
+publish_advertisement/5` (which already ignores option keys it doesn't recognize).
+
+**`macula_upload`'s `handle_open/2` does not reject a bad manifest via `{stop, Reason,
+State}`, discovered empirically, not reasoned out in advance.** First version did
+exactly that — seemed obviously correct, matching how `handle_chunk/2`'s own
+`too_many_chunks` guard stops the stream. Running the test written for it revealed why
+it's wrong: a `handle_open/2` stop makes `macula_streamer:init/1` itself return
+`{stop, Reason}`, a genuine gen_server init failure — and OTP never calls
+`terminate/2` for a process that failed to start. That silently dropped the push (no
+`handle_uploaded/2`, no `sharing.upload_completed_v1`) and would have left the
+sender's own `await_reply/1` hanging or crashing too, since nothing ever reaches
+`handle_eof/1` to set a reply. Fixed by accepting the stream and stashing the decode
+error in the module's own state instead, letting `handle_eof/1` — the one place
+already wired to set a terminal reply — report it correctly on both sides once the
+sender closes, exactly like any other failure.
+
+Also bounded: a sender pushing more chunks than its own manifest declared is stopped
+(`too_many_chunks`, abort-wired same as any other non-normal stop) rather than
+accumulated without limit — the manifest is a system-boundary input from an untrusted
+remote peer, worth guarding explicitly rather than waiting for
+`macula_manifest:verify/2`'s own eventual `size_mismatch` to catch it after the fact.
+
+Both modules ship with a real, RED-verified receiver-side-verification-catches-tampering
+test — bytes that don't match the manifest's own root hash are caught and reported as
+`{error, root_hash_mismatch}`, never silently accepted just because the manifest
+claimed them. Publishes `sharing.push_started_v1`/`sharing.push_completed_v1` and
+`sharing.upload_started_v1`/`sharing.upload_completed_v1` respectively, exactly as
+designed.
 
 ## Files likely to change (all in this repo unless noted)
 
@@ -510,10 +581,10 @@ multi-stream from day one, nothing to retrofit later.
 | `native/macula_quic/src/{atoms,lib,stream}.rs` | Phase 1 shipped: new `nif_reset_stream` NIF (Quinn `SendStream::reset`); recv loop distinguishes a peer reset from every other read error |
 | `src/macula_feeder.erl` | Phase 4 shipped: internals call `macula_content_transfer:start_put/3`/`start_put_station/5` directly via a lightweight resolve+await proxy; `terminate/2` now reaps the real transfer, fixing the orphan-on-cancel bug |
 | `src/macula_download.erl` | Phase 4 shipped, symmetric — `start_get/3`/`start_get_station/5` |
-| `src/macula_streamer.erl` | Phase 5 shipped: optional `handle_chunk/2` + linked-reader loop for `client_stream` mode; `terminate/2` now closes (`normal`) or aborts (anything else) the underlying stream, previously did neither |
+| `src/macula_streamer.erl` | Phase 5 shipped: optional `handle_chunk/2` + linked-reader loop for `client_stream` mode; `terminate/2` now closes (`normal`) or aborts (anything else) the underlying stream, previously did neither. Phase 6 shipped: new optional `handle_eof/1` callback sets the terminal reply on eof; `advertise_direct/7` bug fix (now forwards `Opts`, previously silently defaulted every direct-dial advertisement to `server_stream`) |
 | `src/macula_stream_sink.erl` | Phase 5 shipped: `terminate/2` now closes on `normal`, aborts otherwise — previously called `close_stream` unconditionally regardless of reason |
-| `src/macula_pusher.erl` | New — Phase 6 (not started) |
-| `src/macula_upload.erl` | New — Phase 6 (not started) |
+| `src/macula_pusher.erl` | New — Phase 6 shipped: sender, `start_link`/`start_link_direct`, mirrors `macula_feeder`'s wrapper shape (not its direct-dial dial semantics — see the Phase 6 section) |
+| `src/macula_upload.erl` | New — Phase 6 shipped: receiver, `advertise`/`advertise_direct`, built directly on `macula_streamer` (mirrors ITS shape, not `macula_download`'s — see the Phase 6 section) |
 | `test/macula_content_transfer_tests.erl` | Phase 1 shipped: new, 7 cases, meck-based. Phase 2 shipped: +5 cases (pause/resume put and get, single-block no-op, cancel-while-paused). Phase 3: existing chunked cases pinned to `stream_count => 1` (the new default of 4 changed their behavior — they're specifically about single-stream sequential ordering) |
 | `test/macula_content_transfer_multi_stream_tests.erl` | New — Phase 3 shipped, 6 cases: concurrent dispatch, order-independent reassembly, stream-count capping, degraded-stream fallback, failure kills other lanes, cancel aborts every stream |
 | `test/macula_quic_stream_reset_tests.erl` | New — Phase 1 shipped, 3 cases, real two-endpoint loopback. Untouched since. |
@@ -522,11 +593,13 @@ multi-stream from day one, nothing to retrofit later.
 | `test/macula_streamer_tests.erl` | Phase 5 shipped: `abort`/`close` mocked explicitly; existing normal-stop and abnormal-stop cases now assert which one fires |
 | `test/macula_stream_sink_tests.erl` | Phase 5 shipped: `abort` mocked; +2 cases (`normal_stop_closes_not_aborts`, `abnormal_stop_aborts_not_closes`) |
 | `test/macula_streamer_client_stream_tests.erl` | New — Phase 5 shipped, 2 cases: pushed chunks reach `handle_chunk/2` then eof closes; a `recv` error aborts instead. Split from `macula_streamer_tests.erl` because it needs a callback module that genuinely exports `handle_chunk/2` (see the Phase 5 section above) |
-| `test/macula_pusher_tests.erl`, `macula_upload_tests.erl` | New (Phase 6, not started) |
-| `CHANGELOG.md`, `macula.app.src`, `CLAUDE.md` (version header) | Phase 1 as 9.9.0, Phase 2 as 9.10.0, Phase 3 as 9.11.0, Phase 5 as 9.12.0 (all MINOR — new capability), Phase 4 as 9.11.1 (PATCH — fixes existing behavior, no new public API) |
+| `test/macula_streamer_eof_reply_tests.erl` | New — Phase 6 shipped, 2 cases: `handle_eof/1` returning `{reply, {ok,_},_}` calls `set_reply`, `{reply,{error,_},_}` calls `set_error`. Split from the other streamer test files for the same reason `macula_streamer_client_stream_tests.erl` was — needs a callback module that genuinely exports `handle_eof/1` |
+| `test/macula_pusher_tests.erl` | New — Phase 6 shipped, 7 cases: small push, chunked push sends every chunk in order, send failure bails without awaiting a reply, open failure, cancel before resolve, cancel reaches the real stream (not just the local proxy), direct-dial |
+| `test/macula_upload_tests.erl` | New — Phase 6 shipped, 5 cases: verified push delivers ok and replies ok, tampered bytes deliver an error and reply with one (receiver-side verification), too-many-chunks aborts the stream, a bad manifest is reported cleanly (not silently dropped), direct-dial forwards `client_stream` mode |
+| `CHANGELOG.md`, `macula.app.src`, `CLAUDE.md` (version header) | Phase 1 as 9.9.0, Phase 2 as 9.10.0, Phase 3 as 9.11.0, Phase 5 as 9.12.0, Phase 6 as 9.13.0 (all MINOR — new capability), Phase 4 as 9.11.1 (PATCH — fixes existing behavior, no new public API) |
 | `docs/guides/CONTENT_GUIDE.md` | Phase 1: new "Real cancel: macula_content_transfer" section + Reference table rows. Phase 2: new "Real pause/resume for chunked transfers" section + row. Phase 3: new "Parallel multi-stream chunk transfer" section + rows. Phase 4: corrected the now-stale "not the blunt local kill macula_feeder/download's cancel/1 still is" line; Reference table rows updated to say `macula_content_transfer` instead of `put_content/2`/`get_content/2`. |
-| `docs/guides/STREAMING_GUIDE.md` | Phase 5 shipped: new `client_stream` provider example + "Cancel" paragraph under "Supervised wrappers"; Reference table rows for `macula_streamer`/`macula_stream_sink` note the receive-loop + abort-wired cancel |
-| `macula-station`, `macula-realm`, `hecate-om` (separate repos) | Checked for direct `put_content`/`get_content` callers before Phase 1 landed, and for direct `macula_feeder`/`macula_download` callers before Phase 4 — none found in any of the three, either time, nothing to update. |
+| `docs/guides/STREAMING_GUIDE.md` | Phase 5 shipped: new `client_stream` provider example + "Cancel" paragraph under "Supervised wrappers"; Reference table rows for `macula_streamer`/`macula_stream_sink` note the receive-loop + abort-wired cancel. Phase 6 shipped: new "Push/upload" section + two Reference table rows |
+| `macula-station`, `macula-realm`, `hecate-om` (separate repos) | Checked for direct `put_content`/`get_content` callers before Phase 1 landed, and for direct `macula_feeder`/`macula_download` callers before Phase 4 — none found in any of the three, either time, nothing to update. `macula_pusher`/`macula_upload` are brand new — nothing to check for Phase 6. |
 
 ## Testing plan
 
@@ -584,6 +657,19 @@ of this work, but re-verify per phase rather than assuming).
       not just an outcome check) — extended beyond the plan's literal wording, which
       named only the receive-loop; the cancel fix was always part of the same phase per
       the plan's own body text above, the checklist item just hadn't named it.
-- [ ] Phase 6: a `macula_pusher` push to a `macula_upload` receiver whose received bytes
-      are tampered with in transit (test-injected corruption) is caught by
-      `macula_manifest:verify/2` and reported as a failure, never silently accepted.
+- [x] Phase 6: a `macula_pusher` push to a `macula_upload` receiver whose received bytes
+      are tampered with in transit (test-injected corruption — a deterministic bit
+      flip on the first byte, not a fixed replacement value, after an early draft's
+      1-in-256 chance of a coincidental no-op tamper was itself caught by a flaky RED
+      check) is caught by `macula_manifest:verify/2` and reported as a failure, never
+      silently accepted (`tampered_bytes_deliver_error_and_replies_error`) — verified
+      on BOTH sides: `handle_uploaded/2` sees `{error, root_hash_mismatch}` locally,
+      and `macula_stream:set_error/2` is called so a real `macula_pusher` on the other
+      end would see it too via `await_reply/1`. Two further guards beyond the
+      criterion's literal text, both RED-verified: a sender pushing more chunks than
+      its own manifest declared is stopped rather than accumulated without limit
+      (`too_many_chunks_aborts_the_stream`), and a manifest that fails to decode is
+      reported cleanly rather than silently dropped by an OTP init-failure trap found
+      empirically, not anticipated (`bad_manifest_stops_before_any_chunk` — see the
+      Phase 6 section above for the full trace of why the obvious first
+      implementation was wrong).

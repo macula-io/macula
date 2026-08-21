@@ -27,6 +27,18 @@
 %%% linked-reader `recv/2' loop for you, on the provider side. A
 %%% `server_stream'-mode module that doesn't export it is unaffected.
 %%%
+%%% A `client_stream' provider that also needs to hand the consumer a
+%%% terminal result (not just accept chunks) exports the optional
+%%% `handle_eof/1' callback: called once, when the consumer's own
+%%% `close_send/1' surfaces here as end-of-stream, in place of the
+%%% default unconditional `{stop, normal, State}'. Returning
+%%% `{reply, Result, NewState}' sets the stream's terminal reply
+%%% (`macula_stream:set_reply/2' for `{ok, Value}', `set_error/2' for
+%%% `{error, Reason}') so the consumer's own `macula:await_reply/1,2'
+%%% unblocks with it, before stopping. A module that doesn't export
+%%% `handle_eof/1' keeps the exact prior behavior — no reply is ever
+%%% set, eof just stops the stream.
+%%%
 %%% This is the general-purpose RPC streaming feature (`call_stream/5',
 %%% `advertise_stream/5', e.g. a `logs.tail_v1'-style procedure) —
 %%% unrelated to content sharing's own chunked-transfer protocol; see
@@ -122,9 +134,14 @@
 -callback handle_chunk(Chunk :: term(), State :: term()) ->
     {noreply, NewState :: term()} | {stop, Reason :: term(), NewState :: term()}.
 
+-callback handle_eof(State :: term()) ->
+    {noreply, NewState :: term()}
+  | {reply, {ok, term()} | {error, term()}, NewState :: term()}
+  | {stop, Reason :: term(), NewState :: term()}.
+
 -callback terminate(Reason :: term(), State :: term()) -> any().
 
--optional_callbacks([terminate/2, handle_chunk/2]).
+-optional_callbacks([terminate/2, handle_chunk/2, handle_eof/1]).
 
 -define(STREAMING_STARTED, <<"streaming.started_v1">>).
 -define(STREAMING_COMPLETED, <<"streaming.completed_v1">>).
@@ -184,14 +201,17 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
 advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
     advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
 
-%% @doc As `advertise_direct/6', with `Opts' forwarded to
-%% `macula_direct_dial:publish_advertisement/5' — e.g. `cert_chain =>
-%% ChainPem' (Slice 7c Direction B, managed realms only).
+%% @doc As `advertise_direct/6', with `Opts' forwarded BOTH to
+%% `advertise/6' (so `mode'/`announce' apply here too, e.g.
+%% `mode => client_stream') and to
+%% `macula_direct_dial:publish_advertisement/5' (e.g. `cert_chain =>
+%% ChainPem', Slice 7c Direction B, managed realms only) — each side
+%% reads only the keys it recognizes, so one `Opts' map serves both.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
                        module(), term(), macula_identity:key_pair(), map()) ->
     {ok, pid()} | {error, term()}.
 advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
-    case advertise(Pool, Realm, Procedure, Module, Args) of
+    case advertise(Pool, Realm, Procedure, Module, Args, Opts) of
         {ok, Sup} ->
             _ = macula_direct_dial:publish_advertisement(Pool, Realm,
                                                           Procedure, Identity,
@@ -309,7 +329,7 @@ handle_cast(_Msg, State) -> {noreply, State}.
 handle_info({stream_item, Data}, #tstate{module = Module, user = User} = State) ->
     deliver(Module:handle_chunk(Data, User), State);
 handle_info(stream_eof, State) ->
-    {stop, normal, State};
+    handle_eof(State);
 handle_info({stream_error, Reason}, State) ->
     {stop, Reason, State};
 handle_info({'EXIT', Reader, Reason}, #tstate{reader = Reader} = State)
@@ -323,6 +343,26 @@ handle_info(_Msg, State) ->
 deliver({noreply, NewUser}, State) ->
     {noreply, State#tstate{user = NewUser}};
 deliver({stop, Reason, NewUser}, State) ->
+    {stop, Reason, State#tstate{user = NewUser}}.
+
+%% @private Default (no `handle_eof/1' exported): unchanged prior
+%% behavior, eof just stops the stream. Otherwise gives the callback
+%% one last chance to set a terminal reply before stopping.
+handle_eof(#tstate{module = Module, user = User} = State) ->
+    case erlang:function_exported(Module, handle_eof, 1) of
+        true -> deliver_eof(Module:handle_eof(User), State);
+        false -> {stop, normal, State}
+    end.
+
+deliver_eof({noreply, NewUser}, State) ->
+    {stop, normal, State#tstate{user = NewUser}};
+deliver_eof({reply, {ok, Value}, NewUser}, #tstate{stream = Stream} = State) ->
+    _ = macula_stream:set_reply(Stream, Value),
+    {stop, normal, State#tstate{user = NewUser}};
+deliver_eof({reply, {error, Reason}, NewUser}, #tstate{stream = Stream} = State) ->
+    _ = macula_stream:set_error(Stream, Reason),
+    {stop, normal, State#tstate{user = NewUser}};
+deliver_eof({stop, Reason, NewUser}, State) ->
     {stop, Reason, State#tstate{user = NewUser}}.
 
 %% @private

@@ -263,6 +263,70 @@ plain `advertise/5,6` — a plain advertise publishes no discoverable record.
 
 ---
 
+## Push/upload: `macula_pusher` / `macula_upload`
+
+`client_stream` mode with `macula_feeder`/`macula_download`'s own integrity
+machinery bolted on: push a file at a specific, already-known recipient
+(not into content-addressed storage for someone to discover and pull
+later — that's what `macula_feeder` is for). `macula_manifest:create/2`
+chunks and hashes the bytes up front; the manifest rides the stream's
+open-time `Args`, not an in-band header chunk; the recipient reassembles
+and verifies against it — receiver-side, never sender-trusted — before
+replying. No multi-stream parallelism here: that mechanism is
+content-sharing-only, built on a wire format `client_stream` doesn't have.
+
+Sender:
+
+```erlang
+-module(doc_pusher).
+-behaviour(macula_pusher).
+-export([init/1, handle_pushed/2]).
+
+init(Parent) -> {ok, Parent}.
+
+handle_pushed(Result, Parent) ->
+    Parent ! {pushed, Result},
+    {stop, normal, Parent}.
+```
+
+```erlang
+{ok, Pid} = macula_pusher:start_link(doc_pusher, Pool, Realm,
+    <<"bulk.ingest">>, Bytes, self()).
+```
+
+Receiver — advertises the procedure once, handles every push sent at it:
+
+```erlang
+-module(doc_upload).
+-behaviour(macula_upload).
+-export([init/1, handle_uploaded/2]).
+
+init(Parent) -> {ok, Parent}.
+
+handle_uploaded(Result, Parent) ->
+    Parent ! {uploaded, Result},
+    ok.
+```
+
+```erlang
+{ok, _Sup} = macula_upload:advertise(Pool, Realm, <<"bulk.ingest">>,
+    doc_upload, self()).
+```
+
+`Result` is `{ok, Mcid, Bytes} | {error, _}` on the receiver's side,
+`{ok, Mcid} | {error, _}` on the sender's — the sender never sees the
+receiver's own copy of the bytes back, only confirmation that they
+verified. `macula_pusher:start_link_direct/5,6` /
+`macula_upload:advertise_direct/6,7` are the direct-dial counterparts,
+same shape as `macula_stream_sink`/`macula_streamer`'s own (a `Procedure`
+resolves via its `procedure_advertisement`, no `Station` parameter — a
+push targets a specific advertised procedure, not a named station the way
+content-sharing's own direct-dial does). Both inherit Phase 5's
+abort-wired cancel: `macula_pusher:cancel/1` reaches the real underlying
+stream, not just the local proxy process.
+
+---
+
 ## Content streaming
 
 "Content streaming" is the `server_stream` mode applied to a live source: the
@@ -298,10 +362,12 @@ They are for unit tests and same-node dispatch. The pool forms
 | `call_stream_station(Pool, Station, Realm, Proc, Args, Opts)` | consumer: **direct-dial** — dial `Station` and open the stream there in one hop |
 | `advertise_stream(Pool, Realm, Proc, Mode, Handler)` | provider: serve a streaming procedure |
 | `unadvertise_stream(Pool, Realm, Proc)` | provider: stop serving it |
-| `macula_streamer:advertise/5,6` | provider: supervised, `streaming.*_v1`-announcing wrapper. Optional `Module:handle_chunk/2` drives a receive loop for `client_stream` mode; abort-wired cancel |
+| `macula_streamer:advertise/5,6` | provider: supervised, `streaming.*_v1`-announcing wrapper. Optional `Module:handle_chunk/2` drives a receive loop for `client_stream` mode; optional `Module:handle_eof/1` sets the terminal reply; abort-wired cancel |
 | `macula_streamer:advertise_direct/6,7` | provider: as above, and publishes a `procedure_advertisement` for direct-dial |
 | `macula_stream_sink:start_link/5,6` | consumer: supervised, `streaming.*_v1`-announcing wrapper; abort-wired cancel |
 | `macula_stream_sink:start_link_direct/5,6` | consumer: **direct-dial** — resolve the provider and dial in one hop |
+| `macula_pusher:start_link/5,6` / `start_link_direct/5,6` | sender: chunk+hash `Bytes`, push over `client_stream`, deliver the recipient's verified `{ok, Mcid} \| {error, _}` to `handle_pushed/2` |
+| `macula_upload:advertise/5,6` / `advertise_direct/6,7` | receiver: accept pushes for `Procedure`, verify against the manifest, deliver `{ok, Mcid, Bytes} \| {error, _}` to `handle_uploaded/2` |
 | `send(Stream, Bin)` / `send(Stream, Body, Enc)` | send a chunk (`Enc` = `raw` \| `msgpack`) |
 | `recv(Stream)` / `recv(Stream, Timeout)` | read the next `{chunk,_}` / `{data,_}` / `eof` |
 | `close_send(Stream)` | half-close your send direction |

@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.13.0] - 2026-08-21
+
+### Added
+
+- **`macula_pusher` / `macula_upload` — push-initiated content transfer.**
+  PLAN_PUSH_UPLOAD.md Phase 6, the plan's final phase. `macula_pusher`
+  (sender) chunks and hashes bytes with `macula_manifest:create/2`,
+  opens a `client_stream` to the recipient's advertised upload
+  procedure with the manifest riding the stream's open-time `Args`
+  (out-of-band, not an in-band header chunk), sends every chunk in
+  order, and blocks for the recipient's own verified terminal reply
+  before delivering `{ok, Mcid} | {error, _}` to `handle_pushed/2`.
+  `macula_upload` (receiver) advertises the procedure, accumulates
+  pushed chunks (built directly on Phase 5's `handle_chunk/2` receive
+  loop), and once the sender half-closes, reassembles and verifies
+  with `macula_manifest:verify/2` — receiver-side, never
+  sender-trusted — before delivering `{ok, Mcid, Bytes} | {error, _}`
+  to `handle_uploaded/2`. Both publish `sharing.push_*_v1` /
+  `sharing.upload_*_v1` mesh facts. `start_link`/`start_link_direct`
+  and `advertise`/`advertise_direct` respectively — see the module
+  docs' "correction from the plan's literal wording" sections for two
+  places the plan's shorthand description didn't survive tracing the
+  actual codebase: no multi-stream parallelism here (that's a
+  content-sharing-only mechanism, per the plan's own scope-decision
+  section — an earlier draft of the plan said otherwise), and
+  `macula_upload`'s shape mirrors `macula_streamer`'s (a long-lived,
+  advertised provider), not `macula_download`'s (a one-shot,
+  caller-initiated fetch) — the plan named the right API
+  (`advertise`/`advertise_direct`) but the wrong module to compare it to.
+- **`macula_streamer` gained an optional `handle_eof/1` callback** — a
+  `client_stream` provider's one chance to set the stream's terminal
+  reply (`macula_stream:set_reply/2` for `{reply, {ok, Value}, State}`,
+  `set_error/2` for `{reply, {error, Reason}, State}`) before it stops,
+  called in place of the previous unconditional `{stop, normal, State}`
+  on eof. A module that doesn't export it keeps the exact prior
+  behavior. Needed to let `macula_upload` hand `macula_pusher` a
+  verified outcome over `client_stream`'s own terminal-reply channel —
+  the callback contract never exposes the raw stream pid to user code,
+  so this had to live in the wrapper itself, at the one point
+  (`handle_info(stream_eof, State)`) that still has it.
+
+### Fixed
+
+- **`macula_streamer:advertise_direct/7` now actually forwards `Opts`
+  to the underlying advertise call — it silently didn't before.** Found
+  while building `macula_upload`'s direct-dial path, not something
+  either intentionally relied on `mode` being ignored. It called the
+  arity-5 `advertise/5` (which always defaults `mode` to
+  `server_stream`) instead of `advertise/6`, so `Opts => #{mode =>
+  client_stream}` — or ANY `mode`/`announce` override — was silently
+  discarded for every direct-dial advertisement, not just this
+  session's. A `client_stream` provider that advertised directly would
+  have been served as `server_stream` instead, with no error anywhere
+  to say so. Fixed at the source, per this project's "fix bugs in
+  owned libraries immediately" rule.
+
+### Notes
+
+- No public API changes to already-shipped modules beyond the new
+  optional `handle_eof/1` callback (additive) and the
+  `advertise_direct/7` bug fix (same signature, now honors `Opts`
+  correctly) — MINOR, not MAJOR.
+- New test files: `test/macula_pusher_tests.erl` (7 cases),
+  `test/macula_upload_tests.erl` (5 cases, including a genuine
+  receiver-side-verification-catches-tampering case and the
+  too-many-chunks guard), `test/macula_streamer_eof_reply_tests.erl`
+  (2 cases). `test/macula_streamer_tests.erl` gained a regression case
+  for the `advertise_direct/7` fix.
+- A design detail worth recording: `macula_upload`'s `handle_open/2`
+  does NOT reject a manifest that fails to decode via
+  `{stop, Reason, State}` — traced why that would be wrong: a
+  `handle_open/2` stop makes the underlying `macula_streamer:init/1`
+  itself return `{stop, Reason}`, a genuine gen_server init failure,
+  and OTP never calls `terminate/2` for a process that failed to
+  start. That would have silently dropped the push (no
+  `handle_uploaded/2`, no `sharing.upload_completed_v1`) and left the
+  sender's own `macula:await_reply/1` hanging or crashing, since
+  nothing ever reaches `handle_eof/1` to set a reply either. Accepting
+  the stream and stashing the decode error instead lets `handle_eof/1`
+  — the one place already wired to set a terminal reply — report it
+  correctly on both sides once the sender closes, exactly like any
+  other failure. Caught by actually running the test before assuming
+  the simpler design would work, not by reasoning it through in the
+  abstract.
+
+---
+
 ## [9.12.0] - 2026-08-21
 
 ### Added
