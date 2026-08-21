@@ -29,8 +29,8 @@
   Trust is enforced at the application layer — a production station's TLS
   cannot be pinned, since it's terminated by an unrelated PKI — with an
   opt-in X.509 cert-chain check available for managed realms. See the
-  [RPC](guides/RPC_GUIDE.md), [Content](guides/CONTENT_GUIDE.md), and
-  [Streaming](guides/STREAMING_GUIDE.md) guides.
+  [RPC](guides/rpc/RPC_GUIDE.md), [Content](guides/content/CONTENT_GUIDE.md), and
+  [Streaming](guides/streaming/STREAMING_GUIDE.md) guides.
 - **Connection health / metrics API** — `macula_diagnostics`,
   `macula_metrics` (+ HTTP exporter) ship in the SDK.
 - **Subscription persistence across reconnects** — `macula_client_replay`

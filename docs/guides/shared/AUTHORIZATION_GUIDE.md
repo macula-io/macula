@@ -340,5 +340,5 @@ provider opts in.
 
 ### Related Guides
 
-- [RPC Guide](RPC_GUIDE.md) - direct-dial, `advertise/5`'s `auth` opt, `call_station/7`'s `ucan_token`
+- [RPC Guide](../rpc/RPC_GUIDE.md) - direct-dial, `advertise/5`'s `auth` opt, `call_station/7`'s `ucan_token`
 - [MRI Guide](MRI_GUIDE.md) - typed, hierarchical resource identifiers (a separate feature from DID namespaces)

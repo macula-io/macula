@@ -87,7 +87,7 @@ macula:join_mesh(#{
 There is no `realm` option — dist tunnel frames travel under the
 protocol-internal all-zeros realm regardless of any user realm. There
 is no `tls_verify` option either, at `join_mesh/1` or anywhere in the
-pool's `connect/2` options (see the [Connecting Guide](CONNECTING_GUIDE.md)
+pool's `connect/2` options (see the [Connecting Guide](shared/CONNECTING_GUIDE.md)
 for the real option set) — QUIC's TLS 1.3 is mandatory and not
 independently togglable from the SDK side.
 

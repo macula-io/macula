@@ -150,17 +150,21 @@ Hash = macula_blake3_nif:hash(Data),
 
 | Guide | Description |
 |-------|-------------|
-| [Connecting](docs/guides/CONNECTING_GUIDE.md) | Pools, seeds, TLS policy, reconnection |
-| [PubSub Guide](docs/guides/PUBSUB_GUIDE.md) | Fan-out + per-publisher delivery ordering |
-| [Topic Naming](docs/guides/TOPIC_NAMING_GUIDE.md) | Event-type topics, IDs in payloads |
-| [RPC Guide](docs/guides/RPC_GUIDE.md) | Direct-dial request/response |
-| [Content Guide](docs/guides/CONTENT_GUIDE.md) | Content-addressed blobs (MCID) |
-| [Records Guide](docs/guides/RECORDS_GUIDE.md) | Signed, TTL'd facts in the DHT — your own record types |
-| [Streaming Guide](docs/guides/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi) |
+| [Connecting](docs/guides/shared/CONNECTING_GUIDE.md) | Pools, seeds, TLS policy, reconnection |
+| [PubSub Guide](docs/guides/pubsub/PUBSUB_GUIDE.md) | Fan-out + per-publisher delivery ordering |
+| [PubSub Protocol](docs/guides/pubsub/PUBSUB_PROTOCOL.md) | Raw `subscribe`/`publish` primitives |
+| [Topic Naming](docs/guides/shared/TOPIC_NAMING_GUIDE.md) | Event-type topics, IDs in payloads |
+| [RPC Guide](docs/guides/rpc/RPC_GUIDE.md) | Direct-dial request/response |
+| [RPC Protocol](docs/guides/rpc/RPC_PROTOCOL.md) | Raw `advertise`/`call` primitives, error codes |
+| [Content Guide](docs/guides/content/CONTENT_GUIDE.md) | Content-addressed blobs (MCID), push/upload |
+| [Content Protocol](docs/guides/content/CONTENT_PROTOCOL.md) | Raw `put_content`/`get_content`, MCID format, discovery |
+| [Records Guide](docs/guides/shared/RECORDS_GUIDE.md) | Signed, TTL'd facts in the DHT — your own record types |
+| [Streaming Guide](docs/guides/streaming/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi) |
+| [Streaming Protocol](docs/guides/streaming/STREAMING_PROTOCOL.md) | Raw `call_stream`/`advertise_stream` primitives |
 | [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Erlang dist through the mesh |
 | [Clustering](docs/guides/CLUSTERING_GUIDE.md) | LAN gossip clustering |
-| [Authorization](docs/guides/AUTHORIZATION_GUIDE.md) | DID / UCAN / cert-chain trust |
-| [MRI Guide](docs/guides/MRI_GUIDE.md) | Resource identifiers |
+| [Authorization](docs/guides/shared/AUTHORIZATION_GUIDE.md) | DID / UCAN / cert-chain trust |
+| [MRI Guide](docs/guides/shared/MRI_GUIDE.md) | Resource identifiers |
 | [Development](docs/guides/DEVELOPMENT.md) | Building and testing |
 | [Glossary](docs/GLOSSARY.md) | Terminology |
 

@@ -24,7 +24,7 @@
 %% ok          = macula_pubsub:unsubscribe(Pool, Sub).
 %% '''
 %%
-%% See `docs/guides/PUBSUB_GUIDE.md' for a full guide and
+%% See `docs/guides/pubsub/PUBSUB_GUIDE.md' for a full guide and
 %% `docs/migrations/V1_TO_V2_PUBSUB.md' for the breaking changes
 %% from the pre-3.11.0 facade.
 -module(macula_pubsub).

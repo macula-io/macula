@@ -28,7 +28,7 @@
 %%% are infrastructure-owned, dot-separated, and exempt from this
 %%% 5-segment structure.
 %%%
-%%% Full guide: docs/guides/TOPIC_NAMING_GUIDE.md
+%%% Full guide: docs/guides/shared/TOPIC_NAMING_GUIDE.md
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_topic).

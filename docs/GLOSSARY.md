@@ -28,7 +28,7 @@ A logical group of nodes that form an Erlang cluster. Can be formed via gossip (
 ## Communication
 
 ### Pub/Sub
-Topic-based event distribution. Publishers send events to topics; all subscribers on the mesh receive them. Topics are the canonical five-segment slash-separated shape (`{realm}/{org}/{app}/{domain}/{name}_v{N}`, e.g. `io.macula/acme/counter/orders/placed_v1`), built via `macula_topic`, never hand-typed. Entity IDs go in payloads, not topic names. See the [Topic Naming Guide](guides/TOPIC_NAMING_GUIDE.md).
+Topic-based event distribution. Publishers send events to topics; all subscribers on the mesh receive them. Topics are the canonical five-segment slash-separated shape (`{realm}/{org}/{app}/{domain}/{name}_v{N}`, e.g. `io.macula/acme/counter/orders/placed_v1`), built via `macula_topic`, never hand-typed. Entity IDs go in payloads, not topic names. See the [Topic Naming Guide](guides/shared/TOPIC_NAMING_GUIDE.md).
 
 ### RPC (Remote Procedure Call)
 Request/response pattern. Providers advertise procedures; consumers call them. The relay mesh handles discovery via Kademlia DHT. Calls return `{ok, Result}` or `{error, Reason}`.
@@ -40,7 +40,7 @@ A named RPC endpoint (e.g., `math.add`, `weather.get_current`). Registered via `
 A named pub/sub channel (e.g., `orders.placed`). Subscribed via `macula:subscribe/5`, published via `macula:publish/5`.
 
 ### Direct-Dial
-Resolving a specific provider's station from a signed DHT record (`procedure_advertisement` for RPC/streaming, `content_announcement` for content) and dialing it directly in one hop, instead of relying on advertise-gossip having propagated a route between arbitrary stations. Available for all four supervised primitive pairs — `macula_request`/`macula_response`, `macula_stream_sink`/`macula_streamer`, `macula_download`/`macula_feeder` — via each pair's `start_link_direct`/`advertise_direct`. Trust is enforced at the application layer, not by pinning the TLS connection: a production station's certificate is terminated by an unrelated PKI (e.g. Let's Encrypt) and cannot be pinned, so the CONNECT/HELLO handshake's own signature check does the real work instead. See the [RPC Guide](guides/RPC_GUIDE.md).
+Resolving a specific provider's station from a signed DHT record (`procedure_advertisement` for RPC/streaming, `content_announcement` for content) and dialing it directly in one hop, instead of relying on advertise-gossip having propagated a route between arbitrary stations. Available for all four supervised primitive pairs — `macula_request`/`macula_response`, `macula_stream_sink`/`macula_streamer`, `macula_download`/`macula_feeder` — via each pair's `start_link_direct`/`advertise_direct`. Trust is enforced at the application layer, not by pinning the TLS connection: a production station's certificate is terminated by an unrelated PKI (e.g. Let's Encrypt) and cannot be pinned, so the CONNECT/HELLO handshake's own signature check does the real work instead. See the [RPC Guide](guides/rpc/RPC_GUIDE.md).
 
 ---
 

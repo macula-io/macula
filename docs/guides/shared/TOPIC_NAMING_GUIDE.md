@@ -234,6 +234,6 @@ dot-separated infrastructure topics, out of scope for this validator.
 
 ## Related guides
 
-- `docs/guides/PUBSUB_GUIDE.md` — pub/sub usage, payload conventions
-- `docs/guides/RPC_GUIDE.md` — RPC usage, error handling
+- `docs/guides/pubsub/PUBSUB_GUIDE.md` — pub/sub usage, payload conventions
+- `docs/guides/rpc/RPC_GUIDE.md` — RPC usage, error handling
 - `hecate-social/hecate-corpus/skills/MESH_TOPIC_TIERING.md` — Hecate-specific guidance, audit history, anti-patterns from real bugs

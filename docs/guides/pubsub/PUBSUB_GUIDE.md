@@ -5,43 +5,25 @@
 ![PubSub across Two Stations](assets/pubsub_two_stations.svg)
 
 > **Audience:** Erlang/OTP applications publishing or subscribing to
-> events. Since v3.11.0 (V2 surface). For the V1 (pre-3.11.0)
+> events. Building something the wrappers below don't fit? See
+> [PUBSUB_PROTOCOL.md](PUBSUB_PROTOCOL.md) for the raw `macula:subscribe/4,5`
+> / `macula:publish/4,5` primitives underneath. For the V1 (pre-3.11.0)
 > single-connection surface, see
-> [../migrations/V1_TO_V2_PUBSUB.md](../migrations/V1_TO_V2_PUBSUB.md).
+> [../../migrations/V1_TO_V2_PUBSUB.md](../../migrations/V1_TO_V2_PUBSUB.md).
 
 ---
 
 ## TL;DR
 
-```erlang
-%% 1. Connect to the mesh — see CONNECTING_GUIDE.md.
-{ok, Pool} = macula:connect(Seeds, #{}).
+- **Connect** once — see [Connecting Guide](../shared/CONNECTING_GUIDE.md).
+- **Subscribe** with [`macula_subscriber`](#subscribing-with-macula_subscriber-supervised):
+  implement `init/1` + `handle_event/4`, `start_link/5,6`.
+- **Publish** with [`macula_publisher`](#publishing-with-macula_publisher-supervised):
+  implement `init/1` + `handle_published/2`, `start_link/5,6`.
 
-%% 2. Subscribe.
-Topic = macula_topic:app_fact(Realm, Org, App,
-                              <<"orders">>, <<"placed">>, 1),
-{ok, Sub} = macula:subscribe(Pool, Realm, Topic, self()).
-
-%% 3. Receive events.
-receive
-    {macula_event, Sub, Topic, Payload, Meta} ->
-        handle(Topic, Payload, Meta)
-end.
-
-%% 4. Publish.
-ok = macula:publish(Pool, Realm, Topic,
-                    #{order_id => <<"ord-123">>, total => 4999}).
-
-%% 5. Drop the sub.
-ok = macula:unsubscribe(Pool, Sub).
-```
-
-The calls above are the raw primitives. Most applications want the
-supervised counterparts instead — an addressable pid you can monitor and
-cancel, `pubsub.*_v1` mesh facts around each operation: see
-[Subscribing with `macula_subscriber`](#subscribing-with-macula_subscriber-supervised)
-and [Publishing with `macula_publisher`](#publishing-with-macula_publisher-supervised)
-below.
+Both give you an addressable pid (monitor it, `macula_publisher:cancel/1`
+it) and `pubsub.*_v1` mesh facts around every operation — see those two
+sections below for full runnable examples.
 
 ---
 
@@ -114,7 +96,7 @@ Topic = <<"my.realm/my.org/my.app/orders/placed_v1">>.
 `macula_topic` returns a canonical binary that the SDK and stations
 agree on. Hand-rolled strings are rejected.
 
-See **[TOPIC_NAMING_GUIDE.md](TOPIC_NAMING_GUIDE.md)** for the canonical
+See **[TOPIC_NAMING_GUIDE.md](../shared/TOPIC_NAMING_GUIDE.md)** for the canonical
 specification of the five-segment shape and the `realm_fact /
 org_fact / app_fact` tier choice.
 
@@ -122,24 +104,8 @@ org_fact / app_fact` tier choice.
 
 ## Subscribing
 
-```erlang
-{ok, SubRef} = macula:subscribe(Pool, Realm, Topic, Subscriber).
-```
-
-| Argument | Type | Notes |
-|---|---|---|
-| `Pool` | `pid()` | Returned by `macula:connect/2` |
-| `Realm` | `<<_:256>>` | 32-byte realm tag |
-| `Topic` | `binary()` | Built via `macula_topic` |
-| `Subscriber` | `pid()` | Process that will receive events |
-
-The subscriber receives:
-
-```erlang
-{macula_event, SubRef, Topic, Payload, Meta}
-```
-
-`Meta` is a map carrying delivery context:
+`handle_event/4` (below) receives `Topic`, `Payload`, and `Meta` — a map
+carrying delivery context:
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -158,9 +124,9 @@ same EVENT arrives via multiple links (e.g. with
 `macula_subscriber` packages a gen_server that subscribes in its own
 `init/1` and threads `macula_event` / `macula_event_gone` dispatch into
 `Module:handle_event/4` for you — no hand-rolled `handle_info` clauses
-needed (see [Subscribing in a callback module](#subscribing-in-a-callback-module)
-below for the manual pattern this replaces, if you're building something
-the wrapper doesn't fit):
+needed (see [PUBSUB_PROTOCOL.md](PUBSUB_PROTOCOL.md#subscribing-in-a-callback-module)
+for the manual pattern this replaces, if you're building something the
+wrapper doesn't fit):
 
 ```erlang
 -module(my_orders_listener).
@@ -181,42 +147,45 @@ Topic = macula_topic:app_fact(Realm, my_org, my_app,
                                          Topic, []).
 ```
 
+`Opts` (the arity-6 `start_link/6`) passes straight through to
+`macula:subscribe/5` — the `delivery` option below works exactly the same
+way whether you call it raw or through the wrapper.
+
 A `macula_event_gone` for this subscription stops the sink with that
-reason — same as the manual `{stop, {pool_gone, Reason}, S}` shown for the
-raw pattern below.
+reason (see [When the subscription ends](#when-the-subscription-ends),
+below). To stop receiving events deliberately, stop the sink itself
+(`gen_server:stop/1`, or let its supervisor terminate it) — the pool
+monitors the subscriber pid directly and drops the wire-level
+subscription automatically once it's gone, the same cleanup an
+explicit `unsubscribe` gives a raw caller.
 
 ### When the subscription ends
 
 The only way a live subscription produces a terminal message today is
-the pool closing:
+the pool closing — delivered to `handle_event/4`'s raw equivalent as
+`{macula_event_gone, SubRef, pool_closed}`, and to a `macula_subscriber`
+sink as its own termination with that reason.
 
-```erlang
-{macula_event_gone, SubRef, pool_closed}
-```
-
-A link dying does **not** send this — the pool logs
+A link dying does **not** end the subscription — the pool logs
 `_macula.client.link_down`, schedules a respawn, and silently
 re-issues the subscription against the new link once it's up (see
-[Connecting Guide](CONNECTING_GUIDE.md#lifecycle)). A subscriber sees
-no gap-signaling message for that case, only a possible gap in
+[Connecting Guide](../shared/CONNECTING_GUIDE.md#lifecycle)). Neither layer
+sees a gap-signaling message for that case, only a possible gap in
 delivery itself, which `ordered` mode's `order_timeout_ms` skip
 handles the same way it handles any other loss.
 
-After `event_gone` arrives, no further events come for that `SubRef`.
+After the subscription ends, no further events come for it.
 
 ### Subscribing with options — delivery ordering
 
-```erlang
-{ok, SubRef} = macula:subscribe(Pool, Realm, Topic, Subscriber, Opts).
-```
-
 The `delivery` option chooses how a **single publisher's** stream is
-ordered on the way to your subscriber. This matters because the mesh
-sends copies of a fact down several links at once, and the pool dedups
-to the *first* arrival — so without ordering, a single publisher's
-`seq 1, 2, 3` can reach you as `1, 3, 2`. Each publisher's `seq` is
-pool-monotonic and contiguous, which is exactly what makes ordered
-delivery possible.
+ordered on the way to your subscriber — pass it in `Opts` to
+`macula_subscriber:start_link/6` the same way you would to raw
+`macula:subscribe/5`. This matters because the mesh sends copies of a
+fact down several links at once, and the pool dedups to the *first*
+arrival — so without ordering, a single publisher's `seq 1, 2, 3` can
+reach you as `1, 3, 2`. Each publisher's `seq` is pool-monotonic and
+contiguous, which is exactly what makes ordered delivery possible.
 
 | Mode | Behaviour | Use when |
 |---|---|---|
@@ -226,15 +195,15 @@ delivery possible.
 
 ```erlang
 %% default — per-publisher FIFO
-{ok, R1} = macula:subscribe(Pool, Realm, Topic, self()),
+{ok, Pid1} = macula_subscriber:start_link(my_orders_listener, Pool, Realm, Topic, []),
 
 %% newest-wins, drop stale
-{ok, R2} = macula:subscribe(Pool, Realm, Topic, self(),
-                            #{delivery => latest_only}),
+{ok, Pid2} = macula_subscriber:start_link(my_orders_listener, Pool, Realm, Topic, [],
+                                          #{delivery => latest_only}),
 
 %% raw arrival order (the pre-8.8 behaviour)
-{ok, R3} = macula:subscribe(Pool, Realm, Topic, self(),
-                            #{delivery => as_arrives}).
+{ok, Pid3} = macula_subscriber:start_link(my_orders_listener, Pool, Realm, Topic, [],
+                                          #{delivery => as_arrives}).
 ```
 
 **Ordered mode and loss.** `ordered` trades a bounded delay for order:
@@ -281,71 +250,11 @@ EVENT arrives via multiple links (e.g. `replication_factor > 1`). In
 the seq to order or drop; in `as_arrives` the dedup layer is the only
 filter.
 
-### Subscribing in a callback module
-
-The raw pattern [`macula_subscriber` wraps](#subscribing-with-macula_subscriber-supervised),
-above: a `gen_server` subscribes in `init/1`, handles events in
-`handle_info/2` by hand. Reach for this directly only if you're building
-something the wrapper doesn't fit.
-
-```erlang
--module(my_orders_listener).
--behaviour(gen_server).
-
-init(_Args) ->
-    Pool  = my_app_mesh:pool(),
-    Realm = my_app_mesh:realm(),
-    Topic = macula_topic:app_fact(Realm, my_org, my_app,
-                                  <<"orders">>, <<"placed">>, 1),
-    {ok, Sub} = macula:subscribe(Pool, Realm, Topic, self()),
-    {ok, #{sub => Sub}}.
-
-handle_info({macula_event, Sub, _Topic, Payload, _Meta},
-            #{sub := Sub} = S) ->
-    on_order_placed(Payload),
-    {noreply, S};
-handle_info({macula_event_gone, Sub, Reason},
-            #{sub := Sub} = S) ->
-    %% Pool went away — supervisor will restart us.
-    {stop, {pool_gone, Reason}, S}.
-```
-
-Pattern-match the `Sub` reference into the function head — that
-keeps a process subscribing to multiple topics readable.
-
 ---
 
 ## Publishing
 
-```erlang
-ok = macula:publish(Pool, Realm, Topic, Payload).
-```
-
-| Argument | Type | Notes |
-|---|---|---|
-| `Pool` | `pid()` | The pool from `connect/2` |
-| `Realm` | `<<_:256>>` | 32-byte realm tag |
-| `Topic` | `binary()` | Built via `macula_topic` |
-| `Payload` | `term()` | Encoded as MessagePack on the wire |
-
-Returns:
-
-| Return | Meaning |
-|---|---|
-| `ok` | At least one link accepted the PUBLISH frame |
-| `{error, {transient, no_healthy_station}}` | The pool has zero spawned links — caller may retry |
-| `{error, _}` | Other failures (validation, etc.) |
-
-> **Partial success counts as success.** With `replication_factor > 1`,
-> `publish/4` returns `ok` as soon as the first selected link accepts
-> the frame. Subsequent links are best-effort.
-
 ### Publishing with `macula_publisher` (supervised)
-
-`macula:publish/4` above is a plain blocking call with no addressable pid
-to cancel or observe from outside. `macula_publisher` (9.4.0+) is the
-supervised counterpart — same relationship `macula_subscriber` has to a
-hand-rolled receive loop, or `macula_feeder` has to `put_content/2`:
 
 ```erlang
 -module(status_publisher).
@@ -365,29 +274,36 @@ handle_published(Result, Parent) ->
 ```
 
 `start_link/5,6` returns immediately with a pid; the publish runs in a
-linked worker and the outcome (`ok | {error, term()}`) reaches
-`Module:handle_published/2`. `macula_publisher:cancel/1` stops it before
-the publish resolves, delivering `outcome => cancelled` in the
-`pubsub.publish_completed_v1` mesh fact published around the transfer
-(paired with `pubsub.publish_started_v1` at the start) — same shape as
-`macula_feeder`'s `sharing.put_started_v1` / `sharing.put_completed_v1`.
+linked worker and the outcome reaches `Module:handle_published/2`:
 
-### Publishing with options
+| `Result` | Meaning |
+|---|---|
+| `ok` | At least one link accepted the PUBLISH frame |
+| `{error, {transient, no_healthy_station}}` | The pool has zero spawned links — caller may retry |
+| `{error, _}` | Other failures (validation, etc.) |
 
-```erlang
-ok = macula:publish(Pool, Realm, Topic, Payload, #{timeout_ms => 1000}).
-```
+> **Partial success counts as success.** With `replication_factor > 1`,
+> the publish resolves as soon as the first selected link accepts the
+> frame. Subsequent links are best-effort.
 
-| Opt | Default | Meaning |
-|---|---|---|
-| `timeout_ms` | `5_000` | gen_server call timeout against the pool |
+`macula_publisher:cancel/1` stops it before the publish resolves,
+delivering `outcome => cancelled` in the `pubsub.publish_completed_v1`
+mesh fact published around the transfer (paired with
+`pubsub.publish_started_v1` at the start) — same shape as `macula_feeder`'s
+`sharing.put_started_v1` / `sharing.put_completed_v1`.
+
+Unlike `macula_subscriber`, `macula_publisher:start_link/6`'s last argument
+is `Args` (for `Module:init/1`) — there's no way to pass `macula:publish/5`'s
+own `Opts` (e.g. `timeout_ms`) through the wrapper. See
+[PUBSUB_PROTOCOL.md](PUBSUB_PROTOCOL.md#publishing-with-options) if you
+need that.
 
 ### Delivery guarantees
 
 - **At-most-once** — fire and forget. No publisher-visible ack from
   subscribers.
 - **Per-publisher delivery order** — `ordered` by default at the
-  subscriber (see [Subscribing with options](#subscribing-with-options--delivery-ordering)
+  subscriber (see [Subscribing with options](#subscribing-with-options-delivery-ordering)
   above): out-of-order arrivals are buffered and released in `seq`
   order, with a genuinely missing `seq` skipped after
   `order_timeout_ms`. The mesh itself does not guarantee arrival
@@ -401,7 +317,7 @@ ok = macula:publish(Pool, Realm, Topic, Payload, #{timeout_ms => 1000}).
   offered, by design" above.
 - **Cross-link dedup** — the pool dedupes by `(Realm, Publisher,
   Seq)` over a 60-second window (configurable; see
-  `dedup_window_ms` in [CONNECTING_GUIDE.md](CONNECTING_GUIDE.md)).
+  `dedup_window_ms` in [CONNECTING_GUIDE.md](../shared/CONNECTING_GUIDE.md)).
 - **Cross-station gossip** — default since 4.5.0. A daemon connected
   to station A and a daemon connected to station B see each other's
   publishes once subscription interest and the fact itself have
@@ -411,31 +327,10 @@ ok = macula:publish(Pool, Realm, Topic, Payload, #{timeout_ms => 1000}).
 
 ---
 
-## Unsubscribing
-
-```erlang
-ok = macula:unsubscribe(Pool, SubRef).
-```
-
-Idempotent — unknown `SubRef` is a no-op. The subscriber pid does
-**not** receive a `event_gone` message for an explicit
-unsubscribe — `event_gone` is reserved for involuntary termination.
-
-The wire-level subscription against the link persists for the pool's
-lifetime. One wire sub per `(Realm, Topic)` is multiplexed across
-local consumers; the pool drops the topic from its index when the
-last local consumer leaves, but does not currently send UNSUBSCRIBE
-on the wire (Phase 4 will tighten).
-
-If the subscriber pid dies before calling `unsubscribe/2`, the pool
-detects the `'DOWN'` and drops the sub spec automatically.
-
----
-
 ## Topic naming reference
 
 Quick reference. Full specification:
-[TOPIC_NAMING_GUIDE.md](TOPIC_NAMING_GUIDE.md).
+[TOPIC_NAMING_GUIDE.md](../shared/TOPIC_NAMING_GUIDE.md).
 
 Every topic is exactly five slash-separated segments:
 
@@ -466,17 +361,17 @@ dot-separated. Do not publish to them from app code.
 If your supervisor restarts the pool, your subscribers are not
 automatically re-attached. Either:
 
-- Restart your subscriber processes alongside the pool (one supervisor
-  with `rest_for_one` strategy), or
-- Watch for `{macula_event_gone, _, pool_closed}` and re-subscribe to
-  the new pool.
+- Restart your subscriber processes (or `macula_subscriber` sinks)
+  alongside the pool (one supervisor with `rest_for_one` strategy), or
+- Watch for the subscription ending with `pool_closed` and re-subscribe
+  to the new pool.
 
 ### Multiple subscribers on one pool
 
-A single pool can have arbitrarily many local subscribers. The pool
-issues exactly one wire-level SUBSCRIBE per `(Realm, Topic)`,
-multiplexes inbound events to every local subscriber for that pair,
-and dedupes across links.
+A single pool can have arbitrarily many local subscribers — whether raw
+processes or `macula_subscriber` sinks. The pool issues exactly one
+wire-level SUBSCRIBE per `(Realm, Topic)`, multiplexes inbound events to
+every local subscriber for that pair, and dedupes across links.
 
 ### Backpressure
 
@@ -502,10 +397,8 @@ timestamp, etc.) when correctness matters.
 3. **Build topics via `macula_topic`** — never inline strings.
 4. **Include a timestamp** — `erlang:system_time(millisecond)` in
    every payload.
-5. **Pattern-match the SubRef** in handlers when listening to
-   multiple topics.
-6. **Keep handlers fast** — spawn workers for heavy processing.
-7. **Make handlers idempotent** — `(publisher, seq)` is a strong dedup
+5. **Keep handlers fast** — spawn workers for heavy processing.
+6. **Make handlers idempotent** — `(publisher, seq)` is a strong dedup
    key, but cross-restart edge cases exist; don't rely on
    exactly-once.
 
@@ -523,25 +416,14 @@ observability layer.
 
 ---
 
-## How it works (relay side)
-
-Routing behind the relay (DHT-based subscriber discovery, peering,
-cross-station gossip, bloom filters, sticky-routing) is the relay's
-concern. See
-macula-station for
-the current relay implementation.
-
-From the SDK side, you publish and subscribe; the pool handles the
-rest.
-
----
-
 ## See also
 
-- [Connecting Guide](CONNECTING_GUIDE.md) — pool model, lifecycle, options
-- [Topic Naming Guide](TOPIC_NAMING_GUIDE.md) — canonical topic shape
-- [V1 → V2 Migration](../migrations/V1_TO_V2_PUBSUB.md) — what changed in 3.11.0
-- [Authorization Guide](AUTHORIZATION_GUIDE.md) — UCAN/DID identity
+- [PUBSUB_PROTOCOL.md](PUBSUB_PROTOCOL.md) — the raw primitives
+  underneath, plus how relay-side routing works.
+- [Connecting Guide](../shared/CONNECTING_GUIDE.md) — pool model, lifecycle, options
+- [Topic Naming Guide](../shared/TOPIC_NAMING_GUIDE.md) — canonical topic shape
+- [V1 → V2 Migration](../../migrations/V1_TO_V2_PUBSUB.md) — what changed in 3.11.0
+- [Authorization Guide](../shared/AUTHORIZATION_GUIDE.md) — UCAN/DID identity
 - [`macula_pubsub`](https://hexdocs.pm/macula/macula_pubsub.html) — slice module
 - [`macula_client`](https://hexdocs.pm/macula/macula_client.html) — pool implementation
 - [`macula_subscriber`](https://hexdocs.pm/macula/macula_subscriber.html) — supervised subscriber behaviour

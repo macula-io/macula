@@ -1,6 +1,6 @@
 # CLAUDE.md - Macula Project Guidelines
 
-**Current Version**: v9.13.4 (August 2026)
+**Current Version**: v9.13.5 (August 2026)
 
 ---
 
@@ -76,8 +76,8 @@ codebase references it.
 Key documentation:
 - `docs/guides/DIST_OVER_MESH_GUIDE.md` - Erlang distribution over relay mesh
 - `docs/guides/CLUSTERING_GUIDE.md` - Cluster formation
-- `docs/guides/MRI_GUIDE.md` - Resource identifiers
-- `docs/guides/AUTHORIZATION_GUIDE.md` - DID/UCAN security
+- `docs/guides/shared/MRI_GUIDE.md` - Resource identifiers
+- `docs/guides/shared/AUTHORIZATION_GUIDE.md` - DID/UCAN security
 - `docs/GLOSSARY.md` - Terminology
 
 ## Testing

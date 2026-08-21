@@ -1,143 +1,18 @@
-# Macula SDK — RPC Guide
+# Macula SDK — RPC Protocol
 
-**Request/response over the mesh: advertise a handler, call a procedure, get a result.**
+**The raw wire primitives underneath `macula_response` / `macula_request`.**
 
-![Direct-Dial RPC across Two Stations](assets/rpc_two_stations.svg)
-
-> **Audience:** applications that need a request/response call to a specific
-> procedure, as opposed to a broadcast ([PubSub Guide](PUBSUB_GUIDE.md)) or an
-> open-ended feed ([Streaming Guide](STREAMING_GUIDE.md)).
-
----
-
-## Overview
-
-A provider **advertises** a procedure with a handler; a consumer **calls** it
-by name and gets a result back. Two layers do this:
-
-- **[`macula_response` / `macula_request`](#supervised-wrappers-macula_response--macula_request)**
-  — supervised OTP behaviours: an addressable pid you can monitor and cancel,
-  `rpc.*_v1` mesh facts around every call, the direct-dial trust model
-  already wired in. **Start here** — this is what most applications want,
-  and it's covered first, right below.
-- **`macula:advertise/5` / `macula:call/5`** — the raw primitives
-  underneath, covered later in this guide ([Advertising a procedure](#advertising-a-procedure))
-  for anyone building something the wrapper doesn't fit: custom retry logic,
-  observability, an SDK for another language.
-
-Both layers share the same two call shapes. `call/5` (raw) and
-`macula_request:start_link/6,7` (wrapped) mean "ask any of my pool's
-connected stations to handle this" — whichever one answers is responsible
-for finding a handler, locally or by forwarding to a peer. **Direct-dial** —
-resolving a specific provider's station in the DHT and dialing it in one
-hop, bypassing your own pool's seeds entirely — is
-`macula_request:start_link_direct/6,7,8` (wrapped, below) or `call_station/6,7`
-(raw, further down).
-
----
-
-## Supervised wrappers: `macula_response` / `macula_request`
-
-`advertise/5`'s handler runs in a transient process spawned per inbound
-call, and `call/5` blocks the calling process on its own `gen_server:call`
-— neither has an addressable pid you can supervise, monitor, or cancel from
-outside. `macula_response` and `macula_request` wrap the same two
-primitives as proper OTP behaviours, and publish `rpc.received_v1` /
-`rpc.replied_v1` (provider) or `rpc.sent_v1` / `rpc.completed_v1` (consumer)
-mesh facts around each call — useful when something else on the mesh wants
-to observe RPC traffic, not just participate in it.
-
-Provider side — each inbound call starts one supervised child under a
-factory supervisor this module owns:
-
-```erlang
--module(math_service).
--behaviour(macula_response).
--export([init/1, handle_request/2]).
-
-init(_Args) -> {ok, []}.
-
-handle_request(#{<<"a">> := A, <<"b">> := B}, State) ->
-    {reply, A + B, State}.
-```
-
-```erlang
-{ok, _Sup} = macula_response:advertise(Pool, Realm, Procedure,
-                                       math_service, []).
-```
-
-Consumer side — `start_link/6,7` returns immediately with a pid; the call
-itself runs in a linked worker, and the outcome is delivered to
-`Module:handle_reply/2`:
-
-```erlang
--module(add_caller).
--behaviour(macula_request).
--export([init/1, handle_reply/2]).
-
-init(Parent) -> {ok, Parent}.
-
-handle_reply(Result, Parent) ->
-    Parent ! {add_result, Result},
-    {stop, normal, Parent}.
-```
-
-```erlang
-{ok, Pid} = macula_request:start_link(add_caller, Pool, Realm, Procedure,
-                                      #{<<"a">> => 2, <<"b">> => 3},
-                                      5_000, self()).
-
-%% cancel before a reply arrives — publishes rpc.completed_v1 with
-%% outcome => cancelled
-ok = macula_request:cancel(Pid).
-```
-
-Embed `macula_request_sup` (a `simple_one_for_one` factory) in your own
-supervision tree if you want to enumerate or cancel in-flight requests via
-`supervisor:which_children/1` / `terminate_child/2` — that is what backs a
-`cancel_*` RPC command in an application built on top of the SDK.
-
-### Direct-dial: `start_link_direct` / `advertise_direct`
-
-The direct-dial counterparts to `start_link/6,7` and `advertise/5,6` above —
-same callback modules, same behaviour, but resolving and dialing the
-provider's station directly instead of routing through the pool's existing
-links. See [Direct-dial](#direct-dial-call_station-6-7) below for the trust
-model.
-
-Provider — `advertise_direct/6,7` does everything `advertise/5,6` does, and
-additionally publishes a signed `procedure_advertisement` naming this pool's
-connected station as the server, so a direct-dial consumer can find it:
-
-```erlang
-Identity = macula_identity:generate(),  %% reuse the same one across re-advertises
-{ok, _Sup} = macula_response:advertise_direct(Pool, Realm, Procedure,
-                                              math_service, [], Identity).
-```
-
-Consumer — `start_link_direct/6,7,8` resolves the advertisement, resolves
-and verifies the serving station's endpoint, and dials it in one hop:
-
-```erlang
-{ok, Pid} = macula_request:start_link_direct(add_caller, Pool, Realm, Procedure,
-                                             #{<<"a">> => 2, <<"b">> => 3},
-                                             5_000, self()).
-```
-
-Resolve failures are distinguishable from call failures:
-`{error, {unresolved, Reason}}` means nobody has advertised the procedure via
-direct-dial yet (or the DHT record hasn't replicated to your station), not
-that the call itself failed. Requires the provider to have advertised via
-`advertise_direct/6,7`, not plain `advertise/5,6` — a plain advertise
-publishes no discoverable record.
+> **Audience:** building something the supervised wrappers don't fit —
+> custom retry logic, observability, an SDK for another language. Most
+> applications want the [RPC Guide](RPC_GUIDE.md) instead — it covers the
+> same capability via `macula_response`/`macula_request`, with an
+> addressable pid, cancel, and mesh facts already wired in.
 
 ---
 
 ## Advertising a procedure
 
-The raw primitive [`macula_response` wraps](#supervised-wrappers-macula_response--macula_request),
-above. Reach for it directly only if you're building something the wrapper
-doesn't fit.
+This is the raw primitive [`macula_response` wraps](RPC_GUIDE.md#supervised-wrappers-macula_response-macula_request).
 
 ```erlang
 -spec advertise(pool(), realm(), procedure(), Handler, opts()) -> ok | {error, term()}.
@@ -155,13 +30,13 @@ ProcRealm = macula_topic:realm_hope(Realm, Domain, Verb, Version),
 Pick a tier by who owns the schema: `app_hope` for an app-specific procedure,
 `org_hope` for one an org exposes to itself, `realm_hope` for a realm
 authority's own procedure (e.g. `check_health`). See the
-[Topic Naming Guide](TOPIC_NAMING_GUIDE.md) for the full naming convention —
+[Topic Naming Guide](../shared/TOPIC_NAMING_GUIDE.md) for the full naming convention —
 present-tense verbs, no CRUD, IDs in the payload never the name.
 
 `advertise/5` fans out to every link in the pool and registers the handler
 for replay on reconnect. `Opts` takes `auth`: `open` (default — serve any
 identified caller) or `{ucan_required, Issuer}` (gated — see
-[Authorization Guide](AUTHORIZATION_GUIDE.md)).
+[Authorization Guide](../shared/AUTHORIZATION_GUIDE.md)).
 
 ```erlang
 ok = macula:unadvertise(Pool, Realm, Procedure).
@@ -195,17 +70,15 @@ A handler is `fun((term()) -> term())` or `{Module, Function}`, called as
 
 Keep handlers fast — there's no async-reply mechanism for unary RPC; a slow
 handler blocks the caller until it returns or the timeout fires. For
-multi-chunk or long-lived work, use the [Streaming Guide](STREAMING_GUIDE.md)
+multi-chunk or long-lived work, use the [Streaming Guide](../streaming/STREAMING_GUIDE.md)
 instead.
 
 ---
 
 ## Direct-dial: `call_station/6,7`
 
-The raw primitive [`macula_request`/`macula_response`'s own direct-dial
-wraps](#direct-dial-start_link_direct--advertise_direct), above. Reach for
-`call_station/6,7` directly only if you're building something that wrapper
-doesn't fit.
+This is the raw primitive [`macula_request`/`macula_response`'s own
+direct-dial wraps](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct).
 
 ```erlang
 -spec call_station(pool(), seed(), realm(), procedure(), term(), timeout_ms()) ->
@@ -223,15 +96,12 @@ link or opening and monitoring a new one, waiting for the handshake, then
 calling through it. One hop, no dependency on your pool's own seed set. Use
 it when you already know *which* station's URL to dial.
 
-**Recommended: let `macula_request` / `macula_response` resolve it for
-you.** Knowing a procedure's URL up front is the exception — normally you
-know the *procedure*, not which station serves it.
-`macula_request:start_link_direct/6,7,8` and
-`macula_response:advertise_direct/6,7` (see
-[Supervised wrappers](#supervised-wrappers-macula_response--macula_request)
-above) do the resolve, verify, and dial for you, with the right trust model
-already wired in — most callers should reach for those, not the raw steps
-below.
+**Most applications don't need this.** Knowing a procedure's URL up front is
+the exception — normally you know the *procedure*, not which station serves
+it. [`macula_request:start_link_direct/6,7,8` and
+`macula_response:advertise_direct/6,7`](RPC_GUIDE.md#direct-dial-start_link_direct-advertise_direct)
+do the resolve, verify, and dial for you, with the right trust model already
+wired in.
 
 ### What resolution does, if you need it raw
 
@@ -282,10 +152,10 @@ the realm CA — proving the *advertiser*, not just the station it names, is
 an org/realm-authorized identity. Unmanaged realms have no realm CA to check
 against, so this stays opt-in rather than mandatory.
 
-This is the same resolve shape used by [content](CONTENT_GUIDE.md)'s
-`get_content_station/4,5` and [streaming](STREAMING_GUIDE.md)'s
-`macula_stream_sink:start_link_direct/5,6` — one mechanism, reused across
-every primitive pair.
+This is the same resolve shape used by [content](../content/CONTENT_PROTOCOL.md)'s
+`get_content_station/4,5` and [streaming](../streaming/STREAMING_PROTOCOL.md)'s
+raw `call_stream_station/6` — one mechanism, reused across every primitive
+pair.
 
 ---
 
@@ -335,22 +205,7 @@ own moduledoc.
 
 ---
 
-## Procedure naming
-
-**See the [Topic Naming Guide](TOPIC_NAMING_GUIDE.md)** — RPC procedures and
-pub/sub topics share the same canonical format, built via `macula_topic`,
-never inline strings.
-
----
-
 ## See also
 
-- [Streaming Guide](STREAMING_GUIDE.md) — when one request/response isn't
-  enough: a live feed, an upload, a duplex session.
-- [Authorization Guide](AUTHORIZATION_GUIDE.md) — gating a procedure with
-  `{ucan_required, Issuer}` and presenting a UCAN token to call it.
-- [Records Guide](RECORDS_GUIDE.md) — the DHT record primitive
-  `procedure_advertisement` is built on.
-- [`macula_response`](https://hexdocs.pm/macula/macula_response.html) /
-  [`macula_request`](https://hexdocs.pm/macula/macula_request.html) —
-  supervised, fact-announcing wrappers around `advertise/5` and `call/5`.
+- [RPC_GUIDE.md](RPC_GUIDE.md) — the supervised wrappers most applications
+  should use instead of these raw primitives.

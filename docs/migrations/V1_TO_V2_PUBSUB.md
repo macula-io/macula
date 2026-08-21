@@ -7,8 +7,8 @@ that still calls the V1 surface will not compile against 4.x.
 
 This guide documents the V1→V2 shape changes for anyone migrating
 across the boundary. If you are starting fresh on 4.0+, read
-[CONNECTING_GUIDE.md](../guides/CONNECTING_GUIDE.md) and
-[PUBSUB_GUIDE.md](../guides/PUBSUB_GUIDE.md) instead.
+[CONNECTING_GUIDE.md](../guides/shared/CONNECTING_GUIDE.md) and
+[PUBSUB_GUIDE.md](../guides/pubsub/PUBSUB_GUIDE.md) instead.
 
 ---
 
@@ -308,8 +308,8 @@ ship a major.
 
 ## See also
 
-- [Connecting Guide](../guides/CONNECTING_GUIDE.md) — pool model
-- [Pub/Sub Guide](../guides/PUBSUB_GUIDE.md) — V2 surface in detail
+- [Connecting Guide](../guides/shared/CONNECTING_GUIDE.md) — pool model
+- [Pub/Sub Guide](../guides/pubsub/PUBSUB_GUIDE.md) — V2 surface in detail
 - [`macula` facade](https://hexdocs.pm/macula/macula.html) — every
   function (V1 and V2)
 - `macula_mesh_client` — the V1 single-connection client this migration

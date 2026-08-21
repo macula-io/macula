@@ -256,7 +256,7 @@ There is no cost to mixing realms on one pool versus running one pool
 per realm. The pool's topic index is keyed by `{Realm, Topic}` end to
 end.
 
-See [PUBSUB_GUIDE.md](PUBSUB_GUIDE.md) for the realm format and how
+See [PUBSUB_GUIDE.md](../pubsub/PUBSUB_GUIDE.md) for the realm format and how
 realms are derived.
 
 ---
@@ -284,9 +284,9 @@ they are normal lifecycle events.
 > Close and every subscriber gets one `{macula_event_gone, SubRef, pool_closed}`.
 
 For the publish/subscribe surface in detail, read
-[PUBSUB_GUIDE.md](PUBSUB_GUIDE.md). For the breaking changes between
+[PUBSUB_GUIDE.md](../pubsub/PUBSUB_GUIDE.md). For the breaking changes between
 the pre-3.11.0 single-connection client and the 3.11.0 pool, read
-[../migrations/V1_TO_V2_PUBSUB.md](../migrations/V1_TO_V2_PUBSUB.md).
+[../../migrations/V1_TO_V2_PUBSUB.md](../../migrations/V1_TO_V2_PUBSUB.md).
 
 ---
 
@@ -294,6 +294,6 @@ the pre-3.11.0 single-connection client and the 3.11.0 pool, read
 
 - [`macula:connect/2`](https://hexdocs.pm/macula/macula.html#connect-2) — facade
 - [`macula_client`](https://hexdocs.pm/macula/macula_client.html) — pool implementation
-- [PubSub Guide](PUBSUB_GUIDE.md) — publish/subscribe semantics
+- [PubSub Guide](../pubsub/PUBSUB_GUIDE.md) — publish/subscribe semantics
 - [Authorization Guide](AUTHORIZATION_GUIDE.md) — UCAN/DID identity
 - [Topic Naming Guide](TOPIC_NAMING_GUIDE.md) — `realm/org/app/domain/name_v{N}` shape

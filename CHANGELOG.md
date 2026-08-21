@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.13.5] - 2026-08-21
+
+### Changed (documentation — supersedes 9.13.4's reorder)
+
+- **Split each of the four primitive-pair guides into a daemon-facing Guide
+  and a library-facing Protocol doc, and gave `docs/guides/` real
+  subdirectory structure.** 9.13.4 reordered sections within one file per
+  guide so the supervised wrapper came first; that turned out not to be
+  enough — three of four guides still *opened* (TL;DR/Overview) with raw
+  code before the reordered wrapper section, because reordering moved a
+  section without touching what greeted the reader first. The real fix is
+  a hard split: a Guide that only ever shows `macula_request`/
+  `macula_publisher`/`macula_feeder`/`macula_download`/`macula_pusher`/
+  `macula_upload`/`macula_streamer`/`macula_stream_sink`, and a Protocol
+  doc holding every raw primitive, wire format, and internal-resolution
+  detail the Guide used to carry.
+  - New layout: `docs/guides/{rpc,pubsub,content,streaming}/*_GUIDE.md` +
+    `*_PROTOCOL.md`, `docs/guides/shared/*_GUIDE.md` for the five
+    cross-cutting guides (Connecting, Topic Naming, Authorization, MRI,
+    Records), and `DIST_OVER_MESH_GUIDE.md`/`CLUSTERING_GUIDE.md`/
+    `DEVELOPMENT.md` staying flat at `docs/guides/` (not primitive-pair
+    material). All nine moves used `git mv` to preserve history.
+  - **`docs/guides/content/CONTENT_GUIDE.md` gained the "Push/upload:
+    `macula_pusher` / `macula_upload`" section, moved wholesale out of
+    `STREAMING_GUIDE.md`.** It's `client_stream` mode with content's own
+    integrity machinery bolted on, not really a streaming-primitives
+    concern — it belongs next to `macula_feeder`/`macula_download`, the
+    wrappers it borrows that machinery from.
+  - Each new `*_PROTOCOL.md` opens with the raw primitive walkthrough that
+    used to open its Guide (e.g. `macula:subscribe/5`/`publish/4`,
+    `macula:call_stream_station/6`), plus everything genuinely raw-only:
+    MCID wire format, BOLT#4 error tables, DHT resolution internals,
+    `macula_content_transfer`'s real cancel/pause/resume/multi-stream API
+    (none of which `macula_feeder`/`macula_download` expose — confirmed by
+    reading their source, not assumed), and local in-process streams.
+    Confirmed which PubSub options genuinely reach through
+    `macula_subscriber`/`macula_publisher`'s own `Opts`/`Args` parameters
+    by reading `macula_subscriber.erl`/`macula_publisher.erl` directly
+    before deciding the split boundary — `subscribe`'s delivery-ordering
+    options pass through the wrapper, `publish`'s `timeout_ms` does not.
+  - `rebar.config` gained `groups_for_extras`, clustering the four Guides,
+    four Protocols, and five Shared guides into their own hexdocs sidebar
+    groups — mirrors 9.13.4's `groups_for_modules` but for the extras
+    sidebar. Confirmed by inspecting `doc/dist/sidebar_items-*.js` for the
+    actual group assignments, not just a clean build.
+  - `README.md` and `docs/README.md`'s documentation tables gained a row
+    per new Protocol doc.
+- **Found and fixed a real anchor-slug bug in 9.13.4's own cross-references**
+  while verifying this split's links against actual rendered HTML (not just
+  file existence): ex_doc collapses ANY run of non-alphanumeric characters
+  in a heading — an em dash, a slash, a colon, any combination — to exactly
+  **one** hyphen, not one hyphen per character removed. `## Supervised
+  wrappers: \`macula_response\` / \`macula_request\`` slugs to
+  `supervised-wrappers-macula_response-macula_request` (one hyphen at the
+  slash), not `...-macula_response--macula_request` (two) — 9.13.4's own
+  RPC cross-references used the double-hyphen form and silently linked to a
+  dead anchor on hexdocs, never caught because the build exits 0 and the
+  href text looked plausible. Swept the whole `docs/` tree for the same
+  double-hyphen pattern and fixed all nine instances found (RPC, Content,
+  Streaming, PubSub), then re-verified every anchor link in the repo
+  (34 of them) against `id="..."` attributes in the real built HTML, not
+  the crude markdown-only slug approximation used earlier in the session.
+
+### Notes
+
+- Every split was verified content-preserving before commit, same method
+  as 9.13.4: a scripted heading-set and code-block diff between each
+  original file (via `git show HEAD:...`) and the union of its resulting
+  Guide + Protocol files. Zero headings or code blocks lost across all
+  four splits — RPC (13→14 code blocks, +1 deliberate new example),
+  PubSub (21→20, 3 raw→wrapper example rewrites accounted for), Content
+  (16→16, only heading-level promotions), Streaming (13→13, only heading
+  additions).
+- No code behavior changes — documentation and `rebar.config` only, plus
+  two `.erl` moduledoc comments (`macula_topic.erl`, `macula_pubsub.erl`)
+  updated to point at the new guide paths. `rebar3 compile` and `rebar3
+  eunit` clean (1902/0 failed); `rebar3 ex_doc` exit 0 with only
+  pre-existing CHANGELOG.md autolink warnings, unrelated to this change.
+
+---
+
 ## [9.13.4] - 2026-08-21
 
 ### Changed (documentation)

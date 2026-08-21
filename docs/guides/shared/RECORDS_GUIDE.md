@@ -7,7 +7,7 @@ advertisement, and station presence are all built on.**
 > discoverable fact into the mesh — a capability announcement, a presence
 > beacon, a small piece of domain state — and don't want to build a bespoke
 > RPC procedure just to hand it out. If what you actually have is an
-> immutable blob, see the [Content Guide](CONTENT_GUIDE.md) instead; content
+> immutable blob, see the [Content Guide](../content/CONTENT_GUIDE.md) instead; content
 > is built on this same primitive but is addressed by hash, not by signer.
 
 ---
@@ -135,5 +135,5 @@ readers even if it's still physically in the store.
 Built-in record types (`0x01`-`0x1F`) — station presence, procedure
 advertisements, content announcements, realm/org directories, delegation
 chains — have their own typed constructors in `macula_record` and are
-documented where they're used: [RPC Guide](RPC_GUIDE.md),
-[Content Guide](CONTENT_GUIDE.md), [Authorization Guide](AUTHORIZATION_GUIDE.md).
+documented where they're used: [RPC Guide](../rpc/RPC_GUIDE.md),
+[Content Guide](../content/CONTENT_GUIDE.md), [Authorization Guide](AUTHORIZATION_GUIDE.md).
