@@ -20,10 +20,27 @@
 %%% `close/1' on it. This module does not prescribe the discovery
 %%% mechanism.
 %%%
+%%% For `client_stream' mode — a consumer pushing chunks INTO the
+%%% provider, e.g. a batch upload — export the optional
+%%% `handle_chunk/2' callback (mirroring `macula_stream_sink''s
+%%% consumer-side callback exactly) and this module drives the same
+%%% linked-reader `recv/2' loop for you, on the provider side. A
+%%% `server_stream'-mode module that doesn't export it is unaffected.
+%%%
 %%% This is the general-purpose RPC streaming feature (`call_stream/5',
 %%% `advertise_stream/5', e.g. a `logs.tail_v1'-style procedure) —
 %%% unrelated to content sharing's own chunked-transfer protocol; see
 %%% `macula_feeder' / `macula_download' for that.
+%%%
+%%% == Cancel ==
+%%%
+%%% Stopping this gen_server for any non-`normal' reason (a crash, the
+%%% underlying stream dying, `Module:handle_open/3'/`handle_chunk/2'
+%%% returning a non-normal stop) sends the peer an explicit
+%%% `macula_stream:abort/3' STREAM_ERROR, not just a graceful close —
+%%% the peer learns the transfer was cancelled/failed instead of
+%%% mistaking it for an ordinary end-of-stream. A `normal' stop closes
+%%% both sides cleanly instead.
 %%%
 %%% == Direct-dial ==
 %%%
@@ -61,6 +78,29 @@
 %%% %% elsewhere, once the provider has announced its pid:
 %%% ok = macula_streamer:send(TailerPid, <<"a log line\n">>).
 %%% '''
+%%%
+%%% A `client_stream'-mode provider exports `handle_chunk/2' instead,
+%%% and never calls `send/2,3' itself — the consumer is the one
+%%% pushing:
+%%%
+%%% ```
+%%% -module(batch_upload_provider).
+%%% -behaviour(macula_streamer).
+%%% -export([init/1, handle_open/2, handle_chunk/2]).
+%%%
+%%% init(Parent) -> {ok, {Parent, []}}.
+%%%
+%%% handle_open(_StreamArgs, State) -> {ok, State}.
+%%%
+%%% handle_chunk(Chunk, {Parent, Acc}) ->
+%%%     {noreply, {Parent, [Chunk | Acc]}}.
+%%% '''
+%%%
+%%% ```
+%%% {ok, _Sup} = macula_streamer:advertise(Pool, Realm,
+%%%     <<"bulk.ingest">>, batch_upload_provider, self(),
+%%%     #{mode => client_stream}).
+%%% '''
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_streamer).
@@ -79,12 +119,17 @@
 -callback handle_open(StreamArgs :: term(), State :: term()) ->
     {ok, NewState :: term()} | {stop, Reason :: term(), NewState :: term()}.
 
+-callback handle_chunk(Chunk :: term(), State :: term()) ->
+    {noreply, NewState :: term()} | {stop, Reason :: term(), NewState :: term()}.
+
 -callback terminate(Reason :: term(), State :: term()) -> any().
 
--optional_callbacks([terminate/2]).
+-optional_callbacks([terminate/2, handle_chunk/2]).
 
 -define(STREAMING_STARTED, <<"streaming.started_v1">>).
 -define(STREAMING_COMPLETED, <<"streaming.completed_v1">>).
+-define(RECV_TIMEOUT, 30_000).
+-define(CANCEL_CODE, <<"cancelled">>).
 
 -record(tstate, {
     module    :: module(),
@@ -93,6 +138,7 @@
     announce  :: boolean(),
     stream_id :: binary(),
     stream    :: pid(),
+    reader    :: pid() | undefined,
     user      :: term()
 }).
 
@@ -207,15 +253,44 @@ open(Module, Pool, Realm, Announce, StreamPid, StreamArgs, UserState) ->
     case Module:handle_open(StreamArgs, UserState) of
         {ok, NewUserState} ->
             link(StreamPid),
+            Reader = maybe_spawn_reader(Module, StreamPid),
             StreamId = crypto:strong_rand_bytes(16),
             publish(Announce, Pool, Realm, ?STREAMING_STARTED,
                     #{stream_id => StreamId}),
             {ok, #tstate{module = Module, pool = Pool, realm = Realm,
                         announce = Announce, stream_id = StreamId,
-                        stream = StreamPid, user = NewUserState}};
+                        stream = StreamPid, reader = Reader,
+                        user = NewUserState}};
         {stop, Reason, _NewUserState} ->
             {stop, Reason}
     end.
+
+%% @private For `client_stream'-mode providers that export
+%% `handle_chunk/2': spawn the same linked-reader `recv/2' loop
+%% `macula_stream_sink' drives on the consumer side, applied here to
+%% the provider's own stream. A `server_stream'-mode module has no
+%% reason to export `handle_chunk/2', so this is a no-op for it.
+maybe_spawn_reader(Module, Stream) ->
+    case erlang:function_exported(Module, handle_chunk, 2) of
+        true -> spawn_reader(Stream);
+        false -> undefined
+    end.
+
+spawn_reader(Stream) ->
+    Parent = self(),
+    spawn_link(fun() -> reader_loop(Parent, Stream) end).
+
+reader_loop(Parent, Stream) ->
+    dispatch_recv(macula:recv(Stream, ?RECV_TIMEOUT), Parent, Stream).
+
+dispatch_recv({chunk, Data}, Parent, Stream) ->
+    Parent ! {stream_item, Data}, reader_loop(Parent, Stream);
+dispatch_recv({data, Data}, Parent, Stream) ->
+    Parent ! {stream_item, Data}, reader_loop(Parent, Stream);
+dispatch_recv(eof, Parent, _Stream) ->
+    Parent ! stream_eof;
+dispatch_recv({error, Reason}, Parent, _Stream) ->
+    Parent ! {stream_error, Reason}.
 
 %% @private
 handle_call({send, Chunk}, _From, #tstate{stream = Stream} = State) ->
@@ -231,18 +306,52 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) -> {noreply, State}.
 
 %% @private
+handle_info({stream_item, Data}, #tstate{module = Module, user = User} = State) ->
+    deliver(Module:handle_chunk(Data, User), State);
+handle_info(stream_eof, State) ->
+    {stop, normal, State};
+handle_info({stream_error, Reason}, State) ->
+    {stop, Reason, State};
+handle_info({'EXIT', Reader, Reason}, #tstate{reader = Reader} = State)
+        when Reason =/= normal ->
+    {stop, {reader_crashed, Reason}, State};
 handle_info({'EXIT', Stream, Reason}, #tstate{stream = Stream} = State) ->
     {stop, Reason, State};
 handle_info(_Msg, State) ->
     {noreply, State}.
 
+deliver({noreply, NewUser}, State) ->
+    {noreply, State#tstate{user = NewUser}};
+deliver({stop, Reason, NewUser}, State) ->
+    {stop, Reason, State#tstate{user = NewUser}}.
+
 %% @private
 terminate(Reason, #tstate{module = Module, pool = Pool, realm = Realm,
                           announce = Announce, stream_id = StreamId,
-                          user = User}) ->
+                          stream = Stream, reader = Reader, user = User}) ->
+    stop_reader(Reader),
+    finish_stream(Reason, Stream),
     publish(Announce, Pool, Realm, ?STREAMING_COMPLETED,
             outcome_fields(#{stream_id => StreamId}, Reason)),
     maybe_terminate(Module, Reason, User).
+
+stop_reader(undefined) -> ok;
+stop_reader(Reader) ->
+    unlink(Reader),
+    exit(Reader, kill).
+
+%% @private A `normal' reason closes both sides cleanly. Anything else
+%% (a crash, the underlying stream dying, a non-normal stop from
+%% `handle_open/2'/`handle_chunk/2') sends the peer an explicit
+%% `STREAM_ERROR' abort instead of leaving it to infer cancellation
+%% from the connection simply going away. `Stream' may already be
+%% dead by the time this runs (e.g. its own exit is what triggered
+%% this termination) — harmless, caught below.
+finish_stream(normal, Stream) ->
+    try macula_stream:close(Stream) catch _:_ -> ok end;
+finish_stream(Reason, Stream) ->
+    Message = iolist_to_binary(io_lib:format("~p", [Reason])),
+    try macula_stream:abort(Stream, ?CANCEL_CODE, Message) catch _:_ -> ok end.
 
 outcome_fields(Base, normal) -> Base#{outcome => completed};
 outcome_fields(Base, Reason) -> Base#{outcome => failed, reason => Reason}.

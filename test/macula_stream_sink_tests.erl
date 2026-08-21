@@ -41,6 +41,7 @@ setup() ->
     meck:expect(macula, call_stream,
                 fun(_Pool, _Realm, _Proc, _Args, _Opts) -> {ok, self()} end),
     meck:expect(macula, close_stream, fun(_Stream) -> ok end),
+    meck:expect(macula, abort, fun(_Stream, _Code, _Message) -> ok end),
     meck:expect(macula, publish, fun(_Pool, _Realm, _Topic, _Payload) -> ok end),
     ok.
 
@@ -63,7 +64,9 @@ sink_test_() ->
      [fun delivers_chunks_then_eof/0,
       fun surfaces_recv_error/0,
       fun callback_can_stop_early/0,
-      fun init_stop_propagates/0]}.
+      fun init_stop_propagates/0,
+      fun normal_stop_closes_not_aborts/0,
+      fun abnormal_stop_aborts_not_closes/0]}.
 
 delivers_chunks_then_eof() ->
     recv_returning([{chunk, <<"a">>}, {chunk, <<"b">>}, eof]),
@@ -78,6 +81,28 @@ surfaces_recv_error() ->
     recv_returning([{error, timeout}]),
     {ok, _Pid} = macula_stream_sink:start_link(?MODULE, pool, <<0:256>>, <<"p">>, self()),
     ?assertEqual({closed, timeout}, wait_msg()).
+
+%% A clean eof (Reason = normal) closes the underlying stream both
+%% sides — the pre-Phase-5 behaviour — and never sends an abort.
+normal_stop_closes_not_aborts() ->
+    recv_returning([eof]),
+    {ok, _Pid} = macula_stream_sink:start_link(?MODULE, pool, <<0:256>>, <<"p">>, self()),
+    ?assertEqual({closed, normal}, wait_msg()),
+    ?assertEqual(1, meck:num_calls(macula, close_stream, ['_'])),
+    ?assertEqual(0, meck:num_calls(macula, abort, ['_', '_', '_'])).
+
+%% A non-normal stop (here: the reader delivering a recv error) sends
+%% the provider an explicit abort instead of an ordinary close — this
+%% is the bug Phase 5 fixes: before, `terminate/2' called
+%% `close_stream' unconditionally, so the provider could not tell a
+%% real cancellation/failure from a clean end-of-stream.
+abnormal_stop_aborts_not_closes() ->
+    process_flag(trap_exit, true),
+    recv_returning([{error, timeout}]),
+    {ok, _Pid} = macula_stream_sink:start_link(?MODULE, pool, <<0:256>>, <<"p">>, self()),
+    ?assertEqual({closed, timeout}, wait_msg()),
+    ?assertEqual(1, meck:num_calls(macula, abort, ['_', <<"cancelled">>, '_'])),
+    ?assertEqual(0, meck:num_calls(macula, close_stream, ['_'])).
 
 callback_can_stop_early() ->
     recv_returning([{chunk, <<"stop">>}, {chunk, <<"never seen">>}]),

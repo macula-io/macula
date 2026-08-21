@@ -38,6 +38,8 @@ setup() ->
     meck:new(macula_stream, [passthrough]),
     meck:expect(macula_stream, send, fun(_Stream, _Chunk) -> ok end),
     meck:expect(macula_stream, close_send, fun(_Stream) -> ok end),
+    meck:expect(macula_stream, close, fun(_Stream) -> ok end),
+    meck:expect(macula_stream, abort, fun(_Stream, _Code, _Message) -> ok end),
     ok.
 
 teardown(_) ->
@@ -70,7 +72,9 @@ opens_and_publishes_lifecycle() ->
     ?assertEqual([<<"streaming.started_v1">>], topics()),
     StreamPid ! stop,
     ?assertMatch({terminated, _}, wait_msg()),
-    ?assertEqual([<<"streaming.started_v1">>, <<"streaming.completed_v1">>], topics()).
+    ?assertEqual([<<"streaming.started_v1">>, <<"streaming.completed_v1">>], topics()),
+    ?assertEqual(1, meck:num_calls(macula_stream, close, [StreamPid])),
+    ?assertEqual(0, meck:num_calls(macula_stream, abort, ['_', '_', '_'])).
 
 send_and_close_drive_the_stream() ->
     process_flag(trap_exit, true),
@@ -100,7 +104,9 @@ dead_stream_stops_the_streamer() ->
     after 1000 -> ?assert(false)
     end,
     ?assertMatch({terminated, _}, wait_msg()),
-    ?assertMatch(#{outcome := failed}, completed_payload()).
+    ?assertMatch(#{outcome := failed}, completed_payload()),
+    ?assertEqual(1, meck:num_calls(macula_stream, abort, [StreamPid, <<"cancelled">>, '_'])),
+    ?assertEqual(0, meck:num_calls(macula_stream, close, [StreamPid])).
 
 %%%===================================================================
 %%% Helpers

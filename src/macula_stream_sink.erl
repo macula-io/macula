@@ -23,6 +23,16 @@
 %%% mirroring how `macula_feeder' / `macula_download' each announce
 %%% their own side of a content transfer.
 %%%
+%%% == Cancel ==
+%%%
+%%% Stopping this gen_server for any non-`normal' reason (a `recv'
+%%% error, the reader crashing, `Module:handle_chunk/2' returning a
+%%% non-normal stop) sends the provider an explicit `macula:abort/3'
+%%% STREAM_ERROR instead of an ordinary close — the provider learns
+%%% the consumer cancelled or failed rather than mistaking it for a
+%%% clean end-of-stream. A `normal' stop closes both sides cleanly
+%%% instead, same as before.
+%%%
 %%% == Direct-dial ==
 %%%
 %%% `start_link/5,6' opens through the pool's existing links — the same
@@ -79,6 +89,7 @@
 -define(RECV_TIMEOUT, 30_000).
 -define(STREAMING_STARTED, <<"streaming.started_v1">>).
 -define(STREAMING_COMPLETED, <<"streaming.completed_v1">>).
+-define(CANCEL_CODE, <<"cancelled">>).
 
 -record(kstate, {
     module    :: module(),
@@ -211,10 +222,22 @@ terminate(Reason, #kstate{module = Module, pool = Pool, realm = Realm,
     %% for anymore. Stop it unconditionally.
     unlink(Reader),
     exit(Reader, kill),
-    try macula:close_stream(Stream) catch _:_ -> ok end,
+    finish_stream(Reason, Stream),
     publish(Announce, Pool, Realm, ?STREAMING_COMPLETED,
             outcome_fields(#{stream_id => StreamId}, Reason)),
     maybe_close(Module, Reason, User).
+
+%% @private A `normal' reason (eof, or the callback choosing to stop
+%% cleanly) closes both sides. Anything else sends the provider an
+%% explicit abort instead of an ordinary close, so it learns this was
+%% a cancellation/failure rather than a clean end-of-stream. `Stream'
+%% may already be dead by the time this runs (e.g. `{stream_error,_}'
+%% means the provider already tore it down) — harmless, caught below.
+finish_stream(normal, Stream) ->
+    try macula:close_stream(Stream) catch _:_ -> ok end;
+finish_stream(Reason, Stream) ->
+    Message = iolist_to_binary(io_lib:format("~p", [Reason])),
+    try macula:abort(Stream, ?CANCEL_CODE, Message) catch _:_ -> ok end.
 
 outcome_fields(Base, normal) -> Base#{outcome => completed};
 outcome_fields(Base, Reason) -> Base#{outcome => failed, reason => Reason}.

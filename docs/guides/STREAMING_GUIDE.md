@@ -199,6 +199,39 @@ handle_close(_Reason, _Lines) -> ok.
                                           <<"logs.tail">>, []).
 ```
 
+**`client_stream` providers get the mirror-image receive loop.** Export the
+same optional `handle_chunk/2` callback on the PROVIDER-side module and
+`macula_streamer` drives a linked-reader loop against its own stream,
+symmetric to `macula_stream_sink`'s consumer-side one. A `server_stream`
+module that doesn't export it is unaffected — the reader is only spawned
+when the callback is present.
+
+```erlang
+-module(batch_upload_provider).
+-behaviour(macula_streamer).
+-export([init/1, handle_open/2, handle_chunk/2]).
+
+init(Parent) -> {ok, {Parent, []}}.
+
+handle_open(_StreamArgs, State) -> {ok, State}.
+
+handle_chunk(Chunk, {Parent, Acc}) ->
+    {noreply, {Parent, [Chunk | Acc]}}.
+```
+
+```erlang
+{ok, _Sup} = macula_streamer:advertise(Pool, Realm, <<"bulk.ingest">>,
+                                       batch_upload_provider, self(),
+                                       #{mode => client_stream}).
+```
+
+**Cancel.** Stopping either wrapper for a non-`normal` reason (a crash, a
+`recv` error, a callback returning a non-normal stop) sends the peer an
+explicit `macula_stream:abort/3` STREAM_ERROR instead of an ordinary close
+or a silent link-crash — the peer can tell a genuine cancellation/failure
+from a clean end-of-stream. A `normal` stop closes both sides cleanly, same
+as before.
+
 ### Direct-dial: `advertise_direct` / `start_link_direct`
 
 The direct-dial counterparts — resolve the procedure's
@@ -265,9 +298,9 @@ They are for unit tests and same-node dispatch. The pool forms
 | `call_stream_station(Pool, Station, Realm, Proc, Args, Opts)` | consumer: **direct-dial** — dial `Station` and open the stream there in one hop |
 | `advertise_stream(Pool, Realm, Proc, Mode, Handler)` | provider: serve a streaming procedure |
 | `unadvertise_stream(Pool, Realm, Proc)` | provider: stop serving it |
-| `macula_streamer:advertise/5,6` | provider: supervised, `streaming.*_v1`-announcing wrapper |
+| `macula_streamer:advertise/5,6` | provider: supervised, `streaming.*_v1`-announcing wrapper. Optional `Module:handle_chunk/2` drives a receive loop for `client_stream` mode; abort-wired cancel |
 | `macula_streamer:advertise_direct/6,7` | provider: as above, and publishes a `procedure_advertisement` for direct-dial |
-| `macula_stream_sink:start_link/5,6` | consumer: supervised, `streaming.*_v1`-announcing wrapper |
+| `macula_stream_sink:start_link/5,6` | consumer: supervised, `streaming.*_v1`-announcing wrapper; abort-wired cancel |
 | `macula_stream_sink:start_link_direct/5,6` | consumer: **direct-dial** — resolve the provider and dial in one hop |
 | `send(Stream, Bin)` / `send(Stream, Body, Enc)` | send a chunk (`Enc` = `raw` \| `msgpack`) |
 | `recv(Stream)` / `recv(Stream, Timeout)` | read the next `{chunk,_}` / `{data,_}` / `eof` |

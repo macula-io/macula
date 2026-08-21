@@ -1,8 +1,8 @@
 # Content Push/Upload (`macula_pusher` / `macula_upload`)
 
-**Status:** Phases 1-4 SHIPPED (macula 9.11.1). Phases 5-6 not started.
+**Status:** Phases 1-5 SHIPPED (macula 9.12.0). Phase 6 not started.
 **Created:** 2026-08-21
-**Last Updated:** 2026-08-21 (Phases 1 through 4 all landed same day, in four
+**Last Updated:** 2026-08-21 (Phases 1 through 5 all landed same day, in five
 follow-up sessions to the one that wrote this plan)
 
 ## Why this exists
@@ -414,16 +414,68 @@ Checked (again) for direct callers of `macula_feeder`/`macula_download` in
 macula-station, macula-realm, and hecate-om before touching internals: none found —
 consistent with Phase 1's earlier check of `put_content`/`get_content` itself.
 
-### Phase 5 — `macula_streamer` client_stream receive-loop
+### Phase 5 — `macula_streamer` client_stream receive-loop — SHIPPED (9.12.0)
 
-Add an optional `handle_chunk/2` callback (mirroring `macula_stream_sink`'s exactly).
-When a `client_stream`-mode provider module exports it, spawn the same linked-reader
-loop `macula_stream_sink` already has, applied to the provider side instead of the
-consumer side. Backward compatible: `server_stream`-mode users who don't export
-`handle_chunk/2` are unaffected. Also wire `macula_stream:abort/3` into
-`macula_streamer`/`macula_stream_sink`'s existing cancel paths (same reasoning as
-Phase 1, applies here too — this pair currently has the same blunt-kill cancel).
-No pause work here per the scope decision above unless a concrete need surfaces first.
+Shipped exactly as designed: `macula_streamer` gained an optional `handle_chunk/2`
+callback (mirroring `macula_stream_sink`'s consumer-side one verbatim, including the
+`spawn_reader/1`/`reader_loop/2`/`dispatch_recv/3` helpers) gated by
+`erlang:function_exported(Module, handle_chunk, 2)` — the same mechanism
+`macula_stream_sink`'s own optional `handle_close/2` already used, so a
+`server_stream`-mode module that doesn't export it spawns no reader and is completely
+unaffected. Considered threading an explicit `Mode` parameter through
+`advertise/6` → `dispatch/8` → `start_link/7` instead, but the `function_exported`
+gate makes it redundant — a `server_stream` module has no reason to export
+`handle_chunk/2` either way, so checking mode explicitly would only duplicate what the
+export check already guarantees; skipped the extra plumbing.
+
+**Both `macula_streamer` and `macula_stream_sink`'s cancel paths now call
+`macula_stream:abort/3` on any non-`normal` termination reason, close cleanly
+(`macula_stream:close/1`) on `normal`.** Unlike Phase 1's cancel gap — where NO
+peer-visible abort mechanism existed at all, requiring new Rust NIF work
+(`nif_reset_stream`) before anything could be wired up — `macula_stream:abort/3`
+already existed, fully implemented (a genuine `STREAM_ERROR` frame via
+`macula_station_link:send_stream_frame/3`), and was already used elsewhere in the
+codebase (`macula_stream_local`, `macula_station_link`'s handler-crash and
+disconnect-teardown paths) with an established `Code`/`Message` convention this phase
+reused (`<<"cancelled">>` code, `iolist_to_binary(io_lib:format("~p", [Reason]))`
+message). So Phase 5's fix was pure wiring, no new transport-layer capability needed —
+a much smaller phase than Phase 1's equivalent, precisely because the plan's own
+"Architecture before this work" section had already verified `macula_stream:abort/3`
+existed and just wasn't being called from either wrapper's `terminate/2`.
+
+**Traced (not assumed) that `macula_streamer`'s bug was worse than `macula_stream_sink`'s.**
+`macula_stream_sink:terminate/2` already called `macula:close_stream/1`
+*unconditionally* pre-Phase-5 — so its bug was purely a signal-quality problem (a real
+failure looked identical to a clean end-of-stream to the peer). `macula_streamer:terminate/2`
+did not close or abort its underlying `macula_stream` AT ALL before this phase — traced
+through `macula_stream`'s own `owner`/monitor lifecycle (`macula_station_link`'s
+server-side dispatch passes an internal `stream_host_loop/0` stub process as the
+`owner`, not the `macula_streamer` wrapper itself) to confirm the underlying stream's
+lifetime was never actually tied to the wrapper's: a *graceful* stop
+(`Reason = normal`) orphaned it forever (a link only propagates a non-normal exit to a
+non-trapping peer, and `owner`'s death — not the wrapper's — is what `macula_stream`
+itself watches), and an *abnormal* stop killed it only via the ordinary link-crash
+cascade, with no explicit protocol-level signal ever reaching the far side either way.
+Fixed by adding `finish_stream/2` to `terminate/2` on both modules, verified RED before
+GREEN for each (neutering the abort branch on either module reproduces the missing-call
+exactly, caught by dedicated `meck:num_calls` assertions, not just an outcome check).
+
+**One test-design pitfall found and worked around, worth recording:** an early version
+of the new `macula_streamer_client_stream_tests` asserted `meck:num_calls` for
+close/abort immediately after receiving the last expected `{chunk_seen, _}` message —
+this raced against the reader process's own concurrent, asynchronous delivery of the
+NEXT recv result (eof or an error), which drives `terminate/2` on a separate schedule
+from when the test process happens to receive its last chunk notification. Passed when
+run in isolation, failed intermittently when run alongside other test files (more
+scheduler contention exposed the race window). Fixed by adding `terminate/2` to the
+test callback module purely as a synchronization signal (`Parent ! {terminated, Reason}`,
+mirroring `macula_streamer_tests`'s existing pattern) and waiting for it before
+asserting on mock call counts — not a meck cross-file isolation problem as first
+suspected; confirmed by running the new file alone (passed) vs. combined with the
+others (failed identically both times), which pointed at a race inherent to the test's
+own OWN synchronization, not shared mock state.
+
+No pause work added, per the scope decision above — no concrete need surfaced.
 
 ### Phase 6 — `macula_pusher` / `macula_upload`
 
@@ -458,8 +510,8 @@ multi-stream from day one, nothing to retrofit later.
 | `native/macula_quic/src/{atoms,lib,stream}.rs` | Phase 1 shipped: new `nif_reset_stream` NIF (Quinn `SendStream::reset`); recv loop distinguishes a peer reset from every other read error |
 | `src/macula_feeder.erl` | Phase 4 shipped: internals call `macula_content_transfer:start_put/3`/`start_put_station/5` directly via a lightweight resolve+await proxy; `terminate/2` now reaps the real transfer, fixing the orphan-on-cancel bug |
 | `src/macula_download.erl` | Phase 4 shipped, symmetric — `start_get/3`/`start_get_station/5` |
-| `src/macula_streamer.erl` | Phase 5 — `handle_chunk/2`, abort-wired cancel (not started) |
-| `src/macula_stream_sink.erl` | Phase 5 — abort-wired cancel (not started) |
+| `src/macula_streamer.erl` | Phase 5 shipped: optional `handle_chunk/2` + linked-reader loop for `client_stream` mode; `terminate/2` now closes (`normal`) or aborts (anything else) the underlying stream, previously did neither |
+| `src/macula_stream_sink.erl` | Phase 5 shipped: `terminate/2` now closes on `normal`, aborts otherwise — previously called `close_stream` unconditionally regardless of reason |
 | `src/macula_pusher.erl` | New — Phase 6 (not started) |
 | `src/macula_upload.erl` | New — Phase 6 (not started) |
 | `test/macula_content_transfer_tests.erl` | Phase 1 shipped: new, 7 cases, meck-based. Phase 2 shipped: +5 cases (pause/resume put and get, single-block no-op, cancel-while-paused). Phase 3: existing chunked cases pinned to `stream_count => 1` (the new default of 4 changed their behavior — they're specifically about single-stream sequential ordering) |
@@ -467,11 +519,13 @@ multi-stream from day one, nothing to retrofit later.
 | `test/macula_quic_stream_reset_tests.erl` | New — Phase 1 shipped, 3 cases, real two-endpoint loopback. Untouched since. |
 | `test/macula_content_block_hash_tests.erl` | Phase 1 shipped: updated to call `macula_content_transfer:verify_block_hash/2` (moved from `macula:verify_block_hash/2`) |
 | `test/macula_feeder_tests.erl`, `macula_download_tests.erl` | Phase 4 shipped: rewritten to mock `macula_client`/`macula_station_link` (mechanical necessity, not a design choice — see the corrected Phase 4 section); `Pool` is now a real pid, not the placeholder atom `pool`; +2 cases per module (real-cancel-reaches-the-stream, direct-dial — previously uncovered) |
-| `test/macula_streamer_tests.erl`, `macula_stream_sink_tests.erl` | Updated for abort + receive-loop (Phase 5, not started) |
+| `test/macula_streamer_tests.erl` | Phase 5 shipped: `abort`/`close` mocked explicitly; existing normal-stop and abnormal-stop cases now assert which one fires |
+| `test/macula_stream_sink_tests.erl` | Phase 5 shipped: `abort` mocked; +2 cases (`normal_stop_closes_not_aborts`, `abnormal_stop_aborts_not_closes`) |
+| `test/macula_streamer_client_stream_tests.erl` | New — Phase 5 shipped, 2 cases: pushed chunks reach `handle_chunk/2` then eof closes; a `recv` error aborts instead. Split from `macula_streamer_tests.erl` because it needs a callback module that genuinely exports `handle_chunk/2` (see the Phase 5 section above) |
 | `test/macula_pusher_tests.erl`, `macula_upload_tests.erl` | New (Phase 6, not started) |
-| `CHANGELOG.md`, `macula.app.src`, `CLAUDE.md` (version header) | Phase 1 as 9.9.0, Phase 2 as 9.10.0, Phase 3 as 9.11.0 (all MINOR — new capability), Phase 4 as 9.11.1 (PATCH — fixes existing behavior, no new public API) |
+| `CHANGELOG.md`, `macula.app.src`, `CLAUDE.md` (version header) | Phase 1 as 9.9.0, Phase 2 as 9.10.0, Phase 3 as 9.11.0, Phase 5 as 9.12.0 (all MINOR — new capability), Phase 4 as 9.11.1 (PATCH — fixes existing behavior, no new public API) |
 | `docs/guides/CONTENT_GUIDE.md` | Phase 1: new "Real cancel: macula_content_transfer" section + Reference table rows. Phase 2: new "Real pause/resume for chunked transfers" section + row. Phase 3: new "Parallel multi-stream chunk transfer" section + rows. Phase 4: corrected the now-stale "not the blunt local kill macula_feeder/download's cancel/1 still is" line; Reference table rows updated to say `macula_content_transfer` instead of `put_content/2`/`get_content/2`. |
-| `docs/guides/STREAMING_GUIDE.md` | Not touched — nothing in Phases 1-4 changes streaming RPC; revisit at Phase 5 |
+| `docs/guides/STREAMING_GUIDE.md` | Phase 5 shipped: new `client_stream` provider example + "Cancel" paragraph under "Supervised wrappers"; Reference table rows for `macula_streamer`/`macula_stream_sink` note the receive-loop + abort-wired cancel |
 | `macula-station`, `macula-realm`, `hecate-om` (separate repos) | Checked for direct `put_content`/`get_content` callers before Phase 1 landed, and for direct `macula_feeder`/`macula_download` callers before Phase 4 — none found in any of the three, either time, nothing to update. |
 
 ## Testing plan
@@ -521,9 +575,15 @@ of this work, but re-verify per phase rather than assuming).
       stream, not just that `outcome => cancelled` gets published — RED-verified
       (neutering the new reap call reproduces exactly the gap this phase fixes) for
       both `macula_feeder` and `macula_download`.
-- [ ] Phase 5: a `client_stream`-mode provider using `handle_chunk/2` receives every
+- [x] Phase 5: a `client_stream`-mode provider using `handle_chunk/2` receives every
       chunk a consumer sends, in order, with no hand-rolled `recv` loop in application
-      code.
+      code (`pushed_chunks_reach_handle_chunk_then_eof_closes` — chunks arrive in send
+      order, then eof closes cleanly). Abort-wiring verified RED before GREEN on both
+      modules separately (neutering the abort branch reproduces the missing
+      `macula_stream:abort/3` call, caught by dedicated `meck:num_calls` assertions,
+      not just an outcome check) — extended beyond the plan's literal wording, which
+      named only the receive-loop; the cancel fix was always part of the same phase per
+      the plan's own body text above, the checklist item just hadn't named it.
 - [ ] Phase 6: a `macula_pusher` push to a `macula_upload` receiver whose received bytes
       are tampered with in transit (test-injected corruption) is caught by
       `macula_manifest:verify/2` and reported as a failure, never silently accepted.

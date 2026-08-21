@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.12.0] - 2026-08-21
+
+### Added
+
+- **`macula_streamer` now supports `client_stream` mode: an optional
+  `handle_chunk/2` callback drives a linked-reader `recv/2` loop on the
+  provider side, mirroring `macula_stream_sink`'s consumer-side callback of
+  the same name.** PLAN_PUSH_UPLOAD.md Phase 5. Before this, `macula_streamer`
+  only wrapped `send/2,3`/`close/1` — it fit `server_stream` (provider
+  pushes) but had no receive path at all for a provider that needs to
+  *receive* pushed chunks (a batch upload, `client_stream`'s whole reason
+  for existing per `STREAMING_GUIDE.md`). A `server_stream`-mode module that
+  doesn't export `handle_chunk/2` is unaffected — the reader is only spawned
+  when the callback is present, gated by `erlang:function_exported/3`, the
+  same mechanism `macula_stream_sink`'s optional `handle_close/2` already
+  uses.
+
+### Fixed
+
+- **`macula_streamer`/`macula_stream_sink` now send the peer a genuine
+  `macula_stream:abort/3` STREAM_ERROR on any non-`normal` termination,
+  instead of an ordinary close (sink) or nothing at all (streamer).** Same
+  bug class as Phase 1's content-transfer cancel fix, applied here: before,
+  `macula_stream_sink:terminate/2` called `macula:close_stream/1`
+  *unconditionally*, regardless of `Reason` — so a real failure (a `recv`
+  error, the reader crashing) looked to the peer exactly like a clean
+  end-of-stream, not a cancellation. `macula_streamer:terminate/2` was
+  worse: it never closed or aborted its underlying `macula_stream` at all —
+  a graceful stop (`Reason = normal`) orphaned that process forever (the
+  link only propagates a *non-normal* exit to a non-trapping peer, and
+  `macula_stream`'s own auto-stop is tied to its `owner`, an internal
+  station-link stub process, not to `macula_streamer`), and an abnormal
+  stop killed it via the ordinary link-crash cascade with no explicit
+  protocol-level signal ever reaching the far side. Both modules now close
+  cleanly (`macula_stream:close/1`) on a `normal` reason and abort
+  (`<<"cancelled">>` code, the reason folded into the message) on anything
+  else — the peer can now genuinely tell a cancellation/failure from an
+  ordinary end-of-stream, for both roles.
+
+### Notes
+
+- No public API changes to `macula_stream_sink` (no new exports). New
+  optional `handle_chunk/2` callback on `macula_streamer` — additive, so
+  MINOR not MAJOR; bundled with the abort-wiring fix in the same release
+  since both were the same phase's deliverable and neither changes any
+  existing function signature.
+- No pause primitive added for streaming RPC — per the plan's own scope
+  decision (see PLAN_PUSH_UPLOAD.md): a QUIC stream is reliable and
+  ordered, so a consumer that stops calling `recv/2` already backpressures
+  the sender via QUIC's own flow control. Re-litigate only if a concrete
+  need surfaces.
+- New test file `test/macula_streamer_client_stream_tests.erl` — split out
+  from `macula_streamer_tests.erl` because it needs a callback module that
+  genuinely exports `handle_chunk/2`; that file's existing callback module
+  deliberately does not (exporting it there would spawn a reader for every
+  one of ITS tests too, since `function_exported/3` gating is module-wide,
+  not per-test-case). Same reasoning Phase 3 used to split
+  `macula_content_transfer_multi_stream_tests.erl` out for a similarly
+  distinct-mock-shape need.
+
+---
+
 ## [9.11.1] - 2026-08-21
 
 ### Fixed
