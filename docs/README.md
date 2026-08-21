@@ -10,7 +10,6 @@ Macula SDK is an Erlang/OTP client library for connecting to a **federated relay
 |--------------|----------|
 | Connect to the mesh | [Connecting Guide](guides/shared/CONNECTING_GUIDE.md) |
 | Understand pub/sub messaging | [PubSub Guide](guides/pubsub/PUBSUB_GUIDE.md) |
-| Migrate from V1 (pre-3.11.0) | [V1 → V2 Migration](migrations/V1_TO_V2_PUBSUB.md) |
 | Make RPC calls across the mesh | [RPC Guide](guides/rpc/RPC_GUIDE.md) |
 | Share content-addressed blobs | [Content Guide](guides/content/CONTENT_GUIDE.md) |
 | Store your own signed DHT facts | [Records Guide](guides/shared/RECORDS_GUIDE.md) |
@@ -53,18 +52,11 @@ observability, an SDK for another language.
 | [Content Protocol](guides/content/CONTENT_PROTOCOL.md) | Raw `put_content`/`get_content`, MCID wire format, discovery, pause/resume/multi-stream |
 | [Streaming Protocol](guides/streaming/STREAMING_PROTOCOL.md) | Raw `call_stream`/`advertise_stream`, local in-process streams |
 
-## Migrations
-
-| Document | Description |
-|----------|-------------|
-| [V1 → V2 Pub/Sub](migrations/V1_TO_V2_PUBSUB.md) | Breaking facade changes in 3.11.0 |
-
 ## Reference
 
 | Document | Description |
 |----------|-------------|
 | [Glossary](GLOSSARY.md) | Terminology reference |
-| [Roadmap](ROADMAP.md) | SDK roadmap |
 
 ---
 

@@ -7,9 +7,7 @@
 > **Audience:** Erlang/OTP applications publishing or subscribing to
 > events. Building something the wrappers below don't fit? See
 > [PUBSUB_PROTOCOL.md](PUBSUB_PROTOCOL.md) for the raw `macula:subscribe/4,5`
-> / `macula:publish/4,5` primitives underneath. For the V1 (pre-3.11.0)
-> single-connection surface, see
-> [../../migrations/V1_TO_V2_PUBSUB.md](../../migrations/V1_TO_V2_PUBSUB.md).
+> / `macula:publish/4,5` primitives underneath.
 
 ---
 
@@ -423,7 +421,6 @@ observability layer.
   underneath, plus how relay-side routing works.
 - [Connecting Guide](../shared/CONNECTING_GUIDE.md) — pool model, lifecycle, options
 - [Topic Naming Guide](../shared/TOPIC_NAMING_GUIDE.md) — canonical topic shape
-- [V1 → V2 Migration](../../migrations/V1_TO_V2_PUBSUB.md) — what changed in 3.11.0
 - [Authorization Guide](../shared/AUTHORIZATION_GUIDE.md) — UCAN/DID identity
 - [`macula_pubsub`](https://hexdocs.pm/macula/macula_pubsub.html) — slice module
 - [`macula_client`](https://hexdocs.pm/macula/macula_client.html) — pool implementation

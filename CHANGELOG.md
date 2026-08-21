@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.13.7] - 2026-08-21
+
+### Removed (documentation)
+
+- **Removed public-inappropriate and stale content flagged directly by the
+  maintainer:** `docs/migrations/`, `docs/PLAN_SDK_3_16.md` /
+  `PLAN_SDK_3_17.md` / `PLAN_SDK_3_17_PROGRESS.md`,
+  `docs/HANDOVER_MULTIHOP_PUBSUB_PROPAGATION.md`, `docs/ROADMAP.md`,
+  `docs/SOAK_2026-05-03_sanity.{csv,report.txt}`. Verified each rather than
+  removing on request alone:
+  - `docs/migrations/V1_TO_V2_PUBSUB.md` — its own text says "V1 is gone"
+    as of 4.0.0. Current version is 9.13.7; nobody migrating onto a current
+    SDK is coming from a pre-4.0.0 install.
+  - `docs/PLAN_SDK_3_16.md`/`PLAN_SDK_3_17.md`/`PLAN_SDK_3_17_PROGRESS.md`
+    — internal planning documents, and this repo already has an
+    established `plans/PLAN_*.md` convention (used by
+    `PLAN_PUSH_UPLOAD.md` etc.) that these predate and sit outside of.
+  - `docs/HANDOVER_MULTIHOP_PUBSUB_PROPAGATION.md` — an internal incident
+    investigation and handover document naming specific internal hosts and
+    deployments (`parksim-leuven`, station names, live triage steps) —
+    genuinely not public-facing material.
+  - `docs/ROADMAP.md` — carried its own `⚠️ OUTDATED` banner and told
+    readers to trust `CHANGELOG.md` instead; redundant with the file it
+    was already deferring to.
+  - `docs/SOAK_2026-05-03_sanity.csv` / `.report.txt` — raw output from one
+    dated soak-test run, no narrative, not referenced from anywhere.
+  - `docs/ROADMAP.md` and `docs/migrations/V1_TO_V2_PUBSUB.md` were both
+    published to hexdocs (`rebar.config`'s `extras`) — removed those
+    entries, plus every live cross-reference: `docs/README.md` (Quick
+    Navigation row, the whole "Migrations" section, the Roadmap reference
+    row), `docs/guides/shared/CONNECTING_GUIDE.md`,
+    `docs/guides/pubsub/PUBSUB_GUIDE.md` (audience line + See also),
+    `src/pubsub/macula_pubsub.erl`'s moduledoc. Also removed a
+    long-dead `%% See architecture/ROADMAP.md` comment in `rebar.config`
+    pointing at a directory this repo has never had.
+  - `CHANGELOG.md`'s own prior entries mentioning these files are left
+    untouched — historical record of what was true when written, per this
+    project's standing convention, not live navigation.
+
+### Notes
+
+- All removed files stay recoverable via git history; nothing here is
+  destructive at the version-control level, only removed from the current
+  tree and the published hex package / hexdocs site going forward.
+- Verified via a repo-wide grep after the edits: zero remaining live
+  references to any removed path outside `CHANGELOG.md`/
+  `CHANGELOG_LEGACY.md`. `rebar3 ex_doc` rebuilt clean (no missing-file
+  errors, no orphaned pages); `rebar3 compile` clean; every remaining
+  `.md`/anchor link in the repo (155 of them) re-checked against real
+  rendered HTML.
+- No code changes — documentation and `rebar.config` only, plus the one
+  `.erl` moduledoc comment trim in `macula_pubsub.erl`.
+
+---
+
 ## [9.13.6] - 2026-08-21
 
 ### Changed (documentation)

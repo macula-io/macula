@@ -284,9 +284,7 @@ they are normal lifecycle events.
 > Close and every subscriber gets one `{macula_event_gone, SubRef, pool_closed}`.
 
 For the publish/subscribe surface in detail, read
-[PUBSUB_GUIDE.md](../pubsub/PUBSUB_GUIDE.md). For the breaking changes between
-the pre-3.11.0 single-connection client and the 3.11.0 pool, read
-[../../migrations/V1_TO_V2_PUBSUB.md](../../migrations/V1_TO_V2_PUBSUB.md).
+[PUBSUB_GUIDE.md](../pubsub/PUBSUB_GUIDE.md).
 
 ---
 
