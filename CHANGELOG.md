@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.13.3] - 2026-08-21
+
+### Fixed (documentation)
+
+- **README.md's "Latest" banner was 11 minor versions stale** (read
+  "9.2.0"; actual 9.13.2 at the time) and didn't mention
+  `macula_content_transfer`, `macula_pusher`/`macula_upload`, or any of
+  the six PLAN_PUSH_UPLOAD.md phases shipped this session —
+  `macula_publisher` wasn't mentioned in the README at all. Rewritten to
+  describe the current state: every supervised primitive pair (RPC,
+  pub/sub, content sharing, streaming RPC) complete and symmetric, each
+  with a pooled and direct-dial mode, plus the new push-initiated
+  transfer pair. Dependency-pin examples bumped `~> 9.2` → `~> 9.13`.
+- **`STREAMING_GUIDE.md`'s "Push/upload" section had no diagram.** New
+  `assets/push_upload.svg`, matching the visual language of the guide's
+  other diagrams (`content_streaming.svg`, `content_sharing.svg`,
+  `rpc_two_stations.svg`) — depicts the push (blue), the receiver's
+  verify-then-reply (green), and the optional direct-dial resolve
+  (purple dashed), plus the four-step flow from local manifest
+  computation through the terminal reply.
+- **`macula_streamer.erl`'s own moduledoc referenced a nonexistent
+  `handle_open/3`** (four textual references, plus the module's own
+  FIRST example using a three-argument `handle_open/3` clause head that
+  would never match the real arity-2 callback) — a leftover from before
+  the callback's real shape, never caught because `STREAMING_GUIDE.md`'s
+  own example was always correct. Fixed all five, including rewriting
+  the broken example to a genuinely arity-2, compilable shape.
+
+### Notes
+
+- No code behavior changes — this release is documentation/assets only,
+  found and fixed during a release-readiness audit (see 9.13.2 for the
+  one real code bug that audit also found, `macula_response:advertise_direct/7`).
+  PATCH, not MINOR.
+- Full eunit suite unchanged at 1902/0 failed; `rebar3 ex_doc` confirmed
+  the new SVG builds into `doc/assets/push_upload.svg` with no new
+  warnings.
+
+---
+
 ## [9.13.2] - 2026-08-21
 
 ### Fixed

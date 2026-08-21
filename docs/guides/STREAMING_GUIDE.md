@@ -265,6 +265,10 @@ plain `advertise/5,6` — a plain advertise publishes no discoverable record.
 
 ## Push/upload: `macula_pusher` / `macula_upload`
 
+<p align="center">
+  <img src="assets/push_upload.svg" alt="Push-Initiated Content Transfer — macula_pusher / macula_upload" width="100%">
+</p>
+
 `client_stream` mode with `macula_feeder`/`macula_download`'s own integrity
 machinery bolted on: push a file at a specific, already-known recipient
 (not into content-addressed storage for someone to discover and pull

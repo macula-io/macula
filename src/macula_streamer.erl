@@ -10,11 +10,11 @@
 %%% `macula_stream_sink': each inbound stream starts one supervised
 %%% `macula_streamer' child (under a `simple_one_for_one' factory this
 %%% module owns), threading state through `Module:init/1' and
-%%% `Module:handle_open/3', and publishing `streaming.started_v1' /
+%%% `Module:handle_open/2', and publishing `streaming.started_v1' /
 %%% `streaming.completed_v1' mesh facts around the stream's lifetime.
 %%%
 %%% Sending is push-based and driven from outside the callback: once
-%%% `Module:handle_open/3' has done whatever registration it needs
+%%% `Module:handle_open/2' has done whatever registration it needs
 %%% (e.g. stashing `self()' in a registry keyed by some connection id),
 %%% any process holding this streamer's pid can call `send/2,3' /
 %%% `close/1' on it. This module does not prescribe the discovery
@@ -47,7 +47,7 @@
 %%% == Cancel ==
 %%%
 %%% Stopping this gen_server for any non-`normal' reason (a crash, the
-%%% underlying stream dying, `Module:handle_open/3'/`handle_chunk/2'
+%%% underlying stream dying, `Module:handle_open/2'/`handle_chunk/2'
 %%% returning a non-normal stop) sends the peer an explicit
 %%% `macula_stream:abort/3' STREAM_ERROR, not just a graceful close —
 %%% the peer learns the transfer was cancelled/failed instead of
@@ -74,13 +74,13 @@
 %%% ```
 %%% -module(log_tailer_provider).
 %%% -behaviour(macula_streamer).
-%%% -export([init/1, handle_open/3]).
+%%% -export([init/1, handle_open/2]).
 %%%
 %%% init(Registry) -> {ok, Registry}.
 %%%
-%%% handle_open(#{topic := Topic}, Registry, State) ->
+%%% handle_open(#{topic := Topic}, Registry) ->
 %%%     Registry ! {tailer_ready, Topic, self()},
-%%%     {ok, State}.
+%%%     {ok, Registry}.
 %%% '''
 %%%
 %%% ```

@@ -15,27 +15,30 @@
 
 ---
 
-> **Latest — 9.2.0**: three new supervised primitive pairs —
-> `macula_feeder`/`macula_download` (content), `macula_streamer`/
-> `macula_stream_sink` (RPC streaming), `macula_response`/`macula_request`
-> (unary RPC) — plus `macula_subscriber` for pub/sub. Each wraps its raw
-> SDK primitive as an OTP behaviour with a `simple_one_for_one` factory
-> supervisor, and publishes mesh-visible protocol facts (`sharing.*_v1`,
-> `streaming.*_v1`, `rpc.*_v1`) around its own side of the operation. Fully
-> additive, no breaking changes. See [CHANGELOG.md](CHANGELOG.md).
-> 9.1.1 checked every guide and this README line-by-line against real
-> source — fabricated modules, a nonexistent legacy RPC API, a dead
-> dependency pin, and a dozen other doc bugs found and fixed, no behavior
-> change. 9.1.0 added OTP 29 readiness (bare `catch` rewritten to `try/catch/end`;
-> `macula_record`'s `record()` type renamed `m_record()`) and the
-> [Records Guide](docs/guides/RECORDS_GUIDE.md). **9.0.0 was breaking**: LAN
-> clustering and
-> distribution-over-mesh split into independent concerns —
-> `macula_cluster_system/` vs. `macula_dist_system/`. `macula_dist_relay` is
-> renamed `macula_dist_pool` (the facade, `join_mesh/1` / `join_dist_relay/1`,
-> is unaffected); the `auto_cluster` sys.config option is removed (start
-> clustering explicitly via `macula_cluster:start_cluster/1`). See
-> [CHANGELOG.md](CHANGELOG.md) for the full history.
+> **Latest — 9.13.2**: every supervised primitive pair is now complete and
+> symmetric, each wrapping its raw SDK primitive as an OTP behaviour with a
+> `simple_one_for_one` factory supervisor, mesh-visible protocol facts
+> (`sharing.*_v1`, `streaming.*_v1`, `rpc.*_v1`) around its own side of the
+> operation, and both a pooled and a **direct-dial** (resolve + one-hop
+> dial) mode:
+> - **RPC** — `macula_request`/`macula_response`, unary call/reply.
+> - **Pub/Sub** — `macula_publisher`/`macula_subscriber`, publish and
+>   per-publisher-ordered subscribe.
+> - **Content sharing** — `macula_feeder`/`macula_download`, built on the
+>   addressable `macula_content_transfer` primitive: a genuinely
+>   peer-visible cancel (a real QUIC `RESET_STREAM`, not a local kill),
+>   pause/resume between chunks, and parallel multi-stream chunk transfer.
+> - **Streaming RPC** — `macula_streamer`/`macula_stream_sink`, server /
+>   client / bidi modes, with an optional `client_stream` receive loop and
+>   terminal-reply callback, and abort-wired cancel.
+> - **NEW: push-initiated content transfer** — `macula_pusher`/
+>   `macula_upload` push a file at a specific, already-known recipient
+>   (rather than into content-addressed storage for someone to discover and
+>   pull later), with the same chunk/hash/verify integrity guarantees, over
+>   `client_stream`.
+>
+> All additive since 9.2.0, no breaking changes. See
+> [CHANGELOG.md](CHANGELOG.md) for the full version-by-version history.
 
 ## What is Macula?
 
@@ -70,14 +73,14 @@ the client you build against.
 Add to `rebar.config`:
 
 ```erlang
-{deps, [{macula, "~> 9.2"}]}.
+{deps, [{macula, "~> 9.13"}]}.
 ```
 
 Or in Elixir `mix.exs`:
 
 ```elixir
 defp deps do
-  [{:macula, "~> 9.2"}]
+  [{:macula, "~> 9.13"}]
 end
 ```
 
