@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.11.0] - 2026-08-21
+
+### Added
+
+- **Multi-stream parallel chunk transfer for chunked content.**
+  PLAN_PUSH_UPLOAD.md Phase 3. Chunks are distributed round-robin
+  (`Index rem StreamCount`) across up to `stream_count` dedicated
+  content streams on the same link (`Opts`'s `stream_count` key,
+  default 4, always capped at the actual chunk count) — each stream
+  runs its own independent chunk-by-chunk loop concurrently, all driven
+  by the ONE `macula_content_transfer` gen_server via
+  `handle_continue/2` (never by the streams' own one-call-and-report
+  worker processes). The manifest is put (or, for a get, its chunks
+  reassembled — by chunk INDEX, not arrival order, since different
+  streams finish in whatever order their own network calls happen to
+  complete in — and verified) only once every stream has drained its
+  own share. A get doesn't know the chunk count, and therefore how many
+  streams are worth opening, until its manifest is fetched, so it
+  starts on the one stream the connect step already opened and expands
+  once the count is known; a put knows upfront and opens every extra
+  stream immediately. Opening an extra stream is best-effort — a
+  failure degrades to fewer streams rather than failing the transfer
+  (a single-stream transfer is still correct, just slower). A single
+  stream's own chunk genuinely failing (an `{error, _}`, not a crash)
+  fails the whole transfer exactly as a sequential one would: every
+  other stream's in-flight work is killed and every stream reset before
+  `await/1,2` sees the error.
+- `pause/1`/`resume/1` (9.10.0) now gate every open stream uniformly,
+  not just one — the same `paused` check, in the same place, whether
+  there's one lane or several.
+- `cancel/1,3` (9.9.0) now resets every currently-open content stream
+  on cancellation, not just one.
+
+### Changed
+
+- `macula_content_transfer`'s single-stream chunk-loop internals
+  (9.10.0's `dispatch_next_step`/`step_result`/etc., single `#chunk`
+  fields `remaining`/`next_index`/`acc`) are replaced by a per-stream
+  `#lane{}` model — each stream owns its own remaining-work queue,
+  in-flight item, and worker. Single-block put/get is untouched — still
+  one worker, connect through completion, exactly as 9.9.0 shipped it;
+  there is no "another stream" for a one-round-trip transfer to use.
+
 ## [9.10.0] - 2026-08-21
 
 ### Added

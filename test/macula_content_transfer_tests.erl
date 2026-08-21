@@ -12,6 +12,13 @@
 %%% correctly, does `cancel/3' behave differently depending on whether
 %%% a stream is open yet, and (Phase 2) does `pause/1'/`resume/1'
 %%% genuinely gate the chunk loop rather than just flip an inert flag.
+%%%
+%%% Every chunked case here pins `stream_count => 1' — Phase 3 made
+%%% multiple concurrent streams the DEFAULT, and these tests are
+%%% specifically about the sequential boundary between one chunk and
+%%% the next, which only has one obvious meaning on a single stream.
+%%% Phase 3's own concurrency, cross-lane ordering, and multi-stream
+%%% cancel coverage lives in `macula_content_transfer_multi_stream_tests'.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_content_transfer_tests).
@@ -230,6 +237,11 @@ await_not_found(ShareId, Retries) ->
 %% fired for chunk 1. Per the design this must NOT affect chunk 0
 %% itself — its round trip stays one uninterrupted blocking call —
 %% only chunk 1 should fail to start.
+%%
+%% Pinned to `stream_count => 1': this test is about the SEQUENTIAL
+%% pause/resume boundary between one chunk and the next on the SAME
+%% stream — Phase 3's multiple-streams-at-once behavior (default since
+%% this phase) is covered separately, in `macula_content_transfer_multi_stream_tests'.
 pause_stops_chunked_put_between_chunks() ->
     Self = self(),
     Bytes = chunked_put_bytes(),
@@ -240,7 +252,7 @@ pause_stops_chunked_put_between_chunks() ->
     meck:expect(macula_station_link, call_on_stream, blocking_call_on_stream(Self)),
     meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
 
-    {ok, Pid} = macula_content_transfer:start_put(dummy_pid(), Bytes),
+    {ok, Pid} = macula_content_transfer:start_put(dummy_pid(), Bytes, #{stream_count => 1}),
 
     {Worker0, <<"_content.put_block">>, _Payload0} = receive_call_started(),
     ok = macula_content_transfer:pause(Pid),
@@ -266,7 +278,7 @@ resume_continues_from_the_next_chunk_not_the_start() ->
     meck:expect(macula_station_link, call_on_stream, blocking_call_on_stream(Self)),
     meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
 
-    {ok, Pid} = macula_content_transfer:start_put(dummy_pid(), Bytes),
+    {ok, Pid} = macula_content_transfer:start_put(dummy_pid(), Bytes, #{stream_count => 1}),
 
     {Worker0, <<"_content.put_block">>, #{mcid := Mcid0}} = receive_call_started(),
     ok = macula_content_transfer:pause(Pid),
@@ -304,7 +316,7 @@ pause_stops_chunked_get_between_chunks() ->
     meck:expect(macula_station_link, call_on_stream, blocking_call_on_stream(Self)),
     meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
 
-    {ok, Pid} = macula_content_transfer:start_get(dummy_pid(), Mcid),
+    {ok, Pid} = macula_content_transfer:start_get(dummy_pid(), Mcid, #{stream_count => 1}),
 
     {WorkerM, <<"_content.get_manifest">>, #{mcid := Mcid}} = receive_call_started(),
     WorkerM ! {proceed, {ok, Manifest}},
@@ -352,7 +364,7 @@ cancel_while_paused_between_chunks_still_resets_the_stream() ->
     meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
     meck:expect(macula_station_link, abort_content_stream, fun(_, _, _, _) -> ok end),
 
-    {ok, Pid} = macula_content_transfer:start_put(dummy_pid(), Bytes),
+    {ok, Pid} = macula_content_transfer:start_put(dummy_pid(), Bytes, #{stream_count => 1}),
     {Worker0, <<"_content.put_block">>, _Payload0} = receive_call_started(),
     ok = macula_content_transfer:pause(Pid),
     Worker0 ! {proceed, {ok, ok}},

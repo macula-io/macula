@@ -11,7 +11,7 @@
 > `macula_download`/`macula_feeder`'s `start_link_direct`) since 9.6.0/9.7.0;
 > addressable transfers with a real, peer-visible cancel
 > (`macula_content_transfer`) since 9.9.0, real pause/resume for chunked
-> transfers since 9.10.0.
+> transfers since 9.10.0, parallel multi-stream chunk transfer since 9.11.0.
 > For a live, open-ended feed instead of a fixed blob, see the
 > [Streaming Guide](STREAMING_GUIDE.md).
 
@@ -179,6 +179,31 @@ is a harmless no-op — the transfer just runs to completion regardless.
 chunk's worker and resets the stream exactly as above; paused between chunks
 (no worker in flight) it just resets the stream directly.
 
+### Parallel multi-stream chunk transfer
+
+Chunked content spreads across multiple dedicated content streams on the same
+link instead of one — pass `stream_count` to use more or fewer than the
+default of 4 (always capped at the actual chunk count, so a 2-chunk transfer
+never opens more than 2 streams):
+
+```erlang
+{ok, Pid} = macula_content_transfer:start_put(Pool, LargeBytes, #{stream_count => 8}),
+{ok, MCID} = macula_content_transfer:await(Pid).
+```
+
+Each stream runs its own chunk-by-chunk loop concurrently; the manifest is
+put (or, for a get, reassembled and verified) only once every stream has
+drained its own share. Reassembly reads fetched chunks back out by INDEX, not
+arrival order, so it doesn't matter which stream's chunk lands first.
+`pause/1`/`resume/1` gate every stream the same way, uniformly. If one
+stream's chunk genuinely fails (a real `{error, _}`, not a crash), the whole
+transfer fails with it — every other stream's in-flight work is killed and
+every stream reset before `await/1,2` sees the error, same as a sequential
+transfer would behave, just faster to notice since fewer chunks were still
+outstanding elsewhere. Opening an extra stream is best-effort: a failure
+degrades to fewer streams rather than failing the transfer outright — a
+single-stream transfer is still correct, just slower.
+
 ---
 
 ## Single block vs. chunked
@@ -328,7 +353,8 @@ known in advance.
 | `macula_content_transfer:start_put_station/4,5`, `start_get_station/4,5` | **direct-dial** addressable variants |
 | `macula_content_transfer:await/1,2` | block for an addressable transfer's outcome, repeatable, cacheable |
 | `macula_content_transfer:cancel/1,3` | real, peer-visible abort (QUIC RESET_STREAM) if a stream is open; pure reap otherwise |
-| `macula_content_transfer:pause/1`/`resume/1` | real pause/resume between chunks (chunked content only — a no-op on single-block) |
+| `macula_content_transfer:pause/1`/`resume/1` | real pause/resume between chunks, every open stream (chunked content only — a no-op on single-block) |
+| `Opts`'s `stream_count` (start_put/start_get etc.) | parallel streams for a chunked transfer, default 4, capped at the chunk count |
 | `macula_content_transfer_registry:whereis_share/1` | resolve a transfer's `share_id` (from a mesh fact) to its pid |
 
 `_content.*` CALLs retry on a BOLT#4-retryable error (e.g.
