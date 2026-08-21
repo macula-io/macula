@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.13.6] - 2026-08-21
+
+### Changed (documentation)
+
+- **`PUBSUB_GUIDE.md`/`PUBSUB_PROTOCOL.md` restructured to match the
+  Overview → `Supervised wrappers: X / Y` → [pair content] → `See also`
+  shape RPC/Content/Streaming already use.** Flagged directly: "why does
+  PUBSUB_GUIDE have a different structure from the rest?" 9.13.5's split
+  carried PubSub's pre-existing skeleton over unchanged (`TL;DR` instead
+  of `Overview`, independent top-level `## Subscribing`/`## Publishing`
+  sections each mixing wrapper usage with deeper protocol semantics)
+  rather than conforming it to the template RPC established. Considered
+  and rejected splitting into separate `PUBLISH_GUIDE.md`/
+  `SUBSCRIBE_GUIDE.md` files first — checked against the actual
+  constraint ("shape must be the same"): a two-file PubSub would make its
+  file topology diverge from RPC/Content/Streaming's one-Guide-one-Protocol
+  shape, the exact inconsistency being removed, not a way to remove it.
+  - `PUBSUB_GUIDE.md`: `TL;DR` → `Overview` (prose only, no inline code,
+    matching the other three); `## Subscribing` + `## Publishing` merged
+    into one `## Supervised wrappers: macula_subscriber / macula_publisher`
+    section holding only wrapper-usage mechanics (subscriber side, then
+    publisher side — subscriber first because it's the long-lived,
+    passively-waiting side, the same role Provider plays in
+    `macula_response`/`macula_streamer`/`macula_feeder`); the deeper
+    protocol semantics that used to live inside those two sections —
+    delivery ordering, dedup, delivery guarantees, subscription
+    termination — promoted to their own top-level sections after it, in
+    the slot RPC's `## Errors` occupies. `Three core ideas` moved to
+    directly follow `Supervised wrappers`, same slot.
+  - Corrected an accuracy gap surfaced while rewriting the wrapper intro
+    paragraph: the old text implied `pubsub.*_v1` mesh facts fire "around
+    every operation" on both sides — checked `macula_subscriber.erl`
+    directly rather than assuming, and it publishes none at all. Only
+    `macula_publisher` announces (`pubsub.publish_started_v1` /
+    `pubsub.publish_completed_v1`); a subscription has no single "done"
+    moment to announce. Fixed in both files.
+  - `PUBSUB_PROTOCOL.md` reordered to match: `Subscribing` now includes
+    its own `### Subscribing in a callback module` subsection immediately
+    (previously separated from it by the terminal-message content), and
+    `When the subscription ends` promoted to a top-level section between
+    `Subscribing` and `Publishing`, mirroring the Guide.
+  - Every `X / Y` wrapper-pair mention flipped from `macula_publisher /
+    macula_subscriber` to `macula_subscriber / macula_publisher` in both
+    files, matching the "passive/long-lived side named first" convention
+    already consistent across RPC (`macula_response`/`macula_request`),
+    Content (`macula_feeder`/`macula_download`), and Streaming
+    (`macula_streamer`/`macula_stream_sink`).
+  - Confirmed via source (`macula_publisher.erl`, `macula_subscriber.erl`)
+    that neither wrapper has a `start_link_direct`/`advertise_direct`
+    variant — PubSub genuinely has no direct-dial mode, so (unlike the
+    other three pairs) the restructured `## Supervised wrappers` section
+    has no `### Direct-dial` subsection. Not an oversight; confirmed
+    absence, not assumed.
+
+### Notes
+
+- Zero content lost: every code block (20/20) and every table row (39/39)
+  from the pre-restructure files is present verbatim in the restructured
+  ones — scripted diff against the prior commit, not a visual skim.
+- Every anchor link touched by the reorder (11 cross-references between
+  the two files, plus this file's own internal links) re-verified against
+  `id="..."` attributes in real `rebar3 ex_doc` output, not assumed correct
+  from the rename.
+- No code changes — documentation only.
+
+---
+
 ## [9.13.5] - 2026-08-21
 
 ### Changed (documentation — supersedes 9.13.4's reorder)

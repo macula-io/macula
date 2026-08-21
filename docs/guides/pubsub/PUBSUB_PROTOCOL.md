@@ -1,11 +1,11 @@
 # Macula SDK — Pub/Sub Protocol
 
-**The raw wire primitives underneath `macula_publisher` / `macula_subscriber`.**
+**The raw wire primitives underneath `macula_subscriber` / `macula_publisher`.**
 
 > **Audience:** building something the supervised wrappers don't fit —
 > custom retry logic, observability, an SDK for another language. Most
 > applications want the [PubSub Guide](PUBSUB_GUIDE.md) instead — it covers
-> the same capability via `macula_publisher`/`macula_subscriber`, with an
+> the same capability via `macula_subscriber`/`macula_publisher`, with an
 > addressable pid, cancel, and mesh facts already wired in.
 
 ---
@@ -36,9 +36,11 @@ ok = macula:unsubscribe(Pool, Sub).
 ```
 
 This is what [`macula_subscriber` and `macula_publisher` wrap](PUBSUB_GUIDE.md) —
-an addressable pid you can monitor and cancel, `pubsub.*_v1` mesh facts
-around each operation. Reach for the raw calls below directly only if
-you're building something the wrappers don't fit.
+an addressable pid you can monitor and cancel, plus `pubsub.*_v1` mesh
+facts around each publish (subscribing has no wire-fact equivalent — see
+[Supervised wrappers](PUBSUB_GUIDE.md#supervised-wrappers-macula_subscriber-macula_publisher)
+in the Guide). Reach for the raw calls below directly only if you're
+building something the wrappers don't fit.
 
 ---
 
@@ -62,7 +64,7 @@ The subscriber receives:
 ```
 
 `Meta` is a map carrying delivery context — the same map
-[`macula_subscriber:handle_event/4` receives as its third argument](PUBSUB_GUIDE.md#subscribing):
+[`macula_subscriber:handle_event/4` receives as its third argument](PUBSUB_GUIDE.md#supervised-wrappers-macula_subscriber-macula_publisher):
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -76,37 +78,14 @@ each `(Realm, Publisher, Seq)` tuple **at most once**, even when the
 same EVENT arrives via multiple links (e.g. with
 `replication_factor > 1`).
 
-### When the subscription ends
-
-The only way a live subscription produces a terminal message today is
-the pool closing:
-
-```erlang
-{macula_event_gone, SubRef, pool_closed}
-```
-
-A link dying does **not** send this — the pool logs
-`_macula.client.link_down`, schedules a respawn, and silently
-re-issues the subscription against the new link once it's up (see
-[Connecting Guide](../shared/CONNECTING_GUIDE.md#lifecycle)). A subscriber sees
-no gap-signaling message for that case, only a possible gap in
-delivery itself, which `ordered` mode's `order_timeout_ms` skip
-handles the same way it handles any other loss.
-
-After `event_gone` arrives, no further events come for that `SubRef`.
-`macula_subscriber` stops its sink with this same reason — see
-[When the subscription ends](PUBSUB_GUIDE.md#when-the-subscription-ends) in
-the Guide.
-
 For `delivery` options (`ordered` / `latest_only` / `as_arrives`) and
 `(publisher, seq)` dedup semantics, see the Guide's
-[Subscribing with options](PUBSUB_GUIDE.md#subscribing-with-options-delivery-ordering) —
-`Opts` is identical whether passed here or through
-`macula_subscriber:start_link/6`.
+[Delivery ordering](PUBSUB_GUIDE.md#delivery-ordering) — `Opts` is
+identical whether passed here or through `macula_subscriber:start_link/6`.
 
 ### Subscribing in a callback module
 
-The raw pattern [`macula_subscriber` wraps](PUBSUB_GUIDE.md#subscribing-with-macula_subscriber-supervised):
+The raw pattern [`macula_subscriber` wraps](PUBSUB_GUIDE.md#supervised-wrappers-macula_subscriber-macula_publisher):
 a `gen_server` subscribes in `init/1`, handles events in
 `handle_info/2` by hand. Reach for this directly only if you're building
 something the wrapper doesn't fit.
@@ -138,6 +117,30 @@ keeps a process subscribing to multiple topics readable.
 
 ---
 
+## When the subscription ends
+
+The only way a live subscription produces a terminal message today is
+the pool closing:
+
+```erlang
+{macula_event_gone, SubRef, pool_closed}
+```
+
+A link dying does **not** send this — the pool logs
+`_macula.client.link_down`, schedules a respawn, and silently
+re-issues the subscription against the new link once it's up (see
+[Connecting Guide](../shared/CONNECTING_GUIDE.md#lifecycle)). A subscriber sees
+no gap-signaling message for that case, only a possible gap in
+delivery itself, which `ordered` mode's `order_timeout_ms` skip
+handles the same way it handles any other loss.
+
+After `event_gone` arrives, no further events come for that `SubRef`.
+`macula_subscriber` stops its sink with this same reason — see
+[When the subscription ends](PUBSUB_GUIDE.md#when-the-subscription-ends) in
+the Guide.
+
+---
+
 ## Publishing
 
 ```erlang
@@ -163,7 +166,7 @@ Returns:
 > `publish/4` returns `ok` as soon as the first selected link accepts
 > the frame. Subsequent links are best-effort.
 
-This is what [`macula_publisher` wraps](PUBSUB_GUIDE.md#publishing-with-macula_publisher-supervised) —
+This is what [`macula_publisher` wraps](PUBSUB_GUIDE.md#supervised-wrappers-macula_subscriber-macula_publisher) —
 `start_link/5,6` returns an addressable pid instead of blocking the
 caller, and delivers the same `ok | {error, term()}` outcome to
 `Module:handle_published/2`.
@@ -203,7 +206,7 @@ on the wire (Phase 4 will tighten).
 If the subscriber pid dies before calling `unsubscribe/2`, the pool
 detects the `'DOWN'` and drops the sub spec automatically — the same
 cleanup a `macula_subscriber` sink gets for free when its own process
-terminates (see [Subscribing with `macula_subscriber`](PUBSUB_GUIDE.md#subscribing-with-macula_subscriber-supervised)
+terminates (see [Supervised wrappers](PUBSUB_GUIDE.md#supervised-wrappers-macula_subscriber-macula_publisher)
 in the Guide).
 
 ---

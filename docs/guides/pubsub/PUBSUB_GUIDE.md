@@ -13,17 +13,123 @@
 
 ---
 
-## TL;DR
+## Overview
 
-- **Connect** once — see [Connecting Guide](../shared/CONNECTING_GUIDE.md).
-- **Subscribe** with [`macula_subscriber`](#subscribing-with-macula_subscriber-supervised):
-  implement `init/1` + `handle_event/4`, `start_link/5,6`.
-- **Publish** with [`macula_publisher`](#publishing-with-macula_publisher-supervised):
-  implement `init/1` + `handle_published/2`, `start_link/5,6`.
+A subscriber **subscribes** to a topic and receives every matching event; a
+publisher **publishes** an event to a topic — `macula_subscriber` and
+`macula_publisher`, an addressable pid you can monitor and cancel.
 
-Both give you an addressable pid (monitor it, `macula_publisher:cancel/1`
-it) and `pubsub.*_v1` mesh facts around every operation — see those two
-sections below for full runnable examples.
+Subscribing and publishing are independent capabilities, unlike RPC's
+request/response or a single content transfer — an application might do
+only one, the other, or both. Every operation on either side names an
+explicit realm and topic; see [Three core ideas](#three-core-ideas), below,
+before writing your first `macula_topic:app_fact/6` call.
+
+See [Supervised wrappers](#supervised-wrappers-macula_subscriber-macula_publisher),
+right below.
+
+---
+
+## Supervised wrappers: `macula_subscriber` / `macula_publisher`
+
+`macula:subscribe/4,5` delivers events as raw messages to whatever pid you
+pass it, and `macula:publish/4,5` is a plain blocking call — neither has an
+addressable pid you can supervise, monitor, or cancel from outside.
+`macula_subscriber` and `macula_publisher` wrap the same two primitives as
+proper OTP behaviours. Only the publish side announces itself on the mesh —
+`macula_publisher` publishes `pubsub.publish_started_v1` /
+`pubsub.publish_completed_v1` around each transfer; `macula_subscriber` has
+no mesh-fact equivalent, since a subscription has no single "done" moment to
+announce.
+
+Subscriber side — `start_link/5,6` opens the subscription in its own
+`init/1` and threads `macula_event` / `macula_event_gone` dispatch into
+`Module:handle_event/4` for you — no hand-rolled `handle_info` clauses
+needed (see [PUBSUB_PROTOCOL.md](PUBSUB_PROTOCOL.md#subscribing-in-a-callback-module)
+for the manual pattern this replaces, if you're building something the
+wrapper doesn't fit). `handle_event/4` receives `Topic`, `Payload`, and
+`Meta` — a map carrying delivery context:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `realm` | `<<_:256>>` | Realm tag (matches the subscribe call) |
+| `publisher` | `binary()` | Publisher pubkey (the original publisher, not the relay) |
+| `seq` | `non_neg_integer()` | Per-publisher monotonic sequence |
+| `delivered_via` | `binary()` | Pubkey of the link/station that delivered this copy |
+
+```erlang
+-module(my_orders_listener).
+-behaviour(macula_subscriber).
+-export([init/1, handle_event/4]).
+
+init(_Args) -> {ok, #{}}.
+
+handle_event(_Topic, Payload, _Meta, State) ->
+    on_order_placed(Payload),
+    {noreply, State}.
+```
+
+```erlang
+Topic = macula_topic:app_fact(Realm, my_org, my_app,
+                              <<"orders">>, <<"placed">>, 1),
+{ok, Pid} = macula_subscriber:start_link(my_orders_listener, Pool, Realm,
+                                         Topic, []).
+```
+
+`Opts` (the arity-6 `start_link/6`) passes straight through to
+`macula:subscribe/5` — the `delivery` option covered in
+[Delivery ordering](#delivery-ordering), below, works exactly the same way
+whether you call it raw or through the wrapper.
+
+A `macula_event_gone` for this subscription stops the sink with that reason
+(see [When the subscription ends](#when-the-subscription-ends), below). To
+stop receiving events deliberately, stop the sink itself
+(`gen_server:stop/1`, or let its supervisor terminate it) — the pool
+monitors the subscriber pid directly and drops the wire-level subscription
+automatically once it's gone, the same cleanup an explicit `unsubscribe`
+gives a raw caller.
+
+Publisher side — `start_link/5,6` returns immediately with a pid; the
+publish runs in a linked worker and the outcome reaches
+`Module:handle_published/2`:
+
+```erlang
+-module(status_publisher).
+-behaviour(macula_publisher).
+-export([init/1, handle_published/2]).
+
+init(Parent) -> {ok, Parent}.
+
+handle_published(Result, Parent) ->
+    Parent ! {published, Result},
+    {stop, normal, Parent}.
+```
+
+```erlang
+{ok, Pid} = macula_publisher:start_link(status_publisher, Pool, Realm,
+                                        Topic, Payload, self()).
+```
+
+| `Result` | Meaning |
+|---|---|
+| `ok` | At least one link accepted the PUBLISH frame |
+| `{error, {transient, no_healthy_station}}` | The pool has zero spawned links — caller may retry |
+| `{error, _}` | Other failures (validation, etc.) |
+
+> **Partial success counts as success.** With `replication_factor > 1`,
+> the publish resolves as soon as the first selected link accepts the
+> frame. Subsequent links are best-effort.
+
+`macula_publisher:cancel/1` stops it before the publish resolves,
+delivering `outcome => cancelled` in the `pubsub.publish_completed_v1`
+mesh fact — same shape as `macula_feeder`'s `sharing.put_started_v1` /
+`sharing.put_completed_v1`.
+
+Unlike `macula_subscriber`, `macula_publisher:start_link/6`'s last argument
+is `Args` (for `Module:init/1`) — there's no way to pass `macula:publish/5`'s
+own `Opts` (e.g. `timeout_ms`) through the wrapper. See
+[PUBSUB_PROTOCOL.md](PUBSUB_PROTOCOL.md#publishing-with-options) if you
+need that.
 
 ---
 
@@ -102,64 +208,7 @@ org_fact / app_fact` tier choice.
 
 ---
 
-## Subscribing
-
-`handle_event/4` (below) receives `Topic`, `Payload`, and `Meta` — a map
-carrying delivery context:
-
-| Key | Type | Meaning |
-|---|---|---|
-| `realm` | `<<_:256>>` | Realm tag (matches the subscribe call) |
-| `publisher` | `binary()` | Publisher pubkey (the original publisher, not the relay) |
-| `seq` | `non_neg_integer()` | Per-publisher monotonic sequence |
-| `delivered_via` | `binary()` | Pubkey of the link/station that delivered this copy |
-
-`{publisher, seq}` is the dedup key. The pool guarantees you see
-each `(Realm, Publisher, Seq)` tuple **at most once**, even when the
-same EVENT arrives via multiple links (e.g. with
-`replication_factor > 1`).
-
-### Subscribing with `macula_subscriber` (supervised)
-
-`macula_subscriber` packages a gen_server that subscribes in its own
-`init/1` and threads `macula_event` / `macula_event_gone` dispatch into
-`Module:handle_event/4` for you — no hand-rolled `handle_info` clauses
-needed (see [PUBSUB_PROTOCOL.md](PUBSUB_PROTOCOL.md#subscribing-in-a-callback-module)
-for the manual pattern this replaces, if you're building something the
-wrapper doesn't fit):
-
-```erlang
--module(my_orders_listener).
--behaviour(macula_subscriber).
--export([init/1, handle_event/4]).
-
-init(_Args) -> {ok, #{}}.
-
-handle_event(_Topic, Payload, _Meta, State) ->
-    on_order_placed(Payload),
-    {noreply, State}.
-```
-
-```erlang
-Topic = macula_topic:app_fact(Realm, my_org, my_app,
-                              <<"orders">>, <<"placed">>, 1),
-{ok, Pid} = macula_subscriber:start_link(my_orders_listener, Pool, Realm,
-                                         Topic, []).
-```
-
-`Opts` (the arity-6 `start_link/6`) passes straight through to
-`macula:subscribe/5` — the `delivery` option below works exactly the same
-way whether you call it raw or through the wrapper.
-
-A `macula_event_gone` for this subscription stops the sink with that
-reason (see [When the subscription ends](#when-the-subscription-ends),
-below). To stop receiving events deliberately, stop the sink itself
-(`gen_server:stop/1`, or let its supervisor terminate it) — the pool
-monitors the subscriber pid directly and drops the wire-level
-subscription automatically once it's gone, the same cleanup an
-explicit `unsubscribe` gives a raw caller.
-
-### When the subscription ends
+## When the subscription ends
 
 The only way a live subscription produces a terminal message today is
 the pool closing — delivered to `handle_event/4`'s raw equivalent as
@@ -176,7 +225,9 @@ handles the same way it handles any other loss.
 
 After the subscription ends, no further events come for it.
 
-### Subscribing with options — delivery ordering
+---
+
+## Delivery ordering
 
 The `delivery` option chooses how a **single publisher's** stream is
 ordered on the way to your subscriber — pass it in `Opts` to
@@ -222,14 +273,14 @@ Cross-publisher order is not something a decentralised broadcast can give
 you; carry a version or timestamp in the fact if a consumer needs to
 relate two publishers' events.
 
-#### Pool-level tuning (`connect/2` options)
+### Pool-level tuning (`connect/2` options)
 
 | Option | Default | Meaning |
 |---|---|---|
 | `order_timeout_ms` | `250` | How long an `ordered` sub waits for a missing seq before skipping the gap. Bounds head-of-line delay. |
 | `order_max_buffer` | `1024` | Per-publisher reorder-buffer count cap. Over it, the head gap is skipped early (memory guard for a high-rate publisher gapping). |
 
-#### Telemetry — is loss real?
+### Telemetry — is loss real?
 
 `macula:status/1` reports `pubsub_gap_skips`: the number of per-publisher
 gaps given up on after the timeout, i.e. the genuine loss rate an
@@ -241,89 +292,39 @@ signal to look at delivery, not ordering.
 {ok, #{pubsub_gap_skips := Skips}} = macula:status(Pool).
 ```
 
-### `(publisher, seq)` and dedup
-
-`{publisher, seq}` is also the dedup key. The pool sees each
-`(Realm, Publisher, Seq)` tuple **at most once**, even when the same
-EVENT arrives via multiple links (e.g. `replication_factor > 1`). In
-`ordered` and `latest_only` modes the delivery layer additionally uses
-the seq to order or drop; in `as_arrives` the dedup layer is the only
-filter.
-
 ---
 
-## Publishing
+## Dedup and delivery guarantees
 
-### Publishing with `macula_publisher` (supervised)
-
-```erlang
--module(status_publisher).
--behaviour(macula_publisher).
--export([init/1, handle_published/2]).
-
-init(Parent) -> {ok, Parent}.
-
-handle_published(Result, Parent) ->
-    Parent ! {published, Result},
-    {stop, normal, Parent}.
-```
-
-```erlang
-{ok, Pid} = macula_publisher:start_link(status_publisher, Pool, Realm,
-                                        Topic, Payload, self()).
-```
-
-`start_link/5,6` returns immediately with a pid; the publish runs in a
-linked worker and the outcome reaches `Module:handle_published/2`:
-
-| `Result` | Meaning |
-|---|---|
-| `ok` | At least one link accepted the PUBLISH frame |
-| `{error, {transient, no_healthy_station}}` | The pool has zero spawned links — caller may retry |
-| `{error, _}` | Other failures (validation, etc.) |
-
-> **Partial success counts as success.** With `replication_factor > 1`,
-> the publish resolves as soon as the first selected link accepts the
-> frame. Subsequent links are best-effort.
-
-`macula_publisher:cancel/1` stops it before the publish resolves,
-delivering `outcome => cancelled` in the `pubsub.publish_completed_v1`
-mesh fact published around the transfer (paired with
-`pubsub.publish_started_v1` at the start) — same shape as `macula_feeder`'s
-`sharing.put_started_v1` / `sharing.put_completed_v1`.
-
-Unlike `macula_subscriber`, `macula_publisher:start_link/6`'s last argument
-is `Args` (for `Module:init/1`) — there's no way to pass `macula:publish/5`'s
-own `Opts` (e.g. `timeout_ms`) through the wrapper. See
-[PUBSUB_PROTOCOL.md](PUBSUB_PROTOCOL.md#publishing-with-options) if you
-need that.
-
-### Delivery guarantees
+`{publisher, seq}` is the dedup key. The pool guarantees you see each
+`(Realm, Publisher, Seq)` tuple **at most once**, even when the same EVENT
+arrives via multiple links (e.g. with `replication_factor > 1`). In
+`ordered` and `latest_only` modes the delivery layer additionally uses the
+seq to order or drop; in `as_arrives` the dedup layer is the only filter.
 
 - **At-most-once** — fire and forget. No publisher-visible ack from
   subscribers.
 - **Per-publisher delivery order** — `ordered` by default at the
-  subscriber (see [Subscribing with options](#subscribing-with-options-delivery-ordering)
-  above): out-of-order arrivals are buffered and released in `seq`
-  order, with a genuinely missing `seq` skipped after
-  `order_timeout_ms`. The mesh itself does not guarantee arrival
-  order — a relay spreads one publisher's burst across concurrent
-  verify workers, and a receiver may admit an event by more than one
-  path — the subscriber-side `ordered` buffer is what turns that into
-  in-order delivery. Opt into `as_arrives` if you'd rather see raw
-  arrival order and reorder yourself.
-- **Cross-publisher ordering** — none, by design. Two publishers'
-  events arrive in arbitrary interleaving; see "Total order is not
-  offered, by design" above.
-- **Cross-link dedup** — the pool dedupes by `(Realm, Publisher,
-  Seq)` over a 60-second window (configurable; see
-  `dedup_window_ms` in [CONNECTING_GUIDE.md](../shared/CONNECTING_GUIDE.md)).
-- **Cross-station gossip** — default since 4.5.0. A daemon connected
-  to station A and a daemon connected to station B see each other's
-  publishes once subscription interest and the fact itself have
-  gossiped between the stations; publisher-end-to-end signatures plus
-  `(publisher, seq)` dedup at each hop is what makes this safe past
-  one hop.
+  subscriber (see [Delivery ordering](#delivery-ordering) above):
+  out-of-order arrivals are buffered and released in `seq` order, with a
+  genuinely missing `seq` skipped after `order_timeout_ms`. The mesh
+  itself does not guarantee arrival order — a relay spreads one
+  publisher's burst across concurrent verify workers, and a receiver may
+  admit an event by more than one path — the subscriber-side `ordered`
+  buffer is what turns that into in-order delivery. Opt into `as_arrives`
+  if you'd rather see raw arrival order and reorder yourself.
+- **Cross-publisher ordering** — none, by design. Two publishers' events
+  arrive in arbitrary interleaving; see "Total order is not offered, by
+  design" above.
+- **Cross-link dedup** — the pool dedupes by `(Realm, Publisher, Seq)`
+  over a 60-second window (configurable; see `dedup_window_ms` in
+  [CONNECTING_GUIDE.md](../shared/CONNECTING_GUIDE.md)).
+- **Cross-station gossip** — default since 4.5.0. A daemon connected to
+  station A and a daemon connected to station B see each other's
+  publishes once subscription interest and the fact itself have gossiped
+  between the stations; publisher-end-to-end signatures plus
+  `(publisher, seq)` dedup at each hop is what makes this safe past one
+  hop.
 
 ---
 
