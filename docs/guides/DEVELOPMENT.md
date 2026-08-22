@@ -52,11 +52,9 @@ macula/
 │   ├── identity/, auth/         # Ed25519 keys, UCAN tokens (Rust NIFs + Erlang fallback)
 │   ├── macula_cert_system/      # Self-sovereign certs, trust store
 │   ├── macula_dist_system/      # Erlang distribution over relay mesh (3 transports)
-│   ├── macula_cluster_system/   # LAN clustering (gossip/static/libcluster) — separate from dist
-│   └── (advertise_station/, host_identity/, resolve_address/, ...)
-│                                 # Smaller single-purpose slices — one module or two each
+│   └── macula_cluster_system/   # LAN clustering (gossip/static/libcluster) — separate from dist
 ├── native/                       # Rust NIF crates (macula_quic, macula_crypto_nif, macula_ucan_nif,
-│                                 # macula_did_nif, macula_mri_nif, macula_cbor_nif, macula_tun_nif)
+│                                 # macula_did_nif, macula_mri_nif, macula_cbor_nif)
 ├── test/                         # EUnit tests, one file per module under test
 ├── include/                      # Header files (.hrl)
 ├── docs/                         # SDK guides
@@ -160,7 +158,6 @@ The SDK includes Rust NIFs for performance-critical operations. They build autom
 | `native/macula_did_nif/` | DID document operations |
 | `native/macula_mri_nif/` | MRI parsing, trie index |
 | `native/macula_cbor_nif/` | CBOR encode/decode |
-| `native/macula_tun_nif/` | TUN device I/O |
 
 ## Contributing Workflow
 

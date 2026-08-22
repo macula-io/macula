@@ -7,8 +7,8 @@
 %%% (streaming RPC's abort) can't be reused — content streams are raw
 %%% QUIC dedicated streams owned by `macula_station_link', not
 %%% `macula_stream' gen_servers. This drives Quinn against itself on
-%%% loopback (same pattern as `macula_net_phase4_2_mtu_tests') to
-%%% prove the QUIC-native alternative actually reaches the peer: a
+%%% loopback to prove the QUIC-native alternative actually reaches the
+%%% peer: a
 %%% `reset_stream/2' on one side's send half must surface as a
 %%% distinguished `{reset, ErrorCode}' reason on the other side's
 %%% `stream_closed' event — never silently collapsed into `none' the

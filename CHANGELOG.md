@@ -7,6 +7,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.0.0] - 2026-08-22
+
+### Removed — macula-net L3 substrate
+
+Deleted the sovereign-IPv6 overlay entirely: crypto-derived addressing,
+the TUN device, DHT-backed station/address resolution, the hosted-identity
+gateway, and their dedicated observability. Verified before removing —
+see rationale below, not a routine cleanup.
+
+- **Source**: `src/macula_net/`, `src/route_packet/`, `src/deliver_packet/`,
+  `src/derive_address/`, `src/manage_tun_device/`, `src/advertise_station/`,
+  `src/resolve_address/`, `src/cache_route/`, `src/host_identity/`,
+  `src/attach_identity/`, `src/host_attach_controller/` — all 10 macula-net
+  `src_dirs` entries, plus `src/observability/macula_metrics.erl`,
+  `macula_metrics_http.erl`, `macula_packet_trace.erl` (their moduledocs
+  named them macula-net-only; confirmed no other caller before deleting).
+- **`macula_root.erl`**: dropped the `metrics_children`/`metrics_http_children`
+  observability wiring — it started only those two now-removed workers.
+- **`macula_record.erl`**: removed `address_pubkey_map/2,3`,
+  `host_delegation/5,6`, `sign_host_delegation/2`, `verify_host_delegation/1`,
+  `hosted_address_map/3,4` and their storage-key clauses (type tags `0x13`,
+  `0x14` — retired, not reassigned, in case a station somewhere still holds
+  a stored record under either). **Kept `station_endpoint/2,3` and
+  `station_endpoint_key/1`/`read_station_endpoint/1` in full** — grep
+  confirmed live callers in `macula_feeder`, `macula_pusher`,
+  `macula_direct_dial`, and `macula_request`: every station publishes its
+  own `station_endpoint` automatically and direct-dial (RPC/content/
+  streaming) resolves through it. It only ever shared a directory with
+  macula-net, not macula-net's logic. Its TTL macro survives renamed
+  `?MACULA_NET_TTL_MS` → `?STATION_ENDPOINT_TTL_MS`.
+- **Native**: deleted `native/macula_tun_nif/` (Rust, `tun-rs`) and its
+  `priv/build-nifs.sh` build step. It was never in the hex package's own
+  `files` list in `macula.app.src` (now removed there too) or in
+  `rebar.config`'s `{hex, [{files, ...}]}` — the published package never
+  shipped it.
+- **`macula.app.src`**: ~~dropped `inets` from `applications`~~ — **kept.**
+  The first pass assumed `macula_metrics_http` was `inets`'s only caller
+  and dropped it; `rebar3 dialyzer` caught a live second caller before
+  release (`macula_relay_discovery:fetch_topology/1`, bootstrap topology
+  over HTTPS — unrelated to macula-net), so `inets` stays.
+- **Tests**: 25 test files covering the substrate, its phases, and its
+  e2e/bench suites.
+- **Scripts**: 11 demo/soak scripts (`lan-demo.sh`, 5×`lan_demo_*.erl`,
+  4×`netns*-demo.sh`, `soak.sh`).
+- **Docs**: one table row in `docs/guides/DEVELOPMENT.md`.
+
+### Why
+
+Dormant since 2026-05-08 (Phase 4.7) — no commits in over three months
+while the SDK shipped v3.15 through v9.13.8. Live in the code at removal
+time: `macula_net_transport_quic.erl` generated a throwaway self-signed
+cert with server-name verification explicitly skipped
+(`%% Phase 1: skip server name verification — self-signed certs.`), and
+`macula_deliver_packet.erl` still stubbed ctrl/gossip envelope handling
+(`%% ctrl/gossip handlers land in Phase 1.5+.`) — both items Phase 1's own
+changelog entry named as deferred to "Phase 4 hardening," which shipped
+observability and benchmarking instead and never closed them. No multi-hop
+routing was ever built. Never exposed through `macula.erl` (its own facade
+was `macula_net.erl`), never in the README's feature list, never in the
+hexdocs `extras` guide corpus — always a self-contained, undocumented
+side subsystem, not part of what this SDK advertises.
+
+Verified zero external dependents before removal: nothing in any other
+repo in the workspace calls `macula_net`, `macula_route_packet`,
+`macula_resolve_address`, `macula_advertise_station`, `macula_cache_route`,
+`macula_host_identity`/`macula_attach_identity`/`macula_host_attach_controller`,
+or `macula_tun*`. Two doc-comment mentions elsewhere (`macula-station`'s
+listener, `hecate-daemon`'s DNS A-record synthesizer) are descriptive, not
+calls — one of them literally documents that the listener does *not*
+depend on macula-net. `macula-testkit`'s own spike concluded macula-net's
+transport behaviour isn't reachable from the pub/sub path at all. The
+planning corpus (`macula-io/macula-architecture/plans/PLAN_MACULA_NET*.md`)
+drafted a Phase 5 (federation, deferred) and a Phase 6 (transport
+pluggability — the actual off-grid-mesh rationale: BATMAN wifi, LoRa,
+satellite as swappable transports), both `status: v1.0-draft`, never
+implemented; that corpus is untouched by this change, since it lives in a
+different repo and remains the record of what was intended.
+
+### Bump rationale
+
+MAJOR: `macula_net`, `macula_tun`, and every macula-net module were
+exported, callable public modules, even though undocumented in the
+README/guides. Removing them is a breaking change for any external
+caller, however unlikely one is, given the verification above.
+
+### Notes
+
+- `rebar3 compile` clean (`warnings_as_errors` is on — nothing left
+  referencing a removed module).
+- `rebar3 eunit`: 1783 passed, 0 regressions attributable to this change.
+  One test fails intermittently across repeated full-suite runs, but a
+  *different* unrelated test each time (station-link disconnect handling
+  on one run, seed-URL parsing on another) — a pre-existing timing flake
+  in the suite, reproduced in isolation before this change and unrelated
+  to anything touched here.
+
+---
+
+## [9.13.8] - 2026-08-21
+
+### Removed (documentation)
+
+- **`docs/BENCHMARKS.md`** — asked about directly as a follow-up to
+  9.13.7's cleanup ("what about BENCHMARKS?"). Verified before removing:
+  stale (single dated run, 2026-05-03, ~3.5 months old at removal time),
+  workstation-only and explicitly self-caveated as not representative
+  ("Re-run on production-class hardware... this MD just establishes the
+  substrate baseline isn't absurd"), scoped narrowly to one internal
+  subsystem (the macula-net L3 substrate specifically, not the SDK
+  broadly), carries a dead cross-repo link (`macula-internal`, the
+  pre-2026-07-26-rename org name, mixed with a Codeberg-style URL path on
+  a github.com host), not published to hexdocs, and not cross-referenced
+  from anywhere else in the live docs tree — an orphan file.
+
+### Notes
+
+- No `rebar.config` change needed — this file was never in `extras`.
+- `rebar3 ex_doc`/`compile` clean; repo-wide grep confirms zero remaining
+  live references outside `CHANGELOG.md`.
+
+---
+
 ## [9.13.7] - 2026-08-21
 
 ### Removed (documentation)

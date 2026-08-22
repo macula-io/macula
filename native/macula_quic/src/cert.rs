@@ -7,7 +7,7 @@
 //!
 //! Used by station listeners that materialize a cert from their
 //! existing identity keypair and hand the PEM bytes to the
-//! transport, and by `macula-net` transport bring-up.
+//! transport.
 
 use std::sync::Arc;
 

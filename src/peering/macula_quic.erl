@@ -199,8 +199,7 @@ warn_if_unverified(_, _, _, _) ->
 %% suitable for handing to `macula_quic:listen/3' via `cert' / `key'
 %% opts (after writing to disk). The cert wraps the identity's
 %% macula pubkey; no CA chain required. Used by station listeners
-%% running pubkey-anchored peering and by `macula-net' transport
-%% bring-up.
+%% running pubkey-anchored peering.
 -spec generate_self_signed_cert(Pubkey :: binary(),
                                 Privkey :: binary(),
                                 Sans :: [binary() | string()]) ->

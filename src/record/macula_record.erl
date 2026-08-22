@@ -33,15 +33,9 @@
     foundation_t3_attestation/3, foundation_t3_attestation/4,
     tombstone/3, tombstone/4,
 
-    %% macula-net Phase 2 — DHT-backed station resolution.
+    %% Station endpoint — every macula-station publishes its own, used
+    %% by direct-dial resolution across RPC/content/streaming.
     station_endpoint/2, station_endpoint/3,
-    address_pubkey_map/2, address_pubkey_map/3,
-
-    %% macula-net Phase 3 — hosted-identity gateway.
-    host_delegation/5, host_delegation/6,
-    sign_host_delegation/2,
-    verify_host_delegation/1,
-    hosted_address_map/3, hosted_address_map/4,
 
     %% Generic builder for domain-defined record types (tag 0x20-0xFF).
     %% Domain code (e.g. realm fact types) supplies its own type tag,
@@ -101,35 +95,13 @@
     foundation_realm_trust_list_opts/0,
     foundation_t3_attestation_opts/0,
     tombstone_opts/0,
-    station_endpoint_opts/0,
-    address_pubkey_map_opts/0,
-    host_delegation/0,
-    hosted_address_map_opts/0
+    station_endpoint_opts/0
 ]).
 
 -type station_endpoint_opts() :: #{
     host_advertised => [binary()],
     alpn            => binary(),
     ttl_ms          => pos_integer()
-}.
-
--type address_pubkey_map_opts() :: #{
-    ttl_ms => pos_integer()
-}.
-
-%% Daemon's signed authorisation for a station to host its address.
-%% Sit inside the `payload.delegation' map of a hosted_address_map.
--type host_delegation() :: #{
-    daemon_pubkey  := <<_:256>>,
-    host_pubkey    := <<_:256>>,
-    realm_pubkey   := <<_:256>>,
-    not_before_ms  := pos_integer(),
-    not_after_ms   := pos_integer(),
-    daemon_sig     => <<_:512>>      %% present after sign_host_delegation/2
-}.
-
--type hosted_address_map_opts() :: #{
-    ttl_ms => pos_integer()
 }.
 
 %% Domain separation prefix for record signatures (Part 6 §10.2).
@@ -153,9 +125,10 @@
 %% Direct-dial dual-trust (Slice 7c): the realm→org→server delegation chain.
 -define(TYPE_ORG_DIRECTORY,                16#15). %% realm-signed: org-name -> org-key
 -define(TYPE_PROCEDURE_DELEGATION,         16#16). %% org-signed: server may serve org
--define(TYPE_STATION_ENDPOINT,             16#12). %% macula-net Phase 2
--define(TYPE_ADDRESS_PUBKEY_MAP,           16#13). %% macula-net Phase 2 (redirect)
--define(TYPE_HOSTED_ADDRESS_MAP,           16#14). %% macula-net Phase 3 (host-signed redirect)
+-define(TYPE_STATION_ENDPOINT,             16#12).
+%% 16#13, 16#14 retired with the macula-net L3 substrate (address_pubkey_map,
+%% hosted_address_map). Do not reassign — an already-deployed station could
+%% still hold a stored record under either tag.
 -define(DOMAIN_TYPE_MIN,                   16#20).
 
 %% Domain separation for derived storage keys (Part 3 §3.3).
@@ -168,18 +141,11 @@
 -define(STORAGE_DOMAIN_ORG_DIRECTORY,    <<"org_directory">>).
 -define(STORAGE_DOMAIN_PROC_DELEGATION,  <<"procedure_delegation">>).
 -define(STORAGE_DOMAIN_STATION_ENDPOINT, <<"station_endpoint">>).
--define(STORAGE_DOMAIN_ADDRESS_PUBKEY,   <<"address_pubkey_map">>).
--define(STORAGE_DOMAIN_HOSTED_ADDRESS,   <<"hosted_address_map">>).
 
-%% Sign-domain prefix for the daemon's host-delegation signature.
-%% Disjoint from ?SIG_DOMAIN so a daemon's record signature can never
-%% be replayed as a delegation (and vice versa).
--define(HOST_DELEGATION_SIG_DOMAIN, "macula-v2-host-delegation\0").
-
-%% macula-net record TTL (Part 4 §11; PLAN_MACULA_NET §3.6). Mirrors
-%% macula_dist_discovery: short enough to drop stale stations within
-%% minutes, long enough that a one-minute refresh keeps it live.
--define(MACULA_NET_TTL_MS, 5 * 60 * 1000).
+%% station_endpoint record TTL (Part 4 §11). Mirrors macula_dist_discovery:
+%% short enough to drop stale stations within minutes, long enough that a
+%% one-minute refresh keeps it live.
+-define(STATION_ENDPOINT_TTL_MS, 5 * 60 * 1000).
 
 %% Default endorsement validity window (30 days).
 -define(DEFAULT_ENDORSEMENT_TTL_MS, 30 * 24 * 60 * 60 * 1000).
@@ -636,12 +602,15 @@ tombstone(SupersededKey, SupersededType, Reason, Opts)
     envelope(?TYPE_TOMBSTONE, SupersededKey, Payload, Opts).
 
 %%------------------------------------------------------------------
-%% Constructors — macula-net station_endpoint (PLAN_MACULA_NET §Phase2)
+%% Constructors — station_endpoint
 %%
 %% Advertises a station's QUIC endpoint so resolvers can reach it
 %% after looking up its identity pubkey. Storage key namespaces under
 %% `station_endpoint:' so it doesn't collide with node_record (which
-%% uses the bare pubkey as storage key).
+%% uses the bare pubkey as storage key). Every macula-station publishes
+%% its own automatically; direct-dial resolution (RPC/content/streaming)
+%% resolves a `procedure_advertisement'/`content_announcement''s
+%% `serving_station' to one of these.
 %%------------------------------------------------------------------
 
 -spec station_endpoint(macula_identity:pubkey(),
@@ -658,33 +627,8 @@ station_endpoint(StationPubkey, QuicPort, Opts)
     Payload0 = #{ {text, <<"quic_port">>} => QuicPort },
     P1 = with_host_list(Payload0, maps:get(host_advertised, Opts, undefined)),
     P2 = with_text(P1, <<"alpn">>, maps:get(alpn, Opts, undefined)),
-    Opts1 = maps:merge(#{ttl_ms => ?MACULA_NET_TTL_MS}, Opts),
+    Opts1 = maps:merge(#{ttl_ms => ?STATION_ENDPOINT_TTL_MS}, Opts),
     envelope(?TYPE_STATION_ENDPOINT, StationPubkey, P2, Opts1).
-
-%%------------------------------------------------------------------
-%% Constructors — macula-net address_pubkey_map (Phase 2 redirect)
-%%
-%% Maps a macula-net IPv6 address to its hosting station's pubkey.
-%% Resolvers do `find_record(sha256(addr_pubkey_map: || addr))', then
-%% use the returned `key' as the index for the station_endpoint
-%% lookup. The address-binding check
-%% (`derive_address(realm, key) == addr') is the resolver's job.
-%%------------------------------------------------------------------
-
--spec address_pubkey_map(macula_identity:pubkey(),
-                         Addr :: <<_:128>>) -> m_record().
-address_pubkey_map(StationPubkey, Addr) ->
-    address_pubkey_map(StationPubkey, Addr, #{}).
-
--spec address_pubkey_map(macula_identity:pubkey(),
-                         Addr :: <<_:128>>,
-                         address_pubkey_map_opts()) -> m_record().
-address_pubkey_map(StationPubkey, Addr, Opts)
-  when is_binary(StationPubkey), byte_size(StationPubkey) =:= 32,
-       is_binary(Addr), byte_size(Addr) =:= 16 ->
-    Payload = #{ {text, <<"addr">>} => Addr },
-    Opts1 = maps:merge(#{ttl_ms => ?MACULA_NET_TTL_MS}, Opts),
-    envelope(?TYPE_ADDRESS_PUBKEY_MAP, StationPubkey, Payload, Opts1).
 
 with_host_list(Map, undefined) -> Map;
 with_host_list(Map, []) -> Map;
@@ -694,120 +638,6 @@ with_host_list(Map, Hosts) when is_list(Hosts) ->
         [] -> Map;
         _  -> Map#{ {text, <<"host_advertised">>} => Bins }
     end.
-
-%%------------------------------------------------------------------
-%% macula-net Phase 3 — host_delegation + hosted_address_map
-%%------------------------------------------------------------------
-
-%% @doc Build an unsigned host_delegation. Pair with
-%% {@link sign_host_delegation/2}.
--spec host_delegation(DaemonPk :: <<_:256>>,
-                      HostPk   :: <<_:256>>,
-                      Realm    :: <<_:256>>,
-                      NotBeforeMs :: pos_integer(),
-                      NotAfterMs  :: pos_integer()) -> host_delegation().
-host_delegation(DaemonPk, HostPk, Realm, NotBeforeMs, NotAfterMs) ->
-    host_delegation(DaemonPk, HostPk, Realm, NotBeforeMs, NotAfterMs, #{}).
-
--spec host_delegation(<<_:256>>, <<_:256>>, <<_:256>>,
-                      pos_integer(), pos_integer(), map()) ->
-    host_delegation().
-host_delegation(DaemonPk, HostPk, Realm, NotBeforeMs, NotAfterMs, _Opts)
-  when is_binary(DaemonPk), byte_size(DaemonPk) =:= 32,
-       is_binary(HostPk),   byte_size(HostPk)   =:= 32,
-       is_binary(Realm),    byte_size(Realm)    =:= 32,
-       is_integer(NotBeforeMs), NotBeforeMs > 0,
-       is_integer(NotAfterMs),  NotAfterMs > NotBeforeMs ->
-    #{daemon_pubkey => DaemonPk,
-      host_pubkey   => HostPk,
-      realm_pubkey  => Realm,
-      not_before_ms => NotBeforeMs,
-      not_after_ms  => NotAfterMs}.
-
-%% @doc Sign the delegation with the daemon's keypair (the daemon
-%% authorises the host). Adds `daemon_sig'.
--spec sign_host_delegation(host_delegation(),
-                           macula_identity:key_pair()
-                         | macula_identity:privkey()) ->
-    host_delegation().
-sign_host_delegation(#{} = Delegation, Identity) ->
-    Bytes = canonical_unsigned_delegation(Delegation),
-    Sig = macula_identity:sign(
-            [?HOST_DELEGATION_SIG_DOMAIN, Bytes], Identity),
-    Delegation#{daemon_sig => iolist_to_binary(Sig)}.
-
-%% @doc Verify a signed delegation. Returns the delegation map
-%% on success.
--spec verify_host_delegation(host_delegation()) ->
-    {ok, host_delegation()} | {error, term()}.
-verify_host_delegation(#{daemon_sig := Sig, daemon_pubkey := DaemonPk}
-                      = Delegation) when byte_size(Sig) =:= 64,
-                                          byte_size(DaemonPk) =:= 32 ->
-    Bytes = canonical_unsigned_delegation(maps:remove(daemon_sig, Delegation)),
-    verify_delegation_sig(
-      macula_identity:verify([?HOST_DELEGATION_SIG_DOMAIN, Bytes], Sig, DaemonPk),
-      Delegation);
-verify_host_delegation(#{}) ->
-    {error, missing_signature}.
-
-verify_delegation_sig(true, Delegation)  -> {ok, Delegation};
-verify_delegation_sig(false, _)          -> {error, bad_signature}.
-
-canonical_unsigned_delegation(#{daemon_pubkey := DaemonPk,
-                                 host_pubkey  := HostPk,
-                                 realm_pubkey := Realm,
-                                 not_before_ms := NotBefore,
-                                 not_after_ms  := NotAfter}) ->
-    %% Deterministic CBOR map. macula_record_cbor handles canonical
-    %% key ordering; we use single-letter keys so the wire is small.
-    Map = #{
-        {text, <<"d">>} => DaemonPk,
-        {text, <<"h">>} => HostPk,
-        {text, <<"r">>} => Realm,
-        {text, <<"nb">>} => NotBefore,
-        {text, <<"na">>} => NotAfter
-    },
-    macula_record_cbor:encode(Map).
-
-%% @doc Build a host-signed redirect from a daemon address to its
-%% hosting station. Pair with {@link sign/2} (signed by the host's
-%% key, NOT the daemon's). Caller is responsible for embedding a
-%% delegation that's already been daemon-signed.
--spec hosted_address_map(HostPk :: <<_:256>>,
-                         DaemonAddr :: <<_:128>>,
-                         Delegation :: host_delegation()) -> m_record().
-hosted_address_map(HostPk, DaemonAddr, Delegation) ->
-    hosted_address_map(HostPk, DaemonAddr, Delegation, #{}).
-
--spec hosted_address_map(<<_:256>>, <<_:128>>,
-                         host_delegation(),
-                         hosted_address_map_opts()) -> m_record().
-hosted_address_map(HostPk, DaemonAddr,
-                   #{daemon_pubkey := DaemonPk,
-                     daemon_sig    := _} = Delegation,
-                   Opts)
-  when is_binary(HostPk),     byte_size(HostPk)     =:= 32,
-       is_binary(DaemonAddr), byte_size(DaemonAddr) =:= 16 ->
-    Payload = #{
-        {text, <<"addr">>}       => DaemonAddr,
-        {text, <<"daemon">>}     => DaemonPk,
-        {text, <<"delegation">>} => delegation_to_cbor(Delegation)
-    },
-    Opts1 = maps:merge(#{ttl_ms => ?MACULA_NET_TTL_MS}, Opts),
-    envelope(?TYPE_HOSTED_ADDRESS_MAP, HostPk, Payload, Opts1).
-
-delegation_to_cbor(#{daemon_pubkey := DaemonPk,
-                      host_pubkey   := HostPk,
-                      realm_pubkey  := Realm,
-                      not_before_ms := NB,
-                      not_after_ms  := NA,
-                      daemon_sig    := Sig}) ->
-    #{ {text, <<"d">>}  => DaemonPk,
-       {text, <<"h">>}  => HostPk,
-       {text, <<"r">>}  => Realm,
-       {text, <<"nb">>} => NB,
-       {text, <<"na">>} => NA,
-       {text, <<"s">>}  => Sig }.
 
 %%------------------------------------------------------------------
 %% Sign / verify
@@ -1523,21 +1353,6 @@ storage_key(#{type := ?TYPE_FOUNDATION_T3_ATTESTATION, payload := P}) ->
 storage_key(#{type := ?TYPE_STATION_ENDPOINT, key := StationPubkey}) ->
     crypto:hash(sha256, <<?STORAGE_DOMAIN_STATION_ENDPOINT/binary,
                           StationPubkey/binary>>);
-%% address_pubkey_map: keyed by the macula-net address itself so a
-%% bare-IPv6 query can find it without already knowing the pubkey.
-storage_key(#{type := ?TYPE_ADDRESS_PUBKEY_MAP, payload := P}) ->
-    Addr = payload_field(P, <<"addr">>),
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_ADDRESS_PUBKEY/binary,
-                          Addr/binary>>);
-%% hosted_address_map: keyed by the daemon's address. Resolvers query
-%% with the bare IPv6; type discrimination happens at lookup time so
-%% the same address can flip from station-owned (Phase 2) to hosted
-%% (Phase 3) by replacing the record. Phase 3 forbids the two records
-%% to coexist for the same address (loop risk).
-storage_key(#{type := ?TYPE_HOSTED_ADDRESS_MAP, payload := P}) ->
-    Addr = payload_field(P, <<"addr">>),
-    crypto:hash(sha256, <<?STORAGE_DOMAIN_HOSTED_ADDRESS/binary,
-                          Addr/binary>>);
 %% Domain-defined types (0x20-0xFF). When the envelope carries a
 %% `subject_id' the storage key is derived from &lt;&lt;type, signer_key,
 %% subject_id&gt;&gt; so one signer can publish many records under
