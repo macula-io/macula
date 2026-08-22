@@ -282,8 +282,18 @@ open(Module, Pool, Realm, Announce, StreamPid, StreamArgs, UserState) ->
                         stream = StreamPid, reader = Reader,
                         user = NewUserState}};
         {stop, Reason, _NewUserState} ->
+            abort_rejected_stream(Reason, StreamPid),
             {stop, Reason}
     end.
+
+%% @private A rejected open (`handle_open/2' returning `{stop, Reason, _}')
+%% never links `StreamPid', so `terminate/2' never runs on it and the peer
+%% that opened the stream would otherwise be stranded until its own `recv'
+%% timeout. Abort it explicitly so the peer gets an immediate signal
+%% instead of silence.
+abort_rejected_stream(Reason, StreamPid) ->
+    Message = iolist_to_binary(io_lib:format("~p", [Reason])),
+    try macula_stream:abort(StreamPid, ?CANCEL_CODE, Message) catch _:_ -> ok end.
 
 %% @private For `client_stream'-mode providers that export
 %% `handle_chunk/2': spawn the same linked-reader `recv/2' loop
