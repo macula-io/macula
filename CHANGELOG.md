@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.0.2] - 2026-08-23
+
+### Fixed — `macula_identity:save/2` crashed instead of returning `{error, Reason}`
+
+`save/2`'s own `-spec` promises `ok | {error, term()}`, but the implementation
+did `ok = filelib:ensure_dir(Path)` — a bare match that raised an unhandled
+`MatchError` whenever `ensure_dir` failed (unwritable parent directory,
+misconfigured path, etc.), instead of returning `{error, Reason}` like every
+other failure branch in this function already does.
+
+Found live: `macula-realm`'s `MaculaRealm.Mesh` calls `save/2` from inside a
+required, supervised `GenServer`, reasonably trusting the documented
+contract — no `try/catch` around it. The unhandled crash took the entire
+hosting OTP application down with it (repeated `init` crashes exceeded the
+supervisor's restart intensity), `Ecto.Repo` included, whenever the
+configured `mesh_identity_path` wasn't writable — reproduced with a
+non-writable default path on a box where it wasn't provisioned.
+
+- **`src/identity/macula_identity.erl`**: `save/2` now dispatches on the
+  `ensure_dir` result instead of asserting it, returning `{error, Reason}`
+  on failure like the rest of the function already does. No behavior change
+  on the success path.
+
 ## [10.0.1] - 2026-08-23
 
 ### Fixed — direct-dial advertisement publish failures were silently swallowed

@@ -132,6 +132,23 @@ saved_file_has_restrictive_permissions_test() ->
     {ok, #file_info{mode = Mode}} = file:read_file_info(Path),
     ?assertEqual(8#0600, Mode band 8#0777).
 
+%% Regression: a bare `ok = filelib:ensure_dir(Path)' match used to crash
+%% this function with an unhandled MatchError whenever ensure_dir failed,
+%% instead of returning `{error, Reason}' as this function's own -spec
+%% promises. Found live: macula-realm's MaculaRealm.Mesh calls this from
+%% a required supervised GenServer with no try/catch around it (reasonably
+%% trusting the documented contract) -- the crash took the entire hosting
+%% OTP application down with it, Ecto.Repo included, whenever the
+%% configured path wasn't writable. A regular file standing where a
+%% directory is expected reproduces the same ensure_dir failure portably,
+%% without depending on OS permissions or running as non-root.
+save_returns_error_instead_of_crashing_when_ensure_dir_fails_test() ->
+    Blocker = mktmp("not_a_directory"),
+    ok = file:write_file(Blocker, <<"not a directory">>),
+    Path = filename:join(Blocker, "identity.key"),
+    Kp = macula_identity:generate(),
+    ?assertMatch({error, _}, macula_identity:save(Path, Kp)).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------

@@ -83,8 +83,14 @@ save(Path, #{public := Pub, private := Priv})
   when byte_size(Pub) =:= 32, byte_size(Priv) =:= 32 ->
     Blob = <<?KEY_FILE_MAGIC, Pub/binary, Priv/binary>>,
     Tmp  = iolist_to_binary([Path, ".tmp"]),
-    ok = filelib:ensure_dir(Path),
-    write_and_rename(Tmp, Path, Blob).
+    ensure_dir_then_write(filelib:ensure_dir(Path), Tmp, Path, Blob).
+
+-spec ensure_dir_then_write(ok | {error, term()}, file:name_all(),
+                            file:name_all(), binary()) -> ok | {error, term()}.
+ensure_dir_then_write(ok, Tmp, Path, Blob) ->
+    write_and_rename(Tmp, Path, Blob);
+ensure_dir_then_write({error, _} = Err, _Tmp, _Path, _Blob) ->
+    Err.
 
 -spec write_and_rename(file:name_all(), file:name_all(), binary()) ->
     ok | {error, term()}.
