@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.0.1] - 2026-08-23
+
+### Fixed — direct-dial advertisement publish failures were silently swallowed
+
+`macula_streamer:advertise_direct/6,7` and `macula_response:advertise_direct/6,7`
+discarded the result of `macula_direct_dial:publish_advertisement/5` with
+`_ = ...`. The DHT publish is intentionally best-effort — a provider stays
+reachable via the pooled path even if it fails — but "best-effort" was
+implemented as "the caller never learns", not "the caller keeps working and
+finds out". A provider whose publish failed once had `advertised => false`
+forever, with nothing anywhere to say why, since nothing retries and nothing
+logs.
+
+Found live: a hecate-tube instance's `tube_mesh_providers` reached
+`advertised => true` for the first time after an unrelated identity fix, then
+direct-dial calls into it still failed with `{unresolved,
+procedure_not_advertised}`. Tracing it back showed
+`macula_direct_dial:publish_advertisement/5` returning `{error, timeout}` on
+every call, three times in a row, well after any startup race could explain
+it — and neither `advertise_direct/6,7` caller ever surfaced that.
+
+- **`src/macula_streamer.erl`**, **`src/macula_response.erl`**: both
+  `advertise_direct/7` now log a `?LOG_WARNING` when the publish fails,
+  naming the procedure and the reason, instead of discarding it. The return
+  contract is unchanged — `{ok, Sup}` still comes back even on publish
+  failure, matching the documented best-effort design; only the silent
+  discard is fixed.
+
+This does not fix a `put_record` timeout itself, if the underlying DHT
+publish is failing for some other reason — it makes that failure observable
+instead of invisible.
+
 ## [10.0.0] - 2026-08-22
 
 ### Removed — macula-net L3 substrate

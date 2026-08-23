@@ -52,6 +52,8 @@
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 -export([advertise/5, advertise/6, advertise_direct/6, advertise_direct/7,
         unadvertise/3]).
 -export([start_link/6]).
@@ -116,7 +118,11 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
 %% The DHT publish is best-effort: if it fails (e.g. no healthy link
 %% at that instant), the handler is still advertised and reachable via
 %% the ordinary pooled path — direct-dial callers just won't be able
-%% to resolve it until a later publish succeeds.
+%% to resolve it until a later publish succeeds. "Best-effort" still
+%% means the failure is logged, not silently discarded — a caller
+%% that only ever calls this once (never retries) has no other way to
+%% learn its handler is pooled-only, and "a later publish succeeds"
+%% cannot happen if nothing ever tries again.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
                        module(), term(), macula_identity:key_pair()) ->
     {ok, pid()} | {error, term()}.
@@ -137,13 +143,22 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
 advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
     case advertise(Pool, Realm, Procedure, Module, Args, Opts) of
         {ok, Sup} ->
-            _ = macula_direct_dial:publish_advertisement(Pool, Realm,
-                                                          Procedure, Identity,
-                                                          Opts),
+            log_publish_result(
+              macula_direct_dial:publish_advertisement(
+                Pool, Realm, Procedure, Identity, Opts),
+              Procedure),
             {ok, Sup};
         {error, _} = Error ->
             Error
     end.
+
+log_publish_result(ok, _Procedure) ->
+    ok;
+log_publish_result({error, Reason}, Procedure) ->
+    ?LOG_WARNING("[macula_response] direct-dial advertisement publish "
+                 "failed for ~s: ~p -- handler stays reachable via the "
+                 "pooled path only until a later publish succeeds",
+                 [Procedure, Reason]).
 
 %% @doc Stop advertising. Does not stop the factory supervisor
 %% returned by `advertise/5,6' — callers that want to tear it down
