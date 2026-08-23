@@ -55,7 +55,23 @@ response_test_() ->
       fun error_reply_is_surfaced/0,
       fun crash_propagates_to_caller/0,
       fun advertise_failure_is_surfaced/0,
-      fun advertise_direct_forwards_opts_to_advertise/0]}.
+      fun advertise_direct_forwards_opts_to_advertise/0,
+      fun reuse_sup_resends_advertise_without_a_new_supervisor/0]}.
+
+%% A station's wire-level registration for a procedure is tied to the
+%% connection that sent it, and does not survive that connection being
+%% replaced -- a periodic re-advertise is the only way to keep it
+%% current. `reuse_sup' is what makes that safe: without it, every
+%% re-advertise call starts a fresh factory supervisor, leaking one per
+%% tick forever.
+reuse_sup_resends_advertise_without_a_new_supervisor() ->
+    {ok, Sup1} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
+                                           ?MODULE, []),
+    {ok, Sup2} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
+                                           ?MODULE, [], #{reuse_sup => Sup1}),
+    ?assertEqual(Sup1, Sup2),
+    ?assertEqual(2, meck:num_calls(macula, advertise,
+                                   [pool, <<0:256>>, <<"math.add_v1">>, '_', '_'])).
 
 %% Regression test for a real bug found while auditing `macula_streamer'
 %% for the same pattern (PLAN_PUSH_UPLOAD.md Phase 6 fixed it there;

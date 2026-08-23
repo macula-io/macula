@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.1.0] - 2026-08-23
+
+### Added — `reuse_sup` opt for `macula_streamer`/`macula_response` `advertise/6`
+
+A station's wire-level registration for a procedure (its
+`macula_remote_advertise_registry` entry) is tied to whichever
+connection sent the `ADVERTISE` frame, and does not survive that
+connection being replaced (reconnect, station-side eviction, a
+newer handshake from the same identity superseding the old one).
+Nothing previously re-sent that frame after the initial advertise,
+so a long-running provider's registration could silently go stale
+while its own local `advertised => true` bookkeeping never noticed.
+
+A periodic re-advertise was the obvious fix, blocked by one thing:
+plain `advertise/5,6` starts a brand new factory supervisor on every
+call, so calling it on a timer leaked one orphaned supervisor per
+tick. `reuse_sup => Sup` (the pid the first call returned) skips
+that — re-sends the wire frame (and, via `advertise_direct/6,7`,
+re-publishes the DHT record) against the existing supervisor
+instead of starting a new one.
+
+Confirmed live: this was the last piece of a long-running
+`unknown_next_peer` investigation traced through hecate-tube,
+macula-realm, and two macula-station bugs this same day — see
+`macula` 10.0.1/10.0.2 and hecate_om 0.14.1/0.14.2's own CHANGELOG
+entries for the rest of the chain.
+
+- **`src/macula_streamer.erl`**, **`src/macula_response.erl`**:
+  `advertise/6` accepts `reuse_sup` in `Opts`; `advertise_direct/6,7`
+  forward it through (already forwarded `Opts` wholesale). Purely
+  additive — omitting `reuse_sup` keeps the exact prior behavior.
+
 ## [10.0.2] - 2026-08-23
 
 ### Fixed — `macula_identity:save/2` crashed instead of returning `{error, Reason}`

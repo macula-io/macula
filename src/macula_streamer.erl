@@ -171,11 +171,19 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
     advertise(Pool, Realm, Procedure, Module, Args, #{}).
 
 %% @doc As `advertise/5'. `Opts' may include `announce' (default
-%% `true') and `mode' (default `server_stream').
+%% `true'), `mode' (default `server_stream'), and `reuse_sup' — an
+%% existing supervisor pid (as returned by a prior `advertise/5,6'
+%% call) to re-send the wire `ADVERTISE' frame on without starting a
+%% new factory supervisor. Use this for periodic re-advertise (a
+%% station's registration for a procedure is tied to the connection
+%% that sent it, and does not survive that connection being replaced
+%% — see `advertise_direct/6,7''s own doc) — calling plain
+%% `advertise/5,6' on a timer would leak one orphaned supervisor per
+%% tick, since each call otherwise starts a fresh one.
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
                 module(), term(), map()) -> {ok, pid()} | {error, term()}.
 advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
-    {ok, Sup} = macula_streamer_sup:start_link(),
+    Sup = existing_or_new_sup(maps:get(reuse_sup, Opts, undefined)),
     Announce = maps:get(announce, Opts, true),
     Mode = maps:get(mode, Opts, server_stream),
     Handler = fun(StreamPid, StreamArgs) ->
@@ -185,6 +193,12 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
         ok -> {ok, Sup};
         {error, Reason} -> {error, Reason}
     end.
+
+existing_or_new_sup(Pid) when is_pid(Pid) ->
+    Pid;
+existing_or_new_sup(undefined) ->
+    {ok, Sup} = macula_streamer_sup:start_link(),
+    Sup.
 
 %% @doc As `advertise/5', and additionally publishes a signed
 %% `procedure_advertisement' DHT record naming this pool's connected
@@ -207,11 +221,18 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
     advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
 
 %% @doc As `advertise_direct/6', with `Opts' forwarded BOTH to
-%% `advertise/6' (so `mode'/`announce' apply here too, e.g.
+%% `advertise/6' (so `mode'/`announce'/`reuse_sup' apply here too, e.g.
 %% `mode => client_stream') and to
 %% `macula_direct_dial:publish_advertisement/5' (e.g. `cert_chain =>
 %% ChainPem', Slice 7c Direction B, managed realms only) — each side
 %% reads only the keys it recognizes, so one `Opts' map serves both.
+%% `reuse_sup' matters here specifically: a station's wire-level
+%% registration for a procedure is tied to whichever connection sent
+%% the `ADVERTISE' frame, and does not survive that connection being
+%% replaced (reconnect, station-side eviction, etc.) — a periodic
+%% re-advertise with `reuse_sup => Sup' (the pid this function
+%% returned the first time) re-sends both the wire frame and the DHT
+%% record without leaking a new supervisor per tick.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
                        module(), term(), macula_identity:key_pair(), map()) ->
     {ok, pid()} | {error, term()}.

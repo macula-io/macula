@@ -67,7 +67,23 @@ streamer_test_() ->
      [fun opens_and_publishes_lifecycle/0,
       fun send_and_close_drive_the_stream/0,
       fun dead_stream_stops_the_streamer/0,
-      fun advertise_direct_forwards_mode_to_advertise_stream/0]}.
+      fun advertise_direct_forwards_mode_to_advertise_stream/0,
+      fun reuse_sup_resends_advertise_without_a_new_supervisor/0]}.
+
+%% A station's wire-level registration for a procedure is tied to the
+%% connection that sent it, and does not survive that connection being
+%% replaced -- a periodic re-advertise is the only way to keep it
+%% current. `reuse_sup' is what makes that safe: without it, every
+%% re-advertise call starts a fresh factory supervisor, leaking one per
+%% tick forever.
+reuse_sup_resends_advertise_without_a_new_supervisor() ->
+    {ok, Sup1} = macula_streamer:advertise(pool, <<0:256>>, <<"bulk.ingest">>,
+                                           ?MODULE, self()),
+    {ok, Sup2} = macula_streamer:advertise(pool, <<0:256>>, <<"bulk.ingest">>,
+                                           ?MODULE, self(), #{reuse_sup => Sup1}),
+    ?assertEqual(Sup1, Sup2),
+    ?assertEqual(2, meck:num_calls(macula, advertise_stream,
+                                   [pool, <<0:256>>, <<"bulk.ingest">>, '_', '_'])).
 
 %% Regression test for a real bug found while building macula_upload
 %% (PLAN_PUSH_UPLOAD.md Phase 6): `advertise_direct/7' used to call
