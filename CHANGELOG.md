@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.1.1] - 2026-08-23
+
+### Fixed — `get_content/2`, `get_content_station/4,5`, and `macula_download` crashed on a malformed MCID
+
+`macula_content_transfer:is_chunked/2` dispatches on an MCID's two-byte
+codec prefix (`16#55` single-block, `16#56` chunked manifest) and has
+no catch-all clause — any other shape raised `FunctionClauseError` in
+the linked worker (and, for `get_content*`, in the calling process too,
+via `gen_server:call(..., :await, :infinity)`). Reachable with
+attacker- or corruption-supplied input on any path that decodes bytes
+into an MCID before fetching it: a content-addressed image/file proxy
+serving a `hex_string -> get_content` route, a stored reference that
+got corrupted, or a share link.
+
+`get_content/2`, `get_content_station/4,5`, and `macula_download`'s
+`start_link*/4,5` (`init/1`) now validate the MCID's shape before
+dispatching, returning `{error, invalid_mcid}` instead of crashing.
+`macula_feeder`/`put_content*` were never affected — `is_chunked/2`'s
+`put` clause dispatches on byte size, not shape.
+
 ## [10.1.0] - 2026-08-23
 
 ### Added — `reuse_sup` opt for `macula_streamer`/`macula_response` `advertise/6`

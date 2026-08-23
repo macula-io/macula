@@ -60,7 +60,33 @@ download_test_() ->
       fun failure_still_announces_completion/0,
       fun cancel_before_get_resolves_announces_cancelled/0,
       fun cancel_reaches_the_real_content_transfer_not_just_the_local_worker/0,
-      fun direct_dial_resolves_then_fetches_from_the_resolved_provider/0]}.
+      fun direct_dial_resolves_then_fetches_from_the_resolved_provider/0,
+      fun a_malformed_mcid_is_rejected_before_anything_is_spawned/0,
+      fun direct_dial_also_rejects_a_malformed_mcid/0]}.
+
+%% Regression: a share link or caller-supplied Mcid that doesn't carry
+%% either codec byte macula:put_content/2 ever mints used to reach
+%% macula_content_transfer's is_chunked/2, whose clauses assume that
+%% shape and crash the spawned worker with a FunctionClauseError. This
+%% pins the rejection at init/1, before the worker (or the started_v1
+%% announce) ever exists.
+a_malformed_mcid_is_rejected_before_anything_is_spawned() ->
+    %% `init/1' returning `{stop, Reason}' acks this process cleanly
+    %% with `{error, Reason}' AND, separately, an untrapped exit signal
+    %% follows once the failed gen_server actually terminates — trap
+    %% it like every other test here that calls start_link*/5.
+    process_flag(trap_exit, true),
+    Result = macula_download:start_link(?MODULE, dummy_pid(), <<0:256>>,
+                                        <<"not-an-mcid">>, self()),
+    ?assertEqual({error, invalid_mcid}, Result),
+    ?assertEqual([], topics()).
+
+direct_dial_also_rejects_a_malformed_mcid() ->
+    process_flag(trap_exit, true),
+    Result = macula_download:start_link_direct(?MODULE, dummy_pid(), <<0:256>>,
+                                               <<"not-an-mcid">>, self()),
+    ?assertEqual({error, invalid_mcid}, Result),
+    ?assertEqual([], topics()).
 
 single_block_get_reports_unchunked() ->
     process_flag(trap_exit, true),

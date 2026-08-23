@@ -540,13 +540,24 @@ put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
 %%
 %% A thin blocking wrapper over `macula_content_transfer:start_get/2' +
 %% `await/1' — see the note on `put_content/2'.
+%% `MCID' must carry one of the two codec bytes `put_content/2' ever
+%% mints (`16#55' single-block, `16#56' chunked manifest) — anything
+%% else can't have come from this SDK's own put path (a corrupted
+%% record, a caller's encoding bug, or hostile input on a path that
+%% turns user-controlled bytes into an MCID) and is rejected here
+%% rather than reaching `macula_content_transfer''s internal dispatch,
+%% whose `is_chunked/2' clauses assume this shape and previously
+%% crashed the calling process's linked worker on anything else.
 -spec get_content(pool(), mcid()) ->
-    {ok, binary()} | {error, not_found | term()}.
-get_content(Pool, MCID) when is_pid(Pool) ->
+    {ok, binary()} | {error, not_found | invalid_mcid | term()}.
+get_content(Pool, <<1, Codec, _/binary>> = MCID)
+  when is_pid(Pool), (Codec =:= 16#55 orelse Codec =:= 16#56) ->
     {ok, Pid} = macula_content_transfer:start_get(Pool, MCID),
     Result = macula_content_transfer:await(Pid),
     macula_content_transfer:cancel(Pid),
-    Result.
+    Result;
+get_content(Pool, _MCID) when is_pid(Pool) ->
+    {error, invalid_mcid}.
 
 %% @doc As `get_content/2', dialing `Station' directly (reusing a live
 %% link or dialing + waiting up to `TimeoutMs' for one) instead of
@@ -566,15 +577,20 @@ get_content_station(Pool, Station, MCID, TimeoutMs) ->
 %% @doc As `get_content_station/4', with a per-call TLS trust override
 %% for this dial — `verify', `expected_node_id', `pin_tls_cert' (see
 %% `call_station/8').
+%% See `get_content/2' on why a malformed `MCID' is rejected here
+%% rather than reaching `macula_content_transfer'.
 -spec get_content_station(pool(), macula_client:seed(), mcid(),
                           pos_integer(), map()) ->
-    {ok, binary()} | {error, not_found | term()}.
-get_content_station(Pool, Station, MCID, TimeoutMs, Opts) ->
+    {ok, binary()} | {error, not_found | invalid_mcid | term()}.
+get_content_station(Pool, Station, <<1, Codec, _/binary>> = MCID, TimeoutMs, Opts)
+  when Codec =:= 16#55 orelse Codec =:= 16#56 ->
     {ok, Pid} = macula_content_transfer:start_get_station(
                   Pool, Station, MCID, TimeoutMs, Opts),
     Result = macula_content_transfer:await(Pid),
     macula_content_transfer:cancel(Pid),
-    Result.
+    Result;
+get_content_station(_Pool, _Station, _MCID, _TimeoutMs, _Opts) ->
+    {error, invalid_mcid}.
 
 %% @doc Resolve every host currently announcing an MCID: hosts that
 %% stored a chunked put (`_content.put_manifest') and got

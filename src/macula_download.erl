@@ -140,8 +140,14 @@ cancel(Pid) -> gen_server:stop(Pid).
 %%% gen_server callbacks
 %%%===================================================================
 
-%% @private
-init({DialMode, Module, Pool, Realm, Mcid, Announce, InitArgs}) ->
+%% @private `Mcid' is rejected here, before `Module:init/1' runs or
+%% anything is spawned/announced, when it doesn't carry one of the two
+%% codec bytes `macula:put_content/2' ever mints — see `macula:get_content/2'
+%% for the full reasoning. This is a share/download entry point, so
+%% `Mcid' plausibly comes from outside this SDK (a share link, a
+%% caller's own storage) rather than always being freshly minted.
+init({DialMode, Module, Pool, Realm, <<1, Codec, _/binary>> = Mcid, Announce, InitArgs})
+        when Codec =:= 16#55 orelse Codec =:= 16#56 ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
@@ -156,7 +162,9 @@ init({DialMode, Module, Pool, Realm, Mcid, Announce, InitArgs}) ->
                         completed = false, user = UserState}};
         {stop, Reason} ->
             {stop, Reason}
-    end.
+    end;
+init({_DialMode, _Module, _Pool, _Realm, _Mcid, _Announce, _InitArgs}) ->
+    {stop, invalid_mcid}.
 
 %% The lightweight proxy: start the addressable transfer, report its
 %% pid back immediately (so `terminate/2' can reach it even if this
