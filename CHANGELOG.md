@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.3.0] - 2026-08-26
+
+### Added — `macula_station_link:overlay_subscribe/3`, `overlay_unsubscribe/2`, `send_overlay_frame/2`
+
+A client (daemon, or `macula-io/macula-realm`) can now actually send and receive
+overlay-protocol frames — HyParView `hyparview_*` (10.2.0), Plumtree `plumtree_*`,
+and any future frame type the built-in call/event handling doesn't recognise.
+Previously `on_frame/2`'s catch-all silently dropped every such frame; nothing in
+the SDK's client-facing API could send or subscribe to one either. SWIM and
+content-transfer frames are unaffected — they already have their own dedicated
+paths and never reach the new catch-all-turned-fan-out clause.
+
+`overlay_subscribe/3` registers interest per realm (no topic dimension, no
+wire-level SUBSCRIBE/UNSUBSCRIBE round trip — these frames already arrive
+addressed at a specific connection, not fanned out by topic like PUBLISH/EVENT)
+and delivers `{macula_overlay_frame, SubRef, Frame, Meta}` (`Meta` carries
+`sender`, the connected peer's NodeId — a frame doesn't self-identify its sender
+at the application layer) or `{macula_overlay_gone, SubRef, Reason}` on
+disconnect. `send_overlay_frame/2` is a raw transport primitive: the caller
+builds and signs the frame itself (e.g. via `hecate_overlay_proto:build_join/1`),
+this just puts it on the wire.
+
+This is the piece `macula-station`'s `hecate_overlay` admission-gating fix
+(10.2.0) needed a consumer for — the protocol logic and the endorsement wire
+format existed, but nothing could actually drive a HyParView session from an
+Elixir client until now.
+
 ## [10.2.0] - 2026-08-26
 
 ### Added — HyParView `hyparview_join`/`hyparview_forward_join`/`hyparview_neighbor` can carry a `record`

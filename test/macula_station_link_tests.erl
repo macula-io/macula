@@ -1031,6 +1031,200 @@ disconnect_notifies_subscribers_test_() ->
      end}.
 
 %%------------------------------------------------------------------
+%% Overlay-frame transport (overlay_subscribe/3, overlay_unsubscribe/2,
+%% send_overlay_frame/2) — HyParView/Plumtree/future frame types the
+%% built-in call/event handling doesn't recognise.
+%%------------------------------------------------------------------
+
+overlay_subscribe_delivers_matching_realm_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => macula_identity:generate()
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
+         Joiner = macula_identity:public(macula_identity:generate()),
+         Frame = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
+         Pid ! {macula_peering, frame, FakePeer, Frame},
+         receive
+             {macula_overlay_frame, R, F, Meta} ->
+                 ?assertEqual(SubRef, R),
+                 ?assertEqual(Frame, F),
+                 ?assertEqual(PeerNodeId, maps:get(sender, Meta))
+         after 2_000 -> erlang:error(no_overlay_frame_delivered)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+overlay_frame_in_other_realm_not_delivered_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => macula_identity:generate()
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         {ok, _SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
+         OtherRealm = crypto:strong_rand_bytes(32),
+         Joiner = macula_identity:public(macula_identity:generate()),
+         Frame = macula_frame:hyparview_join(#{realm => OtherRealm, new_member => Joiner}),
+         Pid ! {macula_peering, frame, FakePeer, Frame},
+         receive
+             {macula_overlay_frame, _, _, _} -> erlang:error(unexpected_delivery)
+         after 500 -> ok
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+send_overlay_frame_sends_on_wire_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => macula_identity:generate()
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Joiner = macula_identity:public(macula_identity:generate()),
+         Frame = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
+         ?assertEqual(ok, macula_station_link:send_overlay_frame(Pid, Frame)),
+         %% Other background traffic (e.g. a DHT call) may cast a
+         %% send_frame to FakePeer first -- skip anything that isn't
+         %% our own hyparview_join.
+         ?assert(receive_frame_cast(Frame, 10)),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+receive_frame_cast(_Frame, 0) -> false;
+receive_frame_cast(Frame, N) ->
+    receive
+        {'$gen_cast', {send_frame, F}} when F =:= Frame -> true;
+        {'$gen_cast', {send_frame, _Other}} -> receive_frame_cast(Frame, N - 1)
+    after 1_000 -> false
+    end.
+
+send_overlay_frame_not_connected_returns_error_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => macula_identity:generate()
+         }),
+         %% Force peer_pid = undefined explicitly rather than relying
+         %% on the real (127.0.0.1:1, nothing listening) dial staying
+         %% pending for the length of this test — under a full-suite
+         %% run sharing the same OTP node with hundreds of other
+         %% QUIC-touching tests, that assumption is not always
+         %% reliable even though the target never legitimately
+         %% accepts a connection.
+         _ = sys:replace_state(Pid, fun(S) ->
+             setelement(?PEER_PID_INDEX, S, undefined)
+         end),
+         Joiner = macula_identity:public(macula_identity:generate()),
+         Frame = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
+         ?assertEqual({error, not_connected},
+                      macula_station_link:send_overlay_frame(Pid, Frame)),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+overlay_subscriber_down_drops_subscription_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => macula_identity:generate()
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Test = self(),
+         Sub = spawn(fun() ->
+             {ok, _R} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
+             Test ! sub_started,
+             receive stop -> ok end
+         end),
+         receive sub_started -> ok
+         after 1_000 -> erlang:error(subscriber_did_not_subscribe)
+         end,
+         Mon = monitor(process, Sub),
+         Sub ! stop,
+         receive {'DOWN', Mon, process, Sub, _} -> ok
+         after 1_000 -> erlang:error(subscriber_did_not_die)
+         end,
+         %% Give the link's own monitor a moment to process the DOWN
+         %% before asserting the subscription is gone.
+         timer:sleep(100),
+         Joiner = macula_identity:public(macula_identity:generate()),
+         Frame = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
+         Pid ! {macula_peering, frame, FakePeer, Frame},
+         receive
+             {macula_overlay_frame, _, _, _} -> erlang:error(delivered_after_subscriber_died)
+         after 500 -> ok
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+disconnect_notifies_overlay_subscribers_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => macula_identity:generate()
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
+         Pid ! {macula_peering, disconnected, FakePeer, peer_closed},
+         receive
+             {macula_overlay_gone, R, Reason} ->
+                 ?assertEqual(SubRef, R),
+                 ?assertMatch({disconnected, peer_closed}, Reason)
+         after 2_000 -> erlang:error(no_overlay_gone)
+         end,
+         ok
+     end}.
+
+%%------------------------------------------------------------------
 %% subscribe/4 before connect — frame drains on connected event
 %%------------------------------------------------------------------
 

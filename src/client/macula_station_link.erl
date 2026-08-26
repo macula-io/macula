@@ -96,6 +96,13 @@
     advertise/4,
     advertise/5,
     unadvertise/3,
+    %% Overlay-protocol frame transport (HyParView, Plumtree, and any
+    %% future frame type the built-in call/event handling doesn't
+    %% recognise) — not for general RPC/pubsub use, see the moduledoc
+    %% on `overlay_subscribe/3'.
+    overlay_subscribe/3,
+    overlay_unsubscribe/2,
+    send_overlay_frame/2,
     %% Streaming RPC (SDK 3.17+, Part 6 §5.6)
     call_stream/5,
     advertise_stream/5,
@@ -112,7 +119,7 @@
     abort_content_stream/4
 ]).
 
--export_type([handler/0, stream_handler/0]).
+-export_type([handler/0, stream_handler/0, overlay_subscription/0]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -205,6 +212,15 @@
     %% (realm, topic) without scanning the whole subscriptions map.
     subscriptions = #{} :: #{reference() => subscription()},
     topic_index   = #{} :: #{{<<_:256>>, binary()} => sets:set(reference())},
+    %% Overlay-frame subscriptions (HyParView, Plumtree, and future
+    %% overlay-protocol frame types the built-in call/event/result/
+    %% error handling doesn't recognise) — see `overlay_subscribe/3'.
+    %% Simpler than the topic case: no wire-level SUBSCRIBE/UNSUBSCRIBE
+    %% round trip, since these frames are already addressed at this
+    %% specific connection by the station, not fanned out by topic
+    %% interest. Keyed by realm only, no topic dimension.
+    overlay_subscriptions = #{} :: #{reference() => overlay_subscription()},
+    overlay_realm_index   = #{} :: #{<<_:256>> => sets:set(reference())},
     %% Monotonic per-link publish sequence (stamps outbound PUBLISH
     %% frames). Resets on link respawn — pool dedup absorbs the gap.
     publish_seq = 0 :: non_neg_integer(),
@@ -317,6 +333,10 @@
                          Topic     :: binary(),
                          Subscriber :: pid(),
                          Mon        :: reference()}.
+
+-type overlay_subscription() :: {Realm      :: <<_:256>>,
+                                 Subscriber :: pid(),
+                                 Mon        :: reference()}.
 
 -type handler() :: fun((term()) -> term())
                  | {module(), atom()}.
@@ -630,6 +650,66 @@ unadvertise(Pid, Realm, Procedure)
        is_binary(Procedure) ->
     gen_server:call(Pid, {unadvertise, Realm, Procedure}, 5_000).
 
+%% @doc Subscribe to overlay-protocol frames for `Realm' — any frame
+%% type the built-in call/event/result/error handling above doesn't
+%% recognise (today: HyParView `hyparview_*', Plumtree `plumtree_*';
+%% SWIM and content-transfer frames have their own dedicated paths and
+%% never reach this). Every such frame whose `realm' field matches
+%% `Realm' is delivered to `Subscriber'.
+%%
+%% Unlike `subscribe/4' there is no wire-level SUBSCRIBE/UNSUBSCRIBE
+%% round trip: these frames already arrive addressed at this specific
+%% connection by the station (a direct peer-to-peer protocol, not a
+%% topic fan-out), so registration is purely local bookkeeping and
+%% takes effect immediately regardless of connection state.
+%%
+%% Subscriber receives one of:
+%%
+%% <ul>
+%%   <li>`{macula_overlay_frame, SubRef, Frame, Meta}' — every time a
+%%       matching frame arrives. `Frame' is the fully decoded frame
+%%       map (including a `record' field already inflated to a
+%%       `macula_record:m_record()' if the frame carried one — see
+%%       `macula_frame:hyparview_join_spec()'). `Meta' is a map with
+%%       a `sender' field: the connected peer's NodeId, since a frame
+%%       does not self-identify its sender at the application layer.</li>
+%%   <li>`{macula_overlay_gone, SubRef, Reason}' — once, when the
+%%       connection drops or the client stops. The subscription is
+%%       cleared on the same transition.</li>
+%% </ul>
+%%
+%% The client monitors `Subscriber'; if it dies the subscription is
+%% torn down.
+-spec overlay_subscribe(pid(), <<_:256>>, pid()) ->
+    {ok, reference()} | {error, term()}.
+overlay_subscribe(Client, Realm, Subscriber)
+  when is_pid(Client),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_pid(Subscriber) ->
+    gen_server:call(Client, {overlay_subscribe, Realm, Subscriber}, 5_000).
+
+%% @doc Drop an overlay-frame subscription. Idempotent: unknown
+%% `SubRef' is a no-op. Always returns `ok'.
+-spec overlay_unsubscribe(pid(), reference()) -> ok.
+overlay_unsubscribe(Client, SubRef)
+  when is_pid(Client), is_reference(SubRef) ->
+    gen_server:call(Client, {overlay_unsubscribe, SubRef}, 5_000).
+
+%% @doc Send a pre-built, pre-signed overlay-protocol frame directly
+%% over this link's peering connection. The caller is responsible for
+%% constructing and signing `Frame' (e.g. via `hecate_overlay_proto:
+%% build_join/1' or `hecate_realm_join:build_join/4') — this is a raw
+%% transport primitive, not a builder. `{error, not_connected}' if the
+%% peering handshake hasn't completed; unlike `subscribe'/`advertise'
+%% there is no drain-on-reconnect queue, since a caller building
+%% protocol-level frames (like a HyParView JOIN) needs to know
+%% immediately whether it actually went out, not have it silently
+%% queued behind a reconnect that may invalidate the frame's contents
+%% (e.g. a JOIN naming a peer that was only reachable via the old link).
+-spec send_overlay_frame(pid(), macula_frame:frame()) -> ok | {error, term()}.
+send_overlay_frame(Client, Frame) when is_pid(Client), is_map(Frame) ->
+    gen_server:call(Client, {send_overlay_frame, Frame}, 5_000).
+
 %% @doc Open a streaming RPC on this link. Returns `{ok, StreamPid}'
 %% bound to the caller; the caller drives the stream via
 %% `macula_stream:send/2,3', `recv/1,2', `close_send/1', `close/1',
@@ -900,6 +980,29 @@ handle_call({unadvertise, Realm, Proc}, _From,
                    policies   = maps:remove({Realm, Proc}, Pols)},
     maybe_send_unadvertise(Realm, Proc, S),
     {reply, ok, NewS};
+
+%%-- Overlay-protocol frame transport --------------------------------
+
+handle_call({overlay_subscribe, Realm, Subscriber}, _From,
+            #state{overlay_subscriptions = Subs, overlay_realm_index = Idx} = S) ->
+    SubRef  = make_ref(),
+    Mon     = erlang:monitor(process, Subscriber),
+    NewSubs = Subs#{SubRef => {Realm, Subscriber, Mon}},
+    NewIdx  = add_realm_sub(Realm, SubRef, Idx),
+    {reply, {ok, SubRef}, S#state{overlay_subscriptions = NewSubs,
+                                  overlay_realm_index   = NewIdx}};
+
+handle_call({overlay_unsubscribe, SubRef}, _From, S) ->
+    {reply, ok, on_overlay_unsubscribe(SubRef, S)};
+
+handle_call({send_overlay_frame, _Frame}, _From,
+            #state{peer_pid = undefined} = S) ->
+    {reply, {error, not_connected}, S};
+handle_call({send_overlay_frame, Frame}, _From, #state{peer_pid = Pid} = S) ->
+    Result = try macula_peering:send_frame(Pid, Frame)
+             catch C:R -> {error, {C, R}}
+             end,
+    {reply, Result, S};
 
 %%-- Streaming RPC ---------------------------------------------------
 
@@ -1233,9 +1336,15 @@ on_frame(#{frame_type := call} = Frame, S) ->
 %% `on_frame/2' decodes. A stream frame reaching this function is a
 %% protocol violation and falls through to the catch-all below.
 %%
-%% HyParView / Plumtree / SWIM / content frames pass through here.
-%% This client cares only about call/result/error and event; the
-%% rest is for dedicated overlay modules.
+%% SWIM and content-transfer frames have their own dedicated paths
+%% (content: `dispatch_dedicated_frame/3'; SWIM: station-to-station,
+%% never reaches a daemon-side client connection at all) and never
+%% land here. HyParView / Plumtree frames DO land here — fan out to
+%% whoever called `overlay_subscribe/3' for the frame's realm, if
+%% anyone. A frame with no `realm' field, or no matching subscriber,
+%% is dropped, same as every overlay frame was before this existed.
+on_frame(#{realm := Realm} = Frame, S) ->
+    deliver_overlay_frame(Realm, Frame, S);
 on_frame(_Frame, S) ->
     S.
 
@@ -1327,6 +1436,7 @@ fail_content_pending({{From, TRef}, NewCP}, _CP, Reason) ->
     NewCP.
 
 fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
+                                overlay_subscriptions = OverlaySubs,
                                 client_streams = CS,
                                 server_streams = SS,
                                 content_pending = ContentP} = S) ->
@@ -1342,6 +1452,10 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
         erlang:demonitor(Mon, [flush]),
         Subscriber ! {macula_event_gone, SubRef, Reason}
     end, Subs),
+    maps:foreach(fun(SubRef, {_Realm, Subscriber, Mon}) ->
+        erlang:demonitor(Mon, [flush]),
+        Subscriber ! {macula_overlay_gone, SubRef, Reason}
+    end, OverlaySubs),
     %% Abort every open stream with a `disconnected' STREAM_ERROR, and
     %% close its dedicated QUIC stream — the peering connection this
     %% stream belonged to is already gone or going, but the stream
@@ -1364,6 +1478,7 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     maps:foreach(fun(Stream, _Buf) -> close_dedicated_stream(Stream) end,
                 S#state.content_stream_bufs),
     S#state{pending = #{}, subscriptions = #{}, topic_index = #{},
+            overlay_subscriptions = #{}, overlay_realm_index = #{},
             client_streams = #{}, server_streams = #{}, stream_bufs = #{},
             content_pending = #{}, content_stream_bufs = #{}}.
 
@@ -1558,13 +1673,76 @@ drain_pending_subscribes(#state{subscriptions = Subs} = S) ->
 
 %% Subscriber pid died — find its SubRef(s) by monitor ref, drop
 %% them. A pid can only have one subscription via one monitor, but
-%% scan defensively.
+%% scan defensively. Also sweeps overlay-frame subscriptions sharing
+%% the same monitor namespace — a pid that called both `subscribe/4'
+%% and `overlay_subscribe/3' gets torn down on both sides by one DOWN.
 on_subscriber_down(Mon, #state{subscriptions = Subs} = S) ->
     Found = maps:fold(fun
         (SubRef, {_R, _T, _P, M}, Acc) when M =:= Mon -> [SubRef | Acc];
         (_, _, Acc) -> Acc
     end, [], Subs),
-    lists:foldl(fun on_unsubscribe/2, S, Found).
+    S1 = lists:foldl(fun on_unsubscribe/2, S, Found),
+    on_overlay_subscriber_down(Mon, S1).
+
+on_overlay_subscriber_down(Mon, #state{overlay_subscriptions = Subs} = S) ->
+    Found = maps:fold(fun
+        (SubRef, {_R, _P, M}, Acc) when M =:= Mon -> [SubRef | Acc];
+        (_, _, Acc) -> Acc
+    end, [], Subs),
+    lists:foldl(fun on_overlay_unsubscribe/2, S, Found).
+
+%%-------------------------------------------------------------------
+%% Overlay-frame subscription helpers (mirrors the topic-subscription
+%% helpers above; no wire-level SUBSCRIBE/UNSUBSCRIBE, see
+%% `overlay_subscribe/3''s own moduledoc for why).
+%%-------------------------------------------------------------------
+
+add_realm_sub(Realm, SubRef, Idx) ->
+    Set = maps:get(Realm, Idx, sets:new()),
+    Idx#{Realm => sets:add_element(SubRef, Set)}.
+
+del_realm_sub(Realm, SubRef, Idx) ->
+    on_realm_set_after_del(Realm, sets:del_element(SubRef, maps:get(Realm, Idx, sets:new())), Idx).
+
+on_realm_set_after_del(Realm, Set, Idx) ->
+    on_realm_empty_set(sets:is_empty(Set), Realm, Set, Idx).
+
+on_realm_empty_set(true,  Realm, _Set, Idx) -> maps:remove(Realm, Idx);
+on_realm_empty_set(false, Realm,  Set, Idx) -> Idx#{Realm => Set}.
+
+%% Drop a single overlay-frame subscription. Idempotent: unknown
+%% SubRef is a no-op.
+on_overlay_unsubscribe(SubRef, #state{overlay_subscriptions = Subs,
+                                      overlay_realm_index   = Idx} = S) ->
+    on_overlay_unsubscribe_take(maps:take(SubRef, Subs), SubRef, Idx, S).
+
+on_overlay_unsubscribe_take(error, _SubRef, _Idx, S) ->
+    S;
+on_overlay_unsubscribe_take({{Realm, _Subscriber, Mon}, NewSubs}, SubRef, Idx, S) ->
+    erlang:demonitor(Mon, [flush]),
+    NewIdx = del_realm_sub(Realm, SubRef, Idx),
+    S#state{overlay_subscriptions = NewSubs, overlay_realm_index = NewIdx}.
+
+%% Fan an overlay frame out to every subscriber for its realm.
+deliver_overlay_frame(Realm, Frame, #state{overlay_realm_index = Idx} = S) ->
+    deliver_overlay_frame_to(maps:find(Realm, Idx), Frame, S),
+    S.
+
+deliver_overlay_frame_to(error, _Frame, _S) ->
+    ok;
+deliver_overlay_frame_to({ok, Set}, Frame,
+                         #state{overlay_subscriptions = Subs,
+                                peer_node_id           = PeerNodeId}) ->
+    Meta = #{sender => PeerNodeId},
+    sets:fold(fun(SubRef, _) ->
+        fan_overlay_frame(maps:find(SubRef, Subs), SubRef, Frame, Meta)
+    end, ok, Set).
+
+fan_overlay_frame(error, _SubRef, _Frame, _Meta) ->
+    ok;
+fan_overlay_frame({ok, {_Realm, Subscriber, _Mon}}, SubRef, Frame, Meta) ->
+    Subscriber ! {macula_overlay_frame, SubRef, Frame, Meta},
+    ok.
 
 %% Pubsub Phase 2 — verify the publisher-end-to-end signature on an
 %% inbound EVENT if it carries one (a relay propagates `publisher_sig'
