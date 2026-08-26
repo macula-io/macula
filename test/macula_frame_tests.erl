@@ -825,6 +825,54 @@ hyparview_forward_join_wire_roundtrip_test() ->
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D).
 
+%% The `record' field (realm-admin-signed endorsement) must survive a
+%% full wire round trip as a decoded map, not an opaque binary blob --
+%% this is exactly the gap that shipped broken (the endorsement was
+%% computed and then discarded, never attached to the frame at all).
+hyparview_join_carries_endorsement_through_wire_roundtrip_test() ->
+    RealmKp = macula_identity:generate(),
+    RealmId = macula_identity:public(RealmKp),
+    Member  = crypto:strong_rand_bytes(32),
+    Endorsement = macula_record:sign(
+        macula_record:realm_member_endorsement(RealmId, #{
+            realm => RealmId, member_node => Member,
+            roles => [<<"member">>]}),
+        RealmKp),
+    LinkKp = macula_identity:generate(),
+    F = macula_frame:sign(macula_frame:hyparview_join(#{
+            realm => RealmId, new_member => Member,
+            record => Endorsement}), LinkKp),
+    ?assertEqual(Endorsement, maps:get(record, F)),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertEqual(Endorsement, maps:get(record, D)),
+    ?assertMatch({ok, _}, macula_record:verify(maps:get(record, D))).
+
+hyparview_join_without_endorsement_omits_record_field_test() ->
+    F = macula_frame:hyparview_join(#{
+            realm => crypto:strong_rand_bytes(32),
+            new_member => crypto:strong_rand_bytes(32)}),
+    ?assertNot(maps:is_key(record, F)).
+
+%% NEIGHBOR can arrive unsolicited (shuffle-driven promotion) and
+%% results in active-view admission the same as JOIN/FORWARD_JOIN --
+%% it needs the same endorsement-carrying capability, not just a
+%% frame shaped like an ack.
+hyparview_neighbor_carries_endorsement_through_wire_roundtrip_test() ->
+    RealmKp = macula_identity:generate(),
+    RealmId = macula_identity:public(RealmKp),
+    Sender  = crypto:strong_rand_bytes(32),
+    Endorsement = macula_record:sign(
+        macula_record:realm_member_endorsement(RealmId, #{
+            realm => RealmId, member_node => Sender,
+            roles => [<<"member">>]}),
+        RealmKp),
+    F = macula_frame:hyparview_neighbor(#{
+            realm => RealmId, priority => high, record => Endorsement}),
+    ?assertEqual(Endorsement, maps:get(record, F)),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(Endorsement, maps:get(record, D)).
+
 hyparview_neighbor_wire_roundtrip_test() ->
     Kp = macula_identity:generate(),
     F = macula_frame:sign(macula_frame:hyparview_neighbor(#{

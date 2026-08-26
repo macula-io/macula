@@ -346,7 +346,16 @@
 
 -type hyparview_join_spec() :: #{
     realm      := id256(),
-    new_member := macula_identity:pubkey()
+    new_member := macula_identity:pubkey(),
+    %% Signed `realm_member_endorsement' macula_record (see
+    %% hecate_overlay's hecate_realm_join module), proving the realm's
+    %% admin authorised `new_member' to join. Optional at the type
+    %% level since not every realm may require admission-gated JOIN,
+    %% but any realm that does MUST reject a JOIN missing it. Reuses
+    %% the generic `record'-field encode/decode machinery
+    %% (`prepare_records/1'/`restore_records/1') -- pass the decoded
+    %% macula_record map here, not a pre-encoded binary.
+    record     => macula_record:m_record()
 }.
 
 -type hyparview_forward_join_spec() :: #{
@@ -354,12 +363,26 @@
     new_member := macula_identity:pubkey(),
     ttl        := non_neg_integer(),
     arwl       := non_neg_integer(),
-    prwl       := non_neg_integer()
+    prwl       := non_neg_integer(),
+    %% Carries the ORIGINAL JOIN's endorsement through the forward
+    %% chain, so every peer that admits `new_member' off a
+    %% FORWARD_JOIN verifies the same admission proof the original
+    %% JOIN carried -- trust is never transitively assumed from
+    %% "my neighbour forwarded this to me." See `record' above.
+    record     => macula_record:m_record()
 }.
 
 -type hyparview_neighbor_spec() :: #{
     realm    := id256(),
-    priority := neighbor_priority()
+    priority := neighbor_priority(),
+    %% The SENDER's own signed `realm_member_endorsement', so the
+    %% receiver can verify admission the same way it would for a
+    %% fresh JOIN -- a NEIGHBOR is an admission event too (it can
+    %% arrive unsolicited, e.g. shuffle-driven promotion, not only as
+    %% an ack to a JOIN the receiver itself initiated), so trust is
+    %% never assumed just because a frame is shaped like an ack. See
+    %% `record' on `hyparview_join_spec()'.
+    record   => macula_record:m_record()
 }.
 
 -type hyparview_disconnect_spec() :: #{
@@ -966,29 +989,36 @@ validate_optional_hop(B) when is_binary(B), byte_size(B) =:= 32 -> ok.
 %%------------------------------------------------------------------
 
 -spec hyparview_join(hyparview_join_spec()) -> frame().
-hyparview_join(#{realm := R, new_member := M})
+hyparview_join(#{realm := R, new_member := M} = Spec)
   when is_binary(R), byte_size(R) =:= 32,
        is_binary(M), byte_size(M) =:= 32 ->
-    (base(hyparview_join, 0))#{realm => R, new_member => M}.
+    with_endorsement(Spec, (base(hyparview_join, 0))#{realm => R, new_member => M}).
 
 -spec hyparview_forward_join(hyparview_forward_join_spec()) -> frame().
 hyparview_forward_join(#{realm := R, new_member := M,
-                         ttl := Ttl, arwl := A, prwl := P})
+                         ttl := Ttl, arwl := A, prwl := P} = Spec)
   when is_binary(R), byte_size(R) =:= 32,
        is_binary(M), byte_size(M) =:= 32,
        is_integer(Ttl), Ttl >= 0,
        is_integer(A),   A >= 0,
        is_integer(P),   P >= 0 ->
-    (base(hyparview_forward_join, 0))#{
+    with_endorsement(Spec, (base(hyparview_forward_join, 0))#{
         realm => R, new_member => M,
         ttl => Ttl, arwl => A, prwl => P
-    }.
+    }).
+
+%% `record' is optional at the spec level (see the type's own doc) --
+%% only set it on the outgoing frame when the caller actually supplied
+%% one, so a realm that doesn't require admission-gated JOIN isn't
+%% forced to carry an empty/dummy record.
+with_endorsement(#{record := R}, Frame) when is_map(R) -> Frame#{record => R};
+with_endorsement(_Spec, Frame) -> Frame.
 
 -spec hyparview_neighbor(hyparview_neighbor_spec()) -> frame().
-hyparview_neighbor(#{realm := R, priority := P})
+hyparview_neighbor(#{realm := R, priority := P} = Spec)
   when is_binary(R), byte_size(R) =:= 32,
        (P =:= high orelse P =:= low) ->
-    (base(hyparview_neighbor, 0))#{realm => R, priority => P}.
+    with_endorsement(Spec, (base(hyparview_neighbor, 0))#{realm => R, priority => P}).
 
 -spec hyparview_disconnect(hyparview_disconnect_spec()) -> frame().
 hyparview_disconnect(#{realm := R})

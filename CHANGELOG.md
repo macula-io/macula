@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.2.0] - 2026-08-26
+
+### Added — HyParView `hyparview_join`/`hyparview_forward_join`/`hyparview_neighbor` can carry a `record`
+
+The three HyParView admission-relevant frames (Part 3 §7.1, shipped wire-format-only
+in the 5.x line) gain an optional `record` field carrying a `macula_record:m_record()`
+— e.g. a signed `realm_member_endorsement` (Part 6 §9.6) proving the frame's subject
+is authorised to join a realm's overlay. Reuses the existing generic `prepare_records/1`/
+`restore_records/1` encode/decode machinery already used by `store`/`replicate` (same
+field name, same automatic CBOR handling — no manual encode/decode needed by callers).
+Backward compatible: omitting `record` produces the exact same frame shape as before.
+
+This closes a real gap found downstream in `macula-io/macula-station`'s
+`hecate_overlay` app: `hecate_realm_join:build_join/4` computed a signed endorsement
+and then discarded it (no frame field existed to attach it to), so admission gating
+could never actually verify anything. `hyparview_neighbor` needed the same field for
+a separate reason — it can arrive unsolicited (shuffle-driven promotion), not only as
+an ack to a JOIN the receiver itself initiated, so it's an admission event in its own
+right and needed to be able to prove membership independently.
+
 ## [10.1.1] - 2026-08-23
 
 ### Fixed — `get_content/2`, `get_content_station/4,5`, and `macula_download` crashed on a malformed MCID
