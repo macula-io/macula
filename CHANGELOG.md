@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.5.0] - 2026-08-26
+
+### Added — `overlay_relay` frame + `macula_station_link:send_overlay_frame/3`
+
+Point-to-point overlay-frame delivery by NodeId (Layer 2 plan Phase 3.5).
+`send_overlay_frame/2` (10.3.0) delivers only to whoever is on the other
+end of one specific connection — correct for a direct station-to-station
+link, but a realm member reachable through a relay had no way to actually
+address a specific third-party peer. `send_overlay_frame/3(Client,
+TargetPeer, Frame)` wraps `Frame` in a new `overlay_relay` envelope frame
+(`peer` + opaque encoded `payload`) that a station forwards to whichever of
+its *other* connections authenticates as `TargetPeer` — see
+`macula-station`'s own changelog/commit for the relay side. `{error,
+not_connected}` if the peering handshake to the station itself hasn't
+completed; silently dropped by the station if `TargetPeer` isn't currently
+connected there (HyParView's own shuffle/retry is the recovery path,
+same as it already tolerates ordinary packet loss). `send_overlay_frame/2`
+is unchanged.
+
+### Added — `macula_record:read_node_record/1`
+
+Mirrors the existing `read_station_endpoint/1` — turns a decoded
+`node_record` payload back into a typed map (`node_id`, `station_id`,
+`realms`, `capabilities`, `kind`). The one reader that was missing;
+every other record type already had one.
+
+### Fixed — `overlay_subscribe/3`'s `Meta.sender` was the wrong identity for a relayed frame
+
+Delivering a frame that arrived via the new `overlay_relay` envelope now
+stamps `Meta.sender` from the envelope's own `peer` field (the true
+logical HyParView peer that originated it) instead of
+`state.peer_node_id` (this connection's own directly-connected peer —
+always a station's identity once a relay hop exists, never the actual
+third-party sender). A real bug found while designing point-to-point
+relay, not shipped before this version had a consumer that could
+distinguish the two.
+
 ## [10.4.0] - 2026-08-26
 
 ### Added — HyParView + Plumtree overlay, absorbed from macula-hyparview/macula-plumtree

@@ -103,6 +103,7 @@
     overlay_subscribe/3,
     overlay_unsubscribe/2,
     send_overlay_frame/2,
+    send_overlay_frame/3,
     %% Streaming RPC (SDK 3.17+, Part 6 §5.6)
     call_stream/5,
     advertise_stream/5,
@@ -697,18 +698,49 @@ overlay_unsubscribe(Client, SubRef)
 
 %% @doc Send a pre-built, pre-signed overlay-protocol frame directly
 %% over this link's peering connection. The caller is responsible for
-%% constructing and signing `Frame' (e.g. via `hecate_overlay_proto:
-%% build_join/1' or `hecate_realm_join:build_join/4') — this is a raw
-%% transport primitive, not a builder. `{error, not_connected}' if the
-%% peering handshake hasn't completed; unlike `subscribe'/`advertise'
-%% there is no drain-on-reconnect queue, since a caller building
-%% protocol-level frames (like a HyParView JOIN) needs to know
+%% constructing and signing `Frame' (e.g. via `macula_hyparview_proto:
+%% build_join/1' or `macula_hyparview_endorsement:build_join/4') — this
+%% is a raw transport primitive, not a builder. `{error, not_connected}'
+%% if the peering handshake hasn't completed; unlike `subscribe'/
+%% `advertise' there is no drain-on-reconnect queue, since a caller
+%% building protocol-level frames (like a HyParView JOIN) needs to know
 %% immediately whether it actually went out, not have it silently
 %% queued behind a reconnect that may invalidate the frame's contents
 %% (e.g. a JOIN naming a peer that was only reachable via the old link).
+%%
+%% Delivers to whoever is on the OTHER END of this specific connection —
+%% typically only correct when that's the intended logical peer itself
+%% (a direct station-to-station link, or a connection already scoped to
+%% one target some other way). To reach a specific third-party peer by
+%% its own NodeId through a relay, use `send_overlay_frame/3' instead.
 -spec send_overlay_frame(pid(), macula_frame:frame()) -> ok | {error, term()}.
 send_overlay_frame(Client, Frame) when is_pid(Client), is_map(Frame) ->
     gen_server:call(Client, {send_overlay_frame, Frame}, 5_000).
+
+%% @doc Send a pre-built, pre-signed overlay-protocol frame to a specific
+%% `TargetPeer' (that peer's own 32-byte Ed25519 pubkey), relayed through
+%% whatever station this connection is dialed into. Wraps `Frame' in an
+%% `overlay_relay' envelope (Part 6 §9.x), signed with THIS connection's
+%% own identity — the station verifies that signature against the
+%% authenticated NodeId of whoever sent it before relaying, so a claimed
+%% `TargetPeer' can never be spoofed by an unrelated connection — and
+%% forwards it to whichever of its OTHER connections authenticates as
+%% `TargetPeer'. See `macula_station_peer_observer:dispatch_overlay/5' on
+%% the relay side. `Frame' itself is a separate, independent signature —
+%% the caller's own responsibility, same as `send_overlay_frame/2' — this
+%% function only signs the envelope around it, never touches `Frame'.
+%% Silently dropped by the station if `TargetPeer' isn't currently
+%% connected there; HyParView's own periodic shuffle/retry is the
+%% recovery path, the same way it already tolerates ordinary packet loss.
+%%
+%% `{error, not_connected}' if the peering handshake to the station
+%% itself hasn't completed.
+-spec send_overlay_frame(pid(), macula_identity:pubkey(), macula_frame:frame()) ->
+    ok | {error, term()}.
+send_overlay_frame(Client, TargetPeer, Frame)
+  when is_pid(Client), is_binary(TargetPeer), byte_size(TargetPeer) =:= 32,
+       is_map(Frame) ->
+    gen_server:call(Client, {send_overlay_frame_to, TargetPeer, Frame}, 5_000).
 
 %% @doc Open a streaming RPC on this link. Returns `{ok, StreamPid}'
 %% bound to the caller; the caller drives the stream via
@@ -1000,6 +1032,28 @@ handle_call({send_overlay_frame, _Frame}, _From,
     {reply, {error, not_connected}, S};
 handle_call({send_overlay_frame, Frame}, _From, #state{peer_pid = Pid} = S) ->
     Result = try macula_peering:send_frame(Pid, Frame)
+             catch C:R -> {error, {C, R}}
+             end,
+    {reply, Result, S};
+
+handle_call({send_overlay_frame_to, _Target, _Frame}, _From,
+            #state{peer_pid = undefined} = S) ->
+    {reply, {error, not_connected}, S};
+handle_call({send_overlay_frame_to, Target, Frame}, _From,
+            #state{peer_pid = Pid, identity = Id} = S) ->
+    %% The ENVELOPE is signed with this connection's own identity — the
+    %% station verifies it against the authenticated NodeId of whoever is
+    %% sending, before relaying (see macula_station_peer_observer:
+    %% dispatch_overlay/5). `Frame' itself (the wrapped inner frame) is
+    %% the caller's own responsibility to sign, same as `send_overlay_
+    %% frame/2' — the two signatures serve different purposes: this one
+    %% proves who asked for the relay, the inner one proves who
+    %% originated the protocol-level frame.
+    Envelope = macula_frame:sign(
+                 macula_frame:overlay_relay(#{peer    => Target,
+                                              payload => macula_frame:encode(Frame)}),
+                 Id),
+    Result = try macula_peering:send_frame(Pid, Envelope)
              catch C:R -> {error, {C, R}}
              end,
     {reply, Result, S};
@@ -1343,6 +1397,20 @@ on_frame(#{frame_type := call} = Frame, S) ->
 %% whoever called `overlay_subscribe/3' for the frame's realm, if
 %% anyone. A frame with no `realm' field, or no matching subscriber,
 %% is dropped, same as every overlay frame was before this existed.
+%%
+%% `overlay_relay' is a relayed third-party frame (Phase 3.5): the
+%% station forwarded it here because its `peer' field named US, having
+%% received it from a DIFFERENT connection whose authenticated identity
+%% is `Origin'. Decode the wrapped frame and deliver with `Origin' as
+%% `Meta.sender' — NOT `peer_node_id' (that's the station's own
+%% identity, always wrong for a genuine third-party HyParView peer).
+%% Must be matched before the bare `#{realm := Realm}' clause below,
+%% since an `overlay_relay' envelope has no `realm' field of its own.
+on_frame(#{frame_type := overlay_relay, peer := Origin, payload := Bytes}, S) ->
+    case macula_frame:decode(Bytes) of
+        {ok, Inner, _Rest} -> deliver_overlay_frame_from(Origin, Inner, S);
+        {error, _Reason} -> S
+    end;
 on_frame(#{realm := Realm} = Frame, S) ->
     deliver_overlay_frame(Realm, Frame, S);
 on_frame(_Frame, S) ->
@@ -1726,17 +1794,34 @@ on_overlay_unsubscribe_take({{Realm, _Subscriber, Mon}, NewSubs}, SubRef, Idx, S
     NewIdx = del_realm_sub(Realm, SubRef, Idx),
     S#state{overlay_subscriptions = NewSubs, overlay_realm_index = NewIdx}.
 
-%% Fan an overlay frame out to every subscriber for its realm.
-deliver_overlay_frame(Realm, Frame, #state{overlay_realm_index = Idx} = S) ->
-    deliver_overlay_frame_to(maps:find(Realm, Idx), Frame, S),
+%% Fan an overlay frame out to every subscriber for its realm. Sender is
+%% this connection's own peer identity — correct for a frame that
+%% genuinely arrived directly from the connected peer.
+deliver_overlay_frame(Realm, Frame, #state{overlay_realm_index = Idx,
+                                           peer_node_id        = PeerNodeId} = S) ->
+    deliver_overlay_frame_to(maps:find(Realm, Idx), Frame, PeerNodeId, S),
     S.
 
-deliver_overlay_frame_to(error, _Frame, _S) ->
+%% Phase 3.5: a relayed third-party frame arrived wrapped in an
+%% `overlay_relay' envelope. `Sender' is the envelope's own `peer' field
+%% (the station-authenticated origin of the ORIGINAL frame), never this
+%% connection's own `peer_node_id' — that would always be the station's
+%% identity, not the logical HyParView peer. See `on_frame/2''s
+%% `overlay_relay' clause.
+deliver_overlay_frame_from(Sender, #{realm := Realm} = Frame,
+                           #state{overlay_realm_index = Idx} = S) ->
+    deliver_overlay_frame_to(maps:find(Realm, Idx), Frame, Sender, S),
+    S;
+deliver_overlay_frame_from(_Sender, _Frame, S) ->
+    %% Wrapped frame carries no `realm' — nothing to route on, same as
+    %% the bare-frame catch-all in on_frame/2.
+    S.
+
+deliver_overlay_frame_to(error, _Frame, _Sender, _S) ->
     ok;
-deliver_overlay_frame_to({ok, Set}, Frame,
-                         #state{overlay_subscriptions = Subs,
-                                peer_node_id           = PeerNodeId}) ->
-    Meta = #{sender => PeerNodeId},
+deliver_overlay_frame_to({ok, Set}, Frame, Sender,
+                         #state{overlay_subscriptions = Subs}) ->
+    Meta = #{sender => Sender},
     sets:fold(fun(SubRef, _) ->
         fan_overlay_frame(maps:find(SubRef, Subs), SubRef, Frame, Meta)
     end, ok, Set).

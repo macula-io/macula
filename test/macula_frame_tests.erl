@@ -969,6 +969,35 @@ plumtree_gossip_wire_roundtrip_test() ->
                  macula_frame:verify(D, macula_identity:public(Kp))).
 
 %%------------------------------------------------------------------
+%% Overlay relay envelope — Phase 3.5
+%%------------------------------------------------------------------
+
+overlay_relay_carries_peer_and_payload_test() ->
+    Peer = crypto:strong_rand_bytes(32),
+    Inner = macula_frame:encode(macula_frame:plumtree_prune(#{
+                realm => crypto:strong_rand_bytes(32)})),
+    F = macula_frame:overlay_relay(#{peer => Peer, payload => Inner}),
+    ?assertEqual(overlay_relay, macula_frame:frame_type(F)),
+    ?assertEqual(Peer, maps:get(peer, F)),
+    ?assertEqual(Inner, maps:get(payload, F)).
+
+overlay_relay_wire_roundtrip_preserves_wrapped_frame_bytes_test() ->
+    Kp = macula_identity:generate(),
+    Peer = crypto:strong_rand_bytes(32),
+    Inner = macula_frame:encode(macula_frame:sign(macula_frame:hyparview_disconnect(
+                #{realm => crypto:strong_rand_bytes(32)}), Kp)),
+    F = macula_frame:sign(macula_frame:overlay_relay(
+            #{peer => Peer, payload => Inner}), Kp),
+    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
+    ?assertEqual(F, D),
+    ?assertMatch({ok, _}, macula_frame:verify(D, macula_identity:public(Kp))),
+    %% The wrapped bytes decode back to the exact original inner frame.
+    {ok, InnerDecoded, <<>>} = macula_frame:decode(maps:get(payload, D)),
+    {ok, InnerExpected, <<>>} = macula_frame:decode(Inner),
+    ?assertEqual(InnerExpected, InnerDecoded),
+    ?assertEqual(hyparview_disconnect, macula_frame:frame_type(InnerDecoded)).
+
+%%------------------------------------------------------------------
 %% PubSub frames — Part 6 §6
 %%------------------------------------------------------------------
 

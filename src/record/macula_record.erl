@@ -56,6 +56,7 @@
     payload/1, signature/1,
     read_procedure_advertisement/1,
     read_station_endpoint/1,
+    read_node_record/1,
     read_org_directory/1,
     read_procedure_delegation/1,
     read_content_announcement/1,
@@ -858,6 +859,27 @@ read_station_endpoint(#{type := ?TYPE_STATION_ENDPOINT, payload := P}) ->
 host_list(undefined)          -> [];
 host_list(L) when is_list(L)  -> [unwrap_text(H) || H <- L];
 host_list(V)                  -> [unwrap_text(V)].
+
+%% @doc Read a `node_record''s fields as a typed map, hiding the payload
+%% keying (robust to canonical vs wire-decoded, like
+%% `read_procedure_advertisement/1'). `station_id' is what Phase 3.5's
+%% peer resolution keys on: the station this node currently advertises
+%% itself as reachable through. `kind' is `undefined' for a record
+%% predating that field (treated as `station' by convention — see
+%% `node_payload/5''s own comment).
+-spec read_node_record(m_record()) -> #{
+    node_id      := macula_identity:pubkey(),
+    station_id   := macula_identity:pubkey(),
+    realms       := [macula_identity:pubkey()],
+    capabilities := non_neg_integer(),
+    kind         => binary() | undefined
+}.
+read_node_record(#{type := ?TYPE_NODE_RECORD, payload := P}) ->
+    #{node_id      => payload_field(P, <<"node_id">>),
+      station_id   => payload_field(P, <<"station_id">>),
+      realms       => payload_field(P, <<"realms">>),
+      capabilities => payload_field(P, <<"capabilities">>),
+      kind         => payload_field(P, <<"kind">>)}.
 
 %%------------------------------------------------------------------
 %% Direct-dial dual-trust (Slice 7c) — key derivation, readers, and the

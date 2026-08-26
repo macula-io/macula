@@ -55,6 +55,13 @@
     %% Constructors — Plumtree (Part 3 §7.2)
     plumtree_gossip/1, plumtree_ihave/1, plumtree_graft/1, plumtree_prune/1,
 
+    %% Constructor — overlay relay envelope (Phase 3.5). Wraps an
+    %% already-encoded HyParView/Plumtree frame with an explicit target
+    %% peer NodeId so a station can forward it to whichever of its OTHER
+    %% connections authenticates as that peer. Opaque `payload' — the
+    %% station never decodes it.
+    overlay_relay/1,
+
     %% Constructors — PubSub (Part 6 §6)
     publish/1, subscribe/1, unsubscribe/1, event/1,
 
@@ -121,6 +128,7 @@
     plumtree_gossip_spec/0, plumtree_ihave_spec/0,
     plumtree_graft_spec/0, plumtree_prune_spec/0,
     msg_id/0,
+    overlay_relay_spec/0,
     publish_spec/0, subscribe_spec/0, unsubscribe_spec/0, event_spec/0,
     advertise_spec/0, unadvertise_spec/0,
     delivery_channel/0,
@@ -155,6 +163,7 @@
                     | hyparview_shuffle | hyparview_shuffle_reply
                     | plumtree_gossip | plumtree_ihave
                     | plumtree_graft | plumtree_prune
+                    | overlay_relay
                     | publish | subscribe | unsubscribe | event
                     | advertise | unadvertise
                     | stream_open | stream_data | stream_end
@@ -428,6 +437,21 @@
 
 -type plumtree_prune_spec() :: #{
     realm := id256()
+}.
+
+%%------------------------------------------------------------------
+%% Overlay relay envelope spec (Phase 3.5)
+%%
+%% Wraps an already-`encode/1'd overlay frame (HyParView/Plumtree) so a
+%% station can forward it to whichever of its OTHER connections
+%% authenticates as `peer'. Carries no `realm' of its own — the wrapped
+%% frame's own `realm' field (inside `payload') is what the receiving
+%% end routes on after decoding.
+%%------------------------------------------------------------------
+
+-type overlay_relay_spec() :: #{
+    peer    := macula_identity:pubkey(),
+    payload := binary()
 }.
 
 %%------------------------------------------------------------------
@@ -1084,6 +1108,15 @@ plumtree_graft(#{realm := R, msg_id := M, round := Rd})
 plumtree_prune(#{realm := R})
   when is_binary(R), byte_size(R) =:= 32 ->
     (base(plumtree_prune, 0))#{realm => R}.
+
+%%------------------------------------------------------------------
+%% Overlay relay envelope constructor (Phase 3.5)
+%%------------------------------------------------------------------
+
+-spec overlay_relay(overlay_relay_spec()) -> frame().
+overlay_relay(#{peer := P, payload := Bin})
+  when is_binary(P), byte_size(P) =:= 32, is_binary(Bin) ->
+    (base(overlay_relay, 0))#{peer => P, payload => Bin}.
 
 %%------------------------------------------------------------------
 %% PubSub constructors (Part 6 §6)

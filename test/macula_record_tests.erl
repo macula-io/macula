@@ -64,6 +64,46 @@ node_record_with_kind_field_test() ->
     ?assertEqual({text, <<"daemon">>},
                  maps:get({text, <<"kind">>}, P)).
 
+%%------------------------------------------------------------------
+%% read_node_record/1 — Phase 3.5's peer-resolution reader.
+%%------------------------------------------------------------------
+
+read_node_record_returns_typed_map_test() ->
+    Kp = macula_identity:generate(),
+    NodeId = macula_identity:public(Kp),
+    Realm = crypto:strong_rand_bytes(32),
+    StationId = crypto:strong_rand_bytes(32),
+    R = macula_record:node_record(NodeId, [Realm], 7,
+                                  #{station_id => StationId, kind => <<"daemon">>}),
+    ?assertEqual(#{node_id      => NodeId,
+                   station_id   => StationId,
+                   realms       => [Realm],
+                   capabilities => 7,
+                   kind         => <<"daemon">>},
+                 macula_record:read_node_record(R)).
+
+read_node_record_kind_undefined_when_unset_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:node_record(macula_identity:public(Kp), [], 0),
+    ?assertEqual(undefined, maps:get(kind, macula_record:read_node_record(R))).
+
+read_node_record_survives_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    NodeId = macula_identity:public(Kp),
+    StationId = crypto:strong_rand_bytes(32),
+    R = macula_record:sign(
+          macula_record:node_record(NodeId, [], 0,
+                                    #{station_id => StationId, kind => <<"daemon">>}),
+          Kp),
+    Wire = macula_record:encode(R),
+    {ok, Decoded} = macula_record:decode(Wire),
+    ?assertMatch({ok, _}, macula_record:verify(Decoded)),
+    #{node_id := DecodedNodeId, station_id := DecodedStationId, kind := DecodedKind} =
+        macula_record:read_node_record(Decoded),
+    ?assertEqual(NodeId, DecodedNodeId),
+    ?assertEqual(StationId, DecodedStationId),
+    ?assertEqual(<<"daemon">>, DecodedKind).
+
 node_record_with_geo_metadata_test() ->
     %% Subscribers (e.g. realm dashboards) read geo straight from
     %% the payload — no side-channel fetches. v3.4.0 added these

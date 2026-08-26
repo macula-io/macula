@@ -1128,6 +1128,91 @@ receive_frame_cast(Frame, N) ->
     after 1_000 -> false
     end.
 
+%%------------------------------------------------------------------
+%% send_overlay_frame/3 + inbound overlay_relay envelope — Phase 3.5.
+%%------------------------------------------------------------------
+
+send_overlay_frame_3_wraps_target_in_relay_envelope_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => macula_identity:generate()
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Target = macula_identity:public(macula_identity:generate()),
+         Frame = macula_frame:hyparview_disconnect(#{realm => ?REALM}),
+         ?assertEqual(ok, macula_station_link:send_overlay_frame(Pid, Target, Frame)),
+         Envelope = receive_relay_envelope(Target, 10),
+         ?assert(Envelope =/= false),
+         {ok, InnerDecoded, <<>>} =
+             macula_frame:decode(maps:get(payload, Envelope)),
+         ?assertEqual(Frame, InnerDecoded),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+receive_relay_envelope(_Target, 0) -> false;
+receive_relay_envelope(Target, N) ->
+    receive
+        {'$gen_cast', {send_frame, #{frame_type := overlay_relay,
+                                     peer := P} = F}} when P =:= Target ->
+            F;
+        {'$gen_cast', {send_frame, _Other}} -> receive_relay_envelope(Target, N - 1)
+    after 1_000 -> false
+    end.
+
+%% The regression test for the sender-attribution bug found while
+%% designing Phase 3.5: a relayed frame's `Meta.sender' must be the
+%% ORIGINAL sender named in the `overlay_relay' envelope's `peer' field
+%% (a genuine third-party HyParView peer), never this connection's own
+%% `peer_node_id' (the station we're directly connected to) — those two
+%% identities are deliberately different in this test to prove the fix
+%% doesn't just happen to work when they coincide.
+overlay_relay_delivers_with_envelope_origin_as_sender_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => macula_identity:generate()
+         }),
+         FakePeer = self(),
+         StationNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, StationNodeId)
+         end),
+         {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
+         Origin = macula_identity:public(macula_identity:generate()),
+         ?assertNotEqual(Origin, StationNodeId),
+         Joiner = macula_identity:public(macula_identity:generate()),
+         Inner = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
+         Envelope = macula_frame:overlay_relay(#{
+             peer    => Origin,
+             payload => macula_frame:encode(Inner)
+         }),
+         Pid ! {macula_peering, frame, FakePeer, Envelope},
+         receive
+             {macula_overlay_frame, R, F, Meta} ->
+                 ?assertEqual(SubRef, R),
+                 ?assertEqual(Inner, F),
+                 ?assertEqual(Origin, maps:get(sender, Meta)),
+                 ?assertNotEqual(StationNodeId, maps:get(sender, Meta))
+         after 2_000 -> erlang:error(no_overlay_frame_delivered)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
 send_overlay_frame_not_connected_returns_error_test_() ->
     {timeout, 5,
      fun() ->
