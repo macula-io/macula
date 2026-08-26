@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.4.0] - 2026-08-26
+
+### Added — HyParView + Plumtree overlay, absorbed from macula-hyparview/macula-plumtree
+
+The standalone `macula-hyparview` and `macula-plumtree` packages — extracted from
+`macula-station`'s `apps/hecate_overlay/` earlier the same day — are folded into
+this SDK under `src/overlay/`, rather than published as two more loosely-coupled
+repos. Both were only ever going to be consumed alongside `macula` itself (they
+already depend on `macula_record`/`macula_frame`/`macula_identity`), and keeping
+them separate meant a two-package version-coordination step before Phase 4 of
+the realm-membership work (`macula-io/macula-realm-identity`) could even build
+against the client-facing overlay transport this SDK shipped in 10.3.0.
+
+Module names are unchanged on the move, matching this org's established
+extraction convention (keep the name when there's an existing external caller by
+that exact name, rename freely otherwise): `hecate_plumtree`, `hecate_pubsub`,
+`hecate_pubsub_server`, `hecate_pubsub_registry`, and `hecate_or_set` keep their
+`hecate_*` names because `macula-station`'s own `macula_station_sup` starts
+`hecate_pubsub_registry` directly as its pubsub backbone — folding them in here
+required no code changes in `macula-station` beyond its dependency declaration.
+`macula_hyparview_view`, `macula_hyparview_proto`, and
+`macula_hyparview_endorsement` already carried the `macula_` prefix from their
+own earlier rename and needed none.
+
+Not carried over: `macula_plumtree_app`/`macula_plumtree_sup`, the standalone
+package's OTP application shell — an empty supervisor with no children (its own
+moduledoc: "no children are owned here") that existed only so
+`application:start/1` had something to call. `macula` already provides that.
+
+New guides: [`docs/guides/overlay/HYPARVIEW_GUIDE.md`](docs/guides/overlay/HYPARVIEW_GUIDE.md)
+and [`docs/guides/overlay/PLUMTREE_GUIDE.md`](docs/guides/overlay/PLUMTREE_GUIDE.md),
+each with a new SVG diagram (`assets/hyparview_views.svg`,
+`assets/plumtree_broadcast_tree.svg`). No supervised OTP wrapper exists yet for
+either protocol (unlike RPC/PubSub/Content/Streaming), so each guide covers both
+the "why" and the raw functional API, including the realm-gated admission flow
+built on `macula_record:realm_member_endorsement/2,3` and this SDK's own
+overlay transport (`macula_station_link:overlay_subscribe/3`,
+`send_overlay_frame/2`, 10.3.0).
+
+Verified: `rebar3 compile xref eunit ct dialyzer` clean (1940/1941 eunit —
+the one failure is the pre-existing `macula_station_link_tests:
+disconnect_notifies_subscribers_test_` Ref-comparison race noted in 10.3.0's
+own development, unrelated to this change and untouched by it), `rebar3 as
+lint lint` clean, `rebar3 ex_doc` builds with both new guide pages and both
+new diagrams rendering correctly (checked in a real browser, not just
+`xmllint`). `macula-station`'s dependency on the standalone `macula_plumtree`
+git package is removed in the same pass — see its own CHANGELOG.
+
 ## [10.3.0] - 2026-08-26
 
 ### Added — `macula_station_link:overlay_subscribe/3`, `overlay_unsubscribe/2`, `send_overlay_frame/2`

@@ -15,7 +15,7 @@
 
 ---
 
-> **Latest — 9.13.2**: every supervised primitive pair is now complete and
+> **Latest — 10.4.0**: every supervised primitive pair is now complete and
 > symmetric, each wrapping its raw SDK primitive as an OTP behaviour with a
 > `simple_one_for_one` factory supervisor, mesh-visible protocol facts
 > (`sharing.*_v1`, `streaming.*_v1`, `rpc.*_v1`) around its own side of the
@@ -31,11 +31,15 @@
 > - **Streaming RPC** — `macula_streamer`/`macula_stream_sink`, server /
 >   client / bidi modes, with an optional `client_stream` receive loop and
 >   terminal-reply callback, and abort-wired cancel.
-> - **NEW: push-initiated content transfer** — `macula_pusher`/
->   `macula_upload` push a file at a specific, already-known recipient
->   (rather than into content-addressed storage for someone to discover and
->   pull later), with the same chunk/hash/verify integrity guarantees, over
->   `client_stream`.
+> - **Push-initiated content transfer** — `macula_pusher`/`macula_upload`
+>   push a file at a specific, already-known recipient (rather than into
+>   content-addressed storage for someone to discover and pull later), with
+>   the same chunk/hash/verify integrity guarantees, over `client_stream`.
+> - **NEW: overlay (HyParView + Plumtree)** — realm-scoped bounded partial
+>   views and epidemic broadcast trees, absorbed from the standalone
+>   `macula-hyparview`/`macula-plumtree` packages. No supervised wrapper yet
+>   — see the [HyParView](docs/guides/overlay/HYPARVIEW_GUIDE.md) and
+>   [Plumtree](docs/guides/overlay/PLUMTREE_GUIDE.md) guides.
 >
 > All additive since 9.2.0, no breaking changes. See
 > [CHANGELOG.md](CHANGELOG.md) for the full version-by-version history.
@@ -161,6 +165,8 @@ Hash = macula_blake3_nif:hash(Data),
 | [Records Guide](docs/guides/shared/RECORDS_GUIDE.md) | Signed, TTL'd facts in the DHT — your own record types |
 | [Streaming Guide](docs/guides/streaming/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi) |
 | [Streaming Protocol](docs/guides/streaming/STREAMING_PROTOCOL.md) | Raw `call_stream`/`advertise_stream` primitives |
+| [HyParView Guide](docs/guides/overlay/HYPARVIEW_GUIDE.md) | Bounded partial-view realm membership |
+| [Plumtree Guide](docs/guides/overlay/PLUMTREE_GUIDE.md) | Epidemic broadcast trees, realm PubSub, OR-Set CRDT |
 | [Distribution Over Mesh](docs/guides/DIST_OVER_MESH_GUIDE.md) | Erlang dist through the mesh |
 | [Clustering](docs/guides/CLUSTERING_GUIDE.md) | LAN gossip clustering |
 | [Authorization](docs/guides/shared/AUTHORIZATION_GUIDE.md) | DID / UCAN / cert-chain trust |

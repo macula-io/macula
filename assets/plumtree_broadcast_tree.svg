@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 560">
+  <defs>
+    <marker id="pt-gossip" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" fill="#10b981"/></marker>
+    <marker id="pt-ihave" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#8b5cf6"/></marker>
+    <marker id="pt-graft" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f97316"/></marker>
+    <marker id="pt-prune" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ef4444"/></marker>
+    <linearGradient id="pt-hg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#8b5cf6"/></linearGradient>
+    <filter id="pt-sh" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="1" dy="1" stdDeviation="2" flood-opacity="0.12"/></filter>
+  </defs>
+
+  <rect width="980" height="560" rx="6" fill="#f8fafc"/>
+  <rect x="0" y="0" width="980" height="40" fill="url(#pt-hg)"/>
+  <text x="490" y="26" text-anchor="middle" fill="white" font-family="system-ui" font-size="15" font-weight="bold">Plumtree: the eager-push tree emerges, lazy links repair it</text>
+
+  <!-- Legend -->
+  <rect x="742" y="50" width="212" height="94" rx="5" fill="white" stroke="#e5e7eb" filter="url(#pt-sh)"/>
+  <line x1="752" y1="66" x2="778" y2="66" stroke="#10b981" stroke-width="2.2" marker-end="url(#pt-gossip)"/>
+  <text x="786" y="69" font-family="system-ui" font-size="9" fill="#6b7280">GOSSIP (eager, full payload)</text>
+  <line x1="752" y1="84" x2="778" y2="84" stroke="#8b5cf6" stroke-width="1.6" stroke-dasharray="4 2" marker-end="url(#pt-ihave)"/>
+  <text x="786" y="87" font-family="system-ui" font-size="9" fill="#6b7280">IHAVE (lazy, id only)</text>
+  <line x1="752" y1="102" x2="778" y2="102" stroke="#f97316" stroke-width="1.6" stroke-dasharray="4 2" marker-end="url(#pt-graft)"/>
+  <text x="786" y="105" font-family="system-ui" font-size="9" fill="#6b7280">GRAFT (repair request)</text>
+  <line x1="752" y1="120" x2="778" y2="120" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="4 2" marker-end="url(#pt-prune)"/>
+  <text x="786" y="123" font-family="system-ui" font-size="9" fill="#6b7280">PRUNE (edge -&gt; lazy)</text>
+  <text x="752" y="138" font-family="system-ui" font-size="8" fill="#9ca3af">tree edges = eager_push set</text>
+
+  <!-- Publisher -->
+  <rect x="405" y="60" width="150" height="48" rx="9" fill="#eff6ff" stroke="#3b82f6" stroke-width="2.5" filter="url(#pt-sh)"/>
+  <text x="480" y="84" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="700" fill="#1d4ed8">Publisher</text>
+  <text x="480" y="98" text-anchor="middle" font-family="system-ui" font-size="8" fill="#3b82f6">publish/3 -&gt; GOSSIP round 0</text>
+
+  <!-- A, B: round-1 eager children -->
+  <rect x="130" y="170" width="140" height="46" rx="8" fill="white" stroke="#10b981" stroke-width="2" filter="url(#pt-sh)"/>
+  <text x="200" y="198" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#047857">Peer A (eager)</text>
+
+  <rect x="700" y="170" width="140" height="46" rx="8" fill="white" stroke="#10b981" stroke-width="2" filter="url(#pt-sh)"/>
+  <text x="770" y="198" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#047857">Peer B (eager)</text>
+
+  <line x1="420" y1="108" x2="215" y2="168" stroke="#10b981" stroke-width="2.2" marker-end="url(#pt-gossip)"/>
+  <line x1="540" y1="108" x2="755" y2="168" stroke="#10b981" stroke-width="2.2" marker-end="url(#pt-gossip)"/>
+
+  <!-- C: eager child of A -->
+  <rect x="40" y="290" width="130" height="46" rx="8" fill="white" stroke="#10b981" stroke-width="2" filter="url(#pt-sh)"/>
+  <text x="105" y="318" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#047857">Peer C (eager)</text>
+  <line x1="165" y1="216" x2="115" y2="288" stroke="#10b981" stroke-width="2.2" marker-end="url(#pt-gossip)"/>
+
+  <!-- E: receives eager from A, then a duplicate from B -> PRUNE -->
+  <rect x="345" y="290" width="150" height="52" rx="8" fill="white" stroke="#10b981" stroke-width="2" filter="url(#pt-sh)"/>
+  <text x="420" y="313" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#047857">Peer E</text>
+  <text x="420" y="328" text-anchor="middle" font-family="system-ui" font-size="8" fill="#6b7280">already has the message</text>
+  <line x1="225" y1="205" x2="350" y2="298" stroke="#10b981" stroke-width="2.2" marker-end="url(#pt-gossip)"/>
+
+  <path d="M 700 205 C 590 245, 520 260, 497 288" fill="none" stroke="#ef4444" stroke-width="1.8" stroke-dasharray="5 3" marker-end="url(#pt-prune)"/>
+  <text x="595" y="243" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#b91c1c">GOSSIP arrives again (dup)</text>
+  <path d="M 497 300 C 560 275, 630 250, 698 213" fill="none" stroke="#ef4444" stroke-width="1.8" stroke-dasharray="5 3" marker-end="url(#pt-prune)"/>
+  <text x="595" y="300" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#b91c1c">E -&gt; PRUNE: edge becomes lazy</text>
+
+  <!-- D: lazy peer of B, then GRAFT repair. Corridor between B (ends y=216)
+       and D (starts y=400) is wide open: three distinct paths, stacked
+       labels, no crossing text. -->
+  <rect x="800" y="400" width="160" height="52" rx="8" fill="#faf5ff" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="4 2" filter="url(#pt-sh)"/>
+  <text x="880" y="423" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#6d28d9">Peer D (lazy)</text>
+  <text x="880" y="438" text-anchor="middle" font-family="system-ui" font-size="8" fill="#7c3aed">does not have the message yet</text>
+
+  <!-- 1. B -> D: IHAVE, left side of the corridor -->
+  <path d="M 790 216 C 780 280, 810 350, 845 398" fill="none" stroke="#8b5cf6" stroke-width="1.6" stroke-dasharray="4 2" marker-end="url(#pt-ihave)"/>
+  <text x="770" y="260" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#7c3aed">IHAVE(msg_id)</text>
+
+  <!-- 2. D -> B: GRAFT, middle of the corridor -->
+  <path d="M 895 398 C 920 340, 900 270, 850 218" fill="none" stroke="#f97316" stroke-width="1.8" stroke-dasharray="5 3" marker-end="url(#pt-graft)"/>
+  <text x="950" y="320" text-anchor="end" font-family="system-ui" font-size="8.5" fill="#c2410c">D -&gt; GRAFT(msg_id)</text>
+
+  <!-- 3. B -> D: full GOSSIP reply, right side of the corridor -->
+  <path d="M 840 216 C 960 280, 970 340, 940 398" fill="none" stroke="#10b981" stroke-width="2.2" marker-end="url(#pt-gossip)"/>
+  <text x="950" y="380" text-anchor="end" font-family="system-ui" font-size="8.5" fill="#059669">B replies GOSSIP -&gt; D eager</text>
+
+  <!-- Footer -->
+  <text x="490" y="490" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">The eager-push tree is never configured — it emerges from duplicate-triggered PRUNE and IHAVE-triggered GRAFT alone</text>
+  <text x="490" y="508" text-anchor="middle" font-family="system-ui" font-size="9.5" fill="#374151">hecate_plumtree:process/3 drives GOSSIP / IHAVE / GRAFT / PRUNE against eager_push / lazy_push / received / missing</text>
+  <text x="490" y="526" text-anchor="middle" font-family="system-ui" font-size="8.5" fill="#9ca3af">eager_push and lazy_push track HyParView's active view — add_peer/2 and remove_peer/2 keep the two in sync</text>
+</svg>
