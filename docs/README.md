@@ -14,6 +14,8 @@ Macula SDK is an Erlang/OTP client library for connecting to a **federated relay
 | Share content-addressed blobs | [Content Guide](guides/content/CONTENT_GUIDE.md) |
 | Store your own signed DHT facts | [Records Guide](guides/shared/RECORDS_GUIDE.md) |
 | Stream more than one request/response | [Streaming Guide](guides/streaming/STREAMING_GUIDE.md) |
+| Maintain realm-scoped membership | [HyParView Guide](guides/overlay/HYPARVIEW_GUIDE.md) |
+| Gossip realm-scoped messages/state | [Plumtree Guide](guides/overlay/PLUMTREE_GUIDE.md) |
 | Connect nodes across firewalls | [Distribution Over Mesh](guides/DIST_OVER_MESH_GUIDE.md) |
 | Form a LAN cluster | [Clustering Guide](guides/CLUSTERING_GUIDE.md) |
 | Understand DID/UCAN security | [Authorization Guide](guides/shared/AUTHORIZATION_GUIDE.md) |
@@ -34,6 +36,8 @@ Macula SDK is an Erlang/OTP client library for connecting to a **federated relay
 | [Content](guides/content/CONTENT_GUIDE.md) | Content-addressed blobs (MCID), single-block or chunked, plus push/upload at a known recipient; direct-dial fetch/seed |
 | [Records](guides/shared/RECORDS_GUIDE.md) | Signed, TTL'd facts in the DHT — your own record types |
 | [Streaming](guides/streaming/STREAMING_GUIDE.md) | Streaming RPC (server / client / bidi); direct-dial via `call_stream_station/6` |
+| [HyParView](guides/overlay/HYPARVIEW_GUIDE.md) | Bounded partial-view realm membership |
+| [Plumtree](guides/overlay/PLUMTREE_GUIDE.md) | Epidemic broadcast trees, realm PubSub, OR-Set CRDT |
 | [Distribution Over Mesh](guides/DIST_OVER_MESH_GUIDE.md) | Erlang distribution tunneled through relays |
 | [Clustering](guides/CLUSTERING_GUIDE.md) | LAN cluster formation via gossip |
 | [Authorization](guides/shared/AUTHORIZATION_GUIDE.md) | DID identities and UCAN capability tokens |

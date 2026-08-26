@@ -190,6 +190,16 @@ index once and query it in `O(d)` (tree depth) instead of scanning:
 ![MRI Trie Index](assets/mri_trie_index.svg)
 
 ```erlang
+%% One {realm(), [path_segment()], mri()} tuple per MRI to index — the
+%% path is the MRI's own segments split out, so the trie doesn't have
+%% to re-parse each entry on every lookup.
+All = [
+    {<<"io.macula">>, [<<"acme">>, <<"counter">>],
+     <<"mri:app:io.macula/acme/counter">>},
+    {<<"io.macula">>, [<<"acme">>, <<"weather">>],
+     <<"mri:app:io.macula/acme/weather">>}
+],
+
 {ok, Idx}  = macula_mri:build_index(All),
 {ok, Kids} = macula_mri:index_children(
     Idx, <<"io.macula">>, [<<"acme">>]).

@@ -83,7 +83,7 @@ Runtime registry for MRI types. Built-in types are always valid. Custom types ca
 UDP-based transport protocol (RFC 9000) with built-in TLS 1.3. NAT-friendly (single UDP port), firewall-friendly (outbound only). Macula uses Quinn (Rust NIF) for QUIC transport.
 
 ### Wire Protocol
-Binary message format using MessagePack encoding. Message types include CONNECT, HELLO, SUBSCRIBE, PUBLISH, EVENT, CALL, RESULT, CALL_ERROR, ADVERTISE/UNADVERTISE, and PING/PONG — see `macula_frame` for the full set, including stream and SWIM/HyParView frames.
+Binary message format using CBOR encoding (RFC 8949). Message types include CONNECT, HELLO, SUBSCRIBE, PUBLISH, EVENT, CALL, RESULT, CALL_ERROR, ADVERTISE/UNADVERTISE, and PING/PONG — see `macula_frame` for the full set, including stream and SWIM/HyParView frames.
 
 ### Tunnel
 An encrypted Erlang distribution channel between two nodes routed through the relay mesh. Uses AES-256-GCM encryption (key derived from distribution cookie). The relay cannot read ETF content.

@@ -15,7 +15,7 @@
 
 ---
 
-> **Latest — 10.4.0**: every supervised primitive pair is now complete and
+> **Latest — 10.5.0**: every supervised primitive pair is now complete and
 > symmetric, each wrapping its raw SDK primitive as an OTP behaviour with a
 > `simple_one_for_one` factory supervisor, mesh-visible protocol facts
 > (`sharing.*_v1`, `streaming.*_v1`, `rpc.*_v1`) around its own side of the
@@ -77,14 +77,14 @@ the client you build against.
 Add to `rebar.config`:
 
 ```erlang
-{deps, [{macula, "~> 9.13"}]}.
+{deps, [{macula, "~> 10.5"}]}.
 ```
 
 Or in Elixir `mix.exs`:
 
 ```elixir
 defp deps do
-  [{:macula, "~> 9.13"}]
+  [{:macula, "~> 10.5"}]
 end
 ```
 

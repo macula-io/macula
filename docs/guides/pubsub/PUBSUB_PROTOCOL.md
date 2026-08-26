@@ -152,7 +152,7 @@ ok = macula:publish(Pool, Realm, Topic, Payload).
 | `Pool` | `pid()` | The pool from `connect/2` |
 | `Realm` | `<<_:256>>` | 32-byte realm tag |
 | `Topic` | `binary()` | Built via `macula_topic` |
-| `Payload` | `term()` | Encoded as MessagePack on the wire |
+| `Payload` | `term()` | Encoded as CBOR on the wire |
 
 Returns:
 

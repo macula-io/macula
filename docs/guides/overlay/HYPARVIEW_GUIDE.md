@@ -180,6 +180,31 @@ wire. There's no wire-level SUBSCRIBE/UNSUBSCRIBE round trip: overlay frames
 already arrive addressed at a specific connection, they aren't fanned out by
 topic the way PUBLISH/EVENT is.
 
+`send_overlay_frame/2` only reaches whoever is on the *other end* of
+`Link` — correct once you're already connected to your intended contact
+(e.g. the seed peer a JOIN goes to), but most `{send, TargetPeer, Frame}`
+actions `macula_hyparview_proto:process/4` returns name a peer you aren't
+directly connected to at all. For that, resolve the target's own current
+station first (its published `node_record`'s `station_id` field, keyed by
+the target's own pubkey — `macula:find_record(Pool, TargetPeer)`), dial
+that station directly the same way [direct-dial](../rpc/RPC_PROTOCOL.md#what-resolution-does-if-you-need-it-raw)
+does, then use `send_overlay_frame/3`:
+
+```erlang
+ok = macula_station_link:send_overlay_frame(Link, TargetPeer,
+                                            macula_hyparview_proto:build_join(Ctx)).
+```
+
+The station relays it to whichever of its *other* connections
+authenticates as `TargetPeer`, and stamps the delivered copy's
+`Meta.sender` with your own authenticated identity — not something you
+can spoof by naming a different `TargetPeer` in the frame content, since
+there isn't one; the routing lives entirely in the envelope, verified
+against the connection that sent it. `macula-realm-identity`'s
+`Overlay.SelfPublisher` (publish your own presence) and
+`Overlay.PeerResolver.resolve_and_dial/2` (the resolve-then-dial sequence
+above, as reusable code) are a concrete example of both halves.
+
 ---
 
 ## See also
