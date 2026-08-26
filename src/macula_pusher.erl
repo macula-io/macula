@@ -202,17 +202,18 @@ init({DialMode, Module, Pool, Realm, Procedure, Bytes, Announce, InitArgs}) ->
 %% `send/2,3' fails — the stream is already gone or going.
 spawn_worker(DialMode, Pool, Realm, Procedure, Bytes) ->
     Parent = self(),
-    spawn_link(fun() ->
-        {ok, Manifest, Chunks} = macula_manifest:create(Bytes),
-        case open_stream(DialMode, Pool, Realm, Procedure, Manifest) of
-            {ok, Stream} ->
-                Parent ! {stream, Stream},
-                Result = push_chunks(Stream, Chunks),
-                Parent ! {push_result, Result};
-            {error, Reason} ->
-                Parent ! {push_result, {error, Reason}}
-        end
-    end).
+    spawn_link(fun() -> pusher_worker_run(DialMode, Pool, Realm, Procedure, Bytes, Parent) end).
+
+pusher_worker_run(DialMode, Pool, Realm, Procedure, Bytes, Parent) ->
+    {ok, Manifest, Chunks} = macula_manifest:create(Bytes),
+    case open_stream(DialMode, Pool, Realm, Procedure, Manifest) of
+        {ok, Stream} ->
+            Parent ! {stream, Stream},
+            Result = push_chunks(Stream, Chunks),
+            Parent ! {push_result, Result};
+        {error, Reason} ->
+            Parent ! {push_result, {error, Reason}}
+    end.
 
 open_stream(pooled, Pool, Realm, Procedure, Manifest) ->
     macula:call_stream(Pool, Realm, Procedure, Manifest, #{mode => client_stream});

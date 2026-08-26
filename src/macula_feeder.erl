@@ -188,21 +188,22 @@ spawn_worker(pooled, Pool, Bytes, ShareId) ->
 %% — only the transfer itself becomes addressable.
 spawn_worker(direct, Pool, Station, Bytes, ShareId) ->
     Parent = self(),
-    spawn_link(fun() ->
-        case macula_direct_dial:resolve_station_endpoint(Pool, Station) of
-            {ok, DialUrl} ->
-                Opts = #{share_id => ShareId, expected_node_id => Station,
-                        pin_tls_cert => false, verify => none},
-                {ok, CTPid} = macula_content_transfer:start_put_station(
-                    Pool, DialUrl, Bytes, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts),
-                Parent ! {content_transfer, CTPid},
-                Result = macula_content_transfer:await(CTPid),
-                catch macula_content_transfer:cancel(CTPid),
-                Parent ! {feed_result, Result};
-            {error, Reason} ->
-                Parent ! {feed_result, {error, {unresolved, Reason}}}
-        end
-    end).
+    spawn_link(fun() -> direct_worker_run(Pool, Station, Bytes, ShareId, Parent) end).
+
+direct_worker_run(Pool, Station, Bytes, ShareId, Parent) ->
+    case macula_direct_dial:resolve_station_endpoint(Pool, Station) of
+        {ok, DialUrl} ->
+            Opts = #{share_id => ShareId, expected_node_id => Station,
+                    pin_tls_cert => false, verify => none},
+            {ok, CTPid} = macula_content_transfer:start_put_station(
+                Pool, DialUrl, Bytes, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts),
+            Parent ! {content_transfer, CTPid},
+            Result = macula_content_transfer:await(CTPid),
+            catch macula_content_transfer:cancel(CTPid),
+            Parent ! {feed_result, Result};
+        {error, Reason} ->
+            Parent ! {feed_result, {error, {unresolved, Reason}}}
+    end.
 
 %% @private
 handle_call(_Request, _From, State) ->

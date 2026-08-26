@@ -569,12 +569,15 @@ parse_url(Other) -> parse_host_port(Other).
 parse_host_port(Str) ->
     case string:tokens(Str, ":") of
         [Host, PortStr] ->
-            parse_port(Host, try list_to_integer(PortStr) catch _:_ -> error end);
+            parse_port(Host, to_port_int(PortStr));
         [Host] ->
             {ok, Host, 4434};
         _ ->
             {error, {invalid_url, Str}}
     end.
+
+to_port_int(PortStr) ->
+    try list_to_integer(PortStr) catch _:_ -> error end.
 
 parse_port(Host, Port) when is_integer(Port), Port > 0, Port < 65536 ->
     {ok, Host, Port};

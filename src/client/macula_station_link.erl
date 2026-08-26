@@ -1465,10 +1465,7 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
     AbortFun = fun(_Sid, {Pid, Mon, Stream}) ->
         erlang:demonitor(Mon, [flush]),
         close_dedicated_stream(Stream),
-        try
-            macula_stream:abort(Pid, <<"disconnected">>,
-                                 iolist_to_binary(io_lib:format("~p", [Reason])))
-        catch _:_ -> ok end
+        abort_stream_process(Pid, Reason)
     end,
     maps:foreach(AbortFun, CS),
     maps:foreach(AbortFun, SS),
@@ -1481,6 +1478,12 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
             overlay_subscriptions = #{}, overlay_realm_index = #{},
             client_streams = #{}, server_streams = #{}, stream_bufs = #{},
             content_pending = #{}, content_stream_bufs = #{}}.
+
+abort_stream_process(Pid, Reason) ->
+    try
+        macula_stream:abort(Pid, <<"disconnected">>,
+                             iolist_to_binary(io_lib:format("~p", [Reason])))
+    catch _:_ -> ok end.
 
 %%-------------------------------------------------------------------
 %% Liveness probe — bounded zombie-connection detection

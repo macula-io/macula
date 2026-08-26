@@ -34,6 +34,16 @@ This is the piece `macula-station`'s `hecate_overlay` admission-gating fix
 format existed, but nothing could actually drive a HyParView session from an
 Elixir client until now.
 
+### Fixed — elvis `no_deep_nesting` violations
+
+Six pre-existing level-3 nestings, all the same shape: a spawned worker's
+`fun() -> ... end` wrapping a `case`/`try` one level too deep for this repo's
+`macula_min` ruleset (limit 2). Extracted each into a named top-level
+function the spawn just calls, in `macula_content_transfer.erl` (two sites),
+`macula_download.erl`, `macula_feeder.erl`, `macula_pusher.erl`,
+`macula_dist_relay_client.erl`, and `client/macula_station_link.erl` — no
+behavior change, `rebar3 as lint lint` now passes clean.
+
 ## [10.2.0] - 2026-08-26
 
 ### Added — HyParView `hyparview_join`/`hyparview_forward_join`/`hyparview_neighbor` can carry a `record`

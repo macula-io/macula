@@ -185,21 +185,22 @@ spawn_worker(pooled, Pool, Mcid, ShareId) ->
 %% only the transfer itself becomes addressable.
 spawn_worker(direct, Pool, Mcid, ShareId) ->
     Parent = self(),
-    spawn_link(fun() ->
-        case macula_direct_dial:resolve_content_provider(Pool, Mcid) of
-            {ok, #{announcer_node := Node, endpoint := Endpoint}} ->
-                Opts = #{share_id => ShareId, expected_node_id => Node,
-                        pin_tls_cert => false, verify => none},
-                {ok, CTPid} = macula_content_transfer:start_get_station(
-                    Pool, Endpoint, Mcid, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts),
-                Parent ! {content_transfer, CTPid},
-                Result = macula_content_transfer:await(CTPid),
-                catch macula_content_transfer:cancel(CTPid),
-                Parent ! {download_result, Result};
-            {error, Reason} ->
-                Parent ! {download_result, {error, {unresolved, Reason}}}
-        end
-    end).
+    spawn_link(fun() -> direct_worker_run(Pool, Mcid, ShareId, Parent) end).
+
+direct_worker_run(Pool, Mcid, ShareId, Parent) ->
+    case macula_direct_dial:resolve_content_provider(Pool, Mcid) of
+        {ok, #{announcer_node := Node, endpoint := Endpoint}} ->
+            Opts = #{share_id => ShareId, expected_node_id => Node,
+                    pin_tls_cert => false, verify => none},
+            {ok, CTPid} = macula_content_transfer:start_get_station(
+                Pool, Endpoint, Mcid, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts),
+            Parent ! {content_transfer, CTPid},
+            Result = macula_content_transfer:await(CTPid),
+            catch macula_content_transfer:cancel(CTPid),
+            Parent ! {download_result, Result};
+        {error, Reason} ->
+            Parent ! {download_result, {error, {unresolved, Reason}}}
+    end.
 
 %% @private
 handle_call(_Request, _From, State) ->

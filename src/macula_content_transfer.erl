@@ -584,24 +584,27 @@ setup_get_lanes(LinkPid, Stream0, DesiredN, ChunkCount) ->
 %% streams rather than failing the whole transfer over it.
 open_extra_streams(_LinkPid, N) when N =< 0 -> [];
 open_extra_streams(LinkPid, N) ->
-    lists:filtermap(fun(_) ->
-        case macula_station_link:open_content_stream(LinkPid) of
-            {ok, S} -> {true, S};
-            {error, _} -> false
-        end
-    end, lists:seq(1, N)).
+    lists:filtermap(fun(_) -> try_open_content_stream(LinkPid) end, lists:seq(1, N)).
+
+try_open_content_stream(LinkPid) ->
+    case macula_station_link:open_content_stream(LinkPid) of
+        {ok, S} -> {true, S};
+        {error, _} -> false
+    end.
 
 %% Round-robin `Items' across `Streams' by `KeyFun(Item) rem length(Streams)',
 %% each lane's own queue kept in ascending original order.
 distribute_lanes(Streams, Items, KeyFun) ->
     NumStreams = length(Streams),
-    Grouped = lists:foldl(fun(Item, Acc) ->
-        LaneIdx = KeyFun(Item) rem NumStreams,
-        maps:update_with(LaneIdx, fun(L) -> [Item | L] end, [Item], Acc)
-    end, #{}, Items),
+    Grouped = lists:foldl(fun(Item, Acc) -> group_by_lane(Item, KeyFun, NumStreams, Acc) end,
+                           #{}, Items),
     [#lane{stream = S, remaining = lists:reverse(maps:get(I, Grouped, [])),
           in_flight = undefined, worker = undefined}
      || {I, S} <- lists:zip(lists:seq(0, NumStreams - 1), Streams)].
+
+group_by_lane(Item, KeyFun, NumStreams, Acc) ->
+    LaneIdx = KeyFun(Item) rem NumStreams,
+    maps:update_with(LaneIdx, fun(L) -> [Item | L] end, [Item], Acc).
 
 dispatch_get_manifest_step(#state{kind = get, payload = Mcid} = State) ->
     start_single_step(State, fun(Self, LinkPid, Stream) ->
