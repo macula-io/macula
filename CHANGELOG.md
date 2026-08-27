@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.7.0] - 2026-08-27
+
+### Added — native deterministic CBOR codec (additive, NOT wired into the live frame path)
+
+`macula_cbor_nif` gains `pack_deterministic/1` and `unpack_deterministic/1`,
+a from-scratch native implementation of `macula_record_cbor.erl`'s exact
+RFC 8949 §4.2.1 deterministic subset — the codec every `macula_frame`
+and `macula_record` encode/decode actually goes through today, and
+therefore the thing every signature verification in the mesh depends
+on producing byte-identical bytes. This is the headline NIF opportunity
+identified while surveying the SDK for further native-acceleration
+candidates: `macula_record_cbor` is pure Erlang despite this crate's
+existing `nif_pack`/`nif_unpack` sitting right next to it — but that
+existing pair goes through `ciborium::value::Value`, a generic,
+non-deterministic representation (no canonical map-key order, no
+forced integer/float widths, lossy atom/tuple handling), so it isn't a
+drop-in for the wire protocol's actual requirements. The new functions
+bypass `ciborium` entirely and operate directly on `rustler::Term`,
+implementing the same value model by hand: non-negative integer ->
+uint (major 0), negative integer -> major 1 (encoded count = `-1-N`,
+full range down to `-(2^64)` via `i128`, unconditionally available in
+rustler 0.34 with no feature flag), binary -> byte string, `{text,
+Binary}` -> UTF-8 text string (bytes used as-is, no UTF-8 validation,
+matching the Erlang encoder exactly), atom (encode-only, not `null`)
+-> UTF-8 text via its own name, list -> array, map -> map with keys
+sorted by the bytewise order of their own encoded bytes, `null` ->
+simple null, float -> always binary64 on encode (decode accepts
+16/32/64-bit).
+
+Every decode path is on the hot path for untrusted, network-received
+bytes and is written to never panic — no `unwrap`/`expect`/unchecked
+slice indexing anywhere; every length and offset is bounds-checked
+before use, and every "no matching clause" case in the Erlang reference
+(major-7 additional info outside {22,25,26,27}, major-6 tags, trailing
+bytes after the top-level value, NaN/infinity in a half-float) becomes
+an explicit `rustler::Error::RaiseTerm` — genuinely raising, matching
+`macula_record_cbor:decode/1`'s real crash-on-malformed-input contract,
+not `Error::Term`'s different "return `{error,_}` normally" behavior.
+
+Verified, not assumed: `test/macula_cbor_deterministic_diff_tests.erl`
+differentially tests the new codec against `macula_record_cbor` across
+the exact boundary vectors `macula_record_cbor_tests.erl` already
+treats as load-bearing (uint/negative-int width boundaries, empty/full
+binaries and text, nested maps, atom-as-map-key, the `-(2^64)` extreme),
+plus a 3000-iteration seeded random generator (same style as
+`macula_frame_tests`'s own `check_payload_soundness_holds_on_generated_terms_test_`)
+covering deeply nested maps/arrays/mixed types, run against two
+different seeds, plus 14 malformed/truncated input cases asserting the
+decoder raises cleanly rather than panicking. All 65 tests pass; the
+full macula_identity/peering_conn/peering/frame/record_cbor/cbor_nif
+suite (326 tests) passes unchanged.
+
+**Deliberately NOT done here**: `macula_frame.erl`/`macula_record.erl`
+still call `macula_record_cbor`, unchanged. Swapping the live wire
+codec is a separate, higher-stakes step — this release only makes the
+native codec exist and prove itself byte-for-byte identical.
+
 ## [10.6.0] - 2026-08-27
 
 ### Added — native puzzle grinding in `macula_crypto_nif`

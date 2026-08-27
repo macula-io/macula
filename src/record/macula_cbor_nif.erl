@@ -32,10 +32,12 @@
 %%%-------------------------------------------------------------------
 -module(macula_cbor_nif).
 
--export([pack/1, unpack/1, is_nif_loaded/0]).
+-export([pack/1, unpack/1, pack_deterministic/1, unpack_deterministic/1,
+         is_nif_loaded/0]).
 
 %% NIF stubs
--export([nif_pack/1, nif_unpack/1]).
+-export([nif_pack/1, nif_unpack/1,
+         nif_pack_deterministic/1, nif_unpack_deterministic/1]).
 
 -on_load(init/0).
 
@@ -83,9 +85,30 @@ pack(Term) ->
 unpack(Bytes) when is_binary(Bytes) ->
     nif_unpack(Bytes).
 
+%% @doc Deterministic CBOR (RFC 8949 §4.2.1) encode, matching
+%% `macula_record_cbor:encode/1' byte-for-byte — see that module and
+%% `native/macula_cbor_nif/src/deterministic.rs' for the exact value
+%% model. NOT wired into `macula_frame'/`macula_record' yet: additive
+%% only, pending exhaustive differential testing against the existing
+%% Erlang codec. Crashes on unencodable input, same as
+%% `macula_record_cbor:encode/1' (no clause matches).
+-spec pack_deterministic(macula_record_cbor:value()) -> binary().
+pack_deterministic(Term) ->
+    nif_pack_deterministic(Term).
+
+%% @doc Deterministic CBOR decode, matching
+%% `macula_record_cbor:decode/1' exactly, including its strict
+%% "no trailing bytes" requirement and its crash-on-malformed-input
+%% contract (this raises, it does not return an error tuple).
+-spec unpack_deterministic(binary()) -> macula_record_cbor:value().
+unpack_deterministic(Bytes) when is_binary(Bytes) ->
+    nif_unpack_deterministic(Bytes).
+
 %%%===================================================================
 %%% NIF stubs (replaced at load time)
 %%%===================================================================
 
 nif_pack(_Term)    -> ?NIF_NOT_LOADED.
 nif_unpack(_Bytes) -> ?NIF_NOT_LOADED.
+nif_pack_deterministic(_Term)    -> ?NIF_NOT_LOADED.
+nif_unpack_deterministic(_Bytes) -> ?NIF_NOT_LOADED.

@@ -36,6 +36,8 @@ use rustler::types::atom::Atom as ErlAtom;
 use rustler::types::map::MapIterator;
 use rustler::{Binary, Encoder, Env, NifResult, OwnedBinary, Term, TermType};
 
+mod deterministic;
+
 mod atoms {
     rustler::atoms! {
         ok,
@@ -46,6 +48,22 @@ mod atoms {
         true_ = "true",
         false_ = "false",
     }
+}
+
+/// Deterministic CBOR (RFC 8949 §4.2.1) encode, mirroring
+/// `macula_record_cbor:encode/1` byte-for-byte. See `deterministic.rs`
+/// module docs for the value model and why this bypasses `ciborium`.
+#[rustler::nif]
+fn nif_pack_deterministic<'a>(env: Env<'a>, term: Term<'a>) -> NifResult<Binary<'a>> {
+    deterministic::encode(env, term)
+}
+
+/// Deterministic CBOR decode, mirroring `macula_record_cbor:decode/1`
+/// exactly, including its strict "no trailing bytes" requirement.
+/// Never panics on malformed input — see `deterministic.rs`.
+#[rustler::nif]
+fn nif_unpack_deterministic<'a>(env: Env<'a>, bytes: Binary<'a>) -> NifResult<Term<'a>> {
+    deterministic::decode(env, bytes)
 }
 
 #[rustler::nif]
