@@ -261,7 +261,7 @@ compute_mcid(Body, Algorithm) ->
         {text, <<"hash_algorithm">>} => {text, atom_to_binary(Algorithm)},
         {text, <<"root_hash">>}      => maps:get(root_hash, Body)
     },
-    Bytes = macula_record_cbor:encode(Canonical),
+    Bytes = macula_cbor_nif:pack_deterministic(Canonical),
     make_mcid(?CODEC_MANIFEST, hash(Algorithm, Bytes)).
 
 make_mcid(Codec, Hash) ->

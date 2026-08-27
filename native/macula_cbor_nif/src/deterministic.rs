@@ -202,9 +202,9 @@ fn err(msg: &'static str) -> rustler::Error {
 }
 
 pub fn decode<'a>(env: Env<'a>, bytes: Binary<'a>) -> NifResult<Term<'a>> {
-    let buf = bytes.as_slice();
-    let (term, pos) = decode_one(env, buf, 0)?;
-    if pos != buf.len() {
+    let len = bytes.as_slice().len();
+    let (term, pos) = decode_one(env, bytes, 0)?;
+    if pos != len {
         // `macula_record_cbor:decode/1` requires `{V, <<>>} = decode_one(Bin)`
         // — trailing bytes after the top-level value is a badmatch there.
         return Err(err("cbor: trailing bytes after top-level value"));
@@ -220,7 +220,17 @@ fn need(buf: &[u8], pos: usize, n: usize) -> NifResult<()> {
     }
 }
 
-fn decode_one<'a>(env: Env<'a>, buf: &[u8], pos: usize) -> NifResult<(Term<'a>, usize)> {
+// `orig` (the whole input binary, threaded through every recursive call)
+// is what makes `make_subbinary` possible below: byte-string and
+// text-string decoding take a zero-copy reference into `orig` instead of
+// allocating a fresh `OwnedBinary` and copying — the same thing Erlang's
+// own `<<B:Len/binary, Rest/binary>> = R` pattern match does for a refc
+// binary. Measured: without this, native decode was *slower* than the
+// pure-Erlang reference implementation (15-43% depending on payload
+// shape) specifically because it was paying a real allocation+copy on
+// every binary/text field where Erlang pays neither.
+fn decode_one<'a>(env: Env<'a>, orig: Binary<'a>, pos: usize) -> NifResult<(Term<'a>, usize)> {
+    let buf = orig.as_slice();
     need(buf, pos, 1)?;
     let byte0 = buf[pos];
     let major = byte0 >> 5;
@@ -245,25 +255,22 @@ fn decode_one<'a>(env: Env<'a>, buf: &[u8], pos: usize) -> NifResult<(Term<'a>, 
         2 => {
             let len = n as usize;
             need(buf, next, len)?;
-            let bytes = &buf[next..next + len];
-            let mut out = OwnedBinary::new(len)
-                .ok_or_else(|| err("cbor: failed to allocate binary"))?;
-            out.as_mut_slice().copy_from_slice(bytes);
-            Ok((out.release(env).to_term(env), next + len))
+            let sub = orig
+                .make_subbinary(next, len)
+                .map_err(|_| err("cbor: failed to slice binary"))?;
+            Ok((sub.to_term(env), next + len))
         }
         3 => {
             let len = n as usize;
             need(buf, next, len)?;
-            let bytes = &buf[next..next + len];
-            let mut out = OwnedBinary::new(len)
-                .ok_or_else(|| err("cbor: failed to allocate binary"))?;
-            out.as_mut_slice().copy_from_slice(bytes);
-            let bin_term = out.release(env).to_term(env);
-            let tuple = (atoms::text().to_term(env), bin_term);
+            let sub = orig
+                .make_subbinary(next, len)
+                .map_err(|_| err("cbor: failed to slice binary"))?;
+            let tuple = (atoms::text().to_term(env), sub.to_term(env));
             Ok((tuple.encode(env), next + len))
         }
-        4 => decode_array(env, buf, next, n),
-        5 => decode_map(env, buf, next, n),
+        4 => decode_array(env, orig, next, n),
+        5 => decode_map(env, orig, next, n),
         _ => Err(err("cbor: major type 6 (tags) not supported")),
     }
 }
@@ -331,13 +338,13 @@ fn decode_major7<'a>(env: Env<'a>, buf: &[u8], pos: usize, ai: u8) -> NifResult<
 
 fn decode_array<'a>(
     env: Env<'a>,
-    buf: &[u8],
+    orig: Binary<'a>,
     mut pos: usize,
     count: u64,
 ) -> NifResult<(Term<'a>, usize)> {
     let mut items: Vec<Term<'a>> = Vec::with_capacity(count.min(1024) as usize);
     for _ in 0..count {
-        let (item, next) = decode_one(env, buf, pos)?;
+        let (item, next) = decode_one(env, orig, pos)?;
         items.push(item);
         pos = next;
     }
@@ -346,7 +353,7 @@ fn decode_array<'a>(
 
 fn decode_map<'a>(
     env: Env<'a>,
-    buf: &[u8],
+    orig: Binary<'a>,
     mut pos: usize,
     count: u64,
 ) -> NifResult<(Term<'a>, usize)> {
@@ -354,8 +361,8 @@ fn decode_map<'a>(
     // `Acc#{K => V}` in `decode_map/3` exactly — not an error.
     let mut pairs: Vec<(Term<'a>, Term<'a>)> = Vec::with_capacity(count.min(1024) as usize);
     for _ in 0..count {
-        let (k, next1) = decode_one(env, buf, pos)?;
-        let (v, next2) = decode_one(env, buf, next1)?;
+        let (k, next1) = decode_one(env, orig, pos)?;
+        let (v, next2) = decode_one(env, orig, next1)?;
         pos = next2;
         match pairs.iter_mut().find(|(ek, _)| *ek == k) {
             Some(entry) => entry.1 = v,

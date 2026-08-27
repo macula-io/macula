@@ -703,11 +703,11 @@ expiry_check(#{expires_at := X} = Record) ->
 
 -spec encode(m_record()) -> binary().
 encode(#{signature := Sig} = Record) when is_binary(Sig), byte_size(Sig) =:= 64 ->
-    macula_record_cbor:encode(to_envelope_map(Record)).
+    macula_cbor_nif:pack_deterministic(to_envelope_map(Record)).
 
 -spec decode(binary()) -> {ok, m_record()} | {error, term()}.
 decode(Bin) when is_binary(Bin) ->
-    decode_value(macula_record_cbor:decode(Bin)).
+    decode_value(macula_cbor_nif:unpack_deterministic(Bin)).
 
 decode_value(Map) when is_map(Map) ->
     G = fun(Key) -> maps:get({text, Key}, Map, undefined) end,
@@ -1415,4 +1415,4 @@ add_signature(M, Sig) when is_binary(Sig) ->
 
 %% Canonical CBOR of the record minus its signature — what gets signed/verified.
 canonical_unsigned(Record) ->
-    macula_record_cbor:encode(to_envelope_map(maps:without([signature], Record))).
+    macula_cbor_nif:pack_deterministic(to_envelope_map(maps:without([signature], Record))).

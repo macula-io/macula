@@ -22,8 +22,10 @@
 %% taxonomy in `hecate_bolt4'. PUBLISH frames land later.
 %%
 %% Signatures are Ed25519 over `"macula-v2-frame\0" ++ canonical_cbor(unsigned)'
-%% where `canonical_cbor' is `macula_record_cbor:encode/1' (RFC 8949 §4.2.1
-%% deterministic).
+%% where `canonical_cbor' is `macula_cbor_nif:pack_deterministic/1' (RFC 8949
+%% §4.2.1 deterministic — same rules `macula_record_cbor:encode/1' implements
+%% in pure Erlang, kept as the differentially-tested reference; see
+%% `test/macula_cbor_deterministic_diff_tests.erl').
 -module(macula_frame).
 
 -export([
@@ -803,7 +805,7 @@ verify_update_result(true,  Update) -> {ok, Update};
 verify_update_result(false, _Update) -> {error, signature_invalid}.
 
 canonical_swim_update(Update) ->
-    macula_record_cbor:encode(to_wire(maps:without([signature], Update))).
+    macula_cbor_nif:pack_deterministic(to_wire(maps:without([signature], Update))).
 
 %%------------------------------------------------------------------
 %% DHT frame constructors (Part 6 §7)
@@ -1492,7 +1494,7 @@ verify_publisher_result(false, _Frame) -> {error, signature_invalid}.
 %% publisher sent and on the EVENT a relay derives from it.
 publisher_signing_bytes(#{topic := T, realm := R, publisher := Pub,
                           seq := Seq, payload := Payload}) ->
-    macula_record_cbor:encode(to_wire(prepare_records(#{
+    macula_cbor_nif:pack_deterministic(to_wire(prepare_records(#{
         topic     => T,
         realm     => R,
         publisher => Pub,
@@ -1517,7 +1519,7 @@ publisher_signing_bytes(#{topic := T, realm := R, publisher := Pub,
 
 -spec encode(frame()) -> binary().
 encode(Frame) when is_map(Frame) ->
-    Bytes = macula_record_cbor:encode(to_wire(prepare_records(Frame))),
+    Bytes = macula_cbor_nif:pack_deterministic(to_wire(prepare_records(Frame))),
     Len = byte_size(Bytes),
     encode_with_check(Len, Bytes).
 
@@ -1555,7 +1557,7 @@ decode(Buf) when is_binary(Buf), byte_size(Buf) < 4 ->
     {more, 4 - byte_size(Buf)}.
 
 decode_cbor(Bytes, Rest) ->
-    try macula_record_cbor:decode(Bytes) of
+    try macula_cbor_nif:unpack_deterministic(Bytes) of
         Term when is_map(Term) ->
             Frame = from_wire_envelope(Term),
             {ok, restore_records(Frame), Rest};
@@ -1637,7 +1639,7 @@ canonical_unsigned(Frame) ->
     %% `publisher_sig' to frames until every relay is on a build that
     %% strips it here too — see CHANGELOG 4.4.0.)
     Unsigned = maps:without([signature, publisher_sig], Frame),
-    macula_record_cbor:encode(to_wire(prepare_records(Unsigned))).
+    macula_cbor_nif:pack_deterministic(to_wire(prepare_records(Unsigned))).
 
 %%------------------------------------------------------------------
 %% Atom <-> wire-binary translation
@@ -1665,7 +1667,7 @@ canonical_unsigned(Frame) ->
 %% before the cast, is what makes that `ok' mean something.
 %%
 %% This function must agree exactly with `to_wire/1' followed by
-%% `macula_record_cbor:encode/1'. That is why it lives beside them
+%% `macula_cbor_nif:pack_deterministic/1'. That is why it lives beside them
 %% rather than in a validation module: the two cannot drift apart
 %% without the agreement property test in `macula_frame_tests' going
 %% red.
@@ -1755,7 +1757,9 @@ sum_floor([H | T], Acc) -> sum_floor(T, Acc + byte_floor(H)).
 
 %% Integers: the codec renders major 0 / major 1 and bounds both at 64
 %% bits. The bound is NOT restated here — a bignum past it matches no
-%% clause in `macula_record_cbor:encode/1', so the codec is asked.
+%% clause in either CBOR encoder (`macula_cbor_nif:pack_deterministic/1',
+%% the live path, or `macula_record_cbor:encode/1', its differentially-
+%% tested reference), so the codec is asked.
 check_value(I, Path) when is_integer(I) ->
     int_ok(macula_record_cbor:is_encodable_int(I), Path);
 check_value(F, _Path) when is_float(F) ->
@@ -1843,7 +1847,7 @@ unsupported(Type, Path) ->
     {error, {unsupported_payload_type, Type, lists:reverse(Path)}}.
 
 %% @private Convert a frame map (atom keys, atom values where used)
-%% into the shape `macula_record_cbor:encode/1' understands. Booleans
+%% into the shape the CBOR encoders understand. Booleans
 %% (`true' / `false') are atoms in Erlang and round-trip the same way
 %% as any other atom — encoded as text strings, decoded via
 %% `binary_to_existing_atom'. Floats are stringified compactly so the
@@ -1865,7 +1869,7 @@ to_wire(Other) -> Other.
 wire_key(A) when is_atom(A)   -> {text, atom_to_binary(A, utf8)};
 wire_key({text, B})           -> {text, B};
 wire_key(B) when is_binary(B) -> {text, B};
-%% Integer keys (any sign) pass through to macula_record_cbor:encode/1
+%% Integer keys (any sign) pass through to the CBOR encoder as-is,
 %% which renders them as major 0 or major 1 — both are valid CBOR map
 %% keys. Required for payloads whose nested maps are indexed by integer
 %% (e.g. per-wall sub-maps in mpong game state).

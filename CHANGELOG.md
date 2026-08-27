@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.8.0] - 2026-08-27
+
+### Changed — the live wire codec is now the native deterministic CBOR encoder
+
+10.7.0 shipped `macula_cbor_nif:pack_deterministic/1` and
+`unpack_deterministic/1` as an additive, differentially-tested-but-unused
+capability. This release wires it in: all 9 real call sites across
+`macula_frame.erl`, `macula_record.erl`, and `macula_manifest.erl` that
+used to call `macula_record_cbor:encode/1` / `decode/1` now call
+`macula_cbor_nif:pack_deterministic/1` / `unpack_deterministic/1`
+instead — every frame sent or received on the mesh, every signed
+record, and every content manifest hash now goes through the native
+codec. `macula_record_cbor.erl` itself is untouched and stays live as
+the differentially-tested reference implementation (still exercised by
+its own full test suite); nothing calls it for real traffic anymore.
+
+**Found and fixed a real performance bug before wiring anything in**:
+the native decoder was originally *slower* than the pure-Erlang
+reference for every payload size tested (15-43% slower, worst on
+medium-sized frames) — it paid a fresh allocation + full copy
+(`OwnedBinary::new` + `copy_from_slice`) for every byte-string/text-
+string field, where Erlang's own `<<B:Len/binary, Rest/binary>>` sub-
+binary pattern match pays neither for a refc binary. Fixed by threading
+the original input `Binary<'a>` through the whole recursive descent and
+using `Binary::make_subbinary/2` (a genuine zero-copy reference) instead.
+Benchmarked before wiring in (representative small/medium/large
+frame-shaped payloads, 50k iterations each, two independent runs):
+encode 2.6-4.2x faster, decode 1.24-1.62x faster, both directions, both
+runs — a real, reproducible net win, not a wash.
+
+**Verification**: full targeted suite (`macula_frame`, `macula_record`,
+`macula_record_cbor`, `macula_record_uuid`, `macula_record_cert_chain`,
+`macula_record_content_announcement`, `macula_manifest`, `macula_identity`,
+`macula_peering_conn`, `macula_peering`, `macula_cbor_nif`,
+`macula_cbor_deterministic_diff_tests` — 455 tests) passes clean. Full project eunit suite: 1586 passed, 1
+failed before the run cascaded/aborted (a pre-existing flake in
+`macula_station_link_tests`, confirmed unrelated to this change by
+running that module in isolation — 53/53 pass there, matching the
+already-documented `macula_full_eunit_suite_flaky_under_load` pattern).
+Rebuilt the NIF from scratch via the real `priv/build-nifs.sh`
+pipeline (not a manual `cargo build` + copy) to confirm the hex-publish
+path produces the same result a consumer's `rebar3 compile` would.
+
+**No wire-format change**: this is the entire point of shipping 10.7.0
+first and differentially testing it — the bytes this produces are
+identical to what `macula_record_cbor` always produced, verified by
+construction (65 differential tests including 3000+ randomized trials
+across two seeds) rather than assumed. Any station or client on an
+older macula version interoperates unchanged.
+
 ## [10.7.0] - 2026-08-27
 
 ### Added — native deterministic CBOR codec (additive, NOT wired into the live frame path)
