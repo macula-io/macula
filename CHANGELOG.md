@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.5.4] - 2026-08-27
+
+### Added — SDK-side send-path diagnostic in `macula_peering_conn` (TO BE REVERTED)
+
+Follow-up to 10.5.3, and a change of layer. 10.5.1-10.5.3 proved the
+overlay_relay bytes are read correctly, delivered to the correct,
+unchanged-since-birth stream owner, and enqueued into that Erlang
+process's mailbox (`send_and_clear` returns `Ok(())`). Two further
+diagnostics added directly to macula-station's own
+`macula_station_peer_observer.erl` (not requiring this SDK, since that
+module is macula-station's own code) then showed something unexpected:
+an unconditional log at the very entry of `on_frame/3` — which every
+frame taking the "legacy controlling_pid" path must pass through —
+never fired even once during a full reproduction capture, for this
+frame or any other. That points further upstream than macula-station's
+own dispatch logic, back into this SDK's own `macula_peering_conn`
+module, which is the thing actually responsible for delivering
+`{macula_peering, frame, ConnPid, Frame}` to `controlling_pid` in the
+first place.
+
+This adds three unconditional diagnostics: `connected/3`'s handling of
+`{quic, Bin, Stream, Flags}` now logs `parse_stream/1`'s actual frame
+count for each read (distinguishing a clean parse from a silent
+`{more, _}` stall or a silently-swallowed `{error, bad_frame}`, both of
+which look identical from outside); `notify_frame/2` and
+`notify_bypass/5` now log the resolved `controlling_pid` target and
+whether it was alive at send time, immediately before the `Pid ! Msg`
+send that is the last SDK-owned step before the message left for
+macula-station's mailbox.
+
+**No functional change.** Follow-up patch removes all of 10.5.1's
+through this logging once the incident is root-caused.
+
 ## [10.5.3] - 2026-08-27
 
 ### Added — stream-ownership identity diagnostic in `macula_quic` (TO BE REVERTED)

@@ -481,6 +481,18 @@ connected(enter, _Old, Data) ->
 connected(info, {quic, Bin, Stream, _Flags},
           #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
     {Frames, Tail} = macula_frame:parse_stream(<<Buf/binary, Bin/binary>>),
+    %% TEMP DIAGNOSTIC (overlay_relay WAN-only vanishing-frame incident)
+    %% — remove once root-caused. Confirms `parse_stream/1' itself
+    %% actually yields a frame for this read, rather than silently
+    %% stalling on `{more, _}' or `{error, bad_frame}' (both of which
+    %% return the accumulated buffer with zero frames, indistinguishable
+    %% from each other or from a clean empty read without this).
+    catch macula_diagnostics:event(
+            <<"_macula.peering.parse_stream">>,
+            #{bin_size    => byte_size(Bin),
+              buf_size_in => byte_size(Buf),
+              frame_count => length(Frames),
+              tail_size   => byte_size(Tail)}),
     [route_frame(F, Data) || F <- Frames],
     {keep_state, Data#data{buf = Tail}};
 %% Peer opened a new stream on this connection, outside the control
@@ -804,17 +816,42 @@ bypass_or_legacy(Pid, Tag, Frame, NodeId,
     ok.
 
 notify_frame(Frame, #data{controlling_pid = Pid, timing_enabled = false}) ->
+    diag_notify_frame(Pid, Frame),
     Pid ! {macula_peering, frame, self(), Frame},
     ok;
 notify_frame(Frame, #data{controlling_pid = Pid, timing_enabled = true}) ->
+    diag_notify_frame(Pid, Frame),
     T = erlang:monotonic_time(microsecond),
     Pid ! {macula_peering, frame, self(), Frame, T},
     ok.
 
+%% TEMP DIAGNOSTIC (overlay_relay WAN-only vanishing-frame incident) —
+%% remove once root-caused. macula-station's own peer_observer:on_frame/3
+%% (which every message sent here must reach) never logs at all for this
+%% path on the real fleet, even for frame types with no other explanation
+%% for being dropped — so this instruments the SDK side of the same send,
+%% right before it happens, to confirm the send is even attempted and
+%% whether `controlling_pid' resolves to a live target at send time.
+diag_notify_frame(Pid, Frame) ->
+    catch macula_diagnostics:event(
+            <<"_macula.peering.notify_frame">>,
+            #{pid        => Pid,
+              pid_alive  => pid_alive(Pid),
+              frame_type => macula_frame:frame_type(Frame)}).
+
+pid_alive(Pid) when is_pid(Pid), node(Pid) =:= node() ->
+    erlang:is_process_alive(Pid);
+pid_alive(Pid) when is_pid(Pid) ->
+    remote;
+pid_alive(Name) when is_atom(Name) ->
+    erlang:whereis(Name) =/= undefined.
+
 notify_bypass(Pid, Tag, NodeId, Frame, false) ->
+    diag_notify_frame(Pid, Frame),
     Pid ! {macula_peering, Tag, self(), NodeId, Frame},
     ok;
 notify_bypass(Pid, Tag, NodeId, Frame, true) ->
+    diag_notify_frame(Pid, Frame),
     T = erlang:monotonic_time(microsecond),
     Pid ! {macula_peering, Tag, self(), NodeId, Frame, T},
     ok.
