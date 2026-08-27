@@ -95,13 +95,13 @@ impl StreamResource {
                         );
                         break;
                     }
-                    Err(_e) => {
+                    Err(e) => {
                         let owner = *stream_arc.owner.read().unwrap();
                         message::send_event(
                             &owner,
                             atoms::stream_closed(),
                             stream_arc.clone(),
-                            atoms::none(), // simplified for now
+                            format!("{}", e),
                         );
                         break;
                     }

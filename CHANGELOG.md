@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.10.0] - 2026-08-27
+
+### Fixed — `macula_diagnostics:event/2,3` was silently dropped everywhere, always
+
+Root cause of a class of bug this session had already independently
+rediscovered and worked around three separate times (10.5.5's
+`drop_unexpected/4`, the listener's `maybe_emit_puzzle_invalid/3` and
+`duplicate_replaced` warnings in macula-station) without ever tracing
+it back to the actual source: `event/3` stamps every report with
+`domain => [macula]` in its metadata. OTP's own stock `default` logger
+handler — confirmed with a bare `erl`, no `sasl`, no project config —
+ships `filter_default => stop` with only two explicit allows: events
+whose domain is `[otp, sasl]` (or a sub-domain of it), and events with
+no domain at all. `[macula]` matches neither. Every single call to
+`macula_diagnostics:event/2,3`, in this SDK and in every consumer
+(macula-station's announcer, outbound_link, health_publisher,
+peer_observer's `relay_overlay`/`forward_overlay`, listener's
+`cap_exceeded`), has been silently dropped before reaching any handler
+output since the day this module shipped. Confirmed end-to-end with a
+throwaway `default` handler pointed at a file: `info`-level events
+never appeared until this fix was in place.
+
+Fixed at the source, not by working around it at each call site again:
+new `macula_diagnostics:install_domain_filter/0` adds an explicit
+`{log, equal, [macula]}` allow filter to the `default` handler, called
+once from `macula_app`'s own `start/2` — every consumer gets it for
+free just by depending on `macula`, no per-release filter config to
+remember. `macula_peering_conn`'s `drop_unexpected/4`, which carried
+the `logger:warning/2` workaround and a comment explaining why, is
+reverted back to `macula_diagnostics:event/2` (topic
+`_macula.peering.unexpected_event`) now that the underlying mechanism
+actually works. macula-station's own workarounds
+(`maybe_emit_puzzle_invalid/3`, `duplicate_replaced`) are addressed in
+that repo's own CHANGELOG once it picks up this version.
+
+Verified with `test/macula_diagnostics_tests.erl`'s
+`domain_filter_fixes_the_actual_drop_test/0`: reproduces the exact
+production filter chain (including kernel's `logger_level => info`
+override, since OTP's stock primary-level default of `notice` would
+otherwise mask the same symptom for an unrelated reason) against a
+temporary `default` handler backed by a real file, confirms the event
+is silently absent before the fix and present after it. Confirmed RED
+without the fix (`{error, undef}` on the not-yet-existing function) via
+`git stash`, GREEN with it restored.
+
+### Fixed — NIF discarded the real reason a QUIC stream closed
+
+`native/macula_quic/src/stream.rs`'s recv-loop catch-all
+(`Err(_e) => ... atoms::none() // simplified for now`) collapsed every
+read error other than a peer `Reset` — connection loss, timeout,
+anything else `quinn::ReadError` can return — into a bare `none`
+atom. 10.9.1's `stream_closed`/`peer_send_shutdown` handling threads
+this `Detail` straight into the `disconnected` notification's reason
+(`{peer_closed, Detail}`, `{closed_during_handshake, Detail}`, etc.),
+so every one of those reasons carried no actual diagnostic content.
+Now formats the real `quinn::ReadError` via `format!("{}", e)`,
+matching the existing pattern already used two lines away in the same
+file for `reset`/`send` errors. No Erlang-side change needed — `Detail`
+was always passed through opaquely, so it now just carries a real
+string instead of always `none`.
+
 ## [10.9.1] - 2026-08-27
 
 ### Fixed — connections could sit "connected" forever after their transport actually died

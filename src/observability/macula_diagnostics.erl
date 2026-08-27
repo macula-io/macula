@@ -16,7 +16,8 @@
     event/2, event/3,
     metric/3,
     snapshot/0,
-    reset/0
+    reset/0,
+    install_domain_filter/0
 ]).
 
 -export_type([level/0, metric_type/0, sample/0]).
@@ -45,6 +46,34 @@ event(Level, Topic, Properties)
 %% Logger report callback — flat single-line format.
 report_cb(#{event := Topic, properties := Props}) ->
     {"~s ~0p", [Topic, Props]}.
+
+%% @doc Allow `domain => [macula]' events through the default logger
+%% handler's filter chain.
+%%
+%% Every event this module emits is stamped `domain => [macula]'
+%% (above). On a release that includes `sasl' — true of every
+%% consumer's production build — the default handler installs a
+%% filter chain with `filter_default => stop' and only two explicit
+%% allows: events whose domain is `[otp, sasl]' (or a sub-domain of
+%% it) and events with no domain at all. `[macula]' matches neither,
+%% so every `event/2,3' call was silently dropped before reaching
+%% any handler, in every consumer, always — confirmed live on the
+%% macula-station fleet (see CHANGELOG [10.5.5] there) after already
+%% being independently rediscovered and worked around three separate
+%% times at three separate call sites before anyone traced it to this
+%% one line. Call this once, from the `macula' application's own
+%% `start/2', so every consumer gets it for free just by depending on
+%% `macula' — no per-consumer release config to remember.
+-spec install_domain_filter() -> ok.
+install_domain_filter() ->
+    case logger:add_handler_filter(
+            default,
+            macula_domain,
+            {fun logger_filters:domain/2, {log, equal, [macula]}}) of
+        ok                           -> ok;
+        {error, {already_exist, _}} -> ok;
+        {error, _Reason}             -> ok
+    end.
 
 %%------------------------------------------------------------------
 %% Metrics — process-dictionary backed (Phase 1 only)
