@@ -487,12 +487,17 @@ connected(info, {quic, Bin, Stream, _Flags},
     %% stalling on `{more, _}' or `{error, bad_frame}' (both of which
     %% return the accumulated buffer with zero frames, indistinguishable
     %% from each other or from a clean empty read without this).
-    catch macula_diagnostics:event(
-            <<"_macula.peering.parse_stream">>,
-            #{bin_size    => byte_size(Bin),
-              buf_size_in => byte_size(Buf),
-              frame_count => length(Frames),
-              tail_size   => byte_size(Tail)}),
+    %% Plain `logger:info/2', not `macula_diagnostics:event/2' — the
+    %% latter stamps `domain => [macula]', which the default handler's
+    %% filter chain silently drops on any release that includes `sasl'
+    %% (`filter_default => stop' + only `[otp,sasl]'-domain and
+    %% no-domain events are explicitly allowed through). Confirmed live
+    %% on the fleet: a manually-triggered `logger:log' with
+    %% `domain => [macula]' never reached `docker logs' at all, while
+    %% the identical report with no domain metadata did.
+    logger:info("[peering] parse_stream bin_size=~p buf_size_in=~p "
+                "frame_count=~p tail_size=~p",
+                [byte_size(Bin), byte_size(Buf), length(Frames), byte_size(Tail)]),
     [route_frame(F, Data) || F <- Frames],
     {keep_state, Data#data{buf = Tail}};
 %% Peer opened a new stream on this connection, outside the control
@@ -832,12 +837,13 @@ notify_frame(Frame, #data{controlling_pid = Pid, timing_enabled = true}) ->
 %% for being dropped — so this instruments the SDK side of the same send,
 %% right before it happens, to confirm the send is even attempted and
 %% whether `controlling_pid' resolves to a live target at send time.
+%% Plain `logger:info/2' — see the `parse_stream' diagnostic above for
+%% why `macula_diagnostics:event/2' is unusable here: it is silently
+%% dropped by the default handler's domain filter on any release built
+%% with `sasl'.
 diag_notify_frame(Pid, Frame) ->
-    catch macula_diagnostics:event(
-            <<"_macula.peering.notify_frame">>,
-            #{pid        => Pid,
-              pid_alive  => pid_alive(Pid),
-              frame_type => macula_frame:frame_type(Frame)}).
+    logger:info("[peering] notify_frame pid=~p pid_alive=~p frame_type=~p",
+                [Pid, pid_alive(Pid), macula_frame:frame_type(Frame)]).
 
 pid_alive(Pid) when is_pid(Pid), node(Pid) =:= node() ->
     erlang:is_process_alive(Pid);

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.5.5] - 2026-08-27
+
+### Fixed — 10.5.4's diagnostics were silently dropped by the default logger filter chain
+
+Not a code-path bug: a logging-visibility one, found while trying to
+read 10.5.4's output on the fleet. `macula_diagnostics:event/2,3`
+stamps `domain => [macula]` on every event. The default `logger_std_h`
+handler on any release that includes `sasl` (every macula-station box)
+installs `filter_default => stop` plus filters that only explicitly
+`log` two things: `[otp, sasl]`-domain reports and events with **no**
+domain metadata at all. Anything else — including every single
+`macula_diagnostics:event` call, this incident's temporary diagnostics
+and macula-station's own pre-existing `overlay_relay_stats`-adjacent
+events alike — falls through every filter unmatched and is dropped by
+`filter_default => stop`. Confirmed directly on the live Frankfurt
+node: a manually-triggered `logger:log` with `domain => [macula]`
+metadata never reached `docker logs`; the identical report with no
+domain metadata did.
+
+Practical effect on this investigation: the three diagnostic cycles
+between 10.5.3 and this one (peer_observer's `route/4` and `on_frame`
+logging in macula-station, and this SDK's own `notify_frame`/
+`parse_stream` logging added in 10.5.4) produced **no information at
+all** — not a negative result, just silence, indistinguishable from
+"never executed." The only diagnostics unaffected by this bug are the
+`overlay_relay_stats/0` counters (`persistent_term`/`counters`, not the
+logger) and the Rust-side `eprintln!` calls in `macula_quic` (bypass
+Erlang's logger entirely).
+
+10.5.4's `parse_stream` and `notify_frame` diagnostics now use plain
+`logger:info/2` (no domain metadata) instead of
+`macula_diagnostics:event/2`, so they are actually observable. This SDK
+release does not fix the underlying filter-chain default itself (that
+lives in macula-station's release config, not here) — it only makes
+this incident's own temporary instrumentation visible again.
+
+**No functional change.** Follow-up patch removes all of 10.5.1's
+through this logging once the incident is root-caused.
+
 ## [10.5.4] - 2026-08-27
 
 ### Added — SDK-side send-path diagnostic in `macula_peering_conn` (TO BE REVERTED)
