@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.5.2] - 2026-08-27
+
+### Added — one more temporary diagnostic line in `macula_quic` (TO BE REVERTED)
+
+Follow-up to 10.5.1. Deploying 10.5.1's tracing to the fleet proved the
+overlay_relay bytes ARE correctly received by the Quinn/Rust layer
+(`recv.read()` returns the exact expected byte count, loop continues
+healthily, no error) — but the message never reaches ANY Erlang code:
+neither the intended `macula_peering_conn` clause nor its own catch-all
+(`drop_unexpected/4`, which already logs and did not fire). That points
+at `message::send_data`'s `env.send_and_clear(...)` call itself, whose
+`Result` was unconditionally discarded (`let _ = ...`) — the one part of
+the whole path never actually checked. This logs that result.
+
+**No functional change.** Follow-up patch removes both 10.5.1's and this
+logging once the incident is root-caused.
+
 ## [10.5.1] - 2026-08-27
 
 ### Added — temporary `macula_quic` diagnostic logging (TO BE REVERTED)
