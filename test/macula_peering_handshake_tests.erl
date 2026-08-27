@@ -43,6 +43,8 @@ handshake_test_() ->
             %% DRAIN_TIMEOUT_MS is 5s; the disconnected fires shortly
             %% after that. Override the eunit default 5s per-test cap.
             {timeout, 15, fun() -> close_drains_then_disconnects(Ctx) end}},
+           {"reject on a connected worker terminates immediately, no draining",
+            fun() -> reject_terminates_immediately(Ctx) end},
            {"undefined accept_owner: handshake completes without notification",
             fun() -> handshake_complete_skipped_when_accept_owner_undefined(Ctx) end}]
       end}}.
@@ -184,6 +186,32 @@ close_drains_then_disconnects(Ctx) ->
     end,
     cleanup_pair(undefined, ServerPid, Listener).
 
+%% The whole point of `reject/2': unlike `close/2' above, both the
+%% `disconnected' notification and worker exit must land almost
+%% immediately, never anywhere near `?DRAIN_TIMEOUT_MS' (5s) — proving
+%% there is no `draining' state in between. Also confirms the REAL
+%% rejection reason (`puzzle_invalid') travels in the local
+%% notification, unlike `close/2''s drain path where the local
+%% notification reason is always the fixed atom `drained' regardless
+%% of what the caller originally passed.
+reject_terminates_immediately(Ctx) ->
+    {ClientPid, ServerPid, _, Listener} = handshake_pair(Ctx, []),
+    expect_message({macula_peering, connected, ClientPid, '_'}, 5_000),
+    expect_message({macula_peering, connected, ServerPid, '_'}, 5_000),
+    Mon = erlang:monitor(process, ClientPid),
+    macula_peering:reject(ClientPid, puzzle_invalid),
+    receive
+        {macula_peering, disconnected, ClientPid, puzzle_invalid} -> ok
+    after 500 ->
+        ?assert(false)
+    end,
+    receive
+        {'DOWN', Mon, process, ClientPid, normal} -> ok
+    after 500 ->
+        ?assert(false)
+    end,
+    cleanup_pair(undefined, ServerPid, Listener).
+
 handshake_complete_skipped_when_accept_owner_undefined(Ctx) ->
     %% Server worker spawned WITHOUT accept_owner. `notify_handshake_complete'
     %% should be a no-op — `connected' still fires to controlling_pid, but
@@ -239,7 +267,7 @@ do_handshake_pair(Port, Opts) ->
         capabilities    => 0,
         controlling_pid => Self,
         target          => #{host => "127.0.0.1", port => Port,
-                             timeout_ms => 5_000}
+                             timeout_ms => 5_000, verify => none}
     }),
 
     %% Server side: wait for the listener to deliver the new conn,

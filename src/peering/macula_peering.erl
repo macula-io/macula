@@ -32,6 +32,7 @@
     connect/1,
     accept/2,
     close/1, close/2,
+    reject/2,
     send_frame/2,
     peer_capabilities/1,
     open_dedicated_stream/1,
@@ -77,6 +78,9 @@ handle_started(Err, _Conn) ->
     Err.
 
 %% @doc Initiate a graceful close (sends GOODBYE, drains 5s, terminates).
+%% For a peer that was never trusted in the first place (failed an
+%% admission check rather than ending a legitimate session), use
+%% `reject/2' instead — see its own doc for why.
 -spec close(pid()) -> ok.
 close(Pid) ->
     close(Pid, operator_stop).
@@ -84,6 +88,24 @@ close(Pid) ->
 -spec close(pid(), atom()) -> ok.
 close(Pid, Reason) ->
     gen_statem:cast(Pid, {close, Reason}).
+
+%% @doc Terminate a connection immediately, with no GOODBYE and no
+%% drain window — for a peer that failed an admission check (e.g. an
+%% S/Kademlia identity puzzle) rather than one ending a legitimate
+%% session. `close/2' transitions through `draining' for up to 5s
+%% (`?DRAIN_TIMEOUT_MS'), during which any further inbound data is
+%% silently accepted and discarded by design (`draining' state's
+%% "ignore late inbound during drain" clause) — correct for a
+%% genuinely-trusted peer whose last few in-flight frames shouldn't
+%% cause spurious errors, but for a peer that was never admitted at
+%% all, those same 5 seconds are pure exposure: the connection went
+%% from "no verdict yet" to "should already be gone" the instant the
+%% admission check failed, so there is no legitimate traffic left to
+%% drain gracefully. `reject/2' skips `draining' and terminates the
+%% state machine directly.
+-spec reject(pid(), atom()) -> ok.
+reject(Pid, Reason) ->
+    gen_statem:cast(Pid, {reject, Reason}).
 
 %% @doc Send a frame through the peer connection. Signs the frame with
 %% the local identity if it isn't already signed.

@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.9.0] - 2026-08-27
+
+### Added — `macula_peering:reject/2`, closing the puzzle-enforcement drain window
+
+Follow-up to the overlay_relay root cause ([10.5.9]). That incident's
+mechanism was: a puzzle-invalid peer's connection promotes to
+`connected` (the SDK's state machine has no knowledge of a station's
+puzzle policy), and only afterward does `macula_station_listener`
+decide to reject it — using `macula_peering:close/2`, which transitions
+through `draining` for `?DRAIN_TIMEOUT_MS` (**5 seconds**), during
+which `draining/3`'s "ignore late inbound during drain" clause silently
+accepts and discards any further traffic by design. That's correct for
+a peer whose session was genuinely trusted and is simply ending; it's
+pure exposure for a peer that was never trusted in the first place —
+flagged explicitly as real hardening material still worth doing, not
+done in that release.
+
+`reject/2` is `close/2`'s counterpart for exactly that case: no GOODBYE,
+no `draining`, straight to `{stop, normal, Data}`. Added matching
+`{reject, Reason}` clauses to every state (`connecting`,
+`awaiting_start`, `handshaking`, `connected`, `draining`) — in every
+state except `connected` this is identical to what `close/2` already
+does there (nothing has been established yet, so immediate termination
+was already correct); `connected` and `draining` are where the actual
+fix lives. `macula_station_listener:reject_handshake/3` now calls
+`reject/2` instead of `close/2` for `puzzle_invalid`. This narrows the
+exposure window from the full 5s drain to, at most, whatever's already
+in the connection process's mailbox at the moment of rejection — not a
+mathematically perfect elimination (that would need synchronous
+admission control gating the SDK's own `connected` transition, a much
+larger change not currently justified) but a genuine, order-of-
+magnitude reduction of a real, measured gap.
+
+Also fixed: `macula_station_listener:maybe_emit_puzzle_invalid/3`
+(macula-station) used `macula_diagnostics:event/2`, the same
+domain-filter logging bug fixed elsewhere in the 10.5.x line — a
+function whose whole purpose is letting an operator see rejection
+volume before flipping `log_only` to `enforce` was silently
+unobservable. Switched to `logger:warning/2`.
+
+**Found and fixed a real, unrelated pre-existing bug while adding
+tests**: `macula_peering_handshake_tests.erl`'s client `target` options
+never set `verify`, which defaults to `webpki` (documented as "the
+default since 5.0.0") — meaning every test in this file was rejecting
+its own self-signed test certificate with `UnknownIssuer` and had
+apparently been doing so for a long time, just never caught by a
+careful full-file run. Added `verify => none`, matching the
+established self-signed-test-cluster convention used everywhere else
+in this codebase. All 7 tests in the file pass now, including the new
+one — which also serves as direct proof of the fix: "close" takes
+5.002s (still drains, unchanged), "reject" takes 0.002s (immediate,
+the whole point).
+
+**Verification**: new `reject_terminates_immediately/1` end-to-end test
+(real Quinn QUIC pair, not a state-machine mock) confirms both the
+`disconnected` notification and process exit land within 500ms, never
+anywhere near the 5s drain window. Broader suite (`macula_peering_conn`,
+`macula_peering`, `macula_peering_handshake_tests`,
+`macula_peering_dial_trust_tests`, `macula_peering_recipient_tests`,
+`macula_frame`, `macula_station_link_tests` — 254 tests) passes clean.
+
 ## [10.8.0] - 2026-08-27
 
 ### Changed — the live wire codec is now the native deterministic CBOR encoder

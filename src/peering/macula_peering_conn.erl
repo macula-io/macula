@@ -238,6 +238,12 @@ connecting(info, attempt_connect, #data{target = Target} = Data) ->
 connecting(cast, {close, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, Data};
+%% `reject/2' behaves exactly like `close/2' here: nothing has been
+%% established yet, so there is no legitimate session to distinguish
+%% "graceful" from "immediate" for.
+connecting(cast, {reject, Reason}, Data) ->
+    notify(disconnected, Reason, Data),
+    {stop, normal, Data};
 connecting(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, connecting, Data).
 
@@ -257,6 +263,10 @@ awaiting_start(enter, _Old, Data) ->
 awaiting_start(cast, start_handshake, Data) ->
     {next_state, handshaking, Data};
 awaiting_start(cast, {close, Reason}, Data) ->
+    notify(disconnected, Reason, Data),
+    {stop, normal, Data};
+%% See `connecting/3''s matching clause — same reasoning.
+awaiting_start(cast, {reject, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, Data};
 %% QUIC events that race the `start_handshake' cast must NOT be
@@ -320,6 +330,15 @@ handshaking(info, {quic, closed, _Conn, _Detail}, Data) ->
     notify(disconnected, closed_during_handshake, Data),
     {stop, normal, Data};
 handshaking(cast, {close, Reason}, Data) ->
+    notify(disconnected, Reason, Data),
+    {stop, normal, Data};
+%% See `connecting/3''s matching clause — same reasoning. This is the
+%% state `macula_station_listener:reject_handshake/3' expects a
+%% puzzle-invalid peer to still be in, though the notify/transition
+%% race with `transition_to_connected/1' (see `connected/3''s own
+%% `{reject, Reason}' clause) means it can just as easily already be
+%% `connected' by the time the reject cast arrives — both are covered.
+handshaking(cast, {reject, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, Data};
 %% No CONNECT/HELLO completed within the timeout window. Most common
@@ -543,6 +562,18 @@ connected(info, {quic, closed, _Conn, _Detail}, Data) ->
 connected(cast, {close, Reason}, Data) ->
     _ = send_goodbye(Data#data.quic_stream, Reason, Data),
     {next_state, draining, Data};
+%% `reject/2''s reason for existing: `close/2' transitions through
+%% `draining' for up to `?DRAIN_TIMEOUT_MS' (5s), during which further
+%% inbound data is silently accepted and discarded by design
+%% (`draining/3''s "ignore late inbound during drain" clause) — correct
+%% for a peer whose session was genuinely trusted and is simply ending,
+%% wrong for a peer that just failed an admission check (e.g. an
+%% S/Kademlia puzzle, see `macula_station_listener:reject_handshake/3')
+%% and was never trusted in the first place. No GOODBYE either — a
+%% rejected peer has no session to say goodbye to.
+connected(cast, {reject, Reason}, Data) ->
+    notify(disconnected, Reason, Data),
+    {stop, normal, Data};
 connected(cast, {send_frame, Frame}, Data) ->
     %% Coalesce: drain any other queued `{send_frame, _}' casts and
     %% emit them in a single NIF write. Cuts per-NIF overhead +
@@ -578,6 +609,12 @@ draining(info, {quic, _, _, _}, Data) ->
 draining(cast, {close, _Reason}, Data) ->
     %% Already draining — idempotent.
     {keep_state, Data};
+%% A `reject/2' arriving while already draining (e.g. a caller closed
+%% gracefully first, then a separate admission check failed) ends the
+%% remaining drain window immediately rather than idling it out.
+draining(cast, {reject, Reason}, Data) ->
+    notify(disconnected, Reason, Data),
+    {stop, normal, Data};
 draining(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, draining, Data).
 
