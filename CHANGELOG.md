@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.5.1] - 2026-08-27
+
+### Added — temporary `macula_quic` diagnostic logging (TO BE REVERTED)
+
+`eprintln!`-based tracing in `native/macula_quic/src/{stream,connection}.rs`
+at the NIF boundary: `nif_send`'s `write_all` call (stream id, byte length,
+result), `start_recv_loop`'s `recv.read()` outcomes (bytes read, EOF,
+reset, error), `nif_setopt_active`'s active-flag transitions, and stream
+creation in `nif_open_stream`/`nif_async_accept_stream` (stream ids +
+role). Lands on stderr, which `docker logs` captures on the fleet.
+
+**Why:** `overlay_relay` (10.5.0, Layer 2 plan Phase 3.5) passes CI's
+local test-cluster suite but silently fails to deliver on the real
+7-station fleet. Every layer of `macula`'s own Erlang code (frame codec,
+send path, receive dispatch) has been individually proven correct via
+live `dbg`/`recon` tracing and a local reproduction against the actual
+release binary — the failure is real-network-specific and below the
+Erlang layer. This logging is the next diagnostic step, not a fix.
+Neither `tc netem` delay (30ms±5ms) nor delay+loss (20ms±5ms + 1%)
+reproduces it on loopback, so this instruments the one layer never
+directly observed: the Quinn/Rust NIF boundary itself.
+
+**No functional change.** Follow-up patch removes this logging once the
+incident is root-caused.
+
 ## [10.5.0] - 2026-08-26
 
 ### Added — `overlay_relay` frame + `macula_station_link:send_overlay_frame/3`

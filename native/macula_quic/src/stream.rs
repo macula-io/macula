@@ -48,27 +48,38 @@ impl StreamResource {
         };
         drop(recv_opt);
         let stream_arc = self_arc.clone();
+        // TEMP DIAGNOSTIC (macula 10.5.1) — remove once the overlay_relay
+        // WAN-only vanishing-frame incident is root-caused. See
+        // CHANGELOG.md [10.5.1].
+        let diag_id = recv.id();
 
         let handle = runtime::rt().spawn(async move {
             let mut buf = vec![0u8; 65536];
+            eprintln!("[quic-diag] recv_loop stream={:?} started", diag_id);
             loop {
                 if stream_arc.closed.load(Ordering::Relaxed) {
+                    eprintln!("[quic-diag] recv_loop stream={:?} closed flag set, exiting", diag_id);
                     break;
                 }
 
                 // Wait for active mode
                 if !stream_arc.active.load(Ordering::Relaxed) {
+                    eprintln!("[quic-diag] recv_loop stream={:?} waiting for active", diag_id);
                     stream_arc.active_notify.notified().await;
+                    eprintln!("[quic-diag] recv_loop stream={:?} woke from active wait", diag_id);
                     continue;
                 }
 
+                eprintln!("[quic-diag] recv_loop stream={:?} calling recv.read()", diag_id);
                 match recv.read(&mut buf).await {
                     Ok(Some(n)) => {
+                        eprintln!("[quic-diag] recv_loop stream={:?} read {} bytes", diag_id, n);
                         let data = buf[..n].to_vec();
                         let owner = *stream_arc.owner.read().unwrap();
                         message::send_data(&owner, data, stream_arc.clone());
                     }
                     Ok(None) => {
+                        eprintln!("[quic-diag] recv_loop stream={:?} peer finished (EOF)", diag_id);
                         // Peer finished sending
                         let owner = *stream_arc.owner.read().unwrap();
                         message::send_event(
@@ -80,6 +91,7 @@ impl StreamResource {
                         break;
                     }
                     Err(quinn::ReadError::Reset(code)) => {
+                        eprintln!("[quic-diag] recv_loop stream={:?} RESET code={:?}", diag_id, code);
                         // Peer called reset() on their send side (see
                         // `nif_reset_stream` below) — a deliberate,
                         // peer-visible abort with an application error
@@ -95,7 +107,8 @@ impl StreamResource {
                         );
                         break;
                     }
-                    Err(_e) => {
+                    Err(e) => {
+                        eprintln!("[quic-diag] recv_loop stream={:?} ERROR {:?}", diag_id, e);
                         let owner = *stream_arc.owner.read().unwrap();
                         message::send_event(
                             &owner,
@@ -150,6 +163,16 @@ fn nif_send<'a>(
         None => return Ok((atoms::error(), atoms::stream_finished()).encode(env)),
     };
 
+    // TEMP DIAGNOSTIC (macula 10.5.1) — remove once the overlay_relay
+    // WAN-only vanishing-frame incident is root-caused. See
+    // CHANGELOG.md [10.5.1].
+    let diag_id = send_stream.id();
+    eprintln!(
+        "[quic-diag] nif_send stream={:?} len={} calling write_all",
+        diag_id,
+        bytes.len()
+    );
+
     // Clone the send stream reference for the async block
     // Actually, we need to do the write inside block_on with a mutable ref
     let result = runtime::rt().block_on(async {
@@ -158,6 +181,13 @@ fn nif_send<'a>(
             .await
             .map_err(|e| format!("{}", e))
     });
+
+    eprintln!(
+        "[quic-diag] nif_send stream={:?} len={} write_all result={:?}",
+        diag_id,
+        bytes.len(),
+        result
+    );
 
     drop(guard); // release lock
 
@@ -254,6 +284,10 @@ fn nif_setopt_active<'a>(
     stream: ResourceArc<StreamResource>,
     value: bool,
 ) -> NifResult<Term<'a>> {
+    // TEMP DIAGNOSTIC (macula 10.5.1) — remove once the overlay_relay
+    // WAN-only vanishing-frame incident is root-caused. See
+    // CHANGELOG.md [10.5.1].
+    eprintln!("[quic-diag] nif_setopt_active stream=<ptr {:p}> value={}", &*stream, value);
     stream.active.store(value, Ordering::SeqCst);
     if value {
         stream.notify_active();
