@@ -45,6 +45,8 @@ handshake_test_() ->
             {timeout, 15, fun() -> close_drains_then_disconnects(Ctx) end}},
            {"reject on a connected worker terminates immediately, no draining",
             fun() -> reject_terminates_immediately(Ctx) end},
+           {"peer closing (reject) notifies and terminates the surviving side",
+            fun() -> peer_closing_notifies_the_surviving_side(Ctx) end},
            {"undefined accept_owner: handshake completes without notification",
             fun() -> handshake_complete_skipped_when_accept_owner_undefined(Ctx) end}]
       end}}.
@@ -211,6 +213,47 @@ reject_terminates_immediately(Ctx) ->
         ?assert(false)
     end,
     cleanup_pair(undefined, ServerPid, Listener).
+
+%% Real bug this pins: when one side's connection dies, the events the
+%% NIF actually delivers to the OTHER side are `{quic, stream_closed,
+%% Stream, Detail}' / `{quic, peer_send_shutdown, Stream, Detail}' —
+%% `{quic, closed, Conn, Detail}' is never sent by anything (verified
+%% directly in `native/macula_quic/src/*.rs': the atom exists, nothing
+%% calls `send_event' with it). Before this fix, `handshaking' and
+%% `connected' had a clause ONLY for the atom that never arrives, so
+%% the surviving side's worker fell through to `drop_unexpected',
+%% logged "unexpected", and sat there indefinitely — never notifying
+%% its own `controlling_pid', never terminating — a zombie connection
+%% that looks alive from the BEAM side while its transport is
+%% genuinely gone. Reproduced live against the real fleet while
+%% verifying `reject/2' (10.9.0): the puzzle-invalid CLIENT correctly
+%% saw the SDK's own logging fire `unexpected state=handshaking
+%% event={quic, stream_closed, ...}' and simply never disconnected.
+peer_closing_notifies_the_surviving_side(Ctx) ->
+    {ClientPid, ServerPid, _, Listener} = handshake_pair(Ctx, []),
+    expect_message({macula_peering, connected, ClientPid, '_'}, 5_000),
+    expect_message({macula_peering, connected, ServerPid, '_'}, 5_000),
+    Mon = erlang:monitor(process, ServerPid),
+    %% Reject the CLIENT — the SERVER did not initiate this and has no
+    %% a priori reason to expect it, exactly like a real transport
+    %% failure or a peer that vanished. `reject/2', not `close/2': an
+    %% immediate `{stop, normal, Data}' with no GOODBYE frame is the
+    %% scenario that actually exercises the missing-event-clause bug —
+    %% `close/2''s GOODBYE is itself an application-level frame the
+    %% peer would see as ordinary stream data, not a transport-level
+    %% closure.
+    macula_peering:reject(ClientPid, puzzle_invalid),
+    receive
+        {macula_peering, disconnected, ServerPid, _Reason} -> ok
+    after 2_000 ->
+        ?assert(false)
+    end,
+    receive
+        {'DOWN', Mon, process, ServerPid, normal} -> ok
+    after 500 ->
+        ?assert(false)
+    end,
+    cleanup_pair(undefined, undefined, Listener).
 
 handshake_complete_skipped_when_accept_owner_undefined(Ctx) ->
     %% Server worker spawned WITHOUT accept_owner. `notify_handshake_complete'

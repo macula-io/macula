@@ -326,7 +326,30 @@ handshaking(info, {quic, new_stream, Stream, _Info}, Data) ->
 handshaking(info, {quic, Bin, Stream, _Flags},
             #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
     consume_handshake(<<Buf/binary, Bin/binary>>, Data);
-handshaking(info, {quic, closed, _Conn, _Detail}, Data) ->
+%% `{quic, closed, Conn, Detail}' is NEVER actually sent by the NIF —
+%% `native/macula_quic/src/atoms.rs' defines the atom but nothing calls
+%% `send_event' with it (verified directly in source: the connection's
+%% own `closed' field is a purely-local `AtomicBool', never surfaced as
+%% an event). What the recv loop ACTUALLY sends when the control
+%% stream dies for ANY reason (peer reset, connection loss, timeout —
+%% every non-Reset read error, collapsed by `stream.rs''s own
+%% "simplified for now" catch-all) is `{quic, stream_closed, Stream,
+%% Detail}'; a clean peer-initiated half-close on the same stream comes
+%% as `{quic, peer_send_shutdown, Stream, none}'. A clause that can
+%% never match is not a safety net — it is a connection that, if its
+%% transport dies during handshake, sits in this state forever: no
+%% `disconnected' notification, no termination, indistinguishable from
+%% healthy to `controlling_pid'/`accept_owner' until some unrelated
+%% higher-layer liveness probe eventually notices. This is the same
+%% failure class `project_station_dead_but_healthy_milan' documented at
+%% the station-transport level; the fix here is at the connection
+%% state-machine level, one layer down.
+handshaking(info, {quic, stream_closed, Stream, Detail},
+            #data{quic_stream = Stream} = Data) ->
+    notify(disconnected, {closed_during_handshake, Detail}, Data),
+    {stop, normal, Data};
+handshaking(info, {quic, peer_send_shutdown, Stream, _Detail},
+            #data{quic_stream = Stream} = Data) ->
     notify(disconnected, closed_during_handshake, Data),
     {stop, normal, Data};
 handshaking(cast, {close, Reason}, Data) ->
@@ -556,7 +579,18 @@ connected({call, From}, {open_dedicated_stream, Owner},
           #data{quic_conn = Conn} = Data) ->
     Reply = open_and_handoff(macula_quic:open_stream(Conn), Owner),
     {keep_state, Data, [{reply, From, Reply}]};
-connected(info, {quic, closed, _Conn, _Detail}, Data) ->
+%% `{quic, closed, Conn, Detail}' is NEVER actually sent — see
+%% `handshaking/3''s matching comment for the full explanation. The
+%% events that actually arrive when the control stream dies are
+%% `stream_closed'/`peer_send_shutdown', handled below; a connection
+%% stuck here would otherwise sit `connected' forever after its
+%% transport genuinely died.
+connected(info, {quic, stream_closed, Stream, Detail},
+          #data{quic_stream = Stream} = Data) ->
+    notify(disconnected, {peer_closed, Detail}, Data),
+    {stop, normal, Data};
+connected(info, {quic, peer_send_shutdown, Stream, _Detail},
+          #data{quic_stream = Stream} = Data) ->
     notify(disconnected, peer_closed, Data),
     {stop, normal, Data};
 connected(cast, {close, Reason}, Data) ->
@@ -600,7 +634,19 @@ draining(state_timeout, drain_done, Data) ->
     notify(disconnected, drained, Data),
     _ = close_quic(Data),
     {stop, normal, Data};
-draining(info, {quic, closed, _Conn, _Detail}, Data) ->
+%% `{quic, closed, Conn, Detail}' is NEVER actually sent — see
+%% `handshaking/3''s matching comment. Replaced with the events that
+%% actually arrive; unlike `handshaking'/`connected' this was not a
+%% "stuck forever" bug (the `state_timeout' below already terminates
+%% the drain unconditionally), just a missed opportunity to end the
+%% drain the instant the transport confirms the peer is gone instead
+%% of always waiting out the full `?DRAIN_TIMEOUT_MS'.
+draining(info, {quic, stream_closed, Stream, Detail},
+         #data{quic_stream = Stream} = Data) ->
+    notify(disconnected, {peer_closed_during_drain, Detail}, Data),
+    {stop, normal, Data};
+draining(info, {quic, peer_send_shutdown, Stream, _Detail},
+         #data{quic_stream = Stream} = Data) ->
     notify(disconnected, peer_closed_during_drain, Data),
     {stop, normal, Data};
 draining(info, {quic, _, _, _}, Data) ->

@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.9.1] - 2026-08-27
+
+### Fixed — connections could sit "connected" forever after their transport actually died
+
+Found while live-verifying 10.9.0's `reject/2` against the real fleet:
+the surviving side of a rejected/closed connection sometimes logged
+`[peering] unexpected state=handshaking event={quic, stream_closed,
+...}` and never disconnected.
+
+Root cause: `handshaking/3`, `connected/3`, and `draining/3` each had a
+clause for `{quic, closed, Conn, Detail}` — an event **nothing ever
+sends**. Verified directly in `native/macula_quic/src/atoms.rs`/
+`stream.rs`/`connection.rs`: the `closed` atom exists and a
+connection's own `closed` field is a purely-local `AtomicBool`, but no
+code path anywhere calls `send_event` with it. What the recv loop
+*actually* sends when the control stream dies for any reason — peer
+reset, connection loss, timeout, everything `stream.rs`'s own
+`Err(_e)` catch-all collapses under a `// simplified for now` comment
+— is `{quic, stream_closed, Stream, Detail}`; a clean peer-initiated
+half-close is `{quic, peer_send_shutdown, Stream, Detail}`. Neither was
+handled anywhere in the state machine. Both `handshaking` and
+`connected` had no other matching clause either, so every occurrence
+fell through to `drop_unexpected/4`, which (correctly, since 10.5.6)
+logs it and returns `{keep_state, Data}` — the connection just sits
+there. No `disconnected` notification, no termination, indistinguishable
+from healthy to `controlling_pid`/`accept_owner` until some unrelated
+higher-layer liveness probe eventually notices. This is the same
+failure class `project_station_dead_but_healthy_milan` documented at
+the station-transport level, one layer down at the connection state
+machine itself.
+
+Replaced all three dead clauses with working ones for
+`stream_closed`/`peer_send_shutdown` (guarded to the control stream,
+`Data#data.quic_stream`, matching the codebase's own established
+pattern). `draining/3`'s case was not a "stuck forever" bug (its
+`state_timeout` already terminates unconditionally) — just a missed
+opportunity to end the drain the instant the peer's transport
+confirms closure instead of always waiting out the full
+`?DRAIN_TIMEOUT_MS`.
+
+**Verification, not assumption**: new
+`peer_closing_notifies_the_surviving_side/1` test (real Quinn QUIC
+pair) — reject one side, confirm the OTHER side (which did not
+initiate anything) still gets `disconnected` and terminates, within
+2s. Confirmed RED without the fix (reverted `macula_peering_conn.erl`
+alone, reran — the new test failed exactly as expected) before trusting
+GREEN with it restored. Broader suite (`macula_peering_conn`,
+`macula_peering`, `macula_peering_handshake_tests` — now 8 tests,
+`macula_peering_dial_trust_tests`, `macula_peering_recipient_tests`,
+`macula_frame`, `macula_station_link_tests`, `macula_identity` — 275
+tests total) passes clean.
+
 ## [10.9.0] - 2026-08-27
 
 ### Added — `macula_peering:reject/2`, closing the puzzle-enforcement drain window
