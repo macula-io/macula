@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.5.6] - 2026-08-27
+
+### Fixed — `drop_unexpected/4`'s own logging was silently dropped, same as 10.5.4's
+
+Not a temporary diagnostic this time — a real, pre-existing bugfix.
+`drop_unexpected/4` is `macula_peering_conn`'s catch-all for any event a
+connection's current state doesn't handle, and its entire purpose is
+observability: log `_macula.peering.unexpected` and keep going. It used
+`macula_diagnostics:event/2`, which suffers exactly the filter-chain
+bug fixed for this incident's own diagnostics in 10.5.5 (see that
+entry) — `domain => [macula]` metadata silently dropped by the default
+`logger_std_h` handler on any release built with `sasl`. A function
+whose only job is to be observed was, in practice, unobservable on
+every station in the fleet. Switched to plain `logger:warning/2`.
+
+Found while root-causing the overlay_relay WAN-only vanishing-frame
+incident: 10.5.5's `parse_stream` diagnostic proved the frame's raw
+bytes never reach `connected/3`'s frame-processing clause at all (its
+`logger:info` firing correctly for every other frame type in the same
+capture, but never once with the overlay_relay frame's exact byte
+count) — `drop_unexpected/4` is the only remaining code path capable of
+silently absorbing it, and its own logging bug meant nobody could have
+seen it fire even if it did.
+
 ## [10.5.5] - 2026-08-27
 
 ### Fixed — 10.5.4's diagnostics were silently dropped by the default logger filter chain

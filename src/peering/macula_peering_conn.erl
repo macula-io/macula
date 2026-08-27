@@ -890,18 +890,21 @@ drop_unexpected({call, From}, Event, State, Data) ->
     %% handshake completes) instead of blocking until its own
     %% timeout — which would surface as `{timeout, ...}' to user
     %% code and require defensive try/catch wrappers everywhere.
-    macula_diagnostics:event(<<"_macula.peering.unexpected">>, #{
-        state      => State,
-        event_type => call,
-        event      => safe_event(Event)
-    }),
+    %%
+    %% Plain `logger:warning/2', not `macula_diagnostics:event/2': the
+    %% latter stamps `domain => [macula]', which the default handler's
+    %% filter chain silently drops on any release built with `sasl'
+    %% (`filter_default => stop' + only `[otp,sasl]'-domain and
+    %% no-domain events explicitly allowed through) — confirmed live on
+    %% the fleet, see CHANGELOG [10.5.5]. This function exists purely
+    %% for observability, so a logging path that never actually reaches
+    %% `docker logs' defeats its only purpose.
+    logger:warning("[peering] unexpected state=~p event_type=call event=~p",
+                   [State, safe_event(Event)]),
     {keep_state, Data, [{reply, From, not_connected}]};
 drop_unexpected(EventType, Event, State, Data) ->
-    macula_diagnostics:event(<<"_macula.peering.unexpected">>, #{
-        state      => State,
-        event_type => EventType,
-        event      => safe_event(Event)
-    }),
+    logger:warning("[peering] unexpected state=~p event_type=~p event=~p",
+                   [State, EventType, safe_event(Event)]),
     {keep_state, Data}.
 
 %% Truncate large/binary events for safer log emission.
