@@ -557,7 +557,15 @@ connected({call, From}, {open_dedicated_stream, Owner},
 connected(info, {quic, closed, _Conn, _Detail}, Data) ->
     notify(disconnected, peer_closed, Data),
     {stop, normal, Data};
-connected(cast, {close, Reason}, Data) ->
+connected(cast, {close, Reason}, #data{peer_node_id = NodeId} = Data) ->
+    %% TEMP DIAGNOSTIC (overlay_relay WAN-only vanishing-frame incident)
+    %% — remove once root-caused. `draining's own late-inbound diagnostic
+    %% (10.5.7) proved this exact transition swallows the overlay_relay
+    %% frame; this logs WHY the transition happened, to confirm the
+    %% `replaced_by_newer_handshake' hypothesis directly instead of by
+    %% elimination.
+    logger:warning("[peering] connected_to_draining peer_node_id=~p reason=~p",
+                   [NodeId, Reason]),
     _ = send_goodbye(Data#data.quic_stream, Reason, Data),
     {next_state, draining, Data};
 connected(cast, {send_frame, Frame}, Data) ->

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.5.8] - 2026-08-27
+
+### Added — logs the close `Reason` on the `connected` → `draining` transition (TO BE REVERTED)
+
+10.5.7 proved the overlay_relay frame is swallowed by `draining`'s
+intentional, by-design silent late-inbound drop, on A's own connection
+to the station, ~211ms after the frame was sent. The only transition
+into `draining` from `connected` is `connected(cast, {close, Reason},
+Data) -> {next_state, draining, Data}` — this logs `Reason` there
+directly, to confirm (rather than infer by elimination) whether it is
+`replaced_by_newer_handshake`, macula-station's own duplicate-handshake
+guard (`macula_station_listener:maybe_close_old_worker/3`) — the only
+close-call site whose timing profile fits a fresh connection being
+closed within a few hundred ms of first use, rather than a dial
+timeout or app-silence timeout.
+
+**No functional change.** Follow-up patch removes all of 10.5.1's
+through this logging once the incident is root-caused.
+
 ## [10.5.7] - 2026-08-27
 
 ### Added — diagnostic on the `draining` state's silent late-inbound drop (TO BE REVERTED)
