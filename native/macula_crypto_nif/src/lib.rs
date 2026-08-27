@@ -11,7 +11,7 @@
 //! DID operations, and content-addressed storage in the Macula mesh.
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey, Signer, Verifier};
-use rand::rngs::OsRng;
+use rand::{rngs::OsRng, SeedableRng};
 use rustler::{Atom, Binary, Env, NifResult, OwnedBinary};
 use sha2::{Digest, Sha256};
 
@@ -159,6 +159,87 @@ fn nif_sha256<'a>(env: Env<'a>, data: Binary) -> NifResult<Binary<'a>> {
     output.as_mut_slice().copy_from_slice(&result);
 
     Ok(output.release(env))
+}
+
+/// Grind an Ed25519 keypair whose SHA-256(public_key) has at least
+/// `difficulty` leading zero bits (S/Kademlia Sybil-resistance puzzle).
+///
+/// Mirrors `macula_identity:grind/1` + `has_leading_zero_bits/2`
+/// exactly: same evidence (SHA-256 of the raw 32-byte public key), same
+/// bit-prefix check. Runs entirely in native code so raising the
+/// configured difficulty scales the cost of the search itself rather
+/// than the cost of re-entering the BEAM scheduler once per candidate
+/// key — `#[rustler::nif(schedule = "DirtyCpu")]` because a
+/// non-trivial difficulty can run well past the ~1ms budget a normal
+/// scheduler thread is expected to yield within.
+///
+/// Arguments:
+/// - difficulty: required leading zero bits of SHA-256(public_key), 0-256
+///
+/// Returns:
+/// - `{ok, {PublicKey, PrivateKey}}`, both 32-byte binaries (same shape
+///   as `nif_generate_keypair/0`)
+#[rustler::nif(schedule = "DirtyCpu")]
+fn nif_grind_puzzle<'a>(
+    env: Env<'a>,
+    difficulty: u32,
+) -> NifResult<(Atom, (Binary<'a>, Binary<'a>))> {
+    // Seed a fast userspace CSPRNG once from OS entropy, rather than
+    // drawing from `OsRng` directly on every candidate: `OsRng` hits
+    // the OS entropy source (a syscall) per draw, which dominates a
+    // loop that can run thousands of iterations at non-trivial
+    // difficulty. `StdRng` is cryptographically secure and reseeding
+    // isn't a concern here — the puzzle only needs unpredictable
+    // candidates, not a long-lived secret-generation stream.
+    let mut csprng = rand::rngs::StdRng::from_entropy();
+    loop {
+        let signing_key = SigningKey::generate(&mut csprng);
+        let verifying_key = signing_key.verifying_key();
+        let public_key_bytes = verifying_key.to_bytes();
+
+        let mut hasher = Sha256::new();
+        hasher.update(public_key_bytes);
+        let evidence = hasher.finalize();
+
+        if has_leading_zero_bits(&evidence, difficulty) {
+            let private_key_bytes = signing_key.to_bytes();
+
+            let mut pub_out = OwnedBinary::new(32).ok_or(rustler::Error::Term(Box::new(
+                "Failed to allocate binary for public key",
+            )))?;
+            pub_out.as_mut_slice().copy_from_slice(&public_key_bytes);
+
+            let mut priv_out = OwnedBinary::new(32).ok_or(rustler::Error::Term(Box::new(
+                "Failed to allocate binary for private key",
+            )))?;
+            priv_out.as_mut_slice().copy_from_slice(&private_key_bytes);
+
+            return Ok((atoms::ok(), (pub_out.release(env), priv_out.release(env))));
+        }
+    }
+}
+
+/// Does `evidence` have at least `n` leading zero bits? Same semantics
+/// as `macula_identity:has_leading_zero_bits/2`: `n = 0` is trivially
+/// true, `n` beyond the buffer's bit length is false.
+fn has_leading_zero_bits(evidence: &[u8], n: u32) -> bool {
+    let total_bits = (evidence.len() as u32) * 8;
+    if n == 0 {
+        return true;
+    }
+    if n > total_bits {
+        return false;
+    }
+    let full_bytes = (n / 8) as usize;
+    let remaining_bits = n % 8;
+    if evidence[..full_bytes].iter().any(|&b| b != 0) {
+        return false;
+    }
+    if remaining_bits == 0 {
+        return true;
+    }
+    let mask = 0xFFu8 << (8 - remaining_bits);
+    evidence[full_bytes] & mask == 0
 }
 
 /// Compute BLAKE3 hash of data.

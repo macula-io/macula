@@ -55,7 +55,8 @@ generate() ->
     key_pair().
 generate(#{puzzle := true} = Opts) ->
     Difficulty = maps:get(difficulty, Opts, default_difficulty()),
-    grind(Difficulty);
+    {ok, {Pub, Priv}} = macula_crypto_nif:grind_puzzle(Difficulty),
+    #{public => Pub, private => Priv};
 generate(_Opts) ->
     generate().
 
@@ -164,17 +165,6 @@ puzzle_valid(X, Difficulty) when is_integer(Difficulty), Difficulty >= 0 ->
 -spec default_difficulty() -> non_neg_integer().
 default_difficulty() ->
     application:get_env(macula_identity, puzzle_difficulty, ?DEFAULT_PUZZLE_DIFFICULTY).
-
--spec grind(non_neg_integer()) -> key_pair().
-grind(Difficulty) ->
-    Kp = generate(),
-    grind_loop(Kp, Difficulty, puzzle_valid(Kp, Difficulty)).
-
--spec grind_loop(key_pair(), non_neg_integer(), boolean()) -> key_pair().
-grind_loop(Kp, _Difficulty, true) ->
-    Kp;
-grind_loop(_Kp, Difficulty, false) ->
-    grind(Difficulty).
 
 -spec has_leading_zero_bits(binary(), non_neg_integer()) -> boolean().
 has_leading_zero_bits(_Bin, 0) ->

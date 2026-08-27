@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.6.0] - 2026-08-27
+
+### Added — native puzzle grinding in `macula_crypto_nif`
+
+`macula_identity:generate(#{puzzle => true})` now grinds the S/Kademlia
+identity puzzle (see [10.5.9]) natively via a new
+`nif_grind_puzzle/1` in `macula_crypto_nif`, instead of looping
+`crypto:generate_key/2` + `crypto:hash/2` one candidate at a time from
+Erlang. Motivated directly by the overlay_relay incident: puzzle
+enforcement is live on the real fleet, and a difficulty high enough to
+matter as Sybil resistance is exactly the kind of long, CPU-bound
+search a BEAM scheduler thread shouldn't run — the new NIF is
+`schedule = "DirtyCpu"` so it doesn't block a normal scheduler either
+way.
+
+`macula_crypto_nif:grind_puzzle/1` follows the module's existing
+NIF-with-Erlang-fallback pattern (`generate_keypair/0`,
+`sha256/1`, etc.) — the fallback (`erlang_grind_puzzle/1`) is the same
+loop `macula_identity` used to run itself, kept only for architectures
+where the NIF fails to load. `macula_identity`'s own `grind/1` and
+`grind_loop/3` are removed as dead code now that `generate/1` delegates
+directly; `puzzle_valid/1,2`, `puzzle_evidence/1`, and
+`has_leading_zero_bits/2` are unchanged and still the source of truth
+the NIF's Rust implementation mirrors exactly (same evidence: SHA-256
+of the raw 32-byte public key; same bit-prefix check).
+
+Benchmarked at difficulty 16 (20 trials): ~998ms/grind natively vs.
+~2470ms/grind via the old Erlang loop — about 2.5x. The native
+implementation originally benchmarked *slower* than the Erlang loop
+(`OsRng` draws hit the OS entropy source, a syscall, on every candidate
+key); fixed by seeding a `StdRng` once from OS entropy and drawing from
+that buffered CSPRNG for the whole grind, which is where essentially
+all of the win comes from — worth remembering if grinding is ever
+extended to run in parallel across dirty schedulers.
+
 ## [10.5.9] - 2026-08-27
 
 ### Root-caused: overlay_relay was never broken — the fleet's puzzle enforcement was rejecting test identities

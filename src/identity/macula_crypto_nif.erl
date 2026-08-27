@@ -22,6 +22,7 @@
 %% API
 -export([
     generate_keypair/0,
+    grind_puzzle/1,
     sign/2,
     verify/3,
     blake3/1,
@@ -39,6 +40,7 @@
 %% NIF stubs
 -export([
     nif_generate_keypair/0,
+    nif_grind_puzzle/1,
     nif_sign/2,
     nif_verify/3,
     nif_blake3/1,
@@ -104,6 +106,22 @@ generate_keypair() ->
     case is_nif_loaded() of
         true -> nif_generate_keypair();
         false -> erlang_generate_keypair()
+    end.
+
+%% @doc Grind an Ed25519 keypair whose SHA-256(PublicKey) has at least
+%% `Difficulty' leading zero bits (S/Kademlia Sybil-resistance puzzle,
+%% see `macula_identity:puzzle_valid/2'). Runs the search natively when
+%% the NIF is loaded, so raising the configured difficulty scales the
+%% cost of the search itself instead of the cost of re-entering the
+%% BEAM scheduler once per candidate key.
+%% Returns `{ok, {PublicKey, PrivateKey}}' where both are 32-byte
+%% binaries, same shape as `generate_keypair/0'.
+-spec grind_puzzle(Difficulty :: non_neg_integer()) ->
+    {ok, {PubKey :: binary(), PrivKey :: binary()}}.
+grind_puzzle(Difficulty) when is_integer(Difficulty), Difficulty >= 0 ->
+    case is_nif_loaded() of
+        true -> nif_grind_puzzle(Difficulty);
+        false -> erlang_grind_puzzle(Difficulty)
     end.
 
 %% @doc Sign a message with an Ed25519 private key.
@@ -218,6 +236,9 @@ secure_compare(A, B) ->
 nif_generate_keypair() ->
     erlang:nif_error(nif_not_loaded).
 
+nif_grind_puzzle(_Difficulty) ->
+    erlang:nif_error(nif_not_loaded).
+
 nif_sign(_Message, _PrivateKey) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -261,6 +282,27 @@ erlang_generate_keypair() ->
     %% PrivKey from crypto is 64 bytes (seed + public), we want just the 32-byte seed
     <<Seed:32/binary, _/binary>> = PrivKey,
     {ok, {PubKey, Seed}}.
+
+%% @private Same predicate as `macula_identity:has_leading_zero_bits/2'
+%% — SHA-256(PublicKey) must have `Difficulty' leading zero bits.
+%% Portable but slow: this is the pre-NIF behavior kept only for
+%% architectures where the NIF fails to load.
+erlang_grind_puzzle(Difficulty) ->
+    {ok, {PubKey, PrivKey}} = erlang_generate_keypair(),
+    Evidence = crypto:hash(sha256, PubKey),
+    case has_leading_zero_bits(Evidence, Difficulty) of
+        true  -> {ok, {PubKey, PrivKey}};
+        false -> erlang_grind_puzzle(Difficulty)
+    end.
+
+has_leading_zero_bits(_Bin, 0) ->
+    true;
+has_leading_zero_bits(Bin, N)
+  when is_integer(N), N > 0, N =< bit_size(Bin) ->
+    <<Prefix:N, _/bitstring>> = Bin,
+    Prefix =:= 0;
+has_leading_zero_bits(_Bin, _N) ->
+    false.
 
 %% @private Sign using Erlang crypto
 erlang_sign(Message, PrivateKey) when byte_size(PrivateKey) =:= 32 ->
