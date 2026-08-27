@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.5.3] - 2026-08-27
+
+### Added — stream-ownership identity diagnostic in `macula_quic` (TO BE REVERTED)
+
+Follow-up to 10.5.2. 10.5.2 proved `message::send_data`'s
+`env.send_and_clear(...)` returns `Ok(())` on the fleet for the exact
+overlay_relay frame — the bytes are correctly read AND successfully
+enqueued into a live Erlang process's mailbox, yet nothing downstream
+ever observes the message, not even `macula_peering_conn`'s own
+catch-all clause (`drop_unexpected/4`, which already logs and does not
+fire). A message enqueued into a mailbox that nothing ever matches on
+is consistent with delivery to the *wrong* (but still-alive) process —
+so this instruments stream ownership identity itself.
+
+Adds a `birth_owner: LocalPid` field to `StreamResource`, captured at
+stream-creation time. `start_recv_loop`'s successful-read arm now logs
+whether the stream's current owner still matches its birth owner
+(`owner_unchanged_since_birth`); `nif_controlling_process` now logs
+whether a reassignment actually changed the owner and whether the
+prior owner was still the birth owner (`actually_changed`,
+`was_birth_owner`). `rustler::LocalPid` has no `Debug` impl, so identity
+is compared, not printed directly.
+
+**No functional change.** Follow-up patch removes all of 10.5.1's,
+10.5.2's, and this logging once the incident is root-caused.
+
 ## [10.5.2] - 2026-08-27
 
 ### Added — one more temporary diagnostic line in `macula_quic` (TO BE REVERTED)

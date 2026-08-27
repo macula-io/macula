@@ -14,6 +14,14 @@ pub struct StreamResource {
     recv_task: Mutex<Option<JoinHandle<()>>>,
     pub conn: ResourceArc<ConnectionResource>,
     pub owner: RwLock<LocalPid>,
+    // TEMP DIAGNOSTIC (macula 10.5.3) — remove once the overlay_relay
+    // WAN-only vanishing-frame incident is root-caused. See
+    // CHANGELOG.md [10.5.3]. Immutable snapshot of `owner` at
+    // construction time, purely so later code can answer "has ownership
+    // of this stream ever been reassigned since it was created?" via
+    // `LocalPid`'s `PartialEq` (it has no `Debug`, so this is compared,
+    // not printed).
+    pub birth_owner: LocalPid,
     pub active: AtomicBool,
     active_notify: Notify,
     pub closed: AtomicBool,
@@ -32,6 +40,7 @@ impl StreamResource {
             recv_task: Mutex::new(None),
             conn,
             owner: RwLock::new(owner),
+            birth_owner: owner,
             active: AtomicBool::new(false),
             active_notify: Notify::new(),
             closed: AtomicBool::new(false),
@@ -73,9 +82,18 @@ impl StreamResource {
                 eprintln!("[quic-diag] recv_loop stream={:?} calling recv.read()", diag_id);
                 match recv.read(&mut buf).await {
                     Ok(Some(n)) => {
-                        eprintln!("[quic-diag] recv_loop stream={:?} read {} bytes", diag_id, n);
-                        let data = buf[..n].to_vec();
                         let owner = *stream_arc.owner.read().unwrap();
+                        // TEMP DIAGNOSTIC (macula 10.5.3) — remove once
+                        // the overlay_relay WAN-only vanishing-frame
+                        // incident is root-caused. See CHANGELOG.md
+                        // [10.5.3]. Does THIS read's delivery target
+                        // differ from the stream's original owner?
+                        let owner_unchanged = owner == stream_arc.birth_owner;
+                        eprintln!(
+                            "[quic-diag] recv_loop stream={:?} read {} bytes owner_unchanged_since_birth={}",
+                            diag_id, n, owner_unchanged
+                        );
+                        let data = buf[..n].to_vec();
                         message::send_data(&owner, data, stream_arc.clone());
                     }
                     Ok(None) => {
@@ -303,6 +321,15 @@ fn nif_controlling_process<'a>(
     new_owner: LocalPid,
 ) -> NifResult<Term<'a>> {
     let mut owner = stream.owner.write().unwrap();
+    // TEMP DIAGNOSTIC (macula 10.5.3) — remove once the overlay_relay
+    // WAN-only vanishing-frame incident is root-caused. See
+    // CHANGELOG.md [10.5.3].
+    let actually_changed = *owner != new_owner;
+    let was_birth_owner = *owner == stream.birth_owner;
+    eprintln!(
+        "[quic-diag] nif_controlling_process stream=<ptr {:p}> actually_changed={} was_birth_owner={}",
+        &*stream, actually_changed, was_birth_owner
+    );
     *owner = new_owner;
     Ok(atoms::ok().encode(env))
 }
