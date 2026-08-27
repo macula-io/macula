@@ -14,14 +14,6 @@ pub struct StreamResource {
     recv_task: Mutex<Option<JoinHandle<()>>>,
     pub conn: ResourceArc<ConnectionResource>,
     pub owner: RwLock<LocalPid>,
-    // TEMP DIAGNOSTIC (macula 10.5.3) — remove once the overlay_relay
-    // WAN-only vanishing-frame incident is root-caused. See
-    // CHANGELOG.md [10.5.3]. Immutable snapshot of `owner` at
-    // construction time, purely so later code can answer "has ownership
-    // of this stream ever been reassigned since it was created?" via
-    // `LocalPid`'s `PartialEq` (it has no `Debug`, so this is compared,
-    // not printed).
-    pub birth_owner: LocalPid,
     pub active: AtomicBool,
     active_notify: Notify,
     pub closed: AtomicBool,
@@ -40,7 +32,6 @@ impl StreamResource {
             recv_task: Mutex::new(None),
             conn,
             owner: RwLock::new(owner),
-            birth_owner: owner,
             active: AtomicBool::new(false),
             active_notify: Notify::new(),
             closed: AtomicBool::new(false),
@@ -57,47 +48,27 @@ impl StreamResource {
         };
         drop(recv_opt);
         let stream_arc = self_arc.clone();
-        // TEMP DIAGNOSTIC (macula 10.5.1) — remove once the overlay_relay
-        // WAN-only vanishing-frame incident is root-caused. See
-        // CHANGELOG.md [10.5.1].
-        let diag_id = recv.id();
 
         let handle = runtime::rt().spawn(async move {
             let mut buf = vec![0u8; 65536];
-            eprintln!("[quic-diag] recv_loop stream={:?} started", diag_id);
             loop {
                 if stream_arc.closed.load(Ordering::Relaxed) {
-                    eprintln!("[quic-diag] recv_loop stream={:?} closed flag set, exiting", diag_id);
                     break;
                 }
 
                 // Wait for active mode
                 if !stream_arc.active.load(Ordering::Relaxed) {
-                    eprintln!("[quic-diag] recv_loop stream={:?} waiting for active", diag_id);
                     stream_arc.active_notify.notified().await;
-                    eprintln!("[quic-diag] recv_loop stream={:?} woke from active wait", diag_id);
                     continue;
                 }
 
-                eprintln!("[quic-diag] recv_loop stream={:?} calling recv.read()", diag_id);
                 match recv.read(&mut buf).await {
                     Ok(Some(n)) => {
-                        let owner = *stream_arc.owner.read().unwrap();
-                        // TEMP DIAGNOSTIC (macula 10.5.3) — remove once
-                        // the overlay_relay WAN-only vanishing-frame
-                        // incident is root-caused. See CHANGELOG.md
-                        // [10.5.3]. Does THIS read's delivery target
-                        // differ from the stream's original owner?
-                        let owner_unchanged = owner == stream_arc.birth_owner;
-                        eprintln!(
-                            "[quic-diag] recv_loop stream={:?} read {} bytes owner_unchanged_since_birth={}",
-                            diag_id, n, owner_unchanged
-                        );
                         let data = buf[..n].to_vec();
+                        let owner = *stream_arc.owner.read().unwrap();
                         message::send_data(&owner, data, stream_arc.clone());
                     }
                     Ok(None) => {
-                        eprintln!("[quic-diag] recv_loop stream={:?} peer finished (EOF)", diag_id);
                         // Peer finished sending
                         let owner = *stream_arc.owner.read().unwrap();
                         message::send_event(
@@ -109,7 +80,6 @@ impl StreamResource {
                         break;
                     }
                     Err(quinn::ReadError::Reset(code)) => {
-                        eprintln!("[quic-diag] recv_loop stream={:?} RESET code={:?}", diag_id, code);
                         // Peer called reset() on their send side (see
                         // `nif_reset_stream` below) — a deliberate,
                         // peer-visible abort with an application error
@@ -125,8 +95,7 @@ impl StreamResource {
                         );
                         break;
                     }
-                    Err(e) => {
-                        eprintln!("[quic-diag] recv_loop stream={:?} ERROR {:?}", diag_id, e);
+                    Err(_e) => {
                         let owner = *stream_arc.owner.read().unwrap();
                         message::send_event(
                             &owner,
@@ -181,16 +150,6 @@ fn nif_send<'a>(
         None => return Ok((atoms::error(), atoms::stream_finished()).encode(env)),
     };
 
-    // TEMP DIAGNOSTIC (macula 10.5.1) — remove once the overlay_relay
-    // WAN-only vanishing-frame incident is root-caused. See
-    // CHANGELOG.md [10.5.1].
-    let diag_id = send_stream.id();
-    eprintln!(
-        "[quic-diag] nif_send stream={:?} len={} calling write_all",
-        diag_id,
-        bytes.len()
-    );
-
     // Clone the send stream reference for the async block
     // Actually, we need to do the write inside block_on with a mutable ref
     let result = runtime::rt().block_on(async {
@@ -199,13 +158,6 @@ fn nif_send<'a>(
             .await
             .map_err(|e| format!("{}", e))
     });
-
-    eprintln!(
-        "[quic-diag] nif_send stream={:?} len={} write_all result={:?}",
-        diag_id,
-        bytes.len(),
-        result
-    );
 
     drop(guard); // release lock
 
@@ -302,10 +254,6 @@ fn nif_setopt_active<'a>(
     stream: ResourceArc<StreamResource>,
     value: bool,
 ) -> NifResult<Term<'a>> {
-    // TEMP DIAGNOSTIC (macula 10.5.1) — remove once the overlay_relay
-    // WAN-only vanishing-frame incident is root-caused. See
-    // CHANGELOG.md [10.5.1].
-    eprintln!("[quic-diag] nif_setopt_active stream=<ptr {:p}> value={}", &*stream, value);
     stream.active.store(value, Ordering::SeqCst);
     if value {
         stream.notify_active();
@@ -321,15 +269,6 @@ fn nif_controlling_process<'a>(
     new_owner: LocalPid,
 ) -> NifResult<Term<'a>> {
     let mut owner = stream.owner.write().unwrap();
-    // TEMP DIAGNOSTIC (macula 10.5.3) — remove once the overlay_relay
-    // WAN-only vanishing-frame incident is root-caused. See
-    // CHANGELOG.md [10.5.3].
-    let actually_changed = *owner != new_owner;
-    let was_birth_owner = *owner == stream.birth_owner;
-    eprintln!(
-        "[quic-diag] nif_controlling_process stream=<ptr {:p}> actually_changed={} was_birth_owner={}",
-        &*stream, actually_changed, was_birth_owner
-    );
     *owner = new_owner;
     Ok(atoms::ok().encode(env))
 }

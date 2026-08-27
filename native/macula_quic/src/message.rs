@@ -53,8 +53,7 @@ pub fn send_new_stream<S: Encoder + Send + 'static, C: Encoder + Send + 'static>
 pub fn send_data(pid: &LocalPid, data: Vec<u8>, stream_ref: impl Encoder + Send + 'static) {
     let pid = pid.clone();
     let mut env = OwnedEnv::new();
-    let len = data.len();
-    let result = env.send_and_clear(&pid, |env| {
+    let _ = env.send_and_clear(&pid, |env| {
         let binary = {
             let mut bin = rustler::OwnedBinary::new(data.len()).unwrap();
             bin.as_mut_slice().copy_from_slice(&data);
@@ -63,15 +62,6 @@ pub fn send_data(pid: &LocalPid, data: Vec<u8>, stream_ref: impl Encoder + Send 
         let flags = 0u32;
         (atoms::quic(), binary, stream_ref.encode(env), flags).encode(env)
     });
-    // TEMP DIAGNOSTIC (macula 10.5.2) — remove once the overlay_relay
-    // WAN-only vanishing-frame incident is root-caused. See
-    // CHANGELOG.md [10.5.2]. `send_and_clear`'s Result was previously
-    // discarded unconditionally (`let _ = ...`) — this is the one thing
-    // in the whole send_data/read path that was never actually checked.
-    eprintln!(
-        "[quic-diag] send_data len={} send_and_clear result={:?}",
-        len, result
-    );
 }
 
 /// Send `{quic, EventAtom, Handle, Detail}` for lifecycle events.

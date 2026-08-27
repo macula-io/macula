@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.5.9] - 2026-08-27
+
+### Root-caused: overlay_relay was never broken — the fleet's puzzle enforcement was rejecting test identities
+
+The overlay_relay WAN-only vanishing-frame incident (opened at 10.5.0)
+is closed. It was never a bug in `overlay_relay`, in the QUIC/Rust
+layer, in frame codec/parsing, or in any relay logic. Confirmed by
+resending the exact same reproduction with a puzzle-solving identity
+(`macula_identity:generate(#{puzzle => true})`): the relay succeeds
+end-to-end, with correct sender attribution and correct realm/payload
+preservation. The chain that made non-puzzle-solving test identities
+appear to break it:
+
+1. `station-de-frankfurt.macula.io` runs with `puzzle_enforcement =
+   enforce` (an operational config choice, not the SDK's `off`
+   default).
+2. A freshly-generated (non-puzzle-solving) identity's handshake is
+   allowed to complete and reach `connected` — the SDK's own state
+   machine has no knowledge of the puzzle check.
+3. macula-station's `on_handshake_complete/3` independently validates
+   the puzzle immediately after, and under `enforce` with an invalid
+   puzzle, closes the connection (`macula_peering:close(Pid,
+   puzzle_invalid)`).
+4. That transitions `connected → draining`. `draining`'s handling of
+   further inbound bytes is an intentional, by-design silent drop
+   ("Ignore late inbound during drain") — no log, no counter. Any
+   frame sent in the split-second before this closes — including the
+   test's own overlay_relay frame — is silently discarded.
+5. This is why it "only failed on the real fleet": local test stations
+   never had `puzzle_enforcement` configured, so they default to
+   `off` and the reject path never fires there. It was never a
+   network-latency-sensitive race.
+
+### Reverted — all temporary diagnostics from 10.5.1 through 10.5.8
+
+`native/macula_quic/src/{stream,connection,message}.rs` and
+`src/peering/macula_peering_conn.erl` are restored to their 10.5.0
+state, **except** `drop_unexpected/4`, whose `logger:warning/2` fix
+(10.5.6) is kept — that one was a real, pre-existing bug (unobservable
+logging), not investigation-only instrumentation, and reverting it
+would silently reintroduce it.
+
+### Follow-ups (not done here, worth doing separately)
+
+- The `connected → draining` window itself is real hardening
+  material: a connection that has already been decided invalid can
+  still accept and silently swallow traffic for one message before
+  the close takes effect. Rejecting the puzzle check *before*
+  promoting to `connected` would close that window rather than merely
+  making it debuggable.
+- `macula_station_listener.erl`'s `maybe_emit_puzzle_invalid/3` still
+  uses `macula_diagnostics:event/2` and is silently dropped for the
+  same domain-filter reason as everything else in this incident —
+  worth the same one-line fix as `duplicate_replaced` got.
+- `macula_diagnostics:event/2,3`'s `domain => [macula]` metadata being
+  unconditionally dropped by the default `sasl`-enabled logger handler
+  is a real, fleet-wide observability gap independent of this
+  incident. Either fix the filter chain (allow `[macula]` explicitly)
+  or stop using `domain` metadata in `macula_diagnostics` until
+  Phase 7's real exporter lands.
+
 ## [10.5.8] - 2026-08-27
 
 ### Added — logs the close `Reason` on the `connected` → `draining` transition (TO BE REVERTED)

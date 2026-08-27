@@ -162,14 +162,6 @@ fn nif_open_stream<'a>(
 
     match result {
         Ok((send, recv)) => {
-            // TEMP DIAGNOSTIC (macula 10.5.1) — remove once the
-            // overlay_relay WAN-only vanishing-frame incident is
-            // root-caused. See CHANGELOG.md [10.5.1].
-            eprintln!(
-                "[quic-diag] nif_open_stream (client open_bi) send_id={:?} recv_id={:?}",
-                send.id(),
-                recv.id()
-            );
             let resource = ResourceArc::new(stream::StreamResource::new(
                 send, recv, conn.clone(), caller,
             ));
@@ -212,14 +204,6 @@ fn nif_async_accept_stream<'a>(
 
             match connection.accept_bi().await {
                 Ok((send, recv)) => {
-                    // TEMP DIAGNOSTIC (macula 10.5.1) — remove once the
-                    // overlay_relay WAN-only vanishing-frame incident is
-                    // root-caused. See CHANGELOG.md [10.5.1].
-                    eprintln!(
-                        "[quic-diag] nif_async_accept_stream (server accept_bi) send_id={:?} recv_id={:?}",
-                        send.id(),
-                        recv.id()
-                    );
                     let owner = *conn_arc.owner.read().unwrap();
                     let stream_resource = ResourceArc::new(stream::StreamResource::new(
                         send,

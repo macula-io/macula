@@ -481,23 +481,6 @@ connected(enter, _Old, Data) ->
 connected(info, {quic, Bin, Stream, _Flags},
           #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
     {Frames, Tail} = macula_frame:parse_stream(<<Buf/binary, Bin/binary>>),
-    %% TEMP DIAGNOSTIC (overlay_relay WAN-only vanishing-frame incident)
-    %% — remove once root-caused. Confirms `parse_stream/1' itself
-    %% actually yields a frame for this read, rather than silently
-    %% stalling on `{more, _}' or `{error, bad_frame}' (both of which
-    %% return the accumulated buffer with zero frames, indistinguishable
-    %% from each other or from a clean empty read without this).
-    %% Plain `logger:info/2', not `macula_diagnostics:event/2' — the
-    %% latter stamps `domain => [macula]', which the default handler's
-    %% filter chain silently drops on any release that includes `sasl'
-    %% (`filter_default => stop' + only `[otp,sasl]'-domain and
-    %% no-domain events are explicitly allowed through). Confirmed live
-    %% on the fleet: a manually-triggered `logger:log' with
-    %% `domain => [macula]' never reached `docker logs' at all, while
-    %% the identical report with no domain metadata did.
-    logger:info("[peering] parse_stream bin_size=~p buf_size_in=~p "
-                "frame_count=~p tail_size=~p",
-                [byte_size(Bin), byte_size(Buf), length(Frames), byte_size(Tail)]),
     [route_frame(F, Data) || F <- Frames],
     {keep_state, Data#data{buf = Tail}};
 %% Peer opened a new stream on this connection, outside the control
@@ -557,15 +540,7 @@ connected({call, From}, {open_dedicated_stream, Owner},
 connected(info, {quic, closed, _Conn, _Detail}, Data) ->
     notify(disconnected, peer_closed, Data),
     {stop, normal, Data};
-connected(cast, {close, Reason}, #data{peer_node_id = NodeId} = Data) ->
-    %% TEMP DIAGNOSTIC (overlay_relay WAN-only vanishing-frame incident)
-    %% — remove once root-caused. `draining's own late-inbound diagnostic
-    %% (10.5.7) proved this exact transition swallows the overlay_relay
-    %% frame; this logs WHY the transition happened, to confirm the
-    %% `replaced_by_newer_handshake' hypothesis directly instead of by
-    %% elimination.
-    logger:warning("[peering] connected_to_draining peer_node_id=~p reason=~p",
-                   [NodeId, Reason]),
+connected(cast, {close, Reason}, Data) ->
     _ = send_goodbye(Data#data.quic_stream, Reason, Data),
     {next_state, draining, Data};
 connected(cast, {send_frame, Frame}, Data) ->
@@ -597,32 +572,14 @@ draining(state_timeout, drain_done, Data) ->
 draining(info, {quic, closed, _Conn, _Detail}, Data) ->
     notify(disconnected, peer_closed_during_drain, Data),
     {stop, normal, Data};
-draining(info, {quic, Bin, _, _}, #data{peer_node_id = NodeId} = Data) ->
+draining(info, {quic, _, _, _}, Data) ->
     %% Ignore late inbound during drain.
-    %%
-    %% TEMP DIAGNOSTIC (overlay_relay WAN-only vanishing-frame incident)
-    %% — remove once root-caused. 10.5.1-10.5.6 proved the frame's raw
-    %% bytes are read correctly and delivered to the correct,
-    %% unchanged-since-birth stream owner's mailbox, but never reach
-    %% `connected/3''s frame-processing clause and are never caught by
-    %% `drop_unexpected/4' either. This clause — an intentional, by
-    %% design silent drop with no logging at all — is the only
-    %% remaining place capable of explaining that. Confirms whether
-    %% this connection was already draining by the time the frame
-    %% arrived, and logs enough of the payload to correlate with the
-    %% overlay_relay frame specifically.
-    logger:warning("[peering] late_inbound_during_drain peer_node_id=~p "
-                   "byte_size=~p",
-                   [NodeId, byte_size_or_undefined(Bin)]),
     {keep_state, Data};
 draining(cast, {close, _Reason}, Data) ->
     %% Already draining — idempotent.
     {keep_state, Data};
 draining(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, draining, Data).
-
-byte_size_or_undefined(Bin) when is_binary(Bin) -> byte_size(Bin);
-byte_size_or_undefined(Other) -> Other.
 
 %%------------------------------------------------------------------
 %% Dedicated stream open
@@ -847,43 +804,17 @@ bypass_or_legacy(Pid, Tag, Frame, NodeId,
     ok.
 
 notify_frame(Frame, #data{controlling_pid = Pid, timing_enabled = false}) ->
-    diag_notify_frame(Pid, Frame),
     Pid ! {macula_peering, frame, self(), Frame},
     ok;
 notify_frame(Frame, #data{controlling_pid = Pid, timing_enabled = true}) ->
-    diag_notify_frame(Pid, Frame),
     T = erlang:monotonic_time(microsecond),
     Pid ! {macula_peering, frame, self(), Frame, T},
     ok.
 
-%% TEMP DIAGNOSTIC (overlay_relay WAN-only vanishing-frame incident) —
-%% remove once root-caused. macula-station's own peer_observer:on_frame/3
-%% (which every message sent here must reach) never logs at all for this
-%% path on the real fleet, even for frame types with no other explanation
-%% for being dropped — so this instruments the SDK side of the same send,
-%% right before it happens, to confirm the send is even attempted and
-%% whether `controlling_pid' resolves to a live target at send time.
-%% Plain `logger:info/2' — see the `parse_stream' diagnostic above for
-%% why `macula_diagnostics:event/2' is unusable here: it is silently
-%% dropped by the default handler's domain filter on any release built
-%% with `sasl'.
-diag_notify_frame(Pid, Frame) ->
-    logger:info("[peering] notify_frame pid=~p pid_alive=~p frame_type=~p",
-                [Pid, pid_alive(Pid), macula_frame:frame_type(Frame)]).
-
-pid_alive(Pid) when is_pid(Pid), node(Pid) =:= node() ->
-    erlang:is_process_alive(Pid);
-pid_alive(Pid) when is_pid(Pid) ->
-    remote;
-pid_alive(Name) when is_atom(Name) ->
-    erlang:whereis(Name) =/= undefined.
-
 notify_bypass(Pid, Tag, NodeId, Frame, false) ->
-    diag_notify_frame(Pid, Frame),
     Pid ! {macula_peering, Tag, self(), NodeId, Frame},
     ok;
 notify_bypass(Pid, Tag, NodeId, Frame, true) ->
-    diag_notify_frame(Pid, Frame),
     T = erlang:monotonic_time(microsecond),
     Pid ! {macula_peering, Tag, self(), NodeId, Frame, T},
     ok.
