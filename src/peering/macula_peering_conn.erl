@@ -589,14 +589,32 @@ draining(state_timeout, drain_done, Data) ->
 draining(info, {quic, closed, _Conn, _Detail}, Data) ->
     notify(disconnected, peer_closed_during_drain, Data),
     {stop, normal, Data};
-draining(info, {quic, _, _, _}, Data) ->
+draining(info, {quic, Bin, _, _}, #data{peer_node_id = NodeId} = Data) ->
     %% Ignore late inbound during drain.
+    %%
+    %% TEMP DIAGNOSTIC (overlay_relay WAN-only vanishing-frame incident)
+    %% — remove once root-caused. 10.5.1-10.5.6 proved the frame's raw
+    %% bytes are read correctly and delivered to the correct,
+    %% unchanged-since-birth stream owner's mailbox, but never reach
+    %% `connected/3''s frame-processing clause and are never caught by
+    %% `drop_unexpected/4' either. This clause — an intentional, by
+    %% design silent drop with no logging at all — is the only
+    %% remaining place capable of explaining that. Confirms whether
+    %% this connection was already draining by the time the frame
+    %% arrived, and logs enough of the payload to correlate with the
+    %% overlay_relay frame specifically.
+    logger:warning("[peering] late_inbound_during_drain peer_node_id=~p "
+                   "byte_size=~p",
+                   [NodeId, byte_size_or_undefined(Bin)]),
     {keep_state, Data};
 draining(cast, {close, _Reason}, Data) ->
     %% Already draining — idempotent.
     {keep_state, Data};
 draining(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, draining, Data).
+
+byte_size_or_undefined(Bin) when is_binary(Bin) -> byte_size(Bin);
+byte_size_or_undefined(Other) -> Other.
 
 %%------------------------------------------------------------------
 %% Dedicated stream open

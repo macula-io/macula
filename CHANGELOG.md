@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.5.7] - 2026-08-27
+
+### Added — diagnostic on the `draining` state's silent late-inbound drop (TO BE REVERTED)
+
+10.5.6's `drop_unexpected/4` fix proved the overlay_relay frame's raw
+`{quic, Bin, Stream, Flags}` message is never caught there either — no
+`event_type=info` unexpected event ever fires for it, on top of
+`connected/3`'s own frame-processing clause never matching it
+(10.5.5's `parse_stream` diagnostic never once logged `bin_size=499`).
+That leaves exactly one remaining code path: `draining(info, {quic, _,
+_, _}, Data) -> {keep_state, Data}` — an intentional, by-design silent
+drop ("Ignore late inbound during drain") with no logging at all. It
+matches every symptom observed across 10.5.1-10.5.6: bytes read
+correctly, delivered to the correct, unchanged-since-birth stream
+owner's mailbox, and then gone without any trace, by design.
+
+Logs `peer_node_id` and payload byte size whenever this clause fires,
+using plain `logger:warning/2` (see 10.5.5/10.5.6 for why
+`macula_diagnostics:event/2` would not work here).
+
+**No functional change.** Follow-up patch removes all of 10.5.1's
+through this logging once the incident is root-caused.
+
 ## [10.5.6] - 2026-08-27
 
 ### Fixed — `drop_unexpected/4`'s own logging was silently dropped, same as 10.5.4's
