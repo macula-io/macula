@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.10.2] - 2026-08-28
+
+### Fixed — a text payload VALUE matching an existing atom name silently arrived as that atom, not a binary
+
+Real production crash: `hecate-stations` (a live directory service built on
+this SDK) ingested a genuine `node_record` from `station-it-milan.macula.io`
+via `find_records_by_type/2` and crashed a downstream RocksDB indexer,
+repeatedly, on every restart. The record's `kind` field decoded as the
+**atom** `station` instead of the binary `<<"station">>` — every other
+field on the identical record (`hostname`, `city`, `country`) decoded as
+an ordinary binary, which is what made it invisible until something
+finally choked on the one field that happened to collide.
+
+Root cause: `macula_frame:from_wire_envelope/1` — the RPC-response decode
+path `find_record/2`/`find_records_by_type/2` return records through,
+distinct from the DHT-storage wire codec (`encode/1`/`decode/1`) —
+deliberately collapses a `{text, B}` VALUE into the atom `B` whenever `B`
+already exists in the runtime's atom table (safe there: an undeclared
+name harmlessly stays `{text, Bin}`). `"station"` is used as a literal
+atom throughout this codebase, so it collided; `"Milan"` is not, so it
+didn't. `macula_record:payload_field/2` already handled this exact
+class of decode-path variance for KEYS (`{text, Name}` / bare `Name` /
+`safe_atom(Name)`), but never accounted for it on the VALUE side.
+
+`unwrap_text/1` now converts an atom value back to its binary form
+before returning it from `payload_field/2` — used by every `read_*`
+function in this module — except `true`/`false`/`undefined`/`null`,
+which are left as atoms (no current reader expects a boolean, and
+`null` is `read_tombstone/1`'s own explicit-absence marker for
+`detail`).
+
 ## [10.10.1] - 2026-08-28
 
 ### Fixed — `read_node_record/1` silently dropped fields the writer already stores

@@ -96,6 +96,29 @@ read_node_record_kind_undefined_when_unset_test() ->
     R = macula_record:node_record(macula_identity:public(Kp), [], 0),
     ?assertEqual(undefined, maps:get(kind, macula_record:read_node_record(R))).
 
+%% Reproduces a real production crash (hecate-stations against a live
+%% station-it-milan.macula.io node_record, 2026-08-28): `macula_frame:
+%% from_wire_envelope/1' -- the RPC-response decode path
+%% `find_records_by_type/2' actually returns records through, distinct
+%% from the DHT-storage wire codec `read_node_record_survives_wire_
+%% roundtrip_test' above exercises -- collapses a `{text, B}' VALUE to
+%% the atom `B' whenever `B' already exists in the atom table. "station"
+%% is (used as a literal atom throughout this codebase); "Milan" is not,
+%% which is why every OTHER field on the very same record decoded as an
+%% ordinary binary and only `kind' broke -- a downstream consumer choked
+%% on the one atom it didn't expect.
+read_node_record_kind_survives_rpc_atom_coercion_test() ->
+    Record = #{
+        type => 16#01,
+        payload => #{
+            kind => station,
+            hostname => {text, <<"station-it-milan.macula.io">>}
+        }
+    },
+    Read = macula_record:read_node_record(Record),
+    ?assertEqual(<<"station">>, maps:get(kind, Read)),
+    ?assertEqual(<<"station-it-milan.macula.io">>, maps:get(hostname, Read)).
+
 read_node_record_survives_wire_roundtrip_test() ->
     Kp = macula_identity:generate(),
     NodeId = macula_identity:public(Kp),

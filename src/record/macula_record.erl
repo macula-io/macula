@@ -817,7 +817,29 @@ first_present([], _P) ->
     undefined.
 
 unwrap_text({text, B}) -> B;
-unwrap_text(V)         -> V.
+%% `macula_frame:from_wire_envelope/1' (the RPC-response decode path
+%% `find_record/2'/`find_records_by_type/2' go through, distinct from a
+%% same-VM-constructed record) collapses a `{text, B}' VALUE into the
+%% atom `B' whenever B already exists in the atom table -- deliberate
+%% and safe there (an undeclared name harmlessly stays `{text, Bin}'),
+%% but this module's callers all expect a binary regardless of which
+%% decode path a record travelled. Hit for real: a station's own
+%% `kind' field is the literal text "station", which is ALREADY an
+%% atom throughout this codebase, so it silently arrived as the atom
+%% `station' instead of `<<"station">>' -- while `city'/`hostname'
+%% values (never pre-declared atoms) came through as binaries from the
+%% very same record, making the bug invisible until a consumer (a
+%% RocksDB indexer, in this case) choked on the one field that
+%% happened to collide. `true'/`false'/`undefined'/`null' are left as
+%% atoms: no current caller of `payload_field/2' reads a boolean field,
+%% and a future one should get the real boolean back, not `<<"true">>';
+%% `null' is `tombstone_payload/5''s own explicit-absence marker for
+%% `detail' (see `read_tombstone/1''s `null_to_undefined/1'), which
+%% must still see the literal atom to recognise it.
+unwrap_text(A) when is_atom(A), A =/= true, A =/= false,
+                    A =/= undefined, A =/= null ->
+    atom_to_binary(A, utf8);
+unwrap_text(V) -> V.
 
 %% @doc The DHT storage key for a procedure by its URI, without a
 %% record in hand: `SHA-256(procedure_uri)', identical to
