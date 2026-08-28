@@ -364,6 +364,68 @@ tombstone_wire_roundtrip_test() ->
     ?assertEqual(Pub, macula_record:key(Decoded)).
 
 %%------------------------------------------------------------------
+%% read_tombstone/1 -- the typed reader a consumer (e.g. hecate-stations,
+%% reacting to macula_station_announcer's graceful-shutdown tombstone)
+%% should actually use, instead of digging into the raw payload the way
+%% the tombstone_* tests above do.
+%%------------------------------------------------------------------
+
+read_tombstone_returns_typed_map_test() ->
+    Kp = macula_identity:generate(),
+    Pub = macula_identity:public(Kp),
+    Before = erlang:system_time(millisecond),
+    Tomb = macula_record:tombstone(Pub, 16#01, retired),
+    After = erlang:system_time(millisecond),
+    Read = macula_record:read_tombstone(Tomb),
+    %% `replaced_at' and the envelope's own `created_at' are two
+    %% independent `erlang:system_time(millisecond)' calls a few
+    %% instructions apart (see `tombstone/4' then `envelope/4') --
+    %% bracketed, not asserted equal, so a millisecond tick between them
+    %% can never flake this.
+    ?assert(maps:get(replaced_at, Read) >= Before),
+    ?assert(maps:get(replaced_at, Read) =< After),
+    ?assertEqual(#{superseded_key  => Pub,
+                   superseded_type => 16#01,
+                   reason          => <<"retired">>,
+                   detail          => undefined},
+                 maps:remove(replaced_at, Read)).
+
+read_tombstone_carries_detail_when_given_test() ->
+    Kp = macula_identity:generate(),
+    Pub = macula_identity:public(Kp),
+    Tomb = macula_record:tombstone(Pub, 16#01, revoked,
+                                   #{detail => <<"key compromise">>}),
+    ?assertEqual(<<"key compromise">>, maps:get(detail, macula_record:read_tombstone(Tomb))).
+
+read_tombstone_key_equals_superseded_key_test() ->
+    %% Part 6 §9.13: a tombstone is stored under the superseded record's
+    %% own key, overwriting its DHT slot -- so a subscriber never needs a
+    %% second lookup to know which node_id just went away.
+    Kp = macula_identity:generate(),
+    Pub = macula_identity:public(Kp),
+    Tomb = macula_record:tombstone(Pub, 16#01, expired),
+    #{superseded_key := SupKey} = macula_record:read_tombstone(Tomb),
+    ?assertEqual(macula_record:key(Tomb), SupKey).
+
+read_tombstone_survives_wire_roundtrip_test() ->
+    Kp = macula_identity:generate(),
+    Pub = macula_identity:public(Kp),
+    Tomb = macula_record:sign(
+             macula_record:tombstone(Pub, 16#01, moved,
+                                     #{detail => <<"renamed">>}),
+             Kp),
+    Wire = macula_record:encode(Tomb),
+    {ok, Decoded} = macula_record:decode(Wire),
+    ?assertMatch({ok, _}, macula_record:verify(Decoded)),
+    #{superseded_key := DecodedKey, superseded_type := DecodedType,
+      reason := DecodedReason, detail := DecodedDetail} =
+        macula_record:read_tombstone(Decoded),
+    ?assertEqual(Pub, DecodedKey),
+    ?assertEqual(16#01, DecodedType),
+    ?assertEqual(<<"moved">>, DecodedReason),
+    ?assertEqual(<<"renamed">>, DecodedDetail).
+
+%%------------------------------------------------------------------
 %% realm_directory
 %%------------------------------------------------------------------
 

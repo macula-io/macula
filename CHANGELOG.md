@@ -27,6 +27,22 @@ point at all, so a plain `binary_to_float/1` would crash on an
 integer-valued coordinate — the new `parse_geo/1` tries float first and
 falls back to integer.
 
+### Added — `read_tombstone/1`, the typed reader for `tombstone` records
+
+Same gap as `read_node_record/1` above, one type tag over: a `tombstone`
+(`0x0C`) could be built, signed, and verified, but nothing let a
+subscriber read `superseded_key`/`superseded_type`/`replaced_at`/
+`reason`/`detail` back out without reaching for the unexported
+`payload_field/2`. `macula_station_announcer` has published a signed
+tombstone on every graceful shutdown since it existed; nothing outside
+this module could ever read one. Also found building `hecate-stations`,
+which needs to retire a station from its read model the moment its
+`node_record` tombstone lands rather than waiting out the TTL.
+
+`detail` comes back `undefined` rather than the wire's `null` —
+`tombstone/3,4` always writes the key, present-but-empty, unlike every
+other optional field in this module which is simply omitted when unset.
+
 ## [10.10.0] - 2026-08-27
 
 ### Fixed — `macula_diagnostics:event/2,3` was silently dropped everywhere, always

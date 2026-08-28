@@ -57,6 +57,7 @@
     read_procedure_advertisement/1,
     read_station_endpoint/1,
     read_node_record/1,
+    read_tombstone/1,
     read_org_directory/1,
     read_procedure_delegation/1,
     read_content_announcement/1,
@@ -919,6 +920,32 @@ parse_geo(Bin) when is_binary(Bin) ->
     try binary_to_float(Bin)
     catch error:badarg -> binary_to_integer(Bin)
     end.
+
+%% @doc Read a `tombstone' record's fields as a typed map. Same
+%% payload-keying robustness as `read_node_record/1'. `superseded_key'
+%% is the pubkey of the record this tombstone replaces — and is also
+%% this record's own `key' field, since `tombstone/3,4' stores the
+%% tombstone under the superseded record's storage key (Part 6 §9.13),
+%% overwriting its DHT slot rather than occupying a new one. `detail'
+%% comes back `undefined' rather than the wire's `null': `tombstone/4'
+%% always writes the key, present-but-empty, unlike every other
+%% optional field in this module which is simply omitted.
+-spec read_tombstone(m_record()) -> #{
+    superseded_key  := macula_identity:pubkey(),
+    superseded_type := type_tag(),
+    replaced_at     := non_neg_integer(),
+    reason          := binary(),
+    detail          => binary() | undefined
+}.
+read_tombstone(#{type := ?TYPE_TOMBSTONE, payload := P}) ->
+    #{superseded_key  => payload_field(P, <<"superseded_key">>),
+      superseded_type => payload_field(P, <<"superseded_type">>),
+      replaced_at     => payload_field(P, <<"replaced_at">>),
+      reason          => payload_field(P, <<"reason">>),
+      detail          => null_to_undefined(payload_field(P, <<"detail">>))}.
+
+null_to_undefined(null) -> undefined;
+null_to_undefined(V)    -> V.
 
 %%------------------------------------------------------------------
 %% Direct-dial dual-trust (Slice 7c) — key derivation, readers, and the
