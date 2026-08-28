@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.10.1] - 2026-08-28
+
+### Fixed — `read_node_record/1` silently dropped fields the writer already stores
+
+`node_payload/5` has written `hostname`/`endpoint`/`city`/`country`/`lat`/
+`lng`/`display_name`/`caps_hint`/`peers` into every `node_record` since
+v3.4.0, but `read_node_record/1`'s typed-map reader stopped at `node_id`/
+`station_id`/`realms`/`capabilities`/`kind` — the data was always on the
+wire, just unreachable through the public API (`payload_field/2`, the
+only thing that knows how to read either the canonical or wire-decoded
+key shape, isn't exported). Found building `hecate-stations`, a directory
+service that needs exactly these fields to answer "where is this
+station".
+
+`lat`/`lng` now come back as `float() | integer() | undefined`:
+`with_geo/3` writes floats to 6 decimals but integers with no decimal
+point at all, so a plain `binary_to_float/1` would crash on an
+integer-valued coordinate — the new `parse_geo/1` tries float first and
+falls back to integer.
+
 ## [10.10.0] - 2026-08-27
 
 ### Fixed — `macula_diagnostics:event/2,3` was silently dropped everywhere, always

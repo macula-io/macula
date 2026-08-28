@@ -79,7 +79,16 @@ read_node_record_returns_typed_map_test() ->
                    station_id   => StationId,
                    realms       => [Realm],
                    capabilities => 7,
-                   kind         => <<"daemon">>},
+                   kind         => <<"daemon">>,
+                   hostname     => undefined,
+                   endpoint     => undefined,
+                   city         => undefined,
+                   country      => undefined,
+                   lat          => undefined,
+                   lng          => undefined,
+                   display_name => undefined,
+                   caps_hint    => undefined,
+                   peers        => undefined},
                  macula_record:read_node_record(R)).
 
 read_node_record_kind_undefined_when_unset_test() ->
@@ -103,6 +112,61 @@ read_node_record_survives_wire_roundtrip_test() ->
     ?assertEqual(NodeId, DecodedNodeId),
     ?assertEqual(StationId, DecodedStationId),
     ?assertEqual(<<"daemon">>, DecodedKind).
+
+read_node_record_returns_geo_metadata_test() ->
+    %% Same fields/values as node_record_with_geo_metadata_test below,
+    %% but through the typed reader instead of digging into the raw
+    %% payload -- this is the API a consumer (e.g. hecate-stations)
+    %% should actually use.
+    Kp = macula_identity:generate(),
+    R = macula_record:node_record(
+          macula_identity:public(Kp), [], 0,
+          #{hostname     => <<"relay-be-leuven.macula.io">>,
+            endpoint     => <<"quic://relay-be-leuven.macula.io:4433">>,
+            city         => <<"Leuven">>,
+            country      => <<"BE">>,
+            lat          => 50.8798,
+            lng          => 4.7005,
+            display_name => <<"Leuven relay">>,
+            caps_hint    => <<"stub">>}),
+    Read = macula_record:read_node_record(R),
+    ?assertEqual(<<"relay-be-leuven.macula.io">>, maps:get(hostname, Read)),
+    ?assertEqual(<<"quic://relay-be-leuven.macula.io:4433">>, maps:get(endpoint, Read)),
+    ?assertEqual(<<"Leuven">>, maps:get(city, Read)),
+    ?assertEqual(<<"BE">>, maps:get(country, Read)),
+    ?assertEqual(50.8798, maps:get(lat, Read)),
+    ?assertEqual(4.7005, maps:get(lng, Read)),
+    ?assertEqual(<<"Leuven relay">>, maps:get(display_name, Read)),
+    ?assertEqual(<<"stub">>, maps:get(caps_hint, Read)).
+
+read_node_record_geo_undefined_when_unset_test() ->
+    Kp = macula_identity:generate(),
+    R = macula_record:node_record(macula_identity:public(Kp), [], 0),
+    Read = macula_record:read_node_record(R),
+    ?assertEqual(undefined, maps:get(hostname, Read)),
+    ?assertEqual(undefined, maps:get(lat, Read)),
+    ?assertEqual(undefined, maps:get(lng, Read)),
+    ?assertEqual(undefined, maps:get(peers, Read)).
+
+read_node_record_parses_integer_geo_test() ->
+    %% with_geo/3 writes an integer coordinate with no decimal point
+    %% ("0", not "0.0") -- binary_to_float/1 alone would crash on that.
+    %% parse_geo/1's fallback is what this actually tests.
+    Kp = macula_identity:generate(),
+    R = macula_record:node_record(macula_identity:public(Kp), [], 0,
+                                  #{lat => 0, lng => 51}),
+    Read = macula_record:read_node_record(R),
+    ?assertEqual(0, maps:get(lat, Read)),
+    ?assertEqual(51, maps:get(lng, Read)).
+
+read_node_record_returns_peers_test() ->
+    Kp = macula_identity:generate(),
+    PeerA = crypto:strong_rand_bytes(32),
+    PeerB = crypto:strong_rand_bytes(32),
+    R = macula_record:node_record(macula_identity:public(Kp), [], 0,
+                                  #{peers => [PeerA, PeerB]}),
+    ?assertEqual(lists:usort([PeerA, PeerB]),
+                 maps:get(peers, macula_record:read_node_record(R))).
 
 node_record_with_geo_metadata_test() ->
     %% Subscribers (e.g. realm dashboards) read geo straight from

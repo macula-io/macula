@@ -867,19 +867,58 @@ host_list(V)                  -> [unwrap_text(V)].
 %% itself as reachable through. `kind' is `undefined' for a record
 %% predating that field (treated as `station' by convention — see
 %% `node_payload/5''s own comment).
+%%
+%% Previously stopped at `kind' even though `node_payload/5' (20 lines
+%% away in this same file) has always written `hostname'/`endpoint'/
+%% `city'/`country'/`lat'/`lng'/`display_name'/`caps_hint'/`peers' too —
+%% every one of those fields was on the wire and unreachable through this
+%% module's public API, since `payload_field/2' (the only thing that
+%% knows how to read either the canonical or wire-decoded key shape) is
+%% not exported. Found while building `hecate-stations', a directory
+%% service that needs exactly these fields.
+%%
+%% `lat'/`lng' come back as `float() | integer() | undefined': `with_geo/3'
+%% stores them as formatted text (floats to 6 decimals, integers with no
+%% decimal point at all), so a plain `binary_to_float/1' would crash on an
+%% integer-valued coordinate — `parse_geo/1' tries float first and falls
+%% back to integer, matching the writer's own two cases exactly.
 -spec read_node_record(m_record()) -> #{
     node_id      := macula_identity:pubkey(),
     station_id   := macula_identity:pubkey(),
     realms       := [macula_identity:pubkey()],
     capabilities := non_neg_integer(),
-    kind         => binary() | undefined
+    kind         => binary() | undefined,
+    hostname     => binary() | undefined,
+    endpoint     => binary() | undefined,
+    city         => binary() | undefined,
+    country      => binary() | undefined,
+    lat          => float() | integer() | undefined,
+    lng          => float() | integer() | undefined,
+    display_name => binary() | undefined,
+    caps_hint    => binary() | undefined,
+    peers        => [macula_identity:pubkey()] | undefined
 }.
 read_node_record(#{type := ?TYPE_NODE_RECORD, payload := P}) ->
     #{node_id      => payload_field(P, <<"node_id">>),
       station_id   => payload_field(P, <<"station_id">>),
       realms       => payload_field(P, <<"realms">>),
       capabilities => payload_field(P, <<"capabilities">>),
-      kind         => payload_field(P, <<"kind">>)}.
+      kind         => payload_field(P, <<"kind">>),
+      hostname     => payload_field(P, <<"hostname">>),
+      endpoint     => payload_field(P, <<"endpoint">>),
+      city         => payload_field(P, <<"city">>),
+      country      => payload_field(P, <<"country">>),
+      lat          => parse_geo(payload_field(P, <<"lat">>)),
+      lng          => parse_geo(payload_field(P, <<"lng">>)),
+      display_name => payload_field(P, <<"display_name">>),
+      caps_hint    => payload_field(P, <<"caps_hint">>),
+      peers        => payload_field(P, <<"peers">>)}.
+
+parse_geo(undefined) -> undefined;
+parse_geo(Bin) when is_binary(Bin) ->
+    try binary_to_float(Bin)
+    catch error:badarg -> binary_to_integer(Bin)
+    end.
 
 %%------------------------------------------------------------------
 %% Direct-dial dual-trust (Slice 7c) — key derivation, readers, and the
