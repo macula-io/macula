@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.14.1] - 2026-08-29
+
+### Fixed
+
+- Bumped `rand` 0.8.5 → 0.8.6 in `native/macula_ucan_nif/Cargo.lock` and
+  `native/macula_crypto_nif/Cargo.lock` (Cargo.toml already permitted it —
+  lockfile-only update). Closes GHSA-cq8v-f236-94qc, the two remaining
+  Dependabot alerts on this repo (both low severity: the unsound path needs
+  a custom `log` logger reading `rand::rng()` from inside the log call
+  itself, which neither NIF crate does — no working exploit here, fixed
+  anyway since a patched version was available with no other changes
+  needed). `native/macula_quic/Cargo.lock` was already clear (rand 0.10.2).
+
 ## [10.14.0] - 2026-08-29
 
 ### Added
