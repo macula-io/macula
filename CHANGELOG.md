@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.14.0] - 2026-08-29
+
+### Added
+
+- `hecate_pubsub:patterns/1` and `hecate_pubsub_server:patterns/1` expose a
+  subscriber's registered wildcard patterns (e.g. `<<"*/svc.do">>`) as their
+  own list, separate from `topics/1`. This is the export macula-station's
+  bloom-exchange gossip now reads to propagate wildcard-pattern interest
+  mesh-wide, rather than the station-local-only matching that existed before.
+
 ## [10.13.2] - 2026-08-29
 
 ### Fixed

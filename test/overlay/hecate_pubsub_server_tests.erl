@@ -51,6 +51,15 @@ subscribe_records_subscriber_test() ->
     ?assertEqual(1, hecate_pubsub_server:subscriber_count(Pid)),
     stop_(Pid).
 
+subscribe_records_a_pattern_separately_from_topics_test() ->
+    Pid = start(),
+    Sub = id(1),
+    ok = hecate_pubsub_server:subscribe(Pid, <<"acme/svc.do">>, Sub),
+    ok = hecate_pubsub_server:subscribe(Pid, <<"*/svc.do">>, Sub),
+    ?assertEqual([<<"acme/svc.do">>], hecate_pubsub_server:topics(Pid)),
+    ?assertEqual([<<"*/svc.do">>], hecate_pubsub_server:patterns(Pid)),
+    stop_(Pid).
+
 subscribe_idempotent_test() ->
     Pid = start(),
     Sub = id(1),

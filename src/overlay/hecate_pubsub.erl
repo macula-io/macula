@@ -39,19 +39,21 @@
 %% realm) pays zero extra cost on delivery: `subscribers/2' only scans
 %% `patterns' when `map_size(patterns) > 0'.
 %%
-%% Deliberately NOT propagated cross-station: `topics/1' returns
-%% `subscriptions''s keys only. `macula_station_peering_router' treats
-%% every entry in `topics/1' as local interest worth re-subscribing on
-%% every peer and folding into the Bloom-gossip summary — a Bloom filter
-%% tests exact-string membership, so gossiping a raw `*'-bearing string
-%% would be meaningless (it can only ever match itself, never the
-%% concrete topics it was meant to stand in for) and would pollute the
-%% gossip layer for no benefit. A wildcard subscriber therefore only
-%% ever receives a publish that reaches THIS realm instance directly —
-%% same station as the publisher, or already fanned here via the
-%% ordinary (exact-topic) gossip/relay path. Mesh-wide wildcard
-%% subscription (matching cross-station, not just locally) is a
-%% separate, bigger piece of work — see
+%% `topics/1' returns `subscriptions''s keys only, still deliberately —
+%% `macula_station_peering_router' treats every entry in `topics/1' as
+%% local interest worth re-subscribing on every peer and folding into
+%% the Bloom-gossip summary, and a Bloom filter tests exact-string
+%% membership: gossiping a raw `*'-bearing string INTO THE BLOOM would
+%% be meaningless (it can only ever match itself, never the concrete
+%% topics it was meant to stand in for).
+%%
+%% `patterns/1' (2026-08-29) is the separate, purpose-built export for
+%% mesh-wide wildcard propagation: `macula_station_bloom_exchange'
+%% gossips the raw pattern SET on its own `_mesh.patterns' topic
+%% (patterns are expected to be few — no Bloom-summarization needed,
+%% unlike the exact-topic set) and matches a concrete publish against
+%% every peer's gossiped patterns directly via `macula_topic_pattern:matches/2'
+%% at fan-out time, entirely separate from the Bloom path. See
 %% macula-station/plans/PLAN_ORG_SCOPED_DISPATCH_AND_WILDCARD_DISCOVERY.md,
 %% slice 5.
 %%
@@ -68,6 +70,7 @@
     is_subscribed/3,
     subscribers/2,
     topics/1,
+    patterns/1,
     topic_count/1,
     subscriber_count/1,
     deliver_event/2,
@@ -158,10 +161,17 @@ route_map(true,  _S, P) -> P;
 route_map(false, S, _P) -> S.
 
 %% Exact topics ONLY — deliberately excludes `patterns'. See moduledoc:
-%% this feeds cross-station gossip re-subscription, where a raw
+%% this feeds the Bloom-gossip re-subscription path, where a raw
 %% `*'-bearing string would be meaningless.
 -spec topics(state()) -> [topic()].
 topics(#{subscriptions := S}) -> maps:keys(S).
+
+%% @doc Every wildcard pattern registered in this realm — the keys of
+%% the separate `patterns' map (never mixed with `topics/1''s exact
+%% keys). Feeds `macula_station_bloom_exchange''s own, separate
+%% `_mesh.patterns' gossip — see moduledoc.
+-spec patterns(state()) -> [topic()].
+patterns(#{patterns := P}) -> maps:keys(P).
 
 %% Observability counts include patterns — real, load-bearing state,
 %% just not gossip-propagated. See `topics/1' for what IS propagated.

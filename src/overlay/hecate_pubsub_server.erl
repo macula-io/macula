@@ -35,7 +35,7 @@
 -export([
     start_link/1,
     subscribe/3, unsubscribe/3, purge_subscriber/2, is_subscribed/3,
-    subscribers/2, topics/1, topic_count/1, subscriber_count/1,
+    subscribers/2, topics/1, patterns/1, topic_count/1, subscriber_count/1,
     realm/1,
     publish/3, deliver_event/2, process_frame/3,
     relay_publish/2,
@@ -90,6 +90,10 @@ subscribers(Pid, Topic) ->
 -spec topics(pid()) -> [binary()].
 topics(Pid) ->
     gen_server:call(Pid, topics).
+
+-spec patterns(pid()) -> [binary()].
+patterns(Pid) ->
+    gen_server:call(Pid, patterns).
 
 -spec topic_count(pid()) -> non_neg_integer().
 topic_count(Pid) ->
@@ -175,6 +179,8 @@ handle_call({subscribers, Topic}, _From, S) ->
     {reply, hecate_pubsub:subscribers(S#state.pubsub, Topic), S};
 handle_call(topics, _From, S) ->
     {reply, hecate_pubsub:topics(S#state.pubsub), S};
+handle_call(patterns, _From, S) ->
+    {reply, hecate_pubsub:patterns(S#state.pubsub), S};
 handle_call(topic_count, _From, S) ->
     {reply, hecate_pubsub:topic_count(S#state.pubsub), S};
 handle_call(subscriber_count, _From, S) ->

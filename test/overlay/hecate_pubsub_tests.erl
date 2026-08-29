@@ -208,10 +208,13 @@ pattern_is_not_exposed_via_topics_1_test() ->
     S0 = hecate_pubsub:new(realm()),
     S1 = hecate_pubsub:subscribe(S0, <<"acme/svc.do">>, Sub),
     S2 = hecate_pubsub:subscribe(S1, <<"*/svc.do">>, Sub),
-    %% topics/1 feeds cross-station gossip re-subscription -- a
+    %% topics/1 feeds the Bloom-gossip re-subscription path -- a
     %% wildcard pattern must never appear there (see moduledoc).
     ?assertEqual([<<"acme/svc.do">>], hecate_pubsub:topics(S2)),
-    %% But it IS real, counted state.
+    %% patterns/1 is the separate, purpose-built export for the
+    %% _mesh.patterns gossip path instead.
+    ?assertEqual([<<"*/svc.do">>], hecate_pubsub:patterns(S2)),
+    %% Both ARE real, counted state.
     ?assertEqual(2, hecate_pubsub:topic_count(S2)),
     ?assertEqual(2, hecate_pubsub:subscriber_count(S2)).
 
