@@ -15,7 +15,7 @@
 
 ---
 
-> **Latest — 10.5.0**: every supervised primitive pair is now complete and
+> **Since 10.5.0**: every supervised primitive pair is complete and
 > symmetric, each wrapping its raw SDK primitive as an OTP behaviour with a
 > `simple_one_for_one` factory supervisor, mesh-visible protocol facts
 > (`sharing.*_v1`, `streaming.*_v1`, `rpc.*_v1`) around its own side of the
@@ -100,27 +100,38 @@ application:ensure_all_started(macula),
 {ok, Pool} = macula:connect([<<"quic://boot.macula.io:443">>], #{}),
 
 %% A realm is a 32-byte tag derived from a name; it scopes every call.
-Realm = macula_realm:id(<<"io.example.myapp">>),
+%% Keep the name around too — topics are built from it, not the tag.
+RealmName = <<"io.example.myapp">>,
+Realm     = macula_realm:id(RealmName),
+
+%% Topics/procedures are built via macula_topic, never hand-typed — a
+%% typo becomes a wrong VALUE your own tests catch, not two strings
+%% silently drifting apart. Facts (pub/sub) are past tense; hopes (RPC)
+%% are present tense. See docs/guides/shared/TOPIC_NAMING_GUIDE.md.
+Topic     = macula_topic:app_fact(RealmName, <<"example">>, <<"myapp">>,
+                                  <<"sensors">>, <<"temperature_measured">>, 1),
+Procedure = macula_topic:app_hope(RealmName, <<"example">>, <<"myapp">>,
+                                  <<"math">>, <<"add">>, 1),
 
 %% Subscribe (delivers {macula_event, Ref, Topic, Payload, Meta} to a pid),
-{ok, Ref} = macula:subscribe(Pool, Realm, <<"sensors.temperature">>, self()),
+{ok, Ref} = macula:subscribe(Pool, Realm, Topic, self()),
 
 %% or subscribe with a callback fun(Topic, Payload, Meta):
 {ok, Ref2} = macula:subscribe_callback(
-    Pool, Realm, <<"sensors.temperature">>,
+    Pool, Realm, Topic,
     fun(_Topic, Payload, _Meta) -> io:format("~p~n", [Payload]) end),
 
 %% Publish. Entity IDs go in the PAYLOAD, never in the topic.
-ok = macula:publish(Pool, Realm, <<"sensors.temperature">>,
+ok = macula:publish(Pool, Realm, Topic,
                     #{sensor => <<"kitchen">>, value => 23.5}),
 
 %% Advertise an RPC procedure (open to any identified caller here),
-ok = macula:advertise(Pool, Realm, <<"math.add">>,
+ok = macula:advertise(Pool, Realm, Procedure,
                       fun(#{<<"a">> := A, <<"b">> := B}) -> {ok, A + B} end,
                       #{}),
 
 %% Call it — the SDK resolves the provider and dials its station directly.
-{ok, 5} = macula:call(Pool, Realm, <<"math.add">>,
+{ok, 5} = macula:call(Pool, Realm, Procedure,
                       #{<<"a">> => 2, <<"b">> => 3}, 5_000).
 ```
 
@@ -141,11 +152,16 @@ Sig = macula_identity:sign(<<"hello">>, KP),
 true = macula_identity:verify(<<"hello">>, Sig, macula_identity:public(KP)),
 
 %% BLAKE3 hashing
-Hash = macula_blake3_nif:hash(Data),
+Hash = macula_blake3_nif:hash(<<"hello">>),
 
-%% UCAN capability tokens + DID documents
-{ok, Token}   = macula_ucan_nif:create(Issuer, Audience, Caps, PrivKey),
-{ok, Payload} = macula_ucan_nif:verify(Token, PubKey).
+%% UCAN capability tokens — Issuer/Audience are DIDs (binaries), not raw keys
+Issuer   = <<"did:macula:io.example.myapp">>,
+Audience = <<"did:macula:io.example.otherapp">>,
+Caps     = [#{with => <<"mri:sensor:io.example.myapp/kitchen">>,
+              can  => <<"read">>}],
+{ok, Token}   = macula_ucan_nif:create(Issuer, Audience, Caps,
+                                       macula_identity:private(KP)),
+{ok, Payload} = macula_ucan_nif:verify(Token, macula_identity:public(KP)).
 ```
 
 ---
