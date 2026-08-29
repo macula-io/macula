@@ -175,6 +175,87 @@ process_event_returns_local_subscribers_test() ->
 %% Helpers
 %%=====================================================================
 
+%%---------------------------------------------------------------------
+%% Wildcard subscriptions (2026-08-29, station-local)
+%%---------------------------------------------------------------------
+
+wildcard_subscriber_receives_every_matching_concrete_topic_test() ->
+    Sub = id(1),
+    S0 = hecate_pubsub:new(realm()),
+    S1 = hecate_pubsub:subscribe(S0, <<"realm/*/app/domain/name_v1">>, Sub),
+    ?assertEqual([Sub], hecate_pubsub:subscribers(
+                          S1, <<"realm/acme/app/domain/name_v1">>)),
+    ?assertEqual([Sub], hecate_pubsub:subscribers(
+                          S1, <<"realm/contoso/app/domain/name_v1">>)),
+    ?assertEqual([], hecate_pubsub:subscribers(
+                       S1, <<"realm/acme/app/domain/other_v1">>)).
+
+exact_subscriber_unaffected_by_a_coexisting_pattern_test() ->
+    ExactSub = id(1),
+    PatternSub = id(2),
+    S0 = hecate_pubsub:new(realm()),
+    S1 = hecate_pubsub:subscribe(S0, <<"acme/svc.do">>, ExactSub),
+    S2 = hecate_pubsub:subscribe(S1, <<"*/svc.do">>, PatternSub),
+    Got = lists:sort(hecate_pubsub:subscribers(S2, <<"acme/svc.do">>)),
+    ?assertEqual(lists:sort([ExactSub, PatternSub]), Got),
+    %% A topic the exact subscription doesn't cover but the pattern
+    %% does -- only the pattern subscriber receives it.
+    ?assertEqual([PatternSub],
+                 hecate_pubsub:subscribers(S2, <<"contoso/svc.do">>)).
+
+pattern_is_not_exposed_via_topics_1_test() ->
+    Sub = id(1),
+    S0 = hecate_pubsub:new(realm()),
+    S1 = hecate_pubsub:subscribe(S0, <<"acme/svc.do">>, Sub),
+    S2 = hecate_pubsub:subscribe(S1, <<"*/svc.do">>, Sub),
+    %% topics/1 feeds cross-station gossip re-subscription -- a
+    %% wildcard pattern must never appear there (see moduledoc).
+    ?assertEqual([<<"acme/svc.do">>], hecate_pubsub:topics(S2)),
+    %% But it IS real, counted state.
+    ?assertEqual(2, hecate_pubsub:topic_count(S2)),
+    ?assertEqual(2, hecate_pubsub:subscriber_count(S2)).
+
+is_subscribed_checks_the_literal_pattern_string_not_matched_concrete_topics_test() ->
+    Sub = id(1),
+    S0 = hecate_pubsub:new(realm()),
+    S1 = hecate_pubsub:subscribe(S0, <<"*/svc.do">>, Sub),
+    ?assert(hecate_pubsub:is_subscribed(S1, <<"*/svc.do">>, Sub)),
+    %% Sub is not "subscribed" to a concrete topic the pattern merely
+    %% matches -- it never registered under that literal string.
+    ?assertNot(hecate_pubsub:is_subscribed(S1, <<"acme/svc.do">>, Sub)),
+    %% But it WOULD receive a publish there -- a different question.
+    ?assertEqual([Sub], hecate_pubsub:subscribers(S1, <<"acme/svc.do">>)).
+
+unsubscribe_from_a_pattern_drops_it_like_any_other_topic_test() ->
+    Sub = id(1),
+    S0 = hecate_pubsub:new(realm()),
+    S1 = hecate_pubsub:subscribe(S0, <<"*/svc.do">>, Sub),
+    S2 = hecate_pubsub:unsubscribe(S1, <<"*/svc.do">>, Sub),
+    ?assertNot(hecate_pubsub:is_subscribed(S2, <<"*/svc.do">>, Sub)),
+    ?assertEqual([], hecate_pubsub:subscribers(S2, <<"acme/svc.do">>)),
+    ?assertEqual(0, hecate_pubsub:topic_count(S2)).
+
+purge_subscriber_drops_patterns_too_test() ->
+    Sub = id(1),
+    S0 = hecate_pubsub:new(realm()),
+    S1 = hecate_pubsub:subscribe(S0, <<"acme/svc.do">>, Sub),
+    S2 = hecate_pubsub:subscribe(S1, <<"*/svc.do">>, Sub),
+    S3 = hecate_pubsub:purge_subscriber(S2, Sub),
+    ?assertEqual(0, hecate_pubsub:topic_count(S3)),
+    ?assertEqual([], hecate_pubsub:subscribers(S3, <<"acme/svc.do">>)),
+    ?assertEqual([], hecate_pubsub:subscribers(S3, <<"contoso/svc.do">>)).
+
+%% deliver_event/2 (what a real inbound EVENT actually drives) routes
+%% through subscribers/2 unchanged -- this proves the full frame-shaped
+%% path, not just the pure subscribers/2 call above.
+deliver_event_reaches_a_wildcard_subscriber_test() ->
+    R = realm(),
+    Sub = id(1),
+    S0 = hecate_pubsub:new(R),
+    S1 = hecate_pubsub:subscribe(S0, <<"*/svc.do">>, Sub),
+    Frame = event_frame(R, <<"acme/svc.do">>),
+    ?assertEqual([Sub], hecate_pubsub:deliver_event(S1, Frame)).
+
 realm() -> crypto:strong_rand_bytes(32).
 
 id(N) -> <<N:256>>.

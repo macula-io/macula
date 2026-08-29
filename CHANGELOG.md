@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.13.0] - 2026-08-29
+
+### Added — station-local wildcard pubsub subscriptions
+
+`hecate_pubsub:subscribe/3` now treats a topic containing a literal `*`
+segment as a wildcard pattern (matched via `macula_topic_pattern:matches/2`)
+rather than an exact topic — kept in a separate internal map so a realm
+with no wildcard subscribers pays no extra cost on delivery. A subscriber
+on `realm/*/app/domain/name_v1` receives publishes to both
+`realm/acme/app/domain/name_v1` and `realm/contoso/app/domain/name_v1`.
+
+**Station-local only, by design, this release**: `topics/1` (which feeds
+cross-station Bloom-gossip re-subscription in `macula-station`) still
+returns exact topics only — a wildcard pattern is never propagated to
+peer stations, since a Bloom filter tests exact-string membership and a
+raw `*`-bearing string would be meaningless there. A wildcard subscriber
+therefore only receives a publish that reaches this realm instance
+directly (same-station publisher, or one already fanned here via the
+ordinary exact-topic relay path) — not one arriving purely via gossip
+from a peer that has no exact-topic overlap. Mesh-wide wildcard
+subscription is a separate, larger piece of work, tracked in
+`macula-station/plans/PLAN_ORG_SCOPED_DISPATCH_AND_WILDCARD_DISCOVERY.md`.
+
 ## [10.12.0] - 2026-08-29
 
 ### Added — `macula_topic_pattern:matches/2`
