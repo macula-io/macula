@@ -96,7 +96,7 @@
 
 -ifdef(TEST).
 %% Exports for unit tests — pure helpers that are otherwise private.
--export([advertisement_trusted/2]).
+-export([advertisement_trusted/2, adv_opts/1]).
 -endif.
 
 -define(RESOLVE_RETRIES, 50).
@@ -193,9 +193,25 @@ on_links({ok, Station}, Pool, Realm, Procedure, Identity, Opts) ->
 on_links({error, _} = Error, _Pool, _Realm, _Procedure, _Identity, _Opts) ->
     Error.
 
-adv_opts(#{cert_chain := ChainPem}) when is_binary(ChainPem) ->
+%% Forwards each opt `procedure_advertisement/4' actually recognizes,
+%% independently — a caller passing `ttl_ms' alone (no `cert_chain') used
+%% to get `#{}' back, silently dropping `ttl_ms' too, because the old
+%% single-clause match only ever produced `cert_chain' or nothing. Found
+%% while wiring a proportioned `ttl_ms' through `advertise_direct/7' from
+%% `hecate_om_capabilities'; `procedure_advertisement/4' already reads
+%% `ttl_ms' from its own Opts (falls back to `?DEFAULT_TTL_MS'), so the
+%% bug was purely in this forwarder never passing it through.
+adv_opts(Opts) ->
+    maps:merge(cert_chain_opt(Opts), ttl_ms_opt(Opts)).
+
+cert_chain_opt(#{cert_chain := ChainPem}) when is_binary(ChainPem) ->
     #{cert_chain => ChainPem};
-adv_opts(_Opts) ->
+cert_chain_opt(_Opts) ->
+    #{}.
+
+ttl_ms_opt(#{ttl_ms := Ttl}) when is_integer(Ttl), Ttl > 0 ->
+    #{ttl_ms => Ttl};
+ttl_ms_opt(_Opts) ->
     #{}.
 
 %% The first CONNECTED link with a known peer pubkey — `links/1' can

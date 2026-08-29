@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.11.1] - 2026-08-29
+
+### Fixed — `macula_direct_dial:publish_advertisement/5` silently dropped `ttl_ms`
+
+`adv_opts/1` only ever forwarded `cert_chain` from a caller's `Opts` to
+`macula_record:procedure_advertisement/4` — a single-clause match meant passing
+`ttl_ms` alone (no `cert_chain`) produced `#{}`, silently discarding it, even
+though `procedure_advertisement/4` has read `ttl_ms` from its own Opts all
+along. Now forwards each recognized opt independently, so a caller of
+`advertise_direct/7`/`publish_advertisement/5` can set a proportioned TTL on
+the published `procedure_advertisement` instead of getting the envelope
+default regardless of what it asked for. Found wiring a proportioned `ttl_ms`
+through from `hecate_om_capabilities`.
+
 ## [10.11.0] - 2026-08-29
 
 ### Added — `purge_subscriber/2` on the pubsub overlay stack
