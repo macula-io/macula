@@ -841,6 +841,39 @@ spawned_link_pids(#state{links = Links}) ->
 %% `expected_node_id'. An already-connected, reused
 %% link keeps whatever trust it was originally dialed under; `ExtraOpts'
 %% only shapes a dial that happens as a result of THIS call.
+%%
+%% `Links' is keyed by the literal `Station' STRING, not by the
+%% station's actual identity. A direct-dial caller names `Station' by a
+%% URL it just resolved (`macula-io/macula-station'-style: a
+%% `station_endpoint' record's `quic://[host]:port'), which very often
+%% spells the SAME physical station differently than however the pool's
+%% own seeds (or an earlier direct-dial call to it) already named it —
+%% and a literal-string miss here used to dial a genuinely SECOND,
+%% redundant connection to a station the pool already held a live
+%% connection to.
+%%
+%% Found live 2026-08-29: reproducible on literally the SECOND
+%% `call_station' to the same station from one pool, regardless of
+%% realm/procedure — the station closed one of the two duplicate
+%% connections, and whichever caller's next attempt landed on the
+%% closed one failed with `{disconnected, {peer_closed, ...}}'.
+%%
+%% `expected_node_id' (when a direct-dial caller supplies one — see
+%% `call_station/8') is exactly the station identity that caller already
+%% resolved and verified via a signed DHT record before ever reaching
+%% here. A literal-key miss now falls back to asking every link this
+%% pool currently holds whether IT is already connected to that same
+%% identity, under `find_link_by_node_id/2', before dialing fresh.
+%%
+%% Deliberately does NOT do this for a caller with no `expected_node_id'
+%% (the pool's own seed-connect path never sets one — see
+%% `call_station/8''s own doc: "The pool's own connect/2-time verify/
+%% expected_node_id are fixed at connect time"): scanning every link for
+%% a plain seed dial would add cost to the common path for no benefit,
+%% since a seed's `Station' string IS already its own canonical `Links'
+%% key. This only ever runs on a direct-dial literal-key miss, which any
+%% SUBSEQUENT call to that SAME resolved URL will skip entirely (it hits
+%% the ordinary literal-key match above).
 ensure_link(Station, ExtraOpts, #state{links = Links} = S) ->
     ensure_link_for(maps:find(Station, Links), Station, ExtraOpts, S).
 
@@ -848,8 +881,45 @@ ensure_link_for({ok, #link_state{pid = Pid}}, _Station, _ExtraOpts, S)
         when is_pid(Pid) ->
     {Pid, S};
 ensure_link_for(_Missing, Station, ExtraOpts, S) ->
+    reuse_by_node_id(maps:get(expected_node_id, ExtraOpts, undefined),
+                     Station, ExtraOpts, S).
+
+reuse_by_node_id(undefined, Station, ExtraOpts, S) ->
+    dial_fresh(Station, ExtraOpts, S);
+reuse_by_node_id(NodeId, Station, ExtraOpts, #state{links = Links} = S) ->
+    reuse_or_dial(find_link_by_node_id(NodeId, Links), Station, ExtraOpts, S).
+
+reuse_or_dial(Pid, _Station, _ExtraOpts, S) when is_pid(Pid) ->
+    {Pid, S};
+reuse_or_dial(undefined, Station, ExtraOpts, S) ->
+    dial_fresh(Station, ExtraOpts, S).
+
+dial_fresh(Station, ExtraOpts, S) ->
     S1 = start_link_for_seed(Station, ExtraOpts, S),
     {link_pid(Station, S1), S1}.
+
+%% Bounded by however many links this pool currently holds — typically
+%% a handful (its configured seeds plus any prior direct-dial targets),
+%% so a synchronous `peer_node_id/1' round trip per link is an
+%% acceptable, RARE cost: only a direct-dial literal-key MISS reaches
+%% here at all (see `ensure_link/3''s own doc for why every subsequent
+%% call to the same resolved URL skips this entirely).
+find_link_by_node_id(NodeId, Links) ->
+    first_matching_pid(
+      [Pid || #link_state{pid = Pid} <- maps:values(Links), is_pid(Pid)],
+      NodeId).
+
+first_matching_pid([], _NodeId) ->
+    undefined;
+first_matching_pid([Pid | Rest], NodeId) ->
+    %% safe_peer_node_id/1 (below, pre-existing) already absorbs a dead
+    %% or wedged link's gen_server:call exit -- exactly the "one bad
+    %% link must not crash this whole reuse scan" concern this function
+    %% would otherwise need its own try/catch for.
+    keep_or_next(safe_peer_node_id(Pid), Pid, Rest, NodeId).
+
+keep_or_next(NodeId, Pid, _Rest, NodeId) when NodeId =/= undefined -> Pid;
+keep_or_next(_Other, _Pid, Rest, NodeId) -> first_matching_pid(Rest, NodeId).
 
 link_pid(Station, #state{links = Links}) ->
     case maps:find(Station, Links) of

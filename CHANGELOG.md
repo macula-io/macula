@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.13.1] - 2026-08-29
+
+### Fixed — `call_station`/`call_stream_station`/`ensure_content_link` dialed a redundant duplicate connection to an already-connected station
+
+`macula_client`'s link table is keyed by the literal seed STRING passed to
+`ensure_link/3`. A direct-dial caller names its target by a URL it just
+resolved (a `station_endpoint` record's `quic://[host]:port`), which very
+often spells the SAME physical station differently than however the pool's
+own configured seed (or an earlier direct-dial call to it) already named it.
+A literal-string miss dialed a genuinely second, redundant connection to a
+station the pool already held a live connection to — reproducible, live,
+100% of the time, as literally the SECOND `call_station` from one pool to
+the same station, regardless of realm or procedure: the station closed one
+of the two duplicate connections, and whichever caller's next attempt
+landed on the closed one failed with `{disconnected, {peer_closed,
+"connection lost"}}`.
+
+Fixed: a literal-key miss now checks whether the caller supplied
+`expected_node_id` (every direct-dial caller does — it's the station
+identity already resolved and verified via a signed DHT record before
+reaching here) and, if so, scans this pool's existing links for one already
+connected to that same identity before dialing fresh. Only runs on a
+direct-dial literal-key miss — the pool's own plain seed-connect path is
+unaffected, and any subsequent call to the same resolved URL hits the
+ordinary literal-key match and skips the scan entirely.
+
 ## [10.13.0] - 2026-08-29
 
 ### Added — station-local wildcard pubsub subscriptions

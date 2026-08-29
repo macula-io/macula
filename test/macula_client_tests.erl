@@ -79,6 +79,31 @@ call_station_unreachable_returns_not_connected_test() ->
     ok = macula_client:close(Pool),
     ok.
 
+%% expected_node_id reuse-by-identity (2026-08-29): a direct-dial call to
+%% a station this pool has NO existing link to at all (under any name)
+%% must fall through cleanly to an ordinary fresh dial, same outcome as
+%% the plain case above -- the actual REUSE happens live (a live
+%% station is what makes a match possible at all; see
+%% hecate-om/test_live/hecate_om_capabilities_live_station_tests.erl's
+%% org_scoped_call_reaches_only_the_targeted_org_test_, which now
+%% reuses ONE pool for two sequential call_station calls specifically
+%% because this fix makes that safe). This proves the new code path
+%% added for that fix doesn't hang, crash, or misbehave in the "nothing
+%% matches" case this suite CAN exercise without a live station.
+call_station_with_expected_node_id_and_no_match_falls_through_to_dial_test() ->
+    {ok, _} = application:ensure_all_started(macula),
+    {ok, Pool} = macula_client:connect([], #{}),
+    SomeNodeId = crypto:strong_rand_bytes(32),
+    Result = macula_client:call_station(Pool, ?SEED1, ?REALM, <<"x.y">>,
+                                        #{}, 300, <<>>,
+                                        #{expected_node_id => SomeNodeId,
+                                          verify => none,
+                                          pin_tls_cert => false}),
+    ?assertEqual({error, not_connected}, Result),
+    ?assert(is_process_alive(Pool)),
+    ok = macula_client:close(Pool),
+    ok.
+
 %%------------------------------------------------------------------
 %% subscribe/5 + unsubscribe/2 bookkeeping
 %%------------------------------------------------------------------
