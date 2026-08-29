@@ -198,7 +198,13 @@ Topic = <<"my.realm/my.org/my.app/orders/placed_v1">>.
 ```
 
 `macula_topic` returns a canonical binary that the SDK and stations
-agree on. Hand-rolled strings are rejected.
+agree on. Nothing on the send path rejects a hand-rolled string —
+`macula:publish/4,5` and `subscribe/4,5` take `Topic` as an opaque
+binary and send whatever you pass, so a typo just never matches
+instead of erroring. Building via `macula_topic` turns that class of
+bug into a wrong *value* your own tests can catch. See
+[Validation](../shared/TOPIC_NAMING_GUIDE.md#validation) in the Topic
+Naming Guide for exactly what is and isn't enforced.
 
 See **[TOPIC_NAMING_GUIDE.md](../shared/TOPIC_NAMING_GUIDE.md)** for the canonical
 specification of the five-segment shape and the `realm_fact /
