@@ -63,6 +63,37 @@ unsubscribe_unknown_subscriber_is_noop_test() ->
     ?assertEqual(0, hecate_pubsub:topic_count(S)).
 
 %%---------------------------------------------------------------------
+%% purge_subscriber
+%%---------------------------------------------------------------------
+
+purge_subscriber_drops_topics_where_it_was_sole_subscriber_test() ->
+    Sub = id(1),
+    S0 = hecate_pubsub:subscribe(hecate_pubsub:new(realm()), <<"a">>, Sub),
+    S1 = hecate_pubsub:subscribe(S0, <<"b">>, Sub),
+    S2 = hecate_pubsub:purge_subscriber(S1, Sub),
+    ?assertEqual(0, hecate_pubsub:topic_count(S2)),
+    ?assertEqual([], hecate_pubsub:topics(S2)).
+
+purge_subscriber_keeps_topics_that_still_have_other_subscribers_test() ->
+    S0 = hecate_pubsub:subscribe(hecate_pubsub:new(realm()), <<"a">>, id(1)),
+    S1 = hecate_pubsub:subscribe(S0, <<"a">>, id(2)),
+    S2 = hecate_pubsub:purge_subscriber(S1, id(1)),
+    ?assertEqual([<<"a">>], hecate_pubsub:topics(S2)),
+    ?assertEqual([id(2)], hecate_pubsub:subscribers(S2, <<"a">>)).
+
+purge_subscriber_only_touches_topics_the_subscriber_was_on_test() ->
+    S0 = hecate_pubsub:subscribe(hecate_pubsub:new(realm()), <<"a">>, id(1)),
+    S1 = hecate_pubsub:subscribe(S0, <<"b">>, id(2)),
+    S2 = hecate_pubsub:purge_subscriber(S1, id(1)),
+    ?assertEqual([<<"b">>], hecate_pubsub:topics(S2)),
+    ?assertEqual([id(2)], hecate_pubsub:subscribers(S2, <<"b">>)).
+
+purge_subscriber_unknown_subscriber_is_noop_test() ->
+    S0 = hecate_pubsub:subscribe(hecate_pubsub:new(realm()), <<"a">>, id(1)),
+    S1 = hecate_pubsub:purge_subscriber(S0, id(99)),
+    ?assertEqual([<<"a">>], hecate_pubsub:topics(S1)).
+
+%%---------------------------------------------------------------------
 %% Event delivery
 %%---------------------------------------------------------------------
 

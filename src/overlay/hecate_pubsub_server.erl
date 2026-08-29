@@ -34,7 +34,7 @@
 
 -export([
     start_link/1,
-    subscribe/3, unsubscribe/3, is_subscribed/3,
+    subscribe/3, unsubscribe/3, purge_subscriber/2, is_subscribed/3,
     subscribers/2, topics/1, topic_count/1, subscriber_count/1,
     realm/1,
     publish/3, deliver_event/2, process_frame/3,
@@ -71,6 +71,13 @@ subscribe(Pid, Topic, Sub) ->
 -spec unsubscribe(pid(), binary(), <<_:256>>) -> ok.
 unsubscribe(Pid, Topic, Sub) ->
     gen_server:call(Pid, {unsubscribe, Topic, Sub}).
+
+%% @doc Remove `Sub' from every topic this server holds, dropping any
+%% topic that empties out as a result. See
+%% `hecate_pubsub:purge_subscriber/2'.
+-spec purge_subscriber(pid(), <<_:256>>) -> ok.
+purge_subscriber(Pid, Sub) ->
+    gen_server:call(Pid, {purge_subscriber, Sub}).
 
 -spec is_subscribed(pid(), binary(), <<_:256>>) -> boolean().
 is_subscribed(Pid, Topic, Sub) ->
@@ -158,6 +165,9 @@ handle_call({subscribe, Topic, Sub}, _From, S) ->
     {reply, ok, S#state{pubsub = PS2}};
 handle_call({unsubscribe, Topic, Sub}, _From, S) ->
     PS2 = hecate_pubsub:unsubscribe(S#state.pubsub, Topic, Sub),
+    {reply, ok, S#state{pubsub = PS2}};
+handle_call({purge_subscriber, Sub}, _From, S) ->
+    PS2 = hecate_pubsub:purge_subscriber(S#state.pubsub, Sub),
     {reply, ok, S#state{pubsub = PS2}};
 handle_call({is_subscribed, Topic, Sub}, _From, S) ->
     {reply, hecate_pubsub:is_subscribed(S#state.pubsub, Topic, Sub), S};

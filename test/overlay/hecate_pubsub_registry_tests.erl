@@ -51,7 +51,12 @@ registry_test_() ->
          fun(Reg) -> ?_test(list_realms_reports_active_realms(Reg)) end,
          fun(Reg) -> ?_test(shutdown_propagates_to_children(Reg)) end,
          fun(Reg) -> ?_test(relay_publish_unknown_realm_is_not_found(Reg)) end,
-         fun(Reg) -> ?_test(relay_publish_returns_event_and_subscribers(Reg)) end
+         fun(Reg) -> ?_test(relay_publish_returns_event_and_subscribers(Reg)) end,
+         fun(Reg) -> ?_test(purge_subscriber_clears_a_single_realm(Reg)) end,
+         fun(Reg) -> ?_test(purge_subscriber_fans_out_across_realms(Reg)) end,
+         fun(Reg) -> ?_test(purge_subscriber_keeps_other_subscribers(Reg)) end,
+         fun(Reg) -> ?_test(purge_subscriber_tolerates_no_realms(Reg)) end,
+         fun(Reg) -> ?_test(purge_subscriber_tolerates_a_dead_server(Reg)) end
      ]}.
 
 %%---------------------------------------------------------------------
@@ -372,6 +377,60 @@ relay_publish_returns_event_and_subscribers(Reg) ->
                                      macula_identity:public(Station))),
     %% Local sub matched.
     ?assertEqual([SubId], Matched).
+
+%%---------------------------------------------------------------------
+%% purge_subscriber
+%%---------------------------------------------------------------------
+
+purge_subscriber_clears_a_single_realm(Reg) ->
+    R  = realm(),
+    Kp = keypair(),
+    Sub = id(1),
+    {ok, Server} = hecate_pubsub_registry:register(Reg, R, Kp),
+    ok = hecate_pubsub_server:subscribe(Server, <<"t">>, Sub),
+    ok = hecate_pubsub_registry:purge_subscriber(Reg, Sub),
+    ?assertEqual(0, hecate_pubsub_server:topic_count(Server)).
+
+%% A departed peer or daemon has no notion of "which realm" it was
+%% subscribed under — this is the whole reason `purge_subscriber/2'
+%% lives on the registry rather than requiring the caller to know.
+purge_subscriber_fans_out_across_realms(Reg) ->
+    R1 = realm(),
+    R2 = realm(),
+    Kp = keypair(),
+    Sub = id(1),
+    {ok, S1} = hecate_pubsub_registry:register(Reg, R1, Kp),
+    {ok, S2} = hecate_pubsub_registry:register(Reg, R2, Kp),
+    ok = hecate_pubsub_server:subscribe(S1, <<"a">>, Sub),
+    ok = hecate_pubsub_server:subscribe(S2, <<"b">>, Sub),
+    ok = hecate_pubsub_registry:purge_subscriber(Reg, Sub),
+    ?assertEqual(0, hecate_pubsub_server:topic_count(S1)),
+    ?assertEqual(0, hecate_pubsub_server:topic_count(S2)).
+
+purge_subscriber_keeps_other_subscribers(Reg) ->
+    R  = realm(),
+    Kp = keypair(),
+    {ok, Server} = hecate_pubsub_registry:register(Reg, R, Kp),
+    ok = hecate_pubsub_server:subscribe(Server, <<"t">>, id(1)),
+    ok = hecate_pubsub_server:subscribe(Server, <<"t">>, id(2)),
+    ok = hecate_pubsub_registry:purge_subscriber(Reg, id(1)),
+    ?assertEqual([id(2)], hecate_pubsub_server:subscribers(Server, <<"t">>)).
+
+purge_subscriber_tolerates_no_realms(Reg) ->
+    ?assertEqual(ok, hecate_pubsub_registry:purge_subscriber(Reg, id(1))).
+
+%% A server dying between `list_realms'-time bookkeeping and this
+%% call's fan-out is a race, not an error: the registry's own `EXIT'
+%% handling clears the stale entry independently. purge_subscriber
+%% must not crash the registry when it hits a dead pid.
+purge_subscriber_tolerates_a_dead_server(Reg) ->
+    R  = realm(),
+    Kp = keypair(),
+    {ok, Pid} = hecate_pubsub_registry:register(Reg, R, Kp),
+    exit(Pid, kill),
+    wait_until(fun() -> not is_process_alive(Pid) end, 1000),
+    ?assertEqual(ok, hecate_pubsub_registry:purge_subscriber(Reg, id(1))),
+    ?assert(is_process_alive(Reg)).
 
 %%---------------------------------------------------------------------
 %% Polling helper

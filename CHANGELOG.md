@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.11.0] - 2026-08-29
+
+### Added — `purge_subscriber/2` on the pubsub overlay stack
+
+New `hecate_pubsub:purge_subscriber/2`, `hecate_pubsub_server:purge_subscriber/2`,
+and `hecate_pubsub_registry:purge_subscriber/2` (the last one fanning out across
+every realm the registry currently holds a server for). Removes one subscriber
+pubkey from every topic it was on, dropping any topic that empties out as a
+result — the same `drop_or_keep` rule `unsubscribe/3` already applies to one
+topic, generalized to "all topics this subscriber touched."
+
+Closes the missing half of `macula-station/plans/DESIGN_SUBSCRIPTION_LIFECYCLE_GC.md`:
+nothing in this SDK previously removed a subscriber's entries on connection loss,
+only on an explicit UNSUBSCRIBE frame. A station never had this primitive to call
+in the first place — `macula_station_peer_observer:on_disconnected/2` purges SWIM,
+DHT, ADVERTISE and stream state on disconnect already, but had nothing to call for
+pubsub, so a peer or daemon that vanished without unsubscribing left its topics
+permanently registered as local interest, which `macula_station_peering_router`
+then re-propagated to every other peer indefinitely. Wiring this into that
+disconnect path is a `macula-station` change, not an SDK one; this release only
+adds the primitive.
+
 ## [10.10.2] - 2026-08-28
 
 ### Fixed — a text payload VALUE matching an existing atom name silently arrived as that atom, not a binary

@@ -41,6 +41,7 @@
     dispatch_frame/4,
     relay_publish/3,
     list_realms/1,
+    purge_subscriber/2,
     stop/1
 ]).
 
@@ -143,6 +144,22 @@ relay_publish(RegistryPid, <<_:256>> = Realm, Frame) ->
 list_realms(RegistryPid) ->
     gen_server:call(RegistryPid, list_realms).
 
+%% @doc Remove `Sub' (a subscriber pubkey) from every topic under
+%% every realm currently materialised on this registry — i.e. from
+%% every live `hecate_pubsub_server' it owns. A dead server pid
+%% (raced against its own `EXIT' cleanup, see `handle_info/2') is
+%% skipped rather than treated as an error; the registry's own
+%% `by_realm'/`by_pid' bookkeeping self-heals on the pending `EXIT'.
+%%
+%% Intended caller: the station's peer/daemon connection-lifecycle
+%% path, once a `NodeId' is confirmed to have no remaining
+%% connection. `Sub' has no notion of "which realm" it was
+%% subscribed under, so this fans out to all of them rather than
+%% requiring the caller to know.
+-spec purge_subscriber(pid(), <<_:256>>) -> ok.
+purge_subscriber(RegistryPid, <<_:256>> = Sub) ->
+    gen_server:call(RegistryPid, {purge_subscriber, Sub}).
+
 %% @doc Stop the registry. Uses reason `shutdown' (not the default
 %% `normal') so the registry's spawn-linked pubsub_servers receive
 %% the exit signal and terminate alongside it. Without this, normal
@@ -178,6 +195,10 @@ handle_call({relay_publish, Realm, Frame}, _From, S) ->
     do_relay_publish(Realm, Frame, maps:find(Realm, S#state.by_realm), S);
 handle_call(list_realms, _From, S) ->
     {reply, maps:keys(S#state.by_realm), S};
+handle_call({purge_subscriber, Sub}, _From, S) ->
+    lists:foreach(fun(Pid) -> purge_one(Pid, Sub) end,
+                  maps:values(S#state.by_realm)),
+    {reply, ok, S};
 handle_call(_Other, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
@@ -318,3 +339,12 @@ drop_realm(Realm, S) ->
 
 drop_pid_entry(undefined, ByPid) -> ByPid;
 drop_pid_entry(Pid, ByPid)       -> maps:remove(Pid, ByPid).
+
+%%====================================================================
+%% Internals — purge_subscriber
+%%====================================================================
+
+purge_one(Pid, Sub) ->
+    try hecate_pubsub_server:purge_subscriber(Pid, Sub)
+    catch exit:{noproc, _} -> ok
+    end.

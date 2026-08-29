@@ -83,6 +83,28 @@ unsubscribe_unknown_topic_is_noop_test() ->
     stop_(Pid).
 
 %%---------------------------------------------------------------------
+%% purge_subscriber
+%%---------------------------------------------------------------------
+
+purge_subscriber_drops_topics_where_it_was_sole_subscriber_test() ->
+    Pid = start(),
+    Sub = id(1),
+    ok = hecate_pubsub_server:subscribe(Pid, <<"a">>, Sub),
+    ok = hecate_pubsub_server:subscribe(Pid, <<"b">>, Sub),
+    ok = hecate_pubsub_server:purge_subscriber(Pid, Sub),
+    ?assertEqual(0, hecate_pubsub_server:topic_count(Pid)),
+    stop_(Pid).
+
+purge_subscriber_keeps_topics_that_still_have_other_subscribers_test() ->
+    Pid = start(),
+    ok = hecate_pubsub_server:subscribe(Pid, <<"a">>, id(1)),
+    ok = hecate_pubsub_server:subscribe(Pid, <<"a">>, id(2)),
+    ok = hecate_pubsub_server:purge_subscriber(Pid, id(1)),
+    ?assertEqual([<<"a">>], hecate_pubsub_server:topics(Pid)),
+    ?assertEqual([id(2)], hecate_pubsub_server:subscribers(Pid, <<"a">>)),
+    stop_(Pid).
+
+%%---------------------------------------------------------------------
 %% Publish
 %%---------------------------------------------------------------------
 

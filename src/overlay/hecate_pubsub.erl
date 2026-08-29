@@ -39,6 +39,7 @@
     realm/1,
     subscribe/3,
     unsubscribe/3,
+    purge_subscriber/2,
     is_subscribed/3,
     subscribers/2,
     topics/1,
@@ -124,6 +125,27 @@ drop_or_keep(Map, Topic, Set) ->
         0 -> maps:remove(Topic, Map);
         _ -> Map#{Topic => Set}
     end.
+
+%% @doc Remove `Sub' from every topic in this realm, dropping any
+%% topic whose subscriber set becomes empty as a result — the same
+%% `drop_or_keep/3' rule `unsubscribe/3' applies to one topic, fanned
+%% out across all of them in one pass.
+%%
+%% For a peer or daemon that disconnects without sending UNSUBSCRIBE
+%% for everything it held: without this, a topic whose only
+%% subscriber was that departed connection never empties, so it never
+%% leaves `topics/1' — and `macula_station_peering_router' (which
+%% treats every entry in `topics/1' as local interest worth
+%% re-subscribing on every peer, regardless of whether the original
+%% subscriber was a peer-sourced entry) keeps re-propagating it
+%% mesh-wide forever. See
+%% macula-station/plans/DESIGN_SUBSCRIPTION_LIFECYCLE_GC.md.
+-spec purge_subscriber(state(), subscriber()) -> state().
+purge_subscriber(#{subscriptions := S} = State, Sub) ->
+    State#{subscriptions := maps:fold(
+        fun(Topic, Set, Acc) ->
+            drop_or_keep(Acc, Topic, sets:del_element(Sub, Set))
+        end, S, S)}.
 
 %%=====================================================================
 %% Delivery
