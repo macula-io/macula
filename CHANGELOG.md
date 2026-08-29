@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.12.0] - 2026-08-29
+
+### Added — `macula_topic_pattern:matches/2`
+
+Segment-wise wildcard matching for hierarchical mesh addresses (pubsub
+topics, RPC procedure names, capability advertisements): `*` matches
+exactly one segment, in exactly that position. Deliberately arity-agnostic
+— no assumption of a fixed segment count, so it serves both
+`hecate_om_capabilities`'s 2-segment capability names (`org`, `name`) and
+`macula_topic`'s 4-segment tiered topics (`org`-or-`_org`,
+`app`-or-`_realm`, `domain`, `name`) with the same primitive. Building
+block for wildcard capability discovery and wildcard pubsub subscription
+matching (`hecate-services/hecate-om`,
+`macula-station/plans/PLAN_ORG_SCOPED_DISPATCH_AND_WILDCARD_DISCOVERY.md`).
+
 ## [10.11.1] - 2026-08-29
 
 ### Fixed — `macula_direct_dial:publish_advertisement/5` silently dropped `ttl_ms`
