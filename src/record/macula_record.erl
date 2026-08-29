@@ -919,7 +919,8 @@ host_list(V)                  -> [unwrap_text(V)].
     lng          => float() | integer() | undefined,
     display_name => binary() | undefined,
     caps_hint    => binary() | undefined,
-    peers        => [macula_identity:pubkey()] | undefined
+    peers        => [macula_identity:pubkey()] | undefined,
+    version      => binary() | undefined
 }.
 read_node_record(#{type := ?TYPE_NODE_RECORD, payload := P}) ->
     #{node_id      => payload_field(P, <<"node_id">>),
@@ -935,7 +936,13 @@ read_node_record(#{type := ?TYPE_NODE_RECORD, payload := P}) ->
       lng          => parse_geo(payload_field(P, <<"lng">>)),
       display_name => payload_field(P, <<"display_name">>),
       caps_hint    => payload_field(P, <<"caps_hint">>),
-      peers        => payload_field(P, <<"peers">>)}.
+      peers        => payload_field(P, <<"peers">>),
+      %% `macula_station_announcer:identity_metadata/1' has stamped this
+      %% onto every station's re-announce heartbeat since before this SDK
+      %% existed -- WRITE-only until now, silently dropped here, so
+      %% nothing downstream (hecate-stations included) could ever read a
+      %% station's own reported build back out.
+      version      => payload_field(P, <<"version">>)}.
 
 parse_geo(undefined) -> undefined;
 parse_geo(Bin) when is_binary(Bin) ->

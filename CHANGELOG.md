@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.13.2] - 2026-08-29
+
+### Fixed
+
+- `macula_record:read_node_record/1` silently dropped the `version` field
+  `macula_station_announcer:inject_identity_metadata/1` has stamped onto
+  every station's re-announce heartbeat since before this reader existed —
+  write-only until now, so no consumer (including `hecate-stations`) could
+  ever read a station's own reported build back out. Added `version` to the
+  returned map.
+
 ## [10.13.1] - 2026-08-29
 
 ### Fixed — `call_station`/`call_stream_station`/`ensure_content_link` dialed a redundant duplicate connection to an already-connected station

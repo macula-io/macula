@@ -88,8 +88,27 @@ read_node_record_returns_typed_map_test() ->
                    lng          => undefined,
                    display_name => undefined,
                    caps_hint    => undefined,
-                   peers        => undefined},
+                   peers        => undefined,
+                   version      => undefined},
                  macula_record:read_node_record(R)).
+
+%% `version' is stamped by `macula_station_announcer:inject_identity_metadata/1'
+%% directly onto an already-built record's payload -- not a `node_record_opts()'
+%% field `node_record/4' itself knows how to write -- so this constructs the
+%% payload by hand, the same minimal shape
+%% `read_node_record_kind_survives_rpc_atom_coercion_test' already uses for
+%% exactly this reason. Was previously silently dropped: the announcer wrote
+%% it on every heartbeat, but nothing read it back out.
+read_node_record_returns_version_test() ->
+    Record = #{
+        type => 16#01,
+        payload => #{
+            node_id => crypto:strong_rand_bytes(32),
+            <<"version">> => <<"a1b2c3d4e5f6">>
+        }
+    },
+    ?assertEqual(<<"a1b2c3d4e5f6">>,
+                 maps:get(version, macula_record:read_node_record(Record))).
 
 read_node_record_kind_undefined_when_unset_test() ->
     Kp = macula_identity:generate(),
