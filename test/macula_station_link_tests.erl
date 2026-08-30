@@ -1350,6 +1350,61 @@ subscribe_before_connect_drains_on_connected_test_() ->
          ok
      end}.
 
+%%------------------------------------------------------------------
+%% subscribe/4 mid-handshake (peer_pid set, peer_node_id not yet) --
+%% regression for the bug fixed alongside this test: maybe_send_subscribe/3
+%% used to gate on peer_pid alone, unlike maybe_send_advertise/3 and
+%% maybe_send_unadvertise/3 (both correctly gate on peer_node_id), so a
+%% SUBSCRIBE frame sent in this exact window landed on the wire while the
+%% peering statem was still in `handshaking' -- which has no clause for
+%% `cast({send_frame, _})' and silently drops it via `drop_unexpected'.
+%% Reproduced live: hecate-stations' own logs showed this exact frame
+%% (topic _dht.records.N.stored) dropped on every reconnect.
+%%------------------------------------------------------------------
+
+subscribe_during_handshake_not_sent_early_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         flush_send_frame_casts(),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => Identity
+         }),
+         FakePeer = self(),
+         %% peer_pid set (mirrors after_connect_request/2 right after
+         %% macula_peering:connect/1 returns), peer_node_id deliberately
+         %% left undefined (mirrors the statem still being in
+         %% `handshaking' -- it is only set on the real `connected' event).
+         _ = sys:replace_state(Pid, fun(S) ->
+             setelement(?PEER_PID_INDEX, S, FakePeer)
+         end),
+         {ok, SubRef} = macula_station_link:subscribe(
+                          Pid, ?REALM,
+                          <<"_dht.records.1.stored">>, self()),
+         ?assert(is_reference(SubRef)),
+         receive
+             {'$gen_cast', {send_frame, _}} ->
+                 erlang:error(premature_send_frame)
+         after 200 -> ok
+         end,
+         %% Handshake now genuinely completes -- drain must still deliver
+         %% the frame that was correctly withheld above.
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, connected, FakePeer, PeerNodeId},
+         receive
+             {'$gen_cast', {send_frame, #{frame_type := subscribe,
+                                          topic := T}}} ->
+                 ?assertEqual(<<"_dht.records.1.stored">>, T)
+         after 1_000 ->
+             erlang:error(subscribe_frame_not_drained)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
 %%==================================================================
 %% advertise/4 + inbound CALL dispatch
 %%==================================================================

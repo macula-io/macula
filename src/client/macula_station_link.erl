@@ -1720,7 +1720,23 @@ send_unsubscribe(Pid, Realm, Topic, Id) ->
     ok.
 
 %% Send a SUBSCRIBE frame for `(Realm, Topic)' iff peering is connected.
+%% Must gate on `peer_node_id' (set only once the CONNECT/HELLO handshake
+%% completes), not `peer_pid' (set the moment `macula_peering:connect/1'
+%% returns, before handshaking finishes) -- matches `is_connected/1' and
+%% mirrors `maybe_send_advertise/3'/`maybe_send_unadvertise/3' below,
+%% which already gate correctly. Gating on `peer_pid' alone let a
+%% SUBSCRIBE frame through mid-handshake, where the peering statem has no
+%% clause for `cast({send_frame, _})' and silently drops it via
+%% `drop_unexpected' (logged as `_macula.peering.unexpected_event') --
+%% verified live: every occurrence in a real deployment's logs landed in
+%% the few-hundred-ms window right after a `_macula.client.link_down'
+%% reconnect. Harmless for a *stored* subscription, since
+%% `drain_pending_subscribes/1' resends it once `connected' genuinely
+%% fires, but wasteful and alarming on every reconnect, and NOT harmless
+%% for a caller that assumed the frame had actually gone out now.
 maybe_send_subscribe(_Realm, _Topic, #state{peer_pid = undefined}) ->
+    ok;
+maybe_send_subscribe(_Realm, _Topic, #state{peer_node_id = undefined}) ->
     ok;
 maybe_send_subscribe(Realm, Topic, #state{peer_pid = Pid, identity = Id}) ->
     SubKey = macula_identity:public(Id),

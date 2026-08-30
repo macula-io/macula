@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.14.2] - 2026-08-30
+
+### Fixed
+
+- `macula_station_link:maybe_send_subscribe/3` gated a SUBSCRIBE frame's
+  immediate send on `peer_pid` alone, unlike its two siblings
+  (`maybe_send_advertise/3`/`maybe_send_unadvertise/3` in the same
+  module), which correctly gate on `peer_node_id`. `peer_pid` is set the
+  moment `macula_peering:connect/1` returns, before the CONNECT/HELLO
+  handshake completes; `peer_node_id` is only set once it genuinely has.
+  A SUBSCRIBE frame sent in that window landed on the wire while the
+  peering statem was still in `handshaking`, which has no clause for
+  `cast({send_frame, _})` and silently drops it via `drop_unexpected`
+  (logged as `_macula.peering.unexpected_event`). Found live: a real
+  deployment's logs showed this exact frame (topic
+  `_dht.records.N.stored`) dropped on every reconnect. Harmless for a
+  *stored* subscription — `drain_pending_subscribes/1` resends it once
+  `connected` genuinely fires — but wasteful and alarming on every
+  reconnect, and not harmless for a caller that assumed the frame had
+  actually gone out. Regression test added
+  (`subscribe_during_handshake_not_sent_early_test_`); confirmed it fails
+  without the fix before confirming it passes with it.
+
 ## [10.14.1] - 2026-08-29
 
 ### Fixed
