@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.14.3] - 2026-08-31
+
+### Fixed
+
+- `priv/build-nifs.sh` silently skipped building `macula_cbor_nif` when
+  `cargo` wasn't on PATH -- a warning, not a failure, and the script still
+  exited 0 ("All NIFs ready.") having built nothing. `macula_cbor_nif.erl`'s
+  own moduledoc is explicit that this NIF has no Erlang fallback and
+  "failing fast at NIF-load time is the right behavior" -- the build script
+  did the opposite: a clean, green build that fails every caller at
+  runtime with an opaque `nif_not_loaded` instead. Found live in a
+  downstream consumer's CI (an `erlang:28` container with no Rust
+  toolchain installed): `rebar3 compile` and dependency resolution both
+  went green, then every test touching CBOR pack/unpack failed. `cargo`
+  missing (or a build that reports success but produces no `.so`) is now
+  a hard failure (exit 1) for `macula_cbor_nif` specifically, with a
+  message naming why. The other four Rust NIFs `build-nifs.sh` builds
+  (`macula_crypto_nif`/`macula_ucan_nif`/`macula_did_nif`/`macula_mri_nif`)
+  keep the existing soft-skip -- each documents a real Erlang fallback in
+  its own moduledoc, so a consumer without Rust still gets a working,
+  if slower, build for those. Verified directly (isolated the `build_nif`
+  function, three scenarios): cargo present builds `macula_cbor_nif`
+  normally same as before; cargo absent now exits 1 with the new message;
+  the four fallback-having NIFs still soft-skip and return 0 unchanged.
+
 ## [10.14.2] - 2026-08-30
 
 ### Fixed
