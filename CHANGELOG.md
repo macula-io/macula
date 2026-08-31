@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.14.4] - 2026-08-31
+
+### Fixed
+
+- `macula_direct_dial:discovery_uri/2` used `binary:encode_hex(Realm)` (lowercase)
+  while the live fleet's DHT `procedure_advertisement` records carry uppercase hex
+  in `procedure_uri`. Since `SHA-256(uppercase) != SHA-256(lowercase)`, the Go/Rust/.NET
+  direct-dial resolvers were looking up the wrong DHT key — every direct-dial call failed
+  with "procedure has no direct-dial advertisement". Changed to `binary:encode_hex(Realm, uppercase)`
+  so the source matches what the fleet actually publishes.
+
 ## [10.14.3] - 2026-08-31
 
 ### Fixed
