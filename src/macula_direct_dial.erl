@@ -418,4 +418,4 @@ on_find_record(_Other, Pool, Key, N) ->
 %% organization (see `advertisement_trusted/2') — it does not affect
 %% how a `procedure_advertisement' is keyed or found.
 discovery_uri(Realm, Procedure) ->
-    <<(binary:encode_hex(Realm))/binary, "/", Procedure/binary>>.
+    <<(binary:encode_hex(Realm, uppercase))/binary, "/", Procedure/binary>>.
