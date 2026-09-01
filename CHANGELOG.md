@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.15.0] - 2026-09-01
+
+### Added
+
+- The inbound CALL frame's `caller` field (required, wire-authenticated —
+  see `macula_frame`'s CALL spec) is now merged into `Payload` before an
+  RPC handler runs, in `macula_station_link:handle_inbound_call/2`. Until
+  now this field was decoded off the wire and then silently dropped: it
+  never reached `Module:handle_request/2` (the callback every provider,
+  `macula_response` included, calls with just `Payload` and `State`).
+  Pub/sub already had the equivalent (`publisher` reaches a
+  `subscribe_callback/4` handler via `Meta`); this closes the same gap
+  for the request/reply RPC path.
+- Deliberately **not** a `handle_request/2` arity change — that callback
+  is a fixed contract every existing provider implements, and bumping it
+  would break every one of them. `caller` is merged into the payload map
+  instead (`Payload#{caller => Caller}`), so a handler that wants
+  provenance reads it exactly like any other field
+  (`hecate_om_wire:field(caller, Payload)`), and one that doesn't needs
+  no change at all. The merge happens after the payload is fully decoded,
+  so it deterministically overwrites any same-named key a caller's own
+  payload might supply — the value a handler reads is always the wire-
+  authenticated identity, never spoofable via the payload body.
+
 ## [10.14.5] - 2026-09-01
 
 ### Fixed

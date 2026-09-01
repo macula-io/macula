@@ -1968,13 +1968,37 @@ handle_inbound_call(#{call_id := CallId, procedure := Proc, realm := Realm,
     %% Gate first (Slice 7b): an `open' procedure serves any identified
     %% caller; a gated one requires a valid `ucan_token', else refuse
     %% with BOLT#4 `unauthorized' instead of invoking the handler.
+    PayloadWithCaller = with_caller(Payload, maps:get(caller, Frame, undefined)),
     Reply   = authorized_reply(authorize({Realm, Proc}, Frame, Pols),
                                maps:find({Realm, Proc}, Procs),
-                               CallId, Payload, SelfPub),
+                               CallId, PayloadWithCaller, SelfPub),
     sent_or_faulted(macula_peering:send_frame(Pid, Reply),
                     Pid, CallId, SelfPub);
 handle_inbound_call(_Frame, _State) ->
     ok.
+
+%% The CALL frame carries `caller' (a required, wire-authenticated field,
+%% see `macula_frame''s CALL spec) but no application handler ever saw
+%% it: `handle_request/2''s contract is fixed at 2-arity across every
+%% existing provider (`macula_response', and every hecate-om desk built
+%% on it), so threading it as a new function argument would be a
+%% breaking change to all of them. Merging it into `Payload' instead
+%% needs no arity change anywhere downstream — a handler that wants
+%% provenance reads `caller' the same way it reads any other field
+%% (`hecate_om_wire:field/2,3'); one that doesn't, ignores an extra map
+%% key exactly as it already ignores fields it doesn't ask for.
+%%
+%% The merge happens here, not earlier, specifically so it happens AFTER
+%% the payload has been fully decoded from whatever the remote peer
+%% actually sent — `Payload#{caller => Caller}' deterministically
+%% overwrites any `caller' key a caller's own payload might have
+%% supplied, so the field a handler reads is always the wire-
+%% authenticated identity, never a value the caller could spoof by
+%% naming their own field the same thing.
+with_caller(Payload, Caller) when is_map(Payload), Caller =/= undefined ->
+    Payload#{caller => Caller};
+with_caller(Payload, _Caller) ->
+    Payload.
 
 authorized_reply(ok, Found, CallId, Payload, SelfPub) ->
     build_inbound_call_reply(Found, CallId, Payload, SelfPub);

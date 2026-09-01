@@ -1528,6 +1528,59 @@ inbound_call_dispatches_to_handler_test_() ->
          ok
      end}.
 
+inbound_call_threads_caller_into_payload_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => Identity
+         }),
+         FakePeer = self(),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         Procedure = <<"_realm.membership.join_with_token_v1">>,
+         Self = self(),
+         %% The handler asserts what it actually received -- this is the
+         %% behaviour under test, not the frame's own `caller' field.
+         Handler = fun(Payload) ->
+             Self ! {handler_saw, Payload},
+             {ok, #{member_id => 42}}
+         end,
+         ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
+         flush_send_frame_casts(),
+         CallId = <<1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16>>,
+         CallerPub = macula_identity:public(macula_identity:generate()),
+         SpoofedCaller = macula_identity:public(macula_identity:generate()),
+         Pid ! {macula_peering, frame, FakePeer, #{
+             frame_type  => call,
+             call_id     => CallId,
+             realm       => ?REALM,
+             procedure   => Procedure,
+             %% Payload itself claims a DIFFERENT caller under the same
+             %% key -- proving the wire-authenticated value wins, not
+             %% whatever the payload body happens to say.
+             payload     => #{token => <<"abc">>, caller => SpoofedCaller},
+             deadline_ms => erlang:system_time(millisecond) + 5_000,
+             caller      => CallerPub
+         }},
+         receive
+             {handler_saw, Payload} ->
+                 ?assertEqual(CallerPub, maps:get(caller, Payload)),
+                 ?assertNotEqual(SpoofedCaller, maps:get(caller, Payload)),
+                 ?assertEqual(<<"abc">>, maps:get(token, Payload))
+         after 1_000 ->
+             erlang:error(handler_never_invoked)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
 inbound_call_unknown_procedure_returns_error_frame_test_() ->
     {timeout, 5,
      fun() ->
