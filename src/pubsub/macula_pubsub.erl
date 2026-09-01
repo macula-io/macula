@@ -81,10 +81,14 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %%
 %% Returns `{ok, SubRef}'. `Subscriber' subsequently receives
 %% `{macula_event, SubRef, Topic, Payload, Meta}' for each delivered
-%% event; `Meta' is a map carrying `realm', `publisher', `seq', and
-%% `delivered_via'. Stores receive `{macula_event_gone, SubRef,
-%% Reason}' once when the subscription terminates (pool close,
-%% subscriber pid death).
+%% event; `Meta' is a map carrying `realm', `publisher',
+%% `publisher_verified', `seq', and `delivered_via'.
+%% `publisher_verified' is `not_signed' (the frame carried no
+%% `publisher_sig'), `true' (present and verified), or `false' (present
+%% but invalid -- delivered anyway unless `pubsub_strict_publisher_sig'
+%% is set, since dropping it silently would hide a relay bug). Stores
+%% receive `{macula_event_gone, SubRef, Reason}' once when the
+%% subscription terminates (pool close, subscriber pid death).
 %%
 %% `Opts' is a forward-compatible map; Phase 1 honors no
 %% subscribe-time options. Future phases (history replay, server-

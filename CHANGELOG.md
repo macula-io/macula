@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.16.0] - 2026-09-01
+
+### Added
+
+- `macula_pubsub:subscribe/4,5`'s delivered `Meta` map now carries
+  `publisher_verified` (`not_signed` | `true` | `false`), alongside the
+  existing `realm`/`publisher`/`seq`/`delivered_via`. The verification
+  outcome (whether an inbound EVENT's `publisher_sig` checked out) was
+  already computed in `macula_station_link:on_inbound_event/5` before
+  this -- `check_publisher_sig/1` calls `macula_frame:verify_publisher/1`
+  and branches on `ok` / `{ok, _}` / `{error, _}` -- but that result was
+  discarded before `deliver_event/4` (now `/5`) built `Meta`, so a
+  subscriber could see `publisher` (the identity) but never learn
+  whether its signature was actually valid, indistinguishable from
+  "never signed." A lenient-mode delivery of an invalid signature (the
+  default, so a relay bug surfaces rather than silently drops events)
+  now reaches the subscriber tagged `false`, not folded into the same
+  bucket as a genuinely unsigned event.
+
 ## [10.15.0] - 2026-09-01
 
 ### Added

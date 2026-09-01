@@ -583,7 +583,8 @@ classify_records({error, _} = E)                       -> E.
 %% <ul>
 %%   <li>`{macula_event, SubRef, Topic, Payload, Meta}' — every time
 %%       an EVENT frame arrives for `(Realm, Topic)'. `Meta' is a map
-%%       with `realm', `publisher', `seq', and `delivered_via'
+%%       with `realm', `publisher', `publisher_verified'
+%%       (`not_signed' | `true' | `false'), `seq', and `delivered_via'
 %%       fields.</li>
 %%   <li>`{macula_event_gone, SubRef, Reason}' — once, when the
 %%       connection drops or the client stops. The subscription map
@@ -1864,10 +1865,18 @@ check_publisher_sig(_Frame) ->
 %%                  drop only if `pubsub_strict_publisher_sig' is set
 %%                  (default lenient — a relay bug should surface, not
 %%                  silently lose events, during the Phase 2 rollout).
+%%
+%% The verification OUTCOME itself used to stop here: `deliver_event/4'
+%% got only `Frame', so a subscriber could see `publisher' but never
+%% learn whether its signature checked out — indistinguishable from
+%% "never signed" for anyone downstream trying to weight a fact's
+%% confidence by provenance quality. `not_signed' / `true' / `false'
+%% now rides through to `Meta' as `publisher_verified' precisely so
+%% that distinction survives to the subscriber.
 on_inbound_event(ok, Realm, Topic, Frame, S) ->
-    deliver_event(Realm, Topic, Frame, S);
+    deliver_event(Realm, Topic, Frame, not_signed, S);
 on_inbound_event({ok, _Verified}, Realm, Topic, Frame, S) ->
-    deliver_event(Realm, Topic, Frame, S);
+    deliver_event(Realm, Topic, Frame, true, S);
 on_inbound_event({error, Why}, Realm, Topic, Frame, S) ->
     logger:warning("[macula_pubsub] inbound EVENT publisher_sig invalid (~p)"
                    " realm=~s topic=~s", [Why, hex_prefix(Realm), Topic]),
@@ -1878,7 +1887,7 @@ on_inbound_event({error, Why}, Realm, Topic, Frame, S) ->
 on_invalid_publisher_sig(true, _Realm, _Topic, _Frame, S) ->
     S;
 on_invalid_publisher_sig(_Lenient, Realm, Topic, Frame, S) ->
-    deliver_event(Realm, Topic, Frame, S).
+    deliver_event(Realm, Topic, Frame, false, S).
 
 hex_prefix(B) when is_binary(B), byte_size(B) >= 4 ->
     binary:encode_hex(binary:part(B, 0, 4));
@@ -1888,18 +1897,25 @@ hex_prefix(_) ->
     <<"?">>.
 
 %% Fan an EVENT frame out to every subscriber for that (realm, topic).
-deliver_event(Realm, Topic, Frame, #state{topic_index = Idx} = S) ->
-    deliver_event_to(maps:find({Realm, Topic}, Idx), Realm, Topic, Frame, S),
+%% `PublisherVerified' is `on_inbound_event/5''s already-computed
+%% signature-check outcome (`not_signed' | `true' | `false') — see its
+%% own doc for why this must ride through rather than be recomputed or
+%% dropped.
+deliver_event(Realm, Topic, Frame, PublisherVerified, #state{topic_index = Idx} = S) ->
+    deliver_event_to(maps:find({Realm, Topic}, Idx), Realm, Topic, Frame,
+                      PublisherVerified, S),
     S.
 
-deliver_event_to(error, _Realm, _Topic, _Frame, _S) ->
+deliver_event_to(error, _Realm, _Topic, _Frame, _PublisherVerified, _S) ->
     ok;
-deliver_event_to({ok, Set}, Realm, Topic, Frame, #state{subscriptions = Subs}) ->
+deliver_event_to({ok, Set}, Realm, Topic, Frame, PublisherVerified,
+                 #state{subscriptions = Subs}) ->
     Payload = maps:get(payload, Frame),
-    Meta = #{realm         => Realm,
-             publisher     => maps:get(publisher, Frame),
-             seq           => maps:get(seq, Frame),
-             delivered_via => maps:get(delivered_via, Frame, direct)},
+    Meta = #{realm              => Realm,
+             publisher          => maps:get(publisher, Frame),
+             publisher_verified => PublisherVerified,
+             seq                => maps:get(seq, Frame),
+             delivered_via      => maps:get(delivered_via, Frame, direct)},
     sets:fold(fun(SubRef, _) ->
         deliver_event_one(SubRef, Topic, Payload, Meta, Subs)
     end, ok, Set).

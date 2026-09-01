@@ -651,17 +651,32 @@ event_publisher_sig_verify_test_() ->
                  seq => Seq, payload => Payload, delivered_via => direct})
          end,
 
-         %% 1. Valid publisher_sig → delivered.
+         %% 0. No publisher_sig at all → delivered, Meta says `not_signed'
+         %% (distinct from an unverifiable/invalid signature -- a
+         %% subscriber weighting confidence by provenance needs to tell
+         %% "never signed" apart from "signed but wrong").
+         Pid ! {macula_peering, frame, FakePeer, MkEvent(0, ok0)},
+         receive {macula_event, SubRef, Topic, ok0, Meta0} ->
+             ?assertEqual(not_signed, maps:get(publisher_verified, Meta0))
+         after 2_000 -> erlang:error(unsigned_event_not_delivered) end,
+
+         %% 1. Valid publisher_sig → delivered, Meta says `true'.
          Pid ! {macula_peering, frame, FakePeer,
                 macula_frame:sign_publisher(MkEvent(1, ok1), PubKp)},
-         receive {macula_event, SubRef, Topic, ok1, _} -> ok
+         receive {macula_event, SubRef, Topic, ok1, Meta1} ->
+             ?assertEqual(true, maps:get(publisher_verified, Meta1))
          after 2_000 -> erlang:error(valid_sig_event_not_delivered) end,
 
-         %% 2. Tampered publisher_sig, lenient (default) → still delivered.
+         %% 2. Tampered publisher_sig, lenient (default) → still
+         %% delivered, but Meta says `false', not `true' -- a
+         %% subscriber must be able to tell "signed, but the signature
+         %% didn't check out" apart from an actually-trustworthy fact,
+         %% even though lenient mode still hands it over.
          Bad = (macula_frame:sign_publisher(MkEvent(2, ok2), PubKp))#{
                  payload => tampered},
          Pid ! {macula_peering, frame, FakePeer, Bad},
-         receive {macula_event, SubRef, Topic, tampered, _} -> ok
+         receive {macula_event, SubRef, Topic, tampered, Meta2} ->
+             ?assertEqual(false, maps:get(publisher_verified, Meta2))
          after 2_000 -> erlang:error(lenient_bad_sig_event_not_delivered) end,
 
          %% 3. Tampered publisher_sig, strict → NOT delivered.
