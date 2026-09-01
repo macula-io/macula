@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.14.5] - 2026-09-01
+
+### Fixed
+
+- `macula_response`/`macula_streamer`'s `existing_or_new_sup/1` reused a
+  `reuse_sup` pid unconditionally, without checking it was still alive.
+  A caller that periodically re-advertises with `reuse_sup` (the
+  documented pattern for keeping one factory supervisor across ticks
+  instead of leaking one per tick) can find that pid already dead --
+  e.g. the caller itself crashed between ticks and, being linked to the
+  factory sup it started via `start_link`, took it down too. Reusing the
+  dead pid handed `dispatch/7` (or `dispatch/8`) a `Sup' that would
+  `noproc` on its very first `supervisor:start_child`, silently breaking
+  every inbound call for that procedure until a later re-advertise
+  happened to land. Found live 2026-09-01 via hecate-rag:
+  `hecate_om_capabilities` crashed on a timed-out advertise call and,
+  through exactly this path, several unrelated capabilities
+  (`search_chunks_semantic`/`answer_query`/`add_knowledge`) started
+  failing every inbound call with `noproc` for the next few minutes.
+  `existing_or_new_sup/1` now checks `erlang:is_process_alive/1` before
+  reusing a pid and falls through to starting a fresh supervisor
+  otherwise -- a pattern-matched predicate dispatch, not a try/catch.
+
 ## [10.14.4] - 2026-08-31
 
 ### Fixed

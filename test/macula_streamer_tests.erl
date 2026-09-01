@@ -68,7 +68,8 @@ streamer_test_() ->
       fun send_and_close_drive_the_stream/0,
       fun dead_stream_stops_the_streamer/0,
       fun advertise_direct_forwards_mode_to_advertise_stream/0,
-      fun reuse_sup_resends_advertise_without_a_new_supervisor/0]}.
+      fun reuse_sup_resends_advertise_without_a_new_supervisor/0,
+      fun reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor/0]}.
 
 %% A station's wire-level registration for a procedure is tied to the
 %% connection that sent it, and does not survive that connection being
@@ -84,6 +85,24 @@ reuse_sup_resends_advertise_without_a_new_supervisor() ->
     ?assertEqual(Sup1, Sup2),
     ?assertEqual(2, meck:num_calls(macula, advertise_stream,
                                    [pool, <<0:256>>, <<"bulk.ingest">>, '_', '_'])).
+
+%% Regression test for the identical noproc-on-first-dispatch bug fixed
+%% in `macula_response' (found live 2026-09-01 via hecate-rag): see that
+%% module's test of the same name for the full incident.
+reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor() ->
+    DeadPid = spawn(fun() -> ok end),
+    wait_until_dead(DeadPid),
+    {ok, Sup} = macula_streamer:advertise(pool, <<0:256>>, <<"bulk.ingest">>,
+                                          ?MODULE, self(), #{reuse_sup => DeadPid}),
+    ?assert(is_pid(Sup)),
+    ?assertNotEqual(DeadPid, Sup),
+    ?assert(erlang:is_process_alive(Sup)).
+
+wait_until_dead(Pid) ->
+    wait_until_dead(Pid, erlang:is_process_alive(Pid)).
+
+wait_until_dead(_Pid, false) -> ok;
+wait_until_dead(Pid, true) -> timer:sleep(1), wait_until_dead(Pid, erlang:is_process_alive(Pid)).
 
 %% Regression test for a real bug found while building macula_upload
 %% (PLAN_PUSH_UPLOAD.md Phase 6): `advertise_direct/7' used to call

@@ -194,9 +194,18 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
         {error, Reason} -> {error, Reason}
     end.
 
+%% See `macula_response:existing_or_new_sup/1' for why a dead `reuse_sup'
+%% pid must fall through to a fresh one rather than being handed to
+%% `dispatch/8' as-is.
 existing_or_new_sup(Pid) when is_pid(Pid) ->
-    Pid;
+    existing_or_new_sup(Pid, erlang:is_process_alive(Pid));
 existing_or_new_sup(undefined) ->
+    new_sup().
+
+existing_or_new_sup(Pid, true)  -> Pid;
+existing_or_new_sup(_Pid, false) -> new_sup().
+
+new_sup() ->
     {ok, Sup} = macula_streamer_sup:start_link(),
     Sup.
 

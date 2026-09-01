@@ -116,9 +116,26 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
         {error, Reason} -> {error, Reason}
     end.
 
+%% A `reuse_sup' pid from a caller's prior `advertise/6' call can have
+%% died since (e.g. the caller itself crashed and, being linked to the
+%% factory sup it started, took it down too — see `hecate_om_capabilities'
+%% for a real periodic-republish caller that does exactly this on a
+%% timed-out advertise). Reusing a dead pid unconditionally used to hand
+%% `dispatch/7' a `Sup' that would `noproc' on its very first
+%% `supervisor:start_child' — silently breaking every inbound call for
+%% that procedure until the next re-advertise happened to land. Checking
+%% liveness here is pattern matching on a plain predicate, not a
+%% try/catch: a dead reuse target is exactly as valid an input as an
+%% absent one, and both fall through to `new_sup/0'.
 existing_or_new_sup(Pid) when is_pid(Pid) ->
-    Pid;
+    existing_or_new_sup(Pid, erlang:is_process_alive(Pid));
 existing_or_new_sup(undefined) ->
+    new_sup().
+
+existing_or_new_sup(Pid, true)  -> Pid;
+existing_or_new_sup(_Pid, false) -> new_sup().
+
+new_sup() ->
     {ok, Sup} = macula_response_sup:start_link(),
     Sup.
 
