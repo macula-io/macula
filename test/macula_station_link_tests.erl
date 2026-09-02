@@ -2392,3 +2392,116 @@ consume_probe(_Pid) ->
     after 1_000 ->
         erlang:error(no_probe_call_emitted)
     end.
+
+%%------------------------------------------------------------------
+%% Inbound CALL handlers run off the link process.
+%%
+%% Found live 2026-09-02 on hecate-rag: a handler that made its own
+%% mesh call through the pool waited 30 s and crashed, because the
+%% link that had delivered the inbound CALL was still blocked running
+%% that very handler and so could never read the RESULT of the
+%% handler's outbound call (nor answer the pool's advertise/publish
+%% calls, which timed out at 5 s meanwhile). Both tests below fail
+%% on the inline implementation and pass once the handler runs in
+%% its own process.
+%%------------------------------------------------------------------
+
+%% Start a link with a fake peer patched in, advertise `Handlers'
+%% (a list of {Procedure, Fun}), and drain the ADVERTISE frames.
+inbound_call_fixture(Handlers) ->
+    {ok, _} = application:ensure_all_started(macula),
+    Identity = macula_identity:generate(),
+    {ok, Pid} = macula_station_link:start_link(#{
+        seed     => #{host => <<"127.0.0.1">>, port => 1},
+        connect_timeout_ms => 2000,
+        identity => Identity
+    }),
+    FakePeer = self(),
+    PeerNodeId = macula_identity:public(macula_identity:generate()),
+    _ = sys:replace_state(Pid, fun(S) ->
+        S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+        setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+    end),
+    lists:foreach(
+      fun({Proc, Fun}) ->
+              ok = macula_station_link:advertise(Pid, ?REALM, Proc, Fun),
+              receive
+                  {'$gen_cast', {send_frame, #{frame_type := advertise}}} -> ok
+              after 1_000 ->
+                  erlang:error({no_advertise_frame, Proc})
+              end
+      end, Handlers),
+    {Pid, PeerNodeId}.
+
+inject_call(Pid, FakePeer, Caller, CallId, Proc) ->
+    Pid ! {macula_peering, frame, FakePeer, #{
+        frame_type => call,
+        call_id    => CallId,
+        realm      => ?REALM,
+        procedure  => Proc,
+        payload    => #{},
+        caller     => Caller
+    }}.
+
+await_result(CallId, TimeoutMs) ->
+    receive
+        {'$gen_cast', {send_frame, #{frame_type := result,
+                                     call_id    := CallId,
+                                     payload    := Payload}}} ->
+            {ok, Payload};
+        {'$gen_cast', {send_frame, #{frame_type := call_error,
+                                     call_id    := CallId} = Err}} ->
+            {error, Err}
+    after TimeoutMs ->
+        timeout
+    end.
+
+connected_flag(true)  -> 1;
+connected_flag(false) -> 0.
+
+inbound_call_handler_calling_back_into_link_does_not_deadlock_test_() ->
+    {timeout, 15,
+     fun() ->
+         %% The handler calls back into the link that is delivering
+         %% the CALL -- what every hecate-om desk does when it
+         %% publishes rpc.received_v1 or makes a mesh call of its own.
+         %% The link is registered under a name because the handler
+         %% is advertised before it can know the link's pid.
+         Handler = fun(_Payload) ->
+                       Link = whereis(link_under_inbound_call_test),
+                       Up = macula_station_link:is_connected(Link),
+                       {ok, #{connected => connected_flag(Up)}}
+                   end,
+         {Pid, Caller} = inbound_call_fixture([{<<"probe.callback">>, Handler}]),
+         true = register(link_under_inbound_call_test, Pid),
+         CallId = crypto:strong_rand_bytes(16),
+         inject_call(Pid, self(), Caller, CallId, <<"probe.callback">>),
+         %% Inline, is_connected/1's 1 s gen_server:call into the
+         %% blocked link exits with timeout and the handler crash
+         %% surfaces as call_error; off-process it is a RESULT that
+         %% agrees with what the link says from outside.
+         Result = await_result(CallId, 5_000),
+         Expected = connected_flag(macula_station_link:is_connected(Pid)),
+         ?assertEqual({ok, #{connected => Expected}}, Result),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+inbound_calls_are_served_concurrently_test_() ->
+    {timeout, 15,
+     fun() ->
+         Slow = fun(_Payload) -> timer:sleep(1_500), {ok, #{who => 1}} end,
+         Fast = fun(_Payload) -> {ok, #{who => 2}} end,
+         {Pid, Caller} = inbound_call_fixture([{<<"probe.slow">>, Slow},
+                                               {<<"probe.fast">>, Fast}]),
+         SlowId = crypto:strong_rand_bytes(16),
+         FastId = crypto:strong_rand_bytes(16),
+         inject_call(Pid, self(), Caller, SlowId, <<"probe.slow">>),
+         inject_call(Pid, self(), Caller, FastId, <<"probe.fast">>),
+         %% Inline, the fast reply queues behind the slow handler and
+         %% arrives after ~1.5 s; off-process it arrives at once.
+         ?assertMatch({ok, #{who := 2}}, await_result(FastId, 500)),
+         ?assertMatch({ok, #{who := 1}}, await_result(SlowId, 3_000)),
+         macula_station_link:stop(Pid),
+         ok
+     end}.

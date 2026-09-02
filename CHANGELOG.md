@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.18.0] - 2026-09-02
+
+### Fixed
+
+- `macula_station_link` ran every inbound CALL handler inside the link
+  process itself, so the link could not read its own peering connection
+  while a handler was running. A handler that touched the mesh through the
+  pool, publishing a fact or making a call of its own, then waited on a
+  reply that had to arrive over the very link it was blocking, until its own
+  timeout fired: the pool's `advertise` and `publish` calls into that link
+  timed out at 5 s, an outbound `call` at its full deadline. `macula_response`
+  has published `rpc.received_v1` on every request since 9.2.0, so every
+  hecate-om desk was exposed; the ones that make a mesh call inside the
+  handler failed outright. Found live 2026-09-02 on hecate-rag: every
+  semantic search waited 30 s on its `io.hecate.embed` call and crashed,
+  the advertise republish for its other capabilities timed out meanwhile,
+  and the service flickered out of the station's registry, so callers saw
+  `unknown_next_peer` for a service that was up. Handlers now run in a
+  process spawned per CALL, which is what the `advertise/4` doc had promised
+  all along, and the RESULT or call_error frame is sent from there. Inbound
+  calls on one link are therefore served concurrently rather than one at a
+  time, and a slow handler no longer delays other calls, subscriptions,
+  advertises or publishes on that link. Two new tests: a handler that calls
+  back into its own link gets a RESULT instead of a 1 s timeout, and a fast
+  call injected behind a 1.5 s one is answered at once. Both failed on the
+  previous code.
+
 ## [10.17.0] - 2026-09-02
 
 ### Fixed

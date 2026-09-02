@@ -1968,9 +1968,25 @@ drain_pending_advertises(#state{procedures = Procs} = S) ->
     ok.
 
 %% Inbound CALL — relay forwarded a CALL whose `(realm, procedure)'
-%% this link has advertised. Look up the handler, invoke it, and
-%% ship the resulting RESULT or call_error frame back over the same
-%% peering connection.
+%% this link has advertised. Authorise and look up the handler here,
+%% where the state lives, then run the handler in a process of its
+%% own and ship the resulting RESULT or call_error frame back over
+%% the same peering connection from there.
+%%
+%% The handler must not run in this process. This link is the only
+%% reader of its peering connection: while it waits on a handler it
+%% cannot read the RESULT of any call that handler makes through the
+%% pool over this same link, nor answer the pool's advertise and
+%% publish calls (5 s), so a handler that touches the mesh at all
+%% deadlocks against itself until its own timeout fires. Found live
+%% 2026-09-02 on hecate-rag: every semantic search waited 30 s on its
+%% embedder call and crashed, and the link's advertise republishes
+%% timed out meanwhile, so the service flickered out of the station's
+%% registry. The worker is a plain spawn, matching
+%% `spawn_stream_handler/4': `safe_invoke_handler/4' already turns a
+%% handler crash into a call_error frame, and
+%% `macula_peering:send_frame/2' is a cast, so the worker needs no
+%% link to this process and a peer gone by reply time is harmless.
 %%
 %% A handler crash maps to BOLT#4 `temporary_relay_failure' (0x02);
 %% an unknown `(realm, procedure)' (race between UNADVERTISE in
@@ -1984,12 +2000,16 @@ handle_inbound_call(#{call_id := CallId, procedure := Proc, realm := Realm,
     %% Gate first (Slice 7b): an `open' procedure serves any identified
     %% caller; a gated one requires a valid `ucan_token', else refuse
     %% with BOLT#4 `unauthorized' instead of invoking the handler.
+    Verdict = authorize({Realm, Proc}, Frame, Pols),
+    Found   = maps:find({Realm, Proc}, Procs),
     PayloadWithCaller = with_caller(Payload, maps:get(caller, Frame, undefined)),
-    Reply   = authorized_reply(authorize({Realm, Proc}, Frame, Pols),
-                               maps:find({Realm, Proc}, Procs),
-                               CallId, PayloadWithCaller, SelfPub),
-    sent_or_faulted(macula_peering:send_frame(Pid, Reply),
-                    Pid, CallId, SelfPub);
+    _ = spawn(fun() ->
+            Reply = authorized_reply(Verdict, Found, CallId,
+                                     PayloadWithCaller, SelfPub),
+            sent_or_faulted(macula_peering:send_frame(Pid, Reply),
+                            Pid, CallId, SelfPub)
+        end),
+    ok;
 handle_inbound_call(_Frame, _State) ->
     ok.
 
