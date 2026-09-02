@@ -85,6 +85,41 @@ ordered_cap_skips_when_buffer_full_test() ->
     ?assertEqual(1, macula_pubsub_order:skips(S1)),
     ?assertEqual(0, macula_pubsub_order:buffered(S1)).
 
+%% A large BACKWARD jump is also a publisher restart: one whose seq
+%% counter re-seeded from zero instead of wall-clock microseconds
+%% (macula-station's own hecate_pubsub_server did exactly this before
+%% 10.17.0). Without this clause every fact after such a restart reads
+%% as "past" and is silently dropped until the counter climbs back over
+%% the old watermark -- which is how a live read model (hecate-stations,
+%% 2026-09-02) went deaf for 10+ hours after a fleet rollout while its
+%% link, subscriptions and dedup all looked healthy. Rebase, deliver,
+%% count no skip.
+ordered_rewound_epoch_rebases_test() ->
+    S0 = macula_pubsub_order:new(ordered),
+    {D, S1} = run(S0, [{?P, 589000, 0}, {?P, 589001, 0},
+                       {?P, 40, 0}, {?P, 41, 0}]),
+    ?assertEqual([589000, 589001, 40, 41], D),
+    ?assertEqual(0, macula_pubsub_order:skips(S1)).
+
+%% Whatever the old epoch still had buffered is released (in seq order)
+%% ahead of the first fact of the new epoch -- same as the forward-jump
+%% case, so a restart never strands a buffered tail.
+ordered_rewound_epoch_releases_buffered_tail_test() ->
+    S0 = macula_pubsub_order:new(ordered),
+    %% 500005 delivered; 500008, 500007 buffered behind a gap at 500006;
+    %% then the rewind lands
+    {D, S1} = run(S0, [{?P, 500005, 0}, {?P, 500008, 1}, {?P, 500007, 2},
+                       {?P, 40, 3}]),
+    ?assertEqual([500005, 500007, 500008, 40], D),
+    ?assertEqual(0, macula_pubsub_order:buffered(S1)).
+
+%% A backward step within the epoch-jump threshold is still a late
+%% duplicate / already-past seq, not a restart: dropped, as before.
+ordered_small_backstep_is_still_past_test() ->
+    S0 = macula_pubsub_order:new(ordered),
+    {D, _} = run(S0, [{?P, 20000, 0}, {?P, 20001, 0}, {?P, 15000, 0}]),
+    ?assertEqual([20000, 20001], D).
+
 %%%===================================================================
 %%% latest_only
 %%%===================================================================
@@ -96,6 +131,17 @@ latest_only_drops_stale_test() ->
     {D, S1} = run(S0, [{?P, 5, 0}, {?P, 8, 0}, {?P, 6, 0}, {?P, 9, 0}]),
     ?assertEqual([5, 8, 9], D),
     ?assertEqual(0, macula_pubsub_order:buffered(S1)),
+    ?assertEqual(0, macula_pubsub_order:skips(S1)).
+
+%% A large backward jump is a publisher restart with a re-seeded-from-
+%% zero counter (see ordered_rewound_epoch_rebases_test): accept it as
+%% the new high-water mark instead of dropping every fact until the
+%% counter climbs back. A small backstep after the rebase is still stale.
+latest_only_rewound_epoch_rebases_test() ->
+    S0 = macula_pubsub_order:new(latest_only),
+    {D, S1} = run(S0, [{?P, 589000, 0}, {?P, 589001, 0},
+                       {?P, 40, 0}, {?P, 39, 0}, {?P, 41, 0}]),
+    ?assertEqual([589000, 589001, 40, 41], D),
     ?assertEqual(0, macula_pubsub_order:skips(S1)).
 
 %%%===================================================================

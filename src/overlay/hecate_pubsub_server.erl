@@ -161,7 +161,16 @@ init(#{realm := Realm, identity := Kp}) ->
         identity = Kp,
         self_id  = macula_identity:public(Kp),
         pubsub   = hecate_pubsub:new(Realm),
-        next_seq = 0
+        %% Seeded from wall-clock µs, never from 0 -- the same convention
+        %% macula_client's publish_seq follows. Subscribers put a
+        %% publisher's stream back in order with macula_pubsub_order,
+        %% which reads a large forward jump as a restart. A counter that
+        %% restarts at 0 instead rewinds below every subscriber's
+        %% watermark, and each fact is then dropped as "past" until the
+        %% counter climbs back over it: a station rollout blinded
+        %% hecate-stations for 10+ hours this way on 2026-09-02, with the
+        %% link, subscriptions and dedup all looking healthy.
+        next_seq = erlang:system_time(microsecond)
     }}.
 
 handle_call({subscribe, Topic, Sub}, _From, S) ->

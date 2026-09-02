@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.17.0] - 2026-09-02
+
+### Fixed
+
+- A station restart silently blinded every `ordered` (the default) and
+  `latest_only` subscriber to that station's own facts until the station's
+  publish counter climbed back over its pre-restart value. Two halves, both
+  fixed here:
+  - `hecate_pubsub_server` seeded its `next_seq` from 0 at start. A
+    macula-station publishes its own facts (`_dht.records.<type>.stored`,
+    `_mesh.*`) through this server under the station's persistent identity,
+    so every restart rewound that publisher's seq. `macula_client` had always
+    seeded its own `publish_seq` from wall-clock microseconds for exactly this
+    reason; the server now does the same (`erlang:system_time(microsecond)`),
+    so a restart is a large FORWARD jump that `macula_pubsub_order` -- on
+    every already-deployed SDK version too -- reads as a new epoch.
+  - `macula_pubsub_order` only recognised a large forward jump as a publisher
+    restart; a large BACKWARD jump fell through to the "already delivered,
+    drop" clause, leaving the per-publisher watermark, buffer and skip
+    counter untouched, so nothing in the pool state showed anything wrong.
+    A backward jump wider than `EPOCH_JUMP` is now treated as a restart in
+    both `ordered` (the old epoch's buffered tail is released first, then
+    rebase) and `latest_only` (new high-water mark). A backstep within the
+    threshold is still a late duplicate and is still dropped.
+  Found live 2026-09-02: `hecate-stations`' read model stopped ingesting at
+  the exact minute of a fleet-wide station rollout and stayed frozen for 10+
+  hours while its link, wire subscriptions, dedup table and subscriber
+  processes all looked healthy -- a throwaway subscription on the same pool
+  received 27 facts in 25 s with seqs around 249k while the standing one
+  expected the next seq after 589k. `hecate_stations.list_stations` reported
+  2 of 8 stations as a result, and the same mechanism had blinded it after
+  every earlier rollout for as long as the previous epoch had lasted. Four
+  new tests cover both halves; all four failed on the previous code.
+
 ## [10.16.0] - 2026-09-01
 
 ### Added

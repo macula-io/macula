@@ -269,6 +269,19 @@ fact — a reorder buffer cannot invent a message the mesh dropped. Design
 mesh facts to be **idempotent and version-stamped** so an occasional
 skip washes out.
 
+**Publisher restarts.** A publisher's `seq` is seeded from wall-clock
+microseconds at start (`macula_client` for an SDK pool; `hecate_pubsub_server`
+for a station's own facts, since 10.17.0), so a restart shows up as a jump
+far wider than any reorder window. Both `ordered` and `latest_only` read a
+jump of more than 10 000 in *either* direction as a new epoch: the old
+epoch's buffered tail is released, then delivery continues from the new
+counter. The backward case matters for any publisher whose counter restarts
+at 0: without it, every fact after such a restart is dropped as "already
+delivered" until the counter climbs back over the old watermark, with
+nothing in `macula:status/1` showing it (a live read model went blind for
+10+ hours this way in September 2026). A backstep smaller than that is still
+a late duplicate and is still dropped.
+
 **Total order is not offered, by design.** `ordered` restores a *single*
 publisher's order (cheap, over ordered transport). It does not impose a
 total order across *different* publishers — that would need a single

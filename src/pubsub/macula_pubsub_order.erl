@@ -26,6 +26,14 @@
 %%% seq re-bases to wall-clock microseconds when a publisher's pool
 %%% restarts, so a large forward jump (> `?EPOCH_JUMP') is read as a
 %%% restart: the old expected counter is abandoned rather than waited on.
+%%% A large BACKWARD jump is read the same way. A publisher that restarts
+%%% with a counter re-seeded from zero instead of wall-clock (a
+%%% macula-station's own `hecate_pubsub_server' before 10.17.0) would
+%%% otherwise have every fact after the restart dropped as "past" until
+%%% the counter climbed back over the old watermark -- silently, with the
+%%% link, the wire subscription and dedup all healthy. That is how
+%%% hecate-stations went deaf for 10+ hours after a fleet rollout on
+%%% 2026-09-02. A backstep within the threshold is still a late duplicate.
 %%%
 %%% Pure and side-effect-free: it returns the events to deliver now, and
 %%% the caller does the sending. `flush/3' is driven by the caller on a
@@ -35,9 +43,10 @@
 -export([new/1, new/2, offer/5, flush/3, buffered/1, skips/1]).
 -export_type([t/0, mode/0]).
 
-%% A seq gap wider than this is a publisher restart (seq re-based to
-%% µs), not a run of lost facts. Losing this many consecutive facts is
-%% an outage, not reordering.
+%% A seq gap wider than this, in EITHER direction, is a publisher
+%% restart (seq re-based to µs, or rewound to zero), not a run of lost
+%% facts. Losing this many consecutive facts is an outage, not
+%% reordering; a late duplicate never trails by this much.
 -define(EPOCH_JUMP, 10000).
 
 %% Per-publisher reorder-buffer cap. The flush timeout bounds a buffer
@@ -114,6 +123,10 @@ skips(#{skips := N}) -> N.
 
 offer_latest(undefined, S, Pub, Seq, Ev) ->
     {[Ev], put_pub(S, Pub, #pub{high = Seq})};
+%% Huge backward jump: the publisher restarted with a counter re-seeded
+%% from zero. Take it as the new high-water mark (see `offer_ordered').
+offer_latest(#pub{high = H}, S, Pub, Seq, Ev) when Seq + ?EPOCH_JUMP < H ->
+    {[Ev], put_pub(S, Pub, #pub{high = Seq})};
 offer_latest(#pub{high = H}, S, _Pub, Seq, _Ev) when Seq =< H ->
     {[], S};
 offer_latest(#pub{} = Pst, S, Pub, Seq, Ev) ->
@@ -131,10 +144,11 @@ offer_ordered(#pub{next = Next} = Pst, S, Pub, Seq, Ev, _Now)
   when Seq =:= Next ->
     {Evs, Pst2} = drain(Pst#pub{next = Next + 1}, [Ev]),
     {lists:reverse(Evs), put_pub(S, Pub, Pst2)};
-%% Huge forward jump: the publisher's pool restarted (seq re-based).
+%% Huge jump either way: the publisher restarted -- forward when its
+%% seq re-based to wall-clock µs, backward when it re-seeded from zero.
 %% Deliver whatever is buffered (old epoch, in seq order), then rebase.
 offer_ordered(#pub{next = Next, buf = Buf}, S, Pub, Seq, Ev, _Now)
-  when Seq > Next + ?EPOCH_JUMP ->
+  when Seq > Next + ?EPOCH_JUMP; Seq + ?EPOCH_JUMP < Next ->
     Old = [E || {_Sq, {E, _Arr}} <- lists:keysort(1, maps:to_list(Buf))],
     {Old ++ [Ev], put_pub(S, Pub, #pub{next = Seq + 1, buf = #{}})};
 %% Future within the same epoch: buffer it, then skip the head gap early

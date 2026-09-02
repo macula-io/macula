@@ -140,6 +140,22 @@ publish_increments_seq_test() ->
     ?assertNotEqual(maps:get(seq, F1), maps:get(seq, F2)),
     stop_(Pid).
 
+%% The seq is seeded from wall-clock microseconds at start, never from
+%% zero -- the same convention macula_client's own publish_seq follows,
+%% so a restarted server produces a large FORWARD jump that subscribers'
+%% macula_pubsub_order reads as a new epoch. Seeding from zero rewinds
+%% the counter on every station restart, and every ordered/latest_only
+%% subscriber then drops each fact as "past" until the counter climbs
+%% back over its old watermark: hecate-stations went deaf for 10+ hours
+%% this way after a fleet rollout, 2026-09-02, with link, subscriptions
+%% and dedup all looking healthy.
+publish_seq_is_seeded_from_wall_clock_microseconds_test() ->
+    Before = erlang:system_time(microsecond),
+    Pid = start(),
+    {F, _} = hecate_pubsub_server:publish(Pid, <<"t">>, <<"a">>),
+    ?assert(maps:get(seq, F) >= Before),
+    stop_(Pid).
+
 publish_signs_with_server_identity_test() ->
     R   = realm(),
     Kp  = keypair(),
