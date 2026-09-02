@@ -201,4 +201,4 @@ git commit -m "Commit message here."
 
 If you find this project valuable, consider supporting its development:
 
-https://buymeacoffee.com/rlefever
+https://github.com/sponsors/rgfaber
