@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.19.0] - 2026-09-05
+
+### Changed
+
+- `macula_client`'s `replication_factor` default is now `2`, not `1` (only
+  matters for a pool with 2+ connected links — a single-seed pool is
+  unaffected). Publish is fanned to `replication_factor` currently-connected
+  links, and "connected" only means the app-liveness ping still answers —
+  it has no way to know a link's station is silently relaying nowhere for
+  some other reason (e.g. that station just doesn't serve/route the
+  caller's realm). At the old default that single link was the entire
+  story for every publish through the pool: total, silent data loss, with
+  `ok` returned throughout, since a partial (here: complete) success still
+  satisfies `publish/5`'s "first link to accept wins" contract. `2` is the
+  minimum default that survives exactly that (one bad selected link no
+  longer means zero delivery, as long as a second is live) without
+  defaulting every publisher in the ecosystem to 3x baseline traffic for
+  marginal extra protection past "survives one bad station" — callers with
+  a reason to want the old single-link behavior (e.g. an already
+  cost-conscious high-frequency publisher) can still pass
+  `replication_factor => 1` explicitly.
+
+  **Does not protect against a wrong `Realm` passed by the caller** — every
+  replicated copy carries the identical `Realm` argument, so a
+  publisher-side realm misconfiguration blackholes every selected link the
+  same way regardless of factor. The gap this closes is the adjacent,
+  genuinely link-local case: caller config correct, one specific station's
+  relay path silently broken. (Found live 2026-09-05 investigating a
+  warden whose presence heartbeat never reached the mesh despite a
+  healthy-looking connection — its own publisher turned out to be
+  configured with a stale realm id, which replication would not have
+  fixed; tracing that incident is what surfaced this adjacent gap.)
+
+  `status/1` now also reports the resolved `replication_factor` so a
+  caller (or a test) can confirm what the pool actually applied, rather
+  than trusting a doc claim. The selection math itself
+  (`select_publish_targets/2`) is now a pure function with direct unit
+  coverage instead of being inlined in `handle_call({publish, ...})`.
+
+### Fixed
+
+- Publish's fan-out worker ran each selected link's `publish/5` call
+  unguarded in a plain list comprehension. A crash or exit from one
+  link (a dead pid, a wedged connection hitting its 5s call timeout)
+  skipped straight past `gen_server:reply/2`, so the caller got a hard
+  timeout instead of the `ok` it should have received if an EARLIER
+  link in the list had already accepted the frame — silently violating
+  publish's own "partial success counts as success" contract. This
+  exact ordering (success on link 1, failure on a later link) was
+  structurally impossible at the old default `replication_factor=1`
+  (never more than one link to fail "after"); raising the default to 2
+  above makes it a real, common-path risk for the first time, so it's
+  fixed in the same release. `advertise`'s own fan-out already guarded
+  each per-link call this way (`safe_link_advertise/5`); publish's
+  fan-out now does too, via the equivalent `safe_link_publish/5`.
+
 ## [10.18.0] - 2026-09-02
 
 ### Fixed

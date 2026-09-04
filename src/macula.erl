@@ -126,7 +126,7 @@
 %% Honored opts (full reference: `macula_client:opts()'):
 %% <ul>
 %%   <li>`identity' — pool's Ed25519 keypair; auto-generated if absent.</li>
-%%   <li>`replication_factor' — links per PUBLISH (default 1).</li>
+%%   <li>`replication_factor' — links per PUBLISH (default 2, since 10.19.0).</li>
 %%   <li>`capabilities' — per-link bitfield (default 0).</li>
 %%   <li>`alpn' — QUIC ALPN list (default `[<<"macula">>]').</li>
 %%   <li>`connect_timeout_ms' — per-link CONNECT/HELLO deadline (default 30_000).</li>

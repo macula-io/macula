@@ -93,7 +93,7 @@ Every option has a default. Most apps pass `#{}`.
 | Option | Type | Default | What it does |
 |---|---|---|---|
 | `identity` | `macula_identity:key_pair()` | auto-generated | Ed25519 keypair shared by every link |
-| `replication_factor` | `pos_integer()` | `1` | How many links accept each PUBLISH |
+| `replication_factor` | `pos_integer()` | `2` | How many links accept each PUBLISH |
 | `capabilities` | `non_neg_integer()` | `0` | Capability bitmap forwarded in CONNECT |
 | `alpn` | `[binary()]` | `[<<"macula">>]` | QUIC ALPN list |
 | `connect_timeout_ms` | `pos_integer()` | `30_000` | Per-link CONNECT timeout |
@@ -125,16 +125,42 @@ relay endpoints). This matters for:
 
 ### Replication factor
 
-```erlang
-{ok, Pool} = macula:connect(Seeds, #{replication_factor => 2}).
+Default is `2`, not `1` (since 10.19.0, and only with 2+ connected
+links — a single-seed pool gets no benefit from this): a station can
+pass the pool's app-liveness ping and look perfectly healthy while
+silently relaying a PUBLISH nowhere for a reason that check can't see
+— e.g. it just doesn't serve/route the caller's realm, even though
+nothing about the connection itself looks wrong. At
+`replication_factor => 1` that single link is the entire story for
+every publish — total, silent data loss with `ok` returned throughout.
+`2` is the minimum that survives exactly that.
 
-%% This PUBLISH goes to TWO healthy links (if available).
+**This does not protect against a wrong `Realm` passed by the caller.**
+Every replicated copy of a publish carries the identical `Realm`
+argument — a publisher-side realm misconfiguration blackholes every
+selected link the same way, replication factor notwithstanding. Raise
+`replication_factor` for redundancy against a link-local relay problem
+on the station's side, not as a substitute for getting the realm right.
+
+```erlang
+{ok, Pool} = macula:connect(Seeds, #{}).
+
+%% This PUBLISH goes to the pool's default of TWO healthy links.
 ok = macula:publish(Pool, Realm, Topic, Payload).
+
+%% Opt down to the old single-link behavior if you have a reason to
+%% (e.g. a very high-frequency publisher that has already reasoned
+%% about the cost/redundancy tradeoff for its own traffic):
+{ok, Pool2} = macula:connect(Seeds, #{replication_factor => 1}).
+
+%% Or raise it further for extra redundancy on a low-frequency,
+%% high-value fact:
+{ok, Pool3} = macula:connect(Seeds, #{replication_factor => 3}).
 ```
 
 `publish/4,5` returns `ok` as soon as **at least one** of the selected
 links accepts the frame. Partial success counts as success — the
-remaining links are best-effort. If the pool has zero spawned links
+remaining links are best-effort. If the pool has zero connected links
 the call returns `{error, {transient, no_healthy_station}}`; the
 caller may retry.
 

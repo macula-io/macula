@@ -323,6 +323,85 @@ publish_with_no_seeds_is_transient_test_() ->
      end}.
 
 %%------------------------------------------------------------------
+%% replication_factor default (2, since 10.19.0)
+%%
+%% A live QUIC handshake is out of scope for this suite (see the
+%% module header) so `connected_link_pids/1' can't be exercised
+%% directly here. Two things ARE real, direct behavior, not a doc
+%% claim: (1) what value the pool actually resolves into its own
+%% state when a caller passes no `replication_factor' opt at all, and
+%% an explicit override is honored verbatim; (2) the exact selection
+%% math publish/5 applies against that value, exported as a pure
+%% function specifically so it's testable without a live link.
+%%------------------------------------------------------------------
+
+connect_default_replication_factor_is_two_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         {ok, S} = macula_client:status(Pool),
+         ?assertEqual(2, maps:get(replication_factor, S)),
+         ok = macula_client:close(Pool)
+     end}.
+
+connect_explicit_replication_factor_is_honored_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{replication_factor => 5}),
+         {ok, S} = macula_client:status(Pool),
+         ?assertEqual(5, maps:get(replication_factor, S)),
+         ok = macula_client:close(Pool)
+     end}.
+
+%% With 3 connected targets and the new default (2), a publish selects
+%% only the first 2 — proves the fix actually raises the fan-out past
+%% the old default of 1 without over-amplifying to "every link".
+select_publish_targets_caps_at_default_replication_test() ->
+    Targets = [t1, t2, t3],
+    ?assertEqual([t1, t2], macula_client:select_publish_targets(Targets, 2)),
+    ok.
+
+%% Fewer connected links than the replication factor: publish to
+%% whatever is actually connected, not an error and not padded.
+select_publish_targets_uses_all_when_fewer_than_replication_test() ->
+    ?assertEqual([t1], macula_client:select_publish_targets([t1], 2)),
+    ok.
+
+%% No connected links at all: selects nothing, regardless of
+%% replication_factor — this is what feeds the zero-links transient
+%% error path above, not a crash on empty input.
+select_publish_targets_empty_when_no_targets_test() ->
+    ?assertEqual([], macula_client:select_publish_targets([], 2)),
+    ok.
+
+%% An explicit replication_factor above the old default (1) but below
+%% the connected count fans to exactly that many, not fewer and not
+%% "all of them" — the cap is real, not a floor.
+select_publish_targets_honors_explicit_factor_above_one_test() ->
+    ?assertEqual([t1, t2, t3],
+                 macula_client:select_publish_targets([t1, t2, t3, t4], 3)),
+    ok.
+
+%% A crash/exit from one selected link must not escape and kill the
+%% pool's spawned fan-out worker — with replication_factor's new
+%% default of 2, an earlier link's already-accepted publish must
+%% still make it back to the caller via summarize_publish/2 even if a
+%% later selected link is dead. Proven directly against a real dead
+%% pid (a genuine `noproc' exit from gen_server:call, not a fake): if
+%% safe_link_publish/5 didn't catch it, THIS test process would take
+%% the exit and fail/crash rather than reach the assertion below.
+safe_link_publish_survives_a_dead_link_test() ->
+    Pid = spawn(fun() -> ok end),
+    %% Give it a moment to actually exit before calling.
+    timer:sleep(10),
+    ?assertNot(is_process_alive(Pid)),
+    Result = macula_client:safe_link_publish(Pid, ?REALM, <<"x.v1">>, hello, 1),
+    ?assertMatch({error, _}, Result),
+    ok.
+
+%%------------------------------------------------------------------
 %% status/1
 %%------------------------------------------------------------------
 

@@ -23,7 +23,9 @@
 %% == Replication ==
 %%
 %% `publish/5' fans the PUBLISH frame to `replication_factor' (default
-%% 1) currently-spawned links. **Partial success counts as success**
+%% 2 with >=2 connected links, since 10.19.0 -- see `?DEFAULT_REPLICATION''s
+%% own doc for exactly what this does and does not protect against)
+%% currently-connected links. **Partial success counts as success**
 %% per `PLAN_V2_PARITY' §5.1.1: the call returns `ok' as soon as one
 %% link accepts the frame; the others are best-effort. When zero
 %% links are spawned the call returns
@@ -76,6 +78,10 @@
 %% Probe guards — exported so a test can hang a link and prove the pool
 %% survives it. See the note above safe_is_connected/1.
 -export([safe_is_connected/1, safe_peer_node_id/1]).
+%% The pure selection math behind publish/5's replication fan-out, and
+%% the per-link crash guard its fan-out worker uses — exported for
+%% macula_client_tests.erl only, see their own docs.
+-export([select_publish_targets/2, safe_link_publish/5]).
 -endif.
 
 -export_type([pool/0, opts/0, seed/0, status/0, link_info/0, handler/0,
@@ -103,12 +109,13 @@
 
 %% Aggregate health snapshot of a pool. See `status/1'.
 -type status() :: #{
-    seeds            := [seed()],
-    healthy_links    := non_neg_integer(),
-    failed_links     := non_neg_integer(),
-    self_node_id     := macula_identity:pubkey(),
-    subscriptions    := non_neg_integer(),
-    pubsub_gap_skips := non_neg_integer()
+    seeds              := [seed()],
+    healthy_links      := non_neg_integer(),
+    failed_links       := non_neg_integer(),
+    self_node_id       := macula_identity:pubkey(),
+    subscriptions      := non_neg_integer(),
+    replication_factor := pos_integer(),
+    pubsub_gap_skips   := non_neg_integer()
 }.
 %% Per-link view returned by `links/1'. One entry per configured seed
 %% that currently has a spawned link worker. `node_id' is the peer
@@ -133,7 +140,8 @@
 
     %% How many of the pool's currently-connected links accept a
     %% single PUBLISH frame. Partial success counts as success
-    %% (`PLAN_V2_PARITY' §5.1.1). Default 1.
+    %% (`PLAN_V2_PARITY' §5.1.1). Default 2, since 10.19.0 (was 1) --
+    %% see `?DEFAULT_REPLICATION''s own doc for why.
     replication_factor => pos_integer(),
 
     %% Per-link capability bitfield, forwarded to every
@@ -166,7 +174,37 @@
 %% can name them helpfully.
 -define(V1_LEGACY_OPTS, [relays, realm, site, connections]).
 
--define(DEFAULT_REPLICATION, 1).
+%% 2, not 1: a station can look perfectly healthy (answers the app-liveness
+%% ping -- CONNECT/HELLO done, still answers `_macula.ping') while silently
+%% relaying a PUBLISH nowhere for a reason that liveness check cannot see,
+%% e.g. it just doesn't serve/route the caller's realm even though nothing
+%% about the connection itself looks wrong. At replication_factor=1 that
+%% single "connected" link is the whole story for every publish through
+%% the pool: total, silent data loss, with `ok' returned throughout.
+%%
+%% What this does NOT protect against: a wrong `Realm' passed by the
+%% CALLER itself. Every replicated copy carries the identical `Realm'
+%% argument (see `handle_call({publish, Realm, ...})' below) -- a
+%% publisher-side realm misconfiguration blackholes every selected link
+%% identically, replication factor notwithstanding. That specific failure
+%% mode is what surfaced this gap live 2026-09-05 (a warden whose presence
+%% heartbeat used a stale realm id), but replication_factor would not have
+%% fixed THAT incident; it protects the adjacent, genuinely link-local
+%% case where the caller's own config is right and one specific station's
+%% relay path is the thing silently broken.
+%%
+%% Also only helps a pool with >=2 connected links -- a single-seed pool
+%% gets no benefit from raising this. 2 is the minimum that helps at all
+%% (one bad selected link no longer means zero delivery, as long as a
+%% second is live) without defaulting every publisher in the ecosystem to
+%% 3x traffic (2x, really, on top of the previous 1x) for marginal extra
+%% protection past "survives one bad station" -- see CONNECTING_GUIDE.md's
+%% Replication factor section. Note publish's own fan-out worker
+%% (`safe_link_publish/5') must not let one selected link's crash or
+%% timeout swallow an earlier link's already-accepted frame -- with
+%% replication_factor=1 there was never a "later" link for that to matter;
+%% raising the default makes it matter for everyone.
+-define(DEFAULT_REPLICATION, 2).
 -define(DEFAULT_DEDUP_WINDOW_MS, 60_000).
 -define(DEFAULT_DEDUP_SWEEP_MS, 30_000).
 %% How long an `ordered' subscription waits for a missing seq before
@@ -501,8 +539,12 @@ status(Pool) when is_pid(Pool) ->
 links(Pool) when is_pid(Pool) ->
     gen_server:call(Pool, links, 5_000).
 
-%% @doc Publish a frame to `replication_factor' currently-spawned
-%% links. Partial success = success. Realm is per-call (32 bytes).
+%% @doc Publish a frame to `replication_factor' currently-connected
+%% links. Partial success = success. Realm is per-call (32 bytes) and
+%% identical across every replicated link — a wrong `Realm' here
+%% blackholes the publish on every selected station alike, regardless
+%% of `replication_factor'; see `?DEFAULT_REPLICATION''s own doc for
+%% what raising the factor does and does not protect against.
 %%
 %% The payload is checked for wire admissibility HERE, in the caller's
 %% process, before the pool is touched. Downstream the send is a
@@ -610,15 +652,14 @@ handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     %% and the harness's `multi_publisher_pubsub' case fails with
     %% empty receives).
     Targets = connected_link_pids(S),
-    N = min(length(Targets), S#state.replication),
-    Selected = lists:sublist(Targets, N),
+    Selected = select_publish_targets(Targets, S#state.replication),
     AllTargets = Targets,
     %% One pool-monotone seq per fact, reused across every replicated
     %% link so `{publisher, seq}' identifies the fact regardless of
     %% which station relayed it.
     Seq = S#state.publish_seq,
     _ = spawn(fun() ->
-        Results = [macula_station_link:publish(P, Realm, Topic, Payload, Seq)
+        Results = [safe_link_publish(P, Realm, Topic, Payload, Seq)
                    || P <- Selected],
         gen_server:reply(From, summarize_publish(Results, AllTargets))
     end),
@@ -736,17 +777,22 @@ handle_call({unadvertise_stream, Realm, Procedure}, _From,
 
 handle_call(status, _From,
             #state{seeds = Seeds, links = Links, subs = Subs,
-                   identity = Identity} = S) ->
+                   identity = Identity, replication = Replication} = S) ->
     {Healthy, Failed} = count_link_health(Seeds, Links),
     Status = #{
-        seeds            => Seeds,
-        healthy_links    => Healthy,
-        failed_links     => Failed,
-        self_node_id     => macula_identity:public(Identity),
-        subscriptions    => map_size(Subs),
+        seeds              => Seeds,
+        healthy_links      => Healthy,
+        failed_links       => Failed,
+        self_node_id       => macula_identity:public(Identity),
+        subscriptions      => map_size(Subs),
+        %% How many links one publish/5 call fans to (Opts'
+        %% `replication_factor', or the pool default) — surfaced so a
+        %% caller (and macula_client_tests.erl) can confirm what the
+        %% pool actually resolved, not just what a doc claims.
+        replication_factor => Replication,
         %% Per-publisher gaps given up on after the reorder timeout —
         %% the genuine loss rate an `ordered' subscriber could not fill.
-        pubsub_gap_skips => total_skips(Subs)
+        pubsub_gap_skips   => total_skips(Subs)
     },
     {reply, {ok, Status}, S};
 
@@ -976,6 +1022,18 @@ connected_link_pids(#state{} = S) ->
     [P || P <- spawned_link_pids(S),
           is_process_alive(P),
           safe_is_connected(P)].
+
+%% Which of the currently-connected links receive one publish, given
+%% the pool's replication_factor: the first `Replication' of `Targets'
+%% (in `connected_link_pids/1' order), capped at however many are
+%% actually connected. A pure function, exported for
+%% macula_client_tests.erl, specifically so the selection math itself
+%% (and the default replication_factor's effect on it) is directly
+%% testable without needing a live QUIC handshake.
+-spec select_publish_targets([pid()], pos_integer()) -> [pid()].
+select_publish_targets(Targets, Replication) ->
+    %% lists:sublist/2 already caps at length(Targets) on its own.
+    lists:sublist(Targets, Replication).
 
 first_connected_link([Pid | _]) -> {ok, Pid};
 first_connected_link([])        -> {error, no_healthy_station}.
@@ -1432,6 +1490,24 @@ flush_all_subs(#state{subs = Subs, order_timeout = Timeout} = S) ->
 %%====================================================================
 %% Internals — publish summary
 %%====================================================================
+
+%% A crash or exit from ONE selected link (dead pid between selection
+%% and call, a wedged connection timing out its 5s gen_server:call,
+%% the link process itself erroring) must never take the whole
+%% fan-out worker down with it. This list comprehension has no other
+%% guard, and an unhandled exit here skips straight past
+%% `gen_server:reply/2' entirely -- the caller then hangs until its
+%% OWN timeout and gets a hard error, even if an EARLIER link in
+%% `Selected' already accepted the frame. That specific ordering
+%% (success then a later failure) was structurally impossible at the
+%% old default replication_factor=1 (never more than one element to
+%% fail "after"); raising the default to 2 makes it a real, common-path
+%% risk for the first time. Same idiom as safe_link_advertise/5 below,
+%% which this fan-out should have matched from the start.
+safe_link_publish(Pid, Realm, Topic, Payload, Seq) ->
+    try macula_station_link:publish(Pid, Realm, Topic, Payload, Seq)
+    catch _:Reason -> {error, Reason}
+    end.
 
 summarize_publish([], []) ->
     {error, {transient, no_healthy_station}};
