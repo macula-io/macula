@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.19.1] - 2026-09-05
+
+### Fixed
+
+- Replaced 12 uses of the deprecated bare `catch Expr` prefix-operator form
+  (`catch macula_stream:abort(...)`, etc.) with `try Expr catch _:_ -> ok
+  end`, across `macula_pusher.erl`, `macula_feeder.erl`,
+  `macula_content_transfer.erl`, `macula_download.erl`, and
+  `client/macula_station_link.erl`. OTP 29 deprecates this syntax; under a
+  consumer's own `warnings_as_errors` (a common convention across this
+  org's repos) it becomes a hard compile failure, not a warning, so this
+  repo's own OTP-29-clean commitment doesn't help a consumer building with
+  a newer default toolchain than this repo pins. Found live 2026-09-05 by
+  two independent sessions bumping separate downstream repos to 10.19.0
+  under OTP 29. Behavior unchanged — every site was already a deliberate
+  "best-effort, swallow any exception" idiom; the `try/catch` form
+  preserves that exactly. Predates 10.19.0's own changes (oldest site:
+  2026-08-21); unrelated to the `replication_factor` work, released
+  separately since 10.19.0 was already tagged and published.
+
 ## [10.19.0] - 2026-09-05
 
 ### Changed

@@ -285,7 +285,8 @@ terminate(_Reason, #pstate{stream = Stream} = State) ->
 %% completion and an external `cancel/1' landing at the same time.
 reap_stream(undefined) -> ok;
 reap_stream(Stream) ->
-    catch macula_stream:abort(Stream, ?CANCEL_CODE, <<"push cancelled">>),
+    try macula_stream:abort(Stream, ?CANCEL_CODE, <<"push cancelled">>)
+    catch _:_ -> ok end,
     ok.
 
 announce_completed(#pstate{completed = true} = State, _Result) ->

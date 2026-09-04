@@ -179,7 +179,7 @@ spawn_worker(pooled, Pool, Bytes, ShareId) ->
         {ok, CTPid} = macula_content_transfer:start_put(Pool, Bytes, #{share_id => ShareId}),
         Parent ! {content_transfer, CTPid},
         Result = macula_content_transfer:await(CTPid),
-        catch macula_content_transfer:cancel(CTPid),
+        try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
         Parent ! {feed_result, Result}
     end).
 
@@ -199,7 +199,7 @@ direct_worker_run(Pool, Station, Bytes, ShareId, Parent) ->
                 Pool, DialUrl, Bytes, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts),
             Parent ! {content_transfer, CTPid},
             Result = macula_content_transfer:await(CTPid),
-            catch macula_content_transfer:cancel(CTPid),
+            try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
             Parent ! {feed_result, Result};
         {error, Reason} ->
             Parent ! {feed_result, {error, {unresolved, Reason}}}
@@ -253,7 +253,9 @@ terminate(_Reason, #fstate{content_transfer = CTPid} = State) ->
 %% `cancel/1' land at the same time — the second `cancel/1' call
 %% reaches an already-dead pid.
 reap_content_transfer(undefined) -> ok;
-reap_content_transfer(CTPid) -> catch macula_content_transfer:cancel(CTPid), ok.
+reap_content_transfer(CTPid) ->
+    try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
+    ok.
 
 announce_completed(#fstate{completed = true} = State, _Result) ->
     State;

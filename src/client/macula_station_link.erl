@@ -1493,7 +1493,7 @@ teardown_content_stream_state(Stream, LocalFailReason, CloseFun,
                               #state{content_pending = CP,
                                      content_stream_bufs = Bufs} = S) ->
     NewCP = fail_content_pending(maps:take(Stream, CP), CP, LocalFailReason),
-    catch CloseFun(Stream),
+    try CloseFun(Stream) catch _:_ -> ok end,
     S#state{content_pending = NewCP,
             content_stream_bufs = maps:remove(Stream, Bufs)}.
 
@@ -2284,8 +2284,9 @@ dedicated_open_result({ok, Stream}, Frame, Sid, StreamPid, Mon, Id,
             stream_bufs = Bufs#{Stream => <<>>}};
 dedicated_open_result({error, _Reason}, _Frame, _Sid, StreamPid, Mon, _Id, S) ->
     erlang:demonitor(Mon, [flush]),
-    catch macula_stream:deliver_error(StreamPid, <<"unavailable">>,
-                                      <<"failed to open dedicated stream">>),
+    try macula_stream:deliver_error(StreamPid, <<"unavailable">>,
+                                    <<"failed to open dedicated stream">>)
+    catch _:_ -> ok end,
     S.
 
 %%-------------------------------------------------------------------
@@ -2599,7 +2600,9 @@ take_dedicated_stream(Sid, Map) ->
 %% dedicated QUIC stream anymore. Close it rather than leaking a live
 %% stream resource for a session that will never resume.
 close_dedicated_stream(undefined) -> ok;
-close_dedicated_stream(Stream) -> catch macula_quic:close_stream(Stream), ok.
+close_dedicated_stream(Stream) ->
+    try macula_quic:close_stream(Stream) catch _:_ -> ok end,
+    ok.
 
 %% Lookup a stream by Sid across both maps. Client-side first (the
 %% common server_stream mode delivers server→client chunks to the

@@ -458,7 +458,8 @@ run_if_single_block(true, _Parent, _Kind, _LinkPid, _Stream, _Payload) ->
     ok;
 run_if_single_block(false, Parent, Kind, LinkPid, Stream, Payload) ->
     Result = transfer(Kind, LinkPid, Stream, Payload),
-    catch macula_station_link:close_content_stream(LinkPid, Stream),
+    try macula_station_link:close_content_stream(LinkPid, Stream)
+    catch _:_ -> ok end,
     Parent ! {content_result, Result}.
 
 connect({pooled, Pool}) ->
@@ -756,7 +757,8 @@ close_all_streams(LinkPid, _PrimalStream, #chunk{lanes = Lanes}) ->
     lists:foreach(fun(#lane{stream = S}) -> close_stream_safely(LinkPid, S) end, Lanes).
 
 close_stream_safely(LinkPid, Stream) when is_pid(LinkPid), is_reference(Stream) ->
-    catch macula_station_link:close_content_stream(LinkPid, Stream);
+    try macula_station_link:close_content_stream(LinkPid, Stream)
+    catch _:_ -> ok end;
 close_stream_safely(_LinkPid, _Stream) ->
     ok.
 

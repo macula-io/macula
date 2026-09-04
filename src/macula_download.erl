@@ -177,7 +177,7 @@ spawn_worker(pooled, Pool, Mcid, ShareId) ->
         {ok, CTPid} = macula_content_transfer:start_get(Pool, Mcid, #{share_id => ShareId}),
         Parent ! {content_transfer, CTPid},
         Result = macula_content_transfer:await(CTPid),
-        catch macula_content_transfer:cancel(CTPid),
+        try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
         Parent ! {download_result, Result}
     end);
 %% Resolving `Mcid''s provider stays a plain blocking DHT lookup here
@@ -196,7 +196,7 @@ direct_worker_run(Pool, Mcid, ShareId, Parent) ->
                 Pool, Endpoint, Mcid, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts),
             Parent ! {content_transfer, CTPid},
             Result = macula_content_transfer:await(CTPid),
-            catch macula_content_transfer:cancel(CTPid),
+            try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
             Parent ! {download_result, Result};
         {error, Reason} ->
             Parent ! {download_result, {error, {unresolved, Reason}}}
@@ -245,7 +245,9 @@ terminate(_Reason, #dstate{content_transfer = CTPid} = State) ->
 %% the proxy's own natural reap and an external `cancel/1' landing at
 %% the same time.
 reap_content_transfer(undefined) -> ok;
-reap_content_transfer(CTPid) -> catch macula_content_transfer:cancel(CTPid), ok.
+reap_content_transfer(CTPid) ->
+    try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
+    ok.
 
 announce_completed(#dstate{completed = true} = State, _Result) ->
     State;
