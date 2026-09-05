@@ -2409,6 +2409,11 @@ consume_probe(_Pid) ->
 %% Start a link with a fake peer patched in, advertise `Handlers'
 %% (a list of {Procedure, Fun}), and drain the ADVERTISE frames.
 inbound_call_fixture(Handlers) ->
+    inbound_call_fixture(Handlers, open).
+
+%% Same, but with an explicit auth policy on every advertised procedure
+%% instead of the `open' default -- for exercising `authorize_policy/2'.
+inbound_call_fixture(Handlers, Policy) ->
     {ok, _} = application:ensure_all_started(macula),
     Identity = macula_identity:generate(),
     {ok, Pid} = macula_station_link:start_link(#{
@@ -2424,7 +2429,7 @@ inbound_call_fixture(Handlers) ->
     end),
     lists:foreach(
       fun({Proc, Fun}) ->
-              ok = macula_station_link:advertise(Pid, ?REALM, Proc, Fun),
+              ok = macula_station_link:advertise(Pid, ?REALM, Proc, Fun, Policy),
               receive
                   {'$gen_cast', {send_frame, #{frame_type := advertise}}} -> ok
               after 1_000 ->
@@ -2443,13 +2448,35 @@ inject_call(Pid, FakePeer, Caller, CallId, Proc) ->
         caller     => Caller
     }}.
 
+%% Same as inject_call/5, carrying a `ucan_token' too -- for exercising
+%% `{ucan_required, _}'/`{realm_member_required, _}' gates, which read
+%% it straight off the Frame the same way `authorize/3' does.
+inject_call_with_ucan(Pid, FakePeer, Caller, CallId, Proc, UcanToken) ->
+    Pid ! {macula_peering, frame, FakePeer, #{
+        frame_type => call,
+        call_id    => CallId,
+        realm      => ?REALM,
+        procedure  => Proc,
+        payload    => #{},
+        caller     => Caller,
+        ucan_token => UcanToken
+    }}.
+
+%% The error frame's own `frame_type' is `error' (`macula_frame:call_error/1'
+%% builds it on `base(error, 0)'), not `call_error' -- every OTHER place in
+%% this file that matches an error frame directly already uses `error'
+%% (e.g. line ~1628). This helper's own `call_error' match never fired
+%% until `realm_member_required_test_' below became the first test to
+%% actually need `await_result/2' to recognize an authorization failure --
+%% both existing callers only ever exercised its RESULT branch. Fixed
+%% here rather than left broken now that something depends on it.
 await_result(CallId, TimeoutMs) ->
     receive
         {'$gen_cast', {send_frame, #{frame_type := result,
                                      call_id    := CallId,
                                      payload    := Payload}}} ->
             {ok, Payload};
-        {'$gen_cast', {send_frame, #{frame_type := call_error,
+        {'$gen_cast', {send_frame, #{frame_type := error,
                                      call_id    := CallId} = Err}} ->
             {error, Err}
     after TimeoutMs ->
@@ -2502,6 +2529,86 @@ inbound_calls_are_served_concurrently_test_() ->
          %% arrives after ~1.5 s; off-process it arrives at once.
          ?assertMatch({ok, #{who := 2}}, await_result(FastId, 500)),
          ?assertMatch({ok, #{who := 1}}, await_result(SlowId, 3_000)),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%%------------------------------------------------------------------
+%% {realm_member_required, RealmDid} -- gates a procedure on membership
+%% in a realm (any valid token signed by the realm's own DID, audience-
+%% bound to the calling identity) rather than one exact known identity.
+%% See `macula_client:auth_policy()' and `authorize_policy/2' for the
+%% full design reasoning.
+%%------------------------------------------------------------------
+
+%% Mints a real membership-shaped token: `RealmIdentity' signs it (the
+%% realm's own keypair), naming `MemberPub' (hex-encoded, matching
+%% macula-realm's own `RealmUcanIssuer.mint_membership/2' convention) as
+%% audience. `ExpOverride' lets a test set `exp' explicitly (e.g.
+%% already-expired); omitted keys keep the default (valid for an hour).
+mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride) ->
+    IssuerDid = binary:encode_hex(macula_identity:public(RealmIdentity), lowercase),
+    AudienceDid = binary:encode_hex(MemberPub, lowercase),
+    Cap = #{with => <<"mri:realm:test">>, can => <<"member/email-verified">>},
+    Opts = maps:merge(#{exp => erlang:system_time(second) + 3_600}, ExpOverride),
+    {ok, Token} = macula_ucan_nif:create(IssuerDid, AudienceDid, [Cap],
+                                        macula_identity:private(RealmIdentity), Opts),
+    Token.
+
+realm_member_required_test_() ->
+    {timeout, 15,
+     fun() ->
+         UnauthorizedCode = macula_bolt4:code(unauthorized),
+         RealmIdentity = macula_identity:generate(),
+         RealmDid = macula_identity:public(RealmIdentity),
+         Handler = fun(_Payload) -> {ok, #{admitted => true}} end,
+         Policy = {realm_member_required, RealmDid},
+         {Pid, Caller} = inbound_call_fixture([{<<"realm.only">>, Handler}], Policy),
+
+         %% A genuine member: token signed by the realm, audience is
+         %% the identity actually making the call.
+         GoodToken = mint_membership_ucan(RealmIdentity, Caller, #{}),
+         GoodId = crypto:strong_rand_bytes(16),
+         inject_call_with_ucan(Pid, self(), Caller, GoodId, <<"realm.only">>, GoodToken),
+         ?assertMatch({ok, #{admitted := true}}, await_result(GoodId, 2_000)),
+
+         %% No token at all.
+         NoTokenId = crypto:strong_rand_bytes(16),
+         inject_call(Pid, self(), Caller, NoTokenId, <<"realm.only">>),
+         ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(NoTokenId, 2_000)),
+
+         %% Token signed by a DIFFERENT key than the declared realm --
+         %% a plausible-looking membership token that simply isn't from
+         %% this realm at all.
+         OtherRealmIdentity = macula_identity:generate(),
+         WrongIssuerToken = mint_membership_ucan(OtherRealmIdentity, Caller, #{}),
+         WrongIssuerId = crypto:strong_rand_bytes(16),
+         inject_call_with_ucan(Pid, self(), Caller, WrongIssuerId, <<"realm.only">>, WrongIssuerToken),
+         ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(WrongIssuerId, 2_000)),
+
+         %% Expired: genuinely signed by the realm, for this exact
+         %% caller, but its own exp has already passed.
+         ExpiredToken = mint_membership_ucan(RealmIdentity, Caller,
+                                             #{exp => erlang:system_time(second) - 60}),
+         ExpiredId = crypto:strong_rand_bytes(16),
+         inject_call_with_ucan(Pid, self(), Caller, ExpiredId, <<"realm.only">>, ExpiredToken),
+         ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(ExpiredId, 2_000)),
+
+         %% THE REPLAY CASE: a token that is completely genuine --
+         %% signed by the real realm, not expired, would pass
+         %% `ucan_required' against this same realm's key with no
+         %% further question -- but minted for a DIFFERENT member than
+         %% whoever is actually making this call. Whoever obtained a
+         %% copy of another member's token cannot use it as their own:
+         %% this is the exact bearer-replay gap `ucan_required' does not
+         %% close (it never checks `aud' at all), closed here by binding
+         %% to `Caller', the wire-authenticated identity making THIS call.
+         RightfulOwner = macula_identity:public(macula_identity:generate()),
+         StolenToken = mint_membership_ucan(RealmIdentity, RightfulOwner, #{}),
+         StolenId = crypto:strong_rand_bytes(16),
+         inject_call_with_ucan(Pid, self(), Caller, StolenId, <<"realm.only">>, StolenToken),
+         ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(StolenId, 2_000)),
+
          macula_station_link:stop(Pid),
          ok
      end}.

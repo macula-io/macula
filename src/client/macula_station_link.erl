@@ -637,7 +637,9 @@ unsubscribe(Client, SubRef)
 advertise(Pid, Realm, Procedure, Handler) ->
     advertise(Pid, Realm, Procedure, Handler, open).
 
-%% @doc Advertise with an auth policy (`open' | `{ucan_required, Issuer}').
+%% @doc Advertise with an auth policy -- see `macula_client:auth_policy()'
+%% for the full set (`open' | `{ucan_required, Issuer}' |
+%% `{realm_member_required, RealmDid}').
 -spec advertise(pid(), <<_:256>>, binary(), handler(),
                 macula_client:auth_policy()) -> ok.
 advertise(Pid, Realm, Procedure, Handler, Policy)
@@ -2055,7 +2057,10 @@ authorize(Key, Frame, Pols) ->
 authorize_policy(open, _Frame) ->
     ok;
 authorize_policy({ucan_required, Issuer}, Frame) ->
-    check_ucan(maps:get(ucan_token, Frame, <<>>), Issuer).
+    check_ucan(maps:get(ucan_token, Frame, <<>>), Issuer);
+authorize_policy({realm_member_required, RealmDid}, Frame) ->
+    check_realm_membership(maps:get(ucan_token, Frame, <<>>), RealmDid,
+                            maps:get(caller, Frame, undefined)).
 
 check_ucan(<<>>, _Issuer) ->
     unauthorized;
@@ -2066,6 +2071,43 @@ check_ucan(_Other, _Issuer) ->
 
 ucan_verdict({ok, _Payload}) -> ok;
 ucan_verdict(_Error)         -> unauthorized.
+
+%% `RealmDid' is a realm's own DID (a real Ed25519 keypair the realm
+%% holds), never the 32-byte `RealmId' routing/scoping hash used in
+%% `-realm' flags and DHT scoping elsewhere -- the two are unrelated
+%% values, and nobody could verify a signature against a hash. A service
+%% already has its realm's DID with no new plumbing: it reads `iss' off
+%% its own realm-issued service credential (`macula_ucan_nif:get_issuer/1'
+%% on whatever `hecate_om:service_cert/0' or equivalent already returns).
+%%
+%% `macula_ucan_nif:verify/2' checks signature + `exp' + `nbf' against
+%% `RealmDid' -- proof the token is a genuine grant from this realm, and
+%% not expired. It does NOT check `aud' (see that function's own doc):
+%% a bearer token proves the realm issued it to SOMEONE, not that it
+%% belongs to whoever is presenting it now. Without the audience check
+%% below, any membership token a caller obtained a copy of -- not
+%% necessarily its own -- would authorize as if it were a genuine member
+%% making this call. `Caller' is the SAME wire-authenticated field
+%% `with_caller/2' already trusts elsewhere in this module for the same
+%% reason: unspoofable, verified by the transport itself before this
+%% function ever runs.
+check_realm_membership(Token, RealmDid, Caller)
+  when is_binary(Token), Token =/= <<>>, is_binary(Caller) ->
+    membership_verdict(macula_ucan_nif:verify(Token, RealmDid), Caller);
+check_realm_membership(_Token, _RealmDid, _Caller) ->
+    unauthorized.
+
+%% Membership UCANs mint `aud' as the citizen's own device pubkey,
+%% hex-encoded (`macula-realm''s `RealmUcanIssuer.mint_membership/2');
+%% `Caller' is that same identity's raw wire pubkey, so hex-encoding it
+%% the same way makes the two directly comparable.
+membership_verdict({ok, #{<<"aud">> := Aud}}, Caller) when is_binary(Aud) ->
+    audience_verdict(Aud =:= binary:encode_hex(Caller, lowercase));
+membership_verdict(_Result, _Caller) ->
+    unauthorized.
+
+audience_verdict(true)  -> ok;
+audience_verdict(false) -> unauthorized.
 
 %% `open' is the default, so store it as absence to keep the map small.
 set_policy(Key, open, Pols)   -> maps:remove(Key, Pols);
