@@ -16,7 +16,8 @@ ucan_test_() ->
      {"Token extraction tests", fun extraction_tests/0},
      {"Expiration tests", fun expiration_tests/0},
      {"Error handling tests", fun error_handling_tests/0},
-     {"Roundtrip tests", fun roundtrip_tests/0}
+     {"Roundtrip tests", fun roundtrip_tests/0},
+     {"Opts JSON encoding tests", fun opts_encoding_tests/0}
     ].
 
 %%====================================================================
@@ -303,5 +304,62 @@ roundtrip_tests() ->
         ?assertEqual(Issuer, ExtIss),
         ?assertEqual(Audience, ExtAud)
     end, lists:seq(1, 7)),
+
+    ok.
+
+%%====================================================================
+%% Opts JSON Encoding Tests
+%%====================================================================
+%%
+%% Regression coverage for a real bug (Fable review, 2026-09-05):
+%% `encode_json_term/1' escaped only `"', so an opts map whose `fct'
+%% contained a raw backslash or control character (a newline, say)
+%% produced syntactically invalid JSON. `nif_create''s own opts-parse
+%% failure path then silently substituted an empty object rather than
+%% erroring -- so `exp' (and everything else in Opts) vanished with no
+%% signal at all, producing a token that never expires. Both are fixed:
+%% the encoder now escapes properly, and the NIF fails closed
+%% (`malformed_json') instead of substituting `{}' if a caller ever
+%% reaches it with genuinely broken JSON regardless.
+opts_encoding_tests() ->
+    {ok, {_PubKey, PrivKey}} = generate_keypair(),
+    Issuer = <<"did:macula:io.macula.escape-a">>,
+    Audience = <<"did:macula:io.macula.escape-b">>,
+    Capabilities = [#{<<"with">> => <<"*">>, <<"can">> => <<"*">>}],
+    Exp = current_timestamp() + 3600,
+
+    %% Test: a `fct' value containing a newline, a backslash, and a
+    %% quote -- every character the old encoder mishandled -- no longer
+    %% corrupts the opts JSON, so `exp' survives (the token is not
+    %% expired) and the note round-trips through decode/1 byte for byte.
+    TrickyNote = <<"line one\nline two \\ and a \"quoted\" word">>,
+    {ok, TokenTricky} = macula_ucan_nif:create(
+        Issuer, Audience, Capabilities, PrivKey,
+        #{exp => Exp, fct => #{<<"note">> => TrickyNote}}),
+    ?assertEqual(false, macula_ucan_nif:is_expired(TokenTricky)),
+    {ok, PayloadTricky} = macula_ucan_nif:decode(TokenTricky),
+    ?assertEqual(Exp, maps:get(<<"exp">>, PayloadTricky)),
+    ?assertEqual(TrickyNote,
+                 maps:get(<<"note">>, maps:get(<<"fct">>, PayloadTricky))),
+
+    %% Test: a control character outside the named short-form set
+    %% (\b \f \n \r \t) still produces valid JSON via the \u00XX path.
+    BellNote = <<"bell", 7, "byte">>,
+    {ok, TokenBell} = macula_ucan_nif:create(
+        Issuer, Audience, Capabilities, PrivKey,
+        #{exp => Exp, fct => #{<<"note">> => BellNote}}),
+    {ok, PayloadBell} = macula_ucan_nif:decode(TokenBell),
+    ?assertEqual(Exp, maps:get(<<"exp">>, PayloadBell)),
+    ?assertEqual(BellNote,
+                 maps:get(<<"note">>, maps:get(<<"fct">>, PayloadBell))),
+
+    %% Test: the NIF's own defense in depth -- calling `nif_create/5'
+    %% directly with genuinely malformed opts JSON (bypassing the now-
+    %% fixed Erlang encoder entirely) must fail closed with
+    %% `malformed_json', never silently drop to an empty object.
+    CapsJson = <<"[{\"with\":\"*\",\"can\":\"*\"}]">>,
+    ?assertMatch({malformed_json, _},
+                 macula_ucan_nif:nif_create(Issuer, Audience, CapsJson,
+                                            PrivKey, <<"{not valid json">>)),
 
     ok.

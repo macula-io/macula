@@ -439,9 +439,7 @@ encode_json_term(List) when is_list(List) ->
     Items = [encode_json_term(I) || I <- List],
     <<"[", (iolist_to_binary(lists:join(<<",">>, Items)))/binary, "]">>;
 encode_json_term(Bin) when is_binary(Bin) ->
-    %% Simple JSON string encoding (escape quotes)
-    Escaped = binary:replace(Bin, <<"\"">>, <<"\\\"">>, [global]),
-    <<"\"", Escaped/binary, "\"">>;
+    <<"\"", (json_escape(Bin))/binary, "\"">>;
 encode_json_term(Num) when is_integer(Num) ->
     integer_to_binary(Num);
 encode_json_term(true) -> <<"true">>;
@@ -452,6 +450,37 @@ encode_json_term(Atom) when is_atom(Atom) ->
 
 encode_json_fold(K, V, Acc) ->
     [encode_json_pair(json_key(K), V) | Acc].
+
+%% Escapes a binary for embedding inside a JSON string. Backslash and
+%% quote get their two-char escapes; the other JSON-mandatory control
+%% characters (0x00-0x1F) get their named short form where one exists
+%% (\b \f \n \r \t) or a \u00XX escape otherwise. Byte-wise matching on
+%% these values is UTF-8-safe: every continuation byte of a multi-byte
+%% codepoint is >= 0x80, so it can never be mistaken for one of these.
+%%
+%% Fixes a real bug (Fable review, 2026-09-05): the previous version
+%% escaped only `"', so any caller-supplied string containing a raw
+%% backslash or control character (e.g. a `fct' note with a newline)
+%% produced syntactically invalid JSON. Downstream, `nif_create''s own
+%% opts-parse-failure path silently substituted an empty object rather
+%% than erroring -- so a genuinely-set `exp' could vanish without any
+%% signal, producing a token that never expires. That NIF-side fallback
+%% is fixed separately (`native/macula_ucan_nif/src/lib.rs'); this fixes
+%% the root cause so well-formed input never reaches it broken.
+json_escape(Bin) ->
+    iolist_to_binary([json_escape_byte(B) || <<B>> <= Bin]).
+
+json_escape_byte($")  -> <<"\\\"">>;
+json_escape_byte($\\) -> <<"\\\\">>;
+json_escape_byte($\b) -> <<"\\b">>;
+json_escape_byte($\f) -> <<"\\f">>;
+json_escape_byte($\n) -> <<"\\n">>;
+json_escape_byte($\r) -> <<"\\r">>;
+json_escape_byte($\t) -> <<"\\t">>;
+json_escape_byte(B) when B < 16#20 ->
+    iolist_to_binary(io_lib:format("\\u~4.16.0b", [B]));
+json_escape_byte(B) ->
+    <<B>>.
 
 json_key(K) when is_atom(K) -> atom_to_binary(K);
 json_key(K)                 -> K.
@@ -503,10 +532,31 @@ json_tokenize(<<C, _/binary>> = Bin, Acc) when C >= $0, C =< $9; C =:= $- ->
     {Num, Rest} = json_number(Bin, <<>>),
     json_tokenize(Rest, [{number, Num} | Acc]).
 
+%% Mirrors `json_escape/1' -- every escape it can produce must unescape
+%% back to the original byte here, or the encoder fix above (2026-09-05,
+%% Fable review) would newly introduce a round-trip gap of its own: valid
+%% JSON containing `\n'/`\t'/etc. would now parse into a value still
+%% carrying the literal two-character escape sequence instead of the
+%% real byte it stands for.
 json_string(<<"\\\"", Rest/binary>>, Acc) ->
     json_string(Rest, <<Acc/binary, "\"">>);
 json_string(<<"\\\\", Rest/binary>>, Acc) ->
     json_string(Rest, <<Acc/binary, "\\">>);
+json_string(<<"\\/", Rest/binary>>, Acc) ->
+    json_string(Rest, <<Acc/binary, "/">>);
+json_string(<<"\\b", Rest/binary>>, Acc) ->
+    json_string(Rest, <<Acc/binary, "\b">>);
+json_string(<<"\\f", Rest/binary>>, Acc) ->
+    json_string(Rest, <<Acc/binary, "\f">>);
+json_string(<<"\\n", Rest/binary>>, Acc) ->
+    json_string(Rest, <<Acc/binary, "\n">>);
+json_string(<<"\\r", Rest/binary>>, Acc) ->
+    json_string(Rest, <<Acc/binary, "\r">>);
+json_string(<<"\\t", Rest/binary>>, Acc) ->
+    json_string(Rest, <<Acc/binary, "\t">>);
+json_string(<<"\\u", Hex:4/binary, Rest/binary>>, Acc) ->
+    Code = binary_to_integer(Hex, 16),
+    json_string(Rest, <<Acc/binary, Code/utf8>>);
 json_string(<<"\"", Rest/binary>>, Acc) ->
     {Acc, Rest};
 json_string(<<C, Rest/binary>>, Acc) ->

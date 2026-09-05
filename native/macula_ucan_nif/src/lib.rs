@@ -84,10 +84,14 @@ fn nif_create<'a>(
         Err(_) => return result_error(env, atoms::malformed_json()),
     };
 
-    // Parse options
+    // Parse options. A parse failure here used to silently fall back to
+    // an empty object, discarding every opt including `exp` -- a caller
+    // that set `exp` got back a token that never expires with no error
+    // at all. Fails the same way `capabilities_json` already does above
+    // (Fable review, 2026-09-05).
     let opts: serde_json::Value = match serde_json::from_slice(opts_json.as_slice()) {
         Ok(v) => v,
-        Err(_) => serde_json::json!({}),
+        Err(_) => return result_error(env, atoms::malformed_json()),
     };
 
     // Validate private key
