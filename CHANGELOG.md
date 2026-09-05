@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.20.3] - 2026-09-05
+
+### Fixed
+
+- **`priv/build-nifs.sh` and `priv/fetch-nif.sh` could silently serve a
+  stale compiled NIF.** Both scripts skipped rebuilding purely on
+  `[ -f "$NIF_FILE" ]` — whether the artifact existed at all, never
+  whether it was still current. This is exactly what masked several of
+  today's earlier verification runs: editing `deterministic.rs` and
+  running `rebar3 compile`/`eunit` kept silently loading an Aug-27
+  `.so` through a full day of "clean" results, until an unrelated
+  regression test's crash (from decoding against genuinely stale code)
+  surfaced it. Fixed by also checking, via `find -newer` (POSIX,
+  portable), whether any `.rs`/`Cargo.toml`/`Cargo.lock` file under the
+  crate is newer than the built artifact — rebuild if so. `fetch-nif.sh`
+  had a second, related bug fixed in the same pass:
+  `MACULA_FORCE_SOURCE_BUILD=1` did nothing at all whenever a cached
+  artifact already existed, because the bare existence check ran
+  *before* that env var was ever consulted.
+
+  Verified RED-then-GREEN, not just read: reproduced the original
+  silent-staleness bug in isolation (an aged `.so` next to a newer
+  source file, old check says skip), confirmed the fix catches it (new
+  check says rebuild), confirmed it doesn't over-trigger once genuinely
+  up to date, and confirmed end-to-end against this repo's own build —
+  touching `deterministic.rs` and running `rebar3 compile` now visibly
+  logs `[macula_cbor_nif] Building NIF from source...` and produces a
+  new `.so`, where before it silently did neither. Same defect (`priv/
+  build-nifs.sh` only — this repo has no `fetch-nif.sh` equivalent)
+  found and fixed the same way in `reckon-db-org/reckon-db`.
+
 ## [10.20.2] - 2026-09-05
 
 ### Documentation

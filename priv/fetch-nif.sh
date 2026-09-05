@@ -21,8 +21,18 @@ if [ ! -d "${NATIVE_DIR}" ] && [ -L "${BASEDIR}/src" ]; then
     fi
 fi
 
-# Skip if NIF already exists
-if [ -f "${NIF_FILE}" ]; then
+# Skip only if already fetched/built AND (a) not forcing a source
+# build and (b) no local source file is newer than the cached artifact.
+# The bare "skip if exists" version had two real problems: it silently
+# kept an Aug-27 .so loaded through a full day of source edits with no
+# warning (same defect as build-nifs.sh's build_nif, fixed alongside
+# this), AND it ran BEFORE the MACULA_FORCE_SOURCE_BUILD check below —
+# so setting that env var to force a fresh source build did nothing at
+# all whenever a cached artifact already existed, defeating the one
+# thing it exists for. `find -newer` is POSIX and portable.
+if [ -f "${NIF_FILE}" ] \
+   && [ "${MACULA_FORCE_SOURCE_BUILD:-0}" != "1" ] \
+   && [ -z "$(find "${NATIVE_DIR}" \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' \) -newer "${NIF_FILE}" 2>/dev/null)" ]; then
     exit 0
 fi
 

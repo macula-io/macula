@@ -39,8 +39,15 @@ build_nif() {
     local NIF_FILE="${PRIV_DIR}/${CRATE_NAME}.so"
     local CRATE_DIR="${NATIVE_DIR}/${CRATE_NAME}"
 
-    # Skip if already built
-    if [ -f "${NIF_FILE}" ]; then
+    # Skip only if already built AND no source file is newer than the
+    # built artifact. "Skip if already built" alone went stale silently:
+    # editing deterministic.rs and running `rebar3 compile` kept loading
+    # an Aug-27 .so through a full day of "clean rebar3 eunit" runs on
+    # 2026-09-05, because this check never looked past the file's mere
+    # existence. `find -newer` is POSIX and portable (GNU and BSD find
+    # both support it); comparing against Cargo.toml/Cargo.lock too
+    # catches a dependency bump with no .rs change.
+    if [ -f "${NIF_FILE}" ] && [ -z "$(find "${CRATE_DIR}" \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' \) -newer "${NIF_FILE}" 2>/dev/null)" ]; then
         return 0
     fi
 
