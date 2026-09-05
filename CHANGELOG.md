@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.20.1] - 2026-09-05
+
+### Fixed
+
+- **Three pre-auth vulnerabilities in `macula_cbor_nif`'s deterministic
+  decoder** — `deterministic.rs`'s `decode_one`/`decode_array`/
+  `decode_map`, the codec every network-received frame is decoded
+  through before any signature check (`macula_frame.erl`,
+  `macula_record.erl`), running as a NIF directly on a BEAM scheduler
+  thread. Found across four rounds of adversarial review of the same
+  function, each round catching something the previous one missed:
+
+  1. **O(n²) decode-time DoS** (10.20.0's original fix): `decode_map`'s
+     duplicate-key dedup was a linear `Term`-equality scan over every
+     entry already decoded. A map with many distinct keys, well under
+     the 16MB frame cap, could peg a scheduler for tens of seconds,
+     scaling quadratically toward the cap.
+  2. **Uncatchable process crash via stack overflow**: plain recursive
+     descent had no nesting-depth limit. A list-of-one-list-of-one-
+     list... encodes extreme nesting in one byte per level; a ~10KB
+     frame reliably segfaulted the whole BEAM VM (not just one
+     connection). Fixed with `MAX_NESTING_DEPTH = 128`.
+  3. **O(depth × key size) blowup reintroduced by fix #1**: re-encoding
+     a key fresh via `encode_value` at every ancestor level, for a map
+     whose key is itself a large nested structure, turned back into
+     real seconds of pre-auth CPU on a frame still under the size cap.
+     Fixed by threading a `need_canon` flag alongside depth and
+     building each decoded value's own canonical bytes bottom-up
+     (computed once, only ever concatenated/sorted by ancestors, never
+     re-derived) — bounding the cost to the same `MAX_NESTING_DEPTH`
+     bound already enforced elsewhere.
+  4. **Uncatchable VM abort on a NaN/Infinity map key**: `decode_major7`'s
+     float32/float64 arms built an Erlang float term directly from the
+     wire bits with no finiteness check, unlike the adjacent half-float
+     arm. BEAM has no NaN/Infinity float representation; the resulting
+     invalid term worked fine right up until fix #1/#3's `encode_value`
+     call inspected it as a map key, aborting the whole VM with an ERTS
+     assertion failure (`tag_val_def()`, SIGABRT) — not a catchable
+     Erlang exception. Fixed by rejecting non-finite floats in both
+     arms, matching the half-float arm's existing behavior.
+
+  All four verified empirically (RED then GREEN against isolated
+  pre-fix builds, not just reasoned about) and adversarially reviewed;
+  6 new regression tests added to
+  `test/macula_cbor_deterministic_diff_tests.erl` (nesting-depth
+  boundary, extreme-nesting-without-crashing, duplicate-key-slot
+  preservation — flat and nested-map-key cases, both key-count and
+  key-size quadratic-complexity guards, 6 new NaN/Infinity malformed-
+  input vectors). Full differential fuzz suite (3000 randomized terms
+  against the pure-Erlang reference codec) and full `rebar3 eunit`/
+  `dialyzer` clean throughout.
+
+  Also fixed a build-tooling gap this work exposed: `priv/*.so` files
+  under `native/*/priv/build-nifs.sh`'s "skip if already built" caching
+  can go stale relative to source changes with no warning — this
+  silently invalidated several "clean `rebar3 eunit`" verification runs
+  earlier today until caught by comparing against isolated scratch
+  builds. Not fixed in this release (tracked separately); if verifying
+  a change to any native NIF crate in this repo, delete the relevant
+  `priv/*.so` before trusting a `rebar3 eunit`/`dialyzer` result.
+
 ## [10.20.0] - 2026-09-05
 
 ### Changed

@@ -201,9 +201,22 @@ fn err(msg: &'static str) -> rustler::Error {
     rustler::Error::RaiseTerm(Box::new(msg))
 }
 
+// Recursive-descent nesting limit. Without it, a list-of-one-list-of-
+// one-list... encodes extreme nesting in one byte per level (0x81
+// repeated), and this decoder is plain recursive descent -- a crafted
+// frame well under the 16MB cap can overflow the stack and crash the
+// whole process (this runs as a NIF directly on a BEAM scheduler
+// thread, so it takes the whole VM down, not just one connection).
+// Confirmed empirically: a chain of 10,000 nested one-element arrays
+// (10,001 bytes) segfaulted this NIF before this limit existed. No real
+// macula wire value nests remotely this deep.
+const MAX_NESTING_DEPTH: usize = 128;
+
 pub fn decode<'a>(env: Env<'a>, bytes: Binary<'a>) -> NifResult<Term<'a>> {
     let len = bytes.as_slice().len();
-    let (term, pos) = decode_one(env, bytes, 0)?;
+    // Nobody consumes the top-level value's own canonical bytes -- start
+    // with need_canon=false (see decode_one's doc for what that skips).
+    let (term, _canon, pos) = decode_one(env, bytes, 0, 0, false)?;
     if pos != len {
         // `macula_record_cbor:decode/1` requires `{V, <<>>} = decode_one(Bin)`
         // — trailing bytes after the top-level value is a badmatch there.
@@ -220,6 +233,28 @@ fn need(buf: &[u8], pos: usize, n: usize) -> NifResult<()> {
     }
 }
 
+// Decodes one value and — only when `need_canon` is true — its own
+// canonical (deterministic-CBOR) bytes, built bottom-up as decoding
+// proceeds rather than re-derived by a separate `encode_value` call
+// afterward. `decode_map` needs a key's canonical bytes as its dedup
+// identity (see that function's doc); re-encoding a key from scratch at
+// every ancestor level (an earlier version of this fix) costs O(depth x
+// key size) for a map nested inside another map's key, which a deep
+// enough chain turns back into real, measured seconds of pre-auth CPU.
+// Building bytes bottom-up instead means each value is encoded exactly
+// once, then only ever concatenated (arrays) or sorted+concatenated
+// (maps, matching `encode_map`'s own key-sort rule) by its ancestors.
+//
+// `need_canon` exists because computing these bytes for every value
+// regardless of whether anything ever reads them is itself a real,
+// separate cost: most decoded values are never used as a map key
+// anywhere, and a large value that never touches one shouldn't pay for
+// canon-bytes it doesn't need. `decode_map` is the only caller that
+// ever passes different values for its two child decodes: always `true`
+// for a key (dedup needs it unconditionally) and its own `need_canon`
+// for a value (only needed if this whole map is itself nested inside
+// some ancestor's key).
+//
 // `orig` (the whole input binary, threaded through every recursive call)
 // is what makes `make_subbinary` possible below: byte-string and
 // text-string decoding take a zero-copy reference into `orig` instead of
@@ -229,7 +264,16 @@ fn need(buf: &[u8], pos: usize, n: usize) -> NifResult<()> {
 // pure-Erlang reference implementation (15-43% depending on payload
 // shape) specifically because it was paying a real allocation+copy on
 // every binary/text field where Erlang pays neither.
-fn decode_one<'a>(env: Env<'a>, orig: Binary<'a>, pos: usize) -> NifResult<(Term<'a>, usize)> {
+fn decode_one<'a>(
+    env: Env<'a>,
+    orig: Binary<'a>,
+    pos: usize,
+    depth: usize,
+    need_canon: bool,
+) -> NifResult<(Term<'a>, Vec<u8>, usize)> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(err("cbor: nesting exceeds 128 levels"));
+    }
     let buf = orig.as_slice();
     need(buf, pos, 1)?;
     let byte0 = buf[pos];
@@ -237,12 +281,13 @@ fn decode_one<'a>(env: Env<'a>, orig: Binary<'a>, pos: usize) -> NifResult<(Term
     let ai = byte0 & 0x1F;
 
     if major == 7 {
-        return decode_major7(env, buf, pos, ai);
+        let (term, next) = decode_major7(env, buf, pos, ai)?;
+        return scalar_canon(env, term, next, need_canon);
     }
 
     let (n, next) = decode_count(buf, pos + 1, ai)?;
     match major {
-        0 => Ok((n.encode(env), next)),
+        0 => scalar_canon(env, n.encode(env), next, need_canon),
         1 => {
             // actual value = -1 - n. n fits in u64 (up to 2^64-1), so
             // -1-n can be as low as -2^64, below i64::MIN — i128's
@@ -250,7 +295,7 @@ fn decode_one<'a>(env: Env<'a>, orig: Binary<'a>, pos: usize) -> NifResult<(Term
             // handles this correctly, falling back to Erlang's bignum
             // external term format for anything i64 can't hold.
             let neg: i128 = -1i128 - n as i128;
-            Ok((neg.encode(env), next))
+            scalar_canon(env, neg.encode(env), next, need_canon)
         }
         2 => {
             let len = n as usize;
@@ -258,7 +303,7 @@ fn decode_one<'a>(env: Env<'a>, orig: Binary<'a>, pos: usize) -> NifResult<(Term
             let sub = orig
                 .make_subbinary(next, len)
                 .map_err(|_| err("cbor: failed to slice binary"))?;
-            Ok((sub.to_term(env), next + len))
+            scalar_canon(env, sub.to_term(env), next + len, need_canon)
         }
         3 => {
             let len = n as usize;
@@ -267,12 +312,32 @@ fn decode_one<'a>(env: Env<'a>, orig: Binary<'a>, pos: usize) -> NifResult<(Term
                 .make_subbinary(next, len)
                 .map_err(|_| err("cbor: failed to slice binary"))?;
             let tuple = (atoms::text().to_term(env), sub.to_term(env));
-            Ok((tuple.encode(env), next + len))
+            scalar_canon(env, tuple.encode(env), next + len, need_canon)
         }
-        4 => decode_array(env, orig, next, n),
-        5 => decode_map(env, orig, next, n),
+        4 => decode_array(env, orig, next, n, depth + 1, need_canon),
+        5 => decode_map(env, orig, next, n, depth + 1, need_canon),
         _ => Err(err("cbor: major type 6 (tags) not supported")),
     }
+}
+
+// A scalar's own canonical bytes, computed via `encode_value` — or
+// skipped (an empty `Vec`) when nothing will ever read them, see
+// `decode_one`'s `need_canon` doc. Cheap regardless of where in a
+// nested structure it's called from: a scalar's canonical bytes are
+// just its own `encode_value` output, never a recursive re-derivation
+// of a child's bytes the way `decode_array`/`decode_map` build theirs.
+fn scalar_canon<'a>(
+    env: Env<'a>,
+    term: Term<'a>,
+    next: usize,
+    need_canon: bool,
+) -> NifResult<(Term<'a>, Vec<u8>, usize)> {
+    if !need_canon {
+        return Ok((term, Vec::new(), next));
+    }
+    let mut canon = Vec::with_capacity(16);
+    encode_value(env, term, &mut canon)?;
+    Ok((term, canon, next))
 }
 
 fn decode_count(buf: &[u8], pos: usize, ai: u8) -> NifResult<(u64, usize)> {
@@ -319,6 +384,23 @@ fn decode_major7<'a>(env: Env<'a>, buf: &[u8], pos: usize, ai: u8) -> NifResult<
             let mut b = [0u8; 4];
             b.copy_from_slice(&buf[pos + 1..pos + 5]);
             let f = f32::from_be_bytes(b) as f64;
+            // NaN/Infinity have no BEAM float representation (same
+            // reason half_to_f64 rejects binary16 exp=31 below) — reject
+            // here too, not just for binary16. Found via adversarial
+            // review: `f.encode(env)` on a non-finite value still
+            // "succeeds" (BEAM has no validity check at construction),
+            // producing an invalid float term that only crashes later
+            // when something actually inspects it — `encode_value` does
+            // exactly that when this term is used as a map key (for its
+            // canonical-bytes dedup identity), aborting the whole VM
+            // with an ERTS assertion failure, uncatchable by try/catch.
+            // Confirmed empirically pre-fix: a NaN-float64 map key
+            // reliably aborts the process (`tag_val_def()` assertion,
+            // SIGABRT) instead of the clean `{error, badarg}` a NaN
+            // value (not key) already got.
+            if !f.is_finite() {
+                return Err(err("cbor: float32 NaN/infinity not representable"));
+            }
             Ok((f.encode(env), pos + 5))
         }
         27 => {
@@ -326,6 +408,11 @@ fn decode_major7<'a>(env: Env<'a>, buf: &[u8], pos: usize, ai: u8) -> NifResult<
             let mut b = [0u8; 8];
             b.copy_from_slice(&buf[pos + 1..pos + 9]);
             let f = f64::from_be_bytes(b);
+            // See the ai=26 arm above — same non-finite rejection, same
+            // reason.
+            if !f.is_finite() {
+                return Err(err("cbor: float64 NaN/infinity not representable"));
+            }
             Ok((f.encode(env), pos + 9))
         }
         // `macula_record_cbor:decode_one/1` has no clause for any other
@@ -341,39 +428,118 @@ fn decode_array<'a>(
     orig: Binary<'a>,
     mut pos: usize,
     count: u64,
-) -> NifResult<(Term<'a>, usize)> {
+    depth: usize,
+    need_canon: bool,
+) -> NifResult<(Term<'a>, Vec<u8>, usize)> {
     let mut items: Vec<Term<'a>> = Vec::with_capacity(count.min(1024) as usize);
+    let mut canon = Vec::new();
+    if need_canon {
+        encode_head(4, count, &mut canon);
+    }
     for _ in 0..count {
-        let (item, next) = decode_one(env, orig, pos)?;
+        let (item, item_canon, next) = decode_one(env, orig, pos, depth, need_canon)?;
+        if need_canon {
+            canon.extend_from_slice(&item_canon);
+        }
         items.push(item);
         pos = next;
     }
-    Ok((items.encode(env), pos))
+    Ok((items.encode(env), canon, pos))
 }
 
+// Duplicate keys overwrite (last write wins), matching Erlang's
+// `Acc#{K => V}` in `decode_map/3` exactly — not an error.
+//
+// Dedup is keyed on each key's own canonical bytes — computed once, by
+// `decode_one`, as part of decoding that key (see its doc) — not a
+// linear `Term` equality scan: a linear scan makes this function O(n^2)
+// in the key count, a pre-auth algorithmic-complexity DoS reachable
+// during frame decode, before any signature check. Measured on the
+// equivalent Rust pattern (macula-rust, same decoder shape): a map with
+// 80,000 distinct keys, 348KB on the wire (well under the 16MB frame
+// cap), took 52.3s to decode, scaling quadratically.
+//
+// An earlier version of this fix looked up each key by calling
+// `encode_value` on it fresh, per entry, instead of reusing the bytes
+// `decode_one` already built while decoding that same key. That's sound
+// for a flat map (fixed the case above), but reintroduces unbounded
+// work for a map whose KEY is itself a large nested structure:
+// re-encoding a key from scratch at every ancestor level costs O(depth x
+// key size), and a 128-level chain of single-entry maps
+// (MAX_NESTING_DEPTH) each keyed by a large blob turns back into real
+// seconds of pre-auth CPU on a frame still under the size cap — the same
+// bug macula-rust's own adversarial review caught in its first attempt
+// at this exact fix. Building canonical bytes bottom-up instead (this
+// version) bounds it to O(depth x size), the same bound
+// MAX_NESTING_DEPTH already enforces elsewhere — not O(total input size)
+// regardless of nesting shape.
+//
+// One documented behavioral change from a literal `Term`-equality scan:
+// two float keys holding bit-identical NaN payloads now dedupe (they
+// never did under Term's PartialEq, since NaN != NaN); no real macula
+// wire value uses a float as a map key.
 fn decode_map<'a>(
     env: Env<'a>,
     orig: Binary<'a>,
     mut pos: usize,
     count: u64,
-) -> NifResult<(Term<'a>, usize)> {
-    // Duplicate keys overwrite (last write wins), matching Erlang's
-    // `Acc#{K => V}` in `decode_map/3` exactly — not an error.
-    let mut pairs: Vec<(Term<'a>, Term<'a>)> = Vec::with_capacity(count.min(1024) as usize);
+    depth: usize,
+    need_canon: bool,
+) -> NifResult<(Term<'a>, Vec<u8>, usize)> {
+    let capacity = count.min(1024) as usize;
+    let mut pairs: Vec<(Term<'a>, Term<'a>)> = Vec::with_capacity(capacity);
+    // Owns each distinct key's canonical bytes -> its slot index into
+    // `pairs`/`vals_canon`.
+    let mut index_of_key: std::collections::HashMap<Vec<u8>, usize> =
+        std::collections::HashMap::with_capacity(capacity);
+    // Per-slot VALUE canon, kept in step with `pairs` (same index, same
+    // last-write-wins updates) — only populated when `need_canon`, since
+    // a key's canon (owned by `index_of_key` above) is the only one ever
+    // needed just to make dedup itself work.
+    let mut vals_canon: Vec<Vec<u8>> = Vec::with_capacity(if need_canon { capacity } else { 0 });
     for _ in 0..count {
-        let (k, next1) = decode_one(env, orig, pos)?;
-        let (v, next2) = decode_one(env, orig, next1)?;
+        // A key ALWAYS needs its canon bytes — that's the dedup identity
+        // itself, independent of whether this map's OWN canon bytes
+        // (built below) are ever going to be read by anything.
+        let (k, key_canon, next1) = decode_one(env, orig, pos, depth, true)?;
+        let (v, val_canon, next2) = decode_one(env, orig, next1, depth, need_canon)?;
         pos = next2;
-        match pairs.iter_mut().find(|(ek, _)| *ek == k) {
-            Some(entry) => entry.1 = v,
-            None => pairs.push((k, v)),
+        use std::collections::hash_map::Entry;
+        match index_of_key.entry(key_canon) {
+            Entry::Occupied(e) => {
+                let i = *e.get();
+                pairs[i].1 = v;
+                if need_canon {
+                    vals_canon[i] = val_canon;
+                }
+            }
+            Entry::Vacant(e) => {
+                e.insert(pairs.len());
+                pairs.push((k, v));
+                if need_canon {
+                    vals_canon.push(val_canon);
+                }
+            }
         }
     }
     let keys: Vec<Term<'a>> = pairs.iter().map(|(k, _)| *k).collect();
     let vals: Vec<Term<'a>> = pairs.iter().map(|(_, v)| *v).collect();
     let map_term = Term::map_from_arrays(env, &keys, &vals)
         .map_err(|_| err("cbor: map_from_arrays failed"))?;
-    Ok((map_term, pos))
+    if !need_canon {
+        return Ok((map_term, Vec::new(), pos));
+    }
+    // Matches `encode_map`'s own rule exactly: sort entries by the key's
+    // encoded bytes, plain lexicographic `Ord` on `Vec<u8>`.
+    let mut order: Vec<(&Vec<u8>, usize)> = index_of_key.iter().map(|(k, &i)| (k, i)).collect();
+    order.sort_by(|a, b| a.0.cmp(b.0));
+    let mut canon = Vec::new();
+    encode_head(5, order.len() as u64, &mut canon);
+    for (k, i) in order {
+        canon.extend_from_slice(k);
+        canon.extend_from_slice(&vals_canon[i]);
+    }
+    Ok((map_term, canon, pos))
 }
 
 // IEEE 754 binary16 -> f64, mirroring `macula_record_cbor:half_to_float/1`
