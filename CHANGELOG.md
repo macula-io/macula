@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.19.2] - 2026-09-05
+
+### Fixed
+
+- Removed `erl_opts` (`no_debug_info`, `deterministic`) from the `prod`
+  profile in `rebar.config`. Confirmed live with a controlled A/B rebuild
+  (a bare git dependency fetch of this exact repo, only variable changed
+  was this profile's `erl_opts`): rebar3 merges a fetched dependency's
+  `erl_opts` across *every* profile that dependency defines, not just
+  whichever one the consuming project actually activated. That meant this
+  library's `prod` profile — a local-dev-only convenience for running a
+  leaner standalone macula node, not used anywhere in this repo's own
+  CI/scripts — was silently stripping `debug_info` from every consumer's
+  copy of macula, whether or not they ever selected `prod` themselves.
+  Effect: `rebar3 dialyzer` with macula in `plt_extra_apps` failed for
+  every consumer with "Could not get Core Erlang code," found
+  independently by two sessions on three separate repos before being
+  traced to this. The `prod` profile's `relx` settings (mode/dev_mode/
+  include_src) are untouched — only the `erl_opts` override is gone; pass
+  `--erl_opts +no_debug_info` on the `rebar3 as prod release` command
+  line instead if that leaner local build is ever needed again.
+
 ## [10.19.1] - 2026-09-05
 
 ### Fixed
