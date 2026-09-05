@@ -82,6 +82,9 @@
 %% the per-link crash guard its fan-out worker uses — exported for
 %% macula_client_tests.erl only, see their own docs.
 -export([select_publish_targets/2, safe_link_publish/5]).
+%% Station discovery selection math — exported for direct testing, same
+%% rationale as `select_publish_targets/2' above.
+-export([ordered_for_selection/2, select_discovery_seeds/3, station_seed/1]).
 -endif.
 
 -export_type([pool/0, opts/0, seed/0, status/0, link_info/0, handler/0,
@@ -165,7 +168,58 @@
 
     %% How often the dedup table is swept for entries older than
     %% `dedup_window_ms'. Default 30_000.
-    dedup_sweep_ms     => pos_integer()
+    dedup_sweep_ms     => pos_integer(),
+
+    %% Opt-in dynamic station discovery via `hecate_stations.list_stations'
+    %% (the mesh's canonical station directory). Absent, or
+    %% `#{enabled => false}': the pool behaves exactly as before this
+    %% option existed -- `Seeds' is the whole story, forever. Enabled:
+    %% `Seeds' becomes the BOOTSTRAP list (unchanged meaning -- dialled
+    %% first, and the permanent fallback if discovery never succeeds).
+    %% Once a bootstrap link connects, the pool resolves which realm
+    %% `hecate_stations.list_stations' is advertised under (a DHT lookup;
+    %% there is no way to know its realm without asking first) and calls
+    %% it; every station it returns that isn't already a link gets one
+    %% (up to `max_links'), replayed with current subs/advertises exactly
+    %% like a respawned link. Refresh is additive only: a station absent
+    %% from a later discovery response never tears down an existing live
+    %% link (replication lag in the read model is not evidence a station
+    %% is gone) -- removal stays tied to the existing crash/DOWN cleanup.
+    %% Default OFF: fleet memory records at least one deployment relying
+    %% on Frankfurt being first in a hand-configured seed list (a 1-hop
+    %% sentinel path); this must never change under a caller that hasn't
+    %% opted in.
+    station_discovery => #{
+        enabled    => boolean(),
+        %% Re-run discovery on this cadence, and opportunistically the
+        %% moment every currently-held link goes unhealthy at once
+        %% (independent of the timer -- that's exactly the moment "the
+        %% world changed" is most likely true). Default 1_800_000 (30 min)
+        %% -- the station directory changes on provisioning timescales,
+        %% not seconds.
+        refresh_ms => pos_integer(),
+        %% Cap on total concurrent links (bootstrap + discovered) --
+        %% counts EVERY entry in `#state.links', including direct-dial
+        %% targets (`call_station'/`ensure_content_link') and a seed
+        %% still mid-respawn after a failed dial, not only successfully
+        %% connected discovered stations. A large station directory
+        %% should not mean dozens of QUIC connections. Default 5.
+        max_links  => pos_integer()
+    },
+
+    %% How a one-shot CALL (`call/5') or PUBLISH (`publish/5', within its
+    %% `replication_factor' slice) picks among currently-connected links.
+    %% `first_success' (default, unless `station_discovery' is enabled --
+    %% see below): today's behaviour, unchanged -- try links in the order
+    %% they were spawned, first non-error reply wins. `random': shuffle
+    %% the candidate list first, so load spreads across every connected
+    %% link instead of pinning to whichever seed happened to be listed or
+    %% discovered first. Defaults to `random' when `station_discovery' is
+    %% enabled (there is little reason to discover a bigger station set
+    %% and then still only ever call the first one) and `first_success'
+    %% otherwise, but either can be set explicitly to override that
+    %% pairing.
+    link_selection => first_success | random
 }.
 
 %% V1 multi_relay options that have NO V2 equivalent. Callers passing
@@ -215,10 +269,37 @@
 -define(DEFAULT_ORDER_MAX_BUFFER, 1024).
 -define(LINK_RESPAWN_DELAY_MS, 1_000).
 
+%% Station discovery (opt-in, `station_discovery' opt -- see `opts()').
+-define(DEFAULT_DISCOVERY_REFRESH_MS, 1_800_000).
+-define(DEFAULT_DISCOVERY_MAX_LINKS, 5).
+%% First discovery attempt fires shortly after `connect/2' returns, not
+%% immediately -- gives the bootstrap links a moment to complete
+%% CONNECT/HELLO (healthy handshakes finish in ~100ms per
+%% `macula_station_listener''s own doc). Not load-bearing for
+%% correctness: a discovery attempt with zero connected links just gets
+%% `no_healthy_station' back and retries on the next refresh tick, same
+%% as any other transient failure.
+-define(INITIAL_DISCOVERY_DELAY_MS, 500).
+%% `hecate_stations.list_stations' is a plain mesh RPC; this timeout
+%% belongs to the discovery worker only, an ordinary call deadline. The
+%% `_dht.find_records_by_type' lookup half of discovery uses `macula.erl'
+%% own `?DHT_RECORD_TIMEOUT_MS' internally.
+-define(DISCOVERY_CALL_TIMEOUT_MS, 5_000).
+-define(LIST_STATIONS_PROCEDURE, <<"hecate_stations.list_stations">>).
+
 -record(link_state, {
     seed     :: seed(),
     pid      :: pid() | undefined,
     mon      :: reference() | undefined
+}).
+
+%% `undefined' on `#state.discovery' means the feature is off for this
+%% pool -- checked throughout instead of a separate boolean, so "is
+%% discovery enabled" is one pattern match, not two fields kept in sync.
+-record(discovery_state, {
+    refresh_ms :: pos_integer(),
+    max_links  :: pos_integer(),
+    timer      :: reference() | undefined
 }).
 
 -record(sub_spec, {
@@ -267,7 +348,12 @@
     %% a lazily armed one-shot timer that fires to release timed-out gaps.
     order_timeout    :: non_neg_integer(),
     order_max_buffer :: pos_integer(),
-    flush_timer      :: reference() | undefined
+    flush_timer      :: reference() | undefined,
+    %% `undefined' == station discovery disabled for this pool (the
+    %% default). See `#discovery_state{}' and the `station_discovery'
+    %% opt.
+    discovery        :: #discovery_state{} | undefined,
+    link_selection   :: first_success | random
 }).
 
 %%====================================================================
@@ -627,16 +713,47 @@ init({Seeds, Opts}) ->
     DedupTab    = macula_client_dedup:new(),
     OrderTimeout = maps:get(order_timeout_ms, Opts, ?DEFAULT_ORDER_TIMEOUT_MS),
     OrderMaxBuf  = maps:get(order_max_buffer, Opts, ?DEFAULT_ORDER_MAX_BUFFER),
+    Discovery = init_discovery(maps:get(station_discovery, Opts, #{})),
+    LinkSelection = maps:get(link_selection, Opts, default_link_selection(Discovery)),
     State0 = #state{seeds = Seeds, identity = Identity,
                     link_opts = LinkOpts, replication = Replication,
                     dedup_window = DedupWindow, dedup_sweep = DedupSweep,
                     dedup_tab = DedupTab,
                     order_timeout = OrderTimeout, order_max_buffer = OrderMaxBuf,
                     flush_timer = undefined,
-                    publish_seq = erlang:system_time(microsecond)},
+                    publish_seq = erlang:system_time(microsecond),
+                    discovery = Discovery, link_selection = LinkSelection},
     State1 = lists:foldl(fun start_link_for_seed/2, State0, Seeds),
     erlang:send_after(DedupSweep, self(), dedup_sweep),
-    {ok, State1}.
+    {ok, schedule_discovery(?INITIAL_DISCOVERY_DELAY_MS, State1)}.
+
+init_discovery(#{enabled := true} = Opts) ->
+    #discovery_state{
+        refresh_ms = maps:get(refresh_ms, Opts, ?DEFAULT_DISCOVERY_REFRESH_MS),
+        max_links  = maps:get(max_links, Opts, ?DEFAULT_DISCOVERY_MAX_LINKS),
+        timer      = undefined
+    };
+init_discovery(_NotEnabled) ->
+    undefined.
+
+default_link_selection(undefined)          -> first_success;
+default_link_selection(#discovery_state{}) -> random.
+
+schedule_discovery(_DelayMs, #state{discovery = undefined} = S) ->
+    S;
+schedule_discovery(DelayMs, #state{discovery = D} = S) ->
+    %% Cancel any timer already pending -- unlike `dedup_sweep' (which
+    %% only ever reschedules itself, so it never has more than one
+    %% pending timer at a time), this is also armed opportunistically by
+    %% `maybe_rediscover_now/1', so without cancelling here two chains
+    %% can end up running side by side forever, each rescheduling itself
+    %% on every fire.
+    cancel_discovery_timer(D#discovery_state.timer),
+    Timer = erlang:send_after(DelayMs, self(), run_discovery),
+    S#state{discovery = D#discovery_state{timer = Timer}}.
+
+cancel_discovery_timer(undefined) -> ok;
+cancel_discovery_timer(Timer)     -> erlang:cancel_timer(Timer).
 
 handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     %% Publish only to links that have completed CONNECT/HELLO. A
@@ -651,7 +768,7 @@ handle_call({publish, Realm, Topic, Payload, _Opts}, From, S) ->
     %% calls are sync 5s timeouts; under load they pile up at the pool
     %% and the harness's `multi_publisher_pubsub' case fails with
     %% empty receives).
-    Targets = connected_link_pids(S),
+    Targets = ordered_for_selection(connected_link_pids(S), S#state.link_selection),
     Selected = select_publish_targets(Targets, S#state.replication),
     AllTargets = Targets,
     %% One pool-monotone seq per fact, reused across every replicated
@@ -682,7 +799,8 @@ handle_call({unsubscribe, SubRef}, _From, S) ->
     {reply, ok, drop_sub(SubRef, S)};
 
 handle_call(pick_connected_link, _From, S) ->
-    {reply, first_connected_link(connected_link_pids(S)), S};
+    {reply, first_connected_link(ordered_for_selection(connected_link_pids(S),
+                                                       S#state.link_selection)), S};
 
 handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     %% Worker-spawn so concurrent CALLs don't serialise through the
@@ -690,7 +808,7 @@ handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     %% is a sync gen_server:call to the link; with the old
     %% `{reply, ..., S}' shape every caller blocked the pool until
     %% the link replied, capping concurrent CALL throughput at 1.
-    Pids = spawned_link_pids(S),
+    Pids = ordered_for_selection(spawned_link_pids(S), S#state.link_selection),
     _ = spawn(fun() ->
         Reply = call_first_success(Pids, Realm, Procedure, Payload,
                                     TimeoutMs),
@@ -802,6 +920,15 @@ handle_call(links, _From, #state{links = Links} = S) ->
 handle_call(_Req, _From, S) ->
     {reply, {error, unknown_call}, S}.
 
+%% Delivered by the discovery worker (`run_station_discovery/1') after a
+%% successful `hecate_stations.list_stations' call, as raw
+%% `[{Seed, NodeId}]' pairs -- NOT pre-deduped or pre-capped (the worker
+%% only knows the seeds/links at spawn time, so all of that has to
+%% happen here, against the pool's actual current state, not a stale
+%% snapshot). See `add_discovered_seeds/2'.
+handle_cast({discovered_stations, NewSeeds}, S) ->
+    {noreply, add_discovered_seeds(NewSeeds, S)};
+
 handle_cast(_Msg, S) -> {noreply, S}.
 
 handle_info({macula_event, _LinkSubRef, Topic, Payload, Meta}, S) ->
@@ -823,6 +950,15 @@ handle_info({'DOWN', Mon, process, Pid, Reason}, S) ->
 
 handle_info({respawn_link, Seed}, S) ->
     {noreply, on_respawn_link(Seed, S)};
+
+handle_info(run_discovery, #state{discovery = undefined} = S) ->
+    %% Disabled after being scheduled (should not happen -- discovery
+    %% is fixed at connect/2 time today) or a stray message. No-op.
+    {noreply, S};
+handle_info(run_discovery, #state{discovery = D} = S) ->
+    Self = self(),
+    _ = spawn(fun() -> run_station_discovery(Self) end),
+    {noreply, schedule_discovery(D#discovery_state.refresh_ms, S)};
 
 handle_info(dedup_sweep, S) ->
     _ = macula_client_dedup:sweep(S#state.dedup_tab, S#state.dedup_window),
@@ -1037,6 +1173,20 @@ select_publish_targets(Targets, Replication) ->
 
 first_connected_link([Pid | _]) -> {ok, Pid};
 first_connected_link([])        -> {error, no_healthy_station}.
+
+%% Candidate ordering for `call_first_success/5', `select_publish_targets/2'
+%% (via its `lists:sublist/2' first-N), and `pick_connected_link/1'.
+%% `first_success': today's behaviour, byte-for-byte -- whatever order
+%% `Pids' already came in (spawn order, i.e. seed-list order). `random':
+%% shuffle first, so which link is tried first (and which N a
+%% replicated publish lands on) varies per call instead of always
+%% favouring whichever seed happens to be first in the list.
+-spec ordered_for_selection([pid()], first_success | random) -> [pid()].
+ordered_for_selection(Pids, first_success) ->
+    Pids;
+ordered_for_selection(Pids, random) ->
+    %% Schwartzian-transform shuffle -- O(n log n), no external dep.
+    [P || {_Rand, P} <- lists:sort([{rand:uniform(), P} || P <- Pids])].
 
 %% Surface a one-shot warning when a caller passes V1 multi_relay
 %% options that have no V2 equivalent. The opts are silently dropped
@@ -1337,6 +1487,282 @@ replay_to_seed(_, S) ->
     S.
 
 %%====================================================================
+%% Internals — station discovery (opt-in, see `station_discovery' opt)
+%%====================================================================
+
+%% Add every seed in `NewSeeds' not already a link, up to the pool's
+%% configured `max_links' (bootstrap + already-discovered links count
+%% against the same cap). Each added seed is spawned and replayed
+%% exactly like a respawned link (`start_link_for_seed/2' +
+%% `replay_to_seed/2', both pre-existing) -- a discovered station joins
+%% the pool the same way any other link does; SUBSCRIBE/ADVERTISE
+%% fan-out (`spawned_link_pids/1') reaches it automatically from then on.
+add_discovered_seeds(_Stations, #state{discovery = undefined} = S) ->
+    %% Discovery was disabled after a worker was already in flight (only
+    %% possible if a future caller adds a way to toggle it at runtime --
+    %% not exposed today) or this is a stray cast. Ignore.
+    S;
+add_discovered_seeds(Stations, #state{discovery = D, links = Links,
+                                      seeds = ConfiguredSeeds} = S) ->
+    %% `ConfiguredSeeds' (the pool's original bootstrap list, fixed for
+    %% its whole lifetime) is included alongside `maps:keys(Links)'
+    %% because a bootstrap seed's *link* drops out of `Links' for the
+    %% ~1s gap between a DOWN and its respawn (`on_down_routed/5') --
+    %% without it, a bootstrap station that is down, mid-handshake, or
+    %% simply slow to answer HELLO would be invisible to this dedup
+    %% pass for that whole window, and re-added under whatever scheme
+    %% discovery spells it in. See `select_discovery_seeds/3''s doc.
+    ExistingSeeds = ConfiguredSeeds ++ maps:keys(Links),
+    ByString = select_discovery_seeds([Seed || {Seed, _NodeId} <- Stations],
+                                      ExistingSeeds, D#discovery_state.max_links),
+    ByStringSet = sets:from_list(ByString, [{version, 2}]),
+    Fresh = [Seed || {Seed, NodeId} <- Stations,
+                     sets:is_element(Seed, ByStringSet),
+                     not already_connected_to(NodeId, Links)],
+    lists:foldl(fun add_one_discovered_seed/2, S, Fresh).
+
+%% Pure: which of `NewSeeds' are worth adding, given `ExistingSeeds'
+%% already held and a total `MaxLinks' budget. Exported (like
+%% `select_publish_targets/2') so this arithmetic is directly testable
+%% without a live pool. Already-held seeds are dropped first (order
+%% doesn't matter there); the remainder is capped at whatever budget is
+%% left, in `NewSeeds' order.
+%%
+%% Comparison is by NORMALIZED `{host, port}' (via `normalize_seed/1'),
+%% not raw seed term equality: real bootstrap seeds are `https://...'
+%% (every live deployment config), discovery always builds `quic://...'
+%% (`seed_url/2') -- as plain strings those never compare equal for the
+%% identical physical station. `MaxLinks - length(ExistingSeeds)' relies
+%% on `ExistingSeeds' containing no duplicate STATIONS (only possible
+%% if the caller passes a raw, non-deduped union -- `sets:size/1' is
+%% used for the actual room count precisely to stay correct even then).
+%% See `already_connected_to/2' for the secondary, identity-based check
+%% this still needs: two genuinely different hostnames for the same
+%% station (aliasing) normalize to two different `{host, port}' pairs
+%% and this pass alone cannot catch that.
+-spec select_discovery_seeds([seed()], [seed()], pos_integer()) -> [seed()].
+select_discovery_seeds(NewSeeds, ExistingSeeds, MaxLinks) ->
+    Existing = normalized_seed_set(ExistingSeeds),
+    Room = MaxLinks - sets:size(Existing),
+    lists:sublist([Seed || Seed <- NewSeeds, not is_known_seed(Seed, Existing)],
+                  max(0, Room)).
+
+normalized_seed_set(Seeds) ->
+    sets:from_list([normalize_seed(Seed) || Seed <- Seeds], [{version, 2}]).
+
+is_known_seed(Seed, ExistingNormalized) ->
+    sets:is_element(normalize_seed(Seed), ExistingNormalized).
+
+%% `macula_station_link:parse_seed/1' already does exactly this
+%% normalization at connect time (collapsing `https://host:port',
+%% `quic://host:port' and a pre-built `#{host, port}' map to the same
+%% shape whenever the port is explicit, which every real seed in this
+%% codebase's config always is). Reused here rather than re-implemented
+%% so the two can never drift. Total over malformed input: a seed that
+%% fails to parse falls back to comparing its own raw term, same as
+%% before this normalization existed -- no worse, never crashes the
+%% pool over a bad seed string.
+normalize_seed(Seed) ->
+    case catch macula_station_link:parse_seed(Seed) of
+        #{host := H, port := P} -> #{host => H, port => P};
+        _Unparseable -> Seed
+    end.
+
+%% Secondary, identity-based backstop for exactly the case
+%% `select_discovery_seeds/3''s host/port normalization cannot catch:
+%% the same station reachable under two genuinely DIFFERENT hostnames
+%% (aliasing) -- those normalize to two different `{host, port}' pairs,
+%% so the primary pass lets both through. This check asks whether any
+%% currently-held link's actual live peer identity already matches, via
+%% the SAME `find_link_by_node_id/2' the direct-dial literal-key-miss
+%% path already uses for exactly this problem (see its own doc).
+%% Without either check, discovery would dial a second connection to a
+%% station already held; the station closes one of the two (one
+%% connection per identity, keyed by `PeerNodeId' --
+%% `macula_station_listener.erl'), the pool's monitor sees that as a
+%% DOWN, respawns after 1s, gets closed again -- a permanent flap that
+%% never self-heals since discovery never removes a seed. Unlike the
+%% primary pass, this one can only see links that have completed HELLO
+%% (a spawned-but-not-yet-connected or respawn-gap link answers
+%% `undefined' here, same as no link at all) -- that gap is exactly why
+%% the primary pass now also checks against `S#state.seeds' rather than
+%% relying on this identity check alone.
+already_connected_to(undefined, _Links) ->
+    %% `list_stations' didn't carry a node_id for this row (defensive;
+    %% every row in the real read model does). Can't rule the station
+    %% in or out by identity here -- falls through to the host/port
+    %% dedup above, no worse than before this check existed.
+    false;
+already_connected_to(NodeId, Links) ->
+    find_link_by_node_id(NodeId, Links) =/= undefined.
+
+add_one_discovered_seed(Seed, S) ->
+    NewS = start_link_for_seed(Seed, S),
+    replay_to_seed(maps:get(Seed, NewS#state.links, undefined), NewS).
+
+%% Runs in a spawned worker (never the pool gen_server — the DHT lookup
+%% + `list_stations' call are ordinary blocking RPCs with real network
+%% round trips). Failure at any step (DHT lookup, `hecate_stations' not
+%% currently advertised, the `list_stations' call itself) leaves the
+%% pool exactly as it was; the next refresh tick tries again. This is
+%% the fallback Raf's brief asked for: it falls out of "a failed
+%% discovery attempt is just a no-op" rather than needing its own
+%% special-cased error path.
+run_station_discovery(Pool) ->
+    Type = macula_record:type_procedure_advertisement(),
+    resolve_realm_and_list(macula:find_records_by_type(Pool, Type), Pool).
+
+resolve_realm_and_list({ok, Records}, Pool) ->
+    list_stations_with_realm(find_list_stations_realm(Records), Pool);
+resolve_realm_and_list({error, _Reason}, _Pool) ->
+    ok.
+
+%% `procedure_advertisement' is a mesh-wide DHT record type: ANY
+%% identity can `_dht.put_record' one (the station's only gate is
+%% `macula_record:verify/1', a signature/envelope check with no URI
+%% shape validation), so unlike `hecate_stations.list_stations''s own
+%% RESULT payload (first-party, this pool's own already-authenticated
+%% call), this SET is not trusted input. A single malformed record
+%% anywhere in the DHT view must not crash the whole discovery pass --
+%% pre-filter to the shape `read_procedure_advertisement/1' actually
+%% expects before calling it, and make every parsing step below total.
+find_list_stations_realm(Records) ->
+    Type = macula_record:type_procedure_advertisement(),
+    WellFormed = [R || R = #{type := T, payload := P} <- Records,
+                       T =:= Type, is_map(P)],
+    Advertisements = [macula_record:read_procedure_advertisement(R) || R <- WellFormed],
+    case lists:filtermap(fun realm_for_list_stations/1, Advertisements) of
+        [Realm | _] -> {ok, Realm};
+        []          -> error
+    end.
+
+%% `procedure_uri' is `<64 hex realm>/<procedure>' (see
+%% `macula_record.erl''s own storage_key/1 doc). Exact-match the
+%% procedure segment -- `advertise_direct' publishes a SECOND, distinct
+%% record naming a `_/'-prefixed procedure for the direct-dial path;
+%% this deliberately only matches the plain, gossip-routed one, since
+%% discovery calls through the pool's own already-established links,
+%% not direct-dial. Same filter macula-mcp's `mesh_list_stations' tool
+%% already uses (`mesh_stations.ts'), the reference this was ported from.
+%% `binary:split/3' with `[global]' yields 3+ segments for the `_/'
+%% variant (and for any procedure name that itself contains a `/'), so
+%% the 2-element pattern below rejects both without misparsing either.
+realm_for_list_stations(#{procedure_uri := Uri}) when is_binary(Uri) ->
+    match_procedure_uri(binary:split(Uri, <<"/">>, [global]));
+realm_for_list_stations(_) ->
+    false.
+
+match_procedure_uri([RealmHex, ?LIST_STATIONS_PROCEDURE]) ->
+    realm_from_hex(RealmHex);
+match_procedure_uri(_) ->
+    false.
+
+%% Total over any peer-suppliable `RealmHex': a right-sized-but-non-hex
+%% value would otherwise reach `binary:decode_hex/1' and `badarg' --
+%% caught, not guarded against up front, since validating hex-ness
+%% without a regex is awkward in pure guards and this mirrors
+%% `macula_content_manifest.erl''s own established "wrap the untrusted
+%% decode in `catch', match on the shape you actually wanted back"
+%% pattern elsewhere in this codebase.
+realm_from_hex(Hex) when is_binary(Hex), byte_size(Hex) =:= 64 ->
+    valid_realm(catch binary:decode_hex(Hex));
+realm_from_hex(_Hex) ->
+    false.
+
+valid_realm(Bin) when is_binary(Bin), byte_size(Bin) =:= 32 ->
+    {true, Bin};
+valid_realm(_NotAValidRealm) ->
+    false.
+
+list_stations_with_realm({ok, Realm}, Pool) ->
+    report_discovered(macula_client:call(Pool, Realm, ?LIST_STATIONS_PROCEDURE,
+                                         #{}, ?DISCOVERY_CALL_TIMEOUT_MS),
+                      Pool);
+list_stations_with_realm(error, _Pool) ->
+    ok.
+
+report_discovered({ok, Payload}, Pool) ->
+    Seeds = station_seeds(Payload),
+    Seeds =/= [] andalso gen_server:cast(Pool, {discovered_stations, Seeds}),
+    ok;
+report_discovered({error, _Reason}, _Pool) ->
+    ok.
+
+%% `payload_field/2' (macula_record.erl, exported) is the established
+%% defensive accessor for reading an arbitrary wire-decoded payload
+%% field in this codebase: `macula_frame:from_wire_envelope/1' collapses
+%% a TEXT value into an atom whenever that atom already exists in this
+%% VM (a station's `kind' field, literal text "station", silently
+%% arriving as the atom `station' — already-atomized here — while
+%% `hostname'/`city' values from the very same record stayed binaries —
+%% never pre-declared atoms — is the exact, previously-hit bug this
+%% guards). `quic_port'/`host_advertised' are `hecate_stations'' own
+%% atoms, not declared anywhere in this SDK's own source, so they are
+%% NOT guaranteed to already exist in an arbitrary caller's VM — hand-
+%% rolled atom-keyed pattern matching against this reply would be
+%% exactly that bug, not a hypothetical one.
+%% Returns `[{Seed, NodeId}]', not bare seeds -- `NodeId' is what
+%% `already_connected_to/2' needs to detect the same physical station
+%% already held under a differently-spelled seed (see its own doc).
+station_seeds(Payload) ->
+    Stations = macula_record:payload_field(Payload, <<"stations">>),
+    lists:filtermap(fun station_seed/1, list_or_empty(Stations)).
+
+list_or_empty(L) when is_list(L) -> L;
+list_or_empty(_)                 -> [].
+
+station_seed(Station) when is_map(Station) ->
+    seed_from_fields(macula_record:payload_field(Station, <<"hostname">>),
+                     macula_record:payload_field(Station, <<"quic_port">>),
+                     macula_record:payload_field(Station, <<"node_id">>));
+station_seed(_) ->
+    false.
+
+%% `hostname' -- the DNS name the station's own TLS certificate actually
+%% covers -- is required, with no `host_advertised' fallback:
+%% `host_advertised' entries are bare IP literals in this fleet (checked
+%% live, not assumed: every entry is a raw IPv6 address, never a DNS
+%% name), so a link dialled against one fails ordinary WebPKI
+%% certificate validation even though the station itself is perfectly
+%% reachable -- confirmed live, and independently found the same way
+%% porting this same design to Go (direct-dial gets away with a bare IP
+%% because it dials under `Trust::Insecure' + its own node-id
+%% verification, a different trust model from an ordinary pool link's
+%% WebPKI default). A station with no `hostname' on record (seen live
+%% on the real fleet) is skipped rather than dialled via a fallback
+%% that would only fail its handshake the same way.
+seed_from_fields(Hostname, Port, NodeId)
+  when is_binary(Hostname), is_integer(Port) ->
+    {true, {seed_url(unwrap_wire_text(Hostname), Port), NodeId}};
+seed_from_fields(_Hostname, _Port, _NodeId) ->
+    false.
+
+%% Bracket only a literal IPv6 address (contains a colon) per RFC 3986 --
+%% `hostname' never needs this; the `host_advertised' fallback might.
+seed_url(Host, Port) ->
+    PortBin = integer_to_binary(Port),
+    HostBin = case binary:match(Host, <<":">>) of
+                 nomatch -> Host;
+                 _       -> <<"[", Host/binary, "]">>
+              end,
+    <<"quic://", HostBin/binary, ":", PortBin/binary>>.
+
+%% Small local duplicate of `macula_record:unwrap_text/1' (not exported
+%% there) — a `host_advertised' list ENTRY is not itself run through
+%% `payload_field/2' (that only unwraps the field's own top-level
+%% value, a list, not each element inside it), so an individual hostname
+%% could in principle still arrive as `{text, Bin}' or an atom under the
+%% exact same collapse rule. Low real risk (a DNS hostname colliding
+%% with a pre-existing atom is unlikely) but cheap to guard correctly
+%% rather than assume away.
+unwrap_wire_text({text, B}) -> B;
+unwrap_wire_text(B) when is_binary(B) -> B;
+unwrap_wire_text(A) when is_atom(A), A =/= true, A =/= false,
+                         A =/= undefined, A =/= null ->
+    atom_to_binary(A, utf8);
+unwrap_wire_text(V) -> V.
+
+%%====================================================================
 %% Internals — DOWN routing (link vs subscriber)
 %%====================================================================
 
@@ -1347,9 +1773,32 @@ on_down_routed({ok, Seed}, _Mon, Pid, Reason, S) ->
     macula_diagnostics:event(<<"_macula.client.link_down">>,
                              #{seed => Seed, pid => Pid, reason => Reason}),
     erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
-    {noreply, S#state{links = maps:remove(Seed, S#state.links)}};
+    S1 = S#state{links = maps:remove(Seed, S#state.links)},
+    {noreply, maybe_rediscover_now(S1)};
 on_down_routed(error, Mon, _Pid, _Reason, S) ->
     {noreply, on_subscriber_down(Mon, S)}.
+
+%% The moment every currently-held link is gone is exactly the moment
+%% "the world changed" is most likely true -- re-discover soon rather
+%% than wait for the next periodic tick. Only fires when discovery is
+%% enabled; a pool without it relies purely on the existing per-seed
+%% respawn timer, unchanged. Delayed past `?LINK_RESPAWN_DELAY_MS' (the
+%% existing per-seed respawn timer already pending for every link this
+%% just removed) rather than firing at 0: discovery's own worker calls
+%% back into this SAME pool (`macula:find_records_by_type/2' -> a plain
+%% CALL), so running it with genuinely zero links connected can only
+%% ever return `no_healthy_station' -- dead on arrival, not "the world
+%% changed" at all. Giving the ordinary respawn a chance to reconnect
+%% first is what actually gives this trigger something to work with.
+maybe_rediscover_now(#state{discovery = undefined} = S) ->
+    S;
+maybe_rediscover_now(S) ->
+    rediscover_if_no_links(spawned_link_pids(S), S).
+
+rediscover_if_no_links([], S) ->
+    schedule_discovery(?LINK_RESPAWN_DELAY_MS + ?INITIAL_DISCOVERY_DELAY_MS, S);
+rediscover_if_no_links(_Pids, S) ->
+    S.
 
 find_link_by_mon(Mon, #state{links = Links}) ->
     case [Seed || {Seed, #link_state{mon = M}} <- maps:to_list(Links),

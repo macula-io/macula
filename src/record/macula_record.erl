@@ -54,6 +54,24 @@
     %% Accessors
     type/1, key/1, version/1, created_at/1, expires_at/1,
     payload/1, signature/1,
+    %% Generic defensive field accessor for an arbitrary wire-decoded
+    %% payload map (own doc, near its definition, explains why this is
+    %% needed at all rather than a plain `maps:get/2' or atom-keyed
+    %% pattern match). Exported so a caller reading a payload this
+    %% module has no `read_*/1' for -- e.g. an RPC reply body from a
+    %% procedure this SDK doesn't itself define, like
+    %% `hecate_stations.list_stations' -- doesn't have to duplicate this
+    %% exact defensive logic (`macula_client.erl''s station-discovery
+    %% code is the first such caller).
+    payload_field/2,
+    %% The `procedure_advertisement' record-type tag as an exported
+    %% function rather than a cross-module `-define' (Erlang macros
+    %% aren't visible outside their defining module without a shared
+    %% .hrl) -- so a caller needing the raw tag for
+    %% `find_records_by_type/2' (e.g. `macula_client.erl''s station
+    %% discovery) can't drift from this module's own `?TYPE_PROCEDURE_
+    %% ADVERTISEMENT' value by re-declaring it locally.
+    type_procedure_advertisement/0,
     read_procedure_advertisement/1,
     read_station_endpoint/1,
     read_node_record/1,
@@ -758,6 +776,9 @@ payload(#{payload := P}) -> P.
 %% AND the wire-decoded form (bare `<<"k">>' keys, bare values, as a
 %% record returned over an RPC like `find_records/2'). Consumers get
 %% the same map either way, so they never touch the CBOR keying.
+-spec type_procedure_advertisement() -> type_tag().
+type_procedure_advertisement() -> ?TYPE_PROCEDURE_ADVERTISEMENT.
+
 -spec read_procedure_advertisement(m_record()) ->
     #{procedure_uri   := binary(),
       advertiser_node := macula_identity:pubkey(),

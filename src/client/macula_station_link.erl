@@ -117,7 +117,13 @@
     open_content_stream/1,
     call_on_stream/6,
     close_content_stream/2,
-    abort_content_stream/4
+    abort_content_stream/4,
+    %% Exported for `macula_client''s discovery-seed dedup, which needs
+    %% to know whether two differently-spelled seeds (e.g. `https://'
+    %% bootstrap vs. `quic://' discovery-generated) name the same
+    %% `{host, port}' — the exact normalization this link already does
+    %% at connect time. See `macula_client:normalize_seed/1'.
+    parse_seed/1
 ]).
 
 -export_type([handler/0, stream_handler/0, overlay_subscription/0]).

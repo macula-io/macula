@@ -725,3 +725,203 @@ safe_peer_node_id_absorbs_an_unexpected_reply_test() ->
                 end),
     ?assertEqual(undefined, macula_client:safe_peer_node_id(Pid)),
     exit(Pid, kill).
+
+%%====================================================================
+%% Station discovery + link selection (opt-in `station_discovery' /
+%% `link_selection' opts) — pure selection-math tests, no live pool.
+%%====================================================================
+
+%% Default behaviour, `station_discovery' absent entirely: unchanged --
+%% `first_success' preserves the exact spawn-order list.
+ordered_for_selection_first_success_is_identity_test() ->
+    ?assertEqual([a, b, c], macula_client:ordered_for_selection([a, b, c], first_success)).
+
+ordered_for_selection_first_success_identity_on_empty_test() ->
+    ?assertEqual([], macula_client:ordered_for_selection([], first_success)).
+
+%% `random' is a genuine permutation, not a no-op and not a shrink/grow.
+ordered_for_selection_random_is_a_permutation_test() ->
+    Pids = [a, b, c, d, e],
+    Shuffled = macula_client:ordered_for_selection(Pids, random),
+    ?assertEqual(lists:sort(Pids), lists:sort(Shuffled)),
+    ?assertEqual(length(Pids), length(Shuffled)).
+
+ordered_for_selection_random_of_empty_is_empty_test() ->
+    ?assertEqual([], macula_client:ordered_for_selection([], random)).
+
+ordered_for_selection_random_of_one_is_that_one_test() ->
+    ?assertEqual([solo], macula_client:ordered_for_selection([solo], random)).
+
+%% Not a hard guarantee (a fair shuffle CAN reproduce the identity
+%% order), but over enough draws `random' must actually vary which
+%% element leads at least once -- this is what actually distinguishes
+%% it from `first_success' and is the whole point of the feature. A
+%% failure here after 200 draws is astronomically unlikely to be a false
+%% negative (odds of 200 consecutive 5-element shuffles ALL landing `a'
+%% first would be a landslide victory for "not actually random", not bad
+%% luck) — this is the load-spreading behaviour itself, not incidental.
+ordered_for_selection_random_actually_varies_test() ->
+    Pids = [a, b, c, d, e],
+    Leaders = lists:usort(
+                [hd(macula_client:ordered_for_selection(Pids, random))
+                 || _ <- lists:seq(1, 200)]),
+    ?assert(length(Leaders) > 1).
+
+%% New seeds not already held, within budget: all added, in order.
+select_discovery_seeds_adds_new_within_budget_test() ->
+    ?assertEqual([<<"b">>, <<"c">>],
+                 macula_client:select_discovery_seeds(
+                   [<<"b">>, <<"c">>], [<<"a">>], 5)).
+
+%% Already-held seeds are dropped, not re-added or double-counted.
+select_discovery_seeds_drops_already_held_test() ->
+    ?assertEqual([<<"c">>],
+                 macula_client:select_discovery_seeds(
+                   [<<"a">>, <<"b">>, <<"c">>], [<<"a">>, <<"b">>], 5)).
+
+%% Budget already fully consumed by existing links: nothing added,
+%% not an error.
+select_discovery_seeds_no_room_adds_nothing_test() ->
+    ?assertEqual([],
+                 macula_client:select_discovery_seeds(
+                   [<<"b">>, <<"c">>], [<<"a">>], 1)).
+
+%% Partial room: capped at whatever budget remains, in `NewSeeds' order
+%% -- not "all or nothing".
+select_discovery_seeds_caps_at_remaining_room_test() ->
+    ?assertEqual([<<"b">>],
+                 macula_client:select_discovery_seeds(
+                   [<<"b">>, <<"c">>, <<"d">>], [<<"a">>], 2)).
+
+%% More existing links than the (mis)configured max -- Room goes
+%% negative; must clamp to zero, not crash or add a negative count.
+select_discovery_seeds_over_budget_existing_adds_nothing_test() ->
+    ?assertEqual([],
+                 macula_client:select_discovery_seeds(
+                   [<<"d">>], [<<"a">>, <<"b">>, <<"c">>], 2)).
+
+select_discovery_seeds_empty_new_seeds_test() ->
+    ?assertEqual([], macula_client:select_discovery_seeds([], [<<"a">>], 5)).
+
+%% Round-2 Fable finding: real bootstrap seeds are `https://' (every
+%% live deployment config), discovery always builds `quic://'
+%% (`seed_url/2') -- the SAME physical station must dedup as one, even
+%% though the two strings never match. Comparison is by normalized
+%% `{host, port}' (`normalize_seed/1', reusing
+%% `macula_station_link:parse_seed/1'), not raw term equality.
+select_discovery_seeds_normalizes_scheme_before_comparing_test() ->
+    ?assertEqual([],
+                 macula_client:select_discovery_seeds(
+                   [<<"quic://station-de-frankfurt.macula.io:4433">>],
+                   [<<"https://station-de-frankfurt.macula.io:4433">>],
+                   5)).
+
+%% Scheme-normalized dedup drops the already-held station but still
+%% lets a genuinely different one through.
+select_discovery_seeds_normalizes_scheme_keeps_genuinely_new_test() ->
+    ?assertEqual([<<"quic://station-ca-toronto:4433">>],
+                 macula_client:select_discovery_seeds(
+                   [<<"quic://station-de-frankfurt.macula.io:4433">>,
+                    <<"quic://station-ca-toronto:4433">>],
+                   [<<"https://station-de-frankfurt.macula.io:4433">>],
+                   5)).
+
+%% Room accounting is by DISTINCT normalized station, not raw list
+%% length -- `add_discovered_seeds/2' passes
+%% `ConfiguredSeeds ++ maps:keys(Links)' as `ExistingSeeds', which
+%% legitimately lists the same station twice (once under its
+%% configured `https://' spelling, once under whatever key its own
+%% link was spawned with) during normal steady-state operation. That
+%% must count once against `MaxLinks', not twice.
+select_discovery_seeds_room_counts_distinct_stations_not_list_length_test() ->
+    ?assertEqual([<<"quic://station-ca-toronto:4433">>],
+                 macula_client:select_discovery_seeds(
+                   [<<"quic://station-ca-toronto:4433">>],
+                   [<<"https://station-de-frankfurt.macula.io:4433">>,
+                    <<"quic://station-de-frankfurt.macula.io:4433">>],
+                   2)).
+
+%% A seed that fails to parse (not a URL at all) falls back to raw-term
+%% comparison rather than crashing the dedup pass -- same behaviour as
+%% before normalization existed, never worse.
+select_discovery_seeds_unparseable_seed_falls_back_to_raw_compare_test() ->
+    ?assertEqual([],
+                 macula_client:select_discovery_seeds(
+                   [<<"not-a-url">>], [<<"not-a-url">>], 5)).
+
+%% Real `hecate_stations.list_stations' row shape (payload_field/2's own
+%% pass-through: field names already atomized -- `hostname'/`quic_port'/
+%% `node_id' are common enough atoms to already exist in a real caller's
+%% VM -- see live confirmation in this function's own module doc).
+%% `hostname' present: builds a seed against it, paired with `node_id',
+%% and does NOT fall back to `host_advertised' at all.
+station_seed_prefers_hostname_over_host_advertised_test() ->
+    Station = #{hostname => <<"station-de-frankfurt.macula.io">>,
+               host_advertised => [<<"2a01:7e01::f03c:94ff:fe22:719e">>],
+               quic_port => 4433,
+               node_id => <<1:256>>},
+    ?assertEqual({true, {<<"quic://station-de-frankfurt.macula.io:4433">>, <<1:256>>}},
+                 macula_client:station_seed(Station)).
+
+%% No `hostname' on record (seen live: at least one real fleet entry) --
+%% skipped, not dialled via `host_advertised' (a bare IP that would only
+%% fail WebPKI certificate validation the same way).
+station_seed_with_no_hostname_is_skipped_test() ->
+    Station = #{host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
+               quic_port => 4433, node_id => <<1:256>>},
+    ?assertEqual(false, macula_client:station_seed(Station)).
+
+station_seed_with_no_quic_port_is_skipped_test() ->
+    Station = #{hostname => <<"station-de-frankfurt.macula.io">>, node_id => <<1:256>>},
+    ?assertEqual(false, macula_client:station_seed(Station)).
+
+station_seed_of_a_non_map_is_skipped_test() ->
+    ?assertEqual(false, macula_client:station_seed(<<"not-a-station">>)).
+
+%% `node_id' passes through even when `undefined' (a defensive shape
+%% `already_connected_to/2' -- not exported, covered live -- treats as
+%% "can't rule in or out", not a reason to skip the station outright).
+station_seed_with_no_node_id_still_builds_a_seed_test() ->
+    Station = #{hostname => <<"station-ca-toronto">>, quic_port => 4433},
+    ?assertEqual({true, {<<"quic://station-ca-toronto:4433">>, undefined}},
+                 macula_client:station_seed(Station)).
+
+%% `station_discovery' absent: `connect/2' behaves exactly as before --
+%% no discovery timer armed, `link_selection' defaults to
+%% `first_success'. Proven via `status/1' (no crash, healthy pool) since
+%% `#state.discovery'/`#state.link_selection' aren't part of the public
+%% API -- this is a behavioural smoke test, not a state-inspection one.
+connect_without_station_discovery_behaves_as_before_test_() ->
+    {setup,
+     fun() -> {ok, Pool} = macula_client:connect([], #{}), Pool end,
+     fun(Pool) -> macula_client:close(Pool) end,
+     fun(Pool) ->
+         fun() ->
+             {ok, Status} = macula_client:status(Pool),
+             ?assertEqual(0, maps:get(healthy_links, Status))
+         end
+     end}.
+
+%% `station_discovery => #{enabled => true}' with zero seeds and no
+%% network to actually resolve `hecate_stations' against: must not
+%% crash the pool. The discovery worker's own `find_records_by_type'
+%% call fails immediately (no healthy station), which is exactly the
+%% "stay on bootstrap seeds" fallback path -- proven here by the pool
+%% simply staying alive and responsive past the point discovery would
+%% have fired.
+connect_with_station_discovery_enabled_and_no_seeds_stays_alive_test_() ->
+    {setup,
+     fun() ->
+         {ok, Pool} = macula_client:connect(
+                        [], #{station_discovery => #{enabled => true,
+                                                     refresh_ms => 60_000}}),
+         Pool
+     end,
+     fun(Pool) -> macula_client:close(Pool) end,
+     fun(Pool) ->
+         fun() ->
+             timer:sleep(50),
+             ?assert(is_process_alive(Pool)),
+             {ok, _Status} = macula_client:status(Pool)
+         end
+     end}.
