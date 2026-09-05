@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.20.0] - 2026-09-05
+
+### Changed
+
+- `gproc` bumped `0.9.1 → 1.3.0` and loosened to `~> 1.3` (was pinned
+  exact). Crosses a major version boundary, so this was audited
+  commit-by-commit across all four intervening tag jumps (16 commits
+  total via the GitHub compare API) rather than taken on trust: every
+  change is either purely additive (new `reg_remote`/`unreg_remote`/
+  `set_value_remote`/`update_counter_remote` remote-registration API,
+  added in the 0.9.1→1.0.0 jump) or an internal, non-exported refactor
+  (`gproc_pool`'s `setup_wait`/`do_wait`/`clear_wait` timer-to-monotonic-
+  time rewrite). The final 1.2.0→1.3.0 jump is "Address warnings for OTP
+  29." No exported function was removed or changed signature. This
+  library only calls `gproc:lookup_pids/1` (in a standalone script and a
+  test helper), which none of the above touches.
+- `telemetry` constraint loosened `1.3.0 → ~> 1.3` (was pinned exact).
+  Two-segment `~>` still resolves to the real latest (1.4.2) in an
+  isolated build, but — caught by adversarial review — `~> 1.4` would
+  have made this unsatisfiable for anyone resolving macula alongside
+  evoq/reckon_db/reckon_gater, which all pin telemetry exactly to
+  `1.3.0`. `~> 1.3` is compatible with both.
+- `macula_mdns` floor raised `0.1.0 → ~> 0.1.1`. 0.1.0 pinned `gproc`
+  exactly to `0.9.1`, which — also caught by adversarial review — made
+  this repo's own `gproc ~> 1.3` unsatisfiable for any consumer
+  resolving both packages together (rebar3 masked this locally by
+  letting the root project's constraint win with just a warning; a real
+  solver would fail outright). macula_mdns 0.1.1 fixes that pin and,
+  incidentally, a real bug: `mdns:vsn/0` referenced the pre-rename OTP
+  application name and crash-looped the built-in mDNS advertiser on
+  every distributed node since the 0.1.0 rename. See macula-mdns's own
+  CHANGELOG for the full trace.
+
+### Fixed
+
+- **Phantom `msgpack` runtime dependency on every hex release since
+  v3.0.0.** `rebar.config`'s `deps` list has had zero `msgpack` entries
+  since the v3.0.0 CBOR migration, but every published package
+  (`rebar3 hex publish` derives its declared requirements from the
+  resolved/locked dependency graph, not purely from `rebar.config`) kept
+  declaring `msgpack ~>0.8.1` as a non-optional requirement — because a
+  local, untracked `rebar.lock` was never regenerated after that
+  migration, so it kept resolving and republishing the same phantom
+  entry. Confirmed via `rebar3 tree`, not by reading lock file content.
+  The only thing anywhere in source still requiring the actual msgpack
+  library (as opposed to the unrelated `msgpack` atom used elsewhere as
+  a symbolic `macula_stream` encoding tag) was
+  `test/dht_address_serialization_test.erl` — a debugging-era test that
+  doesn't call any macula function; it only exercises the third-party
+  msgpack library's own tuple-vs-binary packing behavior, disconnected
+  from the current CBOR wire path. Deleted that test and regenerated the
+  lock; `rebar3 tree` now shows zero msgpack anywhere in the tree. Every
+  consumer resolving this package from hex now gets one less unnecessary
+  transitive dependency.
+
 ## [10.19.2] - 2026-09-05
 
 ### Fixed
