@@ -925,3 +925,66 @@ connect_with_station_discovery_enabled_and_no_seeds_stays_alive_test_() ->
              {ok, _Status} = macula_client:status(Pool)
          end
      end}.
+
+%% RED (the bug this fixes): a discovered station that never connects
+%% (unreachable seed, `?SEED1''s own convention -- port 1, connection
+%% refused, link stays alive and disconnected forever, never a DOWN)
+%% used to retry forever and permanently occupy a `max_links' slot.
+%% GREEN: with `station_discovery' enabled, that same discovered link
+%% is given up on and removed once it has been alive longer than
+%% `giveup_after_ms' without ever connecting -- proven by `links/1'
+%% going from one entry to zero. Bypasses the real discovery worker
+%% (no live `hecate_stations' to call here) by casting exactly the
+%% message `add_discovered_seeds/2' expects, same shape
+%% `run_station_discovery/1' itself would deliver.
+discovered_link_that_never_connects_is_given_up_test_() ->
+    {setup,
+     fun() ->
+         {ok, Pool} = macula_client:connect(
+                        [], #{station_discovery =>
+                              #{enabled => true, refresh_ms => 60_000,
+                                giveup_after_ms => 150,
+                                giveup_sweep_ms => 50}}),
+         Pool ! {'$gen_cast',
+                {discovered_stations, [{<<"quic://127.0.0.1:1">>, undefined}]}},
+         Pool
+     end,
+     fun(Pool) -> macula_client:close(Pool) end,
+     fun(Pool) ->
+         fun() ->
+             timer:sleep(30),
+             {ok, Before} = macula_client:links(Pool),
+             ?assertEqual(1, length(Before)),
+             ?assertEqual(false, maps:get(connected, hd(Before))),
+             timer:sleep(400),
+             {ok, After} = macula_client:links(Pool),
+             ?assertEqual([], After)
+         end
+     end}.
+
+%% The same never-connects seed, but configured as a BOOTSTRAP seed
+%% (via `connect/2''s own `Seeds' argument) rather than discovered --
+%% must retry forever, completely unaffected by `giveup_after_ms', even
+%% though it is exactly as unconnected for exactly as long as the
+%% discovered link above. A human chose this seed; only an automated
+%% process's own additions are ever given up on.
+bootstrap_seed_that_never_connects_is_not_given_up_test_() ->
+    {setup,
+     fun() ->
+         {ok, Pool} = macula_client:connect(
+                        [<<"quic://127.0.0.1:1">>],
+                        #{station_discovery =>
+                          #{enabled => true, refresh_ms => 60_000,
+                            giveup_after_ms => 150,
+                            giveup_sweep_ms => 50}}),
+         Pool
+     end,
+     fun(Pool) -> macula_client:close(Pool) end,
+     fun(Pool) ->
+         fun() ->
+             timer:sleep(400),
+             {ok, Links} = macula_client:links(Pool),
+             ?assertEqual(1, length(Links)),
+             ?assertEqual(false, maps:get(connected, hd(Links)))
+         end
+     end}.

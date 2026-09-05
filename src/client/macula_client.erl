@@ -204,7 +204,30 @@
         %% still mid-respawn after a failed dial, not only successfully
         %% connected discovered stations. A large station directory
         %% should not mean dozens of QUIC connections. Default 5.
-        max_links  => pos_integer()
+        max_links  => pos_integer(),
+
+        %% A discovered station that NEVER once connects (e.g. one
+        %% whose only reachable address is a bare IP this pool has no
+        %% way to dial safely yet -- see the Pinned-trust design note
+        %% on `seed()') would otherwise retry forever and permanently
+        %% occupy a `max_links' slot, silently starving room for any
+        %% OTHER station a later refresh tick discovers. Unlike a
+        %% bootstrap seed (a human explicitly chose it; it keeps
+        %% retrying forever, unchanged), a discovered seed nobody chose
+        %% is safe to give up on and free its slot -- it is
+        %% rediscoverable again on a later refresh tick if the station
+        %% ever becomes reachable. A discovered link that connects even
+        %% once is never subject to this again, for its whole lifetime,
+        %% even if it later disconnects. Default 60_000 (1 minute) --
+        %% generous relative to a normal handshake (~100ms) but short
+        %% relative to the default `refresh_ms' (30 min), so a stuck
+        %% slot is freed well before the next refresh cycle needs it.
+        giveup_after_ms => pos_integer(),
+        %% How often to check for a stale, never-connected discovered
+        %% link. Independent of `refresh_ms' (which controls how often
+        %% NEW stations are discovered, not how often existing
+        %% never-connected ones are re-judged). Default 5_000.
+        giveup_sweep_ms => pos_integer()
     },
 
     %% How a one-shot CALL (`call/5') or PUBLISH (`publish/5', within its
@@ -287,19 +310,47 @@
 -define(DISCOVERY_CALL_TIMEOUT_MS, 5_000).
 -define(LIST_STATIONS_PROCEDURE, <<"hecate_stations.list_stations">>).
 
+%% A discovered station nobody chose -- unlike a hand-configured seed,
+%% it is safe to give up on one that never once connects and free its
+%% `max_links' slot (it's rediscoverable again on a later refresh tick
+%% if the station comes back). Bootstrap seeds never go through this
+%% path regardless of these defaults -- see `giveup_after_ms''s own
+%% doc on `station_discovery'.
+-define(DEFAULT_DISCOVERY_GIVEUP_MS, 60_000).
+-define(DEFAULT_DISCOVERY_GIVEUP_SWEEP_MS, 5_000).
+
 -record(link_state, {
-    seed     :: seed(),
-    pid      :: pid() | undefined,
-    mon      :: reference() | undefined
+    seed          :: seed(),
+    pid           :: pid() | undefined,
+    mon           :: reference() | undefined,
+    %% The three fields below are meaningless (left at their defaults)
+    %% for a bootstrap or direct-dial link -- only
+    %% `add_one_discovered_seed/2' ever sets `discovered = true', via
+    %% `mark_discovered/2' immediately after the link is created. See
+    %% `sweep_stale_discovered_links/2'.
+    discovered     = false :: boolean(),
+    %% Set `true' the first time a discovery-added link is ever
+    %% observed connected -- once true, it behaves exactly like any
+    %% other link forever after (no more give-up checks), same as a
+    %% hand-configured seed that happens to be down right now.
+    ever_connected = false :: boolean(),
+    %% When this link entry was created (`erlang:monotonic_time
+    %% (millisecond)'). Preserved across a respawn of the SAME seed
+    %% (`after_link_start/3') rather than reset, so a discovered link
+    %% that keeps dying and respawning without ever once connecting
+    %% doesn't get an ever-renewing grace period.
+    spawned_at     :: integer() | undefined
 }).
 
 %% `undefined' on `#state.discovery' means the feature is off for this
 %% pool -- checked throughout instead of a separate boolean, so "is
 %% discovery enabled" is one pattern match, not two fields kept in sync.
 -record(discovery_state, {
-    refresh_ms :: pos_integer(),
-    max_links  :: pos_integer(),
-    timer      :: reference() | undefined
+    refresh_ms      :: pos_integer(),
+    max_links       :: pos_integer(),
+    timer           :: reference() | undefined,
+    giveup_after_ms :: pos_integer(),
+    giveup_sweep_ms :: pos_integer()
 }).
 
 -record(sub_spec, {
@@ -725,13 +776,26 @@ init({Seeds, Opts}) ->
                     discovery = Discovery, link_selection = LinkSelection},
     State1 = lists:foldl(fun start_link_for_seed/2, State0, Seeds),
     erlang:send_after(DedupSweep, self(), dedup_sweep),
+    arm_giveup_sweep(Discovery),
     {ok, schedule_discovery(?INITIAL_DISCOVERY_DELAY_MS, State1)}.
+
+%% Self-rearming, like `dedup_sweep' -- unlike `run_discovery''s own
+%% timer, this one is never opportunistically re-triggered elsewhere,
+%% so (unlike `schedule_discovery/2') there is nothing to cancel and
+%% no risk of two chains running side by side.
+arm_giveup_sweep(undefined) ->
+    ok;
+arm_giveup_sweep(#discovery_state{giveup_sweep_ms = Ms}) ->
+    erlang:send_after(Ms, self(), discovery_giveup_sweep),
+    ok.
 
 init_discovery(#{enabled := true} = Opts) ->
     #discovery_state{
-        refresh_ms = maps:get(refresh_ms, Opts, ?DEFAULT_DISCOVERY_REFRESH_MS),
-        max_links  = maps:get(max_links, Opts, ?DEFAULT_DISCOVERY_MAX_LINKS),
-        timer      = undefined
+        refresh_ms      = maps:get(refresh_ms, Opts, ?DEFAULT_DISCOVERY_REFRESH_MS),
+        max_links       = maps:get(max_links, Opts, ?DEFAULT_DISCOVERY_MAX_LINKS),
+        timer           = undefined,
+        giveup_after_ms = maps:get(giveup_after_ms, Opts, ?DEFAULT_DISCOVERY_GIVEUP_MS),
+        giveup_sweep_ms = maps:get(giveup_sweep_ms, Opts, ?DEFAULT_DISCOVERY_GIVEUP_SWEEP_MS)
     };
 init_discovery(_NotEnabled) ->
     undefined.
@@ -965,6 +1029,17 @@ handle_info(dedup_sweep, S) ->
     erlang:send_after(S#state.dedup_sweep, self(), dedup_sweep),
     {noreply, S};
 
+handle_info(discovery_giveup_sweep, #state{discovery = undefined} = S) ->
+    %% Defensive only -- `arm_giveup_sweep/1' never arms this timer
+    %% unless discovery was enabled at `connect/2' time, and nothing
+    %% today can disable it afterwards. Dropped, not re-armed.
+    {noreply, S};
+handle_info(discovery_giveup_sweep, #state{discovery = D} = S) ->
+    S1 = sweep_stale_discovered_links(D#discovery_state.giveup_after_ms, S),
+    erlang:send_after(D#discovery_state.giveup_sweep_ms, self(),
+                      discovery_giveup_sweep),
+    {noreply, S1};
+
 handle_info(order_flush, S) ->
     %% Release timed-out gaps, then re-arm only if something is still
     %% buffered (a fresh gap opened while this timer was pending).
@@ -1003,14 +1078,26 @@ start_link_for_seed(Seed, ExtraOpts, S) ->
 
 after_link_start({ok, Pid}, Seed, S) ->
     Mon = erlang:monitor(process, Pid),
-    LinkState = #link_state{seed = Seed, pid = Pid, mon = Mon},
+    LinkState = (prior_link_state(Seed, S))#link_state{
+        seed = Seed, pid = Pid, mon = Mon},
     S#state{links = (S#state.links)#{Seed => LinkState}};
 after_link_start({error, Reason}, Seed, S) ->
     macula_diagnostics:event(<<"_macula.client.link_start_failed">>,
                              #{seed => Seed, reason => Reason}),
     erlang:send_after(?LINK_RESPAWN_DELAY_MS, self(), {respawn_link, Seed}),
-    Empty = #link_state{seed = Seed, pid = undefined, mon = undefined},
+    Empty = (prior_link_state(Seed, S))#link_state{
+        seed = Seed, pid = undefined, mon = undefined},
     S#state{links = (S#state.links)#{Seed => Empty}}.
+
+%% Carries a seed's `discovered'/`ever_connected'/`spawned_at' across
+%% its own respawn (both branches above) instead of resetting them --
+%% a discovered link that dies and respawns before ever connecting
+%% must not get a fresh give-up clock every time
+%% (`sweep_stale_discovered_links/2'). No-op for a seed with no prior
+%% entry (a first dial) or a bootstrap/direct-dial seed (these three
+%% fields stay at their record defaults regardless).
+prior_link_state(Seed, #state{links = Links}) ->
+    maps:get(Seed, Links, #link_state{seed = Seed}).
 
 spawned_link_pids(#state{links = Links}) ->
     [P || #link_state{pid = P} <- maps:values(Links), is_pid(P)].
@@ -1597,8 +1684,73 @@ already_connected_to(NodeId, Links) ->
     find_link_by_node_id(NodeId, Links) =/= undefined.
 
 add_one_discovered_seed(Seed, S) ->
-    NewS = start_link_for_seed(Seed, S),
+    NewS = mark_discovered(Seed, start_link_for_seed(Seed, S)),
     replay_to_seed(maps:get(Seed, NewS#state.links, undefined), NewS).
+
+%% The ONLY place `discovered' is ever set -- every other link
+%% (bootstrap, direct-dial) keeps the record default `false' for its
+%% whole life. `spawned_at' is set here too, once, since this always
+%% runs on the SAME dial that created the entry (`start_link_for_seed/2'
+%% just above never had a prior entry for a freshly discovered seed).
+mark_discovered(Seed, #state{links = Links} = S) ->
+    give_up_sweep_tag(maps:find(Seed, Links), Seed, S).
+
+give_up_sweep_tag({ok, LinkState}, Seed, #state{links = Links} = S) ->
+    Tagged = LinkState#link_state{
+        discovered = true,
+        spawned_at = erlang:monotonic_time(millisecond)},
+    S#state{links = Links#{Seed => Tagged}};
+give_up_sweep_tag(error, _Seed, S) ->
+    %% `start_link_for_seed/2' always inserts an entry (connected or
+    %% not) -- this branch is unreachable in practice, kept only so
+    %% this function is total rather than crashing the pool.
+    S.
+
+%% Give up on any discovered link that has NEVER once connected and
+%% has been alive longer than `GiveupAfterMs' -- frees its `Links'
+%% entry (and its `max_links' slot) rather than letting it retry
+%% forever, exactly as `already_connected_to/2''s own doc describes the
+%% problem this solves for the case where the retry loop never even
+%% produces a DOWN to hang a fix off (a dial against a
+%% non-resolving/unreachable host can retry internally forever without
+%% the link process itself ever dying -- see the seed()/Pinned-trust
+%% design note). A discovered link proven connected on this same sweep
+%% is marked `ever_connected' and never checked again.
+sweep_stale_discovered_links(GiveupAfterMs, #state{links = Links} = S) ->
+    Now = erlang:monotonic_time(millisecond),
+    maps:fold(fun(Seed, LinkState, Acc) ->
+                  check_discovered_link(Seed, LinkState, Now, GiveupAfterMs, Acc)
+              end, S, Links).
+
+check_discovered_link(Seed, #link_state{discovered = true, ever_connected = false,
+                                        pid = Pid} = LinkState,
+                      Now, GiveupAfterMs, S) when is_pid(Pid) ->
+    judge_unconnected_link(safe_is_connected(Pid), Seed, LinkState, Now,
+                           GiveupAfterMs, S);
+check_discovered_link(_Seed, _LinkState, _Now, _GiveupAfterMs, S) ->
+    %% Not a discovered link, already proven connected once, or has no
+    %% live pid yet (mid-respawn -- the NEXT sweep tick will see it once
+    %% `after_link_start/3' gives it a fresh pid, `spawned_at' intact).
+    S.
+
+judge_unconnected_link(true, Seed, LinkState, _Now, _GiveupAfterMs, S) ->
+    set_ever_connected(Seed, LinkState, S);
+judge_unconnected_link(false, Seed, #link_state{spawned_at = SpawnedAt, mon = Mon,
+                                                pid = Pid}, Now, GiveupAfterMs, S)
+  when is_integer(SpawnedAt), Now - SpawnedAt >= GiveupAfterMs ->
+    give_up_on(Seed, Pid, Mon, S);
+judge_unconnected_link(false, _Seed, _LinkState, _Now, _GiveupAfterMs, S) ->
+    S.
+
+set_ever_connected(Seed, LinkState, #state{links = Links} = S) ->
+    S#state{links = Links#{Seed => LinkState#link_state{ever_connected = true}}}.
+
+give_up_on(Seed, Pid, Mon, #state{links = Links} = S) ->
+    macula_diagnostics:event(<<"_macula.client.discovery_link_given_up">>,
+                             #{seed => Seed}),
+    is_reference(Mon) andalso erlang:demonitor(Mon, [flush]),
+    macula_station_link:stop(Pid),
+    S#state{links = maps:remove(Seed, Links)}.
 
 %% Runs in a spawned worker (never the pool gen_server — the DHT lookup
 %% + `list_stations' call are ordinary blocking RPCs with real network
