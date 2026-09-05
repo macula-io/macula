@@ -104,6 +104,21 @@ create(Data, Opts) when is_binary(Data), is_map(Opts) ->
 %% @doc The MCID a chunk at `Index' is stored/fetched under. The
 %% station derives this same value independently when serving the
 %% chunk, so both sides agree on its address without exchanging it.
+%%
+%% `Algorithm' is accepted but unused: the chunk's hash was already
+%% computed (with whichever algorithm `create/2' was given) and stored
+%% in `Chunks', so there's nothing left to derive here. KNOWN GAP
+%% (2026-09-05, will not be fixed without a design decision): per-chunk
+%% fetch verification (`macula_content_transfer:verify_block_hash/2') is
+%% hardcoded to blake3 regardless of this field, so a manifest created
+%% with `hash_algorithm => sha256' produces chunk MCIDs that can never
+%% actually verify on fetch. `hash_algorithm' today only affects the
+%% manifest's own root-hash Merkle step (`verify/2'). Same gap
+%% independently confirmed in macula-io/macula-rust's `content.rs'
+%% (`block_mcid' is likewise hardcoded to blake3). Left as-is: nothing
+%% exercises sha256 in practice, and whether per-chunk sha256
+%% verification was ever meant to work is an open question, not a bug
+%% with an obvious fix.
 -spec chunk_mcid(manifest(), non_neg_integer(), algorithm()) ->
         {ok, mcid()} | {error, invalid_index}.
 chunk_mcid(#{chunks := Chunks}, Index, _Algorithm)

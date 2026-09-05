@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.20.2] - 2026-09-05
+
+### Documentation
+
+- Documented a known, deliberately-unresolved gap found while auditing
+  content-transfer code adjacent to today's CBOR work: `chunk_mcid/3`'s
+  `Algorithm` argument is unused, and per-chunk fetch verification
+  (`macula_content_transfer:verify_block_hash/2`) is hardcoded to
+  blake3 regardless of a manifest's `hash_algorithm` field — so a
+  manifest created with `hash_algorithm => sha256` produces chunk MCIDs
+  that can never actually verify on fetch. `hash_algorithm` today only
+  affects the manifest's own root-hash Merkle step. Same gap
+  independently confirmed in macula-io/macula-rust. No behavior change
+  in this release — recorded so it isn't silently rediscovered; whether
+  per-chunk sha256 verification was ever meant to work is an open
+  design question, not a bug with an obvious fix, and nothing exercises
+  sha256 in practice today.
+
 ## [10.20.1] - 2026-09-05
 
 ### Fixed
