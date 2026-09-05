@@ -191,6 +191,25 @@ fn nif_async_send<'a>(
     Ok(atoms::ok().encode(env))
 }
 
+/// Finish the send side, then await Quinn's own `stopped()` before this
+/// value is allowed to drop.
+///
+/// Quinn's `Drop for SendStream` calls the underlying `finish()` a
+/// SECOND time if the value drops while still mid-flight. If a peer
+/// STOP_SENDING landed in that gap, Drop's second call sees
+/// `FinishError::Stopped` and turns it into a `reset()` instead —
+/// which discards locally-buffered, not-yet-transmitted data (see
+/// `reset()`'s own doc). A legitimate in-flight reply that raced a
+/// peer-side stop could be silently dropped this way. `finish()`'s own
+/// doc recommends awaiting `stopped()` to observe this outcome; doing
+/// so here means the eventual drop always lands on an already-terminal
+/// stream state, never mid-flight. Returns the peer's STOP_SENDING
+/// code if it stopped us, `None` if it cleanly acknowledged receipt.
+async fn finish_and_await_stopped(mut send: quinn::SendStream) -> Option<quinn::VarInt> {
+    let _ = send.finish();
+    send.stopped().await.unwrap_or(None)
+}
+
 /// NIF: close_stream(StreamRef) -> ok
 #[rustler::nif]
 fn nif_close_stream<'a>(
@@ -201,11 +220,11 @@ fn nif_close_stream<'a>(
     if let Some(task) = stream.recv_task.lock().unwrap().take() {
         task.abort();
     }
-    // Finish the send stream gracefully
     let mut guard = stream.send.lock().unwrap();
-    if let Some(mut send_stream) = guard.take() {
-        let _ = send_stream.finish();
+    if let Some(send_stream) = guard.take() {
+        runtime::rt().spawn(finish_and_await_stopped(send_stream));
     }
+    drop(guard);
     Ok(atoms::ok().encode(env))
 }
 
