@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.21.0] - 2026-09-05
+
+### Security
+
+- **`macula_ucan_nif`'s opts-JSON mint path could silently produce a
+  UCAN token that never expires.** Two compounding gaps: the Erlang
+  opts encoder (`encode_json_term/1`) escaped only `"`, so any `fct`/
+  `nnc` value containing a raw backslash or control character (a
+  newline, say) produced syntactically invalid JSON; the Rust NIF's
+  `nif_create` then silently substituted an empty object whenever that
+  JSON failed to parse, instead of erroring the way its
+  `capabilities_json` argument two lines above already does. Together:
+  a caller that set `exp` got back a token with no `exp` at all — no
+  error, no signal, a token that never expires — for any UCAN this
+  library has ever issued, not specific to any one policy or consumer.
+  Found empirically (direct NIF probes) while adversarially reviewing
+  the new `realm_member_required` policy below, independently verified,
+  and fixed on its own: the encoder now escapes the full JSON escape
+  set properly, the NIF fails closed with `malformed_json` on an opts
+  parse failure, and the matching JSON-string *decoder* gap that fixing
+  the encoder alone would have newly exposed (it only ever unescaped
+  `\"`/`\\`, so `\n`/`\uXXXX` etc. would have round-tripped as the
+  literal escape text rather than the real byte) is fixed to match.
+  RED-checked both halves independently by reverting each in turn and
+  confirming the original failure reproduces.
+
+### Added
+
+- **`{realm_member_required, RealmDid, RequiredCan}`**, a third
+  per-procedure `advertise` auth policy alongside `open` and
+  `{ucan_required, Issuer}`: gates a procedure on membership in a realm
+  at a specific capability tier, rather than one exact known identity.
+  A caller is authorized if it presents a UCAN signed by `RealmDid` (a
+  realm's own DID keypair — distinct from the 32-byte `RealmId`
+  routing/scoping hash used elsewhere) whose `aud` is the wire-
+  authenticated caller itself and whose `cap` list carries the required
+  `can` string. The audience check closes the ordinary UCAN bearer gap
+  for this policy specifically (`macula_ucan_nif:verify/2` checks
+  signature/expiry only, never `aud`); the capability check closes a
+  second, sharper gap found via adversarial review before this policy
+  shipped as a final design: a realm mints membership UCANs at more
+  than one tier from the same signing key (e.g. a human-confirmed
+  citizen tier versus a self-service device tier gated only by proof of
+  key possession), and signature-plus-audience alone cannot tell them
+  apart — any device could otherwise self-enroll and pass identically
+  to a genuine, human-admitted member. `RequiredCan` is mandatory, not
+  optional-with-a-default, precisely so a caller must name the tier it
+  actually needs rather than inherit a guess. RED/GREEN-verified
+  (including the audience-bearer-replay case and the device-tier-
+  bypass case, each independently RED-checked) and live-verified twice
+  over the real production mesh.
+- `advertise/5` now validates each auth policy's own shape (`open` |
+  `{ucan_required, Issuer}` | `{realm_member_required, RealmDid,
+  RequiredCan}`) with its own guarded function clause instead of one
+  generic clause. A malformed `Issuer`/`RealmDid` now raises immediately
+  at the calling process, rather than being accepted at advertise time
+  and only crashing later inside the link's own process loop on the
+  first inbound CALL that exercises the policy — which would have
+  faulted every other procedure multiplexed on that same link, not just
+  the misconfigured one.
+
 ## [10.20.3] - 2026-09-05
 
 ### Fixed

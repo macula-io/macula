@@ -17,9 +17,18 @@ Macula's authorization is:
 > **What's actually gated today.** The SDK's only enforced authorization
 > point is per-procedure: `macula:advertise/5`'s `auth` opt takes `open`
 > (default — serve any identified caller; every QUIC session is Ed25519
-> peer-bound, so "open" is not "anonymous") or `{ucan_required, Issuer}`
-> (a caller must present a valid UCAN, checked via `call_station/7`'s
-> `ucan_token` opt). There is no automatic DID-namespace-ownership check on
+> peer-bound, so "open" is not "anonymous"), `{ucan_required, Issuer}`
+> (a caller must present a valid UCAN signed by `Issuer`, checked via
+> `call_station/7`'s `ucan_token` opt — bearer only: proves the token came
+> from `Issuer`, not that the presenter is who it was issued to), or
+> `{realm_member_required, RealmDid, RequiredCan}` (a caller must present a
+> UCAN signed by a realm's own DID, audience-bound to the caller itself,
+> carrying a capability whose `can` matches `RequiredCan` exactly — closes
+> the bearer gap for this policy specifically, and the tier gap `Issuer`-only
+> checking can't: a realm can mint membership UCANs at more than one tier
+> from the same key, e.g. a human-confirmed tier versus a self-service
+> device tier, and `RequiredCan` is mandatory so a service names the tier it
+> actually needs). There is no automatic DID-namespace-ownership check on
 > publish/subscribe/call — the primitives below (DIDs, certs, UCANs) are
 > what you build a stronger policy from, not a policy the SDK enforces on
 > its own. See [Direct-Dial Dual-Trust](#direct-dial-dual-trust) for the
@@ -293,6 +302,34 @@ recognises — no live authority in the path.
 Managed realms are the first target for this model; the fully-open public realm
 keeps discovery permissionless and layers authorization on top only where a
 provider opts in.
+
+### provider → consumer: realm-membership-gated procedures
+
+`{ucan_required, Issuer}` gates a procedure to exactly one known identity by
+direct signature. `{realm_member_required, RealmDid, RequiredCan}` gates on
+membership in a realm instead — any caller holding a valid UCAN signed by the
+realm's own DID (not the 32-byte realm tag; a realm's DID is a real Ed25519
+keypair it holds), whose `aud` names the caller itself and whose capability
+list carries `RequiredCan`, is admitted:
+
+```erlang
+%% RealmDid: a realm's own DID, e.g. read from its RealmUcanIssuer's
+%% published `iss` (never the 32-byte realm tag used for `-realm` flags).
+%% RequiredCan: mandatory -- name the exact tier this procedure needs, since
+%% a realm can mint membership UCANs at more than one tier from the same
+%% key (a human-confirmed tier and a weaker self-service tier are both
+%% "genuine, correctly-signed" tokens; only the capability tells them apart).
+Opts = #{auth => {realm_member_required, RealmDid, <<"member/email-verified">>}},
+ok = macula:advertise(Pool, Realm, <<"private.procedure">>, Handler, Opts).
+```
+
+The audience binding is what distinguishes this from a redundant special case
+of `ucan_required`: `macula_ucan_nif:verify/2` checks signature and expiry
+only, never `aud`, so a bearer token proves the realm issued it to *someone*,
+not that whoever is presenting it now is that someone. This policy closes
+that gap for itself specifically — a token that is genuinely realm-signed and
+unexpired, but minted for a different member, is refused. `ucan_required`
+itself is unchanged and remains bearer-only.
 
 ---
 
