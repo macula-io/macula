@@ -2534,22 +2534,30 @@ inbound_calls_are_served_concurrently_test_() ->
      end}.
 
 %%------------------------------------------------------------------
-%% {realm_member_required, RealmDid} -- gates a procedure on membership
-%% in a realm (any valid token signed by the realm's own DID, audience-
-%% bound to the calling identity) rather than one exact known identity.
-%% See `macula_client:auth_policy()' and `authorize_policy/2' for the
-%% full design reasoning.
+%% {realm_member_required, RealmDid, RequiredCan} -- gates a procedure on
+%% membership in a realm AT A SPECIFIC TIER (any valid token signed by
+%% the realm's own DID, audience-bound to the calling identity, carrying
+%% the required capability) rather than one exact known identity. See
+%% `macula_client:auth_policy()' and `authorize_policy/2' for the full
+%% design reasoning, including why the tier check is mandatory.
 %%------------------------------------------------------------------
 
 %% Mints a real membership-shaped token: `RealmIdentity' signs it (the
 %% realm's own keypair), naming `MemberPub' (hex-encoded, matching
 %% macula-realm's own `RealmUcanIssuer.mint_membership/2' convention) as
-%% audience. `ExpOverride' lets a test set `exp' explicitly (e.g.
-%% already-expired); omitted keys keep the default (valid for an hour).
+%% audience, and carrying `Can' as its one capability (default the
+%% citizen/human-confirmed tier -- see `mint_membership_ucan/4' for a
+%% caller-chosen tier, used by the device-tier-bypass test below).
+%% `ExpOverride' lets a test set `exp' explicitly (e.g. already-expired);
+%% omitted keys keep the default (valid for an hour).
 mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride) ->
+    mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride,
+                         <<"member/email-verified">>).
+
+mint_membership_ucan(RealmIdentity, MemberPub, ExpOverride, Can) ->
     IssuerDid = binary:encode_hex(macula_identity:public(RealmIdentity), lowercase),
     AudienceDid = binary:encode_hex(MemberPub, lowercase),
-    Cap = #{with => <<"mri:realm:test">>, can => <<"member/email-verified">>},
+    Cap = #{with => <<"mri:realm:test">>, can => Can},
     Opts = maps:merge(#{exp => erlang:system_time(second) + 3_600}, ExpOverride),
     {ok, Token} = macula_ucan_nif:create(IssuerDid, AudienceDid, [Cap],
                                         macula_identity:private(RealmIdentity), Opts),
@@ -2562,15 +2570,36 @@ realm_member_required_test_() ->
          RealmIdentity = macula_identity:generate(),
          RealmDid = macula_identity:public(RealmIdentity),
          Handler = fun(_Payload) -> {ok, #{admitted => true}} end,
-         Policy = {realm_member_required, RealmDid},
+         Policy = {realm_member_required, RealmDid, <<"member/email-verified">>},
          {Pid, Caller} = inbound_call_fixture([{<<"realm.only">>, Handler}], Policy),
 
          %% A genuine member: token signed by the realm, audience is
-         %% the identity actually making the call.
+         %% the identity actually making the call, capability matches
+         %% the tier this procedure actually requires.
          GoodToken = mint_membership_ucan(RealmIdentity, Caller, #{}),
          GoodId = crypto:strong_rand_bytes(16),
          inject_call_with_ucan(Pid, self(), Caller, GoodId, <<"realm.only">>, GoodToken),
          ?assertMatch({ok, #{admitted := true}}, await_result(GoodId, 2_000)),
+
+         %% THE FABLE-FOUND GAP: a token that is entirely genuine --
+         %% signed by the real realm, correctly audienced to this exact
+         %% caller, not expired -- but minted at the weaker self-service
+         %% device tier (`member/device-verified'), which any device can
+         %% obtain with no human involved (macula-realm's
+         %% `MembershipUcanRpcHandlers', gated only by proof of key
+         %% possession plus a default-permissive admission list). Before
+         %% the capability check this authorized identically to a real
+         %% citizen -- signature and audience alone cannot tell the two
+         %% tiers apart, since both are genuine grants from the same
+         %% realm key. Must be refused for a procedure that requires the
+         %% stronger tier.
+         DeviceTierToken = mint_membership_ucan(RealmIdentity, Caller, #{},
+                                                <<"member/device-verified">>),
+         DeviceTierId = crypto:strong_rand_bytes(16),
+         inject_call_with_ucan(Pid, self(), Caller, DeviceTierId, <<"realm.only">>,
+                               DeviceTierToken),
+         ?assertMatch({error, #{code := UnauthorizedCode}},
+                      await_result(DeviceTierId, 2_000)),
 
          %% No token at all.
          NoTokenId = crypto:strong_rand_bytes(16),

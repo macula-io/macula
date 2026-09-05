@@ -639,15 +639,42 @@ advertise(Pid, Realm, Procedure, Handler) ->
 
 %% @doc Advertise with an auth policy -- see `macula_client:auth_policy()'
 %% for the full set (`open' | `{ucan_required, Issuer}' |
-%% `{realm_member_required, RealmDid}').
+%% `{realm_member_required, RealmDid, RequiredCan}').
+%%
+%% `Policy''s own shape is validated HERE, at the call boundary, one
+%% clause per valid shape with no catch-all: a malformed `Issuer'/
+%% `RealmDid' (wrong type, wrong byte size) raises `function_clause' in
+%% the CALLING process before ever reaching this link's gen_server loop,
+%% rather than being accepted now and only crashing later -- inside the
+%% loop, on the first inbound CALL that exercises `authorize_policy/2' --
+%% which would fault every OTHER procedure multiplexed on the same link,
+%% not just this one (Fable review, 2026-09-05).
 -spec advertise(pid(), <<_:256>>, binary(), handler(),
                 macula_client:auth_policy()) -> ok.
-advertise(Pid, Realm, Procedure, Handler, Policy)
+advertise(Pid, Realm, Procedure, Handler, open = Policy)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        (is_function(Handler, 1) orelse
         (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)) ->
+    gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000);
+advertise(Pid, Realm, Procedure, Handler, {ucan_required, Issuer} = Policy)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (is_function(Handler, 1) orelse
+        (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
+       is_binary(Issuer), byte_size(Issuer) =:= 32 ->
+    gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000);
+advertise(Pid, Realm, Procedure, Handler,
+          {realm_member_required, RealmDid, RequiredCan} = Policy)
+  when is_pid(Pid),
+       is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (is_function(Handler, 1) orelse
+        (is_tuple(Handler) andalso tuple_size(Handler) =:= 2)),
+       is_binary(RealmDid), byte_size(RealmDid) =:= 32,
+       is_binary(RequiredCan), RequiredCan =/= <<>> ->
     gen_server:call(Pid, {advertise, Realm, Procedure, Handler, Policy}, 5_000).
 
 %% @doc Drop a previously-advertised procedure. Sends a best-effort
@@ -2058,9 +2085,9 @@ authorize_policy(open, _Frame) ->
     ok;
 authorize_policy({ucan_required, Issuer}, Frame) ->
     check_ucan(maps:get(ucan_token, Frame, <<>>), Issuer);
-authorize_policy({realm_member_required, RealmDid}, Frame) ->
+authorize_policy({realm_member_required, RealmDid, RequiredCan}, Frame) ->
     check_realm_membership(maps:get(ucan_token, Frame, <<>>), RealmDid,
-                            maps:get(caller, Frame, undefined)).
+                            maps:get(caller, Frame, undefined), RequiredCan).
 
 check_ucan(<<>>, _Issuer) ->
     unauthorized;
@@ -2091,23 +2118,47 @@ ucan_verdict(_Error)         -> unauthorized.
 %% `with_caller/2' already trusts elsewhere in this module for the same
 %% reason: unspoofable, verified by the transport itself before this
 %% function ever runs.
-check_realm_membership(Token, RealmDid, Caller)
+%%
+%% Signature and audience are still not enough on their own: a realm
+%% mints membership UCANs at more than one tier from the same key (see
+%% `auth_policy()' in `macula_client' for why), so `RequiredCan' is
+%% checked against the verified token's own `cap' list too -- a device
+%% that self-enrolled at a weaker tier presents a token that is entirely
+%% genuine and entirely correctly-audienced, and must still be refused if
+%% it doesn't carry the capability this procedure actually requires.
+check_realm_membership(Token, RealmDid, Caller, RequiredCan)
   when is_binary(Token), Token =/= <<>>, is_binary(Caller) ->
-    membership_verdict(macula_ucan_nif:verify(Token, RealmDid), Caller);
-check_realm_membership(_Token, _RealmDid, _Caller) ->
+    membership_verdict(macula_ucan_nif:verify(Token, RealmDid), Caller,
+                        RequiredCan);
+check_realm_membership(_Token, _RealmDid, _Caller, _RequiredCan) ->
     unauthorized.
 
 %% Membership UCANs mint `aud' as the citizen's own device pubkey,
 %% hex-encoded (`macula-realm''s `RealmUcanIssuer.mint_membership/2');
 %% `Caller' is that same identity's raw wire pubkey, so hex-encoding it
 %% the same way makes the two directly comparable.
-membership_verdict({ok, #{<<"aud">> := Aud}}, Caller) when is_binary(Aud) ->
-    audience_verdict(Aud =:= binary:encode_hex(Caller, lowercase));
-membership_verdict(_Result, _Caller) ->
+membership_verdict({ok, #{<<"aud">> := Aud} = Payload}, Caller, RequiredCan)
+  when is_binary(Aud) ->
+    grant_verdict(Aud =:= binary:encode_hex(Caller, lowercase),
+                  has_required_capability(maps:get(<<"cap">>, Payload, []),
+                                           RequiredCan));
+membership_verdict(_Result, _Caller, _RequiredCan) ->
     unauthorized.
 
-audience_verdict(true)  -> ok;
-audience_verdict(false) -> unauthorized.
+grant_verdict(true, true) -> ok;
+grant_verdict(_AudienceOk, _CapabilityOk) -> unauthorized.
+
+%% A membership UCAN's `cap' list entries are `#{<<"with">> := _,
+%% <<"can">> := _}' maps (macula-realm's own minting shape, decoded
+%% straight off the verified JWT payload). Only `can' is checked here --
+%% this policy gates on TIER (which admission path minted the token), not
+%% on any particular MRI scope, so `with' is left alone.
+has_required_capability(Caps, RequiredCan) when is_list(Caps) ->
+    lists:any(fun(#{<<"can">> := Can}) -> Can =:= RequiredCan;
+                 (_Other) -> false
+              end, Caps);
+has_required_capability(_Caps, _RequiredCan) ->
+    false.
 
 %% `open' is the default, so store it as absence to keep the map small.
 set_policy(Key, open, Pols)   -> maps:remove(Key, Pols);

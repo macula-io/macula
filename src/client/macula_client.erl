@@ -96,20 +96,36 @@
 %% check that the caller is who the token was issued to (bearer -- see
 %% `macula_ucan_nif:verify/2''s own doc). Direct-dial dual-trust (Slice 7b).
 %%
-%% `{realm_member_required, RealmDid}' gates on membership in a realm
-%% instead of one exact identity: a valid token signed by `RealmDid' (a
-%% realm's own DID -- NOT the 32-byte `RealmId' routing/scoping hash used
-%% in `-realm' flags and DHT scoping elsewhere; a realm's DID is a real
-%% Ed25519 keypair it holds, the two are unrelated values) whose audience
-%% is the calling identity itself. That audience check is what makes this
-%% different from `ucan_required' rather than a redundant special case of
-%% it: this policy closes the bearer gap for itself specifically by
-%% checking `aud' against the wire-authenticated caller, `ucan_required'
-%% does not and still won't after this -- see `authorize_policy/2' in
-%% `macula_station_link' for both checks.
+%% `{realm_member_required, RealmDid, RequiredCan}' gates on membership in
+%% a realm instead of one exact identity: a valid token signed by
+%% `RealmDid' (a realm's own DID -- NOT the 32-byte `RealmId'
+%% routing/scoping hash used in `-realm' flags and DHT scoping elsewhere;
+%% a realm's DID is a real Ed25519 keypair it holds, the two are unrelated
+%% values) whose audience is the calling identity itself. That audience
+%% check is what makes this different from `ucan_required' rather than a
+%% redundant special case of it: this policy closes the bearer gap for
+%% itself specifically by checking `aud' against the wire-authenticated
+%% caller, `ucan_required' does not and still won't after this -- see
+%% `authorize_policy/2' in `macula_station_link' for both checks.
+%%
+%% `RequiredCan' is mandatory, not optional-with-a-default: a realm mints
+%% membership UCANs at more than one tier from the SAME signing key --
+%% e.g. macula-realm's own citizen tier (`member/email-verified', a human
+%% confirmed a join session) versus its device tier
+%% (`member/device-verified', any device that proves it holds a keypair,
+%% no human involved, gated only by an admission list that ships
+%% permissive-by-default). A signature+audience check alone cannot tell
+%% these apart -- both are genuine, correctly-audienced tokens from the
+%% real realm. Accepting either would let any device self-enroll and pass
+%% as a genuine member, defeating the isolation this policy exists to
+%% provide (Fable review, 2026-09-05). There is no silent default here on
+%% purpose: a caller must name the tier it actually requires (typically
+%% the realm's citizen/human-confirmed capability string) rather than
+%% inherit a guess that might be wrong for its threat model.
 -type auth_policy() :: open
                       | {ucan_required, macula_identity:pubkey()}
-                      | {realm_member_required, macula_identity:pubkey()}.
+                      | {realm_member_required, macula_identity:pubkey(),
+                         binary()}.
 
 -type pool() :: pid().
 
@@ -566,7 +582,9 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
 advertise(Pool, Realm, Procedure, Handler) ->
     advertise(Pool, Realm, Procedure, Handler, open).
 
-%% @doc Advertise with an auth policy (`open' | `{ucan_required, Issuer}').
+%% @doc Advertise with an auth policy -- see `auth_policy()' above for
+%% the full set (`open' | `{ucan_required, Issuer}' |
+%% `{realm_member_required, RealmDid, RequiredCan}').
 -spec advertise(pool(), <<_:256>>, binary(), handler(), auth_policy()) ->
     ok | {error, term()}.
 advertise(Pool, Realm, Procedure, Handler, Policy)

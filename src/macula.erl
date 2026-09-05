@@ -276,7 +276,10 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, Opts) ->
 advertise(Pool, Realm, Procedure, Handler, Opts)
   when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32 ->
     %% `auth' opt sets the procedure's policy: `open' (default, serve any
-    %% identified caller) or `{ucan_required, Issuer}' (gated). Slice 7b.
+    %% identified caller), `{ucan_required, Issuer}' (gated to one known
+    %% identity, Slice 7b), or `{realm_member_required, RealmDid,
+    %% RequiredCan}' (gated to realm membership at a specific tier) -- see
+    %% `macula_client:auth_policy()' for the full set.
     Policy = maps:get(auth, Opts, open),
     macula_client:advertise(Pool, Realm, Procedure, Handler, Policy).
 
