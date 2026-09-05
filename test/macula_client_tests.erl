@@ -863,13 +863,78 @@ station_seed_prefers_hostname_over_host_advertised_test() ->
     ?assertEqual({true, {<<"quic://station-de-frankfurt.macula.io:4433">>, <<1:256>>}},
                  macula_client:station_seed(Station)).
 
-%% No `hostname' on record (seen live: at least one real fleet entry) --
-%% skipped, not dialled via `host_advertised' (a bare IP that would only
-%% fail WebPKI certificate validation the same way).
-station_seed_with_no_hostname_is_skipped_test() ->
+%% KNOWN LIMITATION, documented via test (adversarial review, 2026-09-05):
+%% `station-ca-toronto''s REAL live row -- genuinely no working DNS name,
+%% the whole reason the Pinned/IP fallback below exists -- still has a
+%% non-empty `hostname' value, because `macula_station_app' defaults an
+%% unconfigured `geo.hostname' to the OS hostname rather than leaving it
+%% absent. This asserts today's ACTUAL outcome (the WebPKI/hostname path,
+%% which does not connect) rather than the intended one, so nobody
+%% mistakes this fallback for "Toronto is fixed" -- it isn't, yet; see
+%% `seed_from_fields/4''s own doc. Fixing this is a `macula-station'
+%% producer-side change (or a different SDK-side signal than "hostname
+%% key present"), not a change to this function -- flagged, not done.
+station_seed_toronto_real_row_shape_currently_uses_webpki_test() ->
+    Station = #{hostname => <<"station-ca-toronto">>,
+               host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
+               quic_port => 4433,
+               node_id => <<1:256>>},
+    ?assertEqual({true, {<<"quic://station-ca-toronto:4433">>, <<1:256>>}},
+                 macula_client:station_seed(Station)).
+
+%% No `hostname' on record (seen live: at least one real fleet entry,
+%% deliberately DNS-less) but `host_advertised' + `node_id' both
+%% present: falls back to a Pinned-trust seed against the bare IP --
+%% `pin_tls_cert => false' since there is no CA-issued cert for a raw
+%% IP to validate, trust enforced entirely at the app layer via
+%% `expected_node_id'. Live-verified against the real station this
+%% models (both a genuinely self-signed station and, separately, an
+%% ordinary Let's-Encrypt-backed one dialled the same way).
+station_seed_with_no_hostname_falls_back_to_pinned_ip_test() ->
     Station = #{host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
                quic_port => 4433, node_id => <<1:256>>},
+    ?assertEqual({true, {#{host => <<"2600:3c04::2000:f0ff:feb9:e155">>,
+                          port => 4433, expected_node_id => <<1:256>>,
+                          pin_tls_cert => false},
+                        <<1:256>>}},
+                 macula_client:station_seed(Station)).
+
+%% No `hostname' AND no `node_id': nothing safe to authenticate a bare
+%% IP with (no CA cert, no pubkey to pin) -- skipped, same as before
+%% this station had a fallback at all.
+station_seed_with_no_hostname_and_no_node_id_is_skipped_test() ->
+    Station = #{host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
+               quic_port => 4433},
     ?assertEqual(false, macula_client:station_seed(Station)).
+
+%% A `node_id' that isn't exactly 32 bytes (a real Ed25519 pubkey) is
+%% nothing valid to pin against -- `dial_trust_opts/1' would reject it
+%% downstream anyway, so this fails closed at seed-construction time
+%% instead of burning a `max_links' slot until `giveup_after_ms' only
+%% to fail the same way later.
+station_seed_with_wrong_length_node_id_is_skipped_test() ->
+    Station = #{host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
+               quic_port => 4433, node_id => <<1, 2, 3>>},
+    ?assertEqual(false, macula_client:station_seed(Station)).
+
+%% No `hostname' AND no `host_advertised' either -- nothing to dial at
+%% all, regardless of `node_id'.
+station_seed_with_neither_hostname_nor_host_advertised_is_skipped_test() ->
+    Station = #{quic_port => 4433, node_id => <<1:256>>},
+    ?assertEqual(false, macula_client:station_seed(Station)).
+
+%% An empty-string `hostname' is not a usable hostname -- treated the
+%% same as absent, falling back to `host_advertised' + Pinned trust
+%% rather than building a seed against an empty dial target.
+station_seed_with_empty_hostname_falls_back_to_pinned_ip_test() ->
+    Station = #{hostname => <<>>,
+               host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
+               quic_port => 4433, node_id => <<1:256>>},
+    ?assertEqual({true, {#{host => <<"2600:3c04::2000:f0ff:feb9:e155">>,
+                          port => 4433, expected_node_id => <<1:256>>,
+                          pin_tls_cert => false},
+                        <<1:256>>}},
+                 macula_client:station_seed(Station)).
 
 station_seed_with_no_quic_port_is_skipped_test() ->
     Station = #{hostname => <<"station-de-frankfurt.macula.io">>, node_id => <<1:256>>},

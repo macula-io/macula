@@ -1865,32 +1865,102 @@ list_or_empty(_)                 -> [].
 
 station_seed(Station) when is_map(Station) ->
     seed_from_fields(macula_record:payload_field(Station, <<"hostname">>),
+                     macula_record:payload_field(Station, <<"host_advertised">>),
                      macula_record:payload_field(Station, <<"quic_port">>),
                      macula_record:payload_field(Station, <<"node_id">>));
 station_seed(_) ->
     false.
 
 %% `hostname' -- the DNS name the station's own TLS certificate actually
-%% covers -- is required, with no `host_advertised' fallback:
-%% `host_advertised' entries are bare IP literals in this fleet (checked
-%% live, not assumed: every entry is a raw IPv6 address, never a DNS
-%% name), so a link dialled against one fails ordinary WebPKI
-%% certificate validation even though the station itself is perfectly
-%% reachable -- confirmed live, and independently found the same way
-%% porting this same design to Go (direct-dial gets away with a bare IP
-%% because it dials under `Trust::Insecure' + its own node-id
-%% verification, a different trust model from an ordinary pool link's
-%% WebPKI default). A station with no `hostname' on record (seen live
-%% on the real fleet) is skipped rather than dialled via a fallback
-%% that would only fail its handshake the same way.
-seed_from_fields(Hostname, Port, NodeId)
-  when is_binary(Hostname), is_integer(Port) ->
+%% covers -- is preferred whenever present, unchanged from before this
+%% station ever had a fallback: it dials under the pool's normal
+%% default (WebPKI), keeping full TLS-layer MITM resistance for the
+%% common case (every fleet station checked so far has a working
+%% hostname except one, deliberately -- see below).
+%%
+%% Only when a row has NO `hostname' at all does this fall back to
+%% `host_advertised' (a bare IP literal -- checked live, every entry in
+%% this fleet is a raw IPv6 address, never a DNS name) dialled under
+%% Pinned trust: `expected_node_id' set to the row's own `node_id',
+%% `pin_tls_cert => false' since there is no CA-issued cert for a bare
+%% IP to validate against WebPKI-style -- trust is enforced entirely at
+%% the application layer, via the HELLO frame's Ed25519-signed
+%% `node_id', exactly the mode `macula_peering_conn:connect_opts()'
+%% documents for "TLS terminated by a PKI unrelated to its macula
+%% identity". Requires a `node_id' to pin against -- without one there
+%% is nothing safe to authenticate a bare IP with, so it is skipped
+%% exactly like a station with neither field at all.
+%%
+%% This priority (hostname first, IP+Pinned only as a genuine fallback)
+%% was a deliberate choice, not the only one considered: a station's
+%% `node_id' is present on essentially every row regardless of whether
+%% it also has a working hostname, so a "prefer IP+Pinned whenever a
+%% node_id exists" rule (checked directly against a real, independent,
+%% already-shipped implementation of exactly that priority) would also
+%% work mechanically -- live-verified against this exact fleet, dialing
+%% an ordinary Let's-Encrypt-backed station by its bare IP under Pinned
+%% trust connects just as cleanly as dialing it by hostname. It was
+%% rejected as the DEFAULT ordering specifically because it means every
+%% station's dial loses TLS-layer verification (`macula_quic' itself
+%% logs "vulnerable to MITM ... outside development" for this mode),
+%% not just the ones that genuinely have no other option -- a much
+%% larger blast radius for no benefit to the common case, which already
+%% has a perfectly good hostname to dial through WebPKI.
+%%
+%% ⚠ KNOWN LIMITATION (2026-09-05, adversarially reviewed): the
+%% fallback clause below cannot fire for any station running today's
+%% macula-station, INCLUDING the one it was written for
+%% (`station-ca-toronto'). `macula_station_app:hostname_or_default/1'
+%% defaults an unconfigured `geo.hostname' to the OS hostname
+%% (`inet:gethostname()'), so every announced row has a non-empty
+%% `hostname' regardless of whether it is actually WebPKI-dialable --
+%% confirmed against the live directory (all 9 `kind = station' rows
+%% have one). This clause is still correct and still worth keeping: it
+%% is exactly right for a row that genuinely has no `hostname' at all
+%% (the `kind = daemon' rows already look like this, minus a
+%% `host_advertised'/`quic_port' of their own), and it starts working
+%% for a station like Toronto the moment that producer-side default is
+%% fixed (own repo, `macula-station' -- flagged, not yet done pending
+%% a decision on how: stop defaulting to the OS hostname, or give the
+%% SDK a different signal than "hostname key present" to decide
+%% WebPKI-vs-Pinned). Not a defect in THIS function -- it correctly
+%% implements the approved priority order on whatever shape a row
+%% actually has today. See `station_seed_toronto_real_row_shape_currently_uses_webpki_test'
+%% in the test file for the live, current behaviour this produces.
+seed_from_fields(Hostname, _HostAdvertised, Port, NodeId)
+  when is_binary(Hostname), byte_size(Hostname) > 0, is_integer(Port) ->
     {true, {seed_url(unwrap_wire_text(Hostname), Port), NodeId}};
-seed_from_fields(_Hostname, _Port, _NodeId) ->
+%% `NodeId' must be exactly 32 bytes (a real Ed25519 pubkey) or there is
+%% nothing valid to pin -- `dial_trust_opts/1' would reject a
+%% wrong-length key anyway (falls through to a plain, unauthenticated
+%% `verify' with no pin), so failing closed here instead means a
+%% malformed row never burns a `max_links' slot until `giveup_after_ms'
+%% only to fail downstream the same way.
+seed_from_fields(_Hostname, HostAdvertised, Port, NodeId)
+  when is_integer(Port), is_binary(NodeId), byte_size(NodeId) =:= 32 ->
+    pinned_seed_from_host_advertised(HostAdvertised, Port, NodeId);
+seed_from_fields(_Hostname, _HostAdvertised, _Port, _NodeId) ->
+    false.
+
+pinned_seed_from_host_advertised([Ip | _], Port, NodeId) ->
+    ip_pinned_seed(unwrap_wire_text(Ip), Port, NodeId);
+pinned_seed_from_host_advertised(_NotAList, _Port, _NodeId) ->
+    false.
+
+%% No `seed_url/2' bracketing here: this is a MAP seed, not a URL
+%% string -- `macula_station_link:parse_seed/1' passes a `#{host,
+%% port}' map through unchanged (no `uri_string:parse/1' involved), and
+%% the underlying QUIC dial takes `host' as a plain literal either way
+%% (live-verified with an unbracketed IPv6 `host' value).
+ip_pinned_seed(Ip, Port, NodeId) when is_binary(Ip), byte_size(Ip) > 0 ->
+    {true, {#{host => Ip, port => Port,
+             expected_node_id => NodeId, pin_tls_cert => false}, NodeId}};
+ip_pinned_seed(_Ip, _Port, _NodeId) ->
     false.
 
 %% Bracket only a literal IPv6 address (contains a colon) per RFC 3986 --
-%% `hostname' never needs this; the `host_advertised' fallback might.
+%% `hostname' never needs this. Only used for the hostname/WebPKI path;
+%% the IP+Pinned fallback builds a map seed, not a URL string.
 seed_url(Host, Port) ->
     PortBin = integer_to_binary(Port),
     HostBin = case binary:match(Host, <<":">>) of
