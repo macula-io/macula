@@ -1650,9 +1650,10 @@ is_known_seed(Seed, ExistingNormalized) ->
 %% before this normalization existed -- no worse, never crashes the
 %% pool over a bad seed string.
 normalize_seed(Seed) ->
-    case catch macula_station_link:parse_seed(Seed) of
-        #{host := H, port := P} -> #{host => H, port => P};
-        _Unparseable -> Seed
+    try macula_station_link:parse_seed(Seed) of
+        #{host := H, port := P} -> #{host => H, port => P}
+    catch
+        _:_ -> Seed
     end.
 
 %% Secondary, identity-based backstop for exactly the case
@@ -1812,14 +1813,19 @@ match_procedure_uri(_) ->
 %% Total over any peer-suppliable `RealmHex': a right-sized-but-non-hex
 %% value would otherwise reach `binary:decode_hex/1' and `badarg' --
 %% caught, not guarded against up front, since validating hex-ness
-%% without a regex is awkward in pure guards and this mirrors
-%% `macula_content_manifest.erl''s own established "wrap the untrusted
-%% decode in `catch', match on the shape you actually wanted back"
-%% pattern elsewhere in this codebase.
+%% without a regex is awkward in pure guards. `try...catch', not a bare
+%% `catch Expr' (deprecated, a hard compile failure under a consumer's
+%% own `warnings_as_errors' -- see the commit replacing 12 other sites
+%% of this same pattern earlier today).
 realm_from_hex(Hex) when is_binary(Hex), byte_size(Hex) =:= 64 ->
-    valid_realm(catch binary:decode_hex(Hex));
+    valid_realm(decode_hex_safe(Hex));
 realm_from_hex(_Hex) ->
     false.
+
+decode_hex_safe(Hex) ->
+    try binary:decode_hex(Hex)
+    catch _:_ -> invalid
+    end.
 
 valid_realm(Bin) when is_binary(Bin), byte_size(Bin) =:= 32 ->
     {true, Bin};
