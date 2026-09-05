@@ -123,7 +123,7 @@ hop re-verifies it independently rather than trusting the peer that
 forwarded it.
 
 Minting an endorsement (done by whoever administers the realm — see
-`GuideRealmLifecycle.AdmitRealmMember` in `macula-realm-identity` for a real
+`GuideRealmLifecycle.AdmitRealmMember` in `macula-realm` for a real
 example):
 
 ```erlang
@@ -200,7 +200,7 @@ authenticates as `TargetPeer`, and stamps the delivered copy's
 `Meta.sender` with your own authenticated identity — not something you
 can spoof by naming a different `TargetPeer` in the frame content, since
 there isn't one; the routing lives entirely in the envelope, verified
-against the connection that sent it. `macula-realm-identity`'s
+against the connection that sent it. `macula-realm`'s
 `Overlay.SelfPublisher` (publish your own presence) and
 `Overlay.PeerResolver.resolve_and_dial/2` (the resolve-then-dial sequence
 above, as reusable code) are a concrete example of both halves.

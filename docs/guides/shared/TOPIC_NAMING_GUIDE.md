@@ -177,7 +177,7 @@ ok = macula_topic:validate(<<"io.macula/beam-campus/hecate/mpong/lobby_opened_v1
 
 ### Calling from Elixir (no wrapper)
 
-Per the macula-io coding rule "no Elixir wrappers for Erlang", Elixir consumers (e.g. `macula-realm`) call `macula_topic` directly via the Erlang interop:
+Per the macula-io coding rule "no Elixir wrappers for Erlang", Elixir consumers (e.g. `macula-portal`) call `macula_topic` directly via the Erlang interop:
 
 ```elixir
 topic = :macula_topic.realm_fact("io.macula", "membership", "revoked", 1)

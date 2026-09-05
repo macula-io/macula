@@ -63,4 +63,4 @@ so consumers never reach into `macula_station_link`.
 relay-link pool entirely and retire the `MeshSubscriber` god-module — the last
 thing keeping that pool alive is exactly this per-station subscribe. Until then,
 macula-realm keeps a thin `Topology.StationLinks` module (path B of
-`macula-internal/macula-realm/plans/PLAN_DEMOS_VERTICAL_SLICING.md`).
+`macula-io/macula-portal/plans/PLAN_DEMOS_VERTICAL_SLICING.md`).

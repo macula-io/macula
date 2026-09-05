@@ -5696,4 +5696,4 @@ dependency (it is no longer transitively pulled in by macula).
 
 ## Pre-3.0 history
 
-Releases prior to 3.0.0 are wire-incompatible (MessagePack era) and have been archived to [CHANGELOG_LEGACY.md](https://codeberg.org/macula-io/macula/src/branch/main/CHANGELOG_LEGACY.md) in the repository. They do not apply to current 3.x consumers.
+Releases prior to 3.0.0 are wire-incompatible (MessagePack era) and have been archived to [CHANGELOG_LEGACY.md](CHANGELOG_LEGACY.md) in the repository. They do not apply to current 3.x consumers.
