@@ -91,10 +91,25 @@
               stream_handler/0, auth_policy/0]).
 
 %% Per-procedure auth policy for `advertise'. `open' (default) serves any
-%% identified caller; `{ucan_required, Issuer}' gates the procedure on a
-%% valid capability token chaining from `Issuer'. Direct-dial dual-trust
-%% (Slice 7b).
--type auth_policy() :: open | {ucan_required, macula_identity:pubkey()}.
+%% identified caller; `{ucan_required, Issuer}' gates the procedure to
+%% exactly one known identity: a valid token signed by `Issuer', with no
+%% check that the caller is who the token was issued to (bearer -- see
+%% `macula_ucan_nif:verify/2''s own doc). Direct-dial dual-trust (Slice 7b).
+%%
+%% `{realm_member_required, RealmDid}' gates on membership in a realm
+%% instead of one exact identity: a valid token signed by `RealmDid' (a
+%% realm's own DID -- NOT the 32-byte `RealmId' routing/scoping hash used
+%% in `-realm' flags and DHT scoping elsewhere; a realm's DID is a real
+%% Ed25519 keypair it holds, the two are unrelated values) whose audience
+%% is the calling identity itself. That audience check is what makes this
+%% different from `ucan_required' rather than a redundant special case of
+%% it: this policy closes the bearer gap for itself specifically by
+%% checking `aud' against the wire-authenticated caller, `ucan_required'
+%% does not and still won't after this -- see `authorize_policy/2' in
+%% `macula_station_link' for both checks.
+-type auth_policy() :: open
+                      | {ucan_required, macula_identity:pubkey()}
+                      | {realm_member_required, macula_identity:pubkey()}.
 
 -type pool() :: pid().
 
@@ -1913,26 +1928,28 @@ station_seed(_) ->
 %% larger blast radius for no benefit to the common case, which already
 %% has a perfectly good hostname to dial through WebPKI.
 %%
-%% ⚠ KNOWN LIMITATION (2026-09-05, adversarially reviewed): the
-%% fallback clause below cannot fire for any station running today's
-%% macula-station, INCLUDING the one it was written for
-%% (`station-ca-toronto'). `macula_station_app:hostname_or_default/1'
-%% defaults an unconfigured `geo.hostname' to the OS hostname
-%% (`inet:gethostname()'), so every announced row has a non-empty
-%% `hostname' regardless of whether it is actually WebPKI-dialable --
-%% confirmed against the live directory (all 9 `kind = station' rows
-%% have one). This clause is still correct and still worth keeping: it
-%% is exactly right for a row that genuinely has no `hostname' at all
-%% (the `kind = daemon' rows already look like this, minus a
-%% `host_advertised'/`quic_port' of their own), and it starts working
-%% for a station like Toronto the moment that producer-side default is
-%% fixed (own repo, `macula-station' -- flagged, not yet done pending
-%% a decision on how: stop defaulting to the OS hostname, or give the
-%% SDK a different signal than "hostname key present" to decide
-%% WebPKI-vs-Pinned). Not a defect in THIS function -- it correctly
-%% implements the approved priority order on whatever shape a row
-%% actually has today. See `station_seed_toronto_real_row_shape_currently_uses_webpki_test'
-%% in the test file for the live, current behaviour this produces.
+%% UPDATE (2026-09-05): the producer-side bug this section originally
+%% described is fixed (`macula_station_app:hostname_or_default/1',
+%% deleted -- an unconfigured `geo.hostname' is now genuinely omitted,
+%% not defaulted to the OS hostname). That fix alone is NOT sufficient
+%% to make Toronto's row actually change, though, per a second
+%% Fable review: `hecate_stations'' own read model
+%% (`station_read_model:upsert_node_record/1') is read-modify-write --
+%% a fresh announcement with `hostname' genuinely absent does not
+%% clear an ALREADY-PERSISTED `hostname' value from a prior (buggy)
+%% announcement, it only ever ADDS a field, never removes one. Toronto
+%% announced "station-ca-toronto" under the old bug for a while, so
+%% its existing `hecate_stations' doc likely still carries that value
+%% until either a tombstone/retire cycle runs or `hecate_stations'
+%% own upsert semantics change to make an announcer's record
+%% authoritative for its own optional fields -- a separate, not-yet-
+%% decided fix in a different service. This function is NOT the thing
+%% to check for whether Toronto is actually reachable yet -- query
+%% `hecate_stations.list_stations' directly and look at the real row.
+%% This clause is still correct and worth keeping regardless: it is
+%% exactly right for ANY row that genuinely has no `hostname' at all
+%% (the `kind = daemon' rows already look like this), independent of
+%% whichever specific station eventually clears its stale record.
 seed_from_fields(Hostname, _HostAdvertised, Port, NodeId)
   when is_binary(Hostname), byte_size(Hostname) > 0, is_integer(Port) ->
     {true, {seed_url(unwrap_wire_text(Hostname), Port), NodeId}};

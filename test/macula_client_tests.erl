@@ -864,16 +864,20 @@ station_seed_prefers_hostname_over_host_advertised_test() ->
                  macula_client:station_seed(Station)).
 
 %% KNOWN LIMITATION, documented via test (adversarial review, 2026-09-05):
-%% `station-ca-toronto''s REAL live row -- genuinely no working DNS name,
-%% the whole reason the Pinned/IP fallback below exists -- still has a
-%% non-empty `hostname' value, because `macula_station_app' defaults an
-%% unconfigured `geo.hostname' to the OS hostname rather than leaving it
-%% absent. This asserts today's ACTUAL outcome (the WebPKI/hostname path,
-%% which does not connect) rather than the intended one, so nobody
-%% mistakes this fallback for "Toronto is fixed" -- it isn't, yet; see
-%% `seed_from_fields/4''s own doc. Fixing this is a `macula-station'
-%% producer-side change (or a different SDK-side signal than "hostname
-%% key present"), not a change to this function -- flagged, not done.
+%% pins the exact row shape `station-ca-toronto' was announcing under
+%% the now-fixed `macula_station_app' bug (an unconfigured
+%% `geo.hostname' defaulted to the OS hostname instead of being
+%% genuinely absent). That producer-side bug is fixed as of 2026-09-05,
+%% but `hecate_stations'' own read model does not retroactively clear
+%% an already-persisted field on a fresh announcement (read-modify-
+%% write upsert, a separate, not-yet-fixed issue) -- so a row shaped
+%% EXACTLY like this may keep showing up in the real directory for a
+%% while yet, and this function correctly keeps taking the WebPKI path
+%% for it regardless. See `seed_from_fields/4''s own doc for the full,
+%% current state. This test is not a claim about Toronto's live row
+%% today -- it pins the SHAPE, and the behavior for that shape, so a
+%% future reader can tell at a glance what the SDK does with it either
+%% way.
 station_seed_toronto_real_row_shape_currently_uses_webpki_test() ->
     Station = #{hostname => <<"station-ca-toronto">>,
                host_advertised => [<<"2600:3c04::2000:f0ff:feb9:e155">>],
