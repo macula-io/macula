@@ -18,19 +18,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Ed25519 signatures
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
-
-# Random number generation
-rand = "0.8"
+ed25519-dalek = { version = "3.0", features = ["rand_core"] }
 
 # Base64 encoding (URL-safe for JWT)
-base64 = "0.22"
-
-# For signature verification
-signature = "2.2"
+base64 = "0.23"
 
 # SHA-256 for CID generation
-sha2 = "0.10"
+sha2 = "0.11"
 
 [profile.release]
 lto = true

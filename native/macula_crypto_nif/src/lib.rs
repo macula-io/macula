@@ -11,7 +11,8 @@
 //! DID operations, and content-addressed storage in the Macula mesh.
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey, Signer, Verifier};
-use rand::{rngs::OsRng, SeedableRng};
+use rand::rand_core::UnwrapErr;
+use rand::{rngs::SysRng, SeedableRng};
 use rustler::{Atom, Binary, Env, NifResult, OwnedBinary};
 use sha2::{Digest, Sha256};
 
@@ -33,7 +34,12 @@ mod atoms {
 ///   Note: PrivateKey is the seed (32 bytes), not the full secret key (64 bytes)
 #[rustler::nif]
 fn nif_generate_keypair<'a>(env: Env<'a>) -> NifResult<(Atom, (Binary<'a>, Binary<'a>))> {
-    let mut csprng = OsRng;
+    // `rand` 0.9 made `OsRng` fallible-only (an OS entropy syscall can
+    // fail); `rand` 0.10 renamed it `SysRng`. `UnwrapErr` restores the
+    // old panic-on-failure semantics `SigningKey::generate`'s infallible
+    // `CryptoRng` bound needs -- the exact pattern ed25519-dalek 3.0's
+    // own docs use for this call.
+    let mut csprng = UnwrapErr(SysRng);
     let signing_key = SigningKey::generate(&mut csprng);
     let verifying_key = signing_key.verifying_key();
 
@@ -185,13 +191,21 @@ fn nif_grind_puzzle<'a>(
     difficulty: u32,
 ) -> NifResult<(Atom, (Binary<'a>, Binary<'a>))> {
     // Seed a fast userspace CSPRNG once from OS entropy, rather than
-    // drawing from `OsRng` directly on every candidate: `OsRng` hits
+    // drawing from `SysRng` directly on every candidate: `SysRng` hits
     // the OS entropy source (a syscall) per draw, which dominates a
     // loop that can run thousands of iterations at non-trivial
     // difficulty. `StdRng` is cryptographically secure and reseeding
     // isn't a concern here — the puzzle only needs unpredictable
     // candidates, not a long-lived secret-generation stream.
-    let mut csprng = rand::rngs::StdRng::from_entropy();
+    //
+    // `SeedableRng::from_entropy` was renamed `from_os_rng` in `rand`
+    // 0.9, then removed outright in 0.10 -- `from_rng` is the current
+    // replacement, seeded from any infallible `Rng`; `UnwrapErr(SysRng)`
+    // supplies that, same reasoning as `nif_generate_keypair` above.
+    // Pulls the exact same 32 bytes via the exact same single syscall
+    // `from_entropy` did (verified against both versions' source), so
+    // this isn't a weaker seed, just the same one through a renamed API.
+    let mut csprng = rand::rngs::StdRng::from_rng(&mut UnwrapErr(SysRng));
     loop {
         let signing_key = SigningKey::generate(&mut csprng);
         let verifying_key = signing_key.verifying_key();

@@ -14,22 +14,19 @@ crate-type = ["cdylib"]
 rustler = "0.34"
 
 # Ed25519 signatures
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+ed25519-dalek = { version = "3.0", features = ["rand_core"] }
 
 # Random number generation for key generation
-rand = "0.8"
+rand = "0.10"
 
 # SHA-256 hashing
-sha2 = "0.10"
+sha2 = "0.11"
 
 # BLAKE3 hashing (fast, parallel, secure)
 blake3 = "1.5"
 
 # Base64 encoding
-base64 = "0.22"
-
-# For signature verification
-signature = "2.2"
+base64 = "0.23"
 
 [profile.release]
 lto = true

@@ -14,17 +14,17 @@ rustler = "0.34"
 quinn = "0.11"
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 rustls-pemfile = "2"
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 tokio = { version = "1", features = ["full"] }
 socket2 = { version = "0.5", features = ["all"] }
 bytes = "1"
 # Self-signed Ed25519 cert generation for pubkey-anchored QUIC.
-rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring"] }
 # rcgen exposes its `not_before`/`not_after` as `time::OffsetDateTime`.
 time = "0.3"
 # Extract Ed25519 SPKI pubkey from leaf cert for pubkey-pin
 # verification.
-x509-parser = "0.16"
+x509-parser = "0.18"
 
 [profile.release]
 lto = true

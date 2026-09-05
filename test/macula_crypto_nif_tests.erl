@@ -10,6 +10,7 @@
 
 crypto_test_() ->
     [
+     {"NIF loaded", fun nif_loaded_tests/0},
      {"Key generation tests", fun keypair_tests/0},
      {"Signing tests", fun signing_tests/0},
      {"Verification tests", fun verification_tests/0},
@@ -19,6 +20,18 @@ crypto_test_() ->
      {"Error handling tests", fun error_handling_tests/0},
      {"Roundtrip tests", fun roundtrip_tests/0}
     ].
+
+%%====================================================================
+%% NIF Loading
+%%====================================================================
+
+nif_loaded_tests() ->
+    %% If the NIF didn't load, every crypto function below silently
+    %% falls back to the pure-Erlang path (see this module's own
+    %% `is_nif_loaded/0` callers) and every other test in this suite
+    %% would still pass without ever exercising the Rust NIF at all.
+    %% Fail loudly here so that isn't a silent gap.
+    ?assert(macula_crypto_nif:is_nif_loaded()).
 
 %%====================================================================
 %% Key Generation Tests
