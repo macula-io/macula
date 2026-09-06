@@ -596,10 +596,16 @@ connected(info, {quic, stream_closed, Stream, Detail},
 %% its own stream, independent of the control stream). Treat it like
 %% OUR OWN `cast, {close, Reason}' just below: drain for up to
 %% `?DRAIN_TIMEOUT_MS' instead of tearing the whole connection down
-%% immediately. No `notify' here either, matching that path -- it
-%% fires when the drain actually concludes, not the instant it starts,
-%% so `controlling_pid' doesn't tear down routing for a stream that
-%% may still legitimately finish.
+%% immediately.
+%%
+%% `notify(draining, ...)' here (and in `cast, {close, Reason}' below)
+%% is deliberately a DIFFERENT event than `disconnected' -- its job is
+%% only to tell `controlling_pid' "you may want to hold off on
+%% `dedicated_streams_idle' until you've checked your own bookkeeping
+%% for this connection", not to signal the connection is gone.
+%% `disconnected' itself still only fires once draining actually
+%% concludes (`finish_draining/1'), so `controlling_pid' never tears
+%% down routing for a stream that may still legitimately finish.
 %%
 %% Was: `{stop, normal, Data}' unconditionally here -- asymmetric with
 %% the graceful `cast, {close, Reason}' path (which already drains)
@@ -614,9 +620,11 @@ connected(info, {quic, stream_closed, Stream, Detail},
 %% errored has no clear benefit.
 connected(info, {quic, peer_send_shutdown, Stream, _Detail},
           #data{quic_stream = Stream} = Data) ->
+    notify(draining, peer_closed, Data),
     {next_state, draining, Data};
 connected(cast, {close, Reason}, Data) ->
     _ = send_goodbye(Data#data.quic_stream, Reason, Data),
+    notify(draining, Reason, Data),
     {next_state, draining, Data};
 %% `reject/2''s reason for existing: `close/2' transitions through
 %% `draining' for up to `?DRAIN_TIMEOUT_MS' (5s), during which further
@@ -653,9 +661,18 @@ connected(EventType, Event, Data) ->
 draining(enter, _Old, Data) ->
     {keep_state, Data, [{state_timeout, ?DRAIN_TIMEOUT_MS, drain_done}]};
 draining(state_timeout, drain_done, Data) ->
-    notify(disconnected, drained, Data),
-    _ = close_quic(Data),
-    {stop, normal, Data};
+    finish_draining(Data);
+%% `controlling_pid' (e.g. macula-station's peer_observer, which
+%% already tracks exactly which dedicated streams belong to which
+%% connection) sends this once it has confirmed none remain for this
+%% connection -- lets a connection with no in-flight dedicated/bidi
+%% work close as soon as that's known, instead of always waiting out
+%% the full `?DRAIN_TIMEOUT_MS'. A `controlling_pid' that never sends
+%% this (doesn't track streams, or simply hasn't been updated) changes
+%% nothing -- `state_timeout'/`drain_done' above still fires
+%% unconditionally as the backstop. macula-io/macula#9.
+draining(cast, dedicated_streams_idle, Data) ->
+    finish_draining(Data);
 %% `{quic, closed, Conn, Detail}' is NEVER actually sent — see
 %% `handshaking/3''s matching comment. Replaced with the events that
 %% actually arrive; unlike `handshaking'/`connected' this was not a
@@ -685,6 +702,17 @@ draining(cast, {reject, Reason}, Data) ->
     {stop, normal, Data};
 draining(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, draining, Data).
+
+%% Shared terminal action for `draining' concluding normally, whether
+%% via the `state_timeout' backstop or an early `dedicated_streams_idle'
+%% signal from `controlling_pid'. `close_quic' here is technically
+%% redundant with `terminate/3''s own unconditional call once `{stop,
+%% normal, Data}' lands -- matches the pre-existing `drain_done' shape,
+%% harmless (`close_quic' is idempotent).
+finish_draining(Data) ->
+    notify(disconnected, drained, Data),
+    _ = close_quic(Data),
+    {stop, normal, Data}.
 
 %%------------------------------------------------------------------
 %% Dedicated stream open

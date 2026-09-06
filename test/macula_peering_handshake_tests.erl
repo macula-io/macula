@@ -43,6 +43,8 @@ handshake_test_() ->
             %% DRAIN_TIMEOUT_MS is 5s; the disconnected fires shortly
             %% after that. Override the eunit default 5s per-test cap.
             {timeout, 15, fun() -> close_drains_then_disconnects(Ctx) end}},
+           {"dedicated_streams_idle ends the drain early instead of waiting the full timeout",
+            fun() -> dedicated_streams_idle_ends_drain_early(Ctx) end},
            {"reject on a connected worker terminates immediately, no draining",
             fun() -> reject_terminates_immediately(Ctx) end},
            {"peer's graceful control-stream half-close drains, doesn't stop immediately",
@@ -187,6 +189,43 @@ close_drains_then_disconnects(Ctx) ->
     receive
         {'DOWN', Mon, process, ClientPid, normal} -> ok
     after 2_000 ->
+        ?assert(false)
+    end,
+    cleanup_pair(undefined, ServerPid, Listener).
+
+%% macula-io/macula#9, part 2: `controlling_pid' (e.g. macula-station's
+%% peer_observer, which tracks dedicated/bidi streams per connection)
+%% can end the drain early by casting `dedicated_streams_idle' once it
+%% knows none remain for this connection, instead of the caller always
+%% waiting out the full `?DRAIN_TIMEOUT_MS' (5s, per
+%% `close_drains_then_disconnects' above). Also pins the new
+%% `{macula_peering, draining, Pid, Reason}' notification `close/2'
+%% fires on entering draining -- the signal `controlling_pid' actually
+%% needs to know it's worth watching this connection's own stream
+%% count at all.
+dedicated_streams_idle_ends_drain_early(Ctx) ->
+    {ClientPid, ServerPid, _, Listener} = handshake_pair(Ctx, []),
+    expect_message({macula_peering, connected, ClientPid, '_'}, 5_000),
+    expect_message({macula_peering, connected, ServerPid, '_'}, 5_000),
+    Mon = erlang:monitor(process, ClientPid),
+    macula_peering:close(ClientPid, operator_stop),
+    receive
+        {macula_peering, draining, ClientPid, operator_stop} -> ok
+    after 1_000 ->
+        erlang:error(no_draining_notification)
+    end,
+    gen_statem:cast(ClientPid, dedicated_streams_idle),
+    %% Must conclude well within the 5s DRAIN_TIMEOUT_MS -- proves this
+    %% actually ended the drain early rather than coincidentally timing
+    %% out at the same moment.
+    receive
+        {macula_peering, disconnected, ClientPid, drained} -> ok
+    after 1_000 ->
+        erlang:error(drain_did_not_end_early)
+    end,
+    receive
+        {'DOWN', Mon, process, ClientPid, normal} -> ok
+    after 500 ->
         ?assert(false)
     end,
     cleanup_pair(undefined, ServerPid, Listener).
