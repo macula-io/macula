@@ -45,6 +45,9 @@ handshake_test_() ->
             {timeout, 15, fun() -> close_drains_then_disconnects(Ctx) end}},
            {"reject on a connected worker terminates immediately, no draining",
             fun() -> reject_terminates_immediately(Ctx) end},
+           {"peer's graceful control-stream half-close drains, doesn't stop immediately",
+            %% Same DRAIN_TIMEOUT_MS budget as close_drains_then_disconnects.
+            {timeout, 15, fun() -> peer_send_shutdown_drains_not_stops(Ctx) end}},
            {"peer closing (reject) notifies and terminates the surviving side",
             fun() -> peer_closing_notifies_the_surviving_side(Ctx) end},
            {"undefined accept_owner: handshake completes without notification",
@@ -187,6 +190,68 @@ close_drains_then_disconnects(Ctx) ->
         ?assert(false)
     end,
     cleanup_pair(undefined, ServerPid, Listener).
+
+%% Real bug this pins (macula-io/macula#9, Fable's review, 2026-09-06):
+%% a peer that gracefully half-closes JUST its control stream — real
+%% SDKs do exactly this in their own graceful close (e.g. macula-go's
+%% Session.Close: send GOODBYE, finish the control stream's send side,
+%% THEN drain briefly before fully closing the whole connection) — used
+%% to be treated by the surviving side as an immediate `{stop, normal,
+%% Data}', asymmetric with this side's OWN `close/2' path (which
+%% already drains, see `close_drains_then_disconnects' above). An
+%% in-flight dedicated/bidi stream on the same connection would be
+%% killed mid-write by that abrupt teardown.
+%%
+%% Closes the CLIENT's control stream directly via `macula_quic:
+%% close_stream/1' (bypassing `macula_peering_conn''s own `close/2',
+%% which closes the whole connection after draining, not just the
+%% control stream) to reproduce exactly the narrow signal a real SDK's
+%% graceful close sends first. The client gen_statem process itself is
+%% left in an artificial half-manipulated state by this — the point is
+%% the SERVER's reaction to what arrives on the wire, not the client.
+peer_send_shutdown_drains_not_stops(Ctx) ->
+    {ClientPid, ServerPid, _, Listener} = handshake_pair(Ctx, []),
+    expect_message({macula_peering, connected, ClientPid, '_'}, 5_000),
+    expect_message({macula_peering, connected, ServerPid, '_'}, 5_000),
+
+    {connected, ClientData} = sys:get_state(ClientPid, 1_000),
+    close_control_stream(ClientData),
+
+    Mon = erlang:monitor(process, ServerPid),
+    %% Must NOT stop immediately -- the old behaviour was an abrupt
+    %% {stop, normal, Data} right here.
+    receive
+        {'DOWN', Mon, process, ServerPid, _Reason} ->
+            erlang:error(stopped_immediately_instead_of_draining)
+    after 500 ->
+        ok
+    end,
+    ?assertMatch({draining, _}, sys:get_state(ServerPid, 1_000)),
+
+    %% Still finishes the drain and disconnects afterward, exactly
+    %% like the initiator-side path.
+    receive
+        {macula_peering, disconnected, ServerPid, drained} -> ok
+    after 8_000 ->
+        ?assert(false)
+    end,
+    receive
+        {'DOWN', Mon, process, ServerPid, normal} -> ok
+    after 2_000 ->
+        ?assert(false)
+    end,
+    cleanup_pair(ClientPid, undefined, Listener).
+
+%% `#data' has two `reference()' slots (`quic_conn', `quic_stream') —
+%% distinguishing them by declared type alone is ambiguous, so try
+%% `close_stream/1' on every reference found and let the NIF's own
+%% resource-type check reject the wrong one (a connection resource
+%% doesn't decode as a stream resource; the mismatch is caught).
+%% Structural, like `tuple_has_list/2' above, rather than a hard-coded
+%% index that ages badly as the record grows.
+close_control_stream(Data) ->
+    Refs = [E || E <- tuple_to_list(Data), is_reference(E)],
+    lists:foreach(fun(Ref) -> catch macula_quic:close_stream(Ref) end, Refs).
 
 %% The whole point of `reject/2': unlike `close/2' above, both the
 %% `disconnected' notification and worker exit must land almost

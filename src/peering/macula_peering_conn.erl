@@ -589,10 +589,32 @@ connected(info, {quic, stream_closed, Stream, Detail},
           #data{quic_stream = Stream} = Data) ->
     notify(disconnected, {peer_closed, Detail}, Data),
     {stop, normal, Data};
+%% A graceful `peer_send_shutdown' on the control stream means the
+%% peer is done sending on it -- their side of the session is over --
+%% but says nothing about a dedicated/bidi stream still actively
+%% finishing on this SAME connection (client_stream/bidi RPC runs on
+%% its own stream, independent of the control stream). Treat it like
+%% OUR OWN `cast, {close, Reason}' just below: drain for up to
+%% `?DRAIN_TIMEOUT_MS' instead of tearing the whole connection down
+%% immediately. No `notify' here either, matching that path -- it
+%% fires when the drain actually concludes, not the instant it starts,
+%% so `controlling_pid' doesn't tear down routing for a stream that
+%% may still legitimately finish.
+%%
+%% Was: `{stop, normal, Data}' unconditionally here -- asymmetric with
+%% the graceful `cast, {close, Reason}' path (which already drains)
+%% for what is, from the wire's perspective, the exact same kind of
+%% event just initiated by the other side. The abrupt CONNECTION_CLOSE
+%% that produced could kill an in-flight dedicated-stream reply
+%% mid-write. Found by Fable's review, macula-io/macula#9.
+%%
+%% `stream_closed' just above is deliberately NOT changed the same
+%% way: it signals an error/reset on the control stream, not a clean
+%% peer GOODBYE, and draining a connection whose control stream just
+%% errored has no clear benefit.
 connected(info, {quic, peer_send_shutdown, Stream, _Detail},
           #data{quic_stream = Stream} = Data) ->
-    notify(disconnected, peer_closed, Data),
-    {stop, normal, Data};
+    {next_state, draining, Data};
 connected(cast, {close, Reason}, Data) ->
     _ = send_goodbye(Data#data.quic_stream, Reason, Data),
     {next_state, draining, Data};
