@@ -1191,7 +1191,19 @@ handle_info({macula_peering, frame, Pid, Frame, _RecvAtUs},
     {noreply, fold_frames(drain_frames(Pid, [Frame]), S)};
 
 handle_info({macula_peering, disconnected, Pid, Reason},
-            #state{peer_pid = Pid} = S) ->
+            #state{peer_pid = Pid, seed = Seed} = S) ->
+    %% The one place the PEER-SIDE disconnect reason (e.g. `peer_closed'
+    %% detail, `drained') is ever known. Everything downstream of this
+    %% -- `fail_all_pending' and the eventual `{stop, normal, ...}' --
+    %% discards it in favor of a uniform `normal' exit, which is all
+    %% `macula_client:on_down_routed/5' has left to log. Without this,
+    %% a station-initiated close is indistinguishable from any other
+    %% disconnect in every log this link ever produces.
+    macula_diagnostics:event(<<"_macula.station_link.disconnected">>, #{
+        seed     => Seed,
+        peer_pid => Pid,
+        reason   => Reason
+    }),
     NewS = fail_all_pending({disconnected, Reason}, cancel_liveness(S)),
     %% Stop normally — the supervisor (or owning gen_server) decides
     %% whether to restart us.
@@ -1270,7 +1282,15 @@ handle_info(connect_watchdog, #state{peer_pid = Pid, seed = Seed} = S) ->
                                               peer_pid = undefined,
                                               peer_node_id = undefined}))};
 
-handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid} = S) ->
+handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
+    %% Same swallowed-reason gap as the `disconnected' clause above, for
+    %% the case where the peering worker itself exits (crash or
+    %% deliberate stop) rather than sending a `disconnected' notification.
+    macula_diagnostics:event(<<"_macula.station_link.peering_exit">>, #{
+        seed     => Seed,
+        peer_pid => Pid,
+        reason   => Reason
+    }),
     NewS = fail_all_pending({peering_exit, Reason}, cancel_liveness(S)),
     {stop, normal, NewS#state{peer_pid = undefined,
                               peer_node_id = undefined}};

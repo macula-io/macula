@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- `macula_station_link`'s two other disconnect paths (`{macula_peering,
+  disconnected, Pid, Reason}` and `{'EXIT', Pid, Reason}` from the
+  peering worker) now emit `_macula.station_link.disconnected` /
+  `_macula.station_link.peering_exit` diagnostics events carrying the
+  real `Reason`, matching the existing `connect_watchdog` clause's own
+  pattern. Both previously computed a real reason (peer-closed detail,
+  drain outcome, a crash) purely to discard it before `{stop, normal,
+  ...}` — every caller downstream (`macula_client:on_down_routed/5`,
+  and therefore any consuming service's own logs) only ever saw a
+  uniform `reason => normal` regardless of why the link actually went
+  down. Found while investigating a live, ongoing hecate-sentinel
+  reconnect loop against one specific station where this gap made the
+  cause genuinely undiagnosable from client-side logs alone.
+
 ## [10.21.0] - 2026-09-05
 
 ### Security
