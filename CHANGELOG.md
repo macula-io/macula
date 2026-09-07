@@ -7,10 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [10.22.0] - 2026-09-07
 
-### Changed
+### Added
 
+- `macula_peering_conn` now tells `controlling_pid` when a graceful
+  drain begins, not just when it concludes: entering draining for a
+  graceful reason (either side's `cast, {close, Reason}`, or the
+  peer's own control-stream shutdown — see Fixed, below) sends
+  `{macula_peering, draining, self(), Reason}`. A `controlling_pid`
+  that already tracks its own dedicated/bidi stream count for this
+  connection (e.g. `macula-station`'s `peer_observer`) can now end the
+  drain immediately once that count reaches zero (`cast,
+  dedicated_streams_idle`) instead of always waiting out the full
+  `DRAIN_TIMEOUT_MS` (5s) — measured at ~0.01s versus ~5s for an
+  otherwise-identical `close/2` starting point. Purely additive and
+  backward compatible: a `controlling_pid` that does neither sees no
+  behavior change, and the `state_timeout` backstop is unchanged for
+  it. No wire-level protocol change — this only decides when a LOCAL
+  side is willing to close a connection it already holds silently;
+  the peer sees nothing different until the eventual `CONNECTION_CLOSE`
+  frame. `macula-io/macula#9`, part 2.
+
+### Fixed
+
+- A peer's own graceful shutdown of the control stream
+  (`peer_send_shutdown`) was treated identically to an abrupt
+  stream-level error (`stream_closed`): an immediate `{stop, normal,
+  Data}`, closing the whole connection with no chance for an in-flight
+  dedicated/bidi stream on it to finish. This was asymmetric with the
+  graceful path already used for a LOCAL close (`cast, {close,
+  Reason}`, which sends `GOODBYE` and drains for up to
+  `DRAIN_TIMEOUT_MS` first) — a peer's graceful shutdown is the same
+  signal in the other direction (confirmed against `macula-go`'s own
+  `Session.Close`, which sends `GOODBYE` then closes just its control
+  stream before the connection), not an error. `peer_send_shutdown`
+  now drains instead of stopping, matching the initiator path exactly;
+  a genuine `stream_closed` error/reset is unchanged (immediate stop —
+  draining a connection whose control stream just errored has no clear
+  benefit). Scoped narrowly per adversarial review of `macula-io/macula#9`
+  as the "cheap interim" mechanical fix; whether a dedicated stream's
+  lifecycle should ever be coupled to the control stream's at all
+  stays open. `macula-io/macula#9`, part 1.
 - `macula_station_link`'s two other disconnect paths (`{macula_peering,
   disconnected, Pid, Reason}` and `{'EXIT', Pid, Reason}` from the
   peering worker) now emit `_macula.station_link.disconnected` /
