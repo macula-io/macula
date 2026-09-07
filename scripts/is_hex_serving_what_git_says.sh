@@ -21,6 +21,21 @@
 # A comparison that has never been seen to fail is not evidence of agreement.
 set -euo pipefail
 
+# `erl` is not necessarily on PATH -- this workspace's repos are pinned via
+# mise (.tool-versions), and a shell without mise's shims active (or one
+# that only exposes it through `mise exec --`) has no bare `erl` at all.
+# `command -v erl` failing here is silent and looks exactly like a normal
+# 127 from a missing tool; the bug this masked was in this script itself,
+# not in erl's absence -- `same_terms' below called bare `erl', got 127 for
+# every single comparison, and this script's own `elif ! same_file' treated
+# that not-run as a genuine content mismatch, reporting "DIFFERS" for
+# src/macula.app.src on a release that was, in fact, byte-for-byte correct
+# (verified by hand: `mise exec -- erl` on the identical two files returns
+# equal: true). Resolved once here rather than in `same_terms' itself so
+# every erl invocation in this script benefits, not just that one.
+ERL=(erl)
+command -v erl >/dev/null 2>&1 || ERL=(mise exec -- erl)
+
 VERSION="${1:?usage: $0 <version> [tag]}"
 TAG="${2:-v${VERSION}}"
 PKG=macula
@@ -59,7 +74,7 @@ git archive "${TAG}" | tar -x -C "${WORK}/git"
 # question for that file is whether it holds the same TERMS, so it is consulted
 # on both sides and the results compared.
 same_terms() {
-  erl -noshell -eval '
+  "${ERL[@]}" -noshell -eval '
     [A, B] = init:get_plain_arguments(),
     {ok, TA} = file:consult(A),
     {ok, TB} = file:consult(B),
