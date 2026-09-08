@@ -6,7 +6,10 @@
 [![GitHub Sponsors](https://img.shields.io/badge/GitHub%20Sponsors-support-ea4aaa.svg?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/rgfaber)
 
 <p align="center">
-  <img src="assets/logo.svg" width="120" height="120" alt="Macula">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/macula-full-dark.svg">
+    <img src="assets/macula-full-light.svg" alt="Macula" width="320">
+  </picture>
 </p>
 
 <p align="center">
