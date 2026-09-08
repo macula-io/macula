@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Irregular mesh full logo (light theme), matching macula-go/-rust/-php/
+     -dotnet/-py/-ts's shared icon + wordmark, with a BEAM/Erlang badge in
+     the mascot-badge slot. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 72" width="240" height="72">
+  <!-- Icon -->
+  <g transform="translate(4, 0) scale(0.64)">
+    <!-- Subtle grid -->
+    <g stroke="#1E3A5F" stroke-width="0.5" opacity="0.1">
+      <line x1="0" y1="25" x2="100" y2="25"/>
+      <line x1="0" y1="50" x2="100" y2="50"/>
+      <line x1="0" y1="75" x2="100" y2="75"/>
+      <line x1="25" y1="0" x2="25" y2="100"/>
+      <line x1="50" y1="0" x2="50" y2="100"/>
+      <line x1="75" y1="0" x2="75" y2="100"/>
+    </g>
+
+    <!-- Irregular mesh connections -->
+    <g stroke="#0EA5E9" stroke-width="1.5" fill="none">
+      <line x1="22" y1="20" x2="50" y2="32"/>
+      <line x1="50" y1="32" x2="78" y2="18"/>
+      <line x1="22" y1="20" x2="15" y2="52"/>
+      <line x1="78" y1="18" x2="85" y2="45"/>
+      <line x1="15" y1="52" x2="35" y2="55"/>
+      <line x1="35" y1="55" x2="50" y2="50"/>
+      <line x1="50" y1="50" x2="68" y2="48"/>
+      <line x1="68" y1="48" x2="85" y2="45"/>
+      <line x1="15" y1="52" x2="28" y2="80"/>
+      <line x1="35" y1="55" x2="50" y2="78"/>
+      <line x1="50" y1="50" x2="50" y2="78"/>
+      <line x1="68" y1="48" x2="72" y2="75"/>
+      <line x1="85" y1="45" x2="72" y2="75"/>
+      <line x1="28" y1="80" x2="50" y2="78"/>
+      <line x1="50" y1="78" x2="72" y2="75"/>
+      <line x1="22" y1="20" x2="35" y2="55" stroke-dasharray="3,2" opacity="0.6"/>
+      <line x1="78" y1="18" x2="68" y2="48" stroke-dasharray="3,2" opacity="0.6"/>
+      <line x1="50" y1="32" x2="50" y2="50" stroke-dasharray="3,2" opacity="0.6"/>
+    </g>
+
+    <!-- Orange accents -->
+    <g stroke="#F97316" stroke-width="2" fill="none" opacity="0.9">
+      <line x1="35" y1="55" x2="68" y2="48"/>
+      <line x1="50" y1="32" x2="35" y2="55" stroke-dasharray="4,3"/>
+    </g>
+
+    <!-- Primary nodes -->
+    <g stroke="#0EA5E9" stroke-width="2" fill="#0C1929">
+      <circle cx="22" cy="20" r="4"/>
+      <circle cx="78" cy="18" r="4"/>
+      <circle cx="15" cy="52" r="3"/>
+      <circle cx="85" cy="45" r="3"/>
+      <circle cx="28" cy="80" r="4"/>
+      <circle cx="72" cy="75" r="4"/>
+    </g>
+
+    <!-- Hub nodes - white -->
+    <g stroke="#0EA5E9" stroke-width="2" fill="white">
+      <circle cx="50" cy="32" r="4"/>
+      <circle cx="50" cy="78" r="4"/>
+    </g>
+
+    <!-- Central hub -->
+    <circle cx="50" cy="50" r="7" stroke="#0EA5E9" stroke-width="2" fill="#0C1929"/>
+    <circle cx="50" cy="50" r="3.5" fill="#0EA5E9"/>
+
+    <!-- Secondary nodes -->
+    <g stroke="#0EA5E9" stroke-width="1.5" fill="#0C1929">
+      <circle cx="35" cy="55" r="3"/>
+      <circle cx="68" cy="48" r="3"/>
+    </g>
+    <g fill="#F97316">
+      <circle cx="35" cy="55" r="1.5"/>
+      <circle cx="68" cy="48" r="1.5"/>
+    </g>
+  </g>
+
+  <!-- Wordmark - centered vertically -->
+  <text x="76" y="42"
+        font-family="'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace"
+        font-size="32"
+        font-weight="600"
+        fill="#0EA5E9"
+        letter-spacing="-0.5px">MACULA</text>
+
+  <!-- BEAM/Erlang badge: styled as an enlarged hub node (white fill, like
+       the mesh's own hub-node convention), matching the sibling SDKs'
+       mascot-badge treatment. Erlang logo path from simple-icons
+       (CC0 1.0), brand red #A90533. -->
+  <circle cx="54" cy="54" r="13" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="2"/>
+  <g transform="translate(45, 45) scale(0.75)" fill="#A90533">
+    <path d="M8.859 7.889c.154-1.863 1.623-3.115 3.344-3.119 1.734.004 2.986 1.256 3.029 3.119zm12.11 11.707c.802-.86 1.52-1.872 2.172-3.03l-3.616-1.807c-1.27 2.064-3.127 3.965-5.694 3.977-3.738-.012-5.206-3.208-5.198-7.322h13.966c.019-.464.019-.68 0-.904.091-2.447-.558-4.504-1.737-6.106l-.007.005H24v15.186h-3.039zm-17.206-.001C1.901 17.62.811 14.894.813 11.64c-.002-2.877.902-5.35 2.456-7.232H0v15.187h3.761Z"/>
+  </g>
+</svg>

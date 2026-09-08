@@ -1,12 +1,15 @@
 # Macula SDK
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-28-brightgreen)](https://www.erlang.org)
+[![BEAM](https://img.shields.io/badge/beam-28%2B-A90533?logo=erlang&logoColor=white)](https://www.erlang.org)
 [![Hex.pm](https://img.shields.io/hexpm/v/macula.svg)](https://hex.pm/packages/macula)
 [![GitHub Sponsors](https://img.shields.io/badge/GitHub%20Sponsors-support-ea4aaa.svg?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/rgfaber)
 
 <p align="center">
-  <img src="assets/logo.svg" width="120" height="120" alt="Macula">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/macula-full-dark.svg">
+    <img src="assets/macula-full-light.svg" alt="Macula" width="320">
+  </picture>
 </p>
 
 <p align="center">
