@@ -82,6 +82,10 @@ data in one form, whatever a node has loaded.
   a foundation key, it is `SHA-256("MACULA-KEY-ID-V1" || 0x00 || len(profile) || profile || key as carried)`, bound to
   the profile as D5 is. Every 32-byte field that names a signer holds a key id, and a verifier compares it with the
   key id derived from the key that verified.
+- **Key ids of domain types.** A record of a domain type (tags 0x20 to 0xFF) names its signer by the
+  `MACULA-KEY-ID-V1` key id of `key`, whatever the key's purpose, since a station cannot tell a key's purpose from
+  a domain type. A consumer that knows a signer only by node_id fetches the signer's node record first and derives
+  the key id from its key.
 
 ### Labels
 
@@ -116,6 +120,7 @@ A record is the signed object `{key, tbs, signature}`, with `key` the signer's k
 
 About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 / 5,139 bytes of signature.
 
+- **Size.** Every stack refuses a record whose wire form is larger than 256 KiB, before any other check.
 - **Checks,** after the steps of a signed object:
   - `tbs` holds exactly these keys, with `subject` only where the type allows it;
   - `created_at` is at most 5 minutes ahead of the verifier's clock, and `expires_at` plus 5 minutes has not passed
@@ -143,6 +148,64 @@ A tombstone, type tag 0x0C, withdraws one record before that record expires.
 - A station stores or forwards a tombstone only after it verifies.
 - Its `expires_at` is no earlier than the withdrawn record's, so a replayed copy of that record cannot return after the
   tombstone expires.
+
+The tombstone payload holds exactly `withdrawn_type`, `withdrawn_version`, `reason`, the slot fields of the withdrawn
+type, and optionally `detail`:
+
+| Key | Type | Content |
+|---|---|---|
+| `withdrawn_type` | unsigned | the withdrawn record's type tag |
+| `withdrawn_version` | bytes, 16 | the withdrawn record's `version` |
+| `reason` | text | `shutdown`, `moved` or `revoked` |
+| `detail` | text | optional, free text for people; no check reads it |
+
+| Withdrawn type | Slot fields |
+|---|---|
+| node record, station endpoint, foundation seed list, foundation realm trust list | none |
+| realm directory, realm stations | `realm_id`: bytes, 32 |
+| realm member endorsement | `realm_id`: bytes, 32; `member_node`: bytes, 32 |
+| procedure advertisement | `realm_id`: bytes, 32; `procedure`: text |
+| foundation parameter | `param_name`: text |
+| foundation T3 attestation | `station_id`: bytes, 32 |
+| content announcement | `mcid`: bytes, 50 |
+| org directory | `realm_id`: bytes, 32; `org_name`: text |
+| procedure delegation | `advertiser`: bytes, 32 |
+| domain type | `subject`: bytes, when the withdrawn record has one |
+
+- Slot fields carry the names the withdrawn type's own payload uses.
+- Where a storage key takes the signer's node_id or key id, as for a node record, a station endpoint, the foundation
+  seed list, the foundation parameter, the foundation realm trust list, a procedure delegation and a domain type,
+  that part is the tombstone's own key id, derived as the withdrawn type derives it, and the payload does not repeat
+  it.
+- `shutdown` withdraws a record because its signer stops serving, `moved` because a record in another slot replaces
+  it, and `revoked` because its signer takes back what the record stated.
+
+### Procedure advertisements
+
+The payload of a procedure advertisement, type tag 0x06, holds exactly these keys:
+
+| Key | Type | Content |
+|---|---|---|
+| `realm_id` | bytes, 32 | the realm id |
+| `procedure` | text | the procedure name within the realm |
+| `advertiser_node` | bytes, 32 | the provider's node_id, equal to the key id of `key` |
+| `serving_station` | bytes, 32 | the node_id of the station that serves the provider |
+| `authorization` | map | the provider authorization (D25 item 6): required with an org namespace, absent without |
+
+- `authorization` holds either `org_directory` and `procedure_delegation`, each bytes, the wire form as received of
+  the realm-signed org directory and of the org-signed procedure delegation that names the provider, or
+  `certificate_chain`, an array of bytes, the provider's certificate chain in DER, leaf first. It holds nothing else.
+- A verifier refuses an advertisement for a procedure with an org namespace that carries no `authorization`. An
+  advertisement for a procedure without an org namespace carries none, since there is no delegation to check (D25);
+  whether such procedures need an authorization of their own is open.
+- The provider's signature covers `authorization`. The caller, and a serving station that gates a CALL, check each
+  embedded record's own signature and validity, or the chain against the realm's trust anchor (D25 item 6).
+- They also refuse an advertisement that expires later than the earliest expiry in its authorization: an embedded
+  record's `expires_at`, or a certificate's notAfter. Renewing an authorization therefore means signing the
+  advertisement again, at a new version.
+- A station that stores or forwards an advertisement checks only the outer record, its signature and its own
+  expiry, and never parses `authorization`.
+- A consumer takes the realm and the procedure from these fields; no advertisement carries a procedure URI.
 
 ### Storage keys
 
@@ -405,9 +468,9 @@ publication bytes ride in the PUBLISH and in every EVENT made from it, so `tbs` 
 
 ### Advertisements: ADVERTISE and UNADVERTISE
 
-- ADVERTISE carries `advertisement`, the provider's signed procedure advertisement record (D25 item 1), and
-  `authorization`, the records or the certificate chain of the realm's provider authorization (item 6). Stations
-  forward both unchanged.
+- ADVERTISE carries `advertisement`, the provider's signed procedure advertisement record (D25 item 1), whose payload
+  holds the realm's provider authorization (item 6). Stations forward it unchanged, and a DHT VALUE returns it the
+  same way.
 - UNADVERTISE carries `withdrawal`, a tombstone signed by the provider in the advertisement's slot, with a later
   version (item 8). A lost withdrawal lasts at most until the advertisement's validity ends.
 

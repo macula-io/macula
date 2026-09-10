@@ -295,6 +295,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - every dial target, including redundancy candidates, carries an expected node_id;
   - neighbour signatures per D17, and publisher signatures verified at the origin station;
   - record fan-out, DHT handlers and content handlers read peer-supplied maps through the facade accessors (D26);
+  - stations keep and serve verified records of any type, including domain types they don't know, until they
+    expire; a test stores and fetches one (D23);
   - content ids have only tag 2, SHA-384, in the post-quantum format: the content hasher, the content store, the
     manifest, announcements and the content DHT key use it, and refuse an id with any other tag (D24);
   - advertisement gossip forwards providers' signed advertisements unchanged and drops expired ones; routing
@@ -736,6 +738,8 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
     2026-09-10);
   - `macula-mcp` keeps the bytes-for-agents rules of WP 4.2 in the post-quantum formats, including `"0x"` with hex as
     its default output, which its internal decoders use;
+  - `macula-mcp`'s `mesh_find_records_by_type` reads a procedure advertisement's realm and procedure from its
+    `realm_id` and `procedure` fields (WP 1.3);
   - release on tag: goreleaser for `macula-cli`, npm for `macula-mcp`.
 - **Red first:** each tool's connection test against the new fleet fails before its cutover.
 - **Effort:** ⚠.
@@ -794,6 +798,9 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
 ---
 
 ## Release after Stage 6
+
+`macula` 11.0.0 waits on WP 3.1 settling how an EU-profile credential carries the composite key, so that EU-profile
+provider certificate chains verify (D25 item 6). Until then `macula` refuses them.
 
 1. `macula` 11.0.0 on hex. Raf publishes hex.
 2. SDK releases on their publish triggers: `macula-go` tag, `macula-cli` (goreleaser on tag), `macula-ts` (npm on
