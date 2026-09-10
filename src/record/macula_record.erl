@@ -162,9 +162,9 @@
 -define(STORAGE_DOMAIN_PROC_DELEGATION,  <<"procedure_delegation">>).
 -define(STORAGE_DOMAIN_STATION_ENDPOINT, <<"station_endpoint">>).
 
-%% station_endpoint record TTL (Part 4 §11). Mirrors macula_dist_discovery:
-%% short enough to drop stale stations within minutes, long enough that a
-%% one-minute refresh keeps it live.
+%% station_endpoint record TTL (Part 4 §11): short enough to drop stale
+%% stations within minutes, long enough that a one-minute refresh keeps
+%% it live.
 -define(STATION_ENDPOINT_TTL_MS, 5 * 60 * 1000).
 
 %% Default endorsement validity window (30 days).

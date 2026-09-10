@@ -28,6 +28,21 @@ ensure_distributed_returns_ok_or_error_test() ->
     ?assert(Result =:= ok orelse element(1, Result) =:= error).
 
 %%%===================================================================
+%%% Strategy Selection Tests
+%%%===================================================================
+
+%% `dht' and `mdns' were removed in 11.0.0 and are refused like any other
+%% unknown strategy, without starting distribution.
+start_cluster_refuses_unknown_strategy_test() ->
+    lists:foreach(fun assert_strategy_refused/1, [dht, mdns, no_such_strategy]).
+
+assert_strategy_refused(Strategy) ->
+    DistributedBefore = macula_cluster:is_distributed(),
+    ?assertEqual({error, {unknown_strategy, Strategy}},
+                 macula_cluster:start_cluster(#{strategy => Strategy})),
+    ?assertEqual(DistributedBefore, macula_cluster:is_distributed()).
+
+%%%===================================================================
 %%% Cookie Resolution Tests
 %%%===================================================================
 
