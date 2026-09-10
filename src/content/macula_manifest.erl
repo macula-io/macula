@@ -110,7 +110,7 @@ create(Data, Opts) when is_binary(Data), is_map(Opts) ->
 %% computed (with whichever algorithm `create/2' was given) and stored
 %% in `Chunks', so there's nothing left to derive here. KNOWN GAP
 %% (2026-09-05, will not be fixed without a design decision): per-chunk
-%% fetch verification (`macula_content_transfer:verify_block_hash/2') is
+%% fetch verification in `macula_content_transfer' is
 %% hardcoded to blake3 regardless of this field, so a manifest created
 %% with `hash_algorithm => sha256' produces chunk MCIDs that can never
 %% actually verify on fetch. `hash_algorithm' today only affects the

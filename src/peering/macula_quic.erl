@@ -354,7 +354,7 @@ async_shutdown_connection(Conn, _Flag, _Code) ->
 %% function — see macula-station `plans/PLAN_WIRE_LIVENESS_TRIPWIRE.md'
 %% commit 5.
 %%
-%% The sole consumer, `macula_dist:quic_getstat/1', already has an
+%% The sole consumer, the getstat callback in `macula_dist', already has an
 %% `{error, _} -> {ok, 0, 0, 0}' branch, so this changes no behaviour
 %% there. It changes what the next caller is told.
 -spec getstat(reference(), [atom()]) -> {error, not_implemented}.
