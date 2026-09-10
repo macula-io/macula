@@ -125,7 +125,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     profile (D4), signing as Macula's composite `ML-DSA-87-PS384` (D7);
   - CONNECT keys and TLS keys, their bindings and their status (D22); key storage per D6, with a round trip on
     load and rotation every 5 days;
-  - node_id per D5, through one identity function that every comparison uses; the puzzle works on node_id;
+  - node_id per D5, through one identity function that every comparison uses; the puzzle works on node_id, and
+    identity key generation regenerates only the ML-DSA-87 half of a pq_hybrid key;
   - record `key` and `signature`, and frame signature fields, become algorithm-tagged and variable-length; records
     carry the signer's full public key or keys (D13);
   - every DHT storage key is SHA-256: a record stored under its signer uses the signer's node_id, and every other
@@ -417,7 +418,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - a separate realm deployment `io.macula` in the EU profile (D19), and the US-profile realm (name open);
   - the distribution relay of WP 3.4, one instance per profile, with hostnames distinct from the live fleet;
   - `macula-station` builds against `macula` branch `post-quantum` (D20);
-  - every fleet node runs chrony with NTS against at least two independent servers (D22); which servers is open.
+  - every fleet node runs chrony with NTS against at least two independent servers (D22); which servers is open;
+  - station instances start with puzzle enforcement in `log_only`; `enforce` follows in WP 4.5.
 - **Red first:** the Stage 2 smoke check against the new fleet fails before provisioning.
 - **Done:** every station instance is reachable in its profile under the node_ids in its seeds.
 - **Effort:** 3 to 5 days, plus configuration generation ⚠.
@@ -498,6 +500,7 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - the handshake frames and identity per WP 1.3, with the EU classical half per D4 and V8.
 - **Red first:**
   - the WP 1.2 and WP 1.5 assertions, as integration tests against the new fleet;
+  - identity key generation runs the node_id puzzle loop, regenerating only the ML-DSA-87 half of a pq_hybrid key;
   - a provider verifies every inbound CALL's signature against its caller before the handler runs; an unverified
     CALL reaches no handler and gets no reply;
   - a caller verifies every RESULT and ERROR signature against `responded_by` or `reported_by` before returning
@@ -564,6 +567,8 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
     - tagged output is opt-in per call, subscription and serve, and `"0x"` with hex stays the default;
     - Go's FFI layer makes the output choice, because only Go knows which values were bytes.
 - **Red first:**
+  - in `macula-go`, identity key generation runs the node_id puzzle loop, regenerating only
+    the ML-DSA-87 half of a pq_hybrid key; `macula-ts` takes it through Go;
   - `transport/pq_handshake_test.go` (new) asserts `ConnectionState().TLS.CurveID`, the certificate signature
     algorithm and the cipher suite per profile, and refusal of a classical-only peer and of an unbound TLS key;
     an FFI size-mismatch test fails instead of truncating;
@@ -637,6 +642,7 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - the `cryptography` floor raised to a version with ML-KEM and ML-DSA;
   - the token checks of WP 1.4, for calls and streams.
 - **Red first:**
+  - identity key generation runs the node_id puzzle loop, regenerating only the ML-DSA-87 half of a pq_hybrid key;
   - `tests/test_pq_handshake.py`, against the new fleet: success in the client's profile, and failure against a
     classical-only station and against an unbound TLS key;
   - `Session.connect` takes the expected station identity from the seed list and refuses a station whose HELLO
@@ -674,6 +680,7 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - an expected node id in `Seed`, and one trust mode replacing `Trust.Pinned`, `Trust.WebPki` and
     `Trust.Insecure`;
   - the connection handshake frames;
+  - identity key generation with the node_id puzzle loop, on the ML-DSA-87 half of a pq_hybrid key;
   - Linux CI on an image with OpenSSL 3.5 or newer, and a `windows-latest` runner for the Schannel result.
 - **Files:**
   - `src/Macula/Macula.csproj`
@@ -694,7 +701,9 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - each client stack against the new fleet's station instances, in its profile;
   - the group, signature scheme and cipher suite checked two independent ways that agree;
   - the connection handshake checked, and a classical-only client and X25519MLKEM768 refused;
-  - the cross-stack leaf-hash vector through each stack's real handshake and accessor.
+  - the cross-stack leaf-hash vector through each stack's real handshake and accessor;
+  - once every stack generates puzzle-valid identity keys, the fleet switches puzzle enforcement from `log_only`
+    to `enforce`, and every cell passes again under `enforce`.
 - **Done:** every cell green for its profile, with captures stored as CI artifacts. This is the evidence for any
   public claim about that stack.
 - **Effort:** 2 to 3 days, together with WP 2.2.

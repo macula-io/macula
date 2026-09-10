@@ -162,7 +162,9 @@ MACULA-PQ-CONNECT-PROOF-V1 || 0x00
   never the currently configured certificate: a listener reloads its certificate on rotation (D22), and a connection
   can straddle a reload.
 - The challenge hash binds the profile and the station's binding and status, not only the fields listed above.
-- The station derives the client's node_id from `identity_key` (D5) and checks the puzzle on that node_id (WP 1.3).
+- The station derives the client's node_id from `identity_key` (D5) and checks the puzzle on that node_id (WP 1.3)
+  inside its CONNECT check, before any signature and before HELLO, under a mode of `off`, `log_only` or
+  `enforce`: `enforce` refuses with `puzzle_invalid`, and `log_only` accepts and reports the unsolved puzzle.
 - The version 2 fields `node_id`, `station_id`, `puzzle_evidence`, `realms`, `addresses`, `site` and `endorsements` are
   not part of CONNECT.
 
@@ -203,6 +205,8 @@ Each side keeps the peer's current expiry and a timer at expiry plus 5 minutes.
     station's derived node_id: not the station the dialer meant;
   - `node_id_mismatch`, when a binding or a statement names a node_id other than the one derived from the carried
     identity key: frames that are inconsistent with each other;
+  - `key_purpose_reuse`, when one key would serve two purposes (D6, D16): the leaf carries the station's identity
+    key or the client's CONNECT key, or a CONNECT key shares a half with its identity key;
   - `puzzle_invalid`;
 - bindings: `binding_signature_invalid`, `binding_wrong_use`, `binding_key_mismatch`, `binding_expired`,
   `binding_not_yet_valid`;
