@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.23.0] - 2026-09-10
+
 ### Changed
 
 - `pubsub_strict_publisher_sig` now defaults to `true`. An inbound EVENT
