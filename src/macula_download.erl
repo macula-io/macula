@@ -177,7 +177,7 @@ spawn_worker(pooled, Pool, Mcid, ShareId) ->
         {ok, CTPid} = macula_content_transfer:start_get(Pool, Mcid, #{share_id => ShareId}),
         Parent ! {content_transfer, CTPid},
         Result = macula_content_transfer:await(CTPid),
-        try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
+        reap_content_transfer(CTPid),
         Parent ! {download_result, Result}
     end);
 %% Resolving `Mcid''s provider stays a plain blocking DHT lookup here
@@ -196,7 +196,7 @@ direct_worker_run(Pool, Mcid, ShareId, Parent) ->
                 Pool, Endpoint, Mcid, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts),
             Parent ! {content_transfer, CTPid},
             Result = macula_content_transfer:await(CTPid),
-            try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
+            reap_content_transfer(CTPid),
             Parent ! {download_result, Result};
         {error, Reason} ->
             Parent ! {download_result, {error, {unresolved, Reason}}}
