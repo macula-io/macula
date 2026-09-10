@@ -14,7 +14,7 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 ### Added
 
 - `macula_crypto_profile`: the two post-quantum profiles,
-  `us` and `eu`, each with its key exchange group, TLS
+  `pq_pure` and `pq_hybrid`, each with its key exchange group, TLS
   signature scheme, cipher suite, signature algorithms and digests.
 - `macula_node_keys`: a node's identity, CONNECT and TLS keys for its
   profile. ML-DSA-87 private keys are stored in their expanded form and
@@ -31,10 +31,10 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 ### Changed
 
 - The `macula` application starts only with `crypto_profile` set to
-  `us` or `eu` in its environment. A missing value, an
+  `pq_pure` or `pq_hybrid` in its environment. A missing value, an
   unknown value or a list of profiles makes the start return an error.
   There is no default. The test configuration, `config/test.sys.config`,
-  sets `us`.
+  sets `pq_pure`.
 
 ### Removed
 

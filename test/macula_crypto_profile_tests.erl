@@ -19,7 +19,7 @@
 %%------------------------------------------------------------------
 
 profiles_are_us_and_eu_test() ->
-    ?assertEqual([us, eu], macula_crypto_profile:profiles()).
+    ?assertEqual([pq_pure, pq_hybrid], macula_crypto_profile:profiles()).
 
 every_profile_has_a_definition_test() ->
     [?assertMatch({ok, #{profile := P}}, macula_crypto_profile:definition(P))
@@ -38,7 +38,7 @@ missing_profile_is_refused_test() ->
                  macula_crypto_profile:validate(undefined)).
 
 two_profiles_are_refused_test() ->
-    Both = [us, eu],
+    Both = [pq_pure, pq_hybrid],
     ?assertEqual({error, {crypto_profile_not_single, Both}},
                  macula_crypto_profile:validate(Both)).
 
@@ -47,9 +47,9 @@ unknown_profile_is_refused_test() ->
                  macula_crypto_profile:validate(classical)).
 
 known_profiles_are_accepted_test() ->
-    ?assertEqual({ok, us},
-                 macula_crypto_profile:validate(us)),
-    ?assertEqual({ok, eu}, macula_crypto_profile:validate(eu)).
+    ?assertEqual({ok, pq_pure},
+                 macula_crypto_profile:validate(pq_pure)),
+    ?assertEqual({ok, pq_hybrid}, macula_crypto_profile:validate(pq_hybrid)).
 
 configured_profile_comes_from_the_application_environment_test_() ->
     {setup,
@@ -59,8 +59,8 @@ configured_profile_comes_from_the_application_environment_test_() ->
          ok = application:unset_env(macula, crypto_profile),
          ?assertEqual({error, crypto_profile_missing},
                       macula_crypto_profile:configured()),
-         ok = application:set_env(macula, crypto_profile, eu),
-         ?assertEqual({ok, eu}, macula_crypto_profile:configured())
+         ok = application:set_env(macula, crypto_profile, pq_hybrid),
+         ?assertEqual({ok, pq_hybrid}, macula_crypto_profile:configured())
      end}.
 
 application_refuses_to_start_without_a_profile_test_() ->
@@ -96,13 +96,13 @@ every_post_quantum_algorithm_is_at_level_5_test() ->
      || P <- macula_crypto_profile:profiles()].
 
 us_profile_is_post_quantum_only_test() ->
-    {ok, D} = macula_crypto_profile:definition(us),
+    {ok, D} = macula_crypto_profile:definition(pq_pure),
     ?assertEqual(mlkem1024, maps:get(key_exchange_group, D)),
     [?assertEqual([mldsa87], maps:get(K, D))
      || K <- [identity_signature, connect_proof_signature, status_signature]].
 
 eu_signatures_pair_mldsa87_with_a_bsi_classical_algorithm_test() ->
-    {ok, D} = macula_crypto_profile:definition(eu),
+    {ok, D} = macula_crypto_profile:definition(pq_hybrid),
     ?assertEqual(secp384r1_mlkem1024, maps:get(key_exchange_group, D)),
     [begin
          [mldsa87, {Classical, _Params}] = maps:get(K, D),
@@ -112,7 +112,7 @@ eu_signatures_pair_mldsa87_with_a_bsi_classical_algorithm_test() ->
 
 eu_classical_half_is_rsa_pss_4096_with_sha384_test() ->
     {ok, #{identity_signature := [mldsa87, {rsa_pss, Params}]}} =
-        macula_crypto_profile:definition(eu),
+        macula_crypto_profile:definition(pq_hybrid),
     ?assertEqual(#{modulus_bits => 4096, public_exponent => 65537,
                    digest => sha384, mgf1_digest => sha384, salt_bytes => 48},
                  Params).

@@ -108,17 +108,17 @@ sign(Message, #{profile := Profile,
 %% @doc Verify a signature with the public key a node carries, under a profile. Malformed input is refused, never
 %% raised on.
 -spec verify(iodata(), binary(), binary(), term()) -> boolean().
-verify(Message, Signature, Public, us)
+verify(Message, Signature, Public, pq_pure)
   when byte_size(Signature) =:= ?MLDSA87_SIGNATURE_BYTES, byte_size(Public) =:= ?MLDSA87_PUBLIC_BYTES ->
     verified_call(fun() -> crypto:verify(mldsa87, none, Message, Signature, Public) end);
 verify(Message, <<MlDsaSignature:?MLDSA87_SIGNATURE_BYTES/binary, RsaSignature/binary>>,
-       <<MlDsaPublic:?MLDSA87_PUBLIC_BYTES/binary, RsaPublicDer/binary>>, eu) ->
+       <<MlDsaPublic:?MLDSA87_PUBLIC_BYTES/binary, RsaPublicDer/binary>>, pq_hybrid) ->
     Representative = composite_representative(Message),
     MlDsaValid = verified_call(fun() ->
         crypto:verify(mldsa87, none, Representative, MlDsaSignature, MlDsaPublic)
     end),
     rsa_half_verifies(MlDsaValid, decode_rsa_public(RsaPublicDer), RsaSignature, Representative,
-                      composite_rsa_params(eu));
+                      composite_rsa_params(pq_hybrid));
 verify(_Message, _Signature, _Public, _Profile) ->
     false.
 
@@ -381,11 +381,11 @@ tag_purpose(2) -> {ok, connect};
 tag_purpose(3) -> {ok, tls};
 tag_purpose(_) -> error.
 
-profile_tag(us) -> 1;
-profile_tag(eu)                   -> 2.
+profile_tag(pq_pure)   -> 1;
+profile_tag(pq_hybrid) -> 2.
 
-tag_profile(1) -> {ok, us};
-tag_profile(2) -> {ok, eu};
+tag_profile(1) -> {ok, pq_pure};
+tag_profile(2) -> {ok, pq_hybrid};
 tag_profile(_) -> error.
 
 algorithm_tag(mldsa87) -> 1;

@@ -12,25 +12,25 @@
 %%------------------------------------------------------------------
 
 us_identity_key_is_one_mldsa87_pair_test() ->
-    {ok, Key} = macula_node_keys:generate(identity, us),
-    ?assertMatch(#{purpose := identity, profile := us,
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+    ?assertMatch(#{purpose := identity, profile := pq_pure,
                    components := [#{algorithm := mldsa87}]}, Key),
     [#{public := Public, private := Private}] = maps:get(components, Key),
     ?assertEqual({2592, 4896}, {byte_size(Public), byte_size(Private)}).
 
 us_connect_key_is_one_mldsa87_pair_test() ->
-    {ok, Key} = macula_node_keys:generate(connect, us),
+    {ok, Key} = macula_node_keys:generate(connect, pq_pure),
     ?assertMatch(#{purpose := connect, components := [#{algorithm := mldsa87}]}, Key).
 
 tls_key_is_mldsa87_alone_in_both_profiles_test_() ->
     [?_assertMatch({ok, #{purpose := tls, profile := Profile, components := [#{algorithm := mldsa87}]}},
                    macula_node_keys:generate(tls, Profile))
-     || Profile <- [us, eu]].
+     || Profile <- [pq_pure, pq_hybrid]].
 
 eu_identity_and_connect_keys_pair_mldsa87_with_rsa_pss_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
         [begin
-             {ok, Key} = macula_node_keys:generate(Purpose, eu),
+             {ok, Key} = macula_node_keys:generate(Purpose, pq_hybrid),
              ?assertMatch(#{components := [#{algorithm := mldsa87}, #{algorithm := rsa_pss}]}, Key)
          end
          || Purpose <- [identity, connect]]
@@ -38,7 +38,7 @@ eu_identity_and_connect_keys_pair_mldsa87_with_rsa_pss_test_() ->
 
 unknown_purpose_is_refused_test() ->
     ?assertEqual({error, {unknown_purpose, signing}},
-                 macula_node_keys:generate(signing, us)).
+                 macula_node_keys:generate(signing, pq_pure)).
 
 unknown_profile_is_refused_test() ->
     ?assertEqual({error, {crypto_profile_unknown, rsa_only}},
@@ -49,95 +49,95 @@ unknown_profile_is_refused_test() ->
 %%------------------------------------------------------------------
 
 us_keys_survive_save_and_load_test_() ->
-    [?_test(assert_round_trip(Purpose, us)) || Purpose <- [identity, connect, tls]].
+    [?_test(assert_round_trip(Purpose, pq_pure)) || Purpose <- [identity, connect, tls]].
 
 eu_keys_survive_save_and_load_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
-        [assert_round_trip(Purpose, eu) || Purpose <- [identity, tls]]
+        [assert_round_trip(Purpose, pq_hybrid) || Purpose <- [identity, tls]]
     end}.
 
 saved_file_is_readable_by_its_owner_only_test() ->
     Path = mktmp("identity.key"),
-    {ok, Key} = macula_node_keys:generate(identity, us),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     ok = macula_node_keys:save(Path, Key),
     {ok, #file_info{mode = Mode}} = file:read_file_info(Path),
     ?assertEqual(8#0600, Mode band 8#0777).
 
 missing_file_returns_enoent_test() ->
     ?assertEqual({error, enoent},
-                 macula_node_keys:load("/nonexistent/xyz/identity.key", identity, us)).
+                 macula_node_keys:load("/nonexistent/xyz/identity.key", identity, pq_pure)).
 
 %%------------------------------------------------------------------
 %% What load refuses
 %%------------------------------------------------------------------
 
 stored_mldsa87_public_key_that_differs_from_the_derived_one_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(identity, us),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     [Component = #{public := Public}] = maps:get(components, Key),
     Tampered = Key#{components := [Component#{public := flip_byte(Public, 100)}]},
-    ?assertEqual({error, public_key_mismatch}, save_and_load(Tampered, identity, us)).
+    ?assertEqual({error, public_key_mismatch}, save_and_load(Tampered, identity, pq_pure)).
 
 stored_rsa_public_key_that_differs_from_the_derived_one_is_refused_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
-        {ok, Key} = macula_node_keys:generate(identity, eu),
-        {ok, Other} = macula_node_keys:generate(connect, eu),
+        {ok, Key} = macula_node_keys:generate(identity, pq_hybrid),
+        {ok, Other} = macula_node_keys:generate(connect, pq_hybrid),
         [MlDsa, Rsa] = maps:get(components, Key),
         [_, #{public := OtherRsaPublic}] = maps:get(components, Other),
         Tampered = Key#{components := [MlDsa, Rsa#{public := OtherRsaPublic}]},
-        ?assertEqual({error, public_key_mismatch}, save_and_load(Tampered, identity, eu))
+        ?assertEqual({error, public_key_mismatch}, save_and_load(Tampered, identity, pq_hybrid))
     end}.
 
 corrupted_mldsa87_private_key_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(identity, us),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     [Component = #{private := Private}] = maps:get(components, Key),
     %% Byte 64 lies in tr, the hash of the public key inside the expanded key: the public key can still derive, so
     %% either the import or the sign-and-verify round trip has to catch it.
     Corrupted = Key#{components := [Component#{private := flip_byte(Private, 64)}]},
-    {error, Reason} = save_and_load(Corrupted, identity, us),
+    {error, Reason} = save_and_load(Corrupted, identity, pq_pure),
     ?assert(lists:member(Reason, [private_key_invalid, round_trip_failed, public_key_mismatch])).
 
 truncated_mldsa87_private_key_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(identity, us),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     [Component = #{private := <<Short:4000/binary, _/binary>>}] = maps:get(components, Key),
     Truncated = Key#{components := [Component#{private := Short}]},
-    ?assertEqual({error, private_key_invalid}, save_and_load(Truncated, identity, us)).
+    ?assertEqual({error, private_key_invalid}, save_and_load(Truncated, identity, pq_pure)).
 
 key_saved_for_another_purpose_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(connect, us),
-    ?assertEqual({error, {wrong_purpose, connect}}, save_and_load(Key, identity, us)).
+    {ok, Key} = macula_node_keys:generate(connect, pq_pure),
+    ?assertEqual({error, {wrong_purpose, connect}}, save_and_load(Key, identity, pq_pure)).
 
 key_saved_for_another_profile_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(tls, us),
-    ?assertEqual({error, {wrong_profile, us}}, save_and_load(Key, tls, eu)).
+    {ok, Key} = macula_node_keys:generate(tls, pq_pure),
+    ?assertEqual({error, {wrong_profile, pq_pure}}, save_and_load(Key, tls, pq_hybrid)).
 
 key_whose_algorithms_do_not_match_its_purpose_and_profile_is_refused_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
-        {ok, EuKey} = macula_node_keys:generate(identity, eu),
-        Relabelled = EuKey#{profile := us},
+        {ok, EuKey} = macula_node_keys:generate(identity, pq_hybrid),
+        Relabelled = EuKey#{profile := pq_pure},
         ?assertEqual({error, {wrong_algorithms, [mldsa87, rsa_pss]}},
-                     save_and_load(Relabelled, identity, us))
+                     save_and_load(Relabelled, identity, pq_pure))
     end}.
 
 ed25519_key_file_is_refused_test() ->
     Path = mktmp("identity.key"),
     ok = macula_identity:save(Path, macula_identity:generate()),
-    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, us)).
+    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, pq_pure)).
 
 file_with_trailing_bytes_is_refused_test() ->
     Path = mktmp("identity.key"),
-    {ok, Key} = macula_node_keys:generate(identity, us),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     ok = macula_node_keys:save(Path, Key),
     {ok, Bin} = file:read_file(Path),
     ok = file:write_file(Path, <<Bin/binary, 0>>),
-    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, us)).
+    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, pq_pure)).
 
 truncated_file_is_refused_test() ->
     Path = mktmp("identity.key"),
-    {ok, Key} = macula_node_keys:generate(identity, us),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     ok = macula_node_keys:save(Path, Key),
     {ok, <<Head:1000/binary, _/binary>>} = file:read_file(Path),
     ok = file:write_file(Path, Head),
-    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, us)).
+    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, pq_pure)).
 
 %%------------------------------------------------------------------
 %% Helpers

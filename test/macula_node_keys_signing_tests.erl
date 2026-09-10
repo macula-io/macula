@@ -35,9 +35,9 @@ us_signing_test_() ->
         Public = macula_node_keys:public_key(Key),
         [?_assertEqual({4627, 2592}, {byte_size(Signature), byte_size(Public)}),
          ?_assert(crypto:verify(mldsa87, none, Message, Signature, Public)),
-         ?_assert(macula_node_keys:verify(Message, Signature, Public, us)),
-         ?_assertNot(macula_node_keys:verify(<<"another record">>, Signature, Public, us)),
-         ?_assertNot(macula_node_keys:verify(Message, Signature, Public, eu))]
+         ?_assert(macula_node_keys:verify(Message, Signature, Public, pq_pure)),
+         ?_assertNot(macula_node_keys:verify(<<"another record">>, Signature, Public, pq_pure)),
+         ?_assertNot(macula_node_keys:verify(Message, Signature, Public, pq_hybrid))]
     end}.
 
 %%------------------------------------------------------------------
@@ -58,17 +58,17 @@ eu_signing_test_() ->
          %% Both halves sign the same message representative; ML-DSA-87 with an empty context.
          ?_assert(crypto:verify(mldsa87, none, Representative, MlDsaSignature, MlDsaPublic)),
          ?_assert(crypto:verify(rsa, sha384, Representative, RsaSignature, [E, N], ?PSS_OPTIONS)),
-         ?_assert(macula_node_keys:verify(Message, Signature, Public, eu)),
-         ?_assertNot(macula_node_keys:verify(<<"another record">>, Signature, Public, eu)),
+         ?_assert(macula_node_keys:verify(Message, Signature, Public, pq_hybrid)),
+         ?_assertNot(macula_node_keys:verify(<<"another record">>, Signature, Public, pq_hybrid)),
          %% A signature with one invalid half is refused.
-         ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 10), Public, eu)),
-         ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 4627 + 10), Public, eu)),
+         ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 10), Public, pq_hybrid)),
+         ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 4627 + 10), Public, pq_hybrid)),
          %% A half on its own is not a signature.
-         ?_assertNot(macula_node_keys:verify(Message, MlDsaSignature, Public, eu)),
-         ?_assertNot(macula_node_keys:verify(Message, MlDsaSignature, MlDsaPublic, us)),
+         ?_assertNot(macula_node_keys:verify(Message, MlDsaSignature, Public, pq_hybrid)),
+         ?_assertNot(macula_node_keys:verify(Message, MlDsaSignature, MlDsaPublic, pq_pure)),
          %% The composite is not accepted under the other profile, nor with a non-canonical key encoding.
-         ?_assertNot(macula_node_keys:verify(Message, Signature, Public, us)),
-         ?_assertNot(macula_node_keys:verify(Message, Signature, <<Public/binary, 0>>, eu))]
+         ?_assertNot(macula_node_keys:verify(Message, Signature, Public, pq_pure)),
+         ?_assertNot(macula_node_keys:verify(Message, Signature, <<Public/binary, 0>>, pq_hybrid))]
     end}}.
 
 %%------------------------------------------------------------------
@@ -76,15 +76,15 @@ eu_signing_test_() ->
 %%------------------------------------------------------------------
 
 malformed_input_is_refused_without_raising_test_() ->
-    [?_assertNot(macula_node_keys:verify(<<"m">>, <<>>, <<>>, us)),
-     ?_assertNot(macula_node_keys:verify(<<"m">>, <<0:4627/unit:8>>, <<0:2592/unit:8>>, us)),
-     ?_assertNot(macula_node_keys:verify(<<"m">>, <<0:5139/unit:8>>, <<0:3118/unit:8>>, eu)),
+    [?_assertNot(macula_node_keys:verify(<<"m">>, <<>>, <<>>, pq_pure)),
+     ?_assertNot(macula_node_keys:verify(<<"m">>, <<0:4627/unit:8>>, <<0:2592/unit:8>>, pq_pure)),
+     ?_assertNot(macula_node_keys:verify(<<"m">>, <<0:5139/unit:8>>, <<0:3118/unit:8>>, pq_hybrid)),
      ?_assertNot(macula_node_keys:verify(<<"m">>, <<"sig">>, <<"key">>, rsa_only))].
 
 ed25519_signature_is_refused_test() ->
     Ed25519 = macula_identity:generate(),
     Signature = macula_identity:sign(<<"m">>, Ed25519),
-    ?assertNot(macula_node_keys:verify(<<"m">>, Signature, macula_identity:public(Ed25519), us)).
+    ?assertNot(macula_node_keys:verify(<<"m">>, Signature, macula_identity:public(Ed25519), pq_pure)).
 
 %%------------------------------------------------------------------
 %% Cross-stack vectors: composites signed by OTP and by Go in the Go V8 check (2026-09-10)
@@ -92,11 +92,11 @@ ed25519_signature_is_refused_test() ->
 
 cross_stack_composite_vectors_test_() ->
     Message = fixture("message.bin"),
-    [{Signer, [?_assert(macula_node_keys:verify(Message, Signature, Public, eu)),
-               ?_assertNot(macula_node_keys:verify(<<Message/binary, 0>>, Signature, Public, eu)),
-               ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 10), Public, eu)),
-               ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 4627 + 10), Public, eu)),
-               ?_assertNot(macula_node_keys:verify(Message, Signature, Public, us))]}
+    [{Signer, [?_assert(macula_node_keys:verify(Message, Signature, Public, pq_hybrid)),
+               ?_assertNot(macula_node_keys:verify(<<Message/binary, 0>>, Signature, Public, pq_hybrid)),
+               ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 10), Public, pq_hybrid)),
+               ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 4627 + 10), Public, pq_hybrid)),
+               ?_assertNot(macula_node_keys:verify(Message, Signature, Public, pq_pure))]}
      || Signer <- ["otp", "go"],
         Public <- [fixture(Signer ++ "_composite_pub.bin")],
         Signature <- [fixture(Signer ++ "_composite_sig.bin")]].
@@ -106,11 +106,11 @@ cross_stack_composite_vectors_test_() ->
 %%------------------------------------------------------------------
 
 us_identity_key() ->
-    {ok, Key} = macula_node_keys:generate(identity, us),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
     Key.
 
 eu_identity_key() ->
-    {ok, Key} = macula_node_keys:generate(identity, eu),
+    {ok, Key} = macula_node_keys:generate(identity, pq_hybrid),
     Key.
 
 representative(Message) ->

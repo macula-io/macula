@@ -6,10 +6,10 @@
 %% start without exactly one known profile.
 %%
 %% <ul>
-%%   <li>`us': the CNSA 2.0 algorithms. ML-KEM-1024
+%%   <li>`pq_pure': the CNSA 2.0 algorithms. ML-KEM-1024
 %%       key exchange, ML-DSA-87 signatures, AES-256, no classical
 %%       half.</li>
-%%   <li>`eu': SecP384r1MLKEM1024 hybrid key exchange, ML-DSA-87 alone
+%%   <li>`pq_hybrid': SecP384r1MLKEM1024 hybrid key exchange, ML-DSA-87 alone
 %%       in TLS, and every other signature hybrid: ML-DSA-87 plus
 %%       RSA-PSS-4096 with SHA-384, valid only if both halves
 %%       verify.</li>
@@ -27,7 +27,7 @@
 
 -export_type([profile/0, definition/0, signature_algorithm/0, refusal/0]).
 
--type profile() :: us | eu.
+-type profile() :: pq_pure | pq_hybrid.
 -type rsa_pss_params() :: #{
     modulus_bits    := 4096,
     public_exponent := 65537,
@@ -68,17 +68,17 @@
 %% @doc The profiles a node can run.
 -spec profiles() -> [profile(), ...].
 profiles() ->
-    [us, eu].
+    [pq_pure, pq_hybrid].
 
 %% @doc The algorithms of a profile. A signature is a list of
 %% algorithms: ML-DSA-87 first, then the classical half of a hybrid
 %% signature when the profile has one.
 -spec definition(term()) ->
         {ok, definition()} | {error, {crypto_profile_unknown, term()}}.
-definition(us) ->
-    {ok, profile_definition(us, mlkem1024, [mldsa87])};
-definition(eu) ->
-    {ok, profile_definition(eu, secp384r1_mlkem1024, [mldsa87, ?RSA_PSS_4096])};
+definition(pq_pure) ->
+    {ok, profile_definition(pq_pure, mlkem1024, [mldsa87])};
+definition(pq_hybrid) ->
+    {ok, profile_definition(pq_hybrid, secp384r1_mlkem1024, [mldsa87, ?RSA_PSS_4096])};
 definition(Other) ->
     {error, {crypto_profile_unknown, Other}}.
 
