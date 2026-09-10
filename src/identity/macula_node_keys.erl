@@ -219,7 +219,7 @@ checked_algorithms(_Key, {error, _} = Error) ->
     Error.
 
 checked_components(#{components := Components} = Key, true, _Found, Expected) ->
-    first_refusal([check_component(C, A) || {C, A} <- lists:zip(Components, Expected)], Key);
+    whole_key_round_trip(first_refusal([check_component(C, A) || {C, A} <- lists:zip(Components, Expected)], Key));
 checked_components(_Key, false, Found, _Expected) ->
     {error, {wrong_algorithms, Found}}.
 
@@ -230,7 +230,7 @@ first_refusal(Results, Key) ->
     end.
 
 check_component(#{algorithm := mldsa87, public := Public, private := Private}, mldsa87) ->
-    mldsa87_public_matches(derive_mldsa87_public(Private), Public, Private);
+    mldsa87_public_matches(derive_mldsa87_public(Private), Public);
 check_component(#{algorithm := rsa_pss, public := Public, private := Private}, {rsa_pss, Params}) ->
     rsa_public_matches(decode_rsa_private(Private), Public, Params).
 
@@ -243,12 +243,11 @@ derive_mldsa87_public(Private) when byte_size(Private) =:= ?MLDSA87_EXPANDED_BYT
 derive_mldsa87_public(_Private) ->
     {error, private_key_invalid}.
 
-mldsa87_public_matches({ok, Public}, Public, Private) ->
-    round_trip(fun(Message) -> crypto:sign(mldsa87, none, Message, Private) end,
-               fun(Message, Signature) -> crypto:verify(mldsa87, none, Message, Signature, Public) end);
-mldsa87_public_matches({ok, _Derived}, _Public, _Private) ->
+mldsa87_public_matches({ok, Public}, Public) ->
+    ok;
+mldsa87_public_matches({ok, _Derived}, _Public) ->
     {error, public_key_mismatch};
-mldsa87_public_matches({error, _} = Error, _Public, _Private) ->
+mldsa87_public_matches({error, _} = Error, _Public) ->
     Error.
 
 decode_rsa_private(Der) ->
@@ -265,22 +264,32 @@ rsa_public_matches({error, _} = Error, _Public, _Params) ->
 
 rsa_size_matches(false, _Key, _Params) ->
     {error, public_key_mismatch};
-rsa_size_matches(true, #'RSAPrivateKey'{modulus = N, publicExponent = E} = Key,
-                 #{modulus_bits := Bits, public_exponent := Exponent} = Params) ->
-    rsa_round_trip({bit_length(N), E} =:= {Bits, Exponent}, Key, Params).
+rsa_size_matches(true, #'RSAPrivateKey'{modulus = N, publicExponent = E},
+                 #{modulus_bits := Bits, public_exponent := Exponent}) ->
+    rsa_size_result({bit_length(N), E} =:= {Bits, Exponent}, N, E).
 
-rsa_round_trip(true, Key, #{digest := Digest} = Params) ->
-    Options = pss_options(Params),
-    round_trip(fun(Message) -> crypto:sign(rsa, Digest, Message, rsa_private_list(Key), Options) end,
-               fun(Message, Signature) ->
-                   crypto:verify(rsa, Digest, Message, Signature, rsa_public_list(Key), Options)
-               end);
-rsa_round_trip(false, #'RSAPrivateKey'{modulus = N, publicExponent = E}, _Params) ->
-    {error, {wrong_key_size, {bit_length(N), E}}}.
+rsa_size_result(true, _N, _E) -> ok;
+rsa_size_result(false, N, E) -> {error, {wrong_key_size, {bit_length(N), E}}}.
 
-round_trip(Sign, Verify) ->
+%% The round trip signs with the whole key only: a hybrid key signs its composite, never one half, so hybrid key
+%% material makes no signature outside the hybrid (BSI TR-02102-1 section 5.3.4).
+whole_key_round_trip({ok, Key}) ->
     Message = crypto:strong_rand_bytes(32),
-    round_trip_result(signed(Sign, Message), Verify, Message).
+    key_round_trip_result(signed(fun(M) -> sign(M, Key) end, Message), Message, Key);
+whole_key_round_trip({error, _} = Error) ->
+    Error.
+
+key_round_trip_result({ok, Signature}, Message, Key) ->
+    round_trip_verdict(verify(Message, Signature, public_key(Key), signature_shape(Key)), Key);
+key_round_trip_result({error, _} = Error, _Message, _Key) ->
+    Error.
+
+round_trip_verdict(true, Key)   -> {ok, Key};
+round_trip_verdict(false, _Key) -> {error, round_trip_failed}.
+
+%% verify/4 checks by profile; a one-component key (every pq_pure key, and a pq_hybrid TLS key) is ML-DSA-87 alone.
+signature_shape(#{components := [_]})    -> pq_pure;
+signature_shape(#{components := [_, _]}) -> pq_hybrid.
 
 signed(Sign, Message) ->
     try Sign(Message) of
@@ -289,13 +298,6 @@ signed(Sign, Message) ->
         error:_ -> {error, round_trip_failed}
     end.
 
-round_trip_result({ok, Signature}, Verify, Message) ->
-    verified(Verify(Message, Signature));
-round_trip_result({error, _} = Error, _Verify, _Message) ->
-    Error.
-
-verified(true)  -> ok;
-verified(false) -> {error, round_trip_failed}.
 
 %%------------------------------------------------------------------
 %% Internals: RSA encoding
@@ -321,9 +323,6 @@ rsa_private_der([E, N, D, P1, P2, E1, E2, C]) ->
 rsa_private_list(#'RSAPrivateKey'{publicExponent = E, modulus = N, privateExponent = D, prime1 = P1,
                                   prime2 = P2, exponent1 = E1, exponent2 = E2, coefficient = C}) ->
     [E, N, D, P1, P2, E1, E2, C].
-
-rsa_public_list(#'RSAPrivateKey'{publicExponent = E, modulus = N}) ->
-    [E, N].
 
 pss_options(#{mgf1_digest := Mgf1Digest, salt_bytes := SaltBytes}) ->
     [{rsa_padding, rsa_pkcs1_pss_padding}, {rsa_pss_saltlen, SaltBytes}, {rsa_mgf1_md, Mgf1Digest}].
