@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Post-quantum work on the `post-quantum` branch. Not on `main`.
 
+### Added
+
+- `macula_crypto_profile`: the two post-quantum profiles,
+  `us_national_security` and `eu`, each with its key exchange group, TLS
+  signature scheme, cipher suite, signature algorithms and digests.
+
+### Changed
+
+- The `macula` application starts only with `crypto_profile` set to
+  `us_national_security` or `eu` in its environment. A missing value, an
+  unknown value or a list of profiles makes the start return an error.
+  There is no default. The test configuration, `config/test.sys.config`,
+  sets `us_national_security`.
+
 ### Removed
 
 - `macula_frame:sign_swim_update/2` and `macula_frame:verify_swim_update/1`,

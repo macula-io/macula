@@ -14,6 +14,7 @@
 -export([run/2]).
 
 run(Host, WindowMs) when is_binary(Host), is_integer(WindowMs) ->
+    ok = application:set_env(macula, crypto_profile, us_national_security),
     {ok, _} = application:ensure_all_started(macula),
     Identity = macula_identity:generate(),
     Seed = <<"https://", Host/binary, ":4433">>,
