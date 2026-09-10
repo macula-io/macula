@@ -35,7 +35,6 @@
     %% Constructors — SWIM
     swim_ping/1, swim_ack/1, swim_suspect/1, swim_confirm/1,
     swim_update/1,
-    sign_swim_update/2, verify_swim_update/1,
 
     %% Constructors — DHT (Part 6 §7)
     ping/1, pong/1,
@@ -143,7 +142,6 @@
 ]).
 
 -define(SIG_DOMAIN,        "macula-v2-frame\0").
--define(SWIM_UPDATE_DOMAIN, "macula-v2-swim-update\0").
 %% Domain-separated signing context for the publisher-end-to-end
 %% pubsub signature (`publisher_sig'). Distinct from ?SIG_DOMAIN so a
 %% per-frame signature can never be replayed as a publisher signature
@@ -213,8 +211,7 @@
     state       := member_state(),
     incarnation := non_neg_integer(),
     observed_at := pos_integer(),
-    by          := macula_identity:pubkey(),
-    signature   => <<_:512>>
+    by          := macula_identity:pubkey()
 }.
 
 -type swim_ping_spec() :: #{
@@ -761,9 +758,8 @@ build_suspect_like(Type,
 %%------------------------------------------------------------------
 %% SWIM piggyback updates
 %%
-%% Updates are individually signed by the observer (`by') so piggyback
-%% propagation can be verified end-to-end. Domain separator differs
-%% from the frame signature (`macula-v2-swim-update\0').
+%% An update names its observer in `by' and travels as piggyback inside
+%% PING and ACK frames.
 %%------------------------------------------------------------------
 
 -spec swim_update(swim_update_spec()) -> swim_update().
@@ -781,31 +777,6 @@ swim_update(#{target := T, state := St, incarnation := Inc,
         observed_at => Ts,
         by          => By
     }.
-
--spec sign_swim_update(swim_update(),
-                       macula_identity:key_pair() | macula_identity:privkey()) ->
-    swim_update().
-sign_swim_update(Update, Identity) ->
-    Bytes = canonical_swim_update(Update),
-    Sig = macula_identity:sign([?SWIM_UPDATE_DOMAIN, Bytes], Identity),
-    Update#{signature => Sig}.
-
--spec verify_swim_update(swim_update()) -> {ok, swim_update()} | {error, term()}.
-verify_swim_update(#{signature := Sig, by := By} = Update)
-  when is_binary(Sig), byte_size(Sig) =:= 64,
-       is_binary(By),  byte_size(By)  =:= 32 ->
-    Bytes = canonical_swim_update(Update),
-    verify_update_result(
-        macula_identity:verify([?SWIM_UPDATE_DOMAIN, Bytes], Sig, By),
-        Update);
-verify_swim_update(_Update) ->
-    {error, bad_swim_update}.
-
-verify_update_result(true,  Update) -> {ok, Update};
-verify_update_result(false, _Update) -> {error, signature_invalid}.
-
-canonical_swim_update(Update) ->
-    macula_cbor_nif:pack_deterministic(to_wire(maps:without([signature], Update))).
 
 %%------------------------------------------------------------------
 %% DHT frame constructors (Part 6 §7)

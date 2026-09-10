@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [11.0.0] - Unreleased
+
+Post-quantum work on the `post-quantum` branch. Not on `main`.
+
+### Removed
+
+- `macula_frame:sign_swim_update/2` and `macula_frame:verify_swim_update/1`,
+  with their private helpers and the `macula-v2-swim-update` signing
+  domain. Nothing signed or verified SWIM membership updates. SWIM itself
+  stays: `macula_frame:swim_update/1` and the piggyback updates in SWIM
+  PING and ACK frames are unchanged. An update no longer has an optional
+  `signature` key.
+
 ## [Unreleased]
 
 ### Changed
