@@ -30,6 +30,10 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 - `macula_node_keys:node_id/1` and `node_id/2`: node_ids per plan decision
   D5, SHA-256 over the label `MACULA-NODE-ID-V1`, the profile name and the
   identity key as carried. The reference vectors match Go, Rust and Python.
+- `macula_node_keys:generate/3` with `puzzle_difficulty`, and
+  `puzzle_solved/2`: an identity key whose node_id starts with that many
+  zero bits. Each try makes a new ML-DSA-87 half; a hybrid key keeps its
+  RSA-PSS half, since the node_id covers both halves.
 - `macula_record_cbor:decode_strict/1`: decodes one CBOR item and refuses a
   duplicate map key at any depth, bytes after the top-level item, and
   malformed input, without raising. `decode/1` is unchanged.

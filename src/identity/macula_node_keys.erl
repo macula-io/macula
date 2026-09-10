@@ -19,6 +19,10 @@
 %% An identity key has a node_id: SHA-256 over the label MACULA-NODE-ID-V1, a zero byte, the length and ASCII name
 %% of the profile, and the identity key as carried. CONNECT and TLS keys have none.
 %%
+%% An identity key can be generated for a puzzle difficulty, so its node_id starts with that many zero bits. Each
+%% try makes a new ML-DSA-87 half; a hybrid key keeps its RSA-PSS half across tries, since the node_id covers both
+%% halves.
+%%
 %% See plans/PLAN_POST_QUANTUM_SECURITY.md, decisions D4, D5, D6 and D7.
 -module(macula_node_keys).
 
@@ -26,14 +30,20 @@
 
 -export([
     generate/2,
+    generate/3,
     save/2,
     load/3,
     public_key/1,
     sign/2,
     verify/4,
     node_id/1,
-    node_id/2
+    node_id/2,
+    puzzle_solved/2
 ]).
+
+-ifdef(TEST).
+-export([puzzle_candidate/1]).
+-endif.
 
 -export_type([purpose/0, algorithm/0, component/0, node_key/0, refusal/0]).
 
@@ -70,6 +80,18 @@
 -spec generate(purpose(), macula_crypto_profile:profile()) -> {ok, node_key()} | {error, refusal()}.
 generate(Purpose, Profile) ->
     generated_key(expected_algorithms(Purpose, Profile), Purpose, Profile).
+
+%% @doc Generate the key for a purpose in a profile, with options. With puzzle_difficulty, generate an identity key
+%% whose node_id meets that difficulty (see puzzle_solved/2), in about 2^Difficulty tries.
+-spec generate(purpose(), macula_crypto_profile:profile(), #{puzzle_difficulty => 0..256}) ->
+        {ok, node_key()} | {error, refusal() | not_an_identity_key}.
+generate(identity, Profile, #{puzzle_difficulty := Difficulty} = Options)
+  when map_size(Options) =:= 1, is_integer(Difficulty), Difficulty >= 0, Difficulty =< 256 ->
+    solved_key(generate(identity, Profile), Difficulty);
+generate(Purpose, _Profile, #{puzzle_difficulty := _}) when Purpose =:= connect; Purpose =:= tls ->
+    {error, not_an_identity_key};
+generate(Purpose, Profile, Options) when map_size(Options) =:= 0 ->
+    generate(Purpose, Profile).
 
 %%------------------------------------------------------------------
 %% Persistence
@@ -146,6 +168,30 @@ node_id(IdentityKey, Profile)
   when is_binary(IdentityKey), (Profile =:= pq_pure orelse Profile =:= pq_hybrid) ->
     Name = atom_to_binary(Profile),
     crypto:hash(sha256, <<?NODE_ID_LABEL, 0:8, (byte_size(Name)):8, Name/binary, IdentityKey/binary>>).
+
+%% @doc Whether a node_id meets a puzzle difficulty: its first Difficulty bits are zero.
+-spec puzzle_solved(<<_:256>>, 0..256) -> boolean().
+puzzle_solved(<<_:256>> = NodeId, Difficulty) when is_integer(Difficulty), Difficulty >= 0, Difficulty =< 256 ->
+    <<Prefix:Difficulty, _/bitstring>> = NodeId,
+    Prefix =:= 0.
+
+%%------------------------------------------------------------------
+%% Internals: the puzzle
+%%------------------------------------------------------------------
+
+solved_key({ok, Key}, Difficulty) -> grind(Key, Difficulty);
+solved_key({error, _} = Error, _Difficulty) -> Error.
+
+grind(Key, Difficulty) ->
+    {ok, NodeId} = node_id(Key),
+    ground_key(puzzle_solved(NodeId, Difficulty), Key, Difficulty).
+
+ground_key(true, Key, _Difficulty) -> {ok, Key};
+ground_key(false, Key, Difficulty) -> grind(puzzle_candidate(Key), Difficulty).
+
+%% One try: a new ML-DSA-87 half, with the classical half, if any, kept.
+puzzle_candidate(#{purpose := identity, components := [#{algorithm := mldsa87} | Classical]} = Key) ->
+    Key#{components := [generate_component(mldsa87) | Classical]}.
 
 %%------------------------------------------------------------------
 %% Internals: algorithms per purpose
