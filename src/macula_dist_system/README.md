@@ -57,7 +57,10 @@ Talks to a `macula-io/macula-dist-relay` server instance, not an ordinary statio
 
 ## Status
 
-**Live.** `-proto_dist macula` and `macula:join_mesh/1` ship in the published `macula` hex package and are exercised in CI by `hecate-social/hecate-stub`'s dist integration harness.
+`-proto_dist macula`, `macula:join_mesh/1` and `macula:join_dist_relay/1` ship in the published `macula` hex package.
+
+- **Automated tests** (`rebar3 eunit --dir=test/macula_dist_system`) cover the driver's node name, address, frame and packet handling; the loopback socket pair and the bridge's tunnel I/O, encryption, backpressure and metrics; the tunnel RPC reply and arguments as a decoded frame delivers them; the relay protocol's frames; and `macula:join_dist_relay/1` against a loopback relay, including a relay that closes.
+- **No automated test** runs Erlang distribution end to end, over the mesh pool or through a `macula-dist-relay` server. `hecate-social/hecate-stub` has a dist mode (`HECATE_STUB_MODE=dist`, `src/hecate_stub_dist.erl`) whose ping, rpc and burst scenarios are started through its admin endpoint; its CI builds container images and runs no tests.
 
 ## Testing
 
