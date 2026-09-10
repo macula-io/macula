@@ -248,6 +248,11 @@ contiguous, which is exactly what makes ordered delivery possible.
 | `latest_only` | Deliver only seqs newer than the highest seen for that publisher (drop stale). No buffering, no head-of-line delay. | State snapshots — you want the freshest value, not every value. |
 | `as_arrives` | Raw arrival order. Zero added latency; you order it yourself. | You have your own versioning, or you truly do not care. |
 
+Ordering state is kept per publisher, and separately for EVENTs whose
+publisher signature verified and for all others: unsigned EVENTs are
+ordered among themselves, per publisher, and never affect the order of a
+verified publisher's EVENTs.
+
 ```erlang
 %% default — per-publisher FIFO
 {ok, Pid1} = macula_subscriber:start_link(my_orders_listener, Pool, Realm, Topic, []),

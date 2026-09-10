@@ -57,6 +57,10 @@
 -type mode()  :: ordered | latest_only | as_arrives.
 -type seq()   :: non_neg_integer().
 -type event() :: term().
+%% The key ordering state is kept under: the publisher, or
+%% `{unverified, Publisher}' for events whose publisher signature did not
+%% verify, so the two never share state.
+-type publisher_key() :: binary() | {unverified, binary()}.
 
 %% Per-publisher state. `ordered' uses `next' + `buf'; `latest_only'
 %% uses `high'. Unused fields stay `undefined'.
@@ -67,7 +71,7 @@
 }).
 
 -opaque t() :: #{mode := mode(),
-                 pubs := #{binary() => #pub{}},
+                 pubs := #{publisher_key() => #pub{}},
                  skips := non_neg_integer(),
                  max := pos_integer()}.
 
@@ -87,8 +91,10 @@ new(Mode, Max)
 
 %% @doc Offer an arrived (deduped) event. Returns the events to deliver
 %% now, in order, and the updated state. `NowMs' timestamps buffered
-%% arrivals for `flush/3'.
--spec offer(t(), binary(), seq(), event(), integer()) -> {[event()], t()}.
+%% arrivals for `flush/3'. `Pub' is the publisher, or
+%% `{unverified, Publisher}' for an event whose publisher signature did
+%% not verify; each key has its own ordering state.
+-spec offer(t(), publisher_key(), seq(), event(), integer()) -> {[event()], t()}.
 offer(#{mode := as_arrives} = S, _Pub, _Seq, Ev, _Now) ->
     {[Ev], S};
 offer(#{mode := latest_only, pubs := P} = S, Pub, Seq, Ev, _Now) ->

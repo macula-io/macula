@@ -74,3 +74,16 @@ sweep_keeps_recent_entries_test() ->
     ?assertEqual(duplicate, macula_client_dedup:check(Tab, ?REALM, ?PUB, 1)),
     ets:delete(Tab),
     ok.
+
+unverified_key_never_matches_a_verified_one_test() ->
+    Tab = macula_client_dedup:new(),
+    ?assertEqual(new, macula_client_dedup:check_unverified(Tab, ?REALM, ?PUB, 1, <<"d">>)),
+    ?assertEqual(new, macula_client_dedup:check(Tab, ?REALM, ?PUB, 1)),
+    ets:delete(Tab).
+
+identical_unverified_copies_are_duplicates_test() ->
+    Tab = macula_client_dedup:new(),
+    ?assertEqual(new, macula_client_dedup:check_unverified(Tab, ?REALM, ?PUB, 1, <<"d">>)),
+    ?assertEqual(duplicate, macula_client_dedup:check_unverified(Tab, ?REALM, ?PUB, 1, <<"d">>)),
+    ?assertEqual(new, macula_client_dedup:check_unverified(Tab, ?REALM, ?PUB, 1, <<"e">>)),
+    ets:delete(Tab).

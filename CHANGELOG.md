@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCID. Otherwise the fetch ends with `{error, manifest_mcid_mismatch}`
   before any chunk is requested. `macula_manifest:verify_mcid/2` performs
   the check.
+- The pool deduplicates an inbound EVENT on its `(realm, publisher, seq)`
+  only when its publisher signature verified. Any other EVENT is
+  deduplicated on that triple together with a digest of its topic and
+  payload, so identical copies arriving over several links are still
+  delivered once.
+- `ordered` and `latest_only` subscriptions keep separate per-publisher
+  ordering state for EVENTs whose publisher signature verified and for all
+  others. Unsigned EVENTs are ordered among themselves, per publisher.
 
 ## [10.23.0] - 2026-09-10
 

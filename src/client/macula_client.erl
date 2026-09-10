@@ -1044,8 +1044,8 @@ handle_info({macula_event, _LinkSubRef, Topic, Payload, Meta}, S) ->
     Realm     = maps:get(realm, Meta, <<0:256>>),
     Publisher = maps:get(publisher, Meta),
     Seq       = maps:get(seq, Meta),
-    on_inbound_event(macula_client_dedup:check(S#state.dedup_tab,
-                                               Realm, Publisher, Seq),
+    on_inbound_event(dedup_check(S#state.dedup_tab, attested(Meta), Realm,
+                                 Publisher, Seq, {Topic, Payload}),
                      Realm, Topic, Payload, Meta, S);
 
 handle_info({macula_event_gone, _LinkSubRef, _Reason}, S) ->
@@ -2130,6 +2130,20 @@ issue_wire_subs(false, Realm, Topic, S) ->
 %% Internals — inbound event fan-out
 %%====================================================================
 
+%% Only an event whose publisher signature verified claims its
+%% `(realm, publisher, seq)' key. Any other event is deduplicated on that
+%% triple plus a digest of its topic and payload, in a key space of its
+%% own: identical copies arriving over several links are still delivered
+%% once, and such an event only ever matches an identical copy of itself.
+dedup_check(Tab, true, Realm, Publisher, Seq, _Content) ->
+    macula_client_dedup:check(Tab, Realm, Publisher, Seq);
+dedup_check(Tab, false, Realm, Publisher, Seq, Content) ->
+    Digest = crypto:hash(sha256, term_to_binary(Content, [deterministic])),
+    macula_client_dedup:check_unverified(Tab, Realm, Publisher, Seq, Digest).
+
+attested(#{publisher_verified := true}) -> true;
+attested(_Meta)                         -> false.
+
 on_inbound_event(duplicate, _Realm, _Topic, _Payload, _Meta, S) ->
     {noreply, S};
 on_inbound_event(new, Realm, Topic, Payload, Meta, S) ->
@@ -2156,11 +2170,17 @@ deliver_to({ok, #sub_spec{subscriber = Pid, order = Order} = Spec}, SubRef,
     %% Run the fact through this subscription's delivery ordering; send
     %% whatever it releases now, and keep the updated per-publisher state.
     {Events, Order2} = macula_pubsub_order:offer(
-                         Order, maps:get(publisher, Meta), maps:get(seq, Meta),
+                         Order, order_key(Meta), maps:get(seq, Meta),
                          {Payload, Meta}, now_ms()),
     send_events(Pid, SubRef, Topic, Events),
     S#state{subs = maps:put(SubRef, Spec#sub_spec{order = Order2},
                             S#state.subs)}.
+
+%% A verified publisher's ordering state is its own. Events whose publisher
+%% signature did not verify, or that carried none, are ordered among
+%% themselves per publisher and never move that state.
+order_key(#{publisher := Pub, publisher_verified := true}) -> Pub;
+order_key(#{publisher := Pub})                              -> {unverified, Pub}.
 
 send_events(Pid, SubRef, Topic, Events) ->
     _ = [Pid ! {macula_event, SubRef, Topic, P, M} || {P, M} <- Events],

@@ -624,16 +624,20 @@ dedup_zero_window_disables_dedup_test_() ->
                                                  Topic, self(),
                                                  #{delivery => as_arrives}),
          Pub = <<9:256>>,
+         %% Both events are verified, so they share one dedup key and
+         %% only the sweep lets the second through.
          Pool ! {macula_event, make_ref(), Topic, first,
                  #{realm => ?REALM, publisher => Pub,
-                   seq => 1, delivered_via => direct}},
+                   seq => 1, delivered_via => direct,
+                   publisher_verified => true}},
          receive {macula_event, SubRef, Topic, first, _} -> ok
          after 1_000 -> erlang:error(no_first) end,
          %% Wait for sweep to drop the dedup entry.
          timer:sleep(120),
          Pool ! {macula_event, make_ref(), Topic, again,
                  #{realm => ?REALM, publisher => Pub,
-                   seq => 1, delivered_via => direct}},
+                   seq => 1, delivered_via => direct,
+                   publisher_verified => true}},
          receive {macula_event, SubRef, Topic, again, _} -> ok
          after 1_000 -> erlang:error(dedup_swallowed_after_sweep) end,
          ok = macula_client:close(Pool)
@@ -1057,3 +1061,61 @@ bootstrap_seed_that_never_connects_is_not_given_up_test_() ->
              ?assertEqual(false, maps:get(connected, hd(Links)))
          end
      end}.
+
+%%------------------------------------------------------------------
+%% Unverified events never displace a verified publisher's events
+%%------------------------------------------------------------------
+
+%% An event whose publisher signature did not verify can neither claim the
+%% dedup key of a verified event with the same (realm, publisher, seq) nor
+%% move that publisher's ordering state, so the verified event is still
+%% delivered, in every delivery mode.
+unverified_event_does_not_displace_a_verified_one_test_() ->
+    [{atom_to_list(Mode), {timeout, 5, fun() -> unverified_then_verified(Mode) end}}
+     || Mode <- [ordered, latest_only, as_arrives]].
+
+unverified_then_verified(Mode) ->
+    {ok, _} = application:ensure_all_started(macula),
+    {ok, Pool} = macula_client:connect([], #{}),
+    Topic = <<"x.v1">>,
+    {ok, SubRef} = macula_client:subscribe(Pool, ?REALM, Topic, self(),
+                                           #{delivery => Mode}),
+    Base = #{realm => ?REALM, publisher => <<1:256>>, seq => 7,
+             delivered_via => direct},
+    Pool ! {macula_event, make_ref(), Topic, forged,
+            Base#{publisher_verified => not_signed}},
+    Pool ! {macula_event, make_ref(), Topic, genuine,
+            Base#{publisher_verified => true}},
+    Delivered = payloads_for(SubRef, 500),
+    ok = macula_client:close(Pool),
+    ?assert(lists:member(genuine, Delivered)).
+
+%% Identical unverified copies still arrive once; a different unverified
+%% event under the same (publisher, seq) is not treated as a copy.
+identical_unverified_copies_are_delivered_once_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         Topic = <<"x.v1">>,
+         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM, Topic, self(),
+                                                #{delivery => as_arrives}),
+         Meta = #{realm => ?REALM, publisher => <<1:256>>, seq => 9,
+                  delivered_via => direct, publisher_verified => not_signed},
+         Pool ! {macula_event, make_ref(), Topic, same, Meta},
+         Pool ! {macula_event, make_ref(), Topic, same, Meta},
+         Pool ! {macula_event, make_ref(), Topic, other, Meta},
+         Delivered = payloads_for(SubRef, 500),
+         ok = macula_client:close(Pool),
+         ?assertEqual([same, other], Delivered)
+     end}.
+
+%% Payloads delivered to `SubRef', in arrival order, until `Ms' pass with
+%% no further delivery.
+payloads_for(SubRef, Ms) ->
+    receive
+        {macula_event, SubRef, _Topic, Payload, _Meta} ->
+            [Payload | payloads_for(SubRef, Ms)]
+    after Ms ->
+        []
+    end.
