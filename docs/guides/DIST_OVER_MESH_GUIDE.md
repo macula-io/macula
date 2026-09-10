@@ -91,6 +91,15 @@ pool's `connect/2` options (see the [Connecting Guide](shared/CONNECTING_GUIDE.m
 for the real option set) — QUIC's TLS 1.3 is mandatory and not
 independently togglable from the SDK side.
 
+The dist relay client and direct dist dials check the relay's TLS
+certificate against the QUIC library's built-in webpki roots and the host
+they dial. A relay with a self-signed certificate is refused unless the
+node sets development mode explicitly: `MACULA_TLS_MODE=development` (or
+`dev`), or the `tls_mode` app env set to `development`. A CA file set
+through `MACULA_TLS_CACERTFILE` or `tls_cacertfile` is not supported: it
+makes `macula_tls:quic_client_opts/0,1` raise
+`{tls_config_error, {cacertfile_not_supported, Path}}`.
+
 ## What Nodes Need to Share
 
 | Requirement | Why |

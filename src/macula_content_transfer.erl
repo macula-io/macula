@@ -26,8 +26,8 @@
 %%% == Cancel is a real abort, not a dropped connection ==
 %%%
 %%% `cancel/3' resets every currently-open content stream's send side
-%%% via `macula_quic:reset_stream/2' (through `macula_station_link:
-%%% abort_content_stream/4') — a QUIC RESET_STREAM frame the PEER's
+%%% via `macula_quic:reset_stream/2' (through macula_station_link's
+%%% abort_content_stream) — a QUIC RESET_STREAM frame the PEER's
 %%% own read genuinely observes as `{quic, stream_closed, PeerStream,
 %%% {reset, Code}}', not merely a connection that went away. This is
 %%% NOT `macula_stream:abort/3' (streaming RPC's abort) — that targets

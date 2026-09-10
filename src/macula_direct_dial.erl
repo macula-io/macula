@@ -76,7 +76,7 @@
 %%% by trusting whoever answered, so proving the ADVERTISER is
 %%% authorized matters. Content is content-addressed: the fetched bytes
 %%% are independently re-hashed against the MCID client-side
-%%% (`macula:verify_block_hash/2' for single-block,
+%%% (`macula_content_transfer:verify_block_hash/2' for single-block,
 %%% `macula_manifest:verify/2' for chunked) regardless of which peer
 %%% served them, so a rogue or unauthorized announcer can at most
 %%% refuse to serve or waste a dial — it cannot make a caller accept
