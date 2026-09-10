@@ -74,13 +74,17 @@
 %%% cert-chain machinery above — content's threat model genuinely
 %%% differs from RPC's. An RPC reply is opaque and unverifiable except
 %%% by trusting whoever answered, so proving the ADVERTISER is
-%%% authorized matters. Content is content-addressed: the fetched bytes
-%%% are independently re-hashed against the MCID client-side
-%%% (`macula_content_transfer:verify_block_hash/2' for single-block,
-%%% `macula_manifest:verify/2' for chunked) regardless of which peer
-%%% served them, so a rogue or unauthorized announcer can at most
-%%% refuse to serve or waste a dial — it cannot make a caller accept
-%%% content that does not hash to the MCID it asked for. What still
+%%% authorized matters. Content is content-addressed, and the fetched
+%%% bytes are checked against the MCID client-side regardless of which
+%%% peer served them. Single-block content is re-hashed against the MCID
+%%% (`macula_content_transfer:verify_block_hash/2'). For chunked content
+%%% the fetched manifest is used only if its MCID, recomputed from its
+%%% canonical fields, is the one requested (`macula_manifest:verify_mcid/2');
+%%% each chunk is then hashed against that manifest, and the reassembled
+%%% bytes are checked against its size and root hash
+%%% (`macula_manifest:verify/2'). A rogue or unauthorized announcer can at
+%%% most refuse to serve or waste a dial; it cannot make a caller accept
+%%% content that does not match the MCID it asked for. What still
 %%% matters, and is still mandatory, is (1)'s analogue for
 %%% `content_announcement': the signer must equal the `announcer_node'
 %%% it claims (`macula:decode_provider/1'), so an attacker cannot at

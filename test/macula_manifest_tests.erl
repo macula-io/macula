@@ -176,3 +176,51 @@ sha256_algorithm_produces_sha256_chunk_hashes_test() ->
         macula_manifest:create(Data, #{chunk_size => 1024,
                                                hash_algorithm => sha256}),
     ?assertEqual(crypto:hash(sha256, Data), maps:get(hash, Chunk)).
+
+%%%===================================================================
+%%% verify_mcid/2: a manifest describes the MCID it is fetched under
+%%%===================================================================
+
+verify_mcid_accepts_the_manifest_it_created_test() ->
+    {ok, M, _Chunks} = macula_manifest:create(crypto:strong_rand_bytes(700),
+                                              #{chunk_size => 200}),
+    ?assertEqual(ok, macula_manifest:verify_mcid(M, maps:get(mcid, M))).
+
+%% The manifest a caller fetches has been through the frame codec. The name
+%% crosses the wire as a byte string and the MCID hashes it as text, so the
+%% check must still agree after that round trip.
+verify_mcid_accepts_a_manifest_after_the_frame_round_trip_test() ->
+    {ok, M, _Chunks} = macula_manifest:create(crypto:strong_rand_bytes(700),
+                                              #{chunk_size => 200,
+                                                name => <<"report.pdf">>}),
+    Frame = macula_frame:result(#{call_id => <<0:128>>, payload => M,
+                                  responded_by => <<0:256>>}),
+    {ok, Decoded, _Rest} = macula_frame:decode(macula_frame:encode(Frame)),
+    {ok, Read} = macula_manifest:from_wire(maps:get(payload, Decoded)),
+    ?assertEqual(<<"report.pdf">>, maps:get(name, Read)),
+    ?assertEqual(ok, macula_manifest:verify_mcid(Read, maps:get(mcid, M))).
+
+verify_mcid_refuses_a_manifest_for_other_content_test() ->
+    {ok, A, _} = macula_manifest:create(crypto:strong_rand_bytes(700), #{chunk_size => 200}),
+    {ok, B, _} = macula_manifest:create(crypto:strong_rand_bytes(700), #{chunk_size => 200}),
+    McidA = maps:get(mcid, A),
+    ?assertEqual({error, manifest_mcid_mismatch},
+                 macula_manifest:verify_mcid(B#{mcid => McidA}, McidA)).
+
+verify_mcid_refuses_a_changed_canonical_field_test() ->
+    {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700), #{chunk_size => 200}),
+    Mcid = maps:get(mcid, M),
+    [?assertEqual({error, manifest_mcid_mismatch},
+                  macula_manifest:verify_mcid(Changed, Mcid))
+     || Changed <- [M#{size := maps:get(size, M) + 1},
+                    M#{chunk_count := maps:get(chunk_count, M) + 1},
+                    M#{name := <<"renamed">>},
+                    M#{root_hash := crypto:strong_rand_bytes(32)}]].
+
+verify_mcid_refuses_a_malformed_manifest_test() ->
+    {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700), #{chunk_size => 200}),
+    Mcid = maps:get(mcid, M),
+    ?assertEqual({error, manifest_mcid_mismatch},
+                 macula_manifest:verify_mcid(M#{name := <<255, 254>>}, Mcid)),
+    ?assertEqual({error, manifest_mcid_mismatch},
+                 macula_manifest:verify_mcid(maps:remove(root_hash, M), Mcid)).

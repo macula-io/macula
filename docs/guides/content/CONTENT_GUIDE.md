@@ -140,8 +140,10 @@ fixed-size chunks, uploads each (BLAKE3-verified by the station), builds a
 **manifest** — chunk count, per-chunk offsets/sizes/hashes, and a Merkle
 root over the chunk hashes — and uploads that too, returning the manifest's
 own MCID (codec `16#56`). `get_content/2` on a manifest MCID fetches the
-manifest, then every chunk in order, reassembles, and verifies the whole
-against the manifest's size and Merkle root before returning — a tampered
+manifest and uses it only if its MCID, recomputed from its canonical fields,
+is the one requested. It then fetches every chunk in order, reassembles, and
+verifies the whole against the manifest's size and Merkle root before
+returning — a tampered
 or truncated chunk is caught before the caller ever sees the bytes. A chunk
 failure during put stops immediately without uploading the manifest — a
 manifest naming missing chunks would resolve but never reassemble, which is

@@ -55,6 +55,7 @@ content_transfer_test_() ->
       fun pause_stops_chunked_put_between_chunks/0,
       fun resume_continues_from_the_next_chunk_not_the_start/0,
       fun pause_stops_chunked_get_between_chunks/0,
+      fun manifest_not_matching_the_requested_mcid_is_refused/0,
       fun pause_on_single_block_put_is_a_harmless_noop/0,
       fun cancel_while_paused_between_chunks_still_resets_the_stream/0]}.
 
@@ -331,6 +332,31 @@ pause_stops_chunked_get_between_chunks() ->
 %% Single-block content has no "between chunks" to pause at — pause/
 %% resume must be harmless there, never blocking or otherwise
 %% interfering with the transfer's one and only round trip.
+%% A fetched manifest is used only when the MCID recomputed from its
+%% canonical fields is the one requested. A manifest for other content,
+%% even one whose own `mcid' field names the requested MCID, is refused
+%% before any chunk is fetched against it.
+manifest_not_matching_the_requested_mcid_is_refused() ->
+    Self = self(),
+    {ok, Requested, _} = macula_manifest:create(chunked_put_bytes()),
+    {ok, Other, _} = macula_manifest:create(chunked_put_bytes()),
+    Mcid = maps:get(mcid, Requested),
+    LinkPid = dummy_pid(),
+    Stream = make_ref(),
+    meck:expect(macula_client, pick_connected_link, fun(_Pool) -> {ok, LinkPid} end),
+    meck:expect(macula_station_link, open_content_stream, fun(_LinkPid) -> {ok, Stream} end),
+    meck:expect(macula_station_link, call_on_stream, blocking_call_on_stream(Self)),
+    meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
+
+    {ok, Pid} = macula_content_transfer:start_get(dummy_pid(), Mcid, #{stream_count => 1}),
+
+    {WorkerM, <<"_content.get_manifest">>, #{mcid := Mcid}} = receive_call_started(),
+    WorkerM ! {proceed, {ok, Other#{mcid => Mcid}}},
+
+    assert_no_call_started(),
+    ?assertEqual({error, manifest_mcid_mismatch}, macula_content_transfer:await(Pid, 2_000)),
+    ok = macula_content_transfer:cancel(Pid).
+
 pause_on_single_block_put_is_a_harmless_noop() ->
     Bytes = <<"tiny">>,
     LinkPid = dummy_pid(),

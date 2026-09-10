@@ -26,6 +26,7 @@
     create/1, create/2,
     chunk_mcid/3,
     verify/2,
+    verify_mcid/2,
     from_wire/1
 ]).
 
@@ -145,6 +146,31 @@ verify_size(true, #{chunk_size := CS, hash_algorithm := Alg,
 
 root_hash_result(true)  -> ok;
 root_hash_result(false) -> {error, root_hash_mismatch}.
+
+%% @doc Check that `Manifest' describes the content `Mcid' names: the MCID
+%% recomputed from the manifest's canonical fields (name, size, chunk_size,
+%% chunk_count, hash_algorithm and root_hash) must equal `Mcid'. The
+%% manifest's own `mcid' field is not consulted; a sender can put anything
+%% there. A manifest missing a canonical field, or whose name is not valid
+%% UTF-8 text, does not describe `Mcid' either.
+-spec verify_mcid(manifest(), mcid()) -> ok | {error, manifest_mcid_mismatch}.
+verify_mcid(#{name := Name, size := Size, chunk_size := ChunkSize,
+              chunk_count := ChunkCount, hash_algorithm := Alg,
+              root_hash := RootHash} = Manifest, Mcid)
+  when is_binary(Name), is_integer(Size), is_integer(ChunkSize),
+       is_integer(ChunkCount), is_binary(RootHash), is_binary(Mcid) ->
+    recomputed_mcid(unicode:characters_to_binary(Name, utf8, utf8) =:= Name,
+                    Manifest, to_algorithm(Alg), Mcid);
+verify_mcid(_Manifest, _Mcid) ->
+    {error, manifest_mcid_mismatch}.
+
+recomputed_mcid(true, Manifest, Algorithm, Mcid) ->
+    mcid_result(compute_mcid(Manifest, Algorithm) =:= Mcid);
+recomputed_mcid(false, _Manifest, _Algorithm, _Mcid) ->
+    {error, manifest_mcid_mismatch}.
+
+mcid_result(true)  -> ok;
+mcid_result(false) -> {error, manifest_mcid_mismatch}.
 
 %% @doc Read a manifest as it arrives over `_content.get_manifest': the
 %% station stores + returns the map exactly as its RPC layer decoded

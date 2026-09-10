@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The `/5` forms are unchanged and mean `open`.
 - `call_stream/5` takes a `ucan_token` opt. STREAM_OPEN carries an optional
   `ucan_token` field, present only when the caller gives a token.
+- A chunked content fetch uses the fetched manifest only when its MCID,
+  recomputed from the manifest's canonical fields, equals the requested
+  MCID. Otherwise the fetch ends with `{error, manifest_mcid_mismatch}`
+  before any chunk is requested. `macula_manifest:verify_mcid/2` performs
+  the check.
 
 ## [10.23.0] - 2026-09-10
 
