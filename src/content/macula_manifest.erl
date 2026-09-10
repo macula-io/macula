@@ -151,8 +151,9 @@ root_hash_result(false) -> {error, root_hash_mismatch}.
 %% recomputed from the manifest's canonical fields (name, size, chunk_size,
 %% chunk_count, hash_algorithm and root_hash) must equal `Mcid'. The
 %% manifest's own `mcid' field is not consulted; a sender can put anything
-%% there. A manifest missing a canonical field, or whose name is not valid
-%% UTF-8 text, does not describe `Mcid' either.
+%% there. A manifest missing a canonical field, whose name is not valid
+%% UTF-8 text, or whose hash algorithm is not one this module knows, does
+%% not describe `Mcid' either.
 -spec verify_mcid(manifest(), mcid()) -> ok | {error, manifest_mcid_mismatch}.
 verify_mcid(#{name := Name, size := Size, chunk_size := ChunkSize,
               chunk_count := ChunkCount, hash_algorithm := Alg,
@@ -160,13 +161,13 @@ verify_mcid(#{name := Name, size := Size, chunk_size := ChunkSize,
   when is_binary(Name), is_integer(Size), is_integer(ChunkSize),
        is_integer(ChunkCount), is_binary(RootHash), is_binary(Mcid) ->
     recomputed_mcid(unicode:characters_to_binary(Name, utf8, utf8) =:= Name,
-                    Manifest, to_algorithm(Alg), Mcid);
+                    Manifest, known_algorithm(Alg), Mcid);
 verify_mcid(_Manifest, _Mcid) ->
     {error, manifest_mcid_mismatch}.
 
-recomputed_mcid(true, Manifest, Algorithm, Mcid) ->
+recomputed_mcid(true, Manifest, {ok, Algorithm}, Mcid) ->
     mcid_result(compute_mcid(Manifest, Algorithm) =:= Mcid);
-recomputed_mcid(false, _Manifest, _Algorithm, _Mcid) ->
+recomputed_mcid(_Utf8Name, _Manifest, _Algorithm, _Mcid) ->
     {error, manifest_mcid_mismatch}.
 
 mcid_result(true)  -> ok;
@@ -176,11 +177,15 @@ mcid_result(false) -> {error, manifest_mcid_mismatch}.
 %% station stores + returns the map exactly as its RPC layer decoded
 %% it, with no dedicated re-encode/decode round trip on either side
 %% — so the shape depends on the general CALL-result codec, not the
-%% canonical `{text,_}' record shape. Robust to atom
-%% keys (the happy path — the field names are atoms defined in this
-%% module, so `binary_to_existing_atom' in the frame decoder resolves
-%% them) and to binary-string keys (a defensive fallback, mirroring
-%% `macula_record:payload_field/2').
+%% canonical `{text,_}' record shape. Robust to atom keys, to
+%% binary-string keys (mirroring `macula_record:payload_field/2'), and to
+%% `{text, Bin}' keys: the frame decoder resolves a key to an atom only
+%% when that atom already exists, so in a node that has not yet loaded
+%% this module the field names arrive as text. A name or hash algorithm
+%% sent as text is read as its binary value, and a missing hash algorithm
+%% is blake3. A manifest without an mcid, whose chunks are not a list of
+%% maps, or whose hash algorithm is not one this module knows, is
+%% `{error, invalid_manifest}'.
 -spec from_wire(map()) -> {ok, manifest()} | {error, invalid_manifest}.
 from_wire(M) when is_map(M) ->
     from_wire_result(field(M, mcid), field(M, chunks), M).
@@ -190,14 +195,26 @@ from_wire_result(undefined, _Chunks, _M) ->
 from_wire_result(_Mcid, undefined, _M) ->
     {error, invalid_manifest};
 from_wire_result(MCID, Chunks, M) when is_list(Chunks) ->
+    from_wire_chunks(lists:all(fun erlang:is_map/1, Chunks), MCID, Chunks, M);
+from_wire_result(_Mcid, _NotAList, _M) ->
+    {error, invalid_manifest}.
+
+from_wire_chunks(false, _MCID, _Chunks, _M) ->
+    {error, invalid_manifest};
+from_wire_chunks(true, MCID, Chunks, M) ->
+    from_wire_algorithm(wire_algorithm(field(M, hash_algorithm)), MCID, Chunks, M).
+
+from_wire_algorithm(error, _MCID, _Chunks, _M) ->
+    {error, invalid_manifest};
+from_wire_algorithm({ok, Algorithm}, MCID, Chunks, M) ->
     {ok, #{mcid           => MCID,
            version        => field_default(M, version, 1),
-           name           => field_default(M, name, <<"unnamed">>),
+           name           => wire_text(field_default(M, name, <<"unnamed">>)),
            size           => field_default(M, size, 0),
            created        => field_default(M, created, 0),
            chunk_size     => field_default(M, chunk_size, ?DEFAULT_CHUNK_SIZE),
            chunk_count    => field_default(M, chunk_count, 0),
-           hash_algorithm => to_algorithm(field_default(M, hash_algorithm, blake3)),
+           hash_algorithm => Algorithm,
            root_hash      => field_default(M, root_hash, <<>>),
            chunks         => [chunk_info_from_wire(C) || C <- Chunks]}}.
 
@@ -207,16 +224,31 @@ chunk_info_from_wire(C) when is_map(C) ->
       size   => field_default(C, size, 0),
       hash   => field_default(C, hash, <<>>)}.
 
-to_algorithm(<<"blake3">>) -> blake3;
-to_algorithm(<<"sha256">>) -> sha256;
-to_algorithm(blake3)       -> blake3;
-to_algorithm(sha256)       -> sha256;
-to_algorithm(_)            -> blake3.
+%% A missing hash algorithm is blake3; a present one must be known.
+wire_algorithm(undefined) -> {ok, blake3};
+wire_algorithm(Value)     -> known_algorithm(Value).
 
-%% A field, robust to atom keys (the happy path) or binary-string keys
-%% (defensive fallback).
+%% A hash algorithm this module computes, as an atom, a binary, or the
+%% `{text, Bin}' the frame decoder leaves.
+known_algorithm(blake3)                        -> {ok, blake3};
+known_algorithm(sha256)                        -> {ok, sha256};
+known_algorithm(<<"blake3">>)                  -> {ok, blake3};
+known_algorithm(<<"sha256">>)                  -> {ok, sha256};
+known_algorithm({text, Bin}) when is_binary(Bin) -> known_algorithm(Bin);
+known_algorithm(_Other)                        -> error.
+
+%% A field, under its atom key (the happy path), its binary-string key, or
+%% the `{text, Bin}' key the frame decoder leaves when the atom does not
+%% exist yet in the decoding node.
 field(M, Key) when is_atom(Key) ->
-    field_try([Key, atom_to_binary(Key)], M).
+    Name = atom_to_binary(Key),
+    field_try([Key, Name, {text, Name}], M).
+
+%% A text value as the frame decoder leaves it: `{text, Bin}', or an atom
+%% when the text names an existing atom.
+wire_text({text, Bin}) when is_binary(Bin) -> Bin;
+wire_text(Atom) when is_atom(Atom)         -> atom_to_binary(Atom);
+wire_text(Value)                           -> Value.
 
 field_default(M, Key, Default) ->
     field_or_default(field(M, Key), Default).

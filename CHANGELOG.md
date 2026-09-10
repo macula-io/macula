@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{error, {invalid_manifest, manifest_mcid_mismatch}}` on both sides and no
   `sharing.upload_started_v1` fact is published, the same as for a manifest
   that does not decode.
+- `macula_manifest:from_wire/1` reads a manifest whose field names arrive as
+  text keys, as the frame decoder leaves them in a node that has not yet
+  loaded `macula_manifest`, and reads a name or hash algorithm sent as text.
+  A manifest whose chunks are not a list of maps, or whose hash algorithm is
+  present but not blake3 or sha256, is `{error, invalid_manifest}`; a missing
+  hash algorithm is still blake3. `macula_manifest:verify_mcid/2` returns
+  `{error, manifest_mcid_mismatch}` for an unknown hash algorithm.
 
 ## [10.23.0] - 2026-09-10
 

@@ -224,3 +224,92 @@ verify_mcid_refuses_a_malformed_manifest_test() ->
                  macula_manifest:verify_mcid(M#{name := <<255, 254>>}, Mcid)),
     ?assertEqual({error, manifest_mcid_mismatch},
                  macula_manifest:verify_mcid(maps:remove(root_hash, M), Mcid)).
+
+%%%===================================================================
+%%% from_wire/1: a manifest as the frame decoder leaves it
+%%%===================================================================
+
+%% The frame decoder resolves a key to an atom only when that atom already
+%% exists, so in a node that has not loaded this module the field names
+%% arrive as `{text, Bin}' keys. from_wire/1 reads them all the same.
+from_wire_reads_text_keys_as_the_decoder_leaves_them_test() ->
+    {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700),
+                                        #{chunk_size => 200}),
+    Wire = text_keys(M, [created, hash_algorithm, root_hash, chunk_count, chunk_size]),
+    Chunks = [text_keys(C, [offset]) || C <- maps:get(chunks, M)],
+    {ok, Read} = macula_manifest:from_wire(Wire#{chunks := Chunks}),
+    ?assertEqual(M, Read),
+    ?assertEqual(ok, macula_manifest:verify_mcid(Read, maps:get(mcid, M))).
+
+%% A name or hash algorithm sent as text, or as the atom the decoder makes
+%% of a text that names an existing atom, is read as its binary value.
+from_wire_reads_a_name_and_hash_algorithm_sent_as_text_test() ->
+    {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700),
+                                        #{chunk_size => 200, name => <<"ok">>,
+                                          hash_algorithm => sha256}),
+    [begin
+         {ok, Read} = macula_manifest:from_wire(
+                        M#{name := Name, hash_algorithm := {text, <<"sha256">>}}),
+         ?assertEqual(M, Read),
+         ?assertEqual(ok, macula_manifest:verify_mcid(Read, maps:get(mcid, M)))
+     end || Name <- [{text, <<"ok">>}, ok]].
+
+from_wire_refuses_chunks_that_are_not_a_list_of_maps_test() ->
+    {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700),
+                                        #{chunk_size => 200}),
+    ?assertEqual({error, invalid_manifest},
+                 macula_manifest:from_wire(M#{chunks := not_a_list})),
+    ?assertEqual({error, invalid_manifest},
+                 macula_manifest:from_wire(M#{chunks := [not_a_map]})).
+
+%% A missing hash algorithm is blake3; a present one this module does not
+%% know is refused, in any of the shapes it can arrive in.
+from_wire_refuses_an_unknown_hash_algorithm_test() ->
+    {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700),
+                                        #{chunk_size => 200}),
+    ?assertMatch({ok, #{hash_algorithm := blake3}},
+                 macula_manifest:from_wire(maps:remove(hash_algorithm, M))),
+    [?assertEqual({error, invalid_manifest},
+                  macula_manifest:from_wire(M#{hash_algorithm := Unknown}))
+     || Unknown <- [<<"sha3">>, {text, <<"sha3">>}, sha3]].
+
+verify_mcid_refuses_an_unknown_hash_algorithm_test() ->
+    {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700),
+                                        #{chunk_size => 200}),
+    ?assertEqual({error, manifest_mcid_mismatch},
+                 macula_manifest:verify_mcid(M#{hash_algorithm := sha3},
+                                             maps:get(mcid, M))).
+
+%% End to end in a fresh node that has never loaded macula_manifest: the
+%% manifest a station returns decodes there with text keys, and from_wire/1
+%% still reads the manifest the MCID names. The node is checked first, so
+%% the test cannot pass on a node that already has the field atoms.
+from_wire_reads_a_manifest_decoded_in_a_fresh_node_test_() ->
+    {timeout, 60, fun fresh_node_reads_the_manifest/0}.
+
+fresh_node_reads_the_manifest() ->
+    {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700),
+                                        #{chunk_size => 200}),
+    Mcid = maps:get(mcid, M),
+    Bin = macula_frame:encode(macula_frame:result(#{call_id => <<0:128>>,
+                                                    payload => M,
+                                                    responded_by => <<0:256>>})),
+    Paths = lists:append([["-pa", P] || P <- code:get_path()]),
+    {ok, Peer, _Node} = peer:start_link(#{connection => standard_io, args => Paths}),
+    try
+        ?assertMatch({'EXIT', _}, catch peer:call(Peer, erlang, binary_to_existing_atom,
+                                                  [<<"root_hash">>, utf8])),
+        {ok, Decoded, <<>>} = peer:call(Peer, macula_frame, decode, [Bin]),
+        Wire = maps:get(payload, Decoded),
+        ?assert(maps:is_key({text, <<"root_hash">>}, Wire)),
+        {ok, Read} = peer:call(Peer, macula_manifest, from_wire, [Wire]),
+        ?assertEqual(M, Read),
+        ?assertEqual(ok, peer:call(Peer, macula_manifest, verify_mcid, [Read, Mcid]))
+    after
+        peer:stop(Peer)
+    end.
+
+text_keys(Map, Keys) ->
+    lists:foldl(fun(K, Acc) -> text_key(maps:take(K, Acc), K) end, Map, Keys).
+
+text_key({V, Rest}, K) -> Rest#{{text, atom_to_binary(K)} => V}.
