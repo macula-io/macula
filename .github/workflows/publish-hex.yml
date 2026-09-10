@@ -40,11 +40,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      # The guard comes from this workflow's own commit, so a dry run can
+      # check a tag cut before the guard existed. On a tag push this commit
+      # is the tag itself.
+      - name: Check out the workflow's own commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: ci
+
       - name: Check out the release tag
         uses: actions/checkout@v4
         with:
           ref: refs/tags/${{ env.RELEASE_TAG }}
           fetch-depth: 0
+          path: pkg
 
       - name: Set up Erlang/OTP and rebar3
         uses: erlef/setup-beam@v1
@@ -59,9 +69,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Refuse unless this is the clean, pushed release tag
-        run: bash scripts/is_checkout_publishable.sh
+        run: bash ci/scripts/is_checkout_publishable.sh "$GITHUB_WORKSPACE/pkg"
 
       - name: Build the package and docs
+        working-directory: pkg
         run: rebar3 hex build
 
   publish:
