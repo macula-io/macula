@@ -534,7 +534,8 @@ classify_put({ok, Other})    -> {error, {unexpected_reply, Other}};
 classify_put({error, _} = E) -> E.
 
 %% @doc Convenience wrapper for `_dht.find_record'. Looks up a record
-%% by its `macula_record:storage_key/1' (32-byte BLAKE3 digest).
+%% by its `macula_record:storage_key/1': 32 bytes, either the record's own
+%% key (for some record types) or a SHA-256 digest (for the rest).
 %% Returns `{error, not_found}' when no record exists at the key.
 %% Callers SHOULD verify the returned record's signature with
 %% `macula_record:verify/1' before trusting its payload.
