@@ -42,7 +42,8 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 - `macula:field/2`, `field/3` and `text/1`: read fields of maps a peer
   supplies (D26), whose text keys and values arrive as `{text, Bin}`. A
   field is looked up as `{text, Name}`, then as the atom, then as the
-  binary, so maps handed over in process read the same way.
+  binary, so maps handed over in process read the same way. The
+  distribution pool reads its tunnel RPC payloads through them.
 - `macula_key_bindings`: bindings of a node's TLS and CONNECT keys to its
   identity key, and the status statements that keep a binding in force,
   as the handshake frame design lays them out. Each travels as its signed
