@@ -59,12 +59,15 @@ start_with_env_var_nodes_test_() ->
     {setup,
      fun() ->
          setup(),
-         os:putenv("CLUSTER_NODES", "node1@host1,node2@host2,node3@host3")
+         %% localhost: the strategy connects to each configured node from
+         %% its own process, and on a distributed node a connect to an
+         %% unresolvable host takes seconds, so its calls would time out.
+         os:putenv("CLUSTER_NODES", "node1@localhost,node2@localhost,node3@localhost")
      end,
      fun cleanup/1,
      fun(_) ->
          {ok, _Pid} = macula_cluster_static:start_link(#{}),
-         Expected = ['node1@host1', 'node2@host2', 'node3@host3'],
+         Expected = ['node1@localhost', 'node2@localhost', 'node3@localhost'],
          [?_assertEqual(Expected, macula_cluster_static:get_nodes())]
      end}.
 
@@ -72,12 +75,12 @@ start_with_env_var_whitespace_test_() ->
     {setup,
      fun() ->
          setup(),
-         os:putenv("CLUSTER_NODES", " node1@host1 , node2@host2 ")
+         os:putenv("CLUSTER_NODES", " node1@localhost , node2@localhost ")
      end,
      fun cleanup/1,
      fun(_) ->
          {ok, _Pid} = macula_cluster_static:start_link(#{}),
-         Expected = ['node1@host1', 'node2@host2'],
+         Expected = ['node1@localhost', 'node2@localhost'],
          [?_assertEqual(Expected, macula_cluster_static:get_nodes())]
      end}.
 

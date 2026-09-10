@@ -24,7 +24,9 @@ is_distributed_returns_false_when_not_distributed_test() ->
     ?assert(is_boolean(Result)).
 
 ensure_distributed_returns_ok_or_error_test() ->
+    WasDistributed = erlang:is_alive(),
     Result = macula_cluster:ensure_distributed(),
+    stop_distribution_started_here(WasDistributed),
     ?assert(Result =:= ok orelse element(1, Result) =:= error).
 
 %%%===================================================================
@@ -37,11 +39,15 @@ get_cookie_returns_atom_test() ->
 
 set_cookie_with_atom_test() ->
     Cookie = test_cookie_atom_12345,
-    ?assertEqual(ok, macula_cluster:set_cookie(Cookie)).
+    with_distribution(fun() ->
+        ?assertEqual(ok, macula_cluster:set_cookie(Cookie))
+    end).
 
 set_cookie_with_binary_test() ->
     Cookie = <<"test_cookie_binary_67890">>,
-    ?assertEqual(ok, macula_cluster:set_cookie(Cookie)).
+    with_distribution(fun() ->
+        ?assertEqual(ok, macula_cluster:set_cookie(Cookie))
+    end).
 
 get_cookie_from_app_env_test() ->
     %% Set cookie in app env
@@ -141,7 +147,9 @@ macula_ensure_distributed_delegates_test() ->
     %% Verify macula.erl exports the function
     ?assert(erlang:function_exported(macula, ensure_distributed, 0)),
     %% Call it through macula module
+    WasDistributed = erlang:is_alive(),
     Result = macula:ensure_distributed(),
+    stop_distribution_started_here(WasDistributed),
     ?assert(Result =:= ok orelse element(1, Result) =:= error).
 
 macula_get_cookie_delegates_test() ->
@@ -155,7 +163,9 @@ macula_set_cookie_delegates_test() ->
     %% Verify macula.erl exports the function
     ?assert(erlang:function_exported(macula, set_cookie, 1)),
     %% Call it through macula module
-    ?assertEqual(ok, macula:set_cookie(delegation_test_cookie)).
+    with_distribution(fun() ->
+        ?assertEqual(ok, macula:set_cookie(delegation_test_cookie))
+    end).
 
 macula_monitor_nodes_delegates_test() ->
     %% Verify macula.erl exports the function
@@ -164,3 +174,25 @@ macula_monitor_nodes_delegates_test() ->
 macula_unmonitor_nodes_delegates_test() ->
     %% Verify macula.erl exports the function
     ?assert(erlang:function_exported(macula, unmonitor_nodes, 0)).
+
+%%%===================================================================
+%%% Helpers
+%%%===================================================================
+
+%% ensure_distributed/0 starts distribution on a node that is not
+%% distributed. Stop it again, so the test modules that run after this
+%% one in the same eunit run see the node as it was.
+stop_distribution_started_here(true) ->
+    ok;
+stop_distribution_started_here(false) ->
+    _ = net_kernel:stop(),
+    ok.
+
+%% A cookie can be set only on a distributed node. Run Fun on one, and
+%% stop distribution again afterwards when this call started it.
+with_distribution(Fun) ->
+    WasDistributed = erlang:is_alive(),
+    _ = macula_cluster:ensure_distributed(),
+    try Fun()
+    after stop_distribution_started_here(WasDistributed)
+    end.
