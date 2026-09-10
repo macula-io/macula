@@ -205,12 +205,16 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %%   <li>`ordered' (default) — per-publisher FIFO by seq; out-of-order
 %%       arrivals are buffered and released in order, a genuinely
 %%       missing seq skipped after `order_timeout_ms' (a `connect/2'
-%%       option, default 250ms).</li>
+%%       option, default 250ms). A new publisher's first facts are
+%%       held for up to `order_timeout_ms', so its order starts at the
+%%       lowest seq seen.</li>
 %%   <li>`latest_only' — deliver only seqs newer than the highest seen
 %%       for that publisher (drop stale); no buffering, no delay.</li>
 %%   <li>`as_arrives' — deliver in raw arrival order; the consumer
 %%       orders it itself.</li>
 %% </ul>
+%% Ordering state is kept per publisher, and apart for EVENTs whose
+%% publisher signature did not verify.
 %% See `macula_pubsub:subscribe/5'.
 -spec subscribe(pool(), realm(), topic(), pid(), map()) ->
     {ok, reference()}.

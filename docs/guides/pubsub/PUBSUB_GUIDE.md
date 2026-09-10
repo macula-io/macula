@@ -308,7 +308,7 @@ relate two publishers' events.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `order_timeout_ms` | `250` | How long an `ordered` sub waits for a missing seq before skipping the gap. Bounds head-of-line delay. |
+| `order_timeout_ms` | `250` | How long an `ordered` sub waits for a missing seq before skipping the gap, and the longest it holds a new publisher's first facts. Bounds head-of-line delay. |
 | `order_max_buffer` | `1024` | Per-publisher reorder-buffer count cap. Over it, the head gap is skipped early (memory guard for a high-rate publisher gapping). |
 
 ### Telemetry — is loss real?
@@ -327,9 +327,12 @@ signal to look at delivery, not ordering.
 
 ## Dedup and delivery guarantees
 
-`{publisher, seq}` is the dedup key. The pool guarantees you see each
-`(Realm, Publisher, Seq)` tuple **at most once**, even when the same EVENT
-arrives via multiple links (e.g. with `replication_factor > 1`). In
+For an EVENT whose publisher signature verified, `{publisher, seq}` is the
+dedup key: the pool guarantees you see each `(Realm, Publisher, Seq)` tuple
+**at most once**, even when the same EVENT arrives via multiple links (e.g.
+with `replication_factor > 1`). Any other EVENT is deduplicated on that tuple
+plus a digest of its topic and payload, so identical copies still arrive
+once, and it never uses a verified EVENT's key. In
 `ordered` and `latest_only` modes the delivery layer additionally uses the
 seq to order or drop; in `as_arrives` the dedup layer is the only filter.
 
@@ -347,8 +350,9 @@ seq to order or drop; in `as_arrives` the dedup layer is the only filter.
 - **Cross-publisher ordering** — none, by design. Two publishers' events
   arrive in arbitrary interleaving; see "Total order is not offered, by
   design" above.
-- **Cross-link dedup** — the pool dedupes by `(Realm, Publisher, Seq)`
-  over a 60-second window (configurable; see `dedup_window_ms` in
+- **Cross-link dedup** — the pool dedupes by `(Realm, Publisher, Seq)`,
+  plus a digest of topic and payload for an EVENT whose publisher signature
+  did not verify, over a 60-second window (configurable; see `dedup_window_ms` in
   [CONNECTING_GUIDE.md](../shared/CONNECTING_GUIDE.md)).
 - **Cross-station gossip** — default since 4.5.0. A daemon connected to
   station A and a daemon connected to station B see each other's

@@ -39,7 +39,7 @@ connection. The pool owns:
 | **Links** | One `macula_station_link` worker per seed, all sharing one identity |
 | **Replication** | `publish/5` fans the frame to N healthy links |
 | **Replay** | When a link dies, the pool respawns it and replays subscriptions |
-| **Dedup** | Inbound EVENT frames are deduped by `(Realm, Publisher, Seq)` before fan-out |
+| **Dedup** | Inbound EVENT frames are deduped by `(Realm, Publisher, Seq)` before fan-out, plus a digest of topic and payload when the publisher signature did not verify |
 | **Failover** | Subscribe/publish operations only count healthy links — a dead link is excluded |
 
 From the application's point of view there is one handle (`Pool`) and
