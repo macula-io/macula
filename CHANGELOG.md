@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ordered` and `latest_only` subscriptions keep separate per-publisher
   ordering state for EVENTs whose publisher signature verified and for all
   others. Unsigned EVENTs are ordered among themselves, per publisher.
+- An upload receiver (`macula_upload`) uses a pushed manifest only when
+  its MCID, recomputed from the manifest's canonical fields, is the MCID the
+  manifest names. Otherwise the upload ends with
+  `{error, {invalid_manifest, manifest_mcid_mismatch}}` on both sides and no
+  `sharing.upload_started_v1` fact is published, the same as for a manifest
+  that does not decode.
 
 ## [10.23.0] - 2026-09-10
 

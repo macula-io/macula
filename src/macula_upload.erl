@@ -8,6 +8,8 @@
 %%% `macula_pusher' passed as the stream's open-time `Args' (decoded
 %%% via `macula_manifest:from_wire/1', the same decode content
 %%% sharing's own `_content.get_manifest' path already relies on),
+%%% uses it only when its MCID, recomputed from its canonical fields,
+%%% is the MCID it names (`macula_manifest:verify_mcid/2'),
 %%% accumulates pushed chunks, and once the sender half-closes,
 %%% reassembles and verifies them against the manifest with
 %%% `macula_manifest:verify/2' — receiver-side verification, never
@@ -48,11 +50,11 @@
 %%% `macula_stream:set_reply/2' / `set_error/2' — exactly the channel
 %%% `macula_pusher''s own `macula:await_reply/1' blocks on. The Mcid
 %%% itself needs no separate round trip: it's a field already present
-%%% in the manifest both sides hold, deterministic from the same bytes
-%%% the sender is pushing (`macula_manifest' mirrors macula-station's
-%%% own algorithm BYTE-FOR-BYTE) — trustworthy to echo back specifically
-%%% BECAUSE verification against the actually-received bytes already
-%%% passed, not despite it.
+%%% in the manifest both sides hold (`macula_manifest' mirrors
+%%% macula-station's own algorithm BYTE-FOR-BYTE). It is trustworthy to
+%%% echo back because `handle_open/2' recomputed it from the manifest's
+%%% canonical fields, and the actually-received bytes then verified
+%%% against that manifest's size and root hash.
 %%%
 %%% `Module:handle_uploaded/2' — the LOCAL delivery, to whatever
 %%% application registered this upload handler — fires separately, from
@@ -207,7 +209,8 @@ init({Module, Pool, Realm, Announce, InitArgs}) ->
             {stop, Reason}
     end.
 
-%% @private A manifest that fails to decode is NOT rejected via
+%% @private A manifest that fails to decode, or whose MCID does not
+%% recompute from its canonical fields, is NOT rejected via
 %% `{stop, Reason, State}' here — a `handle_open/2' stop makes
 %% `macula_streamer:init/1' itself return `{stop, Reason}', a genuine
 %% gen_server init failure, and OTP never calls `terminate/2' for a
@@ -222,12 +225,23 @@ init({Module, Pool, Realm, Announce, InitArgs}) ->
 %% already wired to set a terminal reply — reports it correctly on
 %% both sides once the sender closes, exactly like any other failure.
 handle_open(StreamArgs, State) ->
-    case macula_manifest:from_wire(StreamArgs) of
+    case bind_manifest(macula_manifest:from_wire(StreamArgs)) of
         {ok, Manifest} ->
             {ok, announce_started(State#ustate{manifest = Manifest})};
         {error, Reason} ->
             {ok, State#ustate{manifest = {error, {invalid_manifest, Reason}}}}
     end.
+
+%% The manifest names its content by MCID, and is used only when that MCID,
+%% recomputed from its canonical fields, is the one it names.
+bind_manifest({ok, Manifest}) ->
+    bound_manifest(macula_manifest:verify_mcid(Manifest, maps:get(mcid, Manifest)),
+                   Manifest);
+bind_manifest({error, _} = E) ->
+    E.
+
+bound_manifest(ok, Manifest)              -> {ok, Manifest};
+bound_manifest({error, _} = E, _Manifest) -> E.
 
 announce_started(#ustate{pool = Pool, realm = Realm, announce = Announce,
                          manifest = Manifest} = State) ->

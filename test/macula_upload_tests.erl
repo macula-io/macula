@@ -108,6 +108,7 @@ upload_test_() ->
       fun tampered_bytes_deliver_error_and_replies_error/0,
       fun too_many_chunks_aborts_the_stream/0,
       fun bad_manifest_stops_before_any_chunk/0,
+      fun relabelled_manifest_is_refused_before_any_chunk/0,
       fun direct_dial_forwards_client_stream_mode/0]}.
 
 verified_push_delivers_ok_and_replies_ok() ->
@@ -171,6 +172,27 @@ bad_manifest_stops_before_any_chunk() ->
 
     ?assertMatch({uploaded, {error, {invalid_manifest, _}}}, wait_msg()),
     ?assertEqual(1, meck:num_calls(macula_stream, set_error, [StreamPid, {invalid_manifest, '_'}])),
+    ?assertEqual([], topics()).
+
+%% A manifest whose own `mcid' names other content is refused when the
+%% stream opens, the same as one that does not decode, even though the
+%% pushed bytes match its size and root hash: no started fact, and both
+%% sides see the error.
+relabelled_manifest_is_refused_before_any_chunk() ->
+    process_flag(trap_exit, true),
+    Bytes = crypto:strong_rand_bytes(macula_manifest:default_chunk_size()),
+    {ok, Manifest, [Chunk]} = macula_manifest:create(Bytes),
+    {ok, Other, _} = macula_manifest:create(crypto:strong_rand_bytes(64)),
+    recv_returning([{chunk, Chunk}, eof]),
+    {ok, _Sup} = macula_upload:advertise(pool, <<0:256>>, <<"bulk.ingest">>, ?MODULE, self()),
+    Handler = captured_handler(),
+    StreamPid = spawn(fun stream_stub/0),
+    ok = Handler(StreamPid, manifest_stream_args(Manifest#{mcid := maps:get(mcid, Other)})),
+
+    Reason = {invalid_manifest, manifest_mcid_mismatch},
+    ?assertEqual({uploaded, {error, Reason}}, wait_msg()),
+    ?assertEqual(1, meck:num_calls(macula_stream, set_error, [StreamPid, Reason])),
+    ?assertEqual(0, meck:num_calls(macula_stream, set_reply, ['_', '_'])),
     ?assertEqual([], topics()).
 
 direct_dial_forwards_client_stream_mode() ->

@@ -173,7 +173,10 @@ content-addressed storage for someone to discover and pull later — that's
 what `macula_feeder` is for). `macula_manifest:create/2` chunks and hashes
 the bytes up front; the manifest rides the stream's open-time `Args`, not
 an in-band header chunk; the recipient reassembles and verifies against it
-— receiver-side, never sender-trusted — before replying. No multi-stream
+— receiver-side, never sender-trusted — before replying. The recipient uses
+the manifest only when its MCID, recomputed from its canonical fields, is the
+MCID it names; one that isn't is refused when the stream opens, like a
+manifest that doesn't decode. No multi-stream
 parallelism here: that mechanism is content-sharing-only, built on a wire
 format `client_stream` doesn't have.
 
@@ -252,7 +255,7 @@ known in advance.
 | `macula_download:start_link/4,5` | supervised, `sharing.get_*_v1`-announcing wrapper around `macula_content_transfer`, real `cancel/1` |
 | `macula_download:start_link_direct/4,5` | **direct-dial** supervised wrapper — resolves the provider automatically |
 | `macula_pusher:start_link/5,6` / `start_link_direct/5,6` | sender: chunk+hash `Bytes`, push over `client_stream`, deliver the recipient's verified `{ok, Mcid} \| {error, _}` to `handle_pushed/2` |
-| `macula_upload:advertise/5,6` / `advertise_direct/6,7` | receiver: accept pushes for `Procedure`, verify against the manifest, deliver `{ok, Mcid, Bytes} \| {error, _}` to `handle_uploaded/2` |
+| `macula_upload:advertise/5,6` / `advertise_direct/6,7` | receiver: accept pushes for `Procedure`, check the manifest's MCID, verify the bytes against the manifest, deliver `{ok, Mcid, Bytes} \| {error, _}` to `handle_uploaded/2` |
 | `macula_content_transfer_registry:whereis_share/1` | resolve a transfer's `share_id` (from a mesh fact) to its pid |
 | `macula_manifest:default_chunk_size()` | the single-block / chunked threshold (256 KiB) |
 
