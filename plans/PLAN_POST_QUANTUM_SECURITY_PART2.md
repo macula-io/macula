@@ -150,6 +150,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     request hash in provider replies, the stream signer with its sequence numbers (D25), and the caller's signature
     with its sequence numbers on its own stream frames (D17);
   - every 32-byte and 64-byte guard is replaced by profile sizes;
+  - peer-supplied maps are delivered in one key form and read through `macula:field/2,3` and `macula:text/1`, and
+    the codec decodes a frame type's own fields through a fixed table (D26);
   - remove the unused signing functions for SWIM membership updates (`sign_swim_update/2`,
     `verify_swim_update/1`, `verify_update_result/2`, `canonical_swim_update/1`, `?SWIM_UPDATE_DOMAIN`) and
     their tests, on this branch only; SWIM itself stays (decided by Raf, 2026-09-10). Done in `8cd60ee`.
@@ -167,7 +169,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `test/macula_node_keys_node_id_tests.erl` (new): the three D5 reference vectors, node_ids derived from the
     carried identity key, and no node_id for CONNECT or TLS keys;
   - `test/macula_record_tests.erl`: the carried key must derive to the claimed node_id;
-  - `test/macula_frame_tests.erl`: the handshake frames round-trip, and labels cannot be confused;
+  - `test/macula_frame_tests.erl`: the handshake frames round-trip, and labels cannot be confused; a frame decoded
+    on a fresh node, with the absence of its field atoms asserted first, and on a warm node delivers identical
+    payload maps (D26);
   - `test/macula_content_block_hash_tests.erl`: a SHA-384 block verifies on fetch, and a content id with any tag
     but 2 is refused;
   - binding tests: an expired binding, a binding for another use, and a binding for another node_id are refused;
@@ -290,6 +294,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     maps the identity-mismatch disconnect to its existing `{error, {node_id_mismatch, ...}}` reply;
   - every dial target, including redundancy candidates, carries an expected node_id;
   - neighbour signatures per D17, and publisher signatures verified at the origin station;
+  - record fan-out, DHT handlers and content handlers read peer-supplied maps through the facade accessors (D26);
   - content ids have only tag 2, SHA-384, in the post-quantum format: the content hasher, the content store, the
     manifest, announcements and the content DHT key use it, and refuse an id with any other tag (D24);
   - advertisement gossip forwards providers' signed advertisements unchanged and drops expired ones; routing
@@ -754,7 +759,8 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - builder and runtime images on OTP 28 with OpenSSL 3.5.0 or newer at build time; the hecate images still on
     OTP 27 move to OTP 28 here (D8);
   - data keyed by the hex node id (hecate-citizens, hecate-mail, hecate-graph) keeps its 64-character shape; the
-    values change when nodes get new identities.
+    values change when nodes get new identities;
+  - every handler that reads payload fields reads them through `macula:field/2,3` and `macula:text/1` (D26).
 - **Red first:** hecate-om ownership-proof tests with a post-quantum key, and every service image passing the V2
   check. Fail today.
 - **Done:** green.

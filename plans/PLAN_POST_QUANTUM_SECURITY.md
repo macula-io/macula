@@ -380,9 +380,9 @@ Once the connection handshake authenticates both ends of every connection:
 - **EU profile:** hybrid neighbour signatures stay on control frames: SWIM, DHT protocol, ADVERTISE and
   UNADVERTISE, SUBSCRIBE and UNSUBSCRIBE, and the overlay relay envelope. They drop on data frames: PUBLISH, a
   relayed EVENT and content frames.
-- **Stream frames are signed at both ends:** a provider's frames by the provider (D25), and a caller's frames in
-  client_stream and bidi streams by the caller, under `MACULA-PQ-CALLER-STREAM-V1`, with the key from the verified
-  STREAM_OPEN (revised by Raf on 2026-09-11).
+- **Stream frames are signed at both ends:** a provider's frames by the provider (D25), and every frame a caller
+  originates after STREAM_OPEN by the caller, in every stream mode, under `MACULA-PQ-CALLER-STREAM-V1`, with the key
+  from the verified STREAM_OPEN (revised by Raf on 2026-09-11).
 - Every event carries a publisher signature, verified at the origin station.
 - A reply is accepted only from the provider the caller signed as the target, and only for the request it answers
   (D25).
@@ -456,6 +456,7 @@ Raf answered "go with the recommendations" on 2026-09-10.
 | D23 | Endorsement of stations | Open | Open |
 | D24 | Hashes under signatures | SHA-384 for content and UCAN parent ids; node ids stay SHA-256 | Accepted |
 | D25 | Replies bound to provider and request | Caller-signed target, request hash, signed stream frames | Accepted |
+| D26 | Peer-supplied maps | One key form in 11.0.0, read through the facade accessors | Accepted |
 
 ### D1 Where the profile is chosen
 
@@ -862,12 +863,13 @@ before its wire checks are green.
 - **Answer:** as in the key model. The US profile drops the neighbour signatures listed there. The EU profile
   keeps hybrid neighbour signatures on control frames. Origin signatures on relayed frames, publisher signatures
   and records always stay.
-- **Revised and accepted by Raf on 2026-09-11:** caller frames in client_stream and bidi streams carry
-  `{tbs, signature}` under `MACULA-PQ-CALLER-STREAM-V1`. The key is the caller's, from the verified STREAM_OPEN,
-  and is not carried again. The signature covers the request hash and a sequence number, and the caller's stream
-  end signs the last number, as provider frames do under D25. No station on the path can change, drop, reorder
-  or add a caller's stream arguments. Cost: about 4.7 KB per caller frame in the US profile and 5.2 KB in the EU
-  profile.
+- **Revised and accepted by Raf on 2026-09-11:** every frame a caller originates after STREAM_OPEN carries
+  `{tbs, signature}` under `MACULA-PQ-CALLER-STREAM-V1`, in every stream mode: data, end and abort frames in
+  client_stream and bidi, and end and abort frames in server_stream. The key is the caller's, from the verified
+  STREAM_OPEN, and is not carried again. The signature covers the request hash and a sequence number, and the
+  caller's stream end signs the last number, as provider frames do under D25. No station on the path can change,
+  drop, reorder or add a caller's stream frames. Cost: about 4.7 KB per caller frame in the US profile and 5.2 KB in
+  the EU profile.
 - **Why:** under the connection handshake a neighbour signature adds nothing in the US profile. In the EU profile
   it keeps classical-strength authenticity for membership, routing, subscriptions and advertisements if ML-DSA were
   broken, at a small cost because control frames are rare. Data stays hybrid end to end through publisher and
@@ -1087,6 +1089,19 @@ before its wire checks are green.
     seen is refused, and a stream whose STREAM_END does not sign the last sequence number fails;
   - an advertisement without valid provider authorization, or expired, is never a target;
   - a relay error never ends a call as failed.
+
+### D26 One key form for peer-supplied maps
+
+- **Answer, accepted by Raf on 2026-09-11:** in `macula` 11.0.0, every map a peer supplies as application data, at
+  any depth, is delivered in one form: text as `{text, Bin}`, byte strings as binaries, integers, floats and lists as
+  decoded, null as `undefined`, and no atoms. The fields a frame type defines decode to atoms through a fixed table,
+  never from peer input. Handlers read fields through `macula:field/2`, `macula:field/3` and `macula:text/1`.
+- **Why:** a reader sees the same map on a node's first call as on every later one, whatever the node has loaded.
+- **Cost:** handlers that match atom or binary keys in payloads change, which is accepted for 11.0.0.
+- **Details:** `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md`, Peer-supplied maps.
+- **Blocks:** WP 1.3 (the codec and the facade accessors, with `macula_manifest:from_wire/1` and the distribution
+  pool reading through them), WP 1.6 (the station's record fan-out, DHT handlers and content handlers), WP 6.1
+  (every hecate service handler that reads payload fields).
 
 ---
 
