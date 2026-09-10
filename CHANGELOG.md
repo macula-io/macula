@@ -23,6 +23,10 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   purpose or profile, a stored public key that differs from the one
   derived from its private key, and a key that fails a sign-and-verify
   round trip.
+- `macula_node_keys:sign/2`, `verify/4` and `public_key/1`: ML-DSA-87
+  alone in the US profile, and Macula's composite ML-DSA-87-PS384 in the
+  EU profile, valid only if both halves verify. Verification refuses
+  malformed input without raising.
 
 ### Changed
 

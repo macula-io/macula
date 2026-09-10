@@ -1,4 +1,5 @@
-%% @doc A node's keys, one per purpose, in the node's crypto profile, stored as plan decision D6 describes.
+%% @doc A node's keys, one per purpose, in the node's crypto profile, stored as plan decision D6 describes, and
+%% signing with them as decisions D4 and D7 describe.
 %%
 %% A node holds an identity key and a CONNECT key, and a station instance also holds a TLS key. Each key serves
 %% exactly one purpose. A key is a list of components in the order of the profile's signature: ML-DSA-87 first,
@@ -9,7 +10,13 @@
 %% stores a DER-encoded RSAPrivateKey and RSAPublicKey. On load, every public key is derived again from its
 %% private key and must equal the stored one, and every component passes a sign-and-verify round trip.
 %%
-%% See plans/PLAN_POST_QUANTUM_SECURITY.md, decisions D4 and D6.
+%% A key with one component signs with ML-DSA-87 alone. A hybrid key signs with Macula's composite
+%% ML-DSA-87-PS384: both halves sign M' = Prefix || Label || len(ctx) || ctx || SHA-512(M), with an empty ctx and
+%% ML-DSA-87 under an empty context; the signature is the ML-DSA-87 signature followed by the RSA-PSS signature, and
+%% the carried public key is the ML-DSA-87 key followed by the DER RSAPublicKey. It is valid only if both halves
+%% verify.
+%%
+%% See plans/PLAN_POST_QUANTUM_SECURITY.md, decisions D4, D6 and D7.
 -module(macula_node_keys).
 
 -include_lib("public_key/include/public_key.hrl").
@@ -17,7 +24,10 @@
 -export([
     generate/2,
     save/2,
-    load/3
+    load/3,
+    public_key/1,
+    sign/2,
+    verify/4
 ]).
 
 -export_type([purpose/0, algorithm/0, component/0, node_key/0, refusal/0]).
@@ -41,6 +51,10 @@
 
 -define(KEY_FILE_MAGIC, "macula-node-key-v1\0").
 -define(MLDSA87_EXPANDED_BYTES, 4896).
+-define(MLDSA87_PUBLIC_BYTES, 2592).
+-define(MLDSA87_SIGNATURE_BYTES, 4627).
+-define(COMPOSITE_PREFIX, "CompositeAlgorithmSignatures2025").
+-define(COMPOSITE_LABEL, "MACULA-ML-DSA-87-PS384").
 
 %%------------------------------------------------------------------
 %% Generation
@@ -66,6 +80,47 @@ save(Path, #{purpose := _, profile := _, components := [_ | _]} = Key) ->
         {ok, node_key()} | {error, refusal() | file:posix() | badarg | terminated | system_limit}.
 load(Path, Purpose, Profile) ->
     checked_key(decode_file(file:read_file(Path)), Purpose, Profile).
+
+%%------------------------------------------------------------------
+%% Signing
+%%------------------------------------------------------------------
+
+%% @doc The public key a node carries for this key (D13): the ML-DSA-87 key, followed by the DER RSAPublicKey when
+%% the key is hybrid.
+-spec public_key(node_key()) -> binary().
+public_key(#{components := Components}) ->
+    << <<Public/binary>> || #{public := Public} <- Components >>.
+
+%% @doc Sign a message: ML-DSA-87 alone for a one-component key, Macula's composite ML-DSA-87-PS384 for a hybrid key.
+-spec sign(iodata(), node_key()) -> binary().
+sign(Message, #{components := [#{algorithm := mldsa87, private := Private}]}) ->
+    crypto:sign(mldsa87, none, Message, Private);
+sign(Message, #{profile := Profile,
+                components := [#{algorithm := mldsa87, private := MlDsaPrivate},
+                               #{algorithm := rsa_pss, private := RsaPrivate}]}) ->
+    Representative = composite_representative(Message),
+    {ok, #{digest := Digest} = Params} = composite_rsa_params(Profile),
+    {ok, RsaKey} = decode_rsa_private(RsaPrivate),
+    MlDsaSignature = crypto:sign(mldsa87, none, Representative, MlDsaPrivate),
+    RsaSignature = crypto:sign(rsa, Digest, Representative, rsa_private_list(RsaKey), pss_options(Params)),
+    <<MlDsaSignature/binary, RsaSignature/binary>>.
+
+%% @doc Verify a signature with the public key a node carries, under a profile. Malformed input is refused, never
+%% raised on.
+-spec verify(iodata(), binary(), binary(), term()) -> boolean().
+verify(Message, Signature, Public, us_national_security)
+  when byte_size(Signature) =:= ?MLDSA87_SIGNATURE_BYTES, byte_size(Public) =:= ?MLDSA87_PUBLIC_BYTES ->
+    verified_call(fun() -> crypto:verify(mldsa87, none, Message, Signature, Public) end);
+verify(Message, <<MlDsaSignature:?MLDSA87_SIGNATURE_BYTES/binary, RsaSignature/binary>>,
+       <<MlDsaPublic:?MLDSA87_PUBLIC_BYTES/binary, RsaPublicDer/binary>>, eu) ->
+    Representative = composite_representative(Message),
+    MlDsaValid = verified_call(fun() ->
+        crypto:verify(mldsa87, none, Representative, MlDsaSignature, MlDsaPublic)
+    end),
+    rsa_half_verifies(MlDsaValid, decode_rsa_public(RsaPublicDer), RsaSignature, Representative,
+                      composite_rsa_params(eu));
+verify(_Message, _Signature, _Public, _Profile) ->
+    false.
 
 %%------------------------------------------------------------------
 %% Internals: algorithms per purpose
@@ -101,6 +156,48 @@ generate_component(mldsa87) ->
 generate_component({rsa_pss, #{modulus_bits := Bits, public_exponent := Exponent}}) ->
     {[E, N], PrivateList} = crypto:generate_key(rsa, {Bits, Exponent}),
     #{algorithm => rsa_pss, public => rsa_public_der(E, N), private => rsa_private_der(PrivateList)}.
+
+%%------------------------------------------------------------------
+%% Internals: the composite
+%%------------------------------------------------------------------
+
+composite_representative(Message) ->
+    <<?COMPOSITE_PREFIX, ?COMPOSITE_LABEL, 0:8, (crypto:hash(sha512, Message))/binary>>.
+
+composite_rsa_params(Profile) ->
+    hybrid_rsa_params(macula_crypto_profile:definition(Profile)).
+
+hybrid_rsa_params({ok, #{identity_signature := [mldsa87, {rsa_pss, Params}]}}) -> {ok, Params};
+hybrid_rsa_params(_Definition) -> error.
+
+decode_rsa_public(Der) ->
+    try public_key:der_decode('RSAPublicKey', Der) of
+        #'RSAPublicKey'{} = Key -> canonical_rsa_public(public_key:der_encode('RSAPublicKey', Key) =:= Der, Key)
+    catch
+        error:_ -> error
+    end.
+
+canonical_rsa_public(true, Key) -> {ok, Key};
+canonical_rsa_public(false, _Key) -> error.
+
+rsa_half_verifies(true, {ok, #'RSAPublicKey'{modulus = N, publicExponent = E}}, Signature, Representative,
+                  {ok, #{modulus_bits := Bits, public_exponent := Exponent, digest := Digest} = Params}) ->
+    rsa_key_verifies({bit_length(N), E} =:= {Bits, Exponent}, [E, N], Signature, Representative, Digest,
+                     pss_options(Params));
+rsa_half_verifies(_MlDsaValid, _RsaPublic, _Signature, _Representative, _Params) ->
+    false.
+
+rsa_key_verifies(true, RsaPublic, Signature, Representative, Digest, Options) ->
+    verified_call(fun() -> crypto:verify(rsa, Digest, Representative, Signature, RsaPublic, Options) end);
+rsa_key_verifies(false, _RsaPublic, _Signature, _Representative, _Digest, _Options) ->
+    false.
+
+verified_call(Verify) ->
+    try Verify() of
+        Result -> Result =:= true
+    catch
+        error:_ -> false
+    end.
 
 %%------------------------------------------------------------------
 %% Internals: checks on load

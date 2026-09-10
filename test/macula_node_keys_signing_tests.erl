@@ -1,0 +1,106 @@
+%% EUnit tests for signing with a node key: ML-DSA-87 alone in the US profile, and Macula's composite ML-DSA-87-PS384
+%% in the EU profile (plan decisions D4 and D7).
+-module(macula_node_keys_signing_tests).
+
+-include_lib("eunit/include/eunit.hrl").
+-include_lib("public_key/include/public_key.hrl").
+
+%% RSA-4096 key generation takes up to about a second per key.
+-define(EU_TIMEOUT, 120).
+-define(PREFIX, "CompositeAlgorithmSignatures2025").
+-define(LABEL, "MACULA-ML-DSA-87-PS384").
+-define(PSS_OPTIONS, [{rsa_padding, rsa_pkcs1_pss_padding}, {rsa_pss_saltlen, 48}, {rsa_mgf1_md, sha384}]).
+
+%%------------------------------------------------------------------
+%% The composite's message representative
+%%------------------------------------------------------------------
+
+%% The same bytes were sent to the Go vector check; this pins the constants used below.
+message_representative_matches_the_shared_vector_test() ->
+    Expected = binary:decode_hex(<<"436f6d706f73697465416c676f726974686d5369676e61747572657332303235"
+                                   "4d4143554c412d4d4c2d4453412d38372d5053333834"
+                                   "00"
+                                   "e4f23edffade3a0a47087a2f675e84d4ed9c126f824e93c09ae81c09033b82d3"
+                                   "ef4b9c62d5bbc6238b99df1bec305ed30456cd776dca2e8182ecc35e4c72b7f7">>),
+    ?assertEqual(Expected, representative(<<"macula-composite-vector">>)).
+
+%%------------------------------------------------------------------
+%% US profile: ML-DSA-87 alone
+%%------------------------------------------------------------------
+
+us_signing_test_() ->
+    {setup, fun us_identity_key/0, fun(Key) ->
+        Message = <<"a record to sign">>,
+        Signature = macula_node_keys:sign(Message, Key),
+        Public = macula_node_keys:public_key(Key),
+        [?_assertEqual({4627, 2592}, {byte_size(Signature), byte_size(Public)}),
+         ?_assert(crypto:verify(mldsa87, none, Message, Signature, Public)),
+         ?_assert(macula_node_keys:verify(Message, Signature, Public, us_national_security)),
+         ?_assertNot(macula_node_keys:verify(<<"another record">>, Signature, Public, us_national_security)),
+         ?_assertNot(macula_node_keys:verify(Message, Signature, Public, eu))]
+    end}.
+
+%%------------------------------------------------------------------
+%% EU profile: Macula's composite ML-DSA-87-PS384
+%%------------------------------------------------------------------
+
+eu_signing_test_() ->
+    {timeout, ?EU_TIMEOUT, {setup, fun eu_identity_key/0, fun(Key) ->
+        Message = <<"a record to sign">>,
+        Signature = macula_node_keys:sign(Message, Key),
+        Public = macula_node_keys:public_key(Key),
+        <<MlDsaSignature:4627/binary, RsaSignature/binary>> = Signature,
+        <<MlDsaPublic:2592/binary, RsaPublicDer/binary>> = Public,
+        #'RSAPublicKey'{modulus = N, publicExponent = E} = public_key:der_decode('RSAPublicKey', RsaPublicDer),
+        Representative = representative(Message),
+        [?_assertEqual({5139, 3118}, {byte_size(Signature), byte_size(Public)}),
+         ?_assertEqual(65537, E),
+         %% Both halves sign the same message representative; ML-DSA-87 with an empty context.
+         ?_assert(crypto:verify(mldsa87, none, Representative, MlDsaSignature, MlDsaPublic)),
+         ?_assert(crypto:verify(rsa, sha384, Representative, RsaSignature, [E, N], ?PSS_OPTIONS)),
+         ?_assert(macula_node_keys:verify(Message, Signature, Public, eu)),
+         ?_assertNot(macula_node_keys:verify(<<"another record">>, Signature, Public, eu)),
+         %% A signature with one invalid half is refused.
+         ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 10), Public, eu)),
+         ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 4627 + 10), Public, eu)),
+         %% A half on its own is not a signature.
+         ?_assertNot(macula_node_keys:verify(Message, MlDsaSignature, Public, eu)),
+         ?_assertNot(macula_node_keys:verify(Message, MlDsaSignature, MlDsaPublic, us_national_security)),
+         %% The composite is not accepted under the other profile, nor with a non-canonical key encoding.
+         ?_assertNot(macula_node_keys:verify(Message, Signature, Public, us_national_security)),
+         ?_assertNot(macula_node_keys:verify(Message, Signature, <<Public/binary, 0>>, eu))]
+    end}}.
+
+%%------------------------------------------------------------------
+%% Malformed input
+%%------------------------------------------------------------------
+
+malformed_input_is_refused_without_raising_test_() ->
+    [?_assertNot(macula_node_keys:verify(<<"m">>, <<>>, <<>>, us_national_security)),
+     ?_assertNot(macula_node_keys:verify(<<"m">>, <<0:4627/unit:8>>, <<0:2592/unit:8>>, us_national_security)),
+     ?_assertNot(macula_node_keys:verify(<<"m">>, <<0:5139/unit:8>>, <<0:3118/unit:8>>, eu)),
+     ?_assertNot(macula_node_keys:verify(<<"m">>, <<"sig">>, <<"key">>, rsa_only))].
+
+ed25519_signature_is_refused_test() ->
+    Ed25519 = macula_identity:generate(),
+    Signature = macula_identity:sign(<<"m">>, Ed25519),
+    ?assertNot(macula_node_keys:verify(<<"m">>, Signature, macula_identity:public(Ed25519), us_national_security)).
+
+%%------------------------------------------------------------------
+%% Helpers
+%%------------------------------------------------------------------
+
+us_identity_key() ->
+    {ok, Key} = macula_node_keys:generate(identity, us_national_security),
+    Key.
+
+eu_identity_key() ->
+    {ok, Key} = macula_node_keys:generate(identity, eu),
+    Key.
+
+representative(Message) ->
+    <<?PREFIX, ?LABEL, 0, (crypto:hash(sha512, Message))/binary>>.
+
+flip_byte(Bin, Offset) ->
+    <<Head:Offset/binary, Byte, Tail/binary>> = Bin,
+    <<Head/binary, (Byte bxor 1), Tail/binary>>.
