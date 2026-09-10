@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default. Set the option to `false` to keep delivering such events with
   `publisher_verified => false` in `Meta`. EVENTs that carry no
   `publisher_sig` are unaffected and are still delivered as `not_signed`.
+- `macula_station_link` now verifies the signature of every inbound CALL,
+  RESULT and ERROR frame against the identity the frame names as its
+  signer: `caller` on a CALL, `responded_by` on a RESULT, `reported_by`
+  on an ERROR. A CALL that does not verify is not handed to its handler
+  and gets no reply. A RESULT or ERROR that does not verify is dropped
+  and leaves its call pending.
 - `macula_tls:quic_client_opts/0,1` now return `[{verify, webpki}]`
   unless development mode is set explicitly. Only
   `MACULA_TLS_MODE=development` (or `dev`), or the `tls_mode` app env set

@@ -1408,24 +1408,17 @@ after_connect_request({error, Reason}, S) ->
     erlang:send_after(S#state.connect_retry_backoff_ms, self(), attempt_connect),
     {noreply, S}.
 
-%% RESULT
-on_frame(#{frame_type := result, call_id := CallId, payload := Payload},
-         #state{pending = P} = S) ->
-    case maybe_clear_liveness(CallId, S) of
-        {true, NewS}  -> NewS;
-        {false, NewS} ->
-            deliver_pending(maps:take(CallId, P), {ok, Payload}, NewS)
-    end;
-%% ERROR
-on_frame(#{frame_type := error, call_id := CallId} = Frame,
-         #state{pending = P} = S) ->
+%% RESULT / ERROR. Acted on only once the frame's signature verifies
+%% against the identity it names as its signer (`responded_by' on a
+%% RESULT, `reported_by' on an ERROR); see `on_reply/4'.
+on_frame(#{frame_type := result, call_id := CallId, payload := Payload} = Frame, S) ->
+    on_reply(verify_signed_by(Frame, reply_signer(Frame)), CallId,
+             {ok, Payload}, S);
+on_frame(#{frame_type := error, call_id := CallId} = Frame, S) ->
     Failure = call_failure(maps:get(code, Frame, 0),
                            maps:get(name, Frame, undefined),
                            maps:get(detail, Frame, undefined)),
-    case maybe_clear_liveness(CallId, S) of
-        {true, NewS}  -> NewS;
-        {false, NewS} -> deliver_pending(maps:take(CallId, P), Failure, NewS)
-    end;
+    on_reply(verify_signed_by(Frame, reply_signer(Frame)), CallId, Failure, S);
 %% EVENT — pubsub delivery. Fan out to every subscriber whose
 %% (realm, topic) matches. Stations may push EVENTs without a prior
 %% SUBSCRIBE on this connection (e.g. wildcard / catalog channels);
@@ -1433,12 +1426,12 @@ on_frame(#{frame_type := error, call_id := CallId} = Frame,
 on_frame(#{frame_type := event, topic := Topic, realm := Realm} = Frame, S) ->
     on_inbound_event(check_publisher_sig(Frame), Realm, Topic, Frame, S);
 %% Inbound CALL — relay forwarded a CALL whose (realm, procedure)
-%% this link advertised. Dispatch to the registered handler and ship
-%% the resulting RESULT or call_error frame back over the same
+%% this link advertised. Once the CALL's signature verifies against its
+%% own `caller' (`on_inbound_call/3'), dispatch to the registered handler
+%% and ship the resulting RESULT or call_error frame back over the same
 %% peering connection.
 on_frame(#{frame_type := call} = Frame, S) ->
-    handle_inbound_call(Frame, S),
-    S;
+    on_inbound_call(verify_signed_by(Frame, call_signer(Frame)), Frame, S);
 %% STREAM_OPEN / STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
 %% no longer arrive here — every streaming session travels on its
 %% own dedicated QUIC stream (see PLAN_PER_STREAM_QUIC_ISOLATION.md
@@ -1479,6 +1472,45 @@ deliver_pending({{From, TRef}, NewP}, Reply, S) ->
     _ = erlang:cancel_timer(TRef),
     gen_server:reply(From, Reply),
     S#state{pending = NewP}.
+
+%% A RESULT or ERROR whose signature does not verify against the identity
+%% it names is dropped before it can complete a pending call or clear a
+%% liveness probe, so the call stays pending for the genuine reply.
+on_reply({ok, _Verified}, CallId, Reply, #state{pending = P} = S) ->
+    case maybe_clear_liveness(CallId, S) of
+        {true, NewS}  -> NewS;
+        {false, NewS} -> deliver_pending(maps:take(CallId, P), Reply, NewS)
+    end;
+on_reply({error, Why}, CallId, _Reply, S) ->
+    logger:warning("[macula_station_link] dropped reply whose signature does"
+                   " not verify against its signer (~p) call_id=~s",
+                   [Why, hex_prefix(CallId)]),
+    S.
+
+%% A CALL whose signature does not verify against its own `caller' never
+%% reaches its handler and gets no reply.
+on_inbound_call({ok, _Verified}, Frame, S) ->
+    handle_inbound_call(Frame, S),
+    S;
+on_inbound_call({error, Why}, Frame, S) ->
+    logger:warning("[macula_station_link] dropped inbound CALL whose signature"
+                   " does not verify against its caller (~p) procedure=~p",
+                   [Why, maps:get(procedure, Frame, undefined)]),
+    S.
+
+%% The identity a frame names as its signer: `responded_by' on a RESULT,
+%% `reported_by' on an ERROR (the same two fields
+%% `macula_station_peer_observer' verifies a reply against before relaying
+%% it), `caller' on a CALL.
+reply_signer(#{responded_by := <<_:256>> = Pub}) -> {ok, Pub};
+reply_signer(#{reported_by := <<_:256>> = Pub})  -> {ok, Pub};
+reply_signer(_Frame)                            -> {error, no_signer}.
+
+call_signer(#{caller := <<_:256>> = Pub}) -> {ok, Pub};
+call_signer(_Frame)                      -> {error, no_signer}.
+
+verify_signed_by(Frame, {ok, Pub})       -> macula_frame:verify(Frame, Pub);
+verify_signed_by(_Frame, {error, _} = E) -> E.
 
 on_timeout(error, S) ->
     {noreply, S};
@@ -2134,10 +2166,11 @@ ucan_verdict(_Error)         -> unauthorized.
 %% belongs to whoever is presenting it now. Without the audience check
 %% below, any membership token a caller obtained a copy of -- not
 %% necessarily its own -- would authorize as if it were a genuine member
-%% making this call. `Caller' is the SAME wire-authenticated field
-%% `with_caller/2' already trusts elsewhere in this module for the same
-%% reason: unspoofable, verified by the transport itself before this
-%% function ever runs.
+%% making this call. `Caller' is the CALL's own `caller' field, and
+%% `on_inbound_call/3' only lets a CALL through to
+%% `handle_inbound_call/2' once the frame's signature verifies against
+%% that same `caller', so by the time this function runs `Caller' is the
+%% identity that signed this CALL.
 %%
 %% Signature and audience are still not enough on their own: a realm
 %% mints membership UCANs at more than one tier from the same key (see
