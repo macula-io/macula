@@ -23,7 +23,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `src/macula_app.erl` (start-up validation)
   - `config/test.sys.config` (new) and `rebar.config`: the profile for test runs
 - **Change:**
-  - two profiles (`us_national_security`, `eu`), mapping to the key exchange group, TLS signature scheme, cipher
+  - two profiles (`pq_pure`, `pq_hybrid`), mapping to the key exchange group, TLS signature scheme, cipher
     suite, and the identity, CONNECT proof and status statement algorithms in the crypto profiles table;
   - selection per D1; a station instance runs exactly one profile (D2);
   - start-up refuses a missing or unknown profile; there is no default.
@@ -68,6 +68,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     `Resumption::disabled()` on clients, early data off;
   - exports: the peer leaf certificate DER exactly as received, for client connections; the leaf the station
     presented, for accepted connections; the negotiated group and signature scheme;
+  - the listener keeps one server configuration per certificate generation and accepts each connection with the
+    current one (quinn `Incoming::accept_with`), storing that generation's leaf on the connection handle, so a
+    certificate reload never changes the leaf a live connection reports;
   - the negotiated group comes from a per-process group recorder, which names a connection's group because each
     profile offers one group; the scheme and the leaf's SHA-384 come from a per-dial verifier recorder (V4);
   - every failed accept-side handshake is reported to the owning process with the remote address and a
@@ -97,7 +100,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Files:**
   - `src/identity/macula_identity.erl`
   - `src/identity/macula_node_keys.erl` (new: a node's keys per purpose and profile, stored per D6, signing per D4
-    and D7)
+    and D7, node_ids per D5)
   - `src/identity/macula_crypto_nif.erl` and `native/macula_crypto_nif` (grinding with post-quantum keys)
   - `src/record/macula_record.erl`
   - `src/macula_content_transfer.erl` and `src/content/macula_manifest.erl` (D24)
@@ -127,8 +130,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     carry the signer's full public key or keys (D13);
   - every DHT storage key is SHA-256: a record stored under its signer uses the signer's node_id, and every other
     key is SHA-256 over a distinct type label and the record's fields;
-  - the frame codec for the opener, the challenge, CONNECT with its proof, and HELLO, with every label distinct;
-    the layout is specified here, with Mars and Neptune, before anyone writes handshake code;
+  - the frame codec for the opener, the challenge, CONNECT with its proof, HELLO and status, per
+    `DESIGN_PQ_HANDSHAKE_FRAMES.md`: signed structures verified over the bytes as received, a strict decoding rule
+    with `malformed_frame`, one accepted encoding per carried key, and every label distinct;
   - STREAM_OPEN carries a capability token as CALL does, so streams are authorized like calls, and CALL and
     STREAM_OPEN carry a signed deadline (WP 1.4, D7);
   - PUBLISH, SUBSCRIBE and cast carry no capability token field in the post-quantum format, unless a signed-request
@@ -155,6 +159,10 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `test/macula_node_keys_signing_tests.erl` (new): a US signature is ML-DSA-87 over the message; an EU signature is
     Macula's composite, whose halves both verify over M'; a signature with one invalid half, a half on its own, a
     signature under the other profile and a non-canonical key encoding are refused;
+  - `test/fixtures/composite_ml_dsa_87_ps384/`: the composites signed by OTP and by Go in V8, which verify and are
+    refused when altered;
+  - `test/macula_node_keys_node_id_tests.erl` (new): the three D5 reference vectors, node_ids derived from the
+    carried identity key, and no node_id for CONNECT or TLS keys;
   - `test/macula_record_tests.erl`: the carried key must derive to the claimed node_id;
   - `test/macula_frame_tests.erl`: the handshake frames round-trip, and labels cannot be confused;
   - `test/macula_content_block_hash_tests.erl`: a SHA-384 block verifies on fetch, and a block whose content id
@@ -219,7 +227,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Change:**
   - the handshake order and checks of the key model: opener, challenge, the client's checks, CONNECT, the
     station's checks, HELLO;
-  - a frame table per role; any other frame closes the handshake with a distinct reason;
+  - a frame table per role; any other frame closes the handshake, in the SDK and every port alike; close reasons stay
+    local, and a refused client sees only HELLO with a coarse refusal code (`DESIGN_PQ_HANDSHAKE_FRAMES.md`);
   - status statements in the challenge and in CONNECT, and a status frame on open connections, with one timer per
     connection at the statement's expiry plus 5 minutes (D22);
   - only the stream the client opened is the control stream;
@@ -521,7 +530,9 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
 - **Waiting on:** V5, WP 1.3, WP 3.2; for the EU profile also V8.
 - **First:** unify the two FFI layers so the identity ABI changes once. `macula-ts` builds a static library into a
   Node addon with five prebuilt binaries; `macula-php` loads a shared library through `FFI::cdef`. Every size
-  mismatch across the FFI fails, and never truncates.
+  mismatch across the FFI fails, and never truncates. The merged C interface gives `macula-ts` caller and provider
+  streams, which `macula-php`'s layer already has; a TS provider gets this package's STREAM_OPEN checks, so both are
+  built together (Raf, 2026-09-10).
 - **Files in `macula-go`:**
   - `go.mod`
   - `transport/transport.go`
@@ -545,7 +556,13 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - the EU classical half per D4, from a constant-time implementation that cross-compiles into all five prebuilt
     binaries without extra C dependencies (V8);
   - the token checks of WP 1.4, for calls and streams, with an authorization policy that `macula-ts` can set and
-    that `macula-php` applies per realm and procedure.
+    that `macula-php` applies per realm and procedure;
+  - in the post-quantum formats, bytes for agents keep the 10.x rules (Raf, 2026-09-10):
+    - a JSON object whose only key is `"$bytes"`, holding padded base64 (RFC 4648 section 4), becomes a CBOR byte
+      string; any other value under that sole key is an error, never a map;
+    - an object with more keys stays a map, and a plain string is always text: there is no `"0x"` input form;
+    - tagged output is opt-in per call, subscription and serve, and `"0x"` with hex stays the default;
+    - Go's FFI layer makes the output choice, because only Go knows which values were bytes.
 - **Red first:**
   - `transport/pq_handshake_test.go` (new) asserts `ConnectionState().TLS.CurveID`, the certificate signature
     algorithm and the cipher suite per profile, and refusal of a classical-only peer and of an unbound TLS key;
@@ -697,6 +714,10 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - device proofs carry the full key (D13);
   - `macula-cli serve --require-ucan-issuer` checks the token's `aud` against the node_id of the verified caller
     (D7);
+  - agent stream tools in `macula-mcp`: open, bounded read and close, on the `macula-ts` streams of WP 4.2 (Raf,
+    2026-09-10);
+  - `macula-mcp` keeps the bytes-for-agents rules of WP 4.2 in the post-quantum formats, including `"0x"` with hex as
+    its default output, which its internal decoders use;
   - release on tag: goreleaser for `macula-cli`, npm for `macula-mcp`.
 - **Red first:** each tool's connection test against the new fleet fails before its cutover.
 - **Effort:** ⚠.

@@ -21,7 +21,7 @@ testable, and Raf can point to a concrete plan in a partner offer.**
 **Profile sources:**
 
 - NSA CNSA 2.0 advisory and FAQ
-- NIST IR 8547 (initial public draft), FIPS 180-4 and SP 800-107r1
+- NIST IR 8547 (initial public draft), FIPS 180-4, FIPS 204 and SP 800-107r1
 - NIS Cooperation Group PQC roadmap and FAQ
 - EU joint statement of 18 member states
 - BSI TR-02102-1, TR-02102-2 and TR-03116-4
@@ -94,17 +94,18 @@ No single configuration satisfies both.
 
 BSI TR-02102-1:
 
-- **Hybrid signature construction** ✅ (section 5.3.4, lines 2817 to 2822):
+- **Hybrid signature construction** ✅ (section 5.3.4, p.54):
   - "This Technical Guideline recommends the use of a quantum-safe signature scheme only in combination with a
     classic signature scheme."
   - The natural construction is concatenation, "so that the concatenated signature is accepted as valid if all
     individual signatures are valid".
-  - Key material must be generated "for hybrid signatures specifically for this purpose and not to use it for
-    non-hybrid signatures as well".
-- **Hash-based signatures** "can ... in principle also be used alone" ✅ (line 2827).
+  - It asks for dedicated key material: "Care should be taken here to generate key material for hybrid signatures
+    specifically for this purpose and not to use it for non-hybrid signatures as well."
+- **Hash-based signatures** can, "provided that the implementation security of stateful and stateless
+  hash-based mechanisms is carefully considered, in principle also be used alone" ✅ (p.54).
 - **Recommended classical signature algorithms** (Table 5.3) ✅:
   - RSA;
-  - DSA;
+  - DSA, "only recommended until 2029" (footnote 1);
   - DSA variants on elliptic curves: ECDSA, ECKDSA/ECKCDSA, ECGDSA.
 - All recommended mechanisms "can be used for signing data as well as for issuing certificates" ✅.
 - **No EdDSA or Ed25519** appears in TR-02102-1 or TR-02102-2 ✅.
@@ -114,9 +115,10 @@ BSI TR-02102-1:
   - brainpoolP384r1;
   - brainpoolP512r1.
 - TR-02102-1 names no NIST P-curves ✅; TR-02102-2 names them for TLS 1.3 ✅.
-- **RSA modulus** "should be at least 3000 bits" ✅ (line 2708).
+- **RSA modulus** "should be at least 3000 bits" ✅ (section 5.3.1, p.52).
 - **Instance authentication:** "a key used to generate signatures is not used for instance authentication" ✅
-  (section 6.2, Remark 6.1).
+  (section 6.2, Remark 6.1, p.58). The remark goes on: "This must also be indicated in the corresponding
+  certificates for the public keys." ✅
 - **Certificates** ✅ (p.28):
   - "There should be possibilities for the deactivation of certificates in a timely manner and it should not be
     possible for an attacker to prevent a verifying party from having the information about the current status
@@ -141,7 +143,8 @@ ANSSI PG-083 v3.00 (2026-03-20):
 - **RSA modulus:** at least 2048 bits until the end of 2030, at least 3072 bits from 2031, and 3072 bits
   recommended now ✅ (p.27).
 - **EdDSA and Ed25519:** not listed ✅.
-- **The overall mechanism must be evaluated** ✅ (section 2.2.4).
+- **The overall mechanism must be evaluated with care**, even when every primitive conforms ✅ (section 2.2.4,
+  p.38, an information box rather than a rule).
 
 ANSSI PA-079 v1.0 (2021): "une même clé ne doit jamais être utilisée par un mécanisme de signature et un mécanisme
 d'authentification d'entité" ✅ (section 6.3).
@@ -214,7 +217,7 @@ as identities.
 
 ## Crypto profiles
 
-| | US national security (CNSA 2.0) | EU |
+| | `pq_pure` (CNSA 2.0 algorithm list) | `pq_hybrid` (EU) |
 |---|---|---|
 | Key exchange group | ML-KEM-1024 ✅ | SecP384r1MLKEM1024 (route: D3) |
 | TLS certificate and handshake signature | ML-DSA-87 on the TLS key | ML-DSA-87 alone on the TLS key (D4) |
@@ -237,6 +240,7 @@ Notes on the table:
 ## Key model and connection design
 
 This is the design every stage builds on the post-quantum fleet. Decisions: D2, D6, D12, D13, D16, D17, D22.
+The frames, bindings and status statements are laid out byte for byte in `DESIGN_PQ_HANDSHAKE_FRAMES.md`.
 
 ### Keys per node
 
@@ -272,13 +276,16 @@ The identity key certifies the TLS key and the CONNECT key, each with a static b
 
 - a context label, distinct for each binding type and from every frame and proof label;
 - the node_id;
-- the SHA-384 of the certified key's SubjectPublicKeyInfo DER;
+- the SHA-384 of the certified subject: the leaf certificate DER as presented for the TLS key, the carried key for
+  the CONNECT key;
 - the permitted use: "TLS handshake only" or "CONNECT proof only";
 - a binding id, not-before and not-after;
 - the hash and signature algorithm tags.
 
 Nothing in a binding is unique to a session. A binding is valid for 7 days, and the node rotates to a new key and
-binding every 5 days (D22). A station instance's listener reloads its certificate on rotation.
+binding every 5 days (D22). A station instance's listener reloads its certificate on rotation. A station makes a new
+leaf only when it rotates its TLS key, and issues the new binding and its status statement before its listener
+presents that leaf.
 The chain has at most three levels: realm, identity, then the TLS or CONNECT key.
 
 A binding is revoked through status statements stapled into the handshake and re-presented on open
@@ -293,8 +300,7 @@ connections (D22).
 3. **Challenge.** The station sends a nonce, its identity public key or keys, and its TLS-key binding.
 4. **Client checks, before signing anything:**
    - the binding's signature, made by the station's identity key;
-   - that the binding's key hash equals the SHA-384 of the SubjectPublicKeyInfo of the leaf certificate it
-     verified;
+   - that the binding's subject hash equals the SHA-384 of the leaf certificate DER it verified;
    - the binding's validity and permitted use;
    - that the node_id derived from the identity keys equals the dial's expected node_id.
 
@@ -304,7 +310,8 @@ connections (D22).
    - a label distinct from every frame and binding label;
    - the nonce;
    - the station's node_id and its own node_id;
-   - the SHA-384 over the DER encoding of the station's leaf certificate as received.
+   - the SHA-384 over the DER encoding of the station's leaf certificate as received;
+   - the SHA-384 of the challenge frame as received.
 6. **Station checks:** the CONNECT-key binding's signature, validity and permitted use; and the proof, over its
    own nonce, its own node_id, the node_id derived from the client's identity keys, and the leaf certificate it
    presented in this session. The client's derived node_id becomes the connection's peer identity.
@@ -319,18 +326,20 @@ connections (D22).
   resumption and keep no session cache. Early data stays off. Every connection is a full handshake, so there is
   always a verified leaf certificate.
 - **Leaf bytes.** Both sides hash the leaf certificate's DER exactly as it went over the wire. Station
-  certificates are strict DER. The station hashes the leaf its listener presents, never a re-encoded file.
+  certificates are strict DER. The station hashes the leaf its listener presents, never a re-encoded file. A leaf
+  that is not strict DER fails closed.
 - **Nonce.** 256 bits from a CSPRNG, fresh for each connection, held only in that connection's state. A proof
   that carries any other nonce is refused.
 - **Frame order per role.** The client accepts only the challenge, then HELLO. The station accepts only the
-  opener, then CONNECT. Any other or repeated frame closes the handshake with a distinct reason.
+  opener, then CONNECT. Any other or repeated frame closes the handshake with a distinct reason. Close reasons stay
+  local; a refused client sees only HELLO with `accepted` 0 and a coarse refusal code.
 - **Control stream.** Only the stream the client opened is the control stream. A stream the station opens during
   the handshake is closed.
 - **Failures are visible.** A station reports every failed handshake to its owning process, with the remote
   address and a classified reason.
 - **Cost.** One more round trip per new connection than a handshake of CONNECT then HELLO. Calls reuse
-  connections. The challenge is about 7.2 KB and CONNECT about 14.4 KB in the US profile. V9 measures the round
-  trips.
+  connections. With D22's status statements the challenge is about 12 KB and CONNECT about 19 KB in the US profile,
+  and each can cost one more round trip under QUIC congestion control. V9 measures the round trips.
 
 ### Dials
 
@@ -460,7 +469,7 @@ Raf answered "go with the recommendations" on 2026-09-10.
   separate ports, each with its own identity, TLS key, CONNECT key, seeds, directory rows, DHT membership and
   links.
 - **Why:**
-  - BSI requires hybrid key material dedicated to hybrid use ✅, so an EU identity pair cannot also serve as a US
+  - BSI asks for hybrid key material dedicated to hybrid use ✅, so an EU identity pair cannot also serve as a US
     identity key. Two identities are needed either way.
   - node_id, DHT membership and routing belong to one identity.
   - The port tells the station the profile before TLS starts.
@@ -496,22 +505,25 @@ Raf answered "go with the recommendations" on 2026-09-10.
     signatures, UCANs, DIDs, realm credentials): BSI's concatenation, ML-DSA-87 plus a classical half, valid only
     if both verify, with key material used only for these hybrid signatures.
   - **Classical half, decided by Raf on 2026-09-10:** RSA-PSS instead of ECDSA on brainpoolP384r1, with:
-    - PSS per RFC 8017, public exponent 65537, and equal-size random primes;
+    - PSS per RFC 8017 section 8.1; public exponent 65537 and equal-size random primes (ANSSI PG-083
+      RègleFactorisation.5, RecoFactorisation.2 and .3);
     - SHA-384 for both the message hash and MGF1;
     - a 48-byte salt, fresh for every signature, from a random generator that meets TR-02102-1;
     - a 4096-bit modulus for every EU hybrid key, identity and CONNECT keys alike, following BSI's advice for
       long-lived systems (3072 bits would also comply with all three texts);
     - no separate message-signing key;
-    - in every stack a signer that is constant-time and blinded, with signing and verification protected against
-      faults (V8).
+    - in every stack, a signer whose private-key operation is constant-time (no key-dependent timing, branches or
+      memory access), blinded where the library provides it, and which verifies each signature before releasing it
+      (V8); revised and accepted by Raf on 2026-09-10. An unblinded signer, such as Go's, is weaker against a physical
+      or differential attacker with known inputs, which the texts answer with certified hardware (BSI AIS 46).
 - **Why the revision:**
   - Go libraries for brainpoolP384r1 interoperate with OTP, but sign through a path that is not constant-time, and
     Rust has no brainpoolP384r1 at all ✅ (V8). A long-term identity key needs a constant-time signer.
   - Go 1.27 `crypto/rsa` signs PSS through constant-time big-number code ✅. OTP signs and verifies RSA-PSS with
     SHA-384 through OpenSSL ✅. Whether OpenSSL, aws-lc-rs, Python `cryptography` and .NET meet the signer
     conditions is checked in V8 ⚠. aws-lc-rs is already a dependency of the post-quantum transport.
-  - Every text accepts it: BSI Table 5.3 lists RSA with at least 3000 bits ✅; ANSSI accepts RSA-SSA-PSS with
-    3072 bits from 2031 ✅; the ECCG list agrees RSA PSS with at least 3000 bits ✅.
+  - Every text accepts it: BSI Table 5.3 lists RSA, and section 5.3.1 asks for a modulus of at least 3000 bits ✅;
+    ANSSI accepts RSA-SSA-PSS with 3072 bits from 2031 ✅; the ECCG list agrees RSA PSS with at least 3000 bits ✅.
   - BSI asks long-lived systems for at least 128 bits of security in every component, and puts 128 bits at about a
     3200-bit modulus ✅; an identity key lives as long as its node.
 - **Cost, by classical half:**
@@ -538,9 +550,9 @@ Raf answered "go with the recommendations" on 2026-09-10.
   - a separate 3072-bit message-signing key certified by a 4096-bit identity key: every relayed or stored object
     would then also carry that key and its binding (D13), about 8 KB more per object.
 - **Reasons that stand:** BSI recommends a quantum-safe signature only combined with a classic one ✅; Ed25519 is
-  not in BSI's documents ✅; hash-based signatures alone are allowed by BSI ✅, but they have no TLS 1.3 scheme
-  anywhere ✅, are missing from rustls, Go and cryptography ✅, and cost 30 to 50 KB and up to 453 ms per
-  signature ✅.
+  not in BSI's documents ✅; BSI allows hash-based signatures alone where their implementation security is
+  carefully considered ✅, but they have no TLS 1.3 scheme anywhere ✅, are missing from rustls, Go and
+  cryptography ✅, and cost 30 to 50 KB and up to 453 ms per signature ✅.
 - **Open:** whether BSI and ANSSI would assess this design as hybrid ⚠.
 - **Blocks:** EU parts of WP 1.1, WP 1.3, WP 1.4, WP 3.1 and WP 4.1 to 4.3.
 
@@ -553,15 +565,25 @@ Raf answered "go with the recommendations" on 2026-09-10.
   rules (D24):
   - every verifier checks the full carried key (D13), never a node_id alone;
   - no trust is ever granted to a node_id because of a property of one particular key, such as attested
-    hardware; a statement about one key names it by the SHA-384 of its SubjectPublicKeyInfo.
+    hardware; a statement about one key names it by the SHA-384 of the key as carried (D13).
+- **Constants** (WP 1.3, 2026-09-10):
+  - node_id = SHA-256(Label || 0x00 || len(Profile) || Profile || IdentityKey);
+  - Label: the 17 ASCII bytes `MACULA-NODE-ID-V1`; len(Profile): one byte; Profile: the ASCII name `pq_pure`
+    or `pq_hybrid`;
+  - IdentityKey: the identity public key as carried (D13): 2,592 bytes for `pq_pure`, and for `pq_hybrid` the
+    ML-DSA-87 key followed by the DER `RSAPublicKey`, 3,118 bytes;
+  - reference vectors, with byte i of the key being i mod 256, reproduced in Go, Rust and Python on 2026-09-10 ✅:
+    - `pq_pure`, 2,592 bytes: `8c6a28c62bda0112065bccb0d8b02b18f46fef03d16e8b7ae91086025dd209ff`;
+    - `pq_hybrid`, 3,118 bytes: `e9df1133a8238239c58fc7f886d9667e961449ee272c30e968a0eecbb6b0131c`;
+    - `pq_hybrid` over the same 2,592 bytes: `4e79818f04bffbd7f2df71b82e3e543458d9f74cda64f88a80b352ed8e9af10b`.
 - **Why:**
   - It keeps the DHT keyspace, routing, 32-byte id fields and the puzzle evidence. An ML-DSA-87 public key is
     2,592 bytes ✅, far too large to be the id. Signatures still grow by about 4.6 KB; only id fields keep their
     size.
-  - The label and profile keep every derivation unambiguous, so no key has two ids (following SP 800-107r1).
+  - The label and profile keep every derivation unambiguous, so no key has two ids.
   - Impersonating a node needs a key whose hash equals its node_id, which rests on second-preimage resistance:
-    256 bits for SHA-256 (IR 8547 Table 7 ✅), so there is no mismatch with ML-DSA-87. Collision resistance does
-    not matter under the two rules above.
+    201 to 256 bits for SHA-256, the high end for short inputs such as a 3 KB key (SP 800-107r1 Table 1 ✅), so
+    there is no mismatch with ML-DSA-87. Collision resistance does not matter under the two rules above.
   - CNSA 2.0 lists SHA-384 and SHA-512 by function ✅ (V17), so a SHA-256 identifier needs a qualifier in US
     wording. Macula derives other identifiers with SHA-256 too ✅: the realm id is the SHA-256 of the realm name,
     and every derived DHT storage key is SHA-256; the others are a record's 32-byte key itself, which is a node_id
@@ -580,11 +602,12 @@ Raf answered "go with the recommendations" on 2026-09-10.
     each ML-DSA-87 private key stored in its 4,896-byte expanded form next to its public key;
   - **each key serves exactly one purpose** (key model);
   - **on load, the public key of each ML-DSA-87 key is derived from the expanded key and must equal the stored
-    public key, and then every key pair is checked with a sign-and-verify round trip;**
+    public key, and then every key is checked with a sign-and-verify round trip by the whole key, so a hybrid key
+    signs only its composite;**
   - **TLS and CONNECT keys and their bindings rotate every 5 days** (D22).
 - **Why:** OTP generates ML-DSA-87 keys only in expanded form and cannot derive a public key from a seed, but derives
-  it from the expanded key with `generate_key(mldsa87, [], K)` (OTP 28.4.2 and 29.0.6) ✅; BSI requires hybrid key
-  material to be dedicated to hybrid signatures ✅; the ECCG list requires different key pairs for message
+  it from the expanded key with `generate_key(mldsa87, [], K)` (OTP 28.4.2 and 29.0.6) ✅; BSI asks for hybrid key
+  material dedicated to hybrid signatures ✅; the ECCG list requires different key pairs for message
   signatures and authentication ✅; ANSSI PA-079 section 6.3 and BSI TR-03116-4 ask for separate keys per
   purpose ✅.
 - **Blocks:** WP 1.3, WP 1.6.
@@ -615,9 +638,11 @@ Raf answered "go with the recommendations" on 2026-09-10.
     ECDSA and EdDSA ✅, and the multicodec table has no composite key ✅.
   - **Compatible with BSI:** TR-02102-1 section 5.3.4 calls "the concatenation of a quantum-safe signature with a
     classic signature so that the concatenated signature is accepted as valid if all individual signatures are
-    valid" a natural and robust hybridisation, with key material generated for hybrid signatures only ✅. The
+    valid" a natural and robust hybridisation, and asks for key material generated for hybrid signatures only ✅. The
     composite is that concatenation over one message representative, with dedicated keys, so it meets D11's
-    preconditions 1 and 2, and ML-DSA stays the pure variant (precondition 3). Whether BSI and ANSSI would assess
+    preconditions 1 and 2. ML-DSA stays the pure variant (precondition 3): SHA-512 of the message is hashing at
+    the application level, which FIPS 204 section 5.4 separates from HashML-DSA, and it meets that section's bar
+    of 256 bits of collision and second-preimage strength for ML-DSA-87 ✅. Whether BSI and ANSSI would assess
     the design as hybrid stays open (D4) ⚠.
   - **Not buildable in OTP as specified:** OTP 28.4.2 and 29.0.6 sign ML-DSA without options, so without a context
     string ✅, and D7 keeps private keys out of Rust.
@@ -632,9 +657,10 @@ Raf answered "go with the recommendations" on 2026-09-10.
     M' with SHA-384, MGF1 with SHA-384, a 48-byte salt and public exponent 65537. The signature is the 4,627-byte
     ML-DSA-87 signature followed by the 512-byte RSA-PSS signature, and the public key is the 2,592-byte ML-DSA-87
     key followed by the 526-byte DER `RSAPublicKey`, both without length prefixes.
-  - **Upstream and switch:** offering ML-DSA context support to Erlang/OTP is approved by Raf on 2026-09-10;
-    opening it is a public act that needs Raf's word in the acting session at that time. If OTP ships it before
-    `macula` 11.0.0, Macula switches to `id-MLDSA87-RSA4096-PSS-SHA512`.
+  - **Upstream and switch:** Macula tracks erlang/otp #11589 (OTP-20368), the OTP team's own change that adds an
+    ML-DSA context string to `crypto:sign/5` and `verify/6` ✅. Macula contributes no code to it; Raf may comment
+    on it in his own words. If OTP ships it before `macula` 11.0.0, Macula switches to
+    `id-MLDSA87-RSA4096-PSS-SHA512`.
 - **Check 2, audience by node_id** (2026-09-10):
   - `iss` keeps the full key, which verifies the token (D13); `aud` carries the audience's node_id.
   - **Refined and accepted by Raf on 2026-09-10:** a token is presented by the node its `aud` names, inside a
@@ -652,9 +678,9 @@ Raf answered "go with the recommendations" on 2026-09-10.
   - Membership tokens from the realm are presented only inside a CALL, so this rule needs no exception (Neptune,
     2026-09-10).
   - This is sound under D24's rules for node ids. Using a delegation needs a key that derives to the named
-    node_id, a second preimage at 256 bits. A collision only gives one party two keys for one node_id, and so a
-    delegation it already holds; no issuer delegates to a node_id because of a property of one key. UCAN parent
-    ids stay SHA-384 (D24).
+    node_id, a second preimage at the high end of SHA-256's 201 to 256 bits (D5). A collision only gives one party
+    two keys for one node_id, and so a delegation it already holds; no issuer delegates to a node_id because of a
+    property of one key. UCAN parent ids stay SHA-384 (D24).
   - UCAN 0.10.0 makes `aud` a DID, has the receiver match `aud` with its own DID, and requires the `aud` of every
     proof to match the outer `iss` (sections 3.2.2, 6.2 and 6.2.1) ✅. Matching by derived node_id departs from
     that string comparison; Macula's verifiers are its own code. WP 1.4 sets the string form of a node_id
@@ -732,11 +758,13 @@ before its wire checks are green.
   - Identifier qualifier, while D5 keeps SHA-256: "Algorithms are aligned with CNSA 2.0, except that identifiers
     (node, realm, DHT keys) use SHA-256." Texts about today's format also add that content identifiers use
     BLAKE3, which is not a NIST-standardised hash function.
+  - Profile name qualifier: text that names the `pq_pure` profile says it uses the CNSA 2.0 algorithm list, and
+    that Macula is not a National Security Systems product.
 - **EU, when true:**
   - base: "TLS session authentication is ML-DSA-87; the identity-to-TLS-key binding is hybrid (ML-DSA-87 plus
     RSA-PSS-4096, built as described in BSI TR-02102-1 section 5.3.4)";
-  - key exchange: "SecP384r1MLKEM1024, a hybrid group BSI intends to recommend once its RFC is adopted", never
-    "BSI-recommended";
+  - key exchange: "the transport uses the hybrid group SecP384r1MLKEM1024, which BSI TR-02102-2 section 3.4.2 names
+    as one it intends to recommend once the RFC is adopted", never "BSI-recommended";
   - clients: "clients authenticate to stations with a hybrid signature over a station-chosen challenge and the
     station's TLS certificate; this proof is not bound to the TLS key exchange";
   - only with an exporter-bound session proof (D18): "each session is additionally authenticated by a hybrid
@@ -766,9 +794,10 @@ before its wire checks are green.
   challenge, and the client checks it against the leaf it verified before signing anything. This applies only on
   the post-quantum fleet.
 - **Why:**
-  - BSI requires dedicated keys for hybrid signatures ✅, so in the EU profile the ML-DSA-87 key that signs alone
+  - BSI asks for dedicated keys for hybrid signatures ✅, so in the EU profile the ML-DSA-87 key that signs alone
     inside TLS cannot also be part of the hybrid identity.
   - Signature keys and authentication keys stay apart (BSI Remark 6.1, ECCG Note 79, ANSSI PA-079 section 6.3) ✅.
+    Remark 6.1 also asks that certificates indicate this; every binding names its key's `use`.
   - TLS stays identical in both profiles.
   - Public certificate authorities do not issue ML-DSA certificates ⚠.
 - **Status:** accepted 2026-09-10.
@@ -822,7 +851,8 @@ before its wire checks are green.
   - The station's first message holds only precomputed material, a static binding and a random nonce, so a
     station makes no per-connection signature for anyone who merely connects.
 - **Not taken:** TLS client certificates (mutual TLS).
-- **Status:** accepted 2026-09-10. The frame layout is specified in WP 1.3 (Mercury, with Mars and Neptune).
+- **Status:** accepted 2026-09-10. The frame layout is in `DESIGN_PQ_HANDSHAKE_FRAMES.md`, agreed by Mercury, Mars
+  and Neptune on 2026-09-10 (WP 1.3).
 - **Blocks:** WP 1.2 to WP 1.6, Stage 4.
 
 ### D17 Signatures between neighbours
@@ -840,8 +870,8 @@ before its wire checks are green.
 
 ### D18 EU session proof
 
-- **Answer:** the fixed binding. A per-session proof, a mutual hybrid signature over an RFC 5705 exporter value with
-  both node_ids as context, only when an offer needs its wording.
+- **Answer:** the fixed binding. A per-session proof, a mutual hybrid signature over a TLS 1.3 exporter value
+  (RFC 8446 section 7.5) with both node_ids as context, only when an offer needs its wording.
 - **Why:** the per-session proof adds one sentence of public wording (D11), but needs an exporter in every EU
   stack. aioquic 1.3.0 ✅ and .NET QUIC ✅ have none; quinn has one ✅ that the NIF does not expose yet. No agency
   has assessed either construction.
@@ -852,7 +882,8 @@ before its wire checks are green.
 ### D19 Realm on the post-quantum fleet
 
 - **Answer, revised and accepted by Raf on 2026-09-10:** the realm name stays `io.macula`, so the realm id stays
-  the same, on a separate realm deployment on the post-quantum fleet. `io.macula` runs the EU profile (D1).
+  the same, on a separate realm deployment on the post-quantum fleet. `io.macula` runs the EU profile, `pq_hybrid`
+  (D1).
 - **Why:** programs keep the same realm id when they move over. The fleets cannot reach each other.
 - **Consequence:** US-first work (D15) needs its own US-profile realm on the post-quantum fleet. Its name is open
   for Raf.
@@ -946,12 +977,14 @@ before its wire checks are green.
 - **Why:**
   - Where a signature authenticates data only through its id, collision resistance matters: whoever prepares the
     content, or an issuer who can make a collision, could swap the data behind a signed id. A signature is at most
-    as strong as the collision strength of the hash it covers (SP 800-107r1) ✅. SHA-256 gives 128 bits of
-    collision strength and SHA-384 gives 192 (IR 8547 Table 7) ✅.
-  - CNSA 2.0 lists SHA-384 and SHA-512 ✅. ANSSI encourages hashes at least as strong as SHA2-384 next to
-    post-quantum algorithms, and asks that a hash before signing matches the signature's strength (PG-083 p.36) ✅.
+    as strong as the collision strength of the hash it covers (SP 800-107r1 section 5.2, and FIPS 204 section 5.4
+    for ML-DSA) ✅. SHA-256 gives 128 bits of collision strength and SHA-384 gives 192 (IR 8547 Table 7) ✅.
+  - CNSA 2.0 lists SHA-384 and SHA-512 ✅. ANSSI recommends digests of at least 384 bits when post-quantum security
+    is the goal (PG-083 RecoPQHachage, p.20), and asks that a hash before signing matches the signature's strength
+    (p.36) ✅.
     BLAKE3 appears in none of the texts ✅.
-  - Node ids rest on second-preimage resistance instead, as long as both rules hold: 256 bits for SHA-256.
+  - Node ids rest on second-preimage resistance instead, as long as both rules hold: the high end of SHA-256's
+    201 to 256 bits for a 3 KB input (D5).
   - Realm ids are like node ids, as Saturnus confirmed against the texts: a collision needs two names one party
     chose, which gains nothing, and taking over an existing realm id needs a second preimage. Third parties
     vouch for a realm by its key: the foundation's realm trust list names realm keys ✅.
@@ -1052,8 +1085,6 @@ before its wire checks are green.
 
 | Item | Owner | State |
 |---|---|---|
-| Carrier for the station's first message | Neptune | client opener proposed; confirm in the layout spec |
-| Frame layout of opener, challenge, CONNECT, HELLO and status | Mercury, with Mars and Neptune | WP 1.3 |
 | Leaf certificate before CONNECT in Go, .NET and Python (V16) | Venus, Uranus, Pluto | Python needs its patch |
 | NTS servers for fleet time synchronisation (D22) | unassigned | open |
 | Authorization for procedures without an org namespace (D25) | Raf | open |

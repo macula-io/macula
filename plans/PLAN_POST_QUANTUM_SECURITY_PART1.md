@@ -214,7 +214,7 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 ## Stage 0: checks before building
 
 - [x] V1 profile facts from primary sources (source review, spot-checked on this machine).
-- [x] V1a BSI TR-02102-1 section 5.3.4 wording on hybrid signatures (re-found at lines 2817 to 2827).
+- [x] V1a BSI TR-02102-1 section 5.3.4 wording on hybrid signatures (re-found at p.54).
 - [ ] All remaining V items closed, each with a recorded result.
 
 | ID | Task | Owner | Status | Effort |
@@ -366,7 +366,8 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
     composite verifies on the other, an altered half and a wrong label are refused, and the standard library builds
     for all five prebuilt targets with cgo off ✅. The RSA signer is constant-time and verifies after signing, with
     no blinding ✅; whether that meets D4's signer condition is open ⚠.
-  - Erlang: `macula_node_keys` verifies both the OTP and the Go composite vectors ✅.
+  - Erlang: `macula_node_keys` verifies both the OTP and the Go composite vectors, kept as test fixtures on the
+    `post-quantum` branch ✅.
   - Rust: no brainpoolP384r1 ✅; RSA-PSS through aws-lc-rs ⚠ (V4).
 - **Done when:** the vector verifies in every stack, with a named implementation that meets the conditions above.
 - **Effort:** 2 days.
@@ -374,8 +375,9 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 #### V9 Handshake size
 
 - **Method:** the ML-DSA-87 certificate (2,592 B key, 4,627 B signature) plus CertificateVerify, against QUIC
-  anti-amplification; then the challenge (about 7.2 KB) and CONNECT (about 14.4 KB in the US profile), plus a status
-  statement each way (D22); round trips per profile.
+  anti-amplification; then the challenge (about 12 KB) and CONNECT (about 19 KB in the US profile), each with its
+  status statement (D22), against the congestion window; round trips per profile, with netem delay and a 1,200-byte
+  path MTU.
 - **Done when:** round trips measured per profile.
 - **Effort:** 0.5 day.
 
@@ -438,7 +440,8 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
   - Go: `PeerCertificates[0].Raw` ✅;
   - .NET: `QuicConnection.RemoteCertificate`, re-serialized DER that equals the received bytes for strict DER ✅;
   - Python: needs the aioquic patch, which V7 proved ✅.
-- **Done when:** access confirmed in every client stack in the first switch, with the leaf-hash vector passing.
+- **Done when:** access confirmed in every client stack in the first switch, with the shared strict DER leaf vector
+  passing.
 - **Effort:** 0.5 day.
 
 #### V17 Identifier hashes under CNSA 2.0
@@ -454,5 +457,5 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 
 - **Result:** BSI TR-02102-1 p.28 requires that withheld certificate status does not go unnoticed, and separately a
   limited validity ✅. ANSSI's TLS recommendations R37 require hard-fail for security-first components ✅. Stapled
-  status is preferred by ANSSI R35 and BSI TR-03116-4 ✅. No source treats short validity as a replacement for
-  revocation ✅. Decision: D22, decided by Raf on 2026-09-10.
+  status is preferred by ANSSI R35 and recommended by BSI TR-03116-4 ✅. No source treats short validity as a
+  replacement for revocation ✅. Decision: D22, decided by Raf on 2026-09-10.
