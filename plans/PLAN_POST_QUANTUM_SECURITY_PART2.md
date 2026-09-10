@@ -96,7 +96,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Waiting on:** nothing; for the EU profile V8.
 - **Files:**
   - `src/identity/macula_identity.erl`
-  - `src/identity/macula_node_keys.erl` (new: a node's keys per purpose and profile, stored per D6)
+  - `src/identity/macula_node_keys.erl` (new: a node's keys per purpose and profile, stored per D6, signing per D4
+    and D7)
   - `src/identity/macula_crypto_nif.erl` and `native/macula_crypto_nif` (grinding with post-quantum keys)
   - `src/record/macula_record.erl`
   - `src/macula_content_transfer.erl` and `src/content/macula_manifest.erl` (D24)
@@ -130,6 +131,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     the layout is specified here, with Mars and Neptune, before anyone writes handshake code;
   - STREAM_OPEN carries a capability token as CALL does, so streams are authorized like calls, and CALL and
     STREAM_OPEN carry a signed deadline (WP 1.4, D7);
+  - PUBLISH, SUBSCRIBE and cast carry no capability token field in the post-quantum format, unless a signed-request
+    rule for them is set first (WP 1.4);
   - one signed station record that carries the hostname and the dial endpoint under one signature, for directory
     rows (WP 3.3);
   - UCAN and DID signing and verification in `macula_identity` (D7);
@@ -149,6 +152,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `test/macula_node_keys_tests.erl` (new): keys for each purpose and profile survive a save and load; a stored
     public key that differs from the one derived from its private key, a key saved for another purpose or
     profile, and an Ed25519 key file are refused;
+  - `test/macula_node_keys_signing_tests.erl` (new): a US signature is ML-DSA-87 over the message; an EU signature is
+    Macula's composite, whose halves both verify over M'; a signature with one invalid half, a half on its own, a
+    signature under the other profile and a non-canonical key encoding are refused;
   - `test/macula_record_tests.erl`: the carried key must derive to the claimed node_id;
   - `test/macula_frame_tests.erl`: the handshake frames round-trip, and labels cannot be confused;
   - `test/macula_content_block_hash_tests.erl`: a SHA-384 block verifies on fetch, and a block whose content id
@@ -187,6 +193,10 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     until then; a nonce store exists only for tokens used outside a signed request;
   - the authorizing verify takes the verified caller key and the expected target; a chain-only check has its own
     name, which says it does not authorize;
+  - every UCAN gate checks `aud` against the node_id of the verified caller, including an issuer-only policy
+    (`ucan_required`);
+  - a realm membership token names its device by node_id in `aud` (D7, V12), changed in the realm issuer (WP 3.1)
+    and in every checker together;
   - streams are authorized by the same checks as calls;
   - `ed25519-dalek` removed.
 - **Red first:** `test/macula_ucan_nif_tests.erl` and `test/macula_did_nif_tests.erl`: a post-quantum token and
@@ -364,6 +374,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - OTP 28.1.1 `public_key` signs and validates ML-DSA X.509 ✅, and OTP signs and verifies brainpool ECDSA ✅ and
     RSA-PSS ✅;
   - leaf issuance, ownership proofs and membership checks take post-quantum keys, carried in full (D13);
+  - `issue_membership_ucan` names the device by node_id in `aud` (D7), in the same change as every checker
+    (WP 1.4, WP 4.2);
   - the realm carries its profile (D1);
   - a separate realm deployment named `io.macula`, in the EU profile, on the post-quantum fleet (D19), and a
     US-profile realm whose name is open (Raf);
@@ -575,6 +587,8 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
     - the standalone token functions in Go, TS and PHP follow the same rule: the authorizing verify takes the
       verified caller key and the expected target, and a chain-only check has a name that says it does not
       authorize;
+    - every UCAN gate checks `aud` against the node_id of the verified caller, including the issuer-only
+      `RequireUcanIssuer`;
   - FFI: `macula_identity_sign` returns the whole signature for every profile, 4,627 bytes for ML-DSA-87, and
     never cuts it to a fixed-size buffer.
 - **Done:** green in CI (`ci.yml` reads the Go version from `go.mod` ✅).
@@ -681,6 +695,8 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - new seeds with node_ids, including compiled-in or documented defaults, such as the default station of
     `macula-mcp`'s hello tool;
   - device proofs carry the full key (D13);
+  - `macula-cli serve --require-ucan-issuer` checks the token's `aud` against the node_id of the verified caller
+    (D7);
   - release on tag: goreleaser for `macula-cli`, npm for `macula-mcp`.
 - **Red first:** each tool's connection test against the new fleet fails before its cutover.
 - **Effort:** ⚠.

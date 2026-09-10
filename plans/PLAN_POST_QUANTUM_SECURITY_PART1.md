@@ -225,7 +225,7 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 | V5 | Go QUIC spike | Venus | open | 1 day |
 | V6 | .NET path | Uranus | closed | 2 days |
 | V7 | Python path | Pluto | handshakes proven; shipping open (D10) | 3 days |
-| V8 | Hybrid signature building blocks per stack | Saturnus, with stack owners | open | 2 days |
+| V8 | Hybrid signature building blocks per stack | Saturnus, with stack owners | open; Go passed | 2 days |
 | V9 | Handshake size | unassigned | open | 0.5 day |
 | V10 | Capture method for the wire checks | Terra | open | 0.5 day |
 | V11 | hecate services | Saturnus | open | 1 day |
@@ -362,6 +362,11 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
   - OTP 28.1 with OpenSSL 3.6.4: ML-DSA-87 signing is randomized ✅; RSA-PSS with SHA-384 works ✅.
   - Go: `crypto/mldsa` interoperates with OTP ML-DSA-87 ✅; the brainpoolP384r1 libraries interoperate but are not
     constant-time ✅; `crypto/rsa` signs on constant-time big-number code ✅.
+  - Go with the D7 composite `ML-DSA-87-PS384` (Venus, 2026-09-10): M' is byte-identical in OTP and Go, each side's
+    composite verifies on the other, an altered half and a wrong label are refused, and the standard library builds
+    for all five prebuilt targets with cgo off ✅. The RSA signer is constant-time and verifies after signing, with
+    no blinding ✅; whether that meets D4's signer condition is open ⚠.
+  - Erlang: `macula_node_keys` verifies both the OTP and the Go composite vectors ✅.
   - Rust: no brainpoolP384r1 ✅; RSA-PSS through aws-lc-rs ⚠ (V4).
 - **Done when:** the vector verifies in every stack, with a named implementation that meets the conditions above.
 - **Effort:** 2 days.

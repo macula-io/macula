@@ -649,7 +649,8 @@ Raf answered "go with the recommendations" on 2026-09-10.
     store for CALL and STREAM_OPEN; a nonce store remains only for tokens used outside a signed request.
   - An authorizing verify takes the verified caller key and the expected target; a check of the chain alone has a
     name that says it does not authorize.
-  - Open, for Neptune: how membership tokens from the realm are used outside a CALL.
+  - Membership tokens from the realm are presented only inside a CALL, so this rule needs no exception (Neptune,
+    2026-09-10).
   - This is sound under D24's rules for node ids. Using a delegation needs a key that derives to the named
     node_id, a second preimage at 256 bits. A collision only gives one party two keys for one node_id, and so a
     delegation it already holds; no issuer delegates to a node_id because of a property of one key. UCAN parent
@@ -1058,7 +1059,6 @@ before its wire checks are green.
 | Authorization for procedures without an org namespace (D25) | Raf | open |
 | Cross-profile federation: how realms of different profiles exchange calls and facts | Raf, with Jupiter | open |
 | Name of the US-profile realm on the post-quantum fleet (D19) | Raf | open |
-| Membership tokens from the realm used outside a CALL (D7) | Neptune | open |
 | Owner of the Reckon post-quantum plan, assigned when Stage 4 starts (D9) | Raf | open |
 | Retiring `macula-portal`, `macula-relay`, `hecate-daemon` and `hecate-stub` (D8) | Raf | open |
 | How the aioquic patch ships (D10) | Pluto | open |
