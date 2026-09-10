@@ -211,18 +211,18 @@ get_tunnel_metrics_specific_missing_test() ->
 %%%===================================================================
 
 bridge_sup_starts_test() ->
-    %% If already running (from dist_system), just verify it exists
-    case whereis(macula_dist_bridge_sup) of
-        undefined ->
-            {ok, Sup} = macula_dist_bridge_sup:start_link(),
-            ?assert(is_pid(Sup)),
-            ?assertEqual([], supervisor:which_children(Sup)),
-            %% Don't kill it — may be needed by other tests.
-            %% It will die when the test process exits.
-            unlink(Sup);
-        Existing ->
-            ?assert(is_pid(Existing))
-    end.
+    bridge_sup_runs(whereis(macula_dist_bridge_sup)).
+
+%% A running macula application already owns the supervisor. Otherwise
+%% start one, check it, and stop it again: a registered supervisor left
+%% behind stops a later test from starting the macula application.
+bridge_sup_runs(undefined) ->
+    {ok, Sup} = macula_dist_bridge_sup:start_link(),
+    ?assertEqual([], supervisor:which_children(Sup)),
+    ok = gen_server:stop(Sup),
+    ?assertEqual(undefined, whereis(macula_dist_bridge_sup));
+bridge_sup_runs(Existing) ->
+    ?assert(is_pid(Existing)).
 
 %%%===================================================================
 %%% Tests — advertise_dist_accept
