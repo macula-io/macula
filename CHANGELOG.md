@@ -16,6 +16,13 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 - `macula_crypto_profile`: the two post-quantum profiles,
   `us_national_security` and `eu`, each with its key exchange group, TLS
   signature scheme, cipher suite, signature algorithms and digests.
+- `macula_node_keys`: a node's identity, CONNECT and TLS keys for its
+  profile. ML-DSA-87 private keys are stored in their expanded form and
+  RSA-PSS-4096 keys as DER. A key file is restricted to its owner before
+  the key is written into it. `load/3` refuses a key saved for another
+  purpose or profile, a stored public key that differs from the one
+  derived from its private key, and a key that fails a sign-and-verify
+  round trip.
 
 ### Changed
 
