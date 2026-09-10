@@ -390,7 +390,7 @@ Part 2 has the work packages.
 | 0 | Checks before building (V items, Part 1) | per check | nothing |
 | 1 | `macula` on branch `post-quantum`, and `macula-station` | Mercury, Neptune, Mars | nothing |
 | 2 | Erlang-only test suite | Terra | Stage 1 |
-| 3 | Post-quantum fleet, station directory and realm | Terra, Mercury | Stage 2 |
+| 3 | Post-quantum fleet, station directory, realm and distribution relay | Terra, Mercury, Neptune | Stage 2 |
 | 4 | Each other stack, with its suite against the fleet | Neptune, Venus, Pluto; Uranus later | Stage 3 |
 | 5 | Cutover of `macula-cli`, `macula-mcp` and `lazymesh` | Mars, Venus | Stage 4 (Go); EU parts for `io.macula` |
 | 6 | Cutover of the hecate services | Saturnus | Stage 5, EU parts included; the Reckon plan (D9) |
@@ -425,8 +425,8 @@ Raf answered "go with the recommendations" on 2026-09-10.
 | D3 | EU key exchange at level 5 | Custom SecP384r1MLKEM1024 group in Rust | Accepted |
 | D4 | EU signature form and classical half | ML-DSA-87 in TLS; hybrid elsewhere; RSA-PSS-4096 | Accepted (revised) |
 | D5 | node_id derivation | SHA-256 over label, profile and identity keys | Accepted |
-| D6 | How node keys are stored | One purpose per key, round trip on load, rotation | Accepted |
-| D7 | Key encoding in UCANs and DIDs | Published names and composite; `aud` by node_id | Accepted |
+| D6 | How node keys are stored | One purpose per key, expanded ML-DSA keys, round trip on load | Accepted (revised) |
+| D7 | Key encoding in UCANs and DIDs | Published names; composite `ML-DSA-87-PS384`; `aud` by node_id | Accepted |
 | D8 | OpenSSL floor and base images | OpenSSL 3.5.0 or newer at build time; station and realm on Debian 13 | Accepted |
 | D9 | `reckon_gater` capability signing | Separate plan in `reckon-db-org`, finished before Stage 6 | Accepted |
 | D10 | A stack that cannot do its profile | .NET out of the first switch; Python ships a patch | Accepted (.NET) |
@@ -575,13 +575,15 @@ Raf answered "go with the recommendations" on 2026-09-10.
 
 ### D6 How node keys are stored
 
-- **Answer, accepted by Raf on 2026-09-10:**
+- **Answer, accepted by Raf on 2026-09-10, revised the same day for ML-DSA key storage:**
   - **per node:** the identity key or pair, the CONNECT key or pair, and on station instances the TLS key, with
-    ML-DSA-87 keys stored as seed plus public key;
+    each ML-DSA-87 private key stored in its 4,896-byte expanded form next to its public key;
   - **each key serves exactly one purpose** (key model);
-  - **on load, every key pair is checked with a sign-and-verify round trip;**
+  - **on load, the public key of each ML-DSA-87 key is derived from the expanded key and must equal the stored
+    public key, and then every key pair is checked with a sign-and-verify round trip;**
   - **TLS and CONNECT keys and their bindings rotate every 5 days** (D22).
-- **Why:** OTP 28.1.1 signs from a seed but cannot derive the public key from it ✅; BSI requires hybrid key
+- **Why:** OTP generates ML-DSA-87 keys only in expanded form and cannot derive a public key from a seed, but derives
+  it from the expanded key with `generate_key(mldsa87, [], K)` (OTP 28.4.2 and 29.0.6) ✅; BSI requires hybrid key
   material to be dedicated to hybrid signatures ✅; the ECCG list requires different key pairs for message
   signatures and authentication ✅; ANSSI PA-079 section 6.3 and BSI TR-03116-4 ask for separate keys per
   purpose ✅.
@@ -617,16 +619,37 @@ Raf answered "go with the recommendations" on 2026-09-10.
     composite is that concatenation over one message representative, with dedicated keys, so it meets D11's
     preconditions 1 and 2, and ML-DSA stays the pure variant (precondition 3). Whether BSI and ANSSI would assess
     the design as hybrid stays open (D4) ⚠.
-  - **Followed:** every EU hybrid signature that D4 names is built as `id-MLDSA87-RSA4096-PSS-SHA512`, with its
-    label, because it is the only published construction for ML-DSA-87 with RSA-PSS-4096 and it matches D4's
-    parameters. Until a JOSE or COSE name is registered, Macula's own `alg` is `ML-DSA-87-PS384`, after the JOSE
-    composite draft's pattern (`ML-DSA-87-ES384`) and JOSE's `PS384`. EU keys in `did:key` use Macula's own key
-    type until a multicodec exists ⚠.
+  - **Not buildable in OTP as specified:** OTP 28.4.2 and 29.0.6 sign ML-DSA without options, so without a context
+    string ✅, and D7 keeps private keys out of Rust.
+  - **Accepted by Raf on 2026-09-10:** every EU hybrid signature that D4 names is Macula's own composite on the
+    LAMPS structure: the same M', the same RSA-PSS parameters from D4, concatenated keys and signatures, valid only
+    if both verify, with ML-DSA-87 signing M' under an empty context. It has no LAMPS name or identifier; its `alg`
+    is `ML-DSA-87-PS384`, after the JOSE composite draft's pattern (`ML-DSA-87-ES384`) and JOSE's `PS384`. EU keys
+    in `did:key` use Macula's own key type until a multicodec exists ⚠.
+  - **Constants** (set in WP 1.3, 2026-09-10): Prefix is the 32 ASCII bytes `CompositeAlgorithmSignatures2025`, as
+    in LAMPS; Label is the 22 ASCII bytes `MACULA-ML-DSA-87-PS384`; ctx is empty for every Macula object, so
+    len(ctx) is the single byte 0, and each object keeps its own domain label inside M; PH is SHA-512. RSA-PSS signs
+    M' with SHA-384, MGF1 with SHA-384, a 48-byte salt and public exponent 65537. The signature is the 4,627-byte
+    ML-DSA-87 signature followed by the 512-byte RSA-PSS signature, and the public key is the 2,592-byte ML-DSA-87
+    key followed by the 526-byte DER `RSAPublicKey`, both without length prefixes.
+  - **Upstream and switch:** offering ML-DSA context support to Erlang/OTP is approved by Raf on 2026-09-10;
+    opening it is a public act that needs Raf's word in the acting session at that time. If OTP ships it before
+    `macula` 11.0.0, Macula switches to `id-MLDSA87-RSA4096-PSS-SHA512`.
 - **Check 2, audience by node_id** (2026-09-10):
   - `iss` keeps the full key, which verifies the token (D13); `aud` carries the audience's node_id.
-  - A receiver accepts a token only if `aud` equals its own node_id. In a proof chain, a proof is accepted only if
-    its `aud` equals the node_id derived per D5 from the outer token's full `iss` key, and the outer signature
-    verifies with that key.
+  - **Refined and accepted by Raf on 2026-09-10:** a token is presented by the node its `aud` names, inside a
+    request that node signed and targeted at the verifier. Before any handler runs, the provider checks, in order:
+    1. the frame signature against the caller key;
+    2. the signed target equals its own node_id (D25 item 2);
+    3. `aud` equals the node_id derived per D5 from that verified caller key;
+    4. the chain: each proof's `aud` equals the node_id of the next token's `iss` key, the chain roots at the
+       policy's required issuer, and capability, expiry and SHA-384 parent ids (D24) all check.
+  - CALL and STREAM_OPEN carry a signed deadline in the post-quantum format. A provider refuses a request past that
+    deadline plus the D22 tolerance and keeps its (caller, call id) deduplication until then, so there is no nonce
+    store for CALL and STREAM_OPEN; a nonce store remains only for tokens used outside a signed request.
+  - An authorizing verify takes the verified caller key and the expected target; a check of the chain alone has a
+    name that says it does not authorize.
+  - Open, for Neptune: how membership tokens from the realm are used outside a CALL.
   - This is sound under D24's rules for node ids. Using a delegation needs a key that derives to the named
     node_id, a second preimage at 256 bits. A collision only gives one party two keys for one node_id, and so a
     delegation it already holds; no issuer delegates to a node_id because of a property of one key. UCAN parent
@@ -653,8 +676,10 @@ Raf answered "go with the recommendations" on 2026-09-10.
   - **builder and runtime images both** move to bases whose OpenSSL is 3.5.0 or newer at build time (V3);
   - **`macula-station` and `macula-realm`** move to Debian 13 slim images from the official `erlang:28-slim` line,
     so only one thing changes at a time; the e2e harness image may stay on Alpine;
-  - **`macula-portal` and `macula-relay` are not upgraded:** they are out of scope and to be retired, which is
-    Raf's call and not planned here;
+  - **`macula-portal`, `macula-relay`, `hecate-daemon` and `hecate-stub` are not upgraded:** they are out of scope
+    and to be retired, which is Raf's call and not planned here;
+  - **`macula-dist-relay`** carries Erlang distribution over QUIC, so it moves in Stage 3 with the station and realm
+    (WP 3.4);
   - **the hecate images on OTP 27** move to OTP 28 in WP 6.1.
 - **Why:** ML-DSA in OTP needs OTP 28 or newer ✅, compiled against OpenSSL headers 3.5.0 or newer: OTP 28.1,
   28.4.2 and 29.0.6 enable ML-DSA and ML-KEM only under that compile-time check ✅ (V3). OTP's `crypto.so` is
@@ -697,7 +722,9 @@ before its wire checks are green.
   - "hybrid TLS authentication";
   - "constant-time" or "side-channel resistant", without an evaluation;
   - that ML-DSA-87 alone is acceptable in Europe;
-  - that Ed25519 is part of the EU profile.
+  - that Ed25519 is part of the EU profile;
+  - that Macula's hybrid signature is the LAMPS composite or `id-MLDSA87-RSA4096-PSS-SHA512`: it is Macula's own
+    composite, `ML-DSA-87-PS384` (D7).
 - **US, when true:** "algorithms aligned with CNSA 2.0 (ML-KEM-1024, ML-DSA-87, AES-256, SHA-384)". Never imply
   deployability in National Security Systems, which also needs NIAP or NSA validation ⚠ (V14). Preconditions: V13
   and V14 closed.
@@ -836,8 +863,10 @@ before its wire checks are green.
 - **Answer:** `macula` develops the post-quantum work on the git branch `post-quantum`. `macula-station` and the
   post-quantum fleet build against that git ref instead of hex during development. Once proven, `macula` 11.0.0
   goes to hex, and only Raf publishes. Changes for the live fleet stay on `main`, the 10.x line.
+- **Merging:** `post-quantum` takes `main` by merge commits after `main` releases, never by a rebase, because
+  branches hang off it (agreed 2026-09-10).
 - **Status:** accepted 2026-09-10.
-- **Blocks:** Stage 1, WP 3.2.
+- **Blocks:** Stage 1, WP 3.2, WP 3.4.
 
 ### D21 The live fleet during the work
 
@@ -1029,8 +1058,9 @@ before its wire checks are green.
 | Authorization for procedures without an org namespace (D25) | Raf | open |
 | Cross-profile federation: how realms of different profiles exchange calls and facts | Raf, with Jupiter | open |
 | Name of the US-profile realm on the post-quantum fleet (D19) | Raf | open |
+| Membership tokens from the realm used outside a CALL (D7) | Neptune | open |
 | Owner of the Reckon post-quantum plan, assigned when Stage 4 starts (D9) | Raf | open |
-| Where the `macula-dist-relay`, `hecate-daemon` and `hecate-stub` images on OTP 27 go (D8) | Raf, Jupiter | open |
+| Retiring `macula-portal`, `macula-relay`, `hecate-daemon` and `hecate-stub` (D8) | Raf | open |
 | How the aioquic patch ships (D10) | Pluto | open |
 | Unused signing functions for SWIM membership updates | Mercury | removed in `8cd60ee` on `post-quantum` |
 | BEP44 bootstrap | Terra, then Raf | Terra checks whether it runs anywhere |
@@ -1054,6 +1084,7 @@ Rough, for planning. Items marked ⚠ are not estimated yet.
 | 3 | Realm | 7 to 10 days |
 | 3 | Fleet and seeds | 3 to 5 days, plus configuration generation ⚠ |
 | 3 | Station directory | ⚠ |
+| 3 | Distribution relay | ⚠ |
 | 4 | Go transport | 2 to 4 days, plus the FFI unification ⚠ |
 | 4 | Python transport | 6 to 9 days, plus seeds and record verification ⚠ |
 | 4 | Rust transport in `macula-rust` | 3 to 4 days |

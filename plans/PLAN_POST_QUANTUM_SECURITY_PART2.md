@@ -96,6 +96,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Waiting on:** nothing; for the EU profile V8.
 - **Files:**
   - `src/identity/macula_identity.erl`
+  - `src/identity/macula_node_keys.erl` (new: a node's keys per purpose and profile, stored per D6)
   - `src/identity/macula_crypto_nif.erl` and `native/macula_crypto_nif` (grinding with post-quantum keys)
   - `src/record/macula_record.erl`
   - `src/macula_content_transfer.erl` and `src/content/macula_manifest.erl` (D24)
@@ -117,7 +118,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `rebar.config` (OTP floor)
 - **Change:**
   - identity keys per profile through OTP `crypto`: ML-DSA-87 in the US profile, the hybrid pair in the EU
-    profile (D4), signing as the composite `id-MLDSA87-RSA4096-PSS-SHA512` (D7);
+    profile (D4), signing as Macula's composite `ML-DSA-87-PS384` (D7);
   - CONNECT keys and TLS keys, their bindings and their status (D22); key storage per D6, with a round trip on
     load and rotation every 5 days;
   - node_id per D5, through one identity function that every comparison uses; the puzzle works on node_id;
@@ -127,6 +128,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     key is SHA-256 over a distinct type label and the record's fields;
   - the frame codec for the opener, the challenge, CONNECT with its proof, and HELLO, with every label distinct;
     the layout is specified here, with Mars and Neptune, before anyone writes handshake code;
+  - STREAM_OPEN carries a capability token as CALL does, so streams are authorized like calls, and CALL and
+    STREAM_OPEN carry a signed deadline (WP 1.4, D7);
   - one signed station record that carries the hostname and the dial endpoint under one signature, for directory
     rows (WP 3.3);
   - UCAN and DID signing and verification in `macula_identity` (D7);
@@ -140,9 +143,12 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - remove the unused signing functions for SWIM membership updates (`sign_swim_update/2`,
     `verify_swim_update/1`, `verify_update_result/2`, `canonical_swim_update/1`, `?SWIM_UPDATE_DOMAIN`) and
     their tests, on this branch only; SWIM itself stays (decided by Raf, 2026-09-10). Done in `8cd60ee`.
-- **Red first:** extend these tests, all of which fail today:
+- **Red first:** extend these tests:
   - `test/macula_identity_tests.erl`: sign and verify per profile; an EU hybrid signature with one invalid half is
     rejected; an Ed25519 key is rejected; a key pair that fails the round trip on load is refused;
+  - `test/macula_node_keys_tests.erl` (new): keys for each purpose and profile survive a save and load; a stored
+    public key that differs from the one derived from its private key, a key saved for another purpose or
+    profile, and an Ed25519 key file are refused;
   - `test/macula_record_tests.erl`: the carried key must derive to the claimed node_id;
   - `test/macula_frame_tests.erl`: the handshake frames round-trip, and labels cannot be confused;
   - `test/macula_content_block_hash_tests.erl`: a SHA-384 block verifies on fetch, and a block whose content id
@@ -172,12 +178,25 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `aud` names the audience by node_id; a proof's `aud` is matched against the node_id derived from the outer
     token's `iss` key, and the string form of that audience is set here without a `did:macula:` prefix (D7);
   - UCAN parent ids are SHA-384, and verifiers reject any other hash (D24);
+  - a provider authorizes a CALL or STREAM_OPEN per D7 check 2, before any handler runs: the frame signature
+    against the caller key, the signed target against its own node_id, the token's `aud` against the node_id of
+    that caller key, then the chain up to the policy's required issuer, with each token's signature checked before
+    its claims, `exp` present, a capability for the procedure and realm, and SHA-384 parent ids; otherwise the
+    request is refused with its own reason;
+  - a request past its signed deadline plus the D22 tolerance is refused, and (caller, call id) deduplication holds
+    until then; a nonce store exists only for tokens used outside a signed request;
+  - the authorizing verify takes the verified caller key and the expected target; a chain-only check has its own
+    name, which says it does not authorize;
+  - streams are authorized by the same checks as calls;
   - `ed25519-dalek` removed.
 - **Red first:** `test/macula_ucan_nif_tests.erl` and `test/macula_did_nif_tests.erl`: a post-quantum token and
-  DID round-trip; an EdDSA token is rejected; a token whose `aud` is not the receiver's node_id, or whose proof's
-  `aud` is not the node_id of the outer `iss` key, is refused. Fail today.
+  DID round-trip; an EdDSA token is rejected. For a call and for a stream, a request is refused when its target is
+  another node, its token's `aud` is not the node_id of the verified caller, a proof's `aud` is not the node_id of
+  the next token's `iss` key, the chain does not root at the required issuer, a token has no `exp` or no capability
+  for the procedure and realm, or the request is past its signed deadline plus the D22 tolerance; a repeated
+  (caller, call id) within that window is refused as a duplicate.
 - **Done:** green.
-- **Effort:** 2 to 3 days.
+- **Effort:** 2 to 3 days, plus the token checks ⚠.
 
 ### WP 1.5 Connection handshake and dials in `macula`
 
@@ -340,8 +359,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `Dockerfile.prod` (Debian 13 slim builder and runner, D8)
 - **Change:**
   - Realm CA and Org CA sign with ML-DSA-87 in the US profile;
-  - in the EU profile each credential carries the composite signature `id-MLDSA87-RSA4096-PSS-SHA512`, valid only
-    if both halves verify (D4, D7); whether OTP `public_key` handles that identifier is not checked ⚠;
+  - in the EU profile each credential carries Macula's composite signature `ML-DSA-87-PS384`, valid only if both
+    halves verify (D4, D7); it has no X.509 identifier, so how a credential carries it is set here ⚠;
   - OTP 28.1.1 `public_key` signs and validates ML-DSA X.509 ✅, and OTP signs and verifies brainpool ECDSA ✅ and
     RSA-PSS ✅;
   - leaf issuance, ownership proofs and membership checks take post-quantum keys, carried in full (D13);
@@ -372,9 +391,10 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     client releases that compile them in; every compiled-in seed list is generated from the csv, including the one
     in `macula-e2e`;
   - station configurations, including bootstrap `outbound_peers` with node_ids, are generated from the csv. Before
-    regenerating, the sync reaches every station (today it misses nl-ams, Toronto and Frankfurt), and hand-picked
-    peer choices are pinned in the csv or the topology;
+    regenerating, the sync reaches every station, and hand-picked peer choices are pinned in the csv or the
+    topology;
   - a separate realm deployment `io.macula` in the EU profile (D19), and the US-profile realm (name open);
+  - the distribution relay of WP 3.4, one instance per profile, with hostnames distinct from the live fleet;
   - `macula-station` builds against `macula` branch `post-quantum` (D20);
   - every fleet node runs chrony with NTS against at least two independent servers (D22); which servers is open.
 - **Red first:** the Stage 2 smoke check against the new fleet fails before provisioning.
@@ -406,6 +426,23 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - a row whose record does not verify is not served.
 - **Effort:** ⚠.
 
+### WP 3.4 Distribution relay (`macula-dist-relay`)
+
+- [ ] Erlang distribution runs over the post-quantum transport in each profile.
+- **Owner:** Neptune for the code; Terra deploys it (WP 3.2).
+- **Waiting on:** WP 1.2, WP 1.5.
+- **Files:**
+  - `rebar.config` (`macula` by git ref, D20)
+  - `Dockerfile` (builder and runtime per D8)
+- **Change:**
+  - the relay builds against `macula` branch `post-quantum` and uses its connection handshake and dials
+    (WP 1.5), with one profile per instance, as station instances do (D2);
+  - the relay client in `macula` dials with an expected identity, like every other dial (WP 1.5).
+- **Red first:** two BEAM nodes on the new fleet reach each other through the relay in each profile, and a node
+  that offers only classical algorithms is refused.
+- **Done:** green on the new fleet.
+- **Effort:** ⚠.
+
 ---
 
 ## Stage 4: each other stack, with its suite against the fleet
@@ -434,10 +471,33 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
     resumption, and the leaf through `peer_identity`;
   - `src/content.rs` checks every block and chunk against its content id's own hash tag, SHA-384 in the
     post-quantum format; `Mcid` takes the 50-byte form, and an unknown hash name is refused (D24);
+  - the token checks of WP 1.4, for calls and streams;
   - one trust mode replaces `Trust::WebPki`, `Trust::Pinned` and `Trust::Insecure`; every dial carries an expected
     identity;
   - the handshake frames and identity per WP 1.3, with the EU classical half per D4 and V8.
-- **Red first:** the WP 1.2 and WP 1.5 assertions, as integration tests against the new fleet.
+- **Red first:**
+  - the WP 1.2 and WP 1.5 assertions, as integration tests against the new fleet;
+  - a provider verifies every inbound CALL's signature against its caller before the handler runs; an unverified
+    CALL reaches no handler and gets no reply;
+  - a caller verifies every RESULT and ERROR signature against `responded_by` or `reported_by` before returning
+    it; an unverified reply is never returned;
+  - a subscriber verifies each EVENT's signature, and its publisher signature, before delivery; an invalid event
+    is dropped, in the core crate and through the FFI;
+  - a provider verifies every inbound STREAM_OPEN's signature against its caller before accept returns it, and
+    the caller handed to the handler is that verified key;
+  - a chunked fetch accepts no chunk until the fetched manifest's recomputed content id equals the requested id;
+    a self-consistent manifest for other content is refused;
+  - event dedup runs only after signature verification; an unverified frame never marks an id as seen;
+  - streams get an authorization policy hook like calls: a STREAM_OPEN carries a capability token, and the policy
+    is enforced before accept returns, in the core crate and through the FFI `accept_stream`;
+  - a provider's policy is an explicit argument of every serve and accept API, and an open policy is always
+    chosen by name;
+  - a UCAN on a CALL or STREAM_OPEN is authorized per D7 check 2: signed target, `aud` as the verified caller's
+    node_id, and the chain to the required issuer;
+  - every dial (pool, direct dial, FFI) carries an expected identity, and a HELLO naming any other node_id is
+    refused;
+  - every build verifies the handshake signature against the presented leaf with the profile's schemes, in every
+    trust mode.
 - **Done:** green in CI; `ring` absent from `Cargo.toml`.
 - **Effort:** the transport takes 3 to 4 days once WP 1.2's Rust code exists (Neptune's estimate); the identity work
   is part of the SDK identity estimate, and the D24 content work is not estimated ⚠.
@@ -471,12 +531,52 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - the handshake frames and identity per WP 1.3; the hello, publisher signature and record checks take carried
     keys (D13);
   - the EU classical half per D4, from a constant-time implementation that cross-compiles into all five prebuilt
-    binaries without extra C dependencies (V8).
-- **Red first:** `transport/pq_handshake_test.go` (new) asserts `ConnectionState().TLS.CurveID`, the certificate
-  signature algorithm and the cipher suite per profile, and refusal of a classical-only peer and of an unbound TLS
-  key. An FFI size-mismatch test fails instead of truncating.
-
-  Fails today: Go 1.26, hybrid X25519MLKEM768 by default with classical fallback.
+    binaries without extra C dependencies (V8);
+  - the token checks of WP 1.4, for calls and streams, with an authorization policy that `macula-ts` can set and
+    that `macula-php` applies per realm and procedure.
+- **Red first:**
+  - `transport/pq_handshake_test.go` (new) asserts `ConnectionState().TLS.CurveID`, the certificate signature
+    algorithm and the cipher suite per profile, and refusal of a classical-only peer and of an unbound TLS key;
+    an FFI size-mismatch test fails instead of truncating;
+  - signatures on inbound frames, each checked end to end against its origin, not the forwarding station:
+    - a provider runs a CALL handler only after the CALL's signature verifies against its caller;
+    - a caller accepts a RESULT or ERROR only after its signature verifies against the answering node, and only
+      when that node is the provider the call was addressed to (D25);
+    - every stream frame (STREAM_OPEN, STREAM_DATA, STREAM_END, STREAM_ERROR, STREAM_REPLY) is delivered only
+      after its signature verifies against the stream's peer;
+    - an EVENT reaches a subscriber only after its publisher signature verifies, on every subscribe path: the
+      callback subscriber, `RecvEvent` and the pool;
+  - station identity:
+    - a dial with an expected station identity closes the session before CONNECT is sent if the station's
+      proven identity differs;
+    - the CONNECT proof binds the station's proven identity to this handshake through the SHA-384 of the leaf
+      certificate, and session resumption stays off, so the leaf is always this handshake's;
+    - every dial path either validates the certificate or applies that binding;
+    - the FFI marks the station node id as verified only for sessions where it was checked against an expected
+      identity;
+  - content:
+    - a chunked fetch recomputes the manifest's id in `computeMcid`'s canonical form and refuses a manifest
+      whose id is not the requested id;
+    - a single-block fetch re-hashes the block and refuses one whose hash is not the requested id;
+  - events: dedup runs only on verified events, so a forged event that reuses a real publisher's realm,
+    publisher, sequence number and topic never suppresses the genuine one;
+  - authorization:
+    - calls and streams both take an authorization policy, enforced before any handler runs; `macula-ts` can
+      set it, and `macula-php`'s gated export applies it per realm and procedure;
+    - a call or stream handler receives the caller's identity only after the caller's signature verifies;
+    - a STREAM_OPEN naming a procedure this session did not advertise is refused before the application sees it;
+    - a request is authorized per D7 check 2, in order: the frame signature against the caller key, the signed
+      target against the provider's node_id, the token's `aud` against the node_id of that caller key, then the
+      chain to the required issuer; each token's signature is checked before its claims, and a token without
+      `exp`, without a capability for the procedure and realm, or with a delegation that does not verify is
+      refused with its own error;
+    - a request past its signed deadline plus the D22 tolerance is refused, and (caller, call id) deduplication
+      holds until then;
+    - the standalone token functions in Go, TS and PHP follow the same rule: the authorizing verify takes the
+      verified caller key and the expected target, and a chain-only check has a name that says it does not
+      authorize;
+  - FFI: `macula_identity_sign` returns the whole signature for every profile, 4,627 bytes for ML-DSA-87, and
+    never cuts it to a fixed-size buffer.
 - **Done:** green in CI (`ci.yml` reads the Go version from `go.mod` ✅).
 - **Effort:** 2 to 4 days for the transport, plus the FFI unification ⚠; the identity work is part of the SDK
   identity estimate.
@@ -503,9 +603,31 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - `Session.connect` takes an expected station identity; a seed list with node_ids (new code); a verifier for
     signed records (new code);
   - identity per WP 1.3, with the EU classical half per D4;
-  - the `cryptography` floor raised to a version with ML-KEM and ML-DSA.
-- **Red first:** `tests/test_pq_handshake.py`, against the new fleet: success in the client's profile, and failure
-  against a classical-only station and against an unbound TLS key. Fails today: aioquic has no ML-KEM or ML-DSA.
+  - the `cryptography` floor raised to a version with ML-KEM and ML-DSA;
+  - the token checks of WP 1.4, for calls and streams.
+- **Red first:**
+  - `tests/test_pq_handshake.py`, against the new fleet: success in the client's profile, and failure against a
+    classical-only station and against an unbound TLS key;
+  - `Session.connect` takes the expected station identity from the seed list and refuses a station whose HELLO
+    identity differs; the client refuses a station whose TLS leaf key is not bound to its HELLO identity, and no
+    configuration skips that check; the CONNECT proof covers the SHA-384 of the station's leaf DER from the same
+    session; the client never sets a session ticket or ticket handler, and refuses a session without a peer
+    certificate;
+  - an incoming CALL or STREAM_OPEN runs its handler only if its signature verifies against its caller;
+    otherwise it is refused and the handler never runs;
+  - a RESULT or ERROR is accepted only if its signature verifies against its responder and that responder is the
+    provider the call was meant for (D25);
+  - STREAM_DATA, STREAM_END, STREAM_REPLY and STREAM_ERROR are delivered only if they verify against the
+    stream's peer, and the signer is kept on inbound frames;
+  - an EVENT is delivered only if its publisher signature verifies, and every PUBLISH carries a publisher
+    signature that test vectors from `macula` verify;
+  - event dedup runs only after the publisher signature verifies, so a forged event that reuses a real publisher
+    and sequence number never suppresses the genuine one;
+  - call and stream handlers receive the verified caller identity, and a policy hook sees that identity and the
+    token before any handler runs; a denial replies unauthorized without running the handler;
+  - a chunked fetch recomputes the manifest id and refuses a manifest whose id differs from the requested id
+    before fetching any chunk, and a single-block fetch checks the block hash against the requested id;
+  - the token checks of WP 1.4.
 - **Done:** green in CI.
 - **Effort:** 6 to 9 days, plus the seed list and record verifier ⚠; the identity work is part of the SDK identity
   estimate.
@@ -673,6 +795,11 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
 ### `hecate-stations` (WP 3.3)
 
 - the files listed in WP 3.3
+
+### `macula-dist-relay` (WP 3.4)
+
+- `rebar.config`
+- `Dockerfile`
 
 ### `macula-rust` (WP 4.1)
 

@@ -189,6 +189,9 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
   whose OpenSSL is 3.0 ✅ (V2).
 - OTP 28.1.1 takes ML-DSA private keys as `{expandedkey, K}` or `{seed, S}`, and **cannot derive the public key
   from a seed** with `generate_key/3` ✅.
+- OTP 28.4.2 and 29.0.6: `generate_key(mldsa87, [])` returns the 4,896-byte expanded private key and never the
+  seed; `generate_key(mldsa87, [], K)` derives the public key from the expanded key; ML-DSA signing takes no options,
+  so no context string ✅.
 - quinn needs AES-128-GCM for QUIC Initial packets.
   - `with_initial` supplies it separately, so the negotiated handshake and application keys can be AES-256-only ✅.
   - rustls has `TLS13_AES_256_GCM_SHA384` and a server-order option ✅.
@@ -242,7 +245,8 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 - **Method caveat:** Docker could not fork on this machine, so the files were inspected from copies instead of
   running `erl` inside the images.
 - **Result across the fleet's images** (Terra, 2026-09-10), from the strings in each image's OTP `crypto.so`, copied
-  out of the image; the method was checked against local OTP 27, 28 and 29 ✅:
+  out of the image; the method was checked against local OTP 27, 28 and 29 ✅. The fleet declares 30 image
+  references for 29 distinct images, because `macula-station` appears twice under two tags ✅:
   - ML-DSA and ML-KEM present (13): the hecate services agora, biotope, citizens, echo, mail, rag, search, society,
     spartan, stations, tube and turn-credentials, on Alpine 3.22 or 3.23 with OpenSSL 3.5.8 (crypto-5.8.3), and
     hecate-whiteboard on Debian 13.5 with OpenSSL 3.5.7 (crypto-5.7);
