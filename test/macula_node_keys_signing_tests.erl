@@ -87,6 +87,21 @@ ed25519_signature_is_refused_test() ->
     ?assertNot(macula_node_keys:verify(<<"m">>, Signature, macula_identity:public(Ed25519), us)).
 
 %%------------------------------------------------------------------
+%% Cross-stack vectors: composites signed by OTP and by Go in the Go V8 check (2026-09-10)
+%%------------------------------------------------------------------
+
+cross_stack_composite_vectors_test_() ->
+    Message = fixture("message.bin"),
+    [{Signer, [?_assert(macula_node_keys:verify(Message, Signature, Public, eu)),
+               ?_assertNot(macula_node_keys:verify(<<Message/binary, 0>>, Signature, Public, eu)),
+               ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 10), Public, eu)),
+               ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 4627 + 10), Public, eu)),
+               ?_assertNot(macula_node_keys:verify(Message, Signature, Public, us))]}
+     || Signer <- ["otp", "go"],
+        Public <- [fixture(Signer ++ "_composite_pub.bin")],
+        Signature <- [fixture(Signer ++ "_composite_sig.bin")]].
+
+%%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
@@ -104,3 +119,8 @@ representative(Message) ->
 flip_byte(Bin, Offset) ->
     <<Head:Offset/binary, Byte, Tail/binary>> = Bin,
     <<Head/binary, (Byte bxor 1), Tail/binary>>.
+
+fixture(Name) ->
+    Path = filename:join([filename:dirname(?FILE), "fixtures", "composite_ml_dsa_87_ps384", Name]),
+    {ok, Bin} = file:read_file(Path),
+    Bin.
