@@ -34,7 +34,7 @@
 %% </ul>
 -module(macula_record_cbor).
 
--export([encode/1, decode/1, is_encodable_int/1]).
+-export([encode/1, decode/1, decode_strict/1, is_encodable_int/1]).
 -export_type([value/0]).
 
 -type value() ::
@@ -138,26 +138,39 @@ head(MT, N) when N =< ?MAX_UINT64 ->
 
 -spec decode(binary()) -> value().
 decode(Bin) when is_binary(Bin) ->
-    {V, <<>>} = decode_one(Bin),
+    {V, <<>>} = decode_one(Bin, lenient),
     V.
 
+%% @doc Decode one item under the post-quantum decoding rule: a duplicate map key at any depth, bytes after the
+%% top-level item, and malformed input are refused, and nothing is raised. `decode/1' keeps its behaviour: a
+%% duplicate key there still keeps the last value.
+-spec decode_strict(binary()) -> {ok, value()} | {error, duplicate_key | trailing_bytes | malformed}.
+decode_strict(Bin) when is_binary(Bin) ->
+    try decode_one(Bin, strict) of
+        {V, <<>>}        -> {ok, V};
+        {_V, _Trailing}  -> {error, trailing_bytes}
+    catch
+        throw:duplicate_key -> {error, duplicate_key};
+        error:_             -> {error, malformed}
+    end.
+
 %% Major 7, value 22 = null.
-decode_one(<<7:3, 22:5, R/binary>>) ->
+decode_one(<<7:3, 22:5, R/binary>>, _Mode) ->
     {null, R};
 %% Floats. We only ever EMIT binary64, but a conforming peer may send the
 %% shorter forms, so all three are accepted. NaN and the infinities have no
 %% Erlang float representation and match no clause here; the frame decoder
 %% already turns that into `bad_frame' rather than a crash, which is the
 %% right answer for a value this codec cannot faithfully hand to a caller.
-decode_one(<<7:3, 25:5, Half:16/bitstring, R/binary>>) ->
+decode_one(<<7:3, 25:5, Half:16/bitstring, R/binary>>, _Mode) ->
     {half_to_float(Half), R};
-decode_one(<<7:3, 26:5, F:32/float, R/binary>>) ->
+decode_one(<<7:3, 26:5, F:32/float, R/binary>>, _Mode) ->
     {F, R};
-decode_one(<<7:3, 27:5, F:64/float, R/binary>>) ->
+decode_one(<<7:3, 27:5, F:64/float, R/binary>>, _Mode) ->
     {F, R};
-decode_one(<<MT:3, AI:5, Rest/binary>>) ->
+decode_one(<<MT:3, AI:5, Rest/binary>>, Mode) ->
     {N, R} = decode_count(AI, Rest),
-    decode_value(MT, N, R).
+    decode_value(MT, N, R, Mode).
 
 decode_count(AI, R) when AI =< 23 -> {AI, R};
 decode_count(24, <<N, R/binary>>) -> {N, R};
@@ -165,35 +178,40 @@ decode_count(25, <<N:16, R/binary>>) -> {N, R};
 decode_count(26, <<N:32, R/binary>>) -> {N, R};
 decode_count(27, <<N:64, R/binary>>) -> {N, R}.
 
-decode_value(0, N, R) ->
+decode_value(0, N, R, _Mode) ->
     {N, R};
 %% Negative integer (major 1) — the encoded count `N' represents the
 %% integer `-1 - N'.
-decode_value(1, N, R) ->
+decode_value(1, N, R, _Mode) ->
     {-1 - N, R};
-decode_value(2, Len, R) ->
+decode_value(2, Len, R, _Mode) ->
     <<B:Len/binary, Rest/binary>> = R,
     {B, Rest};
-decode_value(3, Len, R) ->
+decode_value(3, Len, R, _Mode) ->
     <<B:Len/binary, Rest/binary>> = R,
     {{text, B}, Rest};
-decode_value(4, Len, R) ->
-    decode_array(Len, R, []);
-decode_value(5, Len, R) ->
-    decode_map(Len, R, #{}).
+decode_value(4, Len, R, Mode) ->
+    decode_array(Len, R, [], Mode);
+decode_value(5, Len, R, Mode) ->
+    decode_map(Len, R, #{}, Mode).
 
-decode_array(0, R, Acc) ->
+decode_array(0, R, Acc, _Mode) ->
     {lists:reverse(Acc), R};
-decode_array(N, R, Acc) ->
-    {V, R1} = decode_one(R),
-    decode_array(N - 1, R1, [V | Acc]).
+decode_array(N, R, Acc, Mode) ->
+    {V, R1} = decode_one(R, Mode),
+    decode_array(N - 1, R1, [V | Acc], Mode).
 
-decode_map(0, R, Acc) ->
+decode_map(0, R, Acc, _Mode) ->
     {Acc, R};
-decode_map(N, R, Acc) ->
-    {K, R1} = decode_one(R),
-    {V, R2} = decode_one(R1),
-    decode_map(N - 1, R2, Acc#{K => V}).
+decode_map(N, R, Acc, Mode) ->
+    {K, R1} = decode_one(R, Mode),
+    {V, R2} = decode_one(R1, Mode),
+    decode_map(N - 1, R2, put_key(Mode, K, V, Acc), Mode).
+
+%% A strict decode refuses a key it has already seen; a lenient one keeps the last value. The lookup keeps the check
+%% linear in the number of keys.
+put_key(strict, K, _V, Acc) when is_map_key(K, Acc) -> throw(duplicate_key);
+put_key(_Mode, K, V, Acc) -> Acc#{K => V}.
 
 %% IEEE 754 binary16 -> Erlang float. Subnormals and zero fall out of the
 %% same arithmetic; exponent 31 is NaN/infinity, which has no Erlang
