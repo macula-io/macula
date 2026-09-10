@@ -146,7 +146,7 @@ cancel(Pid) -> gen_server:stop(Pid).
 %% for the full reasoning. This is a share/download entry point, so
 %% `Mcid' plausibly comes from outside this SDK (a share link, a
 %% caller's own storage) rather than always being freshly minted.
-init({DialMode, Module, Pool, Realm, <<1, Codec, _/binary>> = Mcid, Announce, InitArgs})
+init({DialMode, Module, Pool, Realm, <<2, Codec, _:48/binary>> = Mcid, Announce, InitArgs})
         when Codec =:= 16#55 orelse Codec =:= 16#56 ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
@@ -264,7 +264,7 @@ outcome_fields(Base, {error, cancelled}) ->
 outcome_fields(Base, {error, Reason}) ->
     Base#{outcome => failed, reason => Reason}.
 
-is_chunked_mcid(<<1, 16#56, _/binary>>) -> true;
+is_chunked_mcid(<<2, 16#56, _/binary>>) -> true;
 is_chunked_mcid(_) -> false.
 
 publish(false, _, _, _, _) -> ok;

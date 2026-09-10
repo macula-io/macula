@@ -1,7 +1,7 @@
 -module(macula_record_content_announcement_tests).
 -include_lib("eunit/include/eunit.hrl").
 
-mcid()     -> <<1, 16#56, (crypto:strong_rand_bytes(32))/binary>>.
+mcid()     -> <<2, 16#56, (crypto:strong_rand_bytes(48))/binary>>.
 keypair()  -> macula_identity:generate().
 station()  -> Kp = keypair(), {Kp, macula_identity:public(Kp)}.
 
@@ -32,6 +32,13 @@ constructor_rejects_short_mcid_test() ->
     ?assertError(function_clause,
                  macula_record:content_announcement(
                    Pub, <<"too short">>, <<"quic://h:4">>)).
+
+%% The post-quantum format has only tag 2, SHA-384 (D24).
+constructor_rejects_a_blake3_mcid_test() ->
+    {_Kp, Pub} = station(),
+    ?assertError(function_clause,
+                 macula_record:content_announcement(
+                   Pub, <<1, 16#56, (crypto:strong_rand_bytes(32))/binary>>, <<"quic://h:4">>)).
 
 sign_verify_roundtrip_test() ->
     {Kp, Pub} = station(),
@@ -82,6 +89,9 @@ storage_key_same_for_different_announcers_test() ->
 
 content_key_rejects_wrong_size_test() ->
     ?assertError(function_clause, macula_record:content_key(<<"too short">>)).
+
+content_key_rejects_a_blake3_mcid_test() ->
+    ?assertError(function_clause, macula_record:content_key(<<1, 16#56, 0:256>>)).
 
 %%------------------------------------------------------------------
 %% read_content_announcement/1

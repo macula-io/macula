@@ -16,7 +16,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
--define(MCID, <<1, 16#55, (crypto:strong_rand_bytes(32))/binary>>).
+-define(MCID, <<2, 16#55, (crypto:strong_rand_bytes(48))/binary>>).
 
 consistent_signer_and_claim_is_trusted_test() ->
     Identity = macula_identity:generate(),

@@ -60,6 +60,12 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 
 ### Changed
 
+- Content ids are SHA-384 (D24): `<<2, Codec, Hash:48>>`, 50 bytes, with
+  byte 0 as the hash tag. A tag 1 (BLAKE3) id is refused on fetch, in
+  manifests, for chunks and in content announcements. New blocks,
+  manifests and chunks are hashed with SHA-384, a manifest names `sha384`
+  as its only hash algorithm, and `macula_manifest:chunk_mcid/2` replaces
+  `chunk_mcid/3`.
 - The `macula` application starts only with `crypto_profile` set to
   `pq_pure` or `pq_hybrid` in its environment. A missing value, an
   unknown value or a list of profiles makes the start return an error.

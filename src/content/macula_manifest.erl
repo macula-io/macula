@@ -8,13 +8,13 @@
 %% This is deliberate, not incidental — the SDK puts a manifest via the
 %% station's existing (unmodified) `_content.put_manifest' /
 %% `_content.get_manifest' RPCs, so the two sides must agree on the
-%% algorithm bit-for-bit. Both use the same BLAKE3 NIF
-%% (`macula_blake3_nif', SDK-owned; the station calls it too) and the
-%% same deterministic CBOR encoder (`macula_record_cbor', SDK-owned;
-%% the station's manifest module calls it directly), so this is a
-%% faithful client-side port, not a re-derivation.
+%% algorithm bit-for-bit. Both hash with SHA-384 through OTP crypto and
+%% use the same deterministic CBOR encoder (`macula_record_cbor',
+%% SDK-owned; the station's manifest module calls it directly), so this
+%% is a faithful client-side port, not a re-derivation.
 %%
-%% MCID format (34 bytes): `<<Version:8, Codec:8, Hash:32/binary>>'.
+%% MCID format (50 bytes): `<<Tag:8, Codec:8, Hash:48/binary>>'. The tag
+%% names the hash; the post-quantum format has only tag 2, SHA-384 (D24).
 %% `?CODEC_RAW' (16#55) addresses a single chunk (or a whole blob that
 %% fits in one chunk — see the module doc on `macula:put_content/2').
 %% `?CODEC_MANIFEST' (16#56) addresses a manifest describing many
@@ -24,7 +24,7 @@
 -export([
     default_chunk_size/0,
     create/1, create/2,
-    chunk_mcid/3,
+    chunk_mcid/2,
     verify/2,
     verify_mcid/2,
     from_wire/1
@@ -32,8 +32,8 @@
 
 -export_type([manifest/0, chunk_info/0, algorithm/0]).
 
--type algorithm() :: blake3 | sha256.
--type mcid() :: <<_:272>>.
+-type algorithm() :: sha384.
+-type mcid() :: <<_:400>>.
 
 -type chunk_info() :: #{
     index  := non_neg_integer(),
@@ -56,6 +56,7 @@
 }.
 
 -define(VERSION,        1).
+-define(TAG_SHA384,     2).
 -define(CODEC_RAW,      16#55).
 -define(CODEC_MANIFEST, 16#56).
 -define(DEFAULT_CHUNK_SIZE, 262144).
@@ -77,13 +78,13 @@ create(Data) -> create(Data, #{}).
 %% <ul>
 %%   <li>`name' — content name (default `<<"unnamed">>')</li>
 %%   <li>`chunk_size' — bytes per chunk (default `default_chunk_size/0')</li>
-%%   <li>`hash_algorithm' — `blake3' | `sha256' (default `blake3')</li>
+%%   <li>`hash_algorithm': `sha384', the only one and the default</li>
 %% </ul>
 -spec create(binary(), map()) -> {ok, manifest(), [binary()]}.
 create(Data, Opts) when is_binary(Data), is_map(Opts) ->
     Name      = maps:get(name, Opts, <<"unnamed">>),
     ChunkSize = maps:get(chunk_size, Opts, ?DEFAULT_CHUNK_SIZE),
-    Algorithm = maps:get(hash_algorithm, Opts, blake3),
+    Algorithm = maps:get(hash_algorithm, Opts, sha384),
 
     Chunks     = do_chunk(Data, ChunkSize, []),
     ChunkInfos = chunk_infos(Chunks, Algorithm),
@@ -102,31 +103,17 @@ create(Data, Opts) when is_binary(Data), is_map(Opts) ->
     },
     {ok, Body#{mcid => compute_mcid(Body, Algorithm)}, Chunks}.
 
-%% @doc The MCID a chunk at `Index' is stored/fetched under. The
-%% station derives this same value independently when serving the
-%% chunk, so both sides agree on its address without exchanging it.
-%%
-%% `Algorithm' is accepted but unused: the chunk's hash was already
-%% computed (with whichever algorithm `create/2' was given) and stored
-%% in `Chunks', so there's nothing left to derive here. KNOWN GAP
-%% (2026-09-05, will not be fixed without a design decision): per-chunk
-%% fetch verification (`macula_content_transfer:verify_block_hash/2') is
-%% hardcoded to blake3 regardless of this field, so a manifest created
-%% with `hash_algorithm => sha256' produces chunk MCIDs that can never
-%% actually verify on fetch. `hash_algorithm' today only affects the
-%% manifest's own root-hash Merkle step (`verify/2'). Same gap
-%% independently confirmed in macula-io/macula-rust's `content.rs'
-%% (`block_mcid' is likewise hardcoded to blake3). Left as-is: nothing
-%% exercises sha256 in practice, and whether per-chunk sha256
-%% verification was ever meant to work is an open question, not a bug
-%% with an obvious fix.
--spec chunk_mcid(manifest(), non_neg_integer(), algorithm()) ->
-        {ok, mcid()} | {error, invalid_index}.
-chunk_mcid(#{chunks := Chunks}, Index, _Algorithm)
+%% @doc The MCID a chunk at `Index' is stored/fetched under: tag 2,
+%% codec raw, and the chunk's SHA-384 hash. The station derives this same
+%% value independently when serving the chunk, so both sides agree on its
+%% address without exchanging it, and a fetched chunk is checked against it
+%% by `macula_content_transfer:verify_block_hash/2'.
+-spec chunk_mcid(manifest(), non_neg_integer()) -> {ok, mcid()} | {error, invalid_index}.
+chunk_mcid(#{chunks := Chunks}, Index)
   when Index >= 0, Index < length(Chunks) ->
     #{hash := Hash} = lists:nth(Index + 1, Chunks),
     {ok, make_mcid(?CODEC_RAW, Hash)};
-chunk_mcid(#{chunks := _}, _Index, _Algorithm) ->
+chunk_mcid(#{chunks := _}, _Index) ->
     {error, invalid_index}.
 
 %% @doc Verify reassembled `Data' against `Manifest': size, then a
@@ -182,10 +169,9 @@ mcid_result(false) -> {error, manifest_mcid_mismatch}.
 %% `{text, Bin}' keys: the frame decoder resolves a key to an atom only
 %% when that atom already exists, so in a node that has not yet loaded
 %% this module the field names arrive as text. A name or hash algorithm
-%% sent as text is read as its binary value, and a missing hash algorithm
-%% is blake3. A manifest without an mcid, whose chunks are not a list of
-%% maps, or whose hash algorithm is not one this module knows, is
-%% `{error, invalid_manifest}'.
+%% sent as text is read as its binary value. A manifest without an mcid,
+%% whose chunks are not a list of maps, or that does not name sha384 as its
+%% hash algorithm, is `{error, invalid_manifest}'.
 -spec from_wire(map()) -> {ok, manifest()} | {error, invalid_manifest}.
 from_wire(M) when is_map(M) ->
     from_wire_result(field(M, mcid), field(M, chunks), M).
@@ -224,16 +210,14 @@ chunk_info_from_wire(C) when is_map(C) ->
       size   => field_default(C, size, 0),
       hash   => field_default(C, hash, <<>>)}.
 
-%% A missing hash algorithm is blake3; a present one must be known.
-wire_algorithm(undefined) -> {ok, blake3};
+%% A manifest must name its hash algorithm, and the only one is sha384.
+wire_algorithm(undefined) -> error;
 wire_algorithm(Value)     -> known_algorithm(Value).
 
 %% A hash algorithm this module computes, as an atom, a binary, or the
 %% `{text, Bin}' the frame decoder leaves.
-known_algorithm(blake3)                        -> {ok, blake3};
-known_algorithm(sha256)                        -> {ok, sha256};
-known_algorithm(<<"blake3">>)                  -> {ok, blake3};
-known_algorithm(<<"sha256">>)                  -> {ok, sha256};
+known_algorithm(sha384)                        -> {ok, sha384};
+known_algorithm(<<"sha384">>)                  -> {ok, sha384};
 known_algorithm({text, Bin}) when is_binary(Bin) -> known_algorithm(Bin);
 known_algorithm(_Other)                        -> error.
 
@@ -315,8 +299,7 @@ combine([L, R | Rest], Algorithm, Acc) ->
 %% Internal — hashing (mirrors macula_content_hasher:hash/2)
 %%====================================================================
 
-hash(blake3, Data) -> macula_blake3_nif:hash(Data);
-hash(sha256, Data) -> crypto:hash(sha256, Data).
+hash(sha384, Data) -> crypto:hash(sha384, Data).
 
 %%====================================================================
 %% Internal — MCID (mirrors macula_manifest:compute_mcid/2)
@@ -338,4 +321,4 @@ compute_mcid(Body, Algorithm) ->
     make_mcid(?CODEC_MANIFEST, hash(Algorithm, Bytes)).
 
 make_mcid(Codec, Hash) ->
-    <<?VERSION:8, Codec:8, Hash/binary>>.
+    <<?TAG_SHA384:8, Codec:8, Hash/binary>>.

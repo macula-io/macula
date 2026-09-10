@@ -73,8 +73,8 @@ small_put_reports_unchunked() ->
     meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
 
     {ok, _Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), <<0:256>>, Bytes, self()),
-    Hash = macula_blake3_nif:hash(Bytes),
-    ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    ExpectedMcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     ?assertEqual({fed, {ok, ExpectedMcid}}, wait_msg()),
     ?assertEqual([<<"sharing.put_started_v1">>, <<"sharing.put_completed_v1">>], topics()),
     ?assertMatch(#{outcome := completed, mcid := ExpectedMcid, chunked := false},
@@ -179,8 +179,8 @@ direct_dial_resolves_then_puts_through_the_resolved_station() ->
 
     {ok, _Pid} = macula_feeder:start_link_direct(?MODULE, dummy_pid(), Station,
                                                  <<0:256>>, Bytes, self()),
-    Hash = macula_blake3_nif:hash(Bytes),
-    ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    ExpectedMcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     ?assertEqual({fed, {ok, ExpectedMcid}}, wait_msg()),
     meck:unload(macula_direct_dial).
 

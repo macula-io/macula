@@ -55,9 +55,9 @@
 
 %% Content-addressed blob storage. `_content.put_block' /
 %% `_content.get_block' RPCs against the relay's local content
-%% store. MCID is a 34-byte binary: 1 codec byte, 1 algo byte
-%% (BLAKE3 = 16#55), 32-byte BLAKE3 hash. The relay validates the
-%% payload's hash on `put_block' and rejects mismatches.
+%% store. MCID is a 50-byte binary: the hash tag (2, SHA-384), the
+%% codec (16#55 raw, 16#56 manifest), then the 48-byte SHA-384 hash. The
+%% relay validates the payload's hash on `put_block' and rejects mismatches.
 -export([put_content/2,
          put_content_station/4, put_content_station/5,
          get_content/2,
@@ -479,19 +479,19 @@ apply_callback_with_decode(_Fun, _Other) ->
 %%% Content-addressed blob storage (v4.2.7+)
 %%%===================================================================
 
--type mcid() :: <<_:272>>.
+-type mcid() :: <<_:400>>.
 
 
 %% @doc Store `Bytes' in the mesh's content store and return its MCID
-%% (Macula Content ID — 34 bytes: version, codec, then a 32-byte hash).
+%% (Macula Content ID, 50 bytes: tag 2 for SHA-384, codec, then the 48-byte hash).
 %% Content that fits in one block (`byte_size(Bytes) =&lt;
 %% macula_manifest:default_chunk_size/0', 256 KiB) is sent as a
-%% single `_content.put_block' — the MCID is `&lt;&lt;1, 16#55,
-%% BLAKE3(Bytes)&gt;&gt;', unchanged since v4.2.7. Larger content is split
+%% single `_content.put_block', and the MCID is `&lt;&lt;2, 16#55,
+%% SHA-384(Bytes)&gt;&gt;'. Larger content is split
 %% into chunks (`macula_manifest:create/1'), each chunk sent
 %% via its own `_content.put_block', then a `content_manifest' via
 %% `_content.put_manifest'; the returned MCID is the manifest's
-%% (`&lt;&lt;1, 16#56, _/binary&gt;&gt;'), Merkle-rooted over every chunk. Either
+%% (`&lt;&lt;2, 16#56, _/binary&gt;&gt;'), Merkle-rooted over every chunk. Either
 %% way the station verifies each block's hash before accepting it.
 %%
 %% The whole transfer — every block call plus the manifest call for
@@ -558,7 +558,7 @@ put_content_station(Pool, Station, Bytes, TimeoutMs, Opts) ->
 %% crashed the calling process's linked worker on anything else.
 -spec get_content(pool(), mcid()) ->
     {ok, binary()} | {error, not_found | invalid_mcid | term()}.
-get_content(Pool, <<1, Codec, _/binary>> = MCID)
+get_content(Pool, <<2, Codec, _:48/binary>> = MCID)
   when is_pid(Pool), (Codec =:= 16#55 orelse Codec =:= 16#56) ->
     {ok, Pid} = macula_content_transfer:start_get(Pool, MCID),
     Result = macula_content_transfer:await(Pid),
@@ -590,7 +590,7 @@ get_content_station(Pool, Station, MCID, TimeoutMs) ->
 -spec get_content_station(pool(), macula_client:seed(), mcid(),
                           pos_integer(), map()) ->
     {ok, binary()} | {error, not_found | invalid_mcid | term()}.
-get_content_station(Pool, Station, <<1, Codec, _/binary>> = MCID, TimeoutMs, Opts)
+get_content_station(Pool, Station, <<2, Codec, _:48/binary>> = MCID, TimeoutMs, Opts)
   when Codec =:= 16#55 orelse Codec =:= 16#56 ->
     {ok, Pid} = macula_content_transfer:start_get_station(
                   Pool, Station, MCID, TimeoutMs, Opts),
@@ -618,8 +618,7 @@ get_content_station(_Pool, _Station, _MCID, _TimeoutMs, _Opts) ->
 %% errors. Single-block content (put via `_content.put_block' alone) is
 %% not announced — resolving its MCID returns `{ok, []}'.
 -spec find_content_providers(pool(), mcid()) -> {ok, [map()]} | {error, term()}.
-find_content_providers(Pool, MCID)
-  when is_pid(Pool), is_binary(MCID), byte_size(MCID) =:= 34 ->
+find_content_providers(Pool, <<2, _Codec:8, _Hash:48/binary>> = MCID) when is_pid(Pool) ->
     classify_find_providers(
       macula_client:call(Pool, ?DHT_REALM, ?DHT_FIND_RECORDS_PROC,
                          #{key => macula_record:content_key(MCID)},

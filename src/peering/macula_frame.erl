@@ -593,15 +593,15 @@
 %%------------------------------------------------------------------
 %% Content transfer frame specs (Part 6 §9)
 %%
-%% MCID — Macula Content IDentifier — 34 bytes:
-%% &lt;&lt;Version:8, Codec:8, Hash:32/binary&gt;&gt;. Block payloads carry
+%% MCID, Macula Content IDentifier, 50 bytes:
+%% &lt;&lt;Tag:8, Codec:8, Hash:48/binary&gt;&gt;, tag 2 for SHA-384 (D24). Block payloads carry
 %% raw chunk bytes; manifest payloads carry the structured manifest
 %% map. Frames are signed by the sender for accountability; the
 %% recipient verifies the signature on top of the per-block /
 %% per-manifest hash check.
 %%------------------------------------------------------------------
 
--type mcid() :: <<_:272>>.
+-type mcid() :: <<_:400>>.
 
 -type want_priority() :: 0..255.
 
@@ -1363,7 +1363,7 @@ cancel(#{blocks := Bs}) when is_list(Bs) ->
     (base(cancel, 0))#{blocks => Bs}.
 
 -spec validate_mcid(mcid()) -> ok.
-validate_mcid(<<_:272>>) -> ok.
+validate_mcid(<<2, _Codec:8, _Hash:48/binary>>) -> ok.
 
 -spec validate_want_entry(want_entry()) -> want_entry().
 validate_want_entry(#{mcid := M} = E) ->

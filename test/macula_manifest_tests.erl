@@ -42,14 +42,14 @@ chunk_offsets_are_contiguous_test() ->
 %%%===================================================================
 
 %% A blob that fits in ONE chunk must produce the SAME MCID as the
-%% existing single-block `put_content' formula (<<1,16#55,BLAKE3(Data)>>)
-%% — this is what makes the single-block path a strict, unchanged
-%% special case of chunked content, not a second, divergent format.
-single_chunk_mcid_matches_raw_blake3_test() ->
+%% single-block `put_content' formula (<<2,16#55,SHA-384(Data)>>), so the
+%% single-block path is a strict special case of chunked content, not a
+%% second, divergent format.
+single_chunk_mcid_matches_raw_sha384_test() ->
     Data = <<"small blob">>,
     {ok, M, _Chunks} = macula_manifest:create(Data, #{chunk_size => 1024}),
-    {ok, ChunkMcid} = macula_manifest:chunk_mcid(M, 0, blake3),
-    ?assertEqual(<<1, 16#55, (macula_blake3_nif:hash(Data))/binary>>, ChunkMcid).
+    {ok, ChunkMcid} = macula_manifest:chunk_mcid(M, 0),
+    ?assertEqual(<<2, 16#55, (crypto:hash(sha384, Data))/binary>>, ChunkMcid).
 
 %% The manifest's OWN mcid is codec 0x56 (manifest), distinct from any
 %% chunk's codec 0x55 (raw) — this is how `get_content' will later
@@ -58,7 +58,7 @@ manifest_mcid_uses_manifest_codec_test() ->
     Data = crypto:strong_rand_bytes(1000),
     {ok, #{mcid := MCID}, _} =
         macula_manifest:create(Data, #{chunk_size => 300}),
-    ?assertMatch(<<1, 16#56, _:32/binary>>, MCID).
+    ?assertMatch(<<2, 16#56, _:48/binary>>, MCID).
 
 mcid_is_deterministic_test() ->
     Data = crypto:strong_rand_bytes(500),
@@ -85,7 +85,7 @@ different_content_different_mcid_test() ->
 chunk_mcid_out_of_range_test() ->
     {ok, M, _} = macula_manifest:create(<<"x">>, #{}),
     ?assertEqual({error, invalid_index},
-                 macula_manifest:chunk_mcid(M, 5, blake3)).
+                 macula_manifest:chunk_mcid(M, 5)).
 
 %%%===================================================================
 %%% Merkle root — sensitivity + odd-count pairing
@@ -106,7 +106,7 @@ odd_chunk_count_does_not_crash_test() ->
     Data = crypto:strong_rand_bytes(500),  %% chunk_size 200 -> 3 chunks
     {ok, M, _} = macula_manifest:create(Data, #{chunk_size => 200}),
     ?assertEqual(3, maps:get(chunk_count, M)),
-    ?assertEqual(32, byte_size(maps:get(root_hash, M))).
+    ?assertEqual(48, byte_size(maps:get(root_hash, M))).
 
 %%%===================================================================
 %%% verify/2
@@ -132,8 +132,29 @@ verify_rejects_tampered_bytes_same_size_test() ->
                  macula_manifest:verify(M, Tampered)).
 
 %%%===================================================================
-%%% sha256 algorithm option
+%%% SHA-384, the only hash algorithm (D24)
 %%%===================================================================
+
+manifest_names_sha384_test() ->
+    {ok, M, _} = macula_manifest:create(<<"hello world">>, #{}),
+    ?assertEqual(sha384, maps:get(hash_algorithm, M)).
+
+chunks_are_hashed_with_sha384_test() ->
+    Data = <<"hello world">>,
+    {ok, #{chunks := [Chunk]}, _} = macula_manifest:create(Data, #{chunk_size => 1024}),
+    ?assertEqual(crypto:hash(sha384, Data), maps:get(hash, Chunk)).
+
+every_chunk_id_verifies_as_a_block_test() ->
+    Data = crypto:strong_rand_bytes(700),
+    {ok, M, Chunks} = macula_manifest:create(Data, #{chunk_size => 200}),
+    [begin
+         {ok, ChunkMcid} = macula_manifest:chunk_mcid(M, I),
+         ?assertEqual({ok, C}, macula_content_transfer:verify_block_hash(ChunkMcid, C))
+     end || {I, C} <- lists:zip(lists:seq(0, length(Chunks) - 1), Chunks)].
+
+another_hash_algorithm_is_refused_on_create_test_() ->
+    [?_assertError(function_clause, macula_manifest:create(<<"hello world">>, #{hash_algorithm => Algorithm}))
+     || Algorithm <- [blake3, sha256]].
 
 %%%===================================================================
 %%% from_wire/1
@@ -148,17 +169,17 @@ from_wire_atom_keys_round_trips_test() ->
 %% Defensive fallback: binary-string keys (the shape if the RPC codec
 %% ever fails to preserve atoms for this manifest).
 from_wire_binary_keys_test() ->
-    Hash = crypto:strong_rand_bytes(32),
-    Wire = #{<<"mcid">> => <<1, 16#56, Hash/binary>>,
+    Hash = crypto:strong_rand_bytes(48),
+    Wire = #{<<"mcid">> => <<2, 16#56, Hash/binary>>,
              <<"version">> => 1, <<"name">> => <<"f">>, <<"size">> => 5,
              <<"created">> => 100, <<"chunk_size">> => 262144,
-             <<"chunk_count">> => 1, <<"hash_algorithm">> => <<"blake3">>,
+             <<"chunk_count">> => 1, <<"hash_algorithm">> => <<"sha384">>,
              <<"root_hash">> => Hash,
              <<"chunks">> => [#{<<"index">> => 0, <<"offset">> => 0,
                                 <<"size">> => 5, <<"hash">> => Hash}]},
     {ok, Read} = macula_manifest:from_wire(Wire),
-    ?assertEqual(<<1, 16#56, Hash/binary>>, maps:get(mcid, Read)),
-    ?assertEqual(blake3, maps:get(hash_algorithm, Read)),
+    ?assertEqual(<<2, 16#56, Hash/binary>>, maps:get(mcid, Read)),
+    ?assertEqual(sha384, maps:get(hash_algorithm, Read)),
     ?assertEqual([#{index => 0, offset => 0, size => 5, hash => Hash}],
                  maps:get(chunks, Read)).
 
@@ -169,13 +190,6 @@ from_wire_missing_mcid_is_invalid_test() ->
 from_wire_missing_chunks_is_invalid_test() ->
     ?assertEqual({error, invalid_manifest},
                  macula_manifest:from_wire(#{mcid => <<1,2,3>>})).
-
-sha256_algorithm_produces_sha256_chunk_hashes_test() ->
-    Data = <<"hello world">>,
-    {ok, #{chunks := [Chunk]}, _} =
-        macula_manifest:create(Data, #{chunk_size => 1024,
-                                               hash_algorithm => sha256}),
-    ?assertEqual(crypto:hash(sha256, Data), maps:get(hash, Chunk)).
 
 %%%===================================================================
 %%% verify_mcid/2: a manifest describes the MCID it is fetched under
@@ -215,7 +229,7 @@ verify_mcid_refuses_a_changed_canonical_field_test() ->
      || Changed <- [M#{size := maps:get(size, M) + 1},
                     M#{chunk_count := maps:get(chunk_count, M) + 1},
                     M#{name := <<"renamed">>},
-                    M#{root_hash := crypto:strong_rand_bytes(32)}]].
+                    M#{root_hash := crypto:strong_rand_bytes(48)}]].
 
 verify_mcid_refuses_a_malformed_manifest_test() ->
     {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700), #{chunk_size => 200}),
@@ -224,6 +238,13 @@ verify_mcid_refuses_a_malformed_manifest_test() ->
                  macula_manifest:verify_mcid(M#{name := <<255, 254>>}, Mcid)),
     ?assertEqual({error, manifest_mcid_mismatch},
                  macula_manifest:verify_mcid(maps:remove(root_hash, M), Mcid)).
+
+%% The post-quantum format has only tag 2 (D24): a BLAKE3 id, tag 1, never names a manifest.
+verify_mcid_refuses_a_blake3_content_id_test() ->
+    {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700), #{chunk_size => 200}),
+    <<2, Codec, _:48/binary>> = maps:get(mcid, M),
+    ?assertEqual({error, manifest_mcid_mismatch},
+                 macula_manifest:verify_mcid(M, <<1, Codec, 0:256>>)).
 
 %%%===================================================================
 %%% from_wire/1: a manifest as the frame decoder leaves it
@@ -245,11 +266,10 @@ from_wire_reads_text_keys_as_the_decoder_leaves_them_test() ->
 %% of a text that names an existing atom, is read as its binary value.
 from_wire_reads_a_name_and_hash_algorithm_sent_as_text_test() ->
     {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700),
-                                        #{chunk_size => 200, name => <<"ok">>,
-                                          hash_algorithm => sha256}),
+                                        #{chunk_size => 200, name => <<"ok">>}),
     [begin
          {ok, Read} = macula_manifest:from_wire(
-                        M#{name := Name, hash_algorithm := {text, <<"sha256">>}}),
+                        M#{name := Name, hash_algorithm := {text, <<"sha384">>}}),
          ?assertEqual(M, Read),
          ?assertEqual(ok, macula_manifest:verify_mcid(Read, maps:get(mcid, M)))
      end || Name <- [{text, <<"ok">>}, ok]].
@@ -262,23 +282,24 @@ from_wire_refuses_chunks_that_are_not_a_list_of_maps_test() ->
     ?assertEqual({error, invalid_manifest},
                  macula_manifest:from_wire(M#{chunks := [not_a_map]})).
 
-%% A missing hash algorithm is blake3; a present one this module does not
-%% know is refused, in any of the shapes it can arrive in.
-from_wire_refuses_an_unknown_hash_algorithm_test() ->
+%% A manifest must name sha384. A missing hash algorithm, blake3, sha256 or
+%% any other name is refused, in any of the shapes it can arrive in.
+from_wire_refuses_any_hash_algorithm_but_sha384_test() ->
     {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700),
                                         #{chunk_size => 200}),
-    ?assertMatch({ok, #{hash_algorithm := blake3}},
+    ?assertEqual({error, invalid_manifest},
                  macula_manifest:from_wire(maps:remove(hash_algorithm, M))),
     [?assertEqual({error, invalid_manifest},
                   macula_manifest:from_wire(M#{hash_algorithm := Unknown}))
-     || Unknown <- [<<"sha3">>, {text, <<"sha3">>}, sha3]].
+     || Name <- [<<"blake3">>, <<"sha256">>, <<"sha3">>],
+        Unknown <- [Name, {text, Name}, binary_to_atom(Name)]].
 
 verify_mcid_refuses_an_unknown_hash_algorithm_test() ->
     {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700),
                                         #{chunk_size => 200}),
-    ?assertEqual({error, manifest_mcid_mismatch},
-                 macula_manifest:verify_mcid(M#{hash_algorithm := sha3},
-                                             maps:get(mcid, M))).
+    [?assertEqual({error, manifest_mcid_mismatch},
+                  macula_manifest:verify_mcid(M#{hash_algorithm := Unknown}, maps:get(mcid, M)))
+     || Unknown <- [sha3, blake3, sha256]].
 
 %% End to end in a fresh node that has never loaded macula_manifest: the
 %% manifest a station returns decodes there with text keys, and from_wire/1

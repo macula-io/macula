@@ -272,7 +272,7 @@ outcome_fields(Base, {error, cancelled}) ->
 outcome_fields(Base, {error, Reason}) ->
     Base#{outcome => failed, reason => Reason}.
 
-is_chunked_mcid(<<1, 16#56, _/binary>>) -> true;
+is_chunked_mcid(<<2, 16#56, _/binary>>) -> true;
 is_chunked_mcid(_) -> false.
 
 publish(false, _, _, _, _) -> ok;

@@ -1229,7 +1229,7 @@ unadvertise_wire_roundtrip_test() ->
 %% Content transfer frames — Part 6 §9
 %%------------------------------------------------------------------
 
-mcid()     -> <<1, 1, (crypto:strong_rand_bytes(32))/binary>>.
+mcid()     -> <<2, 16#55, (crypto:strong_rand_bytes(48))/binary>>.
 
 want_carries_blocks_with_priority_test() ->
     M1 = mcid(), M2 = mcid(),
@@ -1818,3 +1818,9 @@ survives_detects_the_float_rewrite_test() ->
     %% ...while the wire's deliberate atom/text aliasing is NOT flagged.
     ?assert(survives(an_atom)),
     ?assert(survives(#{<<"k">> => [1, <<"two">>, undefined]})).
+
+%% The post-quantum format has only tag 2, SHA-384 (D24): a BLAKE3 id, tag 1, is refused in content frames.
+content_frames_reject_a_blake3_mcid_test_() ->
+    Blake3 = <<1, 16#55, 0:256>>,
+    [?_assertError(function_clause, macula_frame:block(#{mcid => Blake3, payload => <<"x">>})),
+     ?_assertError(function_clause, macula_frame:manifest_req(#{mcid => Blake3}))].

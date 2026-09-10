@@ -79,15 +79,15 @@ single_block_put_resolves_mcid() ->
                fun(_LinkPid, _Stream) -> ok end),
 
     {ok, Pid} = macula_content_transfer:start_put(dummy_pid(), Bytes),
-    Hash = macula_blake3_nif:hash(Bytes),
-    ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    ExpectedMcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     ?assertEqual({ok, ExpectedMcid}, macula_content_transfer:await(Pid)),
     ok = macula_content_transfer:cancel(Pid).
 
 single_block_get_resolves_bytes() ->
     Bytes = <<"round tripped bytes">>,
-    Hash = macula_blake3_nif:hash(Bytes),
-    Mcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    Mcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     LinkPid = dummy_pid(),
     Stream = make_ref(),
     meck:expect(macula_client, pick_connected_link,
@@ -370,8 +370,8 @@ pause_on_single_block_put_is_a_harmless_noop() ->
     {ok, Pid} = macula_content_transfer:start_put(dummy_pid(), Bytes),
     ok = macula_content_transfer:pause(Pid),
     ok = macula_content_transfer:resume(Pid),
-    Hash = macula_blake3_nif:hash(Bytes),
-    ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
+    Hash = crypto:hash(sha384, Bytes),
+    ExpectedMcid = <<2, ?SINGLE_CODEC, Hash/binary>>,
     ?assertEqual({ok, ExpectedMcid}, macula_content_transfer:await(Pid)),
     ok = macula_content_transfer:cancel(Pid).
 
@@ -444,6 +444,6 @@ assert_no_call_started() ->
 chunk_mcid_map(Manifest, Chunks) ->
     Indices = lists:seq(0, length(Chunks) - 1),
     maps:from_list([begin
-        {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, I, blake3),
+        {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, I),
         {ChunkMcid, C}
     end || {I, C} <- lists:zip(Indices, Chunks)]).

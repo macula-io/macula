@@ -473,7 +473,7 @@ procedure_advertisement(AdvertiserNode, ProcedureUri, ServingStation, Opts)
 %% Constructors — content_announcement (Part 6 §9.x)
 %%
 %% Signed announcement that `AnnouncerNode' is hosting the content
-%% identified by `MCID' (34-byte Macula Content IDentifier) and
+%% identified by `MCID' (50-byte Macula Content IDentifier, tag 2) and
 %% reachable at `Endpoint'. Optional metadata fields carry the
 %% manifest's display name, byte size, and chunk count so locators
 %% can prioritise without fetching the manifest first.
@@ -487,7 +487,7 @@ content_announcement(AnnouncerNode, MCID, Endpoint) ->
                             content_announcement_opts()) -> m_record().
 content_announcement(AnnouncerNode, MCID, Endpoint, Opts)
   when is_binary(AnnouncerNode), byte_size(AnnouncerNode) =:= 32,
-       is_binary(MCID), byte_size(MCID) =:= 34,
+       is_binary(MCID), byte_size(MCID) =:= 50, binary_part(MCID, 0, 1) =:= <<2>>,
        is_binary(Endpoint) ->
     Payload = content_announcement_payload(AnnouncerNode, MCID, Endpoint, Opts),
     envelope(?TYPE_CONTENT_ANNOUNCEMENT, AnnouncerNode, Payload, Opts).
@@ -800,7 +800,7 @@ read_procedure_advertisement(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT,
 %% read back as `undefined').
 -spec read_content_announcement(m_record()) ->
     #{announcer_node := macula_identity:pubkey(),
-      mcid           := <<_:272>>,
+      mcid           := <<_:400>>,
       endpoint       := binary(),
       name           := binary() | undefined,
       size           := non_neg_integer() | undefined,
@@ -876,8 +876,8 @@ procedure_key(ProcedureUri) when is_binary(ProcedureUri) ->
 %% macula-station's independent `macula_content_dht:dht_key/1'.
 %% Consumers use this to `find_records/2' every host announcing an
 %% MCID before holding any record.
--spec content_key(<<_:272>>) -> <<_:256>>.
-content_key(MCID) when is_binary(MCID), byte_size(MCID) =:= 34 ->
+-spec content_key(<<_:400>>) -> <<_:256>>.
+content_key(<<2, _Codec:8, _Hash:48/binary>> = MCID) ->
     crypto:hash(sha256, MCID).
 
 %% @doc The DHT storage key for a station's endpoint by its pubkey,

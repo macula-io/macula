@@ -272,6 +272,6 @@ assert_no_call_started() ->
 chunk_mcid_map(Manifest, Chunks) ->
     Indices = lists:seq(0, length(Chunks) - 1),
     maps:from_list([begin
-        {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, I, blake3),
+        {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, I),
         {ChunkMcid, C}
     end || {I, C} <- lists:zip(Indices, Chunks)]).
