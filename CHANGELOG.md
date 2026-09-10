@@ -20,6 +20,12 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   PING and ACK frames are unchanged. An update no longer has an optional
   `signature` key.
 
+### Fixed
+
+- The `macula_record:envelope/4` documentation said a per-subject storage
+  key is a BLAKE3 digest. `macula_record:storage_key/1` derives it with
+  SHA-256, like every other derived storage key.
+
 ## [Unreleased]
 
 ### Changed

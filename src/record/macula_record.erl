@@ -1216,7 +1216,7 @@ to_bin(L) when is_list(L)   -> unicode:characters_to_binary(L).
 %% publishes about many subjects (e.g., a realm admin signing many
 %% license records), pass a `subject_id' opt — `storage_key/1'
 %% derives a per-subject 32-byte slot via
-%% `BLAKE3(&lt;&lt;type, key, subject_id&gt;&gt;)'. Without `subject_id' the
+%% `SHA-256(&lt;&lt;type, key, subject_id&gt;&gt;)'. Without `subject_id' the
 %% storage key is `key' verbatim (one DHT slot per signer).
 %%
 %% Domain code names its own payload fields. Single-letter wire keys
