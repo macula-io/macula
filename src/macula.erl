@@ -18,7 +18,7 @@
 %%%
 %%% Erlang distribution over the mesh ships via `join_mesh/1' (V2
 %%% pool carrier) or `join_dist_relay/1' (dedicated dist relay). See
-%%% `macula_dist_pool' / `macula_dist_system'.
+%%% `macula_dist_pool' / `macula_dist_relay_client'.
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -83,7 +83,7 @@
          monitor_nodes/0, unmonitor_nodes/0]).
 
 %% Mesh Distribution
--export([join_mesh/1, join_dist_relay/1]).
+-export([join_mesh/1, join_dist_relay/1, dist_relay_client/0]).
 
 -ifdef(TEST).
 %% Exports for unit tests — pure helpers that are otherwise private.
@@ -934,23 +934,49 @@ on_pool_for_join({error, Reason}) ->
 %% After this returns `ok', standard OTP distribution (`rpc:call/4',
 %% `gen_server:call/3' across nodes, `pg' groups, etc.) works across
 %% firewalls via the dist relay.
+%%
+%% The relay client runs as a temporary child of the macula application
+%% supervisor. It does not reconnect: when the relay closes the
+%% connection the client ends and is not restarted. Monitor the pid from
+%% `dist_relay_client/0' to learn that, then call this function again.
+%% Returns `{error, macula_not_started}' when the macula application is
+%% not running.
 -spec join_dist_relay(map()) -> ok | {error, term()}.
 join_dist_relay(Opts) ->
     Url = maps:get(url, Opts),
     NodeName = atom_to_binary(node()),
-    case macula_dist_system:start_dist_relay_client(Url, NodeName) of
+    start_dist_relay_client(whereis(macula_root), Url, NodeName).
+
+start_dist_relay_client(undefined, _Url, _NodeName) ->
+    {error, macula_not_started};
+start_dist_relay_client(_Root, Url, NodeName) ->
+    ChildSpec = macula_dist_relay_client:child_spec(Url, NodeName),
+    case supervisor:start_child(macula_root, ChildSpec) of
         {ok, _Pid} ->
             os:putenv("MACULA_DIST_MODE", "dist_relay"),
-            ?LOG_INFO("[macula] Joined dist relay ~s — distribution enabled", [Url]),
+            ?LOG_INFO("[macula] Joined dist relay ~s, distribution enabled", [Url]),
             ok;
         {error, {already_started, _Pid}} ->
             os:putenv("MACULA_DIST_MODE", "dist_relay"),
-            ?LOG_INFO("[macula] dist_relay_client already running — mode set"),
+            ?LOG_INFO("[macula] dist_relay_client already running, mode set"),
             ok;
         {error, Reason} = Err ->
             ?LOG_ERROR("[macula] Failed to join dist relay: ~p", [Reason]),
             Err
     end.
+
+%% @doc The dist relay client that `join_dist_relay/1' started, if it
+%% is running.
+%%
+%% The client exits with `{relay_closed, Reason}' when the relay closes
+%% the connection and is not restarted. Monitor the returned pid and call
+%% `join_dist_relay/1' again after it goes down.
+-spec dist_relay_client() -> {ok, pid()} | {error, not_joined}.
+dist_relay_client() ->
+    dist_relay_client_result(macula_dist_relay_client:whereis_client()).
+
+dist_relay_client_result(undefined) -> {error, not_joined};
+dist_relay_client_result(Pid) -> {ok, Pid}.
 
 %% @private Wait until the V2 pool has at least one healthy
 %% station_link (CONNECT/HELLO completed). One-second polling, capped

@@ -2,19 +2,18 @@
 
 Erlang distribution over the Macula mesh: three transports, one goal — `net_adm:ping/1` and the rest of OTP's distribution primitives working across NATs and firewalls with no VPN.
 
-**LAN clustering (gossip/static/libcluster strategy) is a separate concern.** See `../macula_cluster_system/README.md` and `docs/guides/CLUSTERING_GUIDE.md`.
+**LAN clustering (the gossip and static strategies) is a separate concern.** See `../macula_cluster_system/README.md` and `docs/guides/CLUSTERING_GUIDE.md`.
 
 ## Module Table
 
 | Module | Purpose |
 |--------|---------|
-| `macula_dist_system` | Supervisor for the dist-over-mesh subsystem (bridge_sup, discovery, optional dist-relay client) |
 | `macula_dist` | `-proto_dist macula` driver — implements the OTP dist-carrier callback set (`listen/1`, `accept/1`, `accept_connection/5`, `setup/5`, `select/1`, ...) for all three transports below |
-| `macula_dist_discovery` | Decentralized node discovery via DHT/mDNS (replaces EPMD) |
-| `macula_dist_mdns_advertiser` | mDNS service advertisement for local discovery |
+| `macula_dist_discovery` | Node discovery over DHT and mDNS. Not available: the macula application does not start it. Removed in 11.0.0 |
+| `macula_dist_mdns_advertiser` | mDNS advertisement for `macula_dist_discovery`. Not available. Removed in 11.0.0 |
 | `macula_dist_pool` | Pool-tunneled transport — rides the ordinary mesh pool (stations) via pub/sub. Used by `macula:join_mesh/1` |
-| `macula_dist_bridge` / `macula_dist_bridge_sup` | Per-tunnel gen_tcp loopback bridge + its supervisor, for the pool-tunneled transport |
-| `macula_dist_relay_client` / `macula_dist_relay_protocol` | Client + wire protocol for the dedicated freight relay. Used by `macula:join_dist_relay/1`, talks to the separate `macula-dist-relay` server (raw QUIC stream forwarding, no pub/sub in the hot path) |
+| `macula_dist_bridge` / `macula_dist_bridge_sup` | Per-tunnel gen_tcp loopback bridge + its supervisor, for the pool-tunneled transport. `macula_root` starts the supervisor |
+| `macula_dist_relay_client` / `macula_dist_relay_protocol` | Client + wire protocol for the dedicated freight relay. Used by `macula:join_dist_relay/1`, talks to the separate `macula-dist-relay` server (raw QUIC stream forwarding, no pub/sub in the hot path). The client runs as a temporary child of `macula_root`; `macula:dist_relay_client/0` returns it for monitoring |
 
 ## The Three Transports
 
@@ -23,8 +22,6 @@ Erlang distribution over the Macula mesh: three transports, one goal — `net_ad
 | **Direct QUIC** | `-proto_dist macula` (no extra call) | Node to node directly, no relay |
 | **Pool-tunneled** | `macula:join_mesh/1` | Rides the general mesh pool (stations), pub/sub-framed |
 | **Freight relay** | `macula:join_dist_relay/1` | Dedicated `macula-dist-relay` server, raw QUIC stream forwarding |
-
-Node discovery (DHT/mDNS, replacing EPMD) is shared across all three.
 
 ## Quick Start
 

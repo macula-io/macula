@@ -31,7 +31,8 @@
         gproc,
         telemetry
     ]},
-    %% mdns is optional - macula works without it using DHT discovery
+    %% Names no installed application (the mDNS dependency is
+    %% macula_mdns), so it has no effect. Removed in 11.0.0.
     {optional_applications, [mdns]},
     {env, []},
     {modules, []},

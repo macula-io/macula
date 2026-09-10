@@ -100,6 +100,36 @@ through `MACULA_TLS_CACERTFILE` or `tls_cacertfile` is not supported: it
 makes `macula_tls:quic_client_opts/0,1` raise
 `{tls_config_error, {cacertfile_not_supported, Path}}`.
 
+## Dedicated Dist Relay
+
+`macula:join_dist_relay/1` sends distribution traffic through a dedicated
+`macula-dist-relay` server instead of the station mesh:
+
+```erlang
+ok = macula:join_dist_relay(#{url => <<"quic://dist-relay.example.com:4434">>}).
+```
+
+It returns `ok` or `{error, Reason}`, and `{error, macula_not_started}` when
+the macula application is not running. The relay client runs as a temporary
+child of `macula_root`.
+
+The client does not reconnect. When the relay closes the connection, the
+client exits with `{relay_closed, Reason}` and is not restarted, so
+distribution over the relay stops. Monitor the client to notice that, and
+call `join_dist_relay/1` again after a relay loss:
+
+```erlang
+{ok, Client} = macula:dist_relay_client(),
+Ref = erlang:monitor(process, Client),
+receive
+    {'DOWN', Ref, process, Client, _Reason} ->
+        macula:join_dist_relay(#{url => RelayUrl})
+end.
+```
+
+`macula:dist_relay_client/0` returns `{error, not_joined}` when no client is
+running.
+
 ## What Nodes Need to Share
 
 | Requirement | Why |
@@ -144,7 +174,8 @@ The bridge owns a `gen_tcp` loopback socket pair — one end goes to
 OTP's `dist_util`, the other is bridged to the relay mesh.
 
 ```
-macula_dist_system (one_for_one)
+macula_root (one_for_one, the macula application supervisor)
+  ├── ... (other SDK children)
   ├── macula_dist_bridge_sup (simple_one_for_one)
   │     └── macula_dist_bridge (gen_server, per tunnel, temporary)
   │           ├── owns BridgeSock (gen_tcp, {packet, raw})
@@ -152,12 +183,12 @@ macula_dist_system (one_for_one)
   │           ├── handle_info: tunnel_in → decrypt → gen_tcp:send
   │           ├── monitors relay client (reconnects on DOWN)
   │           └── per-tunnel counters (bytes/msgs in/out)
-  └── macula_dist_discovery (DHT node discovery)
+  └── macula_dist_relay_client (temporary, started by macula:join_dist_relay/1)
 ```
 
-LAN clustering (`macula_cluster_strategy` and friends) is a separate module,
-`macula_cluster_system`, not a child of this supervisor. See the
-[Clustering Guide](CLUSTERING_GUIDE.md).
+LAN clustering (the gossip and static strategies) lives in
+`macula_cluster_system` and is not started by the macula application. See
+the [Clustering Guide](CLUSTERING_GUIDE.md).
 
 ### Encryption
 
@@ -217,7 +248,7 @@ macula_dist_pool:get_tunnel_metrics().
 
 | Env Variable | Default | Description |
 |-------------|---------|-------------|
-| `MACULA_DIST_MODE` | (unset) | Set to `relay` automatically by `join_mesh/1` |
+| `MACULA_DIST_MODE` | (unset) | Set to `relay` by `join_mesh/1`, and to `dist_relay` by `join_dist_relay/1` |
 
 | Module Define | Value | Description |
 |---------------|-------|-------------|

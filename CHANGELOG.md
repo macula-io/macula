@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `macula:dist_relay_client/0` returns `{ok, Pid}` for the dist relay
+  client that `macula:join_dist_relay/1` started, or `{error, not_joined}`.
+  The client has no reconnect: it exits with `{relay_closed, Reason}` when
+  the relay closes the connection. Monitor the pid and call
+  `join_dist_relay/1` again after it goes down.
+
 ### Changed
 
 - `macula_station_link` now verifies an inbound STREAM_OPEN's signature
@@ -49,6 +57,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   present but not blake3 or sha256, is `{error, invalid_manifest}`; a missing
   hash algorithm is still blake3. `macula_manifest:verify_mcid/2` returns
   `{error, manifest_mcid_mismatch}` for an unknown hash algorithm.
+- The Clustering Guide, the cluster and dist READMEs and the
+  `macula_cluster` documentation describe the `mdns` and `dht` strategies
+  as not available, and name `gossip` and `static` instead. They need a
+  discovery service the application does not start.
+
+### Removed
+
+- `macula_dist_system`, with `start_link/0,1` and
+  `start_dist_relay_client/2`. The application never started it, and it
+  could not start next to `macula_root`, since both start
+  `macula_dist_bridge_sup` under that registered name. Use
+  `macula:join_dist_relay/1` to start the dist relay client.
+- The `dist_relay_url` application environment key. Only
+  `macula_dist_system` read it.
+
+### Fixed
+
+- `macula:join_dist_relay/1` works on a running application. It exited
+  with `noproc`, because it started the relay client under a supervisor
+  that the application never started. The client now runs as a temporary
+  child of `macula_root`: a failed start returns `{error, Reason}`, and a
+  client that ends is not restarted. Without the macula application
+  running it returns `{error, macula_not_started}`.
+- `macula_dist_relay_client` now exits with `{relay_closed, Reason}` when
+  its control stream to the relay ends. The QUIC NIF reports a lost
+  connection as a closed stream, which the client ignored, so after a
+  relay loss it kept running and registered while distribution over the
+  relay no longer worked.
 
 ## [10.23.0] - 2026-09-10
 

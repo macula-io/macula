@@ -333,7 +333,7 @@ persist_cookie(Cookie) ->
 %% 1. Application env: `{macula, [{cluster_nodes, [Node1, Node2, ...]}]}'
 %% 2. Environment variable: `CLUSTER_NODES' (comma-separated)
 %%
-%% If no nodes are configured, starts the DHT-based discovery strategy.
+%% If no nodes are configured, starts the gossip strategy.
 %%
 %% Examples:
 %% ```
@@ -350,7 +350,9 @@ start_cluster() ->
 %% @doc Start automatic cluster formation with options.
 %%
 %% Options:
-%% - strategy: `gossip' (default), `static', `mdns', `dht', or `auto'
+%% - strategy: `auto' (default), `gossip' or `static'. `mdns' and `dht'
+%%   are accepted but not available: they need a discovery service the
+%%   macula application does not start, so the call fails for them.
 %% - nodes: List of node atoms (for static strategy)
 %% - reconnect_interval: Milliseconds between reconnect attempts (default 5000)
 %% - callback: PID or {Module, Function} to receive cluster events
@@ -365,8 +367,6 @@ start_cluster() ->
 %% Strategy selection:
 %% - `gossip': UDP multicast gossip for zero-config LAN (like libcluster Gossip)
 %% - `static': Uses a known list of nodes (like libcluster Epmd strategy)
-%% - `mdns': Uses mDNS for local network discovery
-%% - `dht': Uses Macula's DHT for internet-scale discovery
 %% - `auto': Chooses strategy based on configuration
 %%
 %% Examples:
@@ -388,16 +388,6 @@ start_cluster() ->
 %% ok = macula_cluster:start_cluster(#{
 %%     strategy => static,
 %%     nodes => ['node1@host1', 'node2@host2']
-%% }).
-%%
-%% %% mDNS strategy for local network
-%% ok = macula_cluster:start_cluster(#{
-%%     strategy => mdns
-%% }).
-%%
-%% %% DHT strategy for internet-scale
-%% ok = macula_cluster:start_cluster(#{
-%%     strategy => dht
 %% }).
 %% '''
 -spec start_cluster(map()) -> ok | {error, term()}.
