@@ -53,6 +53,7 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   before it signs the proof. The station checks CONNECT, the node_id puzzle
   under `off`, `log_only` or `enforce` before any signature, and returns
   the HELLO bytes to send; a refusing HELLO carries one coarse refusal code.
+  A key that would serve a second purpose is refused as `key_purpose_reuse`.
 - `macula_node_keys:carried_key_well_formed/2` and `signature_bytes/1`: the
   one carried form of a key per profile, and the signature size per profile.
 - `macula_key_bindings:verify_status/5` returns when the statement expires.

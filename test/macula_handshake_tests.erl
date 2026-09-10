@@ -60,7 +60,8 @@ proof_cases(#{profile := Profile, station_public := StationPublic, client_public
 %% The client refuses a challenge, and sends no CONNECT
 %%------------------------------------------------------------------
 
-client_refusal_cases(#{profile := Profile, station_public := StationPublic} = World) ->
+client_refusal_cases(#{profile := Profile, station_public := StationPublic, connect_public := ConnectPublic,
+                       client_id := ClientId} = World) ->
     Challenge = macula_handshake:challenge(station_material(World)),
     Answer = fun(Changes) ->
         macula_handshake:answer_challenge(Challenge, maps:merge(client_session(World), Changes))
@@ -71,6 +72,14 @@ client_refusal_cases(#{profile := Profile, station_public := StationPublic} = Wo
      ?_assertEqual({error, binding_key_mismatch}, Answer(#{leaf => <<"a leaf this handshake never saw">>})),
      ?_assertEqual({error, status_expired}, Answer(#{now => ?NOW + 2 * ?HOUR})),
      ?_assertEqual({error, binding_not_yet_valid}, Answer(#{now => ?NOW - ?HOUR})),
+     %% A key serves one purpose: the leaf's key is neither the station's identity key nor this client's CONNECT key.
+     ?_assertEqual({error, key_purpose_reuse}, Answer(#{leaf => leaf_with(StationPublic)})),
+     ?_assertEqual({error, key_purpose_reuse}, Answer(#{leaf => leaf_with(ConnectPublic)})),
+     %% A misconfigured node fails locally: its own CONNECT key is its identity key.
+     ?_assertEqual({error, key_purpose_reuse}, Answer(#{connect_key => ClientId})),
+     %% Keys are compared whole: a leaf key that differs from the identity key only in its last byte is no reuse.
+     ?_assertEqual({error, binding_key_mismatch},
+                   Answer(#{leaf => leaf_with(near_copy(StationPublic, ConnectPublic))})),
      ?_assertEqual({error, unexpected_frame},
                    macula_handshake:answer_challenge(macula_handshake:opener(), client_session(World)))].
 
@@ -104,7 +113,8 @@ carried_key_cases(_Challenge, _Answer, _StationPublic, pq_pure) ->
 %% The station refuses CONNECT, and sends only a refusing HELLO
 %%------------------------------------------------------------------
 
-station_refusal_cases(#{client_public := ClientPublic} = World) ->
+station_refusal_cases(#{profile := Profile, client_public := ClientPublic, station_public := StationPublic,
+                        connect_public := ConnectPublic} = World) ->
     Challenge = macula_handshake:challenge(station_material(World)),
     {ok, Connect, _Station} = macula_handshake:answer_challenge(Challenge, client_session(World)),
     Accept = fun(Bytes, Changes) ->
@@ -115,7 +125,15 @@ station_refusal_cases(#{client_public := ClientPublic} = World) ->
     [?_assertMatch({refused, proof_invalid, _}, Accept(Connect, #{leaf => <<"a leaf never presented">>})),
      ?_assertMatch({refused, proof_invalid, _}, Accept(Connect, #{challenge => OtherChallenge})),
      ?_assertMatch({refused, binding_key_mismatch, _},
+                   Accept(rebuilt(Connect, #{<<"connect_key">> => StationPublic}), #{})),
+     %% A key serves one purpose: a CONNECT key that is the identity key, or the key of the presented leaf, is refused.
+     ?_assertMatch({refused, key_purpose_reuse, _},
                    Accept(rebuilt(Connect, #{<<"connect_key">> => ClientPublic}), #{})),
+     ?_assertMatch({refused, key_purpose_reuse, _}, Accept(Connect, #{leaf => leaf_with(ConnectPublic)})),
+     ?_assertMatch({refused, binding_key_mismatch, _},
+                   Accept(rebuilt(Connect, #{<<"connect_key">> => near_copy(ClientPublic, ConnectPublic)}), #{})),
+     ?_assertEqual({error, {refused, not_accepted}},
+                   hello_of(Accept(rebuilt(Connect, #{<<"connect_key">> => ClientPublic}), #{}))),
      ?_assertMatch({refused, status_expired, _}, Accept(Connect, #{now => ?NOW + 2 * ?HOUR})),
      ?_assertMatch({refused, unexpected_frame, _}, Accept(macula_handshake:opener(), #{})),
      ?_assertMatch({refused, unsupported_version, _}, Accept(Version2, #{})),
@@ -124,7 +142,18 @@ station_refusal_cases(#{client_public := ClientPublic} = World) ->
      %% On the wire, one coarse refusal code.
      ?_assertEqual({error, {refused, not_accepted}}, hello_of(Accept(Connect, #{challenge => OtherChallenge}))),
      ?_assertEqual({error, {refused, not_accepted}}, hello_of(Accept(<<"not cbor">>, #{}))),
-     ?_assertEqual({error, {refused, unsupported_version}}, hello_of(Accept(Version2, #{})))].
+     ?_assertEqual({error, {refused, unsupported_version}}, hello_of(Accept(Version2, #{})))]
+        ++ shared_half_cases(Accept, Connect, ConnectPublic, ClientPublic, Profile).
+
+%% In pq_hybrid, a CONNECT key that shares either half with the identity key serves two purposes too.
+shared_half_cases(Accept, Connect, <<ConnectMlDsa:2592/binary, ConnectRsa/binary>>,
+                  <<IdentityMlDsa:2592/binary, IdentityRsa/binary>>, pq_hybrid) ->
+    [?_assertMatch({refused, key_purpose_reuse, _},
+                   Accept(rebuilt(Connect, #{<<"connect_key">> => <<ConnectMlDsa/binary, IdentityRsa/binary>>}), #{})),
+     ?_assertMatch({refused, key_purpose_reuse, _},
+                   Accept(rebuilt(Connect, #{<<"connect_key">> => <<IdentityMlDsa/binary, ConnectRsa/binary>>}), #{}))];
+shared_half_cases(_Accept, _Connect, _ConnectPublic, _ClientPublic, pq_pure) ->
+    [].
 
 %%------------------------------------------------------------------
 %% The puzzle, checked by the station before any signature
@@ -197,7 +226,7 @@ world(Profile) ->
     ConnectBinding = macula_key_bindings:connect_binding(ClientId, ConnectPublic, ?NOW, ?NOW + ?DAY),
     #{profile => Profile,
       station_id => StationId, station_public => macula_node_keys:public_key(StationId),
-      client_public => macula_node_keys:public_key(ClientId),
+      client_id => ClientId, client_public => macula_node_keys:public_key(ClientId),
       client_connect => ClientConnect, connect_public => ConnectPublic,
       tls_binding => TlsBinding,
       tls_status => macula_key_bindings:status_statement(StationId, TlsBinding, ?NOW, ?NOW + ?HOUR),
@@ -219,6 +248,14 @@ station_session(#{profile := Profile}, Challenge) ->
       capabilities => ?STATION_CAPABILITIES, now => ?NOW + ?MINUTE}.
 
 hello_of({refused, _Reason, Hello}) -> macula_handshake:read_hello(Hello).
+
+%% A key that differs from Key only in the last byte of its ML-DSA-87 half, with Other's classical half.
+near_copy(<<MlDsa:2591/binary, Last, _/binary>>, <<_:2592/binary, OtherClassical/binary>>) ->
+    <<MlDsa/binary, (Last bxor 1), OtherClassical/binary>>.
+
+%% A stand-in for a certificate whose SubjectPublicKeyInfo holds a key's ML-DSA-87 half.
+leaf_with(<<MlDsa:2592/binary, _Classical/binary>>) ->
+    <<"certificate before the key", MlDsa/binary, "certificate after the key">>.
 
 other_profile(pq_pure) -> pq_hybrid;
 other_profile(pq_hybrid) -> pq_pure.

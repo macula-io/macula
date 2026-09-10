@@ -36,6 +36,7 @@
                       | unsupported_version
                       | malformed_frame
                       | profile_mismatch
+                      | key_purpose_reuse
                       | {peer_identity_mismatch, #{expected := <<_:256>>, derived := <<_:256>>}}
                       | puzzle_invalid
                       | proof_invalid
@@ -60,6 +61,7 @@
 
 -define(VERSION, 3).
 -define(NONCE_BYTES, 32).
+-define(MLDSA87_PUBLIC_BYTES, 2592).
 -define(PROOF_LABEL, "MACULA-PQ-CONNECT-PROOF-V1").
 -define(OPENER_KEYS, [<<"frame_type">>, <<"version">>]).
 -define(CHALLENGE_KEYS, [<<"frame_type">>, <<"identity_key">>, <<"nonce">>, <<"profile">>, <<"tls_binding">>,
@@ -103,15 +105,17 @@ challenge(#{profile := Profile, identity_key := IdentityKey, tls_binding := Bind
                              <<"tls_status">> => envelope_value(Status)}).
 
 %% @doc The client's check of a challenge and, when every check passes, its CONNECT. The client checks the frame, the
-%% profile, the station's carried key, its node_id against the one dialed, the TLS binding against the leaf received
-%% in this TLS handshake, and the status statement, before it signs the proof. On a refusal it closes without CONNECT.
+%% profile, the station's carried key, that each key in view serves one purpose, the station's node_id against the one
+%% dialed, the TLS binding against the leaf received in this TLS handshake, and the status statement, before it signs
+%% the proof. On a refusal it closes without CONNECT.
 -spec answer_challenge(binary(), client_session()) -> {ok, binary(), station()} | {error, close_reason()}.
 answer_challenge(Bytes, #{profile := _, expected_node_id := <<_:256>>, leaf := Leaf, identity_key := _,
                           connect_key := _, connect_binding := _, connect_status := _, capabilities := _,
                           now := _} = Session) when is_binary(Leaf) ->
     challenge_verdict(steps(#{bytes => Bytes, session => Session},
                             [fun decoded_challenge/1, fun challenge_profile/1, fun station_key/1,
-                             fun station_identity/1, fun station_binding/1, fun station_status/1])).
+                             fun keys_in_view_distinct/1, fun station_identity/1, fun station_binding/1,
+                             fun station_status/1])).
 
 challenge_verdict({ok, State}) -> connect_frame(State);
 challenge_verdict({error, _} = Error) -> Error.
@@ -124,6 +128,15 @@ challenge_profile(#{fields := #{<<"profile">> := Name}, session := #{profile := 
 
 station_key(#{fields := #{<<"identity_key">> := Key}, session := #{profile := Profile}} = State) ->
     expect(macula_node_keys:carried_key_well_formed(Key, Profile), malformed_frame, State).
+
+%% A key serves one purpose (D6, D16): this client's CONNECT key shares no half with its identity key, and the key in
+%% the leaf is neither the station's identity key nor this client's CONNECT key.
+keys_in_view_distinct(#{fields := #{<<"identity_key">> := StationKey},
+                        session := #{leaf := Leaf, identity_key := IdentityKey, connect_key := ConnectKey}} = State) ->
+    ConnectPublic = macula_node_keys:public_key(ConnectKey),
+    expect(not (shares_a_half(IdentityKey, ConnectPublic) orelse in_leaf(StationKey, Leaf)
+                orelse in_leaf(ConnectPublic, Leaf)),
+           key_purpose_reuse, State).
 
 station_identity(#{fields := #{<<"identity_key">> := Key},
                    session := #{profile := Profile, expected_node_id := Expected}} = State) ->
@@ -163,10 +176,10 @@ connect_frame(#{bytes := ChallengeBytes, fields := Fields, station_node_id := St
 %%------------------------------------------------------------------
 
 %% @doc The station's check of CONNECT, and the HELLO bytes to send. The station checks the frame, the carried keys and
-%% the proof length, the puzzle on the derived node_id, the CONNECT binding and status statement, and the proof against
-%% the challenge bytes it sent and the leaf this connection presented. The puzzle comes before any signature: under
-%% enforce an unsolved puzzle is refused with puzzle_invalid, under log_only it is accepted and reported, and off skips
-%% it. A refusal carries a HELLO with accepted 0 and one coarse refusal code.
+%% the proof length, that each key serves one purpose, the puzzle on the derived node_id, the CONNECT binding and
+%% status statement, and the proof against the challenge bytes it sent and the leaf this connection presented. The
+%% puzzle comes before any signature: under enforce an unsolved puzzle is refused with puzzle_invalid, under log_only it
+%% is accepted and reported, and off skips it. A refusal carries a HELLO with accepted 0 and one coarse refusal code.
 -spec accept_connect(binary(), station_session()) ->
         {accepted, client(), binary()} | {refused, close_reason(), binary()}.
 accept_connect(Bytes, #{profile := _, challenge := Challenge, leaf := Leaf, now := _,
@@ -174,8 +187,9 @@ accept_connect(Bytes, #{profile := _, challenge := Challenge, leaf := Leaf, now 
   when is_binary(Challenge), is_binary(Leaf), (Mode =:= off orelse Mode =:= log_only orelse Mode =:= enforce),
        is_integer(Difficulty), Difficulty >= 0, Difficulty =< 256 ->
     connect_verdict(steps(#{bytes => Bytes, session => Session},
-                          [fun decoded_connect/1, fun client_keys/1, fun client_identity/1, fun client_puzzle/1,
-                           fun client_binding/1, fun client_status/1, fun client_proof/1]),
+                          [fun decoded_connect/1, fun client_keys/1, fun client_keys_distinct/1,
+                           fun client_identity/1, fun client_puzzle/1, fun client_binding/1, fun client_status/1,
+                           fun client_proof/1]),
                     Capabilities).
 
 connect_verdict({ok, State}, Capabilities) ->
@@ -192,6 +206,12 @@ client_keys(#{fields := #{<<"identity_key">> := IdentityKey, <<"connect_key">> :
                andalso macula_node_keys:carried_key_well_formed(ConnectKey, Profile)
                andalso byte_size(Proof) =:= macula_node_keys:signature_bytes(Profile),
            malformed_frame, State).
+
+%% A key serves one purpose (D6, D16): the CONNECT key shares no half with the identity key, and is not the key in
+%% the leaf this connection presented.
+client_keys_distinct(#{fields := #{<<"identity_key">> := IdentityKey, <<"connect_key">> := ConnectKey},
+                       session := #{leaf := Leaf}} = State) ->
+    expect(not (shares_a_half(IdentityKey, ConnectKey) orelse in_leaf(ConnectKey, Leaf)), key_purpose_reuse, State).
 
 client_identity(#{fields := #{<<"identity_key">> := IdentityKey}, session := #{profile := Profile}} = State) ->
     {ok, State#{client_node_id => macula_node_keys:node_id(IdentityKey, Profile)}}.
@@ -397,3 +417,15 @@ passed({error, _} = Error, _State) -> Error.
 
 expect(true, _Refusal, State) -> {ok, State};
 expect(false, Refusal, _State) -> {error, Refusal}.
+
+%%------------------------------------------------------------------
+%% Keys in view, compared whole, half by half
+%%------------------------------------------------------------------
+
+%% Carried keys are well formed by now: the ML-DSA-87 key first, then the classical half in pq_hybrid.
+in_leaf(<<MlDsa:?MLDSA87_PUBLIC_BYTES/binary, _Classical/binary>>, Leaf) ->
+    binary:match(Leaf, MlDsa) =/= nomatch.
+
+shares_a_half(<<MlDsaA:?MLDSA87_PUBLIC_BYTES/binary, ClassicalA/binary>>,
+              <<MlDsaB:?MLDSA87_PUBLIC_BYTES/binary, ClassicalB/binary>>) ->
+    MlDsaA =:= MlDsaB orelse (ClassicalA =/= <<>> andalso ClassicalA =:= ClassicalB).
