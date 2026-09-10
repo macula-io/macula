@@ -69,6 +69,7 @@
     call_stream/2, call_stream/3, call_stream/5, call_stream_station/6,
     open_stream/3, open_stream/4,
     advertise_stream/2, advertise_stream/3, advertise_stream/5,
+    advertise_stream/6,
     unadvertise_stream/1, unadvertise_stream/3,
     send/2, send/3,
     recv/1, recv/2,
@@ -699,6 +700,8 @@ call_stream(Procedure, Args, Opts) when is_binary(Procedure), is_map(Opts) ->
 %% currently-healthy link and opens the stream there; the returned
 %% stream is sticky-to-link (errors with `peer_down' if the link
 %% dies; caller re-opens). See `macula_client:call_stream/5'.
+%% `Opts' `ucan_token' presents a UCAN to a streaming procedure
+%% advertised with an `auth' policy (see `advertise_stream/6').
 -spec call_stream(pool(), realm(), procedure(), term(), map()) ->
         {ok, stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, Opts)
@@ -765,6 +768,23 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler)
         orelse Mode =:= bidi),
        is_function(Handler, 2) ->
     macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler).
+
+%% @doc As `advertise_stream/5', with `Opts'. `auth' sets the streaming
+%% procedure's policy, the same set `advertise/5' takes: `open' (default),
+%% `{ucan_required, Issuer}' or `{realm_member_required, RealmDid,
+%% RequiredCan}'. A consumer presents its token with `call_stream/5''s
+%% `ucan_token' opt.
+-spec advertise_stream(pool(), realm(), procedure(),
+                        stream_mode(), stream_handler(), map()) ->
+        ok | {error, term()}.
+advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
+  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (Mode =:= server_stream orelse Mode =:= client_stream
+        orelse Mode =:= bidi),
+       is_function(Handler, 2), is_map(Opts) ->
+    macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
+                                   maps:get(auth, Opts, open)).
 
 %% @doc Stop advertising a LOCAL streaming procedure.
 -spec unadvertise_stream(procedure()) -> ok.

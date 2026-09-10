@@ -2261,10 +2261,11 @@ inbound_stream_open_unknown_procedure_returns_error_test_() ->
      fun() ->
          {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
          try
-             CallerPub = macula_identity:public(macula_identity:generate()),
+             CallerKp = macula_identity:generate(),
+             CallerPub = macula_identity:public(CallerKp),
              Sid = crypto:strong_rand_bytes(16),
              Stream = make_ref(),
-             inject_dedicated_stream_open(Pid, FakePeer, Stream, #{
+             inject_dedicated_stream_open(Pid, FakePeer, Stream, macula_frame:sign(#{
                  frame_type  => stream_open,
                  stream_id   => Sid,
                  procedure   => <<"unknown.proc">>,
@@ -2273,7 +2274,7 @@ inbound_stream_open_unknown_procedure_returns_error_test_() ->
                  args        => #{},
                  deadline_ms => erlang:system_time(millisecond) + 5_000,
                  caller      => CallerPub
-             }),
+             }, CallerKp)),
              receive
                  {sent_on_stream, Stream,
                   #{frame_type := stream_error,
@@ -2331,10 +2332,11 @@ inbound_stream_open_invokes_handler_test_() ->
              ok = macula_station_link:advertise_stream(
                     Pid, ?REALM, Procedure, server_stream, Handler),
              flush_send_frame_casts(),
-             CallerPub = macula_identity:public(macula_identity:generate()),
+             CallerKp = macula_identity:generate(),
+             CallerPub = macula_identity:public(CallerKp),
              Sid = crypto:strong_rand_bytes(16),
              Stream = make_ref(),
-             inject_dedicated_stream_open(Pid, FakePeer, Stream, #{
+             inject_dedicated_stream_open(Pid, FakePeer, Stream, macula_frame:sign(#{
                  frame_type  => stream_open,
                  stream_id   => Sid,
                  procedure   => Procedure,
@@ -2343,7 +2345,7 @@ inbound_stream_open_invokes_handler_test_() ->
                  args        => #{n => 7},
                  deadline_ms => erlang:system_time(millisecond) + 5_000,
                  caller      => CallerPub
-             }),
+             }, CallerKp)),
              receive
                  {handler_invoked, Args} ->
                      ?assertEqual(#{n => 7}, Args)
@@ -2355,6 +2357,166 @@ inbound_stream_open_invokes_handler_test_() ->
              teardown_link_for_streams(ok)
          end
      end}.
+
+%% -- inbound STREAM_OPEN is served only when its signature verifies -
+
+%% A STREAM_OPEN is signed by the identity it names in `caller'. One whose
+%% signature does not verify against it runs no handler and gets nothing
+%% back on its stream; a genuinely signed one that follows is served.
+inbound_stream_open_that_does_not_verify_is_not_served_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Test = self(),
+             Procedure = <<"foo.verified">>,
+             Handler = fun(_Stream, #{tag := Tag}) ->
+                 Test ! {handler_invoked, Tag},
+                 ok
+             end,
+             ok = macula_station_link:advertise_stream(
+                    Pid, ?REALM, Procedure, server_stream, Handler),
+             flush_send_frame_casts(),
+             CallerKp = macula_identity:generate(),
+             [Forged, Unsigned, Genuine] = [make_ref(), make_ref(), make_ref()],
+             %% Names the caller and is signed by another key.
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Forged,
+               macula_frame:sign(stream_open_frame(Procedure, CallerKp, forged),
+                                 macula_identity:generate())),
+             %% Names the caller and carries no signature.
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Unsigned,
+               stream_open_frame(Procedure, CallerKp, unsigned)),
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Genuine,
+               macula_frame:sign(stream_open_frame(Procedure, CallerKp, genuine),
+                                 CallerKp)),
+             receive
+                 {handler_invoked, genuine} -> ok
+             after 1_000 ->
+                 erlang:error(genuine_handler_not_invoked)
+             end,
+             receive
+                 {handler_invoked, Other} ->
+                     erlang:error({handler_invoked_for, Other});
+                 {sent_on_stream, Sent, Frame} when Sent =:= Forged;
+                                                    Sent =:= Unsigned ->
+                     erlang:error({sent_on_unverified_stream, Frame})
+             after 300 ->
+                 ok
+             end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% A STREAM_OPEN for `Procedure' naming `CallerKp' as its caller, with
+%% `Tag' in its args.
+stream_open_frame(Procedure, CallerKp, Tag) ->
+    #{frame_type  => stream_open,
+      stream_id   => crypto:strong_rand_bytes(16),
+      procedure   => Procedure,
+      realm       => ?REALM,
+      mode        => server_stream,
+      args        => #{tag => Tag},
+      deadline_ms => erlang:system_time(millisecond) + 5_000,
+      caller      => macula_identity:public(CallerKp)}.
+
+%% -- a stream procedure's auth policy is enforced before its handler ---
+
+%% `advertise_stream/6' gates a streaming procedure the same way
+%% `advertise/5' gates a unary one. A STREAM_OPEN the policy refuses gets
+%% a STREAM_ERROR `unauthorized' on its own stream and runs no handler; one
+%% carrying a token the policy accepts is served.
+stream_policy_is_enforced_before_the_handler_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Test = self(),
+             Procedure = <<"foo.gated">>,
+             RealmIdentity = macula_identity:generate(),
+             Policy = {realm_member_required,
+                       macula_identity:public(RealmIdentity),
+                       <<"member/email-verified">>},
+             Handler = fun(_Stream, #{tag := Tag}) ->
+                 Test ! {handler_invoked, Tag},
+                 ok
+             end,
+             ok = macula_station_link:advertise_stream(
+                    Pid, ?REALM, Procedure, server_stream, Handler, Policy),
+             flush_send_frame_casts(),
+             CallerKp = macula_identity:generate(),
+             Caller = macula_identity:public(CallerKp),
+             [NoToken, Member] = [make_ref(), make_ref()],
+             inject_dedicated_stream_open(
+               Pid, FakePeer, NoToken,
+               macula_frame:sign(stream_open_frame(Procedure, CallerKp, no_token),
+                                 CallerKp)),
+             Token = mint_membership_ucan(RealmIdentity, Caller, #{}),
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Member,
+               macula_frame:sign(
+                 (stream_open_frame(Procedure, CallerKp, member))#{ucan_token => Token},
+                 CallerKp)),
+             receive
+                 {sent_on_stream, NoToken, #{frame_type := stream_error,
+                                             code       := Code}} ->
+                     ?assertEqual(<<"unauthorized">>, Code)
+             after 1_000 ->
+                 erlang:error(no_unauthorized_stream_error)
+             end,
+             receive
+                 {handler_invoked, member} -> ok
+             after 1_000 ->
+                 erlang:error(member_handler_not_invoked)
+             end,
+             receive
+                 {handler_invoked, no_token} ->
+                     erlang:error(handler_invoked_without_token)
+             after 300 ->
+                 ok
+             end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% -- call_stream presents a ucan_token on its STREAM_OPEN ----------
+
+%% A consumer reaches a gated stream procedure by passing `ucan_token' in
+%% `call_stream/5''s opts, the same key `call_station/7' takes. Without it
+%% the STREAM_OPEN carries no `ucan_token' field at all.
+call_stream_carries_ucan_token_only_when_given_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, _Peer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             {ok, _} = macula_station_link:call_stream(
+                         Pid, ?REALM, <<"foo.gated">>, #{},
+                         #{ucan_token => <<"token-bytes">>}),
+             WithToken = await_sent_stream_open(),
+             ?assertEqual(<<"token-bytes">>,
+                          maps:get(ucan_token, WithToken, undefined)),
+             {ok, _} = macula_station_link:call_stream(
+                         Pid, ?REALM, <<"foo.open">>, #{}, #{}),
+             WithoutToken = await_sent_stream_open(),
+             ?assertNot(maps:is_key(ucan_token, WithoutToken)),
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+await_sent_stream_open() ->
+    receive
+        {sent_on_stream, _Stream, #{frame_type := stream_open} = Frame} -> Frame
+    after 1_000 ->
+        erlang:error(no_stream_open_sent)
+    end.
 
 %% -- disconnect aborts open streams -------------------------------
 

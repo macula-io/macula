@@ -52,20 +52,22 @@ advs_to(LinkPid, Procs) when is_pid(LinkPid), is_map(Procs) ->
 %% @doc Re-issue an ADVERTISE frame for every streaming procedure in
 %% `StreamProcs' against `LinkPid'. Mirrors `advs_to/2' for the
 %% streaming RPC surface (SDK 3.17+). Stored shape is
-%% `{Mode, Handler}' so the receiving link can dispatch inbound
-%% STREAM_OPEN frames with the correct mode.
+%% `{Mode, Handler, Policy}' so the receiving link dispatches inbound
+%% STREAM_OPEN frames with the correct mode and keeps enforcing the
+%% procedure's auth policy.
 %%
 %% Errors are swallowed (same policy as `advs_to/2').
 -spec stream_advs_to(pid(),
                      #{{<<_:256>>, binary()} =>
                        {macula_frame:stream_mode(),
-                        macula_station_link:stream_handler()}}) -> ok.
+                        macula_station_link:stream_handler(),
+                        macula_client:auth_policy()}}) -> ok.
 stream_advs_to(LinkPid, StreamProcs)
   when is_pid(LinkPid), is_map(StreamProcs) ->
     maps:foreach(
-      fun({Realm, Procedure}, {Mode, Handler}) ->
+      fun({Realm, Procedure}, {Mode, Handler, Policy}) ->
           _ = macula_station_link:advertise_stream(LinkPid, Realm,
                                                     Procedure, Mode,
-                                                    Handler)
+                                                    Handler, Policy)
       end, StreamProcs),
     ok.

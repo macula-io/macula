@@ -561,7 +561,8 @@
     deadline_ms  := integer(),
     caller       := macula_identity:pubkey(),
     source_route => binary(),
-    retry_budget => non_neg_integer()
+    retry_budget => non_neg_integer(),
+    ucan_token   => binary()
 }.
 
 -type stream_data_spec() :: #{
@@ -1264,7 +1265,7 @@ stream_open(#{stream_id := Sid, procedure := Proc, realm := Realm,
     validate_source_route(SourceRoute),
     validate_retry_budget(RetryBudget),
     Header = base(stream_open, 0),
-    Header#{
+    with_ucan_token(maps:get(ucan_token, Spec, <<>>), Header#{
         stream_id    => Sid,
         procedure    => Proc,
         realm        => Realm,
@@ -1274,7 +1275,12 @@ stream_open(#{stream_id := Sid, procedure := Proc, realm := Realm,
         caller       => Caller,
         source_route => SourceRoute,
         retry_budget => RetryBudget
-    }.
+    }).
+
+%% A STREAM_OPEN carries `ucan_token' only when the caller presents one, so
+%% a stream opened without a token is the same frame it always was.
+with_ucan_token(<<>>, Frame) -> Frame;
+with_ucan_token(Token, Frame) when is_binary(Token) -> Frame#{ucan_token => Token}.
 
 -spec stream_data(stream_data_spec()) -> frame().
 stream_data(#{stream_id := Sid, seq := Seq,

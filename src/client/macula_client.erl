@@ -69,7 +69,7 @@
 -export([ensure_content_link/4]).
 %% Streaming RPC (since 3.17.0) — called by the `macula' facade.
 -export([call_stream/5, call_stream_station/6,
-         advertise_stream/5, unadvertise_stream/3]).
+         advertise_stream/5, advertise_stream/6, unadvertise_stream/3]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -421,10 +421,10 @@
     %% {realm, procedure} → handler
     procs = #{}   :: #{{<<_:256>>, binary()} => {handler(), auth_policy()}},
     %% Advertised streaming procedures — replayed on link respawn
-    %% alongside `procs'. {realm, procedure} → {mode, handler}
+    %% alongside `procs'. {realm, procedure} → {mode, handler, policy}
     stream_procs = #{} :: #{{<<_:256>>, binary()} =>
                             {macula_frame:stream_mode(),
-                             stream_handler()}},
+                             stream_handler(), auth_policy()}},
     dedup_tab     :: ets:tid(),
     %% Per-`ordered'-subscription reorder-buffer timeout + count cap, and
     %% a lazily armed one-shot timer that fires to release timed-out gaps.
@@ -614,7 +614,8 @@ unadvertise(Pool, Realm, Procedure)
 %% its CONNECT/HELLO handshake. `Realm' (32 bytes) and `Procedure'
 %% name the remote endpoint. `Args' is the opening payload; `Opts'
 %% accepts `mode' (default `server_stream'), `owner' (default the
-%% calling pid), and `deadline_ms'.
+%% calling pid), `deadline_ms', and `ucan_token' (a UCAN presented to a
+%% streaming procedure advertised with an auth policy).
 -spec call_stream(pool(), <<_:256>>, binary(), term(), map()) ->
     {ok, pid()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, Opts)
@@ -655,12 +656,22 @@ call_stream_station(Pool, Station, Realm, Procedure, Args, Opts)
 %% @doc Advertise a streaming procedure handler on every healthy
 %% link. Stored in pool state so links respawned later replay the
 %% advertisement. Returns `ok' when at least one link accepted the
-%% registration.
+%% registration. Same as `advertise_stream/6' with policy `open'.
 -spec advertise_stream(pool(), <<_:256>>, binary(),
                         macula_frame:stream_mode(),
                         stream_handler()) ->
     ok | {error, term()}.
-advertise_stream(Pool, Realm, Procedure, Mode, Handler)
+advertise_stream(Pool, Realm, Procedure, Mode, Handler) ->
+    advertise_stream(Pool, Realm, Procedure, Mode, Handler, open).
+
+%% @doc Advertise a streaming procedure with an auth policy -- the same
+%% `auth_policy()' set `advertise/5' takes. The policy is stored with the
+%% procedure, so a link respawned later re-advertises it still gated.
+-spec advertise_stream(pool(), <<_:256>>, binary(),
+                        macula_frame:stream_mode(),
+                        stream_handler(), auth_policy()) ->
+    ok | {error, term()}.
+advertise_stream(Pool, Realm, Procedure, Mode, Handler, Policy)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
@@ -668,7 +679,7 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler)
         orelse Mode =:= bidi),
        is_function(Handler, 2) ->
     gen_server:call(Pool,
-                    {advertise_stream, Realm, Procedure, Mode, Handler},
+                    {advertise_stream, Realm, Procedure, Mode, Handler, Policy},
                     5_000).
 
 %% @doc Drop a streaming procedure on every healthy link and remove
@@ -977,12 +988,13 @@ handle_call({call_stream_station, Station, Realm, Procedure, Args, Opts,
     end),
     {noreply, S1};
 
-handle_call({advertise_stream, Realm, Procedure, Mode, Handler}, _From,
+handle_call({advertise_stream, Realm, Procedure, Mode, Handler, Policy}, _From,
             #state{stream_procs = SP} = S) ->
     Pids = spawned_link_pids(S),
-    Reply = fanout_advertise_stream(Pids, Realm, Procedure, Mode, Handler),
+    Reply = fanout_advertise_stream(Pids, Realm, Procedure, Mode, Handler,
+                                    Policy),
     {reply, Reply,
-     S#state{stream_procs = SP#{{Realm, Procedure} => {Mode, Handler}}}};
+     S#state{stream_procs = SP#{{Realm, Procedure} => {Mode, Handler, Policy}}}};
 
 handle_call({unadvertise_stream, Realm, Procedure}, _From,
             #state{stream_procs = SP} = S) ->
@@ -1474,15 +1486,16 @@ keep_or_next_stream({error, _} = E, _Rest, _Realm, _Proc, _Args, _Opts) ->
 %% as `fanout_advertise/4' for unary; partial success counts. Same
 %% rationale for dispatching to pre-handshake links — see the
 %% comment on `fanout_advertise/4'.
-fanout_advertise_stream([], _Realm, _Proc, _Mode, _Handler) ->
+fanout_advertise_stream([], _Realm, _Proc, _Mode, _Handler, _Policy) ->
     {error, no_healthy_station};
-fanout_advertise_stream(Pids, Realm, Proc, Mode, Handler) ->
-    Results = [safe_link_advertise_stream(P, Realm, Proc, Mode, Handler)
+fanout_advertise_stream(Pids, Realm, Proc, Mode, Handler, Policy) ->
+    Results = [safe_link_advertise_stream(P, Realm, Proc, Mode, Handler, Policy)
                || P <- Pids, is_process_alive(P)],
     summarize_advertise([R || R <- Results, R =/= skipped]).
 
-safe_link_advertise_stream(Pid, Realm, Proc, Mode, Handler) ->
-    try macula_station_link:advertise_stream(Pid, Realm, Proc, Mode, Handler)
+safe_link_advertise_stream(Pid, Realm, Proc, Mode, Handler, Policy) ->
+    try macula_station_link:advertise_stream(Pid, Realm, Proc, Mode, Handler,
+                                             Policy)
     catch _:_ -> skipped
     end.
 

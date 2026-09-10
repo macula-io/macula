@@ -107,6 +107,7 @@
     %% Streaming RPC (SDK 3.17+, Part 6 §5.6)
     call_stream/5,
     advertise_stream/5,
+    advertise_stream/6,
     unadvertise_stream/3,
     send_stream_frame/3,
     is_connected/1,
@@ -333,7 +334,13 @@
     %% as `connect_timeout_ms + ?CONNECT_WATCHDOG_GRACE_MS'. Exposed as
     %% the `connect_watchdog_ms' start opt for operational tuning and
     %% for tests that need a short deadline.
-    connect_watchdog_ms   :: undefined | non_neg_integer()
+    connect_watchdog_ms   :: undefined | non_neg_integer(),
+    %% Auth policy per advertised STREAMING procedure, kept apart from the
+    %% unary `policies' map so unadvertising a unary procedure never clears
+    %% the policy of a stream advertised under the same name. Absent means
+    %% `open'.
+    stream_policies = #{} :: #{{<<_:256>>, binary()} =>
+                                   macula_client:auth_policy()}
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
@@ -799,6 +806,10 @@ send_overlay_frame(Client, TargetPeer, Frame)
 %%                 dies.</li>
 %%   <li>`deadline_ms' — wall-clock deadline stamped on the
 %%                 STREAM_OPEN frame (default: now + 30s).</li>
+%%   <li>`ucan_token' — a UCAN presented to a streaming procedure
+%%                 advertised with an auth policy
+%%                 (`advertise_stream/6'). Absent or empty sends
+%%                 none.</li>
 %% </ul>
 %%
 %% Returns `{error, not_connected}' when the QUIC handshake has not
@@ -824,20 +835,40 @@ call_stream(Pid, Realm, Procedure, Args, Opts)
 %% STREAM_OPEN frames for `(Realm, Procedure)' back over this peering
 %% connection where this link spawns a server-side
 %% `macula_stream' and dispatches `Handler(StreamPid, Args)' in a
-%% transient process.
+%% transient process. Same as `advertise_stream/6' with policy `open'.
 -spec advertise_stream(pid(), <<_:256>>, binary(),
                         macula_frame:stream_mode(), stream_handler()) ->
     ok | {error, term()}.
-advertise_stream(Pid, Realm, Procedure, Mode, Handler)
+advertise_stream(Pid, Realm, Procedure, Mode, Handler) ->
+    advertise_stream(Pid, Realm, Procedure, Mode, Handler, open).
+
+%% @doc Advertise a streaming RPC handler with an auth policy, the same
+%% `macula_client:auth_policy()' set `advertise/5' takes. An inbound
+%% STREAM_OPEN the policy refuses gets a STREAM_ERROR with code
+%% `<<"unauthorized">>' on its stream and runs no handler. The policy's
+%% shape is checked here, in the calling process, as `advertise/5' does.
+-spec advertise_stream(pid(), <<_:256>>, binary(),
+                        macula_frame:stream_mode(), stream_handler(),
+                        macula_client:auth_policy()) ->
+    ok | {error, term()}.
+advertise_stream(Pid, Realm, Procedure, Mode, Handler, Policy)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        (Mode =:= server_stream orelse Mode =:= client_stream
         orelse Mode =:= bidi),
        is_function(Handler, 2) ->
+    ok = valid_policy(Policy),
     gen_server:call(Pid,
-                    {stream_advertise, Realm, Procedure, Mode, Handler},
+                    {stream_advertise, Realm, Procedure, Mode, Handler, Policy},
                     5_000).
+
+%% One clause per valid `macula_client:auth_policy()' shape and no
+%% catch-all, so a malformed policy raises `function_clause' in the caller.
+valid_policy(open) -> ok;
+valid_policy({ucan_required, <<_:256>>}) -> ok;
+valid_policy({realm_member_required, <<_:256>>, RequiredCan})
+  when is_binary(RequiredCan), RequiredCan =/= <<>> -> ok.
 
 %% @doc Drop a previously-advertised streaming procedure. Idempotent.
 -spec unadvertise_stream(pid(), <<_:256>>, binary()) ->
@@ -1111,15 +1142,17 @@ handle_call({stream_open, Realm, Proc, Args, Opts, Caller}, _From, S) ->
                                                     Caller, S),
     {reply, Reply, NewS};
 
-handle_call({stream_advertise, Realm, Proc, Mode, Handler}, _From,
-            #state{stream_procedures = SP} = S) ->
-    NewS = S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}}},
+handle_call({stream_advertise, Realm, Proc, Mode, Handler, Policy}, _From,
+            #state{stream_procedures = SP, stream_policies = SPols} = S) ->
+    NewS = S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}},
+                   stream_policies   = set_policy({Realm, Proc}, Policy, SPols)},
     maybe_send_advertise(Realm, Proc, NewS),
     {reply, ok, NewS};
 
 handle_call({stream_unadvertise, Realm, Proc}, _From,
-            #state{stream_procedures = SP} = S) ->
-    NewS = S#state{stream_procedures = maps:remove({Realm, Proc}, SP)},
+            #state{stream_procedures = SP, stream_policies = SPols} = S) ->
+    NewS = S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
+                   stream_policies   = maps:remove({Realm, Proc}, SPols)},
     maybe_send_unadvertise(Realm, Proc, S),
     {reply, ok, NewS};
 
@@ -2428,7 +2461,8 @@ open_client_stream(Realm, Proc, Args, Opts, Caller,
         mode        => Mode,
         args        => Args,
         deadline_ms => DeadlineMs,
-        caller      => macula_identity:public(Id)
+        caller      => macula_identity:public(Id),
+        ucan_token  => maps:get(ucan_token, Opts, <<>>)
     }),
     NewS = open_client_stream_dedicated(Pid, Frame, Sid, StreamPid, Mon, Id, S),
     {reply_value, {ok, StreamPid}, NewS}.
@@ -2576,7 +2610,8 @@ drop_bufs(Streams, Bufs) ->
 %% handed-off inbound stream; the rest belong to a session already
 %% tracked in `client_streams' / `server_streams'.
 dispatch_dedicated_frame(#{frame_type := stream_open} = Frame, Stream, S) ->
-    handle_inbound_stream_open(Frame, Stream, S);
+    on_inbound_stream_open(verify_signed_by(Frame, call_signer(Frame)), Frame,
+                           Stream, S);
 dispatch_dedicated_frame(#{frame_type := stream_data} = Frame, _Stream, S) ->
     deliver_stream_data(Frame, S);
 dispatch_dedicated_frame(#{frame_type := stream_end} = Frame, _Stream, S) ->
@@ -2609,6 +2644,36 @@ handle_inbound_stream_open(#{stream_id := Sid, procedure := Proc,
     DeclaredMode = maps:get(mode, Frame, server_stream),
     dispatch_stream_open(maps:find({Realm, Proc}, S#state.stream_procedures),
                          Sid, Proc, DeclaredMode, Args, Stream, S).
+
+%% A STREAM_OPEN whose signature does not verify against its own `caller'
+%% never reaches a handler and gets nothing back on its stream, the same
+%% rule `on_inbound_call/3' applies to a unary CALL. Once it verifies, the
+%% procedure's auth policy (`advertise_stream/6') decides through the same
+%% `authorize/3' a unary CALL goes through, before any handler runs.
+on_inbound_stream_open({ok, _Verified}, Frame, Stream,
+                       #state{stream_policies = SPols} = S) ->
+    Key = {maps:get(realm, Frame, undefined), maps:get(procedure, Frame, undefined)},
+    on_stream_open_verdict(authorize(Key, Frame, SPols), Frame, Stream, S);
+on_inbound_stream_open({error, Why}, Frame, _Stream, S) ->
+    logger:warning("[macula_station_link] dropped inbound STREAM_OPEN whose"
+                   " signature does not verify against its caller (~p)"
+                   " procedure=~p",
+                   [Why, maps:get(procedure, Frame, undefined)]),
+    S.
+
+%% Refused by the procedure's auth policy: a STREAM_ERROR on the caller's
+%% own stream, so it fails fast instead of waiting out its deadline, and no
+%% handler runs.
+on_stream_open_verdict(ok, Frame, Stream, S) ->
+    handle_inbound_stream_open(Frame, Stream, S);
+on_stream_open_verdict(unauthorized, Frame, Stream, #state{identity = Id} = S) ->
+    Refusal = macula_frame:stream_error(#{
+        stream_id => maps:get(stream_id, Frame),
+        code      => <<"unauthorized">>,
+        message   => <<"not authorized for this procedure">>
+    }),
+    try macula_peering:send_on_stream(Stream, Refusal, Id) catch _:_ -> ok end,
+    S.
 
 %% Unknown (Realm, Procedure) → ship a STREAM_ERROR back on the
 %% caller's own dedicated stream so it unblocks immediately rather

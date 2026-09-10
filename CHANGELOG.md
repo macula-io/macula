@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `macula_station_link` now verifies an inbound STREAM_OPEN's signature
+  against its `caller` before dispatching it. A STREAM_OPEN that does not
+  verify runs no handler and gets nothing back on its stream.
+- Streaming procedures can carry an auth policy. `advertise_stream/6` on
+  `macula`, `macula_client` and `macula_station_link`, and an `auth` opt on
+  `macula_streamer:advertise/6` and `advertise_direct/7`, take the same
+  policies as `advertise/5`. A STREAM_OPEN the policy refuses gets a
+  STREAM_ERROR with code `unauthorized` and runs no handler. The pool keeps
+  the policy when it replays a stream advertisement onto a respawned link.
+  The `/5` forms are unchanged and mean `open`.
+- `call_stream/5` takes a `ucan_token` opt. STREAM_OPEN carries an optional
+  `ucan_token` field, present only when the caller gives a token.
+
 ## [10.23.0] - 2026-09-10
 
 ### Changed
