@@ -44,6 +44,10 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   bytes it received before decoding them strictly, refuses an unknown key
   or a field of the wrong type or length as `malformed_frame`, and checks
   validity with 5 minutes of clock tolerance.
+- `macula_frame:encode_bytes/1` and `parse_stream_bytes/1`: frame CBOR
+  bytes with and without the length prefix, exactly as sent and
+  received, for the post-quantum handshake. `decode/1` shares their
+  length-prefix code.
 
 ### Changed
 

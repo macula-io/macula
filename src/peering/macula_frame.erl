@@ -92,6 +92,10 @@
     %% Wire codec — single frame
     encode/1, decode/1,
 
+    %% Wire codec for the post-quantum handshake: frame CBOR bytes exactly as
+    %% sent and received, which the connection proof hashes
+    encode_bytes/1, parse_stream_bytes/1,
+
     %% Sendability, checked before a frame is cast at a peering
     %% connection. Mirrors `to_wire/1' + `macula_record_cbor'.
     check_payload/1, check_frame/1, explain/1,
@@ -1490,9 +1494,14 @@ publisher_signing_bytes(#{topic := T, realm := R, publisher := Pub,
 
 -spec encode(frame()) -> binary().
 encode(Frame) when is_map(Frame) ->
-    Bytes = macula_cbor_nif:pack_deterministic(to_wire(prepare_records(Frame))),
-    Len = byte_size(Bytes),
-    encode_with_check(Len, Bytes).
+    encode_bytes(macula_cbor_nif:pack_deterministic(to_wire(prepare_records(Frame)))).
+
+%% @doc Prefix frame CBOR bytes with their length, leaving the bytes as they
+%% are. The handshake keeps the bytes it passes here, because the connection
+%% proof hashes a frame's bytes without the prefix.
+-spec encode_bytes(binary()) -> binary().
+encode_bytes(Bytes) when is_binary(Bytes) ->
+    encode_with_check(byte_size(Bytes), Bytes).
 
 %% Records (`record', `records' fields) are delegated to
 %% `macula_record:encode/1' so the SDK's canonical CBOR shape is
@@ -1518,13 +1527,20 @@ encode_with_check(Len, Bytes) ->
     {ok, frame(), binary()}
   | {more, pos_integer()}
   | {error, term()}.
-decode(<<Len:32/big, _Rest/binary>>) when Len > ?MAX_FRAME_BYTES ->
+decode(Buf) when is_binary(Buf) ->
+    decoded_frame(split_frame(Buf)).
+
+decoded_frame({ok, Bytes, Rest}) -> decode_cbor(Bytes, Rest);
+decoded_frame(NotAFrame) -> NotAFrame.
+
+%% The length prefix, shared by decode/1 and parse_stream_bytes/1.
+split_frame(<<Len:32/big, _Rest/binary>>) when Len > ?MAX_FRAME_BYTES ->
     {error, frame_too_large};
-decode(<<Len:32/big, Bytes:Len/binary, Rest/binary>>) ->
-    decode_cbor(Bytes, Rest);
-decode(<<Len:32/big, Tail/binary>>) ->
+split_frame(<<Len:32/big, Bytes:Len/binary, Rest/binary>>) ->
+    {ok, Bytes, Rest};
+split_frame(<<Len:32/big, Tail/binary>>) ->
     {more, Len - byte_size(Tail)};
-decode(Buf) when is_binary(Buf), byte_size(Buf) < 4 ->
+split_frame(Buf) when byte_size(Buf) < 4 ->
     {more, 4 - byte_size(Buf)}.
 
 decode_cbor(Bytes, Rest) ->
@@ -1574,6 +1590,21 @@ drain_step({more, _N}, Buf, Acc) ->
 drain_step({error, _R}, Buf, Acc) ->
     %% Stop draining on first parse error; surface buffer as-is.
     {lists:reverse(Acc), Buf}.
+
+%% @doc Drain every complete frame from a buffer as its CBOR bytes, exactly as
+%% received and without the length prefix, and return the incomplete rest.
+%% The handshake reads frames this way, because the connection proof hashes
+%% the challenge bytes as received. A length over the frame cap is refused.
+-spec parse_stream_bytes(binary()) -> {ok, [binary()], binary()} | {error, frame_too_large}.
+parse_stream_bytes(Buf) when is_binary(Buf) ->
+    drain_bytes(split_frame(Buf), Buf, []).
+
+drain_bytes({ok, Bytes, Rest}, _Buf, Acc) ->
+    drain_bytes(split_frame(Rest), Rest, [Bytes | Acc]);
+drain_bytes({more, _Needed}, Buf, Acc) ->
+    {ok, lists:reverse(Acc), Buf};
+drain_bytes({error, frame_too_large} = Error, _Buf, _Acc) ->
+    Error.
 
 %%------------------------------------------------------------------
 %% Accessors
