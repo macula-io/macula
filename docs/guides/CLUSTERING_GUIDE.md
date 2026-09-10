@@ -1,8 +1,8 @@
 # Macula Clustering Guide
 
-This guide covers Macula's LAN clustering capabilities, including gossip-based discovery, the Cluster API, distribution management, and cookie management. The modules live in `src/macula_cluster_system/`, separate from `macula_dist_system` (distribution-over-mesh) — the two do not depend on each other.
+This guide covers Macula's LAN clustering capabilities, including gossip-based discovery, the Cluster API, distribution management, and cookie management. The modules live in `src/macula_cluster_system/`, separate from `src/macula_dist_system/` (distribution over the mesh). The two do not depend on each other.
 
-**Note:** Clustering via gossip/mDNS is designed for **LAN environments** (same subnet). For WAN connectivity across networks, use the relay mesh (see the Dist Over Mesh guide).
+**Note:** Clustering via gossip is designed for **LAN environments** (same subnet). For WAN connectivity across networks, use the relay mesh (see the Dist Over Mesh guide).
 
 ## Overview
 
@@ -21,16 +21,13 @@ The Macula Cluster API (`macula_cluster.erl`) provides a standardized interface 
 |----------|-----------|---------------|---------|----------|
 | **gossip** | Automatic (UDP multicast) | Zero-config | LAN multicast | Development, same-subnet production |
 | **static** | Manual | Node list required | Any | Known node sets, cross-subnet |
-| **mdns**, **dht** | Automatic, via `macula_dist_discovery` (the mesh DHT) | Zero-config | Internet-scale | Discovery across the relay mesh, not just LAN |
+| **mdns**, **dht** | Not available | n/a | n/a | Use **gossip** on a LAN, or **static** with a node list |
 | **auto** | Static if `nodes` is set, else gossip | — | — | Let `start_cluster/1` pick |
 
-`mdns` and `dht` are both accepted `strategy` values and both currently
-dispatch to the same DHT-based discovery
-(`macula_cluster_strategy`/`macula_dist_discovery`) — `discovery_type`
-is accepted in `Opts` and logged, but nothing in the module branches on
-it yet, so passing `discovery_type => mdns` does not get you actual
-mDNS/Bonjour discovery today despite the naming. If you specifically
-need LAN-local zero-config discovery, use `gossip`.
+`mdns` and `dht` are accepted `strategy` values but are not available. They
+need a discovery service that the macula application does not start, so
+`start_cluster/1` fails for them. Use `gossip` for zero-config discovery on
+a LAN, or `static` with a node list. Both values are removed in 11.0.0.
 
 ---
 

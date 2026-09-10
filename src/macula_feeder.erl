@@ -179,7 +179,7 @@ spawn_worker(pooled, Pool, Bytes, ShareId) ->
         {ok, CTPid} = macula_content_transfer:start_put(Pool, Bytes, #{share_id => ShareId}),
         Parent ! {content_transfer, CTPid},
         Result = macula_content_transfer:await(CTPid),
-        try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
+        reap_content_transfer(CTPid),
         Parent ! {feed_result, Result}
     end).
 
@@ -199,7 +199,7 @@ direct_worker_run(Pool, Station, Bytes, ShareId, Parent) ->
                 Pool, DialUrl, Bytes, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts),
             Parent ! {content_transfer, CTPid},
             Result = macula_content_transfer:await(CTPid),
-            try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
+            reap_content_transfer(CTPid),
             Parent ! {feed_result, Result};
         {error, Reason} ->
             Parent ! {feed_result, {error, {unresolved, Reason}}}

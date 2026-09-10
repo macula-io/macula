@@ -39,7 +39,7 @@ connection. The pool owns:
 | **Links** | One `macula_station_link` worker per seed, all sharing one identity |
 | **Replication** | `publish/5` fans the frame to N healthy links |
 | **Replay** | When a link dies, the pool respawns it and replays subscriptions |
-| **Dedup** | Inbound EVENT frames are deduped by `(Realm, Publisher, Seq)` before fan-out |
+| **Dedup** | Inbound EVENT frames are deduped by `(Realm, Publisher, Seq)` before fan-out, plus a digest of topic and payload when the publisher signature did not verify |
 | **Failover** | Subscribe/publish operations only count healthy links — a dead link is excluded |
 
 From the application's point of view there is one handle (`Pool`) and
@@ -63,8 +63,8 @@ A **seed** is a relay endpoint. Three accepted shapes:
 #{host => <<"relay-1.example.com">>, port => 4433}
 ```
 
-The URL scheme is a label, not a switch — `macula_station_link:parse_seed/1`
-extracts `host`/`port` from any scheme with an explicit port and dials over
+The URL scheme is a label, not a switch — the seed parser in macula_station_link
+(`parse_seed/1`) extracts `host`/`port` from any scheme with an explicit port and dials over
 QUIC regardless of what the scheme text says. `https://relay-1.example.com:4433`
 parses and dials identically to the `quic://` form above. Both are seen in
 the wild — the SDK's own examples use `quic://` since that's the actual wire

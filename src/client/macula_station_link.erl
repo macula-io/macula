@@ -107,6 +107,7 @@
     %% Streaming RPC (SDK 3.17+, Part 6 §5.6)
     call_stream/5,
     advertise_stream/5,
+    advertise_stream/6,
     unadvertise_stream/3,
     send_stream_frame/3,
     is_connected/1,
@@ -333,7 +334,13 @@
     %% as `connect_timeout_ms + ?CONNECT_WATCHDOG_GRACE_MS'. Exposed as
     %% the `connect_watchdog_ms' start opt for operational tuning and
     %% for tests that need a short deadline.
-    connect_watchdog_ms   :: undefined | non_neg_integer()
+    connect_watchdog_ms   :: undefined | non_neg_integer(),
+    %% Auth policy per advertised STREAMING procedure, kept apart from the
+    %% unary `policies' map so unadvertising a unary procedure never clears
+    %% the policy of a stream advertised under the same name. Absent means
+    %% `open'.
+    stream_policies = #{} :: #{{<<_:256>>, binary()} =>
+                                   macula_client:auth_policy()}
 }).
 
 -type subscription() :: {Realm     :: <<_:256>>,
@@ -534,7 +541,8 @@ classify_put({ok, Other})    -> {error, {unexpected_reply, Other}};
 classify_put({error, _} = E) -> E.
 
 %% @doc Convenience wrapper for `_dht.find_record'. Looks up a record
-%% by its `macula_record:storage_key/1' (32-byte BLAKE3 digest).
+%% by its `macula_record:storage_key/1': 32 bytes, either the record's own
+%% key (for some record types) or a SHA-256 digest (for the rest).
 %% Returns `{error, not_found}' when no record exists at the key.
 %% Callers SHOULD verify the returned record's signature with
 %% `macula_record:verify/1' before trusting its payload.
@@ -762,9 +770,12 @@ send_overlay_frame(Client, Frame) when is_pid(Client), is_map(Frame) ->
 %% `TargetPeer' can never be spoofed by an unrelated connection — and
 %% forwards it to whichever of its OTHER connections authenticates as
 %% `TargetPeer'. See `macula_station_peer_observer:dispatch_overlay/5' on
-%% the relay side. `Frame' itself is a separate, independent signature —
-%% the caller's own responsibility, same as `send_overlay_frame/2' — this
-%% function only signs the envelope around it, never touches `Frame'.
+%% the relay side. `Frame' carries its own, separate signature, which the
+%% caller must make with THIS connection's identity: the receiving link
+%% delivers `Frame' only if that signature verifies against the sender the
+%% station names in the envelope, and that sender is this connection's
+%% authenticated NodeId. This function only signs the envelope around it,
+%% never touches `Frame'.
 %% Silently dropped by the station if `TargetPeer' isn't currently
 %% connected there; HyParView's own periodic shuffle/retry is the
 %% recovery path, the same way it already tolerates ordinary packet loss.
@@ -795,6 +806,10 @@ send_overlay_frame(Client, TargetPeer, Frame)
 %%                 dies.</li>
 %%   <li>`deadline_ms' — wall-clock deadline stamped on the
 %%                 STREAM_OPEN frame (default: now + 30s).</li>
+%%   <li>`ucan_token' — a UCAN presented to a streaming procedure
+%%                 advertised with an auth policy
+%%                 (`advertise_stream/6'). Absent or empty sends
+%%                 none.</li>
 %% </ul>
 %%
 %% Returns `{error, not_connected}' when the QUIC handshake has not
@@ -820,20 +835,40 @@ call_stream(Pid, Realm, Procedure, Args, Opts)
 %% STREAM_OPEN frames for `(Realm, Procedure)' back over this peering
 %% connection where this link spawns a server-side
 %% `macula_stream' and dispatches `Handler(StreamPid, Args)' in a
-%% transient process.
+%% transient process. Same as `advertise_stream/6' with policy `open'.
 -spec advertise_stream(pid(), <<_:256>>, binary(),
                         macula_frame:stream_mode(), stream_handler()) ->
     ok | {error, term()}.
-advertise_stream(Pid, Realm, Procedure, Mode, Handler)
+advertise_stream(Pid, Realm, Procedure, Mode, Handler) ->
+    advertise_stream(Pid, Realm, Procedure, Mode, Handler, open).
+
+%% @doc Advertise a streaming RPC handler with an auth policy, the same
+%% `macula_client:auth_policy()' set `advertise/5' takes. An inbound
+%% STREAM_OPEN the policy refuses gets a STREAM_ERROR with code
+%% `<<"unauthorized">>' on its stream and runs no handler. The policy's
+%% shape is checked here, in the calling process, as `advertise/5' does.
+-spec advertise_stream(pid(), <<_:256>>, binary(),
+                        macula_frame:stream_mode(), stream_handler(),
+                        macula_client:auth_policy()) ->
+    ok | {error, term()}.
+advertise_stream(Pid, Realm, Procedure, Mode, Handler, Policy)
   when is_pid(Pid),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        (Mode =:= server_stream orelse Mode =:= client_stream
         orelse Mode =:= bidi),
        is_function(Handler, 2) ->
+    ok = valid_policy(Policy),
     gen_server:call(Pid,
-                    {stream_advertise, Realm, Procedure, Mode, Handler},
+                    {stream_advertise, Realm, Procedure, Mode, Handler, Policy},
                     5_000).
+
+%% One clause per valid `macula_client:auth_policy()' shape and no
+%% catch-all, so a malformed policy raises `function_clause' in the caller.
+valid_policy(open) -> ok;
+valid_policy({ucan_required, <<_:256>>}) -> ok;
+valid_policy({realm_member_required, <<_:256>>, RequiredCan})
+  when is_binary(RequiredCan), RequiredCan =/= <<>> -> ok.
 
 %% @doc Drop a previously-advertised streaming procedure. Idempotent.
 -spec unadvertise_stream(pid(), <<_:256>>, binary()) ->
@@ -1107,15 +1142,17 @@ handle_call({stream_open, Realm, Proc, Args, Opts, Caller}, _From, S) ->
                                                     Caller, S),
     {reply, Reply, NewS};
 
-handle_call({stream_advertise, Realm, Proc, Mode, Handler}, _From,
-            #state{stream_procedures = SP} = S) ->
-    NewS = S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}}},
+handle_call({stream_advertise, Realm, Proc, Mode, Handler, Policy}, _From,
+            #state{stream_procedures = SP, stream_policies = SPols} = S) ->
+    NewS = S#state{stream_procedures = SP#{{Realm, Proc} => {Mode, Handler}},
+                   stream_policies   = set_policy({Realm, Proc}, Policy, SPols)},
     maybe_send_advertise(Realm, Proc, NewS),
     {reply, ok, NewS};
 
 handle_call({stream_unadvertise, Realm, Proc}, _From,
-            #state{stream_procedures = SP} = S) ->
-    NewS = S#state{stream_procedures = maps:remove({Realm, Proc}, SP)},
+            #state{stream_procedures = SP, stream_policies = SPols} = S) ->
+    NewS = S#state{stream_procedures = maps:remove({Realm, Proc}, SP),
+                   stream_policies   = maps:remove({Realm, Proc}, SPols)},
     maybe_send_unadvertise(Realm, Proc, S),
     {reply, ok, NewS};
 
@@ -1408,24 +1445,17 @@ after_connect_request({error, Reason}, S) ->
     erlang:send_after(S#state.connect_retry_backoff_ms, self(), attempt_connect),
     {noreply, S}.
 
-%% RESULT
-on_frame(#{frame_type := result, call_id := CallId, payload := Payload},
-         #state{pending = P} = S) ->
-    case maybe_clear_liveness(CallId, S) of
-        {true, NewS}  -> NewS;
-        {false, NewS} ->
-            deliver_pending(maps:take(CallId, P), {ok, Payload}, NewS)
-    end;
-%% ERROR
-on_frame(#{frame_type := error, call_id := CallId} = Frame,
-         #state{pending = P} = S) ->
+%% RESULT / ERROR. Acted on only once the frame's signature verifies
+%% against the identity it names as its signer (`responded_by' on a
+%% RESULT, `reported_by' on an ERROR); see `on_reply/4'.
+on_frame(#{frame_type := result, call_id := CallId, payload := Payload} = Frame, S) ->
+    on_reply(verify_signed_by(Frame, reply_signer(Frame)), CallId,
+             {ok, Payload}, S);
+on_frame(#{frame_type := error, call_id := CallId} = Frame, S) ->
     Failure = call_failure(maps:get(code, Frame, 0),
                            maps:get(name, Frame, undefined),
                            maps:get(detail, Frame, undefined)),
-    case maybe_clear_liveness(CallId, S) of
-        {true, NewS}  -> NewS;
-        {false, NewS} -> deliver_pending(maps:take(CallId, P), Failure, NewS)
-    end;
+    on_reply(verify_signed_by(Frame, reply_signer(Frame)), CallId, Failure, S);
 %% EVENT — pubsub delivery. Fan out to every subscriber whose
 %% (realm, topic) matches. Stations may push EVENTs without a prior
 %% SUBSCRIBE on this connection (e.g. wildcard / catalog channels);
@@ -1433,12 +1463,12 @@ on_frame(#{frame_type := error, call_id := CallId} = Frame,
 on_frame(#{frame_type := event, topic := Topic, realm := Realm} = Frame, S) ->
     on_inbound_event(check_publisher_sig(Frame), Realm, Topic, Frame, S);
 %% Inbound CALL — relay forwarded a CALL whose (realm, procedure)
-%% this link advertised. Dispatch to the registered handler and ship
-%% the resulting RESULT or call_error frame back over the same
+%% this link advertised. Once the CALL's signature verifies against its
+%% own `caller' (`on_inbound_call/3'), dispatch to the registered handler
+%% and ship the resulting RESULT or call_error frame back over the same
 %% peering connection.
 on_frame(#{frame_type := call} = Frame, S) ->
-    handle_inbound_call(Frame, S),
-    S;
+    on_inbound_call(verify_signed_by(Frame, call_signer(Frame)), Frame, S);
 %% STREAM_OPEN / STREAM_DATA / STREAM_END / STREAM_ERROR / STREAM_REPLY
 %% no longer arrive here — every streaming session travels on its
 %% own dedicated QUIC stream (see PLAN_PER_STREAM_QUIC_ISOLATION.md
@@ -1462,9 +1492,12 @@ on_frame(#{frame_type := call} = Frame, S) ->
 %% identity, always wrong for a genuine third-party HyParView peer).
 %% Must be matched before the bare `#{realm := Realm}' clause below,
 %% since an `overlay_relay' envelope has no `realm' field of its own.
+%% The wrapped frame is delivered only once its own signature verifies
+%% against `Origin' (`on_relayed_overlay_frame/3').
 on_frame(#{frame_type := overlay_relay, peer := Origin, payload := Bytes}, S) ->
     case macula_frame:decode(Bytes) of
-        {ok, Inner, _Rest} -> deliver_overlay_frame_from(Origin, Inner, S);
+        {ok, Inner, _Rest} ->
+            on_relayed_overlay_frame(macula_frame:verify(Inner, Origin), Origin, S);
         {error, _Reason} -> S
     end;
 on_frame(#{realm := Realm} = Frame, S) ->
@@ -1479,6 +1512,45 @@ deliver_pending({{From, TRef}, NewP}, Reply, S) ->
     _ = erlang:cancel_timer(TRef),
     gen_server:reply(From, Reply),
     S#state{pending = NewP}.
+
+%% A RESULT or ERROR whose signature does not verify against the identity
+%% it names is dropped before it can complete a pending call or clear a
+%% liveness probe, so the call stays pending for the genuine reply.
+on_reply({ok, _Verified}, CallId, Reply, #state{pending = P} = S) ->
+    case maybe_clear_liveness(CallId, S) of
+        {true, NewS}  -> NewS;
+        {false, NewS} -> deliver_pending(maps:take(CallId, P), Reply, NewS)
+    end;
+on_reply({error, Why}, CallId, _Reply, S) ->
+    logger:warning("[macula_station_link] dropped reply whose signature does"
+                   " not verify against its signer (~p) call_id=~s",
+                   [Why, hex_prefix(CallId)]),
+    S.
+
+%% A CALL whose signature does not verify against its own `caller' never
+%% reaches its handler and gets no reply.
+on_inbound_call({ok, _Verified}, Frame, S) ->
+    handle_inbound_call(Frame, S),
+    S;
+on_inbound_call({error, Why}, Frame, S) ->
+    logger:warning("[macula_station_link] dropped inbound CALL whose signature"
+                   " does not verify against its caller (~p) procedure=~p",
+                   [Why, maps:get(procedure, Frame, undefined)]),
+    S.
+
+%% The identity a frame names as its signer: `responded_by' on a RESULT,
+%% `reported_by' on an ERROR (the same two fields
+%% `macula_station_peer_observer' verifies a reply against before relaying
+%% it), `caller' on a CALL.
+reply_signer(#{responded_by := <<_:256>> = Pub}) -> {ok, Pub};
+reply_signer(#{reported_by := <<_:256>> = Pub})  -> {ok, Pub};
+reply_signer(_Frame)                            -> {error, no_signer}.
+
+call_signer(#{caller := <<_:256>> = Pub}) -> {ok, Pub};
+call_signer(_Frame)                      -> {error, no_signer}.
+
+verify_signed_by(Frame, {ok, Pub})       -> macula_frame:verify(Frame, Pub);
+verify_signed_by(_Frame, {error, _} = E) -> E.
 
 on_timeout(error, S) ->
     {noreply, S};
@@ -1889,6 +1961,19 @@ deliver_overlay_frame_from(_Sender, _Frame, S) ->
     %% the bare-frame catch-all in on_frame/2.
     S.
 
+%% The inner frame of an `overlay_relay' is signed by the peer that emitted
+%% it, and `Origin' is that peer's identity as the station authenticated
+%% it. Every HyParView frame `macula_hyparview_proto' emits is signed with
+%% the emitting peer's own identity, the one its link connects with, so a
+%% genuine relayed frame verifies here. One that does not is dropped.
+on_relayed_overlay_frame({ok, Inner}, Origin, S) ->
+    deliver_overlay_frame_from(Origin, Inner, S);
+on_relayed_overlay_frame({error, Why}, Origin, S) ->
+    logger:warning("[macula_station_link] dropped relayed overlay frame whose"
+                   " signature does not verify against its origin (~p)"
+                   " origin=~s", [Why, hex_prefix(Origin)]),
+    S.
+
 deliver_overlay_frame_to(error, _Frame, _Sender, _S) ->
     ok;
 deliver_overlay_frame_to({ok, Set}, Frame, Sender,
@@ -1916,10 +2001,10 @@ check_publisher_sig(_Frame) ->
 
 %% `ok'           — no publisher_sig present → deliver as before.
 %% `{ok, _}'      — publisher_sig verified → deliver.
-%% `{error, Why}' — publisher_sig present but invalid: always warn;
-%%                  drop only if `pubsub_strict_publisher_sig' is set
-%%                  (default lenient — a relay bug should surface, not
-%%                  silently lose events, during the Phase 2 rollout).
+%% `{error, Why}' — publisher_sig present but invalid: always warn, and
+%%                  drop unless `pubsub_strict_publisher_sig' is
+%%                  explicitly `false', which delivers it with
+%%                  `publisher_verified => false'.
 %%
 %% The verification OUTCOME itself used to stop here: `deliver_event/4'
 %% got only `Frame', so a subscriber could see `publisher' but never
@@ -1936,7 +2021,7 @@ on_inbound_event({error, Why}, Realm, Topic, Frame, S) ->
     logger:warning("[macula_pubsub] inbound EVENT publisher_sig invalid (~p)"
                    " realm=~s topic=~s", [Why, hex_prefix(Realm), Topic]),
     on_invalid_publisher_sig(
-      application:get_env(macula, pubsub_strict_publisher_sig, false),
+      application:get_env(macula, pubsub_strict_publisher_sig, true),
       Realm, Topic, Frame, S).
 
 on_invalid_publisher_sig(true, _Realm, _Topic, _Frame, S) ->
@@ -2134,10 +2219,11 @@ ucan_verdict(_Error)         -> unauthorized.
 %% belongs to whoever is presenting it now. Without the audience check
 %% below, any membership token a caller obtained a copy of -- not
 %% necessarily its own -- would authorize as if it were a genuine member
-%% making this call. `Caller' is the SAME wire-authenticated field
-%% `with_caller/2' already trusts elsewhere in this module for the same
-%% reason: unspoofable, verified by the transport itself before this
-%% function ever runs.
+%% making this call. `Caller' is the CALL's own `caller' field, and
+%% `on_inbound_call/3' only lets a CALL through to
+%% `handle_inbound_call/2' once the frame's signature verifies against
+%% that same `caller', so by the time this function runs `Caller' is the
+%% identity that signed this CALL.
 %%
 %% Signature and audience are still not enough on their own: a realm
 %% mints membership UCANs at more than one tier from the same key (see
@@ -2375,7 +2461,8 @@ open_client_stream(Realm, Proc, Args, Opts, Caller,
         mode        => Mode,
         args        => Args,
         deadline_ms => DeadlineMs,
-        caller      => macula_identity:public(Id)
+        caller      => macula_identity:public(Id),
+        ucan_token  => maps:get(ucan_token, Opts, <<>>)
     }),
     NewS = open_client_stream_dedicated(Pid, Frame, Sid, StreamPid, Mon, Id, S),
     {reply_value, {ok, StreamPid}, NewS}.
@@ -2523,7 +2610,8 @@ drop_bufs(Streams, Bufs) ->
 %% handed-off inbound stream; the rest belong to a session already
 %% tracked in `client_streams' / `server_streams'.
 dispatch_dedicated_frame(#{frame_type := stream_open} = Frame, Stream, S) ->
-    handle_inbound_stream_open(Frame, Stream, S);
+    on_inbound_stream_open(verify_signed_by(Frame, call_signer(Frame)), Frame,
+                           Stream, S);
 dispatch_dedicated_frame(#{frame_type := stream_data} = Frame, _Stream, S) ->
     deliver_stream_data(Frame, S);
 dispatch_dedicated_frame(#{frame_type := stream_end} = Frame, _Stream, S) ->
@@ -2556,6 +2644,36 @@ handle_inbound_stream_open(#{stream_id := Sid, procedure := Proc,
     DeclaredMode = maps:get(mode, Frame, server_stream),
     dispatch_stream_open(maps:find({Realm, Proc}, S#state.stream_procedures),
                          Sid, Proc, DeclaredMode, Args, Stream, S).
+
+%% A STREAM_OPEN whose signature does not verify against its own `caller'
+%% never reaches a handler and gets nothing back on its stream, the same
+%% rule `on_inbound_call/3' applies to a unary CALL. Once it verifies, the
+%% procedure's auth policy (`advertise_stream/6') decides through the same
+%% `authorize/3' a unary CALL goes through, before any handler runs.
+on_inbound_stream_open({ok, _Verified}, Frame, Stream,
+                       #state{stream_policies = SPols} = S) ->
+    Key = {maps:get(realm, Frame, undefined), maps:get(procedure, Frame, undefined)},
+    on_stream_open_verdict(authorize(Key, Frame, SPols), Frame, Stream, S);
+on_inbound_stream_open({error, Why}, Frame, _Stream, S) ->
+    logger:warning("[macula_station_link] dropped inbound STREAM_OPEN whose"
+                   " signature does not verify against its caller (~p)"
+                   " procedure=~p",
+                   [Why, maps:get(procedure, Frame, undefined)]),
+    S.
+
+%% Refused by the procedure's auth policy: a STREAM_ERROR on the caller's
+%% own stream, so it fails fast instead of waiting out its deadline, and no
+%% handler runs.
+on_stream_open_verdict(ok, Frame, Stream, S) ->
+    handle_inbound_stream_open(Frame, Stream, S);
+on_stream_open_verdict(unauthorized, Frame, Stream, #state{identity = Id} = S) ->
+    Refusal = macula_frame:stream_error(#{
+        stream_id => maps:get(stream_id, Frame),
+        code      => <<"unauthorized">>,
+        message   => <<"not authorized for this procedure">>
+    }),
+    try macula_peering:send_on_stream(Stream, Refusal, Id) catch _:_ -> ok end,
+    S.
 
 %% Unknown (Realm, Procedure) → ship a STREAM_ERROR back on the
 %% caller's own dedicated stream so it unblocks immediately rather

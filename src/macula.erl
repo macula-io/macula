@@ -18,7 +18,7 @@
 %%%
 %%% Erlang distribution over the mesh ships via `join_mesh/1' (V2
 %%% pool carrier) or `join_dist_relay/1' (dedicated dist relay). See
-%%% `macula_dist_pool' / `macula_dist_system'.
+%%% `macula_dist_pool' / `macula_dist_relay_client'.
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -69,6 +69,7 @@
     call_stream/2, call_stream/3, call_stream/5, call_stream_station/6,
     open_stream/3, open_stream/4,
     advertise_stream/2, advertise_stream/3, advertise_stream/5,
+    advertise_stream/6,
     unadvertise_stream/1, unadvertise_stream/3,
     send/2, send/3,
     recv/1, recv/2,
@@ -82,7 +83,7 @@
          monitor_nodes/0, unmonitor_nodes/0]).
 
 %% Mesh Distribution
--export([join_mesh/1, join_dist_relay/1]).
+-export([join_mesh/1, join_dist_relay/1, dist_relay_client/0]).
 
 -ifdef(TEST).
 %% Exports for unit tests — pure helpers that are otherwise private.
@@ -204,12 +205,16 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %%   <li>`ordered' (default) — per-publisher FIFO by seq; out-of-order
 %%       arrivals are buffered and released in order, a genuinely
 %%       missing seq skipped after `order_timeout_ms' (a `connect/2'
-%%       option, default 250ms).</li>
+%%       option, default 250ms). A new publisher's first facts are
+%%       held for up to `order_timeout_ms', so its order starts at the
+%%       lowest seq seen.</li>
 %%   <li>`latest_only' — deliver only seqs newer than the highest seen
 %%       for that publisher (drop stale); no buffering, no delay.</li>
 %%   <li>`as_arrives' — deliver in raw arrival order; the consumer
 %%       orders it itself.</li>
 %% </ul>
+%% Ordering state is kept per publisher, and apart for EVENTs whose
+%% publisher signature did not verify.
 %% See `macula_pubsub:subscribe/5'.
 -spec subscribe(pool(), realm(), topic(), pid(), map()) ->
     {ok, reference()}.
@@ -699,6 +704,8 @@ call_stream(Procedure, Args, Opts) when is_binary(Procedure), is_map(Opts) ->
 %% currently-healthy link and opens the stream there; the returned
 %% stream is sticky-to-link (errors with `peer_down' if the link
 %% dies; caller re-opens). See `macula_client:call_stream/5'.
+%% `Opts' `ucan_token' presents a UCAN to a streaming procedure
+%% advertised with an `auth' policy (see `advertise_stream/6').
 -spec call_stream(pool(), realm(), procedure(), term(), map()) ->
         {ok, stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, Opts)
@@ -765,6 +772,23 @@ advertise_stream(Pool, Realm, Procedure, Mode, Handler)
         orelse Mode =:= bidi),
        is_function(Handler, 2) ->
     macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler).
+
+%% @doc As `advertise_stream/5', with `Opts'. `auth' sets the streaming
+%% procedure's policy, the same set `advertise/5' takes: `open' (default),
+%% `{ucan_required, Issuer}' or `{realm_member_required, RealmDid,
+%% RequiredCan}'. A consumer presents its token with `call_stream/5''s
+%% `ucan_token' opt.
+-spec advertise_stream(pool(), realm(), procedure(),
+                        stream_mode(), stream_handler(), map()) ->
+        ok | {error, term()}.
+advertise_stream(Pool, Realm, Procedure, Mode, Handler, Opts)
+  when is_pid(Pool), is_binary(Realm), byte_size(Realm) =:= 32,
+       is_binary(Procedure),
+       (Mode =:= server_stream orelse Mode =:= client_stream
+        orelse Mode =:= bidi),
+       is_function(Handler, 2), is_map(Opts) ->
+    macula_client:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
+                                   maps:get(auth, Opts, open)).
 
 %% @doc Stop advertising a LOCAL streaming procedure.
 -spec unadvertise_stream(procedure()) -> ok.
@@ -914,23 +938,49 @@ on_pool_for_join({error, Reason}) ->
 %% After this returns `ok', standard OTP distribution (`rpc:call/4',
 %% `gen_server:call/3' across nodes, `pg' groups, etc.) works across
 %% firewalls via the dist relay.
+%%
+%% The relay client runs as a temporary child of the macula application
+%% supervisor. It does not reconnect: when the relay closes the
+%% connection the client ends and is not restarted. Monitor the pid from
+%% `dist_relay_client/0' to learn that, then call this function again.
+%% Returns `{error, macula_not_started}' when the macula application is
+%% not running.
 -spec join_dist_relay(map()) -> ok | {error, term()}.
 join_dist_relay(Opts) ->
     Url = maps:get(url, Opts),
     NodeName = atom_to_binary(node()),
-    case macula_dist_system:start_dist_relay_client(Url, NodeName) of
+    start_dist_relay_client(whereis(macula_root), Url, NodeName).
+
+start_dist_relay_client(undefined, _Url, _NodeName) ->
+    {error, macula_not_started};
+start_dist_relay_client(_Root, Url, NodeName) ->
+    ChildSpec = macula_dist_relay_client:child_spec(Url, NodeName),
+    case supervisor:start_child(macula_root, ChildSpec) of
         {ok, _Pid} ->
             os:putenv("MACULA_DIST_MODE", "dist_relay"),
-            ?LOG_INFO("[macula] Joined dist relay ~s — distribution enabled", [Url]),
+            ?LOG_INFO("[macula] Joined dist relay ~s, distribution enabled", [Url]),
             ok;
         {error, {already_started, _Pid}} ->
             os:putenv("MACULA_DIST_MODE", "dist_relay"),
-            ?LOG_INFO("[macula] dist_relay_client already running — mode set"),
+            ?LOG_INFO("[macula] dist_relay_client already running, mode set"),
             ok;
         {error, Reason} = Err ->
             ?LOG_ERROR("[macula] Failed to join dist relay: ~p", [Reason]),
             Err
     end.
+
+%% @doc The dist relay client that `join_dist_relay/1' started, if it
+%% is running.
+%%
+%% The client exits with `{relay_closed, Reason}' when the relay closes
+%% the connection and is not restarted. Monitor the returned pid and call
+%% `join_dist_relay/1' again after it goes down.
+-spec dist_relay_client() -> {ok, pid()} | {error, not_joined}.
+dist_relay_client() ->
+    dist_relay_client_result(macula_dist_relay_client:whereis_client()).
+
+dist_relay_client_result(undefined) -> {error, not_joined};
+dist_relay_client_result(Pid) -> {ok, Pid}.
 
 %% @private Wait until the V2 pool has at least one healthy
 %% station_link (CONNECT/HELLO completed). One-second polling, capped

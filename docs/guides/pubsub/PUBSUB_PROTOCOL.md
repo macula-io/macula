@@ -71,12 +71,15 @@ The subscriber receives:
 | `realm` | `<<_:256>>` | Realm tag (matches the subscribe call) |
 | `publisher` | `binary()` | Publisher pubkey (the original publisher, not the relay) |
 | `seq` | `non_neg_integer()` | Per-publisher monotonic sequence |
+| `publisher_verified` | `true \| false \| not_signed` | Whether the publisher signature verified; `not_signed` when the EVENT carried none |
 | `delivered_via` | `binary()` | Pubkey of the link/station that delivered this copy |
 
-`{publisher, seq}` is the dedup key. The pool guarantees you see
-each `(Realm, Publisher, Seq)` tuple **at most once**, even when the
-same EVENT arrives via multiple links (e.g. with
-`replication_factor > 1`).
+For an EVENT whose publisher signature verified, `(Realm, Publisher, Seq)`
+is the dedup key: the pool delivers each such tuple **at most once**, even
+when the same EVENT arrives via multiple links (e.g. with
+`replication_factor > 1`). Any other EVENT is deduplicated on that tuple
+plus a digest of its topic and payload, so identical copies still arrive
+once, and it never uses a verified EVENT's key.
 
 For `delivery` options (`ordered` / `latest_only` / `as_arrives`) and
 `(publisher, seq)` dedup semantics, see the Guide's

@@ -54,7 +54,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([start_link/2, start_link/3]).
+-export([start_link/2, start_link/3, child_spec/2]).
 -export([request_tunnel/2, close_tunnel/2, status/1]).
 -export([set_kernel/2, whereis_client/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -113,6 +113,19 @@ start_link(RelayUrl, NodeName) ->
 -spec start_link(binary() | string(), binary(), map()) -> {ok, pid()} | {error, term()}.
 start_link(RelayUrl, NodeName, Opts) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, {RelayUrl, NodeName, Opts}, []).
+
+%% @doc Child spec for running the client under `macula_root', as
+%% `macula:join_dist_relay/1' does. Temporary: the client ends when the
+%% relay closes the connection and has no reconnect, so a restart would
+%% only repeat against a relay that is gone.
+-spec child_spec(binary() | string(), binary()) -> supervisor:child_spec().
+child_spec(RelayUrl, NodeName) ->
+    #{id => ?MODULE,
+      start => {?MODULE, start_link, [RelayUrl, NodeName]},
+      restart => temporary,
+      shutdown => 5000,
+      type => worker,
+      modules => [?MODULE]}.
 
 %% @doc Tell the client which process to deliver `{accept, ...}' messages
 %% to when inbound tunnels arrive. Called by `macula_dist:accept/1' with
@@ -196,6 +209,15 @@ handle_info({quic, Data, Stream, _Flags},
     {Msgs, Remaining} = macula_dist_relay_protocol:decode_buffer(NewBuf),
     State2 = lists:foldl(fun handle_control_msg/2, State, Msgs),
     {noreply, State2#state{recv_buf = Remaining}};
+
+%% The control stream ending means the relay is gone. The QUIC NIF reports
+%% a lost connection as a failed read on the connection's streams
+%% (`stream_closed'), and a relay that finishes the control stream
+%% (`peer_send_shutdown') sends no more control frames.
+handle_info({quic, stream_closed, Stream, Flags}, #state{control = Stream} = State) ->
+    relay_lost({stream_closed, Flags}, State);
+handle_info({quic, peer_send_shutdown, Stream, _}, #state{control = Stream} = State) ->
+    relay_lost(peer_send_shutdown, State);
 
 %% Data on an unidentified tunnel stream — accumulate until prefix is complete
 handle_info({quic, Data, Stream, _Flags}, State) when is_binary(Data) ->
@@ -557,6 +579,12 @@ handle_closure(Ref, Closed, #state{conn = Ref} = State) ->
     {stop, {relay_closed, Closed}, State};
 handle_closure(Ref, _Closed, State) ->
     {noreply, drop_stream(Ref, State)}.
+
+%% No reconnect: the client ends, and `macula:join_dist_relay/1' starts a
+%% new one. Callers learn of it by monitoring `macula:dist_relay_client/0'.
+relay_lost(Why, State) ->
+    ?LOG_WARNING("[dist_relay_client] Relay control stream ended: ~p", [Why]),
+    {stop, {relay_closed, Why}, State}.
 
 %%====================================================================
 %% Utilities

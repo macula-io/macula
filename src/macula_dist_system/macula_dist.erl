@@ -123,7 +123,7 @@ register_node_with_dist_relay(NodeName) ->
 
 maybe_announce_node(undefined, NodeName) ->
     ?LOG_WARNING("[dist] dist_relay_client not running — dist over relay will "
-                 "fail until macula:join_mesh/1 is called with dist_relay opt "
+                 "fail until macula:join_dist_relay/1 is called "
                  "(node=~p)", [NodeName]);
 maybe_announce_node(_Pid, _NodeName) ->
     %% Client was started with the NodeName already (via start_link) and

@@ -163,7 +163,7 @@
 
 %% @doc Advertise `Procedure' on `Pool'/`Realm'. Starts a private
 %% factory supervisor for per-stream provider children and registers
-%% a dispatch handler with `macula:advertise_stream/5'. Returns the
+%% a dispatch handler with `macula:advertise_stream/5,6'. Returns the
 %% supervisor pid so the caller can supervise it (or ignore it).
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
                 module(), term()) -> {ok, pid()} | {error, term()}.
@@ -171,7 +171,9 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
     advertise(Pool, Realm, Procedure, Module, Args, #{}).
 
 %% @doc As `advertise/5'. `Opts' may include `announce' (default
-%% `true'), `mode' (default `server_stream'), and `reuse_sup' — an
+%% `true'), `mode' (default `server_stream'), `auth' (the procedure's
+%% auth policy, default `open', see `macula:advertise_stream/6'), and
+%% `reuse_sup' — an
 %% existing supervisor pid (as returned by a prior `advertise/5,6'
 %% call) to re-send the wire `ADVERTISE' frame on without starting a
 %% new factory supervisor. Use this for periodic re-advertise (a
@@ -189,10 +191,19 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
     Handler = fun(StreamPid, StreamArgs) ->
         dispatch(Sup, Module, Pool, Realm, Announce, Args, StreamPid, StreamArgs)
     end,
-    case macula:advertise_stream(Pool, Realm, Procedure, Mode, Handler) of
+    case advertise_with_policy(maps:find(auth, Opts), Pool, Realm, Procedure,
+                               Mode, Handler) of
         ok -> {ok, Sup};
         {error, Reason} -> {error, Reason}
     end.
+
+%% Without an `auth' opt the procedure is advertised exactly as before; with
+%% one, its policy goes to `macula:advertise_stream/6'.
+advertise_with_policy(error, Pool, Realm, Procedure, Mode, Handler) ->
+    macula:advertise_stream(Pool, Realm, Procedure, Mode, Handler);
+advertise_with_policy({ok, Policy}, Pool, Realm, Procedure, Mode, Handler) ->
+    macula:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
+                            #{auth => Policy}).
 
 %% See `macula_response:existing_or_new_sup/1' for why a dead `reuse_sup'
 %% pid must fall through to a fresh one rather than being handed to

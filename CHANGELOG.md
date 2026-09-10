@@ -83,8 +83,112 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 
 ## [Unreleased]
 
+## [10.24.0] - 2026-09-10
+
+### Added
+
+- `macula:dist_relay_client/0` returns `{ok, Pid}` for the dist relay
+  client that `macula:join_dist_relay/1` started, or `{error, not_joined}`.
+  The client has no reconnect: it exits with `{relay_closed, Reason}` when
+  the relay closes the connection. Monitor the pid and call
+  `join_dist_relay/1` again after it goes down.
+
 ### Changed
 
+- `macula_station_link` now verifies an inbound STREAM_OPEN's signature
+  against its `caller` before dispatching it. A STREAM_OPEN that does not
+  verify runs no handler and gets nothing back on its stream.
+- Streaming procedures can carry an auth policy. `advertise_stream/6` on
+  `macula`, `macula_client` and `macula_station_link`, and an `auth` opt on
+  `macula_streamer:advertise/6` and `advertise_direct/7`, take the same
+  policies as `advertise/5`. A STREAM_OPEN the policy refuses gets a
+  STREAM_ERROR with code `unauthorized` and runs no handler. The pool keeps
+  the policy when it replays a stream advertisement onto a respawned link.
+  The `/5` forms are unchanged and mean `open`.
+- `call_stream/5` takes a `ucan_token` opt. STREAM_OPEN carries an optional
+  `ucan_token` field, present only when the caller gives a token.
+- A chunked content fetch uses the fetched manifest only when its MCID,
+  recomputed from the manifest's canonical fields, equals the requested
+  MCID. Otherwise the fetch ends with `{error, manifest_mcid_mismatch}`
+  before any chunk is requested. `macula_manifest:verify_mcid/2` performs
+  the check.
+- The pool deduplicates an inbound EVENT on its `(realm, publisher, seq)`
+  only when its publisher signature verified. Any other EVENT is
+  deduplicated on that triple together with a digest of its topic and
+  payload, so identical copies arriving over several links are still
+  delivered once.
+- `ordered` and `latest_only` subscriptions keep separate per-publisher
+  ordering state for EVENTs whose publisher signature verified and for all
+  others. Unsigned EVENTs are ordered among themselves, per publisher.
+- An upload receiver (`macula_upload`) uses a pushed manifest only when
+  its MCID, recomputed from the manifest's canonical fields, is the MCID the
+  manifest names. Otherwise the upload ends with
+  `{error, {invalid_manifest, manifest_mcid_mismatch}}` on both sides and no
+  `sharing.upload_started_v1` fact is published, the same as for a manifest
+  that does not decode.
+- `macula_manifest:from_wire/1` reads a manifest whose field names arrive as
+  text keys, as the frame decoder leaves them in a node that has not yet
+  loaded `macula_manifest`, and reads a name or hash algorithm sent as text.
+  A manifest whose chunks are not a list of maps, or whose hash algorithm is
+  present but not blake3 or sha256, is `{error, invalid_manifest}`; a missing
+  hash algorithm is still blake3. `macula_manifest:verify_mcid/2` returns
+  `{error, manifest_mcid_mismatch}` for an unknown hash algorithm.
+- The Clustering Guide, the cluster and dist READMEs and the
+  `macula_cluster` documentation describe the `mdns` and `dht` strategies
+  as not available, and name `gossip` and `static` instead. They need a
+  discovery service the application does not start.
+
+### Removed
+
+- `macula_dist_system`, with `start_link/0,1` and
+  `start_dist_relay_client/2`. The application never started it, and it
+  could not start next to `macula_root`, since both start
+  `macula_dist_bridge_sup` under that registered name. Use
+  `macula:join_dist_relay/1` to start the dist relay client.
+- The `dist_relay_url` application environment key. Only
+  `macula_dist_system` read it.
+
+### Fixed
+
+- `macula:join_dist_relay/1` works on a running application. It exited
+  with `noproc`, because it started the relay client under a supervisor
+  that the application never started. The client now runs as a temporary
+  child of `macula_root`: a failed start returns `{error, Reason}`, and a
+  client that ends is not restarted. Without the macula application
+  running it returns `{error, macula_not_started}`.
+- `macula_dist_relay_client` now exits with `{relay_closed, Reason}` when
+  its control stream to the relay ends. The QUIC NIF reports a lost
+  connection as a closed stream, which the client ignored, so after a
+  relay loss it kept running and registered while distribution over the
+  relay no longer worked.
+- `ordered` subscriptions hold a new publisher's first facts, and a
+  publisher's first facts after a seq restart, for up to one
+  `order_timeout_ms` (or until `order_max_buffer` facts are held), and start
+  that publisher's order at the lowest seq held. A lower seq that arrives
+  after a higher one in that window is delivered, in order. A publisher's
+  first facts arrive up to one order timeout later. `latest_only` is
+  unchanged.
+
+## [10.23.0] - 2026-09-10
+
+### Changed
+
+- `pubsub_strict_publisher_sig` now defaults to `true`. An inbound EVENT
+  whose `publisher_sig` is present but does not verify is dropped by
+  default. Set the option to `false` to keep delivering such events with
+  `publisher_verified => false` in `Meta`. EVENTs that carry no
+  `publisher_sig` are unaffected and are still delivered as `not_signed`.
+- `macula_station_link` now verifies the signature of every inbound CALL,
+  RESULT and ERROR frame against the identity the frame names as its
+  signer: `caller` on a CALL, `responded_by` on a RESULT, `reported_by`
+  on an ERROR. A CALL that does not verify is not handed to its handler
+  and gets no reply. A RESULT or ERROR that does not verify is dropped
+  and leaves its call pending.
+- The inner frame of an `overlay_relay` is now delivered to overlay
+  subscribers only when its signature verifies against the origin the
+  envelope names. Callers of `send_overlay_frame/3` must sign the inner
+  frame with the identity of the link they send it on; the HyParView
+  frames `macula_hyparview_proto` builds already are.
 - `macula_tls:quic_client_opts/0,1` now return `[{verify, webpki}]`
   unless development mode is set explicitly. Only
   `MACULA_TLS_MODE=development` (or `dev`), or the `tls_mode` app env set

@@ -83,6 +83,14 @@ Advertise a streaming procedure with a mode and a `fun(Stream, Args)` handler.
 The handler drives the stream with the same `send` / `recv` primitives, and ends
 it with `set_reply` (a final result) or `abort` (an error).
 
+The provider verifies each STREAM_OPEN's signature against its `caller` before
+the handler runs; a STREAM_OPEN that does not verify runs no handler.
+`advertise_stream/6` takes an `auth` policy in `Opts`, the same policies as
+`advertise/5`. A STREAM_OPEN the policy refuses gets a STREAM_ERROR with code
+`unauthorized` and runs no handler. A consumer presents its token with
+`call_stream/5`'s `ucan_token` opt. See the
+[Authorization Guide](../shared/AUTHORIZATION_GUIDE.md) for the policies.
+
 ```erlang
 %% server_stream: push N chunks, then CLOSE — that is what produces `eof'
 %% for a consumer looping on `recv'. `set_reply' is for client_stream /
@@ -132,7 +140,7 @@ macula:abort(Stream, <<"0F">>, <<"source unavailable">>).
 `macula:open_stream/3,4`, `macula:advertise_stream/2,3`, and `call_stream/2,3`
 drive streams **inside one BEAM** (no mesh), backed by `macula_stream_local`.
 They are for unit tests and same-node dispatch. The pool forms
-(`call_stream/5`, `advertise_stream/5`) are the ones that go over the mesh.
+(`call_stream/5`, `advertise_stream/5,6`) are the ones that go over the mesh.
 
 ---
 
@@ -140,9 +148,10 @@ They are for unit tests and same-node dispatch. The pool forms
 
 | Function | Role |
 |---|---|
-| `call_stream(Pool, Realm, Proc, Args, Opts)` | raw consumer: open a stream on the pool's own link (`Opts` may set `mode`) |
+| `call_stream(Pool, Realm, Proc, Args, Opts)` | raw consumer: open a stream on the pool's own link (`Opts` may set `mode`, and `ucan_token` for a gated procedure) |
 | `call_stream_station(Pool, Station, Realm, Proc, Args, Opts)` | raw consumer: **direct-dial** — dial `Station` and open the stream there in one hop |
 | `advertise_stream(Pool, Realm, Proc, Mode, Handler)` | raw provider: serve a streaming procedure |
+| `advertise_stream(Pool, Realm, Proc, Mode, Handler, Opts)` | raw provider: as `/5`, with an `auth` policy in `Opts` |
 | `unadvertise_stream(Pool, Realm, Proc)` | raw provider: stop serving it |
 | `send(Stream, Bin)` / `send(Stream, Body, Enc)` | send a chunk (`Enc` = `raw` \| `msgpack`) |
 | `recv(Stream)` / `recv(Stream, Timeout)` | read the next `{chunk,_}` / `{data,_}` / `eof` |

@@ -15,7 +15,8 @@ Macula's authorization is:
 ![Authorization Flow](assets/authorization_flow.svg)
 
 > **What's actually gated today.** The SDK's only enforced authorization
-> point is per-procedure: `macula:advertise/5`'s `auth` opt takes `open`
+> point is per-procedure: `macula:advertise/5`'s `auth` opt (and the same
+> opt on `macula:advertise_stream/6` for streaming procedures) takes `open`
 > (default — serve any identified caller; every QUIC session is Ed25519
 > peer-bound, so "open" is not "anonymous"), `{ucan_required, Issuer}`
 > (a caller must present a valid UCAN signed by `Issuer`, checked via
@@ -330,6 +331,26 @@ not that whoever is presenting it now is that someone. This policy closes
 that gap for itself specifically — a token that is genuinely realm-signed and
 unexpired, but minted for a different member, is refused. `ucan_required`
 itself is unchanged and remains bearer-only.
+
+### provider → consumer: gated streaming procedures
+
+A streaming procedure takes the same policies. Pass `auth` to
+`macula:advertise_stream/6` (or in the `Opts` of `macula_streamer:advertise/6`
+and `advertise_direct/7`), and a consumer presents its token with
+`call_stream/5`'s `ucan_token` opt:
+
+```erlang
+Opts = #{auth => {realm_member_required, RealmDid, <<"member/email-verified">>}},
+ok = macula:advertise_stream(Pool, Realm, <<"private.feed">>, server_stream,
+                             Handler, Opts),
+{ok, Stream} = macula:call_stream(Pool, Realm, <<"private.feed">>, Args,
+                                  #{ucan_token => Token}).
+```
+
+The provider first verifies the STREAM_OPEN's signature against its `caller`,
+then applies the policy before the handler runs. A refused STREAM_OPEN gets a
+STREAM_ERROR with code `unauthorized` on its stream, and the handler never
+runs.
 
 ---
 

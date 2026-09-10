@@ -35,6 +35,13 @@ setup() ->
                     persistent_term:put({?MODULE, advertised_mode}, Mode),
                     ok
                 end),
+    meck:expect(macula, advertise_stream,
+                fun(_Pool, _Realm, _Proc, Mode, Handler, Opts) ->
+                    persistent_term:put({?MODULE, handler}, Handler),
+                    persistent_term:put({?MODULE, advertised_mode}, Mode),
+                    persistent_term:put({?MODULE, advertised_opts}, Opts),
+                    ok
+                end),
     meck:expect(macula, unadvertise_stream, fun(_Pool, _Realm, _Proc) -> ok end),
     meck:expect(macula, publish, fun(_Pool, _Realm, _Topic, _Payload) -> ok end),
     meck:new(macula_stream, [passthrough]),
@@ -50,6 +57,7 @@ setup() ->
 teardown(_) ->
     persistent_term:erase({?MODULE, handler}),
     persistent_term:erase({?MODULE, advertised_mode}),
+    persistent_term:erase({?MODULE, advertised_opts}),
     meck:unload(macula_stream),
     meck:unload(macula_direct_dial),
     meck:unload(macula).
@@ -68,6 +76,7 @@ streamer_test_() ->
       fun send_and_close_drive_the_stream/0,
       fun dead_stream_stops_the_streamer/0,
       fun advertise_direct_forwards_mode_to_advertise_stream/0,
+      fun advertise_forwards_auth_to_advertise_stream/0,
       fun reuse_sup_resends_advertise_without_a_new_supervisor/0,
       fun reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor/0]}.
 
@@ -119,6 +128,23 @@ advertise_direct_forwards_mode_to_advertise_stream() ->
     ?assertEqual(client_stream, persistent_term:get({?MODULE, advertised_mode})),
     ?assertEqual(1, meck:num_calls(macula_direct_dial, publish_advertisement,
                                    [pool, <<0:256>>, <<"bulk.ingest">>, Identity, '_'])).
+
+%% A streamer-built procedure is gated like any other: `auth' in `Opts'
+%% reaches `macula:advertise_stream/6' as the procedure's policy, through
+%% both `advertise/6' and `advertise_direct/7'.
+advertise_forwards_auth_to_advertise_stream() ->
+    Policy = {ucan_required, <<7:256>>},
+    {ok, _} = macula_streamer:advertise(pool, <<0:256>>, <<"logs.gated">>,
+                                        ?MODULE, self(), #{auth => Policy}),
+    ?assertEqual(#{auth => Policy},
+                 persistent_term:get({?MODULE, advertised_opts}, undefined)),
+    persistent_term:erase({?MODULE, advertised_opts}),
+    {ok, _} = macula_streamer:advertise_direct(pool, <<0:256>>, <<"logs.gated">>,
+                                               ?MODULE, self(),
+                                               macula_identity:generate(),
+                                               #{auth => Policy}),
+    ?assertEqual(#{auth => Policy},
+                 persistent_term:get({?MODULE, advertised_opts}, undefined)).
 
 opens_and_publishes_lifecycle() ->
     process_flag(trap_exit, true),

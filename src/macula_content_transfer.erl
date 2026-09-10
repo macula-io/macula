@@ -26,8 +26,8 @@
 %%% == Cancel is a real abort, not a dropped connection ==
 %%%
 %%% `cancel/3' resets every currently-open content stream's send side
-%%% via `macula_quic:reset_stream/2' (through `macula_station_link:
-%%% abort_content_stream/4') — a QUIC RESET_STREAM frame the PEER's
+%%% via `macula_quic:reset_stream/2' (through macula_station_link's
+%%% abort_content_stream) — a QUIC RESET_STREAM frame the PEER's
 %%% own read genuinely observes as `{quic, stream_closed, PeerStream,
 %%% {reset, Code}}', not merely a connection that went away. This is
 %%% NOT `macula_stream:abort/3' (streaming RPC's abort) — that targets
@@ -683,15 +683,29 @@ classify_put_manifest({ok, Reply},  _MCID) -> {error, {unexpected_reply, Reply}}
 classify_put_manifest({error, _} = E, _MCID) -> E.
 
 step_get_manifest(Self, LinkPid, Stream, Mcid) ->
-    Outcome = classify_get_manifest_step(
-      call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_MANIFEST_PROC,
-                                #{mcid => Mcid}, ?CONTENT_MANIFEST_TIMEOUT_MS)),
+    Outcome = bind_manifest(
+                classify_get_manifest_step(
+                  call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_MANIFEST_PROC,
+                                            #{mcid => Mcid}, ?CONTENT_MANIFEST_TIMEOUT_MS)),
+                Mcid),
     Self ! {step_result, Outcome}.
 
 classify_get_manifest_step({ok, not_found})          -> {error, not_found};
 classify_get_manifest_step({ok, Wire}) when is_map(Wire) -> macula_manifest:from_wire(Wire);
 classify_get_manifest_step({ok, Reply})              -> {error, {unexpected_reply, Reply}};
 classify_get_manifest_step({error, _} = E)            -> E.
+
+%% The manifest is used only if it describes the content asked for: its
+%% MCID, recomputed from its canonical fields, must be `Mcid'. Every chunk
+%% is then fetched against this manifest and the whole is checked against
+%% its size and root hash, so the bytes returned are the bytes `Mcid' names.
+bind_manifest({ok, Manifest}, Mcid) ->
+    bound_manifest(macula_manifest:verify_mcid(Manifest, Mcid), Manifest);
+bind_manifest({error, _} = E, _Mcid) ->
+    E.
+
+bound_manifest(ok, Manifest)              -> {ok, Manifest};
+bound_manifest({error, _} = E, _Manifest) -> E.
 
 %% The ONLY non-lane step for a get is the manifest fetch; for a put
 %% it's the manifest put, which always finalizes (success or failure)

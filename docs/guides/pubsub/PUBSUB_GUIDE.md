@@ -248,6 +248,11 @@ contiguous, which is exactly what makes ordered delivery possible.
 | `latest_only` | Deliver only seqs newer than the highest seen for that publisher (drop stale). No buffering, no head-of-line delay. | State snapshots — you want the freshest value, not every value. |
 | `as_arrives` | Raw arrival order. Zero added latency; you order it yourself. | You have your own versioning, or you truly do not care. |
 
+Ordering state is kept per publisher, and separately for EVENTs whose
+publisher signature verified and for all others: unsigned EVENTs are
+ordered among themselves, per publisher, and never affect the order of a
+verified publisher's EVENTs.
+
 ```erlang
 %% default — per-publisher FIFO
 {ok, Pid1} = macula_subscriber:start_link(my_orders_listener, Pool, Realm, Topic, []),
@@ -268,6 +273,15 @@ skip is the accepted "order-not-guaranteed delivery" trade for a lost
 fact — a reorder buffer cannot invent a message the mesh dropped. Design
 mesh facts to be **idempotent and version-stamped** so an occasional
 skip washes out.
+
+**A publisher's first facts.** When an `ordered` subscription first hears
+from a publisher, or hears from it again after a restart, it does not yet
+know where that publisher's order starts: copies arrive over several links
+in any order. It holds that publisher's first facts for up to
+`order_timeout_ms` (or until `order_max_buffer` facts are held), then starts
+the order at the lowest seq it has seen, so a lower seq that arrives after a
+higher one is still delivered, in order. A publisher's first facts therefore
+reach the subscriber up to one order timeout later than its later facts.
 
 **Publisher restarts.** A publisher's `seq` is seeded from wall-clock
 microseconds at start (`macula_client` for an SDK pool; `hecate_pubsub_server`
@@ -294,7 +308,7 @@ relate two publishers' events.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `order_timeout_ms` | `250` | How long an `ordered` sub waits for a missing seq before skipping the gap. Bounds head-of-line delay. |
+| `order_timeout_ms` | `250` | How long an `ordered` sub waits for a missing seq before skipping the gap, and the longest it holds a new publisher's first facts. Bounds head-of-line delay. |
 | `order_max_buffer` | `1024` | Per-publisher reorder-buffer count cap. Over it, the head gap is skipped early (memory guard for a high-rate publisher gapping). |
 
 ### Telemetry — is loss real?
@@ -313,9 +327,12 @@ signal to look at delivery, not ordering.
 
 ## Dedup and delivery guarantees
 
-`{publisher, seq}` is the dedup key. The pool guarantees you see each
-`(Realm, Publisher, Seq)` tuple **at most once**, even when the same EVENT
-arrives via multiple links (e.g. with `replication_factor > 1`). In
+For an EVENT whose publisher signature verified, `{publisher, seq}` is the
+dedup key: the pool guarantees you see each `(Realm, Publisher, Seq)` tuple
+**at most once**, even when the same EVENT arrives via multiple links (e.g.
+with `replication_factor > 1`). Any other EVENT is deduplicated on that tuple
+plus a digest of its topic and payload, so identical copies still arrive
+once, and it never uses a verified EVENT's key. In
 `ordered` and `latest_only` modes the delivery layer additionally uses the
 seq to order or drop; in `as_arrives` the dedup layer is the only filter.
 
@@ -333,8 +350,9 @@ seq to order or drop; in `as_arrives` the dedup layer is the only filter.
 - **Cross-publisher ordering** — none, by design. Two publishers' events
   arrive in arbitrary interleaving; see "Total order is not offered, by
   design" above.
-- **Cross-link dedup** — the pool dedupes by `(Realm, Publisher, Seq)`
-  over a 60-second window (configurable; see `dedup_window_ms` in
+- **Cross-link dedup** — the pool dedupes by `(Realm, Publisher, Seq)`,
+  plus a digest of topic and payload for an EVENT whose publisher signature
+  did not verify, over a 60-second window (configurable; see `dedup_window_ms` in
   [CONNECTING_GUIDE.md](../shared/CONNECTING_GUIDE.md)).
 - **Cross-station gossip** — default since 4.5.0. A daemon connected to
   station A and a daemon connected to station B see each other's

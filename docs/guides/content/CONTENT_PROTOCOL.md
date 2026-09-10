@@ -232,8 +232,8 @@ budget — the same value `call_station` already gives unary RPC calls.
 | Function | Role |
 |---|---|
 | `put_content(Pool, Bytes)` | store a blob (single-block or chunked, by size), return its MCID |
-| `get_content(Pool, MCID)` | fetch the bytes for an MCID (`{error, not_found}` if none reachable); single-block bytes are re-verified against the MCID's BLAKE3 hash client-side |
-| `get_content_station(Pool, Station, MCID, TimeoutMs, Opts)` | **direct-dial**: fetch from a specific, already-resolved station |
+| `get_content(Pool, MCID)` | fetch the bytes for an MCID (`{error, not_found}` if none reachable); single-block bytes are re-verified against the MCID's BLAKE3 hash client-side, and a chunked MCID's manifest is used only if its recomputed MCID is the one requested (`{error, manifest_mcid_mismatch}` otherwise) |
+| `get_content_station(Pool, Station, MCID, TimeoutMs, Opts)` | **direct-dial**: fetch from a specific, already-resolved station, with the same checks as `get_content/2` |
 | `put_content_station(Pool, Station, Bytes, TimeoutMs, Opts)` | **direct-dial**: seed a specific station directly |
 | `find_content_providers(Pool, MCID)` | resolve every host currently announcing an MCID (signature- and signer-verified) |
 | `macula_direct_dial:get_content(Pool, MCID, TimeoutMs)` | **direct-dial**: resolve a provider and fetch, in one call |

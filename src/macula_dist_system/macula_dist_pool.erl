@@ -14,7 +14,7 @@
 %%% 5. Post-handshake: tick keepalive + distribution traffic via bridge
 %%%
 %%% Bridge processes are supervised by `macula_dist_bridge_sup'
-%%% (simple_one_for_one under `macula_dist_system').
+%%% (simple_one_for_one, started by `macula_root').
 %%%
 %%% Tunnel bytes are encrypted with AES-256-GCM derived from the
 %%% Erlang distribution cookie. The relay cannot read ETF content.

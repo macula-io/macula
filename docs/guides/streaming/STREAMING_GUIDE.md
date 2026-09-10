@@ -165,6 +165,15 @@ plain `advertise/5,6` — a plain advertise publishes no discoverable record.
 
 ---
 
+## Gating a stream procedure
+
+A stream procedure can require a token the same way a unary one can. Give
+`macula_streamer:advertise/6` (or `advertise_direct/7`) an `auth` policy in
+`Opts`, and consumers pass `ucan_token` in their `call_stream` opts. See the
+[Authorization Guide](../shared/AUTHORIZATION_GUIDE.md) for the policies.
+
+---
+
 ## Content streaming
 
 "Content streaming" is the `server_stream` mode applied to a live source: the

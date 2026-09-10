@@ -104,12 +104,11 @@ result_frame_resolves_pending_caller_test_() ->
          after 1_000 ->
              erlang:error({no_send_frame_cast, Pid})
          end,
-         Pid ! {macula_peering, frame, FakePeer, #{
+         Pid ! {macula_peering, frame, FakePeer, signed_reply(#{
              frame_type => result,
              call_id    => CallId,
-             payload    => [#{tag => <<"hello">>}],
-             responded_by => PeerNodeId
-         }},
+             payload    => [#{tag => <<"hello">>}]
+         })},
          receive
              {CallerRef, Reply} ->
                  ?assertEqual({ok, [#{tag => <<"hello">>}]}, Reply)
@@ -164,13 +163,12 @@ error_frame_surfaces_to_caller_test_() ->
          after 1_000 ->
              erlang:error(no_send_frame_cast)
          end,
-         Pid ! {macula_peering, frame, FakePeer, #{
+         Pid ! {macula_peering, frame, FakePeer, signed_reply(#{
              frame_type  => error,
              call_id     => CallId,
              code        => 16#01,
-             name        => <<"unknown_next_peer">>,
-             reported_by => PeerNodeId
-         }},
+             name        => <<"unknown_next_peer">>
+         })},
          receive
              {CallerRef, Reply} ->
                  ?assertMatch({error, {call_error, 16#01, _}}, Reply)
@@ -317,12 +315,11 @@ put_record_ok_test_() ->
          after 1_000 ->
              erlang:error(no_put_record_cast)
          end,
-         Pid ! {macula_peering, frame, FakePeer, #{
+         Pid ! {macula_peering, frame, FakePeer, signed_reply(#{
              frame_type => result,
              call_id    => CallId,
-             payload    => ok,
-             responded_by => PeerNodeId
-         }},
+             payload    => ok
+         })},
          receive
              {CallerRef, Reply} ->
                  ?assertEqual(ok, Reply)
@@ -378,12 +375,11 @@ put_record_unexpected_reply_test_() ->
                                           call_id    := Id}}} -> Id
          after 1_000 -> erlang:error(no_put_record_cast)
          end,
-         Pid ! {macula_peering, frame, FakePeer, #{
+         Pid ! {macula_peering, frame, FakePeer, signed_reply(#{
              frame_type   => result,
              call_id      => CallId,
-             payload      => #{some => garbage},
-             responded_by => PeerNodeId
-         }},
+             payload      => #{some => garbage}
+         })},
          receive
              {CallerRef, Reply} ->
                  ?assertMatch({error, {unexpected_reply, _}}, Reply)
@@ -441,12 +437,11 @@ find_record_ok_test_() ->
          %% `signature' (not legacy `sig') matches the wire-canonical
          %% record shape — see commit 0b35f80 (4.2.2).
          FakeRecord = #{type => 1, payload => #{}, signature => <<>>},
-         Pid ! {macula_peering, frame, FakePeer, #{
+         Pid ! {macula_peering, frame, FakePeer, signed_reply(#{
              frame_type   => result,
              call_id      => CallId,
-             payload      => FakeRecord,
-             responded_by => PeerNodeId
-         }},
+             payload      => FakeRecord
+         })},
          receive
              {CallerRef, Reply} ->
                  ?assertEqual({ok, FakeRecord}, Reply)
@@ -498,12 +493,11 @@ find_record_not_found_test_() ->
                                           call_id    := Id}}} -> Id
          after 1_000 -> erlang:error(no_find_record_cast)
          end,
-         Pid ! {macula_peering, frame, FakePeer, #{
+         Pid ! {macula_peering, frame, FakePeer, signed_reply(#{
              frame_type   => result,
              call_id      => CallId,
-             payload      => not_found,
-             responded_by => PeerNodeId
-         }},
+             payload      => not_found
+         })},
          receive
              {CallerRef, Reply} ->
                  ?assertEqual({error, not_found}, Reply)
@@ -667,26 +661,28 @@ event_publisher_sig_verify_test_() ->
              ?assertEqual(true, maps:get(publisher_verified, Meta1))
          after 2_000 -> erlang:error(valid_sig_event_not_delivered) end,
 
-         %% 2. Tampered publisher_sig, lenient (default) → still
-         %% delivered, but Meta says `false', not `true' -- a
-         %% subscriber must be able to tell "signed, but the signature
-         %% didn't check out" apart from an actually-trustworthy fact,
-         %% even though lenient mode still hands it over.
+         %% 2. Tampered publisher_sig with the setting left at its
+         %% default → NOT delivered. Strict is the default: a signature
+         %% that is present but does not check out is dropped, while an
+         %% absent one (step 0) is still delivered as `not_signed'.
          Bad = (macula_frame:sign_publisher(MkEvent(2, ok2), PubKp))#{
                  payload => tampered},
          Pid ! {macula_peering, frame, FakePeer, Bad},
-         receive {macula_event, SubRef, Topic, tampered, Meta2} ->
-             ?assertEqual(false, maps:get(publisher_verified, Meta2))
-         after 2_000 -> erlang:error(lenient_bad_sig_event_not_delivered) end,
+         receive {macula_event, SubRef, Topic, tampered, _} ->
+             erlang:error(default_bad_sig_event_was_delivered)
+         after 800 -> ok end,
 
-         %% 3. Tampered publisher_sig, strict → NOT delivered.
-         application:set_env(macula, pubsub_strict_publisher_sig, true),
+         %% 3. Tampered publisher_sig with lenient mode explicitly
+         %% opted into → delivered, but Meta says `false', never `true'
+         %% -- a subscriber must still be able to tell "signed, but the
+         %% signature didn't check out" apart from a trustworthy fact.
+         application:set_env(macula, pubsub_strict_publisher_sig, false),
          Bad3 = (macula_frame:sign_publisher(MkEvent(3, ok3), PubKp))#{
                   payload => tampered3},
          Pid ! {macula_peering, frame, FakePeer, Bad3},
-         receive {macula_event, SubRef, Topic, tampered3, _} ->
-             erlang:error(strict_bad_sig_event_was_delivered)
-         after 800 -> ok end,
+         receive {macula_event, SubRef, Topic, tampered3, Meta3} ->
+             ?assertEqual(false, maps:get(publisher_verified, Meta3))
+         after 2_000 -> erlang:error(lenient_bad_sig_event_not_delivered) end,
          application:unset_env(macula, pubsub_strict_publisher_sig),
 
          macula_station_link:stop(Pid),
@@ -1207,10 +1203,13 @@ overlay_relay_delivers_with_envelope_origin_as_sender_test_() ->
              setelement(?PEER_PID_INDEX + 1, S2, StationNodeId)
          end),
          {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
-         Origin = macula_identity:public(macula_identity:generate()),
+         OriginKp = macula_identity:generate(),
+         Origin = macula_identity:public(OriginKp),
          ?assertNotEqual(Origin, StationNodeId),
          Joiner = macula_identity:public(macula_identity:generate()),
-         Inner = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
+         Inner = macula_frame:sign(
+                   macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
+                   OriginKp),
          Envelope = macula_frame:overlay_relay(#{
              peer    => Origin,
              payload => macula_frame:encode(Inner)
@@ -1223,6 +1222,48 @@ overlay_relay_delivers_with_envelope_origin_as_sender_test_() ->
                  ?assertEqual(Origin, maps:get(sender, Meta)),
                  ?assertNotEqual(StationNodeId, maps:get(sender, Meta))
          after 2_000 -> erlang:error(no_overlay_frame_delivered)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%% The inner frame of an `overlay_relay' envelope is delivered only when
+%% its own signature verifies against the origin the envelope names. One
+%% signed by any other key, or not signed at all, is dropped; a genuinely
+%% signed one that follows is delivered.
+overlay_relay_inner_frame_must_verify_against_origin_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {Pid, FakePeer, _StationNodeId} = start_connected_link(),
+         {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
+         OriginKp = macula_identity:generate(),
+         Relay = fun(Inner) ->
+                     Pid ! {macula_peering, frame, FakePeer,
+                            macula_frame:overlay_relay(#{
+                                peer    => macula_identity:public(OriginKp),
+                                payload => macula_frame:encode(Inner)})}
+                 end,
+         Join = fun() ->
+                    macula_frame:hyparview_join(#{
+                        realm      => ?REALM,
+                        new_member => macula_identity:public(macula_identity:generate())})
+                end,
+         Relay(macula_frame:sign(Join(), macula_identity:generate())),
+         Relay(Join()),
+         Genuine = macula_frame:sign(Join(), OriginKp),
+         Relay(Genuine),
+         receive
+             {macula_overlay_frame, SubRef, First, _Meta} ->
+                 ?assertEqual(Genuine, First)
+         after 2_000 ->
+             erlang:error(no_overlay_frame_delivered)
+         end,
+         receive
+             {macula_overlay_frame, SubRef, Extra, _} ->
+                 erlang:error({unverified_overlay_frame_delivered, Extra})
+         after 300 ->
+             ok
          end,
          macula_station_link:stop(Pid),
          ok
@@ -1519,8 +1560,9 @@ inbound_call_dispatches_to_handler_test_() ->
          ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
          flush_send_frame_casts(),
          CallId = <<1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16>>,
-         CallerPub = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, frame, FakePeer, #{
+         CallerKp = macula_identity:generate(),
+         CallerPub = macula_identity:public(CallerKp),
+         Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
              frame_type  => call,
              call_id     => CallId,
              realm       => ?REALM,
@@ -1528,7 +1570,7 @@ inbound_call_dispatches_to_handler_test_() ->
              payload     => #{token => <<"abc">>},
              deadline_ms => erlang:system_time(millisecond) + 5_000,
              caller      => CallerPub
-         }},
+         }, CallerKp)},
          receive
              {'$gen_cast', {send_frame,
                             #{frame_type := result,
@@ -1570,9 +1612,10 @@ inbound_call_threads_caller_into_payload_test_() ->
          ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
          flush_send_frame_casts(),
          CallId = <<1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16>>,
-         CallerPub = macula_identity:public(macula_identity:generate()),
+         CallerKp = macula_identity:generate(),
+         CallerPub = macula_identity:public(CallerKp),
          SpoofedCaller = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, frame, FakePeer, #{
+         Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
              frame_type  => call,
              call_id     => CallId,
              realm       => ?REALM,
@@ -1583,7 +1626,7 @@ inbound_call_threads_caller_into_payload_test_() ->
              payload     => #{token => <<"abc">>, caller => SpoofedCaller},
              deadline_ms => erlang:system_time(millisecond) + 5_000,
              caller      => CallerPub
-         }},
+         }, CallerKp)},
          receive
              {handler_saw, Payload} ->
                  ?assertEqual(CallerPub, maps:get(caller, Payload)),
@@ -1613,8 +1656,9 @@ inbound_call_unknown_procedure_returns_error_frame_test_() ->
              setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
          end),
          CallId = <<2:128>>,
-         CallerPub = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, frame, FakePeer, #{
+         CallerKp = macula_identity:generate(),
+         CallerPub = macula_identity:public(CallerKp),
+         Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
              frame_type  => call,
              call_id     => CallId,
              realm       => ?REALM,
@@ -1622,7 +1666,7 @@ inbound_call_unknown_procedure_returns_error_frame_test_() ->
              payload     => #{},
              deadline_ms => erlang:system_time(millisecond) + 5_000,
              caller      => CallerPub
-         }},
+         }, CallerKp)},
          receive
              {'$gen_cast', {send_frame,
                             #{frame_type := error,
@@ -1658,8 +1702,9 @@ inbound_call_handler_crash_returns_error_frame_test_() ->
          ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
          flush_send_frame_casts(),
          CallId = <<3:128>>,
-         CallerPub = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, frame, FakePeer, #{
+         CallerKp = macula_identity:generate(),
+         CallerPub = macula_identity:public(CallerKp),
+         Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
              frame_type  => call,
              call_id     => CallId,
              realm       => ?REALM,
@@ -1667,7 +1712,7 @@ inbound_call_handler_crash_returns_error_frame_test_() ->
              payload     => #{},
              deadline_ms => erlang:system_time(millisecond) + 5_000,
              caller      => CallerPub
-         }},
+         }, CallerKp)},
          receive
              {'$gen_cast', {send_frame,
                             #{frame_type := error,
@@ -1716,8 +1761,9 @@ inbound_call_handler_error_tuple_emits_call_error_test_() ->
          ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
          flush_send_frame_casts(),
          CallId = <<4:128>>,
-         CallerPub = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, frame, FakePeer, #{
+         CallerKp = macula_identity:generate(),
+         CallerPub = macula_identity:public(CallerKp),
+         Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
              frame_type  => call,
              call_id     => CallId,
              realm       => ?REALM,
@@ -1725,7 +1771,7 @@ inbound_call_handler_error_tuple_emits_call_error_test_() ->
              payload     => #{},
              deadline_ms => erlang:system_time(millisecond) + 5_000,
              caller      => CallerPub
-         }},
+         }, CallerKp)},
          receive
              {'$gen_cast', {send_frame,
                             #{frame_type := error,
@@ -1805,16 +1851,17 @@ binary_reason_crosses_the_wire_verbatim_test_() ->
          Handler = fun(_Args) -> {error, <<"hold_full">>} end,
          ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
          flush_send_frame_casts(),
+         CallerKp = macula_identity:generate(),
          CallId = <<7:128>>,
-         Pid ! {macula_peering, frame, FakePeer, #{
+         Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
              frame_type  => call,
              call_id     => CallId,
              realm       => ?REALM,
              procedure   => Procedure,
              payload     => #{},
              deadline_ms => erlang:system_time(millisecond) + 5_000,
-             caller      => macula_identity:public(macula_identity:generate())
-         }},
+             caller      => macula_identity:public(CallerKp)
+         }, CallerKp)},
          receive
              {'$gen_cast', {send_frame, #{frame_type := error,
                                           detail     := Detail}}} ->
@@ -1854,8 +1901,7 @@ inject_error_frame(Fields) ->
         erlang:error(no_send_frame_cast)
     end,
     Pid ! {macula_peering, frame, FakePeer,
-           Fields#{frame_type => error, call_id => CallId,
-                   reported_by => PeerNodeId}},
+           signed_reply(Fields#{frame_type => error, call_id => CallId})},
     Reply = receive
         {CallerRef, R2} -> R2
     after 2_000 ->
@@ -1863,6 +1909,100 @@ inject_error_frame(Fields) ->
     end,
     macula_station_link:stop(Pid),
     Reply.
+
+%%------------------------------------------------------------------
+%% A reply completes a call only when its signature verifies
+%%------------------------------------------------------------------
+
+%% A RESULT is signed by the identity it names in `responded_by', an
+%% ERROR by the one it names in `reported_by'. A reply whose signature
+%% does not verify against that identity is dropped and leaves the call
+%% pending, so the genuine reply that follows is the one the caller gets.
+result_that_does_not_verify_leaves_call_pending_test_() ->
+    {timeout, 10,
+     fun() ->
+         Genuine = fun(Id) -> signed_reply(result_frame(Id, genuine)) end,
+         ?assertEqual({ok, #{tag => genuine}},
+                      reply_sequence([fun(Id) ->
+                                          forged_reply(result_frame(Id, forged),
+                                                       responded_by)
+                                      end, Genuine])),
+         ?assertEqual({ok, #{tag => genuine}},
+                      reply_sequence([fun(Id) ->
+                                          unsigned_reply(result_frame(Id, unsigned),
+                                                         responded_by)
+                                      end, Genuine]))
+     end}.
+
+error_that_does_not_verify_leaves_call_pending_test_() ->
+    {timeout, 10,
+     fun() ->
+         Genuine = fun(Id) -> signed_reply(result_frame(Id, genuine)) end,
+         ?assertEqual({ok, #{tag => genuine}},
+                      reply_sequence([fun(Id) ->
+                                          forged_reply(refusal_frame(Id), reported_by)
+                                      end, Genuine])),
+         ?assertEqual({ok, #{tag => genuine}},
+                      reply_sequence([fun(Id) ->
+                                          unsigned_reply(refusal_frame(Id), reported_by)
+                                      end, Genuine]))
+     end}.
+
+%% Issue one call on a link with a fake peer, feed it one frame per entry
+%% of `Replies' (each a fun from the call's id to a frame), and hand back
+%% what the caller got.
+reply_sequence(Replies) ->
+    {ok, _} = application:ensure_all_started(macula),
+    {Pid, FakePeer, _PeerNodeId} = start_connected_link(),
+    CallerRef = make_ref(),
+    Test = self(),
+    spawn_link(fun() ->
+        R = macula_station_link:call(Pid, ?REALM, <<"_test.anything">>,
+                                     #{}, 2_000),
+        Test ! {CallerRef, R}
+    end),
+    CallId = receive
+        {'$gen_cast', {send_frame, #{frame_type := call, call_id := Id}}} -> Id
+    after 1_000 ->
+        erlang:error(no_send_frame_cast)
+    end,
+    lists:foreach(fun(ReplyFor) ->
+        Pid ! {macula_peering, frame, FakePeer, ReplyFor(CallId)}
+    end, Replies),
+    Reply = receive
+        {CallerRef, R2} -> R2
+    after 3_000 ->
+        erlang:error(no_caller_reply)
+    end,
+    macula_station_link:stop(Pid),
+    Reply.
+
+result_frame(CallId, Tag) ->
+    #{frame_type => result, call_id => CallId, payload => #{tag => Tag}}.
+
+refusal_frame(CallId) ->
+    #{frame_type => error, call_id => CallId, code => 16#0F,
+      name => <<"unknown_error">>, detail => <<"refused">>}.
+
+%% A reply as a real responder sends it: signed by the identity it names
+%% in `responded_by' (RESULT) or `reported_by' (ERROR).
+signed_reply(#{frame_type := result} = Frame) ->
+    sign_naming_signer(Frame, responded_by);
+signed_reply(#{frame_type := error} = Frame) ->
+    sign_naming_signer(Frame, reported_by).
+
+sign_naming_signer(Frame, Field) ->
+    Kp = macula_identity:generate(),
+    macula_frame:sign(Frame#{Field => macula_identity:public(Kp)}, Kp).
+
+%% Names one identity in `Field' and is signed by another.
+forged_reply(Frame, Field) ->
+    Named = macula_identity:public(macula_identity:generate()),
+    macula_frame:sign(Frame#{Field => Named}, macula_identity:generate()).
+
+%% Names an identity in `Field' and carries no signature.
+unsigned_reply(Frame, Field) ->
+    Frame#{Field => macula_identity:public(macula_identity:generate())}.
 
 unadvertise_clears_handler_and_sends_frame_test_() ->
     {timeout, 5,
@@ -1896,8 +2036,9 @@ unadvertise_clears_handler_and_sends_frame_test_() ->
          %% After unadvertise, an inbound CALL must produce
          %% unknown_next_peer (handler was cleared).
          CallId = <<5:128>>,
-         CallerPub = macula_identity:public(macula_identity:generate()),
-         Pid ! {macula_peering, frame, FakePeer, #{
+         CallerKp = macula_identity:generate(),
+         CallerPub = macula_identity:public(CallerKp),
+         Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
              frame_type  => call,
              call_id     => CallId,
              realm       => ?REALM,
@@ -1905,7 +2046,7 @@ unadvertise_clears_handler_and_sends_frame_test_() ->
              payload     => #{},
              deadline_ms => erlang:system_time(millisecond) + 5_000,
              caller      => CallerPub
-         }},
+         }, CallerKp)},
          receive
              {'$gen_cast', {send_frame,
                             #{frame_type := error,
@@ -2120,10 +2261,11 @@ inbound_stream_open_unknown_procedure_returns_error_test_() ->
      fun() ->
          {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
          try
-             CallerPub = macula_identity:public(macula_identity:generate()),
+             CallerKp = macula_identity:generate(),
+             CallerPub = macula_identity:public(CallerKp),
              Sid = crypto:strong_rand_bytes(16),
              Stream = make_ref(),
-             inject_dedicated_stream_open(Pid, FakePeer, Stream, #{
+             inject_dedicated_stream_open(Pid, FakePeer, Stream, macula_frame:sign(#{
                  frame_type  => stream_open,
                  stream_id   => Sid,
                  procedure   => <<"unknown.proc">>,
@@ -2132,7 +2274,7 @@ inbound_stream_open_unknown_procedure_returns_error_test_() ->
                  args        => #{},
                  deadline_ms => erlang:system_time(millisecond) + 5_000,
                  caller      => CallerPub
-             }),
+             }, CallerKp)),
              receive
                  {sent_on_stream, Stream,
                   #{frame_type := stream_error,
@@ -2190,10 +2332,11 @@ inbound_stream_open_invokes_handler_test_() ->
              ok = macula_station_link:advertise_stream(
                     Pid, ?REALM, Procedure, server_stream, Handler),
              flush_send_frame_casts(),
-             CallerPub = macula_identity:public(macula_identity:generate()),
+             CallerKp = macula_identity:generate(),
+             CallerPub = macula_identity:public(CallerKp),
              Sid = crypto:strong_rand_bytes(16),
              Stream = make_ref(),
-             inject_dedicated_stream_open(Pid, FakePeer, Stream, #{
+             inject_dedicated_stream_open(Pid, FakePeer, Stream, macula_frame:sign(#{
                  frame_type  => stream_open,
                  stream_id   => Sid,
                  procedure   => Procedure,
@@ -2202,7 +2345,7 @@ inbound_stream_open_invokes_handler_test_() ->
                  args        => #{n => 7},
                  deadline_ms => erlang:system_time(millisecond) + 5_000,
                  caller      => CallerPub
-             }),
+             }, CallerKp)),
              receive
                  {handler_invoked, Args} ->
                      ?assertEqual(#{n => 7}, Args)
@@ -2214,6 +2357,166 @@ inbound_stream_open_invokes_handler_test_() ->
              teardown_link_for_streams(ok)
          end
      end}.
+
+%% -- inbound STREAM_OPEN is served only when its signature verifies -
+
+%% A STREAM_OPEN is signed by the identity it names in `caller'. One whose
+%% signature does not verify against it runs no handler and gets nothing
+%% back on its stream; a genuinely signed one that follows is served.
+inbound_stream_open_that_does_not_verify_is_not_served_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Test = self(),
+             Procedure = <<"foo.verified">>,
+             Handler = fun(_Stream, #{tag := Tag}) ->
+                 Test ! {handler_invoked, Tag},
+                 ok
+             end,
+             ok = macula_station_link:advertise_stream(
+                    Pid, ?REALM, Procedure, server_stream, Handler),
+             flush_send_frame_casts(),
+             CallerKp = macula_identity:generate(),
+             [Forged, Unsigned, Genuine] = [make_ref(), make_ref(), make_ref()],
+             %% Names the caller and is signed by another key.
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Forged,
+               macula_frame:sign(stream_open_frame(Procedure, CallerKp, forged),
+                                 macula_identity:generate())),
+             %% Names the caller and carries no signature.
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Unsigned,
+               stream_open_frame(Procedure, CallerKp, unsigned)),
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Genuine,
+               macula_frame:sign(stream_open_frame(Procedure, CallerKp, genuine),
+                                 CallerKp)),
+             receive
+                 {handler_invoked, genuine} -> ok
+             after 1_000 ->
+                 erlang:error(genuine_handler_not_invoked)
+             end,
+             receive
+                 {handler_invoked, Other} ->
+                     erlang:error({handler_invoked_for, Other});
+                 {sent_on_stream, Sent, Frame} when Sent =:= Forged;
+                                                    Sent =:= Unsigned ->
+                     erlang:error({sent_on_unverified_stream, Frame})
+             after 300 ->
+                 ok
+             end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% A STREAM_OPEN for `Procedure' naming `CallerKp' as its caller, with
+%% `Tag' in its args.
+stream_open_frame(Procedure, CallerKp, Tag) ->
+    #{frame_type  => stream_open,
+      stream_id   => crypto:strong_rand_bytes(16),
+      procedure   => Procedure,
+      realm       => ?REALM,
+      mode        => server_stream,
+      args        => #{tag => Tag},
+      deadline_ms => erlang:system_time(millisecond) + 5_000,
+      caller      => macula_identity:public(CallerKp)}.
+
+%% -- a stream procedure's auth policy is enforced before its handler ---
+
+%% `advertise_stream/6' gates a streaming procedure the same way
+%% `advertise/5' gates a unary one. A STREAM_OPEN the policy refuses gets
+%% a STREAM_ERROR `unauthorized' on its own stream and runs no handler; one
+%% carrying a token the policy accepts is served.
+stream_policy_is_enforced_before_the_handler_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Test = self(),
+             Procedure = <<"foo.gated">>,
+             RealmIdentity = macula_identity:generate(),
+             Policy = {realm_member_required,
+                       macula_identity:public(RealmIdentity),
+                       <<"member/email-verified">>},
+             Handler = fun(_Stream, #{tag := Tag}) ->
+                 Test ! {handler_invoked, Tag},
+                 ok
+             end,
+             ok = macula_station_link:advertise_stream(
+                    Pid, ?REALM, Procedure, server_stream, Handler, Policy),
+             flush_send_frame_casts(),
+             CallerKp = macula_identity:generate(),
+             Caller = macula_identity:public(CallerKp),
+             [NoToken, Member] = [make_ref(), make_ref()],
+             inject_dedicated_stream_open(
+               Pid, FakePeer, NoToken,
+               macula_frame:sign(stream_open_frame(Procedure, CallerKp, no_token),
+                                 CallerKp)),
+             Token = mint_membership_ucan(RealmIdentity, Caller, #{}),
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Member,
+               macula_frame:sign(
+                 (stream_open_frame(Procedure, CallerKp, member))#{ucan_token => Token},
+                 CallerKp)),
+             receive
+                 {sent_on_stream, NoToken, #{frame_type := stream_error,
+                                             code       := Code}} ->
+                     ?assertEqual(<<"unauthorized">>, Code)
+             after 1_000 ->
+                 erlang:error(no_unauthorized_stream_error)
+             end,
+             receive
+                 {handler_invoked, member} -> ok
+             after 1_000 ->
+                 erlang:error(member_handler_not_invoked)
+             end,
+             receive
+                 {handler_invoked, no_token} ->
+                     erlang:error(handler_invoked_without_token)
+             after 300 ->
+                 ok
+             end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% -- call_stream presents a ucan_token on its STREAM_OPEN ----------
+
+%% A consumer reaches a gated stream procedure by passing `ucan_token' in
+%% `call_stream/5''s opts, the same key `call_station/7' takes. Without it
+%% the STREAM_OPEN carries no `ucan_token' field at all.
+call_stream_carries_ucan_token_only_when_given_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, _Peer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             {ok, _} = macula_station_link:call_stream(
+                         Pid, ?REALM, <<"foo.gated">>, #{},
+                         #{ucan_token => <<"token-bytes">>}),
+             WithToken = await_sent_stream_open(),
+             ?assertEqual(<<"token-bytes">>,
+                          maps:get(ucan_token, WithToken, undefined)),
+             {ok, _} = macula_station_link:call_stream(
+                         Pid, ?REALM, <<"foo.open">>, #{}, #{}),
+             WithoutToken = await_sent_stream_open(),
+             ?assertNot(maps:is_key(ucan_token, WithoutToken)),
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+await_sent_stream_open() ->
+    receive
+        {sent_on_stream, _Stream, #{frame_type := stream_open} = Frame} -> Frame
+    after 1_000 ->
+        erlang:error(no_stream_open_sent)
+    end.
 
 %% -- disconnect aborts open streams -------------------------------
 
@@ -2309,7 +2612,7 @@ liveness_probe_reply_clears_outstanding_test_() ->
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
-         {Pid, FakePeer, PeerNodeId} = start_connected_link(),
+         {Pid, FakePeer, _PeerNodeId} = start_connected_link(),
          Pid ! liveness_tick,
          CallId = receive
              {'$gen_cast', {send_frame, #{frame_type := call,
@@ -2319,13 +2622,12 @@ liveness_probe_reply_clears_outstanding_test_() ->
          %% Synthesise an ERROR reply (`unknown_next_peer' shape) for
          %% the probe call_id — what a real station emits when it
          %% has no handler for `_macula.ping'.
-         Pid ! {macula_peering, frame, FakePeer, #{
+         Pid ! {macula_peering, frame, FakePeer, signed_reply(#{
              frame_type   => error,
              call_id      => CallId,
              code         => 16#01,
-             name         => unknown_next_peer,
-             responded_by => PeerNodeId
-         }},
+             name         => unknown_next_peer
+         })},
          %% Drive another tick — outstanding must have been cleared
          %% (else this would be miss #1 → miss #2 → close).
          Pid ! liveness_tick,
@@ -2407,7 +2709,8 @@ consume_probe(_Pid) ->
 %%------------------------------------------------------------------
 
 %% Start a link with a fake peer patched in, advertise `Handlers'
-%% (a list of {Procedure, Fun}), and drain the ADVERTISE frames.
+%% (a list of {Procedure, Fun}), and drain the ADVERTISE frames. Returns
+%% the link and the fake peer's key pair, which the tests sign CALLs with.
 inbound_call_fixture(Handlers) ->
     inbound_call_fixture(Handlers, open).
 
@@ -2422,7 +2725,8 @@ inbound_call_fixture(Handlers, Policy) ->
         identity => Identity
     }),
     FakePeer = self(),
-    PeerNodeId = macula_identity:public(macula_identity:generate()),
+    PeerKp = macula_identity:generate(),
+    PeerNodeId = macula_identity:public(PeerKp),
     _ = sys:replace_state(Pid, fun(S) ->
         S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
         setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
@@ -2436,31 +2740,31 @@ inbound_call_fixture(Handlers, Policy) ->
                   erlang:error({no_advertise_frame, Proc})
               end
       end, Handlers),
-    {Pid, PeerNodeId}.
+    {Pid, PeerKp}.
 
-inject_call(Pid, FakePeer, Caller, CallId, Proc) ->
-    Pid ! {macula_peering, frame, FakePeer, #{
+inject_call(Pid, FakePeer, CallerKp, CallId, Proc) ->
+    Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
         frame_type => call,
         call_id    => CallId,
         realm      => ?REALM,
         procedure  => Proc,
         payload    => #{},
-        caller     => Caller
-    }}.
+        caller     => macula_identity:public(CallerKp)
+    }, CallerKp)}.
 
 %% Same as inject_call/5, carrying a `ucan_token' too -- for exercising
 %% `{ucan_required, _}'/`{realm_member_required, _}' gates, which read
 %% it straight off the Frame the same way `authorize/3' does.
-inject_call_with_ucan(Pid, FakePeer, Caller, CallId, Proc, UcanToken) ->
-    Pid ! {macula_peering, frame, FakePeer, #{
+inject_call_with_ucan(Pid, FakePeer, CallerKp, CallId, Proc, UcanToken) ->
+    Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
         frame_type => call,
         call_id    => CallId,
         realm      => ?REALM,
         procedure  => Proc,
         payload    => #{},
-        caller     => Caller,
+        caller     => macula_identity:public(CallerKp),
         ucan_token => UcanToken
-    }}.
+    }, CallerKp)}.
 
 %% The error frame's own `frame_type' is `error' (`macula_frame:call_error/1'
 %% builds it on `base(error, 0)'), not `call_error' -- every OTHER place in
@@ -2499,10 +2803,10 @@ inbound_call_handler_calling_back_into_link_does_not_deadlock_test_() ->
                        Up = macula_station_link:is_connected(Link),
                        {ok, #{connected => connected_flag(Up)}}
                    end,
-         {Pid, Caller} = inbound_call_fixture([{<<"probe.callback">>, Handler}]),
+         {Pid, CallerKp} = inbound_call_fixture([{<<"probe.callback">>, Handler}]),
          true = register(link_under_inbound_call_test, Pid),
          CallId = crypto:strong_rand_bytes(16),
-         inject_call(Pid, self(), Caller, CallId, <<"probe.callback">>),
+         inject_call(Pid, self(), CallerKp, CallId, <<"probe.callback">>),
          %% Inline, is_connected/1's 1 s gen_server:call into the
          %% blocked link exits with timeout and the handler crash
          %% surfaces as call_error; off-process it is a RESULT that
@@ -2519,12 +2823,12 @@ inbound_calls_are_served_concurrently_test_() ->
      fun() ->
          Slow = fun(_Payload) -> timer:sleep(1_500), {ok, #{who => 1}} end,
          Fast = fun(_Payload) -> {ok, #{who => 2}} end,
-         {Pid, Caller} = inbound_call_fixture([{<<"probe.slow">>, Slow},
+         {Pid, CallerKp} = inbound_call_fixture([{<<"probe.slow">>, Slow},
                                                {<<"probe.fast">>, Fast}]),
          SlowId = crypto:strong_rand_bytes(16),
          FastId = crypto:strong_rand_bytes(16),
-         inject_call(Pid, self(), Caller, SlowId, <<"probe.slow">>),
-         inject_call(Pid, self(), Caller, FastId, <<"probe.fast">>),
+         inject_call(Pid, self(), CallerKp, SlowId, <<"probe.slow">>),
+         inject_call(Pid, self(), CallerKp, FastId, <<"probe.fast">>),
          %% Inline, the fast reply queues behind the slow handler and
          %% arrives after ~1.5 s; off-process it arrives at once.
          ?assertMatch({ok, #{who := 2}}, await_result(FastId, 500)),
@@ -2571,14 +2875,15 @@ realm_member_required_test_() ->
          RealmDid = macula_identity:public(RealmIdentity),
          Handler = fun(_Payload) -> {ok, #{admitted => true}} end,
          Policy = {realm_member_required, RealmDid, <<"member/email-verified">>},
-         {Pid, Caller} = inbound_call_fixture([{<<"realm.only">>, Handler}], Policy),
+         {Pid, CallerKp} = inbound_call_fixture([{<<"realm.only">>, Handler}], Policy),
+         Caller = macula_identity:public(CallerKp),
 
          %% A genuine member: token signed by the realm, audience is
          %% the identity actually making the call, capability matches
          %% the tier this procedure actually requires.
          GoodToken = mint_membership_ucan(RealmIdentity, Caller, #{}),
          GoodId = crypto:strong_rand_bytes(16),
-         inject_call_with_ucan(Pid, self(), Caller, GoodId, <<"realm.only">>, GoodToken),
+         inject_call_with_ucan(Pid, self(), CallerKp, GoodId, <<"realm.only">>, GoodToken),
          ?assertMatch({ok, #{admitted := true}}, await_result(GoodId, 2_000)),
 
          %% THE FABLE-FOUND GAP: a token that is entirely genuine --
@@ -2596,14 +2901,14 @@ realm_member_required_test_() ->
          DeviceTierToken = mint_membership_ucan(RealmIdentity, Caller, #{},
                                                 <<"member/device-verified">>),
          DeviceTierId = crypto:strong_rand_bytes(16),
-         inject_call_with_ucan(Pid, self(), Caller, DeviceTierId, <<"realm.only">>,
+         inject_call_with_ucan(Pid, self(), CallerKp, DeviceTierId, <<"realm.only">>,
                                DeviceTierToken),
          ?assertMatch({error, #{code := UnauthorizedCode}},
                       await_result(DeviceTierId, 2_000)),
 
          %% No token at all.
          NoTokenId = crypto:strong_rand_bytes(16),
-         inject_call(Pid, self(), Caller, NoTokenId, <<"realm.only">>),
+         inject_call(Pid, self(), CallerKp, NoTokenId, <<"realm.only">>),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(NoTokenId, 2_000)),
 
          %% Token signed by a DIFFERENT key than the declared realm --
@@ -2612,7 +2917,7 @@ realm_member_required_test_() ->
          OtherRealmIdentity = macula_identity:generate(),
          WrongIssuerToken = mint_membership_ucan(OtherRealmIdentity, Caller, #{}),
          WrongIssuerId = crypto:strong_rand_bytes(16),
-         inject_call_with_ucan(Pid, self(), Caller, WrongIssuerId, <<"realm.only">>, WrongIssuerToken),
+         inject_call_with_ucan(Pid, self(), CallerKp, WrongIssuerId, <<"realm.only">>, WrongIssuerToken),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(WrongIssuerId, 2_000)),
 
          %% Expired: genuinely signed by the realm, for this exact
@@ -2620,7 +2925,7 @@ realm_member_required_test_() ->
          ExpiredToken = mint_membership_ucan(RealmIdentity, Caller,
                                              #{exp => erlang:system_time(second) - 60}),
          ExpiredId = crypto:strong_rand_bytes(16),
-         inject_call_with_ucan(Pid, self(), Caller, ExpiredId, <<"realm.only">>, ExpiredToken),
+         inject_call_with_ucan(Pid, self(), CallerKp, ExpiredId, <<"realm.only">>, ExpiredToken),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(ExpiredId, 2_000)),
 
          %% THE REPLAY CASE: a token that is completely genuine --
@@ -2635,9 +2940,55 @@ realm_member_required_test_() ->
          RightfulOwner = macula_identity:public(macula_identity:generate()),
          StolenToken = mint_membership_ucan(RealmIdentity, RightfulOwner, #{}),
          StolenId = crypto:strong_rand_bytes(16),
-         inject_call_with_ucan(Pid, self(), Caller, StolenId, <<"realm.only">>, StolenToken),
+         inject_call_with_ucan(Pid, self(), CallerKp, StolenId, <<"realm.only">>, StolenToken),
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(StolenId, 2_000)),
 
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%%------------------------------------------------------------------
+%% An inbound CALL is served only when its signature verifies
+%%------------------------------------------------------------------
+
+%% A CALL is signed by the identity it names in `caller', and that field
+%% is what `with_caller/2' hands the handler and what
+%% `realm_member_required' binds a token's audience to. A CALL whose
+%% signature does not verify against `caller' never runs the handler and
+%% gets no reply; a genuinely signed CALL that follows is served.
+call_that_does_not_verify_is_not_served_test_() ->
+    {timeout, 10,
+     fun() ->
+         Test = self(),
+         Handler = fun(#{tag := Tag}) ->
+                       Test ! {handler_ran, Tag},
+                       {ok, #{tag => Tag}}
+                   end,
+         {Pid, CallerKp} = inbound_call_fixture([{<<"probe.verify">>, Handler}]),
+         Caller = macula_identity:public(CallerKp),
+         Call = fun(Id, Tag) ->
+                    #{frame_type => call, call_id => Id, realm => ?REALM,
+                      procedure => <<"probe.verify">>, payload => #{tag => Tag},
+                      caller => Caller}
+                end,
+         [ForgedId, UnsignedId, GenuineId] =
+             [crypto:strong_rand_bytes(16) || _ <- [1, 2, 3]],
+         %% Names `Caller' and is signed by another key.
+         Pid ! {macula_peering, frame, Test,
+                macula_frame:sign(Call(ForgedId, forged), macula_identity:generate())},
+         %% Names `Caller' and carries no signature.
+         Pid ! {macula_peering, frame, Test, Call(UnsignedId, unsigned)},
+         Pid ! {macula_peering, frame, Test,
+                macula_frame:sign(Call(GenuineId, genuine), CallerKp)},
+         ?assertEqual({ok, #{tag => genuine}}, await_result(GenuineId, 2_000)),
+         ?assertEqual(timeout, await_result(ForgedId, 300)),
+         ?assertEqual(timeout, await_result(UnsignedId, 300)),
+         receive
+             {handler_ran, Ran} when Ran =/= genuine ->
+                 erlang:error({handler_ran_for, Ran})
+         after 300 ->
+             ok
+         end,
          macula_station_link:stop(Pid),
          ok
      end}.

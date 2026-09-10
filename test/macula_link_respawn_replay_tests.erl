@@ -77,6 +77,35 @@ subscription_survives_link_respawn_test_() ->
          ok
      end}.
 
+%% A streaming procedure's auth policy is stored with it and replayed onto
+%% a respawned link, so the new link keeps the stream gated.
+stream_policy_survives_link_respawn_test_() ->
+    {timeout, 10,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         ok = meck:new(macula_station_link, [passthrough]),
+         {ok, Pool} = macula_client:connect([?SEED], #{}),
+         Proc    = <<"resp.gated_stream_v1">>,
+         Handler = fun(_Stream, _Args) -> ok end,
+         Policy  = {ucan_required, <<7:256>>},
+         _ = macula_client:advertise_stream(Pool, ?REALM, Proc, server_stream,
+                                            Handler, Policy),
+         {ok, [#{pid := OldPid}]} = macula_client:links(Pool),
+         LinkMon = erlang:monitor(process, OldPid),
+         exit(OldPid, kill),
+         receive
+             {'DOWN', LinkMon, process, OldPid, _} -> ok
+         after 2_000 -> erlang:error(link_did_not_die)
+         end,
+         NewPid = wait_for_new_link(Pool, OldPid, 30),
+         ?assertEqual(ok, meck:wait(macula_station_link, advertise_stream,
+                                    [NewPid, ?REALM, Proc, server_stream,
+                                     Handler, Policy], 2_000)),
+         meck:unload(macula_station_link),
+         ok = macula_client:close(Pool),
+         ok
+     end}.
+
 wait_for_new_link(_Pool, _OldPid, 0) ->
     erlang:error(no_respawn_observed);
 wait_for_new_link(Pool, OldPid, N) ->

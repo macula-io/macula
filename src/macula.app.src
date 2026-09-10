@@ -1,6 +1,6 @@
 {application, macula, [
     {description, "Macula HTTP/3 Mesh SDK — connect, subscribe, publish, call, advertise"},
-    {vsn, "10.22.0"},
+    {vsn, "10.24.0"},
     %% Hex packaging: include NIF source (without target/ build artifacts)
     {files, [
         "src", "include", "priv",
@@ -31,7 +31,8 @@
         gproc,
         telemetry
     ]},
-    %% mdns is optional - macula works without it using DHT discovery
+    %% Names no installed application (the mDNS dependency is
+    %% macula_mdns), so it has no effect. Removed in 11.0.0.
     {optional_applications, [mdns]},
     {env, []},
     {modules, []},

@@ -161,7 +161,7 @@ endorsements isn't worth the overhead yet.
 ## Wire transport: sending and receiving frames
 
 `macula_hyparview_proto` never touches a socket. The SDK's client-facing
-overlay transport (`macula_station_link:overlay_subscribe/3`,
+overlay transport in macula_station_link (`overlay_subscribe/3`,
 `overlay_unsubscribe/2`, `send_overlay_frame/2`) is what actually moves
 `hyparview_*` frames over an existing connection:
 
@@ -204,6 +204,12 @@ against the connection that sent it. `macula-realm`'s
 `Overlay.SelfPublisher` (publish your own presence) and
 `Overlay.PeerResolver.resolve_and_dial/2` (the resolve-then-dial sequence
 above, as reusable code) are a concrete example of both halves.
+
+The frame itself carries its own signature, separate from the envelope's,
+and it must be made with the identity your link connects with: the
+receiving link delivers the frame only when that signature verifies
+against the sender the station names. `macula_hyparview_proto`'s builders
+sign with `Ctx`'s `identity`, so give `Ctx` the same key pair as the link.
 
 ---
 
