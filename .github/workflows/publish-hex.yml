@@ -1,0 +1,119 @@
+name: Publish to hex
+
+# Publishes exactly a pushed release tag to hex.pm.
+#
+# Tests gate the release commit on main, not the publish. This workflow
+# checks that the checkout is the clean, pushed release tag, builds the
+# package and docs, publishes, and checks that hex serves the tagged code.
+#
+# - A pushed tag vX.Y.Z runs `verify`. Then `publish` waits in the
+#   `hex-publish` environment until its required reviewer approves it.
+# - A manual dispatch is a dry run: it runs `verify` for the given tag and
+#   never publishes. GitHub only dispatches a workflow that is on the
+#   default branch.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to dry-run, vX.Y.Z. Never publishes.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  OTP_VERSION: '28.4.2'
+  REBAR3_VERSION: '3.27.0'
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+
+concurrency:
+  group: publish-hex-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Guard and build the package
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Set up Erlang/OTP and rebar3
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          rebar3-version: ${{ env.REBAR3_VERSION }}
+          version-type: strict
+
+      # Compiling builds the Rust NIFs (rebar.config pre_hooks), and the
+      # docs build compiles.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Refuse unless this is the clean, pushed release tag
+        run: bash scripts/is_checkout_publishable.sh
+
+      - name: Build the package and docs
+        run: rebar3 hex build
+
+  publish:
+    name: Publish to hex.pm
+    needs: verify
+    # Only a pushed release tag publishes, whatever the triggers above say.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: hex-publish
+    steps:
+      - name: Refuse unless this run is a pushed release tag
+        run: |
+          case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
+            push:refs/tags/v*) ;;
+            *) echo "::error::publish runs only for a pushed release tag, not $GITHUB_EVENT_NAME $GITHUB_REF"
+               exit 1 ;;
+          esac
+
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Set up Erlang/OTP and rebar3
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          rebar3-version: ${{ env.REBAR3_VERSION }}
+          version-type: strict
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Refuse unless this is the clean, pushed release tag
+        run: bash scripts/is_checkout_publishable.sh
+
+      - name: Publish the package and docs
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: rebar3 hex publish --yes
+
+      - name: Check that hex serves the tagged code
+        run: |
+          VSN="${RELEASE_TAG#v}"
+          for attempt in 1 2 3 4 5; do
+            if bash scripts/is_hex_serving_what_git_says.sh "$VSN" "$RELEASE_TAG"; then
+              exit 0
+            fi
+            echo "Attempt $attempt: not confirmed yet, retrying in 30 seconds"
+            sleep 30
+          done
+          echo "::error::hex.pm does not serve the code tagged $RELEASE_TAG"
+          exit 1
