@@ -274,6 +274,15 @@ fact — a reorder buffer cannot invent a message the mesh dropped. Design
 mesh facts to be **idempotent and version-stamped** so an occasional
 skip washes out.
 
+**A publisher's first facts.** When an `ordered` subscription first hears
+from a publisher, or hears from it again after a restart, it does not yet
+know where that publisher's order starts: copies arrive over several links
+in any order. It holds that publisher's first facts for up to
+`order_timeout_ms` (or until `order_max_buffer` facts are held), then starts
+the order at the lowest seq it has seen, so a lower seq that arrives after a
+higher one is still delivered, in order. A publisher's first facts therefore
+reach the subscriber up to one order timeout later than its later facts.
+
 **Publisher restarts.** A publisher's `seq` is seeded from wall-clock
 microseconds at start (`macula_client` for an SDK pool; `hecate_pubsub_server`
 for a station's own facts, since 10.17.0), so a restart shows up as a jump

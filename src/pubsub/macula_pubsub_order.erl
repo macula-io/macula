@@ -13,7 +13,11 @@
 %%%   <li><strong>ordered</strong> (default) — per-publisher FIFO by
 %%%       seq. Out-of-order arrivals are buffered and released in order;
 %%%       a genuinely missing seq is skipped after a timeout (see
-%%%       `flush/3'), trading a bounded delay for the lost fact.</li>
+%%%       `flush/3'), trading a bounded delay for the lost fact. A
+%%%       publisher's first facts, and its first facts after a restart,
+%%%       are held for up to one timeout (or until the buffer cap), and
+%%%       its order starts at the lowest seq held, so a lower seq that
+%%%       arrives second is delivered rather than lost.</li>
 %%%   <li><strong>latest_only</strong> — deliver only if the seq exceeds
 %%%       the highest already delivered for that publisher (drop stale).
 %%%       No buffering, no head-of-line delay. For state-snapshot
@@ -63,7 +67,8 @@
 -type publisher_key() :: binary() | {unverified, binary()}.
 
 %% Per-publisher state. `ordered' uses `next' + `buf'; `latest_only'
-%% uses `high'. Unused fields stay `undefined'.
+%% uses `high'. Unused fields stay `undefined'. In `ordered', `next' stays
+%% `undefined' while a publisher's first facts are held.
 -record(pub, {
     next :: seq() | undefined,
     buf  = #{}  :: #{seq() => {event(), integer()}},
@@ -93,7 +98,9 @@ new(Mode, Max)
 %% now, in order, and the updated state. `NowMs' timestamps buffered
 %% arrivals for `flush/3'. `Pub' is the publisher, or
 %% `{unverified, Publisher}' for an event whose publisher signature did
-%% not verify; each key has its own ordering state.
+%% not verify; each key has its own ordering state. In `ordered' mode a
+%% publisher's first facts are held until its first order timeout (see
+%% `flush/3') or the buffer cap.
 -spec offer(t(), publisher_key(), seq(), event(), integer()) -> {[event()], t()}.
 offer(#{mode := as_arrives} = S, _Pub, _Seq, Ev, _Now) ->
     {[Ev], S};
@@ -103,7 +110,9 @@ offer(#{mode := ordered, pubs := P} = S, Pub, Seq, Ev, Now) ->
     offer_ordered(maps:get(Pub, P, undefined), S, Pub, Seq, Ev, Now).
 
 %% @doc Release buffers whose head has waited past `TimeoutMs' for a
-%% missing seq: skip the gap up to the smallest buffered seq and drain.
+%% missing seq: skip the gap up to the smallest buffered seq and drain. A
+%% publisher whose first facts are still held starts its order at the
+%% lowest held seq instead, without a skip.
 %% Returns the events to deliver now and the updated state (skip counter
 %% advanced by one per gap given up on). A no-op for non-ordered modes.
 -spec flush(t(), integer(), non_neg_integer()) -> {[event()], t()}.
@@ -142,9 +151,15 @@ offer_latest(#pub{} = Pst, S, Pub, Seq, Ev) ->
 %%% ordered
 %%%===================================================================
 
-%% First fact from this publisher: its seq is the base.
+%% First fact from this publisher: where its order starts is not known yet,
+%% since copies arrive over several links in any order. Hold it with
+%% whatever else arrives in the first order timeout; `flush/3' (or the
+%% buffer cap) then starts the order at the lowest seq held.
 offer_ordered(undefined, S, Pub, Seq, Ev, Now) ->
-    offer_ordered(#pub{next = Seq, buf = #{}}, S, Pub, Seq, Ev, Now);
+    hold(#pub{buf = #{}}, S, Pub, Seq, Ev, Now);
+%% Still holding this publisher's first facts.
+offer_ordered(#pub{next = undefined} = Pst, S, Pub, Seq, Ev, Now) ->
+    hold(Pst, S, Pub, Seq, Ev, Now);
 %% In order: deliver, advance, drain any contiguous buffered tail.
 offer_ordered(#pub{next = Next} = Pst, S, Pub, Seq, Ev, _Now)
   when Seq =:= Next ->
@@ -152,11 +167,13 @@ offer_ordered(#pub{next = Next} = Pst, S, Pub, Seq, Ev, _Now)
     {lists:reverse(Evs), put_pub(S, Pub, Pst2)};
 %% Huge jump either way: the publisher restarted -- forward when its
 %% seq re-based to wall-clock µs, backward when it re-seeded from zero.
-%% Deliver whatever is buffered (old epoch, in seq order), then rebase.
-offer_ordered(#pub{next = Next, buf = Buf}, S, Pub, Seq, Ev, _Now)
+%% Deliver whatever is buffered (old epoch, in seq order), then hold the new
+%% epoch's first facts the same way as a new publisher's.
+offer_ordered(#pub{next = Next, buf = Buf}, S, Pub, Seq, Ev, Now)
   when Seq > Next + ?EPOCH_JUMP; Seq + ?EPOCH_JUMP < Next ->
     Old = [E || {_Sq, {E, _Arr}} <- lists:keysort(1, maps:to_list(Buf))],
-    {Old ++ [Ev], put_pub(S, Pub, #pub{next = Seq + 1, buf = #{}})};
+    {Held, S2} = hold(#pub{buf = #{}}, S, Pub, Seq, Ev, Now),
+    {Old ++ Held, S2};
 %% Future within the same epoch: buffer it, then skip the head gap early
 %% if the buffer is now over the count cap.
 offer_ordered(#pub{next = Next, buf = Buf} = Pst, S, Pub, Seq, Ev, Now)
@@ -166,6 +183,27 @@ offer_ordered(#pub{next = Next, buf = Buf} = Pst, S, Pub, Seq, Ev, Now)
 %% Past: already delivered or skipped (also a late duplicate). Drop.
 offer_ordered(#pub{}, S, _Pub, _Seq, _Ev, _Now) ->
     {[], S}.
+
+%% Hold a fact while this publisher's order has not started. A repeat of a
+%% held seq keeps the first copy. Past the count cap the order starts now
+%% rather than after the timeout.
+hold(#pub{buf = Buf} = Pst, S, Pub, Seq, Ev, Now) ->
+    Held = Pst#pub{buf = hold_once(maps:is_key(Seq, Buf), Buf, Seq, {Ev, Now})},
+    start_at_cap(map_size(Held#pub.buf) > maps:get(max, S), Held, S, Pub).
+
+hold_once(true, Buf, _Seq, _Arrival) -> Buf;
+hold_once(false, Buf, Seq, Arrival)  -> maps:put(Seq, Arrival, Buf).
+
+start_at_cap(false, Pst, S, Pub) ->
+    {[], put_pub(S, Pub, Pst)};
+start_at_cap(true, Pst, S, Pub) ->
+    {Evs, Pst2} = start_order(Pst),
+    {lists:reverse(Evs), put_pub(S, Pub, Pst2)}.
+
+%% Start a publisher's order at the lowest held seq and drain its run.
+%% Nothing was given up, so no skip is counted.
+start_order(#pub{buf = Buf} = Pst) ->
+    drain(Pst#pub{next = lists:min(maps:keys(Buf))}, []).
 
 %% Under the cap: just hold the buffered fact.
 cap_buffer(false, Pst, S, Pub) ->
@@ -206,6 +244,11 @@ flush_pub(#pub{buf = Buf} = Pst, Now, Timeout, EvAcc, Sk) ->
 
 flush_when_expired(false, Pst, _Now, _Timeout, EvAcc, Sk) ->
     {lists:reverse(EvAcc), Pst, Sk};
+%% Held first facts whose order timeout is up: start the order at the lowest
+%% held seq. No skip is counted; any gap after it follows the clause below.
+flush_when_expired(true, #pub{next = undefined} = Pst, Now, Timeout, EvAcc, Sk) ->
+    {Evs, Pst2} = start_order(Pst),
+    flush_pub(Pst2, Now, Timeout, Evs ++ EvAcc, Sk);
 flush_when_expired(true, #pub{buf = Buf} = Pst, Now, Timeout, EvAcc, Sk) ->
     MinSeq = lists:min(maps:keys(Buf)),
     %% `drain' returns events newest-first; `EvAcc' is kept newest-first

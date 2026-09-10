@@ -85,6 +85,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection as a closed stream, which the client ignored, so after a
   relay loss it kept running and registered while distribution over the
   relay no longer worked.
+- `ordered` subscriptions hold a new publisher's first facts, and a
+  publisher's first facts after a seq restart, for up to one
+  `order_timeout_ms` (or until `order_max_buffer` facts are held), and start
+  that publisher's order at the lowest seq held. A lower seq that arrives
+  after a higher one in that window is delivered, in order. A publisher's
+  first facts arrive up to one order timeout later. `latest_only` is
+  unchanged.
 
 ## [10.23.0] - 2026-09-10
 

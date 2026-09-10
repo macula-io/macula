@@ -1086,7 +1086,8 @@ unverified_then_verified(Mode) ->
             Base#{publisher_verified => not_signed}},
     Pool ! {macula_event, make_ref(), Topic, genuine,
             Base#{publisher_verified => true}},
-    Delivered = payloads_for(SubRef, 500),
+    %% ordered holds a new publisher's first facts for one order timeout.
+    Delivered = payloads_for(SubRef, 1_500),
     ok = macula_client:close(Pool),
     ?assert(lists:member(genuine, Delivered)).
 
