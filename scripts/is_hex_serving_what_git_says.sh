@@ -128,6 +128,12 @@ echo "  ${TOTAL} files in the package, ${DIFFERENT} differing, ${MISSING} absent
 
 # A file present at the tag but not in the package is NOT a fault: the files
 # list ships a subset on purpose. Only the other direction is a finding.
-[ "${DIFFERENT}" -eq 0 ] && [ "${MISSING}" -eq 0 ] &&
-  echo "  hex is serving the tagged code." ||
-  echo "  hex is NOT serving the tagged code. The tag does not name what consumers get."
+#
+# The exit code carries the verdict, so a caller (the publish script, CI) can
+# fail on it: 0 when hex serves the tagged code, 1 when it does not.
+if [ "${DIFFERENT}" -eq 0 ] && [ "${MISSING}" -eq 0 ]; then
+  echo "  hex is serving the tagged code."
+  exit 0
+fi
+echo "  hex is NOT serving the tagged code. The tag does not name what consumers get."
+exit 1
