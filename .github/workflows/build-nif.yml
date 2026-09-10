@@ -49,9 +49,6 @@ jobs:
       - name: Generate musl checksum
         run: sha256sum libmacula_quic-linux-musl-x86_64.so > libmacula_quic-linux-musl-x86_64.so.sha256
 
-      - name: Generate checksum
-        run: sha256sum ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
-
       - name: Upload to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
