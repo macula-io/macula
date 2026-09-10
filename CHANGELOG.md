@@ -27,6 +27,9 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   alone in the US profile, and Macula's composite ML-DSA-87-PS384 in the
   EU profile, valid only if both halves verify. Verification refuses
   malformed input without raising.
+- `macula_node_keys:node_id/1` and `node_id/2`: node_ids per plan decision
+  D5, SHA-256 over the label `MACULA-NODE-ID-V1`, the profile name and the
+  identity key as carried. The reference vectors match Go, Rust and Python.
 
 ### Changed
 

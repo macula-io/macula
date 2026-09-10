@@ -16,7 +16,10 @@
 %% the carried public key is the ML-DSA-87 key followed by the DER RSAPublicKey. It is valid only if both halves
 %% verify.
 %%
-%% See plans/PLAN_POST_QUANTUM_SECURITY.md, decisions D4, D6 and D7.
+%% An identity key has a node_id: SHA-256 over the label MACULA-NODE-ID-V1, a zero byte, the length and ASCII name
+%% of the profile, and the identity key as carried. CONNECT and TLS keys have none.
+%%
+%% See plans/PLAN_POST_QUANTUM_SECURITY.md, decisions D4, D5, D6 and D7.
 -module(macula_node_keys).
 
 -include_lib("public_key/include/public_key.hrl").
@@ -27,7 +30,9 @@
     load/3,
     public_key/1,
     sign/2,
-    verify/4
+    verify/4,
+    node_id/1,
+    node_id/2
 ]).
 
 -export_type([purpose/0, algorithm/0, component/0, node_key/0, refusal/0]).
@@ -55,6 +60,7 @@
 -define(MLDSA87_SIGNATURE_BYTES, 4627).
 -define(COMPOSITE_PREFIX, "CompositeAlgorithmSignatures2025").
 -define(COMPOSITE_LABEL, "MACULA-ML-DSA-87-PS384").
+-define(NODE_ID_LABEL, "MACULA-NODE-ID-V1").
 
 %%------------------------------------------------------------------
 %% Generation
@@ -121,6 +127,25 @@ verify(Message, <<MlDsaSignature:?MLDSA87_SIGNATURE_BYTES/binary, RsaSignature/b
                       composite_rsa_params(pq_hybrid));
 verify(_Message, _Signature, _Public, _Profile) ->
     false.
+
+%%------------------------------------------------------------------
+%% Node identity
+%%------------------------------------------------------------------
+
+%% @doc The node_id of an identity key (D5).
+-spec node_id(node_key()) -> {ok, <<_:256>>} | {error, not_an_identity_key}.
+node_id(#{purpose := identity, profile := Profile} = Key) ->
+    {ok, node_id(public_key(Key), Profile)};
+node_id(#{purpose := _OtherPurpose}) ->
+    {error, not_an_identity_key}.
+
+%% @doc The node_id derived from an identity key as carried, under a profile (D5). A node_id earns no trust on its
+%% own: a verifier relies on it only after a signature by the same carried key has verified.
+-spec node_id(binary(), macula_crypto_profile:profile()) -> <<_:256>>.
+node_id(IdentityKey, Profile)
+  when is_binary(IdentityKey), (Profile =:= pq_pure orelse Profile =:= pq_hybrid) ->
+    Name = atom_to_binary(Profile),
+    crypto:hash(sha256, <<?NODE_ID_LABEL, 0:8, (byte_size(Name)):8, Name/binary, IdentityKey/binary>>).
 
 %%------------------------------------------------------------------
 %% Internals: algorithms per purpose
