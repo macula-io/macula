@@ -424,43 +424,122 @@ test_is_production_mode() ->
 
 quic_client_opts_test_() ->
     {setup,
-     fun() ->
-         os:unsetenv("MACULA_TLS_MODE"),
-         application:set_env(macula, tls_mode, development)
-     end,
-     fun(_) ->
-         os:unsetenv("MACULA_TLS_MODE"),
-         application:set_env(macula, tls_mode, development)
-     end,
+     fun save_client_tls_env/0,
+     fun restore_client_tls_env/1,
      fun(_) ->
          [
-          {"Client opts returns list in dev mode",
+          {"Client opts returns list",
            fun test_client_opts_returns_list/0},
-          {"Client opts has verify none in dev mode",
-           fun test_client_opts_verify_none/0},
+          {"Client opts verify webpki when no TLS mode is configured",
+           fun test_client_opts_verify_webpki_when_unset/0},
+          {"Client opts verify none with explicit development env",
+           fun test_client_opts_verify_none_explicit_env/0},
+          {"Client opts verify none with dev shorthand env",
+           fun test_client_opts_verify_none_dev_shorthand/0},
+          {"Client opts verify none with explicit development app env",
+           fun test_client_opts_verify_none_explicit_app_env/0},
+          {"Client opts in production are verify webpki only",
+           fun test_client_opts_production_webpki_only/0},
+          {"Client opts refuse an explicit CA file env",
+           fun test_client_opts_refuse_cacertfile_env/0},
+          {"Client opts refuse an explicit CA file app env",
+           fun test_client_opts_refuse_cacertfile_app_env/0},
           {"Client opts with overrides",
            fun test_client_opts_with_overrides/0},
-          {"Client opts with hostname (dev mode)",
-           fun test_client_opts_with_hostname_dev/0}
+          {"Client opts with hostname (explicit development)",
+           fun test_client_opts_with_hostname_explicit_development/0},
+          {"Client opts with hostname equal plain client opts",
+           fun test_client_opts_with_hostname_equal_plain/0}
          ]
      end}.
 
-test_client_opts_returns_list() ->
-    Opts = macula_tls:quic_client_opts(),
-    ?assert(is_list(Opts)).
+save_client_tls_env() ->
+    #{env_mode       => os:getenv("MACULA_TLS_MODE"),
+      env_cacertfile => os:getenv("MACULA_TLS_CACERTFILE"),
+      app_mode       => application:get_env(macula, tls_mode),
+      app_cacertfile => application:get_env(macula, tls_cacertfile)}.
 
-test_client_opts_verify_none() ->
-    Opts = macula_tls:quic_client_opts(),
-    ?assertEqual(none, proplists:get_value(verify, Opts)).
+restore_client_tls_env(#{env_mode := EnvMode, env_cacertfile := EnvCa,
+                         app_mode := AppMode, app_cacertfile := AppCa}) ->
+    restore_os_env("MACULA_TLS_MODE", EnvMode),
+    restore_os_env("MACULA_TLS_CACERTFILE", EnvCa),
+    restore_app_env(tls_mode, AppMode),
+    restore_app_env(tls_cacertfile, AppCa).
+
+restore_os_env(Name, false) -> os:unsetenv(Name);
+restore_os_env(Name, Value) -> os:putenv(Name, Value).
+
+restore_app_env(Key, undefined)    -> application:unset_env(macula, Key);
+restore_app_env(Key, {ok, Value})  -> application:set_env(macula, Key, Value).
+
+%% No TLS mode and no CA file configured, in either the OS env or the
+%% app env: the state a node is in when nobody set anything.
+clear_client_tls_env() ->
+    os:unsetenv("MACULA_TLS_MODE"),
+    os:unsetenv("MACULA_TLS_CACERTFILE"),
+    application:unset_env(macula, tls_mode),
+    application:unset_env(macula, tls_cacertfile).
+
+test_client_opts_returns_list() ->
+    clear_client_tls_env(),
+    ?assert(is_list(macula_tls:quic_client_opts())).
+
+test_client_opts_verify_webpki_when_unset() ->
+    clear_client_tls_env(),
+    ?assertEqual([{verify, webpki}], macula_tls:quic_client_opts()).
+
+test_client_opts_verify_none_explicit_env() ->
+    clear_client_tls_env(),
+    os:putenv("MACULA_TLS_MODE", "development"),
+    ?assertEqual([{verify, none}], macula_tls:quic_client_opts()).
+
+test_client_opts_verify_none_dev_shorthand() ->
+    clear_client_tls_env(),
+    os:putenv("MACULA_TLS_MODE", "dev"),
+    ?assertEqual([{verify, none}], macula_tls:quic_client_opts()).
+
+test_client_opts_verify_none_explicit_app_env() ->
+    clear_client_tls_env(),
+    application:set_env(macula, tls_mode, development),
+    ?assertEqual([{verify, none}], macula_tls:quic_client_opts()).
+
+test_client_opts_production_webpki_only() ->
+    clear_client_tls_env(),
+    os:putenv("MACULA_TLS_MODE", "production"),
+    ?assertEqual([{verify, webpki}], macula_tls:quic_client_opts()).
+
+test_client_opts_refuse_cacertfile_env() ->
+    clear_client_tls_env(),
+    os:putenv("MACULA_TLS_CACERTFILE", "/etc/macula/private-ca.pem"),
+    ?assertError({tls_config_error,
+                  {cacertfile_not_supported, "/etc/macula/private-ca.pem"}},
+                 macula_tls:quic_client_opts()).
+
+test_client_opts_refuse_cacertfile_app_env() ->
+    clear_client_tls_env(),
+    application:set_env(macula, tls_cacertfile, "/etc/macula/private-ca.pem"),
+    ?assertError({tls_config_error,
+                  {cacertfile_not_supported, "/etc/macula/private-ca.pem"}},
+                 macula_tls:quic_client_opts()).
 
 test_client_opts_with_overrides() ->
+    clear_client_tls_env(),
     Opts = macula_tls:quic_client_opts(#{custom_opt => test_value}),
     ?assertEqual(test_value, proplists:get_value(custom_opt, Opts)).
 
-test_client_opts_with_hostname_dev() ->
-    %% In development mode, hostname verification is skipped
+test_client_opts_with_hostname_explicit_development() ->
+    clear_client_tls_env(),
+    os:putenv("MACULA_TLS_MODE", "development"),
     Opts = macula_tls:quic_client_opts_with_hostname("example.com"),
     ?assertEqual(none, proplists:get_value(verify, Opts)).
+
+%% The QUIC NIF verifies the dialed host itself, so a hostname adds no
+%% options of its own.
+test_client_opts_with_hostname_equal_plain() ->
+    clear_client_tls_env(),
+    os:putenv("MACULA_TLS_MODE", "production"),
+    ?assertEqual(macula_tls:quic_client_opts(),
+                 macula_tls:quic_client_opts_with_hostname("example.com")).
 
 %%%=============================================================================
 %%% Hostname Verification Tests (v0.11.0+)

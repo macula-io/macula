@@ -1,42 +1,41 @@
 %%%-----------------------------------------------------------------------------
-%%% @doc TLS Certificate Management and Verification Module (v0.11.0+)
+%%% @doc TLS certificate management and TLS options for Macula QUIC.
 %%%
-%%% This module provides TLS certificate management for Macula nodes with
-%%% two operating modes:
+%%% == Client dials ==
 %%%
-%%% - **Production Mode**: Strict certificate verification with CA bundle
-%%% - **Development Mode**: Self-signed certificates (auto-generated)
+%%% quic_client_opts/0 decides what an outbound QUIC dial verifies. The
+%%% QUIC NIF checks the server certificate against its built-in webpki
+%%% root store and the host being dialed. It cannot load a CA file.
+%%%
+%%% - No TLS mode configured, or production: [{verify, webpki}].
+%%% - Development set explicitly, through MACULA_TLS_MODE=development
+%%%   (or dev) or the tls_mode app env: [{verify, none}]. This skips
+%%%   verification, so use it only for local development against
+%%%   self-signed peers.
+%%% - A CA file set through MACULA_TLS_CACERTFILE or the tls_cacertfile
+%%%   app env raises {tls_config_error, {cacertfile_not_supported, Path}}.
+%%%
+%%% == Listeners ==
+%%%
+%%% quic_server_opts/0 follows get_tls_mode/0, which reports development
+%%% when nothing is configured:
+%%%
+%%% - Production: certificate and key from tls_certfile and tls_keyfile.
+%%% - Development: a self-signed certificate, generated when missing.
 %%%
 %%% == Configuration (sys.config) ==
 %%%
 %%%   {macula, [
-%%%       %% TLS mode: production (strict) or development (permissive)
-%%%       {tls_mode, development},  % or production
-%%%
-%%%       %% CA certificate bundle (production mode)
-%%%       {tls_cacertfile, "/path/to/ca-bundle.crt"},
-%%%
-%%%       %% Server/client certificate and key
+%%%       {tls_mode, production},  % or development
 %%%       {tls_certfile, "/path/to/server.crt"},
-%%%       {tls_keyfile, "/path/to/server.key"},
-%%%
-%%%       %% Hostname verification (production mode, default: true)
-%%%       {tls_verify_hostname, true}
+%%%       {tls_keyfile, "/path/to/server.key"}
 %%%   ]}
 %%%
 %%% == Environment Variables ==
 %%%
-%%% - MACULA_TLS_MODE: production | development
-%%% - MACULA_TLS_CACERTFILE: Path to CA bundle
-%%% - MACULA_TLS_CERTFILE: Path to certificate
-%%% - MACULA_TLS_KEYFILE: Path to private key
-%%%
-%%% == Security Note ==
-%%%
-%%% In production mode, TLS connections will:
-%%% - Verify the server certificate chain against the CA bundle
-%%% - Reject expired or invalid certificates
-%%% - Optionally verify hostname matches certificate CN/SAN
+%%% - MACULA_TLS_MODE: production, prod, development or dev
+%%% - MACULA_TLS_CERTFILE: path to the listener certificate
+%%% - MACULA_TLS_KEYFILE: path to the listener private key
 %%%
 %%% @end
 %%%-----------------------------------------------------------------------------
@@ -319,10 +318,10 @@ ensure_parent_dir(FilePath) ->
 %%%=============================================================================
 
 %%------------------------------------------------------------------------------
-%% @doc Get QUIC client TLS options based on current TLS mode.
+%% @doc Get QUIC client TLS options for an outbound dial.
 %%
-%% In production mode: Returns options with certificate verification enabled.
-%% In development mode: Returns options with verification disabled.
+%% Verification stays on unless development mode is set explicitly.
+%% See the module doc for the exact rules.
 %%
 %% @returns Proplist of QUIC TLS options for outbound connect.
 %% @end
@@ -334,55 +333,32 @@ quic_client_opts() ->
 %%------------------------------------------------------------------------------
 %% @doc Get QUIC client TLS options with overrides.
 %%
+%% Raises {tls_config_error, {cacertfile_not_supported, Path}} when a CA
+%% file is configured explicitly, because the QUIC NIF cannot use one.
+%%
 %% @param Overrides Map of options to override defaults
 %% @returns Proplist of QUIC TLS options
 %% @end
 %%------------------------------------------------------------------------------
 -spec quic_client_opts(Overrides :: map()) -> list().
 quic_client_opts(Overrides) ->
-    Mode = get_tls_mode(),
-    BaseOpts = build_client_opts(Mode),
-    apply_overrides(BaseOpts, Overrides).
+    ok = refuse_explicit_cacertfile(explicit_cacertfile()),
+    apply_overrides(client_opts_for_mode(explicit_tls_mode()), Overrides).
 
 %%------------------------------------------------------------------------------
-%% @doc Get QUIC client TLS options with hostname verification.
+%% @doc Get QUIC client TLS options for a dial to Hostname.
 %%
-%% In production mode, adds SNI and hostname verification if enabled.
-%% In development mode, hostname verification is skipped.
+%% Same as quic_client_opts/0. The QUIC NIF already checks the server
+%% certificate against the host being dialed, so a hostname adds no
+%% options of its own.
 %%
-%% @param Hostname The hostname to verify (string or binary)
-%% @returns Proplist of QUIC TLS options with hostname verification
+%% @param Hostname The hostname being dialed (string or binary)
+%% @returns Proplist of QUIC TLS options
 %% @end
 %%------------------------------------------------------------------------------
 -spec quic_client_opts_with_hostname(Hostname :: string() | binary()) -> list().
-quic_client_opts_with_hostname(Hostname) ->
-    BaseOpts = quic_client_opts(),
-    hostname_opts(get_tls_mode(), BaseOpts, Hostname).
-
-hostname_opts(production, BaseOpts, Hostname) ->
-    maybe_verify_hostname(get_verify_hostname(), BaseOpts, Hostname);
-hostname_opts(development, BaseOpts, _Hostname) ->
-    %% In development mode, skip hostname verification
-    BaseOpts.
-
-maybe_verify_hostname(true, BaseOpts, Hostname) ->
-    merge_opts(BaseOpts, build_hostname_verify_opts(Hostname));
-maybe_verify_hostname(false, BaseOpts, _Hostname) ->
-    BaseOpts.
-
-%%------------------------------------------------------------------------------
-%% @doc Merge two proplists, second takes precedence.
-%% @private
-%%------------------------------------------------------------------------------
--spec merge_opts(list(), list()) -> list().
-merge_opts(BaseOpts, OverrideOpts) ->
-    lists:foldl(
-        fun({Key, Value}, Acc) ->
-            lists:keystore(Key, 1, Acc, {Key, Value})
-        end,
-        BaseOpts,
-        OverrideOpts
-    ).
+quic_client_opts_with_hostname(_Hostname) ->
+    quic_client_opts().
 
 %%------------------------------------------------------------------------------
 %% @doc Get QUIC server TLS options based on current TLS mode.
@@ -448,38 +424,63 @@ is_production_mode() ->
 %%%=============================================================================
 
 %%------------------------------------------------------------------------------
-%% @doc Build client TLS options for the given mode.
+%% @doc Client TLS options for the explicitly configured mode.
+%%
+%% Only development set explicitly turns verification off. Unset and
+%% production both verify against the QUIC NIF's built-in webpki roots.
 %% @private
 %%------------------------------------------------------------------------------
--spec build_client_opts(production | development) -> list().
+-spec client_opts_for_mode(development | production | unset) -> list().
+client_opts_for_mode(development) ->
+    ?LOG_WARNING("TLS client verification DISABLED: development mode is set explicitly"),
+    [{verify, none}];
+client_opts_for_mode(_ProductionOrUnset) ->
+    [{verify, webpki}].
 
-%% Production mode: verify certificates
-build_client_opts(production) ->
-    CACertFile = get_cacertfile(),
+%%------------------------------------------------------------------------------
+%% @doc The TLS mode as configured, or unset when neither MACULA_TLS_MODE
+%% nor the tls_mode app env is set.
+%%
+%% get_tls_mode/0 reports development in that case, which suits
+%% listeners but must not turn off verification on client dials.
+%% @private
+%%------------------------------------------------------------------------------
+-spec explicit_tls_mode() -> development | production | unset.
+explicit_tls_mode() ->
+    explicit_tls_mode(os:getenv("MACULA_TLS_MODE"),
+                      application:get_env(macula, tls_mode)).
 
-    %% Validate CA cert exists
-    case filelib:is_regular(CACertFile) of
-        true -> ok;
-        false ->
-            ?LOG_ERROR("TLS production mode requires CA certificate: ~s not found", [CACertFile]),
-            error({tls_config_error, {cacertfile_not_found, CACertFile}})
-    end,
+explicit_tls_mode(false, undefined)   -> unset;
+explicit_tls_mode(_EnvMode, _AppMode) -> get_tls_mode().
 
-    Opts = [
-        {verify, peer},
-        {cacertfile, CACertFile},
-        {depth, 3}  % Max certificate chain depth
-    ],
+%%------------------------------------------------------------------------------
+%% @doc A CA file set explicitly in MACULA_TLS_CACERTFILE or the
+%% tls_cacertfile app env.
+%% @private
+%%------------------------------------------------------------------------------
+-spec explicit_cacertfile() -> none | {explicit, string()}.
+explicit_cacertfile() ->
+    explicit_cacertfile(os:getenv("MACULA_TLS_CACERTFILE"),
+                        application:get_env(macula, tls_cacertfile)).
 
-    %% Add client cert if configured (for mTLS)
-    CertFile = get_tls_certfile(),
-    KeyFile = get_tls_keyfile(),
-    add_client_cert_opts(Opts, CertFile, KeyFile);
+explicit_cacertfile(false, undefined)  -> none;
+explicit_cacertfile(false, {ok, Path}) -> {explicit, Path};
+explicit_cacertfile(Path, _AppCaFile)  -> {explicit, Path}.
 
-%% Development mode: no verification
-build_client_opts(development) ->
-    ?LOG_WARNING("TLS running in DEVELOPMENT mode - certificate verification DISABLED"),
-    [{verify, none}].
+%%------------------------------------------------------------------------------
+%% @doc Refuse a client CA file instead of silently ignoring it.
+%%
+%% The QUIC NIF verifies against its built-in webpki roots and cannot
+%% load a CA file.
+%% @private
+%%------------------------------------------------------------------------------
+-spec refuse_explicit_cacertfile(none | {explicit, string()}) -> ok.
+refuse_explicit_cacertfile(none) ->
+    ok;
+refuse_explicit_cacertfile({explicit, Path}) ->
+    ?LOG_ERROR("TLS client CA file ~s is not supported: the QUIC NIF "
+               "verifies against its built-in webpki roots", [Path]),
+    error({tls_config_error, {cacertfile_not_supported, Path}}).
 
 %%------------------------------------------------------------------------------
 %% @doc Build server TLS options for the given mode.
@@ -537,19 +538,6 @@ build_server_opts(development) ->
         {error, Reason} ->
             ?LOG_ERROR("Failed to ensure development certificates: ~p", [Reason]),
             error({tls_config_error, {dev_cert_error, Reason}})
-    end.
-
-%%------------------------------------------------------------------------------
-%% @doc Add client certificate options if configured.
-%% @private
-%%------------------------------------------------------------------------------
--spec add_client_cert_opts(list(), string(), string()) -> list().
-add_client_cert_opts(Opts, CertFile, KeyFile) ->
-    case filelib:is_regular(CertFile) andalso filelib:is_regular(KeyFile) of
-        true ->
-            [{certfile, CertFile}, {keyfile, KeyFile} | Opts];
-        false ->
-            Opts
     end.
 
 %%------------------------------------------------------------------------------
@@ -652,21 +640,6 @@ find_existing_file([Path | Rest]) ->
         false -> find_existing_file(Rest)
     end.
 
-%%------------------------------------------------------------------------------
-%% @doc Check if hostname verification is enabled.
-%% @private
-%%------------------------------------------------------------------------------
--spec get_verify_hostname() -> boolean().
-get_verify_hostname() ->
-    case os:getenv("MACULA_TLS_VERIFY_HOSTNAME") of
-        "false" -> false;
-        "0" -> false;
-        "true" -> true;
-        "1" -> true;
-        false ->
-            application:get_env(macula, tls_verify_hostname, true)
-    end.
-
 %%%=============================================================================
 %%% Hostname Verification
 %%%=============================================================================
@@ -717,18 +690,3 @@ hostname_verify_fun(_Cert, {extension, _}, State) ->
 %% Handle bad certificate errors
 hostname_verify_fun(_Cert, {bad_cert, Reason}, _State) ->
     {fail, Reason}.
-
-%%------------------------------------------------------------------------------
-%% @doc Build verify_fun option for hostname verification.
-%% @private
-%%------------------------------------------------------------------------------
--spec build_hostname_verify_opts(Hostname :: string() | binary()) -> list().
-build_hostname_verify_opts(Hostname) when is_list(Hostname) ->
-    build_hostname_verify_opts(list_to_binary(Hostname));
-build_hostname_verify_opts(Hostname) when is_binary(Hostname) ->
-    [
-        {server_name_indication, binary_to_list(Hostname)},
-        {verify_fun, {fun hostname_verify_fun/3, #{hostname => Hostname}}}
-    ];
-build_hostname_verify_opts(_) ->
-    [].

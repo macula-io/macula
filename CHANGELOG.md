@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- `macula_tls:quic_client_opts/0,1` now return `[{verify, webpki}]`
+  unless development mode is set explicitly. Only
+  `MACULA_TLS_MODE=development` (or `dev`), or the `tls_mode` app env set
+  to `development`, returns `[{verify, none}]`. Production returns
+  `[{verify, webpki}]` alone, without the `cacertfile`, `depth`,
+  `certfile` and `keyfile` options the QUIC NIF never read. The QUIC NIF
+  checks the server certificate against its built-in webpki roots and the
+  dialed host. This affects the dist relay client and direct dist dials.
+- A CA file set through `MACULA_TLS_CACERTFILE` or the `tls_cacertfile`
+  app env now makes `macula_tls:quic_client_opts/0,1` raise
+  `{tls_config_error, {cacertfile_not_supported, Path}}`, because the QUIC
+  NIF cannot load one.
+- `macula_tls:quic_client_opts_with_hostname/1` returns the same options
+  as `quic_client_opts/0`. Listener options are unchanged.
+
 ## [10.22.0] - 2026-09-07
 
 ### Added
