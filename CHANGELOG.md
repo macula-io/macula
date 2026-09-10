@@ -35,6 +35,12 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   profile name and the key as carried; an identity key's key id is its
   node_id. Realm, org and foundation keys are purposes of their own, with
   the identity key's algorithms.
+- `macula_signed_object`: the signed objects of the post-quantum records
+  and frames. `sign/3` and `sign_held/3` sign fields under a label over
+  the label, a zero byte, the SHA-384 of the key as carried and tbs,
+  adding `alg`. `verify/3` and `verify_held/4` check the shape, the carried
+  key, the signature over tbs as received, the decoding rule and `alg`,
+  without raising. `encode/1` and `decode/1` give the wire form.
 - `macula_node_keys:generate/3` with `puzzle_difficulty`, and
   `puzzle_solved/2`: an identity key whose node_id starts with that many
   zero bits. Each try makes a new ML-DSA-87 half; a hybrid key keeps its
