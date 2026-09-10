@@ -78,9 +78,17 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   unknown value or a list of profiles makes the start return an error.
   There is no default. The test configuration, `config/test.sys.config`,
   sets `pq_pure`.
+- `macula_cluster:start_cluster/1` returns
+  `{error, {unknown_strategy, Strategy}}` for a strategy other than `auto`,
+  `gossip` or `static`, and does not start distribution.
 
 ### Removed
 
+- The `mdns` and `dht` cluster strategies and the discovery code behind
+  them: `macula_cluster_strategy`, `macula_dist_discovery` and
+  `macula_dist_mdns_advertiser`, with the `macula_mdns` dependency and the
+  `optional_applications` entry for `mdns`. The macula application never
+  started this code.
 - `macula_frame:sign_swim_update/2` and `macula_frame:verify_swim_update/1`,
   with their private helpers and the `macula-v2-swim-update` signing
   domain. Nothing signed or verified SWIM membership updates. SWIM itself

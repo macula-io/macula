@@ -21,13 +21,11 @@ The Macula Cluster API (`macula_cluster.erl`) provides a standardized interface 
 |----------|-----------|---------------|---------|----------|
 | **gossip** | Automatic (UDP multicast) | Zero-config | LAN multicast | Development, same-subnet production |
 | **static** | Manual | Node list required | Any | Known node sets, cross-subnet |
-| **mdns**, **dht** | Not available | n/a | n/a | Use **gossip** on a LAN, or **static** with a node list |
 | **auto** | Static if `nodes` is set, else gossip | — | — | Let `start_cluster/1` pick |
 
-`mdns` and `dht` are accepted `strategy` values but are not available. They
-need a discovery service that the macula application does not start, so
-`start_cluster/1` fails for them. Use `gossip` for zero-config discovery on
-a LAN, or `static` with a node list. Both values are removed in 11.0.0.
+Any other `strategy` value returns `{error, {unknown_strategy, Strategy}}`
+and does not start distribution. For zero-config discovery on a LAN use
+`gossip`; otherwise use `static` with a node list.
 
 ---
 
