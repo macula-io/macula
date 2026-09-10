@@ -141,17 +141,26 @@ decode(Bin) when is_binary(Bin) ->
     {V, <<>>} = decode_one(Bin, lenient),
     V.
 
-%% @doc Decode one item under the post-quantum decoding rule: a duplicate map key at any depth, bytes after the
-%% top-level item, and malformed input are refused, and nothing is raised. `decode/1' keeps its behaviour: a
-%% duplicate key there still keeps the last value.
--spec decode_strict(binary()) -> {ok, value()} | {error, duplicate_key | trailing_bytes | malformed}.
+%% @doc Decode one item under the post-quantum decoding rule of DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, without
+%% raising. It refuses bytes after the top-level item, a map key that is not text or an integer, a duplicate key
+%% (equal after decoding, so a text key in two length widths is one key), text that is not valid UTF-8, nesting
+%% deeper than 64 levels, a negative integer below -2^63, and malformed input such as an indefinite length, a tag
+%% or a simple value other than null. `decode/1' keeps its behaviour: a duplicate key there still keeps the last
+%% value.
+-spec decode_strict(binary()) ->
+        {ok, value()}
+      | {error, trailing_bytes | bad_key | duplicate_key | invalid_text | too_deep | integer_out_of_range
+              | malformed}.
 decode_strict(Bin) when is_binary(Bin) ->
-    try decode_one(Bin, strict) of
+    try decode_one(Bin, {strict, 0}) of
         {V, <<>>}        -> {ok, V};
         {_V, _Trailing}  -> {error, trailing_bytes}
     catch
-        throw:duplicate_key -> {error, duplicate_key};
-        error:_             -> {error, malformed}
+        throw:Refusal when Refusal =:= bad_key; Refusal =:= duplicate_key; Refusal =:= invalid_text;
+                           Refusal =:= too_deep; Refusal =:= integer_out_of_range ->
+            {error, Refusal};
+        error:_ ->
+            {error, malformed}
     end.
 
 %% Major 7, value 22 = null.
@@ -182,18 +191,32 @@ decode_value(0, N, R, _Mode) ->
     {N, R};
 %% Negative integer (major 1) — the encoded count `N' represents the
 %% integer `-1 - N'.
+decode_value(1, N, _R, {strict, _Depth}) when N >= 1 bsl 63 ->
+    throw(integer_out_of_range);
 decode_value(1, N, R, _Mode) ->
     {-1 - N, R};
 decode_value(2, Len, R, _Mode) ->
     <<B:Len/binary, Rest/binary>> = R,
     {B, Rest};
-decode_value(3, Len, R, _Mode) ->
+decode_value(3, Len, R, Mode) ->
     <<B:Len/binary, Rest/binary>> = R,
-    {{text, B}, Rest};
+    {{text, checked_text(Mode, B)}, Rest};
 decode_value(4, Len, R, Mode) ->
-    decode_array(Len, R, [], Mode);
+    decode_array(Len, R, [], deeper(Mode));
 decode_value(5, Len, R, Mode) ->
-    decode_map(Len, R, #{}, Mode).
+    decode_map(Len, R, #{}, deeper(Mode)).
+
+%% A strict decode counts nesting: 64 levels of arrays and maps are accepted, and one more is refused.
+deeper(lenient) -> lenient;
+deeper({strict, Depth}) when Depth >= 64 -> throw(too_deep);
+deeper({strict, Depth}) -> {strict, Depth + 1}.
+
+%% A strict decode refuses text that is not valid UTF-8.
+checked_text({strict, _Depth}, B) -> valid_text(unicode:characters_to_binary(B, utf8, utf8) =:= B, B);
+checked_text(lenient, B) -> B.
+
+valid_text(true, B) -> B;
+valid_text(false, _B) -> throw(invalid_text).
 
 decode_array(0, R, Acc, _Mode) ->
     {lists:reverse(Acc), R};
@@ -208,10 +231,15 @@ decode_map(N, R, Acc, Mode) ->
     {V, R2} = decode_one(R1, Mode),
     decode_map(N - 1, R2, put_key(Mode, K, V, Acc), Mode).
 
-%% A strict decode refuses a key it has already seen; a lenient one keeps the last value. The lookup keeps the check
-%% linear in the number of keys.
-put_key(strict, K, _V, Acc) when is_map_key(K, Acc) -> throw(duplicate_key);
-put_key(_Mode, K, V, Acc) -> Acc#{K => V}.
+%% A strict decode takes only text and integer keys and refuses a key it has already seen; a lenient one keeps the
+%% last value. The lookup keeps the check linear in the number of keys.
+put_key({strict, _Depth}, {text, _} = K, V, Acc) -> strict_put(K, V, Acc);
+put_key({strict, _Depth}, K, V, Acc) when is_integer(K) -> strict_put(K, V, Acc);
+put_key({strict, _Depth}, _K, _V, _Acc) -> throw(bad_key);
+put_key(lenient, K, V, Acc) -> Acc#{K => V}.
+
+strict_put(K, _V, Acc) when is_map_key(K, Acc) -> throw(duplicate_key);
+strict_put(K, V, Acc) -> Acc#{K => V}.
 
 %% IEEE 754 binary16 -> Erlang float. Subnormals and zero fall out of the
 %% same arithmetic; exponent 31 is NaN/infinity, which has no Erlang

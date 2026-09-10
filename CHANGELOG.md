@@ -34,9 +34,11 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `puzzle_solved/2`: an identity key whose node_id starts with that many
   zero bits. Each try makes a new ML-DSA-87 half; a hybrid key keeps its
   RSA-PSS half, since the node_id covers both halves.
-- `macula_record_cbor:decode_strict/1`: decodes one CBOR item and refuses a
-  duplicate map key at any depth, bytes after the top-level item, and
-  malformed input, without raising. `decode/1` is unchanged.
+- `macula_record_cbor:decode_strict/1`: decodes one CBOR item under the
+  post-quantum decoding rule, without raising. It refuses bytes after the
+  top-level item, map keys other than text or integers, duplicate keys,
+  invalid UTF-8, nesting deeper than 64 levels, negative integers below
+  -2^63, and malformed input. `decode/1` is unchanged.
 - `macula_key_bindings`: bindings of a node's TLS and CONNECT keys to its
   identity key, and the status statements that keep a binding in force,
   as the handshake frame design lays them out. Each travels as its signed
