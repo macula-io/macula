@@ -75,6 +75,17 @@ jobs:
         working-directory: pkg
         run: rebar3 hex build
 
+      # The publish job's command as a dry run, with a placeholder key. It
+      # fails here, before anyone is asked to approve, if the command does
+      # not read a key from HEX_API_KEY; it cannot tell whether the real key
+      # works. The dead API URL keeps the placeholder away from hex.pm.
+      - name: Dry-run the publish command
+        working-directory: pkg
+        env:
+          HEX_API_KEY: placeholder-not-a-real-key
+          HEX_API_URL: http://127.0.0.1:9
+        run: rebar3 hex publish --repo hexpm --yes --dry-run
+
   publish:
     name: Publish to hex.pm
     needs: verify
@@ -111,10 +122,13 @@ jobs:
       - name: Refuse unless this is the clean, pushed release tag
         run: bash scripts/is_checkout_publishable.sh
 
+      # rebar3_hex reads HEX_API_KEY only for a named repository: without
+      # --repo it takes the default hexpm config, finds no write key and
+      # stops with "No write key found for user".
       - name: Publish the package and docs
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-        run: rebar3 hex publish --yes
+        run: rebar3 hex publish --repo hexpm --yes
 
       - name: Check that hex serves the tagged code
         run: |

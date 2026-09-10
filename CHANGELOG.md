@@ -95,6 +95,15 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 
 ## [Unreleased]
 
+### Fixed
+
+- `macula_dist_pool` reads the reply and the arguments of the distribution
+  tunnel RPC (`_dist.tunnel.<node>`) under the atom or `{text, Name}` key
+  that a decoded frame payload holds. It read them with binary keys, which
+  a decoded payload never has, so a tunnel request for distribution over
+  the mesh pool (`macula:join_mesh/1`) ended in
+  `{error, {unexpected_result, _}}`.
+
 ## [10.24.0] - 2026-09-10
 
 ### Added

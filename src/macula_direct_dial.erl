@@ -47,7 +47,7 @@
 %%% nothing (`verify => none' alone would trust whoever answers): trust
 %%% is enforced at the application layer instead, via the
 %%% cryptographically signed CONNECT/HELLO handshake
-%%% (`macula_peering_conn:bind_peer_identity/2') checked against the
+%%% (the peer identity binding in `macula_peering_conn') checked against the
 %%% exact pubkey the signed DHT chain above resolved.
 %%%
 %%% A third check is available but OPT-IN, via `Opts' (managed realms
@@ -77,7 +77,7 @@
 %%% authorized matters. Content is content-addressed, and the fetched
 %%% bytes are checked against the MCID client-side regardless of which
 %%% peer served them. Single-block content is re-hashed against the MCID
-%%% (`macula_content_transfer:verify_block_hash/2'). For chunked content
+%%% (in `macula_content_transfer'). For chunked content
 %%% the fetched manifest is used only if its MCID, recomputed from its
 %%% canonical fields, is the one requested (`macula_manifest:verify_mcid/2');
 %%% each chunk is then hashed against that manifest, and the reassembled
@@ -87,8 +87,8 @@
 %%% content that does not match the MCID it asked for. What still
 %%% matters, and is still mandatory, is (1)'s analogue for
 %%% `content_announcement': the signer must equal the `announcer_node'
-%%% it claims (`macula:decode_provider/1'), so an attacker cannot at
-%%% least misattribute who is claiming to serve what.
+%%% it claims (checked by `macula:find_content_providers/2'), so an
+%%% attacker cannot at least misattribute who is claiming to serve what.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_direct_dial).

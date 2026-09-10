@@ -203,8 +203,8 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
   procedure URI, or over the content id; node records, realm directories, tombstones and domain records without a
   subject use their 32-byte `key` itself ✅ (`macula_record:storage_key/1`, the station's
   `macula_content_dht:dht_key/1`, `macula-rust` `src/dht.rs`). No storage key in `macula`, `macula-station` or
-  `macula-rust` uses BLAKE3 ✅. Content identifiers use BLAKE3 by default, in a format that carries an algorithm
-  tag ✅. The foundation's realm trust list names realms by their key ✅.
+  `macula-rust` uses BLAKE3 ✅. Content identifiers use BLAKE3 by default; their first byte is a format version and
+  their second a codec, and no byte names the hash ✅. The foundation's realm trust list names realms by their key ✅.
 - A push to `macula-station` `main` builds and publishes its image, and watchtower rolls it ✅.
 - There is no TLS 1.3 standard for hybrid authentication: "Pour l'instant, il n'existe pas de standards pour
   l'authentification hybride" (ANSSI) ✅.

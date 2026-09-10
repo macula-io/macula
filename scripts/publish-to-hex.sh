@@ -6,8 +6,10 @@
 # `rebar3 hex publish' packages the WORKING TREE, not a tag. This script
 # refuses first, before anything slow, unless the checkout is the clean
 # release tag v<vsn> and origin has that tag at the same commit
-# (scripts/is_checkout_publishable.sh). After publishing it checks that hex
-# serves the tagged code (scripts/is_hex_serving_what_git_says.sh).
+# (scripts/is_checkout_publishable.sh), and unless the erl on PATH is the
+# Erlang/OTP that .tool-versions pins (scripts/is_erlang_the_pinned_version.sh).
+# After publishing it checks that hex serves the tagged code
+# (scripts/is_hex_serving_what_git_says.sh).
 #
 # Usage: scripts/publish-to-hex.sh   (from a clean checkout of the release tag)
 set -eo pipefail
@@ -15,6 +17,7 @@ set -eo pipefail
 cd "$(dirname "$0")/.."
 
 bash scripts/is_checkout_publishable.sh
+bash scripts/is_erlang_the_pinned_version.sh
 
 MACULA_VERSION="$(sed -n 's/.*{vsn, *"\([^"]*\)"}.*/\1/p' src/macula.app.src | head -n 1)"
 CHECK_ATTEMPTS=5
