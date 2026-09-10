@@ -226,7 +226,7 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 | V9 | Handshake size | unassigned | open | 0.5 day |
 | V10 | Capture method for the wire checks | Terra | open | 0.5 day |
 | V11 | hecate services | Saturnus | open | 1 day |
-| V12 | Identifier standards | unassigned | open | 0.5 day |
+| V12 | Identifier standards | Mercury | closed (D7) | 0.5 day |
 | V13 | QUIC Initial packets | Saturnus | open | 0.5 day |
 | V14 | US national-security deployability | Saturnus | open | 0.5 day |
 | V15 | ANSSI's recognised classical signatures | Saturnus | closed | 0.5 day |
@@ -250,7 +250,7 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
     warden, hecate-daemon, hecate-stub and macula-dist-relay (crypto-5.5.3.2), and macula-e2e, which moves to
     `erlang:28-alpine`;
   - Debian 12 with OpenSSL 3.0, needing a new base (4): macula-station and macula-realm (crypto-5.7), and
-    macula-portal and macula-relay, which also need OTP 28 (crypto-5.5.1);
+    macula-portal and macula-relay (crypto-5.5.1), which D8 leaves out of scope;
   - not BEAM (2): zot and hanko.
 - **Base images** (Terra, 2026-09-10) ✅: `erlang:28-alpine` is Alpine 3.23.5 with OpenSSL 3.5.7 and `erlang:28-slim`
   is Debian 13.6 with OpenSSL 3.5.7, both with `crypto` built with ML-DSA and ML-KEM; `erlang:29-alpine` and
@@ -395,6 +395,8 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
   - whether the UCAN spec requires `aud` to be a DID (Macula membership UCANs use a raw hex key there ⚠).
 - **Context:** a minimal post-quantum UCAN is about 16 KB, because `did:key` carries the full key in `iss` and `aud`.
 - **Done when:** a written result with sources.
+- **Result** (Mercury, 2026-09-10): in D7's two checks, with sources: the RFC 9964 names, the `mldsa-87-pub`
+  multicodec, no composite JOSE, COSE or multicodec name for ML-DSA with RSA, and UCAN 0.10.0's `aud` rules.
 - **Effort:** 0.5 day.
 
 #### V13 QUIC Initial packets

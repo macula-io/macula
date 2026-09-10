@@ -21,7 +21,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Files:**
   - `src/crypto_profile/macula_crypto_profile.erl` (new)
   - `src/macula_app.erl` (start-up validation)
-  - the test modules that start the `macula` application, which set a profile
+  - `config/test.sys.config` (new) and `rebar.config`: the profile for test runs
 - **Change:**
   - two profiles (`us_national_security`, `eu`), mapping to the key exchange group, TLS signature scheme, cipher
     suite, and the identity, CONNECT proof and status statement algorithms in the crypto profiles table;
@@ -117,7 +117,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `rebar.config` (OTP floor)
 - **Change:**
   - identity keys per profile through OTP `crypto`: ML-DSA-87 in the US profile, the hybrid pair in the EU
-    profile (D4);
+    profile (D4), signing as the composite `id-MLDSA87-RSA4096-PSS-SHA512` (D7);
   - CONNECT keys and TLS keys, their bindings and their status (D22); key storage per D6, with a round trip on
     load and rotation every 5 days;
   - node_id per D5, through one identity function that every comparison uses; the puzzle works on node_id;
@@ -158,7 +158,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 
 - [ ] UCANs and DIDs carry the profile's algorithm.
 - **Owner:** Neptune.
-- **Waiting on:** V12, D7, WP 1.3.
+- **Waiting on:** WP 1.3.
 - **Files:**
   - `native/macula_ucan_nif/Cargo.toml`
   - `native/macula_ucan_nif/src/lib.rs`
@@ -167,11 +167,15 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Change:**
   - the NIFs build the signing input and parse tokens and documents; `macula_identity` signs and verifies, so
     private keys never enter Rust;
-  - `alg` and DID key encoding per D7;
+  - `alg` and key encoding per D7: `ML-DSA-87` and `AKP` from RFC 9964 with the `mldsa-87-pub` multicodec in the US
+    profile; the composite with Macula's own `alg` `ML-DSA-87-PS384` and key type in the EU profile;
+  - `aud` names the audience by node_id; a proof's `aud` is matched against the node_id derived from the outer
+    token's `iss` key, and the string form of that audience is set here without a `did:macula:` prefix (D7);
   - UCAN parent ids are SHA-384, and verifiers reject any other hash (D24);
   - `ed25519-dalek` removed.
 - **Red first:** `test/macula_ucan_nif_tests.erl` and `test/macula_did_nif_tests.erl`: a post-quantum token and
-  DID round-trip, and an EdDSA token is rejected. Fail today.
+  DID round-trip; an EdDSA token is rejected; a token whose `aud` is not the receiver's node_id, or whose proof's
+  `aud` is not the node_id of the outer `iss` key, is refused. Fail today.
 - **Done:** green.
 - **Effort:** 2 to 3 days.
 
@@ -230,7 +234,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `apps/macula_station/src/macula_station_route_pubsub_frames.erl`
   - `apps/macula_content/src/macula_content_hasher.erl`, `macula_content_store.erl`, `macula_content_manifest.erl`
     and `macula_content_dht.erl` (D24)
-  - `Dockerfile` (builder and runtime per D8)
+  - `Dockerfile` (builder `erlang:28-slim`, runner `debian:trixie-slim`, D8)
   - `rebar.config` (`macula` by git ref, D20)
 - **Change:**
   - node_id and public key become separate types across those files;
@@ -333,10 +337,11 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Other files:**
   - `apps/guide_realm_lifecycle/lib/guide_realm_lifecycle/admit_realm_member/`
   - `apps/project_realm_identities/lib/project_realm_identities/identity_listener.ex`
-  - `Dockerfile.prod` (runtime base per D8)
+  - `Dockerfile.prod` (Debian 13 slim builder and runner, D8)
 - **Change:**
   - Realm CA and Org CA sign with ML-DSA-87 in the US profile;
-  - in the EU profile each credential carries a hybrid signature, valid only if both halves verify (D4);
+  - in the EU profile each credential carries the composite signature `id-MLDSA87-RSA4096-PSS-SHA512`, valid only
+    if both halves verify (D4, D7); whether OTP `public_key` handles that identifier is not checked ⚠;
   - OTP 28.1.1 `public_key` signs and validates ML-DSA X.509 ✅, and OTP signs and verifies brainpool ECDSA ✅ and
     RSA-PSS ✅;
   - leaf issuance, ownership proofs and membership checks take post-quantum keys, carried in full (D13);
@@ -566,21 +571,23 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
 
 - [ ] hecate-om and the hecate services run post-quantum.
 - **Owner:** Saturnus.
-- **Waiting on:** V11, D9, WP 1.3 and WP 3.2 with their EU parts, because the services live in `io.macula` (D19), and
-  Stage 5 in Raf's order; technically the first four are enough.
+- **Waiting on:** V11, the finished Reckon post-quantum plan (D9), WP 1.3 and WP 3.2 with their EU parts, because
+  the services live in `io.macula` (D19), and Stage 5 in Raf's order; technically the first four are enough.
 - **Files:**
   - `hecate-services/hecate-om` `src/hecate_om_identity.erl`
   - `hecate-services/hecate-om` `src/hecate_om_ownership_proof.erl`
   - the Containerfiles and CI images of the hecate service repositories (V11)
 - **Change:**
   - ownership proofs carry and verify post-quantum keys in full (D13);
-  - builder and runtime images on OTP 28 or newer, with an OpenSSL that gives ML-DSA (D8);
+  - builder and runtime images on OTP 28 with OpenSSL 3.5.0 or newer at build time; the hecate images still on
+    OTP 27 move to OTP 28 here (D8);
   - data keyed by the hex node id (hecate-citizens, hecate-mail, hecate-graph) keeps its 64-character shape; the
     values change when nodes get new identities.
 - **Red first:** hecate-om ownership-proof tests with a post-quantum key, and every service image passing the V2
   check. Fail today.
 - **Done:** green.
-- **Effort:** 3 to 5 days, plus about 30 images ⚠.
+- **Effort:** 3 to 5 days, plus the images: 13 already have ML-DSA and ML-KEM, and the hecate images on OTP 27
+  need OTP 28 ⚠.
 
 ---
 
@@ -625,6 +632,7 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
 - WP 1.1:
   - `src/crypto_profile/macula_crypto_profile.erl` (new)
   - `src/macula_app.erl`
+  - `config/test.sys.config` (new) and `rebar.config`
 - WP 1.2:
   - `native/macula_quic/{Cargo.toml, src/config.rs, src/cert.rs}`
   - `native/macula_quic/{src/connection.rs, src/endpoint.rs, src/lib.rs}`
