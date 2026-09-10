@@ -233,8 +233,73 @@ advertise_no_mesh_pool_test() ->
     ?assertEqual(ok, macula_dist_pool:advertise_dist_accept()).
 
 %%%===================================================================
+%%% Tests — tunnel RPC payloads as the frame decoder delivers them
+%%%===================================================================
+
+%% The accepting side's handler builds its reply with binary keys. After
+%% the RESULT frame is encoded and decoded, the connecting side must still
+%% find the tunnel id, in whatever key form the decode produced.
+tunnel_reply_reads_the_tunnel_id_of_a_decoded_result_test() ->
+    Reply = decoded_payload(#{<<"tunnel_id">> => <<"t-1">>,
+                              <<"send_topic">> => <<"_dist.data.t-1.in">>,
+                              <<"recv_topic">> => <<"_dist.data.t-1.out">>}),
+    ?assertEqual({tunnel, <<"t-1">>}, macula_dist_pool:tunnel_reply(Reply)).
+
+tunnel_reply_reads_the_error_of_a_decoded_result_test() ->
+    Reply = decoded_payload(#{<<"error">> => <<"no_mesh_pool">>}),
+    ?assertEqual({tunnel_error, <<"no_mesh_pool">>},
+                 macula_dist_pool:tunnel_reply(Reply)).
+
+tunnel_reply_without_tunnel_id_or_error_is_unexpected_test() ->
+    Reply = decoded_payload(#{<<"other">> => 1}),
+    ?assertEqual(unexpected, macula_dist_pool:tunnel_reply(Reply)).
+
+tunnel_request_reads_from_node_of_decoded_arguments_test() ->
+    Args = decoded_payload(#{<<"from_node">> => <<"a@host">>,
+                             <<"target_node">> => <<"b@host">>}),
+    ?assertEqual(<<"a@host">>, macula_dist_pool:tunnel_request_from_node(Args)).
+
+tunnel_request_without_from_node_reads_empty_test() ->
+    ?assertEqual(<<>>, macula_dist_pool:tunnel_request_from_node(decoded_payload(#{}))).
+
+%% In a node that has not created the field atoms, the same payloads
+%% decode with {text, Name} keys. The node is checked first, so the test
+%% cannot pass on a node that already has them.
+tunnel_payloads_decoded_in_a_fresh_node_test_() ->
+    {timeout, 60, fun fresh_node_reads_tunnel_payloads/0}.
+
+fresh_node_reads_tunnel_payloads() ->
+    Bin = result_frame(#{<<"tunnel_id">> => <<"t-1">>,
+                         <<"from_node">> => <<"a@host">>}),
+    Paths = lists:append([["-pa", P] || P <- code:get_path()]),
+    {ok, Peer, _Node} = peer:start_link(#{connection => standard_io, args => Paths}),
+    try
+        ?assertMatch({'EXIT', _}, catch peer:call(Peer, erlang, binary_to_existing_atom,
+                                                  [<<"from_node">>, utf8])),
+        {ok, Decoded, <<>>} = peer:call(Peer, macula_frame, decode, [Bin]),
+        Wire = maps:get(payload, Decoded),
+        ?assert(maps:is_key({text, <<"from_node">>}, Wire)),
+        ?assert(maps:is_key({text, <<"tunnel_id">>}, Wire)),
+        ?assertEqual({tunnel, <<"t-1">>},
+                     peer:call(Peer, macula_dist_pool, tunnel_reply, [Wire])),
+        ?assertEqual(<<"a@host">>,
+                     peer:call(Peer, macula_dist_pool, tunnel_request_from_node, [Wire]))
+    after
+        peer:stop(Peer)
+    end.
+
+%%%===================================================================
 %%% Helpers
 %%%===================================================================
+
+result_frame(Payload) ->
+    iolist_to_binary(macula_frame:encode(macula_frame:result(#{call_id => <<0:128>>,
+                                                               payload => Payload,
+                                                               responded_by => <<0:256>>}))).
+
+decoded_payload(Payload) ->
+    {ok, Decoded, <<>>} = macula_frame:decode(result_frame(Payload)),
+    maps:get(payload, Decoded).
 
 make_loopback_pair() ->
     ListenOpts = [binary, {active, false}, {reuseaddr, true}, {ip, {127,0,0,1}}],

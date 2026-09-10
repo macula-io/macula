@@ -37,6 +37,11 @@
 -export([advertise_dist_accept/0]).
 -export([get_tunnel_metrics/0, get_tunnel_metrics/1]).
 
+-ifdef(TEST).
+%% Readers of decoded tunnel RPC payloads, exported for unit tests.
+-export([tunnel_reply/1, tunnel_request_from_node/1]).
+-endif.
+
 %% Must be shorter than OTP's SetupTime. Default SetupTime is 7000ms
 %% but we set it to 15000ms via dist_setup_timeout (see macula_dist.erl).
 %% If the tunnel RPC takes longer than DIST_TIMEOUT, the caller gets
@@ -168,12 +173,8 @@ request_tunnel(Pool, NodeStr) ->
                                 ?DIST_TIMEOUT),
     on_tunnel_rpc_reply(Result, Pool).
 
-on_tunnel_rpc_reply({ok, #{<<"tunnel_id">> := TunnelId}}, Pool) ->
-    ?LOG_INFO("[dist_pool] Tunnel established: ~s", [TunnelId]),
-    create_dist_socket(Pool, TunnelId);
-on_tunnel_rpc_reply({ok, #{<<"error">> := ErrorInfo}}, _Pool) ->
-    ?LOG_WARNING("[dist_pool] Tunnel error: ~p", [ErrorInfo]),
-    {error, {tunnel_error, ErrorInfo}};
+on_tunnel_rpc_reply({ok, Reply}, Pool) when is_map(Reply) ->
+    on_tunnel_reply(tunnel_reply(Reply), Reply, Pool);
 on_tunnel_rpc_reply({error, Reason}, _Pool) ->
     ?LOG_WARNING("[dist_pool] Tunnel request failed: ~p", [Reason]),
     {error, {tunnel_failed, Reason}};
@@ -181,12 +182,57 @@ on_tunnel_rpc_reply(Other, _Pool) ->
     ?LOG_WARNING("[dist_pool] Unexpected RPC result: ~p", [Other]),
     {error, {unexpected_result, Other}}.
 
+on_tunnel_reply({tunnel, TunnelId}, _Reply, Pool) ->
+    ?LOG_INFO("[dist_pool] Tunnel established: ~s", [TunnelId]),
+    create_dist_socket(Pool, TunnelId);
+on_tunnel_reply({tunnel_error, ErrorInfo}, _Reply, _Pool) ->
+    ?LOG_WARNING("[dist_pool] Tunnel error: ~p", [ErrorInfo]),
+    {error, {tunnel_error, ErrorInfo}};
+on_tunnel_reply(unexpected, Reply, _Pool) ->
+    ?LOG_WARNING("[dist_pool] Unexpected RPC result: ~p", [{ok, Reply}]),
+    {error, {unexpected_result, {ok, Reply}}}.
+
+%% The tunnel RPC's reply payload, as the connecting side receives it.
+%% The accepting side builds it with binary keys, but a decoded frame
+%% payload never holds a bare binary key: see wire_field/2.
+tunnel_reply(Reply) ->
+    tunnel_reply_fields(wire_field(tunnel_id, Reply), wire_field(error, Reply)).
+
+tunnel_reply_fields(TunnelId, _ErrorInfo) when is_binary(TunnelId) ->
+    {tunnel, TunnelId};
+tunnel_reply_fields(undefined, ErrorInfo) when ErrorInfo =/= undefined ->
+    {tunnel_error, ErrorInfo};
+tunnel_reply_fields(_TunnelId, _ErrorInfo) ->
+    unexpected.
+
+%% A field of a decoded frame payload. macula_frame's decoder turns a text
+%% key into the atom of that name when the node already holds the atom, and
+%% otherwise leaves it as {text, Name}; it never yields a bare binary key.
+%% Which form arrives depends on what the node has loaded, so both are read.
+%% A text value arrives as {text, Bin} and is returned as the binary.
+wire_field(Name, Map) ->
+    wire_value(maps:find(Name, Map), {text, atom_to_binary(Name)}, Map).
+
+wire_value({ok, Value}, _TextKey, _Map) -> wire_text(Value);
+wire_value(error, TextKey, Map) -> wire_text(maps:get(TextKey, Map, undefined)).
+
+wire_text({text, Bin}) when is_binary(Bin) -> Bin;
+wire_text(Value) -> Value.
+
 %%%===================================================================
 %%% Internal — Tunnel Negotiation (accepting side)
 %%%===================================================================
 
+%% The requesting node named in the tunnel RPC's arguments, read like
+%% every decoded payload field (see wire_field/2); empty when absent.
+tunnel_request_from_node(Args) ->
+    from_node_or_empty(wire_field(from_node, Args)).
+
+from_node_or_empty(undefined) -> <<>>;
+from_node_or_empty(FromNode) -> FromNode.
+
 handle_tunnel_request(Args) ->
-    FromNode = maps:get(<<"from_node">>, Args, <<>>),
+    FromNode = tunnel_request_from_node(Args),
     TunnelId = base64:encode(crypto:strong_rand_bytes(16)),
     ?LOG_INFO("[dist_pool] Tunnel request from ~s, id: ~s", [FromNode, TunnelId]),
 
