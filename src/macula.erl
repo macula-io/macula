@@ -29,6 +29,9 @@
 %% Connection
 -export([connect/2, close/1, child_spec/3, status/1, links/1]).
 
+%% Reading fields of peer-supplied maps (D26)
+-export([field/2, field/3, text/1]).
+
 %% Pub/Sub — realm-per-call against a V2 pool
 -export([subscribe/4, subscribe/5,
          subscribe_callback/4,
@@ -995,3 +998,44 @@ on_pool_status({ok, #{healthy_links := N}}, _Pool, _Retries) when N > 0 ->
 on_pool_status(_Other, Pool, Retries) ->
     timer:sleep(1000),
     wait_for_pool(Pool, Retries - 1).
+
+%%%===================================================================
+%%% Peer-supplied maps (D26)
+%%%===================================================================
+
+%% @doc A field of a map a peer supplied, or `undefined' when it is absent. See `field/3'.
+-spec field(atom() | binary(), map()) -> term().
+field(Name, Map) ->
+    field(Name, Map, undefined).
+
+%% @doc A field of a map a peer supplied (D26), or `Default' when it is absent. A map from the codec carries its text
+%% keys as `{text, Bin}'; a map handed over in process may carry atom or binary keys. The lookup tries `{text, Name}',
+%% then the atom, then the binary, so a handler reads both kinds of map the same way. Looking up a binary name never
+%% creates an atom.
+-spec field(atom() | binary(), map(), term()) -> term().
+field(Name, Map, Default) when (is_atom(Name) orelse is_binary(Name)), is_map(Map) ->
+    first_found(field_keys(Name), Map, Default).
+
+%% @doc The binary of a text value a peer supplied (D26): the binary of `{text, Bin}', a binary unchanged, and
+%% `badarg' for anything else.
+-spec text({text, binary()} | binary()) -> binary().
+text({text, Bin}) when is_binary(Bin) -> Bin;
+text(Bin) when is_binary(Bin) -> Bin;
+text(Other) -> erlang:error(badarg, [Other]).
+
+field_keys(Name) when is_atom(Name) ->
+    Bin = atom_to_binary(Name),
+    [{text, Bin}, Name, Bin];
+field_keys(Name) when is_binary(Name) ->
+    [{text, Name}] ++ existing_atom(Name) ++ [Name].
+
+existing_atom(Name) ->
+    try [binary_to_existing_atom(Name)]
+    catch error:badarg -> []
+    end.
+
+first_found([], _Map, Default) -> Default;
+first_found([Key | Keys], Map, Default) -> found(maps:find(Key, Map), Keys, Map, Default).
+
+found({ok, Value}, _Keys, _Map, _Default) -> Value;
+found(error, Keys, Map, Default) -> first_found(Keys, Map, Default).

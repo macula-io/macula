@@ -39,6 +39,10 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   top-level item, map keys other than text or integers, duplicate keys,
   invalid UTF-8, nesting deeper than 64 levels, negative integers below
   -2^63, and malformed input. `decode/1` is unchanged.
+- `macula:field/2`, `field/3` and `text/1`: read fields of maps a peer
+  supplies (D26), whose text keys and values arrive as `{text, Bin}`. A
+  field is looked up as `{text, Name}`, then as the atom, then as the
+  binary, so maps handed over in process read the same way.
 - `macula_key_bindings`: bindings of a node's TLS and CONNECT keys to its
   identity key, and the status statements that keep a binding in force,
   as the handshake frame design lays them out. Each travels as its signed
