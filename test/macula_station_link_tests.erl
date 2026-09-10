@@ -667,26 +667,28 @@ event_publisher_sig_verify_test_() ->
              ?assertEqual(true, maps:get(publisher_verified, Meta1))
          after 2_000 -> erlang:error(valid_sig_event_not_delivered) end,
 
-         %% 2. Tampered publisher_sig, lenient (default) → still
-         %% delivered, but Meta says `false', not `true' -- a
-         %% subscriber must be able to tell "signed, but the signature
-         %% didn't check out" apart from an actually-trustworthy fact,
-         %% even though lenient mode still hands it over.
+         %% 2. Tampered publisher_sig with the setting left at its
+         %% default → NOT delivered. Strict is the default: a signature
+         %% that is present but does not check out is dropped, while an
+         %% absent one (step 0) is still delivered as `not_signed'.
          Bad = (macula_frame:sign_publisher(MkEvent(2, ok2), PubKp))#{
                  payload => tampered},
          Pid ! {macula_peering, frame, FakePeer, Bad},
-         receive {macula_event, SubRef, Topic, tampered, Meta2} ->
-             ?assertEqual(false, maps:get(publisher_verified, Meta2))
-         after 2_000 -> erlang:error(lenient_bad_sig_event_not_delivered) end,
+         receive {macula_event, SubRef, Topic, tampered, _} ->
+             erlang:error(default_bad_sig_event_was_delivered)
+         after 800 -> ok end,
 
-         %% 3. Tampered publisher_sig, strict → NOT delivered.
-         application:set_env(macula, pubsub_strict_publisher_sig, true),
+         %% 3. Tampered publisher_sig with lenient mode explicitly
+         %% opted into → delivered, but Meta says `false', never `true'
+         %% -- a subscriber must still be able to tell "signed, but the
+         %% signature didn't check out" apart from a trustworthy fact.
+         application:set_env(macula, pubsub_strict_publisher_sig, false),
          Bad3 = (macula_frame:sign_publisher(MkEvent(3, ok3), PubKp))#{
                   payload => tampered3},
          Pid ! {macula_peering, frame, FakePeer, Bad3},
-         receive {macula_event, SubRef, Topic, tampered3, _} ->
-             erlang:error(strict_bad_sig_event_was_delivered)
-         after 800 -> ok end,
+         receive {macula_event, SubRef, Topic, tampered3, Meta3} ->
+             ?assertEqual(false, maps:get(publisher_verified, Meta3))
+         after 2_000 -> erlang:error(lenient_bad_sig_event_not_delivered) end,
          application:unset_env(macula, pubsub_strict_publisher_sig),
 
          macula_station_link:stop(Pid),

@@ -85,8 +85,8 @@ subscribe(Pool, Realm, Topic, Subscriber) ->
 %% `publisher_verified', `seq', and `delivered_via'.
 %% `publisher_verified' is `not_signed' (the frame carried no
 %% `publisher_sig'), `true' (present and verified), or `false' (present
-%% but invalid -- delivered anyway unless `pubsub_strict_publisher_sig'
-%% is set, since dropping it silently would hide a relay bug). Stores
+%% but invalid -- only delivered when `pubsub_strict_publisher_sig' is
+%% explicitly `false'; by default such an event is dropped). Stores
 %% receive `{macula_event_gone, SubRef, Reason}' once when the
 %% subscription terminates (pool close, subscriber pid death).
 %%

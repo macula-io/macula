@@ -1916,10 +1916,10 @@ check_publisher_sig(_Frame) ->
 
 %% `ok'           — no publisher_sig present → deliver as before.
 %% `{ok, _}'      — publisher_sig verified → deliver.
-%% `{error, Why}' — publisher_sig present but invalid: always warn;
-%%                  drop only if `pubsub_strict_publisher_sig' is set
-%%                  (default lenient — a relay bug should surface, not
-%%                  silently lose events, during the Phase 2 rollout).
+%% `{error, Why}' — publisher_sig present but invalid: always warn, and
+%%                  drop unless `pubsub_strict_publisher_sig' is
+%%                  explicitly `false', which delivers it with
+%%                  `publisher_verified => false'.
 %%
 %% The verification OUTCOME itself used to stop here: `deliver_event/4'
 %% got only `Frame', so a subscriber could see `publisher' but never
@@ -1936,7 +1936,7 @@ on_inbound_event({error, Why}, Realm, Topic, Frame, S) ->
     logger:warning("[macula_pubsub] inbound EVENT publisher_sig invalid (~p)"
                    " realm=~s topic=~s", [Why, hex_prefix(Realm), Topic]),
     on_invalid_publisher_sig(
-      application:get_env(macula, pubsub_strict_publisher_sig, false),
+      application:get_env(macula, pubsub_strict_publisher_sig, true),
       Realm, Topic, Frame, S).
 
 on_invalid_publisher_sig(true, _Realm, _Topic, _Frame, S) ->

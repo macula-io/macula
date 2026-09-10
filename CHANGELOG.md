@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `pubsub_strict_publisher_sig` now defaults to `true`. An inbound EVENT
+  whose `publisher_sig` is present but does not verify is dropped by
+  default. Set the option to `false` to keep delivering such events with
+  `publisher_verified => false` in `Meta`. EVENTs that carry no
+  `publisher_sig` are unaffected and are still delivered as `not_signed`.
 - `macula_tls:quic_client_opts/0,1` now return `[{verify, webpki}]`
   unless development mode is set explicitly. Only
   `MACULA_TLS_MODE=development` (or `dev`), or the `tls_mode` app env set
