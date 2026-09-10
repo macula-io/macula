@@ -374,13 +374,15 @@ connections (D22).
 Once the connection handshake authenticates both ends of every connection:
 
 - Only signatures checked against the connection's node_id can drop. Origin signatures on relayed frames,
-  publisher signatures and records always stay.
+  publisher signatures, stream frame signatures and records always stay.
 - **US profile:** no neighbour signature on SWIM, ADVERTISE and UNADVERTISE, SUBSCRIBE and UNSUBSCRIBE, PUBLISH,
-  a relayed EVENT, the overlay relay envelope, DHT protocol frames, content frames, and stream frames without a
-  signer.
+  a relayed EVENT, the overlay relay envelope, DHT protocol frames and content frames.
 - **EU profile:** hybrid neighbour signatures stay on control frames: SWIM, DHT protocol, ADVERTISE and
   UNADVERTISE, SUBSCRIBE and UNSUBSCRIBE, and the overlay relay envelope. They drop on data frames: PUBLISH, a
-  relayed EVENT, content frames, and stream frames without a signer.
+  relayed EVENT and content frames.
+- **Stream frames are signed at both ends:** a provider's frames by the provider (D25), and a caller's frames in
+  client_stream and bidi streams by the caller, under `MACULA-PQ-CALLER-STREAM-V1`, with the key from the verified
+  STREAM_OPEN (revised by Raf on 2026-09-11).
 - Every event carries a publisher signature, verified at the origin station.
 - A reply is accepted only from the provider the caller signed as the target, and only for the request it answers
   (D25).
@@ -445,7 +447,7 @@ Raf answered "go with the recommendations" on 2026-09-10.
 | D14 | How the switch happens | A second post-quantum fleet next to the live one | Accepted |
 | D15 | Profile order | US first, EU right after | Accepted |
 | D16 | Connection handshake and client proof | Signed CONNECT proof, one dial mode, no resumption | Accepted |
-| D17 | Signatures between neighbours | US drops most; EU keeps them on control frames | Accepted |
+| D17 | Signatures between neighbours | US drops most; EU keeps control frames; caller stream frames signed | Accepted |
 | D18 | EU session proof | Fixed binding; exporter proof only when an offer needs it | Accepted |
 | D19 | Realm on the new fleet | `io.macula` with the EU profile, separate realm deployment | Accepted |
 | D20 | Branch and release | Branch `post-quantum`, then `macula` 11.0.0 | Accepted |
@@ -860,12 +862,18 @@ before its wire checks are green.
 - **Answer:** as in the key model. The US profile drops the neighbour signatures listed there. The EU profile
   keeps hybrid neighbour signatures on control frames. Origin signatures on relayed frames, publisher signatures
   and records always stay.
+- **Revised and accepted by Raf on 2026-09-11:** caller frames in client_stream and bidi streams carry
+  `{tbs, signature}` under `MACULA-PQ-CALLER-STREAM-V1`. The key is the caller's, from the verified STREAM_OPEN,
+  and is not carried again. The signature covers the request hash and a sequence number, and the caller's stream
+  end signs the last number, as provider frames do under D25. No station on the path can change, drop, reorder
+  or add a caller's stream arguments. Cost: about 4.7 KB per caller frame in the US profile and 5.2 KB in the EU
+  profile.
 - **Why:** under the connection handshake a neighbour signature adds nothing in the US profile. In the EU profile
   it keeps classical-strength authenticity for membership, routing, subscriptions and advertisements if ML-DSA were
   broken, at a small cost because control frames are rare. Data stays hybrid end to end through publisher and
   origin signatures.
 - **Measured cost:** ML-DSA-87 signs in 1.107 ms ✅, and a daemon's PUBLISH goes from two signatures to one.
-- **Status:** accepted 2026-09-10.
+- **Status:** accepted 2026-09-10; caller stream frames revised and accepted 2026-09-11.
 - **Blocks:** WP 1.3, WP 1.6.
 
 ### D18 EU session proof
@@ -963,9 +971,10 @@ before its wire checks are green.
 ### D24 Hashes under signatures
 
 - **Answer, accepted by Raf on 2026-09-10:**
-  - **content ids in signed records and UCAN parent ids use SHA-384** in the post-quantum format;
-  - **verifiers of the post-quantum format reject any other hash tag** in signed announcements and in UCAN parent
-    ids, so a signer cannot pick a weaker hash;
+  - **content ids and UCAN parent ids use SHA-384** in the post-quantum format;
+  - **the post-quantum format has one hash tag for content ids, SHA-384:** an id with any other tag is refused on
+    fetch, in manifests, for chunks and in announcements, and UCAN parent ids take no other hash, so no signer or
+    sender can pick a weaker hash (narrowed to one tag on 2026-09-11);
   - **node ids stay SHA-256** (D5), under two rules: every verifier checks the full carried key (D13), and no
     trust is ever granted to a node id because of a property of one particular key;
   - **realm ids stay SHA-256**, under two rules: every trust decision about a realm checks the realm key, never
@@ -990,7 +999,7 @@ before its wire checks are green.
     vouch for a realm by its key: the foundation's realm trust list names realm keys ✅.
   - DHT storage keys are covered by no signature; the record itself is checked. In the post-quantum format every
     storage key is SHA-256, a node_id or a SHA-256 derivation (WP 1.3), so the identifier qualifier in D11 holds.
-- **Cost:** the content id already carries an algorithm tag ✅, so a SHA-384 content id is 50 bytes instead of 34;
+- **Cost:** the content id's first byte becomes its hash tag, 2 for SHA-384, so a content id is 50 bytes, not 34;
   a UCAN parent id grows by the same 16 bytes before encoding; content hashing is slower than with BLAKE3, as local
   compute.
 - **Public wording:** the identifier qualifier in D11 covers node, realm and DHT keys; the BLAKE3 clause drops from

@@ -142,11 +142,13 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     rows (WP 3.3);
   - UCAN and DID signing and verification in `macula_identity` (D7);
   - every event carries a publisher signature; neighbour signatures per D17;
-  - content ids named in signed records use SHA-384, and verifiers reject any other hash tag there; block and chunk
-    checks on fetch (`macula_content_transfer:verify_block_hash/2`) and the manifest's hashes follow the content
-    id's tag, and content id guards take the 50-byte SHA-384 form (D24);
+  - content ids take a 50-byte form whose first byte is the hash tag, and the post-quantum format has only tag 2,
+    SHA-384: blocks, chunks and manifests are made with SHA-384, a manifest names `sha384` as its only algorithm,
+    and an id with any other tag is refused on fetch (`macula_content_transfer:verify_block_hash/2`), in manifests,
+    for chunks and in announcements (D24);
   - the advertisement bundle with provider authorization, the caller-signed target in CALL and STREAM_OPEN, the
-    request hash in provider replies, and the stream signer with its sequence numbers (D25);
+    request hash in provider replies, the stream signer with its sequence numbers (D25), and the caller's signature
+    with its sequence numbers on its own stream frames (D17);
   - every 32-byte and 64-byte guard is replaced by profile sizes;
   - remove the unused signing functions for SWIM membership updates (`sign_swim_update/2`,
     `verify_swim_update/1`, `verify_update_result/2`, `canonical_swim_update/1`, `?SWIM_UPDATE_DOMAIN`) and
@@ -166,8 +168,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     carried identity key, and no node_id for CONNECT or TLS keys;
   - `test/macula_record_tests.erl`: the carried key must derive to the claimed node_id;
   - `test/macula_frame_tests.erl`: the handshake frames round-trip, and labels cannot be confused;
-  - `test/macula_content_block_hash_tests.erl`: a SHA-384 block verifies on fetch, and a block whose content id
-    names another hash is refused;
+  - `test/macula_content_block_hash_tests.erl`: a SHA-384 block verifies on fetch, and a content id with any tag
+    but 2 is refused;
   - binding tests: an expired binding, a binding for another use, and a binding for another node_id are refused;
   - `test/macula_crypto_nif_tests.erl`, `test/macula_record_cert_chain_tests.erl`.
 
@@ -239,7 +241,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     the row's node_id;
   - a seed's own expected identity is never replaced by a pool-level value;
   - the caller resolves verified advertisements, signs the target, and accepts a reply only from the target and
-    for its request; provider stream frames are checked against the stream's key and sequence (D25);
+    for its request; provider stream frames are checked against the stream's key and sequence (D25), and a
+    provider checks caller stream frames against the caller key and sequence (D17);
   - distribution dials use the same verification mode.
 - **Red first:** `test/macula_peering_handshake_tests.erl` and the dial tests:
   - a proof carrying another station's leaf certificate hash is refused;
@@ -287,9 +290,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     maps the identity-mismatch disconnect to its existing `{error, {node_id_mismatch, ...}}` reply;
   - every dial target, including redundancy candidates, carries an expected node_id;
   - neighbour signatures per D17, and publisher signatures verified at the origin station;
-  - content announcements carry SHA-384 content ids; the content hasher's default in the post-quantum format is
-    SHA-384, and the content store, the manifest and the content DHT key follow the content id's tag and its
-    50-byte length (D24);
+  - content ids have only tag 2, SHA-384, in the post-quantum format: the content hasher, the content store, the
+    manifest, announcements and the content DHT key use it, and refuse an id with any other tag (D24);
   - advertisement gossip forwards providers' signed advertisements unchanged and drops expired ones; routing
     follows the serving station; replies and stream frames are checked against the target, the request hash and
     the sequence; relay errors carry their own codes (D25);
@@ -492,8 +494,8 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
 - **Change:**
   - the transport of WP 1.2: the aws-lc-rs features of V4, the profile's group, AES-256, one verification mode, no
     resumption, and the leaf through `peer_identity`;
-  - `src/content.rs` checks every block and chunk against its content id's own hash tag, SHA-384 in the
-    post-quantum format; `Mcid` takes the 50-byte form, and an unknown hash name is refused (D24);
+  - `src/content.rs` makes and checks blocks and chunks with SHA-384; `Mcid` takes the 50-byte form with tag 2 only,
+    and a manifest that names any other hash is refused (D24);
   - the token checks of WP 1.4, for calls and streams;
   - one trust mode replaces `Trust::WebPki`, `Trust::Pinned` and `Trust::Insecure`; every dial carries an expected
     identity;
@@ -592,6 +594,7 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
     - a chunked fetch recomputes the manifest's id in `computeMcid`'s canonical form and refuses a manifest
       whose id is not the requested id;
     - a single-block fetch re-hashes the block and refuses one whose hash is not the requested id;
+    - content ids have only tag 2, SHA-384, in `computeMcid` and in every content id check (D24);
   - events: dedup runs only on verified events, so a forged event that reuses a real publisher's realm,
     publisher, sequence number and topic never suppresses the genuine one;
   - authorization:
@@ -664,6 +667,7 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
     token before any handler runs; a denial replies unauthorized without running the handler;
   - a chunked fetch recomputes the manifest id and refuses a manifest whose id differs from the requested id
     before fetching any chunk, and a single-block fetch checks the block hash against the requested id;
+  - content ids have only tag 2, SHA-384, in every content id made and checked (D24);
   - the token checks of WP 1.4.
 - **Done:** green in CI.
 - **Effort:** 6 to 9 days, plus the seed list and record verifier ⚠; the identity work is part of the SDK identity
@@ -777,7 +781,7 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - a missing, stale or future-dated status statement is refused, on a new and on an open connection;
   - a reply from anyone other than the request's target, or for another request, is refused;
   - a provider stream frame from another signer, out of sequence, or on a stream whose first provider frame was not
-    seen is refused;
+    seen is refused, and so is a caller stream frame from another signer or out of sequence (D17);
   - an advertisement without valid provider authorization, or expired, is never a target.
 - **Public claims** follow D11, and only after the stack's wire checks are green.
 
