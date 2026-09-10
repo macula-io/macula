@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on an ERROR. A CALL that does not verify is not handed to its handler
   and gets no reply. A RESULT or ERROR that does not verify is dropped
   and leaves its call pending.
+- The inner frame of an `overlay_relay` is now delivered to overlay
+  subscribers only when its signature verifies against the origin the
+  envelope names. Callers of `send_overlay_frame/3` must sign the inner
+  frame with the identity of the link they send it on; the HyParView
+  frames `macula_hyparview_proto` builds already are.
 - `macula_tls:quic_client_opts/0,1` now return `[{verify, webpki}]`
   unless development mode is set explicitly. Only
   `MACULA_TLS_MODE=development` (or `dev`), or the `tls_mode` app env set

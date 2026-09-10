@@ -762,9 +762,12 @@ send_overlay_frame(Client, Frame) when is_pid(Client), is_map(Frame) ->
 %% `TargetPeer' can never be spoofed by an unrelated connection — and
 %% forwards it to whichever of its OTHER connections authenticates as
 %% `TargetPeer'. See `macula_station_peer_observer:dispatch_overlay/5' on
-%% the relay side. `Frame' itself is a separate, independent signature —
-%% the caller's own responsibility, same as `send_overlay_frame/2' — this
-%% function only signs the envelope around it, never touches `Frame'.
+%% the relay side. `Frame' carries its own, separate signature, which the
+%% caller must make with THIS connection's identity: the receiving link
+%% delivers `Frame' only if that signature verifies against the sender the
+%% station names in the envelope, and that sender is this connection's
+%% authenticated NodeId. This function only signs the envelope around it,
+%% never touches `Frame'.
 %% Silently dropped by the station if `TargetPeer' isn't currently
 %% connected there; HyParView's own periodic shuffle/retry is the
 %% recovery path, the same way it already tolerates ordinary packet loss.
@@ -1455,9 +1458,12 @@ on_frame(#{frame_type := call} = Frame, S) ->
 %% identity, always wrong for a genuine third-party HyParView peer).
 %% Must be matched before the bare `#{realm := Realm}' clause below,
 %% since an `overlay_relay' envelope has no `realm' field of its own.
+%% The wrapped frame is delivered only once its own signature verifies
+%% against `Origin' (`on_relayed_overlay_frame/3').
 on_frame(#{frame_type := overlay_relay, peer := Origin, payload := Bytes}, S) ->
     case macula_frame:decode(Bytes) of
-        {ok, Inner, _Rest} -> deliver_overlay_frame_from(Origin, Inner, S);
+        {ok, Inner, _Rest} ->
+            on_relayed_overlay_frame(macula_frame:verify(Inner, Origin), Origin, S);
         {error, _Reason} -> S
     end;
 on_frame(#{realm := Realm} = Frame, S) ->
@@ -1919,6 +1925,19 @@ deliver_overlay_frame_from(Sender, #{realm := Realm} = Frame,
 deliver_overlay_frame_from(_Sender, _Frame, S) ->
     %% Wrapped frame carries no `realm' — nothing to route on, same as
     %% the bare-frame catch-all in on_frame/2.
+    S.
+
+%% The inner frame of an `overlay_relay' is signed by the peer that emitted
+%% it, and `Origin' is that peer's identity as the station authenticated
+%% it. Every HyParView frame `macula_hyparview_proto' emits is signed with
+%% the emitting peer's own identity, the one its link connects with, so a
+%% genuine relayed frame verifies here. One that does not is dropped.
+on_relayed_overlay_frame({ok, Inner}, Origin, S) ->
+    deliver_overlay_frame_from(Origin, Inner, S);
+on_relayed_overlay_frame({error, Why}, Origin, S) ->
+    logger:warning("[macula_station_link] dropped relayed overlay frame whose"
+                   " signature does not verify against its origin (~p)"
+                   " origin=~s", [Why, hex_prefix(Origin)]),
     S.
 
 deliver_overlay_frame_to(error, _Frame, _Sender, _S) ->

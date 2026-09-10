@@ -1203,10 +1203,13 @@ overlay_relay_delivers_with_envelope_origin_as_sender_test_() ->
              setelement(?PEER_PID_INDEX + 1, S2, StationNodeId)
          end),
          {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
-         Origin = macula_identity:public(macula_identity:generate()),
+         OriginKp = macula_identity:generate(),
+         Origin = macula_identity:public(OriginKp),
          ?assertNotEqual(Origin, StationNodeId),
          Joiner = macula_identity:public(macula_identity:generate()),
-         Inner = macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
+         Inner = macula_frame:sign(
+                   macula_frame:hyparview_join(#{realm => ?REALM, new_member => Joiner}),
+                   OriginKp),
          Envelope = macula_frame:overlay_relay(#{
              peer    => Origin,
              payload => macula_frame:encode(Inner)
@@ -1219,6 +1222,48 @@ overlay_relay_delivers_with_envelope_origin_as_sender_test_() ->
                  ?assertEqual(Origin, maps:get(sender, Meta)),
                  ?assertNotEqual(StationNodeId, maps:get(sender, Meta))
          after 2_000 -> erlang:error(no_overlay_frame_delivered)
+         end,
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%% The inner frame of an `overlay_relay' envelope is delivered only when
+%% its own signature verifies against the origin the envelope names. One
+%% signed by any other key, or not signed at all, is dropped; a genuinely
+%% signed one that follows is delivered.
+overlay_relay_inner_frame_must_verify_against_origin_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {Pid, FakePeer, _StationNodeId} = start_connected_link(),
+         {ok, SubRef} = macula_station_link:overlay_subscribe(Pid, ?REALM, self()),
+         OriginKp = macula_identity:generate(),
+         Relay = fun(Inner) ->
+                     Pid ! {macula_peering, frame, FakePeer,
+                            macula_frame:overlay_relay(#{
+                                peer    => macula_identity:public(OriginKp),
+                                payload => macula_frame:encode(Inner)})}
+                 end,
+         Join = fun() ->
+                    macula_frame:hyparview_join(#{
+                        realm      => ?REALM,
+                        new_member => macula_identity:public(macula_identity:generate())})
+                end,
+         Relay(macula_frame:sign(Join(), macula_identity:generate())),
+         Relay(Join()),
+         Genuine = macula_frame:sign(Join(), OriginKp),
+         Relay(Genuine),
+         receive
+             {macula_overlay_frame, SubRef, First, _Meta} ->
+                 ?assertEqual(Genuine, First)
+         after 2_000 ->
+             erlang:error(no_overlay_frame_delivered)
+         end,
+         receive
+             {macula_overlay_frame, SubRef, Extra, _} ->
+                 erlang:error({unverified_overlay_frame_delivered, Extra})
+         after 300 ->
+             ok
          end,
          macula_station_link:stop(Pid),
          ok
