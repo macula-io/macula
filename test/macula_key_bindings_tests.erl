@@ -69,8 +69,8 @@ status_cases(#{identity := Id, public := Public, profile := Profile}) ->
     Verify = fun(Statement, ForBinding, Now) ->
         macula_key_bindings:verify_status(Statement, ForBinding, Public, Profile, Now)
     end,
-    [?_assertEqual(ok, Verify(Status, Binding, ?NOW + 10 * ?MINUTE)),
-     ?_assertEqual(ok, Verify(Status, Binding, ?NOW + ?HOUR + 4 * ?MINUTE)),
+    [?_assertEqual({ok, #{expires_at => ?NOW + ?HOUR}}, Verify(Status, Binding, ?NOW + 10 * ?MINUTE)),
+     ?_assertEqual({ok, #{expires_at => ?NOW + ?HOUR}}, Verify(Status, Binding, ?NOW + ?HOUR + 4 * ?MINUTE)),
      ?_assertEqual({error, status_expired}, Verify(Status, Binding, ?NOW + ?HOUR + 6 * ?MINUTE)),
      ?_assertEqual({error, status_future_dated}, Verify(Later, Binding, ?NOW)),
      ?_assertEqual({error, status_binding_mismatch}, Verify(Status, Other, ?NOW)),

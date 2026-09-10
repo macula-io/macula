@@ -38,7 +38,9 @@
     verify/4,
     node_id/1,
     node_id/2,
-    puzzle_solved/2
+    puzzle_solved/2,
+    carried_key_well_formed/2,
+    signature_bytes/1
 ]).
 
 -ifdef(TEST).
@@ -175,6 +177,26 @@ puzzle_solved(<<_:256>> = NodeId, Difficulty) when is_integer(Difficulty), Diffi
     <<Prefix:Difficulty, _/bitstring>> = NodeId,
     Prefix =:= 0.
 
+%% @doc Whether bytes are a key in its one carried form for a profile (D13): the 2,592-byte ML-DSA-87 key, followed
+%% in pq_hybrid by a DER RSAPublicKey that encodes back to the same bytes, with the profile's modulus size and
+%% public exponent. It says nothing about who holds the key.
+-spec carried_key_well_formed(binary(), macula_crypto_profile:profile()) -> boolean().
+carried_key_well_formed(Key, pq_pure) when is_binary(Key) ->
+    byte_size(Key) =:= ?MLDSA87_PUBLIC_BYTES;
+carried_key_well_formed(<<_:?MLDSA87_PUBLIC_BYTES/binary, RsaDer/binary>>, pq_hybrid) ->
+    rsa_public_well_formed(decode_rsa_public(RsaDer), composite_rsa_params(pq_hybrid));
+carried_key_well_formed(_Key, _Profile) ->
+    false.
+
+%% @doc The size of a signature by a node key in a profile: the ML-DSA-87 signature, followed in pq_hybrid by an
+%% RSA-PSS signature as long as the modulus.
+-spec signature_bytes(macula_crypto_profile:profile()) -> pos_integer().
+signature_bytes(pq_pure) ->
+    ?MLDSA87_SIGNATURE_BYTES;
+signature_bytes(pq_hybrid) ->
+    {ok, #{modulus_bits := Bits}} = composite_rsa_params(pq_hybrid),
+    ?MLDSA87_SIGNATURE_BYTES + Bits div 8.
+
 %%------------------------------------------------------------------
 %% Internals: the puzzle
 %%------------------------------------------------------------------
@@ -250,6 +272,12 @@ decode_rsa_public(Der) ->
 
 canonical_rsa_public(true, Key) -> {ok, Key};
 canonical_rsa_public(false, _Key) -> error.
+
+rsa_public_well_formed({ok, #'RSAPublicKey'{modulus = N, publicExponent = E}},
+                       {ok, #{modulus_bits := Bits, public_exponent := Exponent}}) ->
+    {bit_length(N), E} =:= {Bits, Exponent};
+rsa_public_well_formed(_Decoded, _Params) ->
+    false.
 
 rsa_half_verifies(true, {ok, #'RSAPublicKey'{modulus = N, publicExponent = E}}, Signature, Representative,
                   {ok, #{modulus_bits := Bits, public_exponent := Exponent, digest := Digest} = Params}) ->

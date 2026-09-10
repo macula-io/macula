@@ -161,9 +161,10 @@ well_formed_binding(_Fields, _Profile) ->
 %% Verifying status statements
 %%------------------------------------------------------------------
 
-%% @doc Verify a status statement for the binding it came with, against the carried identity key.
+%% @doc Verify a status statement for the binding it came with, against the carried identity key, and return when
+%% the statement expires.
 -spec verify_status(term(), envelope(), binary(), macula_crypto_profile:profile(), integer()) ->
-        ok | {error, refusal()}.
+        {ok, #{expires_at := non_neg_integer()}} | {error, refusal()}.
 verify_status(#{tbs := Tbs, signature := Signature} = Envelope, #{tbs := BindingTbs}, IdentityPublic, Profile, NowMs)
   when map_size(Envelope) =:= 2, is_binary(Tbs), is_binary(Signature), is_binary(BindingTbs),
        is_binary(IdentityPublic) ->
@@ -180,7 +181,7 @@ status_signed(true, Tbs, BindingTbs, IdentityPublic, Profile, NowMs) ->
 status_decoded(error, _BindingTbs, _IdentityPublic, _Profile, _NowMs) ->
     {error, malformed_frame};
 status_decoded({ok, F}, BindingTbs, IdentityPublic, Profile, NowMs) ->
-    run_checks([
+    status_result(run_checks([
         fun() -> well_formed_status(F, Profile) end,
         fun() -> expect(maps:get(<<"node_id">>, F) =:= macula_node_keys:node_id(IdentityPublic, Profile),
                         node_id_mismatch) end,
@@ -188,7 +189,10 @@ status_decoded({ok, F}, BindingTbs, IdentityPublic, Profile, NowMs) ->
                         status_binding_mismatch) end,
         fun() -> expect(maps:get(<<"issued_at">>, F) =< NowMs + ?TOLERANCE_MS, status_future_dated) end,
         fun() -> expect(NowMs - ?TOLERANCE_MS =< maps:get(<<"expires_at">>, F), status_expired) end
-    ]).
+    ]), F).
+
+status_result(ok, F) -> {ok, #{expires_at => maps:get(<<"expires_at">>, F)}};
+status_result({error, _} = Error, _F) -> Error.
 
 well_formed_status(#{<<"label">> := {text, ?STATUS_LABEL}, <<"node_id">> := NodeId,
                      <<"binding_hash">> := BindingHash, <<"issued_at">> := IssuedAt,

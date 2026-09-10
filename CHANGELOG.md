@@ -48,6 +48,14 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   bytes with and without the length prefix, exactly as sent and
   received, for the post-quantum handshake. `decode/1` shares their
   length-prefix code.
+- `macula_handshake`: the post-quantum connection handshake frames, built
+  as CBOR bytes and checked as received. The client checks the challenge
+  before it signs the proof. The station checks CONNECT, the node_id puzzle
+  under `off`, `log_only` or `enforce` before any signature, and returns
+  the HELLO bytes to send; a refusing HELLO carries one coarse refusal code.
+- `macula_node_keys:carried_key_well_formed/2` and `signature_bytes/1`: the
+  one carried form of a key per profile, and the signature size per profile.
+- `macula_key_bindings:verify_status/5` returns when the statement expires.
 
 ### Changed
 
