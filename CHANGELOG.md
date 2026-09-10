@@ -33,6 +33,13 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 - `macula_record_cbor:decode_strict/1`: decodes one CBOR item and refuses a
   duplicate map key at any depth, bytes after the top-level item, and
   malformed input, without raising. `decode/1` is unchanged.
+- `macula_key_bindings`: bindings of a node's TLS and CONNECT keys to its
+  identity key, and the status statements that keep a binding in force,
+  as the handshake frame design lays them out. Each travels as its signed
+  `tbs` bytes and a signature. A verifier checks the signature over the
+  bytes it received before decoding them strictly, refuses an unknown key
+  or a field of the wrong type or length as `malformed_frame`, and checks
+  validity with 5 minutes of clock tolerance.
 
 ### Changed
 
