@@ -6,6 +6,9 @@
 %% then the classical half when the profile's signature for that purpose is hybrid. The TLS key is ML-DSA-87
 %% alone in both profiles.
 %%
+%% A realm, an org and a foundation each hold a key of that purpose, which signs their records with the identity
+%% key's algorithms.
+%%
 %% An ML-DSA-87 component stores its 4,896-byte expanded private key and its public key. An RSA-PSS component
 %% stores a DER-encoded RSAPrivateKey and RSAPublicKey. On load, every public key is derived again from its
 %% private key and must equal the stored one, and every component passes a sign-and-verify round trip.
@@ -17,7 +20,9 @@
 %% verify.
 %%
 %% An identity key has a node_id: SHA-256 over the label MACULA-NODE-ID-V1, a zero byte, the length and ASCII name
-%% of the profile, and the identity key as carried. CONNECT and TLS keys have none.
+%% of the profile, and the identity key as carried, and that node_id is its key id. Every other key has no
+%% node_id, and its key id is SHA-256 over the label MACULA-KEY-ID-V1, a zero byte, the length and ASCII name of
+%% the profile, and the key as carried.
 %%
 %% An identity key can be generated for a puzzle difficulty, so its node_id starts with that many zero bits. Each
 %% try makes a new ML-DSA-87 half; a hybrid key keeps its RSA-PSS half across tries, since the node_id covers both
@@ -38,6 +43,8 @@
     verify/4,
     node_id/1,
     node_id/2,
+    key_id/1,
+    key_id/2,
     puzzle_solved/2,
     carried_key_well_formed/2,
     signature_bytes/1
@@ -49,7 +56,7 @@
 
 -export_type([purpose/0, algorithm/0, component/0, node_key/0, refusal/0]).
 
--type purpose()   :: identity | connect | tls.
+-type purpose()   :: identity | connect | tls | realm | org | foundation.
 -type algorithm() :: mldsa87 | rsa_pss.
 -type component() :: #{algorithm := algorithm(), public := binary(), private := binary()}.
 -type node_key()  :: #{purpose    := purpose(),
@@ -73,6 +80,7 @@
 -define(COMPOSITE_PREFIX, "CompositeAlgorithmSignatures2025").
 -define(COMPOSITE_LABEL, "MACULA-ML-DSA-87-PS384").
 -define(NODE_ID_LABEL, "MACULA-NODE-ID-V1").
+-define(KEY_ID_LABEL, "MACULA-KEY-ID-V1").
 
 %%------------------------------------------------------------------
 %% Generation
@@ -90,7 +98,8 @@ generate(Purpose, Profile) ->
 generate(identity, Profile, #{puzzle_difficulty := Difficulty} = Options)
   when map_size(Options) =:= 1, is_integer(Difficulty), Difficulty >= 0, Difficulty =< 256 ->
     solved_key(generate(identity, Profile), Difficulty);
-generate(Purpose, _Profile, #{puzzle_difficulty := _}) when Purpose =:= connect; Purpose =:= tls ->
+generate(Purpose, _Profile, #{puzzle_difficulty := _})
+  when Purpose =:= connect; Purpose =:= tls; Purpose =:= realm; Purpose =:= org; Purpose =:= foundation ->
     {error, not_an_identity_key};
 generate(Purpose, Profile, Options) when map_size(Options) =:= 0 ->
     generate(Purpose, Profile).
@@ -171,6 +180,22 @@ node_id(IdentityKey, Profile)
     Name = atom_to_binary(Profile),
     crypto:hash(sha256, <<?NODE_ID_LABEL, 0:8, (byte_size(Name)):8, Name/binary, IdentityKey/binary>>).
 
+%% @doc The key id of a key (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Signed objects): the node_id of an identity
+%% key, and for any other key the key id of the key as carried.
+-spec key_id(node_key()) -> <<_:256>>.
+key_id(#{purpose := identity, profile := Profile} = Key) ->
+    node_id(public_key(Key), Profile);
+key_id(#{purpose := _OtherPurpose, profile := Profile} = Key) ->
+    key_id(public_key(Key), Profile).
+
+%% @doc The key id of a key as carried that is not an identity key, under a profile: SHA-256 over the label
+%% MACULA-KEY-ID-V1, a zero byte, the length and ASCII name of the profile, and the key. Like a node_id, a key id
+%% earns no trust on its own.
+-spec key_id(binary(), macula_crypto_profile:profile()) -> <<_:256>>.
+key_id(Key, Profile) when is_binary(Key), (Profile =:= pq_pure orelse Profile =:= pq_hybrid) ->
+    Name = atom_to_binary(Profile),
+    crypto:hash(sha256, <<?KEY_ID_LABEL, 0:8, (byte_size(Name)):8, Name/binary, Key/binary>>).
+
 %% @doc Whether a node_id meets a puzzle difficulty: its first Difficulty bits are zero.
 -spec puzzle_solved(<<_:256>>, 0..256) -> boolean().
 puzzle_solved(<<_:256>> = NodeId, Difficulty) when is_integer(Difficulty), Difficulty >= 0, Difficulty =< 256 ->
@@ -222,7 +247,8 @@ puzzle_candidate(#{purpose := identity, components := [#{algorithm := mldsa87} |
 expected_algorithms(Purpose, Profile) ->
     purpose_algorithms(Purpose, macula_crypto_profile:definition(Profile)).
 
-purpose_algorithms(identity, {ok, #{identity_signature := Algorithms}}) ->
+purpose_algorithms(Purpose, {ok, #{identity_signature := Algorithms}})
+  when Purpose =:= identity; Purpose =:= realm; Purpose =:= org; Purpose =:= foundation ->
     {ok, Algorithms};
 purpose_algorithms(connect, {ok, #{connect_proof_signature := Algorithms}}) ->
     {ok, Algorithms};
@@ -472,11 +498,17 @@ decoded_key(_Purpose, _Profile, _Components, _Count) ->
 
 purpose_tag(identity) -> 1;
 purpose_tag(connect)  -> 2;
-purpose_tag(tls)      -> 3.
+purpose_tag(tls)      -> 3;
+purpose_tag(realm)    -> 4;
+purpose_tag(org)      -> 5;
+purpose_tag(foundation) -> 6.
 
 tag_purpose(1) -> {ok, identity};
 tag_purpose(2) -> {ok, connect};
 tag_purpose(3) -> {ok, tls};
+tag_purpose(4) -> {ok, realm};
+tag_purpose(5) -> {ok, org};
+tag_purpose(6) -> {ok, foundation};
 tag_purpose(_) -> error.
 
 profile_tag(pq_pure)   -> 1;
