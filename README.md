@@ -96,9 +96,9 @@ end
 </p>
 
 ```erlang
-%% Every node runs one post-quantum crypto profile, us_national_security
+%% Every node runs one post-quantum crypto profile, us
 %% or eu. The application refuses to start without one.
-ok = application:set_env(macula, crypto_profile, us_national_security),
+ok = application:set_env(macula, crypto_profile, us),
 application:ensure_all_started(macula),
 
 %% Connect a pool to one or more stations (seed URLs). The pool owns one

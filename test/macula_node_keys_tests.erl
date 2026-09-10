@@ -12,20 +12,20 @@
 %%------------------------------------------------------------------
 
 us_identity_key_is_one_mldsa87_pair_test() ->
-    {ok, Key} = macula_node_keys:generate(identity, us_national_security),
-    ?assertMatch(#{purpose := identity, profile := us_national_security,
+    {ok, Key} = macula_node_keys:generate(identity, us),
+    ?assertMatch(#{purpose := identity, profile := us,
                    components := [#{algorithm := mldsa87}]}, Key),
     [#{public := Public, private := Private}] = maps:get(components, Key),
     ?assertEqual({2592, 4896}, {byte_size(Public), byte_size(Private)}).
 
 us_connect_key_is_one_mldsa87_pair_test() ->
-    {ok, Key} = macula_node_keys:generate(connect, us_national_security),
+    {ok, Key} = macula_node_keys:generate(connect, us),
     ?assertMatch(#{purpose := connect, components := [#{algorithm := mldsa87}]}, Key).
 
 tls_key_is_mldsa87_alone_in_both_profiles_test_() ->
     [?_assertMatch({ok, #{purpose := tls, profile := Profile, components := [#{algorithm := mldsa87}]}},
                    macula_node_keys:generate(tls, Profile))
-     || Profile <- [us_national_security, eu]].
+     || Profile <- [us, eu]].
 
 eu_identity_and_connect_keys_pair_mldsa87_with_rsa_pss_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
@@ -38,7 +38,7 @@ eu_identity_and_connect_keys_pair_mldsa87_with_rsa_pss_test_() ->
 
 unknown_purpose_is_refused_test() ->
     ?assertEqual({error, {unknown_purpose, signing}},
-                 macula_node_keys:generate(signing, us_national_security)).
+                 macula_node_keys:generate(signing, us)).
 
 unknown_profile_is_refused_test() ->
     ?assertEqual({error, {crypto_profile_unknown, rsa_only}},
@@ -49,7 +49,7 @@ unknown_profile_is_refused_test() ->
 %%------------------------------------------------------------------
 
 us_keys_survive_save_and_load_test_() ->
-    [?_test(assert_round_trip(Purpose, us_national_security)) || Purpose <- [identity, connect, tls]].
+    [?_test(assert_round_trip(Purpose, us)) || Purpose <- [identity, connect, tls]].
 
 eu_keys_survive_save_and_load_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
@@ -58,24 +58,24 @@ eu_keys_survive_save_and_load_test_() ->
 
 saved_file_is_readable_by_its_owner_only_test() ->
     Path = mktmp("identity.key"),
-    {ok, Key} = macula_node_keys:generate(identity, us_national_security),
+    {ok, Key} = macula_node_keys:generate(identity, us),
     ok = macula_node_keys:save(Path, Key),
     {ok, #file_info{mode = Mode}} = file:read_file_info(Path),
     ?assertEqual(8#0600, Mode band 8#0777).
 
 missing_file_returns_enoent_test() ->
     ?assertEqual({error, enoent},
-                 macula_node_keys:load("/nonexistent/xyz/identity.key", identity, us_national_security)).
+                 macula_node_keys:load("/nonexistent/xyz/identity.key", identity, us)).
 
 %%------------------------------------------------------------------
 %% What load refuses
 %%------------------------------------------------------------------
 
 stored_mldsa87_public_key_that_differs_from_the_derived_one_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(identity, us_national_security),
+    {ok, Key} = macula_node_keys:generate(identity, us),
     [Component = #{public := Public}] = maps:get(components, Key),
     Tampered = Key#{components := [Component#{public := flip_byte(Public, 100)}]},
-    ?assertEqual({error, public_key_mismatch}, save_and_load(Tampered, identity, us_national_security)).
+    ?assertEqual({error, public_key_mismatch}, save_and_load(Tampered, identity, us)).
 
 stored_rsa_public_key_that_differs_from_the_derived_one_is_refused_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
@@ -88,56 +88,56 @@ stored_rsa_public_key_that_differs_from_the_derived_one_is_refused_test_() ->
     end}.
 
 corrupted_mldsa87_private_key_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(identity, us_national_security),
+    {ok, Key} = macula_node_keys:generate(identity, us),
     [Component = #{private := Private}] = maps:get(components, Key),
     %% Byte 64 lies in tr, the hash of the public key inside the expanded key: the public key can still derive, so
     %% either the import or the sign-and-verify round trip has to catch it.
     Corrupted = Key#{components := [Component#{private := flip_byte(Private, 64)}]},
-    {error, Reason} = save_and_load(Corrupted, identity, us_national_security),
+    {error, Reason} = save_and_load(Corrupted, identity, us),
     ?assert(lists:member(Reason, [private_key_invalid, round_trip_failed, public_key_mismatch])).
 
 truncated_mldsa87_private_key_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(identity, us_national_security),
+    {ok, Key} = macula_node_keys:generate(identity, us),
     [Component = #{private := <<Short:4000/binary, _/binary>>}] = maps:get(components, Key),
     Truncated = Key#{components := [Component#{private := Short}]},
-    ?assertEqual({error, private_key_invalid}, save_and_load(Truncated, identity, us_national_security)).
+    ?assertEqual({error, private_key_invalid}, save_and_load(Truncated, identity, us)).
 
 key_saved_for_another_purpose_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(connect, us_national_security),
-    ?assertEqual({error, {wrong_purpose, connect}}, save_and_load(Key, identity, us_national_security)).
+    {ok, Key} = macula_node_keys:generate(connect, us),
+    ?assertEqual({error, {wrong_purpose, connect}}, save_and_load(Key, identity, us)).
 
 key_saved_for_another_profile_is_refused_test() ->
-    {ok, Key} = macula_node_keys:generate(tls, us_national_security),
-    ?assertEqual({error, {wrong_profile, us_national_security}}, save_and_load(Key, tls, eu)).
+    {ok, Key} = macula_node_keys:generate(tls, us),
+    ?assertEqual({error, {wrong_profile, us}}, save_and_load(Key, tls, eu)).
 
 key_whose_algorithms_do_not_match_its_purpose_and_profile_is_refused_test_() ->
     {timeout, ?EU_TIMEOUT, fun() ->
         {ok, EuKey} = macula_node_keys:generate(identity, eu),
-        Relabelled = EuKey#{profile := us_national_security},
+        Relabelled = EuKey#{profile := us},
         ?assertEqual({error, {wrong_algorithms, [mldsa87, rsa_pss]}},
-                     save_and_load(Relabelled, identity, us_national_security))
+                     save_and_load(Relabelled, identity, us))
     end}.
 
 ed25519_key_file_is_refused_test() ->
     Path = mktmp("identity.key"),
     ok = macula_identity:save(Path, macula_identity:generate()),
-    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, us_national_security)).
+    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, us)).
 
 file_with_trailing_bytes_is_refused_test() ->
     Path = mktmp("identity.key"),
-    {ok, Key} = macula_node_keys:generate(identity, us_national_security),
+    {ok, Key} = macula_node_keys:generate(identity, us),
     ok = macula_node_keys:save(Path, Key),
     {ok, Bin} = file:read_file(Path),
     ok = file:write_file(Path, <<Bin/binary, 0>>),
-    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, us_national_security)).
+    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, us)).
 
 truncated_file_is_refused_test() ->
     Path = mktmp("identity.key"),
-    {ok, Key} = macula_node_keys:generate(identity, us_national_security),
+    {ok, Key} = macula_node_keys:generate(identity, us),
     ok = macula_node_keys:save(Path, Key),
     {ok, <<Head:1000/binary, _/binary>>} = file:read_file(Path),
     ok = file:write_file(Path, Head),
-    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, us_national_security)).
+    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, us)).
 
 %%------------------------------------------------------------------
 %% Helpers

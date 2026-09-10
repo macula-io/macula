@@ -35,8 +35,8 @@ us_signing_test_() ->
         Public = macula_node_keys:public_key(Key),
         [?_assertEqual({4627, 2592}, {byte_size(Signature), byte_size(Public)}),
          ?_assert(crypto:verify(mldsa87, none, Message, Signature, Public)),
-         ?_assert(macula_node_keys:verify(Message, Signature, Public, us_national_security)),
-         ?_assertNot(macula_node_keys:verify(<<"another record">>, Signature, Public, us_national_security)),
+         ?_assert(macula_node_keys:verify(Message, Signature, Public, us)),
+         ?_assertNot(macula_node_keys:verify(<<"another record">>, Signature, Public, us)),
          ?_assertNot(macula_node_keys:verify(Message, Signature, Public, eu))]
     end}.
 
@@ -65,9 +65,9 @@ eu_signing_test_() ->
          ?_assertNot(macula_node_keys:verify(Message, flip_byte(Signature, 4627 + 10), Public, eu)),
          %% A half on its own is not a signature.
          ?_assertNot(macula_node_keys:verify(Message, MlDsaSignature, Public, eu)),
-         ?_assertNot(macula_node_keys:verify(Message, MlDsaSignature, MlDsaPublic, us_national_security)),
+         ?_assertNot(macula_node_keys:verify(Message, MlDsaSignature, MlDsaPublic, us)),
          %% The composite is not accepted under the other profile, nor with a non-canonical key encoding.
-         ?_assertNot(macula_node_keys:verify(Message, Signature, Public, us_national_security)),
+         ?_assertNot(macula_node_keys:verify(Message, Signature, Public, us)),
          ?_assertNot(macula_node_keys:verify(Message, Signature, <<Public/binary, 0>>, eu))]
     end}}.
 
@@ -76,22 +76,22 @@ eu_signing_test_() ->
 %%------------------------------------------------------------------
 
 malformed_input_is_refused_without_raising_test_() ->
-    [?_assertNot(macula_node_keys:verify(<<"m">>, <<>>, <<>>, us_national_security)),
-     ?_assertNot(macula_node_keys:verify(<<"m">>, <<0:4627/unit:8>>, <<0:2592/unit:8>>, us_national_security)),
+    [?_assertNot(macula_node_keys:verify(<<"m">>, <<>>, <<>>, us)),
+     ?_assertNot(macula_node_keys:verify(<<"m">>, <<0:4627/unit:8>>, <<0:2592/unit:8>>, us)),
      ?_assertNot(macula_node_keys:verify(<<"m">>, <<0:5139/unit:8>>, <<0:3118/unit:8>>, eu)),
      ?_assertNot(macula_node_keys:verify(<<"m">>, <<"sig">>, <<"key">>, rsa_only))].
 
 ed25519_signature_is_refused_test() ->
     Ed25519 = macula_identity:generate(),
     Signature = macula_identity:sign(<<"m">>, Ed25519),
-    ?assertNot(macula_node_keys:verify(<<"m">>, Signature, macula_identity:public(Ed25519), us_national_security)).
+    ?assertNot(macula_node_keys:verify(<<"m">>, Signature, macula_identity:public(Ed25519), us)).
 
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
 us_identity_key() ->
-    {ok, Key} = macula_node_keys:generate(identity, us_national_security),
+    {ok, Key} = macula_node_keys:generate(identity, us),
     Key.
 
 eu_identity_key() ->

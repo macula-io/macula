@@ -108,7 +108,7 @@ sign(Message, #{profile := Profile,
 %% @doc Verify a signature with the public key a node carries, under a profile. Malformed input is refused, never
 %% raised on.
 -spec verify(iodata(), binary(), binary(), term()) -> boolean().
-verify(Message, Signature, Public, us_national_security)
+verify(Message, Signature, Public, us)
   when byte_size(Signature) =:= ?MLDSA87_SIGNATURE_BYTES, byte_size(Public) =:= ?MLDSA87_PUBLIC_BYTES ->
     verified_call(fun() -> crypto:verify(mldsa87, none, Message, Signature, Public) end);
 verify(Message, <<MlDsaSignature:?MLDSA87_SIGNATURE_BYTES/binary, RsaSignature/binary>>,
@@ -381,10 +381,10 @@ tag_purpose(2) -> {ok, connect};
 tag_purpose(3) -> {ok, tls};
 tag_purpose(_) -> error.
 
-profile_tag(us_national_security) -> 1;
+profile_tag(us) -> 1;
 profile_tag(eu)                   -> 2.
 
-tag_profile(1) -> {ok, us_national_security};
+tag_profile(1) -> {ok, us};
 tag_profile(2) -> {ok, eu};
 tag_profile(_) -> error.
 
