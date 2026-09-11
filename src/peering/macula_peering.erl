@@ -114,7 +114,8 @@ reject(Pid, Reason) ->
     gen_statem:cast(Pid, {reject, Reason}).
 
 %% @doc Send a frame through the peer connection. The frame goes out as
-%% its producer built it: the connection signs nothing.
+%% its producer built it, and in pq_hybrid the connection adds a
+%% neighbour signature to a control frame.
 %%
 %% The send is a cast, so encoding happens later, inside the shared
 %% connection process. This is therefore the LAST synchronous point at

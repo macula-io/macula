@@ -9,7 +9,8 @@
 %%% notification message shapes (`connected', `handshake_complete'
 %%% 4-tuple, `disconnected'), the peer's node_id and `peer_identity/1',
 %%% the station's puzzle modes, status frames at every reissue and the
-%%% peer's statement timer, binding expiry, local close reasons,
+%%% peer's statement timer, binding expiry, neighbour signatures in
+%%% pq_hybrid, local close reasons,
 %%% state-machine progression, and graceful close behaviour.
 %%%
 %%% Why end-to-end and not state-machine-direct: the
@@ -41,7 +42,7 @@
 %%====================================================================
 
 handshake_test_() ->
-    {timeout, 240,
+    {timeout, 600,
      {setup,
       fun setup/0,
       fun cleanup/1,
@@ -89,7 +90,18 @@ handshake_test_() ->
             {timeout, 30, fun() -> a_status_frame_that_fails_its_checks_closes_with_that_reason(Ctx) end}},
            {"a binding at its not_after closes the connection with binding_expired",
             {timeout, 30,
-             fun() -> a_binding_at_its_not_after_closes_the_connection_with_binding_expired(Ctx) end}}]
+             fun() -> a_binding_at_its_not_after_closes_the_connection_with_binding_expired(Ctx) end}},
+           {"control frames verify both ways around a status frame in pq_hybrid",
+            {timeout, 120,
+             fun() -> control_frames_verify_both_ways_around_a_status_frame_in_pq_hybrid(Ctx) end}},
+           {"a control frame signed by another key closes the connection in pq_hybrid",
+            {timeout, 120,
+             fun() -> a_control_frame_signed_by_another_key_closes_the_connection_in_pq_hybrid(Ctx) end}},
+           {"a control frame without a neighbour signature closes the connection in pq_hybrid",
+            {timeout, 120,
+             fun() ->
+                 a_control_frame_without_a_neighbour_signature_closes_the_connection_in_pq_hybrid(Ctx)
+             end}}]
       end}}.
 
 %%====================================================================
@@ -603,12 +615,14 @@ a_binding_at_its_not_after_closes_the_connection_with_binding_expired(Ctx) ->
 
 %% A station and a client, each with its identity key and a statement
 %% issuer on one test clock, and a listener presenting the setup's leaf,
-%% which the station's issuer binds.
+%% which the station's issuer binds. The keys are in pq_pure unless the
+%% test names another profile.
 world(#{der := Der} = Ctx, Options) ->
+    Profile = maps:get(profile, Options, pq_pure),
     {Tab, Clock} = clock(?T0),
-    StationKey = identity(),
-    ClientKey = maps:get(client_key, Options, identity()),
-    {ok, TlsKey} = macula_node_keys:generate(tls, pq_pure),
+    StationKey = identity(Profile),
+    ClientKey = maps:get(client_key, Options, identity(Profile)),
+    {ok, TlsKey} = macula_node_keys:generate(tls, Profile),
     StationIssuer = issuer(StationKey, Clock),
     ok = macula_statement_issuer:register_tls_leaf(StationIssuer, Der, TlsKey),
     {Listener, Port} = start_listener(Ctx),
@@ -664,7 +678,10 @@ forget_world(#{listener := Listener, station_issuer := StationIssuer, client_iss
     ok.
 
 identity() ->
-    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+    identity(pq_pure).
+
+identity(Profile) ->
+    {ok, Key} = macula_node_keys:generate(identity, Profile),
     Key.
 
 node_id(Key) ->
@@ -750,3 +767,84 @@ reported_unsolved() ->
 
 flip(<<Head:20/binary, Byte, Tail/binary>>) ->
     <<Head/binary, (Byte bxor 1), Tail/binary>>.
+
+%%====================================================================
+%% Neighbour signatures in pq_hybrid (D17)
+%%====================================================================
+
+%% Both sides send control frames both ways, and each issuer's reissued
+%% statement goes out as a status frame between two rounds of them. The
+%% clocks of both connections stand 3 seconds short of the tolerance past
+%% the statements from the handshake, so each side stays open past that
+%% only by reading the other's status frame, and a control frame whose
+%% neighbour signature or seq failed would close the connection.
+control_frames_verify_both_ways_around_a_status_frame_in_pq_hybrid(Ctx) ->
+    #{issuer_tab := Tab, client_issuer := ClientIssuer, station_issuer := StationIssuer} = World =
+        world(Ctx, #{profile => pq_hybrid}),
+    Lapse = ?T0 + ?HOUR + 5 * ?MINUTE - 3_000,
+    {Client, Station} = connect(World, #{mode => off, client_clock => Lapse, station_clock => Lapse}),
+    _ = {await(Client, connected), await(Station, connected)},
+    ok = sent(Client, Station, [ping() || _ <- lists:seq(1, 3)]),
+    ok = sent(Station, Client, [ping() || _ <- lists:seq(1, 3)]),
+    set_time(Tab, ?T0 + 15 * ?MINUTE),
+    ok = macula_statement_issuer:tick(ClientIssuer),
+    ok = macula_statement_issuer:tick(StationIssuer),
+    ok = sent(Client, Station, [ping() || _ <- lists:seq(1, 3)]),
+    ok = sent(Station, Client, [ping() || _ <- lists:seq(1, 3)]),
+    ?assertEqual({open, open}, {still_open(Client, 4_500), still_open(Station, 0)}),
+    finish(World, [Client, Station]).
+
+%% A control frame signed with a key other than the peer's identity key
+%% closes the connection with signature_invalid.
+a_control_frame_signed_by_another_key_closes_the_connection_in_pq_hybrid(Ctx) ->
+    #{station_key := StationKey} = World = world(Ctx, #{profile => pq_hybrid}),
+    {Client, Station} = connect(World, #{mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    Forged = macula_frame:sign_neighbour(ping(), StationKey,
+                                         #{connection => crypto:hash(sha384, <<"a challenge">>), seq => 0}),
+    ok = on_control_stream(Client, macula_frame:encode(Forged)),
+    ?assertEqual(signature_invalid, ended(Station)),
+    finish(World, [Client, Station]).
+
+%% In pq_hybrid a control frame without a neighbour signature closes the
+%% connection with malformed_frame.
+a_control_frame_without_a_neighbour_signature_closes_the_connection_in_pq_hybrid(Ctx) ->
+    World = world(Ctx, #{profile => pq_hybrid}),
+    {Client, Station} = connect(World, #{mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    ok = on_control_stream(Client, macula_frame:encode(ping())),
+    ?assertEqual(malformed_frame, ended(Station)),
+    finish(World, [Client, Station]).
+
+ping() ->
+    macula_frame:ping(#{nonce => crypto:strong_rand_bytes(16)}).
+
+%% A frame as a peer reads it: encoded and decoded.
+wire(Frame) ->
+    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(Frame)),
+    Decoded.
+
+%% Frames sent through one connection reach the controlling process of
+%% the other, in order, as their producer built them.
+sent(From, To, Frames) ->
+    _ = [ok = macula_peering:send_frame(From, Frame) || Frame <- Frames],
+    ?assertEqual([wire(Frame) || Frame <- Frames], [frame_from(To) || _ <- Frames]),
+    ok.
+
+frame_from(Pid) ->
+    receive
+        {macula_peering, frame, Pid, Frame} -> Frame;
+        {macula_peering, disconnected, Pid, Reason} -> erlang:error({disconnected, Reason})
+    after 5_000 ->
+        erlang:error(no_frame)
+    end.
+
+%% Bytes written onto a connection's control stream from outside the
+%% connection, as a peer breaking the rules would write them. The stream
+%% is one of the two references in the connection's state, and the
+%% connection resource refuses the send.
+on_control_stream(Conn, Bytes) ->
+    {connected, Data} = sys:get_state(Conn, 1_000),
+    Results = [catch macula_quic:send(Ref, Bytes) || Ref <- tuple_to_list(Data), is_reference(Ref)],
+    ?assert(lists:member(ok, Results)),
+    ok.

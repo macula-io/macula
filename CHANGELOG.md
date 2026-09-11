@@ -121,6 +121,9 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   reasons are local: the controlling process hears them in
   `disconnected`, and the peer does not. A station under `log_only`
   reports an unsolved puzzle as `_macula.peering.puzzle_unsolved`.
+  In `pq_hybrid` a connection neighbour-signs every control frame it
+  sends and checks every one it reads, for the connection hash and the
+  seq in that direction, and closes on a refusal.
 - `macula_peering:peer_identity/1`: the peer's node_id, its identity key
   as carried, the profile and its capabilities, once the handshake has
   completed.
@@ -149,7 +152,8 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   node_id, and a station requires `puzzle => #{mode => Mode}`. A
   connection without them does not start. `connected` and
   `handshake_complete` carry the peer's node_id. A connection sends
-  frames as their producers built them and signs none.
+  frames as their producers built them, adding only the neighbour
+  signature of a control frame in `pq_hybrid`.
 
 ### Removed
 

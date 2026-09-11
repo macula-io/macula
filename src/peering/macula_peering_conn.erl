@@ -10,6 +10,8 @@
 %% or the peer's binding reaches its not_after (`binding_expired'). Close
 %% reasons are local: the controlling process and diagnostics hear them,
 %% the peer does not.
+%% In pq_hybrid every control frame on the open connection carries a
+%% neighbour signature for the connection and its seq in that direction.
 %%
 %% State graph:
 %% <pre>
@@ -165,6 +167,12 @@
     %% The binding this side presented, whose statements it sends as
     %% status frames.
     own_binding_hash :: undefined | <<_:384>>,
+    %% The connection hash neighbour signatures carry (the SHA-384 of the
+    %% challenge frame's bytes), and the seq of the next neighbour-signed
+    %% frame in each direction.
+    connection       :: undefined | <<_:384>>,
+    sent_seq = 0     :: non_neg_integer(),
+    received_seq = 0 :: non_neg_integer(),
     %% What the handshake verified of the peer.
     peer              :: undefined | macula_handshake:station() | macula_handshake:client(),
     peer_node_id      :: undefined | <<_:256>>,
@@ -541,7 +549,8 @@ tls_material({error, _} = Unknown, _Leaf, _Data) ->
     Unknown.
 
 challenge_sent({ok, Leaf, Binding, Challenge}, #data{quic_stream = Stream} = Data) ->
-    Sent = Data#data{leaf = Leaf, challenge = Challenge, own_binding_hash = binding_hash(Binding), expect = connect},
+    Sent = Data#data{leaf = Leaf, challenge = Challenge, own_binding_hash = binding_hash(Binding),
+                     connection = crypto:hash(sha384, Challenge), expect = connect},
     handshake_written(send_handshake_bytes(Stream, Challenge), Sent);
 challenge_sent({error, Reason}, Data) ->
     closed(Reason, Data).
@@ -564,7 +573,8 @@ client_session({error, _} = NoLeaf, _Data) ->
     NoLeaf.
 
 connect_sent({ok, #{connect_binding := Binding} = Session}, Challenge, Data) ->
-    answered(macula_handshake:answer_challenge(Challenge, Session), binding_hash(Binding), Data);
+    answered(macula_handshake:answer_challenge(Challenge, Session), binding_hash(Binding),
+             Data#data{connection = crypto:hash(sha384, Challenge)});
 connect_sent({error, Reason}, _Challenge, Data) ->
     closed(Reason, Data).
 
@@ -778,9 +788,9 @@ connected(info, {quic, peer_send_shutdown, Stream, _Detail},
     notify(draining, peer_closed, Data),
     {next_state, draining, Data};
 connected(cast, {close, Reason}, Data) ->
-    _ = send_goodbye(Data#data.quic_stream, Reason, Data),
-    notify(draining, Reason, Data),
-    {next_state, draining, Data};
+    {_Sent, Signed} = send_goodbye(Data#data.quic_stream, Reason, Data),
+    notify(draining, Reason, Signed),
+    {next_state, draining, Signed};
 %% `reject/2''s reason for existing: `close/2' transitions through
 %% `draining' for up to `?DRAIN_TIMEOUT_MS' (5s), during which further
 %% inbound data is silently accepted and discarded by design
@@ -801,8 +811,8 @@ connected(cast, {send_frame, Frame}, Data) ->
     %% Quinn stream still handles MTU-level packetisation; this is
     %% purely an Erlang-side amortization.
     Frames = drain_send_frames([Frame]),
-    _ = send_application_frames(Frames, Data),
-    {keep_state, Data};
+    {_Sent, Signed} = send_application_frames(Frames, Data),
+    {keep_state, Signed};
 %% The issuer's statement for the binding this side presented goes to
 %% the peer as a status frame.
 connected(info, {macula_statement, Issuer, Hash, Statement},
@@ -840,8 +850,7 @@ open_frame([Bytes | Rest], Data, Actions) ->
     open_frame_read(macula_frame:decode_bytes(Bytes), Bytes, Rest, Data, Actions).
 
 open_frame_read({ok, Frame}, _Bytes, Rest, Data, Actions) ->
-    ok = route_frame(Frame, Data),
-    open_frame(Rest, Data, Actions);
+    neighbour_read(macula_frame:verify_neighbour(Frame, neighbour_reader(Data)), Frame, Rest, Data, Actions);
 open_frame_read({error, bad_frame}, Bytes, Rest, #data{profile = Profile, peer = Peer} = Data, Actions) ->
     Reader = #{profile => Profile, identity_key => maps:get(identity_key, Peer), binding => peer_binding(Peer),
                now => now_ms(Data)},
@@ -853,6 +862,25 @@ status_read({error, unexpected_frame}, _Rest, Data, _Actions) ->
     closed(malformed_frame, Data);
 status_read({error, Reason}, _Rest, Data, _Actions) ->
     closed(Reason, Data).
+
+%% In pq_hybrid a control frame comes back as the frame its neighbour
+%% tbs holds, for this connection and the next seq from the peer, and a
+%% refused one closes the connection with the refusal.
+neighbour_read({ok, Opened}, Frame, Rest, Data, Actions) ->
+    ok = route_frame(Opened, Data),
+    open_frame(Rest, received(Frame, Data), Actions);
+neighbour_read({error, Reason}, _Frame, _Rest, Data, _Actions) ->
+    closed(Reason, Data).
+
+neighbour_reader(#data{profile = Profile, peer = #{identity_key := PeerKey}, connection = Connection,
+                       received_seq = Seq}) ->
+    #{profile => Profile, peer_key => PeerKey, connection => Connection, seq => Seq}.
+
+received(#{frame_type := Type}, #data{profile = Profile, received_seq = Seq} = Data) ->
+    counted(macula_frame:neighbour_signed(Profile, Type), Data#data{received_seq = Seq + 1}, Data).
+
+counted(true, Counted, _Data) -> Counted;
+counted(false, _Counted, Data) -> Data.
 
 peer_binding(#{tls_binding := Binding}) -> Binding;
 peer_binding(#{connect_binding := Binding}) -> Binding.
@@ -941,29 +969,38 @@ open_and_handoff({error, _} = Err, _Owner) ->
 send_handshake_bytes(Stream, Bytes) ->
     macula_quic:send(Stream, macula_frame:encode_bytes(Bytes)).
 
-send_goodbye(undefined, _Reason, _Data) ->
-    ok;
-send_goodbye(Stream, Reason, _Data) ->
-    macula_quic:send(Stream, macula_frame:encode(macula_frame:goodbye(Reason, undefined))).
+send_goodbye(undefined, _Reason, Data) ->
+    {ok, Data};
+send_goodbye(Stream, Reason, Data) ->
+    send_encoded(encode_or_drop(macula_frame:goodbye(Reason, undefined), Data), Stream).
 
-send_application_frame(_Frame, #data{quic_stream = undefined}) ->
-    ok;
-send_application_frame(Frame, #data{quic_stream = Stream}) ->
-    send_encoded(encode_or_drop(Frame), Stream).
+send_application_frame(_Frame, #data{quic_stream = undefined} = Data) ->
+    {ok, Data};
+send_application_frame(Frame, #data{quic_stream = Stream} = Data) ->
+    send_encoded(encode_or_drop(Frame, Data), Stream).
 
 %% Encode N frames into one iolist and push them as a single NIF call.
-%% Their producers sign what they carry. Skips work entirely when the
-%% stream isn't yet up.
-send_application_frames(_Frames, #data{quic_stream = undefined}) ->
-    ok;
+%% Their producers sign what they carry, and in pq_hybrid this
+%% connection neighbour-signs the control frames among them, in order.
+%% Returns the send result with the seq moved on. Skips work entirely
+%% when the stream isn't yet up.
+send_application_frames(_Frames, #data{quic_stream = undefined} = Data) ->
+    {ok, Data};
 send_application_frames([Frame], Data) ->
     %% Single-frame fast path — avoid the iolist accumulation cost.
     send_application_frame(Frame, Data);
-send_application_frames(Frames, #data{quic_stream = Stream}) ->
-    macula_quic:send(Stream, [B || {true, B} <- [encode_or_drop(F) || F <- Frames]]).
+send_application_frames(Frames, #data{quic_stream = Stream} = Data) ->
+    {Encoded, Signed} = lists:foldl(fun encode_next/2, {[], Data}, Frames),
+    {macula_quic:send(Stream, lists:reverse(Encoded)), Signed}.
 
-send_encoded({true, Bytes}, Stream) -> macula_quic:send(Stream, Bytes);
-send_encoded(false, _Stream)        -> ok.
+encode_next(Frame, {Encoded, Data}) ->
+    kept(encode_or_drop(Frame, Data), Encoded).
+
+kept({{true, Bytes}, Data}, Encoded) -> {[Bytes | Encoded], Data};
+kept({false, Data}, Encoded)         -> {Encoded, Data}.
+
+send_encoded({{true, Bytes}, Data}, Stream) -> {macula_quic:send(Stream, Bytes), Data};
+send_encoded({false, Data}, _Stream)        -> {ok, Data}.
 
 %% @private Encode one frame, or drop it loudly.
 %%
@@ -979,13 +1016,28 @@ send_encoded(false, _Stream)        -> ok.
 %% told. What reaches here is what the checker cannot know without
 %% encoding — chiefly total frame size — and the honest response to that
 %% is to lose one frame with a loud log rather than a whole connection.
-encode_or_drop(Frame) ->
-    try {true, macula_frame:encode(Frame)}
+encode_or_drop(Frame, Data) ->
+    try encoded(neighboured(Frame, Data))
     catch Class:Reason ->
         logger:error("[macula_peering_conn] dropped unencodable ~p frame: ~p:~p",
                      [maps:get(frame_type, Frame, unknown), Class, Reason]),
-        false
+        {false, Data}
     end.
+
+%% In pq_hybrid a control frame goes out neighbour-signed with this
+%% side's identity key, for this connection and the next seq. A frame
+%% that cannot be signed or encoded takes no seq.
+neighboured(#{frame_type := Type} = Frame, #data{profile = Profile} = Data) ->
+    neighbour_signed(macula_frame:neighbour_signed(Profile, Type), Frame, Data).
+
+neighbour_signed(true, Frame, #data{identity = Identity, connection = Connection, sent_seq = Seq} = Data) ->
+    {macula_frame:sign_neighbour(Frame, Identity, #{connection => Connection, seq => Seq}),
+     Data#data{sent_seq = Seq + 1}};
+neighbour_signed(false, Frame, Data) ->
+    {Frame, Data}.
+
+encoded({Frame, Data}) ->
+    {{true, macula_frame:encode(Frame)}, Data}.
 
 %% Drain queued send_frame casts. Capped at ?MAX_BATCH frames per
 %% pass so a runaway producer can't park us in the receive forever.
