@@ -1,1138 +1,297 @@
-%% EUnit tests for macula_record.
+%% EUnit tests for macula_record in the signed-object format of DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md: records are
+%% {key, tbs, signature} under MACULA-PQ-RECORD-V1, the signer's key arrives at sign/2, and verify/2,3 refuses what the
+%% design refuses. Tombstones, advertisements, content announcements, storage keys and certificate chains have their own
+%% test modules.
 -module(macula_record_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% RSA-4096 key generation takes up to about a second per key.
+-define(EU_TIMEOUT, 120).
+-define(LABEL, <<"MACULA-PQ-RECORD-V1">>).
+-define(MINUTE, 60000).
+-define(KIB, 1024).
+
 %%------------------------------------------------------------------
-%% node_record construction
+%% Signing
 %%------------------------------------------------------------------
 
-build_node_record_envelope_test() ->
-    Kp = macula_identity:generate(),
-    NodeId = macula_identity:public(Kp),
-    Realm  = crypto:strong_rand_bytes(32),
-    R = macula_record:node_record(NodeId, [Realm], 1),
-    ?assertEqual(16#01, macula_record:type(R)),
-    ?assertEqual(NodeId, macula_record:key(R)),
+a_signed_record_carries_key_key_id_alg_tbs_and_signature_test() ->
+    Id = key(identity),
+    NodeId = macula_node_keys:key_id(Id),
+    R = macula_record:sign(macula_record:node_record(NodeId, [], 0), Id),
+    ?assertEqual(macula_node_keys:public_key(Id), macula_record:key(R)),
+    ?assertEqual(NodeId, macula_record:key_id(R)),
+    ?assertEqual(<<"ML-DSA-87">>, maps:get(alg, R)),
+    ?assertEqual(4627, byte_size(macula_record:signature(R))),
+    ?assert(is_binary(maps:get(tbs, R))).
+
+the_tbs_holds_exactly_the_record_fields_test() ->
+    Id = key(identity),
+    R = macula_record:sign(macula_record:node_record(macula_node_keys:key_id(Id), [], 0), Id),
+    {ok, Fields} = macula_record_cbor:decode_strict(maps:get(tbs, R)),
+    ?assertEqual([<<"alg">>, <<"created_at">>, <<"expires_at">>, <<"payload">>, <<"type">>, <<"version">>],
+                 lists:sort([Name || {text, Name} <- maps:keys(Fields)])).
+
+an_unsigned_record_has_no_key_and_no_signature_test() ->
+    R = macula_record:node_record(fill(1), [], 0),
+    ?assertNot(maps:is_key(key, R)),
+    ?assertNot(maps:is_key(signature, R)),
     ?assertEqual(16, byte_size(macula_record:version(R))),
     ?assert(macula_record:expires_at(R) > macula_record:created_at(R)).
 
-node_record_default_station_id_is_node_id_test() ->
-    Kp = macula_identity:generate(),
-    NodeId = macula_identity:public(Kp),
-    R = macula_record:node_record(NodeId, [], 0),
-    P = macula_record:payload(R),
-    ?assertEqual(NodeId, maps:get({text, <<"station_id">>}, P)).
+sign_refuses_a_key_whose_purpose_does_not_fit_the_type_test_() ->
+    RealmId = fill(16#11),
+    Realm = key(realm),
+    [?_assertError({key_purpose_mismatch, _},
+                   macula_record:sign(macula_record:node_record(macula_node_keys:key_id(Realm), [], 0), Realm)),
+     ?_assertError({key_purpose_mismatch, _},
+                   macula_record:sign(macula_record:realm_directory(RealmId, <<"io.macula">>, fill(2)), key(identity))),
+     ?_assertError({key_purpose_mismatch, _},
+                   macula_record:sign(macula_record:procedure_delegation(fill(3), fill(4)), key(realm))),
+     ?_assertError({key_purpose_mismatch, _},
+                   macula_record:sign(macula_record:foundation_realm_trust_list([], #{}), key(org))),
+     ?_assertError({key_purpose_mismatch, _},
+                   macula_record:sign(macula_record:envelope(16#20, #{}, #{}), key(connect)))].
 
-node_record_with_custom_station_id_test() ->
-    Kp = macula_identity:generate(),
-    NodeId    = macula_identity:public(Kp),
-    StationId = crypto:strong_rand_bytes(32),
-    R = macula_record:node_record(NodeId, [], 0, #{station_id => StationId}),
-    P = macula_record:payload(R),
-    ?assertEqual(StationId, maps:get({text, <<"station_id">>}, P)).
+sign_refuses_a_node_record_for_another_node_test() ->
+    Id = key(identity),
+    ?assertError({key_id_mismatch, _}, macula_record:sign(macula_record:node_record(fill(9), [], 0), Id)).
 
-node_record_with_optional_text_fields_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:node_record(
-        macula_identity:public(Kp), [], 0,
-        #{caps_hint => <<"hint">>, display_name => <<"Alice">>}),
-    P = macula_record:payload(R),
-    ?assertEqual({text, <<"hint">>}, maps:get({text, <<"caps_hint">>}, P)),
-    ?assertEqual({text, <<"Alice">>}, maps:get({text, <<"display_name">>}, P)).
-
-node_record_omits_unset_optional_fields_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:node_record(macula_identity:public(Kp), [], 0),
-    P = macula_record:payload(R),
-    ?assertNot(maps:is_key({text, <<"caps_hint">>}, P)),
-    ?assertNot(maps:is_key({text, <<"display_name">>}, P)),
-    ?assertNot(maps:is_key({text, <<"hostname">>}, P)),
-    ?assertNot(maps:is_key({text, <<"endpoint">>}, P)),
-    ?assertNot(maps:is_key({text, <<"city">>}, P)),
-    ?assertNot(maps:is_key({text, <<"country">>}, P)),
-    ?assertNot(maps:is_key({text, <<"lat">>}, P)),
-    ?assertNot(maps:is_key({text, <<"lng">>}, P)),
-    ?assertNot(maps:is_key({text, <<"kind">>}, P)).
-
-node_record_with_kind_field_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:node_record(
-          macula_identity:public(Kp), [], 0,
-          #{kind => <<"daemon">>}),
-    P = macula_record:payload(R),
-    ?assertEqual({text, <<"daemon">>},
-                 maps:get({text, <<"kind">>}, P)).
+sign_refuses_a_record_larger_than_256_kib_test() ->
+    Id = key(identity),
+    Big = binary:copy(<<"x">>, 256 * ?KIB),
+    Unsigned = macula_record:node_record(macula_node_keys:key_id(Id), [], 0, #{display_name => Big}),
+    ?assertError({record_too_large, _}, macula_record:sign(Unsigned, Id)).
 
 %%------------------------------------------------------------------
-%% read_node_record/1 — Phase 3.5's peer-resolution reader.
+%% Verifying
 %%------------------------------------------------------------------
 
-read_node_record_returns_typed_map_test() ->
-    Kp = macula_identity:generate(),
-    NodeId = macula_identity:public(Kp),
-    Realm = crypto:strong_rand_bytes(32),
-    StationId = crypto:strong_rand_bytes(32),
-    R = macula_record:node_record(NodeId, [Realm], 7,
-                                  #{station_id => StationId, kind => <<"daemon">>}),
-    ?assertEqual(#{node_id      => NodeId,
-                   station_id   => StationId,
-                   realms       => [Realm],
-                   capabilities => 7,
-                   kind         => <<"daemon">>,
-                   hostname     => undefined,
-                   endpoint     => undefined,
-                   city         => undefined,
-                   country      => undefined,
-                   lat          => undefined,
-                   lng          => undefined,
-                   display_name => undefined,
-                   caps_hint    => undefined,
-                   peers        => undefined,
-                   version      => undefined},
-                 macula_record:read_node_record(R)).
+a_record_verifies_from_its_wire_form_test() ->
+    {Id, R} = signed_node_record(),
+    {ok, V} = macula_record:verify(macula_record:encode(R), pq_pure),
+    [?assertEqual(maps:get(F, R), maps:get(F, V))
+     || F <- [type, version, created_at, expires_at, payload, key, key_id, alg, tbs, signature]],
+    ?assertEqual(macula_node_keys:key_id(Id), macula_record:key_id(V)).
 
-%% `version' is stamped by `macula_station_announcer:inject_identity_metadata/1'
-%% directly onto an already-built record's payload -- not a `node_record_opts()'
-%% field `node_record/4' itself knows how to write -- so this constructs the
-%% payload by hand, the same minimal shape
-%% `read_node_record_kind_survives_rpc_atom_coercion_test' already uses for
-%% exactly this reason. Was previously silently dropped: the announcer wrote
-%% it on every heartbeat, but nothing read it back out.
-read_node_record_returns_version_test() ->
-    Record = #{
-        type => 16#01,
-        payload => #{
-            node_id => crypto:strong_rand_bytes(32),
-            <<"version">> => <<"a1b2c3d4e5f6">>
-        }
-    },
-    ?assertEqual(<<"a1b2c3d4e5f6">>,
-                 maps:get(version, macula_record:read_node_record(Record))).
+a_record_verifies_from_its_object_map_test() ->
+    {_Id, #{key := K, tbs := T, signature := S} = R} = signed_node_record(),
+    ?assertMatch({ok, _}, macula_record:verify(#{key => K, tbs => T, signature => S}, pq_pure)),
+    ?assertEqual(macula_record:verify(macula_record:encode(R), pq_pure),
+                 macula_record:verify(#{key => K, tbs => T, signature => S}, pq_pure)).
 
-read_node_record_kind_undefined_when_unset_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:node_record(macula_identity:public(Kp), [], 0),
-    ?assertEqual(undefined, maps:get(kind, macula_record:read_node_record(R))).
+a_hybrid_record_verifies_test_() ->
+    {timeout, ?EU_TIMEOUT, fun() ->
+        {ok, Id} = macula_node_keys:generate(identity, pq_hybrid),
+        R = macula_record:sign(macula_record:node_record(macula_node_keys:key_id(Id), [], 0), Id),
+        ?assertEqual(<<"ML-DSA-87-PS384">>, maps:get(alg, R)),
+        ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(R), pq_hybrid)),
+        ?assertEqual({error, malformed}, macula_record:verify(macula_record:encode(R), pq_pure))
+    end}.
 
-%% Reproduces a real production crash (hecate-stations against a live
-%% station-it-milan.macula.io node_record, 2026-08-28): `macula_frame:
-%% from_wire_envelope/1' -- the RPC-response decode path
-%% `find_records_by_type/2' actually returns records through, distinct
-%% from the DHT-storage wire codec `read_node_record_survives_wire_
-%% roundtrip_test' above exercises -- collapses a `{text, B}' VALUE to
-%% the atom `B' whenever `B' already exists in the atom table. "station"
-%% is (used as a literal atom throughout this codebase); "Milan" is not,
-%% which is why every OTHER field on the very same record decoded as an
-%% ordinary binary and only `kind' broke -- a downstream consumer choked
-%% on the one atom it didn't expect.
-read_node_record_kind_survives_rpc_atom_coercion_test() ->
-    Record = #{
-        type => 16#01,
-        payload => #{
-            kind => station,
-            hostname => {text, <<"station-it-milan.macula.io">>}
-        }
-    },
-    Read = macula_record:read_node_record(Record),
-    ?assertEqual(<<"station">>, maps:get(kind, Read)),
-    ?assertEqual(<<"station-it-milan.macula.io">>, maps:get(hostname, Read)).
+a_record_under_another_profile_is_malformed_test() ->
+    {_Id, R} = signed_node_record(),
+    ?assertEqual({error, malformed}, macula_record:verify(macula_record:encode(R), pq_hybrid)).
 
-read_node_record_survives_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    NodeId = macula_identity:public(Kp),
-    StationId = crypto:strong_rand_bytes(32),
-    R = macula_record:sign(
-          macula_record:node_record(NodeId, [], 0,
-                                    #{station_id => StationId, kind => <<"daemon">>}),
-          Kp),
-    Wire = macula_record:encode(R),
-    {ok, Decoded} = macula_record:decode(Wire),
-    ?assertMatch({ok, _}, macula_record:verify(Decoded)),
-    #{node_id := DecodedNodeId, station_id := DecodedStationId, kind := DecodedKind} =
-        macula_record:read_node_record(Decoded),
-    ?assertEqual(NodeId, DecodedNodeId),
-    ?assertEqual(StationId, DecodedStationId),
-    ?assertEqual(<<"daemon">>, DecodedKind).
+a_record_signed_under_another_label_is_refused_test() ->
+    Id = key(identity),
+    Object = macula_signed_object:sign(<<"MACULA-PQ-REPLY-V1">>, node_fields(Id, now_ms()), Id),
+    ?assertEqual({error, signature_invalid}, macula_record:verify(Object, pq_pure)).
 
-read_node_record_returns_geo_metadata_test() ->
-    %% Same fields/values as node_record_with_geo_metadata_test below,
-    %% but through the typed reader instead of digging into the raw
-    %% payload -- this is the API a consumer (e.g. hecate-stations)
-    %% should actually use.
-    Kp = macula_identity:generate(),
-    R = macula_record:node_record(
-          macula_identity:public(Kp), [], 0,
-          #{hostname     => <<"relay-be-leuven.macula.io">>,
-            endpoint     => <<"quic://relay-be-leuven.macula.io:4433">>,
-            city         => <<"Leuven">>,
-            country      => <<"BE">>,
-            lat          => 50.8798,
-            lng          => 4.7005,
-            display_name => <<"Leuven relay">>,
-            caps_hint    => <<"stub">>}),
-    Read = macula_record:read_node_record(R),
-    ?assertEqual(<<"relay-be-leuven.macula.io">>, maps:get(hostname, Read)),
-    ?assertEqual(<<"quic://relay-be-leuven.macula.io:4433">>, maps:get(endpoint, Read)),
-    ?assertEqual(<<"Leuven">>, maps:get(city, Read)),
-    ?assertEqual(<<"BE">>, maps:get(country, Read)),
-    ?assertEqual(50.8798, maps:get(lat, Read)),
-    ?assertEqual(4.7005, maps:get(lng, Read)),
-    ?assertEqual(<<"Leuven relay">>, maps:get(display_name, Read)),
-    ?assertEqual(<<"stub">>, maps:get(caps_hint, Read)).
+a_tampered_tbs_is_refused_test() ->
+    {_Id, #{tbs := <<Head:20/binary, Byte, Tail/binary>>} = R} = signed_node_record(),
+    Object = object(R),
+    ?assertEqual({error, signature_invalid},
+                 macula_record:verify(Object#{tbs := <<Head/binary, (Byte bxor 1), Tail/binary>>}, pq_pure)).
 
-read_node_record_geo_undefined_when_unset_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:node_record(macula_identity:public(Kp), [], 0),
-    Read = macula_record:read_node_record(R),
-    ?assertEqual(undefined, maps:get(hostname, Read)),
-    ?assertEqual(undefined, maps:get(lat, Read)),
-    ?assertEqual(undefined, maps:get(lng, Read)),
-    ?assertEqual(undefined, maps:get(peers, Read)).
+a_record_under_another_key_is_refused_test() ->
+    {_Id, R} = signed_node_record(),
+    Object = object(R),
+    ?assertEqual({error, signature_invalid},
+                 macula_record:verify(Object#{key := macula_node_keys:public_key(key(identity))}, pq_pure)).
 
-read_node_record_parses_integer_geo_test() ->
-    %% with_geo/3 writes an integer coordinate with no decimal point
-    %% ("0", not "0.0") -- binary_to_float/1 alone would crash on that.
-    %% parse_geo/1's fallback is what this actually tests.
-    Kp = macula_identity:generate(),
-    R = macula_record:node_record(macula_identity:public(Kp), [], 0,
-                                  #{lat => 0, lng => 51}),
-    Read = macula_record:read_node_record(R),
-    ?assertEqual(0, maps:get(lat, Read)),
-    ?assertEqual(51, maps:get(lng, Read)).
+a_held_shape_is_malformed_test() ->
+    {_Id, R} = signed_node_record(),
+    ?assertEqual({error, malformed}, macula_record:verify(maps:remove(key, object(R)), pq_pure)).
 
-read_node_record_returns_peers_test() ->
-    Kp = macula_identity:generate(),
-    PeerA = crypto:strong_rand_bytes(32),
-    PeerB = crypto:strong_rand_bytes(32),
-    R = macula_record:node_record(macula_identity:public(Kp), [], 0,
-                                  #{peers => [PeerA, PeerB]}),
-    ?assertEqual(lists:usort([PeerA, PeerB]),
-                 maps:get(peers, macula_record:read_node_record(R))).
+garbage_is_malformed_test() ->
+    ?assertEqual({error, malformed}, macula_record:verify(<<16#FF, 1, 2, 3>>, pq_pure)).
 
-node_record_with_geo_metadata_test() ->
-    %% Subscribers (e.g. realm dashboards) read geo straight from
-    %% the payload — no side-channel fetches. v3.4.0 added these
-    %% optional fields so stations advertise their location with
-    %% their identity record.
-    Kp = macula_identity:generate(),
-    R = macula_record:node_record(
-          macula_identity:public(Kp), [], 0,
-          #{hostname => <<"relay-be-leuven.macula.io">>,
-            endpoint => <<"quic://relay-be-leuven.macula.io:4433">>,
-            city     => <<"Leuven">>,
-            country  => <<"BE">>,
-            lat      => 50.8798,
-            lng      => 4.7005}),
-    P = macula_record:payload(R),
-    ?assertEqual({text, <<"relay-be-leuven.macula.io">>},
-                 maps:get({text, <<"hostname">>}, P)),
-    ?assertEqual({text, <<"quic://relay-be-leuven.macula.io:4433">>},
-                 maps:get({text, <<"endpoint">>}, P)),
-    ?assertEqual({text, <<"Leuven">>},
-                 maps:get({text, <<"city">>}, P)),
-    ?assertEqual({text, <<"BE">>},
-                 maps:get({text, <<"country">>}, P)),
-    ?assertEqual({text, <<"50.8798">>},
-                 maps:get({text, <<"lat">>}, P)),
-    ?assertEqual({text, <<"4.7005">>},
-                 maps:get({text, <<"lng">>}, P)),
-    %% Round-trip through encode/decode preserves the geo fields.
-    Signed   = macula_record:sign(R, Kp),
-    Bytes    = macula_record:encode(Signed),
-    {ok, R2} = macula_record:decode(Bytes),
-    ?assertEqual({text, <<"50.8798">>},
-                 maps:get({text, <<"lat">>},
-                          macula_record:payload(R2))).
+a_record_larger_than_256_kib_is_refused_before_any_other_check_test() ->
+    Id = key(identity),
+    Fields = node_fields(Id, now_ms()),
+    Payload = maps:get({text, <<"payload">>}, Fields),
+    Name = {text, binary:copy(<<"x">>, 256 * ?KIB)},
+    Big = Fields#{{text, <<"payload">>} := Payload#{{text, <<"display_name">>} => Name}},
+    Bytes = macula_signed_object:encode(macula_signed_object:sign(?LABEL, Big, Id)),
+    ?assert(byte_size(Bytes) > 256 * ?KIB),
+    ?assertEqual({error, record_too_large}, macula_record:verify(Bytes, pq_pure)),
+    ?assertEqual({error, record_too_large}, macula_record:verify(<<Bytes/binary, 0>>, pq_pure)).
 
-node_record_with_integer_geo_test() ->
-    %% Integer 0 should encode as text "0", not be silently dropped.
-    Kp = macula_identity:generate(),
-    R = macula_record:node_record(
-          macula_identity:public(Kp), [], 0,
-          #{lat => 0, lng => 0}),
-    P = macula_record:payload(R),
-    ?assertEqual({text, <<"0">>}, maps:get({text, <<"lat">>}, P)),
-    ?assertEqual({text, <<"0">>}, maps:get({text, <<"lng">>}, P)).
+tbs_fields_the_design_does_not_allow_are_malformed_test_() ->
+    Id = key(identity),
+    Now = now_ms(),
+    Fields = node_fields(Id, Now),
+    Verify = fun(F) -> macula_record:verify(macula_signed_object:sign(?LABEL, F, Id), pq_pure) end,
+    [?_assertMatch({ok, _}, Verify(Fields)),
+     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"extra">>} => 1})),
+     ?_assertEqual({error, malformed}, Verify(maps:remove({text, <<"version">>}, Fields))),
+     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"version">>} := <<0:120>>})),
+     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"subject">>} => <<1, 2>>})),
+     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"type">>} := 16#07})),
+     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"payload">>} := [1]})),
+     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"created_at">>} := {text, <<"now">>}}))].
+
+a_node_record_naming_another_node_is_refused_test() ->
+    Id = key(identity),
+    Fields = node_fields(Id, now_ms()),
+    Payload = maps:get({text, <<"payload">>}, Fields),
+    Other = Fields#{{text, <<"payload">>} := Payload#{{text, <<"node_id">>} := fill(9)}},
+    ?assertEqual({error, key_id_mismatch},
+                 macula_record:verify(macula_signed_object:sign(?LABEL, Other, Id), pq_pure)).
+
+the_clock_tolerance_is_five_minutes_test() ->
+    {_Id, R} = signed_node_record(),
+    Bytes = macula_record:encode(R),
+    Created = macula_record:created_at(R),
+    Expires = macula_record:expires_at(R),
+    ?assertMatch({ok, _}, macula_record:verify(Bytes, pq_pure, Created - 4 * ?MINUTE)),
+    ?assertEqual({error, not_yet_valid}, macula_record:verify(Bytes, pq_pure, Created - 6 * ?MINUTE)),
+    ?assertMatch({ok, _}, macula_record:verify(Bytes, pq_pure, Expires + 4 * ?MINUTE)),
+    ?assertEqual({error, expired}, macula_record:verify(Bytes, pq_pure, Expires + 6 * ?MINUTE)).
 
 %%------------------------------------------------------------------
-%% Sign / verify
+%% Key ids by record type
 %%------------------------------------------------------------------
 
-sign_attaches_signature_test() ->
-    Kp = macula_identity:generate(),
-    R  = macula_record:node_record(macula_identity:public(Kp), [], 0),
-    Signed = macula_record:sign(R, Kp),
-    ?assertEqual(64, byte_size(macula_record:signature(Signed))).
+a_realm_record_is_named_by_the_realm_key_id_test() ->
+    Realm = key(realm),
+    R = macula_record:sign(macula_record:realm_directory(fill(16#11), <<"io.macula">>, fill(2)), Realm),
+    ?assertEqual(macula_node_keys:key_id(Realm), macula_record:key_id(R)),
+    {ok, V} = macula_record:verify(macula_record:encode(R), pq_pure),
+    ?assertEqual(macula_node_keys:key_id(Realm), macula_record:key_id(V)).
 
-verify_signed_record_test() ->
-    Kp = macula_identity:generate(),
-    R  = macula_record:node_record(macula_identity:public(Kp), [], 0),
-    Signed = macula_record:sign(R, Kp),
-    ?assertMatch({ok, _}, macula_record:verify(Signed)).
-
-verify_rejects_tampered_payload_test() ->
-    Kp = macula_identity:generate(),
-    R  = macula_record:node_record(macula_identity:public(Kp), [], 0),
-    Signed = macula_record:sign(R, Kp),
-    P = macula_record:payload(Signed),
-    Tampered = Signed#{payload => P#{ {text, <<"capabilities">>} => 999 }},
-    ?assertEqual({error, signature_invalid}, macula_record:verify(Tampered)).
-
-verify_rejects_wrong_signer_test() ->
-    Kp1 = macula_identity:generate(),
-    Kp2 = macula_identity:generate(),
-    %% Build record with Kp1's pubkey as `key` but sign with Kp2.
-    R  = macula_record:node_record(macula_identity:public(Kp1), [], 0),
-    Signed = macula_record:sign(R, Kp2),
-    ?assertEqual({error, signature_invalid}, macula_record:verify(Signed)).
-
-verify_rejects_expired_test() ->
-    Kp = macula_identity:generate(),
-    R  = macula_record:node_record(macula_identity:public(Kp), [], 0),
-    Past = R#{expires_at => erlang:system_time(millisecond) - 1},
-    Signed = macula_record:sign(Past, Kp),
-    ?assertEqual({error, expired}, macula_record:verify(Signed)).
-
-verify_rejects_record_without_signature_test() ->
-    Kp = macula_identity:generate(),
-    R  = macula_record:node_record(macula_identity:public(Kp), [], 0),
-    ?assertEqual({error, bad_record}, macula_record:verify(R)).
+a_domain_record_is_named_by_the_key_id_even_for_an_identity_key_test() ->
+    Id = key(identity),
+    R = macula_record:sign(macula_record:envelope(16#20, #{{text, <<"fact">>} => 1}, #{}), Id),
+    KeyId = macula_node_keys:key_id(macula_node_keys:public_key(Id), pq_pure),
+    ?assertEqual(KeyId, macula_record:key_id(R)),
+    ?assertNotEqual(macula_node_keys:key_id(Id), KeyId),
+    {ok, V} = macula_record:verify(macula_record:encode(R), pq_pure),
+    ?assertEqual(KeyId, macula_record:key_id(V)).
 
 %%------------------------------------------------------------------
-%% Wire encode / decode
+%% Domain records
 %%------------------------------------------------------------------
 
-encode_decode_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:node_record(
-        macula_identity:public(Kp),
-        [crypto:strong_rand_bytes(32), crypto:strong_rand_bytes(32)],
-        16#DEADBEEF,
-        #{caps_hint => <<"some hint">>, display_name => <<"a node">>}
-    ),
-    Signed = macula_record:sign(R, Kp),
-    Wire = macula_record:encode(Signed),
-    ?assertMatch({ok, _}, macula_record:decode(Wire)),
-    {ok, Decoded} = macula_record:decode(Wire),
-    %% Verify the decoded record (signature still valid over wire bytes).
-    ?assertMatch({ok, _}, macula_record:verify(Decoded)).
+a_domain_record_carries_its_subject_in_tbs_test() ->
+    Realm = key(realm),
+    R = macula_record:sign(macula_record:envelope(16#21, #{}, #{subject_id => <<"station-1">>}), Realm),
+    {ok, Fields} = macula_record_cbor:decode_strict(maps:get(tbs, R)),
+    ?assertEqual(<<"station-1">>, maps:get({text, <<"subject">>}, Fields)),
+    {ok, V} = macula_record:verify(macula_record:encode(R), pq_pure),
+    ?assertEqual(<<"station-1">>, maps:get(subject, V)).
 
-decode_rejects_garbage_test() ->
-    %% A non-CBOR sequence either fails to decode or yields a non-record value.
-    Result = try macula_record:decode(<<255, 255, 255, 255>>) catch _:_ -> error end,
-    case Result of
-        {ok, _} -> ?assert(false);
-        _       -> ok
-    end.
-
-decode_returns_missing_signature_when_unsigned_test() ->
-    Map = #{
-        {text, <<"t">>} => 1,
-        {text, <<"k">>} => crypto:strong_rand_bytes(32),
-        {text, <<"v">>} => crypto:strong_rand_bytes(16),
-        {text, <<"c">>} => erlang:system_time(millisecond),
-        {text, <<"x">>} => erlang:system_time(millisecond) + 60_000,
-        {text, <<"p">>} => #{}
-    },
-    Wire = macula_record_cbor:encode(Map),
-    ?assertEqual({error, missing_signature}, macula_record:decode(Wire)).
-
-decode_rejects_short_signature_test() ->
-    Map = #{
-        {text, <<"t">>} => 1,
-        {text, <<"k">>} => crypto:strong_rand_bytes(32),
-        {text, <<"v">>} => crypto:strong_rand_bytes(16),
-        {text, <<"c">>} => erlang:system_time(millisecond),
-        {text, <<"x">>} => erlang:system_time(millisecond) + 60_000,
-        {text, <<"p">>} => #{},
-        {text, <<"s">>} => crypto:strong_rand_bytes(32)   %% wrong size
-    },
-    Wire = macula_record_cbor:encode(Map),
-    ?assertEqual({error, bad_record}, macula_record:decode(Wire)).
+envelope_refuses_a_built_in_type_test() ->
+    ?assertError(function_clause, macula_record:envelope(16#01, #{}, #{})).
 
 %%------------------------------------------------------------------
-%% Tombstone
+%% Refresh
 %%------------------------------------------------------------------
 
-build_tombstone_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Tomb = macula_record:tombstone(Pub, 16#01, retired),
-    ?assertEqual(16#0C, macula_record:type(Tomb)),
-    ?assertEqual(Pub, macula_record:key(Tomb)).
-
-sign_verify_tombstone_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Tomb = macula_record:tombstone(Pub, 16#01, retired),
-    Signed = macula_record:sign(Tomb, Kp),
-    ?assertMatch({ok, _}, macula_record:verify(Signed)).
-
-tombstone_default_detail_is_null_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Tomb = macula_record:tombstone(Pub, 16#01, expired),
-    P = macula_record:payload(Tomb),
-    ?assertEqual(null, maps:get({text, <<"detail">>}, P)).
-
-tombstone_with_detail_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Tomb = macula_record:tombstone(Pub, 16#01, revoked,
-                                   #{detail => <<"key compromise">>}),
-    P = macula_record:payload(Tomb),
-    ?assertEqual({text, <<"key compromise">>},
-                 maps:get({text, <<"detail">>}, P)).
-
-tombstone_reason_serialised_as_text_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Tomb = macula_record:tombstone(Pub, 16#01, moved),
-    P = macula_record:payload(Tomb),
-    ?assertEqual({text, <<"moved">>},
-                 maps:get({text, <<"reason">>}, P)).
-
-tombstone_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Tomb = macula_record:tombstone(Pub, 16#01, revoked,
-                                   #{detail => <<"reason here">>}),
-    Signed = macula_record:sign(Tomb, Kp),
-    Wire = macula_record:encode(Signed),
-    {ok, Decoded} = macula_record:decode(Wire),
-    {ok, _} = macula_record:verify(Decoded),
-    ?assertEqual(16#0C, macula_record:type(Decoded)),
-    ?assertEqual(Pub, macula_record:key(Decoded)).
-
-%%------------------------------------------------------------------
-%% read_tombstone/1 -- the typed reader a consumer (e.g. hecate-stations,
-%% reacting to macula_station_announcer's graceful-shutdown tombstone)
-%% should actually use, instead of digging into the raw payload the way
-%% the tombstone_* tests above do.
-%%------------------------------------------------------------------
-
-read_tombstone_returns_typed_map_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Before = erlang:system_time(millisecond),
-    Tomb = macula_record:tombstone(Pub, 16#01, retired),
-    After = erlang:system_time(millisecond),
-    Read = macula_record:read_tombstone(Tomb),
-    %% `replaced_at' and the envelope's own `created_at' are two
-    %% independent `erlang:system_time(millisecond)' calls a few
-    %% instructions apart (see `tombstone/4' then `envelope/4') --
-    %% bracketed, not asserted equal, so a millisecond tick between them
-    %% can never flake this.
-    ?assert(maps:get(replaced_at, Read) >= Before),
-    ?assert(maps:get(replaced_at, Read) =< After),
-    ?assertEqual(#{superseded_key  => Pub,
-                   superseded_type => 16#01,
-                   reason          => <<"retired">>,
-                   detail          => undefined},
-                 maps:remove(replaced_at, Read)).
-
-read_tombstone_carries_detail_when_given_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Tomb = macula_record:tombstone(Pub, 16#01, revoked,
-                                   #{detail => <<"key compromise">>}),
-    ?assertEqual(<<"key compromise">>, maps:get(detail, macula_record:read_tombstone(Tomb))).
-
-read_tombstone_key_equals_superseded_key_test() ->
-    %% Part 6 §9.13: a tombstone is stored under the superseded record's
-    %% own key, overwriting its DHT slot -- so a subscriber never needs a
-    %% second lookup to know which node_id just went away.
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Tomb = macula_record:tombstone(Pub, 16#01, expired),
-    #{superseded_key := SupKey} = macula_record:read_tombstone(Tomb),
-    ?assertEqual(macula_record:key(Tomb), SupKey).
-
-read_tombstone_survives_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Tomb = macula_record:sign(
-             macula_record:tombstone(Pub, 16#01, moved,
-                                     #{detail => <<"renamed">>}),
-             Kp),
-    Wire = macula_record:encode(Tomb),
-    {ok, Decoded} = macula_record:decode(Wire),
-    ?assertMatch({ok, _}, macula_record:verify(Decoded)),
-    #{superseded_key := DecodedKey, superseded_type := DecodedType,
-      reason := DecodedReason, detail := DecodedDetail} =
-        macula_record:read_tombstone(Decoded),
-    ?assertEqual(Pub, DecodedKey),
-    ?assertEqual(16#01, DecodedType),
-    ?assertEqual(<<"moved">>, DecodedReason),
-    ?assertEqual(<<"renamed">>, DecodedDetail).
-
-%%------------------------------------------------------------------
-%% realm_directory
-%%------------------------------------------------------------------
-
-realm_directory_shape_test() ->
-    Kp = macula_identity:generate(),
-    RealmId = macula_identity:public(Kp),
-    AdminKey = crypto:strong_rand_bytes(32),
-    R = macula_record:realm_directory(RealmId, <<"my realm">>, AdminKey),
-    ?assertEqual(16#03, macula_record:type(R)),
-    ?assertEqual(RealmId, macula_record:key(R)),
-    P = macula_record:payload(R),
-    ?assertEqual(RealmId, maps:get({text, <<"realm_id">>}, P)),
-    ?assertEqual({text, <<"my realm">>}, maps:get({text, <<"name">>}, P)),
-    ?assertEqual(AdminKey, maps:get({text, <<"admin_key">>}, P)),
-    ?assert(maps:is_key({text, <<"created_at">>}, P)),
-    ?assertNot(maps:is_key({text, <<"policy_url">>}, P)).
-
-realm_directory_with_policy_url_test() ->
-    Kp = macula_identity:generate(),
-    RealmId = macula_identity:public(Kp),
-    AdminKey = crypto:strong_rand_bytes(32),
-    R = macula_record:realm_directory(RealmId, <<"r">>, AdminKey,
-                                      #{policy_url => <<"https://ex.io">>}),
-    ?assertEqual({text, <<"https://ex.io">>},
-                 maps:get({text, <<"policy_url">>}, macula_record:payload(R))).
-
-realm_directory_sign_verify_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    RealmId = macula_identity:public(Kp),
-    R = macula_record:realm_directory(RealmId, <<"r">>,
-                                      crypto:strong_rand_bytes(32)),
-    Signed = macula_record:sign(R, Kp),
-    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
-    {ok, _} = macula_record:verify(Decoded).
-
-realm_directory_rejects_non_32_byte_realm_id_test() ->
-    ?assertError(function_clause,
-        macula_record:realm_directory(<<0:64>>, <<"r">>,
-                                      crypto:strong_rand_bytes(32))).
-
-%%------------------------------------------------------------------
-%% realm_stations
-%%------------------------------------------------------------------
-
-realm_stations_shape_test() ->
-    Kp = macula_identity:generate(),
-    RealmId = macula_identity:public(Kp),
-    S1 = crypto:strong_rand_bytes(32),
-    S2 = crypto:strong_rand_bytes(32),
-    Entries = [
-        #{station_id => S1, roles => [<<"directory">>]},
-        #{station_id => S2, roles => [<<"replica">>, <<"relay">>]}
-    ],
-    R = macula_record:realm_stations(RealmId, Entries),
-    ?assertEqual(16#04, macula_record:type(R)),
-    ?assertEqual(RealmId, macula_record:key(R)),
-    P = macula_record:payload(R),
-    [E1, E2] = maps:get({text, <<"stations">>}, P),
-    ?assertEqual(S1, maps:get({text, <<"station_id">>}, E1)),
-    ?assertEqual([{text, <<"replica">>}, {text, <<"relay">>}],
-                 maps:get({text, <<"roles">>}, E2)).
-
-realm_stations_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    RealmId = macula_identity:public(Kp),
-    R = macula_record:realm_stations(
-          RealmId,
-          [#{station_id => crypto:strong_rand_bytes(32),
-             roles      => [<<"directory">>]}]),
-    Signed = macula_record:sign(R, Kp),
-    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
-    ?assertEqual(16#04, macula_record:type(Decoded)),
-    {ok, _} = macula_record:verify(Decoded).
-
-realm_stations_accepts_empty_list_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:realm_stations(macula_identity:public(Kp), []),
-    ?assertEqual([], maps:get({text, <<"stations">>},
-                              macula_record:payload(R))).
-
-%%------------------------------------------------------------------
-%% realm_member_endorsement
-%%------------------------------------------------------------------
-
-realm_member_endorsement_shape_test() ->
-    AdminKp = macula_identity:generate(),
-    RealmId = macula_identity:public(AdminKp),
-    Member  = crypto:strong_rand_bytes(32),
-    R = macula_record:realm_member_endorsement(
-          RealmId,
-          #{realm => RealmId, member_node => Member,
-            roles => [<<"peer">>]}),
-    ?assertEqual(16#05, macula_record:type(R)),
-    ?assertEqual(RealmId, macula_record:key(R)),
-    P = macula_record:payload(R),
-    ?assertEqual(RealmId, maps:get({text, <<"realm">>}, P)),
-    ?assertEqual(Member,  maps:get({text, <<"member_node">>}, P)),
-    ?assertEqual([{text, <<"peer">>}],
-                 maps:get({text, <<"roles">>}, P)),
-    ?assert(is_integer(maps:get({text, <<"valid_from">>}, P))),
-    ?assert(is_integer(maps:get({text, <<"valid_until">>}, P))),
-    ValidFrom  = maps:get({text, <<"valid_from">>}, P),
-    ValidUntil = maps:get({text, <<"valid_until">>}, P),
-    ?assert(ValidUntil > ValidFrom).
-
-realm_member_endorsement_custom_validity_window_test() ->
-    AdminKp = macula_identity:generate(),
-    RealmId = macula_identity:public(AdminKp),
-    Member  = crypto:strong_rand_bytes(32),
-    R = macula_record:realm_member_endorsement(
-          RealmId,
-          #{realm => RealmId, member_node => Member, roles => []},
-          #{valid_from => 1000, valid_until => 5000}),
-    P = macula_record:payload(R),
-    ?assertEqual(1000, maps:get({text, <<"valid_from">>}, P)),
-    ?assertEqual(5000, maps:get({text, <<"valid_until">>}, P)).
-
-realm_member_endorsement_sign_verify_roundtrip_test() ->
-    AdminKp = macula_identity:generate(),
-    RealmId = macula_identity:public(AdminKp),
-    Member  = crypto:strong_rand_bytes(32),
-    R = macula_record:realm_member_endorsement(
-          RealmId,
-          #{realm => RealmId, member_node => Member,
-            roles => [<<"peer">>, <<"directory">>]}),
-    Signed = macula_record:sign(R, AdminKp),
-    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
-    ?assertEqual(16#05, macula_record:type(Decoded)),
-    {ok, _} = macula_record:verify(Decoded).
-
-realm_member_endorsement_storage_key_binds_realm_and_member_test() ->
-    AdminKp = macula_identity:generate(),
-    RealmId = macula_identity:public(AdminKp),
-    M1 = crypto:strong_rand_bytes(32),
-    M2 = crypto:strong_rand_bytes(32),
-    R1 = macula_record:realm_member_endorsement(
-           RealmId,
-           #{realm => RealmId, member_node => M1, roles => []}),
-    R2 = macula_record:realm_member_endorsement(
-           RealmId,
-           #{realm => RealmId, member_node => M2, roles => []}),
-    K1 = macula_record:storage_key(R1),
-    K2 = macula_record:storage_key(R2),
-    ?assertEqual(32, byte_size(K1)),
-    ?assertEqual(32, byte_size(K2)),
-    %% Different members → different keys even for same realm.
-    ?assertNotEqual(K1, K2),
-    %% Key differs from realm envelope key and from realm_stations hash.
-    ?assertNotEqual(RealmId, K1),
-    RStations = macula_record:realm_stations(RealmId, []),
-    ?assertNotEqual(macula_record:storage_key(RStations), K1).
-
-realm_member_endorsement_rejects_non_32_byte_member_test() ->
-    RealmId = crypto:strong_rand_bytes(32),
-    ?assertError(function_clause,
-                 macula_record:realm_member_endorsement(
-                   RealmId,
-                   #{realm => RealmId, member_node => <<1,2,3>>,
-                     roles => []})).
-
-%%------------------------------------------------------------------
-%% procedure_advertisement
-%%------------------------------------------------------------------
-
-procedure_advertisement_shape_test() ->
-    Kp = macula_identity:generate(),
-    NodeId = macula_identity:public(Kp),
-    Station = crypto:strong_rand_bytes(32),
-    R = macula_record:procedure_advertisement(NodeId,
-                                              <<"mcp://weather/forecast">>,
-                                              Station),
-    ?assertEqual(16#06, macula_record:type(R)),
-    ?assertEqual(NodeId, macula_record:key(R)),
-    P = macula_record:payload(R),
-    ?assertEqual({text, <<"mcp://weather/forecast">>},
-                 maps:get({text, <<"procedure_uri">>}, P)),
-    ?assertEqual(NodeId, maps:get({text, <<"advertiser_node">>}, P)),
-    ?assertEqual(Station, maps:get({text, <<"serving_station">>}, P)).
-
-procedure_advertisement_with_capacity_hints_test() ->
-    Kp = macula_identity:generate(),
-    Station = crypto:strong_rand_bytes(32),
-    R = macula_record:procedure_advertisement(
-          macula_identity:public(Kp),
-          <<"mcp://x/y">>,
-          Station,
-          #{rate_limit_qps => 100, max_concurrency => 8}),
-    P = macula_record:payload(R),
-    ?assertEqual(100, maps:get({text, <<"rate_limit_qps">>}, P)),
-    ?assertEqual(8,   maps:get({text, <<"max_concurrency">>}, P)).
-
-procedure_advertisement_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:procedure_advertisement(
-          macula_identity:public(Kp),
-          <<"mcp://weather/forecast">>,
-          crypto:strong_rand_bytes(32)),
-    Signed = macula_record:sign(R, Kp),
-    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
-    {ok, _} = macula_record:verify(Decoded).
-
-%%------------------------------------------------------------------
-%% storage_key/1 — DHT storage key derivation (Part 3 §3.3)
-%%------------------------------------------------------------------
-
-storage_key_node_record_is_envelope_key_test() ->
-    Kp = macula_identity:generate(),
-    NodeId = macula_identity:public(Kp),
-    R = macula_record:node_record(NodeId, [], 0),
-    ?assertEqual(NodeId, macula_record:storage_key(R)).
-
-storage_key_realm_directory_is_realm_id_test() ->
-    Kp = macula_identity:generate(),
-    RealmId = macula_identity:public(Kp),
-    R = macula_record:realm_directory(RealmId, <<"r">>,
-                                      crypto:strong_rand_bytes(32)),
-    ?assertEqual(RealmId, macula_record:storage_key(R)).
-
-storage_key_realm_stations_is_hashed_test() ->
-    Kp = macula_identity:generate(),
-    RealmId = macula_identity:public(Kp),
-    Expected = crypto:hash(sha256, <<"station_set", RealmId/binary>>),
-    R = macula_record:realm_stations(RealmId, []),
-    ?assertEqual(Expected, macula_record:storage_key(R)),
-    ?assertNotEqual(RealmId, macula_record:storage_key(R)).
-
-storage_key_procedure_advertisement_is_uri_hash_test() ->
-    Kp = macula_identity:generate(),
-    Uri = <<"mcp://weather/forecast">>,
-    R = macula_record:procedure_advertisement(macula_identity:public(Kp),
-                                              Uri,
-                                              crypto:strong_rand_bytes(32)),
-    ?assertEqual(crypto:hash(sha256, Uri), macula_record:storage_key(R)),
-    %% The envelope key (advertiser NodeId) differs from the storage key.
-    ?assertNotEqual(macula_record:key(R), macula_record:storage_key(R)).
-
-storage_key_tombstone_is_superseded_key_test() ->
-    Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Tomb = macula_record:tombstone(Pub, 16#01, revoked),
-    ?assertEqual(Pub, macula_record:storage_key(Tomb)).
-
-%%------------------------------------------------------------------
-%% refresh/2 — owner republish
-%%------------------------------------------------------------------
-
-refresh_preserves_type_key_payload_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:sign(
-          macula_record:node_record(macula_identity:public(Kp), [], 7),
-          Kp),
+refresh_keeps_type_payload_and_ttl_and_takes_a_later_version_test() ->
+    {Id, R} = signed_node_record(),
     timer:sleep(2),
-    Fresh = macula_record:refresh(R, Kp),
-    ?assertEqual(macula_record:type(R),    macula_record:type(Fresh)),
-    ?assertEqual(macula_record:key(R),     macula_record:key(Fresh)),
-    ?assertEqual(macula_record:payload(R), macula_record:payload(Fresh)).
-
-refresh_bumps_version_and_timestamps_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:sign(
-          macula_record:node_record(macula_identity:public(Kp), [], 0),
-          Kp),
-    timer:sleep(2),
-    Fresh = macula_record:refresh(R, Kp),
-    ?assertNotEqual(macula_record:version(R), macula_record:version(Fresh)),
-    ?assert(macula_record:created_at(Fresh) >= macula_record:created_at(R)),
-    ?assert(macula_record:expires_at(Fresh) >= macula_record:expires_at(R)).
-
-refresh_preserves_ttl_duration_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:sign(
-          macula_record:node_record(macula_identity:public(Kp), [], 0,
-                                    #{ttl_ms => 60_000}),
-          Kp),
-    Fresh = macula_record:refresh(R, Kp),
-    Ttl  = macula_record:expires_at(R)     - macula_record:created_at(R),
-    Ttl2 = macula_record:expires_at(Fresh) - macula_record:created_at(Fresh),
-    ?assertEqual(Ttl, Ttl2).
-
-refresh_produces_verifiable_record_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:sign(
-          macula_record:node_record(macula_identity:public(Kp), [], 0),
-          Kp),
-    Fresh = macula_record:refresh(R, Kp),
-    ?assertMatch({ok, _}, macula_record:verify(Fresh)).
-
-refresh_round_trip_over_wire_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:sign(
-          macula_record:node_record(macula_identity:public(Kp), [], 0),
-          Kp),
-    Fresh = macula_record:refresh(R, Kp),
-    {ok, Decoded} = macula_record:decode(macula_record:encode(Fresh)),
-    ?assertEqual(Fresh, Decoded).
+    F = macula_record:refresh(R, Id),
+    ?assertEqual(macula_record:type(R), macula_record:type(F)),
+    ?assertEqual(macula_record:payload(R), macula_record:payload(F)),
+    ?assertEqual(macula_record:expires_at(R) - macula_record:created_at(R),
+                 macula_record:expires_at(F) - macula_record:created_at(F)),
+    ?assert(macula_record:version(F) > macula_record:version(R)),
+    ?assertMatch({ok, _}, macula_record:verify(macula_record:encode(F), pq_pure)).
 
 %%------------------------------------------------------------------
-%% foundation_seed_list (§9.14)
+%% Constructors and readers
 %%------------------------------------------------------------------
 
-foundation_seed_list_shape_test() ->
-    Kp = macula_identity:generate(),
-    Fk = macula_identity:public(Kp),
-    Seed1 = #{node_id => crypto:strong_rand_bytes(32),
-              addresses => [#{{text, <<"v6">>} => {text, <<"2a02::1">>},
-                              {text, <<"port">>} => 7000}],
-              tier => 4},
-    Seed2 = #{node_id => crypto:strong_rand_bytes(32),
-              addresses => [],
-              tier => 3},
-    R = macula_record:foundation_seed_list(Fk, [Seed1, Seed2]),
-    ?assertEqual(16#0D, macula_record:type(R)),
-    ?assertEqual(Fk, macula_record:key(R)),
-    P = macula_record:payload(R),
-    [E1, E2] = maps:get({text, <<"seeds">>}, P),
-    ?assertEqual(4, maps:get({text, <<"tier">>}, E1)),
-    ?assertEqual(3, maps:get({text, <<"tier">>}, E2)).
+node_record_payload_and_reader_test() ->
+    Id = key(identity),
+    NodeId = macula_node_keys:key_id(Id),
+    Opts = #{station_id => fill(5), kind => <<"station">>, hostname => <<"beam00">>, lat => 50.8, lng => 4,
+             peers => [fill(7), fill(6)], display_name => <<"Beam 00">>},
+    R = macula_record:sign(macula_record:node_record(NodeId, [fill(16#11)], 3, Opts), Id),
+    {ok, V} = macula_record:verify(macula_record:encode(R), pq_pure),
+    ?assertMatch(#{node_id := NodeId, station_id := <<5:8, _/binary>>, realms := [<<16#11, _/binary>>],
+                   capabilities := 3, kind := <<"station">>, hostname := <<"beam00">>, lat := 50.8, lng := 4,
+                   display_name := <<"Beam 00">>}, macula_record:read_node_record(V)),
+    ?assertEqual([fill(6), fill(7)], maps:get(peers, macula_record:read_node_record(V))).
 
-foundation_seed_list_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:foundation_seed_list(
-          macula_identity:public(Kp),
-          [#{node_id => crypto:strong_rand_bytes(32),
-             addresses => [], tier => 4}]),
-    Signed = macula_record:sign(R, Kp),
-    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
-    ?assertEqual(16#0D, macula_record:type(Decoded)),
-    {ok, _} = macula_record:verify(Decoded).
+realm_records_name_the_realm_by_realm_id_test() ->
+    RealmId = fill(16#11),
+    Member = macula_record:realm_member_endorsement(RealmId, #{realm => RealmId, member_node => fill(2),
+                                                                roles => [<<"member">>]}),
+    Org = macula_record:org_directory(RealmId, <<"acme">>, fill(4)),
+    Stations = macula_record:realm_stations(RealmId, [#{station_id => fill(3), roles => [<<"seed">>]}]),
+    Directory = macula_record:realm_directory(RealmId, <<"io.macula">>, fill(5)),
+    [?assertEqual(RealmId, maps:get({text, <<"realm_id">>}, macula_record:payload(R)))
+     || R <- [Member, Org, Stations, Directory]],
+    ?assertEqual(#{realm_id => RealmId, org_name => <<"acme">>, org_key => fill(4)},
+                 macula_record:read_org_directory(Org)).
 
-foundation_seed_list_rejects_wrong_tier_test() ->
-    Kp = macula_identity:generate(),
-    ?assertError(function_clause,
-                 macula_record:foundation_seed_list(
-                   macula_identity:public(Kp),
-                   [#{node_id => crypto:strong_rand_bytes(32),
-                      addresses => [], tier => 1}])).
+procedure_delegation_names_org_key_and_advertiser_test() ->
+    Org = key(org),
+    OrgKeyId = macula_node_keys:key_id(Org),
+    R = macula_record:sign(macula_record:procedure_delegation(OrgKeyId, fill(8)), Org),
+    {ok, V} = macula_record:verify(macula_record:encode(R), pq_pure),
+    ?assertEqual(#{org_key => OrgKeyId, advertiser => fill(8)}, macula_record:read_procedure_delegation(V)).
 
-%%------------------------------------------------------------------
-%% foundation_parameter (§9.15)
-%%------------------------------------------------------------------
+a_procedure_delegation_whose_org_key_is_not_its_signer_is_refused_test() ->
+    Org = key(org),
+    ?assertError({key_id_mismatch, _}, macula_record:sign(macula_record:procedure_delegation(fill(3), fill(8)), Org)).
 
-foundation_parameter_shape_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:foundation_parameter(
-          macula_identity:public(Kp), <<"puzzle_difficulty">>, 8),
-    ?assertEqual(16#0E, macula_record:type(R)),
-    P = macula_record:payload(R),
-    ?assertEqual({text, <<"puzzle_difficulty">>},
-                 maps:get({text, <<"param_name">>}, P)),
-    ?assertEqual(8, maps:get({text, <<"param_value">>}, P)),
-    ?assertEqual(null, maps:get({text, <<"prior_version">>}, P)).
+station_endpoint_payload_and_reader_test() ->
+    Id = key(identity),
+    R = macula_record:sign(macula_record:station_endpoint(4433, #{host_advertised => [<<"beam00.lab">>]}), Id),
+    {ok, V} = macula_record:verify(macula_record:encode(R), pq_pure),
+    ?assertEqual(#{quic_port => 4433, host_advertised => [<<"beam00.lab">>]}, macula_record:read_station_endpoint(V)).
 
-foundation_parameter_with_prior_version_test() ->
-    Kp = macula_identity:generate(),
-    Prior = macula_record_uuid:v7(erlang:system_time(millisecond) - 1),
-    R = macula_record:foundation_parameter(
-          macula_identity:public(Kp), <<"tRepublish_ms">>, 3_600_000,
-          #{prior_version => Prior}),
-    P = macula_record:payload(R),
-    ?assertEqual(Prior, maps:get({text, <<"prior_version">>}, P)).
-
-foundation_parameter_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:foundation_parameter(
-          macula_identity:public(Kp), <<"tExpire_ms">>, 86_400_000),
-    Signed = macula_record:sign(R, Kp),
-    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
-    ?assertEqual(16#0E, macula_record:type(Decoded)),
-    {ok, _} = macula_record:verify(Decoded).
+foundation_records_sign_with_a_foundation_key_test() ->
+    Foundation = key(foundation),
+    Records = [macula_record:foundation_seed_list([#{node_id => fill(1), addresses => [], tier => 3}], #{}),
+               macula_record:foundation_parameter(<<"max_hops">>, 8, #{}),
+               macula_record:foundation_realm_trust_list([fill(2)], #{}),
+               macula_record:foundation_t3_attestation(fill(3), 1789000000000, #{})],
+    [?assertMatch({ok, _}, macula_record:verify(macula_record:encode(macula_record:sign(R, Foundation)), pq_pure))
+     || R <- Records].
 
 %%------------------------------------------------------------------
-%% foundation_realm_trust_list (§9.16)
+%% Helpers
 %%------------------------------------------------------------------
 
-foundation_realm_trust_list_shape_test() ->
-    Kp = macula_identity:generate(),
-    T1 = crypto:strong_rand_bytes(32),
-    T2 = crypto:strong_rand_bytes(32),
-    Rv = crypto:strong_rand_bytes(32),
-    R = macula_record:foundation_realm_trust_list(
-          macula_identity:public(Kp), [T1, T2],
-          #{realms_revoked => [Rv]}),
-    ?assertEqual(16#0F, macula_record:type(R)),
-    P = macula_record:payload(R),
-    ?assertEqual([T1, T2], maps:get({text, <<"realms_trusted">>}, P)),
-    ?assertEqual([Rv],     maps:get({text, <<"realms_revoked">>}, P)).
+key(Purpose) ->
+    {ok, Key} = macula_node_keys:generate(Purpose, pq_pure),
+    Key.
 
-foundation_realm_trust_list_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:foundation_realm_trust_list(
-          macula_identity:public(Kp),
-          [crypto:strong_rand_bytes(32)]),
-    Signed = macula_record:sign(R, Kp),
-    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
-    ?assertEqual(16#0F, macula_record:type(Decoded)),
-    {ok, _} = macula_record:verify(Decoded).
+signed_node_record() ->
+    Id = key(identity),
+    {Id, macula_record:sign(macula_record:node_record(macula_node_keys:key_id(Id), [], 0), Id)}.
 
-%%------------------------------------------------------------------
-%% foundation_t3_attestation (§9.17)
-%%------------------------------------------------------------------
+object(#{key := K, tbs := T, signature := S}) ->
+    #{key => K, tbs => T, signature => S}.
 
-foundation_t3_attestation_shape_test() ->
-    Kp = macula_identity:generate(),
-    Station = crypto:strong_rand_bytes(32),
-    Audit = erlang:system_time(millisecond),
-    R = macula_record:foundation_t3_attestation(
-          macula_identity:public(Kp), Station, Audit,
-          #{notes => <<"audited Q2-2026">>}),
-    ?assertEqual(16#10, macula_record:type(R)),
-    P = macula_record:payload(R),
-    ?assertEqual(Station, maps:get({text, <<"station_id">>}, P)),
-    ?assertEqual(3, maps:get({text, <<"tier_attested">>}, P)),
-    ?assertEqual({text, <<"audited Q2-2026">>},
-                 maps:get({text, <<"notes">>}, P)).
+%% The tbs fields of a node record, to sign by hand past what sign/2 would build.
+node_fields(Id, Now) ->
+    NodeId = macula_node_keys:key_id(Id),
+    #{{text, <<"type">>} => 16#01,
+      {text, <<"version">>} => macula_record_uuid:v7(Now),
+      {text, <<"created_at">>} => Now,
+      {text, <<"expires_at">>} => Now + 60 * ?MINUTE,
+      {text, <<"payload">>} => #{{text, <<"node_id">>} => NodeId, {text, <<"station_id">>} => NodeId,
+                                  {text, <<"realms">>} => [], {text, <<"capabilities">>} => 0}}.
 
-foundation_t3_attestation_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    R = macula_record:foundation_t3_attestation(
-          macula_identity:public(Kp),
-          crypto:strong_rand_bytes(32),
-          erlang:system_time(millisecond)),
-    Signed = macula_record:sign(R, Kp),
-    {ok, Decoded} = macula_record:decode(macula_record:encode(Signed)),
-    ?assertEqual(16#10, macula_record:type(Decoded)),
-    {ok, _} = macula_record:verify(Decoded).
+now_ms() ->
+    erlang:system_time(millisecond).
 
-%%------------------------------------------------------------------
-%% storage_key for foundation types
-%%------------------------------------------------------------------
-
-storage_key_foundation_seed_list_is_hashed_test() ->
-    Kp = macula_identity:generate(),
-    Fk = macula_identity:public(Kp),
-    R = macula_record:foundation_seed_list(Fk, []),
-    ?assertEqual(32, byte_size(macula_record:storage_key(R))),
-    ?assertNotEqual(Fk, macula_record:storage_key(R)).
-
-storage_key_foundation_parameter_varies_by_name_test() ->
-    Kp = macula_identity:generate(),
-    Fk = macula_identity:public(Kp),
-    R1 = macula_record:foundation_parameter(Fk, <<"a">>, 1),
-    R2 = macula_record:foundation_parameter(Fk, <<"b">>, 1),
-    ?assertNotEqual(macula_record:storage_key(R1),
-                    macula_record:storage_key(R2)).
-
-storage_key_foundation_t3_attestation_varies_by_station_test() ->
-    Kp = macula_identity:generate(),
-    Fk = macula_identity:public(Kp),
-    S1 = crypto:strong_rand_bytes(32),
-    S2 = crypto:strong_rand_bytes(32),
-    Now = erlang:system_time(millisecond),
-    R1 = macula_record:foundation_t3_attestation(Fk, S1, Now),
-    R2 = macula_record:foundation_t3_attestation(Fk, S2, Now),
-    ?assertNotEqual(macula_record:storage_key(R1),
-                    macula_record:storage_key(R2)).
-
-%%------------------------------------------------------------------
-%% Domain-defined record types (0x20-0xFF) — envelope/4
-%%------------------------------------------------------------------
-
-domain_envelope_round_trip_test() ->
-    Kp     = macula_identity:generate(),
-    Pub    = macula_identity:public(Kp),
-    Type   = 16#20,
-    Payload = #{
-        {text, <<"realm">>}      => <<"io.macula">>,
-        {text, <<"member_did">>} => <<"did:macula:abc">>
-    },
-    R0 = macula_record:envelope(Type, Pub, Payload, #{}),
-    Signed = macula_record:sign(R0, Kp),
-    {ok, Verified} = macula_record:verify(Signed),
-    ?assertEqual(Type, macula_record:type(Verified)),
-    ?assertEqual(Pub,  macula_record:key(Verified)),
-    Wire = macula_record:encode(Signed),
-    {ok, Decoded} = macula_record:decode(Wire),
-    ?assertEqual(Type, macula_record:type(Decoded)),
-    ?assertEqual(Payload, macula_record:payload(Decoded)).
-
-domain_storage_key_without_subject_is_signer_pubkey_test() ->
-    Kp  = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    R   = macula_record:envelope(16#42, Pub, #{}, #{}),
-    ?assertEqual(Pub, macula_record:storage_key(R)).
-
-domain_storage_key_with_subject_varies_test() ->
-    %% One signer, two subjects → distinct DHT slots.
-    Kp  = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    R1 = macula_record:envelope(16#22, Pub, #{}, #{subject_id => <<"license-aaa">>}),
-    R2 = macula_record:envelope(16#22, Pub, #{}, #{subject_id => <<"license-bbb">>}),
-    ?assertNotEqual(macula_record:storage_key(R1),
-                    macula_record:storage_key(R2)),
-    ?assertEqual(32, byte_size(macula_record:storage_key(R1))),
-    ?assertEqual(32, byte_size(macula_record:storage_key(R2))).
-
-domain_subject_id_round_trips_through_wire_test() ->
-    Kp     = macula_identity:generate(),
-    Pub    = macula_identity:public(Kp),
-    Sid    = crypto:hash(sha256, <<"member-x@realm-y">>),
-    R0     = macula_record:envelope(16#20, Pub, #{}, #{subject_id => Sid}),
-    Signed = macula_record:sign(R0, Kp),
-    {ok, V} = macula_record:verify(Signed),
-    ?assertEqual(Sid, maps:get(subject_id, V)),
-    Wire   = macula_record:encode(Signed),
-    {ok, D} = macula_record:decode(Wire),
-    ?assertEqual(Sid, maps:get(subject_id, D)),
-    %% storage_key must agree on both sides
-    ?assertEqual(macula_record:storage_key(Signed),
-                 macula_record:storage_key(D)).
-
-domain_envelope_rejects_bad_key_size_test() ->
-    ShortKey = <<1, 2, 3>>,
-    ?assertError(function_clause,
-                 macula_record:envelope(16#20, ShortKey, #{}, #{})).
-
-%%------------------------------------------------------------------
-%% procedure_advertisement reader + key derivation (direct-dial)
-%%------------------------------------------------------------------
-
-read_procedure_advertisement_canonical_test() ->
-    Kp  = macula_identity:generate(),
-    Adv = macula_identity:public(Kp),
-    Sta = crypto:strong_rand_bytes(32),
-    Uri = <<"realm42/org/app/checkout_v1">>,
-    R   = macula_record:procedure_advertisement(Adv, Uri, Sta),
-    ?assertEqual(#{procedure_uri   => Uri,
-                   advertiser_node => Adv,
-                   serving_station => Sta,
-                   cert_chain      => undefined},
-                 macula_record:read_procedure_advertisement(R)).
-
-%% A record that arrived over the wire presents bare binary payload
-%% keys (as macula-realm's Topology.Directory sees them), not the
-%% canonical {text, _} keys. The reader must handle both.
-read_procedure_advertisement_wire_shape_test() ->
-    Adv = crypto:strong_rand_bytes(32),
-    Sta = crypto:strong_rand_bytes(32),
-    Uri = <<"realm42/org/app/checkout_v1">>,
-    WireRecord = #{type => 16#06,
-                   payload => #{<<"procedure_uri">>   => Uri,
-                                <<"advertiser_node">> => Adv,
-                                <<"serving_station">> => Sta}},
-    ?assertEqual(#{procedure_uri   => Uri,
-                   advertiser_node => Adv,
-                   serving_station => Sta,
-                   cert_chain      => undefined},
-                 macula_record:read_procedure_advertisement(WireRecord)).
-
-procedure_key_matches_storage_key_test() ->
-    Adv = crypto:strong_rand_bytes(32),
-    Sta = crypto:strong_rand_bytes(32),
-    Uri = <<"realm42/org/app/checkout_v1">>,
-    R   = macula_record:procedure_advertisement(Adv, Uri, Sta),
-    ?assertEqual(macula_record:storage_key(R),
-                 macula_record:procedure_key(Uri)).
-
-read_station_endpoint_test() ->
-    Pub = crypto:strong_rand_bytes(32),
-    R   = macula_record:station_endpoint(Pub, 4433,
-                                         #{host_advertised => [<<"::1">>]}),
-    ?assertEqual(#{quic_port => 4433, host_advertised => [<<"::1">>]},
-                 macula_record:read_station_endpoint(R)).
-
-station_endpoint_key_matches_storage_key_test() ->
-    Pub = crypto:strong_rand_bytes(32),
-    R   = macula_record:station_endpoint(Pub, 4433),
-    ?assertEqual(macula_record:storage_key(R),
-                 macula_record:station_endpoint_key(Pub)).
-
-%% The shape a record actually arrives in over the SDK find_records/2
-%% path: payload keys atomised by the frame decoder. The readers must
-%% handle it (they did not before — this regressed silently through
-%% Slice 2's find_value-based test).
-read_procedure_advertisement_atom_keys_test() ->
-    Adv = crypto:strong_rand_bytes(32),
-    Sta = crypto:strong_rand_bytes(32),
-    Uri = <<"realm/org/app/x">>,
-    Rec = #{type    => 16#06,
-            payload => #{procedure_uri   => {text, Uri},
-                         advertiser_node => Adv,
-                         serving_station => Sta}},
-    ?assertEqual(#{procedure_uri   => Uri,
-                   advertiser_node => Adv,
-                   serving_station => Sta,
-                   cert_chain      => undefined},
-                 macula_record:read_procedure_advertisement(Rec)).
-
-read_station_endpoint_atom_keys_test() ->
-    Rec = #{type    => 16#12,
-            payload => #{quic_port => 4433, host_advertised => [<<"::1">>]}},
-    ?assertEqual(#{quic_port => 4433, host_advertised => [<<"::1">>]},
-                 macula_record:read_station_endpoint(Rec)).
-
-%%------------------------------------------------------------------
-%% Slice 7c — realm -> org -> server delegation chain
-%%------------------------------------------------------------------
-
-kp() ->
-    Kp = macula_identity:generate(),
-    {macula_identity:public(Kp), Kp}.
-
-org_directory_round_trips_test() ->
-    {RealmId, _} = kp(),
-    {OrgKey, _}  = kp(),
-    R = macula_record:org_directory(RealmId, <<"acme">>, OrgKey),
-    ?assertEqual(#{realm => RealmId, org_name => <<"acme">>, org_key => OrgKey},
-                 macula_record:read_org_directory(R)),
-    ?assertEqual(macula_record:storage_key(R),
-                 macula_record:org_directory_key(RealmId, <<"acme">>)).
-
-procedure_delegation_round_trips_test() ->
-    {OrgKey, _} = kp(),
-    {Adv, _}    = kp(),
-    R = macula_record:procedure_delegation(OrgKey, Adv),
-    ?assertEqual(#{org_key => OrgKey, advertiser => Adv},
-                 macula_record:read_procedure_delegation(R)),
-    ?assertEqual(macula_record:storage_key(R),
-                 macula_record:procedure_delegation_key(OrgKey, Adv)).
-
-valid_delegation_chain_verifies_test() ->
-    {RealmId, RealmKp} = kp(),
-    {OrgKey, OrgKp}    = kp(),
-    {Adv, _}           = kp(),
-    OrgDir = macula_record:sign(
-               macula_record:org_directory(RealmId, <<"acme">>, OrgKey), RealmKp),
-    Del    = macula_record:sign(
-               macula_record:procedure_delegation(OrgKey, Adv), OrgKp),
-    ?assertEqual(ok,
-                 macula_record:verify_delegation_chain(RealmId, OrgDir, Del, Adv)).
-
-delegation_chain_rejects_wrong_realm_test() ->
-    {RealmId, RealmKp} = kp(),
-    {OtherRealm, _}    = kp(),
-    {OrgKey, OrgKp}    = kp(),
-    {Adv, _}           = kp(),
-    OrgDir = macula_record:sign(
-               macula_record:org_directory(RealmId, <<"acme">>, OrgKey), RealmKp),
-    Del    = macula_record:sign(
-               macula_record:procedure_delegation(OrgKey, Adv), OrgKp),
-    ?assertEqual({error, org_directory_wrong_realm},
-                 macula_record:verify_delegation_chain(OtherRealm, OrgDir, Del, Adv)).
-
-delegation_chain_rejects_squatter_advertiser_test() ->
-    {RealmId, RealmKp} = kp(),
-    {OrgKey, OrgKp}    = kp(),
-    {Adv, _}           = kp(),
-    {Squatter, _}      = kp(),
-    OrgDir = macula_record:sign(
-               macula_record:org_directory(RealmId, <<"acme">>, OrgKey), RealmKp),
-    %% delegation grants Adv, but a squatter advertised
-    Del    = macula_record:sign(
-               macula_record:procedure_delegation(OrgKey, Adv), OrgKp),
-    ?assertEqual({error, delegation_mismatch},
-                 macula_record:verify_delegation_chain(RealmId, OrgDir, Del,
-                                                       Squatter)).
-
-delegation_chain_rejects_forged_delegation_test() ->
-    {RealmId, RealmKp} = kp(),
-    {OrgKey, _OrgKp}   = kp(),
-    {Adv, _}           = kp(),
-    {_Forger, ForgerKp} = kp(),
-    OrgDir = macula_record:sign(
-               macula_record:org_directory(RealmId, <<"acme">>, OrgKey), RealmKp),
-    %% delegation claims OrgKey but is signed by someone else
-    Del    = macula_record:sign(
-               macula_record:procedure_delegation(OrgKey, Adv), ForgerKp),
-    ?assertEqual({error, delegation_bad_signature},
-                 macula_record:verify_delegation_chain(RealmId, OrgDir, Del, Adv)).
+fill(Byte) ->
+    binary:copy(<<Byte>>, 32).

@@ -41,6 +41,17 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   adding `alg`. `verify/3` and `verify_held/4` check the shape, the carried
   key, the signature over tbs as received, the decoding rule and `alg`,
   without raising. `encode/1` and `decode/1` give the wire form.
+- `macula_record` in the signed-object format: a record is `{key, tbs,
+  signature}` under `MACULA-PQ-RECORD-V1`, signed with a node key whose
+  purpose fits its type and named by its key id. `verify/2,3` refuses a
+  record over 256 KiB, a malformed tbs, a clock outside five minutes, a
+  payload that breaks its type's rules and a payload naming another
+  signer. Storage keys derive under `MACULA-PQ-STORAGE-KEY-V1`.
+  Tombstones and procedure advertisements take the design's pinned
+  payloads, and `verify_authorization/3` checks an advertisement's org
+  namespace and its org directory and delegation or certificate chain.
+  It replaces `decode/1`, `verify/1`, `procedure_key/1`,
+  `verify_delegation_chain/4` and `verify_advertisement_cert_chain/3`.
 - `macula_node_keys:generate/3` with `puzzle_difficulty`, and
   `puzzle_solved/2`: an identity key whose node_id starts with that many
   zero bits. Each try makes a new ML-DSA-87 half; a hybrid key keeps its
