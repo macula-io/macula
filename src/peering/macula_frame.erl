@@ -77,8 +77,8 @@
     advertise/1, unadvertise/1,
 
     %% Constructors — Streaming RPC (Part 6 §5.6)
-    stream_open/2, stream_data/1, stream_end/1,
-    stream_error/1, stream_reply/1,
+    stream_open/2, open_stream/1, provider_stream/3, caller_stream/3,
+    verify_provider_stream/3, verify_caller_stream/3,
 
     %% Constructors — Content transfer (Part 6 §9)
     want/1, have/1, block/1,
@@ -141,8 +141,7 @@
     advertise_spec/0, unadvertise_spec/0,
     delivery_channel/0,
     stream_id/0, stream_mode/0, stream_encoding/0, stream_role/0,
-    stream_data_spec/0, stream_end_spec/0,
-    stream_error_spec/0, stream_reply_spec/0,
+    stream_spec/0, stream_state/0,
     mcid/0, want_priority/0, want_entry/0, have_entry/0,
     want_spec/0, have_spec/0, block_spec/0,
     manifest_req_spec/0, manifest_res_spec/0, cancel_spec/0
@@ -168,6 +167,8 @@
 -define(RELAY_ERROR_LABEL, <<"MACULA-PQ-RELAY-ERROR-V1">>).
 %% The relay error codes, a closed set disjoint from every provider code (D25 item 7).
 -define(RELAY_CODES, [unknown_next_peer]).
+-define(STREAM_LABEL, <<"MACULA-PQ-STREAM-V1">>).
+-define(CALLER_STREAM_LABEL, <<"MACULA-PQ-CALLER-STREAM-V1">>).
 -define(NEIGHBOUR_LABEL, <<"MACULA-PQ-NEIGHBOUR-V1">>).
 %% The control frames, which pq_hybrid neighbour-signs (D17). Data frames carry their own end-to-end signatures.
 -define(NEIGHBOUR_SIGNED,
@@ -563,28 +564,25 @@
 
 -type stream_role() :: send | both.
 
--type stream_data_spec() :: #{
-    stream_id := stream_id(),
-    seq       := non_neg_integer(),
-    encoding  := stream_encoding(),
-    body      := term()
+%% A stream frame as its sender gives it to provider_stream/3 or caller_stream/3: its type, the sender's own sequence
+%% number and the fields of its type. STREAM_REPLY is the provider's only.
+-type stream_spec() :: #{
+    frame_type := stream_data | stream_end | stream_error | stream_reply,
+    seq        := non_neg_integer(),
+    encoding   => stream_encoding(),
+    body       => term(),
+    role       => stream_role(),
+    code       => binary(),
+    message    => binary(),
+    payload    => term()
 }.
 
--type stream_end_spec() :: #{
-    stream_id := stream_id(),
-    role      := stream_role()
-}.
-
--type stream_error_spec() :: #{
-    stream_id := stream_id(),
-    code      := binary(),
-    message   := binary()
-}.
-
--type stream_reply_spec() :: #{
-    stream_id    := stream_id(),
-    payload      := term(),
-    responded_by := macula_identity:pubkey()
+%% What a verifier holds for one stream: the verified STREAM_OPEN and, per side, the next sequence number and whether
+%% that side has ended; for the provider also the key and signer its first frame carried.
+-type stream_state() :: #{
+    request  := verified_request(),
+    provider := #{next := non_neg_integer(), ended := boolean(), key => binary(), signer => id256()},
+    caller   := #{next := non_neg_integer(), ended := boolean()}
 }.
 
 %%------------------------------------------------------------------
@@ -1340,76 +1338,211 @@ unadvertise(#{realm := R, procedure := Proc, advertiser := Adv})
 %% Streaming RPC constructors (Part 6 §5.6)
 %%
 %% STREAM_OPEN is a request, built by stream_open/2 with the rules of
-%% requests above. Subsequent STREAM_DATA /
-%% STREAM_END / STREAM_ERROR / STREAM_REPLY frames carry only the
-%% `stream_id' for correlation; the relay forwards them as opaque
-%% bytes between the two endpoints already bound by the OPEN.
+%% requests above. A provider's STREAM_DATA, STREAM_END, STREAM_ERROR and
+%% STREAM_REPLY carry stream under MACULA-PQ-STREAM-V1, with the provider's
+%% key on its first frame only; a caller's STREAM_DATA, STREAM_END and
+%% STREAM_ERROR carry caller_stream under MACULA-PQ-CALLER-STREAM-V1, which
+%% verifies with the STREAM_OPEN's key. Each tbs names the stream by
+%% request_id and request_hash, and each side numbers its own frames.
 %%------------------------------------------------------------------
 
--spec stream_data(stream_data_spec()) -> frame().
-stream_data(#{stream_id := Sid, seq := Seq,
-              encoding := Encoding, body := Body} = Spec)
-  when is_binary(Sid), byte_size(Sid) =:= 16,
-       is_integer(Seq), Seq >= 0,
-       (Encoding =:= raw orelse Encoding =:= msgpack) ->
-    validate_stream_body(Encoding, Body),
-    maybe_add_signer(
-      (base(stream_data, 0))#{
-        stream_id => Sid,
-        seq       => Seq,
-        encoding  => Encoding,
-        body      => Body
-      }, Spec).
+%% @doc The state a verifier starts a stream with: nothing seen from either side yet.
+-spec open_stream(verified_request()) -> stream_state().
+open_stream(#{frame_type := stream_open} = Open) ->
+    #{request => Open, provider => #{next => 0, ended => false}, caller => #{next => 0, ended => false}}.
 
--spec stream_end(stream_end_spec()) -> frame().
-stream_end(#{stream_id := Sid, role := Role} = Spec)
-  when is_binary(Sid), byte_size(Sid) =:= 16,
-       (Role =:= send orelse Role =:= both) ->
-    maybe_add_signer(
-      (base(stream_end, 0))#{
-        stream_id => Sid,
-        role      => Role
-      }, Spec).
+%% @doc Sign a provider's stream frame for a verified STREAM_OPEN with the provider's identity key. The first frame, seq
+%% 0, carries the key; later frames do not.
+-spec provider_stream(stream_spec(), macula_node_keys:node_key(), verified_request()) -> frame().
+provider_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} = Key,
+                #{frame_type := stream_open} = Open)
+  when is_integer(Seq), Seq >= 0, Seq < ?MAX_PROTOCOL_INT ->
+    Tbs = to_wire(stream_tbs(Type, Spec, Key, Open)),
+    #{version => ?PROTOCOL_VERSION, frame_type => Type, stream => provider_signed(Seq, Tbs, Key)}.
 
--spec stream_error(stream_error_spec()) -> frame().
-stream_error(#{stream_id := Sid, code := Code, message := Msg} = Spec)
-  when is_binary(Sid), byte_size(Sid) =:= 16,
-       is_binary(Code),
-       is_binary(Msg) ->
-    maybe_add_signer(
-      (base(stream_error, 0))#{
-        stream_id => Sid,
-        code      => Code,
-        message   => Msg
-      }, Spec).
+provider_signed(0, Tbs, Key) -> macula_signed_object:sign(?STREAM_LABEL, Tbs, Key);
+provider_signed(_Later, Tbs, Key) -> macula_signed_object:sign_held(?STREAM_LABEL, Tbs, Key).
 
-%% Optionally stamp the emitter's pubkey into the frame. Used by the
-%% station-side verify path to authenticate non-OPEN stream frames
-%% end-to-end across multi-hop relays. Without `signer`, the station
-%% can only verify against the inbound conn's NodeId — fine for the
-%% direct edge (daemon → first station) but it fails on every
-%% subsequent station-to-station hop, because the signature was made
-%% by the originating daemon, not the relaying station.
-maybe_add_signer(Frame, #{signer := Pub})
-  when is_binary(Pub), byte_size(Pub) =:= 32 ->
-    Frame#{signer => Pub};
-maybe_add_signer(Frame, _Spec) ->
-    Frame.
+%% @doc Sign a caller's stream frame for a verified STREAM_OPEN with the caller's identity key. A caller sends no
+%% STREAM_REPLY, and no STREAM_DATA in a server_stream.
+-spec caller_stream(stream_spec(), macula_node_keys:node_key(), verified_request()) -> frame().
+caller_stream(#{frame_type := Type, seq := Seq} = Spec, #{purpose := identity} = Key,
+              #{frame_type := stream_open, mode := Mode} = Open)
+  when (Type =:= stream_end orelse Type =:= stream_error orelse (Type =:= stream_data andalso Mode =/= server_stream)),
+       is_integer(Seq), Seq >= 0, Seq < ?MAX_PROTOCOL_INT ->
+    Tbs = to_wire(stream_tbs(Type, Spec, Key, Open)),
+    #{version => ?PROTOCOL_VERSION, frame_type => Type,
+      caller_stream => macula_signed_object:sign_held(?CALLER_STREAM_LABEL, Tbs, Key)}.
 
--spec stream_reply(stream_reply_spec()) -> frame().
-stream_reply(#{stream_id := Sid, payload := Payload,
-               responded_by := RespondedBy})
-  when is_binary(Sid), byte_size(Sid) =:= 16,
-       is_binary(RespondedBy), byte_size(RespondedBy) =:= 32 ->
-    (base(stream_reply, 0))#{
-        stream_id    => Sid,
-        payload      => Payload,
-        responded_by => RespondedBy
-    }.
+stream_tbs(Type, #{seq := Seq} = Spec, Key, #{request_id := RequestId, request_hash := RequestHash}) ->
+    (stream_fields(Type, Spec))#{frame_type => Type, request_id => RequestId, request_hash => RequestHash,
+                                signer => macula_node_keys:key_id(Key), seq => Seq}.
 
--spec validate_stream_body(stream_encoding(), term()) -> ok.
-validate_stream_body(raw, B) when is_binary(B) -> ok;
-validate_stream_body(msgpack, _Term)           -> ok.
+stream_fields(stream_data, #{encoding := raw, body := Body}) when is_binary(Body) ->
+    #{encoding => raw, body => Body};
+stream_fields(stream_data, #{encoding := msgpack, body := Body}) ->
+    ok = check_payload(Body),
+    #{encoding => msgpack, body => Body};
+stream_fields(stream_end, #{role := Role}) when Role =:= send; Role =:= both ->
+    #{role => Role};
+stream_fields(stream_error, #{code := Code, message := Message}) when is_binary(Code), is_binary(Message) ->
+    #{code => {text, Code}, message => {text, Message}};
+stream_fields(stream_reply, #{payload := Payload}) ->
+    ok = check_payload(Payload),
+    #{payload => Payload}.
+
+%% @doc Verify a provider's stream frame against the stream's state, and return its fields and the next state.
+%% Before the provider's first frame the verifier holds no provider key, so a frame without one is out of order. The
+%% first frame's key must be the key id of its signer and the STREAM_OPEN's target; later frames verify with that key.
+%% Each side's seq is the previous one plus one, and nothing follows its STREAM_END.
+-spec verify_provider_stream(frame(), stream_state(), macula_crypto_profile:profile()) ->
+        {ok, map(), stream_state()}
+      | {error, malformed_frame | signature_invalid | key_id_mismatch | not_the_target | request_mismatch
+                | seq_mismatch | stream_ended}.
+verify_provider_stream(#{frame_type := Type, stream := Object} = Frame, #{provider := Side} = State, Profile)
+  when Type =:= stream_data; Type =:= stream_end; Type =:= stream_error; Type =:= stream_reply ->
+    provider_frame(only_fields(Frame, [version, frame_type, stream]), Side, Object, Type, State, Profile);
+verify_provider_stream(_Frame, _State, _Profile) ->
+    {error, malformed_frame}.
+
+provider_frame(false, _Side, _Object, _Type, _State, _Profile) ->
+    {error, malformed_frame};
+provider_frame(true, #{ended := true}, _Object, _Type, _State, _Profile) ->
+    {error, stream_ended};
+provider_frame(true, #{key := HeldKey}, Object, Type, State, Profile) ->
+    provider_later(provider_object(Object, HeldKey, Profile), Type, State);
+provider_frame(true, _NoKeyYet, #{key := _} = Object, Type, State, Profile) ->
+    provider_first(macula_signed_object:verify(?STREAM_LABEL, Object, Profile), Type, State, Profile);
+provider_frame(true, _NoKeyYet, _WithoutKey, _Type, _State, _Profile) ->
+    {error, seq_mismatch}.
+
+%% A later frame verifies with the held key. One that still carries a key verifies with that key, which must be the
+%% held one, and its shape is refused once its sequence number has been checked.
+provider_object(#{key := _} = Object, HeldKey, Profile) ->
+    carried_later(macula_signed_object:verify(?STREAM_LABEL, Object, Profile), HeldKey);
+provider_object(Object, HeldKey, Profile) ->
+    held_later(macula_signed_object:verify_held(?STREAM_LABEL, Object, HeldKey, Profile)).
+
+carried_later({ok, #{key := HeldKey, fields := Fields}}, HeldKey) -> {ok, carried, Fields};
+carried_later({ok, _OtherKey}, _HeldKey) -> {error, key_id_mismatch};
+carried_later({error, _} = Refused, _HeldKey) -> Refused.
+
+held_later({ok, #{fields := Fields}}) -> {ok, held, Fields};
+held_later({error, _} = Refused) -> Refused.
+
+provider_later({ok, Shape, Fields}, Type,
+               #{request := Open, provider := #{next := Next, signer := Signer} = Side} = State) ->
+    later_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type), #{}), Type), Shape, Signer, Next,
+                  Open, Side, State);
+provider_later({error, Refusal}, _Type, _State) when Refusal =:= signature_invalid; Refusal =:= key_id_mismatch ->
+    {error, Refusal};
+provider_later({error, _MalformedOrAlgMismatch}, _Type, _State) ->
+    {error, malformed_frame}.
+
+later_checked({ok, #{signer := FrameSigner, seq := Seq} = Read}, Shape, Signer, Next, Open, Side, State) ->
+    stream_result([{FrameSigner =:= Signer, key_id_mismatch},
+                   {request_names(Read) =:= request_names(Open), request_mismatch},
+                   {Seq =:= Next, seq_mismatch},
+                   {Shape =:= held, malformed_frame}], Read, provider, Side, State);
+later_checked(error, _Shape, _Signer, _Next, _Open, _Side, _State) ->
+    {error, malformed_frame}.
+
+provider_first({ok, #{key := Key, fields := Fields}}, Type, #{request := Open, provider := Side} = State, Profile) ->
+    first_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type), #{}), Type), Key, Open, Side,
+                  State, Profile);
+provider_first({error, signature_invalid}, _Type, _State, _Profile) ->
+    {error, signature_invalid};
+provider_first({error, _MalformedOrAlgMismatch}, _Type, _State, _Profile) ->
+    {error, malformed_frame}.
+
+first_checked({ok, #{signer := Signer, seq := Seq} = Read}, Key, Open, Side, State, Profile) ->
+    stream_result([{Signer =:= macula_node_keys:node_id(Key, Profile), key_id_mismatch},
+                   {request_names(Read) =:= request_names(Open), request_mismatch},
+                   {Signer =:= maps:get(target, Open), not_the_target},
+                   {Seq =:= 0, seq_mismatch}], Read, provider, Side#{key => Key, signer => Signer}, State);
+first_checked(error, _Key, _Open, _Side, _State, _Profile) ->
+    {error, malformed_frame}.
+
+%% @doc Verify a caller's stream frame against the stream's state with the STREAM_OPEN's key, and return its fields
+%% and the next state. The signer must be the STREAM_OPEN's caller, and in a server_stream a caller sends no
+%% STREAM_DATA.
+-spec verify_caller_stream(frame(), stream_state(), macula_crypto_profile:profile()) ->
+        {ok, map(), stream_state()}
+      | {error, malformed_frame | signature_invalid | key_id_mismatch | request_mismatch | seq_mismatch
+                | stream_ended}.
+verify_caller_stream(#{frame_type := Type, caller_stream := Object} = Frame, #{caller := Side} = State, Profile)
+  when Type =:= stream_data; Type =:= stream_end; Type =:= stream_error ->
+    caller_frame(only_fields(Frame, [version, frame_type, caller_stream]), Side, Object, Type, State, Profile);
+verify_caller_stream(_Frame, _State, _Profile) ->
+    {error, malformed_frame}.
+
+caller_frame(false, _Side, _Object, _Type, _State, _Profile) ->
+    {error, malformed_frame};
+caller_frame(true, #{ended := true}, _Object, _Type, _State, _Profile) ->
+    {error, stream_ended};
+caller_frame(true, Side, Object, Type, #{request := #{key := CallerKey}} = State, Profile) ->
+    caller_verified(macula_signed_object:verify_held(?CALLER_STREAM_LABEL, Object, CallerKey, Profile), Type, Side,
+                    State).
+
+caller_verified({ok, #{fields := Fields}}, Type, Side, #{request := Open} = State) ->
+    caller_checked(stream_read(read_fields(maps:to_list(Fields), stream_table(Type), #{}), Type), Type, Side, Open,
+                   State);
+caller_verified({error, signature_invalid}, _Type, _Side, _State) ->
+    {error, signature_invalid};
+caller_verified({error, _MalformedOrAlgMismatch}, _Type, _Side, _State) ->
+    {error, malformed_frame}.
+
+caller_checked({ok, #{signer := Signer, seq := Seq} = Read}, Type, #{next := Next} = Side, Open, State) ->
+    stream_result([{not (Type =:= stream_data andalso maps:get(mode, Open) =:= server_stream), malformed_frame},
+                   {Signer =:= maps:get(caller, Open), key_id_mismatch},
+                   {request_names(Read) =:= request_names(Open), request_mismatch},
+                   {Seq =:= Next, seq_mismatch}], Read, caller, Side, State);
+caller_checked(error, _Type, _Side, _Open, _State) ->
+    {error, malformed_frame}.
+
+%% The fields of a stream frame's tbs, with exactly the fields its type carries.
+stream_read({ok, #{frame_type := Type, request_id := _, request_hash := _, signer := _, seq := _} = Read}, Type) ->
+    shaped(stream_shape(Type, Read), Read);
+stream_read(_NotAStreamFrame, _Type) ->
+    error.
+
+stream_shape(stream_data, #{encoding := raw, body := Body} = Read) ->
+    is_binary(Body) andalso only_type_fields(Read, [encoding, body]);
+stream_shape(stream_data, #{encoding := msgpack, body := _} = Read) -> only_type_fields(Read, [encoding, body]);
+stream_shape(stream_end, #{role := _} = Read) -> only_type_fields(Read, [role]);
+stream_shape(stream_error, #{code := _, message := _} = Read) -> only_type_fields(Read, [code, message]);
+stream_shape(stream_reply, #{payload := _} = Read) -> only_type_fields(Read, [payload]);
+stream_shape(_Type, _Read) -> false.
+
+only_type_fields(Read, TypeFields) ->
+    only_fields(Read, [frame_type, alg, request_id, request_hash, signer, seq | TypeFields]).
+
+shaped(true, Read) -> {ok, Read};
+shaped(false, _Read) -> error.
+
+%% Run the checks in order; the first that fails names the refusal. When all hold, the side moves to its next
+%% sequence number and records whether it has ended.
+stream_result([{true, _Refusal} | Checks], Read, SideName, Side, State) ->
+    stream_result(Checks, Read, SideName, Side, State);
+stream_result([{false, Refusal} | _Checks], _Read, _SideName, _Side, _State) ->
+    {error, Refusal};
+stream_result([], #{frame_type := Type, seq := Seq} = Read, SideName, Side, State) ->
+    {ok, maps:without([alg, request_id, request_hash], Read),
+     State#{SideName := Side#{next := Seq + 1, ended := Type =:= stream_end}}}.
+
+stream_table(Type) ->
+    #{<<"frame_type">> => {frame_type, {enum, [Type]}},
+      <<"alg">> => {alg, value},
+      <<"request_id">> => {request_id, {bytes, 16}},
+      <<"request_hash">> => {request_hash, {bytes, 48}},
+      <<"signer">> => {signer, {bytes, 32}},
+      <<"seq">> => {seq, uint},
+      <<"encoding">> => {encoding, {enum, [raw, msgpack]}},
+      <<"body">> => {body, value},
+      <<"role">> => {role, {enum, [send, both]}},
+      <<"code">> => {code, text},
+      <<"message">> => {message, text},
+      <<"payload">> => {payload, value}}.
 
 %%------------------------------------------------------------------
 %% Content transfer constructors (Part 6 §9)
@@ -2557,60 +2690,24 @@ field_table(stream_open) ->
 field_table(stream_data) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
-      <<"stream_id">> => {stream_id, value},
-      <<"seq">> => {seq, value},
-      <<"encoding">> => {encoding, {enum, [raw, msgpack]}},
-      <<"body">> => {body, value},
-      <<"signer">> => {signer, value}};
+      <<"stream">> => {stream, stream_object},
+      <<"caller_stream">> => {caller_stream, held_object}};
 field_table(stream_end) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
-      <<"stream_id">> => {stream_id, value},
-      <<"role">> => {role, {enum, [send, both]}},
-      <<"signer">> => {signer, value}};
+      <<"stream">> => {stream, stream_object},
+      <<"caller_stream">> => {caller_stream, held_object}};
 field_table(stream_error) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
-      <<"stream_id">> => {stream_id, value},
-      <<"code">> => {code, value},
-      <<"message">> => {message, value},
-      <<"signer">> => {signer, value},
+      <<"stream">> => {stream, stream_object},
+      <<"caller_stream">> => {caller_stream, held_object},
       <<"relay_error">> => {relay_error, signed_object},
       <<"source_route_partial">> => {source_route_partial, bytes}};
 field_table(stream_reply) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
-      <<"stream_id">> => {stream_id, value},
-      <<"payload">> => {payload, value},
-      <<"responded_by">> => {responded_by, value}};
+      <<"stream">> => {stream, stream_object}};
 field_table(want) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
@@ -2716,7 +2813,12 @@ read_value(uint, N) when is_integer(N), N >= 0, N < ?MAX_PROTOCOL_INT -> {ok, N}
 read_value(held_object, #{{text, <<"tbs">>} := Tbs, {text, <<"signature">>} := Signature} = Held)
   when map_size(Held) =:= 2, is_binary(Tbs), is_binary(Signature) ->
     {ok, #{tbs => Tbs, signature => Signature}};
+read_value(stream_object, Object) -> either_object(read_value(signed_object, Object), Object);
 read_value(_Kind, _Value) -> error.
+
+%% A provider's stream object carries its key on the first frame and not after, so either shape reads.
+either_object({ok, _Carried} = Read, _Object) -> Read;
+either_object(error, Object) -> read_value(held_object, Object).
 
 enum_value(Name, [Atom | Atoms]) -> enum_match(atom_to_binary(Atom) =:= Name, Atom, Name, Atoms);
 enum_value(_Name, []) -> error.

@@ -45,9 +45,7 @@ a_field_its_frame_type_does_not_define_is_refused_test() ->
 
 an_enum_value_the_table_does_not_list_is_refused_test() ->
     Neighbour = macula_frame:hyparview_neighbor(#{realm => fill(1), priority => high}),
-    ?assertEqual({error, bad_frame}, decode_map(Neighbour#{priority => medium})),
-    StreamEnd = macula_frame:stream_end(#{stream_id => <<0:128>>, role => send}),
-    ?assertEqual({error, bad_frame}, decode_map(StreamEnd#{role => recv})).
+    ?assertEqual({error, bad_frame}, decode_map(Neighbour#{priority => medium})).
 
 %% A value no code produces and reads is not in the table: EVENT delivered_via dht, and a MANIFEST_RES not_found.
 values_without_a_producer_and_a_reader_are_refused_test() ->
