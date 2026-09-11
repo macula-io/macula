@@ -106,7 +106,9 @@ resolve_test_() ->
       {timeout, 30, fun put_content_reports_a_failed_endpoint_lookup_when_every_lookup_failed/0},
       {timeout, 30, fun put_content_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time/0},
       {timeout, 30, fun put_content_keeps_a_lookup_error_when_a_later_endpoint_lookup_is_cut_off_by_the_deadline/0},
-      {timeout, 30, fun call_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time/0}]}.
+      {timeout, 30, fun call_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time/0},
+      {timeout, 30, fun put_content_asks_again_past_a_malformed_endpoint_record/0},
+      {timeout, 30, fun put_content_reports_a_malformed_endpoint_record_at_its_deadline/0}]}.
 
 %%%===================================================================
 %%% Calls
@@ -501,6 +503,21 @@ call_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time() ->
     set_endpoint_replies(A, [silent]),
     ?assertEqual({error, {unresolved, timeout}}, call(500)).
 
+%% A record that verifies but names no dialable endpoint is asked about
+%% again, as an absent one is.
+put_content_asks_again_past_a_malformed_endpoint_record() ->
+    S = station(<<"s.test">>),
+    set_endpoint_replies(S, [malformed_endpoint_record(S), endpoint_record(S)]),
+    set_answer(dial_url(S), {ok, <<"mcid">>}),
+    ?assertEqual({ok, <<"mcid">>}, put_at_station(S, 2000)).
+
+%% When every lookup found only a malformed record, that is the reason.
+put_content_reports_a_malformed_endpoint_record_at_its_deadline() ->
+    S = station(<<"s.test">>),
+    set_endpoint_replies(S, [malformed_endpoint_record(S)]),
+    ?assertEqual({error, {unresolved, malformed_station_endpoint}}, put_at_station(S, 1000)),
+    ?assert(endpoint_lookups(S) > 1).
+
 put_at_station(#{key := Key}, TimeoutMs) ->
     macula_direct_dial:put_content(self(), Key, <<"bytes">>, TimeoutMs).
 
@@ -628,6 +645,10 @@ dial_url(#{host := Host}) -> <<"quic://[", Host/binary, "]:4433">>.
 
 endpoint_record(#{kp := Kp, key := Key, host := Host}) ->
     macula_record:sign(macula_record:station_endpoint(Key, 4433, #{host_advertised => [Host]}), Kp).
+
+%% Station's own signed station_endpoint record, naming no host.
+malformed_endpoint_record(#{kp := Kp, key := Key}) ->
+    macula_record:sign(macula_record:station_endpoint(Key, 4433, #{host_advertised => []}), Kp).
 
 procedure_uri() ->
     <<(binary:encode_hex(?REALM, uppercase))/binary, "/", ?PROC/binary>>.
