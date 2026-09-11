@@ -9,7 +9,7 @@ software for the Belgian Defence.**
 reading in brackets. Every URL was requested on 2026-09-11, see section 3 for what answered and what was corrected.
 
 "Military grade" is the working title of this document, not a claim. Nothing here says Macula meets any of these
-rules. Public wording stays under D11 in [PLAN_POST_QUANTUM_SECURITY.md][pq-d11].
+rules. Public wording stays under D11 in [PLAN_POST_QUANTUM_SECURITY_DECISIONS.md][pq-d11].
 
 ---
 
@@ -137,4 +137,4 @@ what the page says.
   - The NATO Security link is dead and pointed at the wrong topic.
 
 [pq]: PLAN_POST_QUANTUM_SECURITY.md
-[pq-d11]: PLAN_POST_QUANTUM_SECURITY.md#d11-what-public-text-may-claim
+[pq-d11]: PLAN_POST_QUANTUM_SECURITY_DECISIONS.md#d11-what-public-text-may-claim
