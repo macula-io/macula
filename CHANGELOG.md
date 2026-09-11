@@ -150,6 +150,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policies now share it. A token signed by `Issuer` but minted for another
   audience is refused with `unauthorized`. Mint `ucan_required` tokens for
   the caller that will present them.
+- `macula_cluster:get_cookie/0`, and `macula:get_cookie/0` with it,
+  returns the cookie of a node that is already distributed instead of
+  resolving another one. On a node that is not, it reads
+  `~/.erlang.cookie` only when its owner alone can read it, and generates
+  and saves a new cookie, owner-only, only when that file is missing. It
+  raises `{cookie_file_unavailable, home_not_set}` when `HOME` is unset,
+  where it used to fall back to `/tmp/.erlang.cookie`, and
+  `{cookie_file_refused, Reason}` for a cookie file it cannot use, which
+  is never replaced. `macula_cluster:cookie_file_path/0` returns
+  `{ok, Path}` or `{error, home_not_set}`.
 - `macula_identity:load/1` accepts only a key file its group and others
   have no access to, mode 0600 or 0400, following symlinks. Another mode
   returns `{error, {file_permissions, #{file => Path, mode => <<"0644">>,
