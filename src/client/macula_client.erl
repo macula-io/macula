@@ -42,7 +42,10 @@
 %% ETS table it owns on the event's `publication_hash', the SHA-384 of
 %% the publication's `tbs', and keeps each entry until the publication's
 %% `expires_at', after which every verifier refuses it. The table is swept
-%% every `dedup_sweep_ms' (default 30s).
+%% every `dedup_sweep_ms' (default 30s). The pool checks an event only
+%% while a subscription matches it, so a copy that arrives while nothing
+%% is subscribed never hides the publication from a later subscriber, and
+%% it drops an event whose `expires_at' has passed when the check runs.
 %%
 %% == Replay ==
 %%
@@ -1046,9 +1049,8 @@ handle_cast(_Msg, S) -> {noreply, S}.
 handle_info({macula_event, _LinkSubRef, Topic, Payload,
              #{realm := Realm, publication_hash := Hash,
                expires_at := ExpiresAt} = Meta}, S) ->
-    on_inbound_event(macula_client_dedup:check(S#state.dedup_tab, Hash,
-                                               ExpiresAt),
-                     Realm, Topic, Payload, Meta, S);
+    {noreply, on_inbound_event(maps:find({Realm, Topic}, S#state.topic_index),
+                               Hash, ExpiresAt, Topic, Payload, Meta, S)};
 
 handle_info({macula_event_gone, _LinkSubRef, _Reason}, S) ->
     %% A link torn down its subscription end. Pool will respawn the
@@ -2151,18 +2153,23 @@ issue_wire_subs(false, Realm, Topic, S) ->
 %% Internals — inbound event fan-out
 %%====================================================================
 
-on_inbound_event(duplicate, _Realm, _Topic, _Payload, _Meta, S) ->
-    {noreply, S};
-on_inbound_event(new, Realm, Topic, Payload, Meta, S) ->
-    {noreply, ensure_flush_timer(fan_to_local(Realm, Topic, Payload, Meta, S))}.
-
-fan_to_local(Realm, Topic, Payload, Meta, S) ->
-    fan_to_set(maps:find({Realm, Topic}, S#state.topic_index),
-               Topic, Payload, Meta, S).
-
-fan_to_set(error, _Topic, _Payload, _Meta, S) ->
+%% A publication is checked, and so recorded, only while a subscription
+%% matches it: a copy that arrives while nothing is subscribed must not
+%% hide the publication from a later subscriber. The check drops a
+%% publication whose expiry has passed.
+on_inbound_event(error, _Hash, _ExpiresAt, _Topic, _Payload, _Meta, S) ->
     S;
-fan_to_set({ok, Set}, Topic, Payload, Meta, S) ->
+on_inbound_event({ok, Set}, Hash, ExpiresAt, Topic, Payload, Meta, S) ->
+    on_sighting(macula_client_dedup:check(S#state.dedup_tab, Hash, ExpiresAt,
+                                          erlang:system_time(millisecond)),
+                Set, Topic, Payload, Meta, S).
+
+on_sighting(new, Set, Topic, Payload, Meta, S) ->
+    ensure_flush_timer(fan_to_set(Set, Topic, Payload, Meta, S));
+on_sighting(_DuplicateOrExpired, _Set, _Topic, _Payload, _Meta, S) ->
+    S.
+
+fan_to_set(Set, Topic, Payload, Meta, S) ->
     sets:fold(fun(SubRef, Acc) ->
         deliver_one(SubRef, Topic, Payload, Meta, Acc)
     end, S, Set).

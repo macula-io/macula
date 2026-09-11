@@ -165,6 +165,7 @@
 %% A publication verifies from 5 minutes before its published_at until its ttl_ms, or 10 minutes without one, plus 5.
 -define(PUBLICATION_TOLERANCE_MS, 5 * 60000).
 -define(PUBLICATION_DEFAULT_TTL_MS, 10 * 60000).
+-define(PUBLICATION_MAX_TTL_MS, 60 * 60000).
 -define(NEIGHBOUR_LABEL, <<"MACULA-PQ-NEIGHBOUR-V1">>).
 %% The control frames, which pq_hybrid neighbour-signs (D17). Data frames carry their own end-to-end signatures.
 -define(NEIGHBOUR_SIGNED,
@@ -476,7 +477,7 @@
     seq          := non_neg_integer(),
     published_at := non_neg_integer(),
     payload      := term(),
-    ttl_ms       => non_neg_integer()
+    ttl_ms       => 0..3600000
 }.
 
 %% A publication that verified: its fields, the publisher's carried key, publication_hash, the SHA-384 of its tbs, which
@@ -489,7 +490,7 @@
     topic            := binary(),
     seq              := non_neg_integer(),
     published_at     := non_neg_integer(),
-    ttl_ms           => non_neg_integer(),
+    ttl_ms           => 0..3600000,
     payload          := term(),
     key              := binary(),
     publication_hash := msg_id(),
@@ -1220,7 +1221,7 @@ publish(#{realm := Realm, topic := Topic, seq := Seq, published_at := PublishedA
     #{version => ?PROTOCOL_VERSION, frame_type => publish,
       publication => macula_signed_object:sign(?PUBLICATION_LABEL, to_wire(Fields), Key)}.
 
-optional_ttl(#{ttl_ms := Ttl}, Fields) when is_integer(Ttl), Ttl >= 0, Ttl < ?MAX_PROTOCOL_INT ->
+optional_ttl(#{ttl_ms := Ttl}, Fields) when is_integer(Ttl), Ttl >= 0, Ttl =< ?PUBLICATION_MAX_TTL_MS ->
     Fields#{ttl_ms => Ttl};
 optional_ttl(Spec, Fields) when not is_map_key(ttl_ms, Spec) -> Fields.
 
@@ -1262,9 +1263,9 @@ publication_object(#{key := Key, tbs := Tbs, signature := Signature} = Publicati
     Publication.
 
 %% @doc Verify the publication a PUBLISH, EVENT or GOSSIP carries, under the connection's profile and a clock in
-%% milliseconds: its signature and fields, publisher as the key id of its key, a published_at no more than 5 minutes
-%% ahead, and not past published_at plus its ttl_ms, or 10 minutes without one, plus 5 minutes. The origin station
-%% checks this before fan-out, and every subscriber before delivery.
+%% milliseconds: its signature and fields, a ttl_ms of at most one hour, publisher as the key id of its key, a
+%% published_at no more than 5 minutes ahead, and not past published_at plus its ttl_ms, or 10 minutes without one,
+%% plus 5 minutes. The origin station checks this before fan-out, and every subscriber before delivery.
 -spec verify_publication(frame(), macula_crypto_profile:profile(), integer()) ->
         {ok, verified_publication()} | {error, malformed_frame | signature_invalid | key_id_mismatch | not_yet_valid
                                                                           | expired}.
@@ -1289,7 +1290,8 @@ publication_signed(_OnlyFields, _Verified, _Profile, _Now) ->
 publication_read({ok, #{publisher := Publisher, realm := _, topic := _, seq := _, published_at := PublishedAt,
                         payload := _} = Read}, Key, Tbs, Profile, Now) ->
     Expiry = PublishedAt + maps:get(ttl_ms, Read, ?PUBLICATION_DEFAULT_TTL_MS) + ?PUBLICATION_TOLERANCE_MS,
-    publication_checked([{Publisher =:= macula_node_keys:node_id(Key, Profile), key_id_mismatch},
+    publication_checked([{maps:get(ttl_ms, Read, 0) =< ?PUBLICATION_MAX_TTL_MS, malformed_frame},
+                         {Publisher =:= macula_node_keys:node_id(Key, Profile), key_id_mismatch},
                          {PublishedAt =< Now + ?PUBLICATION_TOLERANCE_MS, not_yet_valid},
                          {Now =< Expiry, expired}],
                         (maps:remove(alg, Read))#{key => Key, publication_hash => crypto:hash(sha384, Tbs),

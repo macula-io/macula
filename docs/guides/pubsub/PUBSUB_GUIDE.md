@@ -355,8 +355,9 @@ seq to order or drop; in `as_arrives` the dedup layer is the only filter.
   design" above.
 - **Cross-link dedup**: the pool dedupes by publication hash and keeps
   each hash until the publication expires, `published_at` plus its
-  `ttl_ms`, or 10 minutes without one, plus 5 minutes, after which every
-  verifier refuses it.
+  `ttl_ms` (at most 1 hour), or 10 minutes without one, plus 5 minutes,
+  after which every verifier refuses it. The pool judges expiry when an
+  event arrives, and records a hash only while a subscription matches it.
 - **Cross-station gossip** — default since 4.5.0. A daemon connected to
   station A and a daemon connected to station B see each other's
   publishes once subscription interest and the fact itself have gossiped

@@ -30,6 +30,7 @@ cases(Keys) ->
                  fun without_ttl_a_publication_lives_10_minutes_plus_5/1,
                  fun a_verified_publication_carries_its_expiry_the_moment_verifiers_refuse_it/1,
                  fun without_ttl_the_expiry_is_15_minutes_after_publishing/1,
+                 fun a_ttl_over_an_hour_is_malformed/1,
                  fun ihave_and_graft_name_a_publication_by_its_hash/1,
                  fun the_old_publisher_signature_is_gone/1]].
 
@@ -131,7 +132,16 @@ a_verified_publication_carries_its_expiry_the_moment_verifiers_refuse_it(#{publi
 without_ttl_the_expiry_is_15_minutes_after_publishing(#{publisher := Publisher}) ->
     Frame = wire(macula_frame:publish(publish_spec(?NOW), Publisher)),
     {ok, Verified} = macula_frame:verify_publication(Frame, pq_pure, ?NOW),
-    ?assertEqual(?NOW + 15 * ?MINUTE, maps:get(expires_at, Verified)).
+    ?assertEqual(?NOW + 15 * ?MINUTE, maps:get(expires_at, Verified)),
+    ?assertMatch({ok, _}, macula_frame:verify_publication(Frame, pq_pure, ?NOW + 15 * ?MINUTE)),
+    ?assertEqual({error, expired}, macula_frame:verify_publication(Frame, pq_pure, ?NOW + 15 * ?MINUTE + 1)).
+
+%% ttl_ms is at most one hour: a publication carrying more is malformed, and publish/2 refuses to sign one.
+a_ttl_over_an_hour_is_malformed(#{publisher := Publisher}) ->
+    Base = publication_tbs(Publisher, ?NOW),
+    ?assertMatch({ok, #{ttl_ms := 3600000}}, verify_crafted(Base#{{text, <<"ttl_ms">>} => 3600000}, Publisher)),
+    ?assertEqual({error, malformed_frame}, verify_crafted(Base#{{text, <<"ttl_ms">>} => 3600001}, Publisher)),
+    ?assertError(function_clause, macula_frame:publish((publish_spec(?NOW))#{ttl_ms => 3600001}, Publisher)).
 
 ihave_and_graft_name_a_publication_by_its_hash(#{publisher := Publisher}) ->
     {ok, #{publication_hash := Hash}} =

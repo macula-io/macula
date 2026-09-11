@@ -606,28 +606,73 @@ same_realm_publisher_and_seq_with_another_hash_is_delivered_test_() ->
          ok = macula_client:close(Pool)
      end}.
 
-%% A sweep drops an entry once its publication has expired, so a later
-%% copy is delivered again. Verifiers refuse such a copy before it
-%% reaches the pool, so no live duplicate gets through this way.
-dedup_entry_is_swept_once_its_publication_has_expired_test_() ->
+%% A copy checked after its publication expired is dropped, even once a
+%% sweep has forgotten the first copy: the check itself judges expiry.
+a_copy_arriving_after_its_publication_expired_is_dropped_test_() ->
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
          {ok, Pool} = macula_client:connect([], #{dedup_sweep_ms => 50}),
+         Topic = <<"dedup.expiring_v1">>,
+         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
+                                                 Topic, self(),
+                                                 #{delivery => as_arrives}),
+         ExpiresAt = erlang:system_time(millisecond) + 150,
+         Meta = (publication_meta(<<9:256>>, 1, <<"tbs expiring">>))#{expires_at := ExpiresAt},
+         Pool ! {macula_event, make_ref(), Topic, hello, Meta},
+         receive {macula_event, SubRef, Topic, hello, _} -> ok
+         after 1_000 -> erlang:error(no_first) end,
+         %% Past the expiry, and past a sweep that forgets the entry.
+         timer:sleep(300),
+         Pool ! {macula_event, make_ref(), Topic, hello, Meta},
+         receive
+             {macula_event, SubRef, Topic, hello, _} ->
+                 erlang:error(expired_copy_delivered)
+         after 200 -> ok
+         end,
+         ok = macula_client:close(Pool)
+     end}.
+
+%% An event whose publication already expired when the pool checks it is
+%% not delivered.
+an_event_expired_at_its_check_is_not_delivered_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
          Topic = <<"dedup.expired_v1">>,
          {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
                                                  Topic, self(),
                                                  #{delivery => as_arrives}),
          Expired = erlang:system_time(millisecond) - 1,
-         Meta = (publication_meta(<<9:256>>, 1, <<"tbs expired">>))#{expires_at := Expired},
+         Meta = (publication_meta(<<13:256>>, 1, <<"tbs expired">>))#{expires_at := Expired},
+         Pool ! {macula_event, make_ref(), Topic, hello, Meta},
+         receive
+             {macula_event, SubRef, Topic, hello, _} ->
+                 erlang:error(expired_event_delivered)
+         after 200 -> ok
+         end,
+         ok = macula_client:close(Pool)
+     end}.
+
+%% A copy that arrives while nothing is subscribed is not recorded, so a
+%% later subscriber still receives the publication.
+a_copy_with_no_subscription_does_not_hide_it_from_a_later_subscriber_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         Topic = <<"dedup.late_subscriber_v1">>,
+         Meta = publication_meta(<<12:256>>, 5, <<"tbs late">>),
+         Pool ! {macula_event, make_ref(), Topic, hello, Meta},
+         %% A call behind the event, so the pool has handled it before the subscribe.
+         {ok, _} = macula_client:status(Pool),
+         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
+                                                 Topic, self(),
+                                                 #{delivery => as_arrives}),
          Pool ! {macula_event, make_ref(), Topic, hello, Meta},
          receive {macula_event, SubRef, Topic, hello, _} -> ok
-         after 1_000 -> erlang:error(no_first) end,
-         %% Wait for a sweep to drop the entry.
-         timer:sleep(120),
-         Pool ! {macula_event, make_ref(), Topic, hello, Meta},
-         receive {macula_event, SubRef, Topic, hello, _} -> ok
-         after 1_000 -> erlang:error(dedup_swallowed_after_expiry) end,
+         after 1_000 -> erlang:error(hidden_from_later_subscriber) end,
          ok = macula_client:close(Pool)
      end}.
 
