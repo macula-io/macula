@@ -51,6 +51,14 @@
 %%% inside the handoff message, so the new owner has them before anything
 %%% the stream delivers to it directly.
 %%%
+%%% == Tunnel end ==
+%%%
+%%% The client monitors the process that holds each tunnel stream after the
+%%% handoff: the caller of `request_tunnel/2' for an outbound tunnel, and
+%%% for an inbound tunnel the setup process until it names the dist
+%%% controller, then the controller. When that process ends, however it
+%%% ends, the client drops the tunnel and sends tunnel_close for it once.
+%%%
 %%% == Control stream ==
 %%%
 %%% Control frames reach the relay in the order the client sends them.
@@ -107,9 +115,10 @@
     pending_inbound = #{}  :: #{binary() => binary()},
     %% Active tunnels: stream → tunnel_id
     active_tunnels = #{}   :: #{reference() => binary()},
-    %% Setup processes currently doing the net_kernel handoff for inbound
-    %% tunnels. Monitored so we notice crashes during handshake.
-    setups = #{}           :: #{reference() => binary()},  %% MonitorRef → TunnelId
+    %% The monitored process that holds each handed-over tunnel stream: the
+    %% outbound caller, or the inbound setup process until it names the dist
+    %% controller, then the controller. MonitorRef → {TunnelId, Stream}
+    holders = #{}          :: #{reference() => {binary(), reference()}},
     %% Streams whose prefix has been extracted but no pending tunnel
     %% matches yet — because the control message (tunnel_ok or
     %% tunnel_notify) is still in flight. Re-matched once the control
@@ -170,6 +179,8 @@ whereis_client() ->
 request_tunnel(Client, TargetNode) when is_binary(TargetNode) ->
     gen_server:call(Client, {request_tunnel, TargetNode}, ?TUNNEL_TIMEOUT + 5_000).
 
+%% @doc Close a tunnel the client knows, active or still being set up: the
+%% relay gets tunnel_close for it once. An unknown tunnel id is ignored.
 -spec close_tunnel(pid(), binary()) -> ok.
 close_tunnel(Client, TunnelId) ->
     gen_server:cast(Client, {close_tunnel, TunnelId}).
@@ -200,10 +211,7 @@ handle_call(_Msg, _From, State) ->
     {reply, {error, unknown_call}, State}.
 
 handle_cast({close_tunnel, TunnelId}, #state{control = Ctrl} = State) when Ctrl =/= undefined ->
-    Frame = macula_dist_relay_protocol:encode(
-        #{type => tunnel_close, tunnel_id => TunnelId}
-    ),
-    control_noreply(send_control(Frame, remove_tunnel(TunnelId, State)));
+    close_known_tunnel(known_tunnel(TunnelId, State), TunnelId, State);
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -259,22 +267,46 @@ handle_info({quic, Closed, Ref, _}, State)
   when Closed =:= closed; Closed =:= shutdown; Closed =:= transport_shutdown ->
     handle_closure(Ref, Closed, State);
 
-%% Inbound-tunnel setup process lifecycle
-handle_info({'DOWN', MonRef, process, _Pid, Reason}, #state{setups = Setups} = State) ->
-    handle_setup_down(maps:take(MonRef, Setups), Reason, State);
+%% The inbound setup process names the dist controller: the controller holds
+%% the tunnel from now on.
+handle_info({tunnel_controller, TunnelId, Stream, DistCtrl}, State) ->
+    {noreply, controller_named(holder_of(TunnelId, Stream, State#state.holders),
+                               TunnelId, Stream, DistCtrl, State)};
+
+%% The process holding a tunnel stream ended: the tunnel ends with it.
+handle_info({'DOWN', MonRef, process, _Pid, Reason}, #state{holders = Holders} = State) ->
+    holder_down(maps:take(MonRef, Holders), Reason, State);
 
 handle_info(Info, State) ->
     ?LOG_DEBUG("[dist_relay_client] Unhandled: ~p", [Info]),
     {noreply, State}.
 
-handle_setup_down({TunnelId, Rest}, normal, State) ->
-    ?LOG_DEBUG("[dist_relay_client] Setup for ~s completed", [TunnelId]),
-    {noreply, State#state{setups = Rest}};
-handle_setup_down({TunnelId, Rest}, Reason, State) ->
-    ?LOG_WARNING("[dist_relay_client] Setup for ~s crashed: ~p", [TunnelId, Reason]),
-    {noreply, State#state{setups = Rest}};
-handle_setup_down(error, _Reason, State) ->
+holder_down({{TunnelId, Stream}, Rest}, Reason, State) ->
+    ?LOG_INFO("[dist_relay_client] Tunnel ~s ended with its holder: ~p", [TunnelId, Reason]),
+    tunnel_ended(maps:find(Stream, State#state.active_tunnels), TunnelId, Stream,
+                 State#state{holders = Rest});
+%% A holder no longer tracked: its tunnel was closed already.
+holder_down(error, _Reason, State) ->
     {noreply, State}.
+
+tunnel_ended({ok, TunnelId}, TunnelId, Stream, State) ->
+    Active = maps:remove(Stream, State#state.active_tunnels),
+    control_noreply(send_control(tunnel_close_frame(TunnelId),
+                                 State#state{active_tunnels = Active}));
+tunnel_ended(_NotActive, _TunnelId, _Stream, State) ->
+    {noreply, State}.
+
+holder_of(TunnelId, Stream, Holders) ->
+    [Mon || {Mon, {T, S}} <- maps:to_list(Holders), T =:= TunnelId, S =:= Stream].
+
+%% The controller is monitored before the setup process stops being, so the
+%% tunnel always has a monitored holder.
+controller_named([SetupMon], TunnelId, Stream, DistCtrl, #state{holders = Holders} = State) ->
+    ControllerMon = erlang:monitor(process, DistCtrl),
+    true = erlang:demonitor(SetupMon, [flush]),
+    State#state{holders = (maps:remove(SetupMon, Holders))#{ControllerMon => {TunnelId, Stream}}};
+controller_named([], _TunnelId, _Stream, _DistCtrl, State) ->
+    State.
 
 terminate(_Reason, #state{conn = Conn}) when Conn =/= undefined ->
     try macula_quic:close_connection(Conn) catch _:_ -> ok end,
@@ -507,7 +539,9 @@ match_outbound({#pending_tunnel{from = From}, Rest}, TunnelId, Stream, Received,
     gen_server:reply(From, {ok, State#state.conn, Stream, Queued}),
     ok = forward(CallerPid, Events),
     Active = (State#state.active_tunnels)#{Stream => TunnelId},
-    {noreply, State#state{pending_outbound = Rest, active_tunnels = Active}};
+    %% The caller holds the stream for the tunnel's whole life.
+    Holders = (State#state.holders)#{erlang:monitor(process, CallerPid) => {TunnelId, Stream}},
+    {noreply, State#state{pending_outbound = Rest, active_tunnels = Active, holders = Holders}};
 match_outbound(error, TunnelId, Stream, Received, State) ->
     match_inbound(maps:take(TunnelId, State#state.pending_inbound),
                   TunnelId, Stream, Received, State).
@@ -540,7 +574,7 @@ match_inbound({_Source, Rest}, TunnelId, Stream,
     try macula_quic:close_stream(Stream) catch _:_ -> ok end,
     {noreply, State#state{pending_inbound = Rest}};
 match_inbound({_Source, Rest}, TunnelId, Stream, Received,
-              #state{kernel_pid = Kernel, conn = Conn, setups = Setups} = State) ->
+              #state{kernel_pid = Kernel, conn = Conn, holders = Holders} = State) ->
     %% Start a monitored setup process for the net_kernel accept handshake.
     %% The handshake requires synchronous receive — can't do it inside a
     %% gen_server. This is the "one-shot setup-and-handoff" exception
@@ -548,8 +582,9 @@ match_inbound({_Source, Rest}, TunnelId, Stream, Received,
     %% after transferring stream ownership, and we monitor it for
     %% crash visibility.
     Socket = {Conn, Stream},
+    Client = self(),
     {SetupPid, MonRef} = spawn_monitor(
-        fun() -> inbound_accept_setup(Kernel, Socket, TunnelId) end),
+        fun() -> inbound_accept_setup(Client, Kernel, Socket, TunnelId) end),
     ?LOG_INFO("[dist_relay_client] Inbound tunnel ~s → setup ~p",
               [TunnelId, SetupPid]),
     ok = macula_quic:controlling_process(Stream, SetupPid),
@@ -560,11 +595,10 @@ match_inbound({_Source, Rest}, TunnelId, Stream, Received,
     {Queued, Events} = take_queued(Stream, Received),
     SetupPid ! {stream_owned, Stream, Queued, Events},
     Active = (State#state.active_tunnels)#{Stream => TunnelId},
-    NewSetups = Setups#{MonRef => TunnelId},
     {noreply, State#state{
         pending_inbound = Rest,
         active_tunnels = Active,
-        setups = NewSetups
+        holders = Holders#{MonRef => {TunnelId, Stream}}
     }};
 match_inbound(error, TunnelId, Stream, Received,
               #state{orphan_streams = Orphans} = State) ->
@@ -592,10 +626,10 @@ dispatch_orphan(error, _TunnelId, State) ->
 %% handshake. Exits normally after transferring ownership, and the tunnel's
 %% bytes read so far, to the dist controller, or crashes (visible via DOWN
 %% in the client) if the handshake fails.
-inbound_accept_setup(Kernel, {_Conn, Stream} = Socket, TunnelId) ->
+inbound_accept_setup(Client, Kernel, {_Conn, Stream} = Socket, TunnelId) ->
     Owned = wait_for_ownership(Stream, TunnelId),
     Kernel ! {accept, self(), Socket, inet, macula_dist},
-    handle_controller_assignment(Kernel, Stream, Owned, TunnelId).
+    handle_controller_assignment({Client, Kernel}, Stream, Owned, TunnelId).
 
 wait_for_ownership(Stream, TunnelId) ->
     receive
@@ -604,7 +638,7 @@ wait_for_ownership(Stream, TunnelId) ->
         exit({setup_timeout, stream_ownership, TunnelId})
     end.
 
-handle_controller_assignment(Kernel, Stream, {Received, Events}, TunnelId) ->
+handle_controller_assignment({Client, Kernel}, Stream, {Received, Events}, TunnelId) ->
     receive
         {Kernel, controller, DistCtrl} ->
             ok = macula_quic:controlling_process(Stream, DistCtrl),
@@ -617,7 +651,11 @@ handle_controller_assignment(Kernel, Stream, {Received, Events}, TunnelId) ->
             %% waits in recv_name until its setup time runs out.
             {Queued, Later} = take_queued(Stream, Received),
             DistCtrl ! {self(), controller, ok, Queued},
-            ok = forward(DistCtrl, Events ++ Later);
+            ok = forward(DistCtrl, Events ++ Later),
+            %% The client monitors the controller from here on. This process
+            %% stays monitored until the client has this message.
+            Client ! {tunnel_controller, TunnelId, Stream, DistCtrl},
+            ok;
         {Kernel, unsupported_protocol} ->
             exit({unsupported_protocol, TunnelId})
     after 30_000 ->
@@ -633,9 +671,27 @@ drop_stream(Stream, State) ->
     Active = maps:remove(Stream, State#state.active_tunnels),
     State#state{unidentified_streams = Unident, active_tunnels = Active}.
 
+%% Whether the client knows `TunnelId': active, pending, or with its stream
+%% waiting for the control message.
+known_tunnel(TunnelId, #state{pending_outbound = Out, pending_inbound = In,
+                              orphan_streams = Orphans, active_tunnels = Active}) ->
+    maps:is_key(TunnelId, Out) orelse maps:is_key(TunnelId, In)
+        orelse maps:is_key(TunnelId, Orphans)
+        orelse lists:member(TunnelId, maps:values(Active)).
+
+close_known_tunnel(true, TunnelId, State) ->
+    control_noreply(send_control(tunnel_close_frame(TunnelId), remove_tunnel(TunnelId, State)));
+close_known_tunnel(false, _TunnelId, State) ->
+    {noreply, State}.
+
+tunnel_close_frame(TunnelId) ->
+    macula_dist_relay_protocol:encode(#{type => tunnel_close, tunnel_id => TunnelId}).
+
+%% Forget a tunnel everywhere the client tracks it. Its holder is no longer
+%% monitored, and a DOWN already queued for it is flushed, so the tunnel is
+%% not closed a second time. A stream still waiting for its control message
+%% is closed.
 remove_tunnel(TunnelId, State) ->
-    %% Remove from pending_outbound (by tunnel_id key or awaiting_ok
-    %% placeholder — caller already knows tunnel_id so normal case)
     NewPending = maps:remove(TunnelId, State#state.pending_outbound),
     NewInbound = maps:remove(TunnelId, State#state.pending_inbound),
     NewActive = maps:filter(fun(_S, TId) -> TId =/= TunnelId end,
@@ -643,8 +699,26 @@ remove_tunnel(TunnelId, State) ->
     State#state{
         pending_outbound = NewPending,
         pending_inbound = NewInbound,
-        active_tunnels = NewActive
+        active_tunnels = NewActive,
+        holders = unmonitored(TunnelId, State#state.holders),
+        orphan_streams = without_orphan(maps:take(TunnelId, State#state.orphan_streams),
+                                        State#state.orphan_streams)
     }.
+
+unmonitored(TunnelId, Holders) ->
+    maps:filter(fun(Mon, {T, _Stream}) -> still_held(T =:= TunnelId, Mon) end, Holders).
+
+still_held(true, Mon) ->
+    true = erlang:demonitor(Mon, [flush]),
+    false;
+still_held(false, _Mon) ->
+    true.
+
+without_orphan({{Stream, _Received}, Rest}, _Orphans) ->
+    try macula_quic:close_stream(Stream) catch _:_ -> ok end,
+    Rest;
+without_orphan(error, Orphans) ->
+    Orphans.
 
 handle_closure(Ref, Closed, #state{conn = Ref} = State) ->
     ?LOG_WARNING("[dist_relay_client] Relay connection ~p", [Closed]),

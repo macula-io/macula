@@ -2,10 +2,11 @@
 %%% @doc Tests for a dist relay client whose relay stops reading its
 %%% control stream.
 %%%
-%%% A relay run by this test identifies the client and then stops reading
-%%% the control stream, which has a 1 KiB receive window, while the client
-%%% is asked to close enough tunnels that their control frames outgrow the
-%%% stream's 1 MiB send queue. The client keeps taking requests, answers
+%%% A relay run by this test identifies the client and announces enough
+%%% inbound tunnels that their tunnel_close frames outgrow the control
+%%% stream's 1 MiB send queue. It then stops reading the control stream,
+%%% which has a 1 KiB receive window, while the client is asked to close
+%%% them all. The client keeps taking requests, answers
 %%% status/1 within 50 ms, reports the control frames it holds, and still
 %%% hands an inbound tunnel to net_kernel. Once the relay reads again,
 %%% every frame arrives, in the order the client was asked to send them.
@@ -24,6 +25,8 @@
 %% About 1.6 MiB of tunnel_close frames: more than the stream's send queue
 %% takes before it answers busy.
 -define(FRAMES, 48_000).
+%% Tunnels announced per write.
+-define(ANNOUNCE_BATCH, 1_000).
 -define(FAST_MS, 50).
 -define(DRAIN_MS, 20_000).
 -define(EVENT_TIMEOUT_MS, 15_000).
@@ -55,6 +58,8 @@ control_frames_while_the_relay_stops_reading() ->
     ok = identified(Client, ?EVENT_TIMEOUT_MS),
     %% This process stands in for net_kernel.
     ok = macula_dist_relay_client:set_kernel(Client, self()),
+    ok = announce_tunnels(Control),
+    ok = pending_inbound(Client, ?FRAMES, erlang:monotonic_time(millisecond) + ?DRAIN_MS),
     ok = macula_quic:setopt(Control, active, false),
     _ = [macula_dist_relay_client:close_tunnel(Client, tunnel_id(N))
          || N <- lists:seq(1, ?FRAMES)],
@@ -72,26 +77,60 @@ control_frames_while_the_relay_stops_reading() ->
 %%%===================================================================
 
 relay_listener() ->
+    Port = free_udp_port(),
+    {ok, Listener} = macula_test_tmp:with_dir("macula-relay-client-queue",
+                                             fun(Dir) -> listener_in(Dir, Port) end),
+    {Listener, Port}.
+
+%% A relay listener on `Port' with a 1 KiB stream window, whose certificate
+%% and key live in `Dir' while listen reads them.
+listener_in(Dir, Port) ->
     {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
     {ok, {CertPem, KeyPem}} =
         macula_quic:generate_self_signed_cert(
             iolist_to_binary(Pub), iolist_to_binary(Priv), [<<"localhost">>, <<"127.0.0.1">>]),
-    Base = lists:flatten(io_lib:format("/tmp/macula-relay-client-queue-~s-~p",
-                                       [os:getpid(), erlang:unique_integer([positive])])),
-    Cert = Base ++ ".crt",
-    Key = Base ++ ".key",
+    Cert = filename:join(Dir, "relay.crt"),
+    Key = filename:join(Dir, "relay.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
-    Port = free_udp_port(),
-    {ok, Listener} = macula_quic:listen(
-        <<"127.0.0.1">>, Port,
-        [{cert, Cert}, {key, Key},
-         {alpn, [?RELAY_ALPN]},
-         {stream_receive_window, ?CONTROL_WINDOW},
-         {receive_window, 4 * ?CONTROL_WINDOW}]),
-    ok = file:delete(Cert),
-    ok = file:delete(Key),
-    {Listener, Port}.
+    macula_quic:listen(<<"127.0.0.1">>, Port,
+                       [{cert, Cert}, {key, Key},
+                        {alpn, [?RELAY_ALPN]},
+                        {stream_receive_window, ?CONTROL_WINDOW},
+                        {receive_window, 4 * ?CONTROL_WINDOW}]).
+
+%% Announces FRAMES inbound tunnels to the client, ANNOUNCE_BATCH per write.
+announce_tunnels(Control) ->
+    lists:foreach(fun(Batch) -> ok = macula_quic:send(Control, notifies(Batch)) end,
+                  batches(lists:seq(1, ?FRAMES), ?ANNOUNCE_BATCH)).
+
+notifies(Ids) ->
+    iolist_to_binary([encode(#{type => tunnel_notify, tunnel_id => tunnel_id(N),
+                               source => <<"peer@127.0.0.1">>})
+                      || N <- Ids]).
+
+batches(List, Size) when length(List) =< Size ->
+    [List];
+batches(List, Size) ->
+    {Batch, Rest} = lists:split(Size, List),
+    [Batch | batches(Rest, Size)].
+
+%% Waits until the client holds `Count' announced inbound tunnels.
+pending_inbound(Client, Count, Deadline) ->
+    pending_count(maps:get(pending_inbound, macula_dist_relay_client:status(Client)),
+                  Count, Client, Deadline).
+
+pending_count(Count, Count, _Client, _Deadline) ->
+    ok;
+pending_count(Seen, Count, Client, Deadline) ->
+    pending_or_give_up(erlang:monotonic_time(millisecond) >= Deadline, Seen, Count, Client,
+                       Deadline).
+
+pending_or_give_up(true, Seen, _Count, _Client, _Deadline) ->
+    {pending_inbound, Seen};
+pending_or_give_up(false, _Seen, Count, Client, Deadline) ->
+    timer:sleep(10),
+    pending_inbound(Client, Count, Deadline).
 
 relay_url(Port) ->
     iolist_to_binary(io_lib:format("quic://127.0.0.1:~p", [Port])).

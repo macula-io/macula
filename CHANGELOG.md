@@ -85,6 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `macula_dist_relay_client:close_tunnel/2` sends `tunnel_close` only for a
+  tunnel the client knows, active or still being set up, and ignores an
+  unknown tunnel id.
 - `macula_dist_relay_client:request_tunnel/2` returns
   `{ok, Conn, Stream, Received}`, where `Received` holds the tunnel's
   bytes the client read before handing the stream over.
@@ -200,6 +203,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `macula_dist_relay_client` drops a tunnel and sends `tunnel_close` for it
+  once the process holding its stream ends: the caller of
+  `request_tunnel/2` for an outbound tunnel, and for an inbound tunnel its
+  setup process until that names the dist controller, then the controller.
+  Tunnels used to stay in the client, and at the relay, for as long as the
+  client ran.
 - `macula_quic:controlling_process/2` returns only once no message for the
   handle is on its way to the former owner, so a stream's data and events,
   and a connection's new_stream notices, all go to the new owner from then
