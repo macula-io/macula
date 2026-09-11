@@ -11,9 +11,12 @@
 %%% [!!] fc01 -&gt; sy07 TIMEOUT [symmetric]
 %%% </pre>
 %%%
+%%% @deprecated Removed in 11.0.0.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_console).
+
+-deprecated(module).
 
 -export([
     %% Ping-pong demo output

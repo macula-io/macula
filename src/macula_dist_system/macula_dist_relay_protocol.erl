@@ -18,6 +18,10 @@
 %%%-------------------------------------------------------------------
 -module(macula_dist_relay_protocol).
 
+-deprecated([
+    {decode, 1, "no longer exported from 11.0.0"}
+]).
+
 -include_lib("kernel/include/logger.hrl").
 
 -export([encode/1, decode/1, decode_buffer/1]).
@@ -51,6 +55,7 @@ encode(Msg) when is_map(Msg) ->
     Len = byte_size(PayloadBin),
     <<Len:32/big-unsigned, PayloadBin/binary>>.
 
+%% @deprecated No longer exported from 11.0.0.
 -spec decode(binary()) -> {ok, control_msg()} | {error, term()}.
 decode(PayloadBin) ->
     case macula_cbor_nif:unpack(PayloadBin) of

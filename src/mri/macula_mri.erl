@@ -14,6 +14,15 @@
 %%%-------------------------------------------------------------------
 -module(macula_mri).
 
+-deprecated([
+    {index_descendants, 3, "removed in 11.0.0"},
+    {index_insert, 4, "removed in 11.0.0"},
+    {index_remove, 3, "removed in 11.0.0"},
+    {index_size, 1, "removed in 11.0.0"},
+    {is_valid, 1, "removed in 11.0.0"},
+    {parent_type, 1, "no longer exported from 11.0.0"}
+]).
+
 %% Parsing and Formatting
 -export([parse/1, format/1, validate/1, is_valid/1]).
 
@@ -96,6 +105,7 @@ validate(_) ->
     {error, invalid_input}.
 
 %% @doc Check if an MRI is valid.
+%% @deprecated Removed in 11.0.0.
 -spec is_valid(mri() | mri_map()) -> boolean().
 is_valid(MRI) ->
     validate(MRI) =:= ok.
@@ -170,6 +180,7 @@ parent_shorter_path(ParentType, _Type, Realm, ShorterPath) ->
     format(#{type => ParentType, realm => Realm, path => ShorterPath}).
 
 %% @doc Get the parent type for a given type.
+%% @deprecated No longer exported from 11.0.0.
 -spec parent_type(mri_type()) -> mri_type() | undefined.
 parent_type(realm) -> undefined;
 parent_type(org) -> realm;
@@ -574,22 +585,26 @@ index_children(Index, Realm, Path) ->
 
 %% @doc Find all descendants of a parent using a trie index.
 %% O(d+m) complexity where d is path depth and m is descendant count.
+%% @deprecated Removed in 11.0.0.
 -spec index_descendants(term(), realm(), [path_segment()]) ->
     {ok, [mri()]} | {error, term()}.
 index_descendants(Index, Realm, Path) ->
     macula_mri_nif:index_find_descendants(Index, Realm, Path).
 
 %% @doc Insert a single MRI into an existing trie index.
+%% @deprecated Removed in 11.0.0.
 -spec index_insert(term(), realm(), [path_segment()], mri()) -> ok | {error, term()}.
 index_insert(Index, Realm, Path, MRI) ->
     macula_mri_nif:index_insert(Index, Realm, Path, MRI).
 
 %% @doc Remove a single MRI from an existing trie index.
+%% @deprecated Removed in 11.0.0.
 -spec index_remove(term(), realm(), [path_segment()]) -> ok | {error, term()}.
 index_remove(Index, Realm, Path) ->
     macula_mri_nif:index_remove(Index, Realm, Path).
 
 %% @doc Get the number of MRIs in a trie index.
+%% @deprecated Removed in 11.0.0.
 -spec index_size(term()) -> {ok, non_neg_integer()}.
 index_size(Index) ->
     macula_mri_nif:index_size(Index).
