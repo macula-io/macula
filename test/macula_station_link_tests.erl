@@ -324,6 +324,80 @@ a_refused_call_frame_is_reported_as_refused_test_() ->
          ok
      end}.
 
+%%------------------------------------------------------------------
+%% A CALL the link reaches late
+%%------------------------------------------------------------------
+
+%% A CALL the link reaches only after its caller's deadline, because the
+%% link was busy for longer than that, is not sent: the caller was already
+%% told it timed out.
+a_call_the_link_reaches_after_its_deadline_is_not_sent_test_() ->
+    {timeout, 10,
+     fun() ->
+         {Pid, FakePeer, Sent} = link_with_relay_peer(),
+         ok = sys:suspend(Pid),
+         ?assertEqual({error, timeout},
+                      macula_station_link:call(Pid, ?REALM, <<"_dht.find_records_by_type">>,
+                                               #{type => 1}, 100)),
+         ok = sys:resume(Pid),
+         receive
+             {Sent, #{frame_type := call, procedure := <<"_dht.find_records_by_type">>}} ->
+                 erlang:error(late_call_was_sent)
+         after 300 -> ok
+         end,
+         stop_link_with_relay_peer(Pid, FakePeer)
+     end}.
+
+%% The CALL frame carries the deadline its caller set, not one counted from
+%% when the link got to the call.
+a_call_frame_carries_the_deadline_its_caller_set_test_() ->
+    {timeout, 10,
+     fun() ->
+         {Pid, FakePeer, Sent} = link_with_relay_peer(),
+         ok = sys:suspend(Pid),
+         Before = erlang:system_time(millisecond),
+         Caller = spawn(fun() ->
+             macula_station_link:call(Pid, ?REALM, <<"_dht.find_records_by_type">>,
+                                      #{type => 1}, 2_000)
+         end),
+         timer:sleep(300),
+         ok = sys:resume(Pid),
+         DeadlineMs = receive
+             {Sent, #{frame_type := call, procedure := <<"_dht.find_records_by_type">>,
+                      deadline_ms := D}} -> D
+         after 1_000 -> erlang:error(no_call_sent)
+         end,
+         exit(Caller, kill),
+         ?assert(DeadlineMs >= Before + 2_000),
+         ?assert(DeadlineMs < Before + 2_150),
+         stop_link_with_relay_peer(Pid, FakePeer)
+     end}.
+
+%% A link that believes it is connected, whose peer relays every frame the
+%% link casts to it back to this process, tagged.
+link_with_relay_peer() ->
+    {ok, _} = application:ensure_all_started(macula),
+    {ok, Pid} = macula_station_link:start_link(#{
+        seed     => #{host => <<"127.0.0.1">>, port => 1},
+        connect_timeout_ms => 2000,
+        identity => macula_identity:generate()
+    }),
+    Test = self(),
+    Sent = make_ref(),
+    FakePeer = spawn_link(fun() -> relay_sent_frames(Test, Sent) end),
+    PeerNodeId = macula_identity:public(macula_identity:generate()),
+    _ = sys:replace_state(Pid, fun(S) ->
+        S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+        setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+    end),
+    {Pid, FakePeer, Sent}.
+
+stop_link_with_relay_peer(Pid, FakePeer) ->
+    unlink(FakePeer),
+    exit(FakePeer, kill),
+    macula_station_link:stop(Pid),
+    ok.
+
 %% Forwards every frame a link casts to this fake peer to `Test', tagged.
 relay_sent_frames(Test, Tag) ->
     receive

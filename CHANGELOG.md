@@ -222,6 +222,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setup process until that names the dist controller, then the controller.
   Tunnels used to stay in the client, and at the relay, for as long as the
   client ran.
+- `macula_station_link:call/5,6` no longer sends a CALL that the link reaches
+  only after its caller's deadline, when the link was busy for longer than the
+  call's timeout: its caller has already been told it timed out. A CALL frame
+  carries the deadline its caller set, and the link waits for the reply until
+  then, instead of counting the timeout from when it got to the call.
 - A `macula_client` subscription to a topic with a `*` segment receives the
   events it matches. The pool looked subscribers up by the event's own topic,
   so such a subscription received none. An event matching several
