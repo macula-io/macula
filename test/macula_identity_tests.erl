@@ -112,25 +112,28 @@ puzzle_higher_difficulty_implies_lower_difficulty_test_() ->
 %%------------------------------------------------------------------
 
 save_load_roundtrip_test() ->
-    Path = mktmp("identity.key"),
-    Kp   = macula_identity:generate(),
-    ok = macula_identity:save(Path, Kp),
-    ?assertEqual({ok, Kp}, macula_identity:load(Path)).
+    with_tmp_path("identity.key", fun(Path) ->
+        Kp   = macula_identity:generate(),
+        ok = macula_identity:save(Path, Kp),
+        ?assertEqual({ok, Kp}, macula_identity:load(Path))
+    end).
 
 load_rejects_bad_format_test() ->
-    Path = mktmp("bad.key"),
-    ok = file:write_file(Path, <<"not a valid key">>),
-    ?assertEqual({error, bad_key_file}, macula_identity:load(Path)).
+    with_tmp_path("bad.key", fun(Path) ->
+        ok = file:write_file(Path, <<"not a valid key">>),
+        ?assertEqual({error, bad_key_file}, macula_identity:load(Path))
+    end).
 
 load_returns_enoent_for_missing_file_test() ->
     ?assertEqual({error, enoent}, macula_identity:load("/nonexistent/xyz/key")).
 
 saved_file_has_restrictive_permissions_test() ->
-    Path = mktmp("identity.key"),
-    Kp   = macula_identity:generate(),
-    ok = macula_identity:save(Path, Kp),
-    {ok, #file_info{mode = Mode}} = file:read_file_info(Path),
-    ?assertEqual(8#0600, Mode band 8#0777).
+    with_tmp_path("identity.key", fun(Path) ->
+        Kp   = macula_identity:generate(),
+        ok = macula_identity:save(Path, Kp),
+        {ok, #file_info{mode = Mode}} = file:read_file_info(Path),
+        ?assertEqual(8#0600, Mode band 8#0777)
+    end).
 
 %% Regression: a bare `ok = filelib:ensure_dir(Path)' match used to crash
 %% this function with an unhandled MatchError whenever ensure_dir failed,
@@ -143,15 +146,17 @@ saved_file_has_restrictive_permissions_test() ->
 %% directory is expected reproduces the same ensure_dir failure portably,
 %% without depending on OS permissions or running as non-root.
 save_returns_error_instead_of_crashing_when_ensure_dir_fails_test() ->
-    Blocker = mktmp("not_a_directory"),
-    ok = file:write_file(Blocker, <<"not a directory">>),
-    Path = filename:join(Blocker, "identity.key"),
-    Kp = macula_identity:generate(),
-    ?assertMatch({error, _}, macula_identity:save(Path, Kp)).
+    with_tmp_path("not_a_directory", fun(Blocker) ->
+        ok = file:write_file(Blocker, <<"not a directory">>),
+        Path = filename:join(Blocker, "identity.key"),
+        Kp = macula_identity:generate(),
+        ?assertMatch({error, _}, macula_identity:save(Path, Kp))
+    end).
 
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
-mktmp(Name) ->
-    filename:join(macula_test_tmp:dir("macula_identity_tests"), Name).
+%% Fun called with the path Name in a new directory, removed once Fun returns or raises.
+with_tmp_path(Name, Fun) ->
+    macula_test_tmp:with_dir("macula_identity_tests", fun(Dir) -> Fun(filename:join(Dir, Name)) end).

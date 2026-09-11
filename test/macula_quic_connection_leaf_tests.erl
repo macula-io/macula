@@ -43,26 +43,22 @@ connection_leaf_test_() ->
 %%%===================================================================
 
 setup() ->
-    #{a => identity(), b => identity()}.
+    Dir = macula_test_tmp:dir("macula-quic-leaf"),
+    #{dir => Dir, a => identity(Dir, "a"), b => identity(Dir, "b")}.
 
-cleanup(Identities) ->
-    lists:foreach(fun(#{cert := Cert, key := Key}) ->
-                          file:delete(Cert),
-                          file:delete(Key)
-                  end,
-                  maps:values(Identities)),
+cleanup(#{dir := Dir}) ->
+    ok = file:del_dir_r(Dir),
     drain_quic_messages(),
     ok.
 
-identity() ->
+identity(Dir, Name) ->
     {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
     PubBin = iolist_to_binary(Pub),
     {ok, {CertPem, KeyPem}} =
         macula_quic:generate_self_signed_cert(
             PubBin, iolist_to_binary(Priv), [<<"localhost">>, <<"127.0.0.1">>]),
-    Base = macula_test_tmp:file("macula-quic-leaf", ""),
-    Cert = Base ++ ".crt",
-    Key = Base ++ ".key",
+    Cert = filename:join(Dir, Name ++ ".crt"),
+    Key = filename:join(Dir, Name ++ ".key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
     [{'Certificate', Der, not_encrypted}] = public_key:pem_decode(CertPem),

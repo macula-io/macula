@@ -135,19 +135,19 @@ no_newer_tls_binding_a_day_before_not_after_warns_at_every_check(Identity) ->
 
 a_restarted_issuer_with_a_key_directory_keeps_its_bindings(Identity) ->
     {Tab, Clock} = clock(),
-    Dir = key_dir(),
-    First = start(Identity, Clock, #{key_dir => Dir}),
-    #{connect_binding := Binding} = macula_statement_issuer:connect_material(First),
-    ok = macula_statement_issuer:register_tls_leaf(First, ?LEAF, tls_key()),
-    gen_server:stop(First),
-    set_time(Tab, ?T0 + ?HOUR),
-    Second = start(Identity, Clock, #{key_dir => Dir}),
-    ?assertMatch(#{connect_binding := Binding}, macula_statement_issuer:connect_material(Second)),
-    ?assertMatch({ok, _}, macula_statement_issuer:tls_material(Second, crypto:hash(sha384, ?LEAF))),
-    ok = macula_statement_issuer:subscribe(Second, hash(Binding)),
-    ok = reissued_at(Second, Tab, Binding, Identity, ?T0 + ?HOUR + 15 * ?MINUTE),
-    gen_server:stop(Second),
-    ok = file:del_dir_r(Dir).
+    with_key_dir(fun(Dir) ->
+        First = start(Identity, Clock, #{key_dir => Dir}),
+        #{connect_binding := Binding} = macula_statement_issuer:connect_material(First),
+        ok = macula_statement_issuer:register_tls_leaf(First, ?LEAF, tls_key()),
+        gen_server:stop(First),
+        set_time(Tab, ?T0 + ?HOUR),
+        Second = start(Identity, Clock, #{key_dir => Dir}),
+        ?assertMatch(#{connect_binding := Binding}, macula_statement_issuer:connect_material(Second)),
+        ?assertMatch({ok, _}, macula_statement_issuer:tls_material(Second, crypto:hash(sha384, ?LEAF))),
+        ok = macula_statement_issuer:subscribe(Second, hash(Binding)),
+        ok = reissued_at(Second, Tab, Binding, Identity, ?T0 + ?HOUR + 15 * ?MINUTE),
+        gen_server:stop(Second)
+    end).
 
 a_restarted_issuer_without_a_key_directory_starts_a_new_binding(Identity) ->
     {_Tab, Clock} = clock(),
@@ -162,39 +162,39 @@ a_restarted_issuer_without_a_key_directory_starts_a_new_binding(Identity) ->
 
 the_issuer_never_writes_the_identity_key(Identity) ->
     {Tab, Clock} = clock(),
-    Dir = key_dir(),
-    Issuer = start(Identity, Clock, #{key_dir => Dir}),
-    ok = macula_statement_issuer:register_tls_leaf(Issuer, ?LEAF, tls_key()),
-    tick_at(Issuer, Tab, ?T0 + 5 * ?DAY),
-    gen_server:stop(Issuer),
-    Keys = filelib:wildcard(filename:join(Dir, "*.key")),
-    ?assertEqual(3, length(Keys)),
-    ?assertEqual([], [K || K <- Keys, element(1, macula_node_keys:load(K, identity, pq_pure)) =:= ok]),
-    ?assertEqual([], [F || F <- filelib:wildcard(filename:join(Dir, "*")), holds_public_key(F, Identity)]),
-    ok = file:del_dir_r(Dir).
+    with_key_dir(fun(Dir) ->
+        Issuer = start(Identity, Clock, #{key_dir => Dir}),
+        ok = macula_statement_issuer:register_tls_leaf(Issuer, ?LEAF, tls_key()),
+        tick_at(Issuer, Tab, ?T0 + 5 * ?DAY),
+        gen_server:stop(Issuer),
+        Keys = filelib:wildcard(filename:join(Dir, "*.key")),
+        ?assertEqual(3, length(Keys)),
+        ?assertEqual([], [K || K <- Keys, element(1, macula_node_keys:load(K, identity, pq_pure)) =:= ok]),
+        ?assertEqual([], [F || F <- filelib:wildcard(filename:join(Dir, "*")), holds_public_key(F, Identity)])
+    end).
 
 saved_connect_and_tls_key_files_are_readable_by_their_owner_only_after_a_rotation(Identity) ->
     {Tab, Clock} = clock(),
-    Dir = key_dir(),
-    Issuer = start(Identity, Clock, #{key_dir => Dir}),
-    ok = macula_statement_issuer:register_tls_leaf(Issuer, ?LEAF, tls_key()),
-    tick_at(Issuer, Tab, ?T0 + 5 * ?DAY),
-    ok = macula_statement_issuer:register_tls_leaf(Issuer, <<"the next leaf">>, tls_key()),
-    gen_server:stop(Issuer),
-    Keys = [filelib:wildcard(filename:join(Dir, Pattern)) || Pattern <- ["connect-*.key", "tls-*.key"]],
-    ?assertEqual([2, 2], [length(Files) || Files <- Keys]),
-    ?assertEqual([], [File || File <- lists:append(Keys), mode(File) =/= 8#600]),
-    ?assertEqual([], [File || File <- filelib:wildcard(filename:join(Dir, "*")), mode(File) =/= 8#600]),
-    ok = file:del_dir_r(Dir).
+    with_key_dir(fun(Dir) ->
+        Issuer = start(Identity, Clock, #{key_dir => Dir}),
+        ok = macula_statement_issuer:register_tls_leaf(Issuer, ?LEAF, tls_key()),
+        tick_at(Issuer, Tab, ?T0 + 5 * ?DAY),
+        ok = macula_statement_issuer:register_tls_leaf(Issuer, <<"the next leaf">>, tls_key()),
+        gen_server:stop(Issuer),
+        Keys = [filelib:wildcard(filename:join(Dir, Pattern)) || Pattern <- ["connect-*.key", "tls-*.key"]],
+        ?assertEqual([2, 2], [length(Files) || Files <- Keys]),
+        ?assertEqual([], [File || File <- lists:append(Keys), mode(File) =/= 8#600]),
+        ?assertEqual([], [File || File <- filelib:wildcard(filename:join(Dir, "*")), mode(File) =/= 8#600])
+    end).
 
 a_key_directory_the_issuer_makes_is_readable_by_its_owner_only(Identity) ->
     {_Tab, Clock} = clock(),
-    Parent = key_dir(),
-    Dir = filename:join(Parent, "keys"),
-    Issuer = start(Identity, Clock, #{key_dir => Dir}),
-    gen_server:stop(Issuer),
-    ?assertEqual(8#700, mode(Dir)),
-    ok = file:del_dir_r(Parent).
+    with_key_dir(fun(Parent) ->
+        Dir = filename:join(Parent, "keys"),
+        Issuer = start(Identity, Clock, #{key_dir => Dir}),
+        gen_server:stop(Issuer),
+        ?assertEqual(8#700, mode(Dir))
+    end).
 
 %%------------------------------------------------------------------
 %% Helpers
@@ -262,8 +262,9 @@ rotation_notice(Issuer) ->
         none
     end.
 
-key_dir() ->
-    macula_test_tmp:dir("macula_statement_issuer_tests").
+%% Fun called with a new key directory, removed once Fun returns or raises.
+with_key_dir(Fun) ->
+    macula_test_tmp:with_dir("macula_statement_issuer_tests", Fun).
 
 holds_public_key(File, Identity) ->
     {ok, Bytes} = file:read_file(File),

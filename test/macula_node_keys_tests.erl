@@ -57,11 +57,12 @@ eu_keys_survive_save_and_load_test_() ->
     end}.
 
 saved_file_is_readable_by_its_owner_only_test() ->
-    Path = mktmp("identity.key"),
-    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
-    ok = macula_node_keys:save(Path, Key),
-    {ok, #file_info{mode = Mode}} = file:read_file_info(Path),
-    ?assertEqual(8#0600, Mode band 8#0777).
+    with_tmp_path("identity.key", fun(Path) ->
+        {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+        ok = macula_node_keys:save(Path, Key),
+        {ok, #file_info{mode = Mode}} = file:read_file_info(Path),
+        ?assertEqual(8#0600, Mode band 8#0777)
+    end).
 
 key_file_its_group_or_others_can_read_is_refused_test_() ->
     [?_assertEqual({error, key_file_permissions}, load_with_mode(Mode))
@@ -126,25 +127,28 @@ key_whose_algorithms_do_not_match_its_purpose_and_profile_is_refused_test_() ->
     end}.
 
 ed25519_key_file_is_refused_test() ->
-    Path = mktmp("identity.key"),
-    ok = macula_identity:save(Path, macula_identity:generate()),
-    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, pq_pure)).
+    with_tmp_path("identity.key", fun(Path) ->
+        ok = macula_identity:save(Path, macula_identity:generate()),
+        ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, pq_pure))
+    end).
 
 file_with_trailing_bytes_is_refused_test() ->
-    Path = mktmp("identity.key"),
-    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
-    ok = macula_node_keys:save(Path, Key),
-    {ok, Bin} = file:read_file(Path),
-    ok = file:write_file(Path, <<Bin/binary, 0>>),
-    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, pq_pure)).
+    with_tmp_path("identity.key", fun(Path) ->
+        {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+        ok = macula_node_keys:save(Path, Key),
+        {ok, Bin} = file:read_file(Path),
+        ok = file:write_file(Path, <<Bin/binary, 0>>),
+        ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, pq_pure))
+    end).
 
 truncated_file_is_refused_test() ->
-    Path = mktmp("identity.key"),
-    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
-    ok = macula_node_keys:save(Path, Key),
-    {ok, <<Head:1000/binary, _/binary>>} = file:read_file(Path),
-    ok = file:write_file(Path, Head),
-    ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, pq_pure)).
+    with_tmp_path("identity.key", fun(Path) ->
+        {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+        ok = macula_node_keys:save(Path, Key),
+        {ok, <<Head:1000/binary, _/binary>>} = file:read_file(Path),
+        ok = file:write_file(Path, Head),
+        ?assertEqual({error, bad_key_file}, macula_node_keys:load(Path, identity, pq_pure))
+    end).
 
 %%------------------------------------------------------------------
 %% Helpers
@@ -155,20 +159,23 @@ assert_round_trip(Purpose, Profile) ->
     ?assertEqual({ok, Key}, save_and_load(Key, Purpose, Profile)).
 
 save_and_load(Key, Purpose, Profile) ->
-    Path = mktmp("node.key"),
-    ok = macula_node_keys:save(Path, Key),
-    macula_node_keys:load(Path, Purpose, Profile).
+    with_tmp_path("node.key", fun(Path) ->
+        ok = macula_node_keys:save(Path, Key),
+        macula_node_keys:load(Path, Purpose, Profile)
+    end).
 
 load_with_mode(Mode) ->
-    Path = mktmp("identity.key"),
-    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
-    ok = macula_node_keys:save(Path, Key),
-    ok = file:change_mode(Path, Mode),
-    macula_node_keys:load(Path, identity, pq_pure).
+    with_tmp_path("identity.key", fun(Path) ->
+        {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+        ok = macula_node_keys:save(Path, Key),
+        ok = file:change_mode(Path, Mode),
+        macula_node_keys:load(Path, identity, pq_pure)
+    end).
 
 flip_byte(Bin, Offset) ->
     <<Head:Offset/binary, Byte, Tail/binary>> = Bin,
     <<Head/binary, (Byte bxor 1), Tail/binary>>.
 
-mktmp(Name) ->
-    filename:join(macula_test_tmp:dir("macula_node_keys_tests"), Name).
+%% Fun called with the path Name in a new directory, removed once Fun returns or raises.
+with_tmp_path(Name, Fun) ->
+    macula_test_tmp:with_dir("macula_node_keys_tests", fun(Dir) -> Fun(filename:join(Dir, Name)) end).

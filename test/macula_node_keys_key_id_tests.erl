@@ -102,9 +102,11 @@ hex(Hex) ->
     binary:decode_hex(Hex).
 
 save_and_load(Key, Purpose, Profile) ->
-    Path = mktmp("node.key"),
-    ok = macula_node_keys:save(Path, Key),
-    macula_node_keys:load(Path, Purpose, Profile).
+    with_tmp_path("node.key", fun(Path) ->
+        ok = macula_node_keys:save(Path, Key),
+        macula_node_keys:load(Path, Purpose, Profile)
+    end).
 
-mktmp(Name) ->
-    filename:join(macula_test_tmp:dir("macula_node_keys_key_id_tests"), Name).
+%% Fun called with the path Name in a new directory, removed once Fun returns or raises.
+with_tmp_path(Name, Fun) ->
+    macula_test_tmp:with_dir("macula_node_keys_key_id_tests", fun(Dir) -> Fun(filename:join(Dir, Name)) end).
