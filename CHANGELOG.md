@@ -9,7 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+### Added
+
+- `macula_quic:async_connect/4` starts a dial and returns at once. The
+  calling process receives `{quic, connected, Tag, ConnRef}` or
+  `{quic, connect_failed, Tag, Reason}`, with `Tag` from
+  `macula_quic:dial_tag/1`. `macula_quic:cancel_connect/1` ends a dial
+  and leaves no result for it in the caller's mailbox.
+
+### Changed
+
+- `macula_quic:connect/4` waits for its connection in the calling
+  process, with the same arguments, results and timeout. A dial ends
+  when the process that started it exits.
+- A client `macula_peering_conn` handles close and reject while it is
+  still dialing, and stops dialing when its controlling process exits.
+
+## [10.24.0] - 2026-09-10
 
 - `macula_dist_pool` reads the reply and the arguments of the distribution
   tunnel RPC (`_dist.tunnel.<node>`) under the atom or `{text, Name}` key

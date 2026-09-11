@@ -9,6 +9,8 @@
 %%%   {quic, Data, StreamRef, Flags}       — stream data
 %%%   {quic, new_conn, ConnRef, Info}      — new connection accepted
 %%%   {quic, new_stream, StreamRef, Props} — new stream accepted
+%%%   {quic, connected, Tag, ConnRef}      a dial from async_connect/4 connected
+%%%   {quic, connect_failed, Tag, Reason}  a dial from async_connect/4 failed
 %%%   {quic, peer_send_shutdown, StreamRef, undefined}
 %%%   {quic, stream_closed, StreamRef, Flags}
 %%%     Flags is `{reset, ErrorCode}' when the read failed because
@@ -34,6 +36,9 @@
 
     %% Connection
     connect/4,
+    async_connect/4,
+    cancel_connect/1,
+    dial_tag/1,
     open_stream/1,
 
     %% Self-signed cert generation (pubkey-anchored)
@@ -68,6 +73,14 @@
     %% Stats
     getstat/2
 ]).
+
+-export_type([dial/0]).
+
+%% A dial started by async_connect/4: its result tag and its handle.
+-opaque dial() :: {macula_quic_dial, reference(), reference()}.
+
+%% Added to a dial's own timeout before connect/4 gives up waiting.
+-define(DIAL_RESULT_GRACE_MS, 1_000).
 
 %%%===================================================================
 %%% NIF Loading
@@ -156,10 +169,45 @@ close_listener(Listener) ->
 %%       impersonate the peer. Must now be opted into explicitly,
 %%       and every such dial logs a warning.</li>
 %% </ul>
+%%
+%% The calling process waits for the result, and the dial ends if that
+%% process exits while it waits. Use `async_connect/4' to wait elsewhere.
 -spec connect(Host, inet:port_number(), list(), timeout()) ->
     {ok, reference()} | {error, term()}
         when Host :: binary() | string().
 connect(Host, Port, Opts, Timeout) ->
+    %% A reference made here, and matched by every clause of the receive in
+    %% await_dial/3, lets that receive skip every message already in this
+    %% process's mailbox.
+    Tag = make_ref(),
+    await_dial(start_dial(Tag, Host, Port, Opts, Timeout), Tag, Timeout).
+
+%% @doc Start a dial and return at once, instead of waiting as `connect/4'
+%% does. The calling process owns the dial and later receives
+%% `{quic, connected, Tag, ConnRef}' or `{quic, connect_failed, Tag, Reason}',
+%% where `Tag' is `dial_tag(Dial)'. The dial ends early when
+%% `cancel_connect/1' is called or when its owner exits. `Opts' and
+%% `Timeout' are those of `connect/4'; options that cannot be used return
+%% `{error, Reason}' at once.
+-spec async_connect(Host, inet:port_number(), list(), timeout()) ->
+    {ok, dial()} | {error, term()}
+        when Host :: binary() | string().
+async_connect(Host, Port, Opts, Timeout) ->
+    start_dial(make_ref(), Host, Port, Opts, Timeout).
+
+%% @doc End a dial. Afterwards no result for it is in, or will reach, the
+%% caller's mailbox: a result sent before the cancel is taken out, and the
+%% connection it carried is closed. Call it from the dial's owner.
+-spec cancel_connect(dial()) -> ok.
+cancel_connect({macula_quic_dial, Tag, Dial}) ->
+    discard_dial_result(nif_cancel_connect(Dial), Tag).
+
+%% @doc The reference in this dial's result message.
+-spec dial_tag(dial()) -> reference().
+dial_tag({macula_quic_dial, Tag, _Dial}) ->
+    Tag.
+
+start_dial(Tag, Host, Port, Opts, Timeout) ->
     HostBin = to_binary(Host),
     Alpn = [to_binary(A) || A <- proplists:get_value(alpn, Opts, ["macula"])],
     %% Secure by default: webpki verification unless the caller
@@ -175,8 +223,43 @@ connect(Host, Port, Opts, Timeout) ->
     %% killed long-lived realm-side station_link clients.
     IdleTimeoutMs = proplists:get_value(idle_timeout_ms, Opts, 300_000),
     KeepAliveMs = proplists:get_value(keep_alive_interval_ms, Opts, 15_000),
-    nif_connect(HostBin, Port, Alpn, Verify, VerifyPubkey,
-                IdleTimeoutMs, KeepAliveMs, Timeout).
+    dial_started(nif_async_connect(Tag, HostBin, Port, Alpn, Verify, VerifyPubkey,
+                                   IdleTimeoutMs, KeepAliveMs, Timeout),
+                 Tag).
+
+dial_started({ok, Dial}, Tag) ->
+    {ok, {macula_quic_dial, Tag, Dial}};
+dial_started({error, _} = Error, _Tag) ->
+    Error.
+
+await_dial({ok, Dial}, Tag, Timeout) ->
+    receive
+        {quic, connected, Tag, Conn} -> {ok, Conn};
+        {quic, connect_failed, Tag, Reason} -> {error, Reason}
+    after dial_wait(Timeout) ->
+        ok = cancel_connect(Dial),
+        {error, <<"connection_timeout">>}
+    end;
+await_dial({error, _} = Error, _Tag, _Timeout) ->
+    Error.
+
+dial_wait(infinity) ->
+    infinity;
+dial_wait(TimeoutMs) ->
+    TimeoutMs + ?DIAL_RESULT_GRACE_MS.
+
+discard_dial_result(cancelled, _Tag) ->
+    ok;
+discard_dial_result(delivered, Tag) ->
+    receive
+        {quic, connected, Tag, Conn} ->
+            _ = close_connection(Conn),
+            ok;
+        {quic, connect_failed, Tag, _Reason} ->
+            ok
+    after 0 ->
+        ok
+    end.
 
 %% An unverified dial (no webpki, no pubkey pin) accepts any server
 %% certificate — a network MITM can impersonate the peer. Legitimate
@@ -394,8 +477,11 @@ nif_async_accept(_Listener) ->
 nif_close_listener(_Listener) ->
     erlang:nif_error(nif_not_loaded).
 
-nif_connect(_Host, _Port, _Alpn, _Verify, _VerifyPubkey,
-            _IdleTimeoutMs, _KeepAliveMs, _TimeoutMs) ->
+nif_async_connect(_Tag, _Host, _Port, _Alpn, _Verify, _VerifyPubkey,
+                  _IdleTimeoutMs, _KeepAliveMs, _TimeoutMs) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_cancel_connect(_Dial) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_generate_self_signed_cert(_Pubkey, _Privkey, _Sans) ->

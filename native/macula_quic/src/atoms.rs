@@ -8,6 +8,12 @@ rustler::atoms! {
     // Connection events
     new_conn,
     new_stream,
+    connected,
+    connect_failed,
+
+    // Dial cancel results
+    delivered,
+    cancelled,
 
     // Stream events
     peer_send_shutdown,
