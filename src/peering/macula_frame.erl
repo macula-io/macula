@@ -156,6 +156,11 @@
 %% A payload sits in the frame map, so a container at payload path length L
 %% is at nesting depth L + 2, and the decoding rule allows depth 64.
 -define(MAX_PAYLOAD_NESTING, 62).
+%% A GOODBYE reason is text for people, bounded because it ends up in logs.
+-define(MAX_GOODBYE_REASON_BYTES, 256).
+%% A STORE_ACK reason names why a record was not stored: a record refusal, or quota.
+-define(STORE_ACK_REASONS,
+        [record_too_large, malformed, signature_invalid, alg_mismatch, not_yet_valid, expired, key_id_mismatch, quota]).
 
 -type frame_type() :: connect | hello | goodbye
                     | swim_ping | swim_ack | swim_suspect | swim_confirm
@@ -301,10 +306,13 @@
 
 -type store_spec()         :: #{record := binary()}.
 
+-type store_ack_reason()   :: record_too_large | malformed | signature_invalid | alg_mismatch | not_yet_valid
+                            | expired | key_id_mismatch | quota.
+
 -type store_ack_spec()     :: #{
     key    := id256(),
     stored := boolean(),
-    reason => atom() | undefined
+    reason => store_ack_reason() | undefined
 }.
 
 -type replicate_spec()     :: #{
@@ -701,8 +709,11 @@ goodbye(Reason, Detail, Caps)
     do_goodbye(Reason, Detail, Caps).
 
 do_goodbye(Reason, Detail, Caps) ->
+    ok = reason_within_bound(byte_size(atom_to_binary(Reason)) =< ?MAX_GOODBYE_REASON_BYTES),
     Header = base(goodbye, Caps),
     Header#{reason => Reason, detail => Detail}.
+
+reason_within_bound(true) -> ok.
 
 %%------------------------------------------------------------------
 %% SWIM frame constructors (Part 6 §8)
@@ -890,9 +901,11 @@ validate_addresses([A | Rest]) when is_map(A) -> validate_addresses(Rest).
 validate_record_bytes(Bytes) when is_binary(Bytes) ->
     ok.
 
--spec validate_optional_reason(atom() | undefined) -> ok.
-validate_optional_reason(undefined)                      -> ok;
-validate_optional_reason(R) when is_atom(R), R =/= true, R =/= false -> ok.
+-spec validate_optional_reason(store_ack_reason() | undefined) -> ok.
+validate_optional_reason(undefined) -> ok;
+validate_optional_reason(R) when is_atom(R) -> listed_reason(lists:member(R, ?STORE_ACK_REASONS)).
+
+listed_reason(true) -> ok.
 
 %%------------------------------------------------------------------
 %% CALL / RESULT / ERROR constructors (Part 6 §5)
@@ -1486,17 +1499,18 @@ publisher_signing_bytes(#{topic := T, realm := R, publisher := Pub,
 %% Wire codec — CBOR (RFC 8949 §4.2.1 deterministic, Part 6 §3)
 %%------------------------------------------------------------------
 %%
-%% A frame map is encoded with to_wire/1: atoms become text and undefined
+%% A frame map is encoded with wire_form/1: a boolean field of the frame
+%% type's table becomes 1 or 0, other atoms become text and undefined
 %% becomes null. A frame is decoded under the decoding rule of
 %% DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, and a frame type's own fields
 %% come back through a fixed table (D26): each field the table defines
 %% takes its atom key, an enum value takes one of the atoms the table
-%% lists, and everything else keeps the one key form of peer-supplied
-%% maps. No atom is made or looked up from what a peer sent.
+%% lists, a boolean is 1 or 0, and everything else keeps the one key form
+%% of peer-supplied maps. No atom is made or looked up from what a peer sent.
 
 -spec encode(frame()) -> binary().
 encode(Frame) when is_map(Frame) ->
-    encode_bytes(macula_cbor_nif:pack_deterministic(to_wire(Frame))).
+    encode_bytes(macula_cbor_nif:pack_deterministic(wire_form(Frame))).
 
 %% @doc Prefix frame CBOR bytes with their length, leaving the bytes as they
 %% are. The handshake keeps the bytes it passes here, because the connection
@@ -1616,7 +1630,7 @@ canonical_unsigned(Frame) ->
     %% `publisher_sig' to frames until every relay is on a build that
     %% strips it here too — see CHANGELOG 4.4.0.)
     Unsigned = maps:without([signature, publisher_sig], Frame),
-    macula_cbor_nif:pack_deterministic(to_wire(Unsigned)).
+    macula_cbor_nif:pack_deterministic(wire_form(Unsigned)).
 
 %%------------------------------------------------------------------
 %% Atom <-> wire-binary translation
@@ -1624,9 +1638,10 @@ canonical_unsigned(Frame) ->
 %% The CBOR codec ships text strings as `{text, Bin}' tuples and byte
 %% strings as plain binaries (per `macula_record_cbor'). Atoms in the
 %% in-process frame map are converted to `{text, atom_to_binary(A)}'
-%% before encoding, and reconstructed via `binary_to_existing_atom'
-%% on the decode path. Binaries (signatures, node ids, payloads,
-%% nonces) stay as binaries on the wire.
+%% before encoding, except envelope booleans, which travel as 1 or 0.
+%% On the decode path envelope fields come back through the frame
+%% type's table, and payload text stays `{text, Bin}'. Binaries
+%% (signatures, node ids, payloads, nonces) stay as binaries on the wire.
 %%------------------------------------------------------------------
 
 %% @doc Is this term admissible as a frame payload?
@@ -1820,12 +1835,27 @@ distinct(false, Path) -> unsupported(duplicate_wire_key, Path).
 unsupported(Type, Path) ->
     {error, {unsupported_payload_type, Type, lists:reverse(Path)}}.
 
+%% @private The wire form of a frame map: the boolean fields its frame
+%% type's table names become 1 or 0, then to_wire/1 applies.
+wire_form(#{frame_type := Type} = Frame) when is_atom(Type) ->
+    booleans_on_wire(frame_type_named(atom_to_binary(Type)), Frame);
+wire_form(Frame) ->
+    to_wire(Frame).
+
+booleans_on_wire({ok, Type}, Frame) ->
+    Booleans = [Field || {Field, boolean} <- maps:values(field_table(Type))],
+    to_wire(maps:map(fun(Field, Value) -> boolean_on_wire(lists:member(Field, Booleans), Value) end, Frame));
+booleans_on_wire(error, Frame) ->
+    to_wire(Frame).
+
+boolean_on_wire(true, true) -> 1;
+boolean_on_wire(true, false) -> 0;
+boolean_on_wire(_Boolean, Value) -> Value.
+
 %% @private Convert a frame map (atom keys, atom values where used)
-%% into the shape the CBOR encoders understand. Booleans
-%% (`true' / `false') are atoms in Erlang and round-trip the same way
-%% as any other atom — encoded as text strings, decoded via
-%% `binary_to_existing_atom'. Floats are stringified compactly so the
-%% canonical-byte derivation is independent of platform float encoding.
+%% into the shape the CBOR encoders understand: atoms, including true and
+%% false outside an envelope boolean field, become text, undefined becomes
+%% null, and binaries, integers and floats stay as they are.
 to_wire(M) when is_map(M) ->
     maps:fold(fun(K, V, Acc) ->
                   Acc#{wire_key(K) => to_wire(V)}
@@ -1954,7 +1984,7 @@ field_table(goodbye) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"reason">> => {reason, {reason, goodbye}},
+      <<"reason">> => {reason, {bounded_text, ?MAX_GOODBYE_REASON_BYTES}},
       <<"detail">> => {detail, value}};
 field_table(swim_ping) ->
     #{<<"version">> => {version, value},
@@ -2119,7 +2149,7 @@ field_table(store_ack) ->
       <<"signature">> => {signature, value},
       <<"key">> => {key, value},
       <<"stored">> => {stored, boolean},
-      <<"reason">> => {reason, {reason, store_ack}}};
+      <<"reason">> => {reason, {optional_enum, ?STORE_ACK_REASONS}}};
 field_table(replicate) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
@@ -2567,10 +2597,11 @@ field_value(error, _Field, _Rest, _Table, _Frame) -> error.
 read_value(value, Value) -> {ok, peer_value(Value)};
 read_value(frame_type, {text, Name}) -> frame_type_named(Name);
 read_value({enum, Atoms}, {text, Name}) -> enum_value(Name, Atoms);
-read_value({reason, _Set}, null) -> {ok, undefined};
-read_value({reason, Set}, {text, Name}) -> reason_value(enum_value(Name, reasons(Set)), Name);
-read_value(boolean, {text, <<"true">>}) -> {ok, true};
-read_value(boolean, {text, <<"false">>}) -> {ok, false};
+read_value({optional_enum, _Atoms}, null) -> {ok, undefined};
+read_value({optional_enum, Atoms}, {text, Name}) -> enum_value(Name, Atoms);
+read_value({bounded_text, Max}, {text, Bin} = Text) when byte_size(Bin) =< Max -> {ok, Text};
+read_value(boolean, 1) -> {ok, true};
+read_value(boolean, 0) -> {ok, false};
 read_value({list_of, Table}, Entries) when is_list(Entries) -> entries_read(Entries, Table, []);
 read_value(manifest, {text, <<"not_found">>}) -> {ok, not_found};
 read_value(manifest, Manifest) when is_map(Manifest) -> {ok, peer_value(Manifest)};
@@ -2582,14 +2613,6 @@ enum_value(_Name, []) -> error.
 
 enum_match(true, Atom, _Name, _Atoms) -> {ok, Atom};
 enum_match(false, _Atom, Name, Atoms) -> enum_value(Name, Atoms).
-
-%% The reasons a GOODBYE and a STORE_ACK name as atoms; any other reason stays text.
-reasons(goodbye) -> [operator_stop, draining, normal, shutdown];
-reasons(store_ack) ->
-    [record_too_large, malformed, signature_invalid, alg_mismatch, not_yet_valid, expired, key_id_mismatch, quota].
-
-reason_value({ok, Atom}, _Name) -> {ok, Atom};
-reason_value(error, Name) -> {ok, {text, Name}}.
 
 entries_read([Entry | Rest], Table, Acc) when is_map(Entry) ->
     entry_read(read_fields(maps:to_list(Entry), Table, #{}), Rest, Table, Acc);

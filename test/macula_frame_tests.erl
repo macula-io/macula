@@ -417,6 +417,12 @@ store_ack_rejects_non_atom_reason_test() ->
                                           stored => false,
                                           reason => <<"bad">>})).
 
+store_ack_rejects_a_reason_outside_the_set_test() ->
+    ?assertError(function_clause,
+                 macula_frame:store_ack(#{key    => crypto:strong_rand_bytes(32),
+                                          stored => false,
+                                          reason => bad_record})).
+
 store_wire_roundtrip_test() ->
     Kp = macula_identity:generate(),
     F  = macula_frame:sign(macula_frame:store(#{record => sample_record()}), Kp),

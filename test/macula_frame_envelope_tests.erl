@@ -1,7 +1,8 @@
 %% EUnit tests for the frame envelope (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Encoding and Peer-supplied maps, D26): a
 %% frame decodes under the decoding rule; a frame type's own fields decode through a fixed table, so a frame type or a
-%% field the table does not define, or an enum value it does not list, is refused; payloads keep one key form, the same
-%% on a fresh node as on a warm one; and records travel as their wire bytes.
+%% field the table does not define, or an enum value it does not list, is refused; an envelope boolean travels as 0 or
+%% 1; a GOODBYE reason is text of at most 256 bytes and a STORE_ACK reason one of a closed set; payloads keep one key
+%% form, the same on a fresh node as on a warm one; and records travel as their wire bytes.
 -module(macula_frame_envelope_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -48,6 +49,48 @@ an_enum_value_the_table_does_not_list_is_refused_test() ->
     ?assertEqual({error, bad_frame}, decode_map(Neighbour#{priority => medium})),
     StreamEnd = macula_frame:stream_end(#{stream_id => <<0:128>>, role => send}),
     ?assertEqual({error, bad_frame}, decode_map(StreamEnd#{role => recv})).
+
+%%------------------------------------------------------------------
+%% Reasons and booleans
+%%------------------------------------------------------------------
+
+%% A GOODBYE reason is text for people, whether or not it is a name a stack knows.
+a_goodbye_reason_is_free_text_test() ->
+    Reasons = [draining, replaced_by_newer_handshake],
+    [?assertEqual({text, atom_to_binary(Reason)},
+                  maps:get(reason, roundtrip(macula_frame:goodbye(Reason, undefined)))) || Reason <- Reasons].
+
+a_goodbye_reason_is_text_of_at_most_256_bytes_test() ->
+    Goodbye = macula_frame:goodbye(draining, undefined),
+    Within = binary:copy(<<"a">>, 256),
+    ?assertMatch({ok, #{reason := {text, Within}}, <<>>}, decode_map(Goodbye#{reason => {text, Within}})),
+    ?assertEqual({error, bad_frame}, decode_map(Goodbye#{reason => {text, <<Within/binary, "a">>}})),
+    ?assertEqual({error, bad_frame}, decode_map(Goodbye#{reason => 7})),
+    %% 129 two-byte characters: a valid atom, and 258 bytes of UTF-8.
+    TooLong = binary_to_atom(binary:copy(<<16#C3, 16#A9>>, 129)),
+    ?assertError(function_clause, macula_frame:goodbye(TooLong, undefined)).
+
+a_store_ack_reason_decodes_to_a_listed_atom_test() ->
+    Refused = macula_frame:store_ack(#{key => fill(3), stored => false, reason => quota}),
+    Stored = macula_frame:store_ack(#{key => fill(3), stored => true}),
+    ?assertEqual(quota, maps:get(reason, roundtrip(Refused))),
+    ?assertEqual(undefined, maps:get(reason, roundtrip(Stored))).
+
+a_store_ack_reason_the_set_does_not_list_is_refused_test() ->
+    Refused = macula_frame:store_ack(#{key => fill(3), stored => false, reason => quota}),
+    ?assertEqual({error, bad_frame}, decode_map(Refused#{reason => bad_record})).
+
+an_envelope_boolean_travels_as_0_or_1_test() ->
+    Stored = macula_frame:store_ack(#{key => fill(3), stored => true}),
+    <<_Length:32, Bytes/binary>> = macula_frame:encode(Stored),
+    ?assertMatch({ok, #{{text, <<"stored">>} := 1}}, macula_record_cbor:decode_strict(Bytes)),
+    ?assertEqual(true, maps:get(stored, roundtrip(Stored))),
+    Replicate = macula_frame:replicate(#{record => <<1, 2, 3>>, new_custodian => false}),
+    ?assertEqual(false, maps:get(new_custodian, roundtrip(Replicate))).
+
+an_envelope_boolean_other_than_0_or_1_is_refused_test() ->
+    Stored = macula_frame:store_ack(#{key => fill(3), stored => true}),
+    [?assertEqual({error, bad_frame}, decode_map(Stored#{stored => Value})) || Value <- [{text, <<"true">>}, 2]].
 
 %%------------------------------------------------------------------
 %% The decoding rule
