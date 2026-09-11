@@ -354,7 +354,9 @@ ok = macula:advertise_stream(Pool, Realm, <<"private.feed">>, server_stream,
 The provider first verifies the STREAM_OPEN's signature against its `caller`,
 then applies the policy before the handler runs. A refused STREAM_OPEN gets a
 STREAM_ERROR with code `unauthorized` on its stream, and the handler never
-runs.
+runs. A handler that needs to know who opened the stream reads `caller` from
+its `Args` when they are a map, as a unary handler reads it from its payload:
+it is the verified public key, whatever the consumer put under that key.
 
 ---
 

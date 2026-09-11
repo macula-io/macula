@@ -1646,6 +1646,41 @@ inbound_call_threads_caller_into_payload_test_() ->
          ok
      end}.
 
+%% The same holds for a CALL as a remote peer sends it, through the frame
+%% codec: whichever form its payload's `caller' key takes on the wire, the
+%% handler finds the verified caller under `caller' and the payload's own
+%% value nowhere.
+inbound_call_payload_caller_never_reaches_the_handler_test_() ->
+    {timeout, 5,
+     fun() ->
+         Test = self(),
+         Procedure = <<"probe.caller">>,
+         Handler = fun(Payload) ->
+                       Test ! {handler_saw, Payload},
+                       {ok, #{}}
+                   end,
+         {Pid, CallerKp} = inbound_call_fixture([{Procedure, Handler}]),
+         Caller = macula_identity:public(CallerKp),
+         Claimed = macula_identity:public(macula_identity:generate()),
+         Call = macula_frame:sign(#{
+             frame_type  => call,
+             call_id     => crypto:strong_rand_bytes(16),
+             realm       => ?REALM,
+             procedure   => Procedure,
+             payload     => #{<<"caller">> => Claimed, n => 7},
+             deadline_ms => erlang:system_time(millisecond) + 5_000,
+             caller      => Caller
+         }, CallerKp),
+         lists:foreach(
+           fun(Form) ->
+                   {ok, Received, <<>>} =
+                       macula_frame:decode(Form(macula_frame:encode(Call))),
+                   Pid ! {macula_peering, frame, Test, Received},
+                   ?assertEqual(#{caller => Caller, n => 7}, await_handler_saw())
+           end, caller_key_forms(payload)),
+         macula_station_link:stop(Pid)
+     end}.
+
 inbound_call_unknown_procedure_returns_error_frame_test_() ->
     {timeout, 5,
      fun() ->
@@ -2221,8 +2256,12 @@ teardown_link_for_streams(_) ->
 %% Simulate a peer opening a dedicated stream toward us and writing
 %% `Frame' as its first bytes — the inbound STREAM_OPEN path.
 inject_dedicated_stream_open(Pid, FakePeer, Stream, Frame) ->
+    inject_dedicated_stream_bytes(Pid, FakePeer, Stream, macula_frame:encode(Frame)).
+
+%% Same, with the frame's encoded bytes as given.
+inject_dedicated_stream_bytes(Pid, FakePeer, Stream, Bytes) ->
     Pid ! {macula_peering, new_dedicated_stream, FakePeer, Stream},
-    Pid ! {quic, macula_frame:encode(Frame), Stream, undefined}.
+    Pid ! {quic, Bytes, Stream, undefined}.
 
 %% Simulate more bytes arriving on an already-open dedicated stream
 %% (STREAM_DATA / END / ERROR / REPLY on a session we opened).
@@ -2457,10 +2496,92 @@ inbound_stream_open_invokes_handler_test_() ->
              }, CallerKp)),
              receive
                  {handler_invoked, Args} ->
-                     ?assertEqual(#{n => 7}, Args)
+                     ?assertEqual(#{n => 7, caller => CallerPub}, Args)
              after 1_000 ->
                  erlang:error(handler_not_invoked)
              end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% -- a STREAM_OPEN's own `caller' argument never reaches the handler
+
+%% A stream handler finds the verified caller under `caller' in its
+%% arguments, as a unary handler does in its payload: a STREAM_OPEN signed
+%% by one key whose arguments name another as `caller', in either form a
+%% sender can give that key on the wire, reaches the handler with the
+%% signer's key and the named one nowhere.
+inbound_stream_open_args_caller_never_reaches_the_handler_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Test = self(),
+             Procedure = <<"foo.caller">>,
+             Handler = fun(_Stream, Args) ->
+                 Test ! {handler_saw, Args},
+                 ok
+             end,
+             ok = macula_station_link:advertise_stream(
+                    Pid, ?REALM, Procedure, server_stream, Handler),
+             flush_send_frame_casts(),
+             CallerKp = macula_identity:generate(),
+             Caller = macula_identity:public(CallerKp),
+             Claimed = macula_identity:public(macula_identity:generate()),
+             Open = fun() ->
+                 macula_frame:sign(#{
+                     frame_type  => stream_open,
+                     stream_id   => crypto:strong_rand_bytes(16),
+                     procedure   => Procedure,
+                     realm       => ?REALM,
+                     mode        => server_stream,
+                     args        => #{<<"caller">> => Claimed, n => 7},
+                     deadline_ms => erlang:system_time(millisecond) + 5_000,
+                     caller      => Caller
+                 }, CallerKp)
+             end,
+             lists:foreach(
+               fun(Form) ->
+                       inject_dedicated_stream_bytes(
+                         Pid, FakePeer, make_ref(), Form(macula_frame:encode(Open()))),
+                       ?assertEqual(#{caller => Caller, n => 7}, await_handler_saw())
+               end, caller_key_forms(args)),
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% Arguments that are not a map reach a stream handler as the STREAM_OPEN
+%% carried them, with no `caller' added.
+inbound_stream_open_args_that_are_not_a_map_reach_the_handler_unchanged_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Test = self(),
+             Procedure = <<"foo.list_args">>,
+             Handler = fun(_Stream, Args) ->
+                 Test ! {handler_saw, Args},
+                 ok
+             end,
+             ok = macula_station_link:advertise_stream(
+                    Pid, ?REALM, Procedure, server_stream, Handler),
+             flush_send_frame_casts(),
+             CallerKp = macula_identity:generate(),
+             inject_dedicated_stream_open(Pid, FakePeer, make_ref(), macula_frame:sign(#{
+                 frame_type  => stream_open,
+                 stream_id   => crypto:strong_rand_bytes(16),
+                 procedure   => Procedure,
+                 realm       => ?REALM,
+                 mode        => server_stream,
+                 args        => [7, <<"raw">>],
+                 deadline_ms => erlang:system_time(millisecond) + 5_000,
+                 caller      => macula_identity:public(CallerKp)
+             }, CallerKp)),
+             ?assertEqual([7, <<"raw">>], await_handler_saw()),
              macula_station_link:stop(Pid)
          after
              teardown_link_for_streams(ok)
@@ -2939,6 +3060,32 @@ inject_call_with_ucan(Pid, FakePeer, CallerKp, CallId, Proc, UcanToken) ->
         caller     => macula_identity:public(CallerKp),
         ucan_token => UcanToken
     }, CallerKp)}.
+
+%% The forms a sender can give the `caller' key of a frame's map field
+%% `Field' on the wire, each applied to the frame's encoded bytes: a text
+%% string, as macula's encoder writes every map key, and a byte string, as
+%% another encoder may.
+caller_key_forms(Field) ->
+    [fun(Bytes) -> Bytes end,
+     fun(Bytes) -> with_byte_string_key(Bytes, Field, <<"caller">>) end].
+
+with_byte_string_key(<<Len:32/big, Cbor:Len/binary>> = Bytes, Field, Key) ->
+    Wire = macula_cbor_nif:unpack_deterministic(Cbor),
+    FieldKey = {text, atom_to_binary(Field, utf8)},
+    Inner = maps:get(FieldKey, Wire),
+    Value = maps:get({text, Key}, Inner),
+    Rekeyed = maps:put(Key, Value, maps:remove({text, Key}, Inner)),
+    RewrittenCbor = macula_cbor_nif:pack_deterministic(Wire#{FieldKey := Rekeyed}),
+    Rewritten = <<(byte_size(RewrittenCbor)):32/big, RewrittenCbor/binary>>,
+    ?assertNotEqual(Bytes, Rewritten),
+    Rewritten.
+
+await_handler_saw() ->
+    receive
+        {handler_saw, Seen} -> Seen
+    after 1_000 ->
+        erlang:error(handler_not_invoked)
+    end.
 
 %% The error frame's own `frame_type' is `error' (`macula_frame:call_error/1'
 %% builds it on `base(error, 0)'), not `call_error' -- every OTHER place in

@@ -2178,6 +2178,11 @@ handle_inbound_call(_Frame, _State) ->
 %% (`hecate_om_wire:field/2,3'); one that doesn't, ignores an extra map
 %% key exactly as it already ignores fields it doesn't ask for.
 %%
+%% A STREAM_OPEN carries `caller' the same way, and a stream handler's
+%% `fun(Stream, Args)' is fixed at 2-arity just the same, so
+%% `handle_inbound_stream_open/3' merges it into `Args' through this
+%% function too. A payload or `Args' that is not a map gets no `caller'.
+%%
 %% The merge happens here, not earlier, specifically so it happens AFTER
 %% the payload has been fully decoded from whatever the remote peer
 %% actually sent — `Payload#{caller => Caller}' deterministically
@@ -2680,13 +2685,16 @@ dispatch_dedicated_frame(_Frame, _Stream, S) ->
 %% Look up `(Realm, Procedure)' this link advertised, spawn a
 %% server-side stream_v1 paired to this link, then dispatch the
 %% registered handler in a transient process so a slow / crashing
-%% handler can't block the link's gen_server.
+%% handler can't block the link's gen_server. The handler's `Args' carry
+%% the frame's verified `caller', as a unary handler's payload does (see
+%% `with_caller/2').
 handle_inbound_stream_open(#{stream_id := Sid, procedure := Proc,
                               realm := Realm, args := Args} = Frame,
                            Stream, S) ->
     DeclaredMode = maps:get(mode, Frame, server_stream),
+    ArgsWithCaller = with_caller(Args, maps:get(caller, Frame, undefined)),
     dispatch_stream_open(maps:find({Realm, Proc}, S#state.stream_procedures),
-                         Sid, Proc, DeclaredMode, Args, Stream, S).
+                         Sid, Proc, DeclaredMode, ArgsWithCaller, Stream, S).
 
 %% A STREAM_OPEN whose signature does not verify against its own `caller'
 %% never reaches a handler and gets nothing back on its stream, the same
