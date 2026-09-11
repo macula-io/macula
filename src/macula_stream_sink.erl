@@ -274,13 +274,22 @@ terminate(Reason, #kstate{io = StreamIo, module = Module, pool = Pool, realm = R
     %% non-trapping process, so a clean stop (eof, or the callback
     %% returning {stop, normal, _}) would otherwise leave the reader
     %% looping on `recv/2' forever against a stream nobody is reading
-    %% for anymore. Stop it unconditionally.
-    unlink(Reader),
-    exit(Reader, kill),
+    %% for anymore. Stop it unconditionally, and wait until it has
+    %% exited: a kill arrives asynchronously, so without the wait the
+    %% sink could be gone while its reader still calls `recv/2'.
+    stop_reader(Reader),
     finish_stream(StreamIo, Reason, Stream),
     publish(StreamIo, Announce, Pool, Realm, ?STREAMING_COMPLETED,
             outcome_fields(#{stream_id => StreamId}, Reason)),
     maybe_close(Module, Reason, User).
+
+stop_reader(Reader) ->
+    Ref = monitor(process, Reader),
+    unlink(Reader),
+    exit(Reader, kill),
+    receive
+        {'DOWN', Ref, process, Reader, _} -> ok
+    end.
 
 %% @private A `normal' reason (eof, or the callback choosing to stop
 %% cleanly) closes both sides. Anything else sends the provider an
