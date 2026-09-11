@@ -48,7 +48,9 @@
 %% convention for protocol-internal traffic.
 -export([put_record/2,
          find_record/2,
+         find_record/3,
          find_records/2,
+         find_records/3,
          find_records_by_type/2,
          subscribe_records/3,
          unsubscribe_records/2]).
@@ -262,15 +264,18 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs) ->
 %% provider via `Opts' (`#{ucan_token => Token}'). Empty/absent = none.
 %% Slice 7b dual-trust. `Opts' also carries the per-call TLS trust
 %% override for this dial: `verify', `expected_node_id', and
-%% `pin_tls_cert' (see `macula_client:call_station/8').
+%% `pin_tls_cert' (see `macula_client:call_station/8'), and may set
+%% `dial_timeout_ms', how much of `TimeoutMs' the wait for a fresh link's
+%% handshake may take (default: all of it).
 -spec call_station(pool(), macula_client:seed(), realm(), procedure(),
                    term(), pos_integer(), map()) ->
     {ok, term()} | {error, term()}.
 call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     Ucan = maps:get(ucan_token, Opts, <<>>),
     LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
+    DialTimeoutMs = maps:get(dial_timeout_ms, Opts, TimeoutMs),
     macula_client:call_station(Pool, Station, Realm, Procedure, Payload,
-                               TimeoutMs, Ucan, LinkOpts).
+                               TimeoutMs, Ucan, LinkOpts, DialTimeoutMs).
 
 %% @doc Advertise a procedure handler on a V2 pool. Fans out to every
 %% healthy link and stores in pool state for replay on link respawn.
@@ -367,12 +372,19 @@ classify_put({error, _} = E) -> E.
 %% `macula_record:verify/1' before its payload is trusted.
 -spec find_record(pool(), record_key()) ->
     {ok, m_record()} | {error, not_found | term()}.
-find_record(Pool, Key)
-  when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32 ->
+find_record(Pool, Key) ->
+    find_record(Pool, Key, ?DHT_RECORD_TIMEOUT_MS).
+
+%% @doc As `find_record/2', waiting at most `TimeoutMs' for the reply, for a
+%% caller that bounds its work by a deadline of its own.
+-spec find_record(pool(), record_key(), pos_integer()) ->
+    {ok, m_record()} | {error, not_found | term()}.
+find_record(Pool, Key, TimeoutMs)
+  when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32,
+       is_integer(TimeoutMs), TimeoutMs > 0 ->
     classify_find(macula_client:call(Pool, ?DHT_REALM,
                                      ?DHT_FIND_RECORD_PROC,
-                                     #{key => Key},
-                                     ?DHT_RECORD_TIMEOUT_MS)).
+                                     #{key => Key}, TimeoutMs)).
 
 classify_find({ok, #{type := _, payload := _, signature := _} = Record}) ->
     {ok, Record};
@@ -392,12 +404,19 @@ classify_find({error, _} = E)      -> E.
 %% trusted.
 -spec find_records(pool(), record_key()) ->
     {ok, [m_record()]} | {error, term()}.
-find_records(Pool, Key)
-  when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32 ->
+find_records(Pool, Key) ->
+    find_records(Pool, Key, ?DHT_RECORD_TIMEOUT_MS).
+
+%% @doc As `find_records/2', waiting at most `TimeoutMs' for the reply, for a
+%% caller that bounds its work by a deadline of its own.
+-spec find_records(pool(), record_key(), pos_integer()) ->
+    {ok, [m_record()]} | {error, term()}.
+find_records(Pool, Key, TimeoutMs)
+  when is_pid(Pool), is_binary(Key), byte_size(Key) =:= 32,
+       is_integer(TimeoutMs), TimeoutMs > 0 ->
     classify_find_list(macula_client:call(Pool, ?DHT_REALM,
                                           ?DHT_FIND_RECORDS_PROC,
-                                          #{key => Key},
-                                          ?DHT_RECORD_TIMEOUT_MS)).
+                                          #{key => Key}, TimeoutMs)).
 
 classify_find_list({ok, Records}) when is_list(Records) -> {ok, Records};
 classify_find_list({ok, Reply})    -> {error, {unexpected_reply, Reply}};

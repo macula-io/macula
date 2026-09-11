@@ -57,6 +57,7 @@
 -export([publish/5, subscribe/5, unsubscribe/2]).
 %% RPC fan-out (since 3.16.0) — called by the `macula' facade.
 -export([call/5, call_station/6, call_station/7, call_station/8,
+         call_station/9,
          advertise/4, advertise/5, unadvertise/3]).
 %% Dedicated-stream content transfer (see
 %% PLAN_PER_STREAM_QUIC_ISOLATION.md Phase 2) — called by the
@@ -562,16 +563,30 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken) ->
                    pos_integer(), binary(), map()) ->
     {ok, term()} | {error, term()}.
 call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
-            LinkOpts)
+            LinkOpts) ->
+    call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
+                 LinkOpts, TimeoutMs).
+
+%% @doc As `call_station/8', waiting at most `DialTimeoutMs' of `TimeoutMs'
+%% for a freshly-dialed link's handshake; the CALL gets whatever remains of
+%% `TimeoutMs'. `{error, not_connected}' then comes back after
+%% `DialTimeoutMs', before any CALL was sent, so a direct-dial caller can
+%% move on to another station within its own deadline.
+-spec call_station(pool(), seed(), <<_:256>>, binary(), term(),
+                   pos_integer(), binary(), map(), pos_integer()) ->
+    {ok, term()} | {error, term()}.
+call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
+            LinkOpts, DialTimeoutMs)
   when is_pid(Pool),
        is_binary(Realm), byte_size(Realm) =:= 32,
        is_binary(Procedure),
        is_integer(TimeoutMs), TimeoutMs > 0,
        is_binary(UcanToken),
-       is_map(LinkOpts) ->
+       is_map(LinkOpts),
+       is_integer(DialTimeoutMs), DialTimeoutMs > 0 ->
     gen_server:call(Pool,
                     {call_station, Station, Realm, Procedure, Payload,
-                     TimeoutMs, UcanToken, LinkOpts},
+                     TimeoutMs, DialTimeoutMs, UcanToken, LinkOpts},
                     TimeoutMs + 2_000).
 
 %% @doc Advertise a procedure handler on every healthy link. Stored
@@ -925,14 +940,14 @@ handle_call({rpc_call, Realm, Procedure, Payload, TimeoutMs}, From, S) ->
     {noreply, S};
 
 handle_call({call_station, Station, Realm, Procedure, Payload, TimeoutMs,
-             Ucan, LinkOpts}, From, S) ->
+             DialTimeoutMs, Ucan, LinkOpts}, From, S) ->
     %% Ensure (reuse or dial) a link to the specific station, then hand
     %% the wait-for-handshake + call to a worker so the pool gen_server
     %% is never blocked (same rationale as rpc_call).
     {Pid, S1} = ensure_link(Station, LinkOpts, S),
     _ = spawn(fun() ->
         Reply = call_when_connected(Pid, Realm, Procedure, Payload,
-                                    TimeoutMs, Ucan),
+                                    TimeoutMs, DialTimeoutMs, Ucan),
         gen_server:reply(From, Reply)
     end),
     {noreply, S1};
@@ -1241,15 +1256,18 @@ link_pid(Station, #state{links = Links}) ->
         _                            -> undefined
     end.
 
-%% Wait for a freshly-dialed link's handshake within the deadline, then
-%% call over it with whatever time remains. A reused, already-connected
-%% link calls immediately.
-call_when_connected(undefined, _Realm, _Proc, _Payload, _TimeoutMs, _Ucan) ->
+%% Wait for a freshly-dialed link's handshake within `DialTimeoutMs' (and
+%% never past the call's own deadline), then call over it with whatever
+%% time remains of `TimeoutMs'. A reused, already-connected link calls
+%% immediately.
+call_when_connected(undefined, _Realm, _Proc, _Payload, _TimeoutMs, _DialTimeoutMs,
+                    _Ucan) ->
     {error, not_connected};
-call_when_connected(Pid, Realm, Proc, Payload, TimeoutMs, Ucan) ->
-    Deadline = erlang:monotonic_time(millisecond) + TimeoutMs,
-    call_after_connect(await_connected(Pid, Deadline), Pid, Realm, Proc,
-                       Payload, Deadline, Ucan).
+call_when_connected(Pid, Realm, Proc, Payload, TimeoutMs, DialTimeoutMs, Ucan) ->
+    Now = erlang:monotonic_time(millisecond),
+    Deadline = Now + TimeoutMs,
+    call_after_connect(await_connected(Pid, Now + min(DialTimeoutMs, TimeoutMs)), Pid,
+                       Realm, Proc, Payload, Deadline, Ucan).
 
 await_connected(Pid, Deadline) ->
     connected_or_wait(safe_is_connected(Pid), Pid, Deadline).
@@ -1271,7 +1289,7 @@ call_after_connect(true, Pid, Realm, Proc, Payload, Deadline, Ucan) ->
 call_after_connect(false, _Pid, _Realm, _Proc, _Payload, _Deadline, _Ucan) ->
     {error, not_connected}.
 
-%% As `call_when_connected/6', but for `ensure_content_link/4': waits
+%% As `call_when_connected/7', but for `ensure_content_link/4': waits
 %% for a freshly-dialed link's handshake, then hands back the pid
 %% itself rather than making a call over it.
 content_link_when_connected(undefined, _TimeoutMs) ->
