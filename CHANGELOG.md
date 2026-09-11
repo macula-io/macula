@@ -63,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `close_stream/1`, `abort/3` and `publish/4`, all five together. Without
   it they are the `macula` facade's, and a direct-dial sink dials with
   `macula_direct_dial:call_stream/5`.
+- `macula_subscriber:start_link/6` takes `subscribe` in its options: the
+  function it subscribes with, `macula:subscribe/5` by default. The other
+  options pass through to that function.
 
 ### Changed
 

@@ -14,6 +14,14 @@
 %%% arrives as a `Module:handle_event/4' call against state your module
 %%% owns and threads itself.
 %%%
+%%% == Subscribe function ==
+%%%
+%%% `start_link/6' takes `subscribe' in its options: the function the
+%%% subscriber subscribes with, called as
+%%% `Subscribe(Pool, Realm, Topic, self(), Opts)' with the other options,
+%%% and `macula:subscribe/5' by default. A test gives its own function
+%%% this way instead of replacing the `macula' module.
+%%%
 %%% == Example ==
 %%%
 %%% ```
@@ -44,6 +52,8 @@
 -export([start_link/5, start_link/6]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
+-export_type([subscribe/0, start_opts/0]).
+
 -callback init(Args :: term()) ->
     {ok, State :: term()} | {stop, Reason :: term()}.
 
@@ -54,6 +64,10 @@
 -callback terminate(Reason :: term(), State :: term()) -> any().
 
 -optional_callbacks([terminate/2]).
+
+-type subscribe() :: fun((macula:pool(), macula:realm(), macula:topic(), pid(), map()) ->
+                            {ok, term()} | {error, term()}).
+-type start_opts() :: #{subscribe => subscribe(), atom() => term()}.
 
 -record(sstate, {
     module  :: module(),
@@ -68,28 +82,39 @@
 start_link(Module, Pool, Realm, Topic, Args) ->
     start_link(Module, Pool, Realm, Topic, Args, #{}).
 
-%% @doc As `start_link/5', passing `Opts' through to `macula:subscribe/5'
-%% (e.g. `delivery').
+%% @doc As `start_link/5', with options: `subscribe' gives the function
+%% the subscriber subscribes with (see "Subscribe function" above), and
+%% the other options pass through to it (e.g. `delivery').
 -spec start_link(module(), macula:pool(), macula:realm(), macula:topic(),
-                  term(), map()) -> {ok, pid()} | {error, term()}.
-start_link(Module, Pool, Realm, Topic, Args, Opts) ->
-    gen_server:start_link(?MODULE, {Module, Pool, Realm, Topic, Args, Opts}, []).
+                  term(), start_opts()) -> {ok, pid()} | {error, term()}.
+start_link(Module, Pool, Realm, Topic, Args, Opts) when is_map(Opts) ->
+    {Subscribe, SubscribeOpts} = subscribe_function(Opts),
+    gen_server:start_link(?MODULE,
+                          {Module, Pool, Realm, Topic, Args, Subscribe, SubscribeOpts}, []).
+
+%% The options' subscribe function and the options without it. A
+%% subscribe option that is not an arity 5 fun is refused with
+%% function_clause, in the caller.
+subscribe_function(#{subscribe := Subscribe} = Opts) when is_function(Subscribe, 5) ->
+    {Subscribe, maps:remove(subscribe, Opts)};
+subscribe_function(Opts) when not is_map_key(subscribe, Opts) ->
+    {fun macula:subscribe/5, Opts}.
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 %% @private
-init({Module, Pool, Realm, Topic, Args, Opts}) ->
+init({Module, Pool, Realm, Topic, Args, Subscribe, Opts}) ->
     case Module:init(Args) of
         {ok, UserState} ->
-            subscribe(Module, Pool, Realm, Topic, Opts, UserState);
+            subscribe(Subscribe, Module, Pool, Realm, Topic, Opts, UserState);
         {stop, Reason} ->
             {stop, Reason}
     end.
 
-subscribe(Module, Pool, Realm, Topic, Opts, UserState) ->
-    case macula:subscribe(Pool, Realm, Topic, self(), Opts) of
+subscribe(Subscribe, Module, Pool, Realm, Topic, Opts, UserState) ->
+    case Subscribe(Pool, Realm, Topic, self(), Opts) of
         {ok, SubRef} ->
             {ok, #sstate{module = Module, sub_ref = SubRef, user = UserState}};
         {error, Reason} ->
