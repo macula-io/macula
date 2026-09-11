@@ -13,16 +13,11 @@
 %%%
 %%% == Cookie Management ==
 %%%
-%%% A node that is already distributed keeps its own cookie. On a node that
-%%% is not, cookies are resolved in this priority order:
-%%% 1. Application env: `{macula, [{cookie, CookieValue}]}'
-%%% 2. Environment variable: `MACULA_COOKIE', `RELEASE_COOKIE' or `ERLANG_COOKIE'
-%%% 3. The ~/.erlang.cookie file, which only its owner may be able to read
-%%% 4. A new cookie, saved owner-only to ~/.erlang.cookie, only when that file
-%%%    is missing
-%%%
-%%% There is no fallback when HOME is unset, and a cookie file that is there
-%%% but cannot be used is refused, never replaced.
+%%% macula sets no distribution cookie, and reads or writes no cookie file. A
+%%% node's cookie is its release's own configuration: `-setcookie', or the
+%%% owner-only `.erlang.cookie' that OTP's auth reads in the node's HOME and
+%%% creates there when it is missing. `get_cookie/0' returns a distributed
+%%% node's cookie, and `set_cookie/1' changes it for the running node only.
 %%%
 %%% == Node Monitoring ==
 %%%
@@ -56,6 +51,9 @@
     set_cookie/1
 ]).
 
+-deprecated([{get_cookie, 0, "call erlang:get_cookie/0 instead; removed in 11.0.0"},
+             {set_cookie, 1, "call erlang:set_cookie/1 instead; removed in 11.0.0"}]).
+
 %% API - Node Monitoring
 -export([
     monitor_nodes/0,
@@ -74,13 +72,6 @@
     stop_cluster/0,
     nodes/0,
     is_clustered/0
-]).
-
-%% Internal exports for testing
--export([
-    resolve_cookie/0,
-    read_cookie_file/0,
-    cookie_file_path/0
 ]).
 
 %%%===================================================================
@@ -115,19 +106,13 @@ is_distributed() ->
 %%% API - Cookie Management
 %%%===================================================================
 
-%% @doc Get the Erlang cookie for the cluster.
+%% @doc The cookie of this node, which must be distributed.
 %%
-%% A node that is already distributed keeps the cookie it has, from its VM
-%% arguments or the Erlang cookie file, and that cookie is returned. On a node
-%% that is not distributed the cookie is resolved in this order:
-%% 1. Application env: `{macula, [{cookie, CookieValue}]}'
-%% 2. Environment variable: `MACULA_COOKIE', `RELEASE_COOKIE' or `ERLANG_COOKIE'
-%% 3. The ~/.erlang.cookie file, which only its owner may be able to read
-%% 4. A new cookie, saved to ~/.erlang.cookie, only when that file is missing
-%%
-%% Raises `{cookie_file_unavailable, home_not_set}' when HOME is unset, and
-%% `{cookie_file_refused, Reason}' when the cookie file is there but cannot be
-%% used. Such a file is never replaced.
+%% Returns what `erlang:get_cookie/0' returns, and raises `not_distributed' on
+%% a node that is not distributed. macula sets no cookie and reads no cookie
+%% file: a distributed node's cookie is its release's own configuration,
+%% `-setcookie' or the owner-only `.erlang.cookie' that OTP's auth reads in
+%% the node's HOME. Deprecated: call `erlang:get_cookie/0'. Removed in 11.0.0.
 %%
 %% Examples:
 %% ```
@@ -135,12 +120,14 @@ is_distributed() ->
 %% '''
 -spec get_cookie() -> atom().
 get_cookie() ->
-    cookie_from(own_cookie(erlang:is_alive())).
+    own_cookie(erlang:is_alive()).
 
-%% @doc Set the Erlang cookie for this node and persist it.
+%% @doc Set the cookie of this node, which must be distributed.
 %%
-%% Sets the cookie for the current node and attempts to persist
-%% it to ~/.erlang.cookie for future sessions.
+%% Only the running node's cookie changes, and `not_distributed' is raised on
+%% a node that is not distributed. No file is written, so a node that starts
+%% again has its release's cookie. Deprecated: call `erlang:set_cookie/1'.
+%% Removed in 11.0.0.
 %%
 %% Examples:
 %% ```
@@ -151,9 +138,7 @@ get_cookie() ->
 set_cookie(Cookie) when is_binary(Cookie) ->
     set_cookie(binary_to_atom(Cookie, utf8));
 set_cookie(Cookie) when is_atom(Cookie) ->
-    true = erlang:set_cookie(node(), Cookie),
-    _ = persist_cookie(Cookie),
-    ok.
+    node_cookie_set(erlang:is_alive(), Cookie).
 
 %%%===================================================================
 %%% API - Node Monitoring
@@ -205,18 +190,17 @@ get_hostname() ->
 %%% Internal Functions - Distribution
 %%%===================================================================
 
-%% The cookie is resolved before distribution starts, while the node has no
-%% cookie of its own, so a configured cookie applies to the node started here.
+%% Distribution starts without a cookie from macula: OTP's auth gives the node
+%% its release's cookie, `-setcookie' or the owner-only `.erlang.cookie' in
+%% the node's HOME, and creates that file when it is missing.
 -spec start_distribution() -> ok | {error, term()}.
 start_distribution() ->
     Hostname = get_hostname(),
     NodeName = list_to_atom("macula_host@" ++ Hostname),
-    Cookie = get_cookie(),
 
     case net_kernel:start([NodeName, shortnames]) of
         {ok, _Pid} ->
             ?LOG_INFO("[macula_cluster] Started distribution as ~p", [NodeName]),
-            true = erlang:set_cookie(node(), Cookie),
             ok;
         {error, {already_started, _Pid}} ->
             ok;
@@ -226,142 +210,17 @@ start_distribution() ->
     end.
 
 %%%===================================================================
-%%% Internal Functions - Cookie Resolution
+%%% Internal Functions - The Node's Cookie
 %%%===================================================================
 
-%% A distributed node's own cookie; `nocookie' means it has none.
-own_cookie(true) -> known_cookie(erlang:get_cookie());
-own_cookie(false) -> none.
+own_cookie(true) -> erlang:get_cookie();
+own_cookie(false) -> erlang:error(not_distributed).
 
-known_cookie(nocookie) -> none;
-known_cookie(Cookie) -> {ok, Cookie}.
-
-cookie_from({ok, Cookie}) -> Cookie;
-cookie_from(none) -> resolved(resolve_cookie()).
-
-resolved({ok, Cookie}) -> Cookie;
-resolved({error, not_found}) -> generated_and_saved();
-resolved({error, home_not_set}) -> erlang:error({cookie_file_unavailable, home_not_set});
-resolved({error, {cookie_file_refused, _} = Refusal}) -> erlang:error(Refusal).
-
-%% Only a missing cookie file gets a new cookie.
-generated_and_saved() ->
-    Cookie = generate_cookie(),
-    saved(persist_cookie(Cookie), Cookie).
-
-saved(ok, Cookie) -> Cookie;
-saved({error, Reason}, _Cookie) -> erlang:error(Reason).
-
-%% @doc Resolve the cookie from the application env, the environment and the
-%% cookie file. A missing cookie file is `{error, not_found}'. An unset HOME,
-%% or a cookie file that cannot be used, is returned as its own error and
-%% never skipped.
--spec resolve_cookie() ->
-    {ok, atom()} | {error, not_found | home_not_set | {cookie_file_refused, term()}}.
-resolve_cookie() ->
-    configured_or_file(try_sources([fun get_cookie_from_app_env/0,
-                                    fun get_cookie_from_env_var/0])).
-
-configured_or_file({ok, _} = Found) -> Found;
-configured_or_file({error, not_found}) -> file_resolution(read_cookie_file()).
-
-file_resolution({error, enoent}) -> {error, not_found};
-file_resolution(Result) -> Result.
-
--spec try_sources([fun(() -> {ok, atom()} | {error, term()})]) ->
-    {ok, atom()} | {error, not_found}.
-try_sources([]) ->
-    {error, not_found};
-try_sources([Source | Rest]) ->
-    case Source() of
-        {ok, Cookie} -> {ok, Cookie};
-        {error, _} -> try_sources(Rest)
-    end.
-
--spec get_cookie_from_app_env() -> {ok, atom()} | {error, not_found}.
-get_cookie_from_app_env() ->
-    case application:get_env(macula, cookie) of
-        {ok, Cookie} when is_atom(Cookie) ->
-            {ok, Cookie};
-        {ok, Cookie} when is_binary(Cookie) ->
-            {ok, binary_to_atom(Cookie, utf8)};
-        {ok, Cookie} when is_list(Cookie) ->
-            {ok, list_to_atom(Cookie)};
-        _ ->
-            {error, not_found}
-    end.
-
--spec get_cookie_from_env_var() -> {ok, atom()} | {error, not_found}.
-get_cookie_from_env_var() ->
-    EnvVars = ["MACULA_COOKIE", "RELEASE_COOKIE", "ERLANG_COOKIE"],
-    get_first_env_var(EnvVars).
-
--spec get_first_env_var([string()]) -> {ok, atom()} | {error, not_found}.
-get_first_env_var([]) ->
-    {error, not_found};
-get_first_env_var([Var | Rest]) ->
-    case os:getenv(Var) of
-        false -> get_first_env_var(Rest);
-        "" -> get_first_env_var(Rest);
-        Value -> {ok, list_to_atom(Value)}
-    end.
-
-%% @doc Read the cookie from ~/.erlang.cookie through
-%% macula_owner_only_file:read/1, which accepts only a regular file its group
-%% and others cannot access. A missing file is `{error, enoent}'; a file that
-%% cannot be used is `{error, {cookie_file_refused, Reason}}'.
--spec read_cookie_file() ->
-    {ok, atom()} | {error, enoent | home_not_set | {cookie_file_refused, term()}}.
-read_cookie_file() ->
-    cookie_from_path(cookie_file_path()).
-
-cookie_from_path({ok, Path}) -> cookie_from_file(macula_owner_only_file:read(Path));
-cookie_from_path({error, home_not_set} = Error) -> Error.
-
-cookie_from_file({ok, Content}) ->
-    cookie_value(string:trim(binary_to_list(Content)));
-cookie_from_file({error, enoent}) ->
-    {error, enoent};
-cookie_from_file({error, Reason}) ->
-    {error, {cookie_file_refused, Reason}}.
-
-cookie_value("") -> {error, {cookie_file_refused, empty}};
-cookie_value(Cookie) -> {ok, list_to_atom(Cookie)}.
-
-%% @doc The cookie file in HOME. There is no fallback when HOME is unset.
--spec cookie_file_path() -> {ok, file:filename()} | {error, home_not_set}.
-cookie_file_path() ->
-    cookie_path_in(os:getenv("HOME")).
-
-cookie_path_in(false) -> {error, home_not_set};
-cookie_path_in("") -> {error, home_not_set};
-cookie_path_in(Home) -> {ok, filename:join(Home, ".erlang.cookie")}.
-
-%%%===================================================================
-%%% Internal Functions - Cookie Generation
-%%%===================================================================
-
--spec generate_cookie() -> atom().
-generate_cookie() ->
-    %% Generate a random 20-character cookie
-    Bytes = crypto:strong_rand_bytes(15),
-    Hex = binary:encode_hex(Bytes),
-    binary_to_atom(Hex, utf8).
-
-%% Saves through macula_owner_only_file:write/2: only the owner can read the
-%% file, and a symlink at the path is replaced, never written through.
--spec persist_cookie(atom()) -> ok | {error, {cookie_persist_failed, term()}}.
-persist_cookie(Cookie) ->
-    persist_result(saved_to(cookie_file_path(), atom_to_list(Cookie) ++ "\n")).
-
-saved_to({ok, Path}, Content) -> macula_owner_only_file:write(Path, Content);
-saved_to({error, _} = Error, _Content) -> Error.
-
-persist_result(ok) ->
+node_cookie_set(true, Cookie) ->
+    true = erlang:set_cookie(node(), Cookie),
     ok;
-persist_result({error, Reason}) ->
-    ?LOG_WARNING("[macula_cluster] Failed to persist cookie: ~p", [Reason]),
-    {error, {cookie_persist_failed, Reason}}.
+node_cookie_set(false, _Cookie) ->
+    erlang:error(not_distributed).
 
 %%%===================================================================
 %%% API - Auto-Clustering

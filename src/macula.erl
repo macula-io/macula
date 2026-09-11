@@ -84,6 +84,13 @@
 -export([ensure_distributed/0, get_cookie/0, set_cookie/1,
          monitor_nodes/0, unmonitor_nodes/0]).
 
+-deprecated([{get_cookie, 0, "call erlang:get_cookie/0 instead; removed in 11.0.0"},
+             {set_cookie, 1, "call erlang:set_cookie/1 instead; removed in 11.0.0"}]).
+
+%% get_cookie/0 and set_cookie/1 forward to macula_cluster's functions of the
+%% same name, deprecated alongside them.
+-ignore_xref([{macula_cluster, get_cookie, 0}, {macula_cluster, set_cookie, 1}]).
+
 %% Mesh Distribution
 -export([join_mesh/1, join_dist_relay/1, dist_relay_client/0]).
 
@@ -888,11 +895,15 @@ abort(Stream, Code, Message)
 -spec ensure_distributed() -> ok | {error, term()}.
 ensure_distributed() -> macula_cluster:ensure_distributed().
 
-%% @doc Get the Erlang cluster cookie.
+%% @doc The cookie of this node, which must be distributed; raises
+%% `not_distributed' otherwise. Deprecated: call `erlang:get_cookie/0'.
+%% Removed in 11.0.0.
 -spec get_cookie() -> atom().
 get_cookie() -> macula_cluster:get_cookie().
 
-%% @doc Set the Erlang cluster cookie.
+%% @doc Set the cookie of this node, which must be distributed; raises
+%% `not_distributed' otherwise. No file is written. Deprecated: call
+%% `erlang:set_cookie/1'. Removed in 11.0.0.
 -spec set_cookie(atom() | binary()) -> ok.
 set_cookie(Cookie) -> macula_cluster:set_cookie(Cookie).
 
