@@ -23,11 +23,12 @@
 %%% mirroring how `macula_feeder' / `macula_download' each announce
 %%% their own side of a content transfer.
 %%%
-%%% A process of the sink's own publishes these facts, in order, so a
-%%% pool that is gone or slow never fails or holds up the sink or its
-%%% stream; a publish that fails is logged. A sink killed before it could
-%%% hand over its stream's end has `streaming.completed_v1' published
-%%% for it, with outcome `failed' and the reason it went down for.
+%%% The sink's `macula_lifetime_announcer' publishes these facts, in
+%%% order, from a process of its own, so a pool that is gone or slow
+%%% never fails or holds up the sink or its stream; a publish that fails
+%%% is logged. A sink killed before it could hand over its stream's end
+%%% has `streaming.completed_v1' published for it, with outcome `failed'
+%%% and the reason it went down for.
 %%%
 %%% == Cancel ==
 %%%
@@ -87,8 +88,6 @@
 -module(macula_stream_sink).
 
 -behaviour(gen_server).
-
--include_lib("kernel/include/logger.hrl").
 
 -export([start_link/5, start_link/6, start_link/7]).
 -export([start_link_direct/5, start_link_direct/6, start_link_direct/7]).
@@ -222,7 +221,8 @@ open_stream(#{call_stream := CallStream, recv := Recv} = StreamIo, Module, Pool,
     case CallStream(Pool, Realm, Procedure, CallArgs, #{}) of
         {ok, Stream} ->
             StreamId = crypto:strong_rand_bytes(16),
-            Announcer = start_announcer(StreamIo, Pool, Realm, StreamId),
+            Announcer = macula_lifetime_announcer:start(
+                          true, facts(StreamIo, Pool, Realm, StreamId)),
             Reader = spawn_reader(Recv, Stream),
             {ok, #kstate{io = StreamIo, module = Module, pool = Pool, realm = Realm,
                          announcer = Announcer, stream_id = StreamId,
@@ -286,7 +286,8 @@ terminate(Reason, #kstate{io = StreamIo, module = Module, announcer = Announcer,
     %% sink could be gone while its reader still calls `recv/2'.
     stop_reader(Reader),
     finish_stream(StreamIo, Reason, Stream),
-    Announcer ! {stream_ended, outcome_fields(#{stream_id => StreamId}, Reason)},
+    ok = macula_lifetime_announcer:announce_end(
+           Announcer, outcome_fields(#{stream_id => StreamId}, Reason)),
     maybe_close(Module, Reason, User).
 
 stop_reader(Reader) ->
@@ -318,46 +319,9 @@ maybe_close(Module, Reason, User) ->
         false -> ok
     end.
 
-%% The sink's facts go out through an announcer of its own, so a publish
-%% never fails, holds up or ends the sink's work on its stream. The
-%% announcer publishes them in the order it gets them, logs a publish
-%% that fails and goes on, and never touches the stream. A sink that
-%% goes down before it hands over its stream's end, killed before
-%% terminate/2, has that end announced for it, with the reason it went
-%% down for. The announcer ends with the last fact it publishes. The
-%% sink waits until the announcer monitors it, so that reason is always
-%% the sink's own.
-start_announcer(#{publish := Publish}, Pool, Realm, StreamId) ->
-    Sink = self(),
-    Announcer = spawn(fun() -> announce(Sink, Publish, Pool, Realm, StreamId) end),
-    receive
-        {announcer_watching, Announcer} -> Announcer
-    end.
-
-announce(Sink, Publish, Pool, Realm, StreamId) ->
-    SinkRef = monitor(process, Sink),
-    Sink ! {announcer_watching, self()},
-    publish(Publish, Pool, Realm, ?STREAMING_STARTED, #{stream_id => StreamId}),
-    receive
-        {stream_ended, Outcome} ->
-            publish(Publish, Pool, Realm, ?STREAMING_COMPLETED, Outcome);
-        {'DOWN', SinkRef, process, Sink, Reason} ->
-            publish(Publish, Pool, Realm, ?STREAMING_COMPLETED,
-                    outcome_fields(#{stream_id => StreamId}, Reason))
-    end.
-
-publish(Publish, Pool, Realm, Topic, #{stream_id := StreamId} = Payload) ->
-    log_unpublished(Topic, StreamId, try_publish(Publish, Pool, Realm, Topic, Payload)).
-
-try_publish(Publish, Pool, Realm, Topic, Payload) ->
-    try
-        Publish(Pool, Realm, Topic, Payload)
-    catch
-        Class:Reason -> {Class, Reason}
-    end.
-
-log_unpublished(_Topic, _StreamId, ok) ->
-    ok;
-log_unpublished(Topic, StreamId, Failure) ->
-    ?LOG_WARNING("[macula_stream_sink] ~ts for stream ~ts not published: ~p",
-                 [Topic, binary:encode_hex(StreamId), Failure]).
+%% The facts the sink's announcer publishes: the stream's start, and its
+%% end, both with the stream's id.
+facts(#{publish := Publish}, Pool, Realm, StreamId) ->
+    #{publish => Publish, pool => Pool, realm => Realm,
+      started => {?STREAMING_STARTED, #{stream_id => StreamId}},
+      ended => {?STREAMING_COMPLETED, #{stream_id => StreamId}}}.
