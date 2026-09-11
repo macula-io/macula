@@ -16,8 +16,8 @@
 %%
 %% Phase 1 covers CONNECT / HELLO / GOODBYE. Phase 2 adds SWIM. Phase 3
 %% (Session 3.4) adds the DHT operation frames from Part 6 §7:
-%% PING / PONG, FIND_NODE / NODES, FIND_VALUE / VALUE, STORE / STORE_ACK,
-%% REPLICATE / REPLICATE_ACK. Phase 4 (Session 4.1) adds the CALL /
+%% PING / PONG, FIND_NODE / NODES, FIND_VALUE / VALUE and STORE / STORE_ACK.
+%% Phase 4 (Session 4.1) adds the CALL /
 %% RESULT / ERROR frames from Part 6 §5 plus the BOLT#4 error
 %% taxonomy in `hecate_bolt4'. PUBLISH frames land later.
 %%
@@ -41,7 +41,6 @@
     find_node/1, nodes/1,
     find_value/1, value/1,
     store/1, store_ack/1,
-    replicate/1, replicate_ack/1,
 
     %% DHT helper — build and validate a station_ref entry
     station_ref/1,
@@ -125,7 +124,6 @@
     find_node_spec/0, nodes_spec/0,
     find_value_spec/0, value_spec/0,
     store_spec/0, store_ack_spec/0,
-    replicate_spec/0, replicate_ack_spec/0,
     station_ref/0, station_ref_spec/0,
     call_spec/0, result_spec/0, call_error_spec/0,
     call_id/0,
@@ -161,14 +159,11 @@
 -define(MAX_PAYLOAD_NESTING, 62).
 %% A GOODBYE reason is text for people, bounded because it ends up in logs.
 -define(MAX_GOODBYE_REASON_BYTES, 256).
-%% A STORE_ACK reason names why a record was not stored: a record refusal, or quota.
--define(STORE_ACK_REASONS,
-        [record_too_large, malformed, signature_invalid, alg_mismatch, not_yet_valid, expired, key_id_mismatch, quota]).
 -define(NEIGHBOUR_LABEL, <<"MACULA-PQ-NEIGHBOUR-V1">>).
 %% The control frames, which pq_hybrid neighbour-signs (D17). Data frames carry their own end-to-end signatures.
 -define(NEIGHBOUR_SIGNED,
         [swim_ping, swim_ack, swim_suspect, swim_confirm, ping, pong, find_node, nodes, find_value, value,
-         store, store_ack, replicate, replicate_ack, advertise, unadvertise, subscribe, unsubscribe,
+         store, store_ack, advertise, unadvertise, subscribe, unsubscribe,
          overlay_relay, hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
          hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune,
          goodbye]).
@@ -179,7 +174,6 @@
                     | find_node | nodes
                     | find_value | value
                     | store | store_ack
-                    | replicate | replicate_ack
                     | call | result | error
                     | hyparview_join | hyparview_forward_join
                     | hyparview_neighbor | hyparview_disconnect
@@ -317,23 +311,9 @@
 
 -type store_spec()         :: #{record := binary()}.
 
--type store_ack_reason()   :: record_too_large | malformed | signature_invalid | alg_mismatch | not_yet_valid
-                            | expired | key_id_mismatch | quota.
-
 -type store_ack_spec()     :: #{
     key    := id256(),
-    stored := boolean(),
-    reason => store_ack_reason() | undefined
-}.
-
--type replicate_spec()     :: #{
-    record        := binary(),
-    new_custodian := boolean()
-}.
-
--type replicate_ack_spec() :: #{
-    key      := id256(),
-    accepted := boolean()
+    stored := boolean()
 }.
 
 %%------------------------------------------------------------------
@@ -481,7 +461,7 @@
 %% PubSub frame specs (Part 6 §6)
 %%------------------------------------------------------------------
 
--type delivery_channel() :: plumtree | dht | direct.
+-type delivery_channel() :: plumtree | direct.
 
 -type publish_spec() :: #{
     topic           := binary(),
@@ -654,7 +634,7 @@
 
 -type manifest_res_spec() :: #{
     mcid     := mcid(),
-    manifest := map() | not_found
+    manifest := map()
 }.
 
 -type cancel_spec() :: #{
@@ -854,24 +834,12 @@ value(#{key := K, records := Rs})
 store(#{record := R}) when is_binary(R) ->
     (base(store, 0))#{record => R}.
 
+%% A STORE_ACK carries no reason: nothing reads one, so a spec that brings one is refused.
 -spec store_ack(store_ack_spec()) -> frame().
 store_ack(#{key := K, stored := Stored} = Spec)
   when is_binary(K), byte_size(K) =:= 32,
-       is_boolean(Stored) ->
-    Reason = maps:get(reason, Spec, undefined),
-    validate_optional_reason(Reason),
-    (base(store_ack, 0))#{key => K, stored => Stored, reason => Reason}.
-
--spec replicate(replicate_spec()) -> frame().
-replicate(#{record := R, new_custodian := NC})
-  when is_binary(R), is_boolean(NC) ->
-    (base(replicate, 0))#{record => R, new_custodian => NC}.
-
--spec replicate_ack(replicate_ack_spec()) -> frame().
-replicate_ack(#{key := K, accepted := A})
-  when is_binary(K), byte_size(K) =:= 32,
-       is_boolean(A) ->
-    (base(replicate_ack, 0))#{key => K, accepted => A}.
+       is_boolean(Stored), not is_map_key(reason, Spec) ->
+    (base(store_ack, 0))#{key => K, stored => Stored}.
 
 %%------------------------------------------------------------------
 %% station_ref — validated payload for NODES responses
@@ -911,12 +879,6 @@ validate_addresses([A | Rest]) when is_map(A) -> validate_addresses(Rest).
 -spec validate_record_bytes(binary()) -> ok.
 validate_record_bytes(Bytes) when is_binary(Bytes) ->
     ok.
-
--spec validate_optional_reason(store_ack_reason() | undefined) -> ok.
-validate_optional_reason(undefined) -> ok;
-validate_optional_reason(R) when is_atom(R) -> listed_reason(lists:member(R, ?STORE_ACK_REASONS)).
-
-listed_reason(true) -> ok.
 
 %%------------------------------------------------------------------
 %% CALL / RESULT / ERROR constructors (Part 6 §5)
@@ -1190,7 +1152,7 @@ event(#{topic := T, realm := R, publisher := Pub, seq := Seq,
        is_binary(R),   byte_size(R)   =:= 32,
        is_binary(Pub), byte_size(Pub) =:= 32,
        is_integer(Seq), Seq >= 0,
-       (Via =:= plumtree orelse Via =:= dht orelse Via =:= direct) ->
+       (Via =:= plumtree orelse Via =:= direct) ->
     with_optional_publisher_sig(Spec, (base(event, 0))#{
         topic         => T,
         realm         => R,
@@ -1404,9 +1366,8 @@ validate_have_entry(#{mcid := M, size := S})
     validate_mcid(M),
     #{mcid => M, size => S}.
 
--spec validate_manifest_payload(map() | not_found) -> ok.
-validate_manifest_payload(not_found)              -> ok;
-validate_manifest_payload(M) when is_map(M)       -> ok.
+-spec validate_manifest_payload(map()) -> ok.
+validate_manifest_payload(M) when is_map(M) -> ok.
 
 %%------------------------------------------------------------------
 %% Neighbour signatures (D17)
@@ -1974,8 +1935,6 @@ frame_type_named(<<"find_value">>) -> {ok, find_value};
 frame_type_named(<<"value">>) -> {ok, value};
 frame_type_named(<<"store">>) -> {ok, store};
 frame_type_named(<<"store_ack">>) -> {ok, store_ack};
-frame_type_named(<<"replicate">>) -> {ok, replicate};
-frame_type_named(<<"replicate_ack">>) -> {ok, replicate_ack};
 frame_type_named(<<"call">>) -> {ok, call};
 frame_type_named(<<"result">>) -> {ok, result};
 frame_type_named(<<"error">>) -> {ok, error};
@@ -2236,34 +2195,7 @@ field_table(store_ack) ->
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"key">> => {key, value},
-      <<"stored">> => {stored, boolean},
-      <<"reason">> => {reason, {optional_enum, ?STORE_ACK_REASONS}}};
-field_table(replicate) ->
-    #{<<"version">> => {version, value},
-      <<"neighbour">> => {neighbour, held_object},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
-      <<"record">> => {record, value},
-      <<"new_custodian">> => {new_custodian, boolean}};
-field_table(replicate_ack) ->
-    #{<<"version">> => {version, value},
-      <<"neighbour">> => {neighbour, held_object},
-      <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
-      <<"key">> => {key, value},
-      <<"accepted">> => {accepted, boolean}};
+      <<"stored">> => {stored, boolean}};
 field_table(call) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
@@ -2510,7 +2442,7 @@ field_table(event) ->
       <<"publisher">> => {publisher, value},
       <<"seq">> => {seq, value},
       <<"payload">> => {payload, value},
-      <<"delivered_via">> => {delivered_via, {enum, [plumtree, dht, direct]}},
+      <<"delivered_via">> => {delivered_via, {enum, [plumtree, direct]}},
       <<"publisher_sig">> => {publisher_sig, value}};
 field_table(advertise) ->
     #{<<"version">> => {version, value},
@@ -2701,13 +2633,10 @@ field_value(error, _Field, _Rest, _Table, _Frame) -> error.
 read_value(value, Value) -> {ok, peer_value(Value)};
 read_value(frame_type, {text, Name}) -> frame_type_named(Name);
 read_value({enum, Atoms}, {text, Name}) -> enum_value(Name, Atoms);
-read_value({optional_enum, _Atoms}, null) -> {ok, undefined};
-read_value({optional_enum, Atoms}, {text, Name}) -> enum_value(Name, Atoms);
 read_value({bounded_text, Max}, {text, Bin} = Text) when byte_size(Bin) =< Max -> {ok, Text};
 read_value(boolean, 1) -> {ok, true};
 read_value(boolean, 0) -> {ok, false};
 read_value({list_of, Table}, Entries) when is_list(Entries) -> entries_read(Entries, Table, []);
-read_value(manifest, {text, <<"not_found">>}) -> {ok, not_found};
 read_value(manifest, Manifest) when is_map(Manifest) -> {ok, peer_value(Manifest)};
 read_value(bolt4_name, {text, Name}) -> enum_value(Name, [N || #{name := N} <- macula_bolt4:table()]);
 read_value(held_object, #{{text, <<"tbs">>} := Tbs, {text, <<"signature">>} := Signature} = Held)

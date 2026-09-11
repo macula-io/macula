@@ -92,7 +92,7 @@
     accept_owner    => pid(),
     %% Optional pid that receives DHT-class frames (`ping', `pong',
     %% `find_node', `nodes', `find_value', `value', `store',
-    %% `store_ack', `replicate', `replicate_ack') directly, bypassing
+    %% `store_ack') directly, bypassing
     %% `controlling_pid'. Sent as
     %%     `{macula_peering, dht_frame, self(), PeerNodeId, Frame}'.
     %% Stations set this to their `macula_dht' pid so DHT traffic
@@ -1015,8 +1015,6 @@ classify(find_value)     -> dht;
 classify(value)          -> dht;
 classify(store)          -> dht;
 classify(store_ack)      -> dht;
-classify(replicate)      -> dht;
-classify(replicate_ack)  -> dht;
 classify(subscribe)      -> pubsub;
 classify(unsubscribe)    -> pubsub;
 classify(publish)        -> pubsub;

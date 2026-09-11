@@ -402,26 +402,18 @@ store_ack_positive_test() ->
     F = macula_frame:store_ack(#{key => Key, stored => true}),
     ?assertEqual(store_ack, macula_frame:frame_type(F)),
     ?assertEqual(true, maps:get(stored, F)),
-    ?assertEqual(undefined, maps:get(reason, F)).
+    ?assertNot(maps:is_key(reason, F)).
 
-store_ack_with_rejection_reason_test() ->
-    F = macula_frame:store_ack(#{key => crypto:strong_rand_bytes(32),
-                                 stored => false,
-                                 reason => quota}),
+store_ack_refusal_carries_no_reason_test() ->
+    F = macula_frame:store_ack(#{key => crypto:strong_rand_bytes(32), stored => false}),
     ?assertEqual(false, maps:get(stored, F)),
-    ?assertEqual(quota, maps:get(reason, F)).
+    ?assertNot(maps:is_key(reason, F)).
 
-store_ack_rejects_non_atom_reason_test() ->
+store_ack_refuses_a_reason_test() ->
     ?assertError(function_clause,
                  macula_frame:store_ack(#{key    => crypto:strong_rand_bytes(32),
                                           stored => false,
-                                          reason => <<"bad">>})).
-
-store_ack_rejects_a_reason_outside_the_set_test() ->
-    ?assertError(function_clause,
-                 macula_frame:store_ack(#{key    => crypto:strong_rand_bytes(32),
-                                          stored => false,
-                                          reason => bad_record})).
+                                          reason => quota})).
 
 store_wire_roundtrip_test() ->
     Kp = macula_identity:generate(),
@@ -431,36 +423,15 @@ store_wire_roundtrip_test() ->
     ?assertMatch({ok, _},
                  macula_frame:verify(D, macula_identity:public(Kp))).
 
-%% -- REPLICATE / REPLICATE_ACK ------------------------------------
+%% -- No REPLICATE / REPLICATE_ACK ---------------------------------
 
-replicate_carries_record_and_custodian_flag_test() ->
-    F = macula_frame:replicate(#{record => sample_record(),
-                                 new_custodian => true}),
-    ?assertEqual(replicate, macula_frame:frame_type(F)),
-    ?assertEqual(true, maps:get(new_custodian, F)).
-
-replicate_rejects_non_boolean_flag_test() ->
-    ?assertError(function_clause,
-                 macula_frame:replicate(#{record => sample_record(),
-                                          new_custodian => perhaps})).
-
-replicate_ack_test() ->
-    Key = crypto:strong_rand_bytes(32),
-    F = macula_frame:replicate_ack(#{key => Key, accepted => true}),
-    ?assertEqual(replicate_ack, macula_frame:frame_type(F)),
-    ?assertEqual(Key, maps:get(key, F)),
-    ?assertEqual(true, maps:get(accepted, F)).
-
-replicate_wire_roundtrip_test() ->
-    Kp = macula_identity:generate(),
-    F  = macula_frame:sign(
-           macula_frame:replicate(#{record => sample_record(),
-                                    new_custodian => false}),
-           Kp),
-    {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
-    ?assertMatch({ok, _},
-                 macula_frame:verify(D, macula_identity:public(Kp))).
+%% Replication runs as STOREs, so the codec has no REPLICATE or REPLICATE_ACK.
+replicate_frames_are_not_frame_types_test() ->
+    {module, macula_frame} = code:ensure_loaded(macula_frame),
+    ?assertNot(erlang:function_exported(macula_frame, replicate, 1)),
+    ?assertNot(erlang:function_exported(macula_frame, replicate_ack, 1)),
+    [?assertEqual({error, bad_frame}, macula_frame:decode(macula_frame:encode(#{frame_type => Type})))
+     || Type <- [replicate, replicate_ack]].
 
 %% -- station_ref helper -------------------------------------------
 
@@ -1034,6 +1005,16 @@ event_rejects_unknown_delivery_channel_test() ->
                      payload       => ok,
                      delivered_via => carrier_pigeon})).
 
+event_refuses_dht_as_a_delivery_channel_test() ->
+    ?assertError(function_clause,
+                 macula_frame:event(#{
+                     topic         => <<"t">>,
+                     realm         => crypto:strong_rand_bytes(32),
+                     publisher     => crypto:strong_rand_bytes(32),
+                     seq           => 0,
+                     payload       => ok,
+                     delivered_via => dht})).
+
 %%------------------------------------------------------------------
 %% Publisher-end-to-end signature (publisher_sig)
 %%------------------------------------------------------------------
@@ -1298,10 +1279,8 @@ manifest_res_carries_manifest_test() ->
     ?assertEqual(manifest_res, macula_frame:frame_type(F)),
     ?assertEqual(Manifest,     maps:get(manifest, F)).
 
-manifest_res_accepts_not_found_test() ->
-    M = mcid(),
-    F = macula_frame:manifest_res(#{mcid => M, manifest => not_found}),
-    ?assertEqual(not_found, maps:get(manifest, F)).
+manifest_res_refuses_not_found_test() ->
+    ?assertError(function_clause, macula_frame:manifest_res(#{mcid => mcid(), manifest => not_found})).
 
 cancel_carries_mcid_list_test() ->
     M1 = mcid(), M2 = mcid(),

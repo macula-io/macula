@@ -10,7 +10,7 @@
 -define(EU_TIMEOUT, 120).
 -define(LABEL, <<"MACULA-PQ-NEIGHBOUR-V1">>).
 -define(CONTROL, [swim_ping, swim_ack, swim_suspect, swim_confirm, ping, pong, find_node, nodes, find_value, value,
-                  store, store_ack, replicate, replicate_ack, advertise, unadvertise, subscribe, unsubscribe,
+                  store, store_ack, advertise, unadvertise, subscribe, unsubscribe,
                   overlay_relay, hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
                   hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune, goodbye]).
 -define(DATA, [publish, event, plumtree_gossip, want, have, block, manifest_req, manifest_res, cancel, call, result,
@@ -40,7 +40,7 @@ neighbour_signatures_test_() ->
 cases(Keys) ->
     [{case_name(Case), fun() -> Case(Keys) end}
      || Case <- [fun a_signed_control_frame_verifies_with_its_connection_and_seq/1,
-                 fun a_signed_store_ack_keeps_its_boolean_and_reason/1,
+                 fun a_signed_store_ack_keeps_its_boolean/1,
                  fun the_outer_frame_carries_only_version_frame_type_and_neighbour/1,
                  fun fields_beside_neighbour_are_refused/1,
                  fun the_tbs_holds_the_frame_fields_with_frame_type_alg_connection_and_seq/1,
@@ -61,8 +61,8 @@ a_signed_control_frame_verifies_with_its_connection_and_seq(#{key := Key} = Keys
                                                  opts(Keys, 0)),
     ?assertEqual(Ping, Opened).
 
-a_signed_store_ack_keeps_its_boolean_and_reason(#{key := Key} = Keys) ->
-    StoreAck = wire(macula_frame:store_ack(#{key => <<7:256>>, stored => false, reason => quota})),
+a_signed_store_ack_keeps_its_boolean(#{key := Key} = Keys) ->
+    StoreAck = wire(macula_frame:store_ack(#{key => <<7:256>>, stored => false})),
     Signed = wire(macula_frame:sign_neighbour(StoreAck, Key, at(Keys, 0))),
     ?assertEqual({ok, StoreAck}, macula_frame:verify_neighbour(Signed, opts(Keys, 0))).
 

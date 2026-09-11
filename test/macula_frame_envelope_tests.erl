@@ -1,7 +1,7 @@
 %% EUnit tests for the frame envelope (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Encoding and Peer-supplied maps, D26): a
 %% frame decodes under the decoding rule; a frame type's own fields decode through a fixed table, so a frame type or a
 %% field the table does not define, or an enum value it does not list, is refused; an envelope boolean travels as 0 or
-%% 1; a GOODBYE reason is text of at most 256 bytes and a STORE_ACK reason one of a closed set; payloads keep one key
+%% 1; a GOODBYE reason is text of at most 256 bytes and a STORE_ACK carries no reason; payloads keep one key
 %% form, the same on a fresh node as on a warm one; and records travel as their wire bytes.
 -module(macula_frame_envelope_tests).
 
@@ -14,7 +14,6 @@
 records_travel_as_their_wire_bytes_test() ->
     Bytes = record_bytes(),
     Frames = [macula_frame:store(#{record => Bytes}),
-              macula_frame:replicate(#{record => Bytes, new_custodian => false}),
               macula_frame:hyparview_join(#{realm => fill(1), new_member => fill(2), record => Bytes})],
     [?assertEqual(Bytes, maps:get(record, roundtrip(Frame))) || Frame <- Frames],
     ?assertEqual([Bytes, Bytes],
@@ -50,6 +49,16 @@ an_enum_value_the_table_does_not_list_is_refused_test() ->
     StreamEnd = macula_frame:stream_end(#{stream_id => <<0:128>>, role => send}),
     ?assertEqual({error, bad_frame}, decode_map(StreamEnd#{role => recv})).
 
+%% A value no code produces and reads is not in the table: EVENT delivered_via dht, and a MANIFEST_RES not_found.
+values_without_a_producer_and_a_reader_are_refused_test() ->
+    Event = macula_frame:event(#{topic => <<"t">>, realm => fill(1), publisher => fill(2), seq => 0, payload => 1,
+                                 delivered_via => direct}),
+    ?assertMatch({ok, #{delivered_via := direct}, <<>>}, decode_map(Event)),
+    ?assertEqual({error, bad_frame}, decode_map(Event#{delivered_via => dht})),
+    ManifestRes = macula_frame:manifest_res(#{mcid => <<2, 0, 0:384>>, manifest => #{}}),
+    ?assertMatch({ok, #{manifest := #{}}, <<>>}, decode_map(ManifestRes)),
+    ?assertEqual({error, bad_frame}, decode_map(ManifestRes#{manifest => not_found})).
+
 %%------------------------------------------------------------------
 %% Reasons and booleans
 %%------------------------------------------------------------------
@@ -70,23 +79,17 @@ a_goodbye_reason_is_text_of_at_most_256_bytes_test() ->
     TooLong = binary_to_atom(binary:copy(<<16#C3, 16#A9>>, 129)),
     ?assertError(function_clause, macula_frame:goodbye(TooLong, undefined)).
 
-a_store_ack_reason_decodes_to_a_listed_atom_test() ->
-    Refused = macula_frame:store_ack(#{key => fill(3), stored => false, reason => quota}),
-    Stored = macula_frame:store_ack(#{key => fill(3), stored => true}),
-    ?assertEqual(quota, maps:get(reason, roundtrip(Refused))),
-    ?assertEqual(undefined, maps:get(reason, roundtrip(Stored))).
-
-a_store_ack_reason_the_set_does_not_list_is_refused_test() ->
-    Refused = macula_frame:store_ack(#{key => fill(3), stored => false, reason => quota}),
-    ?assertEqual({error, bad_frame}, decode_map(Refused#{reason => bad_record})).
+a_store_ack_carries_no_reason_test() ->
+    Refused = macula_frame:store_ack(#{key => fill(3), stored => false}),
+    ?assertNot(maps:is_key(reason, roundtrip(Refused))),
+    ?assertEqual({error, bad_frame}, decode_map(Refused#{reason => quota})).
 
 an_envelope_boolean_travels_as_0_or_1_test() ->
     Stored = macula_frame:store_ack(#{key => fill(3), stored => true}),
     <<_Length:32, Bytes/binary>> = macula_frame:encode(Stored),
     ?assertMatch({ok, #{{text, <<"stored">>} := 1}}, macula_record_cbor:decode_strict(Bytes)),
     ?assertEqual(true, maps:get(stored, roundtrip(Stored))),
-    Replicate = macula_frame:replicate(#{record => <<1, 2, 3>>, new_custodian => false}),
-    ?assertEqual(false, maps:get(new_custodian, roundtrip(Replicate))).
+    ?assertEqual(false, maps:get(stored, roundtrip(macula_frame:store_ack(#{key => fill(3), stored => false})))).
 
 an_envelope_boolean_other_than_0_or_1_is_refused_test() ->
     Stored = macula_frame:store_ack(#{key => fill(3), stored => true}),
