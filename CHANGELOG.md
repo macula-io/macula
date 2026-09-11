@@ -306,6 +306,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed publish is now logged. A sink killed before its stop has its
   `streaming.completed_v1` published with `outcome => failed` and the
   reason.
+- `macula_upload:advertise/6` now passes its `auth` and `reuse_sup` options,
+  and its other options except `fact_publish`, on to
+  `macula_streamer:advertise/6`, as `advertise_direct/7` does. Before this
+  release `advertise/6` ignored them, so an upload advertised through
+  `advertise/6` with an `auth` policy was served without that policy.
+  Upgrade if you advertise uploads through `advertise/6`.
 
 ## [10.24.0] - 2026-09-10
 

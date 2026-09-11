@@ -98,9 +98,9 @@
 %%%
 %%% == Stream I/O ==
 %%%
-%%% `advertise/6' and `advertise_direct/7' pass `stream_io' and
-%%% `advertise_stream', and `advertise_direct/7' also
-%%% `publish_advertisement', on to `macula_streamer' (see its "Stream
+%%% `advertise/6' and `advertise_direct/7' pass their options on to
+%%% `macula_streamer', `stream_io' and `advertise_stream' among them, and
+%%% `advertise_direct/7' also `publish_advertisement' (see its "Stream
 %%% I/O" section). Each upload announces its `sharing.upload_*' facts
 %%% with `fact_publish', `macula:publish/4' by default.
 %%%
@@ -165,16 +165,17 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
     advertise(Pool, Realm, Procedure, Module, Args, #{}).
 
 %% @doc As `advertise/5'. `Opts' may include `announce' (default
-%% `true') for this module's OWN `sharing.upload_*' facts, `fact_publish',
-%% the function it announces them with, and `stream_io' and
-%% `advertise_stream', which go to `macula_streamer' (see "Stream I/O"
-%% above).
+%% `true') for this module's OWN `sharing.upload_*' facts and
+%% `fact_publish', the function it announces them with. The other options,
+%% such as `auth', `reuse_sup', `stream_io' and `advertise_stream', go on
+%% to `macula_streamer:advertise/6', with `mode' `client_stream' (see
+%% "Stream I/O" above).
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
                 module(), term(), map()) -> {ok, pid()} | {error, term()}.
 advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
     Announce = maps:get(announce, Opts, true),
     FactPublish = arity_4(maps:get(fact_publish, Opts, fun macula:publish/4)),
-    StreamerOpts = maps:with([stream_io, advertise_stream], Opts),
+    StreamerOpts = maps:remove(fact_publish, Opts),
     macula_streamer:advertise(Pool, Realm, Procedure, ?MODULE,
                               {Module, Pool, Realm, Announce, FactPublish, Args},
                               StreamerOpts#{mode => client_stream, announce => false}).

@@ -77,7 +77,8 @@ upload_test_() ->
                  fun bad_manifest_stops_before_any_chunk/0,
                  fun relabelled_manifest_is_refused_before_any_chunk/0,
                  fun direct_dial_forwards_client_stream_mode/0,
-                 fun a_fact_publish_of_another_arity_is_refused/0]].
+                 fun a_fact_publish_of_another_arity_is_refused/0,
+                 fun advertise_passes_auth_and_reuse_sup_on_to_the_streamer/0]].
 
 verified_push_delivers_ok_and_replies_ok() ->
     process_flag(trap_exit, true),
@@ -178,6 +179,21 @@ a_fact_publish_of_another_arity_is_refused() ->
                  macula_upload:advertise(pool, <<0:256>>, <<"bulk.ingest">>, ?MODULE, self(),
                                          Opts)),
     ?assertEqual([], macula_scripted_stream:advertised()).
+
+%% advertise/6 passes its options on to the streamer as advertise_direct/7
+%% does: the auth policy reaches the advertise function, and reuse_sup
+%% gives back the supervisor it names.
+advertise_passes_auth_and_reuse_sup_on_to_the_streamer() ->
+    Policy = {ucan_required, <<7:256>>},
+    Opts = (macula_scripted_stream:options([]))#{auth => Policy},
+    {ok, Sup} = macula_upload:advertise(pool, <<0:256>>, <<"bulk.ingest">>, ?MODULE, self(),
+                                        Opts),
+    {ok, Again} = macula_upload:advertise(pool, <<0:256>>, <<"bulk.ingest">>, ?MODULE, self(),
+                                          Opts#{reuse_sup => Sup}),
+    ?assertEqual(Sup, Again),
+    ?assertMatch([{_, client_stream, _, #{auth := Policy}},
+                  {_, client_stream, _, #{auth := Policy}}],
+                 macula_scripted_stream:advertised()).
 
 %%%===================================================================
 %%% Helpers

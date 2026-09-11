@@ -10,6 +10,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% macula_upload callbacks for the gated upload test.
+-export([init/1, handle_uploaded/2]).
+
 %% Realm-per-call: tests use the all-zeros realm tag (DHT-internal /
 %% realm-agnostic) for every call/subscribe/publish.
 -define(REALM, <<0:256>>).
@@ -2772,6 +2775,54 @@ stream_policy_is_enforced_before_the_handler_test_() ->
              teardown_link_for_streams(ok)
          end
      end}.
+
+%% -- an upload advertised through macula_upload:advertise/6 keeps its gate
+
+%% A gated upload advertised through macula_upload:advertise/6 answers a
+%% STREAM_OPEN that carries no token with a STREAM_ERROR `unauthorized'
+%% on its own stream, and starts no receiver for it.
+an_upload_advertised_with_a_policy_refuses_a_caller_without_a_token_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Procedure = <<"bulk.gated_ingest">>,
+             Policy = {realm_member_required,
+                       macula_identity:public(macula_identity:generate()),
+                       <<"member/email-verified">>},
+             AdvertiseOnLink = fun(_Pool, Realm, Proc, Mode, Handler, Opts) ->
+                 macula_station_link:advertise_stream(Pid, Realm, Proc, Mode, Handler,
+                                                      maps:get(auth, Opts, open))
+             end,
+             {ok, Sup} = macula_upload:advertise(pool, ?REALM, Procedure, ?MODULE, self(),
+                                                 #{auth => Policy,
+                                                   advertise_stream => AdvertiseOnLink}),
+             flush_send_frame_casts(),
+             CallerKp = macula_identity:generate(),
+             NoToken = make_ref(),
+             inject_dedicated_stream_open(
+               Pid, FakePeer, NoToken,
+               macula_frame:sign((stream_open_frame(Procedure, CallerKp, no_token))#{
+                                   mode => client_stream}, CallerKp)),
+             receive
+                 {sent_on_stream, NoToken, #{frame_type := stream_error,
+                                             code       := Code}} ->
+                     ?assertEqual(<<"unauthorized">>, Code)
+             after 1_000 ->
+                 erlang:error(no_unauthorized_stream_error)
+             end,
+             timer:sleep(100),
+             ?assertEqual([], supervisor:which_children(Sup)),
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% macula_upload callbacks, for the gated upload test above.
+init(Parent) -> {ok, Parent}.
+
+handle_uploaded(_Result, _Parent) -> ok.
 
 %% -- call_stream presents a ucan_token on its STREAM_OPEN ----------
 
