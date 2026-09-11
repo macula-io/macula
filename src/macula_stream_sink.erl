@@ -57,13 +57,16 @@
 %%%
 %%% == Stream I/O ==
 %%%
-%%% A sink opens, reads, ends and announces its stream through five
-%%% functions: `call_stream/5', `recv/2', `close_stream/1', `abort/3'
-%%% and `publish/4'. They are the `macula' facade's by default, and a
-%%% direct-dial sink dials with `macula_direct_dial:call_stream/5'.
-%%% `start_link/7' and `start_link_direct/7' take a `stream_io' start
-%%% option of five other functions at the same arities, all five given,
-%%% to run a sink on something else, such as a test's scripted stream.
+%%% A sink opens, reads and ends its stream through four functions,
+%%% `call_stream/5', `recv/2', `close_stream/1' and `abort/3', and
+%%% announces its facts through a fifth, `fact_publish/4'. They are the
+%%% `macula' facade's by default, and a direct-dial sink dials with
+%%% `macula_direct_dial:call_stream/5'. `start_link/7' and
+%%% `start_link_direct/7' take a `stream_io' start option, checked by
+%%% `macula_stream:stream_io/2', with the four stream functions and any
+%%% other `macula_stream:stream_io()' ones, and a `fact_publish' start
+%%% option, to run a sink on something else, such as a test's scripted
+%%% stream.
 %%%
 %%% == Example ==
 %%%
@@ -95,7 +98,7 @@
 -export([start_link_direct/5, start_link_direct/6, start_link_direct/7]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
--export_type([stream_io/0, start_opts/0]).
+-export_type([start_opts/0]).
 
 -callback init(Args :: term()) ->
     {ok, State :: term()} | {stop, Reason :: term()}.
@@ -112,19 +115,11 @@
 -define(STREAMING_COMPLETED, <<"streaming.completed_v1">>).
 -define(CANCEL_CODE, <<"cancelled">>).
 
--type stream_io() :: #{call_stream := fun((macula:pool(), macula:realm(), macula:procedure(),
-                                          term(), map()) ->
-                                             {ok, macula:stream()} | {error, term()}),
-                       recv := fun((macula:stream(), timeout()) ->
-                                      {chunk, binary()} | {data, term()} | eof | {error, term()}),
-                       close_stream := fun((macula:stream()) -> term()),
-                       abort := fun((macula:stream(), binary(), binary()) -> term()),
-                       publish := fun((macula:pool(), macula:realm(), macula:topic(), term()) ->
-                                         term())}.
--type start_opts() :: #{stream_io => stream_io()}.
+-type start_opts() :: #{stream_io => macula_stream:stream_io(),
+                        fact_publish => macula_lifetime_announcer:publish()}.
 
 -record(kstate, {
-    io        :: stream_io(),
+    io        :: macula_stream:stream_io(),
     module    :: module(),
     pool      :: macula:pool(),
     realm     :: macula:realm(),
@@ -150,11 +145,12 @@ start_link(Module, Pool, Realm, Procedure, Args, CallArgs) ->
     start_link(Module, Pool, Realm, Procedure, Args, CallArgs, #{}).
 
 %% @doc As `start_link/6', with start options: `stream_io' gives the
-%% five functions the sink runs its stream on (see "Stream I/O" above).
+%% functions the sink runs its stream on, and `fact_publish' the one it
+%% announces its facts with (see "Stream I/O" above).
 -spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),
                   term(), term(), start_opts()) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Procedure, Args, CallArgs, Opts) when is_map(Opts) ->
-    start(stream_io(pooled, Opts), {Module, Pool, Realm, Procedure, Args, CallArgs}).
+    start(pooled, Opts, {Module, Pool, Realm, Procedure, Args, CallArgs}).
 
 %% @doc As `start_link/5', but resolves and dials the procedure's
 %% provider directly instead of routing through the pool's existing
@@ -174,31 +170,30 @@ start_link_direct(Module, Pool, Realm, Procedure, Args, CallArgs) ->
     start_link_direct(Module, Pool, Realm, Procedure, Args, CallArgs, #{}).
 
 %% @doc As `start_link_direct/6', with start options: `stream_io' gives
-%% the five functions the sink runs its stream on (see "Stream I/O"
-%% above).
+%% the functions the sink runs its stream on, and `fact_publish' the one
+%% it announces its facts with (see "Stream I/O" above).
 -spec start_link_direct(module(), macula:pool(), macula:realm(),
                         macula:procedure(), term(), term(), start_opts()) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Realm, Procedure, Args, CallArgs, Opts) when is_map(Opts) ->
-    start(stream_io(direct, Opts), {Module, Pool, Realm, Procedure, Args, CallArgs}).
+    start(direct, Opts, {Module, Pool, Realm, Procedure, Args, CallArgs}).
 
-%% A sink starts on a stream_io of exactly the five functions at their
-%% arities; any other is refused with function_clause, in the caller.
-start(#{call_stream := CallStream, recv := Recv, close_stream := CloseStream,
-        abort := Abort, publish := Publish} = StreamIo, Start)
-  when map_size(StreamIo) =:= 5, is_function(CallStream, 5), is_function(Recv, 2),
-       is_function(CloseStream, 1), is_function(Abort, 3), is_function(Publish, 4) ->
-    gen_server:start_link(?MODULE, {StreamIo, Start}, []).
-
-stream_io(DialMode, Opts) ->
-    maps:get(stream_io, Opts, default_stream_io(DialMode)).
+%% A sink starts on stream functions macula_stream:stream_io/2 accepts
+%% and a fact_publish of arity 4; any other is refused with
+%% function_clause, in the caller.
+start(DialMode, Opts, Start) ->
+    StreamIo = macula_stream:stream_io(default_stream_io(DialMode),
+                                       maps:get(stream_io, Opts, undefined)),
+    FactPublish = arity_4(maps:get(fact_publish, Opts, fun macula:publish/4)),
+    gen_server:start_link(?MODULE, {StreamIo, FactPublish, Start}, []).
 
 default_stream_io(DialMode) ->
     #{call_stream => dial(DialMode),
       recv => fun macula:recv/2,
       close_stream => fun macula:close_stream/1,
-      abort => fun macula:abort/3,
-      publish => fun macula:publish/4}.
+      abort => fun macula:abort/3}.
+
+arity_4(Fun) when is_function(Fun, 4) -> Fun.
 
 dial(pooled) -> fun macula:call_stream/5;
 dial(direct) -> fun macula_direct_dial:call_stream/5.
@@ -208,23 +203,23 @@ dial(direct) -> fun macula_direct_dial:call_stream/5.
 %%%===================================================================
 
 %% @private
-init({StreamIo, {Module, Pool, Realm, Procedure, InitArgs, CallArgs}}) ->
+init({StreamIo, FactPublish, {Module, Pool, Realm, Procedure, InitArgs, CallArgs}}) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
-            open_stream(StreamIo, Module, Pool, Realm, Procedure, CallArgs,
+            open_stream(StreamIo, FactPublish, Module, Pool, Realm, Procedure, CallArgs,
                         UserState);
         {stop, Reason} ->
             {stop, Reason}
     end.
 
-open_stream(#{call_stream := CallStream, recv := Recv} = StreamIo, Module, Pool, Realm,
-            Procedure, CallArgs, UserState) ->
+open_stream(#{call_stream := CallStream, recv := Recv} = StreamIo, FactPublish, Module, Pool,
+            Realm, Procedure, CallArgs, UserState) ->
     case CallStream(Pool, Realm, Procedure, CallArgs, #{}) of
         {ok, Stream} ->
             StreamId = crypto:strong_rand_bytes(16),
             Announcer = macula_lifetime_announcer:start(
-                          true, facts(StreamIo, Pool, Realm, StreamId)),
+                          true, facts(FactPublish, Pool, Realm, StreamId)),
             Reader = spawn_reader(Recv, Stream),
             {ok, #kstate{io = StreamIo, module = Module, pool = Pool, realm = Realm,
                          announcer = Announcer, stream_id = StreamId,
@@ -323,7 +318,7 @@ maybe_close(Module, Reason, User) ->
 
 %% The facts the sink's announcer publishes: the stream's start, and its
 %% end, both with the stream's id.
-facts(#{publish := Publish}, Pool, Realm, StreamId) ->
-    #{publish => Publish, pool => Pool, realm => Realm,
+facts(FactPublish, Pool, Realm, StreamId) ->
+    #{publish => FactPublish, pool => Pool, realm => Realm,
       started => {?STREAMING_STARTED, #{stream_id => StreamId}},
       ended => {?STREAMING_COMPLETED, #{stream_id => StreamId}}}.

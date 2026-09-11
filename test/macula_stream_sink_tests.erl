@@ -1,9 +1,9 @@
 %%%-------------------------------------------------------------------
 %%% @doc Tests for macula_stream_sink.
 %%%
-%%% Each sink runs on stream I/O the test gives it through the
-%%% stream_io start option, over a scripted stream, so no test
-%%% replaces the macula module.
+%%% Each sink runs on stream I/O and a fact publish the test gives it
+%%% through the stream_io and fact_publish start options, over a
+%%% scripted stream, so no test replaces the macula module.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_stream_sink_tests).
@@ -43,12 +43,12 @@ handle_close(Reason, Parent) ->
 %%% Stream I/O over a scripted stream
 %%%===================================================================
 
-%% recv/2 returns Results in order and then waits, as a stream with
-%% nothing more to read does. The other four functions record their
-%% calls, in order, in the table returned with them; publish/4 also
-%% sends the test {published, Topic, Payload}, and abort/3 sends it
-%% {aborted, Code, Message}.
-scripted_stream_io(Results) ->
+%% Start options over a scripted stream. recv/2 returns Results in order
+%% and then waits, as a stream with nothing more to read does. The other
+%% stream functions and fact_publish record their calls, in order, in the
+%% table returned with the options; fact_publish also sends the test
+%% {published, Topic, Payload}, and abort/3 sends it {aborted, Code, Message}.
+scripted_opts(Results) ->
     Test = self(),
     Calls = ets:new(stream_io_calls, [ordered_set, public]),
     Next = atomics:new(1, []),
@@ -67,13 +67,17 @@ scripted_stream_io(Results) ->
                  abort => fun(_Stream, Code, Message) ->
                                   Test ! {aborted, Code, Message},
                                   Record({abort, Code})
-                          end,
-                 publish => fun(_Pool, _Realm, Topic, Payload) ->
-                                    ok = Record({publish, Topic}),
-                                    Test ! {published, Topic, Payload},
-                                    ok
-                            end},
-    {StreamIo, Calls}.
+                          end},
+    FactPublish = fun(_Pool, _Realm, Topic, Payload) ->
+                          ok = Record({publish, Topic}),
+                          Test ! {published, Topic, Payload},
+                          ok
+                  end,
+    {#{stream_io => StreamIo, fact_publish => FactPublish}, Calls}.
+
+%% Opts with its stream function Key given as Fun.
+with_io(#{stream_io := StreamIo} = Opts, Key, Fun) ->
+    Opts#{stream_io := StreamIo#{Key => Fun}}.
 
 next_result(N, Results) when N =< length(Results) ->
     lists:nth(N, Results);
@@ -91,9 +95,9 @@ call_name(Name) -> Name.
 
 %% start_link/7 links the caller, so a test whose sink exits with a
 %% non-normal reason sets trap_exit itself, first thing in the test.
-start_sink(StreamIo) ->
+start_sink(Opts) ->
     {ok, Sink} = macula_stream_sink:start_link(?MODULE, pool, ?REALM, ?PROCEDURE, self(), #{},
-                                               #{stream_io => StreamIo}),
+                                               Opts),
     Sink.
 
 %% Returns once Sink has exited.
@@ -127,7 +131,8 @@ sink_test_() ->
                  fun abnormal_stop_aborts_not_closes/0,
                  fun a_direct_sink_runs_on_the_stream_io_it_is_given/0,
                  fun without_stream_io_a_sink_dials_through_the_macula_facade/0,
-                 fun a_stream_io_of_other_than_the_five_functions_is_refused/0,
+                 fun a_stream_io_missing_a_function_or_of_another_shape_is_refused/0,
+                 fun a_stream_io_may_carry_other_stream_functions/0,
                  {timeout, 60, fun a_stopped_sinks_reader_is_gone_before_the_sink_is/0},
                  fun a_sink_whose_pool_is_gone_still_reads_and_closes/0,
                  {timeout, 10, fun a_sink_whose_pool_never_answers_starts_and_stops_at_once/0},
@@ -135,8 +140,8 @@ sink_test_() ->
                  fun a_failed_streams_end_fact_and_abort_name_the_reason_only/0]].
 
 delivers_chunks_then_eof() ->
-    {StreamIo, _Calls} = scripted_stream_io([{chunk, <<"a">>}, {chunk, <<"b">>}, eof]),
-    Sink = start_sink(StreamIo),
+    {Opts, _Calls} = scripted_opts([{chunk, <<"a">>}, {chunk, <<"b">>}, eof]),
+    Sink = start_sink(Opts),
     ?assertEqual({chunk_seen, <<"a">>}, wait_msg()),
     ?assertEqual({chunk_seen, <<"b">>}, wait_msg()),
     ?assertEqual({closed, normal}, wait_msg()),
@@ -146,16 +151,16 @@ delivers_chunks_then_eof() ->
 
 surfaces_recv_error() ->
     process_flag(trap_exit, true),
-    {StreamIo, _Calls} = scripted_stream_io([{error, timeout}]),
-    Sink = start_sink(StreamIo),
+    {Opts, _Calls} = scripted_opts([{error, timeout}]),
+    Sink = start_sink(Opts),
     ?assertEqual({closed, timeout}, wait_msg()),
     wait_down(Sink).
 
 %% A clean eof (Reason = normal) closes the underlying stream both
 %% sides — the pre-Phase-5 behaviour — and never sends an abort.
 normal_stop_closes_not_aborts() ->
-    {StreamIo, Calls} = scripted_stream_io([eof]),
-    Sink = start_sink(StreamIo),
+    {Opts, Calls} = scripted_opts([eof]),
+    Sink = start_sink(Opts),
     ?assertEqual({closed, normal}, wait_msg()),
     wait_down(Sink),
     ?assertEqual(1, count(close_stream, Calls)),
@@ -168,31 +173,31 @@ normal_stop_closes_not_aborts() ->
 %% real cancellation/failure from a clean end-of-stream.
 abnormal_stop_aborts_not_closes() ->
     process_flag(trap_exit, true),
-    {StreamIo, Calls} = scripted_stream_io([{error, timeout}]),
-    Sink = start_sink(StreamIo),
+    {Opts, Calls} = scripted_opts([{error, timeout}]),
+    Sink = start_sink(Opts),
     ?assertEqual({closed, timeout}, wait_msg()),
     wait_down(Sink),
     ?assertEqual([{abort, <<"cancelled">>}], [Call || {abort, _} = Call <- calls(Calls)]),
     ?assertEqual(0, count(close_stream, Calls)).
 
 callback_can_stop_early() ->
-    {StreamIo, _Calls} = scripted_stream_io([{chunk, <<"stop">>}, {chunk, <<"never seen">>}]),
-    Sink = start_sink(StreamIo),
+    {Opts, _Calls} = scripted_opts([{chunk, <<"stop">>}, {chunk, <<"never seen">>}]),
+    Sink = start_sink(Opts),
     ?assertEqual({chunk_seen, <<"stop">>}, wait_msg()),
     ?assertEqual({closed, normal}, wait_msg()),
     wait_down(Sink).
 
 init_stop_propagates() ->
     process_flag(trap_exit, true),
-    {StreamIo, _Calls} = scripted_stream_io([]),
-    Refusing = StreamIo#{call_stream := fun(_Pool, _Realm, _Procedure, _Args, _Opts) ->
-                                                {error, no_healthy_link}
-                                        end},
+    {Opts, _Calls} = scripted_opts([]),
+    Refusing = with_io(Opts, call_stream, fun(_Pool, _Realm, _Procedure, _Args, _CallOpts) ->
+                                                  {error, no_healthy_link}
+                                          end),
     %% A failed start returns only once the sink is down: proc_lib waits
     %% for its DOWN and takes its EXIT message.
     ?assertEqual({error, no_healthy_link},
                  macula_stream_sink:start_link(?MODULE, pool, ?REALM, ?PROCEDURE, self(), #{},
-                                               #{stream_io => Refusing})).
+                                               Refusing)).
 
 %% Without stream_io a sink dials with macula:call_stream/5, whose
 %% guard refuses a pool that is not a process. As with any failed
@@ -203,9 +208,9 @@ without_stream_io_a_sink_dials_through_the_macula_facade() ->
                  macula_stream_sink:start_link(?MODULE, pool, ?REALM, ?PROCEDURE, self())).
 
 a_direct_sink_runs_on_the_stream_io_it_is_given() ->
-    {StreamIo, Calls} = scripted_stream_io([{chunk, <<"a">>}, eof]),
+    {Opts, Calls} = scripted_opts([{chunk, <<"a">>}, eof]),
     {ok, Sink} = macula_stream_sink:start_link_direct(?MODULE, pool, ?REALM, ?PROCEDURE, self(),
-                                                      undefined, #{stream_io => StreamIo}),
+                                                      undefined, Opts),
     ?assertEqual({chunk_seen, <<"a">>}, wait_msg()),
     ?assertEqual({closed, normal}, wait_msg()),
     wait_down(Sink),
@@ -214,15 +219,29 @@ a_direct_sink_runs_on_the_stream_io_it_is_given() ->
     ?assertMatch({<<"streaming.started_v1">>, _}, next_published()),
     ?assertMatch({<<"streaming.completed_v1">>, _}, next_published()).
 
-a_stream_io_of_other_than_the_five_functions_is_refused() ->
-    {StreamIo, _Calls} = scripted_stream_io([]),
+a_stream_io_missing_a_function_or_of_another_shape_is_refused() ->
+    {#{stream_io := StreamIo} = Opts, _Calls} = scripted_opts([]),
     Start = fun(Given) ->
                     macula_stream_sink:start_link(?MODULE, pool, ?REALM, ?PROCEDURE, self(), #{},
-                                                  #{stream_io => Given})
+                                                  Given)
             end,
-    ?assertError(function_clause, Start(maps:remove(abort, StreamIo))),
-    ?assertError(function_clause, Start(StreamIo#{recv := fun(_Stream) -> eof end})),
-    ?assertError(function_clause, Start(StreamIo#{extra => fun(_Stream) -> ok end})).
+    ?assertError(function_clause, Start(Opts#{stream_io := maps:remove(abort, StreamIo)})),
+    ?assertError(function_clause, Start(with_io(Opts, recv, fun(_Stream) -> eof end))),
+    ?assertError(function_clause, Start(with_io(Opts, extra, fun(_Stream) -> ok end))),
+    ?assertError(function_clause,
+                 Start(Opts#{fact_publish := fun(_Pool, _Realm, _Topic) -> ok end})).
+
+%% A stream_io may carry stream functions other wrappers call, such as
+%% the send/3 and set_reply/2 a provider writes with.
+a_stream_io_may_carry_other_stream_functions() ->
+    {Opts, Calls} = scripted_opts([{chunk, <<"a">>}, eof]),
+    Wider = with_io(with_io(Opts, send, fun(_Stream, _Chunk, _Encoding) -> ok end),
+                    set_reply, fun(_Stream, _Value) -> ok end),
+    Sink = start_sink(Wider),
+    ?assertEqual({chunk_seen, <<"a">>}, wait_msg()),
+    ?assertEqual({closed, normal}, wait_msg()),
+    wait_down(Sink),
+    ?assertEqual(1, count(close_stream, Calls)).
 
 %% A stopped sink's reader has exited by the time the sink has, so it
 %% never goes on calling recv/2 on a stream nobody reads. Each reader
@@ -233,17 +252,17 @@ a_stream_io_of_other_than_the_five_functions_is_refused() ->
 %% outlived its sink.
 a_stopped_sinks_reader_is_gone_before_the_sink_is() ->
     Test = self(),
-    {StreamIo, _Calls} = scripted_stream_io([]),
-    Running = StreamIo#{recv := fun(_Stream, _Timeout) ->
-                                        Test ! {reader_table, ets:new(reader_table, [public])},
-                                        keep_running(0)
-                                end,
-                        publish := fun(_Pool, _Realm, _Topic, _Payload) -> ok end},
+    {Opts, _Calls} = scripted_opts([]),
+    Reading = with_io(Opts, recv, fun(_Stream, _Timeout) ->
+                                          Test ! {reader_table, ets:new(reader_table, [public])},
+                                          keep_running(0)
+                                  end),
+    Running = Reading#{fact_publish := fun(_Pool, _Realm, _Topic, _Payload) -> ok end},
     Tables = [table_once_its_sink_has_stopped(Running) || _ <- lists:seq(1, ?STOPS)],
     ?assertEqual(0, length([Table || {present, Table} <- Tables])).
 
-table_once_its_sink_has_stopped(StreamIo) ->
-    Sink = start_sink(StreamIo),
+table_once_its_sink_has_stopped(Opts) ->
+    Sink = start_sink(Opts),
     Table = receive
                 {reader_table, T} -> T
             after 5000 ->
@@ -263,10 +282,10 @@ keep_running(N) ->
 %% delivers, closes its stream and calls handle_close/2.
 a_sink_whose_pool_is_gone_still_reads_and_closes() ->
     process_flag(trap_exit, true),
-    {StreamIo, Calls} = scripted_stream_io([{chunk, <<"a">>}, eof]),
-    Gone = StreamIo#{publish := fun(_Pool, _Realm, _Topic, _Payload) ->
-                                        exit({noproc, {gen_server, call, [pool, publish]}})
-                                end},
+    {Opts, Calls} = scripted_opts([{chunk, <<"a">>}, eof]),
+    Gone = Opts#{fact_publish := fun(_Pool, _Realm, _Topic, _Payload) ->
+                                         exit({noproc, {gen_server, call, [pool, publish]}})
+                                 end},
     Sink = start_sink(Gone),
     ?assertEqual({chunk_seen, <<"a">>}, wait_msg()),
     ?assertEqual({closed, normal}, wait_msg()),
@@ -278,11 +297,11 @@ a_sink_whose_pool_is_gone_still_reads_and_closes() ->
 %% two publishes is let through.
 a_sink_whose_pool_never_answers_starts_and_stops_at_once() ->
     Test = self(),
-    {StreamIo, _Calls} = scripted_stream_io([]),
-    Held = StreamIo#{publish := fun(_Pool, _Realm, Topic, _Payload) ->
-                                        Test ! {publish_held, Topic, self()},
-                                        receive release -> ok end
-                                end},
+    {Opts, _Calls} = scripted_opts([]),
+    Held = Opts#{fact_publish := fun(_Pool, _Realm, Topic, _Payload) ->
+                                         Test ! {publish_held, Topic, self()},
+                                         receive release -> ok end
+                                 end},
     {StartMs, Sink} = timer:tc(fun() -> start_sink(Held) end, millisecond),
     {StopMs, ok} = timer:tc(fun() -> gen_server:stop(Sink) end, millisecond),
     ?assertEqual({closed, normal}, wait_msg()),
@@ -305,8 +324,8 @@ release(Topic) ->
 %% announced, with outcome failed and the reason it went down for.
 a_killed_sinks_end_is_announced_with_the_kill_reason() ->
     process_flag(trap_exit, true),
-    {StreamIo, _Calls} = scripted_stream_io([]),
-    Sink = start_sink(StreamIo),
+    {Opts, _Calls} = scripted_opts([]),
+    Sink = start_sink(Opts),
     {<<"streaming.started_v1">>, #{stream_id := StreamId}} = next_published(),
     exit(Sink, kill),
     wait_down(Sink),
@@ -318,8 +337,8 @@ a_killed_sinks_end_is_announced_with_the_kill_reason() ->
 %% reason's name, in its end fact and in the message of its abort.
 a_failed_streams_end_fact_and_abort_name_the_reason_only() ->
     process_flag(trap_exit, true),
-    {StreamIo, _Calls} = scripted_stream_io([{error, {bad_frame, ?MARKER}}]),
-    Sink = start_sink(StreamIo),
+    {Opts, _Calls} = scripted_opts([{error, {bad_frame, ?MARKER}}]),
+    Sink = start_sink(Opts),
     ?assertEqual({closed, {bad_frame, ?MARKER}}, wait_msg()),
     wait_down(Sink),
     ?assertEqual({aborted, <<"cancelled">>, <<"bad_frame">>}, next_aborted()),

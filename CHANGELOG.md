@@ -61,11 +61,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller's own. `macula_direct_dial:resolve_station_endpoint/3` takes a
   timeout.
 - `macula_stream_sink:start_link/7` and `start_link_direct/7` take start
-  options. `stream_io` gives the five functions a sink opens, reads, ends
-  and announces its stream with, `call_stream/5`, `recv/2`,
-  `close_stream/1`, `abort/3` and `publish/4`, all five together. Without
-  it they are the `macula` facade's, and a direct-dial sink dials with
+  options. `stream_io` gives the functions a sink opens, reads and ends its
+  stream with, `call_stream/5`, `recv/2`, `close_stream/1` and `abort/3`,
+  and `fact_publish` the function it announces its facts with. Without
+  them they are the `macula` facade's, and a direct-dial sink dials with
   `macula_direct_dial:call_stream/5`.
+- `macula_stream:stream_io/2` checks the stream functions a supervised
+  stream wrapper is given against the ones it calls: each of those keys
+  present, every function at the arity its key takes, and no key outside
+  `macula_stream:stream_io()`. Without any it gives the wrapper's own. A
+  set it refuses raises `function_clause` in the caller.
 - `macula_subscriber:start_link/6` takes `subscribe` in its options: the
   function it subscribes with, `macula:subscribe/5` by default. The other
   options pass through to that function.

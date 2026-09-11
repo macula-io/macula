@@ -45,6 +45,9 @@
     info/1
 ]).
 
+%% The check of the stream functions a supervised wrapper is given.
+-export([stream_io/2]).
+
 %% Peer-to-peer protocol — drives inbound deliveries from carrier
 %% modules (`macula_stream_local' for LOCAL pairs, `macula_station_link'
 %% for V2 station-link pairs).
@@ -84,6 +87,24 @@
 
 -export_type([role/0, mode/0, encoding/0, chunk/0, stream_id/0, result/0,
               peer/0]).
+
+%% The functions a supervised stream wrapper, such as `macula_stream_sink',
+%% opens, reads, writes and ends its stream with, by key. Each wrapper
+%% calls some of them; `stream_io/2' checks the ones it is given.
+-type stream_io() :: #{call_stream => fun((macula:pool(), macula:realm(), macula:procedure(),
+                                           term(), map()) -> {ok, pid()} | {error, term()}),
+                       recv => fun((pid(), timeout()) ->
+                                      {chunk, binary()} | {data, term()} | eof | {error, term()}),
+                       send => fun((pid(), binary() | term(), encoding()) -> ok | {error, term()}),
+                       close_send => fun((pid()) -> term()),
+                       close => fun((pid()) -> term()),
+                       close_stream => fun((pid()) -> term()),
+                       abort => fun((pid(), binary(), binary()) -> term()),
+                       set_reply => fun((pid(), term()) -> term()),
+                       set_error => fun((pid(), term()) -> term()),
+                       await_reply => fun((pid()) -> result())}.
+
+-export_type([stream_io/0]).
 
 -record(state, {
     id              :: stream_id(),
@@ -208,6 +229,33 @@ abort(Pid, Code, Message) when is_binary(Code), is_binary(Message) ->
 -spec info(pid()) -> map().
 info(Pid) ->
     gen_server:call(Pid, info).
+
+%% @doc The stream functions a wrapper runs on. `Defaults' are the
+%% functions the wrapper calls, by key, and `Given' the `stream_io' its
+%% caller gave, or `undefined' for none, which gives `Defaults'. A given
+%% set has every key in `Defaults', each function at the arity its key
+%% takes, and may carry other `stream_io()' functions; any other is
+%% refused with `function_clause', in the calling process.
+-spec stream_io(stream_io(), stream_io() | undefined) -> stream_io().
+stream_io(Defaults, undefined) when is_map(Defaults) ->
+    Defaults;
+stream_io(Defaults, Given) when is_map(Defaults), is_map(Given) ->
+    ok = maps:foreach(fun stream_function/2, Given),
+    ok = lists:foreach(fun(Key) -> given_key(Key, Given) end, maps:keys(Defaults)),
+    Given.
+
+stream_function(call_stream, Fun) when is_function(Fun, 5) -> ok;
+stream_function(recv, Fun) when is_function(Fun, 2) -> ok;
+stream_function(send, Fun) when is_function(Fun, 3) -> ok;
+stream_function(close_send, Fun) when is_function(Fun, 1) -> ok;
+stream_function(close, Fun) when is_function(Fun, 1) -> ok;
+stream_function(close_stream, Fun) when is_function(Fun, 1) -> ok;
+stream_function(abort, Fun) when is_function(Fun, 3) -> ok;
+stream_function(set_reply, Fun) when is_function(Fun, 2) -> ok;
+stream_function(set_error, Fun) when is_function(Fun, 2) -> ok;
+stream_function(await_reply, Fun) when is_function(Fun, 1) -> ok.
+
+given_key(Key, Given) when is_map_key(Key, Given) -> ok.
 
 %%%===================================================================
 %%% Peer-to-peer protocol
