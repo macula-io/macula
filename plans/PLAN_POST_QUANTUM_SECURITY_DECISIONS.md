@@ -712,3 +712,27 @@ before its wire checks are green.
 - **Fallback:** if OTP's TLS 1.3 cannot run the profile's group and certificate (V19), a tunnel key certified by
   the identity key, to be decided again.
 - **Blocks:** WP 1.5 (distribution tunnels), WP 3.4.
+
+### D30 Node_id puzzle difficulty
+
+- **Question:** how many leading zero bits must a node_id's puzzle evidence have in `macula` 11.0.0, and what changes
+  in 10.x?
+- **Answer, decided by Raf on 2026-09-12:**
+  - in 11.0.0, one difficulty for the whole fleet: 12 leading zero bits on the node_id (D5), a constant in every stack
+    as D5's constants are, not a setting and not a `foundation_parameter` record;
+  - identity key generation grinds to it once per identity; the TLS and CONNECT keys that rotate are not part of the
+    node_id (D5), so rotation grinds nothing;
+  - the rollout is the plan's own: station instances start in `log_only`, and the fleet switches to `enforce` in
+    WP 4.5;
+  - 10.x keeps difficulty 8 and gains only a setting for it, with no identity migration.
+- **Why:**
+  - the puzzle is a small cost per identity; which signers take places in the DHT is decided by slot admission (D28);
+  - on one core of this machine (OTP 28.4.2, OpenSSL 3.6.4), ML-DSA-87 key generation with the D5 node_id takes about
+    0.28 ms, so 12 bits takes about 1.1 s per identity on average and 16 bits about 18 s ✅ (PART1);
+  - one constant keeps `puzzle_invalid` something a client can check for itself (`DESIGN_PQ_HANDSHAKE_FRAMES.md`);
+  - a `foundation_parameter` record would depend on live foundation keys, which D28 still waits on;
+  - a higher difficulty in 10.x would change almost every node_id, and with it pinned seeds, DHT records and
+    UCANs, on a fleet that is switched off after Stage 6 (D14).
+- **Waiting on:** V20, before 12 is final. If generation at 12 bits is too slow on the slowest supported client
+  device, the value goes back to Raf.
+- **Blocks:** WP 4.5 (`enforce`).
