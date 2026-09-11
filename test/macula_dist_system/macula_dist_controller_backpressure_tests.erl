@@ -196,8 +196,8 @@ start_relay() ->
     Test = self(),
     Relay = spawn(fun() -> relay(Test) end),
     receive
-        {relay_listening, Relay, Port, Files} ->
-            #{pid => Relay, port => Port, files => Files}
+        {relay_listening, Relay, Port} ->
+            #{pid => Relay, port => Port}
     after ?EVENT_TIMEOUT_MS ->
         error(relay_did_not_listen)
     end.
@@ -208,26 +208,29 @@ relay(Test) ->
         macula_quic:generate_self_signed_cert(
             iolist_to_binary(Pub), iolist_to_binary(Priv),
             [<<"localhost">>, <<"127.0.0.1">>]),
-    Base = lists:flatten(io_lib:format("/tmp/macula-dist-controller-backpressure-~p",
-                                       [erlang:unique_integer([positive])])),
-    Cert = Base ++ ".crt",
-    Key = Base ++ ".key",
+    Port = free_udp_port(),
+    {ok, Listener} = macula_test_tmp:with_dir("macula-dist-controller-backpressure",
+                                              fun(Dir) -> listen(Dir, Port, CertPem, KeyPem) end),
+    Test ! {relay_listening, self(), Port},
+    Nodes = identify_nodes(Listener, 2, #{}),
+    %% The listener and the connections stay referenced for as long as the
+    %% relay runs: a collected handle closes what it refers to.
+    pipe(tunnel(tunnel_request(Nodes), Nodes), {Listener, Nodes}).
+
+%% The relay reads its certificate and key files when it starts listening, so they last only that long.
+listen(Dir, Port, CertPem, KeyPem) ->
+    Cert = filename:join(Dir, "relay.crt"),
+    Key = filename:join(Dir, "relay.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
-    Port = free_udp_port(),
-    {ok, Listener} = macula_quic:listen(
+    macula_quic:listen(
         <<"127.0.0.1">>, Port,
         [{cert, Cert}, {key, Key},
          {alpn, [?RELAY_ALPN]},
          {idle_timeout_ms, 30000},
          {keep_alive_interval_ms, 5000},
          {stream_receive_window, ?TUNNEL_WINDOW},
-         {receive_window, 4 * ?TUNNEL_WINDOW}]),
-    Test ! {relay_listening, self(), Port, [Cert, Key]},
-    Nodes = identify_nodes(Listener, 2, #{}),
-    %% The listener and the connections stay referenced for as long as the
-    %% relay runs: a collected handle closes what it refers to.
-    pipe(tunnel(tunnel_request(Nodes), Nodes), {Listener, Nodes}).
+         {receive_window, 4 * ?TUNNEL_WINDOW}]).
 
 identify_nodes(_Listener, 0, Nodes) ->
     Nodes;
@@ -323,9 +326,8 @@ relay_call(#{pid := Relay}, Request) ->
         error({relay_did_not_answer, Request})
     end.
 
-stop_relay(#{pid := Relay, files := Files}) ->
-    exit(Relay, kill),
-    lists:foreach(fun file:delete/1, Files).
+stop_relay(#{pid := Relay}) ->
+    exit(Relay, kill).
 
 relay_url(#{port := Port}) ->
     iolist_to_binary(io_lib:format("quic://127.0.0.1:~p", [Port])).
