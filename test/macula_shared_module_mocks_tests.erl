@@ -32,11 +32,7 @@
                   "macula_feeder_tests.erl",
                   "macula_link_respawn_replay_tests.erl",
                   "macula_pusher_tests.erl",
-                  "macula_station_link_tests.erl",
-                  "macula_streamer_client_stream_tests.erl",
-                  "macula_streamer_eof_reply_tests.erl",
-                  "macula_streamer_tests.erl",
-                  "macula_upload_tests.erl"]).
+                  "macula_station_link_tests.erl"]).
 
 no_test_replaces_a_shared_module_test() ->
     Sources = test_sources(),

@@ -90,6 +90,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fact_publish`, which each response announces its facts with,
   `macula:publish/4` by default. The other options go on to those
   functions without these three.
+- `macula_streamer:advertise/6` and `advertise_direct/7` take functions in
+  their options: `advertise_stream`, which advertises the procedure,
+  `macula:advertise_stream/6` by default; `publish_advertisement`, which
+  `advertise_direct/7` publishes its DHT record with,
+  `macula_direct_dial:publish_advertisement/5` by default; `fact_publish`,
+  which each streamer announces its facts with, `macula:publish/4` by
+  default; and `stream_io`, the `recv/2`, `send/3`, `close_send/1`,
+  `close/1`, `abort/3`, `set_reply/2` and `set_error/2` each streamer runs
+  its stream on, checked by `macula_stream:stream_io/2`. The advertise
+  function gets only the `auth` policy, and the advertisement publish the
+  other options without these functions.
+- `macula_upload:advertise/6` and `advertise_direct/7` take `fact_publish`,
+  which each upload announces its `sharing.upload_*` facts with,
+  `macula:publish/4` by default, and pass `stream_io` and
+  `advertise_stream`, and for `advertise_direct/7` also
+  `publish_advertisement`, on to `macula_streamer`.
 
 ### Changed
 

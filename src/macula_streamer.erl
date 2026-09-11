@@ -69,6 +69,23 @@
 %%% here directly, in one hop, regardless of whether the two stations
 %%% have a routing edge between them.
 %%%
+%%% == Stream I/O ==
+%%%
+%%% A streamer advertises its procedure with `advertise_stream', a
+%%% function of arity 6, `macula:advertise_stream/6' by default, which
+%%% gets the procedure's `auth' policy and no other option;
+%%% `advertise_direct/6,7' publishes its DHT record with
+%%% `publish_advertisement', `macula_direct_dial:publish_advertisement/5'
+%%% by default; and each streamer announces its facts with
+%%% `fact_publish', `macula:publish/4' by default. Each streamer runs its
+%%% stream on seven `macula_stream:stream_io()' functions, `recv/2',
+%%% `send/3', `close_send/1', `close/1', `abort/3', `set_reply/2' and
+%%% `set_error/2', which are `macula:recv/2' and the `macula_stream' ones
+%%% by default. `advertise/6' and `advertise_direct/7' take all of these
+%%% in their options, the seven as `stream_io', checked by
+%%% `macula_stream:stream_io/2', and refuse a function of another arity
+%%% with `function_clause' before anything is advertised.
+%%%
 %%% == Example ==
 %%%
 %%% ```
@@ -124,8 +141,10 @@
 -export([advertise/5, advertise/6, advertise_direct/6, advertise_direct/7,
         unadvertise/3]).
 -export([send/2, send/3, close/1]).
--export([start_link/7]).
+-export([start_link/8]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+
+-export_type([advertise_stream/0, publish_advertisement/0, advertise_opts/0]).
 
 -callback init(Args :: term()) ->
     {ok, State :: term()} | {stop, Reason :: term()}.
@@ -150,11 +169,28 @@
 -define(RECV_TIMEOUT, 30_000).
 -define(CANCEL_CODE, <<"cancelled">>).
 
+-type advertise_stream() :: fun((macula:pool(), macula:realm(), macula:procedure(),
+                                 macula_stream:mode(), fun((pid(), term()) -> ok), map()) ->
+                                    ok | {error, term()}).
+-type publish_advertisement() :: fun((macula:pool(), macula:realm(), macula:procedure(),
+                                      macula_identity:key_pair(), map()) ->
+                                         ok | {error, term()}).
+-type advertise_opts() :: #{advertise_stream => advertise_stream(),
+                            publish_advertisement => publish_advertisement(),
+                            fact_publish => macula_lifetime_announcer:publish(),
+                            stream_io => macula_stream:stream_io(),
+                            atom() => term()}.
+%% What each streamer runs its stream on and announces its facts with.
+-type functions() :: #{stream_io := macula_stream:stream_io(),
+                       fact_publish := macula_lifetime_announcer:publish()}.
+
 -record(tstate, {
     module    :: module(),
     pool      :: macula:pool(),
     realm     :: macula:realm(),
     announce  :: boolean(),
+    io        :: macula_stream:stream_io(),
+    fact_publish :: macula_lifetime_announcer:publish(),
     stream_id :: binary(),
     stream    :: pid(),
     reader    :: pid() | undefined,
@@ -181,33 +217,57 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
 %% that sent it, and does not survive that connection being replaced
 %% — see `advertise_direct/6,7''s own doc) — calling plain
 %% `advertise/5,6' on a timer would leak one orphaned supervisor per
-%% tick, since each call otherwise starts a fresh one.
+%% tick, since each call otherwise starts a fresh one. The functions a
+%% streamer runs on come from `Opts' too; see "Stream I/O" above.
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
-                module(), term(), map()) -> {ok, pid()} | {error, term()}.
+                module(), term(), advertise_opts()) -> {ok, pid()} | {error, term()}.
 advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
+    AdvertiseStream = arity_6(maps:get(advertise_stream, Opts, fun macula:advertise_stream/6)),
+    Functions = functions(Opts),
     Sup = existing_or_new_sup(maps:get(reuse_sup, Opts, undefined)),
     Announce = maps:get(announce, Opts, true),
     Mode = maps:get(mode, Opts, server_stream),
     Handler = fun(StreamPid, StreamArgs) ->
-        dispatch(Sup, Module, Pool, Realm, Announce, Args, StreamPid, StreamArgs)
+        dispatch(Sup, Module, Pool, Realm, Announce, Args, Functions, StreamPid, StreamArgs)
     end,
-    case advertise_with_policy(maps:find(auth, Opts), Pool, Realm, Procedure,
-                               Mode, Handler) of
+    %% The advertise function gets the procedure's auth policy, when the
+    %% options give one, and no other option.
+    case AdvertiseStream(Pool, Realm, Procedure, Mode, Handler, maps:with([auth], Opts)) of
         ok -> {ok, Sup};
         {error, Reason} -> {error, Reason}
     end.
 
-%% Without an `auth' opt the procedure is advertised exactly as before; with
-%% one, its policy goes to `macula:advertise_stream/6'.
-advertise_with_policy(error, Pool, Realm, Procedure, Mode, Handler) ->
-    macula:advertise_stream(Pool, Realm, Procedure, Mode, Handler);
-advertise_with_policy({ok, Policy}, Pool, Realm, Procedure, Mode, Handler) ->
-    macula:advertise_stream(Pool, Realm, Procedure, Mode, Handler,
-                            #{auth => Policy}).
+%% The functions each streamer runs on, from the options or else the
+%% defaults. Stream functions macula_stream:stream_io/2 does not accept,
+%% or a fact_publish of another arity, are refused with function_clause,
+%% in the caller, before anything is advertised.
+functions(Opts) ->
+    StreamIo = macula_stream:stream_io(default_stream_io(), maps:get(stream_io, Opts, undefined)),
+    #{stream_io => StreamIo,
+      fact_publish => arity_4(maps:get(fact_publish, Opts, fun macula:publish/4))}.
+
+default_stream_io() ->
+    #{recv => fun macula:recv/2,
+      send => fun macula_stream:send/3,
+      close_send => fun macula_stream:close_send/1,
+      close => fun macula_stream:close/1,
+      abort => fun macula_stream:abort/3,
+      set_reply => fun macula_stream:set_reply/2,
+      set_error => fun macula_stream:set_error/2}.
+
+%% The options the advertisement publish gets: all but the functions.
+without_functions(Opts) ->
+    maps:without([advertise_stream, publish_advertisement, fact_publish, stream_io], Opts).
+
+arity_4(Fun) when is_function(Fun, 4) -> Fun.
+
+arity_5(Fun) when is_function(Fun, 5) -> Fun.
+
+arity_6(Fun) when is_function(Fun, 6) -> Fun.
 
 %% See `macula_response:existing_or_new_sup/1' for why a dead `reuse_sup'
 %% pid must fall through to a fresh one rather than being handed to
-%% `dispatch/8' as-is.
+%% `dispatch/9' as-is.
 existing_or_new_sup(Pid) when is_pid(Pid) ->
     existing_or_new_sup(Pid, erlang:is_process_alive(Pid));
 existing_or_new_sup(undefined) ->
@@ -241,11 +301,13 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
     advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
 
 %% @doc As `advertise_direct/6', with `Opts' forwarded BOTH to
-%% `advertise/6' (so `mode'/`announce'/`reuse_sup' apply here too, e.g.
-%% `mode => client_stream') and to
-%% `macula_direct_dial:publish_advertisement/5' (e.g. `cert_chain =>
-%% ChainPem', Slice 7c Direction B, managed realms only) — each side
-%% reads only the keys it recognizes, so one `Opts' map serves both.
+%% `advertise/6' (so `mode'/`announce'/`reuse_sup' and the functions
+%% apply here too, e.g. `mode => client_stream') and, without the
+%% functions, to the advertisement publish, `publish_advertisement' in
+%% `Opts' or `macula_direct_dial:publish_advertisement/5' (e.g.
+%% `cert_chain => ChainPem', Slice 7c Direction B, managed realms only):
+%% each side reads only the keys it recognizes, so one `Opts' map serves
+%% both.
 %% `reuse_sup' matters here specifically: a station's wire-level
 %% registration for a procedure is tied to whichever connection sent
 %% the `ADVERTISE' frame, and does not survive that connection being
@@ -254,14 +316,15 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
 %% returned the first time) re-sends both the wire frame and the DHT
 %% record without leaking a new supervisor per tick.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair(), map()) ->
+                       module(), term(), macula_identity:key_pair(), advertise_opts()) ->
     {ok, pid()} | {error, term()}.
 advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
+    PublishAdvertisement = arity_5(maps:get(publish_advertisement, Opts,
+                                            fun macula_direct_dial:publish_advertisement/5)),
     case advertise(Pool, Realm, Procedure, Module, Args, Opts) of
         {ok, Sup} ->
             log_publish_result(
-              macula_direct_dial:publish_advertisement(
-                Pool, Realm, Procedure, Identity, Opts),
+              PublishAdvertisement(Pool, Realm, Procedure, Identity, without_functions(Opts)),
               Procedure),
             {ok, Sup};
         {error, _} = Error ->
@@ -283,9 +346,9 @@ log_publish_result({error, Reason}, Procedure) ->
 unadvertise(Pool, Realm, Procedure) ->
     macula:unadvertise_stream(Pool, Realm, Procedure).
 
-dispatch(Sup, Module, Pool, Realm, Announce, Args, StreamPid, StreamArgs) ->
+dispatch(Sup, Module, Pool, Realm, Announce, Args, Functions, StreamPid, StreamArgs) ->
     case supervisor:start_child(Sup, [Module, Pool, Realm, Announce, Args,
-                                      StreamPid, StreamArgs]) of
+                                      StreamPid, StreamArgs, Functions]) of
         {ok, _Pid} -> ok;
         {error, _Reason} -> ok
     end.
@@ -305,39 +368,40 @@ close(Pid) -> gen_server:call(Pid, close).
 
 %% @private
 -spec start_link(module(), macula:pool(), macula:realm(), boolean(),
-                 term(), pid(), term()) -> {ok, pid()} | {error, term()}.
-start_link(Module, Pool, Realm, Announce, InitArgs, StreamPid, StreamArgs) ->
+                 term(), pid(), term(), functions()) -> {ok, pid()} | {error, term()}.
+start_link(Module, Pool, Realm, Announce, InitArgs, StreamPid, StreamArgs, Functions) ->
     gen_server:start_link(?MODULE,
-        {Module, Pool, Realm, Announce, InitArgs, StreamPid, StreamArgs}, []).
+        {Module, Pool, Realm, Announce, InitArgs, StreamPid, StreamArgs, Functions}, []).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 %% @private
-init({Module, Pool, Realm, Announce, InitArgs, StreamPid, StreamArgs}) ->
+init({Module, Pool, Realm, Announce, InitArgs, StreamPid, StreamArgs, Functions}) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
-            open(Module, Pool, Realm, Announce, StreamPid, StreamArgs, UserState);
+            open(Module, Pool, Realm, Announce, Functions, StreamPid, StreamArgs, UserState);
         {stop, Reason} ->
             {stop, Reason}
     end.
 
-open(Module, Pool, Realm, Announce, StreamPid, StreamArgs, UserState) ->
+open(Module, Pool, Realm, Announce, #{stream_io := StreamIo, fact_publish := FactPublish},
+     StreamPid, StreamArgs, UserState) ->
     case Module:handle_open(StreamArgs, UserState) of
         {ok, NewUserState} ->
             link(StreamPid),
-            Reader = maybe_spawn_reader(Module, StreamPid),
+            Reader = maybe_spawn_reader(Module, StreamIo, StreamPid),
             StreamId = crypto:strong_rand_bytes(16),
-            publish(Announce, Pool, Realm, ?STREAMING_STARTED,
+            publish(Announce, FactPublish, Pool, Realm, ?STREAMING_STARTED,
                     #{stream_id => StreamId}),
             {ok, #tstate{module = Module, pool = Pool, realm = Realm,
-                        announce = Announce, stream_id = StreamId,
-                        stream = StreamPid, reader = Reader,
+                        announce = Announce, io = StreamIo, fact_publish = FactPublish,
+                        stream_id = StreamId, stream = StreamPid, reader = Reader,
                         user = NewUserState}};
         {stop, Reason, _NewUserState} ->
-            abort_rejected_stream(Reason, StreamPid),
+            abort_rejected_stream(StreamIo, Reason, StreamPid),
             {stop, Reason}
     end.
 
@@ -346,44 +410,45 @@ open(Module, Pool, Realm, Announce, StreamPid, StreamArgs, UserState) ->
 %% that opened the stream would otherwise be stranded until its own `recv'
 %% timeout. Abort it explicitly so the peer gets an immediate signal
 %% instead of silence, naming the reason and carrying none of its terms.
-abort_rejected_stream(Reason, StreamPid) ->
+abort_rejected_stream(#{abort := Abort}, Reason, StreamPid) ->
     Message = macula_reason_name:text(Reason),
-    try macula_stream:abort(StreamPid, ?CANCEL_CODE, Message) catch _:_ -> ok end.
+    try Abort(StreamPid, ?CANCEL_CODE, Message) catch _:_ -> ok end.
 
 %% @private For `client_stream'-mode providers that export
 %% `handle_chunk/2': spawn the same linked-reader `recv/2' loop
 %% `macula_stream_sink' drives on the consumer side, applied here to
 %% the provider's own stream. A `server_stream'-mode module has no
 %% reason to export `handle_chunk/2', so this is a no-op for it.
-maybe_spawn_reader(Module, Stream) ->
+maybe_spawn_reader(Module, #{recv := Recv}, Stream) ->
     case erlang:function_exported(Module, handle_chunk, 2) of
-        true -> spawn_reader(Stream);
+        true -> spawn_reader(Recv, Stream);
         false -> undefined
     end.
 
-spawn_reader(Stream) ->
+spawn_reader(Recv, Stream) ->
     Parent = self(),
-    spawn_link(fun() -> reader_loop(Parent, Stream) end).
+    spawn_link(fun() -> reader_loop(Parent, Recv, Stream) end).
 
-reader_loop(Parent, Stream) ->
-    dispatch_recv(macula:recv(Stream, ?RECV_TIMEOUT), Parent, Stream).
+reader_loop(Parent, Recv, Stream) ->
+    dispatch_recv(Recv(Stream, ?RECV_TIMEOUT), Parent, Recv, Stream).
 
-dispatch_recv({chunk, Data}, Parent, Stream) ->
-    Parent ! {stream_item, Data}, reader_loop(Parent, Stream);
-dispatch_recv({data, Data}, Parent, Stream) ->
-    Parent ! {stream_item, Data}, reader_loop(Parent, Stream);
-dispatch_recv(eof, Parent, _Stream) ->
+dispatch_recv({chunk, Data}, Parent, Recv, Stream) ->
+    Parent ! {stream_item, Data}, reader_loop(Parent, Recv, Stream);
+dispatch_recv({data, Data}, Parent, Recv, Stream) ->
+    Parent ! {stream_item, Data}, reader_loop(Parent, Recv, Stream);
+dispatch_recv(eof, Parent, _Recv, _Stream) ->
     Parent ! stream_eof;
-dispatch_recv({error, Reason}, Parent, _Stream) ->
+dispatch_recv({error, Reason}, Parent, _Recv, _Stream) ->
     Parent ! {stream_error, Reason}.
 
 %% @private
-handle_call({send, Chunk}, _From, #tstate{stream = Stream} = State) ->
-    {reply, macula_stream:send(Stream, Chunk), State};
-handle_call({send, Chunk, Encoding}, _From, #tstate{stream = Stream} = State) ->
-    {reply, macula_stream:send(Stream, Chunk, Encoding), State};
-handle_call(close, _From, #tstate{stream = Stream} = State) ->
-    {reply, macula_stream:close_send(Stream), State};
+handle_call({send, Chunk}, _From, #tstate{io = #{send := Send}, stream = Stream} = State) ->
+    {reply, Send(Stream, Chunk, raw), State};
+handle_call({send, Chunk, Encoding}, _From,
+            #tstate{io = #{send := Send}, stream = Stream} = State) ->
+    {reply, Send(Stream, Chunk, Encoding), State};
+handle_call(close, _From, #tstate{io = #{close_send := CloseSend}, stream = Stream} = State) ->
+    {reply, CloseSend(Stream), State};
 handle_call(_Request, _From, State) ->
     {reply, {error, unsupported}, State}.
 
@@ -421,22 +486,25 @@ handle_eof(#tstate{module = Module, user = User} = State) ->
 
 deliver_eof({noreply, NewUser}, State) ->
     {stop, normal, State#tstate{user = NewUser}};
-deliver_eof({reply, {ok, Value}, NewUser}, #tstate{stream = Stream} = State) ->
-    _ = macula_stream:set_reply(Stream, Value),
+deliver_eof({reply, {ok, Value}, NewUser},
+            #tstate{io = #{set_reply := SetReply}, stream = Stream} = State) ->
+    _ = SetReply(Stream, Value),
     {stop, normal, State#tstate{user = NewUser}};
-deliver_eof({reply, {error, Reason}, NewUser}, #tstate{stream = Stream} = State) ->
-    _ = macula_stream:set_error(Stream, Reason),
+deliver_eof({reply, {error, Reason}, NewUser},
+            #tstate{io = #{set_error := SetError}, stream = Stream} = State) ->
+    _ = SetError(Stream, Reason),
     {stop, normal, State#tstate{user = NewUser}};
 deliver_eof({stop, Reason, NewUser}, State) ->
     {stop, Reason, State#tstate{user = NewUser}}.
 
 %% @private
 terminate(Reason, #tstate{module = Module, pool = Pool, realm = Realm,
-                          announce = Announce, stream_id = StreamId,
-                          stream = Stream, reader = Reader, user = User}) ->
+                          announce = Announce, io = StreamIo, fact_publish = FactPublish,
+                          stream_id = StreamId, stream = Stream, reader = Reader,
+                          user = User}) ->
     stop_reader(Reader),
-    finish_stream(Reason, Stream),
-    publish(Announce, Pool, Realm, ?STREAMING_COMPLETED,
+    finish_stream(StreamIo, Reason, Stream),
+    publish(Announce, FactPublish, Pool, Realm, ?STREAMING_COMPLETED,
             outcome_fields(#{stream_id => StreamId}, Reason)),
     maybe_terminate(Module, Reason, User).
 
@@ -453,11 +521,11 @@ stop_reader(Reader) ->
 %% away. `Stream' may already be dead by the time this runs (e.g. its
 %% own exit is what triggered this termination), which is harmless and
 %% caught below.
-finish_stream(normal, Stream) ->
-    try macula_stream:close(Stream) catch _:_ -> ok end;
-finish_stream(Reason, Stream) ->
+finish_stream(#{close := Close}, normal, Stream) ->
+    try Close(Stream) catch _:_ -> ok end;
+finish_stream(#{abort := Abort}, Reason, Stream) ->
     Message = macula_reason_name:text(Reason),
-    try macula_stream:abort(Stream, ?CANCEL_CODE, Message) catch _:_ -> ok end.
+    try Abort(Stream, ?CANCEL_CODE, Message) catch _:_ -> ok end.
 
 outcome_fields(Base, normal) -> Base#{outcome => completed};
 outcome_fields(Base, Reason) -> Base#{outcome => failed, reason => Reason}.
@@ -468,6 +536,6 @@ maybe_terminate(Module, Reason, User) ->
         false -> ok
     end.
 
-publish(false, _, _, _, _) -> ok;
-publish(true, Pool, Realm, Topic, Payload) ->
-    _ = macula:publish(Pool, Realm, Topic, Payload), ok.
+publish(false, _FactPublish, _, _, _, _) -> ok;
+publish(true, FactPublish, Pool, Realm, Topic, Payload) ->
+    _ = FactPublish(Pool, Realm, Topic, Payload), ok.

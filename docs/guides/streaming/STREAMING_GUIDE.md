@@ -116,6 +116,13 @@ symmetric to `macula_stream_sink`'s consumer-side one. A `server_stream`
 module that doesn't export it is unaffected — the reader is only spawned
 when the callback is present.
 
+`macula_streamer:advertise/6` and `advertise_direct/7` take the functions a
+streamer runs on in their options: `advertise_stream`, `publish_advertisement`,
+`fact_publish`, and `stream_io` with the seven stream functions
+`macula_stream:stream_io/2` checks. `macula_upload` passes them on. A test can
+advertise a provider this way on a scripted stream without replacing `macula`
+or `macula_stream`.
+
 ```erlang
 -module(batch_upload_provider).
 -behaviour(macula_streamer).

@@ -96,6 +96,14 @@
 %%% project's "fix bugs in owned libraries immediately" rule — not
 %%% specific to Phase 6, but found while building it.)
 %%%
+%%% == Stream I/O ==
+%%%
+%%% `advertise/6' and `advertise_direct/7' pass `stream_io' and
+%%% `advertise_stream', and `advertise_direct/7' also
+%%% `publish_advertisement', on to `macula_streamer' (see its "Stream
+%%% I/O" section). Each upload announces its `sharing.upload_*' facts
+%%% with `fact_publish', `macula:publish/4' by default.
+%%%
 %%% == Example ==
 %%%
 %%% ```
@@ -139,6 +147,7 @@
     pool      :: macula:pool(),
     realm     :: macula:realm(),
     announce  :: boolean(),
+    fact_publish :: macula_lifetime_announcer:publish(),
     share_id  :: binary() | undefined,
     manifest  :: map() | {error, term()} | undefined,
     acc       = [] :: [binary()],
@@ -156,14 +165,19 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
     advertise(Pool, Realm, Procedure, Module, Args, #{}).
 
 %% @doc As `advertise/5'. `Opts' may include `announce' (default
-%% `true') for this module's OWN `sharing.upload_*' facts.
+%% `true') for this module's OWN `sharing.upload_*' facts, `fact_publish',
+%% the function it announces them with, and `stream_io' and
+%% `advertise_stream', which go to `macula_streamer' (see "Stream I/O"
+%% above).
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
                 module(), term(), map()) -> {ok, pid()} | {error, term()}.
 advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
     Announce = maps:get(announce, Opts, true),
+    FactPublish = arity_4(maps:get(fact_publish, Opts, fun macula:publish/4)),
+    StreamerOpts = maps:with([stream_io, advertise_stream], Opts),
     macula_streamer:advertise(Pool, Realm, Procedure, ?MODULE,
-                              {Module, Pool, Realm, Announce, Args},
-                              #{mode => client_stream, announce => false}).
+                              {Module, Pool, Realm, Announce, FactPublish, Args},
+                              StreamerOpts#{mode => client_stream, announce => false}).
 
 %% @doc As `advertise/5', and additionally publishes a signed
 %% `procedure_advertisement' DHT record naming this pool's connected
@@ -176,17 +190,21 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
     advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
 
 %% @doc As `advertise_direct/6', with `Opts' forwarded to
-%% `macula_direct_dial:publish_advertisement/5' — e.g. `cert_chain =>
-%% ChainPem' (Slice 7c Direction B, managed realms only).
+%% `macula_streamer:advertise_direct/7', and so to the advertisement
+%% publish, e.g. `cert_chain => ChainPem' (Slice 7c Direction B, managed
+%% realms only), except `fact_publish', the function this module
+%% announces its own facts with.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
                        module(), term(), macula_identity:key_pair(), map()) ->
     {ok, pid()} | {error, term()}.
 advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
     Announce = maps:get(announce, Opts, true),
+    FactPublish = arity_4(maps:get(fact_publish, Opts, fun macula:publish/4)),
+    StreamerOpts = maps:remove(fact_publish, Opts),
     macula_streamer:advertise_direct(Pool, Realm, Procedure, ?MODULE,
-                                     {Module, Pool, Realm, Announce, Args},
+                                     {Module, Pool, Realm, Announce, FactPublish, Args},
                                      Identity,
-                                     Opts#{mode => client_stream, announce => false}).
+                                     StreamerOpts#{mode => client_stream, announce => false}).
 
 %% @doc Stop advertising `Procedure'.
 -spec unadvertise(macula:pool(), macula:realm(), macula:procedure()) -> ok.
@@ -200,11 +218,12 @@ unadvertise(Pool, Realm, Procedure) ->
 %%%===================================================================
 
 %% @private
-init({Module, Pool, Realm, Announce, InitArgs}) ->
+init({Module, Pool, Realm, Announce, FactPublish, InitArgs}) ->
     case Module:init(InitArgs) of
         {ok, UserState} ->
             {ok, #ustate{module = Module, pool = Pool, realm = Realm,
-                        announce = Announce, user = UserState}};
+                        announce = Announce, fact_publish = FactPublish,
+                        user = UserState}};
         {stop, Reason} ->
             {stop, Reason}
     end.
@@ -244,9 +263,9 @@ bound_manifest(ok, Manifest)              -> {ok, Manifest};
 bound_manifest({error, _} = E, _Manifest) -> E.
 
 announce_started(#ustate{pool = Pool, realm = Realm, announce = Announce,
-                         manifest = Manifest} = State) ->
+                         fact_publish = FactPublish, manifest = Manifest} = State) ->
     ShareId = crypto:strong_rand_bytes(16),
-    publish(Announce, Pool, Realm, ?UPLOAD_STARTED,
+    publish(Announce, FactPublish, Pool, Realm, ?UPLOAD_STARTED,
             #{share_id => ShareId, mcid => maps:get(mcid, Manifest),
               size => maps:get(size, Manifest)}),
     State#ustate{share_id = ShareId}.
@@ -284,19 +303,19 @@ reply_for({error, Reason}, _Manifest, _Data, State) ->
 
 %% @private
 terminate(Reason, #ustate{module = Module, pool = Pool, realm = Realm,
-                          announce = Announce, share_id = ShareId,
-                          result = Result, user = UserState}) ->
-    announce_completed(ShareId, Announce, Pool, Realm, Reason, Result),
+                          announce = Announce, fact_publish = FactPublish,
+                          share_id = ShareId, result = Result, user = UserState}) ->
+    announce_completed(ShareId, Announce, FactPublish, Pool, Realm, Reason, Result),
     _ = Module:handle_uploaded(final_result(Reason, Result), UserState),
     ok.
 
 %% No `sharing.upload_started_v1' ever fired (a bad manifest failed
 %% `handle_open/2' before `share_id' was ever minted) — nothing to
 %% close out.
-announce_completed(undefined, _Announce, _Pool, _Realm, _Reason, _Result) ->
+announce_completed(undefined, _Announce, _FactPublish, _Pool, _Realm, _Reason, _Result) ->
     ok;
-announce_completed(ShareId, Announce, Pool, Realm, Reason, Result) ->
-    publish(Announce, Pool, Realm, ?UPLOAD_COMPLETED,
+announce_completed(ShareId, Announce, FactPublish, Pool, Realm, Reason, Result) ->
+    publish(Announce, FactPublish, Pool, Realm, ?UPLOAD_COMPLETED,
             outcome_fields(#{share_id => ShareId}, final_result(Reason, Result))).
 
 final_result(_Reason, {ok, _Mcid, _Data} = R) -> R;
@@ -308,6 +327,8 @@ outcome_fields(Base, {ok, Mcid, Data}) ->
 outcome_fields(Base, {error, Reason}) ->
     Base#{outcome => failed, reason => Reason}.
 
-publish(false, _, _, _, _) -> ok;
-publish(true, Pool, Realm, Topic, Payload) ->
-    _ = macula:publish(Pool, Realm, Topic, Payload), ok.
+publish(false, _FactPublish, _, _, _, _) -> ok;
+publish(true, FactPublish, Pool, Realm, Topic, Payload) ->
+    _ = FactPublish(Pool, Realm, Topic, Payload), ok.
+
+arity_4(Fun) when is_function(Fun, 4) -> Fun.
