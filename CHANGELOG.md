@@ -91,6 +91,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `macula_dist_relay_client:request_tunnel/2` returns
   `{ok, Conn, Stream, Received}`, where `Received` holds the tunnel's
   bytes the client read before handing the stream over.
+- A procedure advertised with `{ucan_required, Issuer}`, unary or
+  streaming, also requires the token's audience (`aud`) to be the calling
+  identity's public key in lowercase hex, the check
+  `{realm_member_required, RealmDid, RequiredCan}` already made; both
+  policies now share it. A token signed by `Issuer` but minted for another
+  audience is refused with `unauthorized`. Mint `ucan_required` tokens for
+  the caller that will present them.
 - `macula_identity:load/1` accepts only a key file its group and others
   have no access to, mode 0600 or 0400, following symlinks. Another mode
   returns `{error, {file_permissions, #{file => Path, mode => <<"0644">>,

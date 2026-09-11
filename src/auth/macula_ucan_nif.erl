@@ -146,6 +146,11 @@ create_nif_result({malformed_json, _}) -> {error, malformed_json}.
 %% @doc Verify a UCAN token.
 %% Checks signature, expiration, and not-before.
 %% Returns the decoded payload on success.
+%%
+%% It does not check the audience (`aud'): a verified token proves who
+%% issued it, not who may present it. The procedure policies in
+%% macula_station_link require `aud' to be the calling identity's public
+%% key, hex-encoded in lowercase.
 -spec verify(Token :: binary(), PublicKey :: binary()) ->
     {ok, Payload :: map()} | {error, term()}.
 verify(Token, PublicKey) ->

@@ -2203,20 +2203,37 @@ authorize(Key, Frame, Pols) ->
 authorize_policy(open, _Frame) ->
     ok;
 authorize_policy({ucan_required, Issuer}, Frame) ->
-    check_ucan(maps:get(ucan_token, Frame, <<>>), Issuer);
+    check_ucan(maps:get(ucan_token, Frame, <<>>), Issuer,
+               maps:get(caller, Frame, undefined));
 authorize_policy({realm_member_required, RealmDid, RequiredCan}, Frame) ->
     check_realm_membership(maps:get(ucan_token, Frame, <<>>), RealmDid,
                             maps:get(caller, Frame, undefined), RequiredCan).
 
-check_ucan(<<>>, _Issuer) ->
-    unauthorized;
-check_ucan(Token, Issuer) when is_binary(Token) ->
-    ucan_verdict(macula_ucan_nif:verify(Token, Issuer));
-check_ucan(_Other, _Issuer) ->
+%% `macula_ucan_nif:verify/2' checks signature + `exp' + `nbf' only. It does
+%% NOT check `aud' (see that function's own doc): a verified token proves
+%% its issuer granted it to SOMEONE, not that it belongs to whoever is
+%% presenting it now. Both gated policies therefore also require the
+%% token's audience to be the caller, through `audience_is_caller/2'.
+%% Without that, any token a caller obtained a copy of -- not necessarily
+%% its own -- would authorize as if it were the caller it was minted for.
+%% `Caller' is the frame's own `caller' field: `on_inbound_call/3' lets a
+%% CALL through to `handle_inbound_call/2', and `on_inbound_stream_open/4'
+%% lets a STREAM_OPEN through to `authorize/3', only once the frame's
+%% signature verifies against that same `caller', so by the time these
+%% checks run `Caller' is the identity that signed the frame.
+check_ucan(Token, Issuer, Caller)
+  when is_binary(Token), Token =/= <<>>, is_binary(Caller) ->
+    ucan_verdict(macula_ucan_nif:verify(Token, Issuer), Caller);
+check_ucan(_Token, _Issuer, _Caller) ->
     unauthorized.
 
-ucan_verdict({ok, _Payload}) -> ok;
-ucan_verdict(_Error)         -> unauthorized.
+ucan_verdict({ok, Payload}, Caller) ->
+    audience_verdict(audience_is_caller(Payload, Caller));
+ucan_verdict(_Error, _Caller) ->
+    unauthorized.
+
+audience_verdict(true)  -> ok;
+audience_verdict(false) -> unauthorized.
 
 %% `RealmDid' is a realm's own DID (a real Ed25519 keypair the realm
 %% holds), never the 32-byte `RealmId' routing/scoping hash used in
@@ -2226,18 +2243,9 @@ ucan_verdict(_Error)         -> unauthorized.
 %% its own realm-issued service credential (`macula_ucan_nif:get_issuer/1'
 %% on whatever `hecate_om:service_cert/0' or equivalent already returns).
 %%
-%% `macula_ucan_nif:verify/2' checks signature + `exp' + `nbf' against
-%% `RealmDid' -- proof the token is a genuine grant from this realm, and
-%% not expired. It does NOT check `aud' (see that function's own doc):
-%% a bearer token proves the realm issued it to SOMEONE, not that it
-%% belongs to whoever is presenting it now. Without the audience check
-%% below, any membership token a caller obtained a copy of -- not
-%% necessarily its own -- would authorize as if it were a genuine member
-%% making this call. `Caller' is the CALL's own `caller' field, and
-%% `on_inbound_call/3' only lets a CALL through to
-%% `handle_inbound_call/2' once the frame's signature verifies against
-%% that same `caller', so by the time this function runs `Caller' is the
-%% identity that signed this CALL.
+%% A verified token signed by `RealmDid' is a genuine grant from this
+%% realm; its audience is bound to the caller exactly as for
+%% `ucan_required' (see `check_ucan/3').
 %%
 %% Signature and audience are still not enough on their own: a realm
 %% mints membership UCANs at more than one tier from the same key (see
@@ -2253,17 +2261,23 @@ check_realm_membership(Token, RealmDid, Caller, RequiredCan)
 check_realm_membership(_Token, _RealmDid, _Caller, _RequiredCan) ->
     unauthorized.
 
-%% Membership UCANs mint `aud' as the citizen's own device pubkey,
-%% hex-encoded (`macula-realm''s `RealmUcanIssuer.mint_membership/2');
-%% `Caller' is that same identity's raw wire pubkey, so hex-encoding it
-%% the same way makes the two directly comparable.
-membership_verdict({ok, #{<<"aud">> := Aud} = Payload}, Caller, RequiredCan)
-  when is_binary(Aud) ->
-    grant_verdict(Aud =:= binary:encode_hex(Caller, lowercase),
+membership_verdict({ok, Payload}, Caller, RequiredCan) ->
+    grant_verdict(audience_is_caller(Payload, Caller),
                   has_required_capability(maps:get(<<"cap">>, Payload, []),
                                            RequiredCan));
 membership_verdict(_Result, _Caller, _RequiredCan) ->
     unauthorized.
+
+%% The one audience check both gated policies share. A token names its
+%% audience as that identity's public key, hex-encoded in lowercase (as
+%% `macula-realm''s `RealmUcanIssuer.mint_membership/2' does); `Caller' is
+%% the same identity's raw wire public key, so hex-encoding it the same way
+%% makes the two directly comparable. A token without a binary `aud' has no
+%% audience to match.
+audience_is_caller(#{<<"aud">> := Aud}, Caller) when is_binary(Aud) ->
+    Aud =:= binary:encode_hex(Caller, lowercase);
+audience_is_caller(_Payload, _Caller) ->
+    false.
 
 grant_verdict(true, true) -> ok;
 grant_verdict(_AudienceOk, _CapabilityOk) -> unauthorized.

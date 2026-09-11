@@ -92,22 +92,22 @@
               stream_handler/0, auth_policy/0]).
 
 %% Per-procedure auth policy for `advertise'. `open' (default) serves any
-%% identified caller; `{ucan_required, Issuer}' gates the procedure to
-%% exactly one known identity: a valid token signed by `Issuer', with no
-%% check that the caller is who the token was issued to (bearer -- see
-%% `macula_ucan_nif:verify/2''s own doc). Direct-dial dual-trust (Slice 7b).
+%% identified caller; `{ucan_required, Issuer}' gates the procedure on one
+%% known issuer: a valid token signed by `Issuer' whose audience is the
+%% calling identity itself, so a token minted for anyone else is refused.
+%% Direct-dial dual-trust (Slice 7b).
 %%
 %% `{realm_member_required, RealmDid, RequiredCan}' gates on membership in
-%% a realm instead of one exact identity: a valid token signed by
-%% `RealmDid' (a realm's own DID -- NOT the 32-byte `RealmId'
-%% routing/scoping hash used in `-realm' flags and DHT scoping elsewhere;
-%% a realm's DID is a real Ed25519 keypair it holds, the two are unrelated
-%% values) whose audience is the calling identity itself. That audience
-%% check is what makes this different from `ucan_required' rather than a
-%% redundant special case of it: this policy closes the bearer gap for
-%% itself specifically by checking `aud' against the wire-authenticated
-%% caller, `ucan_required' does not and still won't after this -- see
-%% `authorize_policy/2' in `macula_station_link' for both checks.
+%% a realm instead: a valid token signed by `RealmDid' (a realm's own DID --
+%% NOT the 32-byte `RealmId' routing/scoping hash used in `-realm' flags
+%% and DHT scoping elsewhere; a realm's DID is a real Ed25519 keypair it
+%% holds, the two are unrelated values) whose audience is the calling
+%% identity itself, carrying the capability `RequiredCan'.
+%%
+%% Both policies bind the audience the same way. `macula_ucan_nif:verify/2'
+%% never checks `aud', so `authorize_policy/2' in `macula_station_link'
+%% compares it with the wire-authenticated caller for both. A token names
+%% its audience as that identity's public key, hex-encoded in lowercase.
 %%
 %% `RequiredCan' is mandatory, not optional-with-a-default: a realm mints
 %% membership UCANs at more than one tier from the SAME signing key --

@@ -183,7 +183,8 @@ never inline strings.
 - [Streaming Guide](../streaming/STREAMING_GUIDE.md) — when one request/response isn't
   enough: a live feed, an upload, a duplex session.
 - [Authorization Guide](../shared/AUTHORIZATION_GUIDE.md) — gating a procedure with
-  `{ucan_required, Issuer}` and presenting a UCAN token to call it.
+  `{ucan_required, Issuer}` and calling it with a UCAN token minted for the
+  calling identity.
 - [Records Guide](../shared/RECORDS_GUIDE.md) — the DHT record primitive
   `procedure_advertisement` is built on.
 - [`macula_response`](https://hexdocs.pm/macula/macula_response.html) /

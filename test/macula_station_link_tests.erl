@@ -3103,14 +3103,12 @@ realm_member_required_test_() ->
          ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(ExpiredId, 2_000)),
 
          %% THE REPLAY CASE: a token that is completely genuine --
-         %% signed by the real realm, not expired, would pass
-         %% `ucan_required' against this same realm's key with no
-         %% further question -- but minted for a DIFFERENT member than
-         %% whoever is actually making this call. Whoever obtained a
-         %% copy of another member's token cannot use it as their own:
-         %% this is the exact bearer-replay gap `ucan_required' does not
-         %% close (it never checks `aud' at all), closed here by binding
-         %% to `Caller', the wire-authenticated identity making THIS call.
+         %% signed by the real realm, not expired -- but minted for a
+         %% DIFFERENT member than whoever is actually making this call.
+         %% Whoever obtained a copy of another member's token cannot use
+         %% it as their own: its audience is bound to `Caller', the
+         %% wire-authenticated identity making THIS call, the same check
+         %% `ucan_required' applies (see its own test below).
          RightfulOwner = macula_identity:public(macula_identity:generate()),
          StolenToken = mint_membership_ucan(RealmIdentity, RightfulOwner, #{}),
          StolenId = crypto:strong_rand_bytes(16),
@@ -3119,6 +3117,119 @@ realm_member_required_test_() ->
 
          macula_station_link:stop(Pid),
          ok
+     end}.
+
+%%------------------------------------------------------------------
+%% {ucan_required, Issuer} -- binds the token's audience to the caller
+%%------------------------------------------------------------------
+
+%% A token for a `ucan_required' procedure: `IssuerIdentity' signs it and
+%% names `AudiencePub' (hex-encoded, the same convention as membership
+%% tokens) as audience, with a plain `call' capability.
+mint_ucan(IssuerIdentity, AudiencePub, ExpOverride) ->
+    mint_membership_ucan(IssuerIdentity, AudiencePub, ExpOverride, <<"call">>).
+
+%% `{ucan_required, Issuer}' serves a CALL only when its token is signed by
+%% `Issuer', unexpired, and minted for the identity that signed this CALL. A
+%% genuine token minted for anyone else is refused, like no token at all.
+ucan_required_binds_the_token_audience_to_the_caller_test_() ->
+    {timeout, 15,
+     fun() ->
+         UnauthorizedCode = macula_bolt4:code(unauthorized),
+         IssuerIdentity = macula_identity:generate(),
+         Handler = fun(_Payload) -> {ok, #{served => true}} end,
+         Policy = {ucan_required, macula_identity:public(IssuerIdentity)},
+         {Pid, CallerKp} = inbound_call_fixture([{<<"issuer.only">>, Handler}], Policy),
+         Caller = macula_identity:public(CallerKp),
+
+         OwnId = crypto:strong_rand_bytes(16),
+         inject_call_with_ucan(Pid, self(), CallerKp, OwnId, <<"issuer.only">>,
+                               mint_ucan(IssuerIdentity, Caller, #{})),
+         ?assertMatch({ok, #{served := true}}, await_result(OwnId, 2_000)),
+
+         Someone = macula_identity:public(macula_identity:generate()),
+         ForSomeoneId = crypto:strong_rand_bytes(16),
+         inject_call_with_ucan(Pid, self(), CallerKp, ForSomeoneId, <<"issuer.only">>,
+                               mint_ucan(IssuerIdentity, Someone, #{})),
+         ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(ForSomeoneId, 2_000)),
+
+         NoTokenId = crypto:strong_rand_bytes(16),
+         inject_call(Pid, self(), CallerKp, NoTokenId, <<"issuer.only">>),
+         ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(NoTokenId, 2_000)),
+
+         WrongIssuerId = crypto:strong_rand_bytes(16),
+         inject_call_with_ucan(Pid, self(), CallerKp, WrongIssuerId, <<"issuer.only">>,
+                               mint_ucan(macula_identity:generate(), Caller, #{})),
+         ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(WrongIssuerId, 2_000)),
+
+         ExpiredId = crypto:strong_rand_bytes(16),
+         inject_call_with_ucan(Pid, self(), CallerKp, ExpiredId, <<"issuer.only">>,
+                               mint_ucan(IssuerIdentity, Caller,
+                                         #{exp => erlang:system_time(second) - 60})),
+         ?assertMatch({error, #{code := UnauthorizedCode}}, await_result(ExpiredId, 2_000)),
+
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%% The same binding holds for a streaming procedure: a STREAM_OPEN carrying
+%% a genuine `ucan_required' token minted for another identity gets a
+%% STREAM_ERROR `unauthorized' and runs no handler; the caller's own token
+%% is served.
+stream_ucan_required_binds_the_token_audience_to_the_caller_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             Test = self(),
+             Procedure = <<"foo.issuer_gated">>,
+             IssuerIdentity = macula_identity:generate(),
+             Policy = {ucan_required, macula_identity:public(IssuerIdentity)},
+             Handler = fun(_Stream, #{tag := Tag}) ->
+                 Test ! {handler_invoked, Tag},
+                 ok
+             end,
+             ok = macula_station_link:advertise_stream(
+                    Pid, ?REALM, Procedure, server_stream, Handler, Policy),
+             flush_send_frame_casts(),
+             CallerKp = macula_identity:generate(),
+             Caller = macula_identity:public(CallerKp),
+             Someone = macula_identity:public(macula_identity:generate()),
+             [ForSomeone, Own] = [make_ref(), make_ref()],
+             inject_dedicated_stream_open(
+               Pid, FakePeer, ForSomeone,
+               macula_frame:sign(
+                 (stream_open_frame(Procedure, CallerKp, for_someone))#{
+                   ucan_token => mint_ucan(IssuerIdentity, Someone, #{})},
+                 CallerKp)),
+             inject_dedicated_stream_open(
+               Pid, FakePeer, Own,
+               macula_frame:sign(
+                 (stream_open_frame(Procedure, CallerKp, own))#{
+                   ucan_token => mint_ucan(IssuerIdentity, Caller, #{})},
+                 CallerKp)),
+             receive
+                 {sent_on_stream, ForSomeone, #{frame_type := stream_error,
+                                                code       := Code}} ->
+                     ?assertEqual(<<"unauthorized">>, Code)
+             after 1_000 ->
+                 erlang:error(no_unauthorized_stream_error)
+             end,
+             receive
+                 {handler_invoked, own} -> ok
+             after 1_000 ->
+                 erlang:error(own_token_handler_not_invoked)
+             end,
+             receive
+                 {handler_invoked, for_someone} ->
+                     erlang:error(handler_invoked_for_another_callers_token)
+             after 300 ->
+                 ok
+             end,
+             macula_station_link:stop(Pid)
+         after
+             teardown_link_for_streams(ok)
+         end
      end}.
 
 %%------------------------------------------------------------------
