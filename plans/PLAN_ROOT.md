@@ -13,6 +13,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 | [PLAN_POST_QUANTUM_SECURITY_DECISIONS.md][pqd] | Decisions: the full text of each decision | Planning |
 | [DESIGN_PQ_HANDSHAKE_FRAMES.md][frames] | Handshake frames, bindings and status statements, byte for byte | Agreed |
 | [DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md][signed] | Signed records and frames after the handshake | Agreed |
+| [DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md][slots] | DHT slot bounds, slot admission and the verification budget | Agreed |
 
 ## Research
 
@@ -34,6 +35,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 [pqd]: PLAN_POST_QUANTUM_SECURITY_DECISIONS.md
 [frames]: DESIGN_PQ_HANDSHAKE_FRAMES.md
 [signed]: DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md
+[slots]: DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md
 [explore]: EXPLORATION_POST_QUANTUM.md
 [stations]: RESEARCH_SDK_STATION_SELECTION_SURVEY.md
 [isolation]: PLAN_PER_STREAM_QUIC_ISOLATION.md

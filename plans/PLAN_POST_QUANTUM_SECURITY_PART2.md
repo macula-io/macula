@@ -75,6 +75,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     profile offers one group; the scheme and the leaf's SHA-384 come from a per-dial verifier recorder (V4);
   - every failed accept-side handshake is reported to the owning process with the remote address and a
     classified reason;
+  - receive-side flow control, once Raf decides (D28): credit per stream, where `setopt(Stream, active, N)`
+    delivers at most N data messages and then one passive notice, and receive windows and the maximum of
+    concurrent streams set per connection (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, 3.4);
   - the Ed25519 OID `1.3.101.112` and the 32-byte checks go.
 - **Red first:** `test/macula_quic_pq_handshake_tests.erl` (new), on loopback:
   - the negotiated group, scheme and suite equal the profile's, as reported by the NIF and confirmed by a second,
@@ -156,6 +159,12 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     the codec decodes a frame type's own fields through a fixed table (D26);
   - `test/vectors/decoding_rule_v1.json`: the shared vectors of the decoding rule, one entry per case with its name,
     its CBOR in hex and whether it is accepted, which every stack's CI runs pinned by commit (Stage 4);
+  - the node side of `DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md` (D28): the 7-day domain record lifetime and the trust list's
+    pairs of realm id and realm key id in `macula_record`; STORE_ACK `signer` and `version`, FIND_VALUE `after`,
+    VALUE `next` and the HyParView bounds in the frame codec; `verify_authorization/3` over the trust list's pairs;
+    the Plumtree IHAVE allowance and GRAFT window; the HyParView placement allowance and solicited SHUFFLE_REPLY;
+    record bytes paced in the DHT put path; decoding vectors for the new fields; and `scripts/bench-pq-verify.sh`
+    for the verification cost per profile;
   - remove the unused signing functions for SWIM membership updates (`sign_swim_update/2`,
     `verify_swim_update/1`, `verify_update_result/2`, `canonical_swim_update/1`, `?SWIM_UPDATE_DOMAIN`) and
     their tests, on this branch only; SWIM itself stays (decided by Raf, 2026-09-10). Done in `8cd60ee`.
@@ -232,7 +241,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 
 - [ ] Every connection runs the connection handshake, and every dial carries an expected identity.
 - **Owners:**
-  - Mars: `src/peering/macula_peering_conn.erl` and `src/client/macula_station_link.erl`;
+  - Mercury: `src/peering/macula_peering_conn.erl` and `src/client/macula_station_link.erl`;
   - Neptune: the trust options and `station_seed/1` in `src/client/macula_client.erl`, `src/macula_direct_dial.erl`,
     `macula_download.erl`, `src/macula_feeder.erl`, `src/peering/macula_tls.erl` and the distribution dials.
 - **Waiting on:** WP 1.2, WP 1.3.
@@ -252,7 +261,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - the caller resolves verified advertisements, signs the target, and accepts a reply only from the target and
     for its request; provider stream frames are checked against the stream's key and sequence (D25), and a
     provider checks caller stream frames against the caller key and sequence (D17);
-  - distribution dials use the same verification mode.
+  - distribution dials use the same verification mode;
+  - on the connection side (Mercury): the verification budget and the reading pause in `macula_peering_conn`, with
+    the SWIM and stream idle timers for that peer extended by each pause (D28).
 - **Red first:** `test/macula_peering_handshake_tests.erl` and the dial tests:
   - a proof carrying another station's leaf certificate hash is refused;
   - a dial without an expected identity refuses to start;
@@ -301,7 +312,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - neighbour signatures per D17, and publisher signatures verified at the origin station;
   - record fan-out, DHT handlers and content handlers read peer-supplied maps through the facade accessors (D26);
   - stations keep and serve verified records of any type, including domain types they don't know, until they
-    expire; a test stores and fetches one (D23);
+    expire, within the per-slot and per-class bounds; a test stores and fetches one (D23, D28);
   - the station's content store and the handlers that store pushed content are removed, not converted (D27);
   - wherever the station still reads content ids, as in pass-through and announcements, they have only tag 2,
     SHA-384, and an id with any other tag is refused (D24);
@@ -309,6 +320,13 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     follows the serving station; replies and stream frames are checked against the target, the request hash and
     the sequence; relay errors carry their own codes (D25);
   - station-side key storage per D6, with the certificate reloaded on rotation;
+  - the station side of `DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md` (D28): slot bounds and class totals; slot admission,
+    with the trust list refreshed in the background and embedded records verified once per hash; VALUE paging; the
+    STORE_ACK fields; the replication rules and rate; expiry at STORE and VALUE; held bytes answered without
+    verifying again; the STORE byte allowance; and the verification budget on station connections;
+  - SUBSCRIBE entries per connection have a configured maximum;
+  - a node that holds private keys runs with Erlang crash dumps disabled (`ERL_CRASH_DUMP_BYTES=0`), or written only
+    to a private location readable by its own user;
   - BEP44 bootstrap: its items are Ed25519 by specification. Open: Terra checks whether it runs anywhere. If it
     does, Raf decides between dropping it and a dedicated classical key with an exemption from the no-classical
     test.
@@ -355,7 +373,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - the cross-stack leaf-hash vector, Erlang side, through the real handshake and the same accessor the proof code
     uses, on both the client and the station side;
   - a smoke check with one dial from each source of an expected identity (a seed, a directory row, a direct dial),
-    which records the disconnect reason and fails hard.
+    which records the disconnect reason and fails hard;
+  - an honest relay forwarding objects the next hop refuses for receiver-dependent reasons is never paused, and a
+    checked advertisement gets a place in a slot whose unchecked places are full (D28).
 - **Red first:** the suite against today's releases shows X25519.
 - **Done:** green, with captures stored as CI artifacts.
 - **Effort:** 2 to 3 days for the Erlang share of the wire checks.
@@ -497,7 +517,12 @@ Every stack also meets these, each red first:
   `test/vectors/decoding_rule_v1.json` in `macula`, which its CI runs pinned by commit; the set includes a text key
   in two widths, integer key 1 beside float key 1.0, and a byte string key;
 - a frame whose signed object is refused is dropped and recorded, and the next frame on the same connection still
-  arrives; a frame whose envelope is malformed closes the connection.
+  arrives; a frame whose envelope is malformed closes the connection;
+- the record and frame rules of `DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md` (D28): a domain record whose lifetime passes 7 days
+  is refused; STORE_ACK is matched on `key`, `signer` and `version`; FIND_VALUE `after` and VALUE `next` are
+  followed under the consumer rules of section 1.5; the put path paces record bytes to at most 1 MiB per second
+  after a 16 MiB burst; the Plumtree IHAVE and HyParView placement allowances hold where the stack runs them; and
+  the decoding vectors cover the new fields.
 
 ### WP 4.1 `macula-rust`
 
@@ -837,7 +862,9 @@ Every stack also meets these, each red first:
   - every hecate service procedure moves under the org namespace `hecate`, with a procedure delegation per service
     signed by the `hecate` org key of WP 3.1; SDK examples, `macula-mcp` and `macula-e2e` callers move with the
     rename (D25);
-  - services that share content keep it and serve it themselves (D27).
+  - services that share content keep it and serve it themselves (D27);
+  - a node that holds private keys runs with Erlang crash dumps disabled (`ERL_CRASH_DUMP_BYTES=0`), or written only
+    to a private location readable by its own user.
 - **Red first:** hecate-om ownership-proof tests with a post-quantum key, and every service image passing the V2
   check. Fail today.
 - **Done:** green.

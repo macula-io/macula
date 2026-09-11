@@ -5,7 +5,8 @@ signer's full key and nothing re-encoded.
 
 By Mercury, 2026-09-11, reviewed by Mars, Neptune and Venus in two rounds. It details D13, D17 as revised on 2026-09-11,
 D24, D25 and the D7 refinement in `PLAN_POST_QUANTUM_SECURITY.md`, for WP 1.3, WP 1.4 and each stack's Stage 4 work
-package. The handshake itself is in `DESIGN_PQ_HANDSHAKE_FRAMES.md`.
+package. The handshake itself is in `DESIGN_PQ_HANDSHAKE_FRAMES.md`, and DHT slots, slot admission and the
+verification budget per connection are in `DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md` (D28).
 
 ## Encoding
 
@@ -136,6 +137,9 @@ A record is the signed object `{key, tbs, signature}`, with `key` the signer's k
 About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 / 5,139 bytes of signature.
 
 - **Size.** Every stack refuses a record whose wire form is larger than 256 KiB, before any other check.
+- **Domain record lifetime.** A domain record's `expires_at` is at most 7 days after its `created_at`, and every
+  verifier refuses a longer one as malformed. With `created_at` at most 5 minutes ahead, no domain record a station
+  accepts expires more than 7 days and 5 minutes after it arrives (D28).
 - **Checks,** after the steps of a signed object:
   - `tbs` holds exactly these keys, with `subject` only where the type allows it;
   - `created_at` is at most 5 minutes ahead of the verifier's clock, and `expires_at` plus 5 minutes has not passed
@@ -148,6 +152,9 @@ About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 /
   to the key it asked for, and discards one that does not.
 - **Replacement** by `version` compares only records under one storage key and one signer key id, so two signers
   never replace each other.
+- **Foundation realm trust list.** Its payload holds exactly `realms_trusted`, an array of maps, each with exactly
+  `realm_id` (bytes, 32) and `realm_key_id` (bytes, 32). A station checks a realm-signed record's signer against the
+  `realm_key_id` paired with the record's `realm_id` (D28).
 
 ### Tombstones
 
@@ -222,8 +229,9 @@ The payload of a procedure advertisement, type tag 0x06, holds exactly these key
 - They also refuse an advertisement that expires later than the earliest expiry in its authorization: an embedded
   record's `expires_at`, or a certificate's notAfter. Renewing an authorization therefore means signing the
   advertisement again, at a new version.
-- A station that stores or forwards an advertisement checks only the outer record, its signature and its own
-  expiry, and never parses `authorization`.
+- A station that stores or forwards an advertisement verifies its embedded org directory and delegation, once per
+  hash, to decide a checked place, and never parses a certificate chain or shows that decision to callers
+  (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, part 2).
 - A consumer takes the realm and the procedure from these fields; no advertisement carries a procedure URI.
 
 ### Storage keys
@@ -315,6 +323,17 @@ which stations set or change per hop, stay outside them.
 - Records inside STORE and VALUE keep their own signatures in both profiles.
 - Requests, replies, relay errors, stream frames and publications carry their own signatures in both profiles.
 
+### DHT and HyParView fields
+
+- STORE_ACK carries `key`, `signer` (bytes, 32: the key id of the stored record's `key`), `version` (bytes, 16: the
+  version of the record in the STORE) and `stored`, and a sender matches each acknowledgement on `key`, `signer`
+  and `version` (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, 1.4).
+- FIND_VALUE carries `key`, `origin` and an optional `after` (bytes, 32), a signer key id. VALUE carries `key`,
+  `records` and `next` (bytes, 32), present only when more entries follow (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, 1.5).
+- A HyParView `peer_sample` holds at most 7 node_ids. A SHUFFLE or FORWARD_JOIN `ttl`, and a FORWARD_JOIN `arwl`,
+  is at most 8, and a `prwl` is at most its `arwl`. A frame outside these is `malformed_frame`. A receiver compares
+  a FORWARD_JOIN's `ttl` with its own PRWL, never the frame's.
+
 ### Refusals
 
 A frame has two layers. Its envelope, meaning the frame's own fields, its routing fields and, in pq_hybrid, its
@@ -336,9 +355,9 @@ stream frame, publication, advertisement, withdrawal or record, is its signer's,
   desynchronises the stream.
 - Objects never close a connection because freshness checks depend on each hop's clock, so an object can pass at one
   hop and fail at the next.
-- A receiver bounds what it logs about refused objects per connection. A per-connection verification budget, where
-  refused objects beyond a rate slow down reading from that connection rather than closing it, is an open item
-  (WP 1.3, WP 1.6).
+- A receiver bounds what it logs about refused objects per connection. A per-connection verification budget slows
+  reading from a connection whose refused objects pass a rate, rather than closing it
+  (`DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`, part 3).
 
 ### Requests: CALL and STREAM_OPEN
 

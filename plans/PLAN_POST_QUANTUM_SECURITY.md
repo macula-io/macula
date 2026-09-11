@@ -464,6 +464,7 @@ Raf answered "go with the recommendations" on 2026-09-10.
 | D25 | Replies bound to provider and request | Caller-signed target, request hash, signed stream frames | Accepted |
 | D26 | Peer-supplied maps | One key form in 11.0.0, read through the facade accessors | Accepted |
 | D27 | Where content lives | The sharing node keeps and serves it; stations only pass it through | Accepted |
+| D28 | DHT slots and verification budget | 64 entries per slot; checked places; slowed reads | Recommended |
 
 The full text of each decision is in
 [PLAN_POST_QUANTUM_SECURITY_DECISIONS.md](PLAN_POST_QUANTUM_SECURITY_DECISIONS.md).
@@ -485,8 +486,11 @@ The full text of each decision is in
 | Unused signing functions for SWIM membership updates | Mercury | removed in `8cd60ee` on `post-quantum` |
 | BEP44 bootstrap | Terra, then Raf | Terra checks whether it runs anywhere |
 | Endorsement of stations (D23) | Raf | accepted on 2026-09-11 |
-| DHT slot bounds to define: records per slot, VALUE paging (WP 1.3, WP 1.6) | Mars | open |
-| Verification budget per connection, slowing reads instead of closing (WP 1.3, WP 1.6) | Mercury, Mars | open |
+| DHT slot bounds to define: records per slot, VALUE paging (WP 1.3, WP 1.6) | Mars | decided, D28 |
+| Verification budget per connection, slowing reads instead of closing (WP 1.3, WP 1.6) | Mercury, Mars | decided, D28 |
+| Receive-side flow control per stream, for the verification budget (D28, WP 1.2) | Raf decides, Neptune builds | open |
+| Fairness of accepted verifications across connections (D28) | unassigned | later |
+| Live foundation keys and a published realm trust list, for slot admission (D28) | Raf | open |
 
 ---
 

@@ -511,7 +511,9 @@ before its wire checks are green.
 - **Question:** should a station need endorsement by a realm or by a foundation before programs use it?
 - **Answer, accepted by Raf on 2026-09-11:** No endorsement is needed to use a station. If endorsement comes later, it
   is a separate signed record about a station, checked by the node that picks a station, under its own policy.
-  Handshake frames carry no endorsement. Stations keep and serve verified records of any type until they expire.
+  Handshake frames carry no endorsement. Stations keep and serve verified records of any type until they expire,
+  within the per-slot and per-class bounds (D28).
+- **Refined on 2026-09-11, accepted by Raf:** the answer gained "within the per-slot and per-class bounds".
 - Such a record fits a domain type (0x20 to 0xFF) with the station's node_id as its subject, so 11.0.0 needs no new
   field or tag for it.
 - A node_id stays the same across the 5-day rotation, because only TLS and CONNECT keys rotate (D6), so an
@@ -669,3 +671,26 @@ before its wire checks are green.
 - **Blocks:** WP 1.3 (sharing and fetching content), WP 1.6 (the station's content store is removed), WP 2.1
   (content probes), WP 4.1, WP 4.2 and WP 4.3 (fetching content), WP 5.1 (`mesh_put` and `mesh_get`) and WP 6.1
   (services that share content).
+
+### D28 Slot bounds, slot admission and the verification budget
+
+- **Question:** how much does a DHT slot hold, who gets a place when it is full, and what does reading from a peer whose
+  objects keep failing cost a node?
+- **Recommendation, agreed by Mars and Mercury and checked by Jupiter on 2026-09-11:** the rules of
+  `DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`:
+  - a slot that signers share holds 64 entries, one per signer; a record from a new signer that finds no free place is
+    not stored, and nothing held is evicted for it; built-in and domain types each have a station total; VALUE
+    answers in pages of at most 256 KiB;
+  - a slot a station can check through its realm trust list keeps 64 places for checked signers and 16 for everyone
+    else; a station never parses a certificate chain, fetches anything during a STORE, or shows callers which place an
+    entry holds;
+  - each connection has a budget of 32 tokens, refilled at 1 per second, spent only on refusals that every verifier
+    reaches from the same bytes and on allowances passed; an empty budget pauses reading from that connection, from
+    250 ms up to 4 seconds, and never closes it;
+  - a domain record expires at most 7 days after its `created_at`, a rule of the record format that every verifier
+    checks.
+- **Waiting on:** receive-side flow control per stream, for the pause (Raf decides, Neptune builds); live foundation
+  keys and a published realm trust list, before slot admission can check any slot (Raf).
+- **Blocks:** WP 1.2 (credit per stream, receive windows), WP 1.3 (record rules, frame fields, the Plumtree and
+  HyParView allowances, put pacing), WP 1.5 (the budget and the pause), WP 1.6 (slots, admission, paging,
+  replication, the STORE allowance), WP 2.2 and Stage 4.
