@@ -1552,7 +1552,7 @@ encode_with_check(Len, Bytes) ->
 -spec decode(binary()) ->
     {ok, frame(), binary()}
   | {more, pos_integer()}
-  | {error, term()}.
+  | {error, frame_too_large | bad_frame}.
 decode(<<Len:32/big, _Rest/binary>>) when Len > ?MAX_FRAME_BYTES ->
     {error, frame_too_large};
 decode(<<Len:32/big, Bytes:Len/binary, Rest/binary>>) ->
@@ -1593,9 +1593,19 @@ decode_record_or_keep(B) when is_binary(B) ->
     end;
 decode_record_or_keep(Other) -> Other.
 
-%% @doc Drain all complete frames from a buffer. Returns the list of frames
-%% (in order) and the remaining (incomplete) buffer.
--spec parse_stream(binary()) -> {[frame()], binary()}.
+%% @doc Drain all complete frames from a buffer.
+%%
+%% Returns `{ok, Frames, Tail}' with the frames in order and `Tail' holding
+%% at most one incomplete frame, so a caller that keeps `Tail' for the next
+%% chunk never holds more than the frame cap plus its 4-byte header. The
+%% first frame that does not decode ends the parse with
+%% `{malformed, FramesBefore, Reason}': `frame_too_large' for a length
+%% header above the cap, decided from the header alone, and `bad_frame' for
+%% a complete frame that is not CBOR. Nothing after that frame can be read,
+%% so the caller ends the stream.
+-spec parse_stream(binary()) ->
+    {ok, [frame()], binary()}
+  | {malformed, [frame()], frame_too_large | bad_frame}.
 parse_stream(Buf) when is_binary(Buf) ->
     drain(Buf, []).
 
@@ -1605,10 +1615,9 @@ drain(Buf, Acc) ->
 drain_step({ok, Frame, Rest}, _Buf, Acc) ->
     drain(Rest, [Frame | Acc]);
 drain_step({more, _N}, Buf, Acc) ->
-    {lists:reverse(Acc), Buf};
-drain_step({error, _R}, Buf, Acc) ->
-    %% Stop draining on first parse error; surface buffer as-is.
-    {lists:reverse(Acc), Buf}.
+    {ok, lists:reverse(Acc), Buf};
+drain_step({error, Reason}, _Buf, Acc) ->
+    {malformed, lists:reverse(Acc), Reason}.
 
 %%------------------------------------------------------------------
 %% Accessors

@@ -384,7 +384,7 @@ handshaking(info, {quic, new_stream, Stream, _Info}, Data) ->
     {keep_state, Data#data{quic_stream = Stream}};
 handshaking(info, {quic, Bin, Stream, _Flags},
             #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
-    consume_handshake(<<Buf/binary, Bin/binary>>, Data);
+    consume_handshake(macula_frame:parse_stream(<<Buf/binary, Bin/binary>>), Data);
 %% `{quic, closed, Conn, Detail}' is NEVER actually sent by the NIF —
 %% `native/macula_quic/src/atoms.rs' defines the atom but nothing calls
 %% `send_event' with it (verified directly in source: the connection's
@@ -429,11 +429,12 @@ handshaking(cast, {close, Reason}, Data) ->
 handshaking(cast, {reject, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, Data};
-%% No CONNECT/HELLO completed within the timeout window. Most common
-%% cause: peer is speaking a different protocol version (e.g. V1
-%% frames at a V2 station) — bytes accumulate in `buf' but never form
-%% a valid frame. Surface a structured diagnostic and exit so the sup
-%% does not retain the worker forever.
+%% No CONNECT/HELLO completed within the timeout window: the peer sent
+%% no complete frame, or only frames other than CONNECT and HELLO. A
+%% peer whose bytes do not decode as frames (e.g. V1 frames at a V2
+%% station) is disconnected as malformed before this. Surface a
+%% structured diagnostic and exit so the sup does not retain the worker
+%% forever.
 handshaking(state_timeout, handshake_timeout,
             #data{role = Role, buf = Buf, quic_stream = Stream} = Data) ->
     macula_diagnostics:event(<<"_macula.peering.handshake_timeout">>, #{
@@ -477,9 +478,14 @@ handshake_send({error, _} = SendErr, _Stream, Data) ->
     notify(disconnected, {send_connect_failed, SendErr}, Data),
     {stop, normal, Data}.
 
-consume_handshake(Buf, Data) ->
-    {Frames, Tail} = macula_frame:parse_stream(Buf),
-    handle_handshake_frames(Frames, Data#data{buf = Tail}).
+%% A handshake stream that does not decode ends the connection at once:
+%% the peer has not authenticated, and nothing after the bad frame can be
+%% read.
+consume_handshake({ok, Frames, Tail}, Data) ->
+    handle_handshake_frames(Frames, Data#data{buf = Tail});
+consume_handshake({malformed, _Frames, Reason}, Data) ->
+    notify(disconnected, {malformed, Reason}, Data),
+    {stop, normal, Data}.
 
 handle_handshake_frames([], Data) ->
     {keep_state, Data};
@@ -589,9 +595,7 @@ connected(enter, _Old, Data) ->
     {keep_state, Data};
 connected(info, {quic, Bin, Stream, _Flags},
           #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
-    {Frames, Tail} = macula_frame:parse_stream(<<Buf/binary, Bin/binary>>),
-    [route_frame(F, Data) || F <- Frames],
-    {keep_state, Data#data{buf = Tail}};
+    consume_control(macula_frame:parse_stream(<<Buf/binary, Bin/binary>>), Data);
 %% Peer opened a new stream on this connection, outside the control
 %% stream — a dedicated stream for a streaming RPC session or a
 %% content transfer (see PLAN_PER_STREAM_QUIC_ISOLATION.md). This
@@ -1004,6 +1008,17 @@ dial_trust_opts(_Target) ->
 notify(Event, Detail, #data{controlling_pid = Pid}) ->
     Pid ! {macula_peering, Event, self(), Detail},
     ok.
+
+%% Frames from the control stream are routed in order. The first frame
+%% that does not decode ends the connection after the frames before it
+%% are routed: nothing after it can be read.
+consume_control({ok, Frames, Tail}, Data) ->
+    [route_frame(F, Data) || F <- Frames],
+    {keep_state, Data#data{buf = Tail}};
+consume_control({malformed, Frames, Reason}, Data) ->
+    [route_frame(F, Data) || F <- Frames],
+    notify(disconnected, {malformed, Reason}, Data),
+    {stop, normal, Data}.
 
 %% Inbound-frame router. Category-bypass: DHT-class frames go to
 %% `dht_recipient' if set; pubsub-class frames go to `pubsub_recipient'
