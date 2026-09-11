@@ -540,6 +540,9 @@ Every stack also meets these, each red first:
   - a chunked fetch accepts no chunk until the fetched manifest's recomputed content id equals the requested id;
     a self-consistent manifest for other content is refused;
   - event dedup runs only after signature verification; an unverified frame never marks an id as seen;
+  - each event exposes realm, topic, `publisher` as the publisher's node_id, seq, `published_at` and
+    `delivered_via`, taken from the verified publication, and `publication_hash` and `expires_at` where the stack
+    deduplicates;
   - streams get an authorization policy hook like calls: a STREAM_OPEN carries a capability token, and the policy
     is enforced before accept returns, in the core crate and through the FFI `accept_stream`;
   - a provider's policy is an explicit argument of every serve and accept API, and an open policy is always
@@ -630,6 +633,9 @@ Every stack also meets these, each red first:
       that node itself (D27);
   - events: dedup runs only on verified events, so a forged event that reuses a real publisher's realm,
     publisher, sequence number and topic never suppresses the genuine one;
+  - each event exposes realm, topic, `publisher` as the publisher's node_id, seq, `published_at` and
+    `delivered_via`, taken from the verified publication, and `publication_hash` and `expires_at` where the stack
+    deduplicates;
   - authorization:
     - calls and streams both take an authorization policy, enforced before any handler runs; `macula-ts` can
       set it, and `macula-php`'s gated export applies it per realm and procedure;
@@ -701,6 +707,9 @@ Every stack also meets these, each red first:
     signature that test vectors from `macula` verify;
   - event dedup runs only after the publisher signature verifies, so a forged event that reuses a real publisher
     and sequence number never suppresses the genuine one;
+  - each event exposes realm, topic, `publisher` as the publisher's node_id, seq, `published_at` and
+    `delivered_via`, taken from the verified publication, and `publication_hash` and `expires_at` where the stack
+    deduplicates;
   - call and stream handlers receive the verified caller identity, and a policy hook sees that identity and the
     token before any handler runs; a denial replies unauthorized without running the handler;
   - a chunked fetch recomputes the manifest id and refuses a manifest whose id differs from the requested id
@@ -731,6 +740,9 @@ Every stack also meets these, each red first:
   - signed frames and records are verified per the design before delivery: an EVENT only after its publisher
     signature verifies, a reply only from the addressed provider, a record only after its signature and slot
     verify;
+  - each event exposes realm, topic, `publisher` as the publisher's node_id, seq, `published_at` and
+    `delivered_via`, taken from the verified publication, and `publication_hash` and `expires_at` where it
+    deduplicates;
   - Linux CI on an image with OpenSSL 3.5 or newer, and a `windows-latest` runner for the Schannel result.
 - **Files:**
   - `src/Macula/Macula.csproj`
@@ -781,6 +793,7 @@ Every stack also meets these, each red first:
     `realm_id` and `procedure` fields (WP 1.3);
   - `macula-mcp`'s `mesh_put` and `mesh_get` serve content from the node that shares it and fetch it from that node,
     through stations (D27);
+  - `macula-mcp`'s envelope attestation compares an envelope's `from` with the event's `publisher`, both as node_ids;
   - release on tag: goreleaser for `macula-cli`, npm for `macula-mcp`.
 - **Red first:** each tool's connection test against the new fleet fails before its cutover.
 - **Effort:** ⚠.
@@ -806,6 +819,11 @@ Every stack also meets these, each red first:
   - data keyed by the hex node id (hecate-citizens, hecate-mail, hecate-graph) keeps its 64-character shape; the
     values change when nodes get new identities;
   - every handler that reads payload fields reads them through `macula:field/2,3` and `macula:text/1` (D26);
+  - services read an event's meta through `realm`, `publisher` as the publisher's node_id, `seq`, `published_at`
+    and `delivered_via`; every event a service receives is verified, so no service reads `publisher_verified` or a
+    publisher signature field (hecate-graph, hecate-agora, hecate-mods);
+  - a service event that recorded `publisher_verified` moves to a new event version without that field, and events
+    already stored stay as they are (hecate-agora);
   - every hecate service procedure moves under the org namespace `hecate`, with a procedure delegation per service
     signed by the `hecate` org key of WP 3.1; SDK examples, `macula-mcp` and `macula-e2e` callers move with the
     rename (D25);

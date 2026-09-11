@@ -66,6 +66,13 @@ The fields of `tbs`:
   its presented leaf change for any other reason, the same rule applies: the station issues the new TLS binding, and
   a status statement for it, before its listener presents that leaf. No connection ever sees a leaf without a
   matching, fresh binding.
+- **Issuing.** A node issues a status statement every 15 minutes for each of its bindings whose `not_after` has not
+  passed, each valid for 1 hour (D22). It rotates each TLS and CONNECT key every 5 days, and issues the new binding
+  and a status statement for it before the new key is used. Across a rotation, a node keeps sending fresh statements
+  for the old binding on the connections that use it, until that binding's `not_after`.
+- **An open connection at its binding's `not_after`.** The connection closes with `binding_expired`. Its owner may
+  dial a replacement with the new key before then, so a link need not have a gap; the old connection closes at
+  `not_after` regardless.
 
 ## Status statement (D22)
 
@@ -186,6 +193,10 @@ of HELLO: both sides already derived the node_ids.
 
 `version` 3, `frame_type` `status`, and `statement`, a `{tbs, signature}` status statement. Sent at every reissue.
 Each side keeps the peer's current expiry and a timer at expiry plus 5 minutes.
+A status frame travels only on the control stream. It is not in the neighbour signature table of D17
+(`DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md`), so it carries no neighbour signature in either profile and does not
+count toward `seq`. When the timer fires before a fresh statement arrives, the connection closes with
+`status_expired`; a statement that fails its checks closes it with that check's reason.
 
 ## Order, close reasons and refusal codes
 

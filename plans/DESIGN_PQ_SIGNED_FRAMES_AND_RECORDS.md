@@ -510,6 +510,8 @@ publication bytes ride in the PUBLISH and in every EVENT made from it, so `tbs` 
   plus `ttl_ms` plus 5 minutes has passed. Without `ttl_ms`, a maximum age of 10 minutes applies.
 - Plumtree deduplication and IHAVE bookkeeping key on the SHA-384 of the publication's `tbs`, never on an unsigned
   message id.
+- Every node that remembers a publication hash for deduplication keeps it until the publication expires, and no
+  longer.
 - `published_at` is part of the event an application receives.
 - PUBLISH and SUBSCRIBE carry no capability token field (WP 1.4).
 
