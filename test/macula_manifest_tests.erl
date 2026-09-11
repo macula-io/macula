@@ -126,8 +126,8 @@ verify_rejects_size_mismatch_test() ->
 verify_rejects_tampered_bytes_same_size_test() ->
     Data = crypto:strong_rand_bytes(700),
     {ok, M, _} = macula_manifest:create(Data, #{chunk_size => 200}),
-    <<_:8, Rest/binary>> = Data,
-    Tampered = <<0, Rest/binary>>,
+    <<First, Rest/binary>> = Data,
+    Tampered = <<(First bxor 16#FF), Rest/binary>>,
     ?assertEqual({error, root_hash_mismatch},
                  macula_manifest:verify(M, Tampered)).
 
