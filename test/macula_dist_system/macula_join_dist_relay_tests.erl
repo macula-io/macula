@@ -109,6 +109,7 @@ joined_client_is_temporary_root_child() ->
     stop_relay(Relay).
 
 relay_loss_is_visible_and_rejoin_works() ->
+    ok = stale_connection_event(),
     Relay = start_relay(),
     Root = whereis(macula_root),
 
@@ -174,6 +175,41 @@ accepted_connection() ->
     after ?EVENT_TIMEOUT_MS ->
         error(no_relay_side_connection)
     end.
+
+%% Leaves in this process's mailbox the connection event of a listener that
+%% is already closed, as a late event from an earlier test's relay can be.
+stale_connection_event() ->
+    Port = pick_free_port(),
+    {ok, Listener} = macula_test_tmp:with_dir("macula-join-dist-relay-stale",
+                                             fun(Dir) -> relay_listener(Dir, Port) end),
+    ok = macula_quic:async_accept(Listener),
+    {ok, _ClientConn} = macula_quic:connect(<<"127.0.0.1">>, Port,
+                                            [{alpn, [?RELAY_ALPN]} | macula_tls:quic_client_opts()],
+                                            5_000),
+    Event = receive
+                {quic, new_conn, _Conn, _Info} = NewConn -> NewConn
+            after ?EVENT_TIMEOUT_MS ->
+                error(no_stale_connection)
+            end,
+    ok = macula_quic:close_listener(Listener),
+    self() ! Event,
+    ok.
+
+%% A listener on `Port' with the relay's ALPN, whose self-signed certificate
+%% and key live in `Dir' while listen reads them.
+relay_listener(Dir, Port) ->
+    {Pub, Priv} = ephemeral_keypair(),
+    {ok, {CertPem, KeyPem}} =
+        macula_quic:generate_self_signed_cert(Pub, Priv, [<<"localhost">>, <<"127.0.0.1">>]),
+    Cert = filename:join(Dir, "relay.crt"),
+    Key = filename:join(Dir, "relay.key"),
+    ok = file:write_file(Cert, CertPem),
+    ok = file:write_file(Key, KeyPem),
+    macula_quic:listen(<<"127.0.0.1">>, Port,
+                       [{cert, Cert}, {key, Key},
+                        {alpn, [?RELAY_ALPN]},
+                        {idle_timeout_ms, 30000},
+                        {keep_alive_interval_ms, 5000}]).
 
 down_reason(MonRef, Pid) ->
     receive
