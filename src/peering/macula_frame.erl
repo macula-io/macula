@@ -222,19 +222,19 @@
 }.
 
 -type swim_update_spec() :: #{
-    target      := macula_identity:pubkey(),
+    target      := id256(),
     state       := member_state(),
     incarnation := non_neg_integer(),
     observed_at := pos_integer(),
-    by          := macula_identity:pubkey()
+    by          := id256()
 }.
 
 -type swim_update() :: #{
-    target      := macula_identity:pubkey(),
+    target      := id256(),
     state       := member_state(),
     incarnation := non_neg_integer(),
     observed_at := pos_integer(),
-    by          := macula_identity:pubkey()
+    by          := id256()
 }.
 
 -type swim_ping_spec() :: #{
@@ -245,15 +245,15 @@
 
 -type swim_ack_spec() :: #{
     round       := non_neg_integer(),
-    responder   := macula_identity:pubkey(),
+    responder   := id256(),
     incarnation := non_neg_integer(),
     piggyback   => [swim_update()]
 }.
 
 -type swim_suspect_spec() :: #{
-    target             := macula_identity:pubkey(),
+    target             := id256(),
     target_incarnation := non_neg_integer(),
-    suspected_by       := macula_identity:pubkey(),
+    suspected_by       := id256(),
     ttl                := non_neg_integer()
 }.
 
@@ -272,8 +272,8 @@
 -type country() :: <<_:16>>.
 
 -type station_ref_spec() :: #{
-    node_id      := macula_identity:pubkey(),
-    station_id   := macula_identity:pubkey(),
+    node_id      := id256(),
+    station_id   := id256(),
     addresses    => [map()],
     tier         := tier(),
     asn          => non_neg_integer() | undefined,
@@ -282,8 +282,8 @@
 }.
 
 -type station_ref() :: #{
-    node_id      := macula_identity:pubkey(),
-    station_id   := macula_identity:pubkey(),
+    node_id      := id256(),
+    station_id   := id256(),
     addresses    := [map()],
     tier         := tier(),
     asn          := non_neg_integer() | undefined,
@@ -296,7 +296,7 @@
 
 -type find_node_spec()     :: #{
     key    := id256(),
-    origin := macula_identity:pubkey(),
+    origin := id256(),
     depth  := non_neg_integer()
 }.
 
@@ -307,7 +307,7 @@
 
 -type find_value_spec()    :: #{
     key    := id256(),
-    origin := macula_identity:pubkey()
+    origin := id256()
 }.
 
 -type value_spec()         :: #{
@@ -367,7 +367,7 @@
 
 -type hyparview_join_spec() :: #{
     realm      := id256(),
-    new_member := macula_identity:pubkey(),
+    new_member := id256(),
     %% Signed `realm_member_endorsement' macula_record (see
     %% hecate_overlay's hecate_realm_join module), proving the realm's
     %% admin authorised `new_member' to join. Optional at the type
@@ -379,7 +379,7 @@
 
 -type hyparview_forward_join_spec() :: #{
     realm      := id256(),
-    new_member := macula_identity:pubkey(),
+    new_member := id256(),
     ttl        := non_neg_integer(),
     arwl       := non_neg_integer(),
     prwl       := non_neg_integer(),
@@ -410,14 +410,14 @@
 
 -type hyparview_shuffle_spec() :: #{
     realm       := id256(),
-    origin      := macula_identity:pubkey(),
+    origin      := id256(),
     ttl         := non_neg_integer(),
-    peer_sample := [macula_identity:pubkey()]
+    peer_sample := [id256()]
 }.
 
 -type hyparview_shuffle_reply_spec() :: #{
     realm       := id256(),
-    peer_sample := [macula_identity:pubkey()]
+    peer_sample := [id256()]
 }.
 
 %%------------------------------------------------------------------
@@ -459,7 +459,7 @@
 %%------------------------------------------------------------------
 
 -type overlay_relay_spec() :: #{
-    peer    := macula_identity:pubkey(),
+    peer    := id256(),
     payload := binary()
 }.
 
@@ -496,7 +496,7 @@
 -type subscribe_spec() :: #{
     topic      := binary(),
     realm      := id256(),
-    subscriber := macula_identity:pubkey(),
+    subscriber := id256(),
     filter     => term() | undefined,
     options    => map()
 }.
@@ -504,7 +504,7 @@
 -type unsubscribe_spec() :: #{
     topic      := binary(),
     realm      := id256(),
-    subscriber := macula_identity:pubkey()
+    subscriber := id256()
 }.
 
 %% An EVENT carries the publication bytes of the PUBLISH it was made from, unchanged.
@@ -524,18 +524,11 @@
 %% peer_observer's terminate path).
 %%------------------------------------------------------------------
 
--type advertise_spec() :: #{
-    realm      := id256(),
-    procedure  := binary(),
-    advertiser := macula_identity:pubkey(),
-    options    => map()
-}.
+%% ADVERTISE carries the provider's signed procedure advertisement record, and UNADVERTISE the tombstone that
+%% withdraws it, each as record bytes that stations forward unchanged.
+-type advertise_spec() :: #{advertisement := binary()}.
 
--type unadvertise_spec() :: #{
-    realm      := id256(),
-    procedure  := binary(),
-    advertiser := macula_identity:pubkey()
-}.
+-type unadvertise_spec() :: #{withdrawal := binary()}.
 
 %%------------------------------------------------------------------
 %% Streaming RPC frame specs (Part 6 §5.6)
@@ -1322,29 +1315,12 @@ validate_options(M) when is_map(M) -> ok.
 %%------------------------------------------------------------------
 
 -spec advertise(advertise_spec()) -> frame().
-advertise(#{realm := R, procedure := Proc, advertiser := Adv} = Spec)
-  when is_binary(R),    byte_size(R)   =:= 32,
-       is_binary(Proc),
-       is_binary(Adv),  byte_size(Adv) =:= 32 ->
-    Options = maps:get(options, Spec, #{}),
-    validate_options(Options),
-    (base(advertise, 0))#{
-        realm      => R,
-        procedure  => Proc,
-        advertiser => Adv,
-        options    => Options
-    }.
+advertise(#{advertisement := Advertisement}) when is_binary(Advertisement) ->
+    (base(advertise, 0))#{advertisement => Advertisement}.
 
 -spec unadvertise(unadvertise_spec()) -> frame().
-unadvertise(#{realm := R, procedure := Proc, advertiser := Adv})
-  when is_binary(R),    byte_size(R)   =:= 32,
-       is_binary(Proc),
-       is_binary(Adv),  byte_size(Adv) =:= 32 ->
-    (base(unadvertise, 0))#{
-        realm      => R,
-        procedure  => Proc,
-        advertiser => Adv
-    }.
+unadvertise(#{withdrawal := Withdrawal}) when is_binary(Withdrawal) ->
+    (base(unadvertise, 0))#{withdrawal => Withdrawal}.
 
 %%------------------------------------------------------------------
 %% Streaming RPC constructors (Part 6 §5.6)
@@ -2146,8 +2122,8 @@ field_table(connect) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2163,8 +2139,8 @@ field_table(hello) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2182,8 +2158,8 @@ field_table(goodbye) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2195,75 +2171,75 @@ field_table(swim_ping) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"round">> => {round, value},
-      <<"incarnation">> => {incarnation, value},
-      <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, value},
+      <<"round">> => {round, uint},
+      <<"incarnation">> => {incarnation, uint},
+      <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, {bytes, 32}},
           <<"state">> => {state, {enum, [alive, suspect, confirmed_failed]}},
-          <<"incarnation">> => {incarnation, value},
-          <<"observed_at">> => {observed_at, value},
-          <<"by">> => {by, value}}}}};
+          <<"incarnation">> => {incarnation, uint},
+          <<"observed_at">> => {observed_at, uint},
+          <<"by">> => {by, {bytes, 32}}}}}};
 field_table(swim_ack) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"round">> => {round, value},
-      <<"responder">> => {responder, value},
-      <<"incarnation">> => {incarnation, value},
-      <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, value},
+      <<"round">> => {round, uint},
+      <<"responder">> => {responder, {bytes, 32}},
+      <<"incarnation">> => {incarnation, uint},
+      <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, {bytes, 32}},
           <<"state">> => {state, {enum, [alive, suspect, confirmed_failed]}},
-          <<"incarnation">> => {incarnation, value},
-          <<"observed_at">> => {observed_at, value},
-          <<"by">> => {by, value}}}}};
+          <<"incarnation">> => {incarnation, uint},
+          <<"observed_at">> => {observed_at, uint},
+          <<"by">> => {by, {bytes, 32}}}}}};
 field_table(swim_suspect) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"target">> => {target, value},
-      <<"target_incarnation">> => {target_incarnation, value},
-      <<"suspected_by">> => {suspected_by, value},
-      <<"ttl">> => {ttl, value}};
+      <<"target">> => {target, {bytes, 32}},
+      <<"target_incarnation">> => {target_incarnation, uint},
+      <<"suspected_by">> => {suspected_by, {bytes, 32}},
+      <<"ttl">> => {ttl, uint}};
 field_table(swim_confirm) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"target">> => {target, value},
-      <<"target_incarnation">> => {target_incarnation, value},
-      <<"suspected_by">> => {suspected_by, value},
-      <<"ttl">> => {ttl, value}};
+      <<"target">> => {target, {bytes, 32}},
+      <<"target_incarnation">> => {target_incarnation, uint},
+      <<"suspected_by">> => {suspected_by, {bytes, 32}},
+      <<"ttl">> => {ttl, uint}};
 field_table(ping) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2274,8 +2250,8 @@ field_table(pong) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2286,54 +2262,54 @@ field_table(find_node) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"key">> => {key, value},
-      <<"origin">> => {origin, value},
-      <<"depth">> => {depth, value}};
+      <<"origin">> => {origin, {bytes, 32}},
+      <<"depth">> => {depth, uint}};
 field_table(nodes) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"key">> => {key, value},
-      <<"nodes">> => {nodes, {list_of, #{<<"node_id">> => {node_id, value},
-          <<"station_id">> => {station_id, value},
+      <<"nodes">> => {nodes, {list_of, #{<<"node_id">> => {node_id, {bytes, 32}},
+          <<"station_id">> => {station_id, {bytes, 32}},
           <<"addresses">> => {addresses, value},
-          <<"tier">> => {tier, value},
-          <<"asn">> => {asn, value},
-          <<"country">> => {country, value},
-          <<"last_seen_at">> => {last_seen_at, value}}}}};
+          <<"tier">> => {tier, uint},
+          <<"asn">> => {asn, {optional, uint}},
+          <<"country">> => {country, {bytes, 2}},
+          <<"last_seen_at">> => {last_seen_at, uint}}}}};
 field_table(find_value) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"key">> => {key, value},
-      <<"origin">> => {origin, value}};
+      <<"origin">> => {origin, {bytes, 32}}};
 field_table(value) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2345,8 +2321,8 @@ field_table(store) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2357,8 +2333,8 @@ field_table(store_ack) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2388,37 +2364,37 @@ field_table(hyparview_join) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"new_member">> => {new_member, value},
+      <<"new_member">> => {new_member, {bytes, 32}},
       <<"record">> => {record, value}};
 field_table(hyparview_forward_join) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"new_member">> => {new_member, value},
-      <<"ttl">> => {ttl, value},
-      <<"arwl">> => {arwl, value},
-      <<"prwl">> => {prwl, value},
+      <<"new_member">> => {new_member, {bytes, 32}},
+      <<"ttl">> => {ttl, uint},
+      <<"arwl">> => {arwl, uint},
+      <<"prwl">> => {prwl, uint},
       <<"record">> => {record, value}};
 field_table(hyparview_neighbor) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2430,8 +2406,8 @@ field_table(hyparview_disconnect) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2441,27 +2417,27 @@ field_table(hyparview_shuffle) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"origin">> => {origin, value},
-      <<"ttl">> => {ttl, value},
-      <<"peer_sample">> => {peer_sample, value}};
+      <<"origin">> => {origin, {bytes, 32}},
+      <<"ttl">> => {ttl, uint},
+      <<"peer_sample">> => {peer_sample, {list_of_bytes, 32}}};
 field_table(hyparview_shuffle_reply) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"peer_sample">> => {peer_sample, value}};
+      <<"peer_sample">> => {peer_sample, {list_of_bytes, 32}}};
 field_table(plumtree_gossip) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
@@ -2472,34 +2448,34 @@ field_table(plumtree_ihave) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"msg_id">> => {msg_id, {bytes, 48}},
-      <<"round">> => {round, value}};
+      <<"round">> => {round, uint}};
 field_table(plumtree_graft) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"msg_id">> => {msg_id, {bytes, 48}},
-      <<"round">> => {round, value}};
+      <<"round">> => {round, uint}};
 field_table(plumtree_prune) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2509,13 +2485,13 @@ field_table(overlay_relay) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"peer">> => {peer, value},
+      <<"peer">> => {peer, {bytes, 32}},
       <<"payload">> => {payload, value}};
 field_table(publish) ->
     #{<<"version">> => {version, value},
@@ -2526,14 +2502,14 @@ field_table(subscribe) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"topic">> => {topic, value},
-      <<"subscriber">> => {subscriber, value},
+      <<"subscriber">> => {subscriber, {bytes, 32}},
       <<"filter">> => {filter, value},
       <<"options">> => {options, value}};
 field_table(unsubscribe) ->
@@ -2541,14 +2517,14 @@ field_table(unsubscribe) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"topic">> => {topic, value},
-      <<"subscriber">> => {subscriber, value}};
+      <<"subscriber">> => {subscriber, {bytes, 32}}};
 field_table(event) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
@@ -2559,28 +2535,25 @@ field_table(advertise) ->
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"procedure">> => {procedure, value},
-      <<"advertiser">> => {advertiser, value},
-      <<"options">> => {options, value}};
+      <<"advertisement">> => {advertisement, bytes}};
 field_table(unadvertise) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"procedure">> => {procedure, value},
-      <<"advertiser">> => {advertiser, value}};
+      <<"withdrawal">> => {withdrawal, bytes}};
 field_table(stream_open) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
@@ -2612,8 +2585,8 @@ field_table(want) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2624,8 +2597,8 @@ field_table(have) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2636,8 +2609,8 @@ field_table(block) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2648,8 +2621,8 @@ field_table(manifest_req) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2659,8 +2632,8 @@ field_table(manifest_res) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2671,8 +2644,8 @@ field_table(cancel) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
+      <<"sent_at_ms">> => {sent_at_ms, uint},
+      <<"capabilities">> => {capabilities, uint},
       <<"realm">> => {realm, value},
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
@@ -2714,7 +2687,14 @@ read_value(held_object, #{{text, <<"tbs">>} := Tbs, {text, <<"signature">>} := S
   when map_size(Held) =:= 2, is_binary(Tbs), is_binary(Signature) ->
     {ok, #{tbs => Tbs, signature => Signature}};
 read_value(stream_object, Object) -> either_object(read_value(signed_object, Object), Object);
+read_value({list_of_bytes, Size}, Items) when is_list(Items) ->
+    sized_items([Item || Item <- Items, is_binary(Item), byte_size(Item) =:= Size], Items);
+read_value({optional, _Kind}, null) -> {ok, undefined};
+read_value({optional, Kind}, Value) -> read_value(Kind, Value);
 read_value(_Kind, _Value) -> error.
+
+sized_items(Items, Items) -> {ok, Items};
+sized_items(_Sized, _Items) -> error.
 
 %% A provider's stream object carries its key on the first frame and not after, so either shape reads.
 either_object({ok, _Carried} = Read, _Object) -> Read;
