@@ -83,6 +83,9 @@
     want/1, have/1, block/1,
     manifest_req/1, manifest_res/1, cancel/1,
 
+    %% Neighbour signatures on control frames in pq_hybrid (D17)
+    neighbour_signed/2, sign_neighbour/3, verify_neighbour/2,
+
     %% Sign / verify frame
     sign/2, verify/2,
 
@@ -161,6 +164,14 @@
 %% A STORE_ACK reason names why a record was not stored: a record refusal, or quota.
 -define(STORE_ACK_REASONS,
         [record_too_large, malformed, signature_invalid, alg_mismatch, not_yet_valid, expired, key_id_mismatch, quota]).
+-define(NEIGHBOUR_LABEL, <<"MACULA-PQ-NEIGHBOUR-V1">>).
+%% The control frames, which pq_hybrid neighbour-signs (D17). Data frames carry their own end-to-end signatures.
+-define(NEIGHBOUR_SIGNED,
+        [swim_ping, swim_ack, swim_suspect, swim_confirm, ping, pong, find_node, nodes, find_value, value,
+         store, store_ack, replicate, replicate_ack, advertise, unadvertise, subscribe, unsubscribe,
+         overlay_relay, hyparview_join, hyparview_forward_join, hyparview_neighbor, hyparview_disconnect,
+         hyparview_shuffle, hyparview_shuffle_reply, plumtree_ihave, plumtree_graft, plumtree_prune,
+         goodbye]).
 
 -type frame_type() :: connect | hello | goodbye
                     | swim_ping | swim_ack | swim_suspect | swim_confirm
@@ -1398,6 +1409,73 @@ validate_manifest_payload(not_found)              -> ok;
 validate_manifest_payload(M) when is_map(M)       -> ok.
 
 %%------------------------------------------------------------------
+%% Neighbour signatures (D17)
+%%
+%% In pq_hybrid a control frame travels as {version, frame_type, neighbour}. neighbour is {tbs, signature} under
+%% MACULA-PQ-NEIGHBOUR-V1, signed with the sender's identity key, which the receiver holds from the connection's
+%% handshake. Its tbs holds the frame's fields with frame_type and alg, the connection hash (the SHA-384 of the
+%% challenge frame's bytes) and seq: 0 on the first neighbour-signed frame in each direction, one more on each after.
+%% In pq_pure no frame carries one. The caller counts seq per direction and closes the connection on a refusal.
+%%------------------------------------------------------------------
+
+%% @doc Whether a profile neighbour-signs a frame type.
+-spec neighbour_signed(macula_crypto_profile:profile(), frame_type()) -> boolean().
+neighbour_signed(pq_hybrid, FrameType) -> lists:member(FrameType, ?NEIGHBOUR_SIGNED);
+neighbour_signed(pq_pure, _FrameType) -> false.
+
+%% @doc Neighbour-sign a control frame with the sender's identity key, for one connection and one seq.
+-spec sign_neighbour(frame(), macula_node_keys:node_key(), #{connection := binary(), seq := non_neg_integer()}) ->
+        frame().
+sign_neighbour(#{frame_type := Type} = Frame, #{profile := Profile} = Key, #{connection := Connection, seq := Seq})
+  when not is_map_key(neighbour, Frame), byte_size(Connection) =:= 48, is_integer(Seq), Seq >= 0 ->
+    neighbour_signature(neighbour_signed(Profile, Type), Frame, Key, Connection, Seq).
+
+neighbour_signature(true, #{version := Version, frame_type := Type} = Frame, Key, Connection, Seq) ->
+    Fields = wire_form(maps:without([version, signature], Frame)),
+    Tbs = Fields#{{text, <<"connection">>} => Connection, {text, <<"seq">>} => Seq},
+    #{version => Version, frame_type => Type, neighbour => macula_signed_object:sign_held(?NEIGHBOUR_LABEL, Tbs, Key)}.
+
+%% @doc Read a received frame under the connection's profile. A frame type the profile signs must be exactly
+%% {version, frame_type, neighbour}, signed by the peer's identity key for this connection and the next seq, and comes
+%% back as the frame its tbs holds. Any other frame must not carry neighbour and comes back as it is.
+-spec verify_neighbour(frame(), #{profile := macula_crypto_profile:profile(), peer_key := binary(),
+                                  connection := binary(), seq := non_neg_integer()}) ->
+        {ok, frame()} | {error, malformed_frame | signature_invalid}.
+verify_neighbour(#{frame_type := Type} = Frame, #{profile := Profile} = Opts) ->
+    neighbour_read(neighbour_signed(Profile, Type), Frame, Opts).
+
+neighbour_read(true, #{version := _, neighbour := Held} = Frame, Opts) when map_size(Frame) =:= 3 ->
+    neighbour_opened(neighbour_held(Held, Opts), Frame, Opts);
+neighbour_read(true, _Frame, _Opts) ->
+    {error, malformed_frame};
+neighbour_read(false, #{neighbour := _}, _Opts) ->
+    {error, malformed_frame};
+neighbour_read(false, Frame, _Opts) ->
+    {ok, Frame}.
+
+neighbour_held(Held, #{profile := Profile, peer_key := PeerKey}) ->
+    macula_signed_object:verify_held(?NEIGHBOUR_LABEL, Held, PeerKey, Profile).
+
+neighbour_opened({ok, #{fields := Fields}}, #{version := Version, frame_type := Type}, Opts) ->
+    neighbour_frame(read_fields(maps:to_list(Fields), neighbour_tbs_table(Type), #{}), Version, Type, Opts);
+neighbour_opened({error, signature_invalid}, _Frame, _Opts) ->
+    {error, signature_invalid};
+neighbour_opened({error, _MalformedOrAlgMismatch}, _Frame, _Opts) ->
+    {error, malformed_frame}.
+
+%% A neighbour tbs holds the frame type's own fields, without version, the per-hop signature and neighbour itself, and
+%% adds alg, connection and seq.
+neighbour_tbs_table(Type) ->
+    (maps:without([<<"version">>, <<"signature">>, <<"neighbour">>], field_table(Type)))#{
+        <<"alg">> => {alg, value}, <<"connection">> => {connection, value}, <<"seq">> => {seq, value}}.
+
+neighbour_frame({ok, #{frame_type := Type, connection := Connection, seq := Seq} = Read}, Version, Type,
+                #{connection := Connection, seq := Seq}) ->
+    {ok, (maps:without([alg, connection, seq], Read))#{version => Version}};
+neighbour_frame(_NotThisConnectionOrSeq, _Version, _Type, _Opts) ->
+    {error, malformed_frame}.
+
+%%------------------------------------------------------------------
 %% Sign / verify
 %%------------------------------------------------------------------
 
@@ -1976,6 +2054,7 @@ field_table(hello) ->
       <<"negotiated_capabilities">> => {negotiated_capabilities, value}};
 field_table(goodbye) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -1988,6 +2067,7 @@ field_table(goodbye) ->
       <<"detail">> => {detail, value}};
 field_table(swim_ping) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2005,6 +2085,7 @@ field_table(swim_ping) ->
           <<"by">> => {by, value}}}}};
 field_table(swim_ack) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2023,6 +2104,7 @@ field_table(swim_ack) ->
           <<"by">> => {by, value}}}}};
 field_table(swim_suspect) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2037,6 +2119,7 @@ field_table(swim_suspect) ->
       <<"ttl">> => {ttl, value}};
 field_table(swim_confirm) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2051,6 +2134,7 @@ field_table(swim_confirm) ->
       <<"ttl">> => {ttl, value}};
 field_table(ping) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2062,6 +2146,7 @@ field_table(ping) ->
       <<"nonce">> => {nonce, value}};
 field_table(pong) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2073,6 +2158,7 @@ field_table(pong) ->
       <<"nonce">> => {nonce, value}};
 field_table(find_node) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2086,6 +2172,7 @@ field_table(find_node) ->
       <<"depth">> => {depth, value}};
 field_table(nodes) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2104,6 +2191,7 @@ field_table(nodes) ->
           <<"last_seen_at">> => {last_seen_at, value}}}}};
 field_table(find_value) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2116,6 +2204,7 @@ field_table(find_value) ->
       <<"origin">> => {origin, value}};
 field_table(value) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2128,6 +2217,7 @@ field_table(value) ->
       <<"records">> => {records, value}};
 field_table(store) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2139,6 +2229,7 @@ field_table(store) ->
       <<"record">> => {record, value}};
 field_table(store_ack) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2152,6 +2243,7 @@ field_table(store_ack) ->
       <<"reason">> => {reason, {optional_enum, ?STORE_ACK_REASONS}}};
 field_table(replicate) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2164,6 +2256,7 @@ field_table(replicate) ->
       <<"new_custodian">> => {new_custodian, boolean}};
 field_table(replicate_ack) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2221,6 +2314,7 @@ field_table(error) ->
       <<"source_route_partial">> => {source_route_partial, value}};
 field_table(hyparview_join) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2233,6 +2327,7 @@ field_table(hyparview_join) ->
       <<"record">> => {record, value}};
 field_table(hyparview_forward_join) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2248,6 +2343,7 @@ field_table(hyparview_forward_join) ->
       <<"record">> => {record, value}};
 field_table(hyparview_neighbor) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2260,6 +2356,7 @@ field_table(hyparview_neighbor) ->
       <<"record">> => {record, value}};
 field_table(hyparview_disconnect) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2270,6 +2367,7 @@ field_table(hyparview_disconnect) ->
       <<"signature">> => {signature, value}};
 field_table(hyparview_shuffle) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2283,6 +2381,7 @@ field_table(hyparview_shuffle) ->
       <<"peer_sample">> => {peer_sample, value}};
 field_table(hyparview_shuffle_reply) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2307,6 +2406,7 @@ field_table(plumtree_gossip) ->
       <<"payload">> => {payload, value}};
 field_table(plumtree_ihave) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2319,6 +2419,7 @@ field_table(plumtree_ihave) ->
       <<"round">> => {round, value}};
 field_table(plumtree_graft) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2331,6 +2432,7 @@ field_table(plumtree_graft) ->
       <<"round">> => {round, value}};
 field_table(plumtree_prune) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2341,6 +2443,7 @@ field_table(plumtree_prune) ->
       <<"signature">> => {signature, value}};
 field_table(overlay_relay) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2370,6 +2473,7 @@ field_table(publish) ->
       <<"publisher_sig">> => {publisher_sig, value}};
 field_table(subscribe) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2384,6 +2488,7 @@ field_table(subscribe) ->
       <<"options">> => {options, value}};
 field_table(unsubscribe) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2412,6 +2517,7 @@ field_table(event) ->
       <<"publisher_sig">> => {publisher_sig, value}};
 field_table(advertise) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2425,6 +2531,7 @@ field_table(advertise) ->
       <<"options">> => {options, value}};
 field_table(unadvertise) ->
     #{<<"version">> => {version, value},
+      <<"neighbour">> => {neighbour, held_object},
       <<"frame_type">> => {frame_type, frame_type},
       <<"frame_id">> => {frame_id, value},
       <<"sent_at_ms">> => {sent_at_ms, value},
@@ -2606,6 +2713,9 @@ read_value({list_of, Table}, Entries) when is_list(Entries) -> entries_read(Entr
 read_value(manifest, {text, <<"not_found">>}) -> {ok, not_found};
 read_value(manifest, Manifest) when is_map(Manifest) -> {ok, peer_value(Manifest)};
 read_value(bolt4_name, {text, Name}) -> enum_value(Name, [N || #{name := N} <- macula_bolt4:table()]);
+read_value(held_object, #{{text, <<"tbs">>} := Tbs, {text, <<"signature">>} := Signature} = Held)
+  when map_size(Held) =:= 2, is_binary(Tbs), is_binary(Signature) ->
+    {ok, #{tbs => Tbs, signature => Signature}};
 read_value(_Kind, _Value) -> error.
 
 enum_value(Name, [Atom | Atoms]) -> enum_match(atom_to_binary(Atom) =:= Name, Atom, Name, Atoms);
