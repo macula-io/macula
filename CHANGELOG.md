@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{quic, send_ready, Stream, undefined}` and may retry. A failed write
   is reported once to the stream's owner as
   `{quic, send_failed, Stream, Reason}`.
+- `macula_owner_only_file:write/2` and `read/1` keep a file on disk where
+  only its owner can read it. `write/2` fills a new file inside a private
+  directory next to the target and renames it into place, so a symlink at
+  the target is replaced rather than written through. `read/1` returns the
+  content of a regular file its group and others have no access to,
+  following symlinks. Otherwise it returns
+  `{error, {file_permissions, #{file, mode, required}}}` or
+  `{error, {file_type, #{file, type, required}}}`, naming the file, what
+  it found and what is required.
 
 ### Changed
 
