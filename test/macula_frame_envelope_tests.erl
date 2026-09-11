@@ -49,8 +49,11 @@ an_enum_value_the_table_does_not_list_is_refused_test() ->
 
 %% A value no code produces and reads is not in the table: EVENT delivered_via dht, and a MANIFEST_RES not_found.
 values_without_a_producer_and_a_reader_are_refused_test() ->
-    Event = macula_frame:event(#{topic => <<"t">>, realm => fill(1), publisher => fill(2), seq => 0, payload => 1,
-                                 delivered_via => direct}),
+    {ok, Publisher} = macula_node_keys:generate(identity, pq_pure),
+    #{publication := Publication} =
+        macula_frame:publish(#{realm => fill(1), topic => <<"t">>, seq => 0, published_at => 1, payload => 1},
+                             Publisher),
+    Event = macula_frame:event(#{publication => Publication, delivered_via => direct}),
     ?assertMatch({ok, #{delivered_via := direct}, <<>>}, decode_map(Event)),
     ?assertEqual({error, bad_frame}, decode_map(Event#{delivered_via => dht})),
     ManifestRes = macula_frame:manifest_res(#{mcid => <<2, 0, 0:384>>, manifest => #{}}),

@@ -130,8 +130,8 @@ a_control_frame_without_neighbour_is_read_as_is_in_pq_pure(Keys) ->
     ?assertEqual({ok, Ping}, macula_frame:verify_neighbour(Ping, (opts(Keys, 0))#{profile => pq_pure})).
 
 a_data_frame_cannot_be_neighbour_signed(#{key := Key} = Keys) ->
-    Publish = macula_frame:publish(#{topic => <<"t">>, realm => <<0:256>>, publisher => <<0:256>>, seq => 0,
-                                     payload => <<"p">>, published_at_ms => 1}),
+    Publish = macula_frame:publish(#{realm => <<0:256>>, topic => <<"t">>, seq => 0, published_at => 1,
+                                     payload => <<"p">>}, Key),
     ?assertError(function_clause, macula_frame:sign_neighbour(Publish, Key, at(Keys, 0))).
 
 %%------------------------------------------------------------------

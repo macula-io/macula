@@ -65,7 +65,7 @@
     overlay_relay/1,
 
     %% Constructors — PubSub (Part 6 §6)
-    publish/1, subscribe/1, unsubscribe/1, event/1,
+    publish/2, subscribe/1, unsubscribe/1, event/1, verify_publication/3,
 
     %% Constructors — RPC procedure advertise (connection-scoped,
     %% Part 6 §5.5). Companions to call/result/error: a peer connected
@@ -89,9 +89,6 @@
 
     %% Sign / verify frame
     sign/2, verify/2,
-
-    %% Publisher-end-to-end pubsub signature (PUBLISH / EVENT frames)
-    sign_publisher/2, verify_publisher/1,
 
     %% Wire codec — single frame
     encode/1, decode/1,
@@ -137,7 +134,7 @@
     plumtree_graft_spec/0, plumtree_prune_spec/0,
     msg_id/0,
     overlay_relay_spec/0,
-    publish_spec/0, subscribe_spec/0, unsubscribe_spec/0, event_spec/0,
+    publish_spec/0, subscribe_spec/0, unsubscribe_spec/0, event_spec/0, verified_publication/0,
     advertise_spec/0, unadvertise_spec/0,
     delivery_channel/0,
     stream_id/0, stream_mode/0, stream_encoding/0, stream_role/0,
@@ -148,11 +145,6 @@
 ]).
 
 -define(SIG_DOMAIN,        "macula-v2-frame\0").
-%% Domain-separated signing context for the publisher-end-to-end
-%% pubsub signature (`publisher_sig'). Distinct from ?SIG_DOMAIN so a
-%% per-frame signature can never be replayed as a publisher signature
-%% or vice versa.
--define(EVENT_PUBLISHER_DOMAIN, "macula-v2-event-pub\0").
 -define(PROTOCOL_VERSION,   2).
 -define(MAX_FRAME_BYTES,    16#FFFFFF).   %% 16 MiB cap (Part 6 §2.2).
 %% A payload sits in the frame map, so a container at payload path length L
@@ -169,6 +161,10 @@
 -define(RELAY_CODES, [unknown_next_peer]).
 -define(STREAM_LABEL, <<"MACULA-PQ-STREAM-V1">>).
 -define(CALLER_STREAM_LABEL, <<"MACULA-PQ-CALLER-STREAM-V1">>).
+-define(PUBLICATION_LABEL, <<"MACULA-PQ-PUBLICATION-V1">>).
+%% A publication verifies from 5 minutes before its published_at until its ttl_ms, or 10 minutes without one, plus 5.
+-define(PUBLICATION_TOLERANCE_MS, 5 * 60000).
+-define(PUBLICATION_DEFAULT_TTL_MS, 10 * 60000).
 -define(NEIGHBOUR_LABEL, <<"MACULA-PQ-NEIGHBOUR-V1">>).
 %% The control frames, which pq_hybrid neighbour-signs (D17). Data frames carry their own end-to-end signatures.
 -define(NEIGHBOUR_SIGNED,
@@ -428,13 +424,12 @@
 %% Plumtree frame specs (Part 3 §7.2)
 %%------------------------------------------------------------------
 
--type msg_id() :: <<_:128>>.
+%% A publication's id in Plumtree bookkeeping: the SHA-384 of its tbs.
+-type msg_id() :: <<_:384>>.
 
 -type plumtree_gossip_spec() :: #{
-    realm   := id256(),
-    msg_id  := msg_id(),
-    round   := non_neg_integer(),
-    payload := term()
+    publication := macula_signed_object:object(),
+    round       := non_neg_integer()
 }.
 
 -type plumtree_ihave_spec() :: #{
@@ -474,21 +469,28 @@
 
 -type delivery_channel() :: plumtree | direct.
 
+%% A publication as its publisher gives it to publish/2.
 -type publish_spec() :: #{
-    topic           := binary(),
-    realm           := id256(),
-    publisher       := macula_identity:pubkey(),
-    seq             := non_neg_integer(),
-    payload         := term(),
-    published_at_ms := non_neg_integer(),
-    ttl_ms          => non_neg_integer() | undefined,
-    %% Optional publisher-end-to-end signature over the canonical
-    %% tuple (topic, realm, publisher, seq, payload) — see
-    %% `sign_publisher/2'. Carried verbatim through relay hops so any
-    %% consumer can verify authenticity against the publisher
-    %% regardless of which relay delivered it. Absent on legacy
-    %% frames; only emitted when the caller opts in.
-    publisher_sig   => binary()
+    realm        := id256(),
+    topic        := binary(),
+    seq          := non_neg_integer(),
+    published_at := non_neg_integer(),
+    payload      := term(),
+    ttl_ms       => non_neg_integer()
+}.
+
+%% A publication that verified: its fields, the publisher's carried key, and publication_hash, the SHA-384 of its tbs,
+%% which deduplication and Plumtree bookkeeping key on.
+-type verified_publication() :: #{
+    publisher        := id256(),
+    realm            := id256(),
+    topic            := binary(),
+    seq              := non_neg_integer(),
+    published_at     := non_neg_integer(),
+    ttl_ms           => non_neg_integer(),
+    payload          := term(),
+    key              := binary(),
+    publication_hash := msg_id()
 }.
 
 -type subscribe_spec() :: #{
@@ -505,16 +507,10 @@
     subscriber := macula_identity:pubkey()
 }.
 
+%% An EVENT carries the publication bytes of the PUBLISH it was made from, unchanged.
 -type event_spec() :: #{
-    topic         := binary(),
-    realm         := id256(),
-    publisher     := macula_identity:pubkey(),
-    seq           := non_neg_integer(),
-    payload       := term(),
-    delivered_via := delivery_channel(),
-    %% See publish_spec()'s `publisher_sig'. Relay stations copy it
-    %% from the inbound PUBLISH onto the EVENT they fan out.
-    publisher_sig => binary()
+    publication   := macula_signed_object:object(),
+    delivered_via := delivery_channel()
 }.
 
 %%------------------------------------------------------------------
@@ -1176,30 +1172,24 @@ validate_pubkey(B) when is_binary(B), byte_size(B) =:= 32 -> ok.
 %% Plumtree constructors (Part 3 §7.2)
 %%------------------------------------------------------------------
 
+%% GOSSIP carries a publication as received, so every node checks it end to end, and a round that stays unsigned.
 -spec plumtree_gossip(plumtree_gossip_spec()) -> frame().
-plumtree_gossip(#{realm := R, msg_id := M, round := Rd,
-                  payload := Payload})
-  when is_binary(R), byte_size(R) =:= 32,
-       is_binary(M), byte_size(M) =:= 16,
-       is_integer(Rd), Rd >= 0 ->
-    (base(plumtree_gossip, 0))#{
-        realm   => R,
-        msg_id  => M,
-        round   => Rd,
-        payload => Payload
-    }.
+plumtree_gossip(#{publication := Publication, round := Round})
+  when is_integer(Round), Round >= 0, Round < ?MAX_PROTOCOL_INT ->
+    #{version => ?PROTOCOL_VERSION, frame_type => plumtree_gossip, publication => publication_object(Publication),
+      round => Round}.
 
 -spec plumtree_ihave(plumtree_ihave_spec()) -> frame().
 plumtree_ihave(#{realm := R, msg_id := M, round := Rd})
   when is_binary(R), byte_size(R) =:= 32,
-       is_binary(M), byte_size(M) =:= 16,
+       is_binary(M), byte_size(M) =:= 48,
        is_integer(Rd), Rd >= 0 ->
     (base(plumtree_ihave, 0))#{realm => R, msg_id => M, round => Rd}.
 
 -spec plumtree_graft(plumtree_graft_spec()) -> frame().
 plumtree_graft(#{realm := R, msg_id := M, round := Rd})
   when is_binary(R), byte_size(R) =:= 32,
-       is_binary(M), byte_size(M) =:= 16,
+       is_binary(M), byte_size(M) =:= 48,
        is_integer(Rd), Rd >= 0 ->
     (base(plumtree_graft, 0))#{realm => R, msg_id => M, round => Rd}.
 
@@ -1221,38 +1211,22 @@ overlay_relay(#{peer := P, payload := Bin})
 %% PubSub constructors (Part 6 §6)
 %%------------------------------------------------------------------
 
--spec publish(publish_spec()) -> frame().
-publish(#{topic := T, realm := R, publisher := Pub, seq := Seq,
-          payload := Payload, published_at_ms := PubAt} = Spec)
-  when is_binary(T),
-       is_binary(R),   byte_size(R)   =:= 32,
-       is_binary(Pub), byte_size(Pub) =:= 32,
-       is_integer(Seq),   Seq   >= 0,
-       is_integer(PubAt), PubAt >= 0 ->
-    Ttl = maps:get(ttl_ms, Spec, undefined),
-    validate_optional_ttl(Ttl),
-    with_optional_publisher_sig(Spec, (base(publish, 0))#{
-        topic           => T,
-        realm           => R,
-        publisher       => Pub,
-        seq             => Seq,
-        payload         => Payload,
-        published_at_ms => PubAt,
-        ttl_ms          => Ttl
-    }).
+%% @doc Sign a publication with the publisher's identity key, as a PUBLISH. Its tbs holds no frame_type, because the
+%% same bytes ride in every EVENT and GOSSIP made from it.
+-spec publish(publish_spec(), macula_node_keys:node_key()) -> frame().
+publish(#{realm := Realm, topic := Topic, seq := Seq, published_at := PublishedAt, payload := Payload} = Spec,
+        #{purpose := identity} = Key)
+  when byte_size(Realm) =:= 32, is_binary(Topic), is_integer(Seq), Seq >= 0, Seq < ?MAX_PROTOCOL_INT,
+       is_integer(PublishedAt), PublishedAt >= 0, PublishedAt < ?MAX_PROTOCOL_INT ->
+    ok = check_payload(Payload),
+    Fields = optional_ttl(Spec, #{publisher => macula_node_keys:key_id(Key), realm => Realm, topic => {text, Topic},
+                                  seq => Seq, published_at => PublishedAt, payload => Payload}),
+    #{version => ?PROTOCOL_VERSION, frame_type => publish,
+      publication => macula_signed_object:sign(?PUBLICATION_LABEL, to_wire(Fields), Key)}.
 
-%% @private Copy a caller-supplied `publisher_sig' (64-byte Ed25519)
-%% onto the frame, if present. Absent → frame unchanged (so legacy
-%% callers produce byte-identical frames). A malformed value is a
-%% caller bug — let it crash rather than ship a frame that won't
-%% verify downstream.
-with_optional_publisher_sig(Spec, Frame) ->
-    case maps:get(publisher_sig, Spec, undefined) of
-        undefined ->
-            Frame;
-        Sig when is_binary(Sig), byte_size(Sig) =:= 64 ->
-            Frame#{publisher_sig => Sig}
-    end.
+optional_ttl(#{ttl_ms := Ttl}, Fields) when is_integer(Ttl), Ttl >= 0, Ttl < ?MAX_PROTOCOL_INT ->
+    Fields#{ttl_ms => Ttl};
+optional_ttl(Spec, Fields) when not is_map_key(ttl_ms, Spec) -> Fields.
 
 -spec subscribe(subscribe_spec()) -> frame().
 subscribe(#{topic := T, realm := R, subscriber := Sub} = Spec)
@@ -1281,26 +1255,64 @@ unsubscribe(#{topic := T, realm := R, subscriber := Sub})
         subscriber => Sub
     }.
 
+%% @doc An EVENT for a verified publication, carrying its bytes unchanged and how it was delivered.
 -spec event(event_spec()) -> frame().
-event(#{topic := T, realm := R, publisher := Pub, seq := Seq,
-        payload := Payload, delivered_via := Via} = Spec)
-  when is_binary(T),
-       is_binary(R),   byte_size(R)   =:= 32,
-       is_binary(Pub), byte_size(Pub) =:= 32,
-       is_integer(Seq), Seq >= 0,
-       (Via =:= plumtree orelse Via =:= direct) ->
-    with_optional_publisher_sig(Spec, (base(event, 0))#{
-        topic         => T,
-        realm         => R,
-        publisher     => Pub,
-        seq           => Seq,
-        payload       => Payload,
-        delivered_via => Via
-    }).
+event(#{publication := Publication, delivered_via := Via}) when Via =:= plumtree; Via =:= direct ->
+    #{version => ?PROTOCOL_VERSION, frame_type => event, publication => publication_object(Publication),
+      delivered_via => Via}.
 
--spec validate_optional_ttl(non_neg_integer() | undefined) -> ok.
-validate_optional_ttl(undefined)                             -> ok;
-validate_optional_ttl(N) when is_integer(N), N >= 0          -> ok.
+publication_object(#{key := Key, tbs := Tbs, signature := Signature} = Publication)
+  when map_size(Publication) =:= 3, is_binary(Key), is_binary(Tbs), is_binary(Signature) ->
+    Publication.
+
+%% @doc Verify the publication a PUBLISH, EVENT or GOSSIP carries, under the connection's profile and a clock in
+%% milliseconds: its signature and fields, publisher as the key id of its key, a published_at no more than 5 minutes
+%% ahead, and not past published_at plus its ttl_ms, or 10 minutes without one, plus 5 minutes. The origin station
+%% checks this before fan-out, and every subscriber before delivery.
+-spec verify_publication(frame(), macula_crypto_profile:profile(), integer()) ->
+        {ok, verified_publication()} | {error, malformed_frame | signature_invalid | key_id_mismatch | not_yet_valid
+                                                                          | expired}.
+verify_publication(#{frame_type := Type, publication := Signed} = Frame, Profile, Now)
+  when (Type =:= publish orelse Type =:= event orelse Type =:= plumtree_gossip), is_integer(Now) ->
+    publication_signed(only_fields(Frame, publication_frame_fields(Type)),
+                       macula_signed_object:verify(?PUBLICATION_LABEL, Signed, Profile), Profile, Now);
+verify_publication(_Frame, _Profile, _Now) ->
+    {error, malformed_frame}.
+
+publication_frame_fields(publish) -> [version, frame_type, publication];
+publication_frame_fields(event) -> [version, frame_type, publication, delivered_via];
+publication_frame_fields(plumtree_gossip) -> [version, frame_type, publication, round].
+
+publication_signed(true, {ok, #{key := Key, tbs := Tbs, fields := Fields}}, Profile, Now) ->
+    publication_read(read_fields(maps:to_list(Fields), publication_table(), #{}), Key, Tbs, Profile, Now);
+publication_signed(true, {error, signature_invalid}, _Profile, _Now) ->
+    {error, signature_invalid};
+publication_signed(_OnlyFields, _Verified, _Profile, _Now) ->
+    {error, malformed_frame}.
+
+publication_read({ok, #{publisher := Publisher, realm := _, topic := _, seq := _, published_at := PublishedAt,
+                        payload := _} = Read}, Key, Tbs, Profile, Now) ->
+    Expiry = PublishedAt + maps:get(ttl_ms, Read, ?PUBLICATION_DEFAULT_TTL_MS) + ?PUBLICATION_TOLERANCE_MS,
+    publication_checked([{Publisher =:= macula_node_keys:node_id(Key, Profile), key_id_mismatch},
+                         {PublishedAt =< Now + ?PUBLICATION_TOLERANCE_MS, not_yet_valid},
+                         {Now =< Expiry, expired}],
+                        (maps:remove(alg, Read))#{key => Key, publication_hash => crypto:hash(sha384, Tbs)});
+publication_read(_NotAPublication, _Key, _Tbs, _Profile, _Now) ->
+    {error, malformed_frame}.
+
+publication_checked([{true, _Refusal} | Checks], Verified) -> publication_checked(Checks, Verified);
+publication_checked([{false, Refusal} | _Checks], _Verified) -> {error, Refusal};
+publication_checked([], Verified) -> {ok, Verified}.
+
+publication_table() ->
+    #{<<"alg">> => {alg, value},
+      <<"publisher">> => {publisher, {bytes, 32}},
+      <<"realm">> => {realm, {bytes, 32}},
+      <<"topic">> => {topic, text},
+      <<"seq">> => {seq, uint},
+      <<"published_at">> => {published_at, uint},
+      <<"ttl_ms">> => {ttl_ms, uint},
+      <<"payload">> => {payload, value}}.
 
 -spec validate_options(map()) -> ok.
 validate_options(M) when is_map(M) -> ok.
@@ -1699,79 +1711,6 @@ verify_result(true,  Frame) -> {ok, Frame};
 verify_result(false, _Frame) -> {error, signature_invalid}.
 
 %%------------------------------------------------------------------
-%% Publisher-end-to-end pubsub signature
-%%
-%% A PUBLISH / EVENT frame's own `signature' (above) is per-hop: it
-%% authenticates whoever last touched the frame (the publishing
-%% daemon on the daemon->station hop; the relay station on a
-%% station->station hop). That is enough for adjacent-hop checks but
-%% not for end-to-end authenticity once a frame is relayed beyond one
-%% hop.
-%%
-%% `publisher_sig' is the publisher's Ed25519 signature over the
-%% canonical tuple (topic, realm, publisher, seq, payload) — the
-%% frame-type-independent content that survives PUBLISH->EVENT
-%% conversion. It is computed once by the original publisher and
-%% carried verbatim through every relay. `verify_publisher/1' checks
-%% it against the frame's own `publisher' field, so any consumer can
-%% confirm "this daemon emitted this event" no matter which relay
-%% delivered it.
-%%
-%% (Authenticity, not authorization: this proves the publisher
-%% emitted it, not that the publisher is permitted to publish on the
-%% realm/topic — realm-level publish authz lives with membership
-%% credentials, not here.)
-%%------------------------------------------------------------------
-
-%% @doc Add `publisher_sig' to a PUBLISH or EVENT frame: the
-%% publisher's Ed25519 signature over (topic, realm, publisher, seq,
-%% payload). `Identity' must be the key pair / private key of the
-%% pubkey in the frame's `publisher' field.
--spec sign_publisher(frame(),
-                     macula_identity:key_pair() | macula_identity:privkey()) ->
-    frame().
-sign_publisher(#{frame_type := FT} = Frame, Identity)
-  when FT =:= publish; FT =:= event ->
-    Bytes = publisher_signing_bytes(Frame),
-    Sig = macula_identity:sign([?EVENT_PUBLISHER_DOMAIN, Bytes], Identity),
-    Frame#{publisher_sig => Sig}.
-
-%% @doc Verify a frame's `publisher_sig' against its `publisher'
-%% field. Returns `{ok, Frame}' on success, `{error, Reason}'
-%% otherwise (`no_publisher_sig' when the field is absent —
-%% callers that want it MUST treat absence as a verification
-%% failure, not as "trusted").
--spec verify_publisher(frame()) -> {ok, frame()} | {error, term()}.
-verify_publisher(#{publisher_sig := Sig, publisher := Pub} = Frame)
-  when is_binary(Sig), byte_size(Sig) =:= 64,
-       is_binary(Pub), byte_size(Pub) =:= 32 ->
-    Bytes = publisher_signing_bytes(Frame),
-    verify_publisher_result(
-        macula_identity:verify([?EVENT_PUBLISHER_DOMAIN, Bytes], Sig, Pub),
-        Frame);
-verify_publisher(#{publisher_sig := _}) ->
-    {error, bad_publisher_sig};
-verify_publisher(_Frame) ->
-    {error, no_publisher_sig}.
-
-verify_publisher_result(true,  Frame) -> {ok, Frame};
-verify_publisher_result(false, _Frame) -> {error, signature_invalid}.
-
-%% @private The canonical bytes the publisher signs — a fixed tuple,
-%% independent of frame type, header fields, `delivered_via', or
-%% `ttl_ms', so the same signature is valid on the PUBLISH the
-%% publisher sent and on the EVENT a relay derives from it.
-publisher_signing_bytes(#{topic := T, realm := R, publisher := Pub,
-                          seq := Seq, payload := Payload}) ->
-    macula_cbor_nif:pack_deterministic(to_wire(#{
-        topic     => T,
-        realm     => R,
-        publisher => Pub,
-        seq       => Seq,
-        payload   => Payload
-    })).
-
-%%------------------------------------------------------------------
 %% Wire codec — CBOR (RFC 8949 §4.2.1 deterministic, Part 6 §3)
 %%------------------------------------------------------------------
 %%
@@ -1898,14 +1837,7 @@ base(FrameType, Caps) ->
     }.
 
 canonical_unsigned(Frame) ->
-    %% `publisher_sig' is excluded alongside `signature': it is itself
-    %% a signature field, and it must be omittable so that adding it
-    %% to a frame does not change the bytes the frame's own per-hop
-    %% `signature' covers. (A pre-`publisher_sig' node strips only
-    %% `signature'; that is why the wire emitter must not add
-    %% `publisher_sig' to frames until every relay is on a build that
-    %% strips it here too — see CHANGELOG 4.4.0.)
-    Unsigned = maps:without([signature, publisher_sig], Frame),
+    Unsigned = maps:without([signature], Frame),
     macula_cbor_nif:pack_deterministic(wire_form(Unsigned)).
 
 %%------------------------------------------------------------------
@@ -2533,16 +2465,8 @@ field_table(hyparview_shuffle_reply) ->
 field_table(plumtree_gossip) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
-      <<"msg_id">> => {msg_id, value},
-      <<"round">> => {round, value},
-      <<"payload">> => {payload, value}};
+      <<"publication">> => {publication, signed_object},
+      <<"round">> => {round, uint}};
 field_table(plumtree_ihave) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
@@ -2554,7 +2478,7 @@ field_table(plumtree_ihave) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"msg_id">> => {msg_id, value},
+      <<"msg_id">> => {msg_id, {bytes, 48}},
       <<"round">> => {round, value}};
 field_table(plumtree_graft) ->
     #{<<"version">> => {version, value},
@@ -2567,7 +2491,7 @@ field_table(plumtree_graft) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"msg_id">> => {msg_id, value},
+      <<"msg_id">> => {msg_id, {bytes, 48}},
       <<"round">> => {round, value}};
 field_table(plumtree_prune) ->
     #{<<"version">> => {version, value},
@@ -2596,20 +2520,7 @@ field_table(overlay_relay) ->
 field_table(publish) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
-      <<"topic">> => {topic, value},
-      <<"publisher">> => {publisher, value},
-      <<"seq">> => {seq, value},
-      <<"payload">> => {payload, value},
-      <<"published_at_ms">> => {published_at_ms, value},
-      <<"ttl_ms">> => {ttl_ms, value},
-      <<"publisher_sig">> => {publisher_sig, value}};
+      <<"publication">> => {publication, signed_object}};
 field_table(subscribe) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
@@ -2641,19 +2552,8 @@ field_table(unsubscribe) ->
 field_table(event) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
-      <<"frame_id">> => {frame_id, value},
-      <<"sent_at_ms">> => {sent_at_ms, value},
-      <<"capabilities">> => {capabilities, value},
-      <<"realm">> => {realm, value},
-      <<"call_id">> => {call_id, value},
-      <<"source_route">> => {source_route, value},
-      <<"signature">> => {signature, value},
-      <<"topic">> => {topic, value},
-      <<"publisher">> => {publisher, value},
-      <<"seq">> => {seq, value},
-      <<"payload">> => {payload, value},
-      <<"delivered_via">> => {delivered_via, {enum, [plumtree, direct]}},
-      <<"publisher_sig">> => {publisher_sig, value}};
+      <<"publication">> => {publication, signed_object},
+      <<"delivered_via">> => {delivered_via, {enum, [plumtree, direct]}}};
 field_table(advertise) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
