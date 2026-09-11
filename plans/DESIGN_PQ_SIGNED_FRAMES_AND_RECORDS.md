@@ -20,14 +20,18 @@ package. The handshake itself is in `DESIGN_PQ_HANDSHAKE_FRAMES.md`.
   - a map key that is not text or an integer;
   - a duplicate map key: two text keys with equal bytes, or two integer keys of equal value;
   - an item nested more than 64 levels deep, in payloads too;
-  - a negative integer below -2^63;
-  - in a signed structure, an unknown key, or a field of the wrong type or length.
+  - an integer below -2^63 or above 2^63-1;
+  - a float that is NaN or an infinity, in any width;
+  - in a signed structure, an unknown key, a field of the wrong type or length, a protocol integer at or above 2^53,
+    or a record `type` above 255.
 - A frame over 16 MiB is refused as `frame_too_large`.
 - A decoder accepts definite lengths in any width, map keys in any order, and floats (half, single or double) as
   values inside application payloads. No protocol field is a float, so a float there is refused by that field's
   type. The shortest form and the key order are the signer's duty.
-- Protocol integers stay below 2^53. An application integer above 2^53 loses precision in a stack whose numbers are
-  doubles.
+- Protocol integers stay below 2^53. An application integer outside a stack's exact integer range is an error to the
+  caller, never delivered as a rounded number.
+- **Vectors.** `test/vectors/decoding_rule_v1.json` in `macula` holds the accepted and refused cases of this rule, and
+  every stack's CI runs it, pinned by commit.
 
 ### Peer-supplied maps (D26)
 
@@ -39,8 +43,19 @@ data in one form, whatever a node has loaded.
 - **Rule:** inside those maps, a text key or value is delivered as `{text, Bin}`, a byte string as a binary, integers,
   floats and lists as decoded, and CBOR null as `undefined`. Nothing becomes an atom.
 - **Envelope fields,** the fields a frame type defines, such as `version`, `frame_type`, `request_id` and `mode`,
-  decode to atoms through a fixed table in the codec, never through `binary_to_existing_atom` on peer input. An
-  unknown `frame_type` or `mode` value is `malformed_frame`.
+  decode to atoms through a fixed table in the codec, never through `binary_to_existing_atom` on peer input.
+- **Closed values.** A field with a listed set of values refuses any other as `malformed_frame`:
+  - `frame_type`: the frame types of this design and of `DESIGN_PQ_HANDSHAKE_FRAMES.md`;
+  - STREAM_OPEN `mode`: `server_stream`, `client_stream` or `bidi`;
+  - STREAM_DATA `encoding`: `raw` or `msgpack`;
+  - STREAM_END `role`: `send` or `both`;
+  - the SWIM membership `state`: `alive`, `suspect` or `confirmed_failed`;
+  - HyParView NEIGHBOR `priority`: `high` or `low`;
+  - EVENT `delivered_via`: `plumtree` or `direct`.
+- **Booleans** in frames, such as STORE_ACK `stored`, are the unsigned integers 0 and 1, and any other value is
+  `malformed_frame`. Payloads carry no CBOR booleans either, since the decoding rule refuses them.
+- **GOODBYE `reason`** is text for people, at most 256 bytes of UTF-8. Any text within that bound is accepted and no
+  check reads it; a longer one is `malformed_frame`.
 - **Accessors on the facade:**
   - `macula:field(Name, Map)` returns a field's value, or `undefined`;
   - `macula:field(Name, Map, Default)` returns `Default` for a missing field;
@@ -298,6 +313,31 @@ which stations set or change per hop, stay outside them.
   unsigned is refused with it, both as `malformed_frame`.
 - Records inside STORE, VALUE and REPLICATE keep their own signatures in both profiles.
 - Requests, replies, relay errors, stream frames and publications carry their own signatures in both profiles.
+
+### Refusals
+
+A frame has two layers. Its envelope, meaning the frame's own fields, its routing fields and, in pq_hybrid, its
+neighbour signature, is the connection peer's. A signed object inside it, whether a request, reply, relay error,
+stream frame, publication, advertisement, withdrawal or record, is its signer's, who may be several hops away.
+
+- An envelope refusal closes the connection:
+  - a frame over 16 MiB;
+  - bytes outside a signed object's byte strings that break the decoding rule;
+  - a field or value the frame type's table does not allow;
+  - a missing, unexpected or failing neighbour signature;
+  - a connection hash or `seq` that does not match;
+  - a neighbour-signed frame off the control stream.
+- An object refusal drops that object only: its shape, key, signature, `tbs`, fields, freshness, replay check or match
+  with its request or stream fails. The receiver records it, answers only where this design defines an answer, such
+  as a STORE_ACK with `stored` 0, and keeps the connection and every other request and stream on it. A refused
+  stream frame is not delivered, and its stream continues only under its own `seq` and idle rules.
+- A receiver takes every frame off the stream by its length prefix before judging it, so an object refusal never
+  desynchronises the stream.
+- Objects never close a connection because freshness checks depend on each hop's clock, so an object can pass at one
+  hop and fail at the next, and because a Plumtree relay forwards publications it has not verified.
+- A receiver bounds what it logs about refused objects per connection. A per-connection verification budget, where
+  refused objects beyond a rate slow down reading from that connection rather than closing it, is an open item
+  (WP 1.3, WP 1.6).
 
 ### Requests: CALL and STREAM_OPEN
 

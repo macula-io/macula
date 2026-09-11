@@ -154,6 +154,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - every 32-byte and 64-byte guard is replaced by profile sizes;
   - peer-supplied maps are delivered in one key form and read through `macula:field/2,3` and `macula:text/1`, and
     the codec decodes a frame type's own fields through a fixed table (D26);
+  - `test/vectors/decoding_rule_v1.json`: the shared vectors of the decoding rule, one entry per case with its name,
+    its CBOR in hex and whether it is accepted, which every stack's CI runs pinned by commit (Stage 4);
   - remove the unused signing functions for SWIM membership updates (`sign_swim_update/2`,
     `verify_swim_update/1`, `verify_update_result/2`, `canonical_swim_update/1`, `?SWIM_UPDATE_DOMAIN`) and
     their tests, on this branch only; SWIM itself stays (decided by Raf, 2026-09-10). Done in `8cd60ee`.
@@ -177,7 +179,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `test/macula_content_block_hash_tests.erl`: a SHA-384 block verifies on fetch, and a content id with any tag
     but 2 is refused;
   - binding tests: an expired binding, a binding for another use, and a binding for another node_id are refused;
-  - `test/macula_crypto_nif_tests.erl`, `test/macula_record_cert_chain_tests.erl`.
+  - `test/macula_crypto_nif_tests.erl`, `test/macula_record_cert_chain_tests.erl`;
+  - the decoding rule vectors run against `macula_record_cbor:decode_strict/1`, one test per entry.
 
   Add `test/macula_no_classical_signing_tests.erl`, which fails while `eddsa` or `ed25519` appears in `src/`.
 - **Done:** all green; the no-classical test guards against regressions.
@@ -488,6 +491,14 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 Every stack runs the connection handshake, carries full keys (D13), binds replies to the target and the request
 (D25), and passes its own wire checks against the new fleet (WP 4.5). Public claims are made per stack (D11).
 
+Every stack also meets these, each red first:
+
+- its decoder refuses exactly what the decoding rule lists and accepts the rest, proven by the shared vector set
+  `test/vectors/decoding_rule_v1.json` in `macula`, which its CI runs pinned by commit; the set includes a text key
+  in two widths, integer key 1 beside float key 1.0, and a byte string key;
+- a frame whose signed object is refused is dropped and recorded, and the next frame on the same connection still
+  arrives; a frame whose envelope is malformed closes the connection.
+
 ### WP 4.1 `macula-rust`
 
 - [ ] macula-rust negotiates only profile algorithms and runs the connection handshake.
@@ -538,7 +549,12 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - every dial (pool, direct dial, FFI) carries an expected identity, and a HELLO naming any other node_id is
     refused;
   - every build verifies the handshake signature against the presented leaf with the profile's schemes, in every
-    trust mode.
+    trust mode;
+  - every stream frame (STREAM_DATA, STREAM_END, STREAM_ERROR, STREAM_REPLY), from the provider and from the
+    caller, is delivered only after its signature verifies against the stream's peer, with its sequence number next
+    in order;
+  - a record from a DHT lookup is used only after its signature verifies against its carried key and it derives to
+    the storage key that was asked for.
 - **Done:** green in CI; `ring` absent from `Cargo.toml`.
 - **Effort:** the transport takes 3 to 4 days once WP 1.2's Rust code exists (Neptune's estimate); the identity work
   is part of the SDK identity estimate, and the D24 content work is not estimated ⚠.
@@ -632,7 +648,12 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
     - every UCAN gate checks `aud` against the node_id of the verified caller, including the issuer-only
       `RequireUcanIssuer`;
   - FFI: `macula_identity_sign` returns the whole signature for every profile, 4,627 bytes for ML-DSA-87, and
-    never cuts it to a fixed-size buffer.
+    never cuts it to a fixed-size buffer;
+  - FFI values in `macula-ts` and `macula-php`: a value crosses the FFI unchanged or not at all; an integer outside
+    the target language's exact range, a map or list the binding cannot represent, or a map key that is not text is
+    an error to the caller, never a substitute value;
+  - a record from a DHT lookup is used only after its signature verifies against its carried key and it derives to
+    the storage key that was asked for.
 - **Done:** green in CI (`ci.yml` reads the Go version from `go.mod` ✅).
 - **Effort:** 2 to 4 days for the transport, plus the FFI unification ⚠; the identity work is part of the SDK
   identity estimate.
@@ -687,7 +708,9 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - content ids have only tag 2, SHA-384, in every content id made and checked (D24);
   - content is fetched from the node that shares it, through stations, and content this stack shares is served by
     the sharing node itself (D27);
-  - the token checks of WP 1.4.
+  - the token checks of WP 1.4;
+  - a record from a DHT lookup is used only after its signature verifies against its carried key and it derives to
+    the storage key that was asked for.
 - **Done:** green in CI.
 - **Effort:** 6 to 9 days, plus the seed list and record verifier ⚠; the identity work is part of the SDK identity
   estimate.
@@ -704,6 +727,10 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
     `Trust.Insecure`;
   - the connection handshake frames;
   - identity key generation with the node_id puzzle loop, on the ML-DSA-87 half of a pq_hybrid key;
+  - a field declared as text is read only from a text value, and a byte string is never read as text;
+  - signed frames and records are verified per the design before delivery: an EVENT only after its publisher
+    signature verifies, a reply only from the addressed provider, a record only after its signature and slot
+    verify;
   - Linux CI on an image with OpenSSL 3.5 or newer, and a `windows-latest` runner for the Schannel result.
 - **Files:**
   - `src/Macula/Macula.csproj`
@@ -859,6 +886,7 @@ provider certificate chains verify (D25 item 6). Until then `macula` refuses the
   - `test/macula_crypto_profile_tests.erl` (new)
   - `test/macula_quic_pq_handshake_tests.erl` (new)
   - `test/macula_no_classical_signing_tests.erl` (new)
+  - `test/vectors/decoding_rule_v1.json` (new)
   - extended identity, record, content block hash, frame, handshake, crypto NIF, cert chain, UCAN and DID tests
 
 ### `macula-station` (WP 1.6)
