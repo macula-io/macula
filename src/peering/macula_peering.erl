@@ -36,6 +36,7 @@
     send_frame/2,
     peer_capabilities/1,
     open_dedicated_stream/1,
+    async_open_dedicated_stream/1,
     send_on_stream/3
 ]).
 
@@ -136,15 +137,47 @@ cast_checked({error, Reason} = Rejected, _Pid, Frame) ->
 
 %% @doc Open a QUIC stream on this connection dedicated to one
 %% session (a streaming RPC call, a content transfer) instead of
-%% sharing the connection's control stream. Ownership transfers to
-%% the calling process immediately: it drives the stream directly via
-%% `send_on_stream/3' and `macula_quic:*', and receives the stream's
-%% `{quic, Bin, Stream, Flags}' events straight into its own mailbox
-%% — the peering connection process is not in this stream's path at
-%% all once this call returns. See PLAN_PER_STREAM_QUIC_ISOLATION.md.
+%% sharing the connection's control stream, waiting for it in the
+%% calling process. Ownership transfers to the calling process: it
+%% drives the stream directly via `send_on_stream/3' and
+%% `macula_quic:*', and receives the stream's `{quic, Bin, Stream, Flags}'
+%% events straight into its own mailbox — the peering connection
+%% process is not in this stream's path at all once this call returns.
+%% See PLAN_PER_STREAM_QUIC_ISOLATION.md.
+%%
+%% Returns `{error, timeout}' when the peer allows no further stream
+%% within 10 s, and `{error, closed}' when the connection ends first. A
+%% process that must keep serving while it waits uses
+%% `async_open_dedicated_stream/1' instead.
 -spec open_dedicated_stream(pid()) -> {ok, reference()} | {error, term()}.
 open_dedicated_stream(Pid) ->
-    gen_statem:call(Pid, {open_dedicated_stream, self()}, 10_000).
+    Mon = erlang:monitor(process, Pid),
+    Ref = async_open_dedicated_stream(Pid),
+    receive
+        {macula_peering, dedicated_stream_opened, Ref, Stream} ->
+            true = erlang:demonitor(Mon, [flush]),
+            {ok, Stream};
+        {macula_peering, dedicated_stream_open_failed, Ref, Reason} ->
+            true = erlang:demonitor(Mon, [flush]),
+            {error, Reason};
+        {'DOWN', Mon, process, Pid, _Reason} ->
+            {error, closed}
+    end.
+
+%% @doc Start opening a dedicated stream, as `open_dedicated_stream/1'
+%% does, and return at once with a reference. The calling process later
+%% receives `{macula_peering, dedicated_stream_opened, Ref, Stream}', and
+%% owns `Stream' in active mode, or
+%% `{macula_peering, dedicated_stream_open_failed, Ref, Reason}', where
+%% `Reason' is `timeout' when the peer allows no further stream within
+%% 10 s, `not_connected' when the connection is not connected, `closed'
+%% when it ends first, or the open's error. A connection process that has
+%% already exited sends nothing, so monitor it to learn that.
+-spec async_open_dedicated_stream(pid()) -> reference().
+async_open_dedicated_stream(Pid) ->
+    Ref = make_ref(),
+    ok = gen_statem:cast(Pid, {open_dedicated_stream, self(), Ref}),
+    Ref.
 
 %% @doc Encode, sign, and write one frame directly onto a dedicated
 %% stream obtained from `open_dedicated_stream/1' — no peering

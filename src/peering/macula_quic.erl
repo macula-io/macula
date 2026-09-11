@@ -47,6 +47,9 @@
     cancel_connect/1,
     dial_tag/1,
     open_stream/1,
+    async_open_stream/1,
+    cancel_open_stream/1,
+    stream_open_tag/1,
 
     %% Self-signed cert generation (pubkey-anchored)
     generate_self_signed_cert/3,
@@ -81,10 +84,18 @@
     getstat/2
 ]).
 
--export_type([dial/0]).
+-export_type([dial/0, stream_opening/0]).
 
 %% A dial started by async_connect/4: its result tag and its handle.
 -opaque dial() :: {macula_quic_dial, reference(), reference()}.
+
+%% A stream open started by async_open_stream/1: its result tag and its
+%% handle.
+-opaque stream_opening() :: {macula_quic_stream_opening, reference(), reference()}.
+
+%% The application error code on a stream whose open was cancelled after
+%% the peer allowed it.
+-define(OPEN_CANCELLED_CODE, 0).
 
 %% Added to a dial's own timeout before connect/4 gives up waiting.
 -define(DIAL_RESULT_GRACE_MS, 1_000).
@@ -330,10 +341,76 @@ generate_self_signed_cert(Pubkey, Privkey, Sans)
                   lists:join(<<",">>, [to_binary(S) || S <- Sans])),
     nif_generate_self_signed_cert(Pubkey, Privkey, SansCsv).
 
-%% @doc Open a new bidirectional stream.
+%% @doc Open a new bidirectional stream, owned by the calling process.
+%%
+%% The calling process waits until the peer allows another stream or the
+%% connection ends, for as long as that takes, and the open ends if that
+%% process exits while it waits. Use `async_open_stream/1' to wait
+%% elsewhere.
 -spec open_stream(reference()) -> {ok, reference()} | {error, term()}.
 open_stream(Conn) ->
-    nif_open_stream(Conn).
+    %% A reference made here, and matched by every clause of the receive in
+    %% await_stream_open/2, lets that receive skip every message already in
+    %% this process's mailbox.
+    Tag = make_ref(),
+    await_stream_open(start_stream_open(Tag, Conn), Tag).
+
+%% @doc Start opening a bidirectional stream and return at once, instead of
+%% waiting as `open_stream/1' does. The calling process owns the open and
+%% later receives `{quic, stream_opened, Tag, StreamRef}', and owns that
+%% stream, or `{quic, stream_open_failed, Tag, Reason}', where `Tag' is
+%% `stream_open_tag(Opening)'. The open waits for as long as the peer allows
+%% no further stream, and ends early when `cancel_open_stream/1' is called or
+%% when its owner exits. On a closed connection it returns
+%% `{error, already_closed}' at once.
+-spec async_open_stream(reference()) -> {ok, stream_opening()} | {error, term()}.
+async_open_stream(Conn) ->
+    start_stream_open(make_ref(), Conn).
+
+%% @doc End a stream open. Afterwards no result for it is in, or will reach,
+%% the caller's mailbox: a result sent before the cancel is taken out, and
+%% the stream it carried is reset. Call it from the open's owner.
+-spec cancel_open_stream(stream_opening()) -> ok.
+cancel_open_stream({macula_quic_stream_opening, Tag, Opening}) ->
+    discard_stream_open_result(nif_cancel_open_stream(Opening), Tag).
+
+%% @doc The reference in this open's result message.
+-spec stream_open_tag(stream_opening()) -> reference().
+stream_open_tag({macula_quic_stream_opening, Tag, _Opening}) ->
+    Tag.
+
+start_stream_open(Tag, Conn) ->
+    stream_open_started(nif_async_open_stream(Conn, Tag), Tag).
+
+stream_open_started({ok, Opening}, Tag) ->
+    {ok, {macula_quic_stream_opening, Tag, Opening}};
+stream_open_started({error, _} = Error, _Tag) ->
+    Error.
+
+%% `Opening' is used in the opened clause, so it stays referenced while this
+%% process waits: a collected handle cancels its open.
+await_stream_open({ok, Opening}, Tag) ->
+    receive
+        {quic, stream_opened, Tag, Stream} -> opened_stream(Opening, Stream);
+        {quic, stream_open_failed, Tag, Reason} -> {error, Reason}
+    end;
+await_stream_open({error, _} = Error, _Tag) ->
+    Error.
+
+opened_stream({macula_quic_stream_opening, _Tag, _Handle}, Stream) ->
+    {ok, Stream}.
+
+discard_stream_open_result(cancelled, _Tag) ->
+    ok;
+discard_stream_open_result(delivered, Tag) ->
+    receive
+        {quic, stream_opened, Tag, Stream} ->
+            reset_stream(Stream, ?OPEN_CANCELLED_CODE);
+        {quic, stream_open_failed, Tag, _Reason} ->
+            ok
+    after 0 ->
+        ok
+    end.
 
 %% @doc Close a connection.
 -spec close_connection(reference()) -> ok.
@@ -565,7 +642,10 @@ nif_cancel_connect(_Dial) ->
 nif_generate_self_signed_cert(_Pubkey, _Privkey, _Sans) ->
     erlang:nif_error(nif_not_loaded).
 
-nif_open_stream(_Conn) ->
+nif_async_open_stream(_Conn, _Tag) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_cancel_open_stream(_Opening) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_close_connection(_Conn) ->

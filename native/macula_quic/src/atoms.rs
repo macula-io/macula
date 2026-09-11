@@ -29,6 +29,10 @@ rustler::atoms! {
     busy,
     undefined,
 
+    // Stream opens
+    stream_opened,
+    stream_open_failed,
+
     // Connection lifecycle
     shutdown,
     closed,
