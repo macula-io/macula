@@ -20,8 +20,11 @@
 %%   <li><strong>received</strong>: `MsgId => {Publication, ExpiresAt}' for the verified publications delivered
 %%       locally, each kept until its publication expires (`sweep/2'). Used to recognise repeat GOSSIPs and to answer
 %%       GRAFTs.</li>
-%%   <li><strong>missing</strong>: `MsgId => {Peers, NotedAt}' for the peers who sent IHAVE for a publication not yet
-%%       received in full, and when the first IHAVE for it came; forgotten after 70 minutes (`sweep/2').</li>
+%%   <li><strong>missing</strong>: `MsgId => {#{Peer => GraftedAt}, NotedAt}' for the peers who sent IHAVE for a
+%%       publication not yet received in full, when this node sent each its GRAFT (monotonic milliseconds), and when
+%%       the first IHAVE for it came (wall-clock milliseconds); forgotten after 70 minutes (`sweep/2').</li>
+%%   <li><strong>open</strong>: `Peer => Count', how many missing entries each neighbour is on. A neighbour is on at
+%%       most 1,024 (DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 3.1).</li>
 %% </ul>
 %%
 %% == Message handling ==
@@ -31,20 +34,25 @@
 %%       every eager peer and IHAVE it to every lazy peer.</li>
 %%   <li><strong>Receive GOSSIP</strong>: the first time, verify the publication; when it verifies, deliver it, remove
 %%       it from missing, eager-forward it to every other eager peer, IHAVE-forward it to every lazy peer and ensure the
-%%       sender is eager, and when it does not, drop it. A duplicate is not verified again: PRUNE the sender and move
+%%       sender is eager, and when it does not, drop it and return the refusal. Either way its missing entry ends, at
+%%       no charge to its announcers. A duplicate is not verified again: PRUNE the sender and move
 %%       it from eager to lazy.</li>
-%%   <li><strong>Receive IHAVE</strong>: if already received, ignore. Else record the sender in missing and emit a
-%%       GRAFT to the sender right away (Phase 5.3 MVP: a real deployment delays the GRAFT briefly to give the eager
+%%   <li><strong>Receive IHAVE</strong>: if already received, or the sender is already on its missing entry, ignore.
+%%       A neighbour on 1,024 open entries gets no new one: its IHAVE is not recorded, gets no GRAFT and returns a
+%%       refusal. Else record the sender with the time of its GRAFT and emit a GRAFT to the sender right away
+%%       (Phase 5.3 MVP: a real deployment delays the GRAFT briefly to give the eager
 %%       push a chance to win the race; eager grafting is correct but slightly heavier).</li>
 %%   <li><strong>Receive GRAFT</strong>: for a publication this node holds, the sender becomes eager and gets the
 %%       GOSSIP publication; for any other id nothing changes, the push sets included.</li>
 %%   <li><strong>Receive PRUNE</strong>: move the sender from eager to lazy.</li>
 %% </ul>
 %%
-%% This module is pure apart from reading the configured profile when a node starts, and the clock when it verifies a
-%% publication or notes a missing one.
-%% The wrapping process transmits the action list, feeds deliveries to the local consumer and calls `sweep/2' on a
-%% timer, so a node remembers a publication hash until the publication expires, and no longer.
+%% This module is pure apart from reading the configured profile when a node starts. The caller passes the clocks:
+%% wall-clock milliseconds for publication freshness and retention, and monotonic milliseconds for GRAFT timing.
+%% The wrapping process transmits the send actions, reports each `{refused, Peer, Kind}' action through
+%% `macula_peering:object_refused/2', feeds deliveries to the local consumer, calls `expired_grafts/2' about once a
+%% second, and calls `sweep/2' on a timer, so a node remembers a publication hash until the publication expires, and
+%% no longer.
 %%
 %% Reference: plans/PLAN_MACULA_V2_PART3_DISCOVERY.md §7.2; plans/PLAN_PHASE_5_BREAKDOWN.md Session 5.3;
 %% DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Publications.
@@ -61,16 +69,22 @@
     has_received/2,
     received_count/1,
     missing_count/1,
-    publish/2,
-    process/3,
+    open_count/2,
+    publish/3,
+    process/4,
+    expired_grafts/2,
     sweep/2
 ]).
 
--export_type([state/0, peer/0, msg_id/0, action/0, delivery/0]).
+-export_type([state/0, peer/0, msg_id/0, action/0, delivery/0, clocks/0]).
 
 %% The longest a publication can live: a published_at up to 5 minutes ahead, a ttl_ms of at most one hour and 5 minutes
 %% of tolerance. No announcement can name a live publication for longer.
 -define(MISSING_MAX_AGE_MS, 70 * 60000).
+%% A neighbour is on at most 1,024 open missing entries, and a GRAFT unanswered for 10 seconds costs it that entry
+%% (DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 3.1).
+-define(OPEN_ENTRIES_MAX, 1024).
+-define(GRAFT_ANSWER_MS, 10_000).
 
 -type peer()     :: <<_:256>>.
 -type msg_id()   :: <<_:384>>.
@@ -82,10 +96,18 @@
     eager_push := sets:set(peer()),
     lazy_push  := sets:set(peer()),
     received   := #{msg_id() => {macula_signed_object:object(), non_neg_integer()}},
-    missing    := #{msg_id() => {sets:set(peer()), non_neg_integer()}}
+    missing    := #{msg_id() => {#{peer() => integer()}, integer()}},
+    open       := #{peer() => pos_integer()}
 }.
 
--type action()   :: {send, peer(), macula_frame:frame()}.
+%% The caller's clocks: wall-clock milliseconds for publication freshness and retention, monotonic milliseconds for
+%% GRAFT timing.
+-type clocks() :: #{wall := integer(), monotonic := integer()}.
+
+-type action()   :: {send, peer(), macula_frame:frame()}
+                  | {refused, peer(), ihave_allowance | graft_unanswered | wrong_realm | macula_frame_refusal()}.
+-type macula_frame_refusal() :: malformed_frame | signature_invalid | key_id_mismatch
+                              | {not_yet_valid, pos_integer()} | {expired, pos_integer()}.
 %% A delivery is the message id and the verified publication: publisher, realm, topic, seq, published_at, payload.
 -type delivery() :: {msg_id(), map()}.
 
@@ -107,7 +129,8 @@ started({ok, Profile}, SelfId, Realm) ->
         eager_push => sets:new(),
         lazy_push  => sets:new(),
         received   => #{},
-        missing    => #{}
+        missing    => #{},
+        open       => #{}
     }};
 started({error, _} = Refusal, _SelfId, _Realm) ->
     Refusal.
@@ -135,6 +158,7 @@ lazy_peers(#{lazy_push := L})   -> sets:to_list(L).
 has_received(MsgId, #{received := R}) -> maps:is_key(MsgId, R).
 received_count(#{received := R}) -> maps:size(R).
 missing_count(#{missing := M})   -> maps:size(M).
+open_count(Peer, #{open := O})   -> maps:get(Peer, O, 0).
 
 %%=====================================================================
 %% Local publish
@@ -143,15 +167,15 @@ missing_count(#{missing := M})   -> maps:size(M).
 %% @doc Publish a PUBLISH this node made: verify its publication, record it, push it fully to every eager peer and
 %% announce it to every lazy peer, and return it as the local delivery the caller's consumer handles. A publication
 %% that does not verify, or names another realm, is refused; one already received is not delivered again.
--spec publish(state(), macula_frame:frame()) -> {state(), [action()], [delivery()]} | {error, term()}.
-publish(State, #{frame_type := publish, publication := #{tbs := Tbs} = Publication} = Frame) ->
+-spec publish(state(), macula_frame:frame(), integer()) -> {state(), [action()], [delivery()]} | {error, term()}.
+publish(State, #{frame_type := publish, publication := #{tbs := Tbs} = Publication} = Frame, WallMs) ->
     MsgId = crypto:hash(sha384, Tbs),
-    local_publish(has_received(MsgId, State), MsgId, Publication, Frame, State).
+    local_publish(has_received(MsgId, State), MsgId, Publication, Frame, State, WallMs).
 
-local_publish(true, _MsgId, _Publication, _Frame, State) ->
+local_publish(true, _MsgId, _Publication, _Frame, State, _WallMs) ->
     {State, [], []};
-local_publish(false, MsgId, Publication, Frame, State) ->
-    published(verified(Frame, State), MsgId, Publication, State).
+local_publish(false, MsgId, Publication, Frame, State, WallMs) ->
+    published(verified(Frame, State, WallMs), MsgId, Publication, State).
 
 published({ok, #{expires_at := ExpiresAt} = Verified}, MsgId, Publication, State) ->
     State1 = mark_received(State, MsgId, Publication, ExpiresAt),
@@ -163,16 +187,17 @@ published({error, _} = Refusal, _MsgId, _Publication, _State) ->
 %% Inbound dispatch
 %%=====================================================================
 
--spec process(state(), peer(), macula_frame:frame()) -> {state(), [action()], [delivery()]}.
-process(State, From, #{frame_type := plumtree_gossip} = F) ->
-    on_gossip(From, F, State);
-process(State, From, #{frame_type := plumtree_ihave} = F) ->
-    on_ihave(From, F, State);
-process(State, From, #{frame_type := plumtree_graft} = F) ->
+%% @doc Handle a Plumtree frame from the neighbour `From', at the caller's clocks.
+-spec process(state(), peer(), macula_frame:frame(), clocks()) -> {state(), [action()], [delivery()]}.
+process(State, From, #{frame_type := plumtree_gossip} = F, #{wall := WallMs}) ->
+    on_gossip(From, F, State, WallMs);
+process(State, From, #{frame_type := plumtree_ihave} = F, Clocks) ->
+    on_ihave(From, F, State, Clocks);
+process(State, From, #{frame_type := plumtree_graft} = F, _Clocks) ->
     on_graft(From, F, State);
-process(State, From, #{frame_type := plumtree_prune}) ->
+process(State, From, #{frame_type := plumtree_prune}, _Clocks) ->
     on_prune(From, State);
-process(State, _From, _Frame) ->
+process(State, _From, _Frame, _Clocks) ->
     {State, [], []}.
 
 %%=====================================================================
@@ -182,49 +207,79 @@ process(State, _From, _Frame) ->
 %% @doc Forget, at `NowMs' in milliseconds of wall-clock time, every received publication that has expired (its
 %% published_at plus its ttl_ms, or 10 minutes without one, plus 5 minutes) and every missing publication first
 %% announced more than 70 minutes ago. A node keeps a publication hash until the publication expires, and no longer; a
-%% later copy is refused by verification, and a GRAFT for it gets no answer.
+%% later copy is refused by verification, and a GRAFT for it gets no answer. Each neighbour still on a forgotten
+%% missing entry has one open entry less, at no charge.
 -spec sweep(state(), integer()) -> state().
 sweep(#{received := R, missing := M} = S, NowMs) when is_integer(NowMs) ->
-    S#{received := maps:filter(live_at(NowMs), R),
-       missing  := maps:filter(announced_since(NowMs - ?MISSING_MAX_AGE_MS), M)}.
+    Oldest = NowMs - ?MISSING_MAX_AGE_MS,
+    Forgotten = [MsgId || {MsgId, {_Peers, NotedAt}} <- maps:to_list(M), NotedAt < Oldest],
+    lists:foldl(fun ended_entry/2, S#{received := maps:filter(live_at(NowMs), R)}, Forgotten).
 
 live_at(NowMs) ->
     fun(_MsgId, {_Publication, ExpiresAt}) -> ExpiresAt >= NowMs end.
 
-announced_since(Oldest) ->
-    fun(_MsgId, {_Peers, NotedAt}) -> NotedAt >= Oldest end.
+%% @doc Take each neighbour off the missing entries whose GRAFT it has not answered within 10 seconds, at `MonoMs' in
+%% monotonic milliseconds: one refused action per neighbour and entry, and an entry left with no neighbour ends. The
+%% wrapping process calls this about once a second.
+-spec expired_grafts(state(), integer()) -> {state(), [action()]}.
+expired_grafts(#{missing := M} = S, MonoMs) when is_integer(MonoMs) ->
+    Unanswered = [{MsgId, Peer} || {MsgId, {Peers, _NotedAt}} <- maps:to_list(M),
+                                   {Peer, GraftedAt} <- maps:to_list(Peers),
+                                   MonoMs - GraftedAt >= ?GRAFT_ANSWER_MS],
+    {lists:foldl(fun taken_off/2, S, Unanswered), [{refused, Peer, graft_unanswered} || {_MsgId, Peer} <- Unanswered]}.
+
+taken_off({MsgId, Peer}, #{missing := M} = S) ->
+    {Peers, NotedAt} = maps:get(MsgId, M),
+    one_open_less(Peer, S#{missing := remaining(maps:remove(Peer, Peers), NotedAt, MsgId, M)}).
+
+remaining(Peers, _NotedAt, MsgId, M) when map_size(Peers) =:= 0 -> maps:remove(MsgId, M);
+remaining(Peers, NotedAt, MsgId, M) -> M#{MsgId => {Peers, NotedAt}}.
 
 %%=====================================================================
 %% Handlers
 %%=====================================================================
 
-on_gossip(From, #{publication := #{tbs := Tbs} = Publication} = Frame, State) ->
+on_gossip(From, #{publication := #{tbs := Tbs} = Publication} = Frame, State, WallMs) ->
     MsgId = crypto:hash(sha384, Tbs),
-    classify_gossip(has_received(MsgId, State), From, MsgId, Publication, Frame, State).
+    classify_gossip(has_received(MsgId, State), From, MsgId, Publication, Frame, State, WallMs).
 
-classify_gossip(true, From, _MsgId, _Publication, _Frame, State) ->
+classify_gossip(true, From, _MsgId, _Publication, _Frame, State, _WallMs) ->
     %% A duplicate, recognised by its id and not verified again. The sender should not be eager: PRUNE it.
     {move_to_lazy(State, From), [{send, From, prune(State)}], []};
-classify_gossip(false, From, MsgId, Publication, #{round := Round} = Frame, State) ->
-    first_gossip(verified(Frame, State), From, MsgId, Round, Publication, State).
+classify_gossip(false, From, MsgId, Publication, #{round := Round} = Frame, State, WallMs) ->
+    first_gossip(verified(Frame, State, WallMs), From, MsgId, Round, Publication, State).
 
 first_gossip({ok, #{expires_at := ExpiresAt} = Verified}, From, MsgId, Round, Publication, State) ->
     State1 = mark_received(State, MsgId, Publication, ExpiresAt),
-    State2 = clear_missing(State1, MsgId),
+    State2 = ended_entry(MsgId, State1),
     State3 = move_to_eager(State2, From),
     {State3, build_pushes(State3, MsgId, Round + 1, Publication, From), [{MsgId, Verified}]};
-first_gossip({error, _Refused}, _From, _MsgId, _Round, _Publication, State) ->
-    {State, [], []}.
+first_gossip({error, Refused}, From, MsgId, _Round, _Publication, State) ->
+    {ended_entry(MsgId, State), [{refused, From, Refused}], []}.
 
-on_ihave(From, #{msg_id := MsgId, round := Round}, State) ->
-    classify_ihave(has_received(MsgId, State), From, MsgId, Round, State).
+%% An IHAVE for a publication not yet received records its sender with the time of its GRAFT and GRAFTs it, unless the
+%% sender is already on that entry, which changes nothing, or is on 1,024 open entries already, which records nothing,
+%% sends no GRAFT and is refused.
+on_ihave(From, #{msg_id := MsgId, round := Round}, State, Clocks) ->
+    classify_ihave(ihave_kind(has_received(MsgId, State), From, MsgId, State), From, MsgId, Round, State, Clocks).
 
-classify_ihave(true, _From, _MsgId, _Round, State) ->
-    %% Already have it: nothing to do.
+ihave_kind(true, _From, _MsgId, _State) ->
+    received;
+ihave_kind(false, From, MsgId, #{missing := M, open := O}) ->
+    announcer_kind(maps:find(MsgId, M), From, maps:get(From, O, 0)).
+
+announcer_kind({ok, {Peers, _NotedAt}}, From, _Open) when is_map_key(From, Peers) -> announced;
+announcer_kind(_Entry, _From, Open) when Open >= ?OPEN_ENTRIES_MAX -> over_allowance;
+announcer_kind(_Entry, _From, _Open) -> new_announcer.
+
+classify_ihave(received, _From, _MsgId, _Round, State, _Clocks) ->
     {State, [], []};
-classify_ihave(false, From, MsgId, Round, State) ->
-    State1 = note_missing(State, MsgId, From),
-    {State1, [{send, From, graft(State, MsgId, Round + 1)}], []}.
+classify_ihave(announced, _From, _MsgId, _Round, State, _Clocks) ->
+    {State, [], []};
+classify_ihave(over_allowance, From, _MsgId, _Round, State, _Clocks) ->
+    {State, [{refused, From, ihave_allowance}], []};
+classify_ihave(new_announcer, From, MsgId, Round, State, Clocks) ->
+    {note_missing(State, MsgId, From, Clocks), [{send, From, graft(State, MsgId, Round + 1)}], []}.
 
 %% The tree moves only for a publication this node holds and sends: a GRAFT for any other id changes nothing.
 on_graft(From, #{msg_id := MsgId, round := Round}, State) ->
@@ -238,9 +293,9 @@ answer_graft({ok, {Publication, _ExpiresAt}}, From, Round, State) ->
 on_prune(From, State) ->
     {move_to_lazy(State, From), [], []}.
 
-%% A publication verified under the node's profile and clock, for this node's realm.
-verified(Frame, #{profile := Profile, realm := Realm}) ->
-    in_realm(macula_frame:verify_publication(Frame, Profile, erlang:system_time(millisecond)), Realm).
+%% A publication verified under the node's profile at `WallMs', for this node's realm.
+verified(Frame, #{profile := Profile, realm := Realm}, WallMs) ->
+    in_realm(macula_frame:verify_publication(Frame, Profile, WallMs), Realm).
 
 in_realm({ok, #{realm := Realm}} = Verified, Realm) -> Verified;
 in_realm({ok, _OtherRealm}, _Realm) -> {error, wrong_realm};
@@ -253,12 +308,25 @@ in_realm({error, _} = Refusal, _Realm) -> Refusal.
 mark_received(#{received := R} = S, MsgId, Publication, ExpiresAt) ->
     S#{received := R#{MsgId => {Publication, ExpiresAt}}}.
 
-clear_missing(#{missing := M} = S, MsgId) ->
-    S#{missing := maps:remove(MsgId, M)}.
+%% A missing entry ends when its publication arrives, is refused or is forgotten. Each neighbour on it has one open
+%% entry less, and none of them is charged.
+ended_entry(MsgId, #{missing := M} = S) ->
+    closed_for(maps:find(MsgId, M), MsgId, S).
 
-note_missing(#{missing := M} = S, MsgId, From) ->
-    {Peers, NotedAt} = maps:get(MsgId, M, {sets:new(), erlang:system_time(millisecond)}),
-    S#{missing := M#{MsgId => {sets:add_element(From, Peers), NotedAt}}}.
+closed_for({ok, {Peers, _NotedAt}}, MsgId, #{missing := M} = S) ->
+    lists:foldl(fun one_open_less/2, S#{missing := maps:remove(MsgId, M)}, maps:keys(Peers));
+closed_for(error, _MsgId, S) ->
+    S.
+
+one_open_less(Peer, #{open := O} = S) ->
+    S#{open := fewer(maps:get(Peer, O) - 1, Peer, O)}.
+
+fewer(0, Peer, O) -> maps:remove(Peer, O);
+fewer(Count, Peer, O) -> O#{Peer := Count}.
+
+note_missing(#{missing := M, open := O} = S, MsgId, From, #{wall := WallMs, monotonic := MonoMs}) ->
+    {Peers, NotedAt} = maps:get(MsgId, M, {#{}, WallMs}),
+    S#{missing := M#{MsgId => {Peers#{From => MonoMs}, NotedAt}}, open := O#{From => maps:get(From, O, 0) + 1}}.
 
 move_to_eager(#{eager_push := E, lazy_push := L} = S, Peer) ->
     S#{eager_push := sets:add_element(Peer, E),

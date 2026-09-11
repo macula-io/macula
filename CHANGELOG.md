@@ -170,6 +170,16 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `{not_yet_valid, AheadMs}` and `{expired, PastMs}`, the milliseconds
   past the moment its rule starts refusing. `charged_refusal/1` charges
   them only beyond 10 minutes.
+- `hecate_plumtree` takes its clocks from the caller: `process/4` with
+  wall-clock and monotonic milliseconds, `publish/3` with the wall clock.
+  A neighbour is on at most 1,024 open missing entries: an IHAVE past that
+  is not recorded, gets no GRAFT and returns `{refused, Neighbour,
+  ihave_allowance}`. `expired_grafts/2` takes a neighbour off an entry
+  whose GRAFT it left unanswered for 10 seconds and returns
+  `graft_unanswered`. A GOSSIP of an id, verified or refused, ends its
+  whole entry at no charge to its announcers, and a refused GOSSIP returns
+  its refusal. `macula_frame:charged_refusal/1` charges `ihave_allowance`,
+  `graft_unanswered` and `wrong_realm`.
 
 ### Changed
 

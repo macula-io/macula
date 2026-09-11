@@ -7,6 +7,7 @@
 
 -define(REALM, <<42:256>>).
 -define(OTHER_REALM, <<77:256>>).
+-define(T0, 1789000000000).
 
 %%---------------------------------------------------------------------
 %% Construction + view changes
@@ -47,7 +48,7 @@ publish_emits_gossip_to_each_eager_peer_test() ->
     S1 = with_peers(fresh(id(99)), [id(1), id(2), id(3)]),
     Publish = publish_frame(<<"hello">>),
     MsgId = msg_id_of(Publish),
-    {S2, Actions, Deliveries} = hecate_plumtree:publish(S1, Publish),
+    {S2, Actions, Deliveries} = publish(S1, Publish),
     ?assertMatch([{MsgId, #{payload := <<"hello">>}}], Deliveries),
     %% Three GOSSIPs, one per eager peer.
     Sends = [F || {send, _, F} <- Actions, macula_frame:frame_type(F) =:= plumtree_gossip],
@@ -58,23 +59,23 @@ publish_emits_gossip_to_each_eager_peer_test() ->
 publish_emits_ihave_to_each_lazy_peer_test() ->
     %% A PRUNE from the peer moves it to lazy.
     S1 = hecate_plumtree:add_peer(fresh(id(99)), id(7)),
-    {S2, _, _} = hecate_plumtree:process(S1, id(7), macula_frame:plumtree_prune(#{realm => ?REALM})),
+    {S2, _, _} = process(S1, id(7), macula_frame:plumtree_prune(#{realm => ?REALM})),
     ?assertEqual([id(7)], hecate_plumtree:lazy_peers(S2)),
     %% Now publish: id(7) receives an IHAVE, not a GOSSIP.
-    {_, Actions, _} = hecate_plumtree:publish(S2, publish_frame(<<"ok">>)),
+    {_, Actions, _} = publish(S2, publish_frame(<<"ok">>)),
     [{send, T, F}] = Actions,
     ?assertEqual(id(7), T),
     ?assertEqual(plumtree_ihave, macula_frame:frame_type(F)).
 
 a_local_publish_that_does_not_verify_is_refused_test() ->
-    ?assertEqual({error, signature_invalid}, hecate_plumtree:publish(fresh(id(99)), tampered(publish_frame(<<"x">>)))).
+    ?assertEqual({error, signature_invalid}, publish(fresh(id(99)), tampered(publish_frame(<<"x">>)))).
 
 a_local_publish_for_another_realm_is_refused_test() ->
-    ?assertEqual({error, wrong_realm}, hecate_plumtree:publish(fresh(id(99)), publish_frame(?OTHER_REALM, <<"x">>))).
+    ?assertEqual({error, wrong_realm}, publish(fresh(id(99)), publish_frame(?OTHER_REALM, <<"x">>))).
 
 the_message_id_is_the_sha384_of_the_publication_tbs_test() ->
     #{publication := #{tbs := Tbs}} = Publish = publish_frame(<<"id">>),
-    {S1, _, [{MsgId, _}]} = hecate_plumtree:publish(fresh(id(99)), Publish),
+    {S1, _, [{MsgId, _}]} = publish(fresh(id(99)), Publish),
     ?assertEqual(crypto:hash(sha384, Tbs), MsgId),
     ?assert(hecate_plumtree:has_received(MsgId, S1)).
 
@@ -89,7 +90,7 @@ receive_first_gossip_delivers_and_forwards_test() ->
     S1 = hecate_plumtree:add_peer(fresh(id(99)), Other),
     Publish = publish_frame(<<"x">>),
     MsgId = msg_id_of(Publish),
-    {S2, Actions, Deliveries} = hecate_plumtree:process(S1, Sender, gossip_of(Publish, 0)),
+    {S2, Actions, Deliveries} = process(S1, Sender, gossip_of(Publish, 0)),
     ?assertMatch([{MsgId, #{payload := <<"x">>}}], Deliveries),
     ?assert(lists:member(Sender, hecate_plumtree:eager_peers(S2))),
     Targets = [T || {send, T, _} <- Actions],
@@ -99,7 +100,7 @@ receive_first_gossip_delivers_and_forwards_test() ->
 a_forwarded_gossip_carries_the_publication_bytes_unchanged_test() ->
     S1 = hecate_plumtree:add_peer(fresh(id(99)), id(12)),
     #{publication := Publication} = Publish = publish_frame(<<"x">>),
-    {_S2, [{send, _, Forward}], _} = hecate_plumtree:process(S1, id(11), gossip_of(Publish, 0)),
+    {_S2, [{send, _, Forward}], _} = process(S1, id(11), gossip_of(Publish, 0)),
     ?assertEqual(Publication, maps:get(publication, Forward)),
     ?assertEqual(1, maps:get(round, Forward)),
     ?assertNot(maps:is_key(signature, Forward)).
@@ -108,9 +109,9 @@ receive_duplicate_gossip_prunes_sender_test() ->
     Sender = id(20),
     S1 = hecate_plumtree:add_peer(fresh(id(99)), Sender),
     Publish = publish_frame(<<"first">>),
-    {S2, _, _} = hecate_plumtree:publish(S1, Publish),
+    {S2, _, _} = publish(S1, Publish),
     %% The sender duplicates the same GOSSIP.
-    {S3, Actions, Deliveries} = hecate_plumtree:process(S2, Sender, gossip_of(Publish, 1)),
+    {S3, Actions, Deliveries} = process(S2, Sender, gossip_of(Publish, 1)),
     ?assertEqual([], Deliveries),
     [{send, T, F}] = Actions,
     ?assertEqual(Sender, T),
@@ -123,8 +124,8 @@ a_publication_reaching_a_node_twice_is_verified_once_test() ->
     S1 = hecate_plumtree:add_peer(fresh(id(99)), id(21)),
     ok = meck:new(macula_frame, [passthrough]),
     try
-        {S2, _, [_]} = hecate_plumtree:process(S1, id(20), gossip_of(Publish, 0)),
-        {_S3, _, []} = hecate_plumtree:process(S2, id(21), gossip_of(Publish, 1)),
+        {S2, _, [_]} = process(S1, id(20), gossip_of(Publish, 0)),
+        {_S3, _, []} = process(S2, id(21), gossip_of(Publish, 1)),
         ?assertEqual(1, meck:num_calls(macula_frame, verify_publication, '_'))
     after
         meck:unload(macula_frame)
@@ -134,15 +135,15 @@ a_gossip_whose_publication_does_not_verify_is_dropped_test() ->
     S1 = hecate_plumtree:add_peer(fresh(id(99)), id(12)),
     #{publication := Bad} = tampered(publish_frame(<<"x">>)),
     Gossip = macula_frame:plumtree_gossip(#{publication => Bad, round => 0}),
-    {S2, Actions, Deliveries} = hecate_plumtree:process(S1, id(11), Gossip),
-    ?assertEqual({[], []}, {Actions, Deliveries}),
+    {S2, Actions, Deliveries} = process(S1, id(11), Gossip),
+    ?assertEqual({[{refused, id(11), signature_invalid}], []}, {Actions, Deliveries}),
     ?assertEqual(0, hecate_plumtree:received_count(S2)),
     ?assertNot(lists:member(id(11), hecate_plumtree:eager_peers(S2))).
 
 a_gossip_for_another_realm_is_dropped_test() ->
     Gossip = gossip_of(publish_frame(?OTHER_REALM, <<"x">>), 0),
-    {S1, Actions, Deliveries} = hecate_plumtree:process(fresh(id(99)), id(11), Gossip),
-    ?assertEqual({[], []}, {Actions, Deliveries}),
+    {S1, Actions, Deliveries} = process(fresh(id(99)), id(11), Gossip),
+    ?assertEqual({[{refused, id(11), wrong_realm}], []}, {Actions, Deliveries}),
     ?assertEqual(0, hecate_plumtree:received_count(S1)).
 
 %%---------------------------------------------------------------------
@@ -153,7 +154,7 @@ ihave_for_unknown_msg_emits_graft_test() ->
     Sender = id(30),
     MsgId = crypto:strong_rand_bytes(48),
     Frame = macula_frame:plumtree_ihave(#{realm => ?REALM, msg_id => MsgId, round => 2}),
-    {S1, [{send, T, F}], []} = hecate_plumtree:process(fresh(id(99)), Sender, Frame),
+    {S1, [{send, T, F}], []} = process(fresh(id(99)), Sender, Frame),
     ?assertEqual(Sender, T),
     ?assertEqual(plumtree_graft, macula_frame:frame_type(F)),
     ?assertEqual(MsgId, maps:get(msg_id, F)),
@@ -161,9 +162,9 @@ ihave_for_unknown_msg_emits_graft_test() ->
 
 ihave_for_known_msg_is_silent_test() ->
     Publish = publish_frame(<<"already">>),
-    {S1, _, _} = hecate_plumtree:publish(fresh(id(99)), Publish),
+    {S1, _, _} = publish(fresh(id(99)), Publish),
     Frame = macula_frame:plumtree_ihave(#{realm => ?REALM, msg_id => msg_id_of(Publish), round => 1}),
-    {S2, [], []} = hecate_plumtree:process(S1, id(31), Frame),
+    {S2, [], []} = process(S1, id(31), Frame),
     ?assertEqual(0, hecate_plumtree:missing_count(S2)).
 
 %%---------------------------------------------------------------------
@@ -173,9 +174,9 @@ ihave_for_known_msg_is_silent_test() ->
 graft_for_known_msg_replies_with_gossip_test() ->
     Sender = id(40),
     #{publication := Publication} = Publish = publish_frame(<<"payload">>),
-    {S1, _, _} = hecate_plumtree:publish(fresh(id(99)), Publish),
+    {S1, _, _} = publish(fresh(id(99)), Publish),
     Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => msg_id_of(Publish), round => 0}),
-    {S2, [{send, T, F}], []} = hecate_plumtree:process(S1, Sender, Frame),
+    {S2, [{send, T, F}], []} = process(S1, Sender, Frame),
     ?assertEqual(Sender, T),
     ?assertEqual(plumtree_gossip, macula_frame:frame_type(F)),
     ?assertEqual(Publication, maps:get(publication, F)),
@@ -187,15 +188,15 @@ graft_for_unknown_msg_is_silent_test() ->
     Sender = id(41),
     Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => crypto:strong_rand_bytes(48), round => 0}),
     S0 = fresh(id(99)),
-    {S1, [], []} = hecate_plumtree:process(S0, Sender, Frame),
+    {S1, [], []} = process(S0, Sender, Frame),
     ?assertEqual(S0, S1).
 
 a_graft_for_an_unknown_publication_leaves_a_lazy_sender_lazy_test() ->
     Sender = id(43),
     S1 = hecate_plumtree:add_peer(fresh(id(99)), Sender),
-    {S2, [], []} = hecate_plumtree:process(S1, Sender, macula_frame:plumtree_prune(#{realm => ?REALM})),
+    {S2, [], []} = process(S1, Sender, macula_frame:plumtree_prune(#{realm => ?REALM})),
     Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => crypto:strong_rand_bytes(48), round => 0}),
-    {S3, [], []} = hecate_plumtree:process(S2, Sender, Frame),
+    {S3, [], []} = process(S2, Sender, Frame),
     ?assertEqual([Sender], hecate_plumtree:lazy_peers(S3)),
     ?assertEqual([], hecate_plumtree:eager_peers(S3)).
 
@@ -206,7 +207,7 @@ a_graft_for_an_unknown_publication_leaves_a_lazy_sender_lazy_test() ->
 sweep_keeps_a_publication_through_its_expiry_and_forgets_it_after_test() ->
     Publish = publish_frame(<<"kept">>),
     MsgId = msg_id_of(Publish),
-    {S1, _, [{MsgId, #{expires_at := ExpiresAt}}]} = hecate_plumtree:publish(fresh(id(99)), Publish),
+    {S1, _, [{MsgId, #{expires_at := ExpiresAt}}]} = publish(fresh(id(99)), Publish),
     ?assert(hecate_plumtree:has_received(MsgId, hecate_plumtree:sweep(S1, ExpiresAt))),
     S2 = hecate_plumtree:sweep(S1, ExpiresAt + 1),
     ?assertNot(hecate_plumtree:has_received(MsgId, S2)),
@@ -215,8 +216,8 @@ sweep_keeps_a_publication_through_its_expiry_and_forgets_it_after_test() ->
 sweep_forgets_an_expired_publication_and_keeps_a_live_one_test() ->
     Short = publish_frame(?REALM, <<"short">>, #{ttl_ms => 1000}),
     Long = publish_frame(<<"long">>),
-    {S1, _, [{ShortId, #{expires_at := ShortExpiry}}]} = hecate_plumtree:publish(fresh(id(99)), Short),
-    {S2, _, [{LongId, _}]} = hecate_plumtree:publish(S1, Long),
+    {S1, _, [{ShortId, #{expires_at := ShortExpiry}}]} = publish(fresh(id(99)), Short),
+    {S2, _, [{LongId, _}]} = publish(S1, Long),
     S3 = hecate_plumtree:sweep(S2, ShortExpiry + 1),
     ?assertNot(hecate_plumtree:has_received(ShortId, S3)),
     ?assert(hecate_plumtree:has_received(LongId, S3)),
@@ -225,32 +226,29 @@ sweep_forgets_an_expired_publication_and_keeps_a_live_one_test() ->
 a_graft_for_a_forgotten_publication_gets_no_answer_test() ->
     Publish = publish_frame(<<"forgotten">>),
     MsgId = msg_id_of(Publish),
-    {S1, _, [{MsgId, #{expires_at := ExpiresAt}}]} = hecate_plumtree:publish(fresh(id(99)), Publish),
+    {S1, _, [{MsgId, #{expires_at := ExpiresAt}}]} = publish(fresh(id(99)), Publish),
     S2 = hecate_plumtree:sweep(S1, ExpiresAt + 1),
     Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => MsgId, round => 0}),
-    {S3, [], []} = hecate_plumtree:process(S2, id(42), Frame),
+    {S3, [], []} = process(S2, id(42), Frame),
     ?assertNot(lists:member(id(42), hecate_plumtree:eager_peers(S3))).
 
 %% An IHAVE for a publication never received is forgotten once it is older than 70 minutes, the longest a
 %% publication can live.
 sweep_forgets_a_missing_publication_announced_over_70_minutes_ago_test() ->
-    {S1, _, []} = hecate_plumtree:process(fresh(id(99)), id(60), ihave(crypto:strong_rand_bytes(48))),
+    {S1, _, []} = hecate_plumtree:process(fresh(id(99)), id(60), ihave(crypto:strong_rand_bytes(48)), at(?T0)),
     ?assertEqual(1, hecate_plumtree:missing_count(S1)),
-    ?assertEqual(1, hecate_plumtree:missing_count(hecate_plumtree:sweep(S1, erlang:system_time(millisecond)))),
-    Later = erlang:system_time(millisecond) + 70 * 60000 + 1000,
-    ?assertEqual(0, hecate_plumtree:missing_count(hecate_plumtree:sweep(S1, Later))).
+    ?assertEqual(1, hecate_plumtree:missing_count(hecate_plumtree:sweep(S1, ?T0 + 70 * 60000))),
+    ?assertEqual(0, hecate_plumtree:missing_count(hecate_plumtree:sweep(S1, ?T0 + 70 * 60000 + 1))).
 
 a_sweep_keeps_a_recently_announced_missing_publication_test() ->
     Old = crypto:strong_rand_bytes(48),
     Recent = crypto:strong_rand_bytes(48),
-    {S1, _, []} = hecate_plumtree:process(fresh(id(99)), id(60), ihave(Old)),
-    timer:sleep(20),
-    Between = erlang:system_time(millisecond),
-    {S2, _, []} = hecate_plumtree:process(S1, id(61), ihave(Recent)),
-    S3 = hecate_plumtree:sweep(S2, Between + 70 * 60000),
+    {S1, _, []} = hecate_plumtree:process(fresh(id(99)), id(60), ihave(Old), at(?T0)),
+    {S2, _, []} = hecate_plumtree:process(S1, id(61), ihave(Recent), at(?T0 + 20)),
+    S3 = hecate_plumtree:sweep(S2, ?T0 + 20 + 70 * 60000),
     ?assertEqual(1, hecate_plumtree:missing_count(S3)),
     %% The recent announcement is the one kept: another IHAVE for it adds no entry.
-    {S4, _, []} = hecate_plumtree:process(S3, id(62), ihave(Recent)),
+    {S4, _, []} = hecate_plumtree:process(S3, id(62), ihave(Recent), at(?T0 + 30)),
     ?assertEqual(1, hecate_plumtree:missing_count(S4)).
 
 %%---------------------------------------------------------------------
@@ -260,7 +258,7 @@ a_sweep_keeps_a_recently_announced_missing_publication_test() ->
 prune_demotes_sender_to_lazy_test() ->
     Sender = id(50),
     S1 = hecate_plumtree:add_peer(fresh(id(99)), Sender),
-    {S2, [], []} = hecate_plumtree:process(S1, Sender, macula_frame:plumtree_prune(#{realm => ?REALM})),
+    {S2, [], []} = process(S1, Sender, macula_frame:plumtree_prune(#{realm => ?REALM})),
     ?assert(lists:member(Sender, hecate_plumtree:lazy_peers(S2))),
     ?assertNot(lists:member(Sender, hecate_plumtree:eager_peers(S2))).
 
@@ -276,20 +274,30 @@ three_node_chain_delivers_message_once_each_test() ->
     Publish = publish_frame(<<"hi">>),
     MsgId = msg_id_of(Publish),
     %% A publishes.
-    {_AAfter, AActions, [{MsgId, _}]} = hecate_plumtree:publish(A1, Publish),
+    {_AAfter, AActions, [{MsgId, _}]} = publish(A1, Publish),
     [{send, BId, GossipAB}] = gossip_and_ihave(AActions),
     ?assertEqual(id(2), BId),
     %% B receives the frame as the wire hands it over, delivers, and forwards to C, not back to A.
-    {_BAfter, BActions, [{MsgId, _}]} = hecate_plumtree:process(B1, id(1), wire(GossipAB)),
+    {_BAfter, BActions, [{MsgId, _}]} = process(B1, id(1), wire(GossipAB)),
     [{send, CId, GossipBC}] = gossip_and_ihave(BActions),
     ?assertEqual(id(3), CId),
     %% C receives and delivers; its only peer is the sender, so it forwards nowhere.
-    {_CAfter, CActions, [{MsgId, _}]} = hecate_plumtree:process(C1, id(2), wire(GossipBC)),
+    {_CAfter, CActions, [{MsgId, _}]} = process(C1, id(2), wire(GossipBC)),
     ?assertEqual([], CActions).
 
 %%=====================================================================
 %% Helpers
 %%=====================================================================
+
+%% A call at the wall clock now, with a monotonic time the tests leave at 0.
+process(State, From, Frame) ->
+    hecate_plumtree:process(State, From, Frame, at(erlang:system_time(millisecond))).
+
+publish(State, Frame) ->
+    hecate_plumtree:publish(State, Frame, erlang:system_time(millisecond)).
+
+at(WallMs) ->
+    #{wall => WallMs, monotonic => 0}.
 
 fresh(SelfId) ->
     {ok, S} = hecate_plumtree:new(SelfId, ?REALM),
