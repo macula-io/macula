@@ -17,6 +17,8 @@
 -define(PROCEDURE, <<"p">>).
 %% Sinks the reader lifetime test stops.
 -define(STOPS, 500).
+%% How long a start or a stop may take while the pool never answers.
+-define(BOUND_MS, 1000).
 
 %%%===================================================================
 %%% Test callback module (this module doubles as the sink under test)
@@ -41,8 +43,10 @@ handle_close(Reason, Parent) ->
 
 %% recv/2 returns Results in order and then waits, as a stream with
 %% nothing more to read does. The other four functions record their
-%% calls, in order, in the table returned with them.
+%% calls, in order, in the table returned with them, and publish/4 also
+%% sends the test {published, Topic, Payload}.
 scripted_stream_io(Results) ->
+    Test = self(),
     Calls = ets:new(stream_io_calls, [ordered_set, public]),
     Next = atomics:new(1, []),
     Record = fun(Call) ->
@@ -58,7 +62,11 @@ scripted_stream_io(Results) ->
                          end,
                  close_stream => fun(_Stream) -> Record(close_stream) end,
                  abort => fun(_Stream, Code, _Message) -> Record({abort, Code}) end,
-                 publish => fun(_Pool, _Realm, Topic, _Payload) -> Record({publish, Topic}) end},
+                 publish => fun(_Pool, _Realm, Topic, Payload) ->
+                                    ok = Record({publish, Topic}),
+                                    Test ! {published, Topic, Payload},
+                                    ok
+                            end},
     {StreamIo, Calls}.
 
 next_result(N, Results) when N =< length(Results) ->
@@ -82,9 +90,6 @@ start_sink(StreamIo) ->
                                                #{stream_io => StreamIo}),
     Sink.
 
-topics(Calls) ->
-    [Topic || {publish, Topic} <- calls(Calls)].
-
 %% Returns once Sink has exited.
 wait_down(Sink) ->
     Ref = monitor(process, Sink),
@@ -92,6 +97,13 @@ wait_down(Sink) ->
         {'DOWN', Ref, process, Sink, _} -> ok
     after 5000 ->
         error(sink_did_not_exit)
+    end.
+
+next_published() ->
+    receive
+        {published, Topic, Payload} -> {Topic, Payload}
+    after 5000 ->
+        error(nothing_published)
     end.
 
 %%%===================================================================
@@ -110,16 +122,20 @@ sink_test_() ->
                  fun a_direct_sink_runs_on_the_stream_io_it_is_given/0,
                  fun without_stream_io_a_sink_dials_through_the_macula_facade/0,
                  fun a_stream_io_of_other_than_the_five_functions_is_refused/0,
-                 {timeout, 60, fun a_stopped_sinks_reader_is_gone_before_the_sink_is/0}]].
+                 {timeout, 60, fun a_stopped_sinks_reader_is_gone_before_the_sink_is/0},
+                 fun a_sink_whose_pool_is_gone_still_reads_and_closes/0,
+                 {timeout, 10, fun a_sink_whose_pool_never_answers_starts_and_stops_at_once/0},
+                 {timeout, 10, fun a_killed_sinks_end_is_announced_with_the_kill_reason/0}]].
 
 delivers_chunks_then_eof() ->
-    {StreamIo, Calls} = scripted_stream_io([{chunk, <<"a">>}, {chunk, <<"b">>}, eof]),
+    {StreamIo, _Calls} = scripted_stream_io([{chunk, <<"a">>}, {chunk, <<"b">>}, eof]),
     Sink = start_sink(StreamIo),
     ?assertEqual({chunk_seen, <<"a">>}, wait_msg()),
     ?assertEqual({chunk_seen, <<"b">>}, wait_msg()),
     ?assertEqual({closed, normal}, wait_msg()),
     wait_down(Sink),
-    ?assertEqual([<<"streaming.started_v1">>, <<"streaming.completed_v1">>], topics(Calls)).
+    ?assertMatch({<<"streaming.started_v1">>, #{stream_id := _}}, next_published()),
+    ?assertMatch({<<"streaming.completed_v1">>, #{outcome := completed}}, next_published()).
 
 surfaces_recv_error() ->
     process_flag(trap_exit, true),
@@ -186,8 +202,10 @@ a_direct_sink_runs_on_the_stream_io_it_is_given() ->
     ?assertEqual({chunk_seen, <<"a">>}, wait_msg()),
     ?assertEqual({closed, normal}, wait_msg()),
     wait_down(Sink),
-    ?assertEqual([call_stream, {publish, <<"streaming.started_v1">>}, close_stream,
-                  {publish, <<"streaming.completed_v1">>}], calls(Calls)).
+    ?assertEqual([call_stream, close_stream],
+                 [Call || Call <- calls(Calls), call_name(Call) =/= publish]),
+    ?assertMatch({<<"streaming.started_v1">>, _}, next_published()),
+    ?assertMatch({<<"streaming.completed_v1">>, _}, next_published()).
 
 a_stream_io_of_other_than_the_five_functions_is_refused() ->
     {StreamIo, _Calls} = scripted_stream_io([]),
@@ -212,7 +230,8 @@ a_stopped_sinks_reader_is_gone_before_the_sink_is() ->
     Running = StreamIo#{recv := fun(_Stream, _Timeout) ->
                                         Test ! {reader_table, ets:new(reader_table, [public])},
                                         keep_running(0)
-                                end},
+                                end,
+                        publish := fun(_Pool, _Realm, _Topic, _Payload) -> ok end},
     Tables = [table_once_its_sink_has_stopped(Running) || _ <- lists:seq(1, ?STOPS)],
     ?assertEqual(0, length([Table || {present, Table} <- Tables])).
 
@@ -233,8 +252,65 @@ table_state(_Owner, Table) -> {present, Table}.
 keep_running(N) ->
     keep_running(N + 1).
 
+%% A pool that is gone makes publish exit. The sink still starts,
+%% delivers, closes its stream and calls handle_close/2.
+a_sink_whose_pool_is_gone_still_reads_and_closes() ->
+    process_flag(trap_exit, true),
+    {StreamIo, Calls} = scripted_stream_io([{chunk, <<"a">>}, eof]),
+    Gone = StreamIo#{publish := fun(_Pool, _Realm, _Topic, _Payload) ->
+                                        exit({noproc, {gen_server, call, [pool, publish]}})
+                                end},
+    Sink = start_sink(Gone),
+    ?assertEqual({chunk_seen, <<"a">>}, wait_msg()),
+    ?assertEqual({closed, normal}, wait_msg()),
+    wait_down(Sink),
+    ?assertEqual(1, count(close_stream, Calls)).
+
+%% A pool that never answers holds only the announcer: the sink starts
+%% and stops within the bound, and the announcer ends once each of its
+%% two publishes is let through.
+a_sink_whose_pool_never_answers_starts_and_stops_at_once() ->
+    Test = self(),
+    {StreamIo, _Calls} = scripted_stream_io([]),
+    Held = StreamIo#{publish := fun(_Pool, _Realm, Topic, _Payload) ->
+                                        Test ! {publish_held, Topic, self()},
+                                        receive release -> ok end
+                                end},
+    {StartMs, Sink} = timer:tc(fun() -> start_sink(Held) end, millisecond),
+    {StopMs, ok} = timer:tc(fun() -> gen_server:stop(Sink) end, millisecond),
+    ?assertEqual({closed, normal}, wait_msg()),
+    Announcer = release(<<"streaming.started_v1">>),
+    Announcer = release(<<"streaming.completed_v1">>),
+    wait_down(Announcer),
+    ?assert(StartMs < ?BOUND_MS),
+    ?assert(StopMs < ?BOUND_MS).
+
+release(Topic) ->
+    receive
+        {publish_held, Topic, Announcer} ->
+            Announcer ! release,
+            Announcer
+    after 5000 ->
+        error({publish_not_held, Topic})
+    end.
+
+%% A sink killed before its terminate/2 runs still has its stream's end
+%% announced, with outcome failed and the reason it went down for.
+a_killed_sinks_end_is_announced_with_the_kill_reason() ->
+    process_flag(trap_exit, true),
+    {StreamIo, _Calls} = scripted_stream_io([]),
+    Sink = start_sink(StreamIo),
+    {<<"streaming.started_v1">>, #{stream_id := StreamId}} = next_published(),
+    exit(Sink, kill),
+    wait_down(Sink),
+    ?assertEqual({<<"streaming.completed_v1">>,
+                  #{stream_id => StreamId, outcome => failed, reason => killed}},
+                 next_published()).
+
+%% The next message from the sink's callbacks.
 wait_msg() ->
     receive
-        Msg -> Msg
+        {chunk_seen, _} = Msg -> Msg;
+        {closed, _} = Msg -> Msg
     after 1000 -> timeout
     end.

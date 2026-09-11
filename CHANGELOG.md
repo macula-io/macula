@@ -196,6 +196,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ends its stream, so the reader never calls `recv/2` once the sink has
   gone. The sink sent its reader a kill and went on, and a kill arrives
   asynchronously.
+- `macula_stream_sink` publishes `streaming.started_v1` and
+  `streaming.completed_v1` from a process of its own. A publish that
+  exited, for a pool that was gone, failed the sink's start with its
+  stream left open or skipped `handle_close/2` at its stop, and one that
+  waited on a busy pool held the start or the stop for up to 5.5 s. A
+  failed publish is now logged. A sink killed before its stop has its
+  `streaming.completed_v1` published with `outcome => failed` and the
+  reason.
 
 ## [10.24.0] - 2026-09-10
 
