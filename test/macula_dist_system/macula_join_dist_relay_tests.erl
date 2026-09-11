@@ -114,7 +114,7 @@ relay_loss_is_visible_and_rejoin_works() ->
     Root = whereis(macula_root),
 
     ?assertEqual(ok, macula:join_dist_relay(#{url => relay_url(Relay)})),
-    RelaySideConn = accepted_connection(),
+    RelaySideConn = accepted_connection(Relay),
     {ok, Client} = macula:dist_relay_client(),
     MonRef = erlang:monitor(process, Client),
 
@@ -123,7 +123,7 @@ relay_loss_is_visible_and_rejoin_works() ->
     ?assertEqual({error, not_joined}, macula:dist_relay_client()),
     ?assertEqual(Root, whereis(macula_root)),
 
-    ok = macula_quic:async_accept(maps:get(listener, Relay)),
+    ok = relay_call(Relay, accept_again),
     ?assertEqual(ok, macula:join_dist_relay(#{url => relay_url(Relay)})),
     ?assertMatch({ok, _}, macula:dist_relay_client()),
     ok = supervisor:terminate_child(macula_root, ?CLIENT),
@@ -134,47 +134,69 @@ without_app_returns_error() ->
                  macula:join_dist_relay(#{url => ?UNUSABLE_RELAY_URL})).
 
 %% =============================================================================
-%% Loopback relay: a QUIC listener with the relay's ALPN and a self-signed
-%% certificate. Started in the test process, which then receives its
-%% connection events.
+%% Loopback relay: a process that owns a QUIC listener with the relay's ALPN
+%% and a self-signed certificate, and hands the test the connections that
+%% listener accepts. A connection event from any other listener never reaches
+%% it.
 %% =============================================================================
 
 start_relay() ->
-    {Pub, Priv} = ephemeral_keypair(),
-    {ok, {CertPem, KeyPem}} =
-        macula_quic:generate_self_signed_cert(
-            Pub, Priv, [<<"localhost">>, <<"127.0.0.1">>]),
-    Tmp  = lists:flatten(io_lib:format("/tmp/macula-join-dist-relay-~p",
-                                       [erlang:unique_integer([positive])])),
-    Cert = Tmp ++ ".crt",
-    Key  = Tmp ++ ".key",
-    ok = file:write_file(Cert, CertPem),
-    ok = file:write_file(Key,  KeyPem),
-    Port = pick_free_port(),
-    {ok, Listener} = macula_quic:listen(
-        <<"127.0.0.1">>, Port,
-        [{cert, Cert}, {key, Key},
-         {alpn, [?RELAY_ALPN]},
-         {idle_timeout_ms, 30000},
-         {keep_alive_interval_ms, 5000}]),
-    ok = macula_quic:async_accept(Listener),
-    #{listener => Listener, port => Port, cert => Cert, key => Key}.
+    Test = self(),
+    Ready = make_ref(),
+    Pid = spawn(fun() -> relay(Test, Ready) end),
+    receive
+        {Ready, Port} -> #{pid => Pid, port => Port}
+    after ?EVENT_TIMEOUT_MS ->
+        error(relay_did_not_listen)
+    end.
 
-stop_relay(#{listener := Listener, cert := Cert, key := Key}) ->
-    try macula_quic:close_listener(Listener) catch _:_ -> ok end,
-    file:delete(Cert),
-    file:delete(Key),
-    drain_quic_messages().
+relay(Test, Ready) ->
+    Port = pick_free_port(),
+    {ok, Listener} = macula_test_tmp:with_dir("macula-join-dist-relay",
+                                             fun(Dir) -> relay_listener(Dir, Port) end),
+    ok = macula_quic:async_accept(Listener),
+    Test ! {Ready, Port},
+    relay_loop(Listener, [], []).
+
+%% The connections the relay's listener accepted and has not handed out yet,
+%% and the requests waiting for one.
+relay_loop(Listener, Accepted, Waiting) ->
+    receive
+        {quic, new_conn, Conn, _Info} ->
+            hand_out(Listener, Accepted ++ [Conn], Waiting);
+        {From, Tag, next_connection} ->
+            hand_out(Listener, Accepted, Waiting ++ [{From, Tag}]);
+        {From, Tag, accept_again} ->
+            From ! {Tag, macula_quic:async_accept(Listener)},
+            relay_loop(Listener, Accepted, Waiting);
+        {From, Tag, stop} ->
+            From ! {Tag, macula_quic:close_listener(Listener)}
+    end.
+
+hand_out(Listener, [Conn | Accepted], [{From, Tag} | Waiting]) ->
+    From ! {Tag, Conn},
+    hand_out(Listener, Accepted, Waiting);
+hand_out(Listener, Accepted, Waiting) ->
+    relay_loop(Listener, Accepted, Waiting).
+
+relay_call(#{pid := Pid}, Request) ->
+    Tag = make_ref(),
+    Pid ! {self(), Tag, Request},
+    receive
+        {Tag, Reply} -> Reply
+    after ?EVENT_TIMEOUT_MS ->
+        error({relay_did_not_answer, Request})
+    end.
+
+stop_relay(Relay) ->
+    ok = relay_call(Relay, stop).
 
 relay_url(#{port := Port}) ->
     iolist_to_binary(io_lib:format("quic://127.0.0.1:~p", [Port])).
 
-accepted_connection() ->
-    receive
-        {quic, new_conn, Conn, _Info} -> Conn
-    after ?EVENT_TIMEOUT_MS ->
-        error(no_relay_side_connection)
-    end.
+%% The next connection the relay's own listener accepted.
+accepted_connection(Relay) ->
+    relay_call(Relay, next_connection).
 
 %% Leaves in this process's mailbox the connection event of a listener that
 %% is already closed, as a late event from an earlier test's relay can be.
@@ -246,9 +268,3 @@ pick_free_port() ->
     {ok, P} = inet:port(S),
     gen_udp:close(S),
     P.
-
-drain_quic_messages() ->
-    receive
-        {quic, _, _, _} -> drain_quic_messages()
-    after 0 -> ok
-    end.
