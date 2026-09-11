@@ -40,13 +40,11 @@ list. Both values are removed in 11.0.0.
 ### Via `macula_cluster` API (Recommended)
 
 ```erlang
-%% Start with gossip strategy (default)
-ok = macula_cluster:start_cluster(#{strategy => gossip}).
-
-%% With shared secret for cluster isolation
+%% Start with gossip strategy (default). Gossip needs a shared secret of at
+%% least 32 bytes, here or in MACULA_GOSSIP_SECRET.
 ok = macula_cluster:start_cluster(#{
     strategy => gossip,
-    secret => <<"my_cluster_secret">>
+    secret => <<"at least 32 bytes of shared secret">>
 }).
 
 %% With static node list
@@ -59,7 +57,7 @@ ok = macula_cluster:start_cluster(#{
 ### Erlang (Direct Gossip)
 
 ```erlang
-%% Start with defaults
+%% Start with defaults, the secret taken from MACULA_GOSSIP_SECRET
 {ok, _Pid} = macula_cluster_gossip:start_link(#{}).
 
 %% With custom configuration
@@ -67,7 +65,7 @@ ok = macula_cluster:start_cluster(#{
     multicast_addr => {230, 1, 1, 251},
     port => 45892,
     broadcast_interval => 1500,
-    secret => <<"my_cluster_secret">>
+    secret => <<"at least 32 bytes of shared secret">>
 }).
 ```
 
@@ -75,7 +73,10 @@ ok = macula_cluster:start_cluster(#{
 
 ```elixir
 def start(_type, _args) do
-  :macula_cluster.start_cluster(%{strategy: :gossip})
+  :macula_cluster.start_cluster(%{
+    strategy: :gossip,
+    secret: System.fetch_env!("MACULA_GOSSIP_SECRET")
+  })
 
   children = [
     # ... your supervision tree
@@ -109,28 +110,35 @@ The `macula_cluster_gossip` module provides automatic cluster discovery using UD
 | `port` | `integer()` | `45892` | UDP port for gossip |
 | `broadcast_interval` | `integer()` | `1500` | Milliseconds between heartbeats |
 | `multicast_ttl` | `integer()` | `1` | Time-to-live (1 = same subnet) |
-| `secret` | `binary()` | `undefined` | Shared secret for HMAC authentication |
+| `secret` | `binary()` | `MACULA_GOSSIP_SECRET` | Shared secret of at least 32 bytes. Required |
 | `callback` | `pid() \| {M,F}` | `undefined` | Callback for cluster events |
 
-### HMAC Authentication
+### Shared Secret
 
-When a `secret` is configured, all gossip packets include an HMAC-SHA256 signature:
+Gossip does not start without a shared secret of at least 32 bytes, given as
+the `secret` option or in `MACULA_GOSSIP_SECRET`. `start_link/1` then returns
+`{error, secret_required}` or
+`{error, {secret_too_short, #{bytes => N, required => 32}}}`, and
+`macula_cluster:start_cluster/1` returns either as
+`{error, {gossip_strategy_failed, Reason}}`.
+
+Every gossip packet carries an HMAC-SHA256 tag over the node name:
 
 ```
-MACULA_GOSSIP:node_name|<HMAC-SHA256>
+MACULA_GOSSIP:node_name|<HMAC-SHA256 in hex>
 ```
 
-- **Without secret**: Nodes accept any valid-looking gossip packet
-- **With secret**: Nodes verify HMAC before accepting the packet
+A node takes a packet only when its tag verifies against the secret and the
+announced name is a node name whose host is a hostname, an IPv4 address or
+an IPv6 literal.
 
 ### Environment Variables
 
 ```bash
 MACULA_GOSSIP_ADDR=230.1.1.251
 MACULA_GOSSIP_PORT=45892
-MACULA_GOSSIP_SECRET=my_cluster_secret
+MACULA_GOSSIP_SECRET=at-least-32-bytes-of-shared-secret
 CLUSTER_STRATEGY=gossip
-CLUSTER_SECRET=my_cluster_secret
 ```
 
 ### Gossip Query API
@@ -221,7 +229,7 @@ ok = macula:unmonitor_nodes().
 
 ```erlang
 %% Using a PID
-{ok, _} = macula_cluster_gossip:start_link(#{callback => self()}).
+{ok, _} = macula_cluster_gossip:start_link(#{callback => self(), secret => Secret}).
 
 receive
     {macula_cluster, nodeup, Node} -> handle_join(Node);
@@ -230,7 +238,8 @@ end.
 
 %% Using module/function callback
 {ok, _} = macula_cluster_gossip:start_link(#{
-    callback => {my_module, handle_cluster_event}
+    callback => {my_module, handle_cluster_event},
+    secret => Secret
 }).
 ```
 
@@ -247,7 +256,7 @@ services:
       - RELEASE_NODE=node1@localhost
       - RELEASE_COOKIE=my_secret_cookie
       - CLUSTER_STRATEGY=gossip
-      - CLUSTER_SECRET=demo_secret
+      - MACULA_GOSSIP_SECRET=${MACULA_GOSSIP_SECRET}  # at least 32 bytes, the same on every node
 
   node2:
     image: my-app:latest
@@ -256,7 +265,7 @@ services:
       - RELEASE_NODE=node2@localhost
       - RELEASE_COOKIE=my_secret_cookie
       - CLUSTER_STRATEGY=gossip
-      - CLUSTER_SECRET=demo_secret
+      - MACULA_GOSSIP_SECRET=${MACULA_GOSSIP_SECRET}  # at least 32 bytes, the same on every node
 ```
 
 ---
@@ -307,25 +316,28 @@ networks:
 
 ### Authentication Failures
 
-If nodes have mismatched secrets:
-```
-[warning] [macula_cluster_gossip] Invalid HMAC from <IP> (authentication failed)
-```
+Nodes with different secrets drop each other's packets and never discover each
+other; the dropped packets are logged at debug level. Ensure all nodes use the
+same `MACULA_GOSSIP_SECRET`, or the same `secret` option.
 
-Ensure all nodes use the same `CLUSTER_SECRET` environment variable.
+### Gossip Does Not Start
+
+`{error, secret_required}` or `{error, {secret_too_short, ...}}` means the node
+has no shared secret of at least 32 bytes. Set `MACULA_GOSSIP_SECRET`, or pass
+`secret`.
 
 ### High CPU Usage
 
 If `broadcast_interval` is too low, increase it:
 ```erlang
-{ok, _} = macula_cluster_gossip:start_link(#{broadcast_interval => 5000}).
+{ok, _} = macula_cluster_gossip:start_link(#{broadcast_interval => 5000, secret => Secret}).
 ```
 
 ---
 
 ## Security Best Practices
 
-1. **Always use a secret in production** - Prevents unauthorized nodes from joining
+1. **Use a random shared secret** - Gossip requires one of at least 32 bytes; generate it with, for example, `openssl rand -hex 32`
 2. **Rotate secrets periodically** - Coordinate rotation across all nodes
 3. **Use network segmentation** - Limit multicast scope with VLANs
 4. **Set TTL appropriately** - `multicast_ttl => 1` limits to same subnet

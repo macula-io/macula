@@ -85,6 +85,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Gossip discovery requires a shared secret of at least 32 bytes.
+  `macula_cluster_gossip:start_link/1` takes it as the `secret` option or
+  from `MACULA_GOSSIP_SECRET`, and without one returns
+  `{error, secret_required}` or
+  `{error, {secret_too_short, #{bytes => N, required => 32}}}`.
+  `macula_cluster:start_cluster/0,1` returns these as
+  `{error, {gossip_strategy_failed, Reason}}` when it would start gossip.
 - `macula_dist_relay_client:close_tunnel/2` sends `tunnel_close` only for a
   tunnel the client knows, active or still being set up, and ignores an
   unknown tunnel id.
