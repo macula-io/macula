@@ -112,6 +112,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `macula_cluster:start_cluster/1` returns
+  `{error, {strategy_unavailable, dht}}` for the `dht` strategy, and
+  `{error, {strategy_unavailable, mdns}}` for `mdns` when no
+  `macula_dist_discovery` server runs, without starting distribution. It
+  started distribution and then failed with a `noproc` error.
+  `macula_dist_discovery:start_link/1` returns
+  `{error, {strategy_unavailable, dht}}` for `discovery_type` `dht` and for
+  `both`, the default. Such a server used to start and answer every
+  registration and lookup from its own node only.
 - `macula_download:cancel/1` and `macula_feeder:cancel/1` cancel the
   underlying content transfer whenever it has started, however soon
   after the start the cancel lands. The download or feeder now starts

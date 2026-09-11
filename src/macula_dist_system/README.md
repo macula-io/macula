@@ -9,8 +9,8 @@ Erlang distribution over the Macula mesh: three transports, one goal — `net_ad
 | Module | Purpose |
 |--------|---------|
 | `macula_dist` | `-proto_dist macula` driver — implements the OTP dist-carrier callback set (`listen/1`, `accept/1`, `accept_connection/5`, `setup/5`, `select/1`, ...) for all three transports below |
-| `macula_dist_discovery` | Node discovery over DHT and mDNS. Not available: the macula application does not start it. Removed in 11.0.0 |
-| `macula_dist_mdns_advertiser` | mDNS advertisement for `macula_dist_discovery`. Not available. Removed in 11.0.0 |
+| `macula_dist_discovery` | Node discovery over mDNS, in a server started with `discovery_type => mdns`; the macula application does not start it. DHT discovery is not available: `dht` and `both` return `{error, {strategy_unavailable, dht}}`. Removed in 11.0.0 |
+| `macula_dist_mdns_advertiser` | mDNS advertisement for `macula_dist_discovery`, used when the `macula_mdns` application runs. Removed in 11.0.0 |
 | `macula_dist_pool` | Pool-tunneled transport — rides the ordinary mesh pool (stations) via pub/sub. Used by `macula:join_mesh/1` |
 | `macula_dist_bridge` / `macula_dist_bridge_sup` | Per-tunnel gen_tcp loopback bridge + its supervisor, for the pool-tunneled transport. `macula_root` starts the supervisor |
 | `macula_dist_relay_client` / `macula_dist_relay_protocol` | Client + wire protocol for the dedicated freight relay. Used by `macula:join_dist_relay/1`, talks to the separate `macula-dist-relay` server (raw QUIC stream forwarding, no pub/sub in the hot path). The client runs as a temporary child of `macula_root`; `macula:dist_relay_client/0` returns it for monitoring |

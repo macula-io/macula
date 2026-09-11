@@ -21,7 +21,7 @@ Any BEAM application using the Macula SDK. Connects outbound to a relay over QUI
 An isolated namespace for multi-tenant applications. Format: reverse domain notation (e.g., `io.macula`, `io.example.myapp`). All communication is scoped to a realm.
 
 ### Cluster
-A logical group of nodes that form an Erlang cluster. Can be formed via gossip (UDP multicast), static configuration, or DHT-based discovery (`strategy => dht` or `mdns` — both currently route through the same DHT-based discovery; see the [Clustering Guide](guides/CLUSTERING_GUIDE.md)). LAN clustering works independently of relay connections.
+A logical group of nodes that form an Erlang cluster, through gossip (UDP multicast) or a static node list. The `dht` strategy is not available, and `mdns` needs a running discovery server; see the [Clustering Guide](guides/CLUSTERING_GUIDE.md). LAN clustering works independently of relay connections.
 
 ---
 

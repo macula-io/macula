@@ -350,9 +350,11 @@ start_cluster() ->
 %% @doc Start automatic cluster formation with options.
 %%
 %% Options:
-%% - strategy: `auto' (default), `gossip' or `static'. `mdns' and `dht'
-%%   are accepted but not available: they need a discovery service the
-%%   macula application does not start, so the call fails for them.
+%% - strategy: `auto' (default), `gossip' or `static'. `dht' is not
+%%   available: the call returns `{error, {strategy_unavailable, dht}}'.
+%%   `mdns' needs a running `macula_dist_discovery' server; without one the
+%%   call returns `{error, {strategy_unavailable, mdns}}'. Neither error
+%%   starts distribution, and both values are removed in 11.0.0.
 %% - nodes: List of node atoms (for static strategy)
 %% - reconnect_interval: Milliseconds between reconnect attempts (default 5000)
 %% - callback: PID or {Module, Function} to receive cluster events
@@ -392,13 +394,7 @@ start_cluster() ->
 %% '''
 -spec start_cluster(map()) -> ok | {error, term()}.
 start_cluster(Opts) ->
-    %% Ensure we're in distributed mode first
-    case ensure_distributed() of
-        ok ->
-            do_start_cluster(Opts);
-        {error, _} = Error ->
-            Error
-    end.
+    start_available(strategy_availability(resolve_strategy(Opts)), Opts).
 
 %% @doc Stop automatic cluster formation.
 %%
@@ -409,7 +405,7 @@ stop_cluster() ->
     try macula_cluster_gossip:stop() catch _:_ -> ok end,
     %% Try to stop static strategy
     try macula_cluster_static:stop() catch _:_ -> ok end,
-    %% Try to stop DHT-based strategy
+    %% Try to stop the mdns discovery strategy
     try macula_cluster_strategy:stop(macula_cluster) catch _:_ -> ok end,
     ok.
 
@@ -428,7 +424,7 @@ nodes() ->
 
 %% @doc Check if auto-clustering is currently active.
 %%
-%% Returns `true' if any cluster strategy is running (gossip, static, or DHT).
+%% Returns `true' if any cluster strategy is running (gossip, static, or mdns).
 -spec is_clustered() -> boolean().
 is_clustered() ->
     (whereis(macula_cluster_gossip) =/= undefined) orelse
@@ -438,6 +434,29 @@ is_clustered() ->
 %%%===================================================================
 %%% Internal Functions - Auto-Clustering
 %%%===================================================================
+
+%% @private The dht strategy needs a DHT module that no macula release
+%% provides, and the mdns strategy needs a running discovery server. An
+%% unavailable strategy is refused before distribution is started.
+strategy_availability(dht) ->
+    {unavailable, dht};
+strategy_availability(mdns) ->
+    mdns_availability(whereis(macula_dist_discovery));
+strategy_availability(_Strategy) ->
+    available.
+
+mdns_availability(undefined) -> {unavailable, mdns};
+mdns_availability(_Pid) -> available.
+
+start_available(available, Opts) ->
+    start_distributed(ensure_distributed(), Opts);
+start_available({unavailable, Strategy}, _Opts) ->
+    {error, {strategy_unavailable, Strategy}}.
+
+start_distributed(ok, Opts) ->
+    do_start_cluster(Opts);
+start_distributed({error, _} = Error, _Opts) ->
+    Error.
 
 %% @private Start clustering with resolved strategy
 -spec do_start_cluster(map()) -> ok | {error, term()}.
@@ -450,8 +469,6 @@ start_with_strategy(static, Opts) ->
     start_static_strategy(Opts);
 start_with_strategy(mdns, Opts) ->
     start_discovery_strategy(Opts#{discovery_type => mdns});
-start_with_strategy(dht, Opts) ->
-    start_discovery_strategy(Opts#{discovery_type => dht});
 start_with_strategy(auto, Opts) ->
     %% Auto-select: use static if nodes configured, else gossip
     start_auto_strategy(resolve_cluster_nodes(Opts), Opts).
@@ -532,7 +549,7 @@ static_start_result({error, Reason}, _Nodes) ->
     ?LOG_ERROR("[macula_cluster] Failed to start static strategy: ~p", [Reason]),
     {error, {static_strategy_failed, Reason}}.
 
-%% @private Start the DHT/mDNS discovery strategy
+%% @private Start the mdns discovery strategy
 -spec start_discovery_strategy(map()) -> ok | {error, term()}.
 start_discovery_strategy(Opts) ->
     start_discovery_running(whereis(macula_cluster), Opts).

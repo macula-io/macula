@@ -11,7 +11,7 @@ LAN clustering: gossip and static node discovery, cookie management, node monito
 | `macula_cluster` | Facade — cluster formation, distribution management, cookie resolution, node monitoring |
 | `macula_cluster_gossip` | UDP multicast gossip discovery, zero-config, same-subnet |
 | `macula_cluster_static` | Manual node-list clustering |
-| `macula_cluster_strategy` | Backs the `mdns` and `dht` strategy values, which are not available (see the Clustering Guide). Removed in 11.0.0 |
+| `macula_cluster_strategy` | Backs the `mdns` strategy value, which needs a running `macula_dist_discovery` server; `dht` is not available (see the Clustering Guide). Removed in 11.0.0 |
 
 ## Quick Start
 

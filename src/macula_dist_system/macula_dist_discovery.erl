@@ -1,25 +1,24 @@
 %%%-------------------------------------------------------------------
-%%% @doc EPMD Replacement using Macula DHT Discovery.
+%%% @doc Node discovery for Erlang distribution over mDNS.
 %%%
-%%% This module provides decentralized node discovery for Erlang distribution,
-%%% replacing the centralized EPMD (Erlang Port Mapper Daemon).
+%%% A registry of distribution nodes that subscribers can query and watch,
+%%% fed by this node's own registration and by mDNS announcements.
 %%%
-%%% == How it Works ==
+%%% == Availability ==
 %%%
-%%% Instead of registering with a local EPMD daemon on port 4369,
-%%% nodes announce themselves via Macula's DHT (Distributed Hash Table):
-%%%
-%%% 1. On startup, nodes call register_node/2 to announce themselves
-%%% 2. Other nodes find peers via lookup_node/1 which queries the DHT
-%%% 3. Subscribers get notified of node join/leave events
-%%%
-%%% == Discovery Mechanisms ==
-%%%
-%%% - **mDNS**: For local network discovery (no bootstrap required)
-%%% - **DHT**: For internet-scale discovery (requires bootstrap nodes)
-%%% - **Bootstrap**: Initial DHT seeds from known nodes
+%%% Only mDNS discovery runs, in a server started with
+%%% `discovery_type => mdns'; announcing this node needs the `macula_mdns'
+%%% application to be running. DHT discovery is not available: it needs a
+%%% DHT module that no macula release provides, so a server started with
+%%% `discovery_type => dht', or with `both' (the default), does not start,
+%%% and `start_link/1' returns `{error, {strategy_unavailable, dht}}'. The
+%%% macula application does not start this server, and this module is
+%%% removed in 11.0.0.
 %%%
 %%% == Usage ==
+%%%
+%%% Start the server:
+%%%   {ok, _} = macula_dist_discovery:start_link(#{discovery_type => mdns}).
 %%%
 %%% Register this node:
 %%%   ok = macula_dist_discovery:register_node('4433@192.168.1.100', 4433).
@@ -65,7 +64,6 @@
 ]).
 
 -define(SERVER, ?MODULE).
--define(DHT_PREFIX, <<"_dist.node.">>).
 -define(DEFAULT_TTL, 300).  % 5 minutes
 -define(REFRESH_INTERVAL, 60000).  % 1 minute
 -define(CLEANUP_INTERVAL, 120000).  % 2 minutes
@@ -82,9 +80,6 @@
     %% Subscribers for node events
     subscribers :: [pid()],
 
-    %% Discovery type
-    discovery_type :: mdns | dht | both,
-
     %% Timers
     refresh_timer :: reference() | undefined,
     cleanup_timer :: reference() | undefined
@@ -94,12 +89,17 @@
 %%% API
 %%%===================================================================
 
-%% @doc Start the discovery server with default options.
+%% @doc Start the discovery server with default options. The default
+%% discovery type is `both', which includes DHT discovery, so this returns
+%% `{error, {strategy_unavailable, dht}}'. Use `start_link/1' with
+%% `discovery_type => mdns'.
 -spec start_link() -> {ok, pid()} | {error, term()}.
 start_link() ->
     start_link(#{}).
 
-%% @doc Start the discovery server with options.
+%% @doc Start the discovery server with options. `discovery_type' is
+%% `mdns', `dht' or `both' (the default); only `mdns' starts, and the other
+%% two return `{error, {strategy_unavailable, dht}}'.
 -spec start_link(map()) -> {ok, pid()} | {error, term()}.
 start_link(Opts) ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, Opts, []).
@@ -151,28 +151,23 @@ unsubscribe(Pid) ->
 %% @private
 init(Opts) ->
     process_flag(trap_exit, true),
+    started_as(maps:get(discovery_type, Opts, both)).
 
-    DiscoveryType = maps:get(discovery_type, Opts, both),
-
-    State = #state{
+%% @private DHT discovery needs a DHT module that no macula release
+%% provides, so a server asked for it, alone or together with mDNS, does
+%% not start. Returning an error stops the server normally, so a linked
+%% caller is not taken down with it.
+started_as(mdns) ->
+    {ok, #state{
         nodes = #{},
         subscribers = [],
-        discovery_type = DiscoveryType
-    },
-
-    %% Start refresh timer
-    RefreshTimer = erlang:send_after(?REFRESH_INTERVAL, self(), refresh_registration),
-
-    %% Start cleanup timer
-    CleanupTimer = erlang:send_after(?CLEANUP_INTERVAL, self(), cleanup_expired),
-
-    %% Subscribe to Macula DHT events if available
-    maybe_subscribe_to_dht(),
-
-    {ok, State#state{
-        refresh_timer = RefreshTimer,
-        cleanup_timer = CleanupTimer
-    }}.
+        refresh_timer = erlang:send_after(?REFRESH_INTERVAL, self(), refresh_registration),
+        cleanup_timer = erlang:send_after(?CLEANUP_INTERVAL, self(), cleanup_expired)
+    }};
+started_as(dht) ->
+    {error, {strategy_unavailable, dht}};
+started_as(both) ->
+    {error, {strategy_unavailable, dht}}.
 
 %% @private
 handle_call({register_node, NodeName, Port}, _From, State) ->
@@ -190,11 +185,11 @@ handle_call({register_node, NodeName, Port}, _From, State) ->
         ttl => ?DEFAULT_TTL
     },
 
-    %% Store in DHT
-    ok = store_in_dht(NodeName, NodeInfo),
+    %% Store in the local cache
+    ok = store_in_local_cache(NodeName, NodeInfo),
 
-    %% Also announce via mDNS if enabled
-    maybe_announce_mdns(NodeName, Port, State),
+    %% Also announce via mDNS when it runs
+    maybe_announce_mdns(NodeName, Port),
 
     {reply, ok, State#state{
         local_node = NodeName,
@@ -203,11 +198,11 @@ handle_call({register_node, NodeName, Port}, _From, State) ->
     }};
 
 handle_call({unregister_node, NodeName}, _From, State) ->
-    %% Remove from DHT
-    ok = remove_from_dht(NodeName),
+    %% Remove from the local cache
+    ok = remove_from_local_cache(NodeName),
 
-    %% Remove from mDNS if enabled
-    maybe_unannounce_mdns(NodeName, State),
+    %% Remove from mDNS when it runs
+    maybe_unannounce_mdns(NodeName),
 
     NewState = case State#state.local_node of
         NodeName ->
@@ -223,7 +218,7 @@ handle_call({unregister_node, NodeName}, _From, State) ->
     {reply, ok, NewState};
 
 handle_call({lookup_node, NodeName}, _From, State) ->
-    %% First check local cache
+    %% First check the known nodes
     lookup_cached(maps:get(NodeName, State#state.nodes, undefined), NodeName, State);
 
 handle_call(list_nodes, _From, State) ->
@@ -243,16 +238,15 @@ handle_call({unsubscribe, Pid}, _From, State) ->
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
-%% @private Cache miss -> query DHT; cache hit -> validate
+%% @private Unknown node -> look in the local cache; known node -> validate
 lookup_cached(undefined, NodeName, State) ->
-    %% Query DHT
-    lookup_miss_result(lookup_in_dht(NodeName), NodeName, State);
+    lookup_miss_result(lookup_in_local_cache(NodeName), NodeName, State);
 lookup_cached(NodeInfo, NodeName, State) ->
-    %% Check if cached entry is still valid
+    %% Check if the known entry is still valid
     lookup_valid(is_entry_valid(NodeInfo), NodeInfo, NodeName, State).
 
 lookup_miss_result({ok, NodeInfo}, NodeName, State) ->
-    %% Cache the result
+    %% Remember the result
     NewNodes = maps:put(NodeName, NodeInfo, State#state.nodes),
     {reply, {ok, NodeInfo}, State#state{nodes = NewNodes}};
 lookup_miss_result({error, Reason}, _NodeName, State) ->
@@ -261,8 +255,8 @@ lookup_miss_result({error, Reason}, _NodeName, State) ->
 lookup_valid(true, NodeInfo, _NodeName, State) ->
     {reply, {ok, NodeInfo}, State};
 lookup_valid(false, _NodeInfo, NodeName, State) ->
-    %% Expired, refresh from DHT
-    lookup_refresh_result(lookup_in_dht(NodeName), NodeName, State).
+    %% Expired, refresh from the local cache
+    lookup_refresh_result(lookup_in_local_cache(NodeName), NodeName, State).
 
 lookup_refresh_result({ok, FreshInfo}, NodeName, State) ->
     NewNodes = maps:put(NodeName, FreshInfo, State#state.nodes),
@@ -277,12 +271,12 @@ handle_cast(_Msg, State) ->
 
 %% @private
 handle_info(refresh_registration, State) ->
-    %% Refresh our registration in DHT
+    %% Refresh our registration in the local cache
     NewState = case State#state.local_info of
         undefined ->
             State;
         NodeInfo ->
-            ok = store_in_dht(State#state.local_node, NodeInfo),
+            ok = store_in_local_cache(State#state.local_node, NodeInfo),
             State
     end,
 
@@ -291,7 +285,7 @@ handle_info(refresh_registration, State) ->
     {noreply, NewState#state{refresh_timer = Timer}};
 
 handle_info(cleanup_expired, State) ->
-    %% Remove expired entries from cache
+    %% Remove expired entries from the known nodes
     Now = erlang:system_time(second),
     NewNodes = maps:filter(
         fun(_NodeName, NodeInfo) ->
@@ -312,17 +306,6 @@ handle_info(cleanup_expired, State) ->
     %% Reschedule
     Timer = erlang:send_after(?CLEANUP_INTERVAL, self(), cleanup_expired),
     {noreply, State#state{nodes = NewNodes, cleanup_timer = Timer}};
-
-%% Handle DHT discovery events
-handle_info({dht_node_discovered, NodeName, NodeInfo}, State) ->
-    %% Update cache
-    NewNodes = maps:put(NodeName, NodeInfo, State#state.nodes),
-
-    %% Notify subscribers
-    #{ip := IP, port := Port} = NodeInfo,
-    notify_subscribers({node_discovered, NodeName, IP, Port}, State#state.subscribers),
-
-    {noreply, State#state{nodes = NewNodes}};
 
 %% Handle mDNS discovery events
 handle_info({mdns_node_discovered, NodeName, IP, Port}, State) ->
@@ -351,10 +334,10 @@ handle_info(_Info, State) ->
 
 %% @private
 terminate(_Reason, State) ->
-    %% Unregister from DHT
+    %% Unregister from the local cache
     case State#state.local_node of
         undefined -> ok;
-        NodeName -> remove_from_dht(NodeName)
+        NodeName -> remove_from_local_cache(NodeName)
     end,
 
     %% Cancel timers
@@ -368,95 +351,7 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %%%===================================================================
-%%% Internal Functions - DHT Operations
-%%%===================================================================
-
-%% @private Store node info in DHT.
-%% macula_routing_dht is an OPTIONAL runtime extension provided by
-%% macula-relay; not part of the SDK. Calls go through erlang:apply/3
-%% so dialyzer doesn't try to resolve the module statically.
-store_in_dht(NodeName, NodeInfo) ->
-    Key = make_dht_key(NodeName),
-    case dht_available() of
-        false -> store_in_local_cache(NodeName, NodeInfo);
-        true ->
-            Ext = externalize_node_info(NodeInfo),
-            erlang:apply(macula_routing_dht, store, [Key, term_to_binary(Ext)]),
-            ok
-    end.
-
-%% Atom-free wire form. The consumer decodes DHT values with
-%% `binary_to_term(_, [safe])', which refuses terms containing atoms
-%% unknown to the decoding node — a remote node's name atom usually
-%% is. Ship `name'/`protocol' as binaries so the record stays
-%% decodable everywhere.
-externalize_node_info(#{name := Name, protocol := Proto} = NodeInfo) ->
-    NodeInfo#{name := atom_to_binary(Name, utf8),
-              protocol := atom_to_binary(Proto, utf8)}.
-
-%% @private Remove node info from DHT
-remove_from_dht(NodeName) ->
-    Key = make_dht_key(NodeName),
-    case dht_available() of
-        false -> remove_from_local_cache(NodeName);
-        true -> erlang:apply(macula_routing_dht, delete, [Key]), ok
-    end.
-
-%% @private Look up node info in DHT
-lookup_in_dht(NodeName) ->
-    Key = make_dht_key(NodeName),
-    case dht_available() of
-        false -> lookup_in_local_cache(NodeName);
-        true -> lookup_in_dht_result(erlang:apply(macula_routing_dht, find, [Key]), NodeName)
-    end.
-
-%% @private Handle DHT lookup result.
-%%
-%% DHT values are attacker-influenceable (any peer that can write the
-%% key controls the bytes), so the decode is `[safe]' — an unsafe
-%% `binary_to_term' here allows permanent atom-table exhaustion and
-%% crafted-term resource attacks. The try is required: `[safe]' has
-%% no non-throwing variant and a hostile payload must degrade to a
-%% lookup miss, not crash the discovery server.
-lookup_in_dht_result({ok, BinInfo}, NodeName) ->
-    Decoded = try
-                  {term, binary_to_term(BinInfo, [safe])}
-              catch
-                  error:badarg -> undecodable
-              end,
-    validated_node_info(Decoded, NodeName);
-lookup_in_dht_result({error, not_found}, NodeName) ->
-    lookup_in_local_cache(NodeName).
-
-%% Reconstruct the internal node-info map from the atom-free wire
-%% form, accepting only the expected shape. `name' is rebuilt from
-%% the CALLER's NodeName — never atomized from DHT bytes (that would
-%% reopen the atom-exhaustion vector via binary_to_atom).
-validated_node_info({term, #{port := Port, host := Host,
-                             registered_at := RegAt, ttl := Ttl} = Info},
-                    NodeName)
-        when is_integer(Port), Port >= 0, Port =< 65535,
-             is_integer(RegAt), is_integer(Ttl), Ttl >= 0 ->
-    {ok, #{name => NodeName,
-           port => Port,
-           host => Host,
-           ip => maps:get(ip, Info, undefined),
-           protocol => 'macula-dist',
-           registered_at => RegAt,
-           ttl => Ttl}};
-validated_node_info(_BadShape, NodeName) ->
-    ?LOG_WARNING("[dist_discovery] Rejected malformed DHT node info for ~p",
-                 [NodeName]),
-    lookup_in_local_cache(NodeName).
-
-%% @private Make DHT key for node
-make_dht_key(NodeName) when is_atom(NodeName) ->
-    <<?DHT_PREFIX/binary, (atom_to_binary(NodeName, utf8))/binary>>;
-make_dht_key(NodeName) when is_list(NodeName) ->
-    <<?DHT_PREFIX/binary, (list_to_binary(NodeName))/binary>>.
-
-%%%===================================================================
-%%% Internal Functions - Local Cache (Fallback)
+%%% Internal Functions - Local Cache
 %%%===================================================================
 
 %% @private Store in local ETS cache
@@ -497,10 +392,8 @@ ensure_local_cache() ->
 %%% Internal Functions - mDNS
 %%%===================================================================
 
-%% @private Maybe announce via mDNS
-maybe_announce_mdns(_NodeName, _Port, #state{discovery_type = dht}) ->
-    ok;
-maybe_announce_mdns(NodeName, Port, _State) ->
+%% @private Announce via mDNS when the mDNS application runs
+maybe_announce_mdns(NodeName, Port) ->
     case whereis(mdns_advertise_sup) of
         undefined ->
             ok;
@@ -510,10 +403,8 @@ maybe_announce_mdns(NodeName, Port, _State) ->
             ok
     end.
 
-%% @private Maybe unannounce via mDNS
-maybe_unannounce_mdns(_NodeName, #state{discovery_type = dht}) ->
-    ok;
-maybe_unannounce_mdns(_NodeName, _State) ->
+%% @private Stop announcing via mDNS when the mDNS application runs
+maybe_unannounce_mdns(_NodeName) ->
     case whereis(mdns_advertise_sup) of
         undefined ->
             ok;
@@ -521,24 +412,6 @@ maybe_unannounce_mdns(_NodeName, _State) ->
             mdns_advertise:stop(macula_dist_mdns_advertiser),
             macula_dist_mdns_advertiser:unregister(),
             ok
-    end.
-
-%%%===================================================================
-%%% Internal Functions - DHT Subscription
-%%%===================================================================
-
-%% @private Subscribe to DHT events
-maybe_subscribe_to_dht() ->
-    case dht_available() of
-        false -> ok;
-        true -> erlang:apply(macula_routing_dht, subscribe, [?DHT_PREFIX, self()])
-    end.
-
-%% @private Check if macula_routing_dht module is available (loaded by macula-relay).
-dht_available() ->
-    case code:ensure_loaded(macula_routing_dht) of
-        {module, _} -> whereis(macula_routing_dht) =/= undefined;
-        _ -> false
     end.
 
 %%%===================================================================

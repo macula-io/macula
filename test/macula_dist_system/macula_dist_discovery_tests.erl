@@ -15,7 +15,7 @@
 setup() ->
     %% Start the discovery server
     {ok, Pid} = macula_dist_discovery:start_link(#{
-        discovery_type => both
+        discovery_type => mdns
     }),
     Pid.
 
@@ -61,13 +61,7 @@ register_node_test(_Pid) ->
 lookup_node_test(_Pid) ->
     ?_test(begin
         NodeName = '4433@127.0.0.1',
-        case macula_dist_discovery:lookup_node(NodeName) of
-            {ok, NodeInfo} ->
-                ?assertMatch(#{port := 4433}, NodeInfo);
-            {error, not_found} ->
-                %% This is acceptable if DHT isn't running
-                ok
-        end
+        ?assertMatch({ok, #{port := 4433}}, macula_dist_discovery:lookup_node(NodeName))
     end).
 
 list_nodes_test(_Pid) ->
