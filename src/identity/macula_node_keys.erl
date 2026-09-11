@@ -46,6 +46,7 @@
     key_id/1,
     key_id/2,
     puzzle_solved/2,
+    puzzle_difficulty/0,
     carried_key_well_formed/2,
     signature_bytes/1
 ]).
@@ -81,6 +82,7 @@
 -define(COMPOSITE_LABEL, "MACULA-ML-DSA-87-PS384").
 -define(NODE_ID_LABEL, "MACULA-NODE-ID-V1").
 -define(KEY_ID_LABEL, "MACULA-KEY-ID-V1").
+-define(PUZZLE_DIFFICULTY, 8).
 
 %%------------------------------------------------------------------
 %% Generation
@@ -201,6 +203,12 @@ key_id(Key, Profile) when is_binary(Key), (Profile =:= pq_pure orelse Profile =:
 puzzle_solved(<<_:256>> = NodeId, Difficulty) when is_integer(Difficulty), Difficulty >= 0, Difficulty =< 256 ->
     <<Prefix:Difficulty, _/bitstring>> = NodeId,
     Prefix =:= 0.
+
+%% @doc The puzzle difficulty of identity keys: a node generates its identity key to meet it (generate/3), and stations
+%% check it on the node_id derived from a client's identity key.
+-spec puzzle_difficulty() -> 0..256.
+puzzle_difficulty() ->
+    ?PUZZLE_DIFFICULTY.
 
 %% @doc Whether bytes are a key in its one carried form for a profile (D13): the 2,592-byte ML-DSA-87 key, followed
 %% in pq_hybrid by a DER RSAPublicKey that encodes back to the same bytes, with the profile's modulus size and

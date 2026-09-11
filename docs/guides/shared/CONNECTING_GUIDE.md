@@ -92,7 +92,7 @@ Every option has a default. Most apps pass `#{}`.
 
 | Option | Type | Default | What it does |
 |---|---|---|---|
-| `identity` | `macula_identity:key_pair()` | auto-generated | Ed25519 keypair shared by every link |
+| `node_identity` | `macula_node_keys:node_key()` | generated | Node identity key shared by every link |
 | `replication_factor` | `pos_integer()` | `2` | How many links accept each PUBLISH |
 | `capabilities` | `non_neg_integer()` | `0` | Capability bitmap forwarded in CONNECT |
 | `alpn` | `[binary()]` | `[<<"macula">>]` | QUIC ALPN list |
@@ -102,26 +102,43 @@ Every option has a default. Most apps pass `#{}`.
 
 ### Identity
 
-If you don't pass `identity`, the pool generates a fresh keypair on
-boot. That is fine for ephemeral clients but means every restart looks
+If you don't pass `node_identity`, the pool generates an identity key
+on boot, in the node's crypto profile (`crypto_profile` in the `macula`
+application environment), with a node_id that meets the puzzle stations
+check. That is fine for ephemeral clients but means every restart looks
 like a brand-new node to the mesh.
 
-For long-lived processes, persist a keypair and pass it explicitly:
+For long-lived processes, generate and save the key once, and load it
+on boot:
 
 ```erlang
-Identity = my_app_keystore:load_or_create_identity(),
-{ok, Pool} = macula:connect(Seeds, #{identity => Identity}).
+{ok, Profile} = macula_crypto_profile:configured(),
+
+%% Once
+{ok, Key} = macula_node_keys:generate(identity, Profile,
+                #{puzzle_difficulty => macula_node_keys:puzzle_difficulty()}),
+ok = macula_node_keys:save(KeyPath, Key),
+
+%% On every boot
+{ok, NodeIdentity} = macula_node_keys:load(KeyPath, identity, Profile),
+{ok, Pool} = macula:connect(Seeds, #{node_identity => NodeIdentity}).
 ```
 
+A key of another purpose, or an identity key in another profile, is
+refused: `macula:connect/2` returns `{error, {node_identity, Reason}}`.
+
+The pool also generates its own CONNECT key, a separate key that signs
+each connection's proof. Every link uses the same two keys.
+
 The pool uses **one shared identity for every link**. Stations see the
-pool as a single peer (one pubkey, even though it is reachable at N
+pool as a single peer (one node_id, even though it is reachable at N
 relay endpoints). This matters for:
 
 - **Subscription delivery.** Stations relay each EVENT to a single
-  subscriber pubkey, not per-link. The pool dedupes the resulting
+  subscriber node_id, not per-link. The pool dedupes the resulting
   multi-relay copies before fan-out.
-- **DHT presence.** The pool's pubkey appears once in the DHT.
-- **Authorization.** UCAN delegations target one pubkey, not N.
+- **DHT presence.** The pool's node_id appears once in the DHT.
+- **Authorization.** UCAN delegations target one identity, not N.
 
 ### Replication factor
 

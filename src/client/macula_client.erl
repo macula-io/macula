@@ -146,7 +146,7 @@
     seeds              := [seed()],
     healthy_links      := non_neg_integer(),
     failed_links       := non_neg_integer(),
-    self_node_id       := macula_identity:pubkey(),
+    self_node_id       := <<_:256>>,
     subscriptions      := non_neg_integer(),
     replication_factor := pos_integer(),
     pubsub_gap_skips   := non_neg_integer()
@@ -167,10 +167,11 @@
                   port := inet:port_number()}.
 
 -type opts() :: #{
-    %% Shared Ed25519 keypair for every link in the pool. Stations see
-    %% the pool as a single peer (one pubkey across N links).
-    %% Auto-generated when absent.
-    identity           => macula_identity:key_pair(),
+    %% The node identity key that every link in the pool shares: an
+    %% identity key in the node's crypto profile. Stations see the pool
+    %% as a single peer (one node_id across N links). Generated when
+    %% absent, with a node_id that meets the puzzle.
+    node_identity      => macula_node_keys:node_key(),
 
     %% How many of the pool's currently-connected links accept a
     %% single PUBLISH frame. Partial success counts as success
@@ -396,7 +397,7 @@
 
 -record(state, {
     seeds         :: [seed()],
-    identity      :: macula_identity:key_pair(),
+    node_id       :: <<_:256>>,
     link_opts     :: map(),
     replication   :: pos_integer(),
     dedup_window  :: non_neg_integer(),
@@ -446,6 +447,9 @@
 %% link handshakes complete asynchronously. Publish/subscribe block
 %% until at least one link is connected (or fail with
 %% `{error, {transient, no_healthy_station}}' on the publish path).
+%% A node with no crypto profile, or a `node_identity' that is not an
+%% identity key in the node's profile, starts no pool: the refusal is
+%% returned and no link is dialed.
 -spec connect([seed()], opts()) -> {ok, pool()} | {error, term()}.
 connect(Seeds, Opts) when is_list(Seeds), is_map(Opts) ->
     gen_server:start_link(?MODULE, {Seeds, Opts}, []).
@@ -786,10 +790,16 @@ unsubscribe(Pool, SubRef) when is_pid(Pool), is_reference(SubRef) ->
 init({Seeds, Opts}) ->
     process_flag(trap_exit, true),
     warn_legacy_opts(Opts),
-    Identity = resolve_identity(Opts),
+    init_with_keys(pool_keys(Opts), Seeds, Opts).
+
+%% A pool whose keys cannot be had does not start: `connect/2' returns
+%% the refusal and no link is dialed.
+init_with_keys({error, _} = Refusal, _Seeds, _Opts) ->
+    Refusal;
+init_with_keys({ok, #{node_identity := NodeIdentity} = Keys}, Seeds, Opts) ->
+    {ok, NodeId} = macula_node_keys:node_id(NodeIdentity),
     LinkOpts = maps:merge(
-        #{
-            identity           => Identity,
+        Keys#{
             capabilities       => maps:get(capabilities, Opts, 0),
             alpn               => maps:get(alpn, Opts, [<<"macula">>]),
             connect_timeout_ms => maps:get(connect_timeout_ms, Opts, 30_000)
@@ -810,7 +820,7 @@ init({Seeds, Opts}) ->
     OrderMaxBuf  = maps:get(order_max_buffer, Opts, ?DEFAULT_ORDER_MAX_BUFFER),
     Discovery = init_discovery(maps:get(station_discovery, Opts, #{})),
     LinkSelection = maps:get(link_selection, Opts, default_link_selection(Discovery)),
-    State0 = #state{seeds = Seeds, identity = Identity,
+    State0 = #state{seeds = Seeds, node_id = NodeId,
                     link_opts = LinkOpts, replication = Replication,
                     dedup_window = DedupWindow, dedup_sweep = DedupSweep,
                     dedup_tab = DedupTab,
@@ -1004,13 +1014,13 @@ handle_call({unadvertise_stream, Realm, Procedure}, _From,
 
 handle_call(status, _From,
             #state{seeds = Seeds, links = Links, subs = Subs,
-                   identity = Identity, replication = Replication} = S) ->
+                   node_id = NodeId, replication = Replication} = S) ->
     {Healthy, Failed} = count_link_health(Seeds, Links),
     Status = #{
         seeds              => Seeds,
         healthy_links      => Healthy,
         failed_links       => Failed,
-        self_node_id       => macula_identity:public(Identity),
+        self_node_id       => NodeId,
         subscriptions      => map_size(Subs),
         %% How many links one publish/5 call fans to (Opts'
         %% `replication_factor', or the pool default) — surfaced so a
@@ -1335,31 +1345,50 @@ notify_legacy(Keys) ->
       "and one-link-per-seed. See macula:connect/2 docs.", [Keys]),
     ok.
 
-%% The pool's own identity when the caller doesn't supply one.
-%%
-%% Puzzle-hardened, not `macula_identity:generate()' — this identity is
-%% exactly what every station's `puzzle_enforcement_mode/0' checks on
-%% CONNECT/HELLO, and a caller who didn't think to pass one is the
-%% caller most likely to be surprised by a silent rejection: the
-%% underlying QUIC/TLS connection still reports healthy, and
-%% `subscribe/5' still returns `{ok, _}' locally, because both succeed
-%% before the station ever closes the handshake it rejected. Confirmed
-%% live 2026-08-21: `MaculaRealm.Mesh' connected with `%{}' opts, and its
-%% dashboard sat dark for over an hour — five links reporting healthy,
-%% zero events ever delivered — before the identity itself turned out to
-%% be the reason. Grinding difficulty 8 is sub-millisecond, so a caller
-%% who genuinely wants an unhardened identity still has
-%% `macula_identity:generate()' directly; this only changes the pool's
-%% own default.
-%%
-%% Lazy on purpose: `maps:get/3' evaluates its default argument
-%% unconditionally, which would grind a puzzle on every `connect/2' call
-%% even when the caller DID pass an identity.
-resolve_identity(Opts) ->
-    identity_or_generate(maps:find(identity, Opts)).
+%% The pool's keys, in the node's crypto profile: the node identity key
+%% that every link shares, and the pool's own CONNECT key, a separate
+%% key that signs each connection's proof under a binding by the
+%% identity key (D16). Every link starts with the profile and both keys.
+pool_keys(Opts) ->
+    keys_in_profile(macula_crypto_profile:configured(), Opts).
 
-identity_or_generate({ok, Identity}) -> Identity;
-identity_or_generate(error) -> macula_identity:generate(#{puzzle => true}).
+keys_in_profile({ok, Profile}, Opts) ->
+    keys_with_identity(node_identity(maps:find(node_identity, Opts), Profile), Profile);
+keys_in_profile({error, _} = Refusal, _Opts) ->
+    Refusal.
+
+keys_with_identity({ok, NodeIdentity}, Profile) ->
+    keys_with_connect_key(macula_node_keys:generate(connect, Profile), NodeIdentity, Profile);
+keys_with_identity({error, _} = Refusal, _Profile) ->
+    Refusal.
+
+keys_with_connect_key({ok, ConnectKey}, NodeIdentity, Profile) ->
+    {ok, #{profile => Profile, node_identity => NodeIdentity, connect_key => ConnectKey}};
+keys_with_connect_key({error, _} = Refusal, _NodeIdentity, _Profile) ->
+    Refusal.
+
+%% The pool's node identity key. A supplied key is used as it is, puzzle
+%% solved or not, when it is an identity key in the node's profile; any
+%% other key is refused.
+%%
+%% Without one, the pool generates a key whose node_id meets
+%% `macula_node_keys:puzzle_difficulty/0', not a bare
+%% `macula_node_keys:generate/2' key: stations check the puzzle on the
+%% node_id derived from the identity key in CONNECT, and the caller who
+%% did not think to pass a key is the one most surprised by a refused
+%% handshake behind links that report healthy (seen live 2026-08-21: a
+%% pool started with no options showed five healthy links and delivered
+%% no event for over an hour). `maps:find/2' keeps the puzzle from being
+%% ground when the caller did pass a key.
+node_identity(error, Profile) ->
+    macula_node_keys:generate(identity, Profile,
+                              #{puzzle_difficulty => macula_node_keys:puzzle_difficulty()});
+node_identity({ok, #{purpose := identity, profile := Profile} = Key}, Profile) ->
+    {ok, Key};
+node_identity({ok, #{purpose := identity, profile := Other}}, _Profile) ->
+    {error, {node_identity, {wrong_profile, Other}}};
+node_identity({ok, _NotAnIdentityKey}, _Profile) ->
+    {error, {node_identity, not_an_identity_key}}.
 
 %% First-success across the pool's healthy links. Tries each link in
 %% turn; the first non-error reply wins. Falls through on

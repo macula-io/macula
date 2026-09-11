@@ -129,7 +129,8 @@
 %%
 %% Honored opts (full reference: `macula_client:opts()'):
 %% <ul>
-%%   <li>`identity' — pool's Ed25519 keypair; auto-generated if absent.</li>
+%%   <li>`node_identity': the pool's node identity key, in the node's crypto
+%%       profile; generated with a puzzle-solved node_id if absent.</li>
 %%   <li>`replication_factor' — links per PUBLISH (default 2, since 10.19.0).</li>
 %%   <li>`capabilities' — per-link bitfield (default 0).</li>
 %%   <li>`alpn' — QUIC ALPN list (default `[<<"macula">>]').</li>
@@ -894,8 +895,8 @@ unmonitor_nodes() -> macula_cluster:unmonitor_nodes().
 %% `Opts' takes:
 %% <ul>
 %%   <li>`relays' (required) — list of seed URLs for the V2 pool.</li>
-%%   <li>`identity' — V2 pool's `macula_identity:key_pair()'.
-%%       Default: auto-generated.</li>
+%%   <li>`node_identity': the V2 pool's node identity key,
+%%       `macula_node_keys:node_key()'. Default: generated.</li>
 %% </ul>
 %%
 %% Internally builds a V2 `macula_client:pool()' and registers it
@@ -909,10 +910,7 @@ join_mesh(Opts) ->
     on_pool_for_join(macula_client:connect(Relays, PoolOpts)).
 
 pool_opts_for_join(Opts) ->
-    case maps:find(identity, Opts) of
-        {ok, Identity} -> #{identity => Identity};
-        error          -> #{}
-    end.
+    maps:with([node_identity], Opts).
 
 on_pool_for_join({ok, Pool}) ->
     wait_for_pool(Pool, 30),
