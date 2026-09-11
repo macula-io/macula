@@ -50,7 +50,6 @@
     size/1,
     is_empty/1,
     tags_for/2,
-    tombstones/1,
     tombstone_count/1,
     merge/2,
     apply_delta/2
@@ -124,9 +123,6 @@ is_empty(Set) -> members(Set) =:= [].
 -spec tags_for(or_set(), element()) -> [tag()].
 tags_for(#{data := D}, Element) ->
     sets:to_list(maps:get(Element, D, sets:new())).
-
--spec tombstones(or_set()) -> [tag()].
-tombstones(#{tombstones := T}) -> sets:to_list(T).
 
 -spec tombstone_count(or_set()) -> non_neg_integer().
 tombstone_count(#{tombstones := T}) -> sets:size(T).

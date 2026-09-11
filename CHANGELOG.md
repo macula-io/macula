@@ -259,6 +259,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Dockerfile`, `Dockerfile.gateway` and `.dockerignore`. They built for
   the earlier quicer transport, without the Rust NIFs, and could not
   build this repository.
+- The NIF stubs of `macula_cbor_nif`, `macula_crypto_nif`, `macula_did_nif`,
+  `macula_mri_nif` and `macula_ucan_nif` that only their own module calls
+  are no longer exported; the wrapper functions of each module are the API.
+  The stubs other modules call stay exported.
+- `hecate_or_set:tombstones/1` and `macula_hyparview_view:contains/2`,
+  which nothing called.
 
 ### Fixed
 
