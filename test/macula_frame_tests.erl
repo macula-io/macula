@@ -504,10 +504,18 @@ sample_station_ref() ->
         last_seen_at => erlang:system_time(millisecond)
     }).
 
+%% A signed record in its wire form, as a frame carries it.
 sample_record() ->
-    Kp = macula_identity:generate(),
-    Node = macula_record:node_record(macula_identity:public(Kp), [], 0),
-    macula_record:sign(Node, Kp).
+    {ok, Id} = macula_node_keys:generate(identity, pq_pure),
+    Node = macula_record:node_record(macula_node_keys:key_id(Id), [], 0),
+    macula_record:encode(macula_record:sign(Node, Id)).
+
+%% A realm's signed member endorsement in its wire form.
+endorsement(RealmId, Member) ->
+    {ok, Realm} = macula_node_keys:generate(realm, pq_pure),
+    Unsigned = macula_record:realm_member_endorsement(RealmId, #{realm => RealmId, member_node => Member,
+                                                                 roles => [<<"member">>]}),
+    macula_record:encode(macula_record:sign(Unsigned, Realm)).
 
 %%------------------------------------------------------------------
 %% CALL / RESULT / ERROR frames — Part 6 §5
@@ -551,7 +559,7 @@ call_sign_verify_wire_roundtrip_test() ->
     Kp = macula_identity:generate(),
     F  = macula_frame:sign(sample_call(macula_identity:public(Kp)), Kp),
     {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, Decoded),
+    ?assertEqual(F#{payload := #{{text, <<"city">>} => <<"Brussels">>}}, Decoded),
     ?assertMatch({ok, _},
                  macula_frame:verify(Decoded, macula_identity:public(Kp))).
 
@@ -783,18 +791,13 @@ hyparview_forward_join_wire_roundtrip_test() ->
     ?assertEqual(F, D).
 
 %% The `record' field (realm-admin-signed endorsement) must survive a
-%% full wire round trip as a decoded map, not an opaque binary blob --
+%% full wire round trip byte for byte, and verify at the receiver --
 %% this is exactly the gap that shipped broken (the endorsement was
 %% computed and then discarded, never attached to the frame at all).
 hyparview_join_carries_endorsement_through_wire_roundtrip_test() ->
-    RealmKp = macula_identity:generate(),
-    RealmId = macula_identity:public(RealmKp),
+    RealmId = crypto:strong_rand_bytes(32),
     Member  = crypto:strong_rand_bytes(32),
-    Endorsement = macula_record:sign(
-        macula_record:realm_member_endorsement(RealmId, #{
-            realm => RealmId, member_node => Member,
-            roles => [<<"member">>]}),
-        RealmKp),
+    Endorsement = endorsement(RealmId, Member),
     LinkKp = macula_identity:generate(),
     F = macula_frame:sign(macula_frame:hyparview_join(#{
             realm => RealmId, new_member => Member,
@@ -803,7 +806,7 @@ hyparview_join_carries_endorsement_through_wire_roundtrip_test() ->
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
     ?assertEqual(F, D),
     ?assertEqual(Endorsement, maps:get(record, D)),
-    ?assertMatch({ok, _}, macula_record:verify(maps:get(record, D))).
+    ?assertMatch({ok, _}, macula_record:verify(maps:get(record, D), pq_pure)).
 
 hyparview_join_without_endorsement_omits_record_field_test() ->
     F = macula_frame:hyparview_join(#{
@@ -816,14 +819,9 @@ hyparview_join_without_endorsement_omits_record_field_test() ->
 %% it needs the same endorsement-carrying capability, not just a
 %% frame shaped like an ack.
 hyparview_neighbor_carries_endorsement_through_wire_roundtrip_test() ->
-    RealmKp = macula_identity:generate(),
-    RealmId = macula_identity:public(RealmKp),
+    RealmId = crypto:strong_rand_bytes(32),
     Sender  = crypto:strong_rand_bytes(32),
-    Endorsement = macula_record:sign(
-        macula_record:realm_member_endorsement(RealmId, #{
-            realm => RealmId, member_node => Sender,
-            roles => [<<"member">>]}),
-        RealmKp),
+    Endorsement = endorsement(RealmId, Sender),
     F = macula_frame:hyparview_neighbor(#{
             realm => RealmId, priority => high, record => Endorsement}),
     ?assertEqual(Endorsement, maps:get(record, F)),
@@ -1114,7 +1112,7 @@ publisher_sig_wire_roundtrip_test() ->
     F = macula_frame:sign(
           macula_frame:sign_publisher(sample_publish(Kp), Kp), Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
+    ?assertEqual(F#{payload := #{{text, <<"a">>} => 1, {text, <<"b">>} => <<"two">>}}, D),
     ?assertMatch({ok, _}, macula_frame:verify_publisher(D)),
     ?assertMatch({ok, _}, macula_frame:verify(D, macula_identity:public(Kp))).
 
@@ -1160,7 +1158,7 @@ event_wire_roundtrip_test() ->
             payload       => ok,
             delivered_via => direct}), Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D).
+    ?assertEqual(F#{payload := {text, <<"ok">>}}, D).
 
 %%------------------------------------------------------------------
 %% advertise / unadvertise — Part 6 §5.5
@@ -1200,7 +1198,7 @@ advertise_wire_roundtrip_test() ->
             advertiser => macula_identity:public(Kp),
             options    => #{rate_limit_qps => 100}}), Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
+    ?assertEqual(F#{options := #{{text, <<"rate_limit_qps">>} => 100}}, D),
     ?assertMatch({ok, _},
                  macula_frame:verify(D, macula_identity:public(Kp))).
 
@@ -1331,7 +1329,7 @@ manifest_res_wire_roundtrip_test() ->
             mcid     => mcid(),
             manifest => #{name => <<"x">>, size => 42}}), Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D).
+    ?assertEqual(F#{manifest := #{{text, <<"name">>} => <<"x">>, {text, <<"size">>} => 42}}, D).
 
 %%------------------------------------------------------------------
 %% Streaming RPC frames — Part 6 §5.6
@@ -1380,7 +1378,7 @@ stream_open_sign_verify_wire_roundtrip_test() ->
     Kp = macula_identity:generate(),
     F  = macula_frame:sign(sample_stream_open(macula_identity:public(Kp)), Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
+    ?assertEqual(F#{args := #{{text, <<"n">>} => 5}}, D),
     ?assertMatch({ok, _},
                  macula_frame:verify(D, macula_identity:public(Kp))).
 
@@ -1521,7 +1519,7 @@ stream_reply_wire_roundtrip_test() ->
             payload      => #{count => 12, last => <<"done">>},
             responded_by => macula_identity:public(Kp)}), Kp),
     {ok, D, <<>>} = macula_frame:decode(macula_frame:encode(F)),
-    ?assertEqual(F, D),
+    ?assertEqual(F#{payload := #{{text, <<"count">>} => 12, {text, <<"last">>} => <<"done">>}}, D),
     ?assertMatch({ok, _},
                  macula_frame:verify(D, macula_identity:public(Kp))).
 
@@ -1674,7 +1672,7 @@ check_payload_rejects_only_what_cannot_survive_test() ->
 %% stopped being true, and it did. Now it pins the fix.
 float_payload_round_trips_exactly_test() ->
     [begin
-         {ok, Frame, <<>>} = macula_frame:decode(macula_frame:encode(#{payload => F})),
+         {ok, Frame, <<>>} = macula_frame:decode(macula_frame:encode(#{frame_type => call, payload => F})),
          ?assertEqual(F, maps:get(payload, Frame))
      end || F <- [52.34, -1234.5, 0.0, 1.0e300, 1.0e-300, 3.141592653589793]].
 
@@ -1690,7 +1688,7 @@ float_payload_round_trips_exactly_test() ->
 %% receiving node knows the atom. Node count is invariant under that
 %% aliasing and still changes the moment a map pair is swallowed.
 survives(Term) ->
-    try macula_frame:decode(macula_frame:encode(#{payload => Term})) of
+    try macula_frame:decode(macula_frame:encode(#{frame_type => call, payload => Term})) of
         {ok, Frame, <<>>} -> intact(Term, maps:get(payload, Frame));
         _Other            -> false
     catch
@@ -1784,15 +1782,14 @@ check_payload_rejects_colliding_wire_keys_test() ->
 collision_actually_loses_data_test() ->
     Colliding = #{foo => 1, <<"foo">> => 2},
     {ok, Frame, <<>>} =
-        macula_frame:decode(macula_frame:encode(#{payload => Colliding})),
+        macula_frame:decode(macula_frame:encode(#{frame_type => call, payload => Colliding})),
     ?assertEqual(2, maps:size(Colliding)),
     ?assertEqual(1, maps:size(maps:get(payload, Frame))).
 
-%% check_frame/1 guards the whole frame at the send_frame seam, but must
-%% not judge record fields — those go through macula_record:encode/1.
-check_frame_ignores_record_fields_test() ->
-    ?assertEqual(ok, macula_frame:check_frame(
-                       #{frame_type => publish, record => #{f => {a, b}}})),
+%% check_frame/1 guards the whole frame at the send_frame seam. Records travel as
+%% their wire bytes, so every field is judged the same way.
+check_frame_judges_every_field_test() ->
+    ?assertEqual(ok, macula_frame:check_frame(#{frame_type => store, record => <<"record bytes">>})),
     ?assertMatch({error, {unsupported_payload_type, tuple, [payload]}},
                  macula_frame:check_frame(
                    #{frame_type => publish, payload => {a, b}})).

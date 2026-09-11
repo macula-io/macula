@@ -52,6 +52,12 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   namespace and its org directory and delegation or certificate chain.
   It replaces `decode/1`, `verify/1`, `procedure_key/1`,
   `verify_delegation_chain/4` and `verify_advertisement_cert_chain/3`.
+- `macula_frame` decodes every frame under the post-quantum decoding
+  rule, and a frame type's own fields through a fixed table (D26): a
+  frame type, a field or an enum value the table does not list is
+  refused, and payloads keep the one key form, the same on every node.
+  Records in STORE, VALUE, REPLICATE and HyParView frames travel as their
+  wire bytes. `check_payload/1` refuses what the decoding rule refuses.
 - `macula_node_keys:generate/3` with `puzzle_difficulty`, and
   `puzzle_solved/2`: an identity key whose node_id starts with that many
   zero bits. Each try makes a new ML-DSA-87 half; a hybrid key keeps its

@@ -10,9 +10,9 @@
 %%
 %% PLAN_WIRE_CBOR.md migrated this codec from BERT to CBOR so
 %% hecate-station and the macula 3.x SDK share a wire format. Frame
-%% schemas (atom-keyed maps in process memory) are unchanged; the codec
-%% transparently round-trips atom keys/values to text strings on the wire
-%% and reconstitutes them via `binary_to_existing_atom' on decode.
+%% schemas (atom-keyed maps in process memory) are unchanged. Atoms go out
+%% as text; on decode a frame type's own fields come back through a fixed
+%% table, and peer-supplied maps keep the one key form (D26).
 %%
 %% Phase 1 covers CONNECT / HELLO / GOODBYE. Phase 2 adds SWIM. Phase 3
 %% (Session 3.4) adds the DHT operation frames from Part 6 §7:
@@ -153,6 +153,9 @@
 -define(EVENT_PUBLISHER_DOMAIN, "macula-v2-event-pub\0").
 -define(PROTOCOL_VERSION,   2).
 -define(MAX_FRAME_BYTES,    16#FFFFFF).   %% 16 MiB cap (Part 6 §2.2).
+%% A payload sits in the frame map, so a container at payload path length L
+%% is at nesting depth L + 2, and the decoding rule allows depth 64.
+-define(MAX_PAYLOAD_NESTING, 62).
 
 -type frame_type() :: connect | hello | goodbye
                     | swim_ping | swim_ack | swim_suspect | swim_confirm
@@ -293,10 +296,10 @@
 
 -type value_spec()         :: #{
     key     := id256(),
-    records := [macula_record:m_record()]
+    records := [binary()]
 }.
 
--type store_spec()         :: #{record := macula_record:m_record()}.
+-type store_spec()         :: #{record := binary()}.
 
 -type store_ack_spec()     :: #{
     key    := id256(),
@@ -305,7 +308,7 @@
 }.
 
 -type replicate_spec()     :: #{
-    record        := macula_record:m_record(),
+    record        := binary(),
     new_custodian := boolean()
 }.
 
@@ -363,11 +366,9 @@
     %% hecate_overlay's hecate_realm_join module), proving the realm's
     %% admin authorised `new_member' to join. Optional at the type
     %% level since not every realm may require admission-gated JOIN,
-    %% but any realm that does MUST reject a JOIN missing it. Reuses
-    %% the generic `record'-field encode/decode machinery
-    %% (`prepare_records/1'/`restore_records/1') -- pass the decoded
-    %% macula_record map here, not a pre-encoded binary.
-    record     => macula_record:m_record()
+    %% but any realm that does MUST reject a JOIN missing it. The record
+    %% travels as its wire form, as received, and the receiver verifies it.
+    record     => binary()
 }.
 
 -type hyparview_forward_join_spec() :: #{
@@ -381,7 +382,7 @@
     %% FORWARD_JOIN verifies the same admission proof the original
     %% JOIN carried -- trust is never transitively assumed from
     %% "my neighbour forwarded this to me." See `record' above.
-    record     => macula_record:m_record()
+    record     => binary()
 }.
 
 -type hyparview_neighbor_spec() :: #{
@@ -394,7 +395,7 @@
     %% an ack to a JOIN the receiver itself initiated), so trust is
     %% never assumed just because a frame is shaped like an ack. See
     %% `record' on `hyparview_join_spec()'.
-    record   => macula_record:m_record()
+    record   => binary()
 }.
 
 -type hyparview_disconnect_spec() :: #{
@@ -824,12 +825,11 @@ find_value(#{key := K, origin := O})
 value(#{key := K, records := Rs})
   when is_binary(K), byte_size(K) =:= 32,
        is_list(Rs) ->
-    lists:foreach(fun validate_record/1, Rs),
+    lists:foreach(fun validate_record_bytes/1, Rs),
     (base(value, 0))#{key => K, records => Rs}.
 
 -spec store(store_spec()) -> frame().
-store(#{record := R}) ->
-    validate_record(R),
+store(#{record := R}) when is_binary(R) ->
     (base(store, 0))#{record => R}.
 
 -spec store_ack(store_ack_spec()) -> frame().
@@ -842,8 +842,7 @@ store_ack(#{key := K, stored := Stored} = Spec)
 
 -spec replicate(replicate_spec()) -> frame().
 replicate(#{record := R, new_custodian := NC})
-  when is_boolean(NC) ->
-    validate_record(R),
+  when is_binary(R), is_boolean(NC) ->
     (base(replicate, 0))#{record => R, new_custodian => NC}.
 
 -spec replicate_ack(replicate_ack_spec()) -> frame().
@@ -887,8 +886,8 @@ validate_asn(N) when is_integer(N), N >= 0 -> ok.
 validate_addresses([])                        -> ok;
 validate_addresses([A | Rest]) when is_map(A) -> validate_addresses(Rest).
 
--spec validate_record(macula_record:m_record()) -> ok.
-validate_record(#{type := _, key := <<_:256>>, payload := P}) when is_map(P) ->
+-spec validate_record_bytes(binary()) -> ok.
+validate_record_bytes(Bytes) when is_binary(Bytes) ->
     ok.
 
 -spec validate_optional_reason(atom() | undefined) -> ok.
@@ -1013,7 +1012,7 @@ hyparview_forward_join(#{realm := R, new_member := M,
 %% only set it on the outgoing frame when the caller actually supplied
 %% one, so a realm that doesn't require admission-gated JOIN isn't
 %% forced to carry an empty/dummy record.
-with_endorsement(#{record := R}, Frame) when is_map(R) -> Frame#{record => R};
+with_endorsement(#{record := R}, Frame) when is_binary(R) -> Frame#{record => R};
 with_endorsement(_Spec, Frame) -> Frame.
 
 -spec hyparview_neighbor(hyparview_neighbor_spec()) -> frame().
@@ -1475,32 +1474,29 @@ verify_publisher_result(false, _Frame) -> {error, signature_invalid}.
 %% publisher sent and on the EVENT a relay derives from it.
 publisher_signing_bytes(#{topic := T, realm := R, publisher := Pub,
                           seq := Seq, payload := Payload}) ->
-    macula_cbor_nif:pack_deterministic(to_wire(prepare_records(#{
+    macula_cbor_nif:pack_deterministic(to_wire(#{
         topic     => T,
         realm     => R,
         publisher => Pub,
         seq       => Seq,
         payload   => Payload
-    }))).
+    })).
 
 %%------------------------------------------------------------------
 %% Wire codec — CBOR (RFC 8949 §4.2.1 deterministic, Part 6 §3)
 %%------------------------------------------------------------------
 %%
-%% Atom-keyed maps round-trip via two helpers:
-%%   to_wire/1   — atoms → `{text, atom_to_binary(A)}', recursing into
-%%                 nested maps and lists.
-%%   from_wire/1 — `{text, Bin}' values whose binary is a known atom
-%%                 spelling become atoms again; binary keys whose name
-%%                 matches an existing atom are restored.
-%%
-%% `binary_to_existing_atom' is safe: the codec never creates new atoms
-%% from untrusted wire input, so a malicious peer cannot exhaust the
-%% atom table.
+%% A frame map is encoded with to_wire/1: atoms become text and undefined
+%% becomes null. A frame is decoded under the decoding rule of
+%% DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, and a frame type's own fields
+%% come back through a fixed table (D26): each field the table defines
+%% takes its atom key, an enum value takes one of the atoms the table
+%% lists, and everything else keeps the one key form of peer-supplied
+%% maps. No atom is made or looked up from what a peer sent.
 
 -spec encode(frame()) -> binary().
 encode(Frame) when is_map(Frame) ->
-    encode_bytes(macula_cbor_nif:pack_deterministic(to_wire(prepare_records(Frame)))).
+    encode_bytes(macula_cbor_nif:pack_deterministic(to_wire(Frame))).
 
 %% @doc Prefix frame CBOR bytes with their length, leaving the bytes as they
 %% are. The handshake keeps the bytes it passes here, because the connection
@@ -1508,18 +1504,6 @@ encode(Frame) when is_map(Frame) ->
 -spec encode_bytes(binary()) -> binary().
 encode_bytes(Bytes) when is_binary(Bytes) ->
     encode_with_check(byte_size(Bytes), Bytes).
-
-%% Records (`record', `records' fields) are delegated to
-%% `macula_record:encode/1' so the SDK's canonical CBOR shape is
-%% preserved verbatim. The frame map carries the resulting opaque
-%% binary blob; on decode `restore_records/1' inflates it back to a
-%% record map. This keeps the macula_record payload's `{text, Bin}'
-%% keys from being mistaken for frame-envelope atoms.
-prepare_records(F = #{record := R}) when is_map(R) ->
-    F#{record := macula_record:encode(R)};
-prepare_records(F = #{records := L}) when is_list(L) ->
-    F#{records := [macula_record:encode(R) || R <- L, is_map(R)]};
-prepare_records(F) -> F.
 
 encode_with_check(Len, _Bytes) when Len > ?MAX_FRAME_BYTES ->
     error({frame_too_large, Len});
@@ -1550,35 +1534,20 @@ split_frame(Buf) when byte_size(Buf) < 4 ->
     {more, 4 - byte_size(Buf)}.
 
 decode_cbor(Bytes, Rest) ->
-    try macula_cbor_nif:unpack_deterministic(Bytes) of
-        Term when is_map(Term) ->
-            Frame = from_wire_envelope(Term),
-            {ok, restore_records(Frame), Rest};
-        _Other ->
-            {error, bad_frame}
-    catch
-        _:_ -> {error, bad_frame}
-    end.
+    frame_read(macula_record_cbor:decode_strict(Bytes), Rest).
 
-%% Inverse of `prepare_records/1' — opaque binary blobs in `record' /
-%% `records' fields are decoded via `macula_record:decode/1' so the
-%% frame map exposes record values in their natural map shape.
-restore_records(F = #{record := B}) when is_binary(B) ->
-    case macula_record:decode(B) of
-        {ok, R} -> F#{record := R};
-        _       -> F
-    end;
-restore_records(F = #{records := L}) when is_list(L) ->
-    Decoded = [decode_record_or_keep(E) || E <- L],
-    F#{records := Decoded};
-restore_records(F) -> F.
+frame_read({ok, #{{text, <<"frame_type">>} := {text, TypeName}} = Wire}, Rest) ->
+    typed_frame(frame_type_named(TypeName), Wire, Rest);
+frame_read(_NotAFrame, _Rest) ->
+    {error, bad_frame}.
 
-decode_record_or_keep(B) when is_binary(B) ->
-    case macula_record:decode(B) of
-        {ok, R} -> R;
-        _       -> B
-    end;
-decode_record_or_keep(Other) -> Other.
+typed_frame({ok, Type}, Wire, Rest) ->
+    read_frame(read_fields(maps:to_list(Wire), field_table(Type), #{}), Rest);
+typed_frame(error, _Wire, _Rest) ->
+    {error, bad_frame}.
+
+read_frame({ok, Frame}, Rest) -> {ok, Frame, Rest};
+read_frame(error, _Rest) -> {error, bad_frame}.
 
 %% @doc Drain all complete frames from a buffer. Returns the list of frames
 %% (in order) and the remaining (incomplete) buffer.
@@ -1647,7 +1616,7 @@ canonical_unsigned(Frame) ->
     %% `publisher_sig' to frames until every relay is on a build that
     %% strips it here too — see CHANGELOG 4.4.0.)
     Unsigned = maps:without([signature, publisher_sig], Frame),
-    macula_cbor_nif:pack_deterministic(to_wire(prepare_records(Unsigned))).
+    macula_cbor_nif:pack_deterministic(to_wire(Unsigned)).
 
 %%------------------------------------------------------------------
 %% Atom <-> wire-binary translation
@@ -1692,26 +1661,12 @@ check_payload(Payload) ->
     sized(check_value(Payload, []), Payload).
 
 %% @doc Is this whole frame sendable? Used by `macula_peering:send_frame/2',
-%% which is the single seam every producer passes through.
-%%
-%% `record' / `records' are excluded: `prepare_records/1' hands those to
-%% `macula_record:encode/1', a different encoder with its own rules, so
-%% judging them by payload rules would reject frames that encode fine.
-%%
-%% KNOWN LIMIT, stated rather than papered over. That exclusion means
-%% record-bearing frames (STORE, REPLICATE, VALUE) get weaker
-%% guarantees than payload-bearing ones: an unsigned record passes here
-%% and then fails in `macula_record:encode/1', and `byte_floor/1' never
-%% sees record bytes, so an oversized record is not caught synchronously.
-%% Neither can kill the connection — `encode_or_drop/2' catches both —
-%% but the caller is told `ok' and the frame is dropped. So "callers get
-%% a structured reason" is true for payload-bearing frames and NOT for
-%% record-bearing ones. Closing it means teaching this function the
-%% record shape and folding record size into the floor.
+%% which is the single seam every producer passes through. Records travel
+%% as their wire bytes, so a record-bearing frame is judged like any other.
 -spec check_frame(frame()) ->
     ok | {error, {unsupported_payload_type, atom(), [term()]}}.
 check_frame(Frame) when is_map(Frame) ->
-    check_payload(maps:without([record, records], Frame)).
+    check_payload(Frame).
 
 %% @doc Render a rejection as a sentence, with the remedy where there is
 %% one. The operator reading a log at 03:00 is not reading edoc.
@@ -1767,20 +1722,25 @@ sum_floor([H | T], Acc) -> sum_floor(T, Acc + byte_floor(H)).
 %% bits. The bound is NOT restated here — a bignum past it matches no
 %% clause in either CBOR encoder (`macula_cbor_nif:pack_deterministic/1',
 %% the live path, or `macula_record_cbor:encode/1', its differentially-
-%% tested reference), so the codec is asked.
+%% tested reference), so the codec is asked. The decoding rule refuses a
+%% negative integer below -2^63, so that floor is added here.
 check_value(I, Path) when is_integer(I) ->
-    int_ok(macula_record_cbor:is_encodable_int(I), Path);
+    int_ok(I >= -(1 bsl 63) andalso macula_record_cbor:is_encodable_int(I), Path);
 check_value(F, _Path) when is_float(F) ->
     ok;
 check_value(B, _Path) when is_binary(B) ->
     ok;
-%% `{text, Binary}' is the codec's own major-3 marker, not a user tuple.
-check_value({text, B}, _Path) when is_binary(B) ->
-    ok;
+%% `{text, Binary}' is the codec's own major-3 marker, not a user tuple. Its
+%% bytes must be valid UTF-8, as the decoding rule requires of text.
+check_value({text, B}, Path) when is_binary(B) ->
+    text_ok(valid_utf8(B), Path);
 %% Every atom survives: `undefined' becomes null, the rest become text
 %% and are restored via `binary_to_existing_atom'.
 check_value(A, _Path) when is_atom(A) ->
     ok;
+check_value(Container, Path)
+  when (is_list(Container) orelse is_map(Container)), length(Path) > ?MAX_PAYLOAD_NESTING ->
+    unsupported(too_deep, Path);
 check_value(L, Path) when is_list(L) ->
     check_list(L, 0, Path);
 check_value(M, Path) when is_map(M) ->
@@ -1824,10 +1784,10 @@ check_map_tail({error, _} = Error, _T, _Path) ->
 %% either sign, and nothing else — a float or nested key crashes it.
 check_key(A, _Path) when is_atom(A) ->
     ok;
-check_key({text, B}, _Path) when is_binary(B) ->
-    ok;
-check_key(B, _Path) when is_binary(B) ->
-    ok;
+check_key({text, B}, Path) when is_binary(B) ->
+    text_ok(valid_utf8(B), Path);
+check_key(B, Path) when is_binary(B) ->
+    text_ok(valid_utf8(B), Path);
 check_key(I, Path) when is_integer(I) ->
     check_value(I, Path);
 check_key(_Other, Path) ->
@@ -1835,6 +1795,12 @@ check_key(_Other, Path) ->
 
 int_ok(true, _Path)  -> ok;
 int_ok(false, Path)  -> unsupported(integer_out_of_range, Path).
+
+text_ok(true, _Path)  -> ok;
+text_ok(false, Path)  -> unsupported(invalid_text, Path).
+
+valid_utf8(Bin) ->
+    unicode:characters_to_binary(Bin, utf8, utf8) =:= Bin.
 
 %% `to_wire/1' projects an atom, a binary and a `{text, Binary}' of the
 %% same name onto ONE wire key, and folds them into one map. Two distinct
@@ -1883,35 +1849,761 @@ wire_key(B) when is_binary(B) -> {text, B};
 %% (e.g. per-wall sub-maps in mpong game state).
 wire_key(I) when is_integer(I) -> I.
 
-%% @private Walk the decoded CBOR term and restore atom keys/values
-%% via `binary_to_existing_atom'. Records (`record' / `records'
-%% fields) are pre-encoded as opaque CBOR binaries by `prepare_records'
-%% on the encode path and re-decoded by `restore_records' after this
-%% walk; their internal `{text, Bin}' payload keys never reach this
-%% function, so unconditional atom restoration is safe.
-%%
-%% `binary_to_existing_atom' raises `badarg' on names that are not
-%% already in the runtime atom table — that is the safety guarantee
-%% against atom-table exhaustion. Names hecate-station never declared
-%% (e.g. a peer-supplied custom field) come back as `{text, Bin}'
-%% (text string) or plain binary (byte string).
-from_wire_envelope(M) when is_map(M) ->
-    maps:fold(fun(K, V, Acc) ->
-                  Acc#{envelope_key(K) => from_wire_envelope(V)}
-              end, #{}, M);
-from_wire_envelope(L) when is_list(L) ->
-    [from_wire_envelope(E) || E <- L];
-from_wire_envelope(null)  -> undefined;
-from_wire_envelope({text, B}) when is_binary(B) -> maybe_atom(B, {text, B});
-from_wire_envelope(B) when is_binary(B) -> B;
-from_wire_envelope(I) when is_integer(I) -> I;
-from_wire_envelope(Other) -> Other.
+%%------------------------------------------------------------------
+%% Decoding through a fixed table (D26)
+%%------------------------------------------------------------------
 
-envelope_key({text, B}) when is_binary(B) -> maybe_atom(B, {text, B});
-envelope_key(B) when is_binary(B)         -> maybe_atom(B, B);
-envelope_key(K)                            -> K.
+%% A frame type from its wire name. Only the frame types below exist.
+frame_type_named(<<"connect">>) -> {ok, connect};
+frame_type_named(<<"hello">>) -> {ok, hello};
+frame_type_named(<<"goodbye">>) -> {ok, goodbye};
+frame_type_named(<<"swim_ping">>) -> {ok, swim_ping};
+frame_type_named(<<"swim_ack">>) -> {ok, swim_ack};
+frame_type_named(<<"swim_suspect">>) -> {ok, swim_suspect};
+frame_type_named(<<"swim_confirm">>) -> {ok, swim_confirm};
+frame_type_named(<<"ping">>) -> {ok, ping};
+frame_type_named(<<"pong">>) -> {ok, pong};
+frame_type_named(<<"find_node">>) -> {ok, find_node};
+frame_type_named(<<"nodes">>) -> {ok, nodes};
+frame_type_named(<<"find_value">>) -> {ok, find_value};
+frame_type_named(<<"value">>) -> {ok, value};
+frame_type_named(<<"store">>) -> {ok, store};
+frame_type_named(<<"store_ack">>) -> {ok, store_ack};
+frame_type_named(<<"replicate">>) -> {ok, replicate};
+frame_type_named(<<"replicate_ack">>) -> {ok, replicate_ack};
+frame_type_named(<<"call">>) -> {ok, call};
+frame_type_named(<<"result">>) -> {ok, result};
+frame_type_named(<<"error">>) -> {ok, error};
+frame_type_named(<<"hyparview_join">>) -> {ok, hyparview_join};
+frame_type_named(<<"hyparview_forward_join">>) -> {ok, hyparview_forward_join};
+frame_type_named(<<"hyparview_neighbor">>) -> {ok, hyparview_neighbor};
+frame_type_named(<<"hyparview_disconnect">>) -> {ok, hyparview_disconnect};
+frame_type_named(<<"hyparview_shuffle">>) -> {ok, hyparview_shuffle};
+frame_type_named(<<"hyparview_shuffle_reply">>) -> {ok, hyparview_shuffle_reply};
+frame_type_named(<<"plumtree_gossip">>) -> {ok, plumtree_gossip};
+frame_type_named(<<"plumtree_ihave">>) -> {ok, plumtree_ihave};
+frame_type_named(<<"plumtree_graft">>) -> {ok, plumtree_graft};
+frame_type_named(<<"plumtree_prune">>) -> {ok, plumtree_prune};
+frame_type_named(<<"overlay_relay">>) -> {ok, overlay_relay};
+frame_type_named(<<"publish">>) -> {ok, publish};
+frame_type_named(<<"subscribe">>) -> {ok, subscribe};
+frame_type_named(<<"unsubscribe">>) -> {ok, unsubscribe};
+frame_type_named(<<"event">>) -> {ok, event};
+frame_type_named(<<"advertise">>) -> {ok, advertise};
+frame_type_named(<<"unadvertise">>) -> {ok, unadvertise};
+frame_type_named(<<"stream_open">>) -> {ok, stream_open};
+frame_type_named(<<"stream_data">>) -> {ok, stream_data};
+frame_type_named(<<"stream_end">>) -> {ok, stream_end};
+frame_type_named(<<"stream_error">>) -> {ok, stream_error};
+frame_type_named(<<"stream_reply">>) -> {ok, stream_reply};
+frame_type_named(<<"want">>) -> {ok, want};
+frame_type_named(<<"have">>) -> {ok, have};
+frame_type_named(<<"block">>) -> {ok, block};
+frame_type_named(<<"manifest_req">>) -> {ok, manifest_req};
+frame_type_named(<<"manifest_res">>) -> {ok, manifest_res};
+frame_type_named(<<"cancel">>) -> {ok, cancel};
+frame_type_named(_Other) -> error.
 
-maybe_atom(B, Default) ->
-    try binary_to_existing_atom(B, utf8)
-    catch error:badarg -> Default
-    end.
+%% The fields each frame type defines, by wire name: the atom key a field
+%% decodes to, and how its value is read. `value' keeps a value in the one
+%% key form of peer-supplied maps; an enum takes only the atoms it lists; a
+%% reason takes its listed atoms and keeps any other reason as text; a list
+%% of entries reads each entry through its own table.
+field_table(connect) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"node_id">> => {node_id, value},
+      <<"station_id">> => {station_id, value},
+      <<"realms">> => {realms, value},
+      <<"addresses">> => {addresses, value},
+      <<"site">> => {site, value},
+      <<"puzzle_evidence">> => {puzzle_evidence, value},
+      <<"endorsements">> => {endorsements, value}};
+field_table(hello) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"node_id">> => {node_id, value},
+      <<"station_id">> => {station_id, value},
+      <<"realms">> => {realms, value},
+      <<"addresses">> => {addresses, value},
+      <<"site">> => {site, value},
+      <<"accepted">> => {accepted, boolean},
+      <<"refusal_code">> => {refusal_code, value},
+      <<"negotiated_capabilities">> => {negotiated_capabilities, value}};
+field_table(goodbye) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"reason">> => {reason, {reason, goodbye}},
+      <<"detail">> => {detail, value}};
+field_table(swim_ping) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"round">> => {round, value},
+      <<"incarnation">> => {incarnation, value},
+      <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, value},
+          <<"state">> => {state, {enum, [alive, suspect, confirmed_failed]}},
+          <<"incarnation">> => {incarnation, value},
+          <<"observed_at">> => {observed_at, value},
+          <<"by">> => {by, value}}}}};
+field_table(swim_ack) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"round">> => {round, value},
+      <<"responder">> => {responder, value},
+      <<"incarnation">> => {incarnation, value},
+      <<"piggyback">> => {piggyback, {list_of, #{<<"target">> => {target, value},
+          <<"state">> => {state, {enum, [alive, suspect, confirmed_failed]}},
+          <<"incarnation">> => {incarnation, value},
+          <<"observed_at">> => {observed_at, value},
+          <<"by">> => {by, value}}}}};
+field_table(swim_suspect) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"target">> => {target, value},
+      <<"target_incarnation">> => {target_incarnation, value},
+      <<"suspected_by">> => {suspected_by, value},
+      <<"ttl">> => {ttl, value}};
+field_table(swim_confirm) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"target">> => {target, value},
+      <<"target_incarnation">> => {target_incarnation, value},
+      <<"suspected_by">> => {suspected_by, value},
+      <<"ttl">> => {ttl, value}};
+field_table(ping) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"nonce">> => {nonce, value}};
+field_table(pong) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"nonce">> => {nonce, value}};
+field_table(find_node) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"key">> => {key, value},
+      <<"origin">> => {origin, value},
+      <<"depth">> => {depth, value}};
+field_table(nodes) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"key">> => {key, value},
+      <<"nodes">> => {nodes, {list_of, #{<<"node_id">> => {node_id, value},
+          <<"station_id">> => {station_id, value},
+          <<"addresses">> => {addresses, value},
+          <<"tier">> => {tier, value},
+          <<"asn">> => {asn, value},
+          <<"country">> => {country, value},
+          <<"last_seen_at">> => {last_seen_at, value}}}}};
+field_table(find_value) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"key">> => {key, value},
+      <<"origin">> => {origin, value}};
+field_table(value) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"key">> => {key, value},
+      <<"records">> => {records, value}};
+field_table(store) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"record">> => {record, value}};
+field_table(store_ack) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"key">> => {key, value},
+      <<"stored">> => {stored, boolean},
+      <<"reason">> => {reason, {reason, store_ack}}};
+field_table(replicate) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"record">> => {record, value},
+      <<"new_custodian">> => {new_custodian, boolean}};
+field_table(replicate_ack) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"key">> => {key, value},
+      <<"accepted">> => {accepted, boolean}};
+field_table(call) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"procedure">> => {procedure, value},
+      <<"payload">> => {payload, value},
+      <<"deadline_ms">> => {deadline_ms, value},
+      <<"caller">> => {caller, value},
+      <<"retry_budget">> => {retry_budget, value},
+      <<"ucan_token">> => {ucan_token, value}};
+field_table(result) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"payload">> => {payload, value},
+      <<"responded_by">> => {responded_by, value},
+      <<"source_route_reverse">> => {source_route_reverse, value}};
+field_table(error) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"code">> => {code, value},
+      <<"name">> => {name, bolt4_name},
+      <<"reported_by">> => {reported_by, value},
+      <<"detail">> => {detail, value},
+      <<"offending_hop">> => {offending_hop, value},
+      <<"source_route_partial">> => {source_route_partial, value}};
+field_table(hyparview_join) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"new_member">> => {new_member, value},
+      <<"record">> => {record, value}};
+field_table(hyparview_forward_join) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"new_member">> => {new_member, value},
+      <<"ttl">> => {ttl, value},
+      <<"arwl">> => {arwl, value},
+      <<"prwl">> => {prwl, value},
+      <<"record">> => {record, value}};
+field_table(hyparview_neighbor) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"priority">> => {priority, {enum, [high, low]}},
+      <<"record">> => {record, value}};
+field_table(hyparview_disconnect) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value}};
+field_table(hyparview_shuffle) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"origin">> => {origin, value},
+      <<"ttl">> => {ttl, value},
+      <<"peer_sample">> => {peer_sample, value}};
+field_table(hyparview_shuffle_reply) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"peer_sample">> => {peer_sample, value}};
+field_table(plumtree_gossip) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"msg_id">> => {msg_id, value},
+      <<"round">> => {round, value},
+      <<"payload">> => {payload, value}};
+field_table(plumtree_ihave) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"msg_id">> => {msg_id, value},
+      <<"round">> => {round, value}};
+field_table(plumtree_graft) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"msg_id">> => {msg_id, value},
+      <<"round">> => {round, value}};
+field_table(plumtree_prune) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value}};
+field_table(overlay_relay) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"peer">> => {peer, value},
+      <<"payload">> => {payload, value}};
+field_table(publish) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"topic">> => {topic, value},
+      <<"publisher">> => {publisher, value},
+      <<"seq">> => {seq, value},
+      <<"payload">> => {payload, value},
+      <<"published_at_ms">> => {published_at_ms, value},
+      <<"ttl_ms">> => {ttl_ms, value},
+      <<"publisher_sig">> => {publisher_sig, value}};
+field_table(subscribe) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"topic">> => {topic, value},
+      <<"subscriber">> => {subscriber, value},
+      <<"filter">> => {filter, value},
+      <<"options">> => {options, value}};
+field_table(unsubscribe) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"topic">> => {topic, value},
+      <<"subscriber">> => {subscriber, value}};
+field_table(event) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"topic">> => {topic, value},
+      <<"publisher">> => {publisher, value},
+      <<"seq">> => {seq, value},
+      <<"payload">> => {payload, value},
+      <<"delivered_via">> => {delivered_via, {enum, [plumtree, dht, direct]}},
+      <<"publisher_sig">> => {publisher_sig, value}};
+field_table(advertise) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"procedure">> => {procedure, value},
+      <<"advertiser">> => {advertiser, value},
+      <<"options">> => {options, value}};
+field_table(unadvertise) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"procedure">> => {procedure, value},
+      <<"advertiser">> => {advertiser, value}};
+field_table(stream_open) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"stream_id">> => {stream_id, value},
+      <<"procedure">> => {procedure, value},
+      <<"mode">> => {mode, {enum, [server_stream, client_stream, bidi]}},
+      <<"args">> => {args, value},
+      <<"deadline_ms">> => {deadline_ms, value},
+      <<"caller">> => {caller, value},
+      <<"retry_budget">> => {retry_budget, value},
+      <<"ucan_token">> => {ucan_token, value}};
+field_table(stream_data) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"stream_id">> => {stream_id, value},
+      <<"seq">> => {seq, value},
+      <<"encoding">> => {encoding, {enum, [raw, msgpack]}},
+      <<"body">> => {body, value},
+      <<"signer">> => {signer, value}};
+field_table(stream_end) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"stream_id">> => {stream_id, value},
+      <<"role">> => {role, {enum, [send, both]}},
+      <<"signer">> => {signer, value}};
+field_table(stream_error) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"stream_id">> => {stream_id, value},
+      <<"code">> => {code, value},
+      <<"message">> => {message, value},
+      <<"signer">> => {signer, value}};
+field_table(stream_reply) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"stream_id">> => {stream_id, value},
+      <<"payload">> => {payload, value},
+      <<"responded_by">> => {responded_by, value}};
+field_table(want) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
+          <<"priority">> => {priority, value}}}}};
+field_table(have) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"blocks">> => {blocks, {list_of, #{<<"mcid">> => {mcid, value},
+          <<"size">> => {size, value}}}}};
+field_table(block) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"mcid">> => {mcid, value},
+      <<"payload">> => {payload, value}};
+field_table(manifest_req) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"mcid">> => {mcid, value}};
+field_table(manifest_res) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"mcid">> => {mcid, value},
+      <<"manifest">> => {manifest, manifest}};
+field_table(cancel) ->
+    #{<<"version">> => {version, value},
+      <<"frame_type">> => {frame_type, frame_type},
+      <<"frame_id">> => {frame_id, value},
+      <<"sent_at_ms">> => {sent_at_ms, value},
+      <<"capabilities">> => {capabilities, value},
+      <<"realm">> => {realm, value},
+      <<"call_id">> => {call_id, value},
+      <<"source_route">> => {source_route, value},
+      <<"signature">> => {signature, value},
+      <<"blocks">> => {blocks, value}}.
+
+read_fields([{{text, Name}, Value} | Rest], Table, Frame) ->
+    field_read(maps:get(Name, Table, undefined), Value, Rest, Table, Frame);
+read_fields([], _Table, Frame) ->
+    {ok, Frame};
+read_fields(_KeyTheTableCannotName, _Table, _Frame) ->
+    error.
+
+field_read({Field, Kind}, Value, Rest, Table, Frame) ->
+    field_value(read_value(Kind, Value), Field, Rest, Table, Frame);
+field_read(undefined, _Value, _Rest, _Table, _Frame) ->
+    error.
+
+field_value({ok, Read}, Field, Rest, Table, Frame) -> read_fields(Rest, Table, Frame#{Field => Read});
+field_value(error, _Field, _Rest, _Table, _Frame) -> error.
+
+read_value(value, Value) -> {ok, peer_value(Value)};
+read_value(frame_type, {text, Name}) -> frame_type_named(Name);
+read_value({enum, Atoms}, {text, Name}) -> enum_value(Name, Atoms);
+read_value({reason, _Set}, null) -> {ok, undefined};
+read_value({reason, Set}, {text, Name}) -> reason_value(enum_value(Name, reasons(Set)), Name);
+read_value(boolean, {text, <<"true">>}) -> {ok, true};
+read_value(boolean, {text, <<"false">>}) -> {ok, false};
+read_value({list_of, Table}, Entries) when is_list(Entries) -> entries_read(Entries, Table, []);
+read_value(manifest, {text, <<"not_found">>}) -> {ok, not_found};
+read_value(manifest, Manifest) when is_map(Manifest) -> {ok, peer_value(Manifest)};
+read_value(bolt4_name, {text, Name}) -> enum_value(Name, [N || #{name := N} <- macula_bolt4:table()]);
+read_value(_Kind, _Value) -> error.
+
+enum_value(Name, [Atom | Atoms]) -> enum_match(atom_to_binary(Atom) =:= Name, Atom, Name, Atoms);
+enum_value(_Name, []) -> error.
+
+enum_match(true, Atom, _Name, _Atoms) -> {ok, Atom};
+enum_match(false, _Atom, Name, Atoms) -> enum_value(Name, Atoms).
+
+%% The reasons a GOODBYE and a STORE_ACK name as atoms; any other reason stays text.
+reasons(goodbye) -> [operator_stop, draining, normal, shutdown];
+reasons(store_ack) ->
+    [record_too_large, malformed, signature_invalid, alg_mismatch, not_yet_valid, expired, key_id_mismatch, quota].
+
+reason_value({ok, Atom}, _Name) -> {ok, Atom};
+reason_value(error, Name) -> {ok, {text, Name}}.
+
+entries_read([Entry | Rest], Table, Acc) when is_map(Entry) ->
+    entry_read(read_fields(maps:to_list(Entry), Table, #{}), Rest, Table, Acc);
+entries_read([], _Table, Acc) ->
+    {ok, lists:reverse(Acc)};
+entries_read(_NotEntries, _Table, _Acc) ->
+    error.
+
+entry_read({ok, Entry}, Rest, Table, Acc) -> entries_read(Rest, Table, [Entry | Acc]);
+entry_read(error, _Rest, _Table, _Acc) -> error.
+
+%% A peer-supplied value in the one key form (D26): text stays `{text, Bin}',
+%% byte strings stay binaries, null reads as undefined, and no atom is made.
+peer_value(null) -> undefined;
+peer_value(List) when is_list(List) -> [peer_value(Element) || Element <- List];
+peer_value(Map) when is_map(Map) -> maps:map(fun(_Key, Value) -> peer_value(Value) end, Map);
+peer_value(Other) -> Other.
