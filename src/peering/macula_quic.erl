@@ -30,6 +30,7 @@
 -module(macula_quic).
 
 -include_lib("kernel/include/logger.hrl").
+-include("macula_quic_error_codes.hrl").
 
 -on_load(init/0).
 
@@ -92,10 +93,6 @@
 %% A stream open started by async_open_stream/1: its result tag and its
 %% handle.
 -opaque stream_opening() :: {macula_quic_stream_opening, reference(), reference()}.
-
-%% The application error code on a stream whose open was cancelled after
-%% the peer allowed it.
--define(OPEN_CANCELLED_CODE, 0).
 
 %% Added to a dial's own timeout before connect/4 gives up waiting.
 -define(DIAL_RESULT_GRACE_MS, 1_000).
@@ -407,7 +404,7 @@ discard_stream_open_result(cancelled, _Tag) ->
 discard_stream_open_result(delivered, Tag) ->
     receive
         {quic, stream_opened, Tag, Stream} ->
-            reset_stream(Stream, ?OPEN_CANCELLED_CODE);
+            reset_stream(Stream, ?QUIC_CODE_CANCELLED);
         {quic, stream_open_failed, Tag, _Reason} ->
             ok
     after 0 ->
@@ -500,8 +497,8 @@ async_send(Stream, Data) ->
 %% Data queued before the close is still written, and then a QUIC FIN ends
 %% the stream: the peer's `RecvStream::read' resolves `{ok, none}'. When that
 %% data cannot be written within the linger bound, the stream is reset with
-%% application error code 1, which means the stream closed and its unwritten
-%% data was dropped after the linger bound. The bound is the macula
+%% application error code 1, `?QUIC_CODE_LINGER_EXPIRED' (see the code table
+%% at `reset_stream/2'), and its unwritten data is dropped. The bound is the macula
 %% application env `quic_close_linger_ms', 30000 by default, read when
 %% `close_stream/1' is called. For an immediate, peer-visible abort see
 %% `reset_stream/2'.
@@ -517,6 +514,17 @@ close_stream(Stream) ->
 %% dropped, and a `send/2' waiting for its write returns `{error, reset}'.
 %% `ErrorCode' must fit a QUIC VarInt (`&lt; 2^62'); out-of-range values
 %% answer `{error, error_code_out_of_range}'.
+%%
+%% The application error codes macula itself sends are defined once, by
+%% name, in `include/macula_quic_error_codes.hrl':
+%% <ul>
+%%   <li>0, `?QUIC_CODE_CANCELLED': the sender cancelled the stream, in a
+%%       content transfer cancel or a stream open cancelled after the peer
+%%       allowed it.</li>
+%%   <li>1, `?QUIC_CODE_LINGER_EXPIRED': a closed stream's queued data could
+%%       not be written within its linger bound.</li>
+%% </ul>
+%% Any other code is the caller's own.
 -spec reset_stream(reference(), non_neg_integer()) -> ok | {error, term()}.
 reset_stream(Stream, ErrorCode)
   when is_reference(Stream), is_integer(ErrorCode), ErrorCode >= 0 ->

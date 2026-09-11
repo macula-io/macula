@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `include/macula_quic_error_codes.hrl` names each QUIC application error
+  code macula sends when it resets or stops a stream, or closes a
+  connection: `QUIC_CODE_CANCELLED` (0), `QUIC_CODE_LINGER_EXPIRED` (1),
+  `QUIC_CODE_REFUSED` (2), `QUIC_CODE_STREAM_PROTOCOL_ERROR` (3) and
+  `QUIC_CODE_REFUSED_BUSY` (4), for a connection a station closes because it
+  has no handshake slot free. The codes on the wire do not change.
 - `macula_station_link:not_sent/1` says whether an error from `call/5,6`
   means the CALL never went out: the link was not connected yet, there was
   no link process, or the link refused the frame before sending it.
