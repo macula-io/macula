@@ -160,12 +160,16 @@ If the node is already distributed, returns `ok` immediately. Otherwise, starts 
 
 ### `macula:get_cookie/0`
 
-Resolves the cookie from sources in priority order:
+A node that is already distributed keeps the cookie it has, from its VM arguments (`-setcookie`) or the Erlang cookie file, and `get_cookie/0` returns that cookie.
+
+On a node that is not distributed yet, the cookie is resolved in this order:
 
 1. **Application env**: `{macula, [{cookie, CookieValue}]}`
 2. **Environment variable**: `MACULA_COOKIE` or `RELEASE_COOKIE` or `ERLANG_COOKIE`
-3. **Cookie file**: `~/.erlang.cookie`
-4. **Auto-generated**: Creates and persists a new cookie
+3. **Cookie file**: `~/.erlang.cookie`, which only its owner may be able to read (mode 0600 or 0400)
+4. **Generated**: only when `~/.erlang.cookie` is missing, a new cookie is created and saved there, readable by its owner only
+
+`get_cookie/0` raises `{cookie_file_unavailable, home_not_set}` when `HOME` is unset. It raises `{cookie_file_refused, Reason}` when the cookie file is there but cannot be used: its group or others can read it, it is empty, or it cannot be read. Such a file is never replaced; fix its mode or its content.
 
 ```erlang
 Cookie = macula:get_cookie().
@@ -173,7 +177,7 @@ Cookie = macula:get_cookie().
 
 ### `macula:set_cookie/1`
 
-Sets the Erlang cookie for this node and persists it.
+Sets the Erlang cookie for this node and saves it to `~/.erlang.cookie`, readable by its owner only.
 
 ```erlang
 ok = macula:set_cookie(my_secret_cookie).
