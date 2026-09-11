@@ -51,7 +51,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `native/macula_quic/src/lib.rs` (exports: the peer leaf certificate DER, the station's presented leaf, the
     negotiated group and signature scheme)
   - `src/peering/macula_quic.erl`
-  - `.github/workflows/build-nif.yml` (build toolchain per V4)
+  - `.github/workflows/publish-hex.yml` (build toolchain per V4; the NIFs build from source in its jobs)
 - **Change:**
   - switch the features from `ring` to aws-lc-rs per V4 (rustls 0.23.44 or later without `tls12`, rcgen and
     rustls-webpki), limited to the profile's group: ML-KEM-1024, or the custom SecP384r1MLKEM1024 group per D3;
@@ -925,7 +925,7 @@ provider certificate chains verify (D25 item 6). Until then `macula` refuses the
   - `native/macula_quic/{Cargo.toml, src/config.rs, src/cert.rs}`
   - `native/macula_quic/{src/connection.rs, src/endpoint.rs, src/lib.rs}`
   - `src/peering/macula_quic.erl`
-  - `.github/workflows/build-nif.yml`
+  - `.github/workflows/publish-hex.yml`
 - WP 1.3:
   - the identity, record, content, frame, client replay and dedup, overlay, pubsub and cert-system modules listed in
     WP 1.3

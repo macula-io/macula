@@ -75,6 +75,12 @@ jobs:
         working-directory: pkg
         run: rebar3 hex build
 
+      # The build compiled the NIFs from the tag's native/ sources. A
+      # macula_quic that does not load from that build stops the release
+      # here, before anyone is asked to approve it.
+      - name: Check that the QUIC NIF loads from this build
+        run: bash ci/scripts/is_quic_nif_built_from_this_tree.sh "$GITHUB_WORKSPACE/pkg/_build/default/lib"
+
       # The publish job's command as a dry run, with a placeholder key. It
       # fails here, before anyone is asked to approve, if the command does
       # not read a key from HEX_API_KEY; it cannot tell whether the real key

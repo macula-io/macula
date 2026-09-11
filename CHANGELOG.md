@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{quic, connect_failed, Tag, Reason}`, with `Tag` from
   `macula_quic:dial_tag/1`. `macula_quic:cancel_connect/1` ends a dial
   and leaves no result for it in the caller's mailbox.
+- `scripts/is_quic_nif_built_from_this_tree.sh` checks that `macula_quic`
+  loads from a build and, given that build's log, that no precompiled NIF
+  was fetched. The hex publish workflow runs it on the package it builds,
+  before the publish is approved.
 
 ### Changed
 
@@ -24,6 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the process that started it exits.
 - A client `macula_peering_conn` handles close and reject while it is
   still dialing, and stops dialing when its controlling process exits.
+- `priv/build-nifs.sh` builds the QUIC NIF from this tree's
+  `native/macula_quic` sources, as a required crate like
+  `macula_cbor_nif`, into `priv/macula_quic.so`. Building macula needs a
+  Rust toolchain, as the CBOR NIF already did.
+
+### Removed
+
+- The precompiled QUIC NIF download: `priv/fetch-nif.sh`,
+  `scripts/fetch-nif.sh`, the `build-nif.yml` workflow that uploaded the
+  `libmacula_quic` release assets, and `MACULA_FORCE_SOURCE_BUILD`, which
+  only skipped that download. Releases up to 10.24.0 keep their assets,
+  so those versions still download them.
+- `Dockerfile`, `Dockerfile.gateway` and `.dockerignore`. They built for
+  the earlier quicer transport, without the Rust NIFs, and could not
+  build this repository.
 
 ### Fixed
 
@@ -37,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a decoded payload never has, so a tunnel request for distribution over
   the mesh pool (`macula:join_mesh/1`) ended in
   `{error, {unexpected_result, _}}`.
+- A build of a commit whose `native/macula_quic` changed after its
+  version's release loads its own QUIC NIF. It installed that release's
+  precompiled NIF instead, and `macula_quic` failed to load with
+  `{bad_lib, "Function not found macula_quic:nif_connect/8"}`.
 
 ## [10.24.0] - 2026-09-10
 

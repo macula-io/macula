@@ -1,7 +1,7 @@
 #!/bin/bash
-# Build all Rust NIFs for the macula package.
-# Handles both the Quinn QUIC NIF (with precompiled download fallback)
-# and the crypto/identity/MRI NIFs (always built from source).
+# Build all Rust NIFs for the macula package from this tree's native/
+# sources. Nothing is downloaded: a library built from other sources can
+# fail to load against this tree's Erlang modules.
 #
 # Usage: priv/build-nifs.sh [BASEDIR]
 # Called by rebar.config pre_hooks during compilation.
@@ -26,12 +26,12 @@ mkdir -p "${PRIV_DIR}"
 # ============================================================
 # Helper: build a Rust NIF crate from source
 #
-# REQUIRED="true" (macula_cbor_nif only, see below) makes a missing
-# cargo or a failed build a hard error (exit 1) instead of a warning.
-# Every OTHER caller here has a real Erlang fallback (macula_crypto_nif,
-# macula_ucan_nif, macula_did_nif, macula_mri_nif all document one in
-# their own moduledoc) and stays soft-skip on purpose: a consumer
-# without a Rust toolchain still gets a working, if slower, build.
+# REQUIRED="true" (macula_quic and macula_cbor_nif, see below) makes a
+# missing cargo or a failed build a hard error (exit 1) instead of a
+# warning. Every OTHER caller here has a real Erlang fallback
+# (macula_crypto_nif, macula_ucan_nif, macula_did_nif, macula_mri_nif all
+# document one in their own moduledoc) and stays soft-skip on purpose: a
+# consumer without a Rust toolchain still gets a working, if slower, build.
 # ============================================================
 build_nif() {
     local CRATE_NAME="$1"
@@ -88,10 +88,13 @@ build_nif() {
 }
 
 # ============================================================
-# 1. Quinn QUIC NIF (with precompiled download)
+# 1. QUIC NIF (build from source, REQUIRED -- macula_quic is the
+#    transport and has no Erlang fallback). It was once downloaded
+#    precompiled for the version in src/macula.app.src; whenever
+#    native/macula_quic had changed since that release, the build
+#    installed a library that failed to load with bad_lib.
 # ============================================================
-# Delegate to existing fetch-nif.sh which handles download + fallback
-sh "${BASEDIR}/priv/fetch-nif.sh" "${BASEDIR}"
+build_nif "macula_quic" "true"
 
 # ============================================================
 # 2. Crypto, Identity, and MRI NIFs (build from source, soft-skip --

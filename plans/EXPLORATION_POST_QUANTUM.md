@@ -61,10 +61,10 @@ is the part to fix first.
 **Cost of switching the Rust transport to aws-lc-rs**
 
 - `aws-lc-rs` and `aws-lc-sys` are **not in the cargo registry** on this machine, so nothing here builds them yet. ✅
-- The NIF is built from source by every consumer (`priv/build-nifs.sh` runs `cargo build`), with a precompiled
-  download only for Linux x86_64 glibc and musl. ✅ So every developer machine would compile a C library.
-- CI musl build runs in `rust:alpine` with only `apk add build-base`. ✅
-  Whether `aws-lc-sys` also needs `cmake` there, and how long it adds to the build, is ⚠ not verified.
+- The NIF is built from source by every consumer (`priv/build-nifs.sh` runs `cargo build`). ✅ So every developer
+  machine would compile a C library.
+- Consumer images on Alpine build it with their own toolchain. Whether `aws-lc-sys` needs `cmake` there, and how
+  long it adds to the build, is ⚠ not verified.
 - Handshake gets bigger:
   - ML-KEM-768 adds 1184 bytes to the ClientHello and 1088 to the ServerHello. ✅ (sizes measured)
   - The ClientHello will span two QUIC Initial packets. ⚠ Expected to be handled by QUIC itself, not tested.
@@ -163,8 +163,7 @@ A signature is about **52 times bigger**. Every signed DHT record and every sign
 - Macula signs DHT records and frames through OTP `crypto` (`macula_identity:sign/2` and `verify/3`), not a Rust
   NIF; the Rust NIFs cover UCANs, DIDs and puzzle grinding.
   - So every BEAM service that uses macula needs an OTP build whose `crypto` supports ML-DSA.
-  - `macula-station` builds on OTP 28.1 and the realm on OTP 28.1.1; only `macula`'s own Dockerfiles use
-    `erlang:27`. ✅
+  - `macula-station` builds on OTP 28.1 and the realm on OTP 28.1.1. ✅
 
 **Is key exchange plus a signature plan enough for an offer?** Yes, with reasons.
 

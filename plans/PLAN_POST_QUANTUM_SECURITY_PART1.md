@@ -276,8 +276,8 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 #### V4 Rust transport spike
 
 - **Method:**
-  - `aws-lc-rs` 1.18 builds for linux-glibc x86_64, linux-musl x86_64 (Alpine CI) and macOS arm64; what `aws-lc-sys`
-    needs on `rust:alpine`, where `build-nif.yml` installs only `build-base`;
+  - `aws-lc-rs` 1.18 builds for linux-glibc x86_64, linux-musl x86_64 (Alpine) and macOS arm64; what `aws-lc-sys`
+    needs on an Alpine image with only `build-base`;
   - quinn loopback handshake with ML-KEM-1024 and with a custom SecP384r1MLKEM1024 group
     (codepoint 4589 ✅, ML-KEM-1024 plus P-384 from aws-lc-rs);
   - the custom group against Go 1.27 or OpenSSL 3.6.4 as well, not only on loopback, because rustls orders key shares

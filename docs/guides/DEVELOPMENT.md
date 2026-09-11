@@ -7,7 +7,7 @@ This guide covers setting up a development environment for contributing to Macul
 - **Erlang/OTP 28** (pinned in `.tool-versions`) - [Installation Guide](https://www.erlang.org/downloads)
 - **Rebar3** - Erlang build tool ([Installation](https://rebar3.org/docs/getting-started/))
 - **Git** - Version control
-- **Docker** (optional) - `Dockerfile` / `Dockerfile.gateway` build deployment images; not required for local development or `rebar3 eunit`
+- **Rust toolchain** (`cargo`) - the NIFs build from source during `rebar3 compile` (see [Rust NIFs](#rust-nifs))
 
 ## Quick Setup
 
@@ -58,7 +58,7 @@ macula/
 ├── test/                         # EUnit tests, one file per module under test
 ├── include/                      # Header files (.hrl)
 ├── docs/                         # SDK guides
-├── priv/                         # build-nifs.sh, precompiled .so fallbacks
+├── priv/                         # build-nifs.sh, and the NIF libraries it builds
 └── rebar.config                  # Build configuration
 ```
 
@@ -148,11 +148,11 @@ Generated docs appear in `doc/` directory. Open `doc/index.html` in a browser.
 
 ## Rust NIFs
 
-The SDK includes Rust NIFs for performance-critical operations. They build automatically via `priv/build-nifs.sh` during `rebar3 compile`. Requires a Rust toolchain (`cargo`). If Rust is not available, pure Erlang fallbacks are used.
+The SDK includes Rust NIFs for performance-critical operations. They build from this repository's `native/` sources via `priv/build-nifs.sh` during `rebar3 compile`, so a Rust toolchain (`cargo`) is required. `macula_quic` and `macula_cbor_nif` have no Erlang fallback, and the build stops without them; the other crates fall back to pure Erlang when Rust is not available. After a build, `scripts/is_quic_nif_built_from_this_tree.sh` confirms that `macula_quic` loads from it.
 
 | NIF Crate | Provides |
 |-----------|----------|
-| `native/macula_quic/` | Quinn QUIC transport (precompiled download available) |
+| `native/macula_quic/` | Quinn QUIC transport |
 | `native/macula_crypto_nif/` | Ed25519, BLAKE3, SHA-256 |
 | `native/macula_ucan_nif/` | UCAN token create/verify |
 | `native/macula_did_nif/` | DID document operations |

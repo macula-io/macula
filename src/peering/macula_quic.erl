@@ -88,7 +88,7 @@
 
 init() ->
     PrivDir = code:priv_dir(macula),
-    SoName = filename:join(PrivDir, "libmacula_quic"),
+    SoName = filename:join(PrivDir, "macula_quic"),
     case erlang:load_nif(SoName, 0) of
         ok ->
             ?LOG_INFO("[macula_quic] Quinn NIF loaded from ~s", [SoName]),
