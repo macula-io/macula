@@ -104,6 +104,8 @@
 %%%-------------------------------------------------------------------
 -module(macula_content_transfer).
 
+-include("macula_quic_error_codes.hrl").
+
 -behaviour(gen_server).
 
 -export([start_put/2, start_put/3,
@@ -270,9 +272,10 @@ await(Pid) -> await(Pid, infinity).
 -spec await(pid(), timeout()) -> {ok, term()} | {error, term()}.
 await(Pid, Timeout) -> gen_server:call(Pid, await, Timeout).
 
-%% @doc As `cancel/3' with a default code/message.
+%% @doc As `cancel/3', with the cancelled code (0,
+%% `?QUIC_CODE_CANCELLED') and the message `cancelled'.
 -spec cancel(pid()) -> ok.
-cancel(Pid) -> cancel(Pid, 0, <<"cancelled">>).
+cancel(Pid) -> cancel(Pid, ?QUIC_CODE_CANCELLED, <<"cancelled">>).
 
 %% @doc Cancel `Pid''s transfer and reap the process. Resets every
 %% currently-open content stream with `Code' — genuinely peer-visible,

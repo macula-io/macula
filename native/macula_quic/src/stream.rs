@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, Notify, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::{atoms, connection::ConnectionResource, message, runtime};
+use crate::{atoms, connection::ConnectionResource, error_codes, message, runtime};
 
 /// Bytes async_send may queue on one stream beyond what the stream has
 /// written. A call that would queue more returns `{error, busy}`.
@@ -21,10 +21,6 @@ const SEND_BUDGET_BYTES: usize = 1024 * 1024;
 /// A process that got `{error, busy}` is told to retry once at least this
 /// much of the budget is free again.
 const SEND_READY_BYTES: usize = SEND_BUDGET_BYTES / 2;
-
-/// Application error code of the reset that ends a closed stream whose queued
-/// data could not be written within its linger bound.
-const LINGER_RESET_CODE: u32 = 1;
 
 /// Why a stream's writes stopped.
 #[derive(Clone)]
@@ -400,7 +396,7 @@ async fn write_all(stream: &ResourceArc<StreamResource>, bytes: &[u8]) -> Result
                 }
             }
             Step::LingerPassed => {
-                reset_send_half(stream, LINGER_RESET_CODE);
+                reset_send_half(stream, error_codes::LINGER_EXPIRED);
                 return Err(Failure::Closed);
             }
             Step::Wrote(Ok(n)) => offset += n,
@@ -545,7 +541,7 @@ fn nif_async_send<'a>(
 ///
 /// Returns at once. With nothing queued it finishes the stream now: a QUIC
 /// FIN, a clean EOF for the peer. Otherwise the writer task writes what is
-/// queued and then finishes, or resets the stream with `LINGER_RESET_CODE`
+/// queued and then finishes, or resets the stream with `error_codes::LINGER_EXPIRED`
 /// when that takes longer than `LingerMs`.
 #[rustler::nif]
 fn nif_close_stream<'a>(

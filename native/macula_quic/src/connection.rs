@@ -5,11 +5,7 @@ use rustler::env::SavedTerm;
 use rustler::{Binary, Encoder, Env, LocalPid, NifResult, OwnedEnv, ResourceArc, Term};
 use tokio::task::{AbortHandle, JoinHandle};
 
-use crate::{atoms, config, message, runtime, stream};
-
-/// Application error code for a stream whose open was cancelled after the
-/// peer allowed it: the stream is reset and stopped with this code.
-const OPEN_CANCELLED_CODE: u32 = 0;
+use crate::{atoms, config, error_codes, message, runtime, stream};
 
 /// Opaque connection handle exposed to Erlang via ResourceArc.
 pub struct ConnectionResource {
@@ -319,8 +315,8 @@ fn deliver_open_result(
     let mut state = state.lock().unwrap();
     if state.cancelled {
         if let Ok((mut send, mut recv)) = result {
-            let _ = send.reset(OPEN_CANCELLED_CODE.into());
-            let _ = recv.stop(OPEN_CANCELLED_CODE.into());
+            let _ = send.reset(error_codes::CANCELLED.into());
+            let _ = recv.stop(error_codes::CANCELLED.into());
         }
         return;
     }
