@@ -128,7 +128,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     profile (D4), signing as Macula's composite `ML-DSA-87-PS384` (D7);
   - CONNECT keys and TLS keys, their bindings and their status (D22); key storage per D6, with a round trip on
     load and rotation every 5 days;
-  - node_id per D5, through one identity function that every comparison uses; the puzzle works on node_id, and
+  - node_id per D5, through one identity function that every comparison uses; the puzzle works on node_id at 12
+    leading zero bits, a constant (D30), and the 10.x `puzzle_difficulty` setting of the `macula` application goes;
     identity key generation regenerates only the ML-DSA-87 half of a pq_hybrid key;
   - record `key` and `signature`, and frame signature fields, become algorithm-tagged and variable-length; records
     carry the signer's full public key or keys (D13);
@@ -492,8 +493,11 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `macula-station` builds against a local checkout of `macula` during development and moves to `macula` `~> 11.0`
     from hex once Raf publishes (D20);
   - every fleet node runs chrony with NTS against at least two independent servers (D22); which servers is open;
+
   - station instances start with puzzle enforcement in `log_only`; `enforce` follows in WP 4.5.
 - **Red first:** the Stage 2 smoke check against the 11.0.0 station instances fails before they start.
+  - station instances start with puzzle enforcement in `log_only`; `enforce` follows in WP 4.5 (D30).
+- **Red first:** the Stage 2 smoke check against the new fleet fails before provisioning.
 - **Done:** every station instance is reachable in its profile under the node_ids in its seeds.
 - **Effort:** 3 to 5 days, plus configuration generation ⚠.
 
@@ -874,8 +878,8 @@ Every stack also meets these, each red first:
   - the group, signature scheme and cipher suite checked two independent ways that agree;
   - the connection handshake checked, and a classical-only client and X25519MLKEM768 refused;
   - the cross-stack leaf-hash vector through each stack's real handshake and accessor;
-  - once every stack generates puzzle-valid identity keys, the fleet switches puzzle enforcement from `log_only`
-    to `enforce`, and every cell passes again under `enforce`.
+  - once every stack generates puzzle-valid identity keys (D30), the fleet switches puzzle enforcement from
+    `log_only` to `enforce`, and every cell passes again under `enforce`.
 - **Done:** every cell green for its profile, with captures stored as CI artifacts. This is the evidence for any
   public claim about that stack.
 - **Effort:** 2 to 3 days, together with WP 2.2.

@@ -484,6 +484,7 @@ Raf answered "go with the recommendations" on 2026-09-10.
 | D27 | Where content lives | The sharing node keeps and serves it; stations only pass it through | Accepted |
 | D28 | DHT slots and verification budget | 64 entries per slot; checked places; slowed reads | Accepted |
 | D29 | Distribution tunnel keys | The connection handshake end to end inside the tunnel | Accepted |
+| D30 | Node_id puzzle difficulty | 12 bits in 11.0.0, one constant in every stack | Accepted |
 
 The full text of each decision is in
 [PLAN_POST_QUANTUM_SECURITY_DECISIONS.md](PLAN_POST_QUANTUM_SECURITY_DECISIONS.md).
