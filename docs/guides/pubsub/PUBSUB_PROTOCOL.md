@@ -69,10 +69,12 @@ The subscriber receives:
 | Key | Type | Meaning |
 |---|---|---|
 | `realm` | `<<_:256>>` | Realm tag (matches the subscribe call) |
-| `publisher` | `binary()` | Publisher pubkey (the original publisher, not the relay) |
+| `publisher` | `<<_:256>>` | The publisher's node_id (the original publisher, not the relay) |
 | `seq` | `non_neg_integer()` | Per-publisher monotonic sequence |
-| `publisher_verified` | `true \| false \| not_signed` | Whether the publisher signature verified; `not_signed` when the EVENT carried none |
-| `delivered_via` | `binary()` | Pubkey of the link/station that delivered this copy |
+| `published_at` | `non_neg_integer()` | When the publisher published it, in milliseconds since the epoch |
+| `delivered_via` | `plumtree \| direct` | How this copy reached the station link |
+| `publication_hash` | `<<_:384>>` | SHA-384 of the publication's signed `tbs`; the pool delivers each hash once |
+| `expires_at` | `non_neg_integer()` | The last moment, in milliseconds, a verifier accepts the publication |
 
 Every EVENT's publication is verified before delivery, and the pool
 delivers each publication **at most once**, keyed on its hash, the SHA-384

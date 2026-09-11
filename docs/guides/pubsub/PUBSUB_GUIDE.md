@@ -51,9 +51,12 @@ wrapper doesn't fit). `handle_event/4` receives `Topic`, `Payload`, and
 | Key | Type | Meaning |
 |---|---|---|
 | `realm` | `<<_:256>>` | Realm tag (matches the subscribe call) |
-| `publisher` | `binary()` | Publisher pubkey (the original publisher, not the relay) |
+| `publisher` | `<<_:256>>` | The publisher's node_id (the original publisher, not the relay) |
 | `seq` | `non_neg_integer()` | Per-publisher monotonic sequence |
-| `delivered_via` | `binary()` | Pubkey of the link/station that delivered this copy |
+| `published_at` | `non_neg_integer()` | When the publisher published it, in milliseconds since the epoch |
+| `delivered_via` | `plumtree \| direct` | How this copy reached the station link |
+| `publication_hash` | `<<_:384>>` | SHA-384 of the publication's signed `tbs`; the pool delivers each hash once |
+| `expires_at` | `non_neg_integer()` | The last moment, in milliseconds, a verifier accepts the publication |
 
 ```erlang
 -module(my_orders_listener).

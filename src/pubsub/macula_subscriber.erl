@@ -47,7 +47,7 @@
 -callback init(Args :: term()) ->
     {ok, State :: term()} | {stop, Reason :: term()}.
 
--callback handle_event(Topic :: binary(), Payload :: term(), Meta :: map(),
+-callback handle_event(Topic :: binary(), Payload :: term(), Meta :: macula_pubsub:event_meta(),
                         State :: term()) ->
     {noreply, NewState :: term()} | {stop, Reason :: term(), NewState :: term()}.
 
