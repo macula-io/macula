@@ -200,17 +200,19 @@ verify_mcid_accepts_the_manifest_it_created_test() ->
                                               #{chunk_size => 200}),
     ?assertEqual(ok, macula_manifest:verify_mcid(M, maps:get(mcid, M))).
 
-%% The manifest a caller fetches has been through the frame codec. The name
-%% crosses the wire as a byte string and the MCID hashes it as text, so the
-%% check must still agree after that round trip.
+%% The manifest a caller fetches has been through the frame codec, as the
+%% payload of the provider's signed RESULT. The name crosses the wire as a
+%% byte string and the MCID hashes it as text, so the check must still agree
+%% after that round trip.
 verify_mcid_accepts_a_manifest_after_the_frame_round_trip_test() ->
     {ok, M, _Chunks} = macula_manifest:create(crypto:strong_rand_bytes(700),
                                               #{chunk_size => 200,
                                                 name => <<"report.pdf">>}),
-    Frame = macula_frame:result(#{call_id => <<0:128>>, payload => M,
-                                  responded_by => <<0:256>>}),
+    {Request, Provider} = manifest_request(),
+    Frame = macula_frame:result(#{request => Request, payload => M}, Provider),
     {ok, Decoded, _Rest} = macula_frame:decode(macula_frame:encode(Frame)),
-    {ok, Read} = macula_manifest:from_wire(maps:get(payload, Decoded)),
+    {ok, #{payload := Wire}} = macula_frame:verify_reply(Decoded, Request, pq_pure),
+    {ok, Read} = macula_manifest:from_wire(Wire),
     ?assertEqual(<<"report.pdf">>, maps:get(name, Read)),
     ?assertEqual(ok, macula_manifest:verify_mcid(Read, maps:get(mcid, M))).
 
@@ -302,7 +304,8 @@ verify_mcid_refuses_an_unknown_hash_algorithm_test() ->
      || Unknown <- [sha3, blake3, sha256]].
 
 %% End to end in a fresh node that has never loaded macula_manifest: the
-%% manifest a station returns decodes there with text keys, and from_wire/1
+%% manifest a provider returns in its signed RESULT decodes and verifies
+%% there with text keys, and from_wire/1
 %% still reads the manifest the MCID names. The node is checked first, so
 %% the test cannot pass on a node that already has the field atoms.
 from_wire_reads_a_manifest_decoded_in_a_fresh_node_test_() ->
@@ -312,16 +315,15 @@ fresh_node_reads_the_manifest() ->
     {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700),
                                         #{chunk_size => 200}),
     Mcid = maps:get(mcid, M),
-    Bin = macula_frame:encode(macula_frame:result(#{call_id => <<0:128>>,
-                                                    payload => M,
-                                                    responded_by => <<0:256>>})),
+    {Request, Provider} = manifest_request(),
+    Bin = macula_frame:encode(macula_frame:result(#{request => Request, payload => M}, Provider)),
     Paths = lists:append([["-pa", P] || P <- code:get_path()]),
     {ok, Peer, _Node} = peer:start_link(#{connection => standard_io, args => Paths}),
     try
         ?assertMatch({'EXIT', _}, catch peer:call(Peer, erlang, binary_to_existing_atom,
                                                   [<<"root_hash">>, utf8])),
         {ok, Decoded, <<>>} = peer:call(Peer, macula_frame, decode, [Bin]),
-        Wire = maps:get(payload, Decoded),
+        {ok, #{payload := Wire}} = peer:call(Peer, macula_frame, verify_reply, [Decoded, Request, pq_pure]),
         ?assert(maps:is_key({text, <<"root_hash">>}, Wire)),
         {ok, Read} = peer:call(Peer, macula_manifest, from_wire, [Wire]),
         ?assertEqual(M, Read),
@@ -329,6 +331,18 @@ fresh_node_reads_the_manifest() ->
     after
         peer:stop(Peer)
     end.
+
+%% A verified CALL for a manifest and the provider key that answers it: the
+%% manifest reaches the caller as the payload of the provider's signed
+%% RESULT, which the caller verifies against its own request.
+manifest_request() ->
+    {ok, Caller} = macula_node_keys:generate(identity, pq_pure),
+    {ok, Provider} = macula_node_keys:generate(identity, pq_pure),
+    Spec = #{request_id => <<7:128>>, realm => <<0:256>>, procedure => <<"_content.get_manifest">>,
+             target => macula_node_keys:key_id(Provider), deadline => 1789000600000, payload => <<"mcid">>},
+    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(macula_frame:call(Spec, Caller))),
+    {ok, Request} = macula_frame:verify_request(Decoded, pq_pure),
+    {Request, Provider}.
 
 text_keys(Map, Keys) ->
     lists:foldl(fun(K, Acc) -> text_key(maps:take(K, Acc), K) end, Map, Keys).

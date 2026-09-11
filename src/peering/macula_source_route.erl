@@ -95,12 +95,12 @@
 %% (Unix ms). Each hop may be an already-truncated 16-byte ID or a
 %% full 32-byte NodeId; full IDs are truncated to their first 16
 %% bytes per the wire format.
--spec new([hop_id() | macula_identity:pubkey()],
+-spec new([hop_id() | <<_:256>>],
           non_neg_integer()) -> header().
 new(Hops, DeadlineMs) ->
     new(Hops, DeadlineMs, 0).
 
--spec new([hop_id() | macula_identity:pubkey()],
+-spec new([hop_id() | <<_:256>>],
           non_neg_integer(), non_neg_integer()) -> header().
 new(Hops, DeadlineMs, CurrentHop)
   when is_list(Hops),
