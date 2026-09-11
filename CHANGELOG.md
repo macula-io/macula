@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `macula_frame:validate_received/1` checks that a frame decoded from a
+  peer's bytes carries every field its `frame_type` requires, each with a
+  value that type's builder accepts, and returns `ok` or
+  `{error, {invalid_frame, Type, Field}}`. A frame type this node does not
+  know passes; a frame without a `frame_type` does not. Sample frames from
+  the Go, Rust and .NET SDKs in `test/fixtures/sdk_frames` all pass.
 - `macula_station_link:not_sent/1` says whether an error from `call/5,6`
   means the CALL never went out: the link was not connected yet, there was
   no link process, or the link refused the frame before sending it.
