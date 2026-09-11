@@ -20,8 +20,8 @@
 %%   <li><strong>received</strong>: `MsgId => {Publication, ExpiresAt}' for the verified publications delivered
 %%       locally, each kept until its publication expires (`sweep/2'). Used to recognise repeat GOSSIPs and to answer
 %%       GRAFTs.</li>
-%%   <li><strong>missing</strong>: `MsgId => [Peer]' for peers who sent IHAVE for publications not yet received in
-%%       full.</li>
+%%   <li><strong>missing</strong>: `MsgId => {Peers, NotedAt}' for the peers who sent IHAVE for a publication not yet
+%%       received in full, and when the first IHAVE for it came; forgotten after 70 minutes (`sweep/2').</li>
 %% </ul>
 %%
 %% == Message handling ==
@@ -41,7 +41,8 @@
 %%   <li><strong>Receive PRUNE</strong>: move the sender from eager to lazy.</li>
 %% </ul>
 %%
-%% This module is pure apart from reading the configured profile when a node starts and the clock when it verifies.
+%% This module is pure apart from reading the configured profile when a node starts, and the clock when it verifies a
+%% publication or notes a missing one.
 %% The wrapping process transmits the action list, feeds deliveries to the local consumer and calls `sweep/2' on a
 %% timer, so a node remembers a publication hash until the publication expires, and no longer.
 %%
@@ -67,6 +68,10 @@
 
 -export_type([state/0, peer/0, msg_id/0, action/0, delivery/0]).
 
+%% The longest a publication can live: a published_at up to 5 minutes ahead, a ttl_ms of at most one hour and 5 minutes
+%% of tolerance. No announcement can name a live publication for longer.
+-define(MISSING_MAX_AGE_MS, 70 * 60000).
+
 -type peer()     :: <<_:256>>.
 -type msg_id()   :: <<_:384>>.
 
@@ -77,7 +82,7 @@
     eager_push := sets:set(peer()),
     lazy_push  := sets:set(peer()),
     received   := #{msg_id() => {macula_signed_object:object(), non_neg_integer()}},
-    missing    := #{msg_id() => sets:set(peer())}
+    missing    := #{msg_id() => {sets:set(peer()), non_neg_integer()}}
 }.
 
 -type action()   :: {send, peer(), macula_frame:frame()}.
@@ -174,15 +179,20 @@ process(State, _From, _Frame) ->
 %% Retention
 %%=====================================================================
 
-%% @doc Forget every received publication that expired before `NowMs', in milliseconds of wall-clock time: its
-%% published_at plus its ttl_ms, or 10 minutes without one, plus 5 minutes. A node keeps a publication hash until the
-%% publication expires, and no longer; a later copy is refused by verification, and a GRAFT for it gets no answer.
+%% @doc Forget, at `NowMs' in milliseconds of wall-clock time, every received publication that has expired (its
+%% published_at plus its ttl_ms, or 10 minutes without one, plus 5 minutes) and every missing publication first
+%% announced more than 70 minutes ago. A node keeps a publication hash until the publication expires, and no longer; a
+%% later copy is refused by verification, and a GRAFT for it gets no answer.
 -spec sweep(state(), integer()) -> state().
-sweep(#{received := R} = S, NowMs) when is_integer(NowMs) ->
-    S#{received := maps:filter(live_at(NowMs), R)}.
+sweep(#{received := R, missing := M} = S, NowMs) when is_integer(NowMs) ->
+    S#{received := maps:filter(live_at(NowMs), R),
+       missing  := maps:filter(announced_since(NowMs - ?MISSING_MAX_AGE_MS), M)}.
 
 live_at(NowMs) ->
     fun(_MsgId, {_Publication, ExpiresAt}) -> ExpiresAt >= NowMs end.
+
+announced_since(Oldest) ->
+    fun(_MsgId, {_Peers, NotedAt}) -> NotedAt >= Oldest end.
 
 %%=====================================================================
 %% Handlers
@@ -247,8 +257,8 @@ clear_missing(#{missing := M} = S, MsgId) ->
     S#{missing := maps:remove(MsgId, M)}.
 
 note_missing(#{missing := M} = S, MsgId, From) ->
-    Existing = maps:get(MsgId, M, sets:new()),
-    S#{missing := M#{MsgId => sets:add_element(From, Existing)}}.
+    {Peers, NotedAt} = maps:get(MsgId, M, {sets:new(), erlang:system_time(millisecond)}),
+    S#{missing := M#{MsgId => {sets:add_element(From, Peers), NotedAt}}}.
 
 move_to_eager(#{eager_push := E, lazy_push := L} = S, Peer) ->
     S#{eager_push := sets:add_element(Peer, E),

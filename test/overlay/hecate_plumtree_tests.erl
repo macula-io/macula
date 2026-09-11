@@ -220,6 +220,28 @@ a_graft_for_a_forgotten_publication_gets_no_answer_test() ->
     Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => MsgId, round => 0}),
     ?assertMatch({_, [], []}, hecate_plumtree:process(S2, id(42), Frame)).
 
+%% An IHAVE for a publication never received is forgotten once it is older than 70 minutes, the longest a
+%% publication can live.
+sweep_forgets_a_missing_publication_announced_over_70_minutes_ago_test() ->
+    {S1, _, []} = hecate_plumtree:process(fresh(id(99)), id(60), ihave(crypto:strong_rand_bytes(48))),
+    ?assertEqual(1, hecate_plumtree:missing_count(S1)),
+    ?assertEqual(1, hecate_plumtree:missing_count(hecate_plumtree:sweep(S1, erlang:system_time(millisecond)))),
+    Later = erlang:system_time(millisecond) + 70 * 60000 + 1000,
+    ?assertEqual(0, hecate_plumtree:missing_count(hecate_plumtree:sweep(S1, Later))).
+
+a_sweep_keeps_a_recently_announced_missing_publication_test() ->
+    Old = crypto:strong_rand_bytes(48),
+    Recent = crypto:strong_rand_bytes(48),
+    {S1, _, []} = hecate_plumtree:process(fresh(id(99)), id(60), ihave(Old)),
+    timer:sleep(20),
+    Between = erlang:system_time(millisecond),
+    {S2, _, []} = hecate_plumtree:process(S1, id(61), ihave(Recent)),
+    S3 = hecate_plumtree:sweep(S2, Between + 70 * 60000),
+    ?assertEqual(1, hecate_plumtree:missing_count(S3)),
+    %% The recent announcement is the one kept: another IHAVE for it adds no entry.
+    {S4, _, []} = hecate_plumtree:process(S3, id(62), ihave(Recent)),
+    ?assertEqual(1, hecate_plumtree:missing_count(S4)).
+
 %%---------------------------------------------------------------------
 %% Receive PRUNE
 %%---------------------------------------------------------------------
@@ -283,6 +305,9 @@ publish_frame(Realm, Payload, Extra) ->
 
 msg_id_of(#{publication := #{tbs := Tbs}}) ->
     crypto:hash(sha384, Tbs).
+
+ihave(MsgId) ->
+    macula_frame:plumtree_ihave(#{realm => ?REALM, msg_id => MsgId, round => 1}).
 
 gossip_of(#{publication := Publication}, Round) ->
     macula_frame:plumtree_gossip(#{publication => Publication, round => Round}).
