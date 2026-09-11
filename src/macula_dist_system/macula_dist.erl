@@ -312,7 +312,9 @@ do_accept({AcceptPid, QuicConn, Stream, MyNode, Allowed, SetupTime}, Kernel, _Un
     Timer = dist_util:start_timer(SetupTime),
 
     receive
-        {AcceptPid, controller, ok} -> ok
+        %% The bytes the socket delivered before this process owned it come
+        %% with the handoff, ahead of everything it delivers here.
+        {AcceptPid, controller, ok, Received} -> stash_buf(Stream, Received)
     after ?HANDSHAKE_TIMEOUT ->
         dist_util:shutdown(?MODULE, ?LINE, control_transfer_timeout)
     end,
@@ -343,11 +345,15 @@ do_setup_connect(Kernel, Node, Type, MyNode, Timer, Host, Port) ->
                           Kernel, Node, Type, MyNode, Timer).
 
 connect_by_mode(relay, Node, Host, Port) ->
-    macula_dist_pool:connect(atom_to_list(Node), Host, Port);
+    nothing_received(macula_dist_pool:connect(atom_to_list(Node), Host, Port));
 connect_by_mode(dist_relay, Node, _Host, _Port) ->
     connect_via_dist_relay(Node);
 connect_by_mode(direct, _Node, Host, Port) ->
     connect_quic(Host, Port).
+
+%% A socket that has delivered no bytes yet.
+nothing_received({ok, Conn, Stream}) -> {ok, Conn, Stream, <<>>};
+nothing_received({error, _} = Error) -> Error.
 
 connect_via_dist_relay(Node) ->
     handle_client_lookup(macula_dist_relay_client:whereis_client(), Node).
@@ -358,8 +364,10 @@ handle_client_lookup(Client, Node) ->
     NodeBin = atom_to_binary(Node),
     macula_dist_relay_client:request_tunnel(Client, NodeBin).
 
-handle_connect_result({ok, Conn, Stream}, Kernel, Node, Type, MyNode, Timer) ->
+handle_connect_result({ok, Conn, Stream, Received}, Kernel, Node, Type, MyNode, Timer) ->
     ?LOG_INFO("[dist] Connected to ~p, starting handshake", [Node]),
+    %% Bytes the socket delivered before this process owned it come first.
+    stash_buf(Stream, Received),
     HSData = make_hs_data(Kernel, MyNode, {Conn, Stream}, Timer, undefined),
     dist_util:handshake_we_started(
         HSData#hs_data{other_node = Node, request_type = Type});
@@ -385,7 +393,7 @@ connect_quic_result({error, Reason}) ->
     {error, Reason}.
 
 open_quic_stream({ok, Stream}, Conn) ->
-    {ok, Conn, Stream};
+    {ok, Conn, Stream, <<>>};
 open_quic_stream({error, Reason}, Conn) ->
     macula_quic:close_connection(Conn),
     {error, {stream_failed, Reason}}.

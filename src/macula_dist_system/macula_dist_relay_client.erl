@@ -32,12 +32,24 @@
 %%% 1. `start_link(RelayUrl, NodeName)' connects + sends identify
 %%% 2. Await identified reply
 %%% 3. `request_tunnel(TargetNode)' blocks until tunnel_ok + tunnel
-%%%    stream arrive; returns `{ok, ConnRef, StreamRef}' for use as
-%%%    the dist Socket in `macula_dist'
+%%%    stream arrive; returns `{ok, ConnRef, StreamRef, Received}' for use
+%%%    as the dist Socket in `macula_dist', where `Received' holds the
+%%%    tunnel's bytes the client read before handing the stream over
 %%% 4. Incoming tunnels: tunnel_notify arrives on control, then a
 %%%    new_stream event; client reads 32-byte prefix, matches to the
 %%%    notified tunnel, hands the stream to `net_kernel' via the
-%%%    standard `{accept, _, Socket, Family, Driver}' protocol.
+%%%    standard `{accept, _, Socket, Family, Driver}' protocol, and the
+%%%    tunnel's bytes read before the handoff reach the dist controller
+%%%    in its controller-ok message.
+%%%
+%%% == Tunnel bytes at a handoff ==
+%%%
+%%% A tunnel stream changes owner once or twice: to the caller of
+%%% `request_tunnel/2', or to a setup process and then the dist controller.
+%%% The bytes an owner read before the handoff, including those that
+%%% arrive while a tunnel waits for tunnel_ok or tunnel_notify, travel
+%%% inside the handoff message, so the new owner has them before anything
+%%% the stream delivers to it directly.
 %%%
 %%% == Control stream ==
 %%%
@@ -102,7 +114,7 @@
     %% matches yet — because the control message (tunnel_ok or
     %% tunnel_notify) is still in flight. Re-matched once the control
     %% side registers the tunnel_id.
-    orphan_streams = #{}   :: #{binary() => {reference(), binary()}},  %% TunnelId → {Stream, Leftover}
+    orphan_streams = #{}   :: #{binary() => {reference(), binary()}},  %% TunnelId → {Stream, bytes read after the prefix}
     %% Control frames the control stream has not taken yet, oldest first.
     held_control = queue:new() :: queue:queue(binary())
 }).
@@ -149,10 +161,12 @@ whereis_client() ->
     erlang:whereis(?MODULE).
 
 %% @doc Request a tunnel to TargetNode. Blocks until the tunnel stream
-%% is ready or the request fails/times out. Returns a {ConnRef, StreamRef}
-%% tuple suitable for use as the dist Socket in `macula_dist'.
+%% is ready or the request fails/times out. Returns the connection and the
+%% stream, suitable for use as the dist Socket in `macula_dist', and the
+%% tunnel's bytes this client read before handing the stream over: they
+%% come before anything the stream delivers to the caller.
 -spec request_tunnel(pid(), binary()) ->
-    {ok, reference(), reference()} | {error, term()}.
+    {ok, reference(), reference(), binary()} | {error, term()}.
 request_tunnel(Client, TargetNode) when is_binary(TargetNode) ->
     gen_server:call(Client, {request_tunnel, TargetNode}, ?TUNNEL_TIMEOUT + 5_000).
 
@@ -448,12 +462,22 @@ handle_stream_data({ok, Accumulated}, Stream, Data,
                    #state{unidentified_streams = Unident} = State) ->
     Combined = <<Accumulated/binary, Data/binary>>,
     maybe_extract_prefix(Stream, Combined, Unident, State);
-handle_stream_data(error, _Stream, _Data, State) ->
-    %% Stream is already identified and owned by the dist controller.
-    %% Bytes arriving here should not happen — once handed off, the
-    %% controller owns the mailbox. Ignore.
-    State2 = State,
-    {noreply, State2}.
+handle_stream_data(error, Stream, Data, #state{orphan_streams = Orphans} = State) ->
+    {noreply, read_after_prefix(orphan_tunnel(Stream, Orphans), Stream, Data, State)}.
+
+%% The tunnel whose stream waits for tunnel_ok or tunnel_notify, if any.
+orphan_tunnel(Stream, Orphans) ->
+    [TunnelId || {TunnelId, {Waiting, _Received}} <- maps:to_list(Orphans), Waiting =:= Stream].
+
+%% Bytes read while a stream waits for its tunnel stay with it, in order,
+%% until the stream is handed over.
+read_after_prefix([TunnelId], Stream, Data, #state{orphan_streams = Orphans} = State) ->
+    #{TunnelId := {Stream, Received}} = Orphans,
+    State#state{orphan_streams = Orphans#{TunnelId := {Stream, <<Received/binary, Data/binary>>}}};
+read_after_prefix([], Stream, Data, State) ->
+    ?LOG_WARNING("[dist_relay_client] ~p bytes for stream ~p, which this client no longer owns",
+                 [byte_size(Data), Stream]),
+    State.
 
 maybe_extract_prefix(Stream, Buf, Unident, State)
   when byte_size(Buf) < ?TUNNEL_ID_SIZE ->
@@ -465,44 +489,57 @@ maybe_extract_prefix(Stream, Buf, Unident, State) ->
     match_tunnel(TunnelId, Stream, Rest, State2).
 
 %% Try to match a freshly-identified stream against pending outbound/inbound.
-match_tunnel(TunnelId, Stream, LeftoverBytes, State) ->
+match_tunnel(TunnelId, Stream, Received, State) ->
     match_outbound(maps:take(TunnelId, State#state.pending_outbound),
-                   TunnelId, Stream, LeftoverBytes, State).
+                   TunnelId, Stream, Received, State).
 
-match_outbound({#pending_tunnel{from = From}, Rest}, TunnelId, Stream, Leftover, State) ->
+match_outbound({#pending_tunnel{from = From}, Rest}, TunnelId, Stream, Received, State) ->
     %% Outbound match. Transfer stream ownership to the caller BEFORE
-    %% replying so subsequent {quic, ...} messages go to the caller, not
-    %% to this gen_server. Then re-inject any bytes that arrived with
-    %% the prefix (typically the peer's first dist handshake frame) as
-    %% a synthetic QUIC data event the caller will see when it starts
-    %% reading.
+    %% replying so later {quic, ...} messages go to the caller, not to
+    %% this gen_server. The bytes read so far, typically the peer's first
+    %% dist handshake frame, and those still queued here for the stream go
+    %% inside the reply, ahead of everything the stream delivers to the
+    %% caller. The stream's other messages queued here follow the reply.
     {CallerPid, _Tag} = From,
     ok = macula_quic:controlling_process(Stream, CallerPid),
     ok = macula_quic:setopt(Stream, active, true),
-    deliver_leftover(CallerPid, Stream, Leftover),
-    gen_server:reply(From, {ok, State#state.conn, Stream}),
+    {Queued, Events} = take_queued(Stream, Received),
+    gen_server:reply(From, {ok, State#state.conn, Stream, Queued}),
+    ok = forward(CallerPid, Events),
     Active = (State#state.active_tunnels)#{Stream => TunnelId},
     {noreply, State#state{pending_outbound = Rest, active_tunnels = Active}};
-match_outbound(error, TunnelId, Stream, Leftover, State) ->
+match_outbound(error, TunnelId, Stream, Received, State) ->
     match_inbound(maps:take(TunnelId, State#state.pending_inbound),
-                  TunnelId, Stream, Leftover, State).
+                  TunnelId, Stream, Received, State).
 
-%% Re-inject leftover bytes as a QUIC data event to the new stream owner.
-%% This is critical: if prefix + first dist frame arrive in the same QUIC
-%% data message, the dist frame would be lost without this handoff.
-deliver_leftover(_Pid, _Stream, <<>>) ->
-    ok;
-deliver_leftover(Pid, Stream, Leftover) ->
-    Pid ! {quic, Leftover, Stream, #{}},
-    ok.
+%% The bytes queued in this process for `Stream', after `Received', and the
+%% stream's other queued {quic, ...} messages, such as its end, oldest first.
+take_queued(Stream, Received) ->
+    receive
+        {quic, Data, Stream, _Flags} when is_binary(Data) ->
+            take_queued(Stream, <<Received/binary, Data/binary>>)
+    after 0 ->
+        {Received, take_events(Stream, [])}
+    end.
+
+take_events(Stream, Events) ->
+    receive
+        {quic, Event, Stream, _Info} = Message when is_atom(Event) ->
+            take_events(Stream, [Message | Events])
+    after 0 ->
+        lists:reverse(Events)
+    end.
+
+forward(Pid, Messages) ->
+    lists:foreach(fun(Message) -> Pid ! Message end, Messages).
 
 match_inbound({_Source, Rest}, TunnelId, Stream,
-              _Leftover, #state{kernel_pid = undefined} = State) ->
+              _Received, #state{kernel_pid = undefined} = State) ->
     ?LOG_WARNING("[dist_relay_client] Inbound tunnel ~s arrived before "
                  "kernel_pid set — dropping stream ~p", [TunnelId, Stream]),
     try macula_quic:close_stream(Stream) catch _:_ -> ok end,
     {noreply, State#state{pending_inbound = Rest}};
-match_inbound({_Source, Rest}, TunnelId, Stream, Leftover,
+match_inbound({_Source, Rest}, TunnelId, Stream, Received,
               #state{kernel_pid = Kernel, conn = Conn, setups = Setups} = State) ->
     %% Start a monitored setup process for the net_kernel accept handshake.
     %% The handshake requires synchronous receive — can't do it inside a
@@ -517,10 +554,11 @@ match_inbound({_Source, Rest}, TunnelId, Stream, Leftover,
               [TunnelId, SetupPid]),
     ok = macula_quic:controlling_process(Stream, SetupPid),
     ok = macula_quic:setopt(Stream, active, true),
-    %% Hand over ownership along with any leftover bytes. Setup process
-    %% will re-inject them to the dist controller after the net_kernel
-    %% handshake.
-    SetupPid ! {stream_owned, Stream, Leftover},
+    %% Hand over ownership with the bytes read so far, those still queued
+    %% here, and the stream's other queued messages. The setup process
+    %% passes them on to the dist controller.
+    {Queued, Events} = take_queued(Stream, Received),
+    SetupPid ! {stream_owned, Stream, Queued, Events},
     Active = (State#state.active_tunnels)#{Stream => TunnelId},
     NewSetups = Setups#{MonRef => TunnelId},
     {noreply, State#state{
@@ -528,14 +566,14 @@ match_inbound({_Source, Rest}, TunnelId, Stream, Leftover,
         active_tunnels = Active,
         setups = NewSetups
     }};
-match_inbound(error, TunnelId, Stream, Leftover,
+match_inbound(error, TunnelId, Stream, Received,
               #state{orphan_streams = Orphans} = State) ->
     %% Neither outbound nor inbound has registered this tunnel yet —
     %% control message is in flight. Stash the stream and retry the
     %% match when tunnel_ok / tunnel_notify arrives.
     ?LOG_INFO("[dist_relay_client] Orphan stream for tunnel ~s — awaiting control",
               [TunnelId]),
-    {noreply, State#state{orphan_streams = Orphans#{TunnelId => {Stream, Leftover}}}}.
+    {noreply, State#state{orphan_streams = Orphans#{TunnelId => {Stream, Received}}}}.
 
 %% When a new tunnel_id appears in pending_outbound or pending_inbound,
 %% check the orphan_streams buffer and complete the match if there's a
@@ -543,63 +581,47 @@ match_inbound(error, TunnelId, Stream, Leftover,
 drain_orphan_stream(TunnelId, #state{orphan_streams = Orphans} = State) ->
     dispatch_orphan(maps:take(TunnelId, Orphans), TunnelId, State).
 
-dispatch_orphan({{Stream, Leftover}, Rest}, TunnelId, State) ->
+dispatch_orphan({{Stream, Received}, Rest}, TunnelId, State) ->
     State2 = State#state{orphan_streams = Rest},
-    {noreply, S3} = match_tunnel(TunnelId, Stream, Leftover, State2),
+    {noreply, S3} = match_tunnel(TunnelId, Stream, Received, State2),
     S3;
 dispatch_orphan(error, _TunnelId, State) ->
     State.
 
 %% Short-lived process that owns the stream through the net_kernel accept
-%% handshake. Exits normally after transferring ownership to the dist
-%% controller (and re-injecting any leftover bytes that came with the
-%% tunnel prefix), or crashes (visible via DOWN in the client) if the
-%% handshake fails.
+%% handshake. Exits normally after transferring ownership, and the tunnel's
+%% bytes read so far, to the dist controller, or crashes (visible via DOWN
+%% in the client) if the handshake fails.
 inbound_accept_setup(Kernel, {_Conn, Stream} = Socket, TunnelId) ->
-    Leftover = wait_for_ownership(Stream, TunnelId),
+    Owned = wait_for_ownership(Stream, TunnelId),
     Kernel ! {accept, self(), Socket, inet, macula_dist},
-    handle_controller_assignment(Kernel, Stream, Leftover, TunnelId).
+    handle_controller_assignment(Kernel, Stream, Owned, TunnelId).
 
 wait_for_ownership(Stream, TunnelId) ->
     receive
-        {stream_owned, Stream, Data} -> Data
+        {stream_owned, Stream, Received, Events} -> {Received, Events}
     after 5_000 ->
         exit({setup_timeout, stream_ownership, TunnelId})
     end.
 
-handle_controller_assignment(Kernel, Stream, Leftover, TunnelId) ->
+handle_controller_assignment(Kernel, Stream, {Received, Events}, TunnelId) ->
     receive
         {Kernel, controller, DistCtrl} ->
             ok = macula_quic:controlling_process(Stream, DistCtrl),
             ok = macula_quic:setopt(Stream, active, true),
-            %% Drain any {quic, ...} messages for this stream that arrived
-            %% while we were waiting for net_kernel. Bytes arrive at the
-            %% current stream owner (us) from the moment controlling_process
-            %% is called in match_inbound until now. If we don't drain and
-            %% forward them, the peer's first handshake frame disappears
-            %% and DistCtrl hangs on recv_name forever.
-            Drained = drain_stream_messages(Stream),
-            deliver_leftover(DistCtrl, Stream, <<Leftover/binary, Drained/binary>>),
-            DistCtrl ! {self(), controller, ok},
-            ok;
+            %% The stream delivered bytes here from the moment the client
+            %% handed it over. They follow the client's, and all of them go
+            %% to the dist controller inside its controller-ok message,
+            %% which it reads before any {quic, ...} message. Without them
+            %% the peer's first handshake frame disappears and DistCtrl
+            %% waits in recv_name until its setup time runs out.
+            {Queued, Later} = take_queued(Stream, Received),
+            DistCtrl ! {self(), controller, ok, Queued},
+            ok = forward(DistCtrl, Events ++ Later);
         {Kernel, unsupported_protocol} ->
             exit({unsupported_protocol, TunnelId})
     after 30_000 ->
         exit({setup_timeout, controller_assignment, TunnelId})
-    end.
-
-%% Consume every buffered {quic, Data, Stream, _} message from our mailbox
-%% and concatenate into a single binary. Stops when the mailbox is empty of
-%% stream-data events (selective receive with 0-timeout).
-drain_stream_messages(Stream) ->
-    drain_stream_messages(Stream, <<>>).
-
-drain_stream_messages(Stream, Acc) ->
-    receive
-        {quic, Data, Stream, _Flags} when is_binary(Data) ->
-            drain_stream_messages(Stream, <<Acc/binary, Data/binary>>)
-    after 0 ->
-        Acc
     end.
 
 %%====================================================================

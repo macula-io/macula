@@ -60,6 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `macula_dist_relay_client:request_tunnel/2` returns
+  `{ok, Conn, Stream, Received}`, where `Received` holds the tunnel's
+  bytes the client read before handing the stream over.
 - `macula_identity:load/1` accepts only a key file its group and others
   have no access to, mode 0600 or 0400, following symlinks. Another mode
   returns `{error, {file_permissions, #{file => Path, mode => <<"0644">>,
@@ -154,6 +157,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A dist connection over the dist relay keeps every byte its tunnel
+  stream delivers while `macula_dist_relay_client` hands the stream over.
+  Bytes that arrive behind the tunnel id, or while the tunnel waits for
+  `tunnel_ok` or `tunnel_notify`, reach the dist controller before
+  anything else. The client dropped them, and the connection then waited
+  until its setup time ran out.
 - `macula_cluster:start_cluster/1` returns
   `{error, {strategy_unavailable, dht}}` for the `dht` strategy, and
   `{error, {strategy_unavailable, mdns}}` for `mdns` when no

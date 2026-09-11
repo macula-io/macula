@@ -293,7 +293,7 @@ negotiate_with_kernel(Self, KernelPid, Pool, DistSock, BridgeSock,
     KernelPid ! {accept, Self, DistSock, inet, macula_dist},
     receive
         {KernelPid, controller, DistCtrl} ->
-            DistCtrl ! {Self, controller, ok},
+            DistCtrl ! {Self, controller, ok, <<>>},
             %% Transfer DistSock to the dist controller so it survives
             %% when this setup process exits.
             gen_tcp:controlling_process(DistSock, DistCtrl),
