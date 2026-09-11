@@ -165,7 +165,12 @@
     liveness_max_misses  => non_neg_integer(),
     %% Backoff in ms before re-dialling after a failed connect (default
     %% 1_000). Raise on a pool that cycles links to soften reconnect storms.
-    connect_retry_backoff_ms => non_neg_integer()
+    connect_retry_backoff_ms => non_neg_integer(),
+    %% Interval in ms of the warnings about frames this link drops (default
+    %% 60_000): per kind, the first drop in an interval is logged at once
+    %% and the rest in one closing line when the interval ends. See
+    %% "Dropped frames" in the RPC protocol guide.
+    drop_warning_interval_ms => pos_integer()
     %% QUIC transport knobs (`idle_timeout_ms' default 300_000,
     %% `keep_alive_interval_ms' default 15_000, `peer_bidi_stream_count',
     %% `peer_unidi_stream_count') may additionally be carried in the `seed'
@@ -175,6 +180,11 @@
 -define(DHT_REALM, <<0:256>>).
 -define(DEFAULT_DEADLINE_MS, 5_000).
 -define(CONNECT_RETRY_BACKOFF_MS, 1_000).
+
+%% Drop warnings: the default interval, and the most bytes of a dropped
+%% frame's procedure a warning prints.
+-define(DROP_WARNING_INTERVAL_MS, 60_000).
+-define(LOGGED_PROCEDURE_BYTES, 256).
 
 %% App-level liveness probe. Sends a tiny CALL (`_macula.ping' on the
 %% DHT realm, no handler expected — station replies with
@@ -340,8 +350,18 @@
     %% the policy of a stream advertised under the same name. Absent means
     %% `open'.
     stream_policies = #{} :: #{{<<_:256>>, binary()} =>
-                                   macula_client:auth_policy()}
+                                   macula_client:auth_policy()},
+    %% Drop warnings (`warn_drop/4'): the interval, and for each kind with
+    %% an interval open, the drops since its last line and the latest
+    %% drop's reason and subject.
+    drop_warning_interval_ms = ?DROP_WARNING_INTERVAL_MS :: pos_integer(),
+    drop_warnings = #{} :: #{drop_kind() =>
+                                 {non_neg_integer(), drop_reason(), drop_subject()}}
 }).
+
+-type drop_kind() :: refused_stream_open | dropped_call | dropped_reply.
+-type drop_reason() :: invalid_signature | unsigned | unknown_call_id.
+-type drop_subject() :: {procedure, binary()} | {call_id, term()} | none.
 
 -type subscription() :: {Realm     :: <<_:256>>,
                          Topic     :: binary(),
@@ -923,13 +943,15 @@ init(Opts) ->
     LiveMs   = maps:get(liveness_interval_ms, Opts, app_env(liveness_interval_ms, ?LIVENESS_INTERVAL_MS)),
     LiveMiss = maps:get(liveness_max_misses, Opts, app_env(liveness_max_misses, ?LIVENESS_MAX_MISSES)),
     RetryMs  = maps:get(connect_retry_backoff_ms, Opts, app_env(connect_retry_backoff_ms, ?CONNECT_RETRY_BACKOFF_MS)),
+    DropMs   = maps:get(drop_warning_interval_ms, Opts, app_env(drop_warning_interval_ms, ?DROP_WARNING_INTERVAL_MS)),
     State    = #state{seed = Seed, identity = Identity,
                       capabilities = Caps, alpn = Alpn,
                       connect_timeout_ms = Tmo,
                       connect_watchdog_ms = WdMs,
                       liveness_interval_ms = LiveMs,
                       liveness_max_misses = LiveMiss,
-                      connect_retry_backoff_ms = RetryMs},
+                      connect_retry_backoff_ms = RetryMs,
+                      drop_warning_interval_ms = DropMs},
     process_flag(trap_exit, true),
     self() ! attempt_connect,
     {ok, State}.
@@ -1347,6 +1369,9 @@ handle_info({'EXIT', Pid, Reason}, #state{peer_pid = Pid, seed = Seed} = S) ->
     {stop, normal, NewS#state{peer_pid = undefined,
                               peer_node_id = undefined}};
 
+handle_info({drop_warning_interval_ended, Kind}, #state{drop_warnings = Warnings} = S) ->
+    {noreply, S#state{drop_warnings = drop_interval_ended(maps:take(Kind, Warnings), Kind)}};
+
 handle_info({'DOWN', Mon, process, Pid, _Reason}, S) ->
     %% Two monitor sources land here: subscriber pids paired by
     %% `subscribe/4', and stream pids tracked in `streams'. Probe
@@ -1520,10 +1545,11 @@ on_frame(#{realm := Realm} = Frame, S) ->
 on_frame(_Frame, S) ->
     S.
 
-deliver_pending(error, _Reply, S) ->
-    %% Unknown call_id (race with timeout, or duplicate reply).
-    S;
-deliver_pending({{From, TRef}, NewP}, Reply, S) ->
+%% A reply for no pending call (one that timed out, or a duplicate) is
+%% dropped, with a warning.
+deliver_pending(error, CallId, _Reply, S) ->
+    warn_drop(dropped_reply, unknown_call_id, {call_id, CallId}, S);
+deliver_pending({{From, TRef}, NewP}, _CallId, Reply, S) ->
     _ = erlang:cancel_timer(TRef),
     gen_server:reply(From, Reply),
     S#state{pending = NewP}.
@@ -1534,13 +1560,10 @@ deliver_pending({{From, TRef}, NewP}, Reply, S) ->
 on_reply({ok, _Verified}, CallId, Reply, #state{pending = P} = S) ->
     case maybe_clear_liveness(CallId, S) of
         {true, NewS}  -> NewS;
-        {false, NewS} -> deliver_pending(maps:take(CallId, P), Reply, NewS)
+        {false, NewS} -> deliver_pending(maps:take(CallId, P), CallId, Reply, NewS)
     end;
 on_reply({error, Why}, CallId, _Reply, S) ->
-    logger:warning("[macula_station_link] dropped reply whose signature does"
-                   " not verify against its signer (~p) call_id=~s",
-                   [Why, hex_prefix(CallId)]),
-    S.
+    warn_drop(dropped_reply, signature_drop_reason(Why), {call_id, CallId}, S).
 
 %% A CALL whose signature does not verify against its own `caller' never
 %% reaches its handler and gets no reply.
@@ -1548,10 +1571,7 @@ on_inbound_call({ok, _Verified}, Frame, S) ->
     handle_inbound_call(Frame, S),
     S;
 on_inbound_call({error, Why}, Frame, S) ->
-    logger:warning("[macula_station_link] dropped inbound CALL whose signature"
-                   " does not verify against its caller (~p) procedure=~p",
-                   [Why, maps:get(procedure, Frame, undefined)]),
-    S.
+    warn_drop(dropped_call, signature_drop_reason(Why), procedure_subject(Frame), S).
 
 %% The identity a frame names as its signer: `responded_by' on a RESULT,
 %% `reported_by' on an ERROR (the same two fields
@@ -1566,6 +1586,71 @@ call_signer(_Frame)                      -> {error, no_signer}.
 
 verify_signed_by(Frame, {ok, Pub})       -> macula_frame:verify(Frame, Pub);
 verify_signed_by(_Frame, {error, _} = E) -> E.
+
+%%------------------------------------------------------------------
+%% Drop warnings
+%%------------------------------------------------------------------
+
+%% A frame the link drops is logged at most twice per kind per interval:
+%% the first drop in an interval at once, and any after it in one closing
+%% line with their count when the interval ends. A peer can make the link
+%% drop frames as fast as it sends them; this keeps the log to a few short
+%% lines however many it sends. Every SDK prints the same line, see
+%% "Dropped frames" in the RPC protocol guide.
+warn_drop(Kind, Reason, Subject, #state{drop_warnings = Warnings} = S) ->
+    drop_in_interval(maps:find(Kind, Warnings), Kind, Reason, Subject, S).
+
+drop_in_interval(error, Kind, Reason, Subject,
+                 #state{drop_warnings = Warnings,
+                        drop_warning_interval_ms = IntervalMs} = S) ->
+    log_drops(Kind, 1, Reason, Subject),
+    _ = erlang:send_after(IntervalMs, self(), {drop_warning_interval_ended, Kind}),
+    S#state{drop_warnings = Warnings#{Kind => {0, Reason, Subject}}};
+drop_in_interval({ok, {Count, _Reason, _Subject}}, Kind, Reason, Subject,
+                 #state{drop_warnings = Warnings} = S) ->
+    S#state{drop_warnings = Warnings#{Kind => {Count + 1, Reason, Subject}}}.
+
+drop_interval_ended({{0, _Reason, _Subject}, Warnings}, _Kind) ->
+    Warnings;
+drop_interval_ended({{Count, Reason, Subject}, Warnings}, Kind) ->
+    log_drops(Kind, Count, Reason, Subject),
+    Warnings.
+
+log_drops(Kind, Count, Reason, Subject) ->
+    logger:warning("[macula_station_link] kind=~ts count=~B reason=~ts~ts",
+                   [Kind, Count, Reason, subject_field(Subject)]).
+
+%% The procedure as a JSON string, so a name a peer chose cannot break the
+%% line; a call_id as its first 4 bytes in upper-case hex.
+subject_field({procedure, Procedure}) ->
+    [" procedure=", json:encode(logged_procedure(Procedure))];
+subject_field({call_id, CallId}) ->
+    [" call_id=", hex_prefix(CallId)];
+subject_field(none) ->
+    "".
+
+%% At most the first ?LOGGED_PROCEDURE_BYTES bytes of a procedure, cut back
+%% to whole UTF-8 characters.
+logged_procedure(Procedure) ->
+    Head = binary:part(Procedure, 0, min(byte_size(Procedure), ?LOGGED_PROCEDURE_BYTES)),
+    utf8_start(unicode:characters_to_binary(Head)).
+
+utf8_start(Valid) when is_binary(Valid) -> Valid;
+utf8_start({incomplete, Valid, _Rest})  -> Valid;
+utf8_start({error, Valid, _Rest})       -> Valid.
+
+procedure_subject(#{procedure := Procedure}) when is_binary(Procedure) ->
+    {procedure, Procedure};
+procedure_subject(_Frame) ->
+    none.
+
+%% The shared reason for a frame whose signature does not verify: unsigned
+%% when it names no signer key or carries no 64-byte signature
+%% (`macula_frame:verify/2''s bad_frame), invalid_signature when the
+%% signature does not check.
+signature_drop_reason(no_signer)         -> unsigned;
+signature_drop_reason(bad_frame)         -> unsigned;
+signature_drop_reason(signature_invalid) -> invalid_signature.
 
 on_timeout(error, S) ->
     {noreply, S};
@@ -2706,11 +2791,7 @@ on_inbound_stream_open({ok, _Verified}, Frame, Stream,
     Key = {maps:get(realm, Frame, undefined), maps:get(procedure, Frame, undefined)},
     on_stream_open_verdict(authorize(Key, Frame, SPols), Frame, Stream, S);
 on_inbound_stream_open({error, Why}, Frame, _Stream, S) ->
-    logger:warning("[macula_station_link] dropped inbound STREAM_OPEN whose"
-                   " signature does not verify against its caller (~p)"
-                   " procedure=~p",
-                   [Why, maps:get(procedure, Frame, undefined)]),
-    S.
+    warn_drop(refused_stream_open, signature_drop_reason(Why), procedure_subject(Frame), S).
 
 %% Refused by the procedure's auth policy: a STREAM_ERROR on the caller's
 %% own stream, so it fails fast instead of waiting out its deadline, and no

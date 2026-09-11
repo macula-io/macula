@@ -5,7 +5,7 @@
 %%%-------------------------------------------------------------------
 -module(macula_test_log).
 
--export([capture/0, wait_text/2, release/1]).
+-export([capture/0, wait_text/2, logged_within/2, release/1]).
 -export([log/2]).
 
 %% @doc Starts sending the calling process the text of every event this
@@ -27,6 +27,22 @@ wait_text(Part, TimeoutMs) ->
     after TimeoutMs ->
         error({not_logged, Part})
     end.
+
+%% @doc The first text captured within Ms that contains Part, or none when
+%% no such text comes. Texts without Part are read and dropped.
+-spec logged_within(binary(), non_neg_integer()) -> binary() | none.
+logged_within(Part, Ms) ->
+    logged_before(Part, erlang:monotonic_time(millisecond) + Ms).
+
+logged_before(Part, Deadline) ->
+    receive
+        {?MODULE, Text} -> text_or_next(binary:match(Text, Part), Text, Part, Deadline)
+    after max(0, Deadline - erlang:monotonic_time(millisecond)) ->
+        none
+    end.
+
+text_or_next(nomatch, _Text, Part, Deadline) -> logged_before(Part, Deadline);
+text_or_next(_Found, Text, _Part, _Deadline) -> Text.
 
 %% @doc Stops capturing and drops what was captured and not read.
 -spec release(logger:handler_id()) -> ok.

@@ -2087,6 +2087,128 @@ error_that_does_not_verify_leaves_call_pending_test_() ->
                                       end, Genuine]))
      end}.
 
+%%------------------------------------------------------------------
+%% A dropped frame is logged at most twice per kind per interval
+%%------------------------------------------------------------------
+
+-define(DROP_INTERVAL_MS, 300).
+
+%% A burst of CALLs whose signatures do not verify: the first is logged at
+%% once, the rest in one closing line with their count when the interval
+%% ends, and nothing after that.
+a_drop_burst_logs_one_immediate_line_and_one_closing_line_with_the_rest_test_() ->
+    {timeout, 10,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {Pid, FakePeer, _PeerNodeId} =
+             start_connected_link(#{drop_warning_interval_ms => ?DROP_INTERVAL_MS}),
+         Log = macula_test_log:capture(),
+         try
+             Forged = fun() ->
+                          macula_frame:sign(
+                            #{frame_type => call, call_id => crypto:strong_rand_bytes(16),
+                              realm => ?REALM, procedure => <<"probe.dropped">>,
+                              payload => #{},
+                              caller => macula_identity:public(macula_identity:generate())},
+                            macula_identity:generate())
+                      end,
+             _ = [Pid ! {macula_peering, frame, FakePeer, Forged()} || _ <- lists:seq(1, 5)],
+             ?assertEqual(<<"[macula_station_link] kind=dropped_call count=1"
+                            " reason=invalid_signature procedure=\"probe.dropped\"">>,
+                          macula_test_log:wait_text(<<"kind=dropped_call">>, 1_000)),
+             ?assertEqual(<<"[macula_station_link] kind=dropped_call count=4"
+                            " reason=invalid_signature procedure=\"probe.dropped\"">>,
+                          macula_test_log:wait_text(<<"kind=dropped_call">>,
+                                                    3 * ?DROP_INTERVAL_MS)),
+             ?assertEqual(none, macula_test_log:logged_within(<<"kind=dropped_call">>,
+                                                               3 * ?DROP_INTERVAL_MS)),
+             macula_station_link:stop(Pid)
+         after
+             macula_test_log:release(Log)
+         end
+     end}.
+
+%% One RESULT for no pending call: logged at once, and no closing line when
+%% the interval ends.
+a_single_drop_logs_only_the_immediate_line_test_() ->
+    {timeout, 10,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {Pid, FakePeer, _PeerNodeId} =
+             start_connected_link(#{drop_warning_interval_ms => ?DROP_INTERVAL_MS}),
+         Log = macula_test_log:capture(),
+         try
+             CallId = <<16#0A, 16#1B, 16#2C, 16#3D, 0:96>>,
+             Pid ! {macula_peering, frame, FakePeer, signed_reply(result_frame(CallId, late))},
+             ?assertEqual(<<"[macula_station_link] kind=dropped_reply count=1"
+                            " reason=unknown_call_id call_id=0A1B2C3D">>,
+                          macula_test_log:wait_text(<<"kind=dropped_reply">>, 1_000)),
+             ?assertEqual(none, macula_test_log:logged_within(<<"kind=dropped_reply">>,
+                                                               3 * ?DROP_INTERVAL_MS)),
+             macula_station_link:stop(Pid)
+         after
+             macula_test_log:release(Log)
+         end
+     end}.
+
+%% A CALL naming no caller and a RESULT naming no signer are dropped as
+%% unsigned.
+a_frame_naming_no_signer_is_dropped_as_unsigned_test_() ->
+    {timeout, 10,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {Pid, FakePeer, _PeerNodeId} = start_connected_link(),
+         Log = macula_test_log:capture(),
+         try
+             Pid ! {macula_peering, frame, FakePeer,
+                    #{frame_type => call, call_id => crypto:strong_rand_bytes(16),
+                      realm => ?REALM, procedure => <<"probe.no_caller">>, payload => #{}}},
+             ?assertEqual(<<"[macula_station_link] kind=dropped_call count=1"
+                            " reason=unsigned procedure=\"probe.no_caller\"">>,
+                          macula_test_log:wait_text(<<"kind=dropped_call">>, 1_000)),
+             Pid ! {macula_peering, frame, FakePeer,
+                    result_frame(<<16#FF, 16#EE, 16#DD, 16#CC, 0:96>>, nobody)},
+             ?assertEqual(<<"[macula_station_link] kind=dropped_reply count=1"
+                            " reason=unsigned call_id=FFEEDDCC">>,
+                          macula_test_log:wait_text(<<"kind=dropped_reply">>, 1_000)),
+             macula_station_link:stop(Pid)
+         after
+             macula_test_log:release(Log)
+         end
+     end}.
+
+%% However large the frame, a warning prints at most the first 256 bytes of
+%% its procedure, cut back to whole UTF-8 characters: here an unsigned
+%% STREAM_OPEN whose procedure nearly fills the 16 MiB frame cap, with a
+%% two-byte character across byte 256.
+a_drop_warning_prints_at_most_256_bytes_of_the_procedure_test_() ->
+    {timeout, 30,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         Log = macula_test_log:capture(),
+         try
+             Kept = binary:copy(<<"p">>, 255),
+             Procedure = <<Kept/binary, "é"/utf8, (binary:copy(<<"q">>, 16#FFFFFF - 4096))/binary>>,
+             inject_dedicated_stream_open(Pid, FakePeer, make_ref(), #{
+                 frame_type  => stream_open,
+                 stream_id   => crypto:strong_rand_bytes(16),
+                 procedure   => Procedure,
+                 realm       => ?REALM,
+                 mode        => server_stream,
+                 args        => #{},
+                 deadline_ms => erlang:system_time(millisecond) + 5_000,
+                 caller      => macula_identity:public(macula_identity:generate())
+             }),
+             ?assertEqual(<<"[macula_station_link] kind=refused_stream_open count=1"
+                            " reason=unsigned procedure=\"", Kept/binary, "\"">>,
+                          macula_test_log:wait_text(<<"kind=refused_stream_open">>, 10_000)),
+             macula_station_link:stop(Pid)
+         after
+             macula_test_log:release(Log),
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
 %% Issue one call on a link with a fake peer, feed it one frame per entry
 %% of `Replies' (each a fun from the call's id to a frame), and hand back
 %% what the caller got.
@@ -2967,8 +3089,12 @@ liveness_consecutive_misses_close_peer_test_() ->
      end}.
 
 start_connected_link() ->
+    start_connected_link(#{}).
+
+%% Same, with `Opts' added to the link's start options.
+start_connected_link(Opts) ->
     Identity = macula_identity:generate(),
-    {ok, Pid} = macula_station_link:start_link(#{
+    {ok, Pid} = macula_station_link:start_link(Opts#{
         seed     => #{host => <<"127.0.0.1">>, port => 1},
         connect_timeout_ms => 2000,
         identity => Identity

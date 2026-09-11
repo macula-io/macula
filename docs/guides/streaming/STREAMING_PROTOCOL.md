@@ -86,7 +86,9 @@ it with `set_reply` (a final result) or `abort` (an error).
 The provider verifies each STREAM_OPEN's signature against its `caller` before
 the handler runs; a STREAM_OPEN that does not verify runs no handler. When
 `Args` is a map, the handler finds that verified caller's public key in it
-under `caller`, in place of any `caller` the consumer sent.
+under `caller`, in place of any `caller` the consumer sent. A STREAM_OPEN that
+does not verify is logged as described in
+[Dropped frames](../rpc/RPC_PROTOCOL.md#dropped-frames).
 `advertise_stream/6` takes an `auth` policy in `Opts`, the same policies as
 `advertise/5`. A STREAM_OPEN the policy refuses gets a STREAM_ERROR with code
 `unauthorized` and runs no handler. A consumer presents its token with

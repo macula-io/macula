@@ -209,6 +209,37 @@ own moduledoc.
 
 ---
 
+## Dropped frames
+
+A provider drops, unanswered, a CALL whose signature does not verify against
+its `caller`. A caller drops a RESULT or ERROR whose signature does not verify
+against its signer, or that answers no pending call. A STREAM_OPEN that does
+not verify is dropped too (see the
+[streaming protocol](../streaming/STREAMING_PROTOCOL.md)). A peer can send such
+frames as fast as it likes, so every SDK logs them in the same bounded way.
+
+A link keeps one warning interval per kind, `drop_warning_interval_ms` long (a
+link start option, 60 000 ms by default). The first drop of a kind in an
+interval is logged at once with `count=1`. The drops after it in that interval
+are counted, and one closing line reports them when the interval ends, with the
+latest drop's reason and subject. No closing line comes when nothing followed
+the first drop.
+
+```text
+[macula_station_link] kind=dropped_call count=1 reason=invalid_signature procedure="probe.echo"
+[macula_station_link] kind=dropped_reply count=4 reason=unknown_call_id call_id=0A1B2C3D
+```
+
+| Field | Value |
+|---|---|
+| `kind` | `dropped_call`, `dropped_reply` or `refused_stream_open` |
+| `count` | the drops of that kind since its last line |
+| `reason` | `invalid_signature`: the signature does not check against the signer; `unsigned`: no signature, a signature that is not 64 bytes, or no signer key; `unknown_call_id`: a reply for no pending call |
+| `procedure` | the frame's procedure, its first 256 bytes cut back to whole UTF-8 characters, as a JSON string; absent when the frame names none |
+| `call_id` | a reply's call id, its first 4 bytes in upper-case hex |
+
+---
+
 ## See also
 
 - [RPC_GUIDE.md](RPC_GUIDE.md) — the supervised wrappers most applications

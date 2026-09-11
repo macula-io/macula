@@ -103,6 +103,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the handler's `Args` hold the calling identity's public key under
   `caller`, replacing any `caller` the arguments carried. Arguments that
   are not a map reach the handler unchanged.
+- A link logs the frames it drops at most twice per kind per
+  `drop_warning_interval_ms` (60 s by default), as
+  `kind=... count=... reason=...` lines: a CALL (`dropped_call`) or a
+  STREAM_OPEN (`refused_stream_open`) whose signature does not verify, and
+  a RESULT or ERROR (`dropped_reply`) whose signature does not verify or
+  that answers no pending call. The first drop in an interval is logged at
+  once and the rest in one closing line with their count. A line prints at
+  most 256 bytes of the procedure, as a JSON string, or a reply's call_id
+  prefix. The link used to log one line per dropped frame with the whole
+  procedure, and nothing for a reply to no pending call.
 - `macula_identity:load/1` accepts only a key file its group and others
   have no access to, mode 0600 or 0400, following symlinks. Another mode
   returns `{error, {file_permissions, #{file => Path, mode => <<"0644">>,
