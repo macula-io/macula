@@ -44,12 +44,7 @@
 
 %% NIF stubs
 -export([
-    nif_create/5,
-    nif_verify/2,
-    nif_decode/1,
-    nif_compute_cid/1,
-    nif_get_issuer/1,
-    nif_get_audience/1
+    nif_create/5
 ]).
 
 -on_load(init/0).
