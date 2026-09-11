@@ -151,9 +151,9 @@ open_dedicated_stream(Pid) ->
 %% connection process involved, unlike `send_frame/2'. `Identity' is
 %% the caller's own key pair (the connection process is not asked to
 %% sign on the caller's behalf here, since it is not a party to this
-%% stream). Synchronous: the underlying NIF write can block briefly
-%% on QUIC flow-control credit, same as any other `macula_quic:send/2'
-%% call.
+%% stream). Synchronous: waits in the calling process until the frame
+%% is written, for as long as the peer withholds QUIC flow-control
+%% credit, as `macula_quic:send/2' does.
 -spec send_on_stream(reference(), macula_frame:frame(),
                      macula_identity:key_pair()) -> ok | {error, term()}.
 send_on_stream(Stream, Frame, Identity) when is_map(Frame) ->

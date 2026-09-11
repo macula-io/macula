@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loads from a build and, given that build's log, that no precompiled NIF
   was fetched. The hex publish workflow runs it on the package it builds,
   before the publish is approved.
+- `macula_quic:listen/3` takes `stream_receive_window` and
+  `receive_window` in bytes: the credit a peer gets per stream and per
+  connection before this side reads. The defaults are 16 MiB and 64 MiB.
+- `macula_quic:async_send/2` returns `{error, busy}` when a stream
+  already has 1 MiB queued; the caller later gets
+  `{quic, send_ready, Stream, undefined}` and may retry. A failed write
+  is reported once to the stream's owner as
+  `{quic, send_failed, Stream, Reason}`.
 
 ### Changed
 
@@ -32,6 +40,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `native/macula_quic` sources, as a required crate like
   `macula_cbor_nif`, into `priv/macula_quic.so`. Building macula needs a
   Rust toolchain, as the CBOR NIF already did.
+- A QUIC stream's writes run in a writer task on the QUIC runtime.
+  `async_send/2` queues and returns at once. `send/2` waits in the
+  calling process until its data is written or the write fails, for as
+  long as the peer withholds flow-control credit. After a write fails,
+  both return that error.
+- `close_stream/1` and `reset_stream/2` return at once. A close writes
+  the data queued before it, then finishes the stream. If that data
+  cannot be written within `quic_close_linger_ms` (default 30000), the
+  stream is reset with application error code 1. A reset drops queued
+  data, and a `send/2` waiting for it returns `{error, reset}`.
+- A `macula_peering_conn` whose control stream write fails reports
+  `disconnected` with that reason and stops. `macula_station_link` ends
+  the streaming sessions on a dedicated stream whose write failed, and
+  fails a content call waiting on such a stream.
+  `macula_dist_relay_client` ends as on a closed control stream.
 
 ### Removed
 

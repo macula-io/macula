@@ -56,6 +56,8 @@ fn nif_listen<'a>(
     keep_alive_ms: u64,
     bidi_streams: u32,
     uni_streams: u32,
+    stream_receive_window: u64,
+    receive_window: u64,
 ) -> NifResult<Term<'a>> {
     let caller = env.pid();
 
@@ -71,6 +73,8 @@ fn nif_listen<'a>(
         keep_alive_ms,
         bidi_streams,
         uni_streams,
+        stream_receive_window,
+        receive_window,
     )
     .map_err(|e| rustler::Error::Term(Box::new(e)))?;
 

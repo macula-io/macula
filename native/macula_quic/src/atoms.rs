@@ -22,6 +22,13 @@ rustler::atoms! {
     stream_closed,
     reset,
 
+    // Stream writes
+    sent,
+    send_ready,
+    send_failed,
+    busy,
+    undefined,
+
     // Connection lifecycle
     shutdown,
     closed,

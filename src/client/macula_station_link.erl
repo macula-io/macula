@@ -1287,6 +1287,21 @@ handle_info({quic, Bin, Stream, _Flags},
                        Frames),
     {noreply, NewS};
 
+%% A write on one of our dedicated streams failed: the sessions it carries
+%% can send nothing more, so they end as they do when the link is lost.
+handle_info({quic, send_failed, Stream, Reason}, #state{stream_bufs = Bufs} = S)
+        when is_map_key(Stream, Bufs) ->
+    {noreply, end_sessions_on_stream(Stream, {send_failed, Reason}, S)};
+
+%% A write on one of our content-transfer streams failed: no call can
+%% reach the peer on it any more, so it is torn down as on a close, and a
+%% call still waiting on it fails with the write's reason.
+handle_info({quic, send_failed, Stream, Reason},
+            #state{content_stream_bufs = Bufs} = S)
+        when is_map_key(Stream, Bufs) ->
+    {noreply, teardown_content_stream_state(Stream, {error, {send_failed, Reason}},
+                                            fun macula_quic:close_stream/1, S)};
+
 handle_info({call_timeout, CallId}, #state{pending = P} = S) ->
     on_timeout(maps:take(CallId, P), S);
 
@@ -2598,6 +2613,20 @@ drop_bufs(Streams, Bufs) ->
     lists:foldl(fun(undefined, Acc) -> Acc;
                    (Stream, Acc) -> maps:remove(Stream, Acc)
                 end, Bufs, Streams).
+
+%% End every session carried by `Stream' once a write on it failed: abort
+%% each session's process with `Reason', as a lost link does, and drop its
+%% routing. A same-pool session is in both maps under one Sid. `Stream' may
+%% carry no session yet (a STREAM_ERROR refusal is written before one is
+%% registered); its buffer goes and the stream is closed either way.
+end_sessions_on_stream(Stream, Reason, #state{client_streams = CS,
+                                              server_streams = SS} = S) ->
+    Carried = [{Sid, Pid} || {Sid, {Pid, _Mon, On}} <- maps:to_list(CS) ++ maps:to_list(SS),
+                             On =:= Stream],
+    _ = [abort_stream_process(Pid, Reason) || Pid <- lists:usort([P || {_, P} <- Carried])],
+    S2 = lists:foldl(fun drop_stream/2, S, lists:usort([Sid || {Sid, _} <- Carried])),
+    close_dedicated_stream(Stream),
+    S2#state{stream_bufs = maps:remove(Stream, S2#state.stream_bufs)}.
 
 %%-------------------------------------------------------------------
 %% Streaming RPC — dispatch for frames decoded off a dedicated stream

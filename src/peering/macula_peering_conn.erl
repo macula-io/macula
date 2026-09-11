@@ -398,6 +398,12 @@ handshaking(info, {quic, peer_send_shutdown, Stream, _Detail},
             #data{quic_stream = Stream} = Data) ->
     notify(disconnected, closed_during_handshake, Data),
     {stop, normal, Data};
+%% A failed CONNECT or HELLO write leaves the control stream as unusable
+%% as a closed one.
+handshaking(info, {quic, send_failed, Stream, Reason},
+            #data{quic_stream = Stream} = Data) ->
+    notify(disconnected, {closed_during_handshake, {send_failed, Reason}}, Data),
+    {stop, normal, Data};
 handshaking(cast, {close, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, Data};
@@ -635,6 +641,11 @@ connected(info, {quic, stream_closed, Stream, Detail},
           #data{quic_stream = Stream} = Data) ->
     notify(disconnected, {peer_closed, Detail}, Data),
     {stop, normal, Data};
+%% A failed write leaves the control stream as unusable as a closed one.
+connected(info, {quic, send_failed, Stream, Reason},
+          #data{quic_stream = Stream} = Data) ->
+    notify(disconnected, {send_failed, Reason}, Data),
+    {stop, normal, Data};
 %% A graceful `peer_send_shutdown' on the control stream means the
 %% peer is done sending on it -- their side of the session is over --
 %% but says nothing about a dedicated/bidi stream still actively
@@ -733,6 +744,12 @@ draining(info, {quic, stream_closed, Stream, Detail},
 draining(info, {quic, peer_send_shutdown, Stream, _Detail},
          #data{quic_stream = Stream} = Data) ->
     notify(disconnected, peer_closed_during_drain, Data),
+    {stop, normal, Data};
+%% A failed write (the GOODBYE, or a frame sent before it) ends the drain
+%% as a closed control stream does.
+draining(info, {quic, send_failed, Stream, Reason},
+         #data{quic_stream = Stream} = Data) ->
+    notify(disconnected, {send_failed_during_drain, Reason}, Data),
     {stop, normal, Data};
 draining(info, {quic, _, _, _}, Data) ->
     %% Ignore late inbound during drain.

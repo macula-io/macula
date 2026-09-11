@@ -218,6 +218,10 @@ handle_info({quic, stream_closed, Stream, Flags}, #state{control = Stream} = Sta
     relay_lost({stream_closed, Flags}, State);
 handle_info({quic, peer_send_shutdown, Stream, _}, #state{control = Stream} = State) ->
     relay_lost(peer_send_shutdown, State);
+%% A failed write on the control stream leaves the relay as unreachable as
+%% a closed control stream does.
+handle_info({quic, send_failed, Stream, Reason}, #state{control = Stream} = State) ->
+    relay_lost({send_failed, Reason}, State);
 
 %% Data on an unidentified tunnel stream — accumulate until prefix is complete
 handle_info({quic, Data, Stream, _Flags}, State) when is_binary(Data) ->

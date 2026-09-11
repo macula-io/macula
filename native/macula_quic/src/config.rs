@@ -1,4 +1,4 @@
-use quinn::{ClientConfig, ServerConfig, TransportConfig};
+use quinn::{ClientConfig, ServerConfig, TransportConfig, VarInt};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::fs;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
@@ -7,11 +7,33 @@ use std::time::Duration;
 
 use crate::cert;
 
+/// A stream's receive window when the listener sets none: the credit a peer
+/// gets on one stream before this side reads.
+///
+/// Well above Quinn's conservative defaults (1.25MB stream, 1.25MB *
+/// streams connection). Macula peering uses ONE long-lived bidi
+/// stream per connection over which we multiplex pubsub EVENTs,
+/// CALL/REPLY, DHT records, blob streams. With many small frames
+/// in flight and the receiver doing per-frame verify (~200µs
+/// Ed25519), the default 1.25MB window exhausts long before the
+/// receiver acks consumed bytes — surfaces as receiver-bound
+/// throughput in pubsub flood torture.
+///
+/// 16 MB stream window absorbs ~100k 150-byte EVENT frames before
+/// backpressure; 64 MB connection window scales with our typical
+/// 1-2 streams per peering. send_window matches.
+pub const DEFAULT_STREAM_RECEIVE_WINDOW: u64 = 16 * 1024 * 1024;
+
+/// A connection's receive window when the listener sets none: the credit a
+/// peer gets across all of a connection's streams.
+pub const DEFAULT_RECEIVE_WINDOW: u64 = 64 * 1024 * 1024;
+
 /// Build a Quinn ServerConfig from Erlang options.
 ///
 /// Required: certfile, keyfile
 /// Optional: alpn (default ["macula"]), idle_timeout_ms, keep_alive_interval_ms,
-///           peer_bidi_stream_count, peer_unidi_stream_count
+///           peer_bidi_stream_count, peer_unidi_stream_count,
+///           stream_receive_window, receive_window
 pub fn build_server_config(
     certfile: &str,
     keyfile: &str,
@@ -20,6 +42,8 @@ pub fn build_server_config(
     keep_alive_ms: u64,
     bidi_streams: u32,
     uni_streams: u32,
+    stream_receive_window: u64,
+    receive_window: u64,
 ) -> Result<ServerConfig, String> {
     let certs = load_certs(certfile)?;
     let key = load_key(keyfile)?;
@@ -39,7 +63,7 @@ pub fn build_server_config(
     transport.keep_alive_interval(Some(Duration::from_millis(keep_alive_ms)));
     transport.max_concurrent_bidi_streams(bidi_streams.into());
     transport.max_concurrent_uni_streams(uni_streams.into());
-    apply_flow_control_defaults(&mut transport);
+    apply_flow_control(&mut transport, stream_receive_window, receive_window)?;
 
     let mut config =
         ServerConfig::with_crypto(Arc::new(
@@ -51,23 +75,21 @@ pub fn build_server_config(
     Ok(config)
 }
 
-/// Bump Quinn's per-stream and per-connection flow-control windows
-/// well above the conservative defaults (1.25MB stream, 1.25MB *
-/// streams connection). Macula peering uses ONE long-lived bidi
-/// stream per connection over which we multiplex pubsub EVENTs,
-/// CALL/REPLY, DHT records, blob streams. With many small frames
-/// in flight and the receiver doing per-frame verify (~200µs
-/// Ed25519), the default 1.25MB window exhausts long before the
-/// receiver acks consumed bytes — surfaces as receiver-bound
-/// throughput in pubsub flood torture.
-///
-/// 16 MB stream window absorbs ~100k 150-byte EVENT frames before
-/// backpressure; 64 MB connection window scales with our typical
-/// 1-2 streams per peering. send_window matches.
-fn apply_flow_control_defaults(transport: &mut TransportConfig) {
-    transport.stream_receive_window(16u32.checked_mul(1024 * 1024).unwrap().into());
-    transport.receive_window(64u32.checked_mul(1024 * 1024).unwrap().into());
-    transport.send_window(64u64.checked_mul(1024 * 1024).unwrap());
+/// Sets the stream and connection receive windows, and a send window as large
+/// as the default connection receive window.
+fn apply_flow_control(
+    transport: &mut TransportConfig,
+    stream_receive_window: u64,
+    receive_window: u64,
+) -> Result<(), String> {
+    let stream_window = VarInt::from_u64(stream_receive_window)
+        .map_err(|_| format!("stream_receive_window too large: {}", stream_receive_window))?;
+    let connection_window = VarInt::from_u64(receive_window)
+        .map_err(|_| format!("receive_window too large: {}", receive_window))?;
+    transport.stream_receive_window(stream_window);
+    transport.receive_window(connection_window);
+    transport.send_window(DEFAULT_RECEIVE_WINDOW);
+    Ok(())
 }
 
 /// Build a Quinn ClientConfig.
@@ -115,7 +137,7 @@ pub fn build_client_config(
             .map_err(|e| format!("idle_timeout: {}", e))?,
     ));
     transport.keep_alive_interval(Some(Duration::from_millis(keep_alive_ms)));
-    apply_flow_control_defaults(&mut transport);
+    apply_flow_control(&mut transport, DEFAULT_STREAM_RECEIVE_WINDOW, DEFAULT_RECEIVE_WINDOW)?;
 
     let mut config = ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto)

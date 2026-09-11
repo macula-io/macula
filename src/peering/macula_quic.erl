@@ -18,6 +18,13 @@
 %%%     deliberate, peer-visible abort) — `none' for every other
 %%%     read failure (connection loss, zero-RTT rejection, ...).
 %%%   {quic, shutdown, Handle, Reason}
+%%%   {quic, send_ready, StreamRef, undefined}
+%%%     The stream takes data again after async_send/2 answered
+%%%     `{error, busy}' to this process; also sent when the stream
+%%%     stops taking data, so the retry sees the failure.
+%%%   {quic, send_failed, StreamRef, Reason}
+%%%     A write on the stream failed; later sends return the error.
+%%%     Handle it as a closed stream.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_quic).
@@ -82,6 +89,15 @@
 %% Added to a dial's own timeout before connect/4 gives up waiting.
 -define(DIAL_RESULT_GRACE_MS, 1_000).
 
+%% A stream's and a connection's receive window, in bytes, unless listen/3
+%% sets them.
+-define(DEFAULT_STREAM_RECEIVE_WINDOW, 16 * 1024 * 1024).
+-define(DEFAULT_RECEIVE_WINDOW, 64 * 1024 * 1024).
+
+%% How long a closed stream's writer may keep writing the data queued before
+%% the close, unless the macula application env quic_close_linger_ms is set.
+-define(CLOSE_LINGER_MS, 30_000).
+
 %%%===================================================================
 %%% NIF Loading
 %%%===================================================================
@@ -114,6 +130,11 @@ listen(Port, Opts) when is_integer(Port) ->
 
 %% @doc Listen on a specific bind address and port.
 %% BindAddr is a binary: "0.0.0.0", "192.168.1.1", "2600:3c0e::100", etc.
+%%
+%% `stream_receive_window' and `receive_window' are the credit, in bytes,
+%% a peer gets on one stream and across all of a connection's streams
+%% before this side reads: 16 MiB and 64 MiB unless set. A value that is
+%% not a positive integer returns `{error, {invalid_receive_window, Value}}'.
 -spec listen(binary() | string(), inet:port_number(), list()) -> {ok, reference()} | {error, term()}.
 listen(BindAddr, Port, Opts) when is_list(BindAddr) ->
     listen(list_to_binary(BindAddr), Port, Opts);
@@ -130,10 +151,25 @@ listen(BindAddr, Port, Opts) when is_binary(BindAddr) ->
     KeepAliveMs = proplists:get_value(keep_alive_interval_ms, Opts, 15_000),
     BidiStreams = proplists:get_value(peer_bidi_stream_count, Opts, 100),
     UniStreams = proplists:get_value(peer_unidi_stream_count, Opts, 3),
+    StreamWindow = proplists:get_value(stream_receive_window, Opts, ?DEFAULT_STREAM_RECEIVE_WINDOW),
+    ConnectionWindow = proplists:get_value(receive_window, Opts, ?DEFAULT_RECEIVE_WINDOW),
     ?LOG_INFO("Starting listener on ~s:~p with idle_timeout=~pms, keep_alive=~pms",
               [BindAddr, Port, IdleTimeoutMs, KeepAliveMs]),
-    nif_listen(BindAddr, Port, CertFile, KeyFile, Alpn,
-               IdleTimeoutMs, KeepAliveMs, BidiStreams, UniStreams).
+    listen_with_windows(receive_window_error([StreamWindow, ConnectionWindow]),
+                        [BindAddr, Port, CertFile, KeyFile, Alpn, IdleTimeoutMs,
+                         KeepAliveMs, BidiStreams, UniStreams, StreamWindow, ConnectionWindow]).
+
+listen_with_windows(none, NifArgs) ->
+    erlang:apply(fun nif_listen/11, NifArgs);
+listen_with_windows(Error, _NifArgs) ->
+    Error.
+
+receive_window_error([]) ->
+    none;
+receive_window_error([Window | Rest]) when is_integer(Window), Window > 0 ->
+    receive_window_error(Rest);
+receive_window_error([Window | _]) ->
+    {error, {invalid_receive_window, Window}}.
 
 %% @doc Start accepting connections on a listener.
 %% Delivers {quic, new_conn, ConnRef, Info} to the calling process.
@@ -337,30 +373,71 @@ max_datagram_size(Conn) ->
 %%% Stream API
 %%%===================================================================
 
-%% @doc Send data on a stream (blocking).
+%% @doc Send data on a stream, waiting in the calling process until the data
+%% is written or the write fails.
+%%
+%% A stream's writes run in a writer task on the QUIC runtime; the calling
+%% process waits in a receive, not in a NIF. It waits for as long as the peer
+%% withholds flow-control credit. For a bounded wait, use `async_send/2' with
+%% its `busy' result and `send_ready' message, or `reset_stream/2'.
+%%
+%% Returns `ok'; `{error, already_closed}' after `close_stream/1' or
+%% `reset_stream/2'; `{error, reset}' when `reset_stream/2' dropped the data;
+%% `{error, closed}' when the stream ended without writing it; or the reason
+%% the stream's writes failed.
 -spec send(reference(), iodata()) -> ok | {error, term()}.
 send(Stream, Data) ->
-    nif_send(Stream, iolist_to_binary(Data)).
+    %% A reference made here, and matched by the receive in await_sent/2,
+    %% lets that receive skip every message already in the mailbox.
+    Ref = make_ref(),
+    await_sent(nif_send(Stream, iolist_to_binary(Data), Ref), Ref).
 
-%% @doc Send data asynchronously.
+await_sent(ok, Ref) ->
+    receive
+        {quic, sent, Ref, Result} -> Result
+    end;
+await_sent({error, _} = Error, _Ref) ->
+    Error.
+
+%% @doc Queue data on a stream and return at once.
+%%
+%% Returns `ok' when the data is queued for the stream's writer task. When
+%% the stream already has 1 MiB queued, queues nothing and returns
+%% `{error, busy}'; the calling process later gets one
+%% `{quic, send_ready, Stream, undefined}' message, meaning it may retry. That
+%% message also comes when the stream's writes stop meanwhile, and the retry
+%% then returns the reason. Returns `{error, already_closed}' after
+%% `close_stream/1' or `reset_stream/2', and the reason once the stream's
+%% writes have failed.
+%%
+%% When a write fails, the stream's owner gets one
+%% `{quic, send_failed, Stream, Reason}' message.
 -spec async_send(reference(), iodata()) -> ok | {error, term()}.
 async_send(Stream, Data) ->
     nif_async_send(Stream, iolist_to_binary(Data)).
 
-%% @doc Close a stream. Graceful: sends a QUIC FIN (clean EOF), the
-%% peer's `RecvStream::read' resolves `{ok, none}'. For a deliberate,
-%% peer-visible abort see `reset_stream/2'.
+%% @doc Close a stream's sending side gracefully, and return at once.
+%%
+%% Data queued before the close is still written, and then a QUIC FIN ends
+%% the stream: the peer's `RecvStream::read' resolves `{ok, none}'. When that
+%% data cannot be written within the linger bound, the stream is reset with
+%% application error code 1, which means the stream closed and its unwritten
+%% data was dropped after the linger bound. The bound is the macula
+%% application env `quic_close_linger_ms', 30000 by default, read when
+%% `close_stream/1' is called. For an immediate, peer-visible abort see
+%% `reset_stream/2'.
 -spec close_stream(reference()) -> ok.
 close_stream(Stream) ->
-    nif_close_stream(Stream).
+    nif_close_stream(Stream, application:get_env(macula, quic_close_linger_ms, ?CLOSE_LINGER_MS)).
 
 %% @doc Abruptly reset a stream's send side with `ErrorCode' — a QUIC
 %% RESET_STREAM frame, genuinely peer-visible at the transport level:
 %% the peer's `RecvStream::read' fails with `{quic, stream_closed,
 %% PeerStream, {reset, ErrorCode}}' instead of the clean EOF
-%% `close_stream/1' produces. `ErrorCode' must fit a QUIC VarInt
-%% (`&lt; 2^62'); out-of-range values answer `{error,
-%% error_code_out_of_range}'.
+%% `close_stream/1' produces. Returns at once: data queued on the stream is
+%% dropped, and a `send/2' waiting for its write returns `{error, reset}'.
+%% `ErrorCode' must fit a QUIC VarInt (`&lt; 2^62'); out-of-range values
+%% answer `{error, error_code_out_of_range}'.
 -spec reset_stream(reference(), non_neg_integer()) -> ok | {error, term()}.
 reset_stream(Stream, ErrorCode)
   when is_reference(Stream), is_integer(ErrorCode), ErrorCode >= 0 ->
@@ -387,7 +464,7 @@ controlling_process(Handle, Pid) ->
 %% @doc Generic close — tries stream, then connection, then listener.
 -spec close(reference()) -> ok.
 close(Ref) ->
-    close_as(Ref, [fun nif_close_stream/1,
+    close_as(Ref, [fun close_stream/1,
                     fun nif_close_connection/1,
                     fun nif_close_listener/1]).
 
@@ -468,7 +545,8 @@ handoff_stream(Stream, NewOwner, _Opts) ->
 %%%===================================================================
 
 nif_listen(_BindAddr, _Port, _CertFile, _KeyFile, _Alpn,
-           _IdleTimeoutMs, _KeepAliveMs, _BidiStreams, _UniStreams) ->
+           _IdleTimeoutMs, _KeepAliveMs, _BidiStreams, _UniStreams,
+           _StreamReceiveWindow, _ReceiveWindow) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_async_accept(_Listener) ->
@@ -502,13 +580,13 @@ nif_peername(_Conn) ->
 nif_max_datagram_size(_Conn) ->
     erlang:nif_error(nif_not_loaded).
 
-nif_send(_Stream, _Data) ->
+nif_send(_Stream, _Data, _Ref) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_async_send(_Stream, _Data) ->
     erlang:nif_error(nif_not_loaded).
 
-nif_close_stream(_Stream) ->
+nif_close_stream(_Stream, _LingerMs) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_reset_stream(_Stream, _ErrorCode) ->
