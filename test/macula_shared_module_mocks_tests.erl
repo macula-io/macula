@@ -25,8 +25,7 @@
 
 %% Test sources that still replace a watched module, until their module
 %% under test takes its functions from its options.
--define(ALLOWED, ["macula_direct_dial_resolve_tests.erl",
-                  "macula_link_respawn_replay_tests.erl",
+-define(ALLOWED, ["macula_link_respawn_replay_tests.erl",
                   "macula_station_link_tests.erl"]).
 
 no_test_replaces_a_shared_module_test() ->
