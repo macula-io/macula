@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A client `macula_peering_conn` handles close and reject while it is
   still dialing, and stops dialing when its controlling process exits.
 
+### Fixed
+
+- `macula_download:cancel/1` and `macula_feeder:cancel/1` cancel the
+  underlying content transfer whenever it has started, however soon
+  after the start the cancel lands. The download or feeder now starts
+  the transfer itself, in a call from its worker.
+
 ## [10.24.0] - 2026-09-10
 
 - `macula_dist_pool` reads the reply and the arguments of the distribution

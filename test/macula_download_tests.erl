@@ -49,6 +49,17 @@ teardown(_) ->
     meck:unload(macula),
     ok.
 
+handover_setup() ->
+    ok = setup(),
+    meck:new(macula_content_transfer, [passthrough]),
+    meck:new(macula_direct_dial, [passthrough]),
+    ok.
+
+handover_teardown(Arg) ->
+    meck:unload(macula_direct_dial),
+    meck:unload(macula_content_transfer),
+    teardown(Arg).
+
 %%%===================================================================
 %%% Tests
 %%%===================================================================
@@ -63,6 +74,15 @@ download_test_() ->
       fun direct_dial_resolves_then_fetches_from_the_resolved_provider/0,
       fun a_malformed_mcid_is_rejected_before_anything_is_spawned/0,
       fun direct_dial_also_rejects_a_malformed_mcid/0]}.
+
+%% A cancel that lands after the transfer has started, and before the
+%% download holds the transfer's pid, still cancels the transfer. The start
+%% is held at that point, in whichever process runs it, until the cancel
+%% has reached the download.
+handover_test_() ->
+    {foreach, fun handover_setup/0, fun handover_teardown/1,
+     [fun cancel_while_the_transfer_is_handed_over_still_reaches_it/0,
+      fun cancel_while_a_direct_transfer_is_handed_over_still_reaches_it/0]}.
 
 %% Regression: a share link or caller-supplied Mcid that doesn't carry
 %% either codec byte macula:put_content/2 ever mints used to reach
@@ -216,6 +236,46 @@ direct_dial_resolves_then_fetches_from_the_resolved_provider() ->
     ?assertEqual({downloaded, {ok, Bytes}}, wait_msg()),
     meck:unload(macula_direct_dial).
 
+cancel_while_the_transfer_is_handed_over_still_reaches_it() ->
+    process_flag(trap_exit, true),
+    Self = self(),
+    LinkPid = dummy_pid(),
+    Stream = make_ref(),
+    meck:expect(macula_client, pick_connected_link, fun(_Pool) -> {ok, LinkPid} end),
+    expect_a_get_that_stays_open(Self, Stream),
+    meck:expect(macula_content_transfer, start_get,
+                fun(Pool, Mcid, Opts) ->
+                    hold_handover(Self, meck:passthrough([Pool, Mcid, Opts]))
+                end),
+
+    {ok, Pid} = macula_download:start_link(?MODULE, dummy_pid(), <<0:256>>, ?SINGLE_MCID, self()),
+    cancel_during_handover(Pid),
+    ?assertEqual(1, meck:num_calls(macula_station_link, abort_content_stream,
+                                   [LinkPid, Stream, '_', '_'])).
+
+cancel_while_a_direct_transfer_is_handed_over_still_reaches_it() ->
+    process_flag(trap_exit, true),
+    Self = self(),
+    LinkPid = dummy_pid(),
+    Stream = make_ref(),
+    Endpoint = <<"quic://provider.example:4433">>,
+    meck:expect(macula_direct_dial, resolve_content_provider,
+               fun(_Pool, _Mcid) ->
+                   {ok, #{announcer_node => crypto:strong_rand_bytes(32), endpoint => Endpoint}}
+               end),
+    meck:expect(macula_client, ensure_content_link,
+               fun(_Pool, Seed, _LinkOpts, _TimeoutMs) when Seed =:= Endpoint -> {ok, LinkPid} end),
+    expect_a_get_that_stays_open(Self, Stream),
+    meck:expect(macula_content_transfer, start_get_station,
+                fun(Pool, Station, Mcid, TimeoutMs, Opts) ->
+                    hold_handover(Self, meck:passthrough([Pool, Station, Mcid, TimeoutMs, Opts]))
+                end),
+
+    {ok, Pid} = macula_download:start_link_direct(?MODULE, dummy_pid(), <<0:256>>, ?SINGLE_MCID, self()),
+    cancel_during_handover(Pid),
+    ?assertEqual(1, meck:num_calls(macula_station_link, abort_content_stream,
+                                   [LinkPid, Stream, '_', '_'])).
+
 %%%===================================================================
 %%% Helpers
 %%%===================================================================
@@ -252,3 +312,51 @@ chunk_mcid_map(Manifest, Chunks) ->
         {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, I, blake3),
         {ChunkMcid, C}
     end || {I, C} <- lists:zip(Indices, Chunks)]).
+
+expect_a_get_that_stays_open(Self, Stream) ->
+    meck:expect(macula_station_link, open_content_stream, fun(_LinkPid) -> {ok, Stream} end),
+    meck:expect(macula_station_link, call_on_stream, fun(_, _, _, _, _, _) ->
+        Self ! get_started,
+        receive never -> ok after 5_000 -> ok end,
+        {ok, <<"too late">>}
+    end),
+    meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
+    meck:expect(macula_station_link, abort_content_stream, fun(_, _, _, _) -> ok end).
+
+%% Runs in whichever process starts the transfer: report, then keep the
+%% start from returning until the test lets it.
+hold_handover(Test, Started) ->
+    Test ! {transfer_started, self()},
+    receive release_handover -> Started end.
+
+%% With the transfer started and its stream open, cancel the download, and let
+%% the held start return only once the cancel has reached the download:
+%% handled already, or queued behind the start.
+cancel_during_handover(Pid) ->
+    Self = self(),
+    Holder = receive {transfer_started, H} -> H after 1_000 -> error(transfer_not_started) end,
+    receive get_started -> ok after 1_000 -> error(stream_not_open) end,
+    _ = spawn_link(fun() -> Self ! {cancelled, macula_download:cancel(Pid)} end),
+    ok = wait_until_cancel_reached(Pid, 5_000),
+    Holder ! release_handover,
+    ?assertEqual({cancelled, ok},
+                 receive {cancelled, _} = Cancelled -> Cancelled after 5_000 -> timeout end).
+
+wait_until_cancel_reached(Pid, BudgetMs) ->
+    cancel_reached(erlang:process_info(Pid, messages), Pid, BudgetMs).
+
+cancel_reached(undefined, _Pid, _BudgetMs) ->
+    ok;
+cancel_reached({messages, Messages}, Pid, BudgetMs) ->
+    stop_queued(lists:any(fun is_stop_request/1, Messages), Pid, BudgetMs).
+
+stop_queued(true, _Pid, _BudgetMs) ->
+    ok;
+stop_queued(false, _Pid, BudgetMs) when BudgetMs =< 0 ->
+    timeout;
+stop_queued(false, Pid, BudgetMs) ->
+    timer:sleep(1),
+    wait_until_cancel_reached(Pid, BudgetMs - 1).
+
+is_stop_request({system, _From, {terminate, _Reason}}) -> true;
+is_stop_request(_Message) -> false.

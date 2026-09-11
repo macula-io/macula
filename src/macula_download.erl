@@ -24,7 +24,8 @@
 %%% nothing links a `gen_server:call' caller's death to the callee.
 %%% This module now holds the `macula_content_transfer' pid directly (a
 %%% `content_transfer' state field, alongside the lightweight resolve +
-%%% await proxy `worker' that reports it back) so `cancel/1' reaches it
+%%% await proxy `worker', which asks this process to start the transfer)
+%%% so `cancel/1' reaches it
 %%% for a real, peer-visible QUIC RESET_STREAM abort. The share_id this
 %%% module already minted for its own `sharing.*' mesh facts is
 %%% threaded through as `macula_content_transfer''s own `share_id' too.
@@ -166,20 +167,14 @@ init({DialMode, Module, Pool, Realm, <<1, Codec, _/binary>> = Mcid, Announce, In
 init({_DialMode, _Module, _Pool, _Realm, _Mcid, _Announce, _InitArgs}) ->
     {stop, invalid_mcid}.
 
-%% The lightweight proxy: start the addressable transfer, report its
-%% pid back immediately (so `terminate/2' can reach it even if this
-%% proxy itself gets killed mid-flight), block for the outcome, reap
-%% the transfer (a no-op if it's already being cancelled from outside
-%% — see `reap_content_transfer/1'), report the outcome.
+%% The lightweight proxy: have this download start the addressable
+%% transfer (see `run_transfer/2'), block for the outcome, reap the
+%% transfer (a no-op if it's already being cancelled from outside, see
+%% `reap_content_transfer/1'), report the outcome.
 spawn_worker(pooled, Pool, Mcid, ShareId) ->
     Parent = self(),
-    spawn_link(fun() ->
-        {ok, CTPid} = macula_content_transfer:start_get(Pool, Mcid, #{share_id => ShareId}),
-        Parent ! {content_transfer, CTPid},
-        Result = macula_content_transfer:await(CTPid),
-        reap_content_transfer(CTPid),
-        Parent ! {download_result, Result}
-    end);
+    Start = pooled_get(Pool, Mcid, #{share_id => ShareId}),
+    spawn_link(fun() -> run_transfer(Parent, Start) end);
 %% Resolving `Mcid''s provider stays a plain blocking DHT lookup here
 %% (matches what `macula_direct_dial:get_content/3' already did) —
 %% only the transfer itself becomes addressable.
@@ -192,26 +187,44 @@ direct_worker_run(Pool, Mcid, ShareId, Parent) ->
         {ok, #{announcer_node := Node, endpoint := Endpoint}} ->
             Opts = #{share_id => ShareId, expected_node_id => Node,
                     pin_tls_cert => false, verify => none},
-            {ok, CTPid} = macula_content_transfer:start_get_station(
-                Pool, Endpoint, Mcid, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts),
-            Parent ! {content_transfer, CTPid},
-            Result = macula_content_transfer:await(CTPid),
-            reap_content_transfer(CTPid),
-            Parent ! {download_result, Result};
+            run_transfer(Parent, station_get(Pool, Endpoint, Mcid, Opts));
         {error, Reason} ->
             Parent ! {download_result, {error, {unresolved, Reason}}}
     end.
 
+pooled_get(Pool, Mcid, Opts) ->
+    fun() -> macula_content_transfer:start_get(Pool, Mcid, Opts) end.
+
+station_get(Pool, Endpoint, Mcid, Opts) ->
+    fun() ->
+        macula_content_transfer:start_get_station(
+            Pool, Endpoint, Mcid, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts)
+    end.
+
+%% This download starts the transfer itself, in a call from the worker,
+%% so the transfer's pid is in the state before any `cancel/1' is
+%% handled: a cancel handled first finds nothing started, and a cancel
+%% handled after finds the pid.
+run_transfer(Parent, Start) ->
+    {ok, CTPid} = gen_server:call(Parent, {start_transfer, Start}, infinity),
+    Result = macula_content_transfer:await(CTPid),
+    reap_content_transfer(CTPid),
+    Parent ! {download_result, Result}.
+
 %% @private
+handle_call({start_transfer, Start}, _From, State) ->
+    Started = Start(),
+    {reply, Started, record_transfer(Started, State)};
 handle_call(_Request, _From, State) ->
     {reply, {error, unsupported}, State}.
+
+record_transfer({ok, CTPid}, State) -> State#dstate{content_transfer = CTPid};
+record_transfer(_NotStarted, State) -> State.
 
 %% @private
 handle_cast(_Msg, State) -> {noreply, State}.
 
 %% @private
-handle_info({content_transfer, CTPid}, State) ->
-    {noreply, State#dstate{content_transfer = CTPid}};
 handle_info({download_result, Result}, State) ->
     NewState = announce_completed(State, Result),
     #dstate{module = Module, user = User} = NewState,
@@ -238,12 +251,12 @@ terminate(_Reason, #dstate{content_transfer = CTPid} = State) ->
     ok.
 
 %% Killing the proxy `worker' does NOT cascade into stopping the
-%% `macula_content_transfer' it started — see `macula_feeder''s
-%% identical helper for the full reasoning. `undefined' covers the
-%% window before `{content_transfer, CTPid}' has arrived yet (still
-%% resolving, for direct-dial). `catch' covers the benign race between
-%% the proxy's own natural reap and an external `cancel/1' landing at
-%% the same time.
+%% `macula_content_transfer' it waits on — see `macula_feeder''s
+%% identical helper for the full reasoning. `undefined' covers a cancel
+%% handled before the worker asked for the transfer to start (still
+%% resolving, for direct-dial): nothing was started. `catch' covers the
+%% benign race between the proxy's own natural reap and an external
+%% `cancel/1' landing at the same time.
 reap_content_transfer(undefined) -> ok;
 reap_content_transfer(CTPid) ->
     try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
