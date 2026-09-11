@@ -269,15 +269,15 @@ tunnel_payloads_decoded_in_a_fresh_node_test_() ->
     {timeout, 60, fun fresh_node_reads_tunnel_payloads/0}.
 
 fresh_node_reads_tunnel_payloads() ->
-    Bin = result_frame(#{<<"tunnel_id">> => <<"t-1">>,
-                         <<"from_node">> => <<"a@host">>}),
+    {Bin, Request} = signed_result(#{<<"tunnel_id">> => <<"t-1">>,
+                                     <<"from_node">> => <<"a@host">>}),
     Paths = lists:append([["-pa", P] || P <- code:get_path()]),
     {ok, Peer, _Node} = peer:start_link(#{connection => standard_io, args => Paths}),
     try
         ?assertMatch({'EXIT', _}, catch peer:call(Peer, erlang, binary_to_existing_atom,
                                                   [<<"from_node">>, utf8])),
         {ok, Decoded, <<>>} = peer:call(Peer, macula_frame, decode, [Bin]),
-        Wire = maps:get(payload, Decoded),
+        {ok, #{payload := Wire}} = peer:call(Peer, macula_frame, verify_reply, [Decoded, Request, pq_pure]),
         ?assert(maps:is_key({text, <<"from_node">>}, Wire)),
         ?assert(maps:is_key({text, <<"tunnel_id">>}, Wire)),
         ?assertEqual({tunnel, <<"t-1">>},
@@ -292,14 +292,23 @@ fresh_node_reads_tunnel_payloads() ->
 %%% Helpers
 %%%===================================================================
 
-result_frame(Payload) ->
-    iolist_to_binary(macula_frame:encode(macula_frame:result(#{call_id => <<0:128>>,
-                                                               payload => Payload,
-                                                               responded_by => <<0:256>>}))).
+%% A RESULT carrying the payload, signed by the provider a CALL was addressed to, as the bytes a caller receives,
+%% together with the verified request it answers.
+signed_result(Payload) ->
+    {ok, Caller} = macula_node_keys:generate(identity, pq_pure),
+    {ok, Provider} = macula_node_keys:generate(identity, pq_pure),
+    Call = macula_frame:call(#{request_id => <<1:128>>, realm => <<1:256>>, procedure => <<"_dist.tunnel">>,
+                               target => macula_node_keys:key_id(Provider), deadline => 1, payload => #{}}, Caller),
+    {ok, Request} = macula_frame:verify_request(Call, pq_pure),
+    Result = macula_frame:result(#{request => Request, payload => Payload}, Provider),
+    {iolist_to_binary(macula_frame:encode(Result)), Request}.
 
+%% The payload of a RESULT as the caller reads it: decoded, then verified for its request.
 decoded_payload(Payload) ->
-    {ok, Decoded, <<>>} = macula_frame:decode(result_frame(Payload)),
-    maps:get(payload, Decoded).
+    {Bin, Request} = signed_result(Payload),
+    {ok, Frame, <<>>} = macula_frame:decode(Bin),
+    {ok, #{payload := Reply}} = macula_frame:verify_reply(Frame, Request, pq_pure),
+    Reply.
 
 make_loopback_pair() ->
     ListenOpts = [binary, {active, false}, {reuseaddr, true}, {ip, {127,0,0,1}}],

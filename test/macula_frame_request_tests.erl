@@ -1,0 +1,311 @@
+%% EUnit tests for requests, replies and relay errors (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md: Requests, Replies and
+%% Relay errors; D25). CALL and STREAM_OPEN carry request, a {key, tbs, signature} under MACULA-PQ-REQUEST-V1 signed by
+%% the caller; RESULT and ERROR from a provider carry reply under MACULA-PQ-REPLY-V1; ERROR and STREAM_ERROR from a
+%% station carry relay_error under MACULA-PQ-RELAY-ERROR-V1. caller, responded_by and reported_by are key ids.
+-module(macula_frame_request_tests).
+
+-include_lib("eunit/include/eunit.hrl").
+
+-define(REQUEST_LABEL, <<"MACULA-PQ-REQUEST-V1">>).
+-define(REPLY_LABEL, <<"MACULA-PQ-REPLY-V1">>).
+-define(RELAY_ERROR_LABEL, <<"MACULA-PQ-RELAY-ERROR-V1">>).
+-define(REALM, <<1:256>>).
+-define(PROCEDURE, <<"acme/get_forecast_v1">>).
+-define(DEADLINE, 1789000600000).
+
+requests_replies_and_relay_errors_test_() ->
+    {setup, fun keys/0, fun cases/1}.
+
+%% Every case signs inside its own test, so each one passes or fails on its own.
+cases(Keys) ->
+    [{case_name(Case), fun() -> Case(Keys) end}
+     || Case <- [fun a_signed_call_verifies_with_its_caller_key_and_request_hash/1,
+                 fun a_call_frame_carries_version_frame_type_request_and_its_routing_fields/1,
+                 fun a_stream_open_carries_its_mode/1,
+                 fun mode_belongs_to_stream_open_only/1,
+                 fun a_token_is_optional_bytes/1,
+                 fun a_caller_that_is_not_the_key_id_of_key_is_refused/1,
+                 fun a_tampered_request_is_refused/1,
+                 fun a_request_under_another_label_is_refused/1,
+                 fun request_fields_the_design_does_not_allow_are_malformed/1,
+                 fun a_request_under_the_other_profile_is_malformed/1,
+                 fun two_callers_never_share_a_request_hash/1,
+                 fun a_result_from_the_target_verifies_for_its_request/1,
+                 fun a_provider_error_carries_its_code_and_detail/1,
+                 fun a_reply_from_a_node_other_than_the_target_is_refused/1,
+                 fun a_reply_for_another_request_is_refused/1,
+                 fun a_responded_by_that_is_not_the_key_id_of_key_is_refused/1,
+                 fun a_tampered_reply_is_refused/1,
+                 fun reply_fields_the_design_does_not_allow_are_malformed/1,
+                 fun a_relay_error_verifies_for_its_request/1,
+                 fun a_stream_error_from_a_station_is_a_relay_error/1,
+                 fun a_relay_code_outside_the_closed_set_is_refused/1,
+                 fun a_relay_error_for_another_request_is_refused/1,
+                 fun a_reported_by_that_is_not_the_key_id_of_key_is_refused/1,
+                 fun an_error_frame_is_either_a_reply_or_a_relay_error/1]].
+
+%%------------------------------------------------------------------
+%% Requests: CALL and STREAM_OPEN
+%%------------------------------------------------------------------
+
+a_signed_call_verifies_with_its_caller_key_and_request_hash(#{caller := Caller} = Keys) ->
+    Frame = wire(macula_frame:call(call_spec(Keys), Caller)),
+    #{request := #{key := Key, tbs := Tbs}} = Frame,
+    {ok, Request} = macula_frame:verify_request(Frame, pq_pure),
+    ?assertMatch(#{frame_type := call, request_id := <<7:128>>, realm := ?REALM, procedure := ?PROCEDURE,
+                   deadline := ?DEADLINE}, Request),
+    ?assertEqual(macula_node_keys:public_key(Caller), Key),
+    ?assertEqual(Key, maps:get(key, Request)),
+    ?assertEqual(macula_node_keys:key_id(Caller), maps:get(caller, Request)),
+    ?assertEqual(target(Keys), maps:get(target, Request)),
+    ?assertEqual(crypto:hash(sha384, Tbs), maps:get(request_hash, Request)),
+    ?assertEqual(#{{text, <<"city">>} => {text, <<"Tienen">>}}, maps:get(payload, Request)).
+
+a_call_frame_carries_version_frame_type_request_and_its_routing_fields(#{caller := Caller} = Keys) ->
+    Routed = wire(macula_frame:call((call_spec(Keys))#{source_route => <<1, 2>>, retry_budget => 3}, Caller)),
+    ?assertEqual([frame_type, request, retry_budget, source_route, version], lists:sort(maps:keys(Routed))),
+    ?assertEqual([key, signature, tbs], lists:sort(maps:keys(maps:get(request, Routed)))),
+    Plain = wire(macula_frame:call(call_spec(Keys), Caller)),
+    ?assertEqual([frame_type, request, version], lists:sort(maps:keys(Plain))).
+
+a_stream_open_carries_its_mode(Keys) ->
+    ?assertMatch(#{frame_type := stream_open, mode := server_stream}, verified_stream_open(Keys)).
+
+mode_belongs_to_stream_open_only(#{caller := Caller} = Keys) ->
+    ?assertError(function_clause, macula_frame:call((call_spec(Keys))#{mode => bidi}, Caller)),
+    ?assertError(function_clause, macula_frame:stream_open(call_spec(Keys), Caller)),
+    WithMode = (request_tbs(Keys))#{{text, <<"mode">>} => {text, <<"bidi">>}},
+    ?assertEqual({error, malformed_frame}, verify_crafted_request(call, WithMode, Caller)),
+    WithoutMode = (request_tbs(Keys))#{{text, <<"frame_type">>} := {text, <<"stream_open">>}},
+    ?assertEqual({error, malformed_frame}, verify_crafted_request(stream_open, WithoutMode, Caller)).
+
+a_token_is_optional_bytes(#{caller := Caller} = Keys) ->
+    Frame = wire(macula_frame:call((call_spec(Keys))#{token => <<"a token">>}, Caller)),
+    ?assertMatch({ok, #{token := <<"a token">>}}, macula_frame:verify_request(Frame, pq_pure)),
+    Text = (request_tbs(Keys))#{{text, <<"token">>} => {text, <<"a token">>}},
+    ?assertEqual({error, malformed_frame}, verify_crafted_request(call, Text, Caller)).
+
+a_caller_that_is_not_the_key_id_of_key_is_refused(#{caller := Caller, other := Other} = Keys) ->
+    Tbs = (request_tbs(Keys))#{{text, <<"caller">>} := macula_node_keys:key_id(Other)},
+    ?assertEqual({error, key_id_mismatch}, verify_crafted_request(call, Tbs, Caller)).
+
+a_tampered_request_is_refused(#{caller := Caller} = Keys) ->
+    #{request := Signed} = Frame = macula_frame:call(call_spec(Keys), Caller),
+    Tampered = Frame#{request := Signed#{tbs := flip(maps:get(tbs, Signed))}},
+    ?assertEqual({error, signature_invalid}, macula_frame:verify_request(wire(Tampered), pq_pure)).
+
+a_request_under_another_label_is_refused(#{caller := Caller} = Keys) ->
+    Frame = crafted(call, request, macula_signed_object:sign(?REPLY_LABEL, request_tbs(Keys), Caller)),
+    ?assertEqual({error, signature_invalid}, macula_frame:verify_request(wire(Frame), pq_pure)).
+
+request_fields_the_design_does_not_allow_are_malformed(#{caller := Caller} = Keys) ->
+    Base = request_tbs(Keys),
+    ?assertMatch({ok, _}, verify_crafted_request(call, Base, Caller)),
+    [?assertEqual({error, malformed_frame}, verify_crafted_request(call, Tbs, Caller))
+     || Tbs <- [Base#{{text, <<"extra">>} => 1},
+                maps:remove({text, <<"target">>}, Base),
+                Base#{{text, <<"request_id">>} := <<7:120>>},
+                Base#{{text, <<"target">>} := <<1:248>>},
+                Base#{{text, <<"deadline">>} := 1 bsl 53},
+                Base#{{text, <<"deadline">>} := {text, <<"soon">>}},
+                Base#{{text, <<"procedure">>} := ?PROCEDURE},
+                Base#{{text, <<"frame_type">>} := {text, <<"result">>}}]].
+
+a_request_under_the_other_profile_is_malformed(#{caller := Caller} = Keys) ->
+    Frame = wire(macula_frame:call(call_spec(Keys), Caller)),
+    ?assertEqual({error, malformed_frame}, macula_frame:verify_request(Frame, pq_hybrid)).
+
+two_callers_never_share_a_request_hash(#{caller := Caller, other := Other} = Keys) ->
+    #{request_hash := One} = verified_request(Caller, call_spec(Keys)),
+    #{request_hash := Two} = verified_request(Other, call_spec(Keys)),
+    ?assertNotEqual(One, Two).
+
+%%------------------------------------------------------------------
+%% Replies: RESULT and ERROR from a provider
+%%------------------------------------------------------------------
+
+a_result_from_the_target_verifies_for_its_request(#{provider := Provider} = Keys) ->
+    Request = verified_call(Keys),
+    Result = wire(macula_frame:result(#{request => Request, payload => #{temp => 21}}, Provider)),
+    ?assertEqual([frame_type, reply, version], lists:sort(maps:keys(Result))),
+    ?assertEqual({ok, #{frame_type => result, responded_by => target(Keys), payload => #{{text, <<"temp">>} => 21}}},
+                 macula_frame:verify_reply(Result, Request, pq_pure)).
+
+a_provider_error_carries_its_code_and_detail(#{provider := Provider} = Keys) ->
+    Request = verified_call(Keys),
+    Detailed = macula_frame:provider_error(#{request => Request, code => <<"closed">>, detail => <<"after six">>},
+                                           Provider),
+    ?assertEqual({ok, #{frame_type => error, responded_by => target(Keys), code => <<"closed">>,
+                        detail => <<"after six">>}},
+                 macula_frame:verify_reply(wire(Detailed), Request, pq_pure)),
+    Bare = macula_frame:provider_error(#{request => Request, code => <<"closed">>}, Provider),
+    ?assertEqual({ok, #{frame_type => error, responded_by => target(Keys), code => <<"closed">>}},
+                 macula_frame:verify_reply(wire(Bare), Request, pq_pure)).
+
+a_reply_from_a_node_other_than_the_target_is_refused(#{other := Other} = Keys) ->
+    Request = verified_call(Keys),
+    Result = wire(macula_frame:result(#{request => Request, payload => 1}, Other)),
+    ?assertEqual({error, not_the_target}, macula_frame:verify_reply(Result, Request, pq_pure)).
+
+a_reply_for_another_request_is_refused(#{caller := Caller, provider := Provider} = Keys) ->
+    Request = verified_call(Keys),
+    Result = wire(macula_frame:result(#{request => Request, payload => 1}, Provider)),
+    Another = verified_request(Caller, (call_spec(Keys))#{request_id => <<8:128>>}),
+    ?assertEqual({error, request_mismatch}, macula_frame:verify_reply(Result, Another, pq_pure)),
+    OtherHash = Request#{request_hash := crypto:hash(sha384, <<"another request">>)},
+    ?assertEqual({error, request_mismatch}, macula_frame:verify_reply(Result, OtherHash, pq_pure)).
+
+a_responded_by_that_is_not_the_key_id_of_key_is_refused(#{provider := Provider, other := Other} = Keys) ->
+    Request = verified_call(Keys),
+    Tbs = (reply_tbs(Request, result))#{{text, <<"responded_by">>} := macula_node_keys:key_id(Other)},
+    Frame = crafted(result, reply, macula_signed_object:sign(?REPLY_LABEL, Tbs, Provider)),
+    ?assertEqual({error, key_id_mismatch}, macula_frame:verify_reply(wire(Frame), Request, pq_pure)).
+
+a_tampered_reply_is_refused(#{provider := Provider} = Keys) ->
+    Request = verified_call(Keys),
+    #{reply := Signed} = Frame = macula_frame:result(#{request => Request, payload => 1}, Provider),
+    Tampered = Frame#{reply := Signed#{tbs := flip(maps:get(tbs, Signed))}},
+    ?assertEqual({error, signature_invalid}, macula_frame:verify_reply(wire(Tampered), Request, pq_pure)).
+
+reply_fields_the_design_does_not_allow_are_malformed(#{provider := Provider} = Keys) ->
+    Request = verified_call(Keys),
+    Verify = fun(FrameType, Tbs) ->
+        Frame = crafted(FrameType, reply, macula_signed_object:sign(?REPLY_LABEL, Tbs, Provider)),
+        macula_frame:verify_reply(wire(Frame), Request, pq_pure)
+    end,
+    Result = reply_tbs(Request, result),
+    Error = reply_tbs(Request, error),
+    ?assertMatch({ok, _}, Verify(result, Result)),
+    ?assertMatch({ok, _}, Verify(error, Error)),
+    [?assertEqual({error, malformed_frame}, Verify(FrameType, Tbs))
+     || {FrameType, Tbs} <- [{result, Result#{{text, <<"code">>} => {text, <<"closed">>}}},
+                             {result, maps:remove({text, <<"payload">>}, Result)},
+                             {error, Error#{{text, <<"payload">>} => 1}},
+                             {error, maps:remove({text, <<"code">>}, Error)},
+                             {result, Result#{{text, <<"request_hash">>} := <<0:376>>}},
+                             {result, Result#{{text, <<"extra">>} => 1}},
+                             {error, Result}]].
+
+%%------------------------------------------------------------------
+%% Relay errors: ERROR and STREAM_ERROR from a station
+%%------------------------------------------------------------------
+
+a_relay_error_verifies_for_its_request(#{station := Station} = Keys) ->
+    Request = verified_call(Keys),
+    Spec = #{frame_type => error, request => Request, code => unknown_next_peer, detail => <<"no route">>,
+             offending_hop => <<9:256>>},
+    Relay = wire(macula_frame:relay_error(Spec, Station)),
+    ?assertEqual([frame_type, relay_error, version], lists:sort(maps:keys(Relay))),
+    ?assertEqual({ok, #{frame_type => error, reported_by => macula_node_keys:key_id(Station), code => unknown_next_peer,
+                        detail => <<"no route">>, offending_hop => <<9:256>>}},
+                 macula_frame:verify_relay_error(Relay, Request, pq_pure)).
+
+a_stream_error_from_a_station_is_a_relay_error(#{station := Station} = Keys) ->
+    Request = verified_stream_open(Keys),
+    Spec = #{frame_type => stream_error, request => Request, code => unknown_next_peer},
+    Relay = wire(macula_frame:relay_error(Spec, Station)),
+    ?assertEqual({ok, #{frame_type => stream_error, reported_by => macula_node_keys:key_id(Station),
+                        code => unknown_next_peer}},
+                 macula_frame:verify_relay_error(Relay, Request, pq_pure)).
+
+a_relay_code_outside_the_closed_set_is_refused(#{station := Station} = Keys) ->
+    Request = verified_call(Keys),
+    ?assertError(function_clause,
+                 macula_frame:relay_error(#{frame_type => error, request => Request, code => no_route}, Station)),
+    Tbs = (relay_tbs(Request, Station))#{{text, <<"code">>} := {text, <<"no_route">>}},
+    Frame = crafted(error, relay_error, macula_signed_object:sign(?RELAY_ERROR_LABEL, Tbs, Station)),
+    ?assertEqual({error, malformed_frame}, macula_frame:verify_relay_error(wire(Frame), Request, pq_pure)).
+
+a_relay_error_for_another_request_is_refused(#{caller := Caller, station := Station} = Keys) ->
+    Request = verified_call(Keys),
+    Spec = #{frame_type => error, request => Request, code => unknown_next_peer},
+    Relay = wire(macula_frame:relay_error(Spec, Station)),
+    Another = verified_request(Caller, (call_spec(Keys))#{request_id => <<8:128>>}),
+    ?assertEqual({error, request_mismatch}, macula_frame:verify_relay_error(Relay, Another, pq_pure)).
+
+a_reported_by_that_is_not_the_key_id_of_key_is_refused(#{station := Station, other := Other} = Keys) ->
+    Request = verified_call(Keys),
+    Tbs = (relay_tbs(Request, Station))#{{text, <<"reported_by">>} := macula_node_keys:key_id(Other)},
+    Frame = crafted(error, relay_error, macula_signed_object:sign(?RELAY_ERROR_LABEL, Tbs, Station)),
+    ?assertEqual({error, key_id_mismatch}, macula_frame:verify_relay_error(wire(Frame), Request, pq_pure)).
+
+an_error_frame_is_either_a_reply_or_a_relay_error(#{provider := Provider, station := Station} = Keys) ->
+    Request = verified_call(Keys),
+    #{reply := Reply} = ProviderError =
+        macula_frame:provider_error(#{request => Request, code => <<"closed">>}, Provider),
+    #{relay_error := RelayError} = Relay =
+        macula_frame:relay_error(#{frame_type => error, request => Request, code => unknown_next_peer}, Station),
+    ?assertEqual({error, malformed_frame}, macula_frame:verify_reply(wire(Relay), Request, pq_pure)),
+    ?assertEqual({error, malformed_frame}, macula_frame:verify_relay_error(wire(ProviderError), Request, pq_pure)),
+    Both = ProviderError#{relay_error => RelayError},
+    ?assertEqual({error, malformed_frame}, macula_frame:verify_reply(wire(Both), Request, pq_pure)),
+    ?assertEqual({error, malformed_frame},
+                 macula_frame:verify_relay_error(wire(Relay#{reply => Reply}), Request, pq_pure)).
+
+%%------------------------------------------------------------------
+%% Helpers
+%%------------------------------------------------------------------
+
+keys() ->
+    Generate = fun() -> {ok, Key} = macula_node_keys:generate(identity, pq_pure), Key end,
+    #{caller => Generate(), provider => Generate(), station => Generate(), other => Generate()}.
+
+case_name(Case) ->
+    {name, Name} = erlang:fun_info(Case, name),
+    atom_to_list(Name).
+
+target(#{provider := Provider}) ->
+    macula_node_keys:key_id(Provider).
+
+call_spec(Keys) ->
+    #{request_id => <<7:128>>, realm => ?REALM, procedure => ?PROCEDURE, target => target(Keys),
+      deadline => ?DEADLINE, payload => #{city => {text, <<"Tienen">>}}}.
+
+verified_call(#{caller := Caller} = Keys) ->
+    verified_request(Caller, call_spec(Keys)).
+
+verified_request(Caller, Spec) ->
+    {ok, Request} = macula_frame:verify_request(wire(macula_frame:call(Spec, Caller)), pq_pure),
+    Request.
+
+verified_stream_open(#{caller := Caller} = Keys) ->
+    Frame = macula_frame:stream_open((call_spec(Keys))#{mode => server_stream}, Caller),
+    {ok, Request} = macula_frame:verify_request(wire(Frame), pq_pure),
+    Request.
+
+%% The fields of a CALL request as its signer puts them in tbs; signing adds alg.
+request_tbs(#{caller := Caller} = Keys) ->
+    #{{text, <<"frame_type">>} => {text, <<"call">>}, {text, <<"caller">>} => macula_node_keys:key_id(Caller),
+      {text, <<"request_id">>} => <<7:128>>, {text, <<"realm">>} => ?REALM,
+      {text, <<"procedure">>} => {text, ?PROCEDURE}, {text, <<"target">>} => target(Keys),
+      {text, <<"deadline">>} => ?DEADLINE, {text, <<"payload">>} => 1}.
+
+reply_tbs(#{request_id := RequestId, request_hash := RequestHash, target := Target}, result) ->
+    #{{text, <<"frame_type">>} => {text, <<"result">>}, {text, <<"request_id">>} => RequestId,
+      {text, <<"request_hash">>} => RequestHash, {text, <<"responded_by">>} => Target, {text, <<"payload">>} => 1};
+reply_tbs(#{request_id := RequestId, request_hash := RequestHash, target := Target}, error) ->
+    #{{text, <<"frame_type">>} => {text, <<"error">>}, {text, <<"request_id">>} => RequestId,
+      {text, <<"request_hash">>} => RequestHash, {text, <<"responded_by">>} => Target,
+      {text, <<"code">>} => {text, <<"closed">>}}.
+
+relay_tbs(#{request_id := RequestId, request_hash := RequestHash}, Station) ->
+    #{{text, <<"frame_type">>} => {text, <<"error">>}, {text, <<"request_id">>} => RequestId,
+      {text, <<"request_hash">>} => RequestHash, {text, <<"reported_by">>} => macula_node_keys:key_id(Station),
+      {text, <<"code">>} => {text, <<"unknown_next_peer">>}}.
+
+verify_crafted_request(FrameType, Tbs, Key) ->
+    Frame = crafted(FrameType, request, macula_signed_object:sign(?REQUEST_LABEL, Tbs, Key)),
+    macula_frame:verify_request(wire(Frame), pq_pure).
+
+%% A frame around one signed object, with the version the codec writes.
+crafted(FrameType, Field, Signed) ->
+    Version = macula_frame:version(macula_frame:ping(#{nonce => <<0:128>>})),
+    #{version => Version, frame_type => FrameType, Field => Signed}.
+
+%% A frame as a peer receives it: encoded and decoded.
+wire(Frame) ->
+    {ok, Decoded, <<>>} = macula_frame:decode(macula_frame:encode(Frame)),
+    Decoded.
+
+flip(<<Head:20/binary, Byte, Tail/binary>>) ->
+    <<Head/binary, (Byte bxor 1), Tail/binary>>.

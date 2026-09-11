@@ -104,22 +104,19 @@ a_duplicate_key_is_refused_test() ->
     Bytes = <<16#A2, FrameType/binary, (text(<<"ping">>))/binary, FrameType/binary, (text(<<"pong">>))/binary>>,
     ?assertEqual({error, bad_frame}, macula_frame:decode(macula_frame:encode_bytes(Bytes))).
 
+%% The frame codec refuses what the decoding rule refuses, wherever it sits in the frame; the shared vectors pin the
+%% accepted side.
 a_negative_integer_below_minus_2_pow_63_is_refused_test() ->
-    ?assertMatch({ok, _, <<>>}, decode_map(#{frame_type => call, payload => -(1 bsl 63)})),
-    ?assertEqual({error, bad_frame}, decode_map(#{frame_type => call, payload => -(1 bsl 63) - 1})).
+    ?assertEqual({error, bad_frame}, decode_ping_with(<<16#3B, (1 bsl 63):64>>)).
 
 a_positive_integer_above_2_pow_63_minus_1_is_refused_test() ->
-    ?assertMatch({ok, _, <<>>}, decode_map(#{frame_type => call, payload => (1 bsl 63) - 1})),
-    ?assertEqual({error, bad_frame}, decode_map(#{frame_type => call, payload => 1 bsl 63})).
+    ?assertEqual({error, bad_frame}, decode_ping_with(<<16#1B, (1 bsl 63):64>>)).
 
 invalid_utf8_text_is_refused_test() ->
-    Bytes = <<16#A2, (text(<<"frame_type">>))/binary, (text(<<"call">>))/binary,
-              (text(<<"payload">>))/binary, 16#61, 16#FF>>,
-    ?assertEqual({error, bad_frame}, macula_frame:decode(macula_frame:encode_bytes(Bytes))).
+    ?assertEqual({error, bad_frame}, decode_ping_with(<<16#61, 16#FF>>)).
 
 nesting_past_the_decoding_rule_is_refused_test() ->
-    ?assertMatch({ok, _, <<>>}, decode_map(#{frame_type => call, payload => nested(63)})),
-    ?assertEqual({error, bad_frame}, decode_map(#{frame_type => call, payload => nested(64)})).
+    ?assertEqual({error, bad_frame}, decode_ping_with(<<(binary:copy(<<16#81>>, 64))/binary, 0>>)).
 
 check_payload_refuses_what_the_decoding_rule_refuses_test() ->
     ?assertEqual(ok, macula_frame:check_payload(-(1 bsl 63))),
@@ -138,10 +135,9 @@ check_payload_refuses_what_the_decoding_rule_refuses_test() ->
 
 a_decoded_payload_holds_no_atoms_test() ->
     Payload = #{station => {text, <<"station">>}, <<"kind">> => {text, <<"daemon">>}, list => [ok]},
-    #{payload := Decoded} = roundtrip(#{frame_type => call, payload => Payload}),
     ?assertEqual(#{{text, <<"station">>} => {text, <<"station">>}, {text, <<"kind">>} => {text, <<"daemon">>},
                    {text, <<"list">>} => [{text, <<"ok">>}]},
-                 Decoded).
+                 request_payload(macula_frame:encode(signed_call(Payload)))).
 
 %% The same frame decodes to the same payload map on a node that holds the payload's names as atoms and on one that
 %% does not. The fresh node is checked first, so the test cannot pass by accident.
@@ -151,16 +147,16 @@ payload_maps_decode_the_same_on_a_fresh_node_and_a_warm_node_test_() ->
 fresh_and_warm_nodes_agree() ->
     Name = <<"d26_probe_field_name_2a">>,
     Payload = #{{text, Name} => {text, Name}, {text, <<"nested">>} => #{{text, Name} => 1}},
-    Bin = macula_frame:encode(#{frame_type => call, payload => Payload}),
+    Bin = macula_frame:encode(signed_call(Payload)),
     _ = binary_to_atom(Name),
     Paths = lists:append([["-pa", Path] || Path <- code:get_path()]),
     {ok, Peer, _Node} = peer:start_link(#{connection => standard_io, args => Paths}),
     try
         ?assertMatch({'EXIT', _}, catch peer:call(Peer, erlang, binary_to_existing_atom, [Name, utf8])),
         {ok, Fresh, <<>>} = peer:call(Peer, macula_frame, decode, [Bin]),
-        {ok, Warm, <<>>} = macula_frame:decode(Bin),
-        ?assertEqual(maps:get(payload, Fresh), maps:get(payload, Warm)),
-        ?assertEqual(Payload, maps:get(payload, Warm))
+        {ok, #{payload := FreshPayload}} = peer:call(Peer, macula_frame, verify_request, [Fresh, pq_pure]),
+        ?assertEqual(FreshPayload, request_payload(Bin)),
+        ?assertEqual(Payload, request_payload(Bin))
     after
         peer:stop(Peer)
     end.
@@ -182,6 +178,23 @@ decode_map(Frame) ->
 
 text(Bin) ->
     macula_record_cbor:encode({text, Bin}).
+
+%% A PING whose nonce is the given CBOR item, as raw frame bytes through the frame codec.
+decode_ping_with(Item) ->
+    Head = <<16#A2, (text(<<"frame_type">>))/binary, (text(<<"ping">>))/binary, (text(<<"nonce">>))/binary>>,
+    macula_frame:decode(macula_frame:encode_bytes(<<Head/binary, Item/binary>>)).
+
+%% A CALL carrying the payload, signed by a fresh caller key.
+signed_call(Payload) ->
+    {ok, Caller} = macula_node_keys:generate(identity, pq_pure),
+    macula_frame:call(#{request_id => <<1:128>>, realm => fill(1), procedure => <<"p">>, target => fill(2),
+                        deadline => 1, payload => Payload}, Caller).
+
+%% The payload of an encoded CALL as a receiver reads it: decoded, then verified.
+request_payload(Bin) ->
+    {ok, Frame, <<>>} = macula_frame:decode(Bin),
+    {ok, #{payload := Payload}} = macula_frame:verify_request(Frame, pq_pure),
+    Payload.
 
 nested(0) -> 1;
 nested(N) -> [nested(N - 1)].
