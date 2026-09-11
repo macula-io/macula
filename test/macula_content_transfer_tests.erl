@@ -49,7 +49,8 @@ content_transfer_test_() ->
                   fun manifest_not_matching_the_requested_mcid_is_refused/0,
                   fun pause_on_single_block_put_is_a_harmless_noop/0,
                   fun cancel_while_paused_between_chunks_still_resets_the_stream/0,
-                  fun a_link_io_of_another_shape_is_refused/0]]}.
+                  fun a_link_io_of_another_shape_is_refused/0,
+                  fun a_transfer_io_of_another_shape_is_refused/0]]}.
 
 single_block_put_resolves_mcid() ->
     Bytes = <<"hello content transfer">>,
@@ -338,6 +339,24 @@ a_link_io_of_another_shape_is_refused() ->
     ?assertError(function_clause, Start(LinkIo#{call_on_stream := fun(_, _, _, _, _) -> ok end})),
     ?assertError(function_clause, Start(LinkIo#{open_stream => fun(_) -> ok end})),
     ?assertEqual([], macula_scripted_link:calls()).
+
+%% transfer_io/2 gives the defaults for none, a set with every function a
+%% feeder or download calls, other transfer functions allowed, and
+%% refuses a set without one, with one of another arity, or with another
+%% key.
+a_transfer_io_of_another_shape_is_refused() ->
+    Put = #{start_put => fun(_, _, _) -> {ok, self()} end,
+            start_put_station => fun(_, _, _, _, _) -> {ok, self()} end,
+            await => fun(_) -> {ok, done} end,
+            cancel => fun(_) -> ok end},
+    Check = fun(Given) -> macula_content_transfer:transfer_io(Put, Given) end,
+    ?assertEqual(Put, Check(undefined)),
+    ?assertEqual(Put, Check(Put)),
+    Wider = Put#{start_get => fun(_, _, _) -> {ok, self()} end},
+    ?assertEqual(Wider, Check(Wider)),
+    ?assertError(function_clause, Check(maps:remove(cancel, Put))),
+    ?assertError(function_clause, Check(Put#{await := fun(_, _) -> ok end})),
+    ?assertError(function_clause, Check(Put#{abort => fun(_) -> ok end})).
 
 %%%===================================================================
 %%% Helpers

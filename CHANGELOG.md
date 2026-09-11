@@ -121,6 +121,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `macula_client` and `macula_station_link` ones by default. A set without
   one of them, with a function of another arity or with another key is
   refused with `function_clause`, in the caller.
+- `macula_feeder:start_link/6` and `start_link_direct/7`, and
+  `macula_download:start_link/6` and `start_link_direct/6`, take start
+  options: `transfer_io`, the functions they start, await and cancel their
+  transfer with, checked by the new `macula_content_transfer:transfer_io/2`
+  (a feeder's `start_put/3`, `start_put_station/5`, `await/1` and
+  `cancel/1`, a download's `start_get/3`, `start_get_station/5`, `await/1`
+  and `cancel/1`); `resolve_station_endpoint/2` for a direct-dial feeder
+  and `fetch_content/4` for a direct-dial download, the
+  `macula_direct_dial` ones by default; `fact_publish`; and `link_io`,
+  which they pass on to the transfer they start.
 
 ### Changed
 

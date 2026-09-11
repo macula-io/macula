@@ -1,13 +1,14 @@
 %%%-------------------------------------------------------------------
 %%% @doc Tests for macula_feeder.
 %%%
-%%% Mocks at the `macula_client'/`macula_station_link' boundary — the
-%%% same layer `macula_content_transfer_tests' mocks, since
-%%% PLAN_PUSH_UPLOAD.md Phase 4 moved this module off a blocking
-%%% `macula:put_content/2' call and onto `macula_content_transfer'
-%%% directly. `Pool' must be a real pid here (not the placeholder atom
-%%% `pool' the pre-Phase-4 version of this suite used) — it's now
-%%% threaded all the way down to `macula_content_transfer:start_put/3',
+%%% Each feeder runs on functions its start options give: scripted link
+%%% functions (macula_scripted_link), which it passes on to the real
+%%% macula_content_transfer, the same layer macula_content_transfer_tests
+%%% scripts, since PLAN_PUSH_UPLOAD.md Phase 4 moved this module onto
+%%% macula_content_transfer directly; a scripted fact publish; and, where
+%%% a test holds or redirects a step, its own transfer or resolve
+%%% function. No test replaces a module. `Pool' must be a real pid here:
+%%% it's threaded all the way down to `macula_content_transfer:start_put/3',
 %%% whose own guard requires one.
 %%% @end
 %%%-------------------------------------------------------------------
@@ -16,6 +17,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(SINGLE_CODEC, 16#55).
+-define(REALM, <<0:256>>).
 
 -behaviour(macula_feeder).
 -export([init/1, handle_fed/2]).
@@ -31,195 +33,155 @@ handle_fed(Result, Parent) ->
     {stop, normal, Parent}.
 
 %%%===================================================================
-%%% Fixtures
-%%%===================================================================
-
-setup() ->
-    {ok, _} = application:ensure_all_started(macula),
-    meck:new(macula, [passthrough]),
-    meck:expect(macula, publish, fun(_Pool, _Realm, _Topic, _Payload) -> ok end),
-    meck:new(macula_client, [passthrough]),
-    meck:new(macula_station_link, [passthrough]),
-    ok.
-
-teardown(_) ->
-    meck:unload(macula_station_link),
-    meck:unload(macula_client),
-    meck:unload(macula),
-    ok.
-
-handover_setup() ->
-    ok = setup(),
-    meck:new(macula_content_transfer, [passthrough]),
-    meck:new(macula_direct_dial, [passthrough]),
-    ok.
-
-handover_teardown(Arg) ->
-    meck:unload(macula_direct_dial),
-    meck:unload(macula_content_transfer),
-    teardown(Arg).
-
-%%%===================================================================
 %%% Tests
 %%%===================================================================
 
+%% The application runs the share registry; each test runs in a process
+%% of its own.
 feeder_test_() ->
-    {foreach, fun setup/0, fun teardown/1,
-     [fun small_put_reports_unchunked/0,
-      fun large_put_reports_chunked/0,
-      fun failure_still_announces_completion/0,
-      fun cancel_before_put_resolves_announces_cancelled/0,
-      fun cancel_reaches_the_real_content_transfer_not_just_the_local_worker/0,
-      fun direct_dial_resolves_then_puts_through_the_resolved_station/0]}.
+    {setup, fun start_macula/0,
+     [{spawn, Test}
+      || Test <- [fun small_put_reports_unchunked/0,
+                  fun large_put_reports_chunked/0,
+                  fun failure_still_announces_completion/0,
+                  fun cancel_before_put_resolves_announces_cancelled/0,
+                  fun cancel_reaches_the_real_content_transfer_not_just_the_local_worker/0,
+                  fun direct_dial_resolves_then_puts_through_the_resolved_station/0,
+                  fun functions_of_another_shape_are_refused/0]]}.
 
 %% A cancel that lands after the transfer has started, and before the
 %% feeder holds the transfer's pid, still cancels the transfer. The start
 %% is held at that point, in whichever process runs it, until the cancel
 %% has reached the feeder.
 handover_test_() ->
-    {foreach, fun handover_setup/0, fun handover_teardown/1,
-     [fun cancel_while_the_transfer_is_handed_over_still_reaches_it/0,
-      fun cancel_while_a_direct_transfer_is_handed_over_still_reaches_it/0]}.
+    {setup, fun start_macula/0,
+     [{spawn, Test}
+      || Test <- [fun cancel_while_the_transfer_is_handed_over_still_reaches_it/0,
+                  fun cancel_while_a_direct_transfer_is_handed_over_still_reaches_it/0]]}.
 
 small_put_reports_unchunked() ->
     process_flag(trap_exit, true),
     Bytes = <<"small">>,
-    LinkPid = dummy_pid(),
-    Stream = make_ref(),
-    meck:expect(macula_client, pick_connected_link, fun(_Pool) -> {ok, LinkPid} end),
-    meck:expect(macula_station_link, open_content_stream, fun(_LinkPid) -> {ok, Stream} end),
-    meck:expect(macula_station_link, call_on_stream,
-               fun(_, _, _, <<"_content.put_block">>, _, _) -> {ok, ok} end),
-    meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
+    LinkIo = (macula_scripted_link:link_io())#{
+               call_on_stream := fun(_, _, _, <<"_content.put_block">>, _, _) -> {ok, ok} end},
 
-    {ok, _Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), <<0:256>>, Bytes, self()),
+    {ok, _Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), ?REALM, Bytes, self(),
+                                          opts(#{link_io => LinkIo})),
     Hash = macula_blake3_nif:hash(Bytes),
     ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
     ?assertEqual({fed, {ok, ExpectedMcid}}, wait_msg()),
-    ?assertEqual([<<"sharing.put_started_v1">>, <<"sharing.put_completed_v1">>], topics()),
-    ?assertMatch(#{outcome := completed, mcid := ExpectedMcid, chunked := false},
-                 completed_payload()).
+    Published = macula_scripted_stream:published(),
+    ?assertEqual([<<"sharing.put_started_v1">>, <<"sharing.put_completed_v1">>],
+                 [Topic || {Topic, _} <- Published]),
+    ?assertMatch([_, {_, #{outcome := completed, mcid := ExpectedMcid, chunked := false}}],
+                 Published).
 
 large_put_reports_chunked() ->
     process_flag(trap_exit, true),
-    %% 3 chunks — macula_content_transfer's default stream_count (4,
-    %% Phase 3) opens one dedicated stream per chunk here, so this
-    %% mock must hand back a genuinely DISTINCT ref each call, same as
-    %% macula_content_transfer_multi_stream_tests' fresh_stream_mock/0
-    %% — a fixed shared ref would collide across lanes.
+    %% 3 chunks: macula_content_transfer's default stream_count (4, Phase
+    %% 3) opens one dedicated stream per chunk here, and the scripted
+    %% open_content_stream/1 hands back a distinct reference each call, as
+    %% the lanes need.
     Bytes = crypto:strong_rand_bytes(3 * macula_manifest:default_chunk_size()),
     {ok, ExpectedManifest, _Chunks} = macula_manifest:create(Bytes),
     ExpectedMcid = maps:get(mcid, ExpectedManifest),
-    LinkPid = dummy_pid(),
-    meck:expect(macula_client, pick_connected_link, fun(_Pool) -> {ok, LinkPid} end),
-    meck:expect(macula_station_link, open_content_stream, fun(_LinkPid) -> {ok, make_ref()} end),
-    meck:expect(macula_station_link, call_on_stream, fun(_, _, _, _, _, _) -> {ok, ok} end),
-    meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
 
-    {ok, _Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), <<0:256>>, Bytes, self()),
+    {ok, _Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), ?REALM, Bytes, self(),
+                                          opts(#{link_io => macula_scripted_link:link_io()})),
     ?assertEqual({fed, {ok, ExpectedMcid}}, wait_msg()),
-    ?assertMatch(#{outcome := completed, mcid := ExpectedMcid, chunked := true},
-                 completed_payload()).
+    ?assertMatch([_, {_, #{outcome := completed, mcid := ExpectedMcid, chunked := true}}],
+                 macula_scripted_stream:published()).
 
 failure_still_announces_completion() ->
     process_flag(trap_exit, true),
-    meck:expect(macula_client, pick_connected_link, fun(_Pool) -> {error, no_healthy_link} end),
+    LinkIo = (macula_scripted_link:link_io())#{
+               pick_connected_link := fun(_Pool) -> {error, no_healthy_link} end},
 
-    {ok, _Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), <<0:256>>, <<"x">>, self()),
+    {ok, _Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), ?REALM, <<"x">>, self(),
+                                          opts(#{link_io => LinkIo})),
     ?assertEqual({fed, {error, no_healthy_link}}, wait_msg()),
-    ?assertMatch(#{outcome := failed, reason := no_healthy_link}, completed_payload()).
+    ?assertMatch([_, {_, #{outcome := failed, reason := no_healthy_link}}],
+                 macula_scripted_stream:published()).
 
 cancel_before_put_resolves_announces_cancelled() ->
     process_flag(trap_exit, true),
-    Self = self(),
-    LinkPid = dummy_pid(),
-    Stream = make_ref(),
-    meck:expect(macula_client, pick_connected_link, fun(_Pool) -> {ok, LinkPid} end),
-    meck:expect(macula_station_link, open_content_stream, fun(_LinkPid) -> {ok, Stream} end),
-    meck:expect(macula_station_link, call_on_stream, fun(_, _, _, _, _, _) ->
-        Self ! put_started,
-        receive never -> ok after 5_000 -> ok end,
-        {ok, ok}
-    end),
-    meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
-    meck:expect(macula_station_link, abort_content_stream, fun(_, _, _, _) -> ok end),
+    LinkIo = open_put_link_io(self(), dummy_pid(), make_ref()),
 
-    {ok, Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), <<0:256>>, <<"x">>, self()),
+    {ok, Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), ?REALM, <<"x">>, self(),
+                                         opts(#{link_io => LinkIo})),
     ?assertEqual(put_started, wait_msg()),
     ok = macula_feeder:cancel(Pid),
-    ?assertMatch(#{outcome := cancelled}, completed_payload()).
+    ?assertMatch([_, {_, #{outcome := cancelled}}], macula_scripted_stream:published()).
 
 %% The actual point of Phase 4: `cancel/1' on the feeder must reach
 %% all the way down to a real, peer-visible abort on the open content
-%% stream — not just kill the feeder's own local proxy process and
+%% stream, not just kill the feeder's own local proxy process and
 %% leave the underlying macula_content_transfer running unnoticed
 %% (which is exactly what happened before this phase: nothing links a
 %% gen_server:call caller's death to the callee it was waiting on).
 cancel_reaches_the_real_content_transfer_not_just_the_local_worker() ->
     process_flag(trap_exit, true),
-    Self = self(),
     LinkPid = dummy_pid(),
     Stream = make_ref(),
-    meck:expect(macula_client, pick_connected_link, fun(_Pool) -> {ok, LinkPid} end),
-    meck:expect(macula_station_link, open_content_stream, fun(_LinkPid) -> {ok, Stream} end),
-    meck:expect(macula_station_link, call_on_stream, fun(_, _, _, _, _, _) ->
-        Self ! put_started,
-        receive never -> ok after 5_000 -> ok end,
-        {ok, ok}
-    end),
-    meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
-    meck:expect(macula_station_link, abort_content_stream, fun(_, _, _, _) -> ok end),
+    LinkIo = open_put_link_io(self(), LinkPid, Stream),
 
-    {ok, Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), <<0:256>>, <<"x">>, self()),
+    {ok, Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), ?REALM, <<"x">>, self(),
+                                         opts(#{link_io => LinkIo})),
     ?assertEqual(put_started, wait_msg()),
     ok = macula_feeder:cancel(Pid),
-    ?assertEqual(1, meck:num_calls(macula_station_link, abort_content_stream,
-                                   [LinkPid, Stream, '_', '_'])).
+    ?assertMatch([[LinkPid, Stream, _, _]], aborts()).
 
 %% start_link_direct resolves the station's endpoint (a plain blocking
-%% DHT lookup, unchanged in shape from before this phase) and THEN
-%% puts through macula_content_transfer:start_put_station/5, dialing
-%% exactly that resolved endpoint.
+%% lookup, unchanged in shape from before this phase) and THEN puts
+%% through macula_content_transfer:start_put_station/5, dialing exactly
+%% that resolved endpoint.
 direct_dial_resolves_then_puts_through_the_resolved_station() ->
     process_flag(trap_exit, true),
     Bytes = <<"direct">>,
     Station = crypto:strong_rand_bytes(32),
     DialUrl = <<"quic://station.example:4433">>,
     LinkPid = dummy_pid(),
-    Stream = make_ref(),
-    meck:new(macula_direct_dial, [passthrough]),
-    meck:expect(macula_direct_dial, resolve_station_endpoint,
-               fun(_Pool, Station0) when Station0 =:= Station -> {ok, DialUrl} end),
-    meck:expect(macula_client, ensure_content_link,
-               fun(_Pool, Seed, _LinkOpts, _TimeoutMs) when Seed =:= DialUrl -> {ok, LinkPid} end),
-    meck:expect(macula_station_link, open_content_stream, fun(_LinkPid) -> {ok, Stream} end),
-    meck:expect(macula_station_link, call_on_stream,
-               fun(_, _, _, <<"_content.put_block">>, _, _) -> {ok, ok} end),
-    meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
+    LinkIo = (macula_scripted_link:link_io())#{
+               ensure_content_link := link_to(DialUrl, LinkPid),
+               call_on_stream := fun(_, _, _, <<"_content.put_block">>, _, _) -> {ok, ok} end},
+    Resolve = fun(_Pool, Station0) when Station0 =:= Station -> {ok, DialUrl} end,
 
-    {ok, _Pid} = macula_feeder:start_link_direct(?MODULE, dummy_pid(), Station,
-                                                 <<0:256>>, Bytes, self()),
+    Opts = opts(#{link_io => LinkIo, resolve_station_endpoint => Resolve}),
+    {ok, _Pid} = macula_feeder:start_link_direct(?MODULE, dummy_pid(), Station, ?REALM, Bytes,
+                                                 self(), Opts),
     Hash = macula_blake3_nif:hash(Bytes),
     ExpectedMcid = <<1, ?SINGLE_CODEC, Hash/binary>>,
-    ?assertEqual({fed, {ok, ExpectedMcid}}, wait_msg()),
-    meck:unload(macula_direct_dial).
+    ?assertEqual({fed, {ok, ExpectedMcid}}, wait_msg()).
+
+%% Transfer functions without one the feeder calls or of another arity,
+%% and a resolve or fact publish of another arity, are refused with
+%% function_clause, in the caller, and nothing is announced.
+functions_of_another_shape_are_refused() ->
+    Start = fun(Opts) ->
+                    macula_feeder:start_link(?MODULE, dummy_pid(), ?REALM, <<"x">>, self(), Opts)
+            end,
+    Transfer = default_transfer_io(),
+    ?assertError(function_clause, Start(opts(#{transfer_io => maps:remove(cancel, Transfer)}))),
+    ?assertError(function_clause,
+                 Start(opts(#{transfer_io => Transfer#{await := fun(_, _) -> ok end}}))),
+    ?assertError(function_clause, Start(opts(#{resolve_station_endpoint => fun(_) -> ok end}))),
+    ?assertError(function_clause, Start(opts(#{fact_publish => fun(_, _, _) -> ok end}))),
+    ?assertEqual([], macula_scripted_stream:published()).
 
 cancel_while_the_transfer_is_handed_over_still_reaches_it() ->
     process_flag(trap_exit, true),
     Self = self(),
     LinkPid = dummy_pid(),
     Stream = make_ref(),
-    meck:expect(macula_client, pick_connected_link, fun(_Pool) -> {ok, LinkPid} end),
-    expect_a_put_that_stays_open(Self, Stream),
-    meck:expect(macula_content_transfer, start_put,
-                fun(Pool, Bytes, Opts) ->
-                    hold_handover(Self, meck:passthrough([Pool, Bytes, Opts]))
-                end),
+    Held = fun(Pool, Bytes, TransferOpts) ->
+                   hold_handover(Self, macula_content_transfer:start_put(Pool, Bytes, TransferOpts))
+           end,
+    Opts = opts(#{link_io => open_put_link_io(Self, LinkPid, Stream),
+                  transfer_io => (default_transfer_io())#{start_put := Held}}),
 
-    {ok, Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), <<0:256>>, <<"x">>, self()),
+    {ok, Pid} = macula_feeder:start_link(?MODULE, dummy_pid(), ?REALM, <<"x">>, self(), Opts),
     cancel_during_handover(Pid),
-    ?assertEqual(1, meck:num_calls(macula_station_link, abort_content_stream,
-                                   [LinkPid, Stream, '_', '_'])).
+    ?assertMatch([[LinkPid, Stream, _, _]], aborts()).
 
 cancel_while_a_direct_transfer_is_handed_over_still_reaches_it() ->
     process_flag(trap_exit, true),
@@ -228,53 +190,71 @@ cancel_while_a_direct_transfer_is_handed_over_still_reaches_it() ->
     Stream = make_ref(),
     Station = crypto:strong_rand_bytes(32),
     DialUrl = <<"quic://station.example:4433">>,
-    meck:expect(macula_direct_dial, resolve_station_endpoint,
-               fun(_Pool, Station0) when Station0 =:= Station -> {ok, DialUrl} end),
-    meck:expect(macula_client, ensure_content_link,
-               fun(_Pool, Seed, _LinkOpts, _TimeoutMs) when Seed =:= DialUrl -> {ok, LinkPid} end),
-    expect_a_put_that_stays_open(Self, Stream),
-    meck:expect(macula_content_transfer, start_put_station,
-                fun(Pool, Dial, Bytes, TimeoutMs, Opts) ->
-                    hold_handover(Self, meck:passthrough([Pool, Dial, Bytes, TimeoutMs, Opts]))
-                end),
+    LinkIo = (open_put_link_io(Self, LinkPid, Stream))#{
+               ensure_content_link := link_to(DialUrl, LinkPid)},
+    Held = fun(Pool, Dial, Bytes, TimeoutMs, TransferOpts) ->
+                   hold_handover(Self, macula_content_transfer:start_put_station(
+                                         Pool, Dial, Bytes, TimeoutMs, TransferOpts))
+           end,
+    Resolve = fun(_Pool, Station0) when Station0 =:= Station -> {ok, DialUrl} end,
+    Opts = opts(#{link_io => LinkIo, resolve_station_endpoint => Resolve,
+                  transfer_io => (default_transfer_io())#{start_put_station := Held}}),
 
-    {ok, Pid} = macula_feeder:start_link_direct(?MODULE, dummy_pid(), Station,
-                                                <<0:256>>, <<"x">>, self()),
+    {ok, Pid} = macula_feeder:start_link_direct(?MODULE, dummy_pid(), Station, ?REALM, <<"x">>,
+                                                self(), Opts),
     cancel_during_handover(Pid),
-    ?assertEqual(1, meck:num_calls(macula_station_link, abort_content_stream,
-                                   [LinkPid, Stream, '_', '_'])).
+    ?assertMatch([[LinkPid, Stream, _, _]], aborts()).
 
 %%%===================================================================
 %%% Helpers
 %%%===================================================================
 
+start_macula() ->
+    {ok, _} = application:ensure_all_started(macula),
+    ok.
+
 dummy_pid() ->
     spawn(fun() -> receive stop -> ok end end).
 
-topics() ->
-    [T || {_, {macula, publish, [_Pool, _Realm, T, _Payload]}, ok} <- meck:history(macula)].
+%% Start options: a scripted fact publish, with Extra over it.
+opts(Extra) ->
+    FactPublish = maps:get(fact_publish, macula_scripted_stream:options([])),
+    maps:merge(#{fact_publish => FactPublish}, Extra).
 
-completed_payload() ->
-    [{_, {macula, publish, [_, _, _, Payload]}, ok}] =
-        [E || {_, {macula, publish, [_, _, T, _]}, ok} = E <- meck:history(macula),
-              T =:= <<"sharing.put_completed_v1">>],
-    Payload.
+%% The transfer functions a feeder runs on by default.
+default_transfer_io() ->
+    #{start_put => fun macula_content_transfer:start_put/3,
+      start_put_station => fun macula_content_transfer:start_put_station/5,
+      await => fun macula_content_transfer:await/1,
+      cancel => fun macula_content_transfer:cancel/1}.
 
+%% An ensure_content_link/4 that dials only Seed, as LinkPid.
+link_to(Seed, LinkPid) ->
+    fun(_Pool, Dialed, _LinkOpts, _TimeoutMs) when Dialed =:= Seed -> {ok, LinkPid} end.
+
+%% The abort calls made so far, as argument lists.
+aborts() ->
+    [Args || {abort_content_stream, Args} <- macula_scripted_link:calls()].
+
+%% The next message from the feeder's callback or a held put.
 wait_msg() ->
     receive
-        Msg -> Msg
+        {fed, _} = Msg -> Msg;
+        put_started = Msg -> Msg
     after 1000 -> timeout
     end.
 
-expect_a_put_that_stays_open(Self, Stream) ->
-    meck:expect(macula_station_link, open_content_stream, fun(_LinkPid) -> {ok, Stream} end),
-    meck:expect(macula_station_link, call_on_stream, fun(_, _, _, _, _, _) ->
-        Self ! put_started,
-        receive never -> ok after 5_000 -> ok end,
-        {ok, ok}
-    end),
-    meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
-    meck:expect(macula_station_link, abort_content_stream, fun(_, _, _, _) -> ok end).
+%% Link functions on LinkPid and Stream whose put stays open: the test
+%% gets put_started, and the call does not return within the test.
+open_put_link_io(Self, LinkPid, Stream) ->
+    (macula_scripted_link:link_io())#{
+      pick_connected_link := fun(_Pool) -> {ok, LinkPid} end,
+      open_content_stream := fun(_LinkPid) -> {ok, Stream} end,
+      call_on_stream := fun(_, _, _, _, _, _) ->
+                                Self ! put_started,
+                                receive never -> ok after 5_000 -> ok end,
+                                {ok, ok}
+                        end}.
 
 %% Runs in whichever process starts the transfer: report, then keep the
 %% start from returning until the test lets it.

@@ -104,6 +104,14 @@
 %%% them, with a function of another arity or with a key outside the six
 %%% is refused with `function_clause', in the caller.
 %%%
+%%% == Transfer I/O ==
+%%%
+%%% A feeder or a download starts, awaits and cancels its transfer through
+%%% `transfer_io()' functions: `start_put/3', `start_put_station/5',
+%%% `start_get/3' and `start_get_station/5', `await/1' and `cancel/1',
+%%% this module's own by default. Each takes the ones it calls in a
+%%% `transfer_io' start option, checked by `transfer_io/2'.
+%%%
 %%% == Correlation-id registry ==
 %%%
 %%% Each transfer mints a `share_id' (`crypto:strong_rand_bytes(16)',
@@ -124,6 +132,9 @@
          start_get/2, start_get/3,
          start_get_station/4, start_get_station/5]).
 -export([await/1, await/2, cancel/1, cancel/3, pause/1, resume/1, share_id/1]).
+
+%% The check of the transfer functions a feeder or a download is given.
+-export([transfer_io/2]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, handle_continue/2]).
 
@@ -162,7 +173,19 @@
                      close_content_stream => fun((pid(), reference()) -> term()),
                      abort_content_stream => fun((pid(), reference(), term(), binary()) -> term())}.
 
--export_type([link_io/0]).
+%% The functions a feeder or a download starts, awaits and cancels its
+%% transfer with, by key; see "Transfer I/O" in the module doc.
+-type transfer_io() :: #{start_put => fun((macula:pool(), binary(), map()) -> {ok, pid()}),
+                         start_put_station => fun((macula:pool(), macula_client:seed(), binary(),
+                                                   pos_integer(), map()) -> {ok, pid()}),
+                         start_get => fun((macula:pool(), macula:mcid(), map()) -> {ok, pid()}),
+                         start_get_station => fun((macula:pool(), macula_client:seed(),
+                                                   macula:mcid(), pos_integer(), map()) ->
+                                                      {ok, pid()}),
+                         await => fun((pid()) -> {ok, term()} | {error, term()}),
+                         cancel => fun((pid()) -> ok)}.
+
+-export_type([link_io/0, transfer_io/0]).
 
 %% One dedicated content stream's own independent chunk-by-chunk queue.
 %% `remaining' holds items not yet dispatched (PUT: `{Index, Bytes}';
@@ -357,6 +380,27 @@ link_function(close_content_stream, Fun) when is_function(Fun, 2) -> ok;
 link_function(abort_content_stream, Fun) when is_function(Fun, 4) -> ok.
 
 given_key(Key, Given) when is_map_key(Key, Given) -> ok.
+
+%% @doc The transfer functions a feeder or a download runs on. `Defaults'
+%% are the ones it calls, by key, and `Given' the `transfer_io' its caller
+%% gave, or `undefined' for none, which gives `Defaults'. A given set has
+%% every key in `Defaults', each function at the arity its key takes, and
+%% may carry other `transfer_io()' functions; any other is refused with
+%% `function_clause', in the calling process.
+-spec transfer_io(transfer_io(), transfer_io() | undefined) -> transfer_io().
+transfer_io(Defaults, undefined) when is_map(Defaults) ->
+    Defaults;
+transfer_io(Defaults, Given) when is_map(Defaults), is_map(Given) ->
+    ok = maps:foreach(fun transfer_function/2, Given),
+    ok = lists:foreach(fun(Key) -> given_key(Key, Given) end, maps:keys(Defaults)),
+    Given.
+
+transfer_function(start_put, Fun) when is_function(Fun, 3) -> ok;
+transfer_function(start_put_station, Fun) when is_function(Fun, 5) -> ok;
+transfer_function(start_get, Fun) when is_function(Fun, 3) -> ok;
+transfer_function(start_get_station, Fun) when is_function(Fun, 5) -> ok;
+transfer_function(await, Fun) when is_function(Fun, 1) -> ok;
+transfer_function(cancel, Fun) when is_function(Fun, 1) -> ok.
 
 default_link_io() ->
     #{pick_connected_link => fun macula_client:pick_connected_link/1,

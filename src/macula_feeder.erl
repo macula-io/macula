@@ -51,6 +51,20 @@
 %%% instead of whichever the pool picks. See `macula_direct_dial''s
 %%% module doc, "Content" section, for the trust model.
 %%%
+%%% == Transfer I/O ==
+%%%
+%%% A feeder starts, awaits and cancels its transfer with `start_put/3',
+%%% `start_put_station/5', `await/1' and `cancel/1', the
+%%% `macula_content_transfer' ones by default; resolves its station for
+%%% `start_link_direct' with `resolve_station_endpoint/2',
+%%% `macula_direct_dial''s by default; and announces its facts with
+%%% `fact_publish', `macula:publish/4' by default. `start_link/6' and
+%%% `start_link_direct/7' take them in their start options, the four
+%%% transfer functions as `transfer_io', checked by
+%%% `macula_content_transfer:transfer_io/2', and pass a `link_io' option on
+%%% to the transfer they start. A function of another shape is refused
+%%% with `function_clause', in the caller.
+%%%
 %%% == Example ==
 %%%
 %%% ```
@@ -75,8 +89,8 @@
 
 -behaviour(gen_server).
 
--export([start_link/4, start_link/5]).
--export([start_link_direct/5, start_link_direct/6]).
+-export([start_link/4, start_link/5, start_link/6]).
+-export([start_link_direct/5, start_link_direct/6, start_link_direct/7]).
 -export([cancel/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -94,11 +108,21 @@
 %% follows has its own separate, internal timeouts regardless.
 -define(DIRECT_DIAL_CONNECT_TIMEOUT_MS, 30_000).
 
+-export_type([start_opts/0]).
+
+-type start_opts() :: #{transfer_io => macula_content_transfer:transfer_io(),
+                        resolve_station_endpoint => fun((macula:pool(), macula_identity:pubkey()) ->
+                                                                {ok, binary()} | {error, term()}),
+                        fact_publish => macula_lifetime_announcer:publish(),
+                        link_io => macula_content_transfer:link_io()}.
+
 -record(fstate, {
     module           :: module(),
     pool             :: macula:pool(),
     realm            :: macula:realm(),
     announce         :: boolean(),
+    transfer_io      :: macula_content_transfer:transfer_io(),
+    fact_publish     :: macula_lifetime_announcer:publish(),
     share_id         :: binary(),
     worker           :: pid(),
     content_transfer :: pid() | undefined,
@@ -116,8 +140,14 @@ start_link(Module, Pool, Realm, Bytes) ->
 -spec start_link(module(), macula:pool(), macula:realm(), binary(), term()) ->
     {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Bytes, Args) ->
+    start_link(Module, Pool, Realm, Bytes, Args, #{}).
+
+%% @doc As `start_link/5', with start options (see "Transfer I/O" above).
+-spec start_link(module(), macula:pool(), macula:realm(), binary(), term(), start_opts()) ->
+    {ok, pid()} | {error, term()}.
+start_link(Module, Pool, Realm, Bytes, Args, Opts) when is_map(Opts) ->
     gen_server:start_link(?MODULE,
-        {pooled, Module, Pool, Realm, Bytes, true, Args}, []).
+        {pooled, Module, Pool, Realm, Bytes, true, Args, functions(Opts)}, []).
 
 %% @doc As `start_link/4', but resolves `Station''s own
 %% `station_endpoint' and dials it directly instead of putting through
@@ -133,36 +163,69 @@ start_link_direct(Module, Pool, Station, Realm, Bytes) ->
                         macula:realm(), binary(), term()) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Station, Realm, Bytes, Args) ->
+    start_link_direct(Module, Pool, Station, Realm, Bytes, Args, #{}).
+
+%% @doc As `start_link_direct/6', with start options (see "Transfer I/O"
+%% above).
+-spec start_link_direct(module(), macula:pool(), macula_identity:pubkey(),
+                        macula:realm(), binary(), term(), start_opts()) ->
+    {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Station, Realm, Bytes, Args, Opts) when is_map(Opts) ->
     gen_server:start_link(?MODULE,
-        {direct, Module, Pool, Station, Realm, Bytes, true, Args}, []).
+        {direct, Module, Pool, Station, Realm, Bytes, true, Args, functions(Opts)}, []).
 
 %% @doc Cancel an in-flight feed. Publishes `sharing.put_completed_v1'
 %% with `outcome => cancelled' if the put had not resolved yet.
 -spec cancel(pid()) -> ok.
 cancel(Pid) -> gen_server:stop(Pid).
 
+%% The functions a feeder runs on, from its start options or else the
+%% defaults; one of another shape is refused with function_clause, in the
+%% caller. `link_io' goes on to the transfer the feeder starts.
+functions(Opts) ->
+    TransferIo = macula_content_transfer:transfer_io(default_transfer_io(),
+                                                     maps:get(transfer_io, Opts, undefined)),
+    #{transfer_io => TransferIo,
+      resolve_station_endpoint =>
+          arity_2(maps:get(resolve_station_endpoint, Opts,
+                           fun macula_direct_dial:resolve_station_endpoint/2)),
+      fact_publish => arity_4(maps:get(fact_publish, Opts, fun macula:publish/4)),
+      transfer_opts => maps:with([link_io], Opts)}.
+
+default_transfer_io() ->
+    #{start_put => fun macula_content_transfer:start_put/3,
+      start_put_station => fun macula_content_transfer:start_put_station/5,
+      await => fun macula_content_transfer:await/1,
+      cancel => fun macula_content_transfer:cancel/1}.
+
+arity_2(Fun) when is_function(Fun, 2) -> Fun.
+
+arity_4(Fun) when is_function(Fun, 4) -> Fun.
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 %% @private
-init({pooled, Module, Pool, Realm, Bytes, Announce, InitArgs}) ->
-    start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce,
-                fun(ShareId) -> spawn_worker(pooled, Pool, Bytes, ShareId) end);
-init({direct, Module, Pool, Station, Realm, Bytes, Announce, InitArgs}) ->
-    start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce,
-                fun(ShareId) -> spawn_worker(direct, Pool, Station, Bytes, ShareId) end).
+init({pooled, Module, Pool, Realm, Bytes, Announce, InitArgs, Functions}) ->
+    start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce, Functions,
+                fun(ShareId) -> spawn_worker(pooled, Functions, Pool, Bytes, ShareId) end);
+init({direct, Module, Pool, Station, Realm, Bytes, Announce, InitArgs, Functions}) ->
+    start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce, Functions,
+                fun(ShareId) -> spawn_worker(direct, Functions, Pool, Station, Bytes, ShareId) end).
 
-start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce, SpawnFun) ->
+start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce,
+             #{transfer_io := TransferIo, fact_publish := FactPublish}, SpawnFun) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
             ShareId = crypto:strong_rand_bytes(16),
-            publish(Announce, Pool, Realm, ?PUT_STARTED,
+            publish(Announce, FactPublish, Pool, Realm, ?PUT_STARTED,
                     #{share_id => ShareId, size => byte_size(Bytes)}),
             Worker = SpawnFun(ShareId),
             {ok, #fstate{module = Module, pool = Pool, realm = Realm,
-                        announce = Announce, share_id = ShareId,
+                        announce = Announce, transfer_io = TransferIo,
+                        fact_publish = FactPublish, share_id = ShareId,
                         worker = Worker, content_transfer = undefined,
                         completed = false, user = UserState}};
         {stop, Reason} ->
@@ -173,45 +236,45 @@ start_feeder(Module, InitArgs, Pool, Realm, Bytes, Announce, SpawnFun) ->
 %% transfer (see `run_transfer/2'), block for the outcome, reap the
 %% transfer (a no-op if it's already being cancelled from outside, see
 %% `reap_content_transfer/1'), report the outcome.
-spawn_worker(pooled, Pool, Bytes, ShareId) ->
+spawn_worker(pooled, #{transfer_io := TransferIo, transfer_opts := TransferOpts}, Pool, Bytes,
+             ShareId) ->
     Parent = self(),
-    Start = pooled_put(Pool, Bytes, #{share_id => ShareId}),
-    spawn_link(fun() -> run_transfer(Parent, Start) end).
+    Start = pooled_put(TransferIo, Pool, Bytes, TransferOpts#{share_id => ShareId}),
+    spawn_link(fun() -> run_transfer(Parent, TransferIo, Start) end).
 
 %% Resolving `Station''s endpoint stays a plain blocking DHT lookup
-%% here (matches what `macula_direct_dial:put_content/4' already did)
-%% — only the transfer itself becomes addressable.
-spawn_worker(direct, Pool, Station, Bytes, ShareId) ->
+%% here (matches what `macula_direct_dial:put_content/4' already did);
+%% only the transfer itself becomes addressable.
+spawn_worker(direct, Functions, Pool, Station, Bytes, ShareId) ->
     Parent = self(),
-    spawn_link(fun() -> direct_worker_run(Pool, Station, Bytes, ShareId, Parent) end).
+    spawn_link(fun() -> direct_worker_run(Functions, Pool, Station, Bytes, ShareId, Parent) end).
 
-direct_worker_run(Pool, Station, Bytes, ShareId, Parent) ->
-    case macula_direct_dial:resolve_station_endpoint(Pool, Station) of
+direct_worker_run(#{transfer_io := TransferIo, transfer_opts := TransferOpts,
+                    resolve_station_endpoint := ResolveStationEndpoint},
+                  Pool, Station, Bytes, ShareId, Parent) ->
+    case ResolveStationEndpoint(Pool, Station) of
         {ok, DialUrl} ->
-            Opts = #{share_id => ShareId, expected_node_id => Station,
-                    pin_tls_cert => false, verify => none},
-            run_transfer(Parent, station_put(Pool, DialUrl, Bytes, Opts));
+            Opts = TransferOpts#{share_id => ShareId, expected_node_id => Station,
+                                 pin_tls_cert => false, verify => none},
+            run_transfer(Parent, TransferIo, station_put(TransferIo, Pool, DialUrl, Bytes, Opts));
         {error, Reason} ->
             Parent ! {feed_result, {error, {unresolved, Reason}}}
     end.
 
-pooled_put(Pool, Bytes, Opts) ->
-    fun() -> macula_content_transfer:start_put(Pool, Bytes, Opts) end.
+pooled_put(#{start_put := StartPut}, Pool, Bytes, Opts) ->
+    fun() -> StartPut(Pool, Bytes, Opts) end.
 
-station_put(Pool, DialUrl, Bytes, Opts) ->
-    fun() ->
-        macula_content_transfer:start_put_station(
-            Pool, DialUrl, Bytes, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts)
-    end.
+station_put(#{start_put_station := StartPutStation}, Pool, DialUrl, Bytes, Opts) ->
+    fun() -> StartPutStation(Pool, DialUrl, Bytes, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts) end.
 
 %% This feeder starts the transfer itself, in a call from the worker, so
 %% the transfer's pid is in the state before any `cancel/1' is handled:
 %% a cancel handled first finds nothing started, and a cancel handled
 %% after finds the pid.
-run_transfer(Parent, Start) ->
+run_transfer(Parent, #{await := Await} = TransferIo, Start) ->
     {ok, CTPid} = gen_server:call(Parent, {start_transfer, Start}, infinity),
-    Result = macula_content_transfer:await(CTPid),
-    reap_content_transfer(CTPid),
+    Result = Await(CTPid),
+    reap_content_transfer(TransferIo, CTPid),
     Parent ! {feed_result, Result}.
 
 %% @private
@@ -246,10 +309,10 @@ terminate(_Reason, #fstate{worker = Worker, completed = true}) ->
     unlink(Worker),
     exit(Worker, kill),
     ok;
-terminate(_Reason, #fstate{content_transfer = CTPid} = State) ->
+terminate(_Reason, #fstate{transfer_io = TransferIo, content_transfer = CTPid} = State) ->
     unlink(State#fstate.worker),
     exit(State#fstate.worker, kill),
-    reap_content_transfer(CTPid),
+    reap_content_transfer(TransferIo, CTPid),
     _ = announce_completed(State, {error, cancelled}),
     ok.
 
@@ -264,16 +327,17 @@ terminate(_Reason, #fstate{content_transfer = CTPid} = State) ->
 %% benign race where the proxy's own natural reap (in `run_transfer/2')
 %% and an external `cancel/1' land at the same time — the second
 %% `cancel/1' call reaches an already-dead pid.
-reap_content_transfer(undefined) -> ok;
-reap_content_transfer(CTPid) ->
-    try macula_content_transfer:cancel(CTPid) catch _:_ -> ok end,
+reap_content_transfer(_TransferIo, undefined) -> ok;
+reap_content_transfer(#{cancel := Cancel}, CTPid) ->
+    try Cancel(CTPid) catch _:_ -> ok end,
     ok.
 
 announce_completed(#fstate{completed = true} = State, _Result) ->
     State;
 announce_completed(#fstate{pool = Pool, realm = Realm, announce = Announce,
-                           share_id = ShareId} = State, Result) ->
-    publish(Announce, Pool, Realm, ?PUT_COMPLETED,
+                           fact_publish = FactPublish, share_id = ShareId} = State,
+                   Result) ->
+    publish(Announce, FactPublish, Pool, Realm, ?PUT_COMPLETED,
             outcome_fields(#{share_id => ShareId}, Result)),
     State#fstate{completed = true}.
 
@@ -287,6 +351,6 @@ outcome_fields(Base, {error, Reason}) ->
 is_chunked_mcid(<<1, 16#56, _/binary>>) -> true;
 is_chunked_mcid(_) -> false.
 
-publish(false, _, _, _, _) -> ok;
-publish(true, Pool, Realm, Topic, Payload) ->
-    _ = macula:publish(Pool, Realm, Topic, Payload), ok.
+publish(false, _FactPublish, _, _, _, _) -> ok;
+publish(true, FactPublish, Pool, Realm, Topic, Payload) ->
+    _ = FactPublish(Pool, Realm, Topic, Payload), ok.
