@@ -404,13 +404,15 @@ call(Pid, Realm, Procedure, Payload, TimeoutMs, UcanToken)
        is_binary(Procedure),
        is_integer(TimeoutMs), TimeoutMs > 0,
        is_binary(UcanToken) ->
-    %% gen_server timeout = TimeoutMs + 500 to give the server time to
-    %% report a clean `{error, timeout}' rather than the caller seeing
-    %% a hard `exit({timeout, ...})'.
+    %% The deadline is the caller's: a link busy past it doesn't send the
+    %% CALL at all (see call_in_time/4). gen_server timeout = TimeoutMs +
+    %% 500 to give the server time to report a clean `{error, timeout}'
+    %% rather than the caller seeing a hard `exit({timeout, ...})'.
+    DeadlineMs = erlang:system_time(millisecond) + TimeoutMs,
     GenTimeout = TimeoutMs + 500,
     try
         gen_server:call(Pid,
-                        {call, Realm, Procedure, Payload, TimeoutMs, UcanToken},
+                        {call, Realm, Procedure, Payload, DeadlineMs, UcanToken},
                         GenTimeout)
     catch
         %% try/catch retained: collapses the three distinct gen_server
@@ -959,7 +961,7 @@ init(Opts) ->
 app_env(Key, Default) ->
     application:get_env(macula, Key, Default).
 
-handle_call({call, _Realm, _Proc, _Payload, _Tmo, _Ucan}, _From,
+handle_call({call, _Realm, _Proc, _Payload, _DeadlineMs, _Ucan}, _From,
             #state{peer_node_id = undefined} = S) ->
     %% Gate CALL on the full CONNECT/HELLO handshake (mirrors the
     %% `{publish, ...}' clause below). `peer_pid' is set the moment
@@ -972,27 +974,9 @@ handle_call({call, _Realm, _Proc, _Payload, _Tmo, _Ucan}, _From,
     %% `{error, not_connected}' here lets the caller back off and
     %% retry once the handshake completes.
     {reply, {error, not_connected}, S};
-handle_call({call, Realm, Proc, Payload, Tmo, Ucan}, From,
-            #state{peer_pid = Pid, identity = Id, pending = P} = S) ->
-    CallId = crypto:strong_rand_bytes(16),
-    Caller = macula_identity:public(Id),
-    DeadlineMs = erlang:system_time(millisecond) + Tmo,
-    Frame = macula_frame:call(#{
-        call_id     => CallId,
-        procedure   => Proc,
-        realm       => Realm,
-        payload     => Payload,
-        deadline_ms => DeadlineMs,
-        caller      => Caller,
-        ucan_token  => Ucan
-    }),
-    %% NOT `ok = send_frame(...)'. Since the frame is now checked before
-    %% the cast, an unsendable RPC payload comes back as an error, and a
-    %% hard match on `ok' would badmatch here and take this link's
-    %% gen_server down — turning a caller's bad argument into an outage
-    %% for every other caller on the link. Reply with the reason instead.
-    await_call_reply(macula_peering:send_frame(Pid, Frame),
-                     CallId, From, Tmo, P, S);
+handle_call({call, Realm, Proc, Payload, DeadlineMs, Ucan}, From, S) ->
+    call_in_time(DeadlineMs - erlang:system_time(millisecond),
+                 {Realm, Proc, Payload, DeadlineMs, Ucan}, From, S);
 
 handle_call(open_content_stream, _From, #state{peer_node_id = undefined} = S) ->
     {reply, {error, not_connected}, S};
@@ -1420,6 +1404,32 @@ publish_reply(ok, Seq, S) ->
     {reply, ok, S#state{publish_seq = Seq + 1}};
 publish_reply({error, _} = Refused, _Seq, S) ->
     {reply, Refused, S}.
+
+%% A CALL the link reaches after its caller's deadline is not sent: the
+%% caller has already been told it timed out, and a provider must not run a
+%% call its caller gave up on. Otherwise the frame carries the caller's
+%% deadline, and the call waits for its reply until then.
+call_in_time(RemainingMs, _Call, _From, S) when RemainingMs =< 0 ->
+    {reply, {error, timeout}, S};
+call_in_time(RemainingMs, {Realm, Proc, Payload, DeadlineMs, Ucan}, From,
+             #state{peer_pid = Pid, identity = Id, pending = P} = S) ->
+    CallId = crypto:strong_rand_bytes(16),
+    Frame = macula_frame:call(#{
+        call_id     => CallId,
+        procedure   => Proc,
+        realm       => Realm,
+        payload     => Payload,
+        deadline_ms => DeadlineMs,
+        caller      => macula_identity:public(Id),
+        ucan_token  => Ucan
+    }),
+    %% NOT `ok = send_frame(...)'. Since the frame is now checked before
+    %% the cast, an unsendable RPC payload comes back as an error, and a
+    %% hard match on `ok' would badmatch here and take this link's
+    %% gen_server down — turning a caller's bad argument into an outage
+    %% for every other caller on the link. Reply with the reason instead.
+    await_call_reply(macula_peering:send_frame(Pid, Frame),
+                     CallId, From, RemainingMs, P, S).
 
 await_call_reply(ok, CallId, From, Tmo, Pending, S) ->
     TRef = erlang:send_after(Tmo, self(), {call_timeout, CallId}),
