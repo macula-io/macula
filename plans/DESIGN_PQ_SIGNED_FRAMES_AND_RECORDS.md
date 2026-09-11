@@ -143,8 +143,8 @@ About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 /
   - the payload follows its type's rules; the owner of a domain type sets them.
 - **Who signed.** A record names no signer beside `key`. Where a payload names the node a record is about, such as
   a node record's own node, that node_id must equal the key id of `key`.
-- **Slot.** A station derives a record's storage key from the verified record on STORE and REPLICATE, never from a
-  key a peer sends, and refuses a record whose sent key differs. A consumer checks that each record in VALUE derives
+- **Slot.** A station derives a record's storage key from the verified record on STORE, never from a key a peer
+  sends, and refuses a record whose sent key differs. A consumer checks that each record in VALUE derives
   to the key it asked for, and discards one that does not.
 - **Replacement** by `version` compares only records under one storage key and one signer key id, so two signers
   never replace each other.
@@ -292,8 +292,9 @@ which stations set or change per hop, stay outside them.
 | Content frames | none | none |
 | Requests, replies, relay errors and stream frames | none | none |
 
-- DHT protocol frames are PING, PONG, FIND_NODE, NODES, FIND_VALUE, VALUE, STORE, STORE_ACK, REPLICATE and
-  REPLICATE_ACK. Content frames are WANT, HAVE, BLOCK, MANIFEST_REQ, MANIFEST_RES and CANCEL.
+- DHT protocol frames are PING, PONG, FIND_NODE, NODES, FIND_VALUE, VALUE, STORE and STORE_ACK. A station replicates
+  a record by sending it in a STORE to each target. Content frames are WANT, HAVE, BLOCK, MANIFEST_REQ, MANIFEST_RES and
+  CANCEL.
 - HyParView, the Plumtree control frames and GOODBYE change membership, tree shape or a connection's lifecycle, so
   they are control frames. GOSSIP carries publications that are checked end to end, so it is data; its Plumtree
   routing fields stay unsigned in both profiles.
@@ -311,7 +312,7 @@ which stations set or change per hop, stay outside them.
   because QUIC delivers streams independently.
 - A frame whose type its profile signs is refused without `neighbour`, and a frame whose type its profile leaves
   unsigned is refused with it, both as `malformed_frame`.
-- Records inside STORE, VALUE and REPLICATE keep their own signatures in both profiles.
+- Records inside STORE and VALUE keep their own signatures in both profiles.
 - Requests, replies, relay errors, stream frames and publications carry their own signatures in both profiles.
 
 ### Refusals

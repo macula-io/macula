@@ -1148,7 +1148,7 @@ before its wire checks are green.
 | Unused signing functions for SWIM membership updates | Mercury | removed in `8cd60ee` on `post-quantum` |
 | BEP44 bootstrap | Terra, then Raf | Terra checks whether it runs anywhere |
 | Endorsement of stations (D23) | Raf | accepted on 2026-09-11 |
-| DHT slot bounds to define: records per slot, VALUE paging, REPLICATE batch bytes (WP 1.3, WP 1.6) | Mars | open |
+| DHT slot bounds to define: records per slot, VALUE paging (WP 1.3, WP 1.6) | Mars | open |
 | Verification budget per connection, slowing reads instead of closing (WP 1.3, WP 1.6) | Mercury, Mars | open |
 
 ---
