@@ -4,7 +4,7 @@
 and decisions are there. [PLAN_POST_QUANTUM_SECURITY_PART2.md](PLAN_POST_QUANTUM_SECURITY_PART2.md) has the stages
 and work packages.
 
-**Last Updated:** 2026-09-10
+**Last Updated:** 2026-09-12
 
 ---
 
@@ -236,6 +236,7 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
 | V16 | Peer leaf certificate before CONNECT | Neptune, Venus, Uranus, Pluto | open for Python shipping | 0.5 day |
 | V17 | Identifier hashes under CNSA 2.0 | Saturnus | answered; D5 pending Raf | 0.5 day |
 | V18 | Revocation under BSI and ANSSI | Saturnus | answered; D22 pending Raf | 0.5 day |
+| V19 | TLS 1.3 in OTP `ssl` with the profile groups | Mercury | done | 0.5 day |
 
 #### V2 OpenSSL in the runtime images
 
@@ -459,3 +460,17 @@ Ceilings from signing and verifying alone, per core, estimated from the table:
   limited validity ✅. ANSSI's TLS recommendations R37 require hard-fail for security-first components ✅. Stapled
   status is preferred by ANSSI R35 and recommended by BSI TR-03116-4 ✅. No source treats short validity as a
   replacement for revocation ✅. Decision: D22, decided by Raf on 2026-09-10.
+
+#### V19 TLS 1.3 in OTP `ssl` with the profile groups
+
+- **What to verify:** OTP 28.4.2 `ssl` completes a TLS 1.3 handshake with the group `mlkem1024` in the US profile
+  and `secp384r1mlkem1024` in the EU profile, each with an ML-DSA-87 certificate, as a distribution tunnel needs
+  (D29).
+- **Result, 2026-09-12 ✅:** two OTP 28.4.2 nodes (`ssl` 11.5.4, OpenSSL 3.6.4) completed a TLS 1.3 handshake over
+  loopback with `mlkem1024` and with `secp384r1mlkem1024`, each with a self-signed ML-DSA-87 certificate on the
+  accepting side, signature scheme `mldsa87`, `TLS_AES_256_GCM_SHA384`, no session tickets and no early data. Both
+  sides recorded the group, the signature scheme, the cipher suite and no resumption, data crossed both ways, and a
+  dialing side offering only `x25519` was refused. OTP's chain check refuses a self-signed ML-DSA-87 leaf, so the
+  dialing side checks the leaf itself with a `verify_fun`, as the key model's client check does. The key came from
+  OpenSSL, since OTP's generated ML-DSA-87 keys need the seed workaround to sign.
+- **Effort:** 0.5 day.

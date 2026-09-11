@@ -152,7 +152,8 @@ table there gives each decision's answer in short and its status.
   - **on load, the public key of each ML-DSA-87 key is derived from the expanded key and must equal the stored
     public key, and then every key is checked with a sign-and-verify round trip by the whole key, so a hybrid key
     signs only its composite;**
-  - **TLS and CONNECT keys and their bindings rotate every 5 days** (D22).
+  - **TLS and CONNECT keys and their bindings rotate every 5 days** (D22);
+  - D29 extends the TLS key beyond station instances: a node that accepts distribution tunnels also holds one.
 - **Why:** OTP generates ML-DSA-87 keys only in expanded form and cannot derive a public key from a seed, but derives
   it from the expanded key with `generate_key(mldsa87, [], K)` (OTP 28.4.2 and 29.0.6) ✅; BSI asks for hybrid key
   material dedicated to hybrid signatures ✅; the ECCG list requires different key pairs for message
@@ -694,3 +695,20 @@ before its wire checks are green.
 - **Blocks:** WP 1.2 (credit per stream, receive windows), WP 1.3 (record rules, frame fields, the Plumtree and
   HyParView allowances, put pacing), WP 1.5 (the budget and the pause), WP 1.6 (slots, admission, paging,
   replication, the STORE allowance), WP 2.2 and Stage 4.
+
+### D29 Distribution tunnel keys
+
+- **Question:** which keys protect a distribution tunnel's data across the mesh, when an identity key never signs
+  anything fresh to a session and every key serves one purpose (D6)?
+- **Answer, decided by Raf on 2026-09-12:**
+  - a distribution tunnel carried over the mesh runs the connection handshake end to end inside the tunnel;
+  - the node that accepts the tunnel takes the station role, with its TLS key, certificate and TLS-key binding;
+  - the dialing node sends CONNECT with its CONNECT key, against the peer's expected node_id;
+  - tunnel data travels only in that TLS 1.3 session, under the profile both endpoints use (D2);
+  - the carrier delivers the tunnel's data complete and in order, or the tunnel ends, on both carriers: the relay,
+    and the pool path that carries the data as pubsub messages through stations.
+- **Why:** it keeps one purpose per key (D6) and the key model unchanged, reuses the handshake WP 1.5 specifies,
+  and takes per-direction keys, replay detection and rekeying from TLS 1.3.
+- **Fallback:** if OTP's TLS 1.3 cannot run the profile's group and certificate (V19), a tunnel key certified by
+  the identity key, to be decided again.
+- **Blocks:** WP 1.5 (distribution tunnels), WP 3.4.
