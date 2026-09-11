@@ -114,6 +114,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its facts with. Without them they are the `macula` and `macula_stream`
   functions, and a direct-dial pusher opens with
   `macula_direct_dial:call_stream/5`.
+- `macula_content_transfer`'s start functions take `link_io` in their
+  options: the `pick_connected_link/1`, `ensure_content_link/4`,
+  `open_content_stream/1`, `call_on_stream/6`, `close_content_stream/2`
+  and `abort_content_stream/4` a transfer reaches its link with, the
+  `macula_client` and `macula_station_link` ones by default. A set without
+  one of them, with a function of another arity or with another key is
+  refused with `function_clause`, in the caller.
 
 ### Changed
 

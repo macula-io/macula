@@ -91,6 +91,19 @@
 %%% every other stream's in-flight work is killed and every stream
 %%% reset before the caller's `await/1,2' sees the error.
 %%%
+%%% == Link I/O ==
+%%%
+%%% A transfer picks or dials its link, and opens, calls on, closes and
+%%% aborts its content streams, through six functions:
+%%% `pick_connected_link/1' and `ensure_content_link/4', the
+%%% `macula_client' ones by default, and `open_content_stream/1',
+%%% `call_on_stream/6', `close_content_stream/2' and
+%%% `abort_content_stream/4', the `macula_station_link' ones. The start
+%%% functions take all six in a `link_io' option, to run a transfer on
+%%% something else, such as a test's scripted link. A set without one of
+%%% them, with a function of another arity or with a key outside the six
+%%% is refused with `function_clause', in the caller.
+%%%
 %%% == Correlation-id registry ==
 %%%
 %%% Each transfer mints a `share_id' (`crypto:strong_rand_bytes(16)',
@@ -138,6 +151,19 @@
 -type dial() :: {pooled, macula:pool()}
               | {station, macula:pool(), macula_client:seed(), pos_integer(), map()}.
 
+%% The functions a transfer reaches its link with, by key; see "Link I/O"
+%% in the module doc.
+-type link_io() :: #{pick_connected_link => fun((macula:pool()) -> {ok, pid()} | {error, term()}),
+                     ensure_content_link => fun((macula:pool(), macula_client:seed(), map(),
+                                                 pos_integer()) -> {ok, pid()} | {error, term()}),
+                     open_content_stream => fun((pid()) -> {ok, reference()} | {error, term()}),
+                     call_on_stream => fun((pid(), reference(), binary(), binary(), term(),
+                                            timeout()) -> {ok, term()} | {error, term()}),
+                     close_content_stream => fun((pid(), reference()) -> term()),
+                     abort_content_stream => fun((pid(), reference(), term(), binary()) -> term())}.
+
+-export_type([link_io/0]).
+
 %% One dedicated content stream's own independent chunk-by-chunk queue.
 %% `remaining' holds items not yet dispatched (PUT: `{Index, Bytes}';
 %% GET: plain `Index'); `in_flight' is the ONE item currently out for
@@ -181,6 +207,7 @@
     kind         :: kind(),
     payload      :: binary(),         % put: Bytes; get: Mcid
     share_id     :: binary(),
+    link_io      :: link_io(),
     link_pid     :: pid() | undefined,
     stream       :: reference() | undefined,
     worker       :: pid() | undefined,
@@ -203,10 +230,11 @@ start_put(Pool, Bytes) -> start_put(Pool, Bytes, #{}).
 %% @doc As `start_put/2'. `Opts' may carry `share_id' (binary,
 %% overrides the minted default) and `stream_count' (positive integer,
 %% default 4 — see the moduledoc's "Multi-stream" section; irrelevant
-%% for a single-block transfer).
+%% for a single-block transfer). `link_io' gives the functions it reaches
+%% its link with (see "Link I/O" above).
 -spec start_put(macula:pool(), binary(), map()) -> {ok, pid()}.
 start_put(Pool, Bytes, Opts) when is_pid(Pool), is_binary(Bytes), is_map(Opts) ->
-    gen_server:start_link(?MODULE, {put, {pooled, Pool}, Bytes, Opts}, []).
+    start(put, {pooled, Pool}, Bytes, Opts).
 
 %% @doc As `start_put/2', dialing `Station' directly (reusing a live
 %% link or dialing + waiting up to `TimeoutMs' for one) instead of
@@ -227,8 +255,7 @@ start_put_station(Pool, Station, Bytes, TimeoutMs, Opts)
   when is_pid(Pool), is_binary(Bytes), is_integer(TimeoutMs), TimeoutMs > 0,
        is_map(Opts) ->
     LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
-    gen_server:start_link(?MODULE,
-        {put, {station, Pool, Station, TimeoutMs, LinkOpts}, Bytes, Opts}, []).
+    start(put, {station, Pool, Station, TimeoutMs, LinkOpts}, Bytes, Opts).
 
 %% @doc Start an addressable get through the pool's own connected
 %% link. See `macula:get_content/2'.
@@ -239,7 +266,7 @@ start_get(Pool, Mcid) -> start_get(Pool, Mcid, #{}).
 %% `stream_count' (see `start_put/3').
 -spec start_get(macula:pool(), macula:mcid(), map()) -> {ok, pid()}.
 start_get(Pool, Mcid, Opts) when is_pid(Pool), is_binary(Mcid), is_map(Opts) ->
-    gen_server:start_link(?MODULE, {get, {pooled, Pool}, Mcid, Opts}, []).
+    start(get, {pooled, Pool}, Mcid, Opts).
 
 %% @doc As `start_get/2', dialing `Station' directly — the addressable
 %% counterpart to `macula:get_content_station/4'.
@@ -255,8 +282,7 @@ start_get_station(Pool, Station, Mcid, TimeoutMs, Opts)
   when is_pid(Pool), is_binary(Mcid), is_integer(TimeoutMs), TimeoutMs > 0,
        is_map(Opts) ->
     LinkOpts = maps:with([verify, expected_node_id, pin_tls_cert], Opts),
-    gen_server:start_link(?MODULE,
-        {get, {station, Pool, Station, TimeoutMs, LinkOpts}, Mcid, Opts}, []).
+    start(get, {station, Pool, Station, TimeoutMs, LinkOpts}, Mcid, Opts).
 
 %% @doc Block for the transfer's outcome: `{ok, Mcid}' (put),
 %% `{ok, Bytes}' (get), or `{error, Reason}'. Safe to call more than
@@ -306,19 +332,53 @@ resume(Pid) -> gen_server:call(Pid, resume).
 -spec share_id(pid()) -> binary().
 share_id(Pid) -> gen_server:call(Pid, share_id).
 
+%% A transfer starts on link functions link_io/2 accepts; any other is
+%% refused with function_clause, in the caller.
+start(Kind, Dial, Payload, Opts) ->
+    LinkIo = link_io(default_link_io(), maps:get(link_io, Opts, undefined)),
+    gen_server:start_link(?MODULE, {Kind, Dial, Payload, LinkIo, Opts}, []).
+
+%% The link functions a transfer runs on: `Defaults', or `Given' when it
+%% has every key in `Defaults', each function at the arity its key takes,
+%% and no key outside `link_io()'. Any other set is refused with
+%% function_clause.
+link_io(Defaults, undefined) when is_map(Defaults) ->
+    Defaults;
+link_io(Defaults, Given) when is_map(Defaults), is_map(Given) ->
+    ok = maps:foreach(fun link_function/2, Given),
+    ok = lists:foreach(fun(Key) -> given_key(Key, Given) end, maps:keys(Defaults)),
+    Given.
+
+link_function(pick_connected_link, Fun) when is_function(Fun, 1) -> ok;
+link_function(ensure_content_link, Fun) when is_function(Fun, 4) -> ok;
+link_function(open_content_stream, Fun) when is_function(Fun, 1) -> ok;
+link_function(call_on_stream, Fun) when is_function(Fun, 6) -> ok;
+link_function(close_content_stream, Fun) when is_function(Fun, 2) -> ok;
+link_function(abort_content_stream, Fun) when is_function(Fun, 4) -> ok.
+
+given_key(Key, Given) when is_map_key(Key, Given) -> ok.
+
+default_link_io() ->
+    #{pick_connected_link => fun macula_client:pick_connected_link/1,
+      ensure_content_link => fun macula_client:ensure_content_link/4,
+      open_content_stream => fun macula_station_link:open_content_stream/1,
+      call_on_stream => fun macula_station_link:call_on_stream/6,
+      close_content_stream => fun macula_station_link:close_content_stream/2,
+      abort_content_stream => fun macula_station_link:abort_content_stream/4}.
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 %% @private
-init({Kind, Dial, Payload, Opts}) ->
+init({Kind, Dial, Payload, LinkIo, Opts}) ->
     process_flag(trap_exit, true),
     ShareId = maps:get(share_id, Opts, crypto:strong_rand_bytes(16)),
     StreamCount = maps:get(stream_count, Opts, ?DEFAULT_STREAM_COUNT),
     ok = macula_content_transfer_registry:register_share(ShareId, self()),
     Self = self(),
-    Worker = spawn_link(fun() -> connect_and_run(Self, Kind, Dial, Payload) end),
-    {ok, #state{kind = Kind, payload = Payload, share_id = ShareId,
+    Worker = spawn_link(fun() -> connect_and_run(Self, LinkIo, Kind, Dial, Payload) end),
+    {ok, #state{kind = Kind, payload = Payload, share_id = ShareId, link_io = LinkIo,
                worker = Worker, waiters = [], paused = false, chunk = undefined,
                stream_count = StreamCount}}.
 
@@ -340,11 +400,11 @@ handle_call({cancel, _Code, _Message}, _From, #state{result = Result} = State)
         when Result =/= undefined ->
     {stop, normal, ok, State};
 handle_call({cancel, Code, Message}, _From,
-            #state{worker = Worker, link_pid = LinkPid, stream = Stream,
+            #state{worker = Worker, link_io = LinkIo, link_pid = LinkPid, stream = Stream,
                   chunk = Chunk, waiters = Waiters} = State) ->
     kill_worker(Worker),
     kill_lane_workers(Chunk),
-    abort_all_streams(LinkPid, Stream, Chunk, Code, Message),
+    abort_all_streams(LinkIo, LinkPid, Stream, Chunk, Code, Message),
     [gen_server:reply(From, {error, cancelled}) || From <- Waiters],
     {stop, normal, ok, State#state{result = {error, cancelled}, waiters = []}};
 handle_call(_Request, _From, State) ->
@@ -419,19 +479,19 @@ kill_lane_workers(#chunk{lanes = undefined}) -> ok;
 kill_lane_workers(#chunk{lanes = Lanes}) ->
     lists:foreach(fun(#lane{worker = W}) -> kill_worker(W) end, Lanes).
 
-abort_stream_if_open(LinkPid, Stream, Code, Message)
+abort_stream_if_open(#{abort_content_stream := Abort}, LinkPid, Stream, Code, Message)
   when is_pid(LinkPid), is_reference(Stream) ->
-    macula_station_link:abort_content_stream(LinkPid, Stream, Code, Message);
-abort_stream_if_open(_LinkPid, _Stream, _Code, _Message) ->
+    Abort(LinkPid, Stream, Code, Message);
+abort_stream_if_open(_LinkIo, _LinkPid, _Stream, _Code, _Message) ->
     ok.
 
-abort_all_streams(LinkPid, PrimalStream, undefined, Code, Message) ->
-    abort_stream_if_open(LinkPid, PrimalStream, Code, Message);
-abort_all_streams(LinkPid, PrimalStream, #chunk{lanes = undefined}, Code, Message) ->
-    abort_stream_if_open(LinkPid, PrimalStream, Code, Message);
-abort_all_streams(LinkPid, _PrimalStream, #chunk{lanes = Lanes}, Code, Message) ->
+abort_all_streams(LinkIo, LinkPid, PrimalStream, undefined, Code, Message) ->
+    abort_stream_if_open(LinkIo, LinkPid, PrimalStream, Code, Message);
+abort_all_streams(LinkIo, LinkPid, PrimalStream, #chunk{lanes = undefined}, Code, Message) ->
+    abort_stream_if_open(LinkIo, LinkPid, PrimalStream, Code, Message);
+abort_all_streams(LinkIo, LinkPid, _PrimalStream, #chunk{lanes = Lanes}, Code, Message) ->
     lists:foreach(fun(#lane{stream = S}) ->
-        abort_stream_if_open(LinkPid, S, Code, Message)
+        abort_stream_if_open(LinkIo, LinkPid, S, Code, Message)
     end, Lanes).
 
 %%%===================================================================
@@ -444,32 +504,35 @@ abort_all_streams(LinkPid, _PrimalStream, #chunk{lanes = Lanes}, Code, Message) 
 %%% `open_extra_streams/2'), not by this worker.
 %%%===================================================================
 
--spec connect_and_run(pid(), kind(), dial(), binary()) -> term().
-connect_and_run(Parent, Kind, Dial, Payload) ->
-    case connect(Dial) of
+-spec connect_and_run(pid(), link_io(), kind(), dial(), binary()) -> term().
+connect_and_run(Parent, LinkIo, Kind, Dial, Payload) ->
+    case connect(LinkIo, Dial) of
         {ok, LinkPid, Stream} ->
             Parent ! {content_link, LinkPid, Stream},
-            run_if_single_block(is_chunked(Kind, Payload), Parent, Kind, LinkPid, Stream, Payload);
+            run_if_single_block(is_chunked(Kind, Payload), Parent, LinkIo, Kind, LinkPid, Stream,
+                                Payload);
         {error, _} = E ->
             Parent ! {content_result, E}
     end.
 
-run_if_single_block(true, _Parent, _Kind, _LinkPid, _Stream, _Payload) ->
+run_if_single_block(true, _Parent, _LinkIo, _Kind, _LinkPid, _Stream, _Payload) ->
     ok;
-run_if_single_block(false, Parent, Kind, LinkPid, Stream, Payload) ->
-    Result = transfer(Kind, LinkPid, Stream, Payload),
-    try macula_station_link:close_content_stream(LinkPid, Stream)
+run_if_single_block(false, Parent, #{close_content_stream := Close} = LinkIo, Kind, LinkPid, Stream,
+                    Payload) ->
+    Result = transfer(LinkIo, Kind, LinkPid, Stream, Payload),
+    try Close(LinkPid, Stream)
     catch _:_ -> ok end,
     Parent ! {content_result, Result}.
 
-connect({pooled, Pool}) ->
-    open_on_link(macula_client:pick_connected_link(Pool));
-connect({station, Pool, Station, TimeoutMs, LinkOpts}) ->
-    open_on_link(macula_client:ensure_content_link(Pool, Station, LinkOpts, TimeoutMs)).
+connect(#{pick_connected_link := PickConnectedLink} = LinkIo, {pooled, Pool}) ->
+    open_on_link(LinkIo, PickConnectedLink(Pool));
+connect(#{ensure_content_link := EnsureContentLink} = LinkIo,
+        {station, Pool, Station, TimeoutMs, LinkOpts}) ->
+    open_on_link(LinkIo, EnsureContentLink(Pool, Station, LinkOpts, TimeoutMs)).
 
-open_on_link({error, _} = E) -> E;
-open_on_link({ok, LinkPid}) ->
-    stream_opened(macula_station_link:open_content_stream(LinkPid), LinkPid).
+open_on_link(_LinkIo, {error, _} = E) -> E;
+open_on_link(#{open_content_stream := OpenContentStream}, {ok, LinkPid}) ->
+    stream_opened(OpenContentStream(LinkPid), LinkPid).
 
 stream_opened({ok, Stream}, LinkPid) -> {ok, LinkPid, Stream};
 stream_opened({error, _} = E, _LinkPid) -> E.
@@ -480,8 +543,8 @@ is_chunked(put, Bytes) -> byte_size(Bytes) > macula_manifest:default_chunk_size(
 is_chunked(get, <<1, 16#56, _/binary>>) -> true;
 is_chunked(get, <<1, 16#55, _/binary>>) -> false.
 
-transfer(put, LinkPid, Stream, Bytes) -> put_single_block(LinkPid, Stream, Bytes);
-transfer(get, LinkPid, Stream, Mcid)  -> get_single_block(LinkPid, Stream, Mcid).
+transfer(LinkIo, put, LinkPid, Stream, Bytes) -> put_single_block(LinkIo, LinkPid, Stream, Bytes);
+transfer(LinkIo, get, LinkPid, Stream, Mcid)  -> get_single_block(LinkIo, LinkPid, Stream, Mcid).
 
 %%%===================================================================
 %%% Single block — one wire round trip, runs entirely in the connect
@@ -490,13 +553,13 @@ transfer(get, LinkPid, Stream, Mcid)  -> get_single_block(LinkPid, Stream, Mcid)
 %%% anything here.
 %%%===================================================================
 
-put_single_block(LinkPid, Stream, Bytes) ->
+put_single_block(LinkIo, LinkPid, Stream, Bytes) ->
     Hash = macula_blake3_nif:hash(Bytes),
     MCID = <<1, 16#55, Hash/binary>>,
-    classify_put_content(put_block(LinkPid, Stream, MCID, Bytes), MCID).
+    classify_put_content(put_block(LinkIo, LinkPid, Stream, MCID, Bytes), MCID).
 
-put_block(LinkPid, Stream, MCID, Bytes) ->
-    call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_PUT_BLOCK_PROC,
+put_block(LinkIo, LinkPid, Stream, MCID, Bytes) ->
+    call_on_stream_with_retry(LinkIo, LinkPid, Stream, ?CONTENT_PUT_BLOCK_PROC,
                               #{mcid => MCID, payload => Bytes},
                               ?CONTENT_BLOCK_TIMEOUT_MS).
 
@@ -505,11 +568,11 @@ classify_put_content({ok, hash_mismatch},     _MCID) -> {error, hash_mismatch};
 classify_put_content({ok, Reply},             _MCID) -> {error, {unexpected_reply, Reply}};
 classify_put_content({error, _} = E,          _MCID) -> E.
 
-get_single_block(LinkPid, Stream, MCID) ->
-    classify_get_content(get_block(LinkPid, Stream, MCID), MCID).
+get_single_block(LinkIo, LinkPid, Stream, MCID) ->
+    classify_get_content(get_block(LinkIo, LinkPid, Stream, MCID), MCID).
 
-get_block(LinkPid, Stream, MCID) ->
-    call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_BLOCK_PROC,
+get_block(LinkIo, LinkPid, Stream, MCID) ->
+    call_on_stream_with_retry(LinkIo, LinkPid, Stream, ?CONTENT_GET_BLOCK_PROC,
                               #{mcid => MCID}, ?CONTENT_BLOCK_TIMEOUT_MS).
 
 classify_get_content({ok, not_found}, _MCID)        -> {error, not_found};
@@ -555,9 +618,10 @@ hash_result(false, _Bin) -> {error, hash_mismatch}.
 %%% PLAN_PUSH_UPLOAD.md Phases 2-3.
 %%%===================================================================
 
-content_link_chunked(put, LinkPid, Stream, Bytes, #state{stream_count = DesiredN} = State) ->
+content_link_chunked(put, LinkPid, Stream, Bytes,
+                     #state{link_io = LinkIo, stream_count = DesiredN} = State) ->
     {ok, Manifest, Chunks} = macula_manifest:create(Bytes),
-    Lanes = setup_put_lanes(LinkPid, Stream, DesiredN, Chunks),
+    Lanes = setup_put_lanes(LinkIo, LinkPid, Stream, DesiredN, Chunks),
     Chunk = #chunk{manifest = Manifest, lanes = Lanes, chunk_count = undefined, acc = #{}},
     {noreply, State#state{worker = undefined, chunk = Chunk}, {continue, next_step}};
 content_link_chunked(get, _LinkPid, _Stream, _Mcid, State) ->
@@ -567,15 +631,15 @@ content_link_chunked(get, _LinkPid, _Stream, _Mcid, State) ->
     Chunk = #chunk{manifest = undefined, lanes = undefined, chunk_count = undefined, acc = #{}},
     {noreply, State#state{chunk = Chunk}, {continue, next_step}}.
 
-setup_put_lanes(LinkPid, Stream0, DesiredN, Chunks) ->
+setup_put_lanes(LinkIo, LinkPid, Stream0, DesiredN, Chunks) ->
     N = max(1, min(DesiredN, length(Chunks))),
-    Streams = [Stream0 | open_extra_streams(LinkPid, N - 1)],
+    Streams = [Stream0 | open_extra_streams(LinkIo, LinkPid, N - 1)],
     Items = lists:zip(lists:seq(0, length(Chunks) - 1), Chunks),
     distribute_lanes(Streams, Items, fun({Index, _Bytes}) -> Index end).
 
-setup_get_lanes(LinkPid, Stream0, DesiredN, ChunkCount) ->
+setup_get_lanes(LinkIo, LinkPid, Stream0, DesiredN, ChunkCount) ->
     N = max(1, min(DesiredN, ChunkCount)),
-    Streams = [Stream0 | open_extra_streams(LinkPid, N - 1)],
+    Streams = [Stream0 | open_extra_streams(LinkIo, LinkPid, N - 1)],
     Items = lists:seq(0, ChunkCount - 1),
     distribute_lanes(Streams, Items, fun(Index) -> Index end).
 
@@ -583,12 +647,12 @@ setup_get_lanes(LinkPid, Stream0, DesiredN, ChunkCount) ->
 %% connection (allocate a stream id, no peer round trip) — fast and
 %% ordinarily infallible, but if one DOES fail this degrades to fewer
 %% streams rather than failing the whole transfer over it.
-open_extra_streams(_LinkPid, N) when N =< 0 -> [];
-open_extra_streams(LinkPid, N) ->
-    lists:filtermap(fun(_) -> try_open_content_stream(LinkPid) end, lists:seq(1, N)).
+open_extra_streams(_LinkIo, _LinkPid, N) when N =< 0 -> [];
+open_extra_streams(LinkIo, LinkPid, N) ->
+    lists:filtermap(fun(_) -> try_open_content_stream(LinkIo, LinkPid) end, lists:seq(1, N)).
 
-try_open_content_stream(LinkPid) ->
-    case macula_station_link:open_content_stream(LinkPid) of
+try_open_content_stream(#{open_content_stream := OpenContentStream}, LinkPid) ->
+    case OpenContentStream(LinkPid) of
         {ok, S} -> {true, S};
         {error, _} -> false
     end.
@@ -608,8 +672,8 @@ group_by_lane(Item, KeyFun, NumStreams, Acc) ->
     maps:update_with(LaneIdx, fun(L) -> [Item | L] end, [Item], Acc).
 
 dispatch_get_manifest_step(#state{kind = get, payload = Mcid} = State) ->
-    start_single_step(State, fun(Self, LinkPid, Stream) ->
-        step_get_manifest(Self, LinkPid, Stream, Mcid)
+    start_single_step(State, fun(Self, LinkIo, LinkPid, Stream) ->
+        step_get_manifest(Self, LinkIo, LinkPid, Stream, Mcid)
     end).
 
 %% For every lane with no worker currently in flight and work left,
@@ -626,19 +690,23 @@ maybe_start_lane(_State, #lane{worker = W} = Lane) when is_pid(W) ->
     Lane;
 maybe_start_lane(_State, #lane{remaining = []} = Lane) ->
     Lane;
-maybe_start_lane(#state{kind = Kind, link_pid = LinkPid, chunk = #chunk{manifest = Manifest}},
+maybe_start_lane(#state{kind = Kind, link_io = LinkIo, link_pid = LinkPid,
+                        chunk = #chunk{manifest = Manifest}},
                  #lane{stream = Stream, remaining = [Item | Rest]} = Lane) ->
     Self = self(),
-    Worker = spawn_link(fun() -> run_lane_step(Self, Kind, LinkPid, Stream, Manifest, Item) end),
+    Worker = spawn_link(fun() ->
+                                run_lane_step(Self, LinkIo, Kind, LinkPid, Stream, Manifest, Item)
+                        end),
     Lane#lane{remaining = Rest, in_flight = Item, worker = Worker}.
 
-run_lane_step(Self, put, LinkPid, Stream, Manifest, {Index, Bytes}) ->
+run_lane_step(Self, LinkIo, put, LinkPid, Stream, Manifest, {Index, Bytes}) ->
     {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
-    Outcome = put_chunk_outcome(classify_put_content(put_block(LinkPid, Stream, ChunkMcid, Bytes), ChunkMcid)),
+    Put = put_block(LinkIo, LinkPid, Stream, ChunkMcid, Bytes),
+    Outcome = put_chunk_outcome(classify_put_content(Put, ChunkMcid)),
     Self ! {lane_step_result, Stream, Outcome};
-run_lane_step(Self, get, LinkPid, Stream, Manifest, Index) ->
+run_lane_step(Self, LinkIo, get, LinkPid, Stream, Manifest, Index) ->
     {ok, ChunkMcid} = macula_manifest:chunk_mcid(Manifest, Index, blake3),
-    Outcome = classify_get_content(get_block(LinkPid, Stream, ChunkMcid), ChunkMcid),
+    Outcome = classify_get_content(get_block(LinkIo, LinkPid, Stream, ChunkMcid), ChunkMcid),
     Self ! {lane_step_result, Stream, Outcome}.
 
 put_chunk_outcome({ok, _})       -> ok;
@@ -654,8 +722,8 @@ lane_done(#lane{remaining = [], in_flight = undefined, worker = undefined}) -> t
 lane_done(_) -> false.
 
 dispatch_terminal_step(#state{kind = put, chunk = #chunk{manifest = Manifest}} = State) ->
-    start_single_step(State, fun(Self, LinkPid, Stream) ->
-        step_put_manifest(Self, LinkPid, Stream, Manifest)
+    start_single_step(State, fun(Self, LinkIo, LinkPid, Stream) ->
+        step_put_manifest(Self, LinkIo, LinkPid, Stream, Manifest)
     end);
 dispatch_terminal_step(#state{kind = get,
                               chunk = #chunk{manifest = Manifest, chunk_count = N, acc = Acc}} = State) ->
@@ -666,14 +734,15 @@ dispatch_terminal_step(#state{kind = get,
 %% put-manifest finalize — both use the transfer's own primal stream
 %% directly (for a chunked put that's also lane 0's stream; for a get
 %% it's the stream the connect step opened, before any lanes exist).
-start_single_step(#state{link_pid = LinkPid, stream = Stream} = State, StepFun) ->
+start_single_step(#state{link_io = LinkIo, link_pid = LinkPid, stream = Stream} = State,
+                  StepFun) ->
     Self = self(),
-    Worker = spawn_link(fun() -> StepFun(Self, LinkPid, Stream) end),
+    Worker = spawn_link(fun() -> StepFun(Self, LinkIo, LinkPid, Stream) end),
     {noreply, State#state{worker = Worker}}.
 
-step_put_manifest(Self, LinkPid, Stream, #{mcid := MCID} = Manifest) ->
+step_put_manifest(Self, LinkIo, LinkPid, Stream, #{mcid := MCID} = Manifest) ->
     Outcome = classify_put_manifest(
-      call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_PUT_MANIFEST_PROC,
+      call_on_stream_with_retry(LinkIo, LinkPid, Stream, ?CONTENT_PUT_MANIFEST_PROC,
                                 #{manifest => Manifest}, ?CONTENT_MANIFEST_TIMEOUT_MS),
       MCID),
     Self ! {step_result, Outcome}.
@@ -682,10 +751,10 @@ classify_put_manifest({ok, ok},      MCID) -> {ok, MCID};
 classify_put_manifest({ok, Reply},  _MCID) -> {error, {unexpected_reply, Reply}};
 classify_put_manifest({error, _} = E, _MCID) -> E.
 
-step_get_manifest(Self, LinkPid, Stream, Mcid) ->
+step_get_manifest(Self, LinkIo, LinkPid, Stream, Mcid) ->
     Outcome = bind_manifest(
                 classify_get_manifest_step(
-                  call_on_stream_with_retry(LinkPid, Stream, ?CONTENT_GET_MANIFEST_PROC,
+                  call_on_stream_with_retry(LinkIo, LinkPid, Stream, ?CONTENT_GET_MANIFEST_PROC,
                                             #{mcid => Mcid}, ?CONTENT_MANIFEST_TIMEOUT_MS)),
                 Mcid),
     Self ! {step_result, Outcome}.
@@ -715,10 +784,11 @@ step_result(Outcome, #state{kind = get} = State) ->
 step_result(Outcome, #state{kind = put} = State) ->
     finalize(State, Outcome).
 
-get_manifest_result({ok, Manifest}, #state{link_pid = LinkPid, stream = Stream0,
+get_manifest_result({ok, Manifest}, #state{link_io = LinkIo, link_pid = LinkPid,
+                                           stream = Stream0,
                                            stream_count = DesiredN} = State) ->
     #{chunk_count := N} = Manifest,
-    Lanes = setup_get_lanes(LinkPid, Stream0, DesiredN, N),
+    Lanes = setup_get_lanes(LinkIo, LinkPid, Stream0, DesiredN, N),
     NewChunk = #chunk{manifest = Manifest, lanes = Lanes, chunk_count = N, acc = #{}},
     {noreply, State#state{chunk = NewChunk}, {continue, next_step}};
 get_manifest_result({error, _} = E, State) ->
@@ -758,22 +828,24 @@ fail_chunked(#state{chunk = #chunk{lanes = Lanes}} = State, FailedLane, Error) -
 %% single-block path, but the close happens here instead of in a
 %% worker (a chunked transfer's step workers never held a stream open
 %% past their own one call).
-finalize(#state{link_pid = LinkPid, stream = Stream, chunk = Chunk, waiters = Waiters} = State, Outcome) ->
-    close_all_streams(LinkPid, Stream, Chunk),
+finalize(#state{link_io = LinkIo, link_pid = LinkPid, stream = Stream, chunk = Chunk,
+                waiters = Waiters} = State, Outcome) ->
+    close_all_streams(LinkIo, LinkPid, Stream, Chunk),
     [gen_server:reply(From, Outcome) || From <- Waiters],
     {noreply, State#state{result = Outcome, waiters = [], worker = undefined}}.
 
-close_all_streams(LinkPid, PrimalStream, undefined) ->
-    close_stream_safely(LinkPid, PrimalStream);
-close_all_streams(LinkPid, PrimalStream, #chunk{lanes = undefined}) ->
-    close_stream_safely(LinkPid, PrimalStream);
-close_all_streams(LinkPid, _PrimalStream, #chunk{lanes = Lanes}) ->
-    lists:foreach(fun(#lane{stream = S}) -> close_stream_safely(LinkPid, S) end, Lanes).
+close_all_streams(LinkIo, LinkPid, PrimalStream, undefined) ->
+    close_stream_safely(LinkIo, LinkPid, PrimalStream);
+close_all_streams(LinkIo, LinkPid, PrimalStream, #chunk{lanes = undefined}) ->
+    close_stream_safely(LinkIo, LinkPid, PrimalStream);
+close_all_streams(LinkIo, LinkPid, _PrimalStream, #chunk{lanes = Lanes}) ->
+    lists:foreach(fun(#lane{stream = S}) -> close_stream_safely(LinkIo, LinkPid, S) end, Lanes).
 
-close_stream_safely(LinkPid, Stream) when is_pid(LinkPid), is_reference(Stream) ->
-    try macula_station_link:close_content_stream(LinkPid, Stream)
+close_stream_safely(#{close_content_stream := Close}, LinkPid, Stream)
+  when is_pid(LinkPid), is_reference(Stream) ->
+    try Close(LinkPid, Stream)
     catch _:_ -> ok end;
-close_stream_safely(_LinkPid, _Stream) ->
+close_stream_safely(_LinkIo, _LinkPid, _Stream) ->
     ok.
 
 verify_result(ok, Reassembled)      -> {ok, Reassembled};
@@ -782,34 +854,28 @@ verify_result({error, _} = E, _Bin) -> E.
 %%%===================================================================
 %%% Retry — a `_content.*' CALL on the transfer's pinned dedicated
 %%% stream, retried on a BOLT#4 error whose OWN retry policy says to.
-%%% Verbatim port of macula:call_on_stream_with_retry/5,6.
+%%% A port of macula:call_on_stream_with_retry/5,6, on the transfer's own
+%%% call_on_stream function.
 %%%===================================================================
 
-call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs) ->
-    call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs, 3).
+call_on_stream_with_retry(#{call_on_stream := CallOnStream}, LinkPid, Stream, Procedure, Payload,
+                          TimeoutMs) ->
+    Call = fun() ->
+                   CallOnStream(LinkPid, Stream, ?CONTENT_REALM, Procedure, Payload, TimeoutMs)
+           end,
+    call_with_retry(Call, 3).
 
-call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs,
-                          AttemptsLeft) ->
-    retry_stream_result(
-      macula_station_link:call_on_stream(LinkPid, Stream, ?CONTENT_REALM,
-                                         Procedure, Payload, TimeoutMs),
-      LinkPid, Stream, Procedure, Payload, TimeoutMs, AttemptsLeft).
+call_with_retry(Call, AttemptsLeft) ->
+    retry_stream_result(Call(), Call, AttemptsLeft).
 
-retry_stream_result({error, {call_error, Code, _Name}} = E, LinkPid, Stream,
-                    Procedure, Payload, TimeoutMs, AttemptsLeft)
+retry_stream_result({error, {call_error, Code, _Name}} = E, Call, AttemptsLeft)
         when AttemptsLeft > 1 ->
-    retry_stream_if_retryable(macula_bolt4:is_retryable(Code), E, LinkPid,
-                              Stream, Procedure, Payload, TimeoutMs,
-                              AttemptsLeft);
-retry_stream_result(Result, _LinkPid, _Stream, _Procedure, _Payload,
-                    _TimeoutMs, _AttemptsLeft) ->
+    retry_stream_if_retryable(macula_bolt4:is_retryable(Code), E, Call, AttemptsLeft);
+retry_stream_result(Result, _Call, _AttemptsLeft) ->
     Result.
 
-retry_stream_if_retryable(true, _E, LinkPid, Stream, Procedure, Payload,
-                          TimeoutMs, AttemptsLeft) ->
+retry_stream_if_retryable(true, _E, Call, AttemptsLeft) ->
     timer:sleep(?CONTENT_RETRY_BACKOFF_MS),
-    call_on_stream_with_retry(LinkPid, Stream, Procedure, Payload, TimeoutMs,
-                              AttemptsLeft - 1);
-retry_stream_if_retryable(false, E, _LinkPid, _Stream, _Procedure, _Payload,
-                          _TimeoutMs, _AttemptsLeft) ->
+    call_with_retry(Call, AttemptsLeft - 1);
+retry_stream_if_retryable(false, E, _Call, _AttemptsLeft) ->
     E.
