@@ -57,6 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   announced providers whose fetch succeeds, with a fetch function of the
   caller's own. `macula_direct_dial:resolve_station_endpoint/3` takes a
   timeout.
+- `macula_stream_sink:start_link/7` and `start_link_direct/7` take start
+  options. `stream_io` gives the five functions a sink opens, reads, ends
+  and announces its stream with, `call_stream/5`, `recv/2`,
+  `close_stream/1`, `abort/3` and `publish/4`, all five together. Without
+  it they are the `macula` facade's, and a direct-dial sink dials with
+  `macula_direct_dial:call_stream/5`.
 
 ### Changed
 

@@ -4,8 +4,7 @@
 %%% Mocks at the `macula'/`macula_direct_dial'/`macula_stream'
 %%% boundary — the raw streaming primitives this module drives
 %%% directly (`call_stream', `send', `close_send', `await_reply',
-%%% `abort'), the same layer `macula_streamer_tests'/
-%%% `macula_stream_sink_tests' mock.
+%%% `abort'), the same layer `macula_streamer_tests' mocks.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_pusher_tests).

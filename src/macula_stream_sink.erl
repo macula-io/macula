@@ -46,6 +46,16 @@
 %%% `advertise_direct/6,7', not plain `advertise/5,6'. See
 %%% `macula_direct_dial''s module doc, "Trust model".
 %%%
+%%% == Stream I/O ==
+%%%
+%%% A sink opens, reads, ends and announces its stream through five
+%%% functions: `call_stream/5', `recv/2', `close_stream/1', `abort/3'
+%%% and `publish/4'. They are the `macula' facade's by default, and a
+%%% direct-dial sink dials with `macula_direct_dial:call_stream/5'.
+%%% `start_link/7' and `start_link_direct/7' take a `stream_io' start
+%%% option of five other functions at the same arities, all five given,
+%%% to run a sink on something else, such as a test's scripted stream.
+%%%
 %%% == Example ==
 %%%
 %%% ```
@@ -72,9 +82,11 @@
 
 -behaviour(gen_server).
 
--export([start_link/5, start_link/6]).
--export([start_link_direct/5, start_link_direct/6]).
+-export([start_link/5, start_link/6, start_link/7]).
+-export([start_link_direct/5, start_link_direct/6, start_link_direct/7]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+
+-export_type([stream_io/0, start_opts/0]).
 
 -callback init(Args :: term()) ->
     {ok, State :: term()} | {stop, Reason :: term()}.
@@ -91,7 +103,19 @@
 -define(STREAMING_COMPLETED, <<"streaming.completed_v1">>).
 -define(CANCEL_CODE, <<"cancelled">>).
 
+-type stream_io() :: #{call_stream := fun((macula:pool(), macula:realm(), macula:procedure(),
+                                          term(), map()) ->
+                                             {ok, macula:stream()} | {error, term()}),
+                       recv := fun((macula:stream(), timeout()) ->
+                                      {chunk, binary()} | {data, term()} | eof | {error, term()}),
+                       close_stream := fun((macula:stream()) -> term()),
+                       abort := fun((macula:stream(), binary(), binary()) -> term()),
+                       publish := fun((macula:pool(), macula:realm(), macula:topic(), term()) ->
+                                         term())}.
+-type start_opts() :: #{stream_io => stream_io()}.
+
 -record(kstate, {
+    io        :: stream_io(),
     module    :: module(),
     pool      :: macula:pool(),
     realm     :: macula:realm(),
@@ -114,8 +138,14 @@ start_link(Module, Pool, Realm, Procedure, Args) ->
 -spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),
                   term(), term()) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Procedure, Args, CallArgs) ->
-    gen_server:start_link(?MODULE,
-        {pooled, Module, Pool, Realm, Procedure, Args, CallArgs}, []).
+    start_link(Module, Pool, Realm, Procedure, Args, CallArgs, #{}).
+
+%% @doc As `start_link/6', with start options: `stream_io' gives the
+%% five functions the sink runs its stream on (see "Stream I/O" above).
+-spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),
+                  term(), term(), start_opts()) -> {ok, pid()} | {error, term()}.
+start_link(Module, Pool, Realm, Procedure, Args, CallArgs, Opts) when is_map(Opts) ->
+    start(stream_io(pooled, Opts), {Module, Pool, Realm, Procedure, Args, CallArgs}).
 
 %% @doc As `start_link/5', but resolves and dials the procedure's
 %% provider directly instead of routing through the pool's existing
@@ -132,57 +162,82 @@ start_link_direct(Module, Pool, Realm, Procedure, Args) ->
                         macula:procedure(), term(), term()) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Realm, Procedure, Args, CallArgs) ->
-    gen_server:start_link(?MODULE,
-        {direct, Module, Pool, Realm, Procedure, Args, CallArgs}, []).
+    start_link_direct(Module, Pool, Realm, Procedure, Args, CallArgs, #{}).
+
+%% @doc As `start_link_direct/6', with start options: `stream_io' gives
+%% the five functions the sink runs its stream on (see "Stream I/O"
+%% above).
+-spec start_link_direct(module(), macula:pool(), macula:realm(),
+                        macula:procedure(), term(), term(), start_opts()) ->
+    {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Realm, Procedure, Args, CallArgs, Opts) when is_map(Opts) ->
+    start(stream_io(direct, Opts), {Module, Pool, Realm, Procedure, Args, CallArgs}).
+
+%% A sink starts on a stream_io of exactly the five functions at their
+%% arities; any other is refused with function_clause, in the caller.
+start(#{call_stream := CallStream, recv := Recv, close_stream := CloseStream,
+        abort := Abort, publish := Publish} = StreamIo, Start)
+  when map_size(StreamIo) =:= 5, is_function(CallStream, 5), is_function(Recv, 2),
+       is_function(CloseStream, 1), is_function(Abort, 3), is_function(Publish, 4) ->
+    gen_server:start_link(?MODULE, {StreamIo, Start}, []).
+
+stream_io(DialMode, Opts) ->
+    maps:get(stream_io, Opts, default_stream_io(DialMode)).
+
+default_stream_io(DialMode) ->
+    #{call_stream => dial(DialMode),
+      recv => fun macula:recv/2,
+      close_stream => fun macula:close_stream/1,
+      abort => fun macula:abort/3,
+      publish => fun macula:publish/4}.
+
+dial(pooled) -> fun macula:call_stream/5;
+dial(direct) -> fun macula_direct_dial:call_stream/5.
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 %% @private
-init({DialMode, Module, Pool, Realm, Procedure, InitArgs, CallArgs}) ->
+init({StreamIo, {Module, Pool, Realm, Procedure, InitArgs, CallArgs}}) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
-            open_stream(DialMode, Module, Pool, Realm, Procedure, CallArgs,
-                       UserState);
+            open_stream(StreamIo, Module, Pool, Realm, Procedure, CallArgs,
+                        UserState);
         {stop, Reason} ->
             {stop, Reason}
     end.
 
-open_stream(DialMode, Module, Pool, Realm, Procedure, CallArgs, UserState) ->
-    case dial_stream(DialMode, Pool, Realm, Procedure, CallArgs) of
+open_stream(#{call_stream := CallStream, recv := Recv} = StreamIo, Module, Pool, Realm,
+            Procedure, CallArgs, UserState) ->
+    case CallStream(Pool, Realm, Procedure, CallArgs, #{}) of
         {ok, Stream} ->
-            Reader = spawn_reader(Stream),
+            Reader = spawn_reader(Recv, Stream),
             StreamId = crypto:strong_rand_bytes(16),
-            publish(true, Pool, Realm, ?STREAMING_STARTED,
+            publish(StreamIo, true, Pool, Realm, ?STREAMING_STARTED,
                     #{stream_id => StreamId}),
-            {ok, #kstate{module = Module, pool = Pool, realm = Realm,
-                        announce = true, stream_id = StreamId,
-                        stream = Stream, reader = Reader, user = UserState}};
+            {ok, #kstate{io = StreamIo, module = Module, pool = Pool, realm = Realm,
+                         announce = true, stream_id = StreamId,
+                         stream = Stream, reader = Reader, user = UserState}};
         {error, Reason} ->
             {stop, Reason}
     end.
 
-dial_stream(pooled, Pool, Realm, Procedure, CallArgs) ->
-    macula:call_stream(Pool, Realm, Procedure, CallArgs, #{});
-dial_stream(direct, Pool, Realm, Procedure, CallArgs) ->
-    macula_direct_dial:call_stream(Pool, Realm, Procedure, CallArgs, #{}).
-
-spawn_reader(Stream) ->
+spawn_reader(Recv, Stream) ->
     Parent = self(),
-    spawn_link(fun() -> reader_loop(Parent, Stream) end).
+    spawn_link(fun() -> reader_loop(Parent, Recv, Stream) end).
 
-reader_loop(Parent, Stream) ->
-    dispatch_recv(macula:recv(Stream, ?RECV_TIMEOUT), Parent, Stream).
+reader_loop(Parent, Recv, Stream) ->
+    dispatch_recv(Recv(Stream, ?RECV_TIMEOUT), Parent, Recv, Stream).
 
-dispatch_recv({chunk, Data}, Parent, Stream) ->
-    Parent ! {stream_item, Data}, reader_loop(Parent, Stream);
-dispatch_recv({data, Data}, Parent, Stream) ->
-    Parent ! {stream_item, Data}, reader_loop(Parent, Stream);
-dispatch_recv(eof, Parent, _Stream) ->
+dispatch_recv({chunk, Data}, Parent, Recv, Stream) ->
+    Parent ! {stream_item, Data}, reader_loop(Parent, Recv, Stream);
+dispatch_recv({data, Data}, Parent, Recv, Stream) ->
+    Parent ! {stream_item, Data}, reader_loop(Parent, Recv, Stream);
+dispatch_recv(eof, Parent, _Recv, _Stream) ->
     Parent ! stream_eof;
-dispatch_recv({error, Reason}, Parent, _Stream) ->
+dispatch_recv({error, Reason}, Parent, _Recv, _Stream) ->
     Parent ! {stream_error, Reason}.
 
 %% @private
@@ -212,7 +267,7 @@ deliver({stop, Reason, NewUser}, State) ->
     {stop, Reason, State#kstate{user = NewUser}}.
 
 %% @private
-terminate(Reason, #kstate{module = Module, pool = Pool, realm = Realm,
+terminate(Reason, #kstate{io = StreamIo, module = Module, pool = Pool, realm = Realm,
                           announce = Announce, stream_id = StreamId,
                           stream = Stream, reader = Reader, user = User}) ->
     %% A `normal'-reason exit does not propagate across a link to a
@@ -222,8 +277,8 @@ terminate(Reason, #kstate{module = Module, pool = Pool, realm = Realm,
     %% for anymore. Stop it unconditionally.
     unlink(Reader),
     exit(Reader, kill),
-    finish_stream(Reason, Stream),
-    publish(Announce, Pool, Realm, ?STREAMING_COMPLETED,
+    finish_stream(StreamIo, Reason, Stream),
+    publish(StreamIo, Announce, Pool, Realm, ?STREAMING_COMPLETED,
             outcome_fields(#{stream_id => StreamId}, Reason)),
     maybe_close(Module, Reason, User).
 
@@ -233,11 +288,11 @@ terminate(Reason, #kstate{module = Module, pool = Pool, realm = Realm,
 %% a cancellation/failure rather than a clean end-of-stream. `Stream'
 %% may already be dead by the time this runs (e.g. `{stream_error,_}'
 %% means the provider already tore it down) — harmless, caught below.
-finish_stream(normal, Stream) ->
-    try macula:close_stream(Stream) catch _:_ -> ok end;
-finish_stream(Reason, Stream) ->
+finish_stream(#{close_stream := CloseStream}, normal, Stream) ->
+    try CloseStream(Stream) catch _:_ -> ok end;
+finish_stream(#{abort := Abort}, Reason, Stream) ->
     Message = iolist_to_binary(io_lib:format("~p", [Reason])),
-    try macula:abort(Stream, ?CANCEL_CODE, Message) catch _:_ -> ok end.
+    try Abort(Stream, ?CANCEL_CODE, Message) catch _:_ -> ok end.
 
 outcome_fields(Base, normal) -> Base#{outcome => completed};
 outcome_fields(Base, Reason) -> Base#{outcome => failed, reason => Reason}.
@@ -248,6 +303,6 @@ maybe_close(Module, Reason, User) ->
         false -> ok
     end.
 
-publish(false, _, _, _, _) -> ok;
-publish(true, Pool, Realm, Topic, Payload) ->
-    _ = macula:publish(Pool, Realm, Topic, Payload), ok.
+publish(_StreamIo, false, _, _, _, _) -> ok;
+publish(#{publish := Publish}, true, Pool, Realm, Topic, Payload) ->
+    _ = Publish(Pool, Realm, Topic, Payload), ok.
