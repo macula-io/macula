@@ -90,13 +90,16 @@ decode_rejects_current_hop_above_total_test() ->
     ?assertEqual({error, bad_current_hop}, macula_source_route:decode(Bin)).
 
 decode_rejects_path_hash_mismatch_test() ->
-    Hops = [sample_hop(), sample_hop()],
+    %% The first hop starts with 16#FF, so a tamper that wrote a fixed
+    %% value there could leave the header as it was.
+    Hops = [<<16#FF, (crypto:strong_rand_bytes(15))/binary>>, sample_hop()],
     H = macula_source_route:new(Hops, 1),
-    %% Mutate the first hop byte after encoding.
+    %% Flip every bit of the first hop's first byte after encoding, so the
+    %% tampered header always differs from the encoded one.
     Bin = macula_source_route:encode(H),
     Off = 27, %% start of hops
-    <<Pre:Off/binary, _OldByte:8, Tail/binary>> = Bin,
-    Tampered = <<Pre/binary, 16#FF:8, Tail/binary>>,
+    <<Pre:Off/binary, OldByte:8, Tail/binary>> = Bin,
+    Tampered = <<Pre/binary, (OldByte bxor 16#FF):8, Tail/binary>>,
     ?assertEqual({error, path_hash_mismatch},
                  macula_source_route:decode(Tampered)).
 
