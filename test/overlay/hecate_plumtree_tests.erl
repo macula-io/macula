@@ -182,12 +182,22 @@ graft_for_known_msg_replies_with_gossip_test() ->
     %% Sender added to eager.
     ?assert(lists:member(Sender, hecate_plumtree:eager_peers(S2))).
 
+%% A GRAFT for a publication this node does not hold changes nothing: the tree only moves for a publication it can send.
 graft_for_unknown_msg_is_silent_test() ->
     Sender = id(41),
     Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => crypto:strong_rand_bytes(48), round => 0}),
-    {S1, [], []} = hecate_plumtree:process(fresh(id(99)), Sender, Frame),
-    %% Sender still added to eager so future publishes reach them.
-    ?assert(lists:member(Sender, hecate_plumtree:eager_peers(S1))).
+    S0 = fresh(id(99)),
+    {S1, [], []} = hecate_plumtree:process(S0, Sender, Frame),
+    ?assertEqual(S0, S1).
+
+a_graft_for_an_unknown_publication_leaves_a_lazy_sender_lazy_test() ->
+    Sender = id(43),
+    S1 = hecate_plumtree:add_peer(fresh(id(99)), Sender),
+    {S2, [], []} = hecate_plumtree:process(S1, Sender, macula_frame:plumtree_prune(#{realm => ?REALM})),
+    Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => crypto:strong_rand_bytes(48), round => 0}),
+    {S3, [], []} = hecate_plumtree:process(S2, Sender, Frame),
+    ?assertEqual([Sender], hecate_plumtree:lazy_peers(S3)),
+    ?assertEqual([], hecate_plumtree:eager_peers(S3)).
 
 %%---------------------------------------------------------------------
 %% Retention: a publication hash is kept until the publication expires, and no longer
@@ -218,7 +228,8 @@ a_graft_for_a_forgotten_publication_gets_no_answer_test() ->
     {S1, _, [{MsgId, #{expires_at := ExpiresAt}}]} = hecate_plumtree:publish(fresh(id(99)), Publish),
     S2 = hecate_plumtree:sweep(S1, ExpiresAt + 1),
     Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => MsgId, round => 0}),
-    ?assertMatch({_, [], []}, hecate_plumtree:process(S2, id(42), Frame)).
+    {S3, [], []} = hecate_plumtree:process(S2, id(42), Frame),
+    ?assertNot(lists:member(id(42), hecate_plumtree:eager_peers(S3))).
 
 %% An IHAVE for a publication never received is forgotten once it is older than 70 minutes, the longest a
 %% publication can live.

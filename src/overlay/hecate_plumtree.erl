@@ -36,8 +36,8 @@
 %%   <li><strong>Receive IHAVE</strong>: if already received, ignore. Else record the sender in missing and emit a
 %%       GRAFT to the sender right away (Phase 5.3 MVP: a real deployment delays the GRAFT briefly to give the eager
 %%       push a chance to win the race; eager grafting is correct but slightly heavier).</li>
-%%   <li><strong>Receive GRAFT</strong>: the sender becomes eager; reply with the GOSSIP publication if we have it,
-%%       drop silently if not.</li>
+%%   <li><strong>Receive GRAFT</strong>: for a publication this node holds, the sender becomes eager and gets the
+%%       GOSSIP publication; for any other id nothing changes, the push sets included.</li>
 %%   <li><strong>Receive PRUNE</strong>: move the sender from eager to lazy.</li>
 %% </ul>
 %%
@@ -226,14 +226,14 @@ classify_ihave(false, From, MsgId, Round, State) ->
     State1 = note_missing(State, MsgId, From),
     {State1, [{send, From, graft(State, MsgId, Round + 1)}], []}.
 
+%% The tree moves only for a publication this node holds and sends: a GRAFT for any other id changes nothing.
 on_graft(From, #{msg_id := MsgId, round := Round}, State) ->
-    State1 = move_to_eager(State, From),
-    answer_graft(maps:find(MsgId, maps:get(received, State1)), From, Round, State1).
+    answer_graft(maps:find(MsgId, maps:get(received, State)), From, Round, State).
 
 answer_graft(error, _From, _Round, State) ->
     {State, [], []};
 answer_graft({ok, {Publication, _ExpiresAt}}, From, Round, State) ->
-    {State, [{send, From, gossip(Publication, Round)}], []}.
+    {move_to_eager(State, From), [{send, From, gossip(Publication, Round)}], []}.
 
 on_prune(From, State) ->
     {move_to_lazy(State, From), [], []}.
