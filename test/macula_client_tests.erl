@@ -947,9 +947,9 @@ station_seed_with_no_hostname_and_no_node_id_is_skipped_test() ->
                quic_port => 4433},
     ?assertEqual(false, macula_client:station_seed(Station)).
 
-%% A `node_id' that isn't exactly 32 bytes (a real Ed25519 pubkey) is
-%% nothing valid to pin against -- `dial_trust_opts/1' would reject it
-%% downstream anyway, so this fails closed at seed-construction time
+%% A `node_id' that isn't exactly 32 bytes is nothing valid to dial
+%% -- a peering connection does not start without a 32-byte
+%% `expected_node_id' anyway, so this fails closed at seed-construction time
 %% instead of burning a `max_links' slot until `giveup_after_ms' only
 %% to fail the same way later.
 station_seed_with_wrong_length_node_id_is_skipped_test() ->

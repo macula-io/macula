@@ -53,10 +53,11 @@
                              puzzle := #{difficulty := 0..256, mode := puzzle_mode()},
                              capabilities := non_neg_integer(), now := integer()}.
 -type station() :: #{node_id := <<_:256>>, identity_key := binary(), tls_binding := envelope(),
-                     status_expires_at := non_neg_integer()}.
+                     status_expires_at := non_neg_integer(), binding_not_after := non_neg_integer()}.
 -type client() :: #{node_id := <<_:256>>, identity_key := binary(), connect_key := binary(),
                     connect_binding := envelope(), capabilities := non_neg_integer(),
-                    status_expires_at := non_neg_integer(), puzzle := solved | unsolved | not_checked}.
+                    status_expires_at := non_neg_integer(), binding_not_after := non_neg_integer(),
+                    puzzle := solved | unsolved | not_checked}.
 -type peer() :: #{profile := profile(), identity_key := binary(), binding := envelope(), now := integer()}.
 
 -define(VERSION, 3).
@@ -151,14 +152,14 @@ station_node_id(Derived, Expected, _State) ->
 
 station_binding(#{fields := #{<<"identity_key">> := Key, <<"tls_binding">> := Binding},
                   session := #{profile := Profile, leaf := Leaf, now := Now}} = State) ->
-    passed(macula_key_bindings:verify_tls_binding(Binding, Key, Profile, Leaf, Now), State).
+    with_not_after(macula_key_bindings:verify_tls_binding(Binding, Key, Profile, Leaf, Now), State).
 
 station_status(#{fields := #{<<"identity_key">> := Key, <<"tls_binding">> := Binding, <<"tls_status">> := Status},
                  session := #{profile := Profile, now := Now}} = State) ->
     with_expiry(macula_key_bindings:verify_status(Status, Binding, Key, Profile, Now), State).
 
 connect_frame(#{bytes := ChallengeBytes, fields := Fields, station_node_id := StationNodeId,
-                status_expires_at := ExpiresAt,
+                status_expires_at := ExpiresAt, binding_not_after := NotAfter,
                 session := #{profile := Profile, leaf := Leaf, identity_key := IdentityKey, connect_key := ConnectKey,
                              connect_binding := Binding, connect_status := Status, capabilities := Capabilities}}) ->
     #{<<"nonce">> := Nonce, <<"identity_key">> := StationKey, <<"tls_binding">> := TlsBinding} = Fields,
@@ -171,7 +172,7 @@ connect_frame(#{bytes := ChallengeBytes, fields := Fields, station_node_id := St
                                      <<"proof">> => Proof,
                                      <<"capabilities">> => Capabilities}),
     {ok, Connect, #{node_id => StationNodeId, identity_key => StationKey, tls_binding => TlsBinding,
-                    status_expires_at => ExpiresAt}}.
+                    status_expires_at => ExpiresAt, binding_not_after => NotAfter}}.
 
 %%------------------------------------------------------------------
 %% CONNECT, checked by the station
@@ -235,7 +236,8 @@ puzzle_verdict(Result, _Puzzle, State) -> {ok, State#{puzzle => Result}}.
 client_binding(#{fields := #{<<"identity_key">> := IdentityKey, <<"connect_key">> := ConnectKey,
                              <<"connect_binding">> := Binding},
                  session := #{profile := Profile, now := Now}} = State) ->
-    passed(macula_key_bindings:verify_connect_binding(Binding, IdentityKey, Profile, ConnectKey, Now), State).
+    with_not_after(macula_key_bindings:verify_connect_binding(Binding, IdentityKey, Profile, ConnectKey, Now),
+                   State).
 
 client_status(#{fields := #{<<"identity_key">> := IdentityKey, <<"connect_binding">> := Binding,
                             <<"connect_status">> := Status},
@@ -251,13 +253,15 @@ client_proof(#{fields := #{<<"connect_key">> := ConnectKey, <<"proof">> := Proof
     Message = proof_message(Nonce, StationNodeId, ClientNodeId, Leaf, Challenge),
     expect(macula_node_keys:verify(Message, Proof, ConnectKey, Profile), proof_invalid, State).
 
-client(#{fields := Fields, client_node_id := NodeId, puzzle := Puzzle, status_expires_at := ExpiresAt}) ->
+client(#{fields := Fields, client_node_id := NodeId, puzzle := Puzzle, status_expires_at := ExpiresAt,
+         binding_not_after := NotAfter}) ->
     #{node_id => NodeId,
       identity_key => maps:get(<<"identity_key">>, Fields),
       connect_key => maps:get(<<"connect_key">>, Fields),
       connect_binding => maps:get(<<"connect_binding">>, Fields),
       capabilities => maps:get(<<"capabilities">>, Fields),
       status_expires_at => ExpiresAt,
+      binding_not_after => NotAfter,
       puzzle => Puzzle}.
 
 %% label || 0x00 || nonce || station node_id || client node_id || SHA-384(leaf DER) || SHA-384(challenge bytes)
@@ -416,8 +420,8 @@ with_fields({error, _} = Error, _State) -> Error.
 with_expiry({ok, #{expires_at := ExpiresAt}}, State) -> {ok, State#{status_expires_at => ExpiresAt}};
 with_expiry({error, _} = Error, _State) -> Error.
 
-passed({ok, _Verified}, State) -> {ok, State};
-passed({error, _} = Error, _State) -> Error.
+with_not_after({ok, #{not_after := NotAfter}}, State) -> {ok, State#{binding_not_after => NotAfter}};
+with_not_after({error, _} = Error, _State) -> Error.
 
 expect(true, _Refusal, State) -> {ok, State};
 expect(false, Refusal, _State) -> {error, Refusal}.

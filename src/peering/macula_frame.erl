@@ -95,7 +95,7 @@
 
     %% Wire codec for the post-quantum handshake: frame CBOR bytes exactly as
     %% sent and received, which the connection proof hashes
-    encode_bytes/1, parse_stream_bytes/1,
+    encode_bytes/1, parse_stream_bytes/1, decode_bytes/1,
 
     %% Sendability, checked before a frame is cast at a peering
     %% connection. Mirrors `to_wire/1' + `macula_record_cbor'.
@@ -1748,6 +1748,15 @@ decode(Buf) when is_binary(Buf) ->
 
 decoded_frame({ok, Bytes, Rest}) -> decode_cbor(Bytes, Rest);
 decoded_frame(NotAFrame) -> NotAFrame.
+
+%% @doc Decode one frame's CBOR bytes, as parse_stream_bytes/1 takes them off a stream without their length
+%% prefix.
+-spec decode_bytes(binary()) -> {ok, frame()} | {error, bad_frame}.
+decode_bytes(Bytes) when is_binary(Bytes) ->
+    whole_frame(decode_cbor(Bytes, <<>>)).
+
+whole_frame({ok, Frame, <<>>}) -> {ok, Frame};
+whole_frame({error, bad_frame} = Refused) -> Refused.
 
 %% The length prefix, shared by decode/1 and parse_stream_bytes/1.
 split_frame(<<Len:32/big, _Rest/binary>>) when Len > ?MAX_FRAME_BYTES ->

@@ -1,8 +1,15 @@
 %% @doc Per-peer connection state machine.
 %%
 %% Implements the lifecycle from `Part 4 §10' simplified for Phase 1:
-%% no REFRESH phase, no RECONNECTING — just enough to exchange signed
-%% CONNECT/HELLO frames and drain on GOODBYE.
+%% no REFRESH phase and no RECONNECTING. The handshake is the post-quantum
+%% one of plans/DESIGN_PQ_HANDSHAKE_FRAMES.md, built and checked by
+%% `macula_handshake': the client sends an opener, the station a
+%% challenge, the client CONNECT and the station HELLO. After HELLO each
+%% side sends a status frame at every reissue of its statement, and the
+%% connection closes when the peer's statement lapses (`status_expired')
+%% or the peer's binding reaches its not_after (`binding_expired'). Close
+%% reasons are local: the controlling process and diagnostics hear them,
+%% the peer does not.
 %%
 %% State graph:
 %% <pre>
@@ -19,70 +26,49 @@
 -export_type([opts/0, connect_opts/0]).
 
 -ifdef(TEST).
-%% Exports for unit tests — pure helpers that are otherwise private.
+%% Exports for unit tests: pure helpers that are otherwise private.
 -export([
-    resolve_recipient/1,
-    dial_trust_opts/1
+    resolve_recipient/1
 ]).
 -endif.
 
 -type connect_opts() :: #{
-    host        := binary() | string(),
-    port        := inet:port_number(),
-    alpn        => [binary()],
-    timeout_ms  => timeout(),
-    %% TLS trust mode for the QUIC dial. `webpki' (the default since
-    %% 5.0.0) validates the server cert against webpki roots + the
-    %% dialed hostname. `none' skips TLS verification — development /
-    %% self-signed labs only; every such dial logs a warning.
-    %% Ignored when `expected_node_id' is set (pubkey pin wins), unless
-    %% `pin_tls_cert => false' — see below.
-    verify      => webpki | none,
-    %% The peer's Ed25519 pubkey, when the dialer knows who it is
-    %% dialing (DHT node records, pre-shared relay identities). Two
-    %% independent enforcement points, both keyed off this field:
-    %% (a) when `pin_tls_cert' is `true' (the default), the QUIC dial
-    %% pins the server cert's SPKI to this key (no CA needed — correct
-    %% when the peer's TLS cert genuinely IS its macula identity, e.g.
-    %% self-signed test clusters); (b) always, regardless of
-    %% `pin_tls_cert': the HELLO handshake is rejected unless the
-    %% peer's verified `node_id' equals this key. (b) is a real
-    %% cryptographic proof independent of (a) or of TLS at all — the
-    %% CONNECT/HELLO frame carries the peer's self-claimed `node_id'
-    %% signed by the matching Ed25519 key, checked by
-    %% `macula_frame:verify/2' before `bind_peer_identity/2' ever runs.
-    %% Without `expected_node_id' set at all, the handshake only proves
-    %% the peer holds the key for whatever identity IT claims
-    %% (self-asserted, no expectation to check against).
-    expected_node_id => macula_identity:pubkey(),
-    %% Whether `expected_node_id' also pins the QUIC/TLS certificate's
-    %% own SPKI. Defaults to `true'. Set to `false' when the peer's TLS
-    %% is terminated by a PKI unrelated to its macula identity (e.g. a
-    %% production station behind Let's Encrypt) — pinning the cert key
-    %% there can never succeed, since the cert's key has no relationship
-    %% to the station's Ed25519 identity at all. With `pin_tls_cert =>
-    %% false', trust is enforced ENTIRELY at the application layer (the
-    %% HELLO-frame check above); `verify' governs the otherwise-
-    %% unauthenticated QUIC/TLS layer and should normally be `none' in
-    %% that case (a bare-IP direct-dial has no hostname for `webpki' to
-    %% validate against anyway).
-    pin_tls_cert => boolean(),
-    _           => _
+    host             := binary() | string(),
+    port             := inet:port_number(),
+    alpn             => [binary()],
+    timeout_ms       => timeout(),
+    %% The station's node_id, derived from its identity key (D5). A dial
+    %% without one does not start, and the handshake closes with
+    %% `{peer_identity_mismatch, #{expected, derived}}' when the station's
+    %% challenge derives to another node_id.
+    expected_node_id := <<_:256>>,
+    _                => _
 }.
 
 -type opts() :: #{
     role            := client | server,
-    identity        := macula_identity:key_pair(),
-    realms          := [macula_identity:pubkey()],
+    %% The node's identity key in its crypto profile: its node_id and its
+    %% key as carried go into the handshake.
+    identity        := macula_node_keys:node_key(),
+    %% The node's `macula_statement_issuer': CONNECT material for a
+    %% client, TLS material for the leaf a station presents, and the
+    %% statements a connection sends as status frames.
+    issuer          := pid(),
     capabilities    := non_neg_integer(),
     controlling_pid := pid(),
     target          => connect_opts(),
     quic_conn       => reference(),
+    %% A station's puzzle mode for the client's derived node_id, at the
+    %% difficulty of `macula_node_keys:puzzle_difficulty/0'. Required on
+    %% the station role.
+    puzzle          => #{mode := macula_handshake:puzzle_mode()},
+    %% Wall-clock milliseconds, for tests.
+    clock           => fun(() -> integer()),
     %% Optional pid notified once when the worker completes the
-    %% CONNECT/HELLO handshake and transitions to `connected'. Sent
+    %% handshake and transitions to `connected'. Sent
     %% as `{macula_peering, handshake_complete, self(), PeerNodeId}'
-    %% where `PeerNodeId' is the verified peer Ed25519 pubkey from
-    %% the inbound CONNECT/HELLO frame. Used by accept-side listeners
+    %% where `PeerNodeId' is the peer's node_id, derived from the
+    %% identity key the handshake verified. Used by accept-side listeners
     %% that (a) cap concurrent *handshaking* workers and need to
     %% release a slot the moment a worker is verified-and-connected,
     %% and (b) dedupe duplicate dials from the same peer identity by
@@ -146,9 +132,10 @@
 
 -record(data, {
     role             :: client | server,
-    identity         :: macula_identity:key_pair(),
-    node_id          :: macula_identity:pubkey(),
-    realms           :: [macula_identity:pubkey()],
+    identity         :: macula_node_keys:node_key(),
+    profile          :: macula_crypto_profile:profile(),
+    node_id          :: <<_:256>>,
+    issuer           :: pid(),
     capabilities     :: non_neg_integer(),
     controlling_pid  :: pid(),
     accept_owner     :: undefined | pid(),
@@ -156,10 +143,11 @@
     pubsub_recipient :: undefined | pid() | atom(),
     timing_enabled   :: boolean(),
     target           :: undefined | connect_opts(),
-    %% Pinned peer identity from the target's `expected_node_id'.
-    %% `undefined' on the server role and on dials where the peer
-    %% identity is not known up front (first-contact bootstrap).
-    expected_node_id :: undefined | macula_identity:pubkey(),
+    %% The station's node_id a client dialed, from its target.
+    expected_node_id :: undefined | <<_:256>>,
+    %% A station's puzzle mode.
+    puzzle           :: undefined | macula_handshake:puzzle_mode(),
+    clock            :: fun(() -> integer()),
     quic_conn        :: undefined | reference(),
     quic_stream      :: undefined | reference(),
     %% While `connecting' (client role): the dial in progress, the tag
@@ -167,12 +155,22 @@
     dial             :: undefined | macula_quic:dial(),
     dial_tag         :: undefined | reference(),
     owner_mon        :: undefined | reference(),
-    peer_node_id      :: undefined | macula_identity:pubkey(),
-    peer_station_id   :: undefined | macula_identity:pubkey(),
-    peer_realms       :: [macula_identity:pubkey()],
-    %% Counterpart's capabilities bitmask as carried in CONNECT
-    %% (server-side absorb) or HELLO (client-side absorb). Captured
-    %% in `absorb_peer_info/2'. Stays `undefined' until handshake.
+    %% During the handshake: the frame this side accepts next, the leaf
+    %% and challenge bytes the checks run over, and a station's refusal
+    %% while its refused HELLO reaches the client.
+    expect           :: undefined | opener | challenge | connect | hello,
+    leaf             :: undefined | binary(),
+    challenge        :: undefined | binary(),
+    refusal          :: undefined | term(),
+    %% The binding this side presented, whose statements it sends as
+    %% status frames.
+    own_binding_hash :: undefined | <<_:384>>,
+    %% What the handshake verified of the peer.
+    peer              :: undefined | macula_handshake:station() | macula_handshake:client(),
+    peer_node_id      :: undefined | <<_:256>>,
+    %% Counterpart's capabilities bitmask as carried in CONNECT (station
+    %% side) or HELLO (client side). Stays `undefined' until the
+    %% handshake completes.
     peer_capabilities :: undefined | non_neg_integer(),
     buf               :: binary(),
     %% Refused objects reported on this connection, by kind, and how
@@ -191,6 +189,12 @@
 %% protocol (e.g. V1 frames against a V2 station) — without this the
 %% sup accumulates stuck workers indefinitely. See PLAN_FLYING_RESTART.
 -define(HANDSHAKE_TIMEOUT_MS, 30_000).
+%% A peer's status statement is accepted up to 5 minutes past its
+%% expiry (D22), so the connection waits that long before it closes.
+-define(STATUS_GRACE_MS, 5 * 60000).
+%% How long a station that refused CONNECT waits for its HELLO to reach
+%% the client before it closes.
+-define(REFUSAL_LINGER_MS, 2_000).
 
 %%------------------------------------------------------------------
 %% Lifecycle
@@ -203,30 +207,46 @@ start_link(Opts) ->
 callback_mode() ->
     [state_functions, state_enter].
 
-init(#{role := Role, identity := Identity, controlling_pid := Pid} = Opts)
-  when Role =:= client; Role =:= server ->
+init(#{role := Role, identity := Identity, issuer := Issuer, controlling_pid := Pid} = Opts)
+  when (Role =:= client orelse Role =:= server), is_pid(Issuer), is_pid(Pid) ->
+    started(identity_key(Identity), role_ready(Role, Opts), Opts).
+
+%% A connection starts only with an identity key; a dial only with the
+%% node_id it expects, and a station only with its puzzle mode.
+identity_key(#{purpose := identity, profile := Profile} = Identity) -> {ok, Identity, Profile};
+identity_key(_NotAnIdentityKey) -> {error, {identity, not_an_identity_key}}.
+
+role_ready(client, #{target := #{expected_node_id := <<_:256>>}}) -> ok;
+role_ready(client, _Opts) -> {error, {target, expected_node_id_required}};
+role_ready(server, #{puzzle := #{mode := Mode}}) when Mode =:= off; Mode =:= log_only; Mode =:= enforce -> ok;
+role_ready(server, _Opts) -> {error, {puzzle, mode_required}}.
+
+started({ok, Identity, Profile}, ok, #{role := Role} = Opts) ->
+    {ok, NodeId} = macula_node_keys:node_id(Identity),
     Data = #data{
         role             = Role,
         identity         = Identity,
-        node_id          = macula_identity:public(Identity),
-        realms           = maps:get(realms, Opts, []),
+        profile          = Profile,
+        node_id          = NodeId,
+        issuer           = maps:get(issuer, Opts),
         capabilities     = maps:get(capabilities, Opts, 0),
-        controlling_pid  = Pid,
+        controlling_pid  = maps:get(controlling_pid, Opts),
         accept_owner     = maps:get(accept_owner, Opts, undefined),
         timing_enabled   = maps:get(timing_enabled, Opts, false),
         dht_recipient    = maps:get(dht_recipient, Opts, undefined),
         pubsub_recipient = maps:get(pubsub_recipient, Opts, undefined),
         target           = maps:get(target, Opts, undefined),
-        expected_node_id = maps:get(expected_node_id,
-                                    maps:get(target, Opts, #{}), undefined),
+        expected_node_id = maps:get(expected_node_id, maps:get(target, Opts, #{}), undefined),
+        puzzle           = maps:get(mode, maps:get(puzzle, Opts, #{}), undefined),
+        clock            = maps:get(clock, Opts, fun wall_clock_ms/0),
         quic_conn        = maps:get(quic_conn, Opts, undefined),
-        quic_stream      = undefined,
-        peer_node_id     = undefined,
-        peer_station_id  = undefined,
-        peer_realms      = [],
         buf              = <<>>
     },
-    {ok, initial_state(Role), Data}.
+    {ok, initial_state(Role), Data};
+started({error, Refusal}, _RoleReady, _Opts) ->
+    {stop, Refusal};
+started(_Identity, {error, Refusal}, _Opts) ->
+    {stop, Refusal}.
 
 initial_state(client) -> connecting;
 initial_state(server) -> awaiting_start.
@@ -362,7 +382,7 @@ handshaking(enter, _Old, #data{role = client, quic_conn = Conn} = Data) ->
     on_handshake_enter_client(macula_quic:open_stream(Conn), Data);
 handshaking(enter, _Old, #data{role = server, quic_conn = Conn} = Data) ->
     ok = macula_quic:async_accept_stream(Conn),
-    {keep_state, Data, [handshake_state_timeout()]};
+    {keep_state, Data#data{expect = opener}, [handshake_state_timeout()]};
 handshaking(info, {quic, new_stream, Stream, _Info}, Data) ->
     %% Take ownership of the stream so subsequent `{quic, Bin, ...}'
     %% events route to us. The Quinn NIF stamps the stream's owner at
@@ -377,6 +397,17 @@ handshaking(info, {quic, new_stream, Stream, _Info}, Data) ->
     _ = macula_quic:controlling_process(Stream, self()),
     ok = macula_quic:setopt(Stream, active, true),
     {keep_state, Data#data{quic_stream = Stream}};
+%% A station that refused CONNECT reads nothing more while its refused
+%% HELLO reaches the client, and closes with its refusal once the client
+%% closes or the linger ends.
+handshaking(info, {quic, Bin, Stream, _Flags}, #data{quic_stream = Stream, refusal = Refusal} = Data)
+  when is_binary(Bin), Refusal =/= undefined ->
+    {keep_state, Data};
+handshaking(info, {quic, Closed, Stream, _Detail}, #data{quic_stream = Stream, refusal = Refusal} = Data)
+  when (Closed =:= stream_closed orelse Closed =:= peer_send_shutdown), Refusal =/= undefined ->
+    closed(Refusal, Data);
+handshaking(state_timeout, refusal_sent, #data{refusal = Refusal} = Data) ->
+    closed(Refusal, Data);
 handshaking(info, {quic, Bin, Stream, _Flags},
             #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
     consume_handshake(<<Buf/binary, Bin/binary>>, Data);
@@ -453,113 +484,183 @@ on_handshake_enter_client(Err, Data) ->
     {stop, normal, Data}.
 
 handshake_setopt(ok, Stream, Data) ->
-    handshake_send(send_connect(Stream, Data), Stream, Data);
+    handshake_send(send_handshake_bytes(Stream, macula_handshake:opener()), Stream, Data);
 handshake_setopt({error, _} = SetoptErr, _Stream, Data) ->
     notify(disconnected, {setopt_failed, SetoptErr}, Data),
     {stop, normal, Data}.
 
 handshake_send(ok, Stream, Data) ->
-    {keep_state, Data#data{quic_stream = Stream}, [handshake_state_timeout()]};
+    {keep_state, Data#data{quic_stream = Stream, expect = challenge}, [handshake_state_timeout()]};
 handshake_send({error, _} = SendErr, _Stream, Data) ->
-    notify(disconnected, {send_connect_failed, SendErr}, Data),
+    notify(disconnected, {send_opener_failed, SendErr}, Data),
     {stop, normal, Data}.
 
+%% Frames come off the control stream by their length prefix, as the
+%% bytes the checks hash, and each one is checked in order against the
+%% one frame this side accepts next. Until HELLO, a frame that arrives
+%% before its turn closes the handshake with `unexpected_frame'.
 consume_handshake(Buf, Data) ->
-    {Frames, Tail} = macula_frame:parse_stream(Buf),
-    handle_handshake_frames(Frames, Data#data{buf = Tail}).
+    handshake_frames(macula_frame:parse_stream_bytes(Buf), Data).
 
-handle_handshake_frames([], Data) ->
+handshake_frames({ok, Frames, Tail}, Data) ->
+    handshake_step(Frames, Data#data{buf = Tail});
+handshake_frames({error, frame_too_large}, Data) ->
+    closed(malformed_frame, Data).
+
+handshake_step([], Data) ->
     {keep_state, Data};
-handle_handshake_frames([#{frame_type := connect} = F | _], Data) ->
-    process_connect(F, Data);
-handle_handshake_frames([#{frame_type := hello} = F | _], Data) ->
-    process_hello(F, Data);
-handle_handshake_frames([_Other | Rest], Data) ->
-    handle_handshake_frames(Rest, Data).
+handshake_step([Bytes | Rest], #data{expect = opener} = Data) ->
+    opened(macula_handshake:read_opener(Bytes), Rest, Data);
+handshake_step([Bytes | Rest], #data{expect = challenge} = Data) ->
+    challenged(Rest, Bytes, Data);
+handshake_step([Bytes | Rest], #data{expect = connect} = Data) ->
+    connect_checked(Rest, Bytes, Data);
+handshake_step([Bytes | Rest], #data{expect = hello} = Data) ->
+    hello_read(macula_handshake:read_hello(Bytes), Rest, Data).
 
-%% Server side: peer's CONNECT
-process_connect(#{node_id := PeerNodeId} = Frame,
-                #data{role = server, quic_stream = Stream} = Data) ->
-    on_connect_verified(macula_frame:verify(Frame, PeerNodeId), Frame, Stream, Data);
-process_connect(_Frame, Data) ->
-    notify(disconnected, unexpected_connect_on_client, Data),
+%% Station: the opener, answered with a challenge over the leaf this
+%% connection presented.
+opened(ok, [], #data{quic_conn = Conn} = Data) ->
+    challenge_sent(station_material(macula_quic:presented_leaf(Conn), Data), Data);
+opened(ok, _Early, Data) ->
+    closed(unexpected_frame, Data);
+opened({error, Reason}, _Rest, Data) ->
+    closed(Reason, Data).
+
+station_material({ok, Leaf}, #data{issuer = Issuer} = Data) ->
+    tls_material(macula_statement_issuer:tls_material(Issuer, crypto:hash(sha384, Leaf)), Leaf, Data);
+station_material({error, _} = NoLeaf, _Data) ->
+    NoLeaf.
+
+tls_material({ok, #{tls_binding := Binding, tls_status := Status}}, Leaf,
+             #data{identity = Identity, profile = Profile}) ->
+    Material = #{profile => Profile, identity_key => macula_node_keys:public_key(Identity), tls_binding => Binding,
+                 tls_status => Status},
+    {ok, Leaf, Binding, macula_handshake:challenge(Material)};
+tls_material({error, _} = Unknown, _Leaf, _Data) ->
+    Unknown.
+
+challenge_sent({ok, Leaf, Binding, Challenge}, #data{quic_stream = Stream} = Data) ->
+    Sent = Data#data{leaf = Leaf, challenge = Challenge, own_binding_hash = binding_hash(Binding), expect = connect},
+    handshake_written(send_handshake_bytes(Stream, Challenge), Sent);
+challenge_sent({error, Reason}, Data) ->
+    closed(Reason, Data).
+
+%% Client: the challenge, answered with CONNECT once every check on it
+%% passes against the leaf this dial received.
+challenged([], Challenge, #data{quic_conn = Conn} = Data) ->
+    connect_sent(client_session(macula_quic:peer_leaf(Conn), Data), Challenge, Data);
+challenged(_Early, _Challenge, Data) ->
+    closed(unexpected_frame, Data).
+
+client_session({ok, Leaf}, #data{issuer = Issuer, identity = Identity, profile = Profile,
+                                 expected_node_id = Expected, capabilities = Capabilities} = Data) ->
+    #{connect_key := Key, connect_binding := Binding, connect_status := Status} =
+        macula_statement_issuer:connect_material(Issuer),
+    {ok, #{profile => Profile, expected_node_id => Expected, leaf => Leaf,
+           identity_key => macula_node_keys:public_key(Identity), connect_key => Key, connect_binding => Binding,
+           connect_status => Status, capabilities => Capabilities, now => now_ms(Data)}};
+client_session({error, _} = NoLeaf, _Data) ->
+    NoLeaf.
+
+connect_sent({ok, #{connect_binding := Binding} = Session}, Challenge, Data) ->
+    answered(macula_handshake:answer_challenge(Challenge, Session), binding_hash(Binding), Data);
+connect_sent({error, Reason}, _Challenge, Data) ->
+    closed(Reason, Data).
+
+answered({ok, Connect, Station}, OwnHash, #data{quic_stream = Stream} = Data) ->
+    Sent = with_peer(Station, Data#data{own_binding_hash = OwnHash, expect = hello}),
+    handshake_written(send_handshake_bytes(Stream, Connect), Sent);
+answered({error, Reason}, _OwnHash, Data) ->
+    closed(Reason, Data).
+
+%% Client: HELLO. Frames that follow it in the same read are the
+%% station's first frames on the open connection.
+hello_read({ok, #{capabilities := Capabilities}}, Rest, Data) ->
+    after_hello(transition_to_connected(Data#data{peer_capabilities = Capabilities}), Rest);
+hello_read({error, Reason}, _Rest, Data) ->
+    closed(Reason, Data).
+
+after_hello({next_state, connected, #data{buf = Buf} = Data, Actions}, Rest) ->
+    Early = iolist_to_binary([macula_frame:encode_bytes(Bytes) || Bytes <- Rest]),
+    {next_state, connected, Data#data{buf = <<Early/binary, Buf/binary>>},
+     Actions ++ [{next_event, internal, drain_buffer}]};
+after_hello(Closed, _Rest) ->
+    Closed.
+
+%% Station: CONNECT, answered with HELLO. A refused CONNECT gets a HELLO
+%% with one coarse refusal code, and the station closes with its own
+%% reason once that HELLO has had time to arrive.
+connect_checked([], Connect, #data{challenge = Challenge, leaf = Leaf, profile = Profile, puzzle = Mode,
+                                   capabilities = Capabilities} = Data) ->
+    Session = #{profile => Profile, challenge => Challenge, leaf => Leaf, capabilities => Capabilities,
+                now => now_ms(Data), puzzle => #{difficulty => macula_node_keys:puzzle_difficulty(), mode => Mode}},
+    connect_verdict(macula_handshake:accept_connect(Connect, Session), Data);
+connect_checked(_Early, _Connect, Data) ->
+    closed(unexpected_frame, Data).
+
+connect_verdict({accepted, #{capabilities := Capabilities} = Client, Hello}, #data{quic_stream = Stream} = Data) ->
+    Accepted = puzzle_reported(Client, with_peer(Client, Data#data{peer_capabilities = Capabilities})),
+    hello_sent(send_handshake_bytes(Stream, Hello), Accepted);
+connect_verdict({refused, Reason, Hello}, #data{quic_stream = Stream} = Data) ->
+    _ = send_handshake_bytes(Stream, Hello),
+    {keep_state, Data#data{refusal = Reason, expect = undefined},
+     [{state_timeout, ?REFUSAL_LINGER_MS, refusal_sent}]}.
+
+hello_sent(ok, Data) ->
+    transition_to_connected(Data);
+hello_sent({error, _} = SendErr, Data) ->
+    notify(disconnected, {send_hello_failed, SendErr}, Data),
     {stop, normal, Data}.
 
-on_connect_verified({ok, _Verified}, Frame, Stream, Data) ->
-    NewData = absorb_peer_info(Frame, Data),
-    on_send_hello(send_hello(Stream, NewData), NewData);
-on_connect_verified({error, R}, _Frame, _Stream, Data) ->
-    notify(disconnected, {connect_verify_failed, R}, Data),
+%% Under log_only an unsolved puzzle is accepted and reported.
+puzzle_reported(#{puzzle := unsolved, node_id := NodeId}, #data{puzzle = log_only} = Data) ->
+    ok = macula_diagnostics:event(warning, <<"_macula.peering.puzzle_unsolved">>,
+                                  #{node_id => binary:encode_hex(NodeId, lowercase)}),
+    Data;
+puzzle_reported(_Client, Data) ->
+    Data.
+
+handshake_written(ok, Data) ->
+    {keep_state, Data};
+handshake_written({error, _} = SendErr, Data) ->
+    notify(disconnected, {handshake_send_failed, SendErr}, Data),
     {stop, normal, Data}.
 
-%% Server-side handshake completion. `send_hello' wraps
-%% `macula_quic:send', which returns `{error, _}' when the underlying
-%% QUIC stream has been closed by the peer between our CONNECT-verify
-%% and our HELLO write — a real race during teardown bursts (peer's
-%% pool closed mid-handshake; many simultaneous closes during e2e
-%% suite end_per_suite). Pre-fix: `ok = send_hello(...)' badmatched
-%% the error and the peering_conn worker crashed. Under load that
-%% tripped the supervisor's restart-intensity threshold and forced a
-%% whole-station restart. Now mirrors the client-side
-%% `send_connect' handling — emit a structured disconnect notify
-%% and stop normally so the supervisor can clean up without
-%% counting it as a crash.
-on_send_hello(ok, NewData) ->
-    transition_to_connected(NewData);
-on_send_hello({error, _} = SendErr, NewData) ->
-    notify(disconnected, {send_hello_failed, SendErr}, NewData),
-    {stop, normal, NewData}.
+with_peer(#{node_id := NodeId} = Peer, Data) ->
+    Data#data{peer = Peer, peer_node_id = NodeId}.
 
-%% Client side: peer's HELLO
-process_hello(#{node_id := PeerNodeId} = Frame, #data{role = client} = Data) ->
-    on_hello_verified(macula_frame:verify(Frame, PeerNodeId), Frame, Data);
-process_hello(_Frame, Data) ->
-    notify(disconnected, unexpected_hello_on_server, Data),
+binding_hash(#{tbs := Tbs}) ->
+    crypto:hash(sha384, Tbs).
+
+%% A handshake or an open connection that ends for a local reason: the
+%% controlling process and diagnostics hear it, the peer does not.
+closed(Reason, #data{role = Role} = Data) ->
+    ok = macula_diagnostics:event(<<"_macula.peering.closed">>, #{role => Role, reason => Reason}),
+    notify(disconnected, Reason, Data),
     {stop, normal, Data}.
 
-on_hello_verified({ok, _Verified}, #{accepted := true} = Frame, Data) ->
-    on_peer_identity_bound(bind_peer_identity(maps:get(node_id, Frame), Data),
-                           Frame, Data);
-on_hello_verified({ok, _Verified}, #{accepted := false} = Frame, Data) ->
-    notify(disconnected, {refused, maps:get(refusal_code, Frame, undefined)}, Data),
-    {stop, normal, Data};
-on_hello_verified({error, R}, _Frame, Data) ->
-    notify(disconnected, {hello_verify_failed, R}, Data),
-    {stop, normal, Data}.
+%% After HELLO the peer hears this side's statements as status frames,
+%% and the connection ends when the peer's statement lapses or its
+%% binding reaches its not_after.
+transition_to_connected(#data{issuer = Issuer, own_binding_hash = Hash} = Data) ->
+    subscribed(macula_statement_issuer:subscribe(Issuer, Hash), Data).
 
-%% The frame-signature check above only proves the peer holds the key
-%% for whatever `node_id' IT claims (self-asserted). When the dialer
-%% pinned an `expected_node_id' in the target, require the verified
-%% identity to match it — otherwise a redirected/intercepted dial
-%% completes the handshake under the interceptor's own identity.
-bind_peer_identity(_PeerNodeId, #data{expected_node_id = undefined}) ->
-    ok;
-bind_peer_identity(PeerNodeId, #data{expected_node_id = PeerNodeId}) ->
-    ok;
-bind_peer_identity(PeerNodeId, #data{expected_node_id = Expected}) ->
-    {error, {peer_identity_mismatch, Expected, PeerNodeId}}.
-
-on_peer_identity_bound(ok, Frame, Data) ->
-    transition_to_connected(absorb_peer_info(Frame, Data));
-on_peer_identity_bound({error, Mismatch}, _Frame, Data) ->
-    macula_diagnostics:event(<<"_macula.peering.identity_mismatch">>, #{
-        role => Data#data.role
-    }),
-    notify(disconnected, Mismatch, Data),
-    {stop, normal, Data}.
-
-absorb_peer_info(Frame, Data) ->
-    Data#data{
-        peer_node_id      = maps:get(node_id, Frame),
-        peer_station_id   = maps:get(station_id, Frame),
-        peer_realms       = maps:get(realms, Frame, []),
-        peer_capabilities = maps:get(capabilities, Frame, 0)
-    }.
-
-transition_to_connected(Data) ->
+%% The issuer forgets a binding only once its not_after has passed.
+subscribed(ok, #data{peer = Peer} = Data) ->
     notify(connected, Data#data.peer_node_id, Data),
     notify_handshake_complete(Data),
-    {next_state, connected, Data}.
+    {next_state, connected, Data#data{expect = undefined, leaf = undefined, challenge = undefined},
+     lifecycle_timers(Peer, Data)};
+subscribed({error, unknown_binding}, Data) ->
+    closed(binding_expired, Data).
+
+lifecycle_timers(#{status_expires_at := StatusExpiresAt, binding_not_after := NotAfter}, Data) ->
+    [status_timer(StatusExpiresAt, Data),
+     {{timeout, binding_expired}, max(0, NotAfter - now_ms(Data)), binding_expired}].
+
+status_timer(ExpiresAt, Data) ->
+    {{timeout, status_expired}, max(0, ExpiresAt + ?STATUS_GRACE_MS - now_ms(Data)), status_expired}.
 
 notify_handshake_complete(#data{accept_owner = undefined}) ->
     ok;
@@ -576,9 +677,9 @@ connected(enter, _Old, Data) ->
     {keep_state, Data};
 connected(info, {quic, Bin, Stream, _Flags},
           #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
-    {Frames, Tail} = macula_frame:parse_stream(<<Buf/binary, Bin/binary>>),
-    [route_frame(F, Data) || F <- Frames],
-    {keep_state, Data#data{buf = Tail}};
+    open_frames(macula_frame:parse_stream_bytes(<<Buf/binary, Bin/binary>>), Data);
+connected(internal, drain_buffer, #data{buf = Buf} = Data) ->
+    open_frames(macula_frame:parse_stream_bytes(Buf), Data);
 %% Peer opened a new stream on this connection, outside the control
 %% stream — a dedicated stream for a streaming RPC session or a
 %% content transfer (see PLAN_PER_STREAM_QUIC_ISOLATION.md). This
@@ -702,11 +803,59 @@ connected(cast, {send_frame, Frame}, Data) ->
     Frames = drain_send_frames([Frame]),
     _ = send_application_frames(Frames, Data),
     {keep_state, Data};
+%% The issuer's statement for the binding this side presented goes to
+%% the peer as a status frame.
+connected(info, {macula_statement, Issuer, Hash, Statement},
+          #data{issuer = Issuer, own_binding_hash = Hash, quic_stream = Stream} = Data) ->
+    _ = send_handshake_bytes(Stream, macula_handshake:status(Statement)),
+    {keep_state, Data};
+connected({timeout, status_expired}, status_expired, Data) ->
+    closed(status_expired, Data);
+connected({timeout, binding_expired}, binding_expired, Data) ->
+    closed(binding_expired, Data);
+connected({call, From}, peer_identity,
+          #data{profile = Profile, peer = #{node_id := NodeId, identity_key := Key},
+                peer_capabilities = Capabilities} = Data) ->
+    Identity = #{node_id => NodeId, identity_key => Key, profile => Profile, capabilities => Capabilities},
+    {keep_state, Data, [{reply, From, {ok, Identity}}]};
 connected({call, From}, peer_capabilities, Data) ->
     {keep_state, Data,
      [{reply, From, {ok, Data#data.peer_capabilities}}]};
 connected(EventType, Event, Data) ->
     other_event(EventType, Event, connected, Data).
+
+
+%% On the open connection every frame is an application frame or a
+%% status frame. A frame that is neither closes the connection, as any
+%% envelope refusal does, and a status frame that fails its checks
+%% closes it with that check's reason.
+open_frames({ok, Frames, Tail}, Data) ->
+    open_frame(Frames, Data#data{buf = Tail}, []);
+open_frames({error, frame_too_large}, Data) ->
+    closed(malformed_frame, Data).
+
+open_frame([], Data, Actions) ->
+    {keep_state, Data, lists:reverse(Actions)};
+open_frame([Bytes | Rest], Data, Actions) ->
+    open_frame_read(macula_frame:decode_bytes(Bytes), Bytes, Rest, Data, Actions).
+
+open_frame_read({ok, Frame}, _Bytes, Rest, Data, Actions) ->
+    ok = route_frame(Frame, Data),
+    open_frame(Rest, Data, Actions);
+open_frame_read({error, bad_frame}, Bytes, Rest, #data{profile = Profile, peer = Peer} = Data, Actions) ->
+    Reader = #{profile => Profile, identity_key => maps:get(identity_key, Peer), binding => peer_binding(Peer),
+               now => now_ms(Data)},
+    status_read(macula_handshake:read_status(Bytes, Reader), Rest, Data, Actions).
+
+status_read({ok, ExpiresAt}, Rest, Data, Actions) ->
+    open_frame(Rest, Data, [status_timer(ExpiresAt, Data) | Actions]);
+status_read({error, unexpected_frame}, _Rest, Data, _Actions) ->
+    closed(malformed_frame, Data);
+status_read({error, Reason}, _Rest, Data, _Actions) ->
+    closed(Reason, Data).
+
+peer_binding(#{tls_binding := Binding}) -> Binding;
+peer_binding(#{connect_binding := Binding}) -> Binding.
 
 %%------------------------------------------------------------------
 %% State: draining
@@ -754,6 +903,12 @@ draining(cast, {close, _Reason}, Data) ->
 draining(cast, {reject, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, Data};
+%% A lifecycle timer or a statement that arrives while draining changes
+%% nothing: the connection is ending.
+draining({timeout, _Lifecycle}, _Expired, Data) ->
+    {keep_state, Data};
+draining(info, {macula_statement, _Issuer, _Hash, _Statement}, Data) ->
+    {keep_state, Data};
 draining(EventType, Event, Data) ->
     other_event(EventType, Event, draining, Data).
 
@@ -783,50 +938,29 @@ open_and_handoff({error, _} = Err, _Owner) ->
 %% Frame send helpers
 %%------------------------------------------------------------------
 
-send_connect(Stream, Data) ->
-    Frame = macula_frame:connect(#{
-        node_id          => Data#data.node_id,
-        station_id       => Data#data.node_id,
-        realms           => Data#data.realms,
-        capabilities     => Data#data.capabilities,
-        puzzle_evidence  => macula_identity:puzzle_evidence(Data#data.node_id)
-    }),
-    Signed = macula_frame:sign(Frame, Data#data.identity),
-    macula_quic:send(Stream, macula_frame:encode(Signed)).
-
-send_hello(Stream, Data) ->
-    Frame = macula_frame:hello(#{
-        node_id                 => Data#data.node_id,
-        station_id              => Data#data.node_id,
-        realms                  => Data#data.realms,
-        capabilities            => Data#data.capabilities,
-        accepted                => true,
-        negotiated_capabilities => Data#data.capabilities
-    }),
-    Signed = macula_frame:sign(Frame, Data#data.identity),
-    macula_quic:send(Stream, macula_frame:encode(Signed)).
+send_handshake_bytes(Stream, Bytes) ->
+    macula_quic:send(Stream, macula_frame:encode_bytes(Bytes)).
 
 send_goodbye(undefined, _Reason, _Data) ->
     ok;
-send_goodbye(Stream, Reason, Data) ->
-    Frame = macula_frame:goodbye(Reason, undefined),
-    Signed = macula_frame:sign(Frame, Data#data.identity),
-    macula_quic:send(Stream, macula_frame:encode(Signed)).
+send_goodbye(Stream, Reason, _Data) ->
+    macula_quic:send(Stream, macula_frame:encode(macula_frame:goodbye(Reason, undefined))).
 
 send_application_frame(_Frame, #data{quic_stream = undefined}) ->
     ok;
-send_application_frame(Frame, #data{quic_stream = Stream, identity = Id}) ->
-    send_encoded(encode_or_drop(Frame, Id), Stream).
+send_application_frame(Frame, #data{quic_stream = Stream}) ->
+    send_encoded(encode_or_drop(Frame), Stream).
 
-%% Encode N frames into one iolist, sign each, push as a single NIF
-%% call. Skips work entirely when the stream isn't yet up.
+%% Encode N frames into one iolist and push them as a single NIF call.
+%% Their producers sign what they carry. Skips work entirely when the
+%% stream isn't yet up.
 send_application_frames(_Frames, #data{quic_stream = undefined}) ->
     ok;
 send_application_frames([Frame], Data) ->
     %% Single-frame fast path — avoid the iolist accumulation cost.
     send_application_frame(Frame, Data);
-send_application_frames(Frames, #data{quic_stream = Stream, identity = Id}) ->
-    macula_quic:send(Stream, [B || {true, B} <- [encode_or_drop(F, Id) || F <- Frames]]).
+send_application_frames(Frames, #data{quic_stream = Stream}) ->
+    macula_quic:send(Stream, [B || {true, B} <- [encode_or_drop(F) || F <- Frames]]).
 
 send_encoded({true, Bytes}, Stream) -> macula_quic:send(Stream, Bytes);
 send_encoded(false, _Stream)        -> ok.
@@ -845,8 +979,8 @@ send_encoded(false, _Stream)        -> ok.
 %% told. What reaches here is what the checker cannot know without
 %% encoding — chiefly total frame size — and the honest response to that
 %% is to lose one frame with a loud log rather than a whole connection.
-encode_or_drop(Frame, Id) ->
-    try {true, macula_frame:encode(ensure_signed(Frame, Id))}
+encode_or_drop(Frame) ->
+    try {true, macula_frame:encode(Frame)}
     catch Class:Reason ->
         logger:error("[macula_peering_conn] dropped unencodable ~p frame: ~p:~p",
                      [maps:get(frame_type, Frame, unknown), Class, Reason]),
@@ -872,9 +1006,6 @@ drain_send_frames(Acc, N) ->
         lists:reverse(Acc)
     end.
 
-ensure_signed(#{signature := _} = Frame, _Id) -> Frame;
-ensure_signed(Frame, Id) -> macula_frame:sign(Frame, Id).
-
 close_quic(#data{quic_conn = undefined}) ->
     ok;
 close_quic(#data{quic_conn = Conn}) ->
@@ -886,37 +1017,24 @@ close_quic(#data{quic_conn = Conn}) ->
 %% positional API.
 %%------------------------------------------------------------------
 
+%% The station is named by the handshake: its challenge must derive to
+%% the node_id dialed, over the leaf this dial received.
 start_dial(#{host := Host, port := Port} = Target) ->
     Alpn = maps:get(alpn, Target, [<<"macula">>]),
-    macula_quic:async_connect(Host, Port,
-                              [{alpn, Alpn} | dial_trust_opts(Target)],
-                              dial_timeout(Target)).
+    macula_quic:async_connect(Host, Port, [{alpn, Alpn}, {verify, none}], dial_timeout(Target)).
 
 dial_timeout(Target) ->
     maps:get(timeout_ms, Target, 30_000).
 
-%% TLS trust for the dial. A known peer identity normally pins the
-%% server cert's Ed25519 SPKI (strongest — no CA involved). When the
-%% caller has explicitly said the cert cannot be pinned
-%% (`pin_tls_cert => false' — the peer's TLS is a PKI unrelated to its
-%% macula identity), trust for THIS dial rests entirely on the
-%% application-layer HELLO check instead (`bind_peer_identity/2', still
-%% armed via `expected_node_id' in `#data{}' regardless of this
-%% clause); the QUIC layer just needs a `verify' mode, defaulting to
-%% `none' since there is nothing meaningful for it to check. Otherwise
-%% the `verify' mode flows through as before, defaulting to webpki
-%% inside `macula_quic:connect/4'. `{verify, none}' must be an explicit
-%% caller choice and is warned about at the macula_quic layer.
-dial_trust_opts(#{expected_node_id := NodeId, pin_tls_cert := false} = Target)
-        when is_binary(NodeId), byte_size(NodeId) =:= 32 ->
-    [{verify, maps:get(verify, Target, none)}];
-dial_trust_opts(#{expected_node_id := NodeId}) when is_binary(NodeId),
-                                                    byte_size(NodeId) =:= 32 ->
-    [{verify_pubkey, NodeId}];
-dial_trust_opts(#{verify := Mode}) ->
-    [{verify, Mode}];
-dial_trust_opts(_Target) ->
-    [].
+%%------------------------------------------------------------------
+%% Clock
+%%------------------------------------------------------------------
+
+now_ms(#data{clock = Clock}) ->
+    Clock().
+
+wall_clock_ms() ->
+    erlang:system_time(millisecond).
 
 %%------------------------------------------------------------------
 %% Notifications

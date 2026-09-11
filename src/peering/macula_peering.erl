@@ -19,6 +19,9 @@
 %%   <li>`{macula_peering, disconnected, ConnPid, Reason}'</li>
 %% </ul>
 %%
+%% `PeerNodeId' is the peer's node_id, derived from the identity key the
+%% handshake verified (plans/DESIGN_PQ_HANDSHAKE_FRAMES.md).
+%%
 %% An optional `accept_owner' pid in opts receives a single
 %% `{macula_peering, handshake_complete, ConnPid, PeerNodeId}'
 %% message the moment the worker transitions from `handshaking' to
@@ -35,6 +38,7 @@
     reject/2,
     send_frame/2,
     peer_capabilities/1,
+    peer_identity/1,
     open_dedicated_stream/1,
     send_on_stream/2,
     object_refused/2,
@@ -56,7 +60,7 @@
 %%------------------------------------------------------------------
 
 %% @doc Outbound connect. Spawns a worker that opens a QUIC connection to
-%% `target' and runs the CONNECT/HELLO handshake.
+%% `target' and runs the post-quantum handshake.
 -spec connect(opts()) -> {ok, pid()} | {error, term()}.
 connect(Opts) ->
     macula_peering_conn_sup:start_conn(Opts#{role => client}).
@@ -109,8 +113,8 @@ close(Pid, Reason) ->
 reject(Pid, Reason) ->
     gen_statem:cast(Pid, {reject, Reason}).
 
-%% @doc Send a frame through the peer connection. Signs the frame with
-%% the local identity if it isn't already signed.
+%% @doc Send a frame through the peer connection. The frame goes out as
+%% its producer built it: the connection signs nothing.
 %%
 %% The send is a cast, so encoding happens later, inside the shared
 %% connection process. This is therefore the LAST synchronous point at
@@ -189,5 +193,19 @@ peer_capabilities(Pid) when is_pid(Pid) ->
     try gen_statem:call(Pid, peer_capabilities, 1_000) of
         {ok, _Caps} = Ok -> Ok;
         not_connected   -> {error, not_connected}
+    catch _:_ -> {error, not_connected}
+    end.
+
+%% @doc What the handshake verified of the peer: its node_id, its identity
+%% key as carried, the profile and its capabilities. Returns
+%% `{error, not_connected}' until the handshake has completed.
+-spec peer_identity(pid()) ->
+    {ok, #{node_id := <<_:256>>, identity_key := binary(), profile := macula_crypto_profile:profile(),
+           capabilities := non_neg_integer()}}
+  | {error, not_connected}.
+peer_identity(Pid) when is_pid(Pid) ->
+    try gen_statem:call(Pid, peer_identity, 1_000) of
+        {ok, _Identity} = Ok -> Ok;
+        not_connected        -> {error, not_connected}
     catch _:_ -> {error, not_connected}
     end.

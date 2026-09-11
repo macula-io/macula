@@ -31,7 +31,8 @@ a_kind_outside_the_classification_is_refused_where_it_is_reported_test() ->
 %% A server-side connection waiting for its handshake, with no QUIC connection behind it.
 conn() ->
     {ok, _} = application:ensure_all_started(macula),
-    {ok, Conn} = macula_peering_conn_sup:start_conn(#{role => server, identity => macula_identity:generate(),
-                                                       realms => [], capabilities => 0, controlling_pid => self(),
-                                                       quic_conn => make_ref()}),
+    {ok, Identity} = macula_node_keys:generate(identity, pq_pure),
+    {ok, Conn} = macula_peering_conn_sup:start_conn(#{role => server, identity => Identity, issuer => self(),
+                                                       puzzle => #{mode => off}, capabilities => 0,
+                                                       controlling_pid => self(), quic_conn => make_ref()}),
     Conn.

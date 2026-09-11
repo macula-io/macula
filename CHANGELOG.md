@@ -111,6 +111,21 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   connection keeps the leaf of the generation it was accepted with. A reload
   that cannot read its files, or whose key does not match its certificate,
   returns an error and keeps the current certificate.
+- `macula_peering` connections run the post-quantum handshake of
+  `macula_handshake` with the node's identity key and its
+  `macula_statement_issuer`. After HELLO each side sends a status frame
+  at every reissue of its statement. A connection closes with
+  `status_expired` once the peer's statement is 5 minutes past its
+  expiry, with `binding_expired` at the peer binding's not_after, and
+  with a check's reason when a status frame fails that check. Close
+  reasons are local: the controlling process hears them in
+  `disconnected`, and the peer does not. A station under `log_only`
+  reports an unsolved puzzle as `_macula.peering.puzzle_unsolved`.
+- `macula_peering:peer_identity/1`: the peer's node_id, its identity key
+  as carried, the profile and its capabilities, once the handshake has
+  completed.
+- `macula_handshake` results carry the not_after of the peer's binding,
+  and `macula_frame:decode_bytes/1` decodes one frame's CBOR bytes.
 
 ### Changed
 
@@ -128,6 +143,13 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 - `macula_cluster:start_cluster/1` returns
   `{error, {unknown_strategy, Strategy}}` for a strategy other than `auto`,
   `gossip` or `static`, and does not start distribution.
+- `macula_peering:connect/1` and `accept/2` take `identity`, a
+  `macula_node_keys` identity key, and `issuer`, the node's statement
+  issuer. A dial's `target` requires `expected_node_id`, the station's
+  node_id, and a station requires `puzzle => #{mode => Mode}`. A
+  connection without them does not start. `connected` and
+  `handshake_complete` carry the peer's node_id. A connection sends
+  frames as their producers built them and signs none.
 
 ### Removed
 
@@ -142,6 +164,8 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   stays: `macula_frame:swim_update/1` and the piggyback updates in SWIM
   PING and ACK frames are unchanged. An update no longer has an optional
   `signature` key.
+- The Ed25519 CONNECT and HELLO frames of `macula_peering_conn`, with the
+  `realms`, `verify` and `pin_tls_cert` options.
 
 ### Fixed
 
