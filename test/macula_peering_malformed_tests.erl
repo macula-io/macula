@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
-%%% @doc Tests for how macula_peering_conn ends a connection whose peer
-%%% sends bytes that do not decode as frames.
+%%% @doc Tests for how macula_peering_conn handles a peer that sends bytes
+%%% that do not decode as frames, or frames with invalid fields.
 %%%
 %%% A server-role connection is driven by a raw QUIC peer on a loopback
 %%% listener. During the handshake, before the peer has authenticated, and
@@ -9,6 +9,14 @@
 %%% length header above the frame cap ends it with
 %%% `{malformed, frame_too_large}' as soon as the header arrives. The worker
 %%% stops without waiting for more data or for the handshake timeout.
+%%%
+%%% A frame whose framing is intact but whose fields are invalid ends the
+%%% connection during the handshake, with the reason
+%%% `{malformed, {invalid_frame, Type, Field}}'. On the control stream, which
+%%% carries frames a station relays for others, that frame is dropped, the
+%%% controlling process is told `{macula_peering, invalid_frame, Pid, Type,
+%%% Field}', and the frames after it are served. A frame of a type this node
+%%% does not know leaves the connection serving.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_peering_malformed_tests).
@@ -23,7 +31,7 @@
 -define(EVENT_MS, 5_000).
 
 malformed_test_() ->
-    {timeout, 120,
+    {timeout, 180,
      {setup, fun setup/0, fun cleanup/1,
       fun(Ctx) ->
           [{"a handshake frame that is not CBOR, followed by more data, ends the connection",
@@ -33,7 +41,13 @@ malformed_test_() ->
            {"a control stream frame that is not CBOR, followed by more data, ends the connection",
             {timeout, 30, fun() -> bad_control_frame(Ctx) end}},
            {"a control stream length header above the cap ends the connection from the header",
-            {timeout, 30, fun() -> oversize_control_header(Ctx) end}}]
+            {timeout, 30, fun() -> oversize_control_header(Ctx) end}},
+           {"a signed CONNECT without puzzle_evidence ends the connection as an invalid frame",
+            {timeout, 30, fun() -> invalid_handshake_frame(Ctx) end}},
+           {"a CALL without caller on the control stream is dropped and the next frame is served",
+            {timeout, 30, fun() -> invalid_control_frame_dropped(Ctx) end}},
+           {"a frame of an unknown type on the control stream leaves the connection serving",
+            {timeout, 30, fun() -> unknown_control_frame_passes(Ctx) end}}]
       end}}.
 
 %%%===================================================================
@@ -68,6 +82,36 @@ oversize_control_header(Ctx) ->
         connected(Server),
         ok = macula_quic:send(Stream, <<(?MAX_FRAME_BYTES + 1):32/big>>),
         ?assertEqual({malformed, frame_too_large}, ended(Server))
+    end).
+
+invalid_handshake_frame(Ctx) ->
+    with_server(Ctx, fun(Server, Stream) ->
+        ok = macula_quic:send(Stream, signed_connect_without(puzzle_evidence)),
+        ?assertEqual({malformed, {invalid_frame, connect, puzzle_evidence}}, ended(Server))
+    end).
+
+invalid_control_frame_dropped(Ctx) ->
+    with_server(Ctx, fun(Server, Stream) ->
+        ok = macula_quic:send(Stream, signed_connect()),
+        connected(Server),
+        ok = macula_quic:send(Stream, encode_signed(maps:remove(caller, call_frame()))),
+        Next = call_frame(),
+        ok = macula_quic:send(Stream, encode_signed(Next)),
+        Reported = invalid_reported(Server),
+        Served = served(Server, Next),
+        ?assertEqual({{invalid_frame, call, caller}, served, running},
+                     {Reported, Served, running(Server)})
+    end).
+
+unknown_control_frame_passes(Ctx) ->
+    with_server(Ctx, fun(Server, Stream) ->
+        ok = macula_quic:send(Stream, signed_connect()),
+        connected(Server),
+        ok = macula_quic:send(Stream, encode_signed((call_frame())#{frame_type => zz_future_frame})),
+        Next = call_frame(),
+        ok = macula_quic:send(Stream, encode_signed(Next)),
+        Served = served(Server, Next),
+        ?assertEqual({served, running}, {Served, running(Server)})
     end).
 
 %%%===================================================================
@@ -132,15 +176,36 @@ server_opts() ->
 %% The CONNECT a peer sends to open the handshake.
 signed_connect() ->
     Kp = macula_identity:generate(),
-    Pub = macula_identity:public(Kp),
-    Connect = macula_frame:connect(#{
+    macula_frame:encode(macula_frame:sign(connect_frame(macula_identity:public(Kp)), Kp)).
+
+%% The same CONNECT without Key, signed as it is sent.
+signed_connect_without(Key) ->
+    Kp = macula_identity:generate(),
+    Connect = maps:remove(Key, connect_frame(macula_identity:public(Kp))),
+    macula_frame:encode(macula_frame:sign(Connect, Kp)).
+
+connect_frame(Pub) ->
+    macula_frame:connect(#{
         node_id         => Pub,
         station_id      => Pub,
         realms          => [],
         capabilities    => 0,
         puzzle_evidence => macula_identity:puzzle_evidence(Pub)
-    }),
-    macula_frame:encode(macula_frame:sign(Connect, Kp)).
+    }).
+
+%% A CALL as a station relays it from a caller.
+call_frame() ->
+    macula_frame:call(#{
+        call_id     => crypto:strong_rand_bytes(16),
+        procedure   => <<"io.macula.test.echo">>,
+        realm       => crypto:strong_rand_bytes(32),
+        payload     => #{},
+        deadline_ms => erlang:system_time(millisecond) + ?EVENT_MS,
+        caller      => macula_identity:public(macula_identity:generate())
+    }).
+
+encode_signed(Frame) ->
+    macula_frame:encode(macula_frame:sign(Frame, macula_identity:generate())).
 
 connected(Server) ->
     receive
@@ -166,10 +231,40 @@ stopped(Mon, Server, Reason) ->
         {still_running, Reason}
     end.
 
+%% The invalid frame Server told its controlling process about.
+invalid_reported(Server) ->
+    receive
+        {macula_peering, invalid_frame, Server, Type, Field} -> {invalid_frame, Type, Field}
+    after ?EVENT_MS ->
+        not_reported
+    end.
+
+%% Whether the next CALL Server delivers is Frame.
+served(Server, #{call_id := CallId}) ->
+    receive
+        {macula_peering, frame, Server, #{frame_type := call, call_id := CallId}} ->
+            served;
+        {macula_peering, frame, Server, #{frame_type := call} = Other} ->
+            {served_instead, maps:get(call_id, Other)}
+    after ?EVENT_MS ->
+        not_served
+    end.
+
+running(Server) ->
+    receive
+        {macula_peering, disconnected, Server, Reason} -> {disconnected, Reason}
+    after 0 ->
+        alive(is_process_alive(Server))
+    end.
+
+alive(true) -> running;
+alive(false) -> stopped.
+
 drain() ->
     receive
         {quic, _, _, _} -> drain();
-        {macula_peering, _, _, _} -> drain()
+        {macula_peering, _, _, _} -> drain();
+        {macula_peering, _, _, _, _} -> drain()
     after 0 ->
         ok
     end.
