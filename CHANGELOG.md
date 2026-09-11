@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{quic, send_ready, Stream, undefined}` and may retry. A failed write
   is reported once to the stream's owner as
   `{quic, send_failed, Stream, Reason}`.
+- `macula_quic:async_open_stream/1` starts opening a stream and returns
+  at once. The owner receives `{quic, stream_opened, Tag, StreamRef}` or
+  `{quic, stream_open_failed, Tag, Reason}`, with `Tag` from
+  `macula_quic:stream_open_tag/1`. `macula_quic:cancel_open_stream/1`
+  ends an open and leaves no result in the caller's mailbox.
+- `macula_peering:async_open_dedicated_stream/1` returns a reference at
+  once. The caller receives
+  `{macula_peering, dedicated_stream_opened, Ref, Stream}` or
+  `{macula_peering, dedicated_stream_open_failed, Ref, Reason}`.
 
 ### Changed
 
@@ -57,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `macula_dist_relay_client` ends as on a closed control stream.
 - `macula_dist`'s QUIC controller sends with `async_send/2` and leaves
   distribution data with the runtime while the stream is busy.
+- `macula_quic:open_stream/1` waits in the calling process for as long as
+  the peer allows no further stream, and the open ends when that process
+  exits.
+- `macula_peering:open_dedicated_stream/1` waits in the calling process
+  and returns `{error, timeout}` after 10 s, or `{error, closed}` when the
+  connection ends, instead of exiting. A peering connection keeps serving
+  while one of its dedicated stream opens waits.
 
 ### Removed
 

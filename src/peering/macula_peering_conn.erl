@@ -174,10 +174,18 @@
     %% (server-side absorb) or HELLO (client-side absorb). Captured
     %% in `absorb_peer_info/2'. Stays `undefined' until handshake.
     peer_capabilities :: undefined | non_neg_integer(),
-    buf               :: binary()
+    buf               :: binary(),
+    %% Dedicated stream opens waiting for the peer, by the tag on their
+    %% result message: the process that asked, its reference, and the
+    %% open's handle.
+    openings = #{}    :: #{reference() =>
+                               {pid(), reference(), macula_quic:stream_opening()}}
 }).
 
 -define(DRAIN_TIMEOUT_MS, 5_000).
+%% How long an open of a dedicated stream may wait for the peer to allow
+%% another stream before it fails with `timeout'.
+-define(DEDICATED_STREAM_OPEN_TIMEOUT_MS, 10_000).
 %% Added to a dial's own timeout before the connecting state gives up on
 %% a dial that has not reported.
 -define(DIAL_DEADLINE_GRACE_MS, 1_000).
@@ -228,6 +236,7 @@ initial_state(client) -> connecting;
 initial_state(server) -> awaiting_start.
 
 terminate(_Reason, _State, Data) ->
+    ok = fail_waiting_opens(Data),
     _ = close_quic(Data),
     ok.
 
@@ -266,6 +275,8 @@ connecting(cast, {close, Reason}, Data) ->
 connecting(cast, {reject, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, cancel_dial(Data)};
+connecting(cast, {open_dedicated_stream, Owner, Ref}, _Data) ->
+    refuse_dedicated_open(Owner, Ref);
 connecting(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, connecting, Data).
 
@@ -331,6 +342,8 @@ awaiting_start(cast, {reject, Reason}, Data) ->
 %% real handler consumes it.
 awaiting_start(info, {quic, _, _, _}, _Data) ->
     {keep_state_and_data, [postpone]};
+awaiting_start(cast, {open_dedicated_stream, Owner, Ref}, _Data) ->
+    refuse_dedicated_open(Owner, Ref);
 awaiting_start(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, awaiting_start, Data).
 
@@ -431,6 +444,8 @@ handshaking(state_timeout, handshake_timeout,
     }),
     notify(disconnected, handshake_timeout, Data),
     {stop, normal, Data};
+handshaking(cast, {open_dedicated_stream, Owner, Ref}, _Data) ->
+    refuse_dedicated_open(Owner, Ref);
 handshaking(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, handshaking, Data).
 
@@ -620,17 +635,27 @@ connected(info, {quic, new_stream, Stream, _Info},
     Pid ! {macula_peering, new_dedicated_stream, self(), Stream},
     ok = macula_quic:setopt(Stream, active, true),
     {keep_state, Data};
-%% Open a dedicated QUIC stream and hand it straight to `Owner' — no
-%% custody window, unlike the inbound case above, since here we are
-%% the one calling `open_stream/1' and the stream has no other owner
-%% yet. `Owner' drives it directly via `macula_quic:send/2' /
+%% Open a dedicated QUIC stream for `Owner' without waiting on the peer:
+%% the open runs on the QUIC runtime, so this connection keeps serving
+%% while the peer allows no further stream. The opened stream goes
+%% straight to `Owner' (no custody window, unlike the inbound case
+%% above) with `{macula_peering, dedicated_stream_opened, Ref, Stream}';
+%% a failed or expired open is reported as
+%% `{macula_peering, dedicated_stream_open_failed, Ref, Reason}'. `Owner'
+%% drives the stream directly via `macula_quic:send/2' /
 %% `macula_peering:send_on_stream/3' and receives its
-%% `{quic, Bin, Stream, Flags}' events straight into its own mailbox
-%% from here on.
-connected({call, From}, {open_dedicated_stream, Owner},
+%% `{quic, Bin, Stream, Flags}' events straight into its own mailbox.
+connected(cast, {open_dedicated_stream, Owner, Ref},
           #data{quic_conn = Conn} = Data) ->
-    Reply = open_and_handoff(macula_quic:open_stream(Conn), Owner),
-    {keep_state, Data, [{reply, From, Reply}]};
+    dedicated_open_started(macula_quic:async_open_stream(Conn), Owner, Ref, Data);
+connected(info, {quic, stream_opened, Tag, Stream},
+          #data{openings = Openings} = Data) when is_map_key(Tag, Openings) ->
+    dedicated_stream_opened(Tag, Stream, Data);
+connected(info, {quic, stream_open_failed, Tag, Reason},
+          #data{openings = Openings} = Data) when is_map_key(Tag, Openings) ->
+    dedicated_open_failed(Tag, Reason, Data);
+connected({timeout, {dedicated_stream_open, Tag}}, expired, Data) ->
+    dedicated_open_expired(Tag, Data);
 %% `{quic, closed, Conn, Detail}' is NEVER actually sent — see
 %% `handshaking/3''s matching comment for the full explanation. The
 %% events that actually arrive when the control stream dies are
@@ -751,6 +776,18 @@ draining(info, {quic, send_failed, Stream, Reason},
          #data{quic_stream = Stream} = Data) ->
     notify(disconnected, {send_failed_during_drain, Reason}, Data),
     {stop, normal, Data};
+%% An open started while connected still ends during the drain: a stream
+%% the peer allows now is handed over as usual. New opens are refused.
+draining(info, {quic, stream_opened, Tag, Stream},
+         #data{openings = Openings} = Data) when is_map_key(Tag, Openings) ->
+    dedicated_stream_opened(Tag, Stream, Data);
+draining(info, {quic, stream_open_failed, Tag, Reason},
+         #data{openings = Openings} = Data) when is_map_key(Tag, Openings) ->
+    dedicated_open_failed(Tag, Reason, Data);
+draining({timeout, {dedicated_stream_open, Tag}}, expired, Data) ->
+    dedicated_open_expired(Tag, Data);
+draining(cast, {open_dedicated_stream, Owner, Ref}, _Data) ->
+    refuse_dedicated_open(Owner, Ref);
 draining(info, {quic, _, _, _}, Data) ->
     %% Ignore late inbound during drain.
     {keep_state, Data};
@@ -781,12 +818,45 @@ finish_draining(Data) ->
 %% Dedicated stream open
 %%------------------------------------------------------------------
 
-open_and_handoff({ok, Stream}, Owner) ->
+dedicated_open_started({ok, Opening}, Owner, Ref, #data{openings = Openings} = Data) ->
+    Tag = macula_quic:stream_open_tag(Opening),
+    {keep_state, Data#data{openings = Openings#{Tag => {Owner, Ref, Opening}}},
+     [{{timeout, {dedicated_stream_open, Tag}}, ?DEDICATED_STREAM_OPEN_TIMEOUT_MS, expired}]};
+dedicated_open_started({error, Reason}, Owner, Ref, _Data) ->
+    Owner ! {macula_peering, dedicated_stream_open_failed, Ref, Reason},
+    keep_state_and_data.
+
+dedicated_stream_opened(Tag, Stream, #data{openings = Openings} = Data) ->
+    {{Owner, Ref, _Opening}, Rest} = maps:take(Tag, Openings),
     ok = macula_quic:controlling_process(Stream, Owner),
     ok = macula_quic:setopt(Stream, active, true),
-    {ok, Stream};
-open_and_handoff({error, _} = Err, _Owner) ->
-    Err.
+    Owner ! {macula_peering, dedicated_stream_opened, Ref, Stream},
+    {keep_state, Data#data{openings = Rest}, [{{timeout, {dedicated_stream_open, Tag}}, cancel}]}.
+
+dedicated_open_failed(Tag, Reason, #data{openings = Openings} = Data) ->
+    {{Owner, Ref, _Opening}, Rest} = maps:take(Tag, Openings),
+    Owner ! {macula_peering, dedicated_stream_open_failed, Ref, Reason},
+    {keep_state, Data#data{openings = Rest}, [{{timeout, {dedicated_stream_open, Tag}}, cancel}]}.
+
+%% The peer allowed no stream within the bound. Ending the open takes out
+%% a result already delivered to this process, so no stream from it
+%% reaches `Owner' later.
+dedicated_open_expired(Tag, #data{openings = Openings} = Data) ->
+    {{Owner, Ref, Opening}, Rest} = maps:take(Tag, Openings),
+    ok = macula_quic:cancel_open_stream(Opening),
+    Owner ! {macula_peering, dedicated_stream_open_failed, Ref, timeout},
+    {keep_state, Data#data{openings = Rest}}.
+
+refuse_dedicated_open(Owner, Ref) ->
+    Owner ! {macula_peering, dedicated_stream_open_failed, Ref, not_connected},
+    keep_state_and_data.
+
+%% A connection that ends fails every open still waiting for the peer.
+fail_waiting_opens(#data{openings = Openings}) ->
+    maps:foreach(fun(_Tag, {Owner, Ref, Opening}) ->
+                         ok = macula_quic:cancel_open_stream(Opening),
+                         Owner ! {macula_peering, dedicated_stream_open_failed, Ref, closed}
+                 end, Openings).
 
 %%------------------------------------------------------------------
 %% Frame send helpers

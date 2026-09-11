@@ -7,6 +7,10 @@ use tokio::task::{AbortHandle, JoinHandle};
 
 use crate::{atoms, config, message, runtime, stream};
 
+/// Application error code for a stream whose open was cancelled after the
+/// peer allowed it: the stream is reset and stopped with this code.
+const OPEN_CANCELLED_CODE: u32 = 0;
+
 /// Opaque connection handle exposed to Erlang via ResourceArc.
 pub struct ConnectionResource {
     pub connection: quinn::Connection,
@@ -41,26 +45,27 @@ impl Drop for ConnectionResource {
     }
 }
 
-/// Shared between a dial's handle and its task. The task sends its result
-/// only while `cancelled` is false, and sets `delivered` once it has. A
-/// cancel reads `delivered` under the same lock, so it knows whether a
-/// result is already in the owner's mailbox.
+/// Shared between a task that sends one result message and the handle that
+/// can cancel it. The task sends its result only while `cancelled` is false,
+/// and sets `delivered` once it has. A cancel reads `delivered` under the
+/// same lock, so it knows whether a result is already in the owner's
+/// mailbox.
 #[derive(Default)]
-struct DialState {
+struct DeliveryState {
     cancelled: bool,
     delivered: bool,
 }
 
-/// Opaque dial handle exposed to Erlang via ResourceArc. Dropping the last
-/// reference, as when the owning process exits, cancels the dial.
-pub struct DialResource {
-    state: Arc<Mutex<DialState>>,
+/// A task that sends one result to its owner, and the means to cancel it.
+/// Dropping it cancels the task.
+struct PendingResult {
+    state: Arc<Mutex<DeliveryState>>,
     abort: AbortHandle,
 }
 
-impl DialResource {
-    /// Mark the dial cancelled and abort its task. Returns whether its
-    /// result had already been sent.
+impl PendingResult {
+    /// Mark the task cancelled and abort it. Returns whether its result
+    /// had already been sent.
     fn cancel(&self) -> bool {
         let mut state = self.state.lock().unwrap();
         state.cancelled = true;
@@ -71,11 +76,19 @@ impl DialResource {
     }
 }
 
-impl Drop for DialResource {
+impl Drop for PendingResult {
     fn drop(&mut self) {
         self.cancel();
     }
 }
+
+/// Opaque dial handle exposed to Erlang via ResourceArc. Dropping the last
+/// reference, as when the owning process exits, cancels the dial.
+pub struct DialResource(PendingResult);
+
+/// Opaque stream open handle exposed to Erlang via ResourceArc. Dropping the
+/// last reference, as when the owning process exits, cancels the open.
+pub struct StreamOpenResource(PendingResult);
 
 /// NIF: async_connect(Tag, Host, Port, Alpn, Verify, VerifyPubkey,
 ///                    IdleTimeoutMs, KeepAliveMs, TimeoutMs)
@@ -121,7 +134,7 @@ fn nif_async_connect<'a>(
 
     let reply_env = OwnedEnv::new();
     let saved_tag = reply_env.save(tag);
-    let state = Arc::new(Mutex::new(DialState::default()));
+    let state = Arc::new(Mutex::new(DeliveryState::default()));
     let task_state = state.clone();
 
     let task = runtime::rt().spawn(async move {
@@ -129,10 +142,10 @@ fn nif_async_connect<'a>(
         deliver_dial_result(reply_env, saved_tag, owner, &task_state, result);
     });
 
-    let resource = ResourceArc::new(DialResource {
+    let resource = ResourceArc::new(DialResource(PendingResult {
         state,
         abort: task.abort_handle(),
-    });
+    }));
     Ok((atoms::ok(), resource).encode(env))
 }
 
@@ -145,7 +158,7 @@ fn nif_cancel_connect<'a>(
     env: Env<'a>,
     dial: ResourceArc<DialResource>,
 ) -> NifResult<Term<'a>> {
-    let outcome = if dial.cancel() {
+    let outcome = if dial.0.cancel() {
         atoms::delivered()
     } else {
         atoms::cancelled()
@@ -213,7 +226,7 @@ fn deliver_dial_result(
     mut reply_env: OwnedEnv,
     tag: SavedTerm,
     owner: LocalPid,
-    state: &Mutex<DialState>,
+    state: &Mutex<DeliveryState>,
     result: Result<quinn::Connection, String>,
 ) {
     let mut state = state.lock().unwrap();
@@ -233,43 +246,98 @@ fn deliver_dial_result(
     state.delivered = true;
 }
 
-/// NIF: open_stream(ConnRef) -> {ok, StreamRef} | {error, Reason}
+/// NIF: async_open_stream(ConnRef, Tag) -> {ok, OpenRef} | {error, already_closed}
 ///
-/// Network-IO bound (`open_bi` awaits stream flow-control credit), so it
-/// runs on a dirty-IO scheduler — not dirty-CPU. Dirty-CPU schedulers are
-/// scarce (one per core) and a blocking wait there starves everything;
-/// dirty-IO is the correct class and there are far more of them.
-#[rustler::nif(schedule = "DirtyIo")]
-fn nif_open_stream<'a>(
+/// Starts opening a bidirectional stream on the QUIC runtime and returns at
+/// once. The calling process, which owns the stream once it is open, later
+/// receives `{quic, stream_opened, Tag, StreamRef}` or
+/// `{quic, stream_open_failed, Tag, Reason}`. The open waits for as long as
+/// the peer allows no further stream, and fails when the connection ends.
+#[rustler::nif]
+fn nif_async_open_stream<'a>(
     env: Env<'a>,
     conn: ResourceArc<ConnectionResource>,
+    tag: Term<'a>,
 ) -> NifResult<Term<'a>> {
     if conn.closed.load(Ordering::Relaxed) {
         return Ok((atoms::error(), atoms::already_closed()).encode(env));
     }
 
-    let caller = env.pid();
-    let connection = conn.connection.clone();
+    let owner = env.pid();
+    let reply_env = OwnedEnv::new();
+    let saved_tag = reply_env.save(tag);
+    let state = Arc::new(Mutex::new(DeliveryState::default()));
+    let task_state = state.clone();
+    let task_conn = conn.clone();
 
-    let result = runtime::rt().block_on(async {
-        let (send, recv) = connection
+    let task = runtime::rt().spawn(async move {
+        let result = task_conn
+            .connection
             .open_bi()
             .await
-            .map_err(|e| format!("open_bi: {}", e))?;
-        Ok::<(quinn::SendStream, quinn::RecvStream), String>((send, recv))
+            .map_err(|e| format!("open_bi: {}", e));
+        deliver_open_result(reply_env, saved_tag, owner, task_conn, &task_state, result);
     });
 
-    match result {
-        Ok((send, recv)) => {
-            let resource = ResourceArc::new(stream::StreamResource::new(
-                send, recv, conn.clone(), caller,
-            ));
-            stream::StreamResource::start_recv_loop(resource.clone());
-            stream::StreamResource::start_writer(resource.clone());
-            Ok((atoms::ok(), resource).encode(env))
+    let resource = ResourceArc::new(StreamOpenResource(PendingResult {
+        state,
+        abort: task.abort_handle(),
+    }));
+    Ok((atoms::ok(), resource).encode(env))
+}
+
+/// NIF: cancel_open_stream(OpenRef) -> delivered | cancelled
+///
+/// Cancels a stream open. `delivered` means its result was sent before the
+/// cancel and is in the owner's mailbox; `cancelled` means no result will be
+/// sent.
+#[rustler::nif]
+fn nif_cancel_open_stream<'a>(
+    env: Env<'a>,
+    opening: ResourceArc<StreamOpenResource>,
+) -> NifResult<Term<'a>> {
+    let outcome = if opening.0.cancel() {
+        atoms::delivered()
+    } else {
+        atoms::cancelled()
+    };
+    Ok(outcome.encode(env))
+}
+
+/// Send an open's result to its owner, unless the open was cancelled. The
+/// state lock is held while sending, so a cancel either stops the send or
+/// learns that it happened. A stream whose send is skipped is reset and
+/// stopped, so the peer does not keep it.
+fn deliver_open_result(
+    mut reply_env: OwnedEnv,
+    tag: SavedTerm,
+    owner: LocalPid,
+    conn: ResourceArc<ConnectionResource>,
+    state: &Mutex<DeliveryState>,
+    result: Result<(quinn::SendStream, quinn::RecvStream), String>,
+) {
+    let mut state = state.lock().unwrap();
+    if state.cancelled {
+        if let Ok((mut send, mut recv)) = result {
+            let _ = send.reset(OPEN_CANCELLED_CODE.into());
+            let _ = recv.stop(OPEN_CANCELLED_CODE.into());
         }
-        Err(e) => Ok((atoms::error(), e).encode(env)),
+        return;
     }
+    let _ = reply_env.send_and_clear(&owner, |env| {
+        let tag = tag.load(env);
+        match result {
+            Ok((send, recv)) => {
+                let stream =
+                    ResourceArc::new(stream::StreamResource::new(send, recv, conn, owner));
+                stream::StreamResource::start_recv_loop(stream.clone());
+                stream::StreamResource::start_writer(stream.clone());
+                (atoms::quic(), atoms::stream_opened(), tag, stream).encode(env)
+            }
+            Err(reason) => (atoms::quic(), atoms::stream_open_failed(), tag, reason).encode(env),
+        }
+    });
+    state.delivered = true;
 }
 
 /// NIF: close_connection(ConnRef) -> ok
