@@ -2,10 +2,13 @@
 %%
 %% Pure functional layer on top of `macula_hyparview_view'. Given the
 %% current view, an incoming HyParView frame, and a context (self
-%% NodeId, realm, signing identity, ARWL/PRWL constants),
+%% node_id, realm, ARWL/PRWL constants and the admission trust),
 %% `process/4' returns the updated view plus a list of `{send,
 %% TargetPeer, Frame}' actions the wrapping process should
 %% transmit.
+%%
+%% Frames leave this module without a signature of their own: the
+%% connection that sends a frame adds its neighbour signature (D17).
 %%
 %% == Message handlers ==
 %%
@@ -14,15 +17,16 @@
 %%       contact: add_active(joiner), reply NEIGHBOR(high),
 %%       FORWARD_JOIN(ttl=ARWL) to every other active peer.
 %%       Eviction in the active view emits DISCONNECT to the
-%%       demoted peer. When `ctx()' carries `realm_admin_pubkey',
-%%       admission is gated on the frame's `record' field holding a
-%%       `realm_member_endorsement' signed by that key for this
+%%       demoted peer. When `ctx()' carries `realm_key_id', admission
+%%       is gated on the frame's `record' field holding the wire form
+%%       of a `realm_member_endorsement' that verifies under the ctx
+%%       `profile', signed by the realm key with that key id, for this
 %%       exact (realm, joiner) pair (`macula_hyparview_endorsement:
-%%       verify_endorsement/3') — a missing or invalid endorsement is
+%%       verify_endorsement/3'). A missing or invalid endorsement is
 %%       dropped silently (no ack, no forward, view unchanged), never
-%%       admitted. Without `realm_admin_pubkey' in `ctx()', admission
-%%       is unconditional (opt-in gating, matches the frame spec's
-%%       own "endorsement is optional" design).</li>
+%%       admitted. Without `realm_key_id' in `ctx()', admission is
+%%       unconditional (opt-in gating, matching the frame spec's own
+%%       "endorsement is optional" design).</li>
 %%   <li><strong>FORWARD_JOIN</strong> — if ttl=0 or active view
 %%       is empty: add_active(new_member) + reply NEIGHBOR(high).
 %%       Otherwise: if ttl == PRWL, also add_passive(new_member);
@@ -64,29 +68,31 @@
 -define(DEFAULT_SHUFFLE_ACTIVE,       3).
 -define(DEFAULT_SHUFFLE_PASSIVE,      4).
 
--type peer() :: macula_identity:pubkey().
+-type peer() :: <<_:256>>.
 
 -type ctx() :: #{
     self_id              := peer(),
     realm                := <<_:256>>,
-    identity             := macula_identity:key_pair(),
     arwl                 => non_neg_integer(),
     prwl                 => non_neg_integer(),
     shuffle_ttl          => non_neg_integer(),
     shuffle_active_size  => non_neg_integer(),
     shuffle_passive_size => non_neg_integer(),
     %% When present, JOIN/FORWARD_JOIN/NEIGHBOR admission is gated on a
-    %% `realm_member_endorsement' record signed by this key (see the
-    %% moduledoc). Absent = unconditional admission, today's behaviour.
-    realm_admin_pubkey   => macula_identity:pubkey(),
-    %% This peer's OWN signed endorsement, attached to every outgoing
+    %% `realm_member_endorsement' record signed by the realm key with
+    %% this key id and verified under `profile', which a gated ctx()
+    %% carries too (see the moduledoc). Absent = unconditional
+    %% admission.
+    realm_key_id         => <<_:256>>,
+    profile              => macula_crypto_profile:profile(),
+    %% This peer's OWN endorsement, as its wire form, attached to every outgoing
     %% NEIGHBOR frame (`neighbor/3') this peer sends -- a NEIGHBOR is
     %% itself an admission event on the receiving end (see
     %% `on_neighbor'), so this peer must be able to prove its own
     %% membership too, not just the peers it admits. Required whenever
-    %% `realm_admin_pubkey' is set on the OTHER side of a link; a
+    %% `realm_key_id' is set on the OTHER side of a link; a
     %% NEIGHBOR built without it will be dropped by a gated receiver.
-    self_endorsement     => macula_record:m_record()
+    self_endorsement     => binary()
 }.
 
 -type action() :: {send, peer(), macula_frame:frame()}.
@@ -95,24 +101,20 @@
 %% Outbound builders for events the local process initiates
 %%=====================================================================
 
-%% @doc Build a signed JOIN frame to send to a contact peer.
+%% @doc Build a JOIN frame to send to a contact peer.
 -spec build_join(ctx()) -> macula_frame:frame().
-build_join(#{self_id := Self, realm := R, identity := Id}) ->
-    sign_with(macula_frame:hyparview_join(
-                #{realm => R, new_member => Self}), Id).
+build_join(#{self_id := Self, realm := R}) ->
+    macula_frame:hyparview_join(#{realm => R, new_member => Self}).
 
-%% @doc Build a signed SHUFFLE frame for a periodic shuffle round.
+%% @doc Build a SHUFFLE frame for a periodic shuffle round.
 %% The orchestrator picks a random active neighbour to send it to.
 -spec build_shuffle(ctx()) -> {ok, macula_frame:frame()}.
-build_shuffle(#{self_id := Self, realm := R, identity := Id} = Ctx) ->
+build_shuffle(#{self_id := Self, realm := R} = Ctx) ->
     Ttl = maps:get(shuffle_ttl, Ctx, ?DEFAULT_SHUFFLE_TTL),
-    %% Sample drawn from our own view by the caller — keep this
+    %% Sample drawn from our own view by the caller: keep this
     %% function pure of the view structure. Caller computes the
     %% sample list and passes it in via process/4 if needed.
-    F = macula_frame:hyparview_shuffle(
-          #{realm => R, origin => Self, ttl => Ttl,
-            peer_sample => []}),
-    {ok, sign_with(F, Id)}.
+    {ok, macula_frame:hyparview_shuffle(#{realm => R, origin => Self, ttl => Ttl, peer_sample => []})}.
 
 %%=====================================================================
 %% Process incoming frame
@@ -159,28 +161,28 @@ admit_join({error, _Reason}, View, _FromId, _Frame, _Ctx) ->
     %% same as any other frame this module doesn't recognise.
     {View, []}.
 
-%% @doc `ok' when `ctx()' carries no `realm_admin_pubkey' (ungated) or
-%% `Frame' presents a valid endorsement for (realm(Ctx), ClaimedMember)
-%% signed by that key. `{error, Reason}' otherwise.
+%% @doc `ok' when `ctx()' carries no `realm_key_id' (ungated) or
+%% `Frame' presents an endorsement for (realm(Ctx), ClaimedMember) that
+%% verifies under the ctx `profile', signed by the realm key with that
+%% key id. `{error, Reason}' otherwise.
 -spec check_admission(macula_frame:frame(), peer(), ctx()) ->
         ok | {error, term()}.
 check_admission(Frame, ClaimedMember, Ctx) ->
-    verify_admission(maps:find(realm_admin_pubkey, Ctx), Frame, ClaimedMember, Ctx).
+    verify_admission(maps:find(realm_key_id, Ctx), Frame, ClaimedMember, Ctx).
 
 verify_admission(error, _Frame, _ClaimedMember, _Ctx) ->
     ok;
-verify_admission({ok, AdminPubkey}, Frame, ClaimedMember, Ctx) ->
-    verify_record(maps:find(record, Frame), AdminPubkey, ClaimedMember, Ctx).
+verify_admission({ok, RealmKeyId}, Frame, ClaimedMember, #{profile := Profile} = Ctx) ->
+    Trust = #{profile => Profile, realm => realm(Ctx), realm_key_id => RealmKeyId},
+    verify_record(maps:find(record, Frame), Trust, ClaimedMember).
 
-verify_record(error, _AdminPubkey, _ClaimedMember, _Ctx) ->
+verify_record(error, _Trust, _ClaimedMember) ->
     {error, missing_endorsement};
-verify_record({ok, #{key := AdminPubkey} = Record}, AdminPubkey, ClaimedMember, Ctx) ->
-    case macula_hyparview_endorsement:verify_endorsement(Record, realm(Ctx), ClaimedMember) of
-        {ok, _Roles} -> ok;
-        {error, _} = Err -> Err
-    end;
-verify_record({ok, _WrongSigner}, _AdminPubkey, _ClaimedMember, _Ctx) ->
-    {error, untrusted_signer}.
+verify_record({ok, Record}, Trust, ClaimedMember) ->
+    admitted(macula_hyparview_endorsement:verify_endorsement(Record, Trust, ClaimedMember)).
+
+admitted({ok, _Roles}) -> ok;
+admitted({error, _} = Refusal) -> Refusal.
 
 -spec absorb_active(macula_hyparview_view:view(), peer(), ctx()) ->
         {macula_hyparview_view:view(), [action()]}.
@@ -193,7 +195,7 @@ absorb_active(View, Peer, Ctx) ->
     {View1, Disconnects}.
 
 -spec forward_join_to_others(macula_hyparview_view:view(), peer(), peer(),
-                             macula_record:m_record() | undefined,
+                             binary() | undefined,
                              ctx()) -> [action()].
 forward_join_to_others(View, NewMember, Origin, Endorsement, Ctx) ->
     Targets = [P || P <- macula_hyparview_view:active(View),
@@ -205,9 +207,7 @@ forward_join_to_others(View, NewMember, Origin, Endorsement, Ctx) ->
                           ttl        => Arwl,
                           arwl       => Arwl,
                           prwl       => Prwl}, Endorsement),
-    [{send, T,
-      sign_with(macula_frame:hyparview_forward_join(Spec),
-                identity(Ctx))} || T <- Targets].
+    [{send, T, macula_frame:hyparview_forward_join(Spec)} || T <- Targets].
 
 with_record(Spec, undefined) -> Spec;
 with_record(Spec, Record) -> Spec#{record => Record}.
@@ -290,7 +290,7 @@ pick_forward_target(Cands, View, _NewMember, NewTtl, Frame, Ctx) ->
                           arwl       => maps:get(arwl, Frame),
                           prwl       => maps:get(prwl, Frame)},
                         maps:get(record, Frame, undefined)),
-    Forward = sign_with(macula_frame:hyparview_forward_join(Spec), identity(Ctx)),
+    Forward = macula_frame:hyparview_forward_join(Spec),
     {View, [{send, Target, Forward}]}.
 
 %%=====================================================================
@@ -366,13 +366,11 @@ pick_shuffle_target([], View, From, Frame, Ctx) ->
     shuffle_reply(View, From, Frame, Ctx);
 pick_shuffle_target(Cands, View, _From, Frame, Ctx) ->
     Target = lists:nth(rand:uniform(length(Cands)), Cands),
-    NewFrame = sign_with(macula_frame:hyparview_shuffle(
-                           #{realm      => realm(Ctx),
-                             origin     => maps:get(origin, Frame),
-                             ttl        => maps:get(ttl, Frame) - 1,
-                             peer_sample => maps:get(peer_sample,
-                                                     Frame)}),
-                         identity(Ctx)),
+    NewFrame = macula_frame:hyparview_shuffle(
+                 #{realm       => realm(Ctx),
+                   origin      => maps:get(origin, Frame),
+                   ttl         => maps:get(ttl, Frame) - 1,
+                   peer_sample => maps:get(peer_sample, Frame)}),
     {View, [{send, Target, NewFrame}]}.
 
 -spec shuffle_reply(macula_hyparview_view:view(), peer(),
@@ -382,10 +380,7 @@ shuffle_reply(View, _FromId, Frame, Ctx) ->
     Origin = maps:get(origin, Frame),
     Sample = maps:get(peer_sample, Frame),
     LocalSample = collect_sample(View, Ctx),
-    Reply = sign_with(macula_frame:hyparview_shuffle_reply(
-                        #{realm => realm(Ctx),
-                          peer_sample => LocalSample}),
-                      identity(Ctx)),
+    Reply = macula_frame:hyparview_shuffle_reply(#{realm => realm(Ctx), peer_sample => LocalSample}),
     %% Merge incoming sample into our passive view.
     View1 = macula_hyparview_view:merge_shuffle(View, Sample),
     {View1, [{send, Origin, Reply}]}.
@@ -413,26 +408,17 @@ collect_sample(View, Ctx) ->
 neighbor(Target, Priority, Ctx) ->
     Spec = with_record(#{realm => realm(Ctx), priority => Priority},
                         maps:get(self_endorsement, Ctx, undefined)),
-    F = macula_frame:hyparview_neighbor(Spec),
-    {send, Target, sign_with(F, identity(Ctx))}.
+    {send, Target, macula_frame:hyparview_neighbor(Spec)}.
 
 -spec build_disconnect(ctx()) -> macula_frame:frame().
 build_disconnect(Ctx) ->
-    sign_with(macula_frame:hyparview_disconnect(
-                #{realm => realm(Ctx)}),
-              identity(Ctx)).
-
--spec sign_with(macula_frame:frame(), macula_identity:key_pair()) ->
-        macula_frame:frame().
-sign_with(Frame, Identity) ->
-    macula_frame:sign(Frame, Identity).
+    macula_frame:hyparview_disconnect(#{realm => realm(Ctx)}).
 
 %%=====================================================================
 %% Context accessors with defaults
 %%=====================================================================
 
 realm(#{realm := R}) -> R.
-identity(#{identity := I}) -> I.
 arwl(C) -> maps:get(arwl, C, ?DEFAULT_ARWL).
 prwl(C) -> maps:get(prwl, C, ?DEFAULT_PRWL).
 
