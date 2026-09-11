@@ -335,7 +335,7 @@ stream frame, publication, advertisement, withdrawal or record, is its signer's,
 - A receiver takes every frame off the stream by its length prefix before judging it, so an object refusal never
   desynchronises the stream.
 - Objects never close a connection because freshness checks depend on each hop's clock, so an object can pass at one
-  hop and fail at the next, and because a Plumtree relay forwards publications it has not verified.
+  hop and fail at the next.
 - A receiver bounds what it logs about refused objects per connection. A per-connection verification budget, where
   refused objects beyond a rate slow down reading from that connection rather than closing it, is an open item
   (WP 1.3, WP 1.6).
@@ -499,7 +499,9 @@ publication bytes ride in the PUBLISH and in every EVENT made from it, so `tbs` 
 | `ttl_ms` | unsigned, ms | optional: how long the publication is delivered |
 | `payload` | any | |
 
-- The origin station verifies a publication before fan-out, and every subscriber verifies it before delivery (D17).
+- The origin station verifies a publication before fan-out (D17). Every Plumtree node verifies a publication once,
+  keyed by the SHA-384 of its `tbs`, before delivering or forwarding it, and every subscriber verifies it before
+  delivery.
 - A subscriber delivers a publication only when its `realm` equals a subscription's realm and its `topic` matches
   that subscription's topic or topic pattern.
 - A subscriber delivers each publication at most once. It keeps the SHA-384 of each delivered publication's `tbs`
