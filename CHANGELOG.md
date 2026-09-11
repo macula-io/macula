@@ -249,6 +249,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   candidate loop, within 10 s, and is deprecated: it is removed in 11.0.0,
   and `fetch_content/4` replaces it.
 
+### Deprecated
+
+- Removed in 11.0.0: the `macula_console` and `macula_cert_system` modules
+  (start `macula_trust_store` directly); `macula_mri:index_descendants/3`,
+  `index_insert/4`, `index_remove/3`, `index_size/1` and `is_valid/1`;
+  `macula_names:local_node_id/0`; `macula_source_route:version/1`;
+  `macula_quic:accept_stream/3`, `async_shutdown_connection/3` and
+  `handoff_stream/3`; `macula_crypto_nif:blake3_streaming/1` and
+  `blake3_verify/2`.
+- No longer exported from 11.0.0: `macula_mri:parent_type/1`,
+  `macula_mri_registry:list_custom_types/0` and
+  `macula_dist_relay_protocol:decode/1`.
+
 ### Removed
 
 - The precompiled QUIC NIF download: `priv/fetch-nif.sh`,
