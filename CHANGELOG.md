@@ -150,16 +150,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policies now share it. A token signed by `Issuer` but minted for another
   audience is refused with `unauthorized`. Mint `ucan_required` tokens for
   the caller that will present them.
-- `macula_cluster:get_cookie/0`, and `macula:get_cookie/0` with it,
-  returns the cookie of a node that is already distributed instead of
-  resolving another one. On a node that is not, it reads
-  `~/.erlang.cookie` only when its owner alone can read it, and generates
-  and saves a new cookie, owner-only, only when that file is missing. It
-  raises `{cookie_file_unavailable, home_not_set}` when `HOME` is unset,
-  where it used to fall back to `/tmp/.erlang.cookie`, and
-  `{cookie_file_refused, Reason}` for a cookie file it cannot use, which
-  is never replaced. `macula_cluster:cookie_file_path/0` returns
-  `{ok, Path}` or `{error, home_not_set}`.
+- `macula_cluster` sets no distribution cookie and reads or writes no
+  cookie file. `ensure_distributed/0` starts distribution without setting a
+  cookie, so a node has its release's cookie: `-setcookie`, or the
+  owner-only `.erlang.cookie` OTP reads in the node's `HOME` and creates
+  when it is missing. `get_cookie/0` and `set_cookie/1`, and `macula`'s
+  functions of the same name with them, return and set the running node's
+  own cookie as `erlang:get_cookie/0` and `erlang:set_cookie/1` do, and
+  raise `not_distributed` on a node that is not distributed. That changes
+  in this release, not in 11.0.0: on a node that is not distributed they
+  used to resolve, generate or save a cookie, and now they raise.
+  `set_cookie/1` writes no file.
 - `macula_identity:load/1` accepts only a key file its group and others
   have no access to, mode 0600 or 0400, following symlinks. Another mode
   returns `{error, {file_permissions, #{file => Path, mode => <<"0644">>,
@@ -258,6 +259,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `macula_direct_dial:resolve_content_provider/2` resolves through the same
   candidate loop, within 10 s, and is deprecated: it is removed in 11.0.0,
   and `fetch_content/4` replaces it.
+- `macula_cluster:get_cookie/0` and `set_cookie/1`, and `macula:get_cookie/0`
+  and `macula:set_cookie/1`, are deprecated and removed in 11.0.0: call
+  `erlang:get_cookie/0` and `erlang:set_cookie/1`. bc-gitops's
+  `bc_gitops_cluster` calls the `macula` functions when macula is loaded,
+  so with this release its `get_cookie/0`, which
+  `bc_gitops_vm_spawner:spawn_vm/4` calls, raises `not_distributed` on a
+  node that is not distributed. Upgrade bc-gitops to a release that no
+  longer calls them before upgrading macula.
 
 ### Removed
 
@@ -268,7 +277,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so those versions still download them.
 - `Dockerfile`, `Dockerfile.gateway` and `.dockerignore`. They built for
   the earlier quicer transport, without the Rust NIFs, and could not
-  build this repository.
+  build this repository. `entrypoint.sh`, which that image ran, goes too.
+- The cookie sources `macula_cluster` resolved and the cookie file it
+  kept: the `cookie` application env, the `MACULA_COOKIE`,
+  `RELEASE_COOKIE` and `ERLANG_COOKIE` environment variables, reading
+  `~/.erlang.cookie`, and generating and saving a cookie there when that
+  file was missing, with `resolve_cookie/0`, `read_cookie_file/0` and
+  `cookie_file_path/0`. A node that set its cookie through one of them
+  gets it from its release instead: the owner-only `.erlang.cookie` in
+  its `HOME`, or `-setcookie`. Upgrade advice: a cluster whose nodes set
+  their cookie through the `cookie` application env or `MACULA_COOKIE`,
+  `RELEASE_COOKIE` or `ERLANG_COOKIE` does not re-form after the upgrade
+  until every node has the same cookie from its release. Until then the
+  nodes refuse each other; nothing falls back to another source.
 
 ### Fixed
 

@@ -86,12 +86,15 @@ distributed(false) -> not_distributed.
 %%% Peer node
 %%%===================================================================
 
-%% The peer gets its own cookie, so a start_cluster/1 that starts
-%% distribution never reads or writes the user's ~/.erlang.cookie.
+%% The peer boots with HOME at a directory of its own and without
+%% XDG_CONFIG_HOME, so a start_cluster/1 that starts distribution has OTP's
+%% auth read or create a cookie file there, never the user's
+%% ~/.erlang.cookie.
 in_peer(Scenario, Args) ->
+    Home = macula_test_tmp:dir("macula_dist_discovery_unavailable_tests"),
     Started = peer:start_link(#{connection => standard_io,
                                 args => ["-pa" | code:get_path()],
-                                env => [{"MACULA_COOKIE", "macula_discovery_unavailable_tests"}]}),
+                                env => [{"HOME", Home}, {"XDG_CONFIG_HOME", false}]}),
     Peer = element(2, Started),
     OsPid = peer:call(Peer, os, getpid, [], 5_000),
     try peer:call(Peer, ?MODULE, Scenario, Args, ?SCENARIO_TIMEOUT_MS) of
@@ -100,5 +103,6 @@ in_peer(Scenario, Args) ->
         Class:Reason -> {error, {Class, Reason}}
     after
         _ = os:cmd("kill -9 " ++ OsPid),
-        try peer:stop(Peer) catch _:_ -> ok end
+        try peer:stop(Peer) catch _:_ -> ok end,
+        ok = file:del_dir_r(Home)
     end.
