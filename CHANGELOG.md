@@ -162,6 +162,10 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `{refused, Neighbour, Kind}` for a frame past the allowance and for an
   unsolicited SHUFFLE_REPLY, and `macula_frame:charged_refusal/1` charges
   both kinds.
+- A link-carried `macula_stream` that receives a frame of a type that
+  belongs on the control stream rejects its peering connection with
+  `malformed_frame` and ends, in either profile.
+  `macula_frame:control_frame/1` names those types.
 
 ### Changed
 

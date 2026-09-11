@@ -258,7 +258,9 @@ deliver_reply(Pid, Result) ->
 %% frame of a link-carried stream from the peer. The stream verifies it
 %% against its STREAM_OPEN before it takes effect. A refused frame is
 %% dropped and reported to the stream's peering connection, and the
-%% stream carries on.
+%% stream carries on. A frame of a type that belongs on the control
+%% stream rejects the connection with malformed_frame and ends the
+%% stream, in either profile.
 -spec deliver_frame(pid(), macula_frame:frame()) -> ok.
 deliver_frame(Pid, Frame) when is_map(Frame) ->
     gen_server:cast(Pid, {peer_frame, Frame}).
@@ -383,8 +385,10 @@ handle_cast({peer_error, Code, Message}, State) ->
     {noreply, error_arrived(Code, Message, State)};
 handle_cast({peer_reply, Result}, State) ->
     {noreply, reply_arrived(Result, State)};
-handle_cast({peer_frame, Frame}, #state{role = Role, verifier = Verifier, profile = Profile} = State) ->
-    {noreply, verified_frame(peer_verified(Role, Frame, Verifier, Profile), State)};
+handle_cast({peer_frame, #{frame_type := Type} = Frame}, State) ->
+    {noreply, peer_frame(macula_frame:control_frame(Type), Frame, State)};
+handle_cast({peer_frame, Frame}, State) ->
+    {noreply, peer_frame(false, Frame, State)};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -418,7 +422,7 @@ handle_info({'DOWN', Ref, process, Pid, _Reason}, State) ->
 %% here with a transport failure, which its readers and reply waiters
 %% receive. It is not a refusal, so its connection hears nothing.
 handle_info({stream_write_failed, Sid, Reason}, #state{id = Sid} = State) ->
-    {noreply, write_failed({error, {transport, Reason}}, State)};
+    {noreply, transport_failed({error, {transport, Reason}}, State)};
 
 handle_info(_Msg, State) ->
     {noreply, State}.
@@ -581,11 +585,21 @@ ended_with(Err, State) ->
     State1 = drain_waiters(Err, State#state{closed_recv = true, closed_send = true}),
     settle_reply_waiters_with(Err, State1).
 
-write_failed(Err, #state{reply = Reply} = State) ->
+transport_failed(Err, #state{reply = Reply} = State) ->
     ended_with(Err, State#state{peer = undefined, reply = first_result(Reply, Err)}).
 
 first_result(undefined, Err) -> Err;
 first_result(Reply, _Err) -> Reply.
+
+%% @private A frame of a type that belongs on the control stream has no place
+%% on a dedicated stream, in either profile. It is the connection peer's
+%% doing, so the connection is rejected with malformed_frame, and this
+%% stream ends with that transport failure. Any other frame is verified.
+peer_frame(true, _Frame, #state{conn = Conn} = State) ->
+    ok = macula_peering:reject(Conn, malformed_frame),
+    transport_failed({error, {transport, malformed_frame}}, State);
+peer_frame(false, Frame, #state{role = Role, verifier = Verifier, profile = Profile} = State) ->
+    verified_frame(peer_verified(Role, Frame, Verifier, Profile), State).
 
 %% @private A link-carried stream's caller side verifies the provider's
 %% frames, and its provider side the caller's.

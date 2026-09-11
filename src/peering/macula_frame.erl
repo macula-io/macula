@@ -85,7 +85,7 @@
     manifest_req/1, manifest_res/1, cancel/1,
 
     %% Neighbour signatures on control frames in pq_hybrid (D17)
-    neighbour_signed/2, sign_neighbour/3, verify_neighbour/2,
+    control_frame/1, neighbour_signed/2, sign_neighbour/3, verify_neighbour/2,
 
     %% Sign / verify frame
     sign/2, verify/2,
@@ -1633,9 +1633,14 @@ validate_manifest_payload(M) when is_map(M) -> ok.
 %% In pq_pure no frame carries one. The caller counts seq per direction and closes the connection on a refusal.
 %%------------------------------------------------------------------
 
+%% @doc Whether a frame type belongs on a connection's control stream, in either profile: the frames pq_hybrid
+%% neighbour-signs (D17). One arriving on a dedicated stream is malformed_frame, and the connection closes.
+-spec control_frame(frame_type()) -> boolean().
+control_frame(FrameType) -> lists:member(FrameType, ?NEIGHBOUR_SIGNED).
+
 %% @doc Whether a profile neighbour-signs a frame type.
 -spec neighbour_signed(macula_crypto_profile:profile(), frame_type()) -> boolean().
-neighbour_signed(pq_hybrid, FrameType) -> lists:member(FrameType, ?NEIGHBOUR_SIGNED);
+neighbour_signed(pq_hybrid, FrameType) -> control_frame(FrameType);
 neighbour_signed(pq_pure, _FrameType) -> false.
 
 %% @doc Neighbour-sign a control frame with the sender's identity key, for one connection and one seq.

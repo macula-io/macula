@@ -23,6 +23,8 @@ cases(Keys) ->
                  fun a_frame_for_another_request_gives_one_uncharged_report/1,
                  fun set_error_sends_stream_error_with_the_reason_as_bounded_text/1,
                  fun a_failed_write_ends_the_stream_with_a_transport_failure_and_no_report/1,
+                 fun a_control_frame_on_a_stream_rejects_the_connection_and_ends_the_stream_in_pq_pure/1,
+                 fun a_control_frame_on_a_stream_rejects_the_connection_and_ends_the_stream_in_pq_hybrid/1,
                  fun the_status_of_a_stream_carries_its_key_with_no_private_half/1]].
 
 %%------------------------------------------------------------------
@@ -168,9 +170,12 @@ verified_request(Caller, Spec) ->
     Request.
 
 %% A link-carried stream on one side of Open, with this process as its link and its connection.
-stream(Role, Key, #{mode := Mode} = Open) ->
+stream(Role, Key, Open) ->
+    stream(Role, Key, Open, pq_pure).
+
+stream(Role, Key, #{mode := Mode} = Open, Profile) ->
     {ok, Pid} = macula_stream:start_link(#{id => ?SID, role => Role, mode => Mode, owner => self(), key => Key,
-                                            open => Open, conn => self(), profile => pq_pure}),
+                                            open => Open, conn => self(), profile => Profile}),
     ok = macula_stream:attach_to_link(Pid, self(), ?SID),
     Pid.
 
@@ -248,3 +253,23 @@ wire(Frame) ->
 
 flip(<<Head:20/binary, Byte, Tail/binary>>) ->
     <<Head/binary, (Byte bxor 1), Tail/binary>>.
+
+%% A frame of a type that belongs on the control stream, arriving on a dedicated stream, is the connection peer's doing
+%% in either profile: the stream rejects its connection with malformed_frame and ends with that transport failure.
+a_control_frame_on_a_stream_rejects_the_connection_and_ends_the_stream_in_pq_pure(Keys) ->
+    control_frame_rejected(Keys, pq_pure).
+
+a_control_frame_on_a_stream_rejects_the_connection_and_ends_the_stream_in_pq_hybrid(Keys) ->
+    control_frame_rejected(Keys, pq_hybrid).
+
+control_frame_rejected(#{provider := Provider} = Keys, Profile) ->
+    Stream = stream(server, Provider, verified_open(Keys, bidi), Profile),
+    Test = self(),
+    _Reader = spawn(fun() -> Test ! {read, macula_stream:recv(Stream, 2000)} end),
+    ok = await_waiting_reader(Stream),
+    ok = macula_stream:deliver_frame(Stream, wire(macula_frame:ping(#{nonce => crypto:strong_rand_bytes(16)}))),
+    ?assertEqual(malformed_frame, receive {'$gen_cast', {reject, Reason}} -> Reason after 1000 -> none end),
+    ?assertEqual({error, {transport, malformed_frame}}, receive {read, Read} -> Read after 1000 -> none end),
+    ?assertEqual({error, send_closed}, macula_stream:send(Stream, <<"after the control frame">>)),
+    ?assertEqual(none, no_more_reports()),
+    gen_server:stop(Stream).

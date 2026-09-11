@@ -160,3 +160,9 @@ at(#{connection := C}, Seq) ->
 
 opts(#{key := Key, connection := C}, Seq) ->
     #{profile => pq_hybrid, peer_key => macula_node_keys:public_key(Key), connection => C, seq => Seq}.
+
+%% The control frames are the frame types that belong on a connection's control stream, whatever the profile.
+control_frames_belong_on_the_control_stream_in_either_profile_test() ->
+    ?assertEqual({?CONTROL, []},
+                 {[Type || Type <- ?CONTROL, macula_frame:control_frame(Type)],
+                  [Type || Type <- ?DATA, macula_frame:control_frame(Type)]}).
