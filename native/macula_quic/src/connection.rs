@@ -1,8 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
-use rustler::{Binary, Encoder, Env, LocalPid, NifResult, ResourceArc, Term};
-use tokio::task::JoinHandle;
+use rustler::env::SavedTerm;
+use rustler::{Binary, Encoder, Env, LocalPid, NifResult, OwnedEnv, ResourceArc, Term};
+use tokio::task::{AbortHandle, JoinHandle};
 
 use crate::{atoms, config, message, runtime, stream};
 
@@ -40,9 +41,50 @@ impl Drop for ConnectionResource {
     }
 }
 
-/// NIF: connect(Host, Port, Opts) -> {ok, ConnRef} | {error, Reason}
+/// Shared between a dial's handle and its task. The task sends its result
+/// only while `cancelled` is false, and sets `delivered` once it has. A
+/// cancel reads `delivered` under the same lock, so it knows whether a
+/// result is already in the owner's mailbox.
+#[derive(Default)]
+struct DialState {
+    cancelled: bool,
+    delivered: bool,
+}
+
+/// Opaque dial handle exposed to Erlang via ResourceArc. Dropping the last
+/// reference, as when the owning process exits, cancels the dial.
+pub struct DialResource {
+    state: Arc<Mutex<DialState>>,
+    abort: AbortHandle,
+}
+
+impl DialResource {
+    /// Mark the dial cancelled and abort its task. Returns whether its
+    /// result had already been sent.
+    fn cancel(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
+        state.cancelled = true;
+        let delivered = state.delivered;
+        drop(state);
+        self.abort.abort();
+        delivered
+    }
+}
+
+impl Drop for DialResource {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+/// NIF: async_connect(Tag, Host, Port, Alpn, Verify, VerifyPubkey,
+///                    IdleTimeoutMs, KeepAliveMs, TimeoutMs)
+///   -> {ok, DialRef} | {error, Reason}
 ///
-/// Blocks the dirty scheduler until handshake completes (up to timeout).
+/// Starts a dial on the QUIC runtime and returns at once. The calling
+/// process later receives `{quic, connected, Tag, ConnRef}` or
+/// `{quic, connect_failed, Tag, Reason}`. One deadline covers resolution,
+/// endpoint acquisition and the handshake.
 ///
 /// `verify_pubkey` is a 32-byte Ed25519 pubkey to pin against the
 /// leaf cert's SubjectPublicKeyInfo. An empty binary disables
@@ -52,9 +94,10 @@ impl Drop for ConnectionResource {
 /// rustler's `Vec<u8>` decoder requires a list term and rejects
 /// Erlang binaries (which is how every caller passes pubkeys).
 /// See cert.rs:nif_generate_self_signed_cert for the same pattern.
-#[rustler::nif(schedule = "DirtyIo")]
-fn nif_connect<'a>(
+#[rustler::nif]
+fn nif_async_connect<'a>(
     env: Env<'a>,
+    tag: Term<'a>,
     host: String,
     port: u32,
     alpn: Vec<String>,
@@ -64,7 +107,7 @@ fn nif_connect<'a>(
     keep_alive_ms: u64,
     timeout_ms: u64,
 ) -> NifResult<Term<'a>> {
-    let caller = env.pid();
+    let owner = env.pid();
 
     let pinned = if verify_pubkey.is_empty() {
         None
@@ -76,62 +119,118 @@ fn nif_connect<'a>(
         config::build_client_config(&alpn, verify, pinned, idle_timeout_ms, keep_alive_ms)
             .map_err(|e| rustler::Error::Term(Box::new(e)))?;
 
-    let result: Result<quinn::Connection, String> = runtime::rt().block_on(async {
-        // One deadline covers the WHOLE operation — DNS resolution,
-        // endpoint acquisition and the CONNECT/HELLO handshake — so a
-        // stall in any stage (a hung resolver, a black-holed handshake)
-        // always returns within `timeout_ms` instead of parking the
-        // scheduler forever. The old code only wrapped the handshake,
-        // leaving `lookup_host` unbounded.
-        let fut = async {
-            // Strip square brackets if the caller passed `[ipv6]` form
-            // (used by the pubkey-pin path where the host string is a
-            // synthetic `[ipv6]` derived from the target pubkey). The
-            // bare IP works for both DNS resolution and SNI.
-            let host_str: &str = host.trim_start_matches('[').trim_end_matches(']');
+    let reply_env = OwnedEnv::new();
+    let saved_tag = reply_env.save(tag);
+    let state = Arc::new(Mutex::new(DialState::default()));
+    let task_state = state.clone();
 
-            // Two-arg lookup_host avoids the bracket+colon parsing the
-            // single-string form requires for IPv6.
-            let addrs: Vec<std::net::SocketAddr> =
-                tokio::net::lookup_host((host_str, port as u16))
-                    .await
-                    .map_err(|e| format!("resolve {}:{}: {}", host_str, port, e))?
-                    .collect();
-
-            let remote_addr = *addrs
-                .first()
-                .ok_or_else(|| format!("no addresses for {}:{}", host_str, port))?;
-
-            // Shared client endpoint per address family (see
-            // `runtime::client_endpoint`) — reused across all dials so we
-            // don't leak a socket + driver task per connection.
-            let endpoint = runtime::client_endpoint(remote_addr.is_ipv6())?;
-
-            // Per-dial client config (verify / ALPN / pubkey-pin) via
-            // `connect_with`; SNI = bare host string (rustls ServerName
-            // accepts a literal IP address as a valid name).
-            let connection = endpoint
-                .connect_with(client_config, remote_addr, host_str)
-                .map_err(|e| format!("connect: {}", e))?
-                .await
-                .map_err(|e| format!("handshake: {}", e))?;
-
-            Ok::<quinn::Connection, String>(connection)
-        };
-
-        match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), fut).await {
-            Ok(inner) => inner,
-            Err(_) => Err("connection_timeout".to_string()),
-        }
+    let task = runtime::rt().spawn(async move {
+        let result = dial(host, port, client_config, timeout_ms).await;
+        deliver_dial_result(reply_env, saved_tag, owner, &task_state, result);
     });
 
-    match result {
-        Ok(connection) => {
-            let resource = ResourceArc::new(ConnectionResource::new(connection, caller));
-            Ok((atoms::ok(), resource).encode(env))
-        }
-        Err(e) => Ok((atoms::error(), e).encode(env)),
+    let resource = ResourceArc::new(DialResource {
+        state,
+        abort: task.abort_handle(),
+    });
+    Ok((atoms::ok(), resource).encode(env))
+}
+
+/// NIF: cancel_connect(DialRef) -> delivered | cancelled
+///
+/// Cancels a dial. `delivered` means its result was sent before the cancel
+/// and is in the owner's mailbox; `cancelled` means no result will be sent.
+#[rustler::nif]
+fn nif_cancel_connect<'a>(
+    env: Env<'a>,
+    dial: ResourceArc<DialResource>,
+) -> NifResult<Term<'a>> {
+    let outcome = if dial.cancel() {
+        atoms::delivered()
+    } else {
+        atoms::cancelled()
+    };
+    Ok(outcome.encode(env))
+}
+
+async fn dial(
+    host: String,
+    port: u32,
+    client_config: quinn::ClientConfig,
+    timeout_ms: u64,
+) -> Result<quinn::Connection, String> {
+    // One deadline covers the WHOLE operation — DNS resolution,
+    // endpoint acquisition and the CONNECT/HELLO handshake — so a
+    // stall in any stage (a hung resolver, a black-holed handshake)
+    // always ends within `timeout_ms`.
+    let fut = async move {
+        // Strip square brackets if the caller passed `[ipv6]` form
+        // (used by the pubkey-pin path where the host string is a
+        // synthetic `[ipv6]` derived from the target pubkey). The
+        // bare IP works for both DNS resolution and SNI.
+        let host_str: &str = host.trim_start_matches('[').trim_end_matches(']');
+
+        // Two-arg lookup_host avoids the bracket+colon parsing the
+        // single-string form requires for IPv6.
+        let addrs: Vec<std::net::SocketAddr> =
+            tokio::net::lookup_host((host_str, port as u16))
+                .await
+                .map_err(|e| format!("resolve {}:{}: {}", host_str, port, e))?
+                .collect();
+
+        let remote_addr = *addrs
+            .first()
+            .ok_or_else(|| format!("no addresses for {}:{}", host_str, port))?;
+
+        // Shared client endpoint per address family (see
+        // `runtime::client_endpoint`) — reused across all dials so we
+        // don't leak a socket + driver task per connection.
+        let endpoint = runtime::client_endpoint(remote_addr.is_ipv6())?;
+
+        // Per-dial client config (verify / ALPN / pubkey-pin) via
+        // `connect_with`; SNI = bare host string (rustls ServerName
+        // accepts a literal IP address as a valid name).
+        let connection = endpoint
+            .connect_with(client_config, remote_addr, host_str)
+            .map_err(|e| format!("connect: {}", e))?
+            .await
+            .map_err(|e| format!("handshake: {}", e))?;
+
+        Ok::<quinn::Connection, String>(connection)
+    };
+
+    match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), fut).await {
+        Ok(inner) => inner,
+        Err(_) => Err("connection_timeout".to_string()),
     }
+}
+
+/// Send a dial's result to its owner, unless the dial was cancelled. The
+/// state lock is held while sending, so a cancel either stops the send or
+/// learns that it happened. A connection whose send is skipped is dropped
+/// here, which closes it.
+fn deliver_dial_result(
+    mut reply_env: OwnedEnv,
+    tag: SavedTerm,
+    owner: LocalPid,
+    state: &Mutex<DialState>,
+    result: Result<quinn::Connection, String>,
+) {
+    let mut state = state.lock().unwrap();
+    if state.cancelled {
+        return;
+    }
+    let _ = reply_env.send_and_clear(&owner, |env| {
+        let tag = tag.load(env);
+        match result {
+            Ok(connection) => {
+                let conn = ResourceArc::new(ConnectionResource::new(connection, owner));
+                (atoms::quic(), atoms::connected(), tag, conn).encode(env)
+            }
+            Err(reason) => (atoms::quic(), atoms::connect_failed(), tag, reason).encode(env),
+        }
+    });
+    state.delivered = true;
 }
 
 /// NIF: open_stream(ConnRef) -> {ok, StreamRef} | {error, Reason}

@@ -162,6 +162,11 @@
     expected_node_id :: undefined | macula_identity:pubkey(),
     quic_conn        :: undefined | reference(),
     quic_stream      :: undefined | reference(),
+    %% While `connecting' (client role): the dial in progress, the tag
+    %% on its result message, and the monitor on `controlling_pid'.
+    dial             :: undefined | macula_quic:dial(),
+    dial_tag         :: undefined | reference(),
+    owner_mon        :: undefined | reference(),
     peer_node_id      :: undefined | macula_identity:pubkey(),
     peer_station_id   :: undefined | macula_identity:pubkey(),
     peer_realms       :: [macula_identity:pubkey()],
@@ -173,6 +178,9 @@
 }).
 
 -define(DRAIN_TIMEOUT_MS, 5_000).
+%% Added to a dial's own timeout before the connecting state gives up on
+%% a dial that has not reported.
+-define(DIAL_DEADLINE_GRACE_MS, 1_000).
 %% Maximum time the `handshaking' state may take before the worker
 %% gives up. CONNECT/HELLO is sub-second on a healthy peer; 30s is
 %% generous. Drains workers stuck because the peer speaks the wrong
@@ -233,19 +241,57 @@ code_change(_OldVsn, State, Data, _Extra) ->
 connecting(enter, _Old, Data) ->
     self() ! attempt_connect,
     {keep_state, Data};
-connecting(info, attempt_connect, #data{target = Target} = Data) ->
-    after_connect(do_connect(Target), Data);
+%% The dial runs on the QUIC runtime, so this worker stays free for close,
+%% reject and its controlling process's exit while the dial waits.
+connecting(info, attempt_connect,
+           #data{target = Target, controlling_pid = Owner} = Data) ->
+    dial_started(start_dial(Target),
+                 Data#data{owner_mon = erlang:monitor(process, Owner)});
+connecting(info, {quic, connected, Tag, Conn}, #data{dial_tag = Tag} = Data) ->
+    after_connect({ok, Conn}, dial_ended(Data));
+connecting(info, {quic, connect_failed, Tag, Reason},
+           #data{dial_tag = Tag} = Data) ->
+    after_connect({error, Reason}, dial_ended(Data));
+connecting(info, {'DOWN', Mon, process, _Owner, _Reason},
+           #data{owner_mon = Mon} = Data) ->
+    {stop, normal, cancel_dial(Data)};
+connecting(state_timeout, dial_deadline, Data) ->
+    after_connect({error, <<"connection_timeout">>}, cancel_dial(Data));
 connecting(cast, {close, Reason}, Data) ->
     notify(disconnected, Reason, Data),
-    {stop, normal, Data};
+    {stop, normal, cancel_dial(Data)};
 %% `reject/2' behaves exactly like `close/2' here: nothing has been
 %% established yet, so there is no legitimate session to distinguish
 %% "graceful" from "immediate" for.
 connecting(cast, {reject, Reason}, Data) ->
     notify(disconnected, Reason, Data),
-    {stop, normal, Data};
+    {stop, normal, cancel_dial(Data)};
 connecting(EventType, Event, Data) ->
     drop_unexpected(EventType, Event, connecting, Data).
+
+dial_started({ok, Dial}, #data{target = Target} = Data) ->
+    {keep_state, Data#data{dial = Dial, dial_tag = macula_quic:dial_tag(Dial)},
+     [{state_timeout, dial_timeout(Target) + ?DIAL_DEADLINE_GRACE_MS,
+       dial_deadline}]};
+dial_started(Error, Data) ->
+    after_connect(Error, cancel_dial(Data)).
+
+%% The dial reported, or is being given up: forget it and stop watching
+%% the controlling process.
+dial_ended(Data) ->
+    stop_watching_owner(Data#data{dial = undefined, dial_tag = undefined}).
+
+cancel_dial(#data{dial = undefined} = Data) ->
+    stop_watching_owner(Data);
+cancel_dial(#data{dial = Dial} = Data) ->
+    ok = macula_quic:cancel_connect(Dial),
+    dial_ended(Data).
+
+stop_watching_owner(#data{owner_mon = undefined} = Data) ->
+    Data;
+stop_watching_owner(#data{owner_mon = Mon} = Data) ->
+    true = erlang:demonitor(Mon, [flush]),
+    Data#data{owner_mon = undefined}.
 
 after_connect({ok, Conn}, Data) ->
     ok = macula_quic:controlling_process(Conn, self()),
@@ -832,11 +878,14 @@ close_quic(#data{quic_conn = Conn}) ->
 %% positional API.
 %%------------------------------------------------------------------
 
-do_connect(#{host := Host, port := Port} = Target) ->
-    Timeout = maps:get(timeout_ms, Target, 30_000),
+start_dial(#{host := Host, port := Port} = Target) ->
     Alpn = maps:get(alpn, Target, [<<"macula">>]),
-    macula_quic:connect(Host, Port,
-                        [{alpn, Alpn} | dial_trust_opts(Target)], Timeout).
+    macula_quic:async_connect(Host, Port,
+                              [{alpn, Alpn} | dial_trust_opts(Target)],
+                              dial_timeout(Target)).
+
+dial_timeout(Target) ->
+    maps:get(timeout_ms, Target, 30_000).
 
 %% TLS trust for the dial. A known peer identity normally pins the
 %% server cert's Ed25519 SPKI (strongest — no CA involved). When the

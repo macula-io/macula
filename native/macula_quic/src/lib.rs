@@ -13,6 +13,7 @@ fn on_load(env: Env, _info: Term) -> bool {
     runtime::init();
     rustler::resource!(endpoint::ListenerResource, env);
     rustler::resource!(connection::ConnectionResource, env);
+    rustler::resource!(connection::DialResource, env);
     rustler::resource!(stream::StreamResource, env);
     true
 }
@@ -25,7 +26,8 @@ rustler::init!(
         endpoint::nif_close_listener,
         endpoint::nif_async_accept,
         // Connection
-        connection::nif_connect,
+        connection::nif_async_connect,
+        connection::nif_cancel_connect,
         connection::nif_open_stream,
         connection::nif_close_connection,
         connection::nif_async_accept_stream,

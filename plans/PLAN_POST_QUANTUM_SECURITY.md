@@ -87,7 +87,8 @@ No single configuration satisfies both.
   - BSI's TLS guidance names SecP256r1MLKEM768 and SecP384r1MLKEM1024 ✅.
 - **Hash:** SHA-384 or SHA-512 ✅ (CNSA 2.0) in bindings, proofs and status statements, and SHA-384 for content
   ids and UCAN parent ids (D24). Identifier hashes: D5.
-- **One purpose per key.** Identity, TLS and CONNECT keys are separate (key model below).
+- **One purpose per key.** Identity, TLS and CONNECT keys are separate, and so are realm, org and foundation keys
+  (key model below).
 - **One profile per station instance** (D2).
 
 ### EU signature constraints, from the documents
@@ -268,6 +269,10 @@ The frames, bindings and status statements are laid out byte for byte in `DESIGN
 - **TLS key:** only the TLS 1.3 handshake, on station instances, with a self-signed certificate.
 - **CONNECT key:** only the per-connection CONNECT proof. A key used for signatures is never also used for entity
   authentication (ANSSI PA-079 section 6.3, BSI Remark 6.1, ECCG Note 79) ✅.
+- **Realm, org and foundation keys:** a realm key signs its realm's records, an org key signs its procedure
+  delegations, and a foundation key signs foundation records. Each is a purpose of its own, which extends each key
+  serving exactly one purpose (D6) beyond a node's own keys. Signing code refuses a key whose purpose does not fit
+  the record type; that check is local, since no verifier can see a key's purpose.
 - **node_id** is derived from the identity public key or keys (D5). The TLS and CONNECT keys are not part of it.
 
 ### Bindings
@@ -354,7 +359,7 @@ connections (D22).
   derive to the row's node_id. A hostname is a locator, never a trust input; nothing maps a name to a node_id.
 - **Station to station.** Bootstrap peers carry a node_id in station configuration, generated from
   `stations.csv`. Peers learned later are dialled with the node_id they were learned under.
-- **Endorsement** of stations by a realm or a foundation is open (D23).
+- **Endorsement:** no endorsement is needed to use a station (D23).
 
 ### Keys in relayed and stored objects (D13)
 
@@ -453,10 +458,11 @@ Raf answered "go with the recommendations" on 2026-09-10.
 | D20 | Branch and release | Branch `post-quantum`, then `macula` 11.0.0 | Accepted |
 | D21 | Live fleet during the work | Pinned to a released station version | Accepted |
 | D22 | Binding lifetime and revocation | 7 days, rotated every 5; stapled status statements | Accepted (revised) |
-| D23 | Endorsement of stations | Open | Open |
+| D23 | Endorsement of stations | None to use a station; a later one is its own signed record | Accepted |
 | D24 | Hashes under signatures | SHA-384 for content and UCAN parent ids; node ids stay SHA-256 | Accepted |
 | D25 | Replies bound to provider and request | Caller-signed target, request hash, signed stream frames | Accepted |
 | D26 | Peer-supplied maps | One key form in 11.0.0, read through the facade accessors | Accepted |
+| D27 | Where content lives | The sharing node keeps and serves it; stations only pass it through | Accepted |
 
 ### D1 Where the profile is chosen
 
@@ -950,7 +956,7 @@ before its wire checks are green.
     wrong; which NTS servers is open ⚠, and unassigned;
   - clock refusals have their own reasons, so a bad clock is visible;
   - a compromised identity key is not covered by statements: realm members go through realm revocation (WP 3.1),
-    and stations are removed from seed lists and directory rows until D23 is decided.
+    and stations are removed from seed lists and directory rows.
 - **Cost:**
   - a station issues 8 statements an hour, whatever its number of connections;
   - each handshake carries one more statement each way, about 4.7 KB in the US profile or 5.2 KB in the EU profile,
@@ -963,11 +969,18 @@ before its wire checks are green.
 
 ### D23 Endorsement of stations
 
-- **Question, open for Raf later:** should a station need endorsement by a realm or by a foundation before
-  programs use it?
+- **Question:** should a station need endorsement by a realm or by a foundation before programs use it?
+- **Answer, accepted by Raf on 2026-09-11:** No endorsement is needed to use a station. If endorsement comes later, it
+  is a separate signed record about a station, checked by the node that picks a station, under its own policy.
+  Handshake frames carry no endorsement. Stations keep and serve verified records of any type until they expire.
+- Such a record fits a domain type (0x20 to 0xFF) with the station's node_id as its subject, so 11.0.0 needs no new
+  field or tag for it.
+- A node_id stays the same across the 5-day rotation, because only TLS and CONNECT keys rotate (D6), so an
+  endorsement survives rotation.
 - **Facts:** `macula` has a foundation record type and verifier, with placeholder keys and no live custody ✅
   (`macula_foundation.erl`). Its design signs with FROST-Ed25519, which has no standardised post-quantum threshold
   equivalent ⚠; a post-quantum foundation list would need m-of-n independent ML-DSA signatures.
+- A foundation record carries one foundation signature in the signed-object format.
 - **Relation:** endorsement answers whether to use a station, not which station a dial reaches (D16).
 
 ### D24 Hashes under signatures
@@ -1054,6 +1067,9 @@ before its wire checks are green.
     namespace, such as the `_` namespace in use today ✅, there is no delegation to check, so any realm member is an
     authorized provider, and the binding proves only that the reply came from the node the caller chose. Whether such
     procedures need their own authorization is open for Raf.
+  - **Hecate services, accepted by Raf on 2026-09-11:** in 11.0.0 every hecate service procedure has the org
+    namespace `hecate`, as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` defines it, with a procedure delegation per
+    service (WP 6.1).
   - **Replaying an old advertisement:** it fails once it has expired. While still valid it names its real provider and
     serving station, so a replay can only send requests towards that provider; it cannot make another node's reply
     acceptable, and a withdrawal counts only under the provider's signature.
@@ -1103,6 +1119,18 @@ before its wire checks are green.
   pool reading through them), WP 1.6 (the station's record fan-out, DHT handlers and content handlers), WP 6.1
   (every hecate service handler that reads payload fields).
 
+### D27 Where content lives
+
+- **Answer, accepted by Raf on 2026-09-11:** a station does not keep content. The node that shares content keeps it
+  and serves it, and stations only pass content through. When efficiency needs it, a station may hold traffic
+  temporarily, only encrypted so that the station cannot read it, with the key held only by the endpoints, and
+  bounded in time and size.
+- **Consequence:** content is available while the sharing node is online.
+- **Not decided:** a storage service that keeps content beyond the sender, outside stations, is a possible later item.
+- **Blocks:** WP 1.3 (sharing and fetching content), WP 1.6 (the station's content store is removed), WP 2.1
+  (content probes), WP 4.1, WP 4.2 and WP 4.3 (fetching content), WP 5.1 (`mesh_put` and `mesh_get`) and WP 6.1
+  (services that share content).
+
 ---
 
 ## Open items
@@ -1119,7 +1147,8 @@ before its wire checks are green.
 | How the aioquic patch ships (D10) | Pluto | open |
 | Unused signing functions for SWIM membership updates | Mercury | removed in `8cd60ee` on `post-quantum` |
 | BEP44 bootstrap | Terra, then Raf | Terra checks whether it runs anywhere |
-| Endorsement of stations (D23) | Raf | later |
+| Endorsement of stations (D23) | Raf | accepted on 2026-09-11 |
+| DHT slot bounds to define: records per slot, VALUE paging, REPLICATE batch bytes (WP 1.3, WP 1.6) | Mars | open |
 
 ---
 

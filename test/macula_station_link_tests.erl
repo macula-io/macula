@@ -1003,6 +1003,9 @@ disconnect_notifies_subscribers_test_() ->
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
+         %% Earlier tests in this eunit process can leave their own
+         %% macula_event_gone messages in the mailbox.
+         flush_mailbox(),
          Identity = macula_identity:generate(),
          {ok, Pid} = macula_station_link:start_link(#{
              seed     => #{host => <<"127.0.0.1">>, port => 1},
@@ -1033,8 +1036,7 @@ disconnect_notifies_subscribers_test_() ->
          end,
          Pid ! {macula_peering, disconnected, FakePeer, peer_closed},
          receive
-             {macula_event_gone, R, Reason} ->
-                 ?assertEqual(SubRef, R),
+             {macula_event_gone, SubRef, Reason} ->
                  ?assertMatch({disconnected, peer_closed}, Reason)
          after 2_000 -> erlang:error(no_event_gone)
          end,
@@ -2062,6 +2064,11 @@ unadvertise_clears_handler_and_sends_frame_test_() ->
 flush_send_frame_casts() ->
     receive
         {'$gen_cast', {send_frame, _}} -> flush_send_frame_casts()
+    after 0 -> ok
+    end.
+
+flush_mailbox() ->
+    receive _ -> flush_mailbox()
     after 0 -> ok
     end.
 
