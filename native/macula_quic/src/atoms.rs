@@ -21,6 +21,7 @@ rustler::atoms! {
     send_shutdown_complete,
     stream_closed,
     reset,
+    stopped,
 
     // Stream writes
     sent,

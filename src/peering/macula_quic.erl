@@ -65,6 +65,7 @@
     async_send/2,
     close_stream/1,
     reset_stream/2,
+    stop_stream/2,
     setopt/3,
     controlling_process/2,
 
@@ -462,8 +463,9 @@ max_datagram_size(Conn) ->
 %%
 %% Returns `ok'; `{error, already_closed}' after `close_stream/1' or
 %% `reset_stream/2'; `{error, reset}' when `reset_stream/2' dropped the data;
-%% `{error, closed}' when the stream ended without writing it; or the reason
-%% the stream's writes failed.
+%% `{error, closed}' when the stream ended without writing it;
+%% `{error, {stopped, Code}}' once the peer stopped reading with `Code' (see
+%% `stop_stream/2'); or the reason the stream's writes failed.
 -spec send(reference(), iodata()) -> ok | {error, term()}.
 send(Stream, Data) ->
     %% A reference made here, and matched by the receive in await_sent/2,
@@ -521,6 +523,22 @@ close_stream(Stream) ->
 reset_stream(Stream, ErrorCode)
   when is_reference(Stream), is_integer(ErrorCode), ErrorCode >= 0 ->
     nif_reset_stream(Stream, ErrorCode).
+
+%% @doc Stop reading a stream with `ErrorCode': a QUIC STOP_SENDING frame,
+%% which asks the peer to stop writing. The peer's writes on the stream then
+%% fail with `{error, {stopped, ErrorCode}}', and its owner gets
+%% `{quic, send_failed, PeerStream, {stopped, ErrorCode}}'. Data the peer
+%% already sent is discarded, and no more data or events of this stream's
+%% receive side reach its owner. The send side is untouched: finish it with
+%% `close_stream/1' or abort it with `reset_stream/2'. Both of those stop
+%% the receive side as well, with code 0; only this function gives it a code
+%% of its own. Returns at once. `ErrorCode' must fit a QUIC VarInt
+%% (`&lt; 2^62'); out-of-range values answer
+%% `{error, error_code_out_of_range}'.
+-spec stop_stream(reference(), non_neg_integer()) -> ok | {error, term()}.
+stop_stream(Stream, ErrorCode)
+  when is_reference(Stream), is_integer(ErrorCode), ErrorCode >= 0 ->
+    nif_stop_stream(Stream, ErrorCode).
 
 %% @doc Set active mode on a stream handle.
 -spec setopt(reference(), active, boolean()) -> ok | {error, term()}.
@@ -675,6 +693,9 @@ nif_close_stream(_Stream, _LingerMs) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_reset_stream(_Stream, _ErrorCode) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_stop_stream(_Stream, _ErrorCode) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_setopt_active(_Stream, _Value) ->

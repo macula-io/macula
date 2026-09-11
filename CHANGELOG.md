@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `macula_quic:stop_stream/2` stops a stream's receive side with a QUIC
+  STOP_SENDING frame carrying an application error code. The peer's
+  writes on the stream then fail with `{error, {stopped, Code}}`, its
+  owner gets `{quic, send_failed, Stream, {stopped, Code}}`, and none of
+  its later data reaches the stopped side, whose send side stays open.
 - `macula_quic:async_connect/4` starts a dial and returns at once. The
   calling process receives `{quic, connected, Tag, ConnRef}` or
   `{quic, connect_failed, Tag, Reason}`, with `Tag` from
@@ -113,6 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   most 256 bytes of the procedure, as a JSON string, or a reply's call_id
   prefix. The link used to log one line per dropped frame with the whole
   procedure, and nothing for a reply to no pending call.
+- A write on a `macula_quic` stream that fails because the peer stopped
+  reading reports `{stopped, Code}`, from `send/2` and in `send_failed`,
+  instead of a text reason.
 - `macula_identity:load/1` accepts only a key file its group and others
   have no access to, mode 0600 or 0400, following symlinks. Another mode
   returns `{error, {file_permissions, #{file => Path, mode => <<"0644">>,

@@ -34,6 +34,9 @@ enum Failure {
     /// The stream ended without writing the data: it was closed and its
     /// linger bound passed, or its writer is gone.
     Closed,
+    /// The peer stopped reading the stream (STOP_SENDING) with this
+    /// application error code.
+    Stopped(u64),
     /// A write failed, or the connection closed.
     Write(String),
 }
@@ -43,6 +46,7 @@ impl Encoder for Failure {
         match self {
             Failure::Reset => atoms::reset().encode(env),
             Failure::Closed => atoms::closed().encode(env),
+            Failure::Stopped(code) => (atoms::stopped(), *code).encode(env),
             Failure::Write(reason) => reason.encode(env),
         }
     }
@@ -112,6 +116,9 @@ pub struct StreamResource {
     /// the lock across an await, so close_stream and reset_stream take it at
     /// once to finish or reset the stream.
     send: Mutex<Option<quinn::SendStream>>,
+    /// The receive half. The read loop polls it under this lock and never
+    /// holds the lock across an await, so stop_stream takes it at once to
+    /// stop the stream with its own code before anything drops it.
     recv: Mutex<Option<quinn::RecvStream>>,
     recv_task: Mutex<Option<JoinHandle<()>>>,
     /// Data for the writer task. Taken, and so dropped, when the stream is
@@ -167,15 +174,13 @@ impl StreamResource {
         }
     }
 
-    /// Start the background read loop. Takes the recv stream from self.
+    /// Start the background read loop. It polls the recv stream under its
+    /// lock and leaves it in self, so stop_stream can take it at any time.
     /// Must be called after the ResourceArc is created.
     pub fn start_recv_loop(self_arc: ResourceArc<Self>) {
-        let mut recv_opt = self_arc.recv.lock().unwrap();
-        let mut recv = match recv_opt.take() {
-            Some(r) => r,
-            None => return, // Already started or no recv stream
-        };
-        drop(recv_opt);
+        if self_arc.recv_task.lock().unwrap().is_some() {
+            return; // Already started
+        }
         let stream_arc = self_arc.clone();
 
         let handle = runtime::rt().spawn(async move {
@@ -191,8 +196,11 @@ impl StreamResource {
                     continue;
                 }
 
-                match recv.read(&mut buf).await {
-                    Ok(Some(n)) => {
+                let read = poll_fn(|cx| poll_read(&stream_arc, cx, &mut buf)).await;
+                match read {
+                    // stop_stream took the receive side.
+                    None => break,
+                    Some(Ok(n)) if n > 0 => {
                         let data = buf[..n].to_vec();
                         // Held until the message is sent, so a
                         // controlling_process that returns has no delivery
@@ -200,7 +208,7 @@ impl StreamResource {
                         let owner = stream_arc.owner.read().unwrap();
                         message::send_data(&owner, data, stream_arc.clone());
                     }
-                    Ok(None) => {
+                    Some(Ok(_)) => {
                         // Peer finished sending
                         let owner = stream_arc.owner.read().unwrap();
                         message::send_event(
@@ -211,7 +219,7 @@ impl StreamResource {
                         );
                         break;
                     }
-                    Err(quinn::ReadError::Reset(code)) => {
+                    Some(Err(quinn::ReadError::Reset(code))) => {
                         // Peer called reset() on their send side (see
                         // `nif_reset_stream` below) — a deliberate,
                         // peer-visible abort with an application error
@@ -227,7 +235,7 @@ impl StreamResource {
                         );
                         break;
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         let owner = stream_arc.owner.read().unwrap();
                         message::send_event(
                             &owner,
@@ -422,8 +430,28 @@ fn poll_write(
     match send.as_mut() {
         Some(send_stream) => Pin::new(send_stream)
             .poll_write(cx, bytes)
-            .map_err(|error| Failure::Write(error.to_string())),
+            .map_err(write_failure),
         None => Poll::Ready(Err(stream.failure().unwrap_or(Failure::Closed))),
+    }
+}
+
+fn write_failure(error: quinn::WriteError) -> Failure {
+    match error {
+        quinn::WriteError::Stopped(code) => Failure::Stopped(code.into_inner()),
+        other => Failure::Write(other.to_string()),
+    }
+}
+
+/// Polls the receive half under its lock. `None` once stop_stream took it.
+fn poll_read(
+    stream: &StreamResource,
+    cx: &mut Context<'_>,
+    buf: &mut [u8],
+) -> Poll<Option<Result<usize, quinn::ReadError>>> {
+    let mut recv = stream.recv.lock().unwrap();
+    match recv.as_mut() {
+        Some(recv_stream) => recv_stream.poll_read(cx, buf).map(Some),
+        None => Poll::Ready(None),
     }
 }
 
@@ -478,11 +506,12 @@ fn answer(reply: &mut Option<Reply>, result: Result<(), Failure>) {
     }
 }
 
-/// Tells the stream's owner, once, that a write failed.
+/// Tells the stream's owner, once, that a write failed or the peer stopped
+/// reading.
 fn report_failed_write(stream: &ResourceArc<StreamResource>, failure: &Failure) {
-    if let Failure::Write(reason) = failure {
+    if let Failure::Write(_) | Failure::Stopped(_) = failure {
         let owner = stream.owner.read().unwrap();
-        message::send_event(&owner, atoms::send_failed(), stream.clone(), reason.clone());
+        message::send_event(&owner, atoms::send_failed(), stream.clone(), failure.clone());
     }
 }
 
@@ -560,6 +589,7 @@ fn nif_close_stream<'a>(
     if let Some(task) = stream.recv_task.lock().unwrap().take() {
         task.abort();
     }
+    drop_receive_side(&stream);
     if stream.pending.load(Ordering::SeqCst) == 0 {
         finish(&stream);
     } else {
@@ -595,6 +625,7 @@ fn nif_reset_stream<'a>(
     if let Some(task) = stream.recv_task.lock().unwrap().take() {
         task.abort();
     }
+    drop_receive_side(&stream);
 
     let result = match stream.send.lock().unwrap().take() {
         Some(mut send_stream) => send_stream.reset(code).map_err(|e| format!("{}", e)),
@@ -603,6 +634,48 @@ fn nif_reset_stream<'a>(
     stream.stop_writes(Failure::Reset);
     stream.stop_taking_data();
     stream.writer_wake.notify_one();
+
+    match result {
+        Ok(()) => Ok(atoms::ok().encode(env)),
+        Err(e) => Ok((atoms::error(), e).encode(env)),
+    }
+}
+
+/// A closed or reset stream stops reading too: dropping the receive half
+/// sends the peer STOP_SENDING with code 0 when unread data remains, as it
+/// did when the read loop owned it.
+fn drop_receive_side(stream: &StreamResource) {
+    drop(stream.recv.lock().unwrap().take());
+}
+
+/// NIF: stop_stream(StreamRef, ErrorCode) -> ok | {error, Reason}
+///
+/// Stops OUR receive side with a QUIC STOP_SENDING frame carrying
+/// `ErrorCode`: the peer's writes on the stream then fail with
+/// `{stopped, ErrorCode}`. Data the peer already sent is discarded, and no
+/// more data or events of the receive side reach the owner. The send side
+/// is untouched: close_stream finishes it, reset_stream aborts it. Stopping
+/// explicitly is what carries the code; a receive half that is only dropped
+/// sends code 0. Returns at once.
+#[rustler::nif]
+fn nif_stop_stream<'a>(
+    env: Env<'a>,
+    stream: ResourceArc<StreamResource>,
+    error_code: u64,
+) -> NifResult<Term<'a>> {
+    let code = match VarInt::from_u64(error_code) {
+        Ok(c) => c,
+        Err(_) => return Ok((atoms::error(), atoms::error_code_out_of_range()).encode(env)),
+    };
+
+    let result = match stream.recv.lock().unwrap().take() {
+        Some(mut recv_stream) => recv_stream.stop(code).map_err(|e| format!("{}", e)),
+        None => Ok(()), // already stopped, closed or reset — idempotent
+    };
+    // A read loop waiting on the half it no longer has would never wake.
+    if let Some(task) = stream.recv_task.lock().unwrap().take() {
+        task.abort();
+    }
 
     match result {
         Ok(()) => Ok(atoms::ok().encode(env)),
