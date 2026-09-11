@@ -66,6 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `macula_subscriber:start_link/6` takes `subscribe` in its options: the
   function it subscribes with, `macula:subscribe/5` by default. The other
   options pass through to that function.
+- `macula_publisher:start_link/7` takes options: `publish`, the function
+  it publishes the payload with, and `fact_publish`, the function it
+  announces its facts with, both `macula:publish/4` by default.
 
 ### Changed
 

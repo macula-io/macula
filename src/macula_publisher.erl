@@ -14,6 +14,14 @@
 %%% facts around the publish — including `outcome => cancelled' if the
 %%% publisher is stopped before the publish resolves.
 %%%
+%%% == Publish functions ==
+%%%
+%%% `start_link/7' takes two functions in its options: `publish', the one
+%%% it publishes `Payload' with, and `fact_publish', the one it announces
+%%% its facts with. Both are called as `Publish(Pool, Realm, Topic,
+%%% Payload)' and default to `macula:publish/4'. A test gives its own
+%%% functions this way instead of replacing the `macula' module.
+%%%
 %%% == Example ==
 %%%
 %%% ```
@@ -38,9 +46,11 @@
 
 -behaviour(gen_server).
 
--export([start_link/5, start_link/6]).
+-export([start_link/5, start_link/6, start_link/7]).
 -export([cancel/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+
+-export_type([publish/0, start_opts/0]).
 
 -callback init(Args :: term()) ->
     {ok, State :: term()} | {stop, Reason :: term()}.
@@ -51,15 +61,20 @@
 -define(PUBLISH_STARTED, <<"pubsub.publish_started_v1">>).
 -define(PUBLISH_COMPLETED, <<"pubsub.publish_completed_v1">>).
 
+-type publish() :: fun((macula:pool(), macula:realm(), macula:topic(), term()) ->
+                          ok | {error, term()}).
+-type start_opts() :: #{publish => publish(), fact_publish => publish()}.
+
 -record(pstate, {
-    module     :: module(),
-    pool       :: macula:pool(),
-    realm      :: macula:realm(),
-    announce   :: boolean(),
-    publish_id :: binary(),
-    worker     :: pid(),
-    completed  :: boolean(),
-    user       :: term()
+    module       :: module(),
+    pool         :: macula:pool(),
+    realm        :: macula:realm(),
+    announce     :: boolean(),
+    fact_publish :: publish(),
+    publish_id   :: binary(),
+    worker       :: pid(),
+    completed    :: boolean(),
+    user         :: term()
 }).
 
 %% @doc Start a publisher. Publishes `Payload' on `Topic' via `Pool'.
@@ -72,8 +87,27 @@ start_link(Module, Pool, Realm, Topic, Payload) ->
 -spec start_link(module(), macula:pool(), macula:realm(), macula:topic(),
                  term(), term()) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Topic, Payload, Args) ->
+    start_link(Module, Pool, Realm, Topic, Payload, Args, #{}).
+
+%% @doc As `start_link/6', with options: `publish' and `fact_publish'
+%% give the functions the publisher publishes and announces with (see
+%% "Publish functions" above).
+-spec start_link(module(), macula:pool(), macula:realm(), macula:topic(),
+                 term(), term(), start_opts()) -> {ok, pid()} | {error, term()}.
+start_link(Module, Pool, Realm, Topic, Payload, Args, Opts) when is_map(Opts) ->
+    Publish = publish_function(publish, Opts),
+    FactPublish = publish_function(fact_publish, Opts),
     gen_server:start_link(?MODULE,
-                          {Module, Pool, Realm, Topic, Payload, true, Args}, []).
+                          {Module, Pool, Realm, Topic, Payload, true, Args,
+                           Publish, FactPublish}, []).
+
+%% The options' function under Key, or macula:publish/4 without one. One
+%% that is not an arity 4 fun is refused with function_clause, in the
+%% caller.
+publish_function(Key, Opts) ->
+    arity_4(maps:get(Key, Opts, fun macula:publish/4)).
+
+arity_4(Publish) when is_function(Publish, 4) -> Publish.
 
 %% @doc Cancel an in-flight publish. Publishes
 %% `pubsub.publish_completed_v1' with `outcome => cancelled' if the
@@ -86,25 +120,26 @@ cancel(Pid) -> gen_server:stop(Pid).
 %%%===================================================================
 
 %% @private
-init({Module, Pool, Realm, Topic, Payload, Announce, InitArgs}) ->
+init({Module, Pool, Realm, Topic, Payload, Announce, InitArgs, Publish, FactPublish}) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
             PublishId = crypto:strong_rand_bytes(16),
-            publish(Announce, Pool, Realm, ?PUBLISH_STARTED,
+            publish(FactPublish, Announce, Pool, Realm, ?PUBLISH_STARTED,
                     #{publish_id => PublishId, topic => Topic}),
-            Worker = spawn_worker(Pool, Realm, Topic, Payload),
+            Worker = spawn_worker(Publish, Pool, Realm, Topic, Payload),
             {ok, #pstate{module = Module, pool = Pool, realm = Realm,
-                        announce = Announce, publish_id = PublishId,
+                        announce = Announce, fact_publish = FactPublish,
+                        publish_id = PublishId,
                         worker = Worker, completed = false, user = UserState}};
         {stop, Reason} ->
             {stop, Reason}
     end.
 
-spawn_worker(Pool, Realm, Topic, Payload) ->
+spawn_worker(Publish, Pool, Realm, Topic, Payload) ->
     Parent = self(),
     spawn_link(fun() ->
-        Result = macula:publish(Pool, Realm, Topic, Payload),
+        Result = Publish(Pool, Realm, Topic, Payload),
         Parent ! {publish_result, Result}
     end).
 
@@ -143,8 +178,9 @@ terminate(_Reason, State) ->
 announce_completed(#pstate{completed = true} = State, _Result) ->
     State;
 announce_completed(#pstate{pool = Pool, realm = Realm, announce = Announce,
+                           fact_publish = FactPublish,
                            publish_id = PublishId} = State, Result) ->
-    publish(Announce, Pool, Realm, ?PUBLISH_COMPLETED,
+    publish(FactPublish, Announce, Pool, Realm, ?PUBLISH_COMPLETED,
             outcome_fields(#{publish_id => PublishId}, Result)),
     State#pstate{completed = true}.
 
@@ -155,6 +191,6 @@ outcome_fields(Base, {error, cancelled}) ->
 outcome_fields(Base, {error, Reason}) ->
     Base#{outcome => failed, reason => Reason}.
 
-publish(false, _, _, _, _) -> ok;
-publish(true, Pool, Realm, Topic, Payload) ->
-    _ = macula:publish(Pool, Realm, Topic, Payload), ok.
+publish(_FactPublish, false, _, _, _, _) -> ok;
+publish(FactPublish, true, Pool, Realm, Topic, Payload) ->
+    _ = FactPublish(Pool, Realm, Topic, Payload), ok.
