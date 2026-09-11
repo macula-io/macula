@@ -142,9 +142,9 @@ new_sup() ->
 %% @doc As `advertise/5', and additionally publishes a signed
 %% `procedure_advertisement' DHT record naming this pool's connected
 %% station as the server, so `macula_request:start_link_direct/6,7'
-%% can resolve and dial here directly. `Identity' signs the
-%% advertisement — reuse the same one across re-advertises so each one
-%% doesn't mint a fresh advertiser identity.
+%% can resolve and dial here directly. `NodeIdentity', the provider's
+%% node identity key, signs the advertisement: reuse the same key across
+%% re-advertises so each one doesn't mint a fresh advertiser.
 %%
 %% The DHT publish is best-effort: if it fails (e.g. no healthy link
 %% at that instant), the handler is still advertised and reachable via
@@ -155,18 +155,16 @@ new_sup() ->
 %% learn its handler is pooled-only, and "a later publish succeeds"
 %% cannot happen if nothing ever tries again.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair()) ->
+                       module(), term(), macula_node_keys:node_key()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
-    advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
+    advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, #{}).
 
 %% @doc As `advertise_direct/6', with `Opts' forwarded BOTH to
 %% `advertise/6' (so `announce'/`auth'/`reuse_sup' apply here too) and
-%% to `macula_direct_dial:publish_advertisement/5' — e.g. `cert_chain =>
-%% ChainPem' (leaf ++ org CA, PEM), so a verifying consumer's
-%% `verify_cert_chain' opt can check this advertiser's org/realm
-%% authorization (Slice 7c Direction B, managed realms only. See
-%% `macula_direct_dial''s module doc, "Trust model") — each side reads
+%% to `macula_direct_dial:publish_advertisement/5', e.g. `authorization',
+%% the provider authorization an org namespaced procedure needs (see
+%% `macula_direct_dial''s module doc, "Trust model"). Each side reads
 %% only the keys it recognizes, so one `Opts' map serves both.
 %% `reuse_sup' matters here specifically: a station's wire-level
 %% registration for a procedure is tied to whichever connection sent
@@ -176,14 +174,14 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
 %% returned the first time) re-sends both the wire frame and the DHT
 %% record without leaking a new supervisor per tick.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair(), map()) ->
+                       module(), term(), macula_node_keys:node_key(), map()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
     case advertise(Pool, Realm, Procedure, Module, Args, Opts) of
         {ok, Sup} ->
             log_publish_result(
               macula_direct_dial:publish_advertisement(
-                Pool, Realm, Procedure, Identity, Opts),
+                Pool, Realm, Procedure, NodeIdentity, Opts),
               Procedure),
             {ok, Sup};
         {error, _} = Error ->

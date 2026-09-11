@@ -170,22 +170,22 @@ advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
 %% station as the server, so `macula_pusher:start_link_direct/5,6' can
 %% resolve and dial here directly. See `macula_streamer:advertise_direct/6,7'.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair()) ->
+                       module(), term(), macula_node_keys:node_key()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
-    advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, #{}).
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity) ->
+    advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, #{}).
 
 %% @doc As `advertise_direct/6', with `Opts' forwarded to
-%% `macula_direct_dial:publish_advertisement/5' — e.g. `cert_chain =>
-%% ChainPem' (Slice 7c Direction B, managed realms only).
+%% `macula_direct_dial:publish_advertisement/5', e.g. `authorization',
+%% the provider authorization an org namespaced procedure needs.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair(), map()) ->
+                       module(), term(), macula_node_keys:node_key(), map()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
+advertise_direct(Pool, Realm, Procedure, Module, Args, NodeIdentity, Opts) ->
     Announce = maps:get(announce, Opts, true),
     macula_streamer:advertise_direct(Pool, Realm, Procedure, ?MODULE,
                                      {Module, Pool, Realm, Announce, Args},
-                                     Identity,
+                                     NodeIdentity,
                                      Opts#{mode => client_stream, announce => false}).
 
 %% @doc Stop advertising `Procedure'.

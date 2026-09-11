@@ -32,15 +32,19 @@
 %%% == Trust model ==
 %%%
 %%% Two independent checks, both mandatory, cover what the QUIC/TLS
-%%% layer cannot: (1) every candidate `procedure_advertisement' must
-%%% carry a valid Ed25519 signature before its `serving_station' is
-%%% trusted at all — otherwise any identity able to sign SOME record
-%%% could name a real, legitimate station as the server for a
-%%% procedure it has no authority over, and the station_endpoint check
+%%% layer cannot. (1) Every candidate `procedure_advertisement' arrives
+%%% verified under the node's crypto profile (`macula:find_records/2'),
+%%% and is trusted only when it advertises the resolved procedure in the
+%%% resolved realm and its provider authorization verifies
+%%% (`macula_record:verify_authorization/3', D25 item 6): a procedure
+%%% with an org namespace needs an authorization for that org, and a
+%%% procedure without one carries none. Otherwise any node able to sign
+%%% SOME record could name a real, legitimate station as the server for
+%%% a procedure it has no authority over, and the station_endpoint check
 %%% below would still pass (it only proves we reached the station we
-%%% were told to reach, not that whoever told us so was authorized to);
-%%% (2) the resolved `station_endpoint' must be signed by the station
-%%% itself (`verify_and_build/2', unchanged). The actual QUIC dial
+%%% were told to reach, not that whoever told us so was authorized to).
+%%% (2) The resolved `station_endpoint' must be signed by the station
+%%% itself (`station_signed_endpoint/2'). The actual QUIC dial
 %%% trusts NEITHER the TLS certificate (`pin_tls_cert => false' — a
 %%% production station's TLS is terminated by an unrelated PKI, e.g.
 %%% Let's Encrypt, so pinning the cert key can never succeed) NOR
@@ -48,19 +52,14 @@
 %%% is enforced at the application layer instead, via the
 %%% cryptographically signed CONNECT/HELLO handshake
 %%% (the peer identity binding in `macula_peering_conn') checked against the
-%%% exact pubkey the signed DHT chain above resolved.
+%%% exact node_id the signed DHT chain above resolved.
 %%%
-%%% A third check is available but OPT-IN, via `Opts' (managed realms
-%%% only — see `macula_record:verify_advertisement_cert_chain/3'):
-%%% `verify_cert_chain => {RealmCaPem, Org}' additionally requires the
-%%% advertisement's embedded X.509 service-cert chain to verify to
-%%% `RealmCaPem' under `Org' (Slice 7c Direction B), proving the
-%%% ADVERTISER — not just the station it names — is an org/realm-
-%%% authorized identity. Without it, (1) above still rejects an
-%%% unsigned or badly-signed advertisement, but not one signed by an
-%%% unauthorized (if self-consistent) identity; unmanaged realms have
-%%% no realm CA to check against, so this stays opt-in rather than
-%%% mandatory.
+%%% An authorization verifies against the realm trust in `Opts',
+%%% `realm_trust => #{realm_key => RealmKey, realm_ca => RealmCaPem}':
+%%% the realm key as carried, for an org directory with a procedure
+%%% delegation, and the realm CA in PEM, for a certificate chain.
+%%% Without the realm trust its form needs, an advertisement for an org
+%%% namespaced procedure is never trusted.
 %%%
 %%% == Content ==
 %%%
@@ -71,7 +70,7 @@
 %%% the same machinery `call/6' uses internally for `serving_station').
 %%%
 %%% `get_content/3' resolves and fetches deliberately WITHOUT the
-%%% cert-chain machinery above — content's threat model genuinely
+%%% authorization check above: content's threat model genuinely
 %%% differs from RPC's. An RPC reply is opaque and unverifiable except
 %%% by trusting whoever answered, so proving the ADVERTISER is
 %%% authorized matters. Content is content-addressed, and the fetched
@@ -105,8 +104,10 @@
 
 -define(RESOLVE_RETRIES, 50).
 -define(RESOLVE_RETRY_MS, 100).
+-define(TYPE_PROCEDURE_ADVERTISEMENT, 16#06).
+-define(TYPE_STATION_ENDPOINT, 16#12).
 
-%% @doc As `call/6' with no cert-chain verification.
+%% @doc As `call/6' with no realm trust.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
           pos_integer()) -> {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
@@ -116,15 +117,16 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% return shape as `macula:call/5'; resolve failures surface as
 %% `{error, {unresolved, Reason}}' so a caller can tell "nobody has
 %% advertised this via direct-dial yet" apart from a real call failure.
-%% `Opts' may include `verify_cert_chain => {RealmCaPem, Org}' — see
-%% the module doc's "Trust model" section.
+%% `Opts' may include `realm_trust', the realm trust an org namespaced
+%% procedure's authorization is checked against: see the module doc's
+%% "Trust model" section.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
           pos_integer(), map()) -> {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
     case resolve_dial_url(Pool, Realm, Procedure, Opts) of
         {ok, {Station, DialUrl}} ->
             %% See the module doc's "Trust model" section: trust is
-            %% pinned to the exact pubkey the signed DHT chain resolved,
+            %% pinned to the exact node_id the signed DHT chain resolved,
             %% but enforced at the application layer, not the TLS
             %% layer — a production station's TLS certificate has no
             %% relationship to its macula identity.
@@ -136,7 +138,7 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
             {error, {unresolved, Reason}}
     end.
 
-%% @doc As `call_stream/6' with no cert-chain verification.
+%% @doc As `call_stream/6' with no realm trust.
 -spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
                   map()) -> {ok, macula:stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, StreamOpts) ->
@@ -147,7 +149,7 @@ call_stream(Pool, Realm, Procedure, Args, StreamOpts) ->
 %% same resolve+trust machinery — see the module doc. `StreamOpts' is
 %% forwarded to `call_stream_station/6' alongside the resolved trust
 %% override (`mode', `owner', `dial_timeout_ms', etc); `Opts' is the
-%% resolve-side `verify_cert_chain' opt, same as `call/6'.
+%% resolve-side `realm_trust' opt, same as `call/6'.
 -spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
                   map(), map()) -> {ok, macula:stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
@@ -161,56 +163,54 @@ call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
             {error, {unresolved, Reason}}
     end.
 
-%% @doc As `publish_advertisement/5' with no cert chain embedded.
+%% @doc As `publish_advertisement/5' with no provider authorization.
 -spec publish_advertisement(macula:pool(), macula:realm(), macula:procedure(),
-                            macula_identity:key_pair()) -> ok | {error, term()}.
-publish_advertisement(Pool, Realm, Procedure, Identity) ->
-    publish_advertisement(Pool, Realm, Procedure, Identity, #{}).
+                            macula_node_keys:node_key()) -> ok | {error, term()}.
+publish_advertisement(Pool, Realm, Procedure, NodeIdentity) ->
+    publish_advertisement(Pool, Realm, Procedure, NodeIdentity, #{}).
 
 %% @doc Publish a signed `procedure_advertisement' for `Procedure',
 %% naming `Pool''s currently-connected station as the serving station.
-%% `Identity' signs it — the pool itself has no identity to sign with,
-%% so the caller supplies one (reuse the same one across re-advertises;
-%% a fresh identity per call is valid but needless DHT churn). `Opts'
-%% may include `cert_chain => ChainPem' (leaf ++ org CA, PEM) so a
-%% verifying consumer's `verify_cert_chain' opt (see `call/6') can
-%% check this advertiser's org/realm authorization — Slice 7c
-%% Direction B, managed realms only.
+%% `NodeIdentity', the provider's node identity key, signs it, and its
+%% node_id is the advertiser (reuse the same key across re-advertises;
+%% a fresh key per call is valid but needless DHT churn). `Opts' may
+%% include `authorization', the provider authorization an org
+%% namespaced procedure needs (D25 item 6), as
+%% `#{org_directory => Wire, procedure_delegation => Wire}' or
+%% `#{certificate_chain => [Der]}', and `ttl_ms'.
 -spec publish_advertisement(macula:pool(), macula:realm(), macula:procedure(),
-                            macula_identity:key_pair(), map()) ->
+                            macula_node_keys:node_key(), map()) ->
     ok | {error, term()}.
-publish_advertisement(Pool, Realm, Procedure, Identity, Opts) ->
+publish_advertisement(Pool, Realm, Procedure, NodeIdentity, Opts) ->
     case macula:links(Pool) of
         {ok, Links} -> on_links(connected_station(Links), Pool, Realm,
-                                Procedure, Identity, Opts);
+                                Procedure, NodeIdentity, Opts);
         {error, _} = Error -> Error
     end.
 
-on_links({ok, Station}, Pool, Realm, Procedure, Identity, Opts) ->
-    AdvPub = macula_identity:public(Identity),
-    Uri = discovery_uri(Realm, Procedure),
+on_links({ok, Station}, Pool, Realm, Procedure, NodeIdentity, Opts) ->
+    Advertiser = macula_node_keys:key_id(NodeIdentity),
     Ad = macula_record:sign(
-           macula_record:procedure_advertisement(AdvPub, Uri, Station,
+           macula_record:procedure_advertisement(Advertiser, Realm, Procedure, Station,
                                                  adv_opts(Opts)),
-           Identity),
+           NodeIdentity),
     macula:put_record(Pool, Ad);
-on_links({error, _} = Error, _Pool, _Realm, _Procedure, _Identity, _Opts) ->
+on_links({error, _} = Error, _Pool, _Realm, _Procedure, _NodeIdentity, _Opts) ->
     Error.
 
-%% Forwards each opt `procedure_advertisement/4' actually recognizes,
-%% independently — a caller passing `ttl_ms' alone (no `cert_chain') used
-%% to get `#{}' back, silently dropping `ttl_ms' too, because the old
-%% single-clause match only ever produced `cert_chain' or nothing. Found
-%% while wiring a proportioned `ttl_ms' through `advertise_direct/7' from
-%% `hecate_om_capabilities'; `procedure_advertisement/4' already reads
-%% `ttl_ms' from its own Opts (falls back to `?DEFAULT_TTL_MS'), so the
-%% bug was purely in this forwarder never passing it through.
+%% Forwards each opt `procedure_advertisement/5' actually recognizes,
+%% independently: a caller passing `ttl_ms' alone once got `#{}' back,
+%% silently dropping `ttl_ms' too, because an older single-clause match
+%% only ever produced one opt or nothing. Found while wiring a
+%% proportioned `ttl_ms' through `advertise_direct/7' from
+%% `hecate_om_capabilities'; `procedure_advertisement/5' reads `ttl_ms'
+%% from its own Opts, so the bug was purely in this forwarder.
 adv_opts(Opts) ->
-    maps:merge(cert_chain_opt(Opts), ttl_ms_opt(Opts)).
+    maps:merge(authorization_opt(Opts), ttl_ms_opt(Opts)).
 
-cert_chain_opt(#{cert_chain := ChainPem}) when is_binary(ChainPem) ->
-    #{cert_chain => ChainPem};
-cert_chain_opt(_Opts) ->
+authorization_opt(#{authorization := Authorization}) when is_map(Authorization) ->
+    #{authorization => Authorization};
+authorization_opt(_Opts) ->
     #{}.
 
 ttl_ms_opt(#{ttl_ms := Ttl}) when is_integer(Ttl), Ttl > 0 ->
@@ -236,7 +236,7 @@ connected_station(Links) ->
 %% handshake if a fresh link must be dialed
 %% (`macula:get_content_station/5') — the underlying block/manifest
 %% transfer has its own internal timeouts. See the module doc's
-%% "Content" section for why this has no `verify_cert_chain'-equivalent
+%% "Content" section for why this has no `realm_trust'-equivalent
 %% opt, unlike `call/6'. Only chunked content is discoverable this way
 %% — see `macula:find_content_providers/2'.
 -spec get_content(macula:pool(), macula:mcid(), pos_integer()) ->
@@ -282,7 +282,7 @@ on_providers_found({error, _} = Error, _Pool, _MCID, _N) ->
 %% handshake if a fresh link must be dialed
 %% (`macula:put_content_station/5') — the underlying block/manifest
 %% transfer has its own internal timeouts.
--spec put_content(macula:pool(), macula_identity:pubkey(), binary(),
+-spec put_content(macula:pool(), <<_:256>>, binary(),
                   pos_integer()) -> {ok, macula:mcid()} | {error, term()}.
 put_content(Pool, Station, Bytes, TimeoutMs) ->
     case resolve_station_endpoint(Pool, Station) of
@@ -300,7 +300,7 @@ put_content(Pool, Station, Bytes, TimeoutMs) ->
 %% `Station' and retrying past a stale/expired replica — the same
 %% discipline `call/6' applies internally once it has resolved a
 %% procedure's `serving_station'.
--spec resolve_station_endpoint(macula:pool(), macula_identity:pubkey()) ->
+-spec resolve_station_endpoint(macula:pool(), <<_:256>>) ->
     {ok, binary()} | {error, term()}.
 resolve_station_endpoint(Pool, Station) ->
     case resolve_endpoint(Pool, Station) of
@@ -313,29 +313,41 @@ resolve_station_endpoint(Pool, Station) ->
 %%%===================================================================
 
 resolve_dial_url(Pool, Realm, Procedure, Opts) ->
-    Uri = discovery_uri(Realm, Procedure),
-    Key = macula_record:procedure_key(Uri),
+    Key = macula_record:procedure_key(Realm, Procedure),
     case find_records_retry(Pool, Key, ?RESOLVE_RETRIES) of
         {ok, [_ | _] = Recs} ->
-            resolve_station(Pool, trusted_advertisements(Recs, Opts));
+            resolve_station(Pool, trusted_advertisements(Recs, trust(Realm, Procedure, Opts)));
         {ok, []} -> {error, procedure_not_advertised};
         {error, _} = Error -> Error
     end.
 
-%% Only a record that passes trust filtering is a candidate at all —
-%% see the module doc's "Trust model" section. Base signature check is
-%% mandatory; `verify_cert_chain' additionally requires the embedded
-%% X.509 chain when the caller opted in.
-trusted_advertisements(Recs, Opts) ->
-    [Rec || Rec <- Recs, advertisement_trusted(Rec, Opts)].
+%% What an advertisement for `Procedure' in `Realm' is checked against:
+%% the node's crypto profile, under which `macula:find_records/2' just
+%% verified the records, and the realm trust the caller holds.
+trust(Realm, Procedure, Opts) ->
+    {ok, Profile} = macula_crypto_profile:configured(),
+    RealmTrust = maps:with([realm_key, realm_ca], maps:get(realm_trust, Opts, #{})),
+    RealmTrust#{realm => Realm, procedure => Procedure, profile => Profile}.
 
-advertisement_trusted(Rec, #{verify_cert_chain := {RealmCaPem, Org}}) ->
-    ok =:= macula_record:verify_advertisement_cert_chain(RealmCaPem, Rec, Org);
-advertisement_trusted(Rec, _Opts) ->
-    signature_ok(macula_record:verify(Rec)).
+%% Only an advertisement that passes the trust check is a candidate at
+%% all: see the module doc's "Trust model" section.
+trusted_advertisements(Recs, Trust) ->
+    [Rec || Rec <- Recs, advertisement_trusted(Rec, Trust)].
 
-signature_ok({ok, _})    -> true;
-signature_ok({error, _}) -> false.
+%% A verified advertisement is trusted when it advertises the resolved
+%% procedure in the resolved realm and its provider authorization
+%% verifies against the realm trust (D25 item 6).
+advertisement_trusted(#{type := ?TYPE_PROCEDURE_ADVERTISEMENT} = Rec,
+                      #{realm := Realm, procedure := Procedure} = Trust) ->
+    for_procedure(macula_record:read_procedure_advertisement(Rec), Rec, Realm, Procedure, Trust);
+advertisement_trusted(_OtherRecord, _Trust) ->
+    false.
+
+for_procedure(#{realm_id := Realm, procedure := Procedure}, Rec, Realm, Procedure, Trust) ->
+    ok =:= macula_record:verify_authorization(Rec, maps:without([realm, procedure], Trust),
+                                              erlang:system_time(millisecond));
+for_procedure(_OtherProcedure, _Rec, _Realm, _Procedure, _Trust) ->
+    false.
 
 resolve_station(_Pool, []) ->
     {error, no_trusted_advertisement};
@@ -363,31 +375,27 @@ resolve_endpoint(Pool, Station, N) ->
     on_endpoint_fetch(find_record_retry(Pool, Key, 1), Pool, Station, N).
 
 on_endpoint_fetch({ok, EpRec}, Pool, Station, N) ->
-    on_endpoint_verified(verify_and_build(Station, EpRec), Pool, Station, N);
+    on_endpoint_verified(station_signed_endpoint(Station, EpRec), Pool, Station, N);
 on_endpoint_fetch({error, not_found}, Pool, Station, N) ->
     timer:sleep(?RESOLVE_RETRY_MS),
     resolve_endpoint(Pool, Station, N - 1).
 
 on_endpoint_verified({ok, _} = Ok, _Pool, _Station, _N) -> Ok;
-on_endpoint_verified({error, expired}, Pool, Station, N) ->
-    timer:sleep(?RESOLVE_RETRY_MS),
-    resolve_endpoint(Pool, Station, N - 1);
 on_endpoint_verified({error, _} = Error, _Pool, _Station, _N) -> Error.
 
 %% The `station_endpoint' record for `Station' must be SIGNED BY
-%% `Station' itself (macula_station_announcer publishes it self-signed
-%% — the station describing its own reachable address). Checking the
-%% signature AND that the signer is exactly `Station', not just any
-%% valid signature, is what makes pinning `expected_node_id => Station'
-%% on the dial meaningful: without it, a record merely stored under the
-%% right DHT key (but signed, or not, by someone else) would still be
-%% trusted, and per-call pinning would authenticate the wrong thing.
-verify_and_build(Station, #{key := Station} = EpRec) ->
-    case macula_record:verify(EpRec) of
-        {ok, Verified} -> build_dial_url(Station, Verified);
-        {error, _} = Error -> Error
-    end;
-verify_and_build(_Station, _EpRec) ->
+%% `Station' itself (macula_station_announcer publishes it self-signed:
+%% the station describing its own reachable address). The record arrives
+%% verified under the node's crypto profile (`macula:find_record/2');
+%% checking that its signer's node_id is exactly `Station', not just any
+%% valid signer, is what makes pinning `expected_node_id => Station' on
+%% the dial meaningful: without it, a record merely stored under the
+%% right DHT key but signed by someone else would still be trusted, and
+%% per-call pinning would authenticate the wrong thing. A stale or
+%% refused replica never gets here: `find_record_retry/3' retries past it.
+station_signed_endpoint(Station, #{type := ?TYPE_STATION_ENDPOINT, key_id := Station} = EpRec) ->
+    build_dial_url(Station, EpRec);
+station_signed_endpoint(_Station, _EpRec) ->
     {error, station_endpoint_signer_mismatch}.
 
 build_dial_url(Station, EpRec) ->
@@ -416,10 +424,3 @@ on_find_record({ok, Rec}, _Pool, _Key, _N) -> {ok, Rec};
 on_find_record(_Other, Pool, Key, N) ->
     timer:sleep(?RESOLVE_RETRY_MS),
     find_record_retry(Pool, Key, N - 1).
-
-%% No `Org' segment in the discovery URI: `Org' is only consulted
-%% post-resolve, as the `verify_cert_chain' opt's expected leaf-cert
-%% organization (see `advertisement_trusted/2') — it does not affect
-%% how a `procedure_advertisement' is keyed or found.
-discovery_uri(Realm, Procedure) ->
-    <<(binary:encode_hex(Realm, uppercase))/binary, "/", Procedure/binary>>.

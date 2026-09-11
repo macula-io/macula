@@ -111,8 +111,8 @@ start_link_direct(Module, Pool, Realm, Procedure, Payload, TimeoutMs, Args) ->
                       Args, #{}).
 
 %% @doc As `start_link_direct/7', with `Opts' forwarded to
-%% `macula_direct_dial:call/6' — e.g. `verify_cert_chain =>
-%% {RealmCaPem, Org}' (Slice 7c Direction B; managed realms only. See
+%% `macula_direct_dial:call/6', e.g. `realm_trust', the realm trust an
+%% org namespaced procedure's authorization is checked against (see
 %% `macula_direct_dial''s module doc, "Trust model").
 -spec start_link_direct(module(), macula:pool(), macula:realm(),
                         macula:procedure(), term(), pos_integer(), term(),
