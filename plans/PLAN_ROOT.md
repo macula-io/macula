@@ -10,6 +10,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 | [PLAN_POST_QUANTUM_SECURITY.md][pq] | Post-quantum security: profiles, key model, decisions, stages | Planning |
 | [PLAN_POST_QUANTUM_SECURITY_PART1.md][pq1] | Part 1: verified facts per stack and the Stage 0 checks | Planning |
 | [PLAN_POST_QUANTUM_SECURITY_PART2.md][pq2] | Part 2: work packages per stage and files per repository | Planning |
+| [PLAN_POST_QUANTUM_SECURITY_DECISIONS.md][pqd] | Decisions: the full text of each decision | Planning |
 | [DESIGN_PQ_HANDSHAKE_FRAMES.md][frames] | Handshake frames, bindings and status statements, byte for byte | Agreed |
 | [DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md][signed] | Signed records and frames after the handshake | Agreed |
 
@@ -30,6 +31,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 [pq]: PLAN_POST_QUANTUM_SECURITY.md
 [pq1]: PLAN_POST_QUANTUM_SECURITY_PART1.md
 [pq2]: PLAN_POST_QUANTUM_SECURITY_PART2.md
+[pqd]: PLAN_POST_QUANTUM_SECURITY_DECISIONS.md
 [frames]: DESIGN_PQ_HANDSHAKE_FRAMES.md
 [signed]: DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md
 [explore]: EXPLORATION_POST_QUANTUM.md
