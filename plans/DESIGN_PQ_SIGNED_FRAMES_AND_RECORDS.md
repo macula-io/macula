@@ -494,9 +494,9 @@ publication bytes ride in the PUBLISH and in every EVENT made from it, so `tbs` 
 | `publisher` | bytes, 32 | the publisher's node_id, equal to the key id of `key` |
 | `realm` | bytes, 32 | |
 | `topic` | text | |
-| `seq` | unsigned | |
-| `published_at` | unsigned, ms | |
-| `ttl_ms` | unsigned, ms | optional: how long the publication is delivered |
+| `seq` | unsigned | below 2^53, numbered by the seq rule below |
+| `published_at` | unsigned, ms | milliseconds since the Unix epoch, from the wall clock |
+| `ttl_ms` | unsigned, ms | optional, at most 3,600,000: how long the publication is delivered |
 | `payload` | any | |
 
 - The origin station verifies a publication before fan-out (D17). Every Plumtree node verifies a publication once,
@@ -504,14 +504,23 @@ publication bytes ride in the PUBLISH and in every EVENT made from it, so `tbs` 
   delivery.
 - A subscriber delivers a publication only when its `realm` equals a subscription's realm and its `topic` matches
   that subscription's topic or topic pattern.
-- A subscriber delivers each publication at most once. It keeps the SHA-384 of each delivered publication's `tbs`
-  until `published_at` plus `ttl_ms`, or 10 minutes, plus 5 minutes has passed.
-- A verifier refuses a `published_at` more than 5 minutes ahead of its clock, and a publication whose `published_at`
-  plus `ttl_ms` plus 5 minutes has passed. Without `ttl_ms`, a maximum age of 10 minutes applies.
+- A publication expires at `published_at` plus `ttl_ms`, or plus 10 minutes without `ttl_ms`, plus 5 minutes.
+  `ttl_ms` is at most 3,600,000, one hour.
+- `published_at` is milliseconds since the Unix epoch, taken from the wall clock, never from a monotonic clock.
+- A verifier refuses a `published_at` more than 5 minutes ahead of its clock, a `ttl_ms` above one hour, and a
+  publication that has expired.
+- A subscriber delivers each publication at most once. Its deduplication key is the SHA-384 of the `tbs` bytes as
+  received, which it keeps at least until the publication expires, and it judges expiry when its deduplication check
+  runs, so a copy checked after expiry is never delivered. A restarted pool counts as a new subscriber: it remembers
+  no hashes.
 - Plumtree deduplication and IHAVE bookkeeping key on the SHA-384 of the publication's `tbs`, never on an unsigned
   message id.
 - Every node that remembers a publication hash for deduplication keeps it until the publication expires, and no
-  longer.
+  longer. With the `ttl_ms` maximum, that is at most 70 minutes after it records the hash.
+- A publisher numbers its publications from the wall clock in microseconds when it starts, one more for each
+  publication, so a restarted publisher continues above its earlier numbers. All publications a node signs with one
+  key share one seq counter. seq stays below 2^53, which microseconds since the Unix epoch do until the year 2255.
+- A subscriber that orders by seq takes a jump of more than 10,000 in either direction as a restarted publisher.
 - `published_at` is part of the event an application receives.
 - PUBLISH and SUBSCRIBE carry no capability token field (WP 1.4).
 

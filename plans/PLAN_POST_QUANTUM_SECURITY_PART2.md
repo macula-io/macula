@@ -539,7 +539,9 @@ Every stack also meets these, each red first:
     the caller handed to the handler is that verified key;
   - a chunked fetch accepts no chunk until the fetched manifest's recomputed content id equals the requested id;
     a self-consistent manifest for other content is refused;
-  - event dedup runs only after signature verification; an unverified frame never marks an id as seen;
+  - event dedup keys on the SHA-384 of a publication's `tbs` bytes as received, runs only on publications that
+    verified, and keeps each hash until the publication's `expires_at`;
+  - a publisher-owned seq counter follows the seq rule of the signed frames design;
   - each event exposes realm, topic, `publisher` as the publisher's node_id, seq, `published_at` and
     `delivered_via`, taken from the verified publication, and `publication_hash` and `expires_at` where the stack
     deduplicates;
@@ -631,8 +633,11 @@ Every stack also meets these, each red first:
     - content ids have only tag 2, SHA-384, in `computeMcid` and in every content id check (D24);
     - content is fetched from the node that shares it, through stations, and content a node shares is served by
       that node itself (D27);
-  - events: dedup runs only on verified events, so a forged event that reuses a real publisher's realm,
-    publisher, sequence number and topic never suppresses the genuine one;
+  - event dedup keys on the SHA-384 of a publication's `tbs` bytes as received, runs only on publications that
+    verified, and keeps each hash until the publication's `expires_at`; the FFI event carries `publication_hash` and
+    `expires_at`, because `macula-ts` deduplicates on the TypeScript side;
+  - every publishing path follows the seq rule of the signed frames design, including `connection/publisher.go`'s
+    meta-fact counter and the `cabi` publish counter that `macula-ts` publishes through;
   - each event exposes realm, topic, `publisher` as the publisher's node_id, seq, `published_at` and
     `delivered_via`, taken from the verified publication, and `publication_hash` and `expires_at` where the stack
     deduplicates;
@@ -705,8 +710,10 @@ Every stack also meets these, each red first:
     stream's peer, and the signer is kept on inbound frames;
   - an EVENT is delivered only if its publisher signature verifies, and every PUBLISH carries a publisher
     signature that test vectors from `macula` verify;
-  - event dedup runs only after the publisher signature verifies, so a forged event that reuses a real publisher
-    and sequence number never suppresses the genuine one;
+  - event dedup keys on the SHA-384 of a publication's `tbs` bytes as received, runs only on publications that
+    verified, and keeps each hash until the publication's `expires_at`;
+  - a publisher-owned seq counter follows the seq rule of the signed frames design, in place of a seq its caller
+    passes;
   - each event exposes realm, topic, `publisher` as the publisher's node_id, seq, `published_at` and
     `delivered_via`, taken from the verified publication, and `publication_hash` and `expires_at` where the stack
     deduplicates;
@@ -743,6 +750,9 @@ Every stack also meets these, each red first:
   - each event exposes realm, topic, `publisher` as the publisher's node_id, seq, `published_at` and
     `delivered_via`, taken from the verified publication, and `publication_hash` and `expires_at` where it
     deduplicates;
+  - event dedup keys on the SHA-384 of a publication's `tbs` bytes as received, runs only on publications that
+    verified, and keeps each hash until the publication's `expires_at`;
+  - `SupervisedPubSub` and `RpcFacts` follow the seq rule of the signed frames design;
   - Linux CI on an image with OpenSSL 3.5 or newer, and a `windows-latest` runner for the Schannel result.
 - **Files:**
   - `src/Macula/Macula.csproj`
