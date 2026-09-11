@@ -86,6 +86,10 @@
 %% Station discovery selection math — exported for direct testing, same
 %% rationale as `select_publish_targets/2' above.
 -export([ordered_for_selection/2, select_discovery_seeds/3, station_seed/1]).
+%% How a pool call moves from one link to the next, over any links and
+%% call -- exported for macula_client_call_first_success_tests.erl, which
+%% replaces no module.
+-export([first_success/3]).
 -endif.
 
 -export_type([pool/0, opts/0, seed/0, status/0, link_info/0, handler/0,
@@ -1383,25 +1387,36 @@ identity_or_generate({ok, Identity}) -> Identity;
 identity_or_generate(error) -> macula_identity:generate(#{puzzle => true}).
 
 %% First-success across the pool's healthy links. Tries each link in
-%% turn; the first non-error reply wins. Falls through on
-%% per-link errors (timeout, not_connected) so a single dead link does
-%% not block the call.
-call_first_success([], _Realm, _Proc, _Payload, _Tmo) ->
+%% turn; the first non-error reply wins. It moves on to the next link only
+%% when the link reports that the CALL never went out
+%% (`macula_station_link:not_sent/1'), so a link that isn't connected does
+%% not block the call. A CALL that may have reached its provider, a timeout
+%% included, is never sent again, so a provider never runs one call twice.
+call_first_success(Pids, Realm, Proc, Payload, Tmo) ->
+    first_success(Pids, fun macula_station_link:is_connected/1,
+                  fun(Pid) -> macula_station_link:call(Pid, Realm, Proc, Payload, Tmo) end).
+
+%% `call_first_success/5' over any links: `Connected(Link)' says whether a
+%% link can take the call, and `Call(Link)' makes it there.
+first_success([], _Connected, _Call) ->
     {error, no_healthy_station};
-call_first_success([Pid | Rest], Realm, Proc, Payload, Tmo) ->
-    next_or_first(macula_station_link:is_connected(Pid),
-                  Pid, Rest, Realm, Proc, Payload, Tmo).
+first_success([Link | Rest], Connected, Call) ->
+    next_or_first(Connected(Link), Link, Rest, Connected, Call).
 
-next_or_first(false, _Pid, Rest, Realm, Proc, Payload, Tmo) ->
-    call_first_success(Rest, Realm, Proc, Payload, Tmo);
-next_or_first(true, Pid, Rest, Realm, Proc, Payload, Tmo) ->
-    keep_or_next(macula_station_link:call(Pid, Realm, Proc, Payload, Tmo),
-                 Rest, Realm, Proc, Payload, Tmo).
+next_or_first(false, _Link, Rest, Connected, Call) ->
+    first_success(Rest, Connected, Call);
+next_or_first(true, Link, Rest, Connected, Call) ->
+    answer_or_next(Call(Link), Rest, Connected, Call).
 
-keep_or_next({ok, _} = R, _Rest, _Realm, _Proc, _Payload, _Tmo) -> R;
-keep_or_next({error, _} = E, [], _Realm, _Proc, _Payload, _Tmo) -> E;
-keep_or_next({error, _}, Rest, Realm, Proc, Payload, Tmo) ->
-    call_first_success(Rest, Realm, Proc, Payload, Tmo).
+answer_or_next({ok, _} = R, _Rest, _Connected, _Call) -> R;
+answer_or_next({error, _} = E, [], _Connected, _Call) -> E;
+answer_or_next({error, _} = E, Rest, Connected, Call) ->
+    next_if_not_sent(macula_station_link:not_sent(E), E, Rest, Connected, Call).
+
+next_if_not_sent(true, _E, Rest, Connected, Call) ->
+    first_success(Rest, Connected, Call);
+next_if_not_sent(false, E, _Rest, _Connected, _Call) ->
+    E.
 
 %% Fan-out advertise: register on every live link. Returns ok if at
 %% least one link accepted; per-link errors are logged and discarded.

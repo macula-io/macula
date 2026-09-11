@@ -274,6 +274,65 @@ call_times_out_when_no_reply_test_() ->
      end}.
 
 %%------------------------------------------------------------------
+%% A CALL that never went out is reported as not sent
+%%------------------------------------------------------------------
+
+%% Only an error from before the CALL went out lets a pool try another link.
+not_sent_is_true_only_for_errors_before_the_call_went_out_test() ->
+    ?assert(macula_station_link:not_sent({error, not_connected})),
+    ?assert(macula_station_link:not_sent({error, noproc})),
+    ?assert(macula_station_link:not_sent({error, {refused, {unsendable, []}}})),
+    ?assertNot(macula_station_link:not_sent({error, timeout})),
+    ?assertNot(macula_station_link:not_sent({error, {disconnected, closed}})),
+    ?assertNot(macula_station_link:not_sent({error, gone})),
+    ?assertNot(macula_station_link:not_sent(
+                 {error, {call_error, 16#02, <<"temporary_relay_failure">>}})).
+
+%% A CALL frame the peering refuses to send comes back as refused, and
+%% nothing is sent.
+a_refused_call_frame_is_reported_as_refused_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         Identity = macula_identity:generate(),
+         {ok, Pid} = macula_station_link:start_link(#{
+             seed     => #{host => <<"127.0.0.1">>, port => 1},
+             connect_timeout_ms => 2000,
+             identity => Identity
+         }),
+         %% A peer of its own, so a frame another test left in this
+         %% process's mailbox can't be mistaken for one sent here.
+         Test = self(),
+         Sent = make_ref(),
+         FakePeer = spawn_link(fun() -> relay_sent_frames(Test, Sent) end),
+         PeerNodeId = macula_identity:public(macula_identity:generate()),
+         _ = sys:replace_state(Pid, fun(S) ->
+             S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+             setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+         end),
+         R = macula_station_link:call(Pid, ?REALM, <<"_dht.find_records_by_type">>,
+                                        #{unsendable => self()}, 1_000),
+         ?assertMatch({error, {refused, _}}, R),
+         ?assert(macula_station_link:not_sent(R)),
+         receive
+             {Sent, _Frame} -> erlang:error(refused_frame_was_sent)
+         after 100 -> ok
+         end,
+         unlink(FakePeer),
+         exit(FakePeer, kill),
+         macula_station_link:stop(Pid),
+         ok
+     end}.
+
+%% Forwards every frame a link casts to this fake peer to `Test', tagged.
+relay_sent_frames(Test, Tag) ->
+    receive
+        {'$gen_cast', {send_frame, Frame}} ->
+            Test ! {Tag, Frame},
+            relay_sent_frames(Test, Tag)
+    end.
+
+%%------------------------------------------------------------------
 %% put_record/2 success path: classifies RESULT(ok) as ok
 %%------------------------------------------------------------------
 
