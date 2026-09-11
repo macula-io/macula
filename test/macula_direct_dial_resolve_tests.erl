@@ -5,9 +5,9 @@
 %%% to one second; a candidate that failed is tried again only on a changed
 %%% record; a content fetch that fails moves on to the next provider.
 %%%
-%%% The DHT, the dials and the transfers are faked with meck on the `macula'
-%%% facade and `macula_content_transfer'; the records themselves are real and
-%%% signed.
+%%% The DHT, the dials and the transfers are fakes the tests give direct dial
+%%% as its `dial_io', and a download as its start options, so no module is
+%%% replaced. The records themselves are real and signed.
 -module(macula_direct_dial_resolve_tests).
 
 -include_lib("eunit/include/eunit.hrl").
@@ -28,40 +28,9 @@
 setup() ->
     ?STATE = ets:new(?STATE, [named_table, public, set]),
     ets:insert(?STATE, {visits, []}),
-    meck:new(macula, [passthrough, non_strict]),
-    meck:new(macula_content_transfer, [passthrough]),
-    meck:expect(macula, find_records, fun(_Pool, Key) -> find_records(Key) end),
-    meck:expect(macula, find_records,
-                fun(_Pool, Key, TimeoutMs) -> find_records(Key, TimeoutMs) end),
-    meck:expect(macula, find_record, fun(_Pool, Key) -> find_record(Key) end),
-    meck:expect(macula, find_record,
-                fun(_Pool, Key, TimeoutMs) -> find_record(Key, TimeoutMs) end),
-    meck:expect(macula, find_content_providers,
-                fun(_Pool, Mcid) -> {ok, providers(Mcid)} end),
-    meck:expect(macula, call_station,
-                fun(_Pool, DialUrl, _Realm, _Proc, _Payload, _TimeoutMs, _Opts) ->
-                        visit(DialUrl)
-                end),
-    meck:expect(macula, call_stream_station,
-                fun(_Pool, DialUrl, _Realm, _Proc, _Args, _Opts) -> visit(DialUrl) end),
-    meck:expect(macula, get_content_station,
-                fun(_Pool, Endpoint, _Mcid, _TimeoutMs, _Opts) -> visit(Endpoint) end),
-    meck:expect(macula, put_content_station,
-                fun(_Pool, DialUrl, _Bytes, _TimeoutMs, _Opts) -> visit(DialUrl) end),
-    meck:expect(macula_content_transfer, start_get_station,
-                fun(_Pool, Endpoint, _Mcid, _TimeoutMs, _Opts) ->
-                        {ok, {fake_transfer, Endpoint}}
-                end),
-    meck:expect(macula_content_transfer, await,
-                fun({fake_transfer, Endpoint}, _Timeout) -> visit(Endpoint) end),
-    meck:expect(macula_content_transfer, await,
-                fun({fake_transfer, Endpoint}) -> visit(Endpoint) end),
-    meck:expect(macula_content_transfer, cancel, fun(_Transfer) -> ok end),
-    meck:expect(macula, publish, fun(_Pool, _Realm, _Topic, _Payload) -> ok end),
     ok.
 
 teardown(_) ->
-    meck:unload([macula, macula_content_transfer]),
     ets:delete(?STATE).
 
 resolve_test_() ->
@@ -108,7 +77,10 @@ resolve_test_() ->
       {timeout, 30, fun put_content_keeps_a_lookup_error_when_a_later_endpoint_lookup_is_cut_off_by_the_deadline/0},
       {timeout, 30, fun call_reports_a_timeout_when_no_endpoint_lookup_was_answered_in_time/0},
       {timeout, 30, fun put_content_asks_again_past_a_malformed_endpoint_record/0},
-      {timeout, 30, fun put_content_reports_a_malformed_endpoint_record_at_its_deadline/0}]}.
+      {timeout, 30, fun put_content_reports_a_malformed_endpoint_record_at_its_deadline/0},
+      {timeout, 30, fun a_dial_io_with_an_unknown_function_is_refused_in_the_caller/0},
+      {timeout, 30, fun a_dial_io_function_of_the_wrong_arity_is_refused_in_the_caller/0},
+      {timeout, 30, fun a_dial_io_without_a_function_the_call_uses_is_refused_in_the_caller/0}]}.
 
 %%%===================================================================
 %%% Calls
@@ -206,7 +178,7 @@ get_content_retries_when_no_provider_qualifies() ->
     set_replies(macula_record:content_key(Mcid), [[], [announcement(P, Mcid)]]),
     set_answer(dial_url(P), {ok, <<"content">>}),
     ?assertEqual({ok, <<"content">>},
-                 macula_direct_dial:get_content(self(), Mcid, 3000)).
+                 get_content(Mcid, 3000)).
 
 %% A provider whose fetch fails is passed over for the next: a fetch is
 %% verified against its MCID, so trying another provider is safe.
@@ -218,13 +190,13 @@ get_content_tries_the_next_provider_after_a_failed_fetch() ->
     set_answer(dial_url(A), {error, hash_mismatch}),
     set_answer(dial_url(B), {ok, <<"content">>}),
     ?assertEqual({ok, <<"content">>},
-                 macula_direct_dial:get_content(self(), Mcid, 3000)),
+                 get_content(Mcid, 3000)),
     ?assertEqual([dial_url(A), dial_url(B)], visits()).
 
 %% The timeout bounds the search for a provider.
 get_content_timeout_bounds_resolution() ->
     {Elapsed, Result} =
-        timed(fun() -> macula_direct_dial:get_content(self(), mcid(), 300) end),
+        timed(fun() -> get_content(mcid(), 300) end),
     ?assertMatch({error, {unresolved, _}}, Result),
     ?assert(Elapsed < 1000).
 
@@ -234,7 +206,7 @@ put_content_timeout_bounds_the_endpoint_lookup() ->
     {Elapsed, Result} =
         timed(fun() ->
                       macula_direct_dial:put_content(self(), maps:get(key, S),
-                                                     <<"bytes">>, 300)
+                                                     <<"bytes">>, 300, opts())
               end),
     ?assertMatch({error, {unresolved, _}}, Result),
     ?assert(Elapsed < 1000).
@@ -315,7 +287,7 @@ get_content_fetches_from_a_failing_provider_once_per_announcement() ->
     set_replies(macula_record:content_key(Mcid), [[announcement(A, Mcid)]]),
     set_answer(dial_url(A), {error, hash_mismatch}),
     ?assertEqual({error, hash_mismatch},
-                 macula_direct_dial:get_content(self(), Mcid, 2000)),
+                 get_content(Mcid, 2000)),
     ?assertEqual([dial_url(A)], visits()).
 
 %% A station whose endpoint record changes partway through the deadline is
@@ -346,7 +318,8 @@ download_direct_tries_the_next_provider_after_a_failed_fetch() ->
                 [[announcement(A, Mcid), announcement(B, Mcid)]]),
     set_answer(dial_url(A), {error, hash_mismatch}),
     set_answer(dial_url(B), {ok, <<"content">>}),
-    {ok, _Download} = macula_download:start_link_direct(?MODULE, self(), ?REALM, Mcid, self()),
+    {ok, _Download} = macula_download:start_link_direct(?MODULE, self(), ?REALM, Mcid, self(),
+                                                        download_opts()),
     ?assertEqual({downloaded, {ok, <<"content">>}}, downloaded()),
     ?assertEqual([dial_url(A), dial_url(B)], visits()).
 
@@ -357,7 +330,8 @@ download_direct_retries_when_no_provider_qualifies() ->
     Mcid = mcid(),
     set_replies(macula_record:content_key(Mcid), [[], [announcement(P, Mcid)]]),
     set_answer(dial_url(P), {ok, <<"content">>}),
-    {ok, _Download} = macula_download:start_link_direct(?MODULE, self(), ?REALM, Mcid, self()),
+    {ok, _Download} = macula_download:start_link_direct(?MODULE, self(), ?REALM, Mcid, self(),
+                                                        download_opts()),
     ?assertEqual({downloaded, {ok, <<"content">>}}, downloaded()).
 
 %% resolve_content_provider/2 stays for 10.x callers: it returns the first
@@ -369,7 +343,7 @@ resolve_content_provider_returns_the_first_qualifying_provider() ->
     Node = maps:get(key, P),
     Endpoint = dial_url(P),
     ?assertMatch({ok, #{announcer_node := Node, endpoint := Endpoint}},
-                 macula_direct_dial:resolve_content_provider(self(), Mcid)).
+                 macula_direct_dial:resolve_content_provider(self(), Mcid, opts())).
 
 %% When no provider qualifies within its 10 seconds, resolve_content_provider/2
 %% reports the content as not announced, as it did before.
@@ -377,7 +351,7 @@ resolve_content_provider_reports_content_not_announced() ->
     Mcid = mcid(),
     set_replies(macula_record:content_key(Mcid), [[]]),
     ?assertEqual({error, content_not_announced},
-                 macula_direct_dial:resolve_content_provider(self(), Mcid)).
+                 macula_direct_dial:resolve_content_provider(self(), Mcid, opts())).
 
 %% Once a candidate has failed before sending, a later pass that finds no
 %% candidate doesn't take its place: the call reports the refused dial.
@@ -405,7 +379,7 @@ get_content_reports_the_last_candidate_failure_when_a_later_lookup_fails() ->
                 [[announcement(A, Mcid)], {error, connection_lost}]),
     set_answer(dial_url(A), {error, not_connected}),
     ?assertEqual({error, not_connected},
-                 macula_direct_dial:get_content(self(), Mcid, 1000)).
+                 get_content(Mcid, 1000)).
 
 %% At the deadline a call reports, in this order: the last candidate failure,
 %% why an answered lookup found nothing qualifying, a failed lookup's own
@@ -420,7 +394,7 @@ get_content_reports_not_announced_when_a_lookup_answered_before_later_ones_faile
     Mcid = mcid(),
     set_replies(macula_record:content_key(Mcid), [[], {error, connection_lost}]),
     ?assertEqual({error, {unresolved, content_not_announced}},
-                 macula_direct_dial:get_content(self(), Mcid, 1000)).
+                 get_content(Mcid, 1000)).
 
 %% When every lookup failed, the lookup's own error is the reason.
 call_reports_a_failed_lookup_at_its_deadline_when_no_candidate_was_tried() ->
@@ -431,7 +405,7 @@ get_content_reports_a_failed_lookup_at_its_deadline_when_no_provider_was_tried()
     Mcid = mcid(),
     set_replies(macula_record:content_key(Mcid), [{error, connection_lost}]),
     ?assertEqual({error, {unresolved, connection_lost}},
-                 macula_direct_dial:get_content(self(), Mcid, 1000)).
+                 get_content(Mcid, 1000)).
 
 %% With no answer and no error before the deadline, the reason is a timeout.
 call_reports_a_timeout_when_no_lookup_was_answered_in_time() ->
@@ -442,7 +416,7 @@ get_content_reports_a_timeout_when_no_lookup_was_answered_in_time() ->
     Mcid = mcid(),
     set_replies(macula_record:content_key(Mcid), [silent]),
     ?assertEqual({error, {unresolved, timeout}},
-                 macula_direct_dial:get_content(self(), Mcid, 500)).
+                 get_content(Mcid, 500)).
 
 %% A lookup the deadline cuts off records nothing, so an earlier lookup's
 %% error stands.
@@ -463,7 +437,7 @@ get_content_retries_after_a_lookup_fails() ->
     Mcid = mcid(),
     set_replies(macula_record:content_key(Mcid), [{error, connection_lost}, [announcement(P, Mcid)]]),
     set_answer(dial_url(P), {ok, <<"content">>}),
-    ?assertEqual({ok, <<"content">>}, macula_direct_dial:get_content(self(), Mcid, 2000)).
+    ?assertEqual({ok, <<"content">>}, get_content(Mcid, 2000)).
 
 %% Within one station endpoint lookup, retries included, the result is: the
 %% endpoint not found when a lookup answered so, else a failed lookup's
@@ -518,8 +492,44 @@ put_content_reports_a_malformed_endpoint_record_at_its_deadline() ->
     ?assertEqual({error, {unresolved, malformed_station_endpoint}}, put_at_station(S, 1000)),
     ?assert(endpoint_lookups(S) > 1).
 
+%%%===================================================================
+%%% Dial I/O
+%%%===================================================================
+
+%% A dial_io carrying a function direct dial does not take is refused, in the
+%% caller, before anything is looked up.
+a_dial_io_with_an_unknown_function_is_refused_in_the_caller() ->
+    Io = (io())#{publish => fun(_Pool, _Realm, _Topic, _Payload) -> ok end},
+    ?assertError(function_clause,
+                 macula_direct_dial:call(self(), ?REALM, ?PROC, <<"hi">>, 1000,
+                                         #{dial_io => Io})),
+    ?assertEqual(0, lookups(procedure_key())).
+
+%% A function at another arity than its key takes is refused, in the caller,
+%% before anything is looked up. The wrong arity is on a function this call
+%% does not run, so the lookup it does run would be counted.
+a_dial_io_function_of_the_wrong_arity_is_refused_in_the_caller() ->
+    S = station(<<"s.test">>),
+    set_endpoint_replies(S, [not_found]),
+    Io = (io())#{cancel => fun(_Transfer, _TimeoutMs) -> ok end},
+    ?assertError(function_clause,
+                 macula_direct_dial:resolve_station_endpoint(self(), maps:get(key, S), 1000,
+                                                             #{dial_io => Io})),
+    ?assertEqual(0, endpoint_lookups(S)).
+
+%% A dial_io without a function the call runs on is refused, in the caller,
+%% before the pool is asked for its links.
+a_dial_io_without_a_function_the_call_uses_is_refused_in_the_caller() ->
+    Links = fun(_Pool) -> _ = visit(links), {ok, []} end,
+    Io = maps:remove(put_record, (io())#{links => Links}),
+    ?assertError(function_clause,
+                 macula_direct_dial:publish_advertisement(self(), ?REALM, ?PROC,
+                                                          macula_identity:generate(),
+                                                          #{dial_io => Io})),
+    ?assertEqual([], visits()).
+
 put_at_station(#{key := Key}, TimeoutMs) ->
-    macula_direct_dial:put_content(self(), Key, <<"bytes">>, TimeoutMs).
+    macula_direct_dial:put_content(self(), Key, <<"bytes">>, TimeoutMs, opts()).
 
 %% macula_download callbacks: hand the outcome back to the test process.
 init(Parent) -> {ok, Parent}.
@@ -541,18 +551,53 @@ downloaded() ->
 call(TimeoutMs) -> call(TimeoutMs, #{}).
 
 call(TimeoutMs, Opts) ->
-    macula_direct_dial:call(self(), ?REALM, ?PROC, <<"hi">>, TimeoutMs, Opts).
+    macula_direct_dial:call(self(), ?REALM, ?PROC, <<"hi">>, TimeoutMs, Opts#{dial_io => io()}).
 
 call_stream(DialTimeoutMs) ->
     macula_direct_dial:call_stream(self(), ?REALM, ?PROC, <<"args">>,
-                                   #{dial_timeout_ms => DialTimeoutMs}, #{}).
+                                   #{dial_timeout_ms => DialTimeoutMs}, opts()).
+
+get_content(Mcid, TimeoutMs) ->
+    macula_direct_dial:get_content(self(), Mcid, TimeoutMs, opts()).
+
+opts() -> #{dial_io => io()}.
+
+%% The DHT, the dials and the transfers direct dial runs on here.
+io() ->
+    #{links => fun(_Pool) -> {ok, []} end,
+      put_record => fun(_Pool, _Record) -> ok end,
+      find_records => fun(_Pool, Key, TimeoutMs) -> find_records(Key, TimeoutMs) end,
+      find_record => fun(_Pool, Key, TimeoutMs) -> find_record(Key, TimeoutMs) end,
+      call_station =>
+          fun(_Pool, DialUrl, _Realm, _Proc, _Payload, _TimeoutMs, _Opts) -> visit(DialUrl) end,
+      call_stream_station =>
+          fun(_Pool, DialUrl, _Realm, _Proc, _Args, _Opts) -> visit(DialUrl) end,
+      put_content_station =>
+          fun(_Pool, DialUrl, _Bytes, _TimeoutMs, _Opts) -> visit(DialUrl) end,
+      start_get_station => fun start_get_station/5,
+      await => fun({fake_transfer, Endpoint}, _TimeoutMs) -> visit(Endpoint) end,
+      cancel => fun(_Transfer) -> ok end}.
+
+start_get_station(_Pool, Endpoint, _Mcid, _ConnectMs, _Opts) ->
+    {ok, {fake_transfer, Endpoint}}.
+
+%% A direct download's start options: it fetches through io(), its transfers
+%% are the same fakes, and its facts go nowhere.
+download_opts() ->
+    #{fetch_content =>
+          fun(Pool, Mcid, TimeoutMs, Fetch) ->
+                  macula_direct_dial:fetch_content(Pool, Mcid, TimeoutMs, Fetch, opts())
+          end,
+      transfer_io => #{start_get => fun(_Pool, _Mcid, _Opts) -> error(not_a_direct_get) end,
+                       start_get_station => fun start_get_station/5,
+                       await => fun({fake_transfer, Endpoint}) -> visit(Endpoint) end,
+                       cancel => fun(_Transfer) -> ok end},
+      fact_publish => fun(_Pool, _Realm, _Topic, _Payload) -> ok end}.
 
 timed(Fun) ->
     Start = erlang:monotonic_time(millisecond),
     Result = Fun(),
     {erlang:monotonic_time(millisecond) - Start, Result}.
-
-find_records(Key) -> find_records(Key, 0).
 
 %% Each lookup answers with the next of a key's replies, the last one
 %% repeating: a list of records, `{error, Reason}' for a lookup that fails, or
@@ -569,8 +614,6 @@ lookup_reply(Records, _TimeoutMs) -> {ok, Records}.
 
 reply_at([], _Asked) -> [];
 reply_at([{_, Replies}], Asked) -> lists:nth(min(Asked + 1, length(Replies)), Replies).
-
-find_record(Key) -> find_record(Key, 0).
 
 %% A station's endpoint lookups answer from its scripted replies when it has
 %% them (set_endpoint_replies/2), the last one repeating: a record, `not_found',
@@ -601,11 +644,6 @@ endpoint_lookups(#{key := Key}) ->
 
 endpoint_found([{_, Record}]) -> {ok, Record};
 endpoint_found([]) -> {error, not_found}.
-
-%% The decoded providers find_content_providers/2 would return for Mcid.
-providers(Mcid) ->
-    {ok, Records} = find_records(macula_record:content_key(Mcid)),
-    [Provider || {true, Provider} <- [macula:decode_provider(R) || R <- Records]].
 
 visit(Target) ->
     [{visits, Seen}] = ets:lookup(?STATE, visits),

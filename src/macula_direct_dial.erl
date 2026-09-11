@@ -105,19 +105,63 @@
 %%% `content_announcement': the signer must equal the `announcer_node'
 %%% it claims (the check `macula:find_content_providers/2' makes too), so
 %%% an attacker cannot at least misattribute who is claiming to serve what.
+%%%
+%%% == Dial I/O ==
+%%%
+%%% The DHT lookups, dials and transfers a call runs on come from the
+%%% `dial_io' in its `Opts', or else from `macula' and
+%%% `macula_content_transfer'. A given `dial_io' has every function the call
+%%% runs on, each at the arity its key takes, and may carry the other
+%%% `dial_io()' functions; any other is refused with `function_clause', in
+%%% the caller. The option is for tests and for embedding direct dial; other
+%%% callers leave it out.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_direct_dial).
 
 -export([call/5, call/6, call_stream/5, call_stream/6,
         publish_advertisement/4, publish_advertisement/5,
-        get_content/3, fetch_content/4, resolve_content_provider/2,
-        put_content/4, resolve_station_endpoint/2, resolve_station_endpoint/3]).
+        get_content/3, get_content/4, fetch_content/4, fetch_content/5,
+        resolve_content_provider/2, put_content/4, put_content/5,
+        resolve_station_endpoint/2, resolve_station_endpoint/3,
+        resolve_station_endpoint/4]).
+
+%% Only tests call these arities so far, each with a dial_io.
+-ignore_xref([{get_content, 4}, {fetch_content, 5}, {put_content, 5},
+              {resolve_station_endpoint, 4}]).
 
 -ifdef(TEST).
-%% Exports for unit tests — pure helpers that are otherwise private.
--export([advertisement_trusted/2, adv_opts/1]).
+%% Exports for unit tests: pure helpers that are otherwise private, and
+%% resolve_content_provider/3, which goes with resolve_content_provider/2 in
+%% 11.0.0.
+-export([advertisement_trusted/2, adv_opts/1, resolve_content_provider/3]).
 -endif.
+
+%% The functions direct dial looks up, dials and fetches with, by key. See
+%% "Dial I/O" in the module doc.
+-type dial_io() :: #{links => fun((macula:pool()) -> {ok, [map()]} | {error, term()}),
+                     put_record => fun((macula:pool(), map()) -> ok | {error, term()}),
+                     find_records => fun((macula:pool(), binary(), pos_integer()) ->
+                                             {ok, [map()]} | {error, term()}),
+                     find_record => fun((macula:pool(), binary(), pos_integer()) ->
+                                            {ok, map()} | {error, term()}),
+                     call_station => fun((macula:pool(), macula_client:seed(), macula:realm(),
+                                          macula:procedure(), term(), pos_integer(), map()) ->
+                                             {ok, term()} | {error, term()}),
+                     call_stream_station => fun((macula:pool(), macula_client:seed(),
+                                                 macula:realm(), macula:procedure(), term(),
+                                                 map()) ->
+                                                    {ok, macula:stream()} | {error, term()}),
+                     put_content_station => fun((macula:pool(), macula_client:seed(), binary(),
+                                                 pos_integer(), map()) ->
+                                                    {ok, macula:mcid()} | {error, term()}),
+                     start_get_station => fun((macula:pool(), macula_client:seed(),
+                                               macula:mcid(), pos_integer(), map()) ->
+                                                  {ok, pid()}),
+                     await => fun((pid(), timeout()) -> {ok, term()} | {error, term()}),
+                     cancel => fun((pid()) -> ok)}.
+
+-export_type([dial_io/0]).
 
 %% The first pause between passes over the DHT; it doubles up to
 %% ?MAX_RETRY_MS. The retry within one candidate's endpoint lookup stays at
@@ -152,13 +196,14 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% `TimeoutMs' bounds resolution, each candidate's connect wait and the
 %% CALL itself (see "Resolution" in the module doc). `Opts' may include
 %% `verify_cert_chain => {RealmCaPem, Org}' — see the module doc's "Trust
-%% model" section.
+%% model" section, and `dial_io' (see "Dial I/O").
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
           pos_integer(), map()) -> {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
+    Dial = dial(Pool, [find_records, find_record, call_station], Opts),
     Deadline = deadline(TimeoutMs),
-    each_candidate(advertised_stations(Pool, Realm, Procedure, Opts),
-                   station_try(Pool, call_work(Pool, Realm, Procedure, Payload, Deadline)),
+    each_candidate(advertised_stations(Dial, Realm, Procedure, Opts),
+                   station_try(Dial, call_work(Dial, Realm, Procedure, Payload, Deadline)),
                    Deadline).
 
 %% @doc As `call_stream/6' with no cert-chain verification.
@@ -174,13 +219,14 @@ call_stream(Pool, Realm, Procedure, Args, StreamOpts) ->
 %% override (`mode', `owner', etc); its `dial_timeout_ms' (default
 %% 10_000) bounds resolution and each candidate's connect wait, and the
 %% stream itself keeps its own deadline. `Opts' is the resolve-side
-%% `verify_cert_chain' opt, same as `call/6'.
+%% `verify_cert_chain' opt and `dial_io', same as `call/6'.
 -spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
                   map(), map()) -> {ok, macula:stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
+    Dial = dial(Pool, [find_records, find_record, call_stream_station], Opts),
     Deadline = deadline(maps:get(dial_timeout_ms, StreamOpts, ?DEFAULT_DIAL_TIMEOUT_MS)),
-    each_candidate(advertised_stations(Pool, Realm, Procedure, Opts),
-                   station_try(Pool, stream_work(Pool, Realm, Procedure, Args, StreamOpts)),
+    each_candidate(advertised_stations(Dial, Realm, Procedure, Opts),
+                   station_try(Dial, stream_work(Dial, Realm, Procedure, Args, StreamOpts)),
                    Deadline).
 
 %% @doc As `publish_advertisement/5' with no cert chain embedded.
@@ -197,26 +243,29 @@ publish_advertisement(Pool, Realm, Procedure, Identity) ->
 %% may include `cert_chain => ChainPem' (leaf ++ org CA, PEM) so a
 %% verifying consumer's `verify_cert_chain' opt (see `call/6') can
 %% check this advertiser's org/realm authorization — Slice 7c
-%% Direction B, managed realms only.
+%% Direction B, managed realms only. `Opts' may also carry `dial_io' (see
+%% "Dial I/O" in the module doc).
 -spec publish_advertisement(macula:pool(), macula:realm(), macula:procedure(),
                             macula_identity:key_pair(), map()) ->
     ok | {error, term()}.
 publish_advertisement(Pool, Realm, Procedure, Identity, Opts) ->
-    case macula:links(Pool) of
-        {ok, Links} -> on_links(connected_station(Links), Pool, Realm,
-                                Procedure, Identity, Opts);
+    #{links := Links} = Dial = dial(Pool, [links, put_record], Opts),
+    case Links(Pool) of
+        {ok, Linked} -> on_links(connected_station(Linked), Dial, Realm,
+                                 Procedure, Identity, Opts);
         {error, _} = Error -> Error
     end.
 
-on_links({ok, Station}, Pool, Realm, Procedure, Identity, Opts) ->
+on_links({ok, Station}, #{pool := Pool, put_record := PutRecord}, Realm, Procedure, Identity,
+         Opts) ->
     AdvPub = macula_identity:public(Identity),
     Uri = discovery_uri(Realm, Procedure),
     Ad = macula_record:sign(
            macula_record:procedure_advertisement(AdvPub, Uri, Station,
                                                  adv_opts(Opts)),
            Identity),
-    macula:put_record(Pool, Ad);
-on_links({error, _} = Error, _Pool, _Realm, _Procedure, _Identity, _Opts) ->
+    PutRecord(Pool, Ad);
+on_links({error, _} = Error, _Dial, _Realm, _Procedure, _Identity, _Opts) ->
     Error.
 
 %% Forwards each opt `procedure_advertisement/4' actually recognizes,
@@ -263,10 +312,21 @@ connected_station(Links) ->
 %% `macula:find_content_providers/2'.
 -spec get_content(macula:pool(), macula:mcid(), pos_integer()) ->
     {ok, binary()} | {error, term()}.
-get_content(Pool, <<1, Codec, _/binary>> = MCID, TimeoutMs)
+get_content(Pool, MCID, TimeoutMs) ->
+    get_content(Pool, MCID, TimeoutMs, #{}).
+
+%% @doc As `get_content/3', on the `dial_io' in `Opts' (see "Dial I/O" in
+%% the module doc).
+-spec get_content(macula:pool(), macula:mcid(), pos_integer(), map()) ->
+    {ok, binary()} | {error, term()}.
+get_content(Pool, MCID, TimeoutMs, Opts) ->
+    content_get(dial(Pool, [find_records, start_get_station, await, cancel], Opts), MCID,
+                TimeoutMs).
+
+content_get(Dial, <<1, Codec, _/binary>> = MCID, TimeoutMs)
   when Codec =:= 16#55; Codec =:= 16#56 ->
-    fetch_content(Pool, MCID, TimeoutMs, transfer_fetch(Pool, MCID));
-get_content(_Pool, _MCID, _TimeoutMs) ->
+    fetch_from_providers(Dial, MCID, TimeoutMs, transfer_fetch(Dial, MCID));
+content_get(_Dial, _MCID, _TimeoutMs) ->
     {error, invalid_mcid}.
 
 %% @doc Fetch `MCID' from the first of its announced providers whose fetch
@@ -285,8 +345,20 @@ get_content(_Pool, _MCID, _TimeoutMs) ->
                             {ok, binary()} | {error, term()})) ->
     {ok, binary()} | {error, term()}.
 fetch_content(Pool, MCID, TimeoutMs, Fetch) ->
+    fetch_content(Pool, MCID, TimeoutMs, Fetch, #{}).
+
+%% @doc As `fetch_content/4', on the `dial_io' in `Opts' (see "Dial I/O" in
+%% the module doc).
+-spec fetch_content(macula:pool(), macula:mcid(), pos_integer(),
+                    fun((binary(), map(), pos_integer(), pos_integer()) ->
+                            {ok, binary()} | {error, term()}), map()) ->
+    {ok, binary()} | {error, term()}.
+fetch_content(Pool, MCID, TimeoutMs, Fetch, Opts) ->
+    fetch_from_providers(dial(Pool, [find_records], Opts), MCID, TimeoutMs, Fetch).
+
+fetch_from_providers(Dial, MCID, TimeoutMs, Fetch) ->
     Deadline = deadline(TimeoutMs),
-    each_candidate(content_providers(Pool, MCID), provider_try(Fetch, Deadline),
+    each_candidate(content_providers(Dial, MCID), provider_try(Fetch, Deadline),
                    Deadline).
 
 %% @doc Resolve `MCID''s provider via its signed `content_announcement',
@@ -299,7 +371,14 @@ fetch_content(Pool, MCID, TimeoutMs, Fetch) ->
 -spec resolve_content_provider(macula:pool(), macula:mcid()) ->
     {ok, map()} | {error, term()}.
 resolve_content_provider(Pool, MCID) ->
-    bare_error(each_candidate(content_providers(Pool, MCID),
+    resolve_content_provider(Pool, MCID, #{}).
+
+%% As `resolve_content_provider/2', on the `dial_io' in `Opts'. Exported for
+%% tests only, and removed with it in 11.0.0.
+-spec resolve_content_provider(macula:pool(), macula:mcid(), map()) ->
+    {ok, map()} | {error, term()}.
+resolve_content_provider(Pool, MCID, Opts) ->
+    bare_error(each_candidate(content_providers(dial(Pool, [find_records], Opts), MCID),
                               fun(#{announcement := Announcement}, _Share, _Seen) ->
                                   {done, {ok, Announcement}}
                               end,
@@ -317,13 +396,21 @@ bare_error(Error) -> bare_reason(Error).
 -spec put_content(macula:pool(), macula_identity:pubkey(), binary(),
                   pos_integer()) -> {ok, macula:mcid()} | {error, term()}.
 put_content(Pool, Station, Bytes, TimeoutMs) ->
-    Deadline = deadline(TimeoutMs),
-    put_at(station_endpoint(Pool, Station, Deadline), Pool, Bytes, Deadline).
+    put_content(Pool, Station, Bytes, TimeoutMs, #{}).
 
-put_at({found, {ok, {Station, DialUrl}}, _Version}, Pool, Bytes, Deadline) ->
-    macula:put_content_station(Pool, DialUrl, Bytes, budget(Deadline),
-                               pinned(Station));
-put_at(Lookup, _Pool, _Bytes, _Deadline) ->
+%% @doc As `put_content/4', on the `dial_io' in `Opts' (see "Dial I/O" in
+%% the module doc).
+-spec put_content(macula:pool(), macula_identity:pubkey(), binary(),
+                  pos_integer(), map()) -> {ok, macula:mcid()} | {error, term()}.
+put_content(Pool, Station, Bytes, TimeoutMs, Opts) ->
+    Dial = dial(Pool, [find_record, put_content_station], Opts),
+    Deadline = deadline(TimeoutMs),
+    put_at(station_endpoint(Dial, Station, Deadline), Dial, Bytes, Deadline).
+
+put_at({found, {ok, {Station, DialUrl}}, _Version},
+       #{pool := Pool, put_content_station := PutContentStation}, Bytes, Deadline) ->
+    PutContentStation(Pool, DialUrl, Bytes, budget(Deadline), pinned(Station));
+put_at(Lookup, _Dial, _Bytes, _Deadline) ->
     lookup_error(Lookup).
 
 %% @doc As `resolve_station_endpoint/3', within 10 seconds.
@@ -344,7 +431,15 @@ resolve_station_endpoint(Pool, Station) ->
                                pos_integer()) ->
     {ok, binary()} | {error, term()}.
 resolve_station_endpoint(Pool, Station, TimeoutMs) ->
-    dial_url(station_endpoint(Pool, Station, deadline(TimeoutMs))).
+    resolve_station_endpoint(Pool, Station, TimeoutMs, #{}).
+
+%% @doc As `resolve_station_endpoint/3', on the `dial_io' in `Opts' (see
+%% "Dial I/O" in the module doc).
+-spec resolve_station_endpoint(macula:pool(), macula_identity:pubkey(),
+                               pos_integer(), map()) ->
+    {ok, binary()} | {error, term()}.
+resolve_station_endpoint(Pool, Station, TimeoutMs, Opts) ->
+    dial_url(station_endpoint(dial(Pool, [find_record], Opts), Station, deadline(TimeoutMs))).
 
 dial_url({found, {ok, {_Station, DialUrl}}, _Version}) -> {ok, DialUrl};
 dial_url(Lookup) -> bare_reason(lookup_error(Lookup)).
@@ -354,6 +449,48 @@ bare_reason({error, {unresolved, Reason}}) -> {error, Reason}.
 %%%===================================================================
 %%% Internal
 %%%===================================================================
+
+%% The pool and the functions a call runs on, `Keys' of them: the `dial_io'
+%% in `Opts', or else the defaults.
+dial(Pool, Keys, Opts) ->
+    Io = dial_io(maps:with(Keys, default_dial_io()), maps:get(dial_io, Opts, undefined)),
+    Io#{pool => Pool}.
+
+%% `Defaults', or `Given' when it has every key in `Defaults', each function
+%% at the arity its key takes, and no key outside `dial_io()'. Any other set
+%% is refused with function_clause.
+dial_io(Defaults, undefined) ->
+    Defaults;
+dial_io(Defaults, Given) when is_map(Given) ->
+    ok = maps:foreach(fun dial_function/2, Given),
+    ok = lists:foreach(fun(Key) -> given_key(Key, Given) end, maps:keys(Defaults)),
+    Given.
+
+dial_function(links, Fun) when is_function(Fun, 1) -> ok;
+dial_function(put_record, Fun) when is_function(Fun, 2) -> ok;
+dial_function(find_records, Fun) when is_function(Fun, 3) -> ok;
+dial_function(find_record, Fun) when is_function(Fun, 3) -> ok;
+dial_function(call_station, Fun) when is_function(Fun, 7) -> ok;
+dial_function(call_stream_station, Fun) when is_function(Fun, 6) -> ok;
+dial_function(put_content_station, Fun) when is_function(Fun, 5) -> ok;
+dial_function(start_get_station, Fun) when is_function(Fun, 5) -> ok;
+dial_function(await, Fun) when is_function(Fun, 2) -> ok;
+dial_function(cancel, Fun) when is_function(Fun, 1) -> ok.
+
+given_key(Key, Given) when is_map_key(Key, Given) -> ok.
+
+-spec default_dial_io() -> dial_io().
+default_dial_io() ->
+    #{links => fun macula:links/1,
+      put_record => fun macula:put_record/2,
+      find_records => fun macula:find_records/3,
+      find_record => fun macula:find_record/3,
+      call_station => fun macula:call_station/7,
+      call_stream_station => fun macula:call_stream_station/6,
+      put_content_station => fun macula:put_content_station/5,
+      start_get_station => fun macula_content_transfer:start_get_station/5,
+      await => fun macula_content_transfer:await/2,
+      cancel => fun macula_content_transfer:cancel/1}.
 
 %% Works through candidates until one settles the request or `Deadline'
 %% passes. `Find(Deadline)' returns one pass's `{ok, Candidates}',
@@ -416,11 +553,10 @@ tried({next, Error, Seen}, Rest, Untried, Try, Deadline) ->
     each(Rest, Untried, Try, Deadline, Seen, {candidate, Error}).
 
 %% One pass over `Procedure''s advertisements.
-advertised_stations(Pool, Realm, Procedure, Opts) ->
+advertised_stations(#{pool := Pool, find_records := FindRecords}, Realm, Procedure, Opts) ->
     Key = macula_record:procedure_key(discovery_uri(Realm, Procedure)),
     fun(Deadline) ->
-        qualifying_stations(macula:find_records(Pool, Key, lookup_timeout(Deadline)),
-                            Opts)
+        qualifying_stations(FindRecords(Pool, Key, lookup_timeout(Deadline)), Opts)
     end.
 
 qualifying_stations({ok, []}, _Opts) ->
@@ -464,41 +600,41 @@ signature_ok({error, _}) -> false.
 %% Sends the CALL to one resolved station. `not_connected' means the link
 %% never came up within the candidate's share, so nothing was sent and the
 %% next candidate may be tried; any other outcome means the CALL went out.
-call_work(Pool, Realm, Procedure, Payload, Deadline) ->
+call_work(#{pool := Pool, call_station := CallStation}, Realm, Procedure, Payload, Deadline) ->
     fun(Station, DialUrl, Share) ->
-        sent_or_not(macula:call_station(Pool, DialUrl, Realm, Procedure, Payload,
-                                        budget(Deadline),
-                                        (pinned(Station))#{dial_timeout_ms => budget(Share)}))
+        sent_or_not(CallStation(Pool, DialUrl, Realm, Procedure, Payload, budget(Deadline),
+                                (pinned(Station))#{dial_timeout_ms => budget(Share)}))
     end.
 
 %% Opens the stream at one resolved station, on the same terms as `call_work/5'.
-stream_work(Pool, Realm, Procedure, Args, StreamOpts) ->
+stream_work(#{pool := Pool, call_stream_station := CallStreamStation}, Realm, Procedure, Args,
+            StreamOpts) ->
     fun(Station, DialUrl, Share) ->
-        sent_or_not(macula:call_stream_station(Pool, DialUrl, Realm, Procedure, Args,
-                                               maps:merge(StreamOpts, (pinned(Station))#{
-                                                   dial_timeout_ms => budget(Share)})))
+        sent_or_not(CallStreamStation(Pool, DialUrl, Realm, Procedure, Args,
+                                      maps:merge(StreamOpts, (pinned(Station))#{
+                                          dial_timeout_ms => budget(Share)})))
     end.
 
 sent_or_not({error, not_connected} = NotSent) -> {not_sent, NotSent};
 sent_or_not(Sent) -> {sent, Sent}.
 
-station_try(Pool, Work) ->
-    fun(Candidate, Share, Seen) -> reach(Pool, Candidate, Share, Seen, Work) end.
+station_try(Dial, Work) ->
+    fun(Candidate, Share, Seen) -> reach(Dial, Candidate, Share, Seen, Work) end.
 
 %% Resolves a candidate's station endpoint within `Share' and hands it to
 %% `Work', unless the candidate already failed on the same advertisement:
 %% then one lookup tells whether its endpoint record has changed, and only a
 %% change is worth another dial. A lookup that itself fails teaches nothing.
-reach(Pool, #{provider := Key, version := Version, station := Station}, Share, Seen,
+reach(Dial, #{provider := Key, version := Version, station := Station}, Share, Seen,
       Work) ->
-    reach_known(maps:find(Key, Seen), Pool, Key, Version, Station, Share, Seen, Work).
+    reach_known(maps:find(Key, Seen), Dial, Key, Version, Station, Share, Seen, Work).
 
-reach_known({ok, #{record := Version} = Prior}, Pool, Key, Version, Station, Share,
+reach_known({ok, #{record := Version} = Prior}, Dial, Key, Version, Station, Share,
             Seen, Work) ->
-    unless_unchanged(lookup_endpoint(Pool, Station, Share), Prior, Key, Version,
+    unless_unchanged(lookup_endpoint(Dial, Station, Share), Prior, Key, Version,
                      Share, Seen, Work);
-reach_known(_NewOrChanged, Pool, Key, Version, Station, Share, Seen, Work) ->
-    attempt(station_endpoint(Pool, Station, Share), Key, Version, Share, Seen, Work).
+reach_known(_NewOrChanged, Dial, Key, Version, Station, Share, Seen, Work) ->
+    attempt(station_endpoint(Dial, Station, Share), Key, Version, Share, Seen, Work).
 
 unless_unchanged({failed, _Error}, #{error := Error}, _Key, _Version, _Share, Seen,
                  _Work) ->
@@ -548,9 +684,9 @@ failed(Key, Version, EndpointVersion, Error, Seen) ->
 %% `{error, expired}' or another `{error, {unresolved, Reason}}';
 %% `{absent, Error}' when there is none; `{failed, Error}' when the lookup
 %% itself failed.
-lookup_endpoint(Pool, Station, Deadline) ->
+lookup_endpoint(#{pool := Pool, find_record := FindRecord}, Station, Deadline) ->
     Key = macula_record:station_endpoint_key(Station),
-    endpoint_lookup(macula:find_record(Pool, Key, lookup_timeout(Deadline)), Station).
+    endpoint_lookup(FindRecord(Pool, Key, lookup_timeout(Deadline)), Station).
 
 endpoint_lookup({ok, #{version := Version} = Rec}, Station) ->
     {found, endpoint_result(verify_and_build(Station, Rec)), Version};
@@ -569,27 +705,27 @@ endpoint_result({error, Reason}) -> {error, {unresolved, Reason}}.
 %% the result is, in this order, the latest lookup that answered with none,
 %% the latest failed lookup, or a timeout; a failed lookup that returned with
 %% no time left was cut off and records nothing.
-station_endpoint(Pool, Station, Deadline) ->
-    endpoint_lookups(Pool, Station, Deadline, {failed, {error, {unresolved, timeout}}}).
+station_endpoint(Dial, Station, Deadline) ->
+    endpoint_lookups(Dial, Station, Deadline, {failed, {error, {unresolved, timeout}}}).
 
-endpoint_lookups(Pool, Station, Deadline, Best) ->
-    endpoint_or_again(lookup_endpoint(Pool, Station, Deadline), Pool, Station, Deadline,
+endpoint_lookups(Dial, Station, Deadline, Best) ->
+    endpoint_or_again(lookup_endpoint(Dial, Station, Deadline), Dial, Station, Deadline,
                       Best).
 
-endpoint_or_again({found, {ok, _}, _Version} = Found, _Pool, _Station, _Deadline, _Best) ->
+endpoint_or_again({found, {ok, _}, _Version} = Found, _Dial, _Station, _Deadline, _Best) ->
     Found;
-endpoint_or_again({found, {error, {unresolved, Reason}}, _Version} = Untrusted, _Pool,
+endpoint_or_again({found, {error, {unresolved, Reason}}, _Version} = Untrusted, _Dial,
                   _Station, _Deadline, _Best)
   when Reason =/= malformed_station_endpoint ->
     Untrusted;
-endpoint_or_again(Lookup, Pool, Station, Deadline, Best) ->
+endpoint_or_again(Lookup, Dial, Station, Deadline, Best) ->
     Recorded = endpoint_recorded(Best, Lookup, remaining(Deadline) > 0),
     pause(Deadline, ?RETRY_MS),
-    endpoint_in_time(remaining(Deadline) > 0, Recorded, Pool, Station, Deadline).
+    endpoint_in_time(remaining(Deadline) > 0, Recorded, Dial, Station, Deadline).
 
-endpoint_in_time(true, Best, Pool, Station, Deadline) ->
-    endpoint_lookups(Pool, Station, Deadline, Best);
-endpoint_in_time(false, Best, _Pool, _Station, _Deadline) ->
+endpoint_in_time(true, Best, Dial, Station, Deadline) ->
+    endpoint_lookups(Dial, Station, Deadline, Best);
+endpoint_in_time(false, Best, _Dial, _Station, _Deadline) ->
     Best.
 
 %% An answered lookup that found no usable record replaces anything; a failed
@@ -633,10 +769,10 @@ build_dial_url(Station, EpRec) ->
     end.
 
 %% One pass over `MCID''s content announcements.
-content_providers(Pool, MCID) ->
+content_providers(#{pool := Pool, find_records := FindRecords}, MCID) ->
     Key = macula_record:content_key(MCID),
     fun(Deadline) ->
-        qualifying_providers(macula:find_records(Pool, Key, lookup_timeout(Deadline)))
+        qualifying_providers(FindRecords(Pool, Key, lookup_timeout(Deadline)))
     end.
 
 qualifying_providers({ok, Recs}) ->
@@ -686,19 +822,20 @@ fetched({ok, _} = Fetched, _Key, _Version, _Seen) ->
 fetched({error, _} = Error, Key, Version, Seen) ->
     failed(Key, Version, none, Error, Seen).
 
-%% Fetches from one provider through `macula_content_transfer', within what
-%% remains of the deadline, and reaps the transfer whatever its outcome.
-transfer_fetch(Pool, MCID) ->
+%% Fetches from one provider through the call's transfer functions,
+%% `macula_content_transfer''s by default, within what remains of the
+%% deadline, and reaps the transfer whatever its outcome.
+transfer_fetch(#{pool := Pool, start_get_station := StartGetStation, cancel := Cancel} = Dial,
+               MCID) ->
     fun(Endpoint, Pinned, ConnectMs, RemainingMs) ->
-        {ok, Transfer} = macula_content_transfer:start_get_station(
-                           Pool, Endpoint, MCID, ConnectMs, Pinned),
-        Result = await_transfer(Transfer, RemainingMs),
-        _ = macula_content_transfer:cancel(Transfer),
+        {ok, Transfer} = StartGetStation(Pool, Endpoint, MCID, ConnectMs, Pinned),
+        Result = await_transfer(Dial, Transfer, RemainingMs),
+        _ = Cancel(Transfer),
         Result
     end.
 
-await_transfer(Transfer, RemainingMs) ->
-    try macula_content_transfer:await(Transfer, RemainingMs)
+await_transfer(#{await := Await}, Transfer, RemainingMs) ->
+    try Await(Transfer, RemainingMs)
     catch exit:{timeout, _} -> {error, timeout}
     end.
 

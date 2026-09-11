@@ -131,6 +131,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `fetch_content/4` for a direct-dial download, the
   `macula_direct_dial` ones by default; `fact_publish`; and `link_io`,
   which they pass on to the transfer they start.
+- `macula_direct_dial:get_content/4`, `fetch_content/5`, `put_content/5`
+  and `resolve_station_endpoint/4` take options, and `call/6`,
+  `call_stream/6` and `publish_advertisement/5` read the same key from
+  theirs: `dial_io`, the functions direct dial looks up, dials and fetches
+  with (`macula:links/1`, `put_record/2`, `find_records/3`,
+  `find_record/3`, `call_station/7`, `call_stream_station/6` and
+  `put_content_station/5`, and `macula_content_transfer:start_get_station/5`,
+  `await/2` and `cancel/1`, by default). A given `dial_io` has every
+  function the call runs on, each at the arity its key takes, and may carry
+  the others; any other is refused with `function_clause`, in the caller.
 
 ### Changed
 
