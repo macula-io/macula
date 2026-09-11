@@ -74,15 +74,13 @@ The subscriber receives:
 | `publisher_verified` | `true \| false \| not_signed` | Whether the publisher signature verified; `not_signed` when the EVENT carried none |
 | `delivered_via` | `binary()` | Pubkey of the link/station that delivered this copy |
 
-For an EVENT whose publisher signature verified, `(Realm, Publisher, Seq)`
-is the dedup key: the pool delivers each such tuple **at most once**, even
-when the same EVENT arrives via multiple links (e.g. with
-`replication_factor > 1`). Any other EVENT is deduplicated on that tuple
-plus a digest of its topic and payload, so identical copies still arrive
-once, and it never uses a verified EVENT's key.
+Every EVENT's publication is verified before delivery, and the pool
+delivers each publication **at most once**, keyed on its hash, the SHA-384
+of its signed `tbs`, even when it arrives via multiple links (e.g. with
+`replication_factor > 1`).
 
 For `delivery` options (`ordered` / `latest_only` / `as_arrives`) and
-`(publisher, seq)` dedup semantics, see the Guide's
+the dedup semantics, see the Guide's
 [Delivery ordering](PUBSUB_GUIDE.md#delivery-ordering) — `Opts` is
 identical whether passed here or through `macula_subscriber:start_link/6`.
 

@@ -479,8 +479,10 @@
     ttl_ms       => non_neg_integer()
 }.
 
-%% A publication that verified: its fields, the publisher's carried key, and publication_hash, the SHA-384 of its tbs,
-%% which deduplication and Plumtree bookkeeping key on.
+%% A publication that verified: its fields, the publisher's carried key, publication_hash, the SHA-384 of its tbs, which
+%% deduplication and Plumtree bookkeeping key on, and expires_at, the last moment a verifier accepts it: published_at
+%% plus its ttl_ms, or 10 minutes without one, plus 5 minutes. A subscriber keeps a delivered publication's hash until
+%% then.
 -type verified_publication() :: #{
     publisher        := id256(),
     realm            := id256(),
@@ -490,7 +492,8 @@
     ttl_ms           => non_neg_integer(),
     payload          := term(),
     key              := binary(),
-    publication_hash := msg_id()
+    publication_hash := msg_id(),
+    expires_at       := non_neg_integer()
 }.
 
 -type subscribe_spec() :: #{
@@ -1289,7 +1292,8 @@ publication_read({ok, #{publisher := Publisher, realm := _, topic := _, seq := _
     publication_checked([{Publisher =:= macula_node_keys:node_id(Key, Profile), key_id_mismatch},
                          {PublishedAt =< Now + ?PUBLICATION_TOLERANCE_MS, not_yet_valid},
                          {Now =< Expiry, expired}],
-                        (maps:remove(alg, Read))#{key => Key, publication_hash => crypto:hash(sha384, Tbs)});
+                        (maps:remove(alg, Read))#{key => Key, publication_hash => crypto:hash(sha384, Tbs),
+                                                  expires_at => Expiry});
 publication_read(_NotAPublication, _Key, _Tbs, _Profile, _Now) ->
     {error, malformed_frame}.
 

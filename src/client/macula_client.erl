@@ -37,10 +37,12 @@
 %%
 %% == Dedup ==
 %%
-%% Inbound EVENT frames are keyed by `(Realm, Publisher, Seq)' in an
-%% ETS table owned by the pool. The table is swept every
-%% `dedup_sweep_ms' (default 30s) for entries older than
-%% `dedup_window_ms' (default 60s).
+%% A link verifies each publication before it hands the event to the
+%% pool, and the pool delivers each publication at most once. It keys an
+%% ETS table it owns on the event's `publication_hash', the SHA-384 of
+%% the publication's `tbs', and keeps each entry until the publication's
+%% `expires_at', after which every verifier refuses it. The table is swept
+%% every `dedup_sweep_ms' (default 30s).
 %%
 %% == Replay ==
 %%
@@ -192,14 +194,8 @@
     %% wallclock can be up to N×timeout for sequential dial fallback.
     connect_timeout_ms => pos_integer(),
 
-    %% Inbound-EVENT dedup window in milliseconds. The pool keys
-    %% inbound events on `(Realm, Publisher, Seq)' so duplicate
-    %% deliveries from multiple subscribed links collapse to one
-    %% emission per consumer. Default 60_000.
-    dedup_window_ms    => non_neg_integer(),
-
-    %% How often the dedup table is swept for entries older than
-    %% `dedup_window_ms'. Default 30_000.
+    %% How often the inbound publication dedup table is swept for
+    %% entries whose publication has expired. Default 30_000.
     dedup_sweep_ms     => pos_integer(),
 
     %% Opt-in dynamic station discovery via `hecate_stations.list_stations'
@@ -314,7 +310,6 @@
 %% replication_factor=1 there was never a "later" link for that to matter;
 %% raising the default makes it matter for everyone.
 -define(DEFAULT_REPLICATION, 2).
--define(DEFAULT_DEDUP_WINDOW_MS, 60_000).
 -define(DEFAULT_DEDUP_SWEEP_MS, 30_000).
 %% How long an `ordered' subscription waits for a missing seq before
 %% skipping the gap (a genuinely lost fact). Bounds head-of-line delay.
@@ -400,7 +395,6 @@
     node_id       :: <<_:256>>,
     link_opts     :: map(),
     replication   :: pos_integer(),
-    dedup_window  :: non_neg_integer(),
     dedup_sweep   :: pos_integer(),
     %% Pool-owned monotonic publish sequence. Stamped onto every
     %% outbound PUBLISH (via `macula_station_link:publish/5') so the
@@ -812,7 +806,6 @@ init_with_keys({ok, #{node_identity := NodeIdentity} = Keys}, Seeds, Opts) ->
         %% `macula_peering_conn:connect_opts()'). Forwarded only when
         %% the caller set them.
         maps:with([verify, expected_node_id, pin_tls_cert], Opts)),
-    DedupWindow = maps:get(dedup_window_ms, Opts, ?DEFAULT_DEDUP_WINDOW_MS),
     DedupSweep  = maps:get(dedup_sweep_ms, Opts, ?DEFAULT_DEDUP_SWEEP_MS),
     Replication = maps:get(replication_factor, Opts, ?DEFAULT_REPLICATION),
     DedupTab    = macula_client_dedup:new(),
@@ -822,7 +815,7 @@ init_with_keys({ok, #{node_identity := NodeIdentity} = Keys}, Seeds, Opts) ->
     LinkSelection = maps:get(link_selection, Opts, default_link_selection(Discovery)),
     State0 = #state{seeds = Seeds, node_id = NodeId,
                     link_opts = LinkOpts, replication = Replication,
-                    dedup_window = DedupWindow, dedup_sweep = DedupSweep,
+                    dedup_sweep = DedupSweep,
                     dedup_tab = DedupTab,
                     order_timeout = OrderTimeout, order_max_buffer = OrderMaxBuf,
                     flush_timer = undefined,
@@ -1050,12 +1043,11 @@ handle_cast({discovered_stations, NewSeeds}, S) ->
 
 handle_cast(_Msg, S) -> {noreply, S}.
 
-handle_info({macula_event, _LinkSubRef, Topic, Payload, Meta}, S) ->
-    Realm     = maps:get(realm, Meta, <<0:256>>),
-    Publisher = maps:get(publisher, Meta),
-    Seq       = maps:get(seq, Meta),
-    on_inbound_event(dedup_check(S#state.dedup_tab, attested(Meta), Realm,
-                                 Publisher, Seq, {Topic, Payload}),
+handle_info({macula_event, _LinkSubRef, Topic, Payload,
+             #{realm := Realm, publication_hash := Hash,
+               expires_at := ExpiresAt} = Meta}, S) ->
+    on_inbound_event(macula_client_dedup:check(S#state.dedup_tab, Hash,
+                                               ExpiresAt),
                      Realm, Topic, Payload, Meta, S);
 
 handle_info({macula_event_gone, _LinkSubRef, _Reason}, S) ->
@@ -1080,7 +1072,7 @@ handle_info(run_discovery, #state{discovery = D} = S) ->
     {noreply, schedule_discovery(D#discovery_state.refresh_ms, S)};
 
 handle_info(dedup_sweep, S) ->
-    _ = macula_client_dedup:sweep(S#state.dedup_tab, S#state.dedup_window),
+    _ = macula_client_dedup:sweep(S#state.dedup_tab, erlang:system_time(millisecond)),
     erlang:send_after(S#state.dedup_sweep, self(), dedup_sweep),
     {noreply, S};
 
@@ -2159,20 +2151,6 @@ issue_wire_subs(false, Realm, Topic, S) ->
 %% Internals — inbound event fan-out
 %%====================================================================
 
-%% Only an event whose publisher signature verified claims its
-%% `(realm, publisher, seq)' key. Any other event is deduplicated on that
-%% triple plus a digest of its topic and payload, in a key space of its
-%% own: identical copies arriving over several links are still delivered
-%% once, and such an event only ever matches an identical copy of itself.
-dedup_check(Tab, true, Realm, Publisher, Seq, _Content) ->
-    macula_client_dedup:check(Tab, Realm, Publisher, Seq);
-dedup_check(Tab, false, Realm, Publisher, Seq, Content) ->
-    Digest = crypto:hash(sha256, term_to_binary(Content, [deterministic])),
-    macula_client_dedup:check_unverified(Tab, Realm, Publisher, Seq, Digest).
-
-attested(#{publisher_verified := true}) -> true;
-attested(_Meta)                         -> false.
-
 on_inbound_event(duplicate, _Realm, _Topic, _Payload, _Meta, S) ->
     {noreply, S};
 on_inbound_event(new, Realm, Topic, Payload, Meta, S) ->
@@ -2205,11 +2183,9 @@ deliver_to({ok, #sub_spec{subscriber = Pid, order = Order} = Spec}, SubRef,
     S#state{subs = maps:put(SubRef, Spec#sub_spec{order = Order2},
                             S#state.subs)}.
 
-%% A verified publisher's ordering state is its own. Events whose publisher
-%% signature did not verify, or that carried none, are ordered among
-%% themselves per publisher and never move that state.
-order_key(#{publisher := Pub, publisher_verified := true}) -> Pub;
-order_key(#{publisher := Pub})                              -> {unverified, Pub}.
+%% Every event reaching the pool carries a publication its link verified,
+%% so each publisher's ordering state is its own.
+order_key(#{publisher := Pub}) -> Pub.
 
 send_events(Pid, SubRef, Topic, Events) ->
     _ = [Pid ! {macula_event, SubRef, Topic, P, M} || {P, M} <- Events],

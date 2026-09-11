@@ -135,7 +135,7 @@
 %%   <li>`capabilities' — per-link bitfield (default 0).</li>
 %%   <li>`alpn' — QUIC ALPN list (default `[<<"macula">>]').</li>
 %%   <li>`connect_timeout_ms' — per-link CONNECT/HELLO deadline (default 30_000).</li>
-%%   <li>`dedup_window_ms', `dedup_sweep_ms' — inbound-EVENT dedup tunables.</li>
+%%   <li>`dedup_sweep_ms': how often the inbound publication dedup table is swept.</li>
 %% </ul>
 %%
 %% Legacy opts silently dropped (with a one-shot `logger:notice'):

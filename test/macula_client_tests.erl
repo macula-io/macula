@@ -123,10 +123,7 @@ inbound_event_fans_to_local_subscriber_test_() ->
          %% {macula_event, _, Topic, Payload, Meta} shape.
          Pool ! {macula_event, make_ref(), Topic,
                  #{temp => 20},
-                 #{realm => ?REALM,
-                   publisher => <<1:256>>,
-                   seq => 1,
-                   delivered_via => direct}},
+                 publication_meta(<<1:256>>, 1, <<"tbs temp">>)},
          receive
              {macula_event, R, T, P, _Meta} ->
                  ?assertEqual(SubRef, R),
@@ -150,11 +147,8 @@ inbound_event_dedup_test_() ->
          Topic = <<"x.v1">>,
          {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
                                                 Topic, self(), #{}),
-         %% Three identical events (same realm/publisher/seq).
-         Meta = #{realm => ?REALM,
-                  publisher => <<1:256>>,
-                  seq => 7,
-                  delivered_via => direct},
+         %% Three copies of one publication, as three links relay it.
+         Meta = publication_meta(<<1:256>>, 7, <<"tbs hello">>),
          Pool ! {macula_event, make_ref(), Topic, hello, Meta},
          Pool ! {macula_event, make_ref(), Topic, hello, Meta},
          Pool ! {macula_event, make_ref(), Topic, hello, Meta},
@@ -205,10 +199,7 @@ multiple_consumers_same_topic_test_() ->
          _R2 = wait_ready(Sub2),
          Pool ! {macula_event, make_ref(), Topic,
                  broadcast,
-                 #{realm => ?REALM,
-                   publisher => <<1:256>>,
-                   seq => 1,
-                   delivered_via => direct}},
+                 publication_meta(<<1:256>>, 1, <<"tbs broadcast">>)},
          receive {got, Sub1, broadcast} -> ok
          after 1_000 -> erlang:error(sub1_no_event)
          end,
@@ -224,6 +215,14 @@ wait_ready(Pid) ->
         {ready, Pid, R} -> R
     after 1_000 -> erlang:error({sub_not_ready, Pid})
     end.
+
+%% The meta a station link hands the pool with an event it verified: the
+%% publication's fields, publication_hash, the SHA-384 of its tbs (here
+%% of a stand-in), and expires_at, a minute from now.
+publication_meta(Publisher, Seq, Tbs) ->
+    #{realm => ?REALM, publisher => Publisher, seq => Seq,
+      delivered_via => direct, publication_hash => crypto:hash(sha384, Tbs),
+      expires_at => erlang:system_time(millisecond) + 60_000}.
 
 %%------------------------------------------------------------------
 %% Subscriber pid dies → subscription cleared
@@ -248,10 +247,7 @@ subscriber_down_drops_subscription_test_() ->
          %% Inject an event — must NOT be delivered anywhere
          %% (consumer is dead, nobody else subscribed).
          Pool ! {macula_event, make_ref(), Topic, ghost,
-                 #{realm => ?REALM,
-                   publisher => <<1:256>>,
-                   seq => 1,
-                   delivered_via => direct}},
+                 publication_meta(<<1:256>>, 1, <<"tbs ghost">>)},
          receive
              {macula_event, _, _, ghost, _} ->
                  erlang:error(event_to_dead_subscriber)
@@ -579,67 +575,80 @@ connect_with_legacy_opts_starts_pool_test_() ->
      end}.
 
 %%------------------------------------------------------------------
-%% dedup_window_ms / dedup_sweep_ms tunable end-to-end (A6)
+%% Dedup keyed on the publication hash, held until the publication
+%% expires
 %%------------------------------------------------------------------
 
-dedup_zero_window_disables_dedup_test_() ->
+%% Two publications that share realm, publisher and seq have different
+%% tbs, so different hashes, and both are delivered: a copy that reuses
+%% a real publication's realm, publisher and seq never suppresses it.
+same_realm_publisher_and_seq_with_another_hash_is_delivered_test_() ->
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
-         %% A 0-millisecond dedup window with a tight sweep means the
-         %% sweep tick will purge entries between two synthetic
-         %% events sharing the same (Realm, Publisher, Seq) — both
-         %% reach the consumer.
-         {ok, Pool} = macula_client:connect(
-                        [],
-                        #{dedup_window_ms => 0,
-                          dedup_sweep_ms  => 50}),
-         Topic = <<"dedup.zero_window_v1">>,
+         {ok, Pool} = macula_client:connect([], #{}),
+         Topic = <<"dedup.another_hash_v1">>,
          %% `as_arrives': isolate the dedup LAYER. `ordered' (the
          %% default) also drops a repeated seq, which would mask what
          %% this test measures.
          {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
                                                  Topic, self(),
                                                  #{delivery => as_arrives}),
-         Pub = <<9:256>>,
-         %% Both events are verified, so they share one dedup key and
-         %% only the sweep lets the second through.
-         Pool ! {macula_event, make_ref(), Topic, first,
-                 #{realm => ?REALM, publisher => Pub,
-                   seq => 1, delivered_via => direct,
-                   publisher_verified => true}},
-         receive {macula_event, SubRef, Topic, first, _} -> ok
+         Pub = <<11:256>>,
+         Pool ! {macula_event, make_ref(), Topic, hello,
+                 publication_meta(Pub, 3, <<"tbs one">>)},
+         Pool ! {macula_event, make_ref(), Topic, hello,
+                 publication_meta(Pub, 3, <<"tbs two">>)},
+         receive {macula_event, SubRef, Topic, hello, _} -> ok
          after 1_000 -> erlang:error(no_first) end,
-         %% Wait for sweep to drop the dedup entry.
-         timer:sleep(120),
-         Pool ! {macula_event, make_ref(), Topic, again,
-                 #{realm => ?REALM, publisher => Pub,
-                   seq => 1, delivered_via => direct,
-                   publisher_verified => true}},
-         receive {macula_event, SubRef, Topic, again, _} -> ok
-         after 1_000 -> erlang:error(dedup_swallowed_after_sweep) end,
+         receive {macula_event, SubRef, Topic, hello, _} -> ok
+         after 1_000 -> erlang:error(another_hash_swallowed) end,
          ok = macula_client:close(Pool)
      end}.
 
-dedup_default_window_holds_duplicate_test_() ->
+%% A sweep drops an entry once its publication has expired, so a later
+%% copy is delivered again. Verifiers refuse such a copy before it
+%% reaches the pool, so no live duplicate gets through this way.
+dedup_entry_is_swept_once_its_publication_has_expired_test_() ->
     {timeout, 5,
      fun() ->
          {ok, _} = application:ensure_all_started(macula),
-         %% Stock 60_000ms window — second copy of the same
-         %% (Publisher, Seq) is dropped.
-         {ok, Pool} = macula_client:connect([], #{}),
-         Topic = <<"dedup.default_window_v1">>,
+         {ok, Pool} = macula_client:connect([], #{dedup_sweep_ms => 50}),
+         Topic = <<"dedup.expired_v1">>,
+         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
+                                                 Topic, self(),
+                                                 #{delivery => as_arrives}),
+         Expired = erlang:system_time(millisecond) - 1,
+         Meta = (publication_meta(<<9:256>>, 1, <<"tbs expired">>))#{expires_at := Expired},
+         Pool ! {macula_event, make_ref(), Topic, hello, Meta},
+         receive {macula_event, SubRef, Topic, hello, _} -> ok
+         after 1_000 -> erlang:error(no_first) end,
+         %% Wait for a sweep to drop the entry.
+         timer:sleep(120),
+         Pool ! {macula_event, make_ref(), Topic, hello, Meta},
+         receive {macula_event, SubRef, Topic, hello, _} -> ok
+         after 1_000 -> erlang:error(dedup_swallowed_after_expiry) end,
+         ok = macula_client:close(Pool)
+     end}.
+
+%% While the publication is live its hash holds, whatever sweeps run in
+%% between: a later copy is dropped.
+dedup_holds_a_hash_while_its_publication_is_live_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{dedup_sweep_ms => 50}),
+         Topic = <<"dedup.live_v1">>,
          %% `as_arrives' so the dedup LAYER is the only filter under test.
          {ok, SubRef} = macula_client:subscribe(Pool, ?REALM,
                                                  Topic, self(),
                                                  #{delivery => as_arrives}),
-         Pub = <<10:256>>,
-         Meta = #{realm => ?REALM, publisher => Pub,
-                  seq => 7, delivered_via => direct},
-         Pool ! {macula_event, make_ref(), Topic, hello, Meta},
+         Meta = publication_meta(<<10:256>>, 7, <<"tbs live">>),
          Pool ! {macula_event, make_ref(), Topic, hello, Meta},
          receive {macula_event, SubRef, Topic, hello, _} -> ok
          after 1_000 -> erlang:error(no_event) end,
+         timer:sleep(120),
+         Pool ! {macula_event, make_ref(), Topic, hello, Meta},
          receive
              {macula_event, SubRef, Topic, hello, _} ->
                  erlang:error(duplicate_not_swallowed)
@@ -1039,62 +1048,3 @@ bootstrap_seed_that_never_connects_is_not_given_up_test_() ->
              ?assertEqual(false, maps:get(connected, hd(Links)))
          end
      end}.
-
-%%------------------------------------------------------------------
-%% Unverified events never displace a verified publisher's events
-%%------------------------------------------------------------------
-
-%% An event whose publisher signature did not verify can neither claim the
-%% dedup key of a verified event with the same (realm, publisher, seq) nor
-%% move that publisher's ordering state, so the verified event is still
-%% delivered, in every delivery mode.
-unverified_event_does_not_displace_a_verified_one_test_() ->
-    [{atom_to_list(Mode), {timeout, 5, fun() -> unverified_then_verified(Mode) end}}
-     || Mode <- [ordered, latest_only, as_arrives]].
-
-unverified_then_verified(Mode) ->
-    {ok, _} = application:ensure_all_started(macula),
-    {ok, Pool} = macula_client:connect([], #{}),
-    Topic = <<"x.v1">>,
-    {ok, SubRef} = macula_client:subscribe(Pool, ?REALM, Topic, self(),
-                                           #{delivery => Mode}),
-    Base = #{realm => ?REALM, publisher => <<1:256>>, seq => 7,
-             delivered_via => direct},
-    Pool ! {macula_event, make_ref(), Topic, forged,
-            Base#{publisher_verified => not_signed}},
-    Pool ! {macula_event, make_ref(), Topic, genuine,
-            Base#{publisher_verified => true}},
-    %% ordered holds a new publisher's first facts for one order timeout.
-    Delivered = payloads_for(SubRef, 1_500),
-    ok = macula_client:close(Pool),
-    ?assert(lists:member(genuine, Delivered)).
-
-%% Identical unverified copies still arrive once; a different unverified
-%% event under the same (publisher, seq) is not treated as a copy.
-identical_unverified_copies_are_delivered_once_test_() ->
-    {timeout, 5,
-     fun() ->
-         {ok, _} = application:ensure_all_started(macula),
-         {ok, Pool} = macula_client:connect([], #{}),
-         Topic = <<"x.v1">>,
-         {ok, SubRef} = macula_client:subscribe(Pool, ?REALM, Topic, self(),
-                                                #{delivery => as_arrives}),
-         Meta = #{realm => ?REALM, publisher => <<1:256>>, seq => 9,
-                  delivered_via => direct, publisher_verified => not_signed},
-         Pool ! {macula_event, make_ref(), Topic, same, Meta},
-         Pool ! {macula_event, make_ref(), Topic, same, Meta},
-         Pool ! {macula_event, make_ref(), Topic, other, Meta},
-         Delivered = payloads_for(SubRef, 500),
-         ok = macula_client:close(Pool),
-         ?assertEqual([same, other], Delivered)
-     end}.
-
-%% Payloads delivered to `SubRef', in arrival order, until `Ms' pass with
-%% no further delivery.
-payloads_for(SubRef, Ms) ->
-    receive
-        {macula_event, SubRef, _Topic, Payload, _Meta} ->
-            [Payload | payloads_for(SubRef, Ms)]
-    after Ms ->
-        []
-    end.

@@ -39,7 +39,7 @@ connection. The pool owns:
 | **Links** | One `macula_station_link` worker per seed, all sharing one identity |
 | **Replication** | `publish/5` fans the frame to N healthy links |
 | **Replay** | When a link dies, the pool respawns it and replays subscriptions |
-| **Dedup** | Inbound EVENT frames are deduped by `(Realm, Publisher, Seq)` before fan-out, plus a digest of topic and payload when the publisher signature did not verify |
+| **Dedup** | Each publication is delivered once, keyed on its hash, the SHA-384 of its signed `tbs`, until it expires |
 | **Failover** | Subscribe/publish operations only count healthy links — a dead link is excluded |
 
 From the application's point of view there is one handle (`Pool`) and
@@ -97,7 +97,6 @@ Every option has a default. Most apps pass `#{}`.
 | `capabilities` | `non_neg_integer()` | `0` | Capability bitmap forwarded in CONNECT |
 | `alpn` | `[binary()]` | `[<<"macula">>]` | QUIC ALPN list |
 | `connect_timeout_ms` | `pos_integer()` | `30_000` | Per-link CONNECT timeout |
-| `dedup_window_ms` | `non_neg_integer()` | `60_000` | Inbound-EVENT dedup window |
 | `dedup_sweep_ms` | `pos_integer()` | `30_000` | Dedup-table sweep interval |
 
 ### Identity
