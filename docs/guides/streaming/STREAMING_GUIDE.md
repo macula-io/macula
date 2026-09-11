@@ -101,6 +101,13 @@ handle_close(_Reason, _Lines) -> ok.
                                           <<"logs.tail">>, []).
 ```
 
+`start_link/7` and `start_link_direct/7` take start options. `stream_io`
+gives the five functions a sink opens, reads, ends and announces its stream
+with: `call_stream/5`, `recv/2`, `close_stream/1`, `abort/3` and
+`publish/4`, all five together. Without it they are the `macula` facade's,
+and a direct-dial sink dials with `macula_direct_dial:call_stream/5`. A test
+can run a sink this way on a scripted stream without replacing `macula`.
+
 **`client_stream` providers get the mirror-image receive loop.** Export the
 same optional `handle_chunk/2` callback on the PROVIDER-side module and
 `macula_streamer` drives a linked-reader loop against its own stream,
