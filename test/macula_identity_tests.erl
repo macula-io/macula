@@ -109,6 +109,43 @@ puzzle_higher_difficulty_implies_lower_difficulty_test_() ->
          ?assert(macula_identity:puzzle_valid(Kp, 10))
      end}.
 
+%% puzzle_valid/1 applies the macula application's puzzle_difficulty.
+configured_lower_difficulty_is_honoured_test() ->
+    Kp = key_meeting(0, 8),
+    ?assert(with_puzzle_difficulty(0, fun() -> macula_identity:puzzle_valid(Kp) end)).
+
+configured_higher_difficulty_is_honoured_test() ->
+    Kp = key_meeting(8, 12),
+    ?assertNot(with_puzzle_difficulty(12, fun() -> macula_identity:puzzle_valid(Kp) end)).
+
+unset_difficulty_is_eight_bits_test() ->
+    ok = application:unset_env(macula, puzzle_difficulty),
+    ?assertEqual({true, false},
+                 {macula_identity:puzzle_valid(key_meeting(8, 9)),
+                  macula_identity:puzzle_valid(key_meeting(7, 8))}).
+
+non_integer_difficulty_is_a_configuration_error_test() ->
+    ?assertError({bad_config, {macula, puzzle_difficulty, <<"12">>}},
+                 with_puzzle_difficulty(<<"12">>, fun() ->
+                     macula_identity:puzzle_valid(macula_identity:generate())
+                 end)).
+
+%% A key whose puzzle meets Met leading zero bits but not Missed.
+key_meeting(Met, Missed) ->
+    Kp = macula_identity:generate(#{puzzle => true, difficulty => Met}),
+    key_meeting(macula_identity:puzzle_valid(Kp, Missed), Kp, Met, Missed).
+
+key_meeting(false, Kp, _Met, _Missed) -> Kp;
+key_meeting(true, _Kp, Met, Missed) -> key_meeting(Met, Missed).
+
+with_puzzle_difficulty(Difficulty, Fun) ->
+    ok = application:set_env(macula, puzzle_difficulty, Difficulty),
+    try
+        Fun()
+    after
+        application:unset_env(macula, puzzle_difficulty)
+    end.
+
 %%------------------------------------------------------------------
 %% Persistence
 %%------------------------------------------------------------------
