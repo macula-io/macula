@@ -464,7 +464,7 @@ handshaking(cast, {reject, Reason}, Data) ->
 %% does not retain the worker forever.
 handshaking(state_timeout, handshake_timeout,
             #data{role = Role, buf = Buf, quic_stream = Stream} = Data) ->
-    macula_diagnostics:event(<<"_macula.peering.handshake_timeout">>, #{
+    macula_diagnostics:bounded_event(info, <<"_macula.peering.handshake_timeout">>, #{
         role         => Role,
         buf_size     => byte_size(Buf),
         has_stream   => Stream =/= undefined,
@@ -623,10 +623,11 @@ hello_sent({error, _} = SendErr, Data) ->
     notify(disconnected, {send_hello_failed, SendErr}, Data),
     {stop, normal, Data}.
 
-%% Under log_only an unsolved puzzle is accepted and reported.
+%% Under log_only an unsolved puzzle is accepted and reported, at most
+%% once per 10 seconds on this node with a count of the rest.
 puzzle_reported(#{puzzle := unsolved, node_id := NodeId}, #data{puzzle = log_only} = Data) ->
-    ok = macula_diagnostics:event(warning, <<"_macula.peering.puzzle_unsolved">>,
-                                  #{node_id => binary:encode_hex(NodeId, lowercase)}),
+    ok = macula_diagnostics:bounded_event(warning, <<"_macula.peering.puzzle_unsolved">>,
+                                          #{node_id => binary:encode_hex(NodeId, lowercase)}),
     Data;
 puzzle_reported(_Client, Data) ->
     Data.
@@ -644,9 +645,10 @@ binding_hash(#{tbs := Tbs}) ->
     crypto:hash(sha384, Tbs).
 
 %% A handshake or an open connection that ends for a local reason: the
-%% controlling process and diagnostics hear it, the peer does not.
+%% controlling process and diagnostics hear it, the peer does not. The
+%% diagnostics line is bounded per node, with a count of the rest.
 closed(Reason, #data{role = Role} = Data) ->
-    ok = macula_diagnostics:event(<<"_macula.peering.closed">>, #{role => Role, reason => Reason}),
+    ok = macula_diagnostics:bounded_event(info, <<"_macula.peering.closed">>, #{role => Role, reason => Reason}),
     notify(disconnected, Reason, Data),
     {stop, normal, Data}.
 

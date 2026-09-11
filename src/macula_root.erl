@@ -45,6 +45,16 @@ init([]) ->
             type => worker
         },
 
+        %% The counts table behind macula_diagnostics:bounded_event/3, which
+        %% callers update themselves. Before any connection logs through it.
+        #{
+            id => macula_diagnostics_bound,
+            start => {macula_diagnostics_bound, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
         %% MRI Type Registry (type validation, custom type registration)
         #{
             id => macula_mri_registry,

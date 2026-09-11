@@ -124,6 +124,15 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   In `pq_hybrid` a connection neighbour-signs every control frame it
   sends and checks every one it reads, for the connection hash and the
   seq in that direction, and closes on a refusal.
+- `macula_diagnostics:bounded_event/3`: a diagnostics event logged at most
+  once per 10 seconds per event name, node-wide. An event inside that
+  window is counted, and the next line for the name carries the latest
+  properties with `suppressed`, the number held back since the line
+  before; once per window the table's owner, `macula_diagnostics_bound`,
+  logs a count a burst left. Callers update the counts table themselves.
+  `macula_peering` connections log `_macula.peering.closed`,
+  `_macula.peering.handshake_timeout` and
+  `_macula.peering.puzzle_unsolved` through it.
 - `macula_peering:peer_identity/1`: the peer's node_id, its identity key
   as carried, the profile and its capabilities, once the handshake has
   completed.
