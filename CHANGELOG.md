@@ -94,6 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and returns `{error, timeout}` after 10 s, or `{error, closed}` when the
   connection ends, instead of exiting. A peering connection keeps serving
   while one of its dedicated stream opens waits.
+- `macula_dist_relay_client` sends control frames without waiting on the
+  relay. While the relay takes no data on the control stream, the client
+  holds the frames in order and keeps serving tunnel requests, inbound
+  tunnels and `status/1`, which reports them as `held_control_frames`.
 
 ### Removed
 
