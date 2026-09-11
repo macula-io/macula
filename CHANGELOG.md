@@ -166,6 +166,10 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   belongs on the control stream rejects its peering connection with
   `malformed_frame` and ends, in either profile.
   `macula_frame:control_frame/1` names those types.
+- `macula_frame:verify_publication/3` sizes a refusal for time:
+  `{not_yet_valid, AheadMs}` and `{expired, PastMs}`, the milliseconds
+  past the moment its rule starts refusing. `charged_refusal/1` charges
+  them only beyond 10 minutes.
 
 ### Changed
 

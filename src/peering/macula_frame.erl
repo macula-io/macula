@@ -150,6 +150,9 @@
 %% most 7 node_ids (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, DHT and HyParView fields).
 -define(HYPARVIEW_MAX_WALK, 8).
 -define(HYPARVIEW_MAX_SAMPLE, 7).
+%% A freshness refusal is charged only when it is more than 10 minutes past the moment its rule starts refusing
+%% (DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 3.1).
+-define(FRESHNESS_CHARGE_AFTER_MS, 10 * 60000).
 -define(MAX_FRAME_BYTES,    16#FFFFFF).   %% 16 MiB cap (Part 6 §2.2).
 %% A payload sits in the frame map, so a container at payload path length L
 %% is at nesting depth L + 2, and the decoding rule allows depth 64.
@@ -1269,10 +1272,13 @@ publication_object(#{key := Key, tbs := Tbs, signature := Signature} = Publicati
 %% @doc Verify the publication a PUBLISH, EVENT or GOSSIP carries, under the connection's profile and a clock in
 %% milliseconds: its signature and fields, a ttl_ms of at most one hour, publisher as the key id of its key, a
 %% published_at no more than 5 minutes ahead, and not past published_at plus its ttl_ms, or 10 minutes without one,
-%% plus 5 minutes. The origin station checks this before fan-out, and every subscriber before delivery.
+%% plus 5 minutes. The origin station checks this before fan-out, and every subscriber before delivery. A
+%% refusal for its time says how far outside its window the publication is, in milliseconds:
+%% {not_yet_valid, AheadMs} past the 5 minutes ahead it may be, and {expired, PastMs} past its expiry.
 -spec verify_publication(frame(), macula_crypto_profile:profile(), integer()) ->
-        {ok, verified_publication()} | {error, malformed_frame | signature_invalid | key_id_mismatch | not_yet_valid
-                                                                          | expired}.
+        {ok, verified_publication()}
+      | {error, malformed_frame | signature_invalid | key_id_mismatch | {not_yet_valid, pos_integer()}
+                | {expired, pos_integer()}}.
 verify_publication(#{frame_type := Type, publication := Signed} = Frame, Profile, Now)
   when (Type =:= publish orelse Type =:= event orelse Type =:= plumtree_gossip), is_integer(Now) ->
     publication_signed(only_fields(Frame, publication_frame_fields(Type)),
@@ -1296,8 +1302,9 @@ publication_read({ok, #{publisher := Publisher, realm := _, topic := _, seq := _
     Expiry = PublishedAt + maps:get(ttl_ms, Read, ?PUBLICATION_DEFAULT_TTL_MS) + ?PUBLICATION_TOLERANCE_MS,
     publication_checked([{maps:get(ttl_ms, Read, 0) =< ?PUBLICATION_MAX_TTL_MS, malformed_frame},
                          {Publisher =:= macula_node_keys:node_id(Key, Profile), key_id_mismatch},
-                         {PublishedAt =< Now + ?PUBLICATION_TOLERANCE_MS, not_yet_valid},
-                         {Now =< Expiry, expired}],
+                         {PublishedAt =< Now + ?PUBLICATION_TOLERANCE_MS,
+                          {not_yet_valid, PublishedAt - (Now + ?PUBLICATION_TOLERANCE_MS)}},
+                         {Now =< Expiry, {expired, Now - Expiry}}],
                         (maps:remove(alg, Read))#{key => Key, publication_hash => crypto:hash(sha384, Tbs),
                                                   expires_at => Expiry});
 publication_read(_NotAPublication, _Key, _Tbs, _Profile, _Now) ->
@@ -1479,9 +1486,11 @@ verify_caller_stream(_Frame, _State, _Profile) ->
 %% malformed shape, key, field or alg, a signature that does not verify, or a signer that is not its key. One that
 %% depends on what the receiver holds is not: a sequence number, a stream that has ended, or a match with the
 %% request or its target. A neighbour's HyParView placements past its allowance, and a SHUFFLE_REPLY that
-%% answers no SHUFFLE, are charged.
+%% answers no SHUFFLE, are charged. A freshness refusal is charged only when it is more than 10 minutes past the
+%% moment its rule starts refusing.
 -spec charged_refusal(malformed_frame | signature_invalid | key_id_mismatch | seq_mismatch | stream_ended
-                      | request_mismatch | not_the_target | placement_allowance | unsolicited_shuffle_reply) ->
+                      | request_mismatch | not_the_target | placement_allowance | unsolicited_shuffle_reply
+                      | {expired, pos_integer()} | {not_yet_valid, pos_integer()}) ->
         boolean().
 charged_refusal(malformed_frame) -> true;
 charged_refusal(signature_invalid) -> true;
@@ -1491,7 +1500,9 @@ charged_refusal(stream_ended) -> false;
 charged_refusal(request_mismatch) -> false;
 charged_refusal(not_the_target) -> false;
 charged_refusal(placement_allowance) -> true;
-charged_refusal(unsolicited_shuffle_reply) -> true.
+charged_refusal(unsolicited_shuffle_reply) -> true;
+charged_refusal({expired, PastMs}) -> PastMs > ?FRESHNESS_CHARGE_AFTER_MS;
+charged_refusal({not_yet_valid, AheadMs}) -> AheadMs > ?FRESHNESS_CHARGE_AFTER_MS.
 
 caller_frame(false, _Side, _Object, _Type, _State, _Profile) ->
     {error, malformed_frame};

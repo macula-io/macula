@@ -103,7 +103,7 @@ a_publication_more_than_5_minutes_ahead_is_refused(#{publisher := Publisher}) ->
         macula_frame:verify_publication(wire(macula_frame:publish(publish_spec(PublishedAt), Publisher)), pq_pure, ?NOW)
     end,
     ?assertMatch({ok, _}, Verify(?NOW + 4 * ?MINUTE)),
-    ?assertEqual({error, not_yet_valid}, Verify(?NOW + 6 * ?MINUTE)).
+    ?assertEqual({error, {not_yet_valid, ?MINUTE}}, Verify(?NOW + 6 * ?MINUTE)).
 
 a_publication_past_its_ttl_plus_5_minutes_is_refused(#{publisher := Publisher}) ->
     Verify = fun(PublishedAt) ->
@@ -111,14 +111,14 @@ a_publication_past_its_ttl_plus_5_minutes_is_refused(#{publisher := Publisher}) 
         macula_frame:verify_publication(wire(macula_frame:publish(Spec, Publisher)), pq_pure, ?NOW)
     end,
     ?assertMatch({ok, _}, Verify(?NOW - 5 * ?MINUTE)),
-    ?assertEqual({error, expired}, Verify(?NOW - 7 * ?MINUTE)).
+    ?assertEqual({error, {expired, ?MINUTE}}, Verify(?NOW - 7 * ?MINUTE)).
 
 without_ttl_a_publication_lives_10_minutes_plus_5(#{publisher := Publisher}) ->
     Verify = fun(PublishedAt) ->
         macula_frame:verify_publication(wire(macula_frame:publish(publish_spec(PublishedAt), Publisher)), pq_pure, ?NOW)
     end,
     ?assertMatch({ok, _}, Verify(?NOW - 14 * ?MINUTE)),
-    ?assertEqual({error, expired}, Verify(?NOW - 16 * ?MINUTE)).
+    ?assertEqual({error, {expired, ?MINUTE}}, Verify(?NOW - 16 * ?MINUTE)).
 
 %% expires_at is the last moment a verifier accepts the publication: a subscriber keeps a delivered publication's hash
 %% until then, and refuses any copy that arrives later.
@@ -127,14 +127,14 @@ a_verified_publication_carries_its_expiry_the_moment_verifiers_refuse_it(#{publi
     {ok, Verified} = macula_frame:verify_publication(Frame, pq_pure, ?NOW),
     ?assertEqual(?NOW + 7 * ?MINUTE, maps:get(expires_at, Verified)),
     ?assertMatch({ok, _}, macula_frame:verify_publication(Frame, pq_pure, ?NOW + 7 * ?MINUTE)),
-    ?assertEqual({error, expired}, macula_frame:verify_publication(Frame, pq_pure, ?NOW + 7 * ?MINUTE + 1)).
+    ?assertEqual({error, {expired, 1}}, macula_frame:verify_publication(Frame, pq_pure, ?NOW + 7 * ?MINUTE + 1)).
 
 without_ttl_the_expiry_is_15_minutes_after_publishing(#{publisher := Publisher}) ->
     Frame = wire(macula_frame:publish(publish_spec(?NOW), Publisher)),
     {ok, Verified} = macula_frame:verify_publication(Frame, pq_pure, ?NOW),
     ?assertEqual(?NOW + 15 * ?MINUTE, maps:get(expires_at, Verified)),
     ?assertMatch({ok, _}, macula_frame:verify_publication(Frame, pq_pure, ?NOW + 15 * ?MINUTE)),
-    ?assertEqual({error, expired}, macula_frame:verify_publication(Frame, pq_pure, ?NOW + 15 * ?MINUTE + 1)).
+    ?assertEqual({error, {expired, 1}}, macula_frame:verify_publication(Frame, pq_pure, ?NOW + 15 * ?MINUTE + 1)).
 
 %% ttl_ms is at most one hour: a publication carrying more is malformed, and publish/2 refuses to sign one.
 a_ttl_over_an_hour_is_malformed(#{publisher := Publisher}) ->
