@@ -40,18 +40,15 @@ setup() ->
     {ok, {CertPem, KeyPem}} =
         macula_quic:generate_self_signed_cert(
             iolist_to_binary(Pub), iolist_to_binary(Priv), [<<"localhost">>, <<"127.0.0.1">>]),
-    Base = lists:flatten(io_lib:format("/tmp/macula-peering-stream-open-~s-~p",
-                                       [os:getpid(), erlang:unique_integer([positive])])),
-    Cert = Base ++ ".crt",
-    Key = Base ++ ".key",
+    Dir = macula_test_tmp:dir("macula-peering-stream-open"),
+    Cert = filename:join(Dir, "listener.crt"),
+    Key = filename:join(Dir, "listener.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
-    #{cert => Cert, key => Key}.
+    #{dir => Dir, cert => Cert, key => Key}.
 
-cleanup(#{cert := Cert, key := Key}) ->
-    _ = file:delete(Cert),
-    _ = file:delete(Key),
-    ok.
+cleanup(#{dir := Dir}) ->
+    ok = file:del_dir_r(Dir).
 
 %%====================================================================
 %% Tests

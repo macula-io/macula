@@ -40,9 +40,8 @@ install_domain_filter_is_idempotent_test() ->
 domain_filter_fixes_the_actual_drop_test() ->
     {ok, OrigPrimary} = {ok, logger:get_primary_config()},
     {ok, OrigDefault} = logger:get_handler_config(default),
-    File = filename:join(
-             "/tmp", "macula_diagnostics_domain_filter_test.log"),
-    file:delete(File),
+    Dir = macula_test_tmp:dir("macula_diagnostics_domain_filter_test"),
+    File = filename:join(Dir, "domain_filter.log"),
     try
         %% Match production's kernel `logger_level => info' — OTP's
         %% own stock default is `notice', which would drop `info'
@@ -76,7 +75,7 @@ domain_filter_fixes_the_actual_drop_test() ->
         _ = logger:add_handler(default, maps:get(module, OrigDefault),
                                 maps:without([id, module], OrigDefault)),
         _ = logger:set_primary_config(OrigPrimary),
-        _ = file:delete(File)
+        ok = file:del_dir_r(Dir)
     end.
 
 %%------------------------------------------------------------------

@@ -33,16 +33,17 @@
 
 %% With a valid certificate and key, only the window can make listen/3 fail.
 receive_window_option_test() ->
-    {Cert, Key} = cert_files(),
-    Result = macula_quic:listen(<<"127.0.0.1">>, free_udp_port(),
-                                [{cert, Cert}, {key, Key}, {stream_receive_window, 0}]),
-    ok = file:delete(Cert),
-    ok = file:delete(Key),
+    Result = macula_test_tmp:with_dir("macula-quic-backpressure", fun listen_without_a_window/1),
     close_if_listening(Result),
     ?assertMatch({error, _}, Result).
 
 close_if_listening({ok, Listener}) -> macula_quic:close_listener(Listener);
 close_if_listening(_Error) -> ok.
+
+listen_without_a_window(Dir) ->
+    {_PubBin, Cert, Key} = identity_files(Dir),
+    macula_quic:listen(<<"127.0.0.1">>, free_udp_port(),
+                       [{cert, Cert}, {key, Key}, {stream_receive_window, 0}]).
 
 send_backpressure_test_() ->
     [{"async_send/2 on a stream without credit returns within 50 ms, then busy",
@@ -150,14 +151,9 @@ close_with_queued_data(LingerMs) ->
 %% connection to it, and one stream the client opened and the listener side
 %% accepted and never reads.
 pair() ->
-    {PubBin, Cert, Key} = identity_files(),
     Port = free_udp_port(),
-    {ok, Listener} = macula_quic:listen(<<"127.0.0.1">>, Port,
-                                        [{cert, Cert}, {key, Key}, {alpn, [<<"macula">>]},
-                                         {stream_receive_window, ?WINDOW},
-                                         {receive_window, 4 * ?WINDOW}]),
-    ok = file:delete(Cert),
-    ok = file:delete(Key),
+    {PubBin, {ok, Listener}} = macula_test_tmp:with_dir("macula-quic-backpressure",
+                                                        fun(Dir) -> windowed_listener(Dir, Port) end),
     ok = macula_quic:async_accept(Listener),
     {ok, ClientConn} = macula_quic:connect(<<"127.0.0.1">>, Port,
                                             [{verify_pubkey, PubBin}, {alpn, [<<"macula">>]}],
@@ -171,24 +167,27 @@ pair() ->
     #{listener => Listener, client_conn => ClientConn, server_conn => ServerConn,
       client_stream => ClientStream, server_stream => ServerStream}.
 
+%% A listener with the scenario's windows, and the public key a client pins. The listener reads its certificate and
+%% key files when it starts listening, so they last only that long.
+windowed_listener(Dir, Port) ->
+    {PubBin, Cert, Key} = identity_files(Dir),
+    {PubBin, macula_quic:listen(<<"127.0.0.1">>, Port,
+                                [{cert, Cert}, {key, Key}, {alpn, [<<"macula">>]},
+                                 {stream_receive_window, ?WINDOW},
+                                 {receive_window, 4 * ?WINDOW}])}.
+
 %% A fresh self-signed identity: the public key a client pins, and the
-%% certificate and key files a listener reads.
-identity_files() ->
+%% certificate and key files in Dir that a listener reads.
+identity_files(Dir) ->
     {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
     PubBin = iolist_to_binary(Pub),
     {ok, {CertPem, KeyPem}} =
         macula_quic:generate_self_signed_cert(PubBin, iolist_to_binary(Priv), [<<"127.0.0.1">>]),
-    Base = lists:flatten(io_lib:format("/tmp/macula-quic-backpressure-~s-~p",
-                                       [os:getpid(), erlang:unique_integer([positive])])),
-    Cert = Base ++ ".crt",
-    Key = Base ++ ".key",
+    Cert = filename:join(Dir, "listener.crt"),
+    Key = filename:join(Dir, "listener.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
     {PubBin, Cert, Key}.
-
-cert_files() ->
-    {_PubBin, Cert, Key} = identity_files(),
-    {Cert, Key}.
 
 %% Returns Result with the pair's handles referenced until now.
 kept(#{listener := _, server_conn := _, server_stream := _}, Result) ->

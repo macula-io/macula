@@ -114,26 +114,29 @@ puzzle_higher_difficulty_implies_lower_difficulty_test_() ->
 %%------------------------------------------------------------------
 
 save_load_roundtrip_test() ->
-    Path = mktmp("identity.key"),
-    Kp   = macula_identity:generate(),
-    ok = macula_identity:save(Path, Kp),
-    ?assertEqual({ok, Kp}, macula_identity:load(Path)).
+    with_tmp_path("identity.key", fun(Path) ->
+        Kp   = macula_identity:generate(),
+        ok = macula_identity:save(Path, Kp),
+        ?assertEqual({ok, Kp}, macula_identity:load(Path))
+    end).
 
 load_rejects_bad_format_test() ->
-    Path = mktmp("bad.key"),
-    ok = file:write_file(Path, <<"not a valid key">>),
-    ok = file:change_mode(Path, 8#600),
-    ?assertEqual({error, bad_key_file}, macula_identity:load(Path)).
+    with_tmp_path("bad.key", fun(Path) ->
+        ok = file:write_file(Path, <<"not a valid key">>),
+        ok = file:change_mode(Path, 8#600),
+        ?assertEqual({error, bad_key_file}, macula_identity:load(Path))
+    end).
 
 load_returns_enoent_for_missing_file_test() ->
     ?assertEqual({error, enoent}, macula_identity:load("/nonexistent/xyz/key")).
 
 saved_file_has_restrictive_permissions_test() ->
-    Path = mktmp("identity.key"),
-    Kp   = macula_identity:generate(),
-    ok = macula_identity:save(Path, Kp),
-    {ok, #file_info{mode = Mode}} = file:read_file_info(Path),
-    ?assertEqual(8#0600, Mode band 8#0777).
+    with_tmp_path("identity.key", fun(Path) ->
+        Kp   = macula_identity:generate(),
+        ok = macula_identity:save(Path, Kp),
+        {ok, #file_info{mode = Mode}} = file:read_file_info(Path),
+        ?assertEqual(8#0600, Mode band 8#0777)
+    end).
 
 %% Regression: a bare `ok = filelib:ensure_dir(Path)' match used to crash
 %% this function with an unhandled MatchError whenever ensure_dir failed,
@@ -146,22 +149,25 @@ saved_file_has_restrictive_permissions_test() ->
 %% directory is expected reproduces the same ensure_dir failure portably,
 %% without depending on OS permissions or running as non-root.
 save_returns_error_instead_of_crashing_when_ensure_dir_fails_test() ->
-    Blocker = mktmp("not_a_directory"),
-    ok = file:write_file(Blocker, <<"not a directory">>),
-    Path = filename:join(Blocker, "identity.key"),
-    Kp = macula_identity:generate(),
-    ?assertMatch({error, _}, macula_identity:save(Path, Kp)).
+    with_tmp_path("not_a_directory", fun(Blocker) ->
+        ok = file:write_file(Blocker, <<"not a directory">>),
+        Path = filename:join(Blocker, "identity.key"),
+        Kp = macula_identity:generate(),
+        ?assertMatch({error, _}, macula_identity:save(Path, Kp))
+    end).
 
 %% A key file its group or others can access is refused, whatever its
 %% content, with an error naming the file, its mode and what is required.
 load_refuses_key_file_group_or_others_can_access_test_() ->
     [{"load refuses a key file with mode " ++ Octal,
       fun() ->
-          Path = saved_key_with_mode(Mode),
-          ?assertEqual({error, {file_permissions, #{file => Path,
-                                                    mode => list_to_binary(Octal),
-                                                    required => ?REQUIRED_MODE}}},
-                       macula_identity:load(Path))
+          with_tmp_dir(fun(Dir) ->
+              Path = saved_key_with_mode(Dir, Mode),
+              ?assertEqual({error, {file_permissions, #{file => Path,
+                                                        mode => list_to_binary(Octal),
+                                                        required => ?REQUIRED_MODE}}},
+                           macula_identity:load(Path))
+          end)
       end}
      || {Mode, Octal} <- [{8#640, "0640"}, {8#604, "0604"}, {8#660, "0660"},
                           {8#606, "0606"}, {8#644, "0644"}]].
@@ -169,55 +175,62 @@ load_refuses_key_file_group_or_others_can_access_test_() ->
 load_accepts_key_file_only_its_owner_can_read_test_() ->
     [{"load accepts a key file with mode " ++ Octal,
       fun() ->
-          ?assertMatch({ok, #{public := _, private := _}},
-                       macula_identity:load(saved_key_with_mode(Mode)))
+          with_tmp_dir(fun(Dir) ->
+              ?assertMatch({ok, #{public := _, private := _}},
+                           macula_identity:load(saved_key_with_mode(Dir, Mode)))
+          end)
       end}
      || {Mode, Octal} <- [{8#600, "0600"}, {8#400, "0400"}]].
 
 load_follows_symlink_to_key_file_test() ->
-    Target = mktmp("identity.key"),
-    Kp = macula_identity:generate(),
-    ok = macula_identity:save(Target, Kp),
-    Link = filename:join(filename:dirname(Target), "linked.key"),
-    ok = file:make_symlink(Target, Link),
-    ?assertEqual({ok, Kp}, macula_identity:load(Link)).
+    with_tmp_path("identity.key", fun(Target) ->
+        Kp = macula_identity:generate(),
+        ok = macula_identity:save(Target, Kp),
+        Link = filename:join(filename:dirname(Target), "linked.key"),
+        ok = file:make_symlink(Target, Link),
+        ?assertEqual({ok, Kp}, macula_identity:load(Link))
+    end).
 
 load_refuses_directory_test() ->
-    Dir = filename:dirname(mktmp("unused")),
-    ?assertEqual({error, {file_type, #{file => Dir, type => directory, required => regular}}},
-                 macula_identity:load(Dir)).
+    with_tmp_dir(fun(Dir) ->
+        ?assertEqual({error, {file_type, #{file => Dir, type => directory, required => regular}}},
+                     macula_identity:load(Dir))
+    end).
 
 save_never_writes_through_symlink_at_path_plus_tmp_test() ->
-    Path = mktmp("identity.key"),
-    Target = filename:join(filename:dirname(Path), "elsewhere"),
-    ok = file:write_file(Target, <<"unrelated">>),
-    ok = file:make_symlink(Target, Path ++ ".tmp"),
-    ok = macula_identity:save(Path, macula_identity:generate()),
-    ?assertEqual({ok, <<"unrelated">>}, file:read_file(Target)),
-    {ok, #file_info{type = Type}} = file:read_link_info(Path),
-    ?assertEqual(regular, Type).
+    with_tmp_path("identity.key", fun(Path) ->
+        Target = filename:join(filename:dirname(Path), "elsewhere"),
+        ok = file:write_file(Target, <<"unrelated">>),
+        ok = file:make_symlink(Target, Path ++ ".tmp"),
+        ok = macula_identity:save(Path, macula_identity:generate()),
+        ?assertEqual({ok, <<"unrelated">>}, file:read_file(Target)),
+        {ok, #file_info{type = Type}} = file:read_link_info(Path),
+        ?assertEqual(regular, Type)
+    end).
 
 save_creates_missing_key_directory_only_its_owner_can_use_test() ->
-    Dir = filename:join(filename:dirname(mktmp("unused")), "keys"),
-    ok = macula_identity:save(filename:join(Dir, "identity.key"), macula_identity:generate()),
-    {ok, #file_info{mode = Mode}} = file:read_file_info(Dir),
-    ?assertEqual(8#700, Mode band 8#777).
+    with_tmp_dir(fun(Base) ->
+        Dir = filename:join(Base, "keys"),
+        ok = macula_identity:save(filename:join(Dir, "identity.key"), macula_identity:generate()),
+        {ok, #file_info{mode = Mode}} = file:read_file_info(Dir),
+        ?assertEqual(8#700, Mode band 8#777)
+    end).
 
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
 
-mktmp(Name) ->
-    Dir  = filename:join([
-        "/tmp",
-        "macula_identity_tests",
-        integer_to_list(erlang:unique_integer([positive]))
-    ]),
-    ok = filelib:ensure_dir(filename:join(Dir, "x")),
-    filename:join(Dir, Name).
+%% Fun called with a new directory, removed once Fun returns or raises.
+with_tmp_dir(Fun) ->
+    macula_test_tmp:with_dir("macula_identity_tests", Fun).
 
-saved_key_with_mode(Mode) ->
-    Path = mktmp("identity.key"),
+%% Fun called with the path Name in a new directory, removed once Fun returns or raises.
+with_tmp_path(Name, Fun) ->
+    with_tmp_dir(fun(Dir) -> Fun(filename:join(Dir, Name)) end).
+
+%% A saved key file with Mode in Dir.
+saved_key_with_mode(Dir, Mode) ->
+    Path = filename:join(Dir, "identity.key"),
     ok = macula_identity:save(Path, macula_identity:generate()),
     ok = file:change_mode(Path, Mode),
     Path.

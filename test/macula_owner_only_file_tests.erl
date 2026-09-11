@@ -11,7 +11,6 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("kernel/include/file.hrl").
 
--define(BASE_PREFIX, "macula_owner_only_file_tests_").
 -define(REQUIRED_MODE, <<"no access for group or others (0600 or 0400)">>).
 -define(WATCHED_WRITES, 20).
 -define(WATCHED_CONTENT_BYTES, 8 * 1024 * 1024).
@@ -210,12 +209,7 @@ read_reports_dangling_symlink(Base) ->
 %%%===================================================================
 
 make_base() ->
-    Unique = integer_to_list(erlang:unique_integer([positive])) ++ "_" ++
-        binary_to_list(binary:encode_hex(crypto:strong_rand_bytes(4), lowercase)),
-    Base = filename:join(os:getenv("TMPDIR", "/tmp"), ?BASE_PREFIX ++ Unique),
-    ok = file:make_dir(Base),
-    ok = file:change_mode(Base, 8#700),
-    Base.
+    macula_test_tmp:dir("macula_owner_only_file_tests").
 
 remove_base(Base) ->
     ok = file:del_dir_r(Base).

@@ -23,19 +23,11 @@
 
 setup() ->
     %% Create temporary directory for test certificates
-    TempDir = lists:flatten(io_lib:format("/tmp/macula_tls_test_~p", [erlang:unique_integer([positive])])),
-    ok = filelib:ensure_dir(TempDir ++ "/"),
-    TempDir.
+    macula_test_tmp:dir("macula_tls_test").
 
 cleanup(TempDir) ->
     %% Remove temporary directory and all files
-    case file:list_dir(TempDir) of
-        {ok, Files} ->
-            [file:delete(filename:join(TempDir, F)) || F <- Files],
-            file:del_dir(TempDir);
-        {error, _} ->
-            ok
-    end.
+    ok = file:del_dir_r(TempDir).
 
 %%%=============================================================================
 %%% Certificate Generation Tests

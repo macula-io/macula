@@ -73,17 +73,15 @@ setup() ->
     {ok, {CertPem, KeyPem}} =
         macula_quic:generate_self_signed_cert(
             Pub, Priv, [<<"localhost">>, <<"127.0.0.1">>]),
-    Tmp  = lists:flatten(io_lib:format("/tmp/macula-peering-handshake-~p",
-                                       [erlang:unique_integer([positive])])),
-    Cert = Tmp ++ ".crt",
-    Key  = Tmp ++ ".key",
+    Dir  = macula_test_tmp:dir("macula-peering-handshake"),
+    Cert = filename:join(Dir, "listener.crt"),
+    Key  = filename:join(Dir, "listener.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key,  KeyPem),
-    #{cert => Cert, key => Key}.
+    #{dir => Dir, cert => Cert, key => Key}.
 
-cleanup(#{cert := Cert, key := Key}) ->
-    file:delete(Cert),
-    file:delete(Key),
+cleanup(#{dir := Dir}) ->
+    ok = file:del_dir_r(Dir),
     drain_quic_messages(),
     ok.
 

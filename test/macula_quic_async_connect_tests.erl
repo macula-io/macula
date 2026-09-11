@@ -39,7 +39,7 @@ file_io_answers_while_dials_wait() ->
     %% schedulers are known to be dialing: their Initial packets have
     %% reached the socket.
     ok = dials_seen(Sock, erlang:system_info(dirty_io_schedulers), 5_000),
-    {Micros, ok} = timer:tc(fun open_and_close_a_file/0),
+    {Micros, ok} = macula_test_tmp:with_dir("macula-quic-dial", fun timed_open_and_close/1),
     [await_dialled(Dialer) || Dialer <- Dialers],
     ok = gen_udp:close(Sock),
     flush_datagrams(Sock),
@@ -190,9 +190,11 @@ await_dialled(Dialer) ->
         erlang:error({dial_did_not_end, Dialer})
     end.
 
-open_and_close_a_file() ->
-    Path = filename:join("/tmp", "macula-quic-dial-" ++
-                             integer_to_list(erlang:unique_integer([positive]))),
+%% How long opening and closing a new file in Dir takes, timing the file operations only.
+timed_open_and_close(Dir) ->
+    timer:tc(fun() -> open_and_close_a_file(filename:join(Dir, "opened")) end).
+
+open_and_close_a_file(Path) ->
     {ok, Fd} = file:open(Path, [write, raw]),
     ok = file:close(Fd),
     file:delete(Path).
@@ -261,26 +263,26 @@ start_listener() ->
     {ok, {CertPem, KeyPem}} = macula_quic:generate_self_signed_cert(
                                 iolist_to_binary(Pub), iolist_to_binary(Priv),
                                 [<<"localhost">>, <<"127.0.0.1">>]),
-    Base = "/tmp/macula-quic-async-connect-" ++
-               integer_to_list(erlang:unique_integer([positive])),
-    Cert = Base ++ ".crt",
-    Key = Base ++ ".key",
+    Port = free_udp_port(),
+    {ok, Listener} = macula_test_tmp:with_dir("macula-quic-async-connect",
+                                              fun(Dir) -> listen(Dir, Port, CertPem, KeyPem) end),
+    ok = macula_quic:async_accept(Listener),
+    #{listener => Listener, port => Port, pubkey => iolist_to_binary(Pub)}.
+
+%% The listener reads its certificate and key files when it starts listening, so they last only that long.
+listen(Dir, Port, CertPem, KeyPem) ->
+    Cert = filename:join(Dir, "listener.crt"),
+    Key = filename:join(Dir, "listener.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
-    Port = free_udp_port(),
-    {ok, Listener} = macula_quic:listen(?HOST, Port,
-                                        [{cert, Cert}, {key, Key},
-                                         {alpn, [<<"macula">>]},
-                                         {idle_timeout_ms, 30_000},
-                                         {keep_alive_interval_ms, 5_000}]),
-    ok = macula_quic:async_accept(Listener),
-    #{listener => Listener, port => Port, pubkey => iolist_to_binary(Pub),
-      cert => Cert, key => Key}.
+    macula_quic:listen(?HOST, Port,
+                       [{cert, Cert}, {key, Key},
+                        {alpn, [<<"macula">>]},
+                        {idle_timeout_ms, 30_000},
+                        {keep_alive_interval_ms, 5_000}]).
 
-stop_listener(#{listener := Listener, cert := Cert, key := Key}) ->
+stop_listener(#{listener := Listener}) ->
     _ = macula_quic:close_listener(Listener),
-    _ = file:delete(Cert),
-    _ = file:delete(Key),
     drain_quic_messages().
 
 free_udp_port() ->

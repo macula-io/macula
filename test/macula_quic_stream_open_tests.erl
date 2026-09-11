@@ -135,13 +135,9 @@ open_by_an_exited_process() ->
 %% a client connection to it, and one stream the client opened and the
 %% listener side accepted.
 pair(StreamLimit) ->
-    {PubBin, Cert, Key} = identity_files(),
     Port = free_udp_port(),
-    {ok, Listener} = macula_quic:listen(<<"127.0.0.1">>, Port,
-                                        [{cert, Cert}, {key, Key}, {alpn, [<<"macula">>]},
-                                         {peer_bidi_stream_count, StreamLimit}]),
-    ok = file:delete(Cert),
-    ok = file:delete(Key),
+    {PubBin, {ok, Listener}} = macula_test_tmp:with_dir("macula-quic-stream-open",
+                                                        fun(Dir) -> limited_listener(Dir, Port, StreamLimit) end),
     ok = macula_quic:async_accept(Listener),
     {ok, ClientConn} = macula_quic:connect(<<"127.0.0.1">>, Port,
                                             [{verify_pubkey, PubBin}, {alpn, [<<"macula">>]}],
@@ -171,17 +167,23 @@ read_to_end(Stream) ->
         error(stream_not_finished)
     end.
 
+%% A listener that allows StreamLimit concurrent streams per connection, and the public key a client pins. The listener
+%% reads its certificate and key files when it starts listening, so they last only that long.
+limited_listener(Dir, Port, StreamLimit) ->
+    {PubBin, Cert, Key} = identity_files(Dir),
+    {PubBin, macula_quic:listen(<<"127.0.0.1">>, Port,
+                                [{cert, Cert}, {key, Key}, {alpn, [<<"macula">>]},
+                                 {peer_bidi_stream_count, StreamLimit}])}.
+
 %% A fresh self-signed identity: the public key a client pins, and the
-%% certificate and key files a listener reads.
-identity_files() ->
+%% certificate and key files in Dir that a listener reads.
+identity_files(Dir) ->
     {Pub, Priv} = crypto:generate_key(eddsa, ed25519),
     PubBin = iolist_to_binary(Pub),
     {ok, {CertPem, KeyPem}} =
         macula_quic:generate_self_signed_cert(PubBin, iolist_to_binary(Priv), [<<"127.0.0.1">>]),
-    Base = lists:flatten(io_lib:format("/tmp/macula-quic-stream-open-~s-~p",
-                                       [os:getpid(), erlang:unique_integer([positive])])),
-    Cert = Base ++ ".crt",
-    Key = Base ++ ".key",
+    Cert = filename:join(Dir, "listener.crt"),
+    Key = filename:join(Dir, "listener.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
     {PubBin, Cert, Key}.

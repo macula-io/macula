@@ -46,30 +46,29 @@ setup_listener() ->
     {ok, {CertPem, KeyPem}} =
         macula_quic:generate_self_signed_cert(
             Pub, Priv, [<<"localhost">>, <<"127.0.0.1">>]),
-    Tmp  = lists:flatten(io_lib:format("/tmp/macula-quic-conn-regress-~p",
-                                       [erlang:unique_integer([positive])])),
-    Cert = Tmp ++ ".crt",
-    Key  = Tmp ++ ".key",
+    Port = pick_free_port(),
+    {ok, Listener} = macula_test_tmp:with_dir("macula-quic-conn-regress",
+                                              fun(Dir) -> listen(Dir, Port, CertPem, KeyPem) end),
+    ok = macula_quic:async_accept(Listener),
+    #{listener => Listener,
+      port     => Port,
+      pubkey   => Pub}.
+
+%% The listener reads its certificate and key files when it starts listening, so they last only that long.
+listen(Dir, Port, CertPem, KeyPem) ->
+    Cert = filename:join(Dir, "listener.crt"),
+    Key  = filename:join(Dir, "listener.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key,  KeyPem),
-    Port = pick_free_port(),
-    {ok, Listener} = macula_quic:listen(
+    macula_quic:listen(
         <<"127.0.0.1">>, Port,
         [{cert, Cert}, {key, Key},
          {alpn, [<<"macula">>]},
          {idle_timeout_ms, 30000},
-         {keep_alive_interval_ms, 5000}]),
-    ok = macula_quic:async_accept(Listener),
-    #{listener => Listener,
-      port     => Port,
-      cert     => Cert,
-      key      => Key,
-      pubkey   => Pub}.
+         {keep_alive_interval_ms, 5000}]).
 
-cleanup(#{listener := L, cert := Cert, key := Key}) ->
+cleanup(#{listener := L}) ->
     try macula_quic:close_listener(L) catch _:_ -> ok end,
-    file:delete(Cert),
-    file:delete(Key),
     %% Drain any leftover {quic, new_conn, ...} the accepts produced.
     drain_quic_messages(),
     ok.
