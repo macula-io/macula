@@ -150,6 +150,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policies now share it. A token signed by `Issuer` but minted for another
   audience is refused with `unauthorized`. Mint `ucan_required` tokens for
   the caller that will present them.
+- A stream handler finds the verified caller in its arguments, as a unary
+  handler finds it in its payload: when a STREAM_OPEN's `args` are a map,
+  the handler's `Args` hold the calling identity's public key under
+  `caller`, replacing any `caller` the arguments carried. Arguments that
+  are not a map reach the handler unchanged.
 - `macula_identity:load/1` accepts only a key file its group and others
   have no access to, mode 0600 or 0400, following symlinks. Another mode
   returns `{error, {file_permissions, #{file => Path, mode => <<"0644">>,
