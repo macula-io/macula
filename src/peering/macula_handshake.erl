@@ -22,7 +22,9 @@
     accept_connect/2,
     read_hello/1,
     status/1,
-    read_status/2
+    read_status/2,
+    read_status_wire/2,
+    open_frame_kind/1
 ]).
 
 -export_type([close_reason/0, refusal_code/0, puzzle_mode/0,
@@ -321,6 +323,24 @@ status_verdict({error, _} = Error, _Binding, _IdentityKey, _Profile, _Now) ->
 
 status_expiry({ok, #{expires_at := ExpiresAt}}) -> {ok, ExpiresAt};
 status_expiry({error, _} = Error) -> Error.
+
+%% @doc read_status/2 on a frame already decoded from CBOR, for a connection that decodes each frame once to route
+%% it.
+-spec read_status_wire(term(), peer()) -> {ok, non_neg_integer()} | {error, close_reason()}.
+read_status_wire(Wire, #{profile := Profile, identity_key := IdentityKey, binding := Binding, now := Now}) ->
+    status_verdict(frame_version(text_keyed({ok, Wire}), <<"status">>, [?STATUS_KEYS]), Binding, IdentityKey,
+                   Profile, Now).
+
+%% @doc What a decoded frame on an open connection is, by its frame_type: a status frame, a handshake frame, which
+%% has no place after HELLO, or any other frame, which macula_frame reads.
+-spec open_frame_kind(term()) -> status | handshake | other.
+open_frame_kind(#{{text, <<"frame_type">>} := {text, <<"status">>}}) ->
+    status;
+open_frame_kind(#{{text, <<"frame_type">>} := {text, Type}})
+  when Type =:= <<"opener">>; Type =:= <<"challenge">>; Type =:= <<"connect">>; Type =:= <<"hello">> ->
+    handshake;
+open_frame_kind(_Other) ->
+    other.
 
 %%------------------------------------------------------------------
 %% Encoding

@@ -838,9 +838,10 @@ connected(EventType, Event, Data) ->
 
 
 %% On the open connection every frame is an application frame or a
-%% status frame. A frame that is neither closes the connection, as any
-%% envelope refusal does, and a status frame that fails its checks
-%% closes it with that check's reason.
+%% status frame, told apart by its frame_type. A handshake frame, a frame
+%% macula_frame refuses and bytes that are not CBOR close the connection
+%% with malformed_frame, as any envelope refusal does, and a status frame
+%% that fails its checks closes it with that check's reason.
 open_frames({ok, Frames, Tail}, Data) ->
     open_frame(Frames, Data#data{buf = Tail}, []);
 open_frames({error, frame_too_large}, Data) ->
@@ -849,19 +850,30 @@ open_frames({error, frame_too_large}, Data) ->
 open_frame([], Data, Actions) ->
     {keep_state, Data, lists:reverse(Actions)};
 open_frame([Bytes | Rest], Data, Actions) ->
-    open_frame_read(macula_frame:decode_bytes(Bytes), Bytes, Rest, Data, Actions).
+    routed(macula_record_cbor:decode_strict(Bytes), Rest, Data, Actions).
 
-open_frame_read({ok, Frame}, _Bytes, Rest, Data, Actions) ->
-    neighbour_read(macula_frame:verify_neighbour(Frame, neighbour_reader(Data)), Frame, Rest, Data, Actions);
-open_frame_read({error, bad_frame}, Bytes, Rest, #data{profile = Profile, peer = Peer} = Data, Actions) ->
+%% Each frame is decoded once, and its frame_type routes it.
+routed({ok, Wire}, Rest, Data, Actions) ->
+    kind_read(macula_handshake:open_frame_kind(Wire), Wire, Rest, Data, Actions);
+routed({error, _NotCbor}, _Rest, Data, _Actions) ->
+    closed(malformed_frame, Data).
+
+kind_read(status, Wire, Rest, #data{profile = Profile, peer = Peer} = Data, Actions) ->
     Reader = #{profile => Profile, identity_key => maps:get(identity_key, Peer), binding => peer_binding(Peer),
                now => now_ms(Data)},
-    status_read(macula_handshake:read_status(Bytes, Reader), Rest, Data, Actions).
+    status_read(macula_handshake:read_status_wire(Wire, Reader), Rest, Data, Actions);
+kind_read(handshake, _Wire, _Rest, Data, _Actions) ->
+    closed(malformed_frame, Data);
+kind_read(other, Wire, Rest, Data, Actions) ->
+    open_frame_read(macula_frame:read_wire(Wire), Rest, Data, Actions).
+
+open_frame_read({ok, Frame}, Rest, Data, Actions) ->
+    neighbour_read(macula_frame:verify_neighbour(Frame, neighbour_reader(Data)), Frame, Rest, Data, Actions);
+open_frame_read({error, bad_frame}, _Rest, Data, _Actions) ->
+    closed(malformed_frame, Data).
 
 status_read({ok, ExpiresAt}, Rest, Data, Actions) ->
     open_frame(Rest, Data, [status_timer(ExpiresAt, Data) | Actions]);
-status_read({error, unexpected_frame}, _Rest, Data, _Actions) ->
-    closed(malformed_frame, Data);
 status_read({error, Reason}, _Rest, Data, _Actions) ->
     closed(Reason, Data).
 

@@ -145,7 +145,11 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   as carried, the profile and its capabilities, once the handshake has
   completed.
 - `macula_handshake` results carry the not_after of the peer's binding,
-  and `macula_frame:decode_bytes/1` decodes one frame's CBOR bytes.
+  and `macula_frame:read_wire/1` reads a frame from its decoded CBOR value.
+  On an open connection a frame is decoded once and routed by its
+  frame_type (`macula_handshake:open_frame_kind/1` and
+  `read_status_wire/2`): a handshake frame, a frame `macula_frame`
+  refuses and bytes that are not CBOR close it as `malformed_frame`.
 
 ### Changed
 

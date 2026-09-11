@@ -101,7 +101,13 @@ handshake_test_() ->
             {timeout, 120,
              fun() ->
                  a_control_frame_without_a_neighbour_signature_closes_the_connection_in_pq_hybrid(Ctx)
-             end}}]
+             end}},
+           {"a frame with a field its table does not name closes with malformed_frame",
+            {timeout, 30, fun() -> a_frame_with_a_field_its_table_does_not_name_closes_with_malformed_frame(Ctx) end}},
+           {"an application frame on the control stream is delivered",
+            {timeout, 30, fun() -> an_application_frame_on_the_control_stream_is_delivered(Ctx) end}},
+           {"a handshake frame after HELLO closes with malformed_frame",
+            {timeout, 30, fun() -> a_handshake_frame_after_hello_closes_with_malformed_frame(Ctx) end}}]
       end}}.
 
 %%====================================================================
@@ -848,3 +854,43 @@ on_control_stream(Conn, Bytes) ->
     Results = [catch macula_quic:send(Ref, Bytes) || Ref <- tuple_to_list(Data), is_reference(Ref)],
     ?assert(lists:member(ok, Results)),
     ok.
+
+%%====================================================================
+%% Frames on the open connection that are not application frames
+%%====================================================================
+
+%% A version-2 frame with a field its table does not name closes the
+%% connection with malformed_frame.
+a_frame_with_a_field_its_table_does_not_name_closes_with_malformed_frame(Ctx) ->
+    World = world(Ctx, #{}),
+    {Client, Station} = connect(World, #{mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    <<_Length:32, Bytes/binary>> = macula_frame:encode(ping()),
+    ok = on_control_stream(Client, macula_frame:encode_bytes(binary:replace(Bytes, <<"nonce">>, <<"nonzz">>))),
+    ?assertEqual(malformed_frame, ended(Station)),
+    finish(World, [Client, Station]).
+
+%% An application frame written onto the control stream reaches the
+%% controlling process as it was built: the connection leaves application
+%% frame types to their owners.
+an_application_frame_on_the_control_stream_is_delivered(Ctx) ->
+    World = world(Ctx, #{}),
+    {Client, Station} = connect(World, #{mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    Ping = ping(),
+    ok = on_control_stream(Client, macula_frame:encode(Ping)),
+    ?assertEqual(wire(Ping), frame_from(Station)),
+    ?assertEqual(open, still_open(Station, 500)),
+    finish(World, [Client, Station]).
+
+%% A handshake frame after HELLO closes the connection with
+%% malformed_frame: here a second accepted HELLO.
+a_handshake_frame_after_hello_closes_with_malformed_frame(Ctx) ->
+    World = world(Ctx, #{}),
+    {Client, Station} = connect(World, #{mode => off}),
+    _ = {await(Client, connected), await(Station, connected)},
+    Hello = macula_record_cbor:encode(#{{text, <<"version">>} => 3, {text, <<"frame_type">>} => {text, <<"hello">>},
+                                        {text, <<"accepted">>} => 1, {text, <<"capabilities">>} => 0}),
+    ok = on_control_stream(Client, macula_frame:encode_bytes(Hello)),
+    ?assertEqual(malformed_frame, ended(Station)),
+    finish(World, [Client, Station]).
