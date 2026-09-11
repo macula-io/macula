@@ -462,6 +462,7 @@ Raf answered "go with the recommendations" on 2026-09-10.
 | D24 | Hashes under signatures | SHA-384 for content and UCAN parent ids; node ids stay SHA-256 | Accepted |
 | D25 | Replies bound to provider and request | Caller-signed target, request hash, signed stream frames | Accepted |
 | D26 | Peer-supplied maps | One key form in 11.0.0, read through the facade accessors | Accepted |
+| D27 | Where content lives | The sharing node keeps and serves it; stations only pass it through | Accepted |
 
 ### D1 Where the profile is chosen
 
@@ -1066,6 +1067,9 @@ before its wire checks are green.
     namespace, such as the `_` namespace in use today ✅, there is no delegation to check, so any realm member is an
     authorized provider, and the binding proves only that the reply came from the node the caller chose. Whether such
     procedures need their own authorization is open for Raf.
+  - **Hecate services, accepted by Raf on 2026-09-11:** in 11.0.0 every hecate service procedure has the org
+    namespace `hecate`, as `DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md` defines it, with a procedure delegation per
+    service (WP 6.1).
   - **Replaying an old advertisement:** it fails once it has expired. While still valid it names its real provider and
     serving station, so a replay can only send requests towards that provider; it cannot make another node's reply
     acceptable, and a withdrawal counts only under the provider's signature.
@@ -1114,6 +1118,18 @@ before its wire checks are green.
 - **Blocks:** WP 1.3 (the codec and the facade accessors, with `macula_manifest:from_wire/1` and the distribution
   pool reading through them), WP 1.6 (the station's record fan-out, DHT handlers and content handlers), WP 6.1
   (every hecate service handler that reads payload fields).
+
+### D27 Where content lives
+
+- **Answer, accepted by Raf on 2026-09-11:** a station does not keep content. The node that shares content keeps it
+  and serves it, and stations only pass content through. When efficiency needs it, a station may hold traffic
+  temporarily, only encrypted so that the station cannot read it, with the key held only by the endpoints, and
+  bounded in time and size.
+- **Consequence:** content is available while the sharing node is online.
+- **Not decided:** a storage service that keeps content beyond the sender, outside stations, is a possible later item.
+- **Blocks:** WP 1.3 (sharing and fetching content), WP 1.6 (the station's content store is removed), WP 2.1
+  (content probes), WP 4.1, WP 4.2 and WP 4.3 (fetching content), WP 5.1 (`mesh_put` and `mesh_get`) and WP 6.1
+  (services that share content).
 
 ---
 

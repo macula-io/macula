@@ -146,6 +146,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     SHA-384: blocks, chunks and manifests are made with SHA-384, a manifest names `sha384` as its only algorithm,
     and an id with any other tag is refused on fetch (`macula_content_transfer:verify_block_hash/2`), in manifests,
     for chunks and in announcements (D24);
+  - `macula:put_content` and `macula:get_content` serve content from the node that shares it and fetch it from that
+    node, through stations (D27);
   - the advertisement bundle with provider authorization, the caller-signed target in CALL and STREAM_OPEN, the
     request hash in provider replies, the stream signer with its sequence numbers (D25), and the caller's signature
     with its sequence numbers on its own stream frames (D17);
@@ -279,7 +281,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - `apps/macula_station/src/macula_station_peer_observer.erl`
   - `apps/macula_station/src/macula_station_route_pubsub_frames.erl`
   - `apps/macula_content/src/macula_content_hasher.erl`, `macula_content_store.erl`, `macula_content_manifest.erl`
-    and `macula_content_dht.erl` (D24)
+    and `macula_content_dht.erl` (D24, D27)
   - `Dockerfile` (builder `erlang:28-slim`, runner `debian:trixie-slim`, D8)
   - `rebar.config` (`macula` by git ref, D20)
 - **Change:**
@@ -297,8 +299,9 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - record fan-out, DHT handlers and content handlers read peer-supplied maps through the facade accessors (D26);
   - stations keep and serve verified records of any type, including domain types they don't know, until they
     expire; a test stores and fetches one (D23);
-  - content ids have only tag 2, SHA-384, in the post-quantum format: the content hasher, the content store, the
-    manifest, announcements and the content DHT key use it, and refuse an id with any other tag (D24);
+  - the station's content store and the handlers that store pushed content are removed, not converted (D27);
+  - wherever the station still reads content ids, as in pass-through and announcements, they have only tag 2,
+    SHA-384, and an id with any other tag is refused (D24);
   - advertisement gossip forwards providers' signed advertisements unchanged and drops expired ones; routing
     follows the serving station; replies and stream frames are checked against the target, the request hash and
     the sequence; relay errors carry their own codes (D25);
@@ -332,6 +335,7 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Change:**
   - an unreachable target or a refused handshake fails the suite, and never skips it;
   - failures name the reason, taken from the disconnect message;
+  - content probes fetch content from the node that shares it, through stations (D27);
   - the harness image runs OTP 28 or newer with OpenSSL 3.5 or newer.
 - **Red first:** a run against an unreachable target fails.
 - **Effort:** ⚠.
@@ -393,6 +397,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - OTP 28.1.1 `public_key` signs and validates ML-DSA X.509 ✅, and OTP signs and verifies brainpool ECDSA ✅ and
     RSA-PSS ✅;
   - leaf issuance, ownership proofs and membership checks take post-quantum keys, carried in full (D13);
+  - the realm key that signs realm records and each org key that signs procedure delegations (key purposes realm and
+    org) are generated and stored per D6, and their custody is set here, including the `hecate` org key (D25);
   - `issue_membership_ucan` names the device by node_id in `aud` (D7), in the same change as every checker
     (WP 1.4, WP 4.2);
   - the realm carries its profile (D1);
@@ -503,6 +509,8 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
     resumption, and the leaf through `peer_identity`;
   - `src/content.rs` makes and checks blocks and chunks with SHA-384; `Mcid` takes the 50-byte form with tag 2 only,
     and a manifest that names any other hash is refused (D24);
+  - content is fetched from the node that shares it, through stations, and content this stack shares is served by
+    the sharing node itself (D27);
   - the token checks of WP 1.4, for calls and streams;
   - one trust mode replaces `Trust::WebPki`, `Trust::Pinned` and `Trust::Insecure`; every dial carries an expected
     identity;
@@ -602,6 +610,8 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
       whose id is not the requested id;
     - a single-block fetch re-hashes the block and refuses one whose hash is not the requested id;
     - content ids have only tag 2, SHA-384, in `computeMcid` and in every content id check (D24);
+    - content is fetched from the node that shares it, through stations, and content a node shares is served by
+      that node itself (D27);
   - events: dedup runs only on verified events, so a forged event that reuses a real publisher's realm,
     publisher, sequence number and topic never suppresses the genuine one;
   - authorization:
@@ -675,6 +685,8 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
   - a chunked fetch recomputes the manifest id and refuses a manifest whose id differs from the requested id
     before fetching any chunk, and a single-block fetch checks the block hash against the requested id;
   - content ids have only tag 2, SHA-384, in every content id made and checked (D24);
+  - content is fetched from the node that shares it, through stations, and content this stack shares is served by
+    the sharing node itself (D27);
   - the token checks of WP 1.4.
 - **Done:** green in CI.
 - **Effort:** 6 to 9 days, plus the seed list and record verifier ⚠; the identity work is part of the SDK identity
@@ -740,6 +752,8 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
     its default output, which its internal decoders use;
   - `macula-mcp`'s `mesh_find_records_by_type` reads a procedure advertisement's realm and procedure from its
     `realm_id` and `procedure` fields (WP 1.3);
+  - `macula-mcp`'s `mesh_put` and `mesh_get` serve content from the node that shares it and fetch it from that node,
+    through stations (D27);
   - release on tag: goreleaser for `macula-cli`, npm for `macula-mcp`.
 - **Red first:** each tool's connection test against the new fleet fails before its cutover.
 - **Effort:** ⚠.
@@ -764,7 +778,11 @@ Every stack runs the connection handshake, carries full keys (D13), binds replie
     OTP 27 move to OTP 28 here (D8);
   - data keyed by the hex node id (hecate-citizens, hecate-mail, hecate-graph) keeps its 64-character shape; the
     values change when nodes get new identities;
-  - every handler that reads payload fields reads them through `macula:field/2,3` and `macula:text/1` (D26).
+  - every handler that reads payload fields reads them through `macula:field/2,3` and `macula:text/1` (D26);
+  - every hecate service procedure moves under the org namespace `hecate`, with a procedure delegation per service
+    signed by the `hecate` org key of WP 3.1; SDK examples, `macula-mcp` and `macula-e2e` callers move with the
+    rename (D25);
+  - services that share content keep it and serve it themselves (D27).
 - **Red first:** hecate-om ownership-proof tests with a post-quantum key, and every service image passing the V2
   check. Fail today.
 - **Done:** green.
