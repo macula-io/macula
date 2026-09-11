@@ -597,7 +597,7 @@ quic_handshake_complete({_Conn, Stream}, Node, DHandle) ->
     Seeded = put_incoming(DHandle, Seed),
     %% Don't return — dist_util's con_loop cannot drive the
     %% `dist_data' / `dist_ctrl_get_data' protocol. Our loop replaces it.
-    ctrl_loop(Node, Stream, DHandle, Seeded).
+    ctrl_loop(Node, Stream, DHandle, Seeded, writable).
 
 take_stashed_bytes(Stream) ->
     case erlang:erase({macula_dist_recv_buf, Stream}) of
@@ -610,49 +610,68 @@ take_stashed_bytes(Stream) ->
 %% `InBuf' is the accumulator for inbound bytes from the QUIC stream.
 %% A packet-4 frame may arrive split across several `{quic, ...}' events
 %% so we buffer until we have a complete frame (or several).
-ctrl_loop(Node, Stream, DHandle, InBuf) ->
-    receive Msg -> handle_msg(Msg, Node, Stream, DHandle, InBuf) end.
+%%
+%% `Out' is `writable' while the stream takes data, or `{held, Frame}'
+%% once the stream answered `busy' for `Frame', a frame already taken
+%% from the runtime. While a frame is held the loop takes no more data
+%% and asks for no `dist_data' notification, so the runtime keeps the
+%% rest and suspends the processes sending to `Node' once its
+%% distribution buffer is full. The stream's `send_ready' message
+%% resumes the drain; every other message is served meanwhile.
+ctrl_loop(Node, Stream, DHandle, InBuf, Out) ->
+    receive Msg -> handle_msg(Msg, Node, Stream, DHandle, InBuf, Out) end.
 
-handle_msg(dist_data, Node, Stream, DHandle, InBuf) ->
-    drain_out(DHandle, Stream),
-    ok = erlang:dist_ctrl_get_data_notification(DHandle),
-    ctrl_loop(Node, Stream, DHandle, InBuf);
-handle_msg({quic, Data, Stream, _Flags}, Node, Stream, DHandle, InBuf)
+handle_msg(dist_data, Node, Stream, DHandle, InBuf, writable) ->
+    ctrl_loop(Node, Stream, DHandle, InBuf, drain_out(DHandle, Stream));
+handle_msg({quic, send_ready, Stream, undefined}, Node, Stream, DHandle, InBuf,
+           {held, Frame}) ->
+    ctrl_loop(Node, Stream, DHandle, InBuf, send_out_frame(Frame, DHandle, Stream));
+%% Nothing held: the write the stream refused was a tick, and ticks are
+%% not retried.
+handle_msg({quic, send_ready, Stream, undefined}, Node, Stream, DHandle, InBuf,
+           writable) ->
+    ctrl_loop(Node, Stream, DHandle, InBuf, writable);
+handle_msg({quic, Data, Stream, _Flags}, Node, Stream, DHandle, InBuf, Out)
   when is_binary(Data) ->
     NewBuf = put_incoming(DHandle, <<InBuf/binary, Data/binary>>),
-    ctrl_loop(Node, Stream, DHandle, NewBuf);
-handle_msg({quic, peer_send_shutdown, Stream, _}, Node, Stream, _DH, _B) ->
+    ctrl_loop(Node, Stream, DHandle, NewBuf, Out);
+handle_msg({quic, peer_send_shutdown, Stream, _}, Node, Stream, _DH, _B, _Out) ->
     exit({shutdown, {Node, peer_send_shutdown}});
-handle_msg({quic, stream_closed, Stream, _}, Node, Stream, _DH, _B) ->
+handle_msg({quic, stream_closed, Stream, _}, Node, Stream, _DH, _B, _Out) ->
     exit({shutdown, {Node, stream_closed}});
-handle_msg({quic, transport_shutdown, _, _}, Node, _Stream, _DH, _B) ->
+%% A failed write leaves the stream as unusable as a closed one.
+handle_msg({quic, send_failed, Stream, Reason}, Node, Stream, _DH, _B, _Out) ->
+    exit({shutdown, {Node, {send_failed, Reason}}});
+handle_msg({quic, transport_shutdown, _, _}, Node, _Stream, _DH, _B, _Out) ->
     exit({shutdown, {Node, transport_shutdown}});
-handle_msg({quic, closed, _, _}, Node, _Stream, _DH, _B) ->
+handle_msg({quic, closed, _, _}, Node, _Stream, _DH, _B, _Out) ->
     exit({shutdown, {Node, closed}});
-handle_msg({_Kernel, disconnect}, Node, _Stream, _DH, _B) ->
+handle_msg({_Kernel, disconnect}, Node, _Stream, _DH, _B, _Out) ->
     exit({shutdown, {Node, disconnected}});
-handle_msg({_Kernel, tick}, Node, Stream, DHandle, InBuf) ->
+handle_msg({_Kernel, tick}, Node, Stream, DHandle, InBuf, Out) ->
     send_tick(Stream),
-    ctrl_loop(Node, Stream, DHandle, InBuf);
-handle_msg({_Kernel, aux_tick}, Node, Stream, DHandle, InBuf) ->
+    ctrl_loop(Node, Stream, DHandle, InBuf, Out);
+handle_msg({_Kernel, aux_tick}, Node, Stream, DHandle, InBuf, Out) ->
     send_tick(Stream),
-    ctrl_loop(Node, Stream, DHandle, InBuf);
-handle_msg({From, Ref, {setopts, _Opts}}, Node, Stream, DHandle, InBuf) ->
+    ctrl_loop(Node, Stream, DHandle, InBuf, Out);
+handle_msg({From, Ref, {setopts, _Opts}}, Node, Stream, DHandle, InBuf, Out) ->
     From ! {Ref, ok},
-    ctrl_loop(Node, Stream, DHandle, InBuf);
-handle_msg({From, Ref, {getopts, _Opts}}, Node, Stream, DHandle, InBuf) ->
+    ctrl_loop(Node, Stream, DHandle, InBuf, Out);
+handle_msg({From, Ref, {getopts, _Opts}}, Node, Stream, DHandle, InBuf, Out) ->
     From ! {Ref, {ok, []}},
-    ctrl_loop(Node, Stream, DHandle, InBuf);
-handle_msg({From, get_status}, Node, Stream, DHandle, InBuf) ->
+    ctrl_loop(Node, Stream, DHandle, InBuf, Out);
+handle_msg({From, get_status}, Node, Stream, DHandle, InBuf, Out) ->
     {ok, R, W, _} = getstat_dist(DHandle),
     From ! {self(), get_status, {ok, R, W}},
-    ctrl_loop(Node, Stream, DHandle, InBuf);
-handle_msg(_Other, Node, Stream, DHandle, InBuf) ->
-    ctrl_loop(Node, Stream, DHandle, InBuf).
+    ctrl_loop(Node, Stream, DHandle, InBuf, Out);
+handle_msg(_Other, Node, Stream, DHandle, InBuf, Out) ->
+    ctrl_loop(Node, Stream, DHandle, InBuf, Out).
 
-%% Zero-length packet-4 frame — the dist-layer keepalive.
+%% Zero-length packet-4 frame — the dist-layer keepalive. Queued without
+%% waiting: a stream that answers `busy' already has data queued, and that
+%% data shows the peer this node is alive as a tick would.
 send_tick(Stream) ->
-    _ = macula_quic:send(Stream, <<0:32>>),
+    _ = macula_quic:async_send(Stream, <<0:32>>),
     ok.
 
 getstat_dist(DHandle) ->
@@ -660,20 +679,28 @@ getstat_dist(DHandle) ->
     erlang:dist_get_stat(DHandle).
 
 %% --- outbound: drain runtime → QUIC stream ---
+%%
+%% Returns the loop's next `Out': `writable' once the runtime has nothing
+%% more and a `dist_data' notification is requested, or `{held, Frame}'
+%% when the stream is busy.
 
 drain_out(DHandle, Stream) ->
     send_out(erlang:dist_ctrl_get_data(DHandle), DHandle, Stream).
 
-send_out(none, _DHandle, _Stream) ->
-    ok;
+send_out(none, DHandle, _Stream) ->
+    ok = erlang:dist_ctrl_get_data_notification(DHandle),
+    writable;
 send_out({Size, Data}, DHandle, Stream) ->
-    Frame = iolist_to_binary([<<Size:32>> | Data]),
-    write_frame(macula_quic:send(Stream, Frame)),
-    drain_out(DHandle, Stream).
+    send_out_frame(iolist_to_binary([<<Size:32>> | Data]), DHandle, Stream).
 
-write_frame(ok) -> ok;
-write_frame({ok, _}) -> ok;
-write_frame({error, Reason}) ->
+send_out_frame(Frame, DHandle, Stream) ->
+    queued(macula_quic:async_send(Stream, Frame), Frame, DHandle, Stream).
+
+queued(ok, _Frame, DHandle, Stream) ->
+    drain_out(DHandle, Stream);
+queued({error, busy}, Frame, _DHandle, _Stream) ->
+    {held, Frame};
+queued({error, Reason}, _Frame, _DHandle, _Stream) ->
     ?LOG_ERROR("[dist] ctrl_loop send failed: ~p", [Reason]),
     exit({dist_send_failed, Reason}).
 

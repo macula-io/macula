@@ -55,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the streaming sessions on a dedicated stream whose write failed, and
   fails a content call waiting on such a stream.
   `macula_dist_relay_client` ends as on a closed control stream.
+- `macula_dist`'s QUIC controller sends with `async_send/2` and leaves
+  distribution data with the runtime while the stream is busy.
 
 ### Removed
 
