@@ -78,7 +78,7 @@
 
     %% Constructors — Streaming RPC (Part 6 §5.6)
     stream_open/2, open_stream/1, provider_stream/3, caller_stream/3,
-    verify_provider_stream/3, verify_caller_stream/3,
+    verify_provider_stream/3, verify_caller_stream/3, charged_refusal/1,
 
     %% Constructors — Content transfer (Part 6 §9)
     want/1, have/1, block/1,
@@ -1469,6 +1469,21 @@ verify_caller_stream(#{frame_type := Type, caller_stream := Object} = Frame, #{c
     caller_frame(only_fields(Frame, [version, frame_type, caller_stream]), Side, Object, Type, State, Profile);
 verify_caller_stream(_Frame, _State, _Profile) ->
     {error, malformed_frame}.
+
+%% @doc Whether a refusal of a signed object is charged to the connection that carried it
+%% (DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 3.1). A refusal every verifier reaches from the same bytes is charged: a
+%% malformed shape, key, field or alg, a signature that does not verify, or a signer that is not its key. One that
+%% depends on what the receiver holds is not: a sequence number, a stream that has ended, or a match with the
+%% request or its target.
+-spec charged_refusal(malformed_frame | signature_invalid | key_id_mismatch | seq_mismatch | stream_ended
+                      | request_mismatch | not_the_target) -> boolean().
+charged_refusal(malformed_frame) -> true;
+charged_refusal(signature_invalid) -> true;
+charged_refusal(key_id_mismatch) -> true;
+charged_refusal(seq_mismatch) -> false;
+charged_refusal(stream_ended) -> false;
+charged_refusal(request_mismatch) -> false;
+charged_refusal(not_the_target) -> false.
 
 caller_frame(false, _Side, _Object, _Type, _State, _Profile) ->
     {error, malformed_frame};

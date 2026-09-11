@@ -36,7 +36,9 @@
     send_frame/2,
     peer_capabilities/1,
     open_dedicated_stream/1,
-    send_on_stream/2
+    send_on_stream/2,
+    object_refused/2,
+    refusals/1
 ]).
 
 %% Capability bit asserting the peer is a relay-station (i.e. it
@@ -156,6 +158,21 @@ open_dedicated_stream(Pid) ->
 -spec send_on_stream(reference(), binary()) -> ok | {error, term()}.
 send_on_stream(Stream, Bytes) when is_binary(Bytes) ->
     macula_quic:send(Stream, Bytes).
+
+%% @doc Report an object a connection carried that its receiver
+%% refused, by the kind of refusal. The connection counts refusals by
+%% kind, and counts the ones `macula_frame:charged_refusal/1' charges.
+%% A kind outside that classification is refused here, where it is
+%% reported.
+-spec object_refused(pid(), atom()) -> ok.
+object_refused(Conn, Kind) when is_pid(Conn) ->
+    gen_statem:cast(Conn, {object_refused, Kind, macula_frame:charged_refusal(Kind)}).
+
+%% @doc The refusals reported on a connection: a count per kind, and
+%% how many of them were charged.
+-spec refusals(pid()) -> #{counts := #{atom() => pos_integer()}, charged := non_neg_integer()}.
+refusals(Conn) when is_pid(Conn) ->
+    gen_statem:call(Conn, refusals).
 
 %% @doc Read the peer's capabilities bitmask as observed in their
 %% CONNECT/HELLO frame. Returns `{ok, NegotiatedCaps}' once the

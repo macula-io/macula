@@ -174,7 +174,11 @@
     %% (server-side absorb) or HELLO (client-side absorb). Captured
     %% in `absorb_peer_info/2'. Stays `undefined' until handshake.
     peer_capabilities :: undefined | non_neg_integer(),
-    buf               :: binary()
+    buf               :: binary(),
+    %% Refused objects reported on this connection, by kind, and how
+    %% many of them were charged (D28).
+    refusals = #{}    :: #{atom() => pos_integer()},
+    charged = 0       :: non_neg_integer()
 }).
 
 -define(DRAIN_TIMEOUT_MS, 5_000).
@@ -271,7 +275,7 @@ connecting(cast, {reject, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, cancel_dial(Data)};
 connecting(EventType, Event, Data) ->
-    drop_unexpected(EventType, Event, connecting, Data).
+    other_event(EventType, Event, connecting, Data).
 
 dial_started({ok, Dial}, #data{target = Target} = Data) ->
     {keep_state, Data#data{dial = Dial, dial_tag = macula_quic:dial_tag(Dial)},
@@ -336,7 +340,7 @@ awaiting_start(cast, {reject, Reason}, Data) ->
 awaiting_start(info, {quic, _, _, _}, _Data) ->
     {keep_state_and_data, [postpone]};
 awaiting_start(EventType, Event, Data) ->
-    drop_unexpected(EventType, Event, awaiting_start, Data).
+    other_event(EventType, Event, awaiting_start, Data).
 
 %%------------------------------------------------------------------
 %% State: handshaking
@@ -430,7 +434,7 @@ handshaking(state_timeout, handshake_timeout,
     notify(disconnected, handshake_timeout, Data),
     {stop, normal, Data};
 handshaking(EventType, Event, Data) ->
-    drop_unexpected(EventType, Event, handshaking, Data).
+    other_event(EventType, Event, handshaking, Data).
 
 handshake_state_timeout() ->
     {state_timeout, ?HANDSHAKE_TIMEOUT_MS, handshake_timeout}.
@@ -702,7 +706,7 @@ connected({call, From}, peer_capabilities, Data) ->
     {keep_state, Data,
      [{reply, From, {ok, Data#data.peer_capabilities}}]};
 connected(EventType, Event, Data) ->
-    drop_unexpected(EventType, Event, connected, Data).
+    other_event(EventType, Event, connected, Data).
 
 %%------------------------------------------------------------------
 %% State: draining
@@ -751,7 +755,7 @@ draining(cast, {reject, Reason}, Data) ->
     notify(disconnected, Reason, Data),
     {stop, normal, Data};
 draining(EventType, Event, Data) ->
-    drop_unexpected(EventType, Event, draining, Data).
+    other_event(EventType, Event, draining, Data).
 
 %% Shared terminal action for `draining' concluding normally, whether
 %% via the `state_timeout' backstop or an early `dedicated_streams_idle'
@@ -1024,6 +1028,19 @@ classify(unsubscribe)    -> pubsub;
 classify(publish)        -> pubsub;
 classify(event)          -> pubsub;
 classify(_)              -> other.
+
+%% Refusal reports and the refusal count are taken in every state;
+%% anything else a state does not handle is dropped.
+other_event(cast, {object_refused, Kind, Charged}, _State, #data{refusals = Refusals, charged = Count} = Data) ->
+    {keep_state, Data#data{refusals = maps:update_with(Kind, fun(N) -> N + 1 end, 1, Refusals),
+                           charged = Count + charge(Charged)}};
+other_event({call, From}, refusals, _State, #data{refusals = Refusals, charged = Count}) ->
+    {keep_state_and_data, [{reply, From, #{counts => Refusals, charged => Count}}]};
+other_event(EventType, Event, State, Data) ->
+    drop_unexpected(EventType, Event, State, Data).
+
+charge(true) -> 1;
+charge(false) -> 0.
 
 drop_unexpected({call, From}, Event, State, Data) ->
     %% Synchronous call into a state that doesn't handle it. Reply
