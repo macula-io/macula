@@ -1,10 +1,11 @@
 #!/bin/bash
 # Test Coverage Report Generator for Macula
-# Runs tests with coverage analysis and generates HTML reports
+# Runs tests with coverage analysis and generates HTML reports, in the repository
+# that holds this script, whichever checkout or worktree that is.
 
-set -e
+set -euo pipefail
 
-PROJECT_ROOT="/home/rl/work/github.com/macula-io/macula"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COVERAGE_DIR="${PROJECT_ROOT}/_build/test/cover"
 
 cd "${PROJECT_ROOT}"
