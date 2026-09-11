@@ -55,6 +55,9 @@
     random_active_subset/2,
     random_passive_subset/2,
     merge_shuffle/2,
+    place_passive/4,
+    record_shuffle/2,
+    take_shuffle_record/2,
     counts/1
 ]).
 
@@ -62,6 +65,9 @@
 
 -define(DEFAULT_ACTIVE_CAP,     5).
 -define(DEFAULT_PASSIVE_RATIO,  4).
+-define(PLACEMENT_TOKENS, 20).
+-define(PLACEMENT_REFILL_MS, 3_000).
+-define(SHUFFLE_REPLY_WINDOW_MS, 30_000).
 
 -type peer() :: <<_:256>>.
 
@@ -75,7 +81,11 @@
     active_cap  := pos_integer(),
     passive_cap := pos_integer(),
     active      := sets:set(peer()),
-    passive     := sets:set(peer())
+    passive     := sets:set(peer()),
+    %% Each neighbour's placement bucket: tokens left and when they last refilled.
+    placements  := #{peer() => {non_neg_integer(), integer()}},
+    %% When this node sent the SHUFFLEs that have no reply yet, oldest first.
+    shuffles_sent := [integer()]
 }.
 
 -type counts() :: #{
@@ -101,7 +111,9 @@ new(<<_:256>> = Self, Opts) when is_map(Opts) ->
         active_cap  => AC,
         passive_cap => PC,
         active      => sets:new(),
-        passive     => sets:new()
+        passive     => sets:new(),
+        placements  => #{},
+        shuffles_sent => []
     }.
 
 -spec valid_caps(integer(), integer()) -> ok.
@@ -243,6 +255,60 @@ random_passive_subset(#{passive := P}, K) ->
 -spec merge_shuffle(view(), [peer()]) -> view().
 merge_shuffle(V, Peers) ->
     lists:foldl(fun(P, Acc) -> add_passive(Acc, P) end, V, Peers).
+
+%%=====================================================================
+%% Placement allowance and SHUFFLE records
+%%
+%% A neighbour places node_ids in the passive view at most 20 per minute
+%% (DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 3.1): a token bucket per neighbour of
+%% 20 tokens, one back every 3 seconds, counting only node_ids new to the
+%% view. A neighbour's bucket is forgotten once it is full again. A
+%% SHUFFLE_REPLY is merged only while a SHUFFLE this node sent in the last
+%% 30 seconds has no reply yet. Times are monotonic milliseconds.
+%%=====================================================================
+
+%% @doc Place the node_ids new to the view that a frame from `From' brings,
+%% as far as that neighbour's allowance goes at `Now'. `exceeded' when some
+%% were left out.
+-spec place_passive(view(), peer(), [peer()], integer()) -> {view(), within | exceeded}.
+place_passive(#{placements := Placements} = V, From, Peers, Now) ->
+    Fresh = [P || P <- distinct(Peers), eligible(P, V) =:= fresh],
+    {Tokens, LastRefill} = refilled(maps:get(From, Placements, {?PLACEMENT_TOKENS, Now}), Now),
+    Take = min(length(Fresh), Tokens),
+    Placed = lists:foldl(fun(P, Acc) -> add_passive(Acc, P) end, V, lists:sublist(Fresh, Take)),
+    Kept = maps:filter(not_full_at(Now), Placements#{From => {Tokens - Take, LastRefill}}),
+    {Placed#{placements := Kept}, allowance_verdict(length(Fresh) > Tokens)}.
+
+%% @doc Record that this node sent a SHUFFLE at `Now'.
+-spec record_shuffle(view(), integer()) -> view().
+record_shuffle(#{shuffles_sent := Sent} = V, Now) ->
+    V#{shuffles_sent := Sent ++ [Now]}.
+
+%% @doc Take the record of the oldest SHUFFLE sent in the 30 seconds before
+%% `Now' that has no reply yet, forgetting older ones. `none' when there is
+%% no such SHUFFLE.
+-spec take_shuffle_record(view(), integer()) -> {ok | none, view()}.
+take_shuffle_record(#{shuffles_sent := Sent} = V, Now) ->
+    taken([SentAt || SentAt <- Sent, Now - SentAt =< ?SHUFFLE_REPLY_WINDOW_MS], V).
+
+taken([], V) -> {none, V#{shuffles_sent := []}};
+taken([_Oldest | Rest], V) -> {ok, V#{shuffles_sent := Rest}}.
+
+distinct([]) -> [];
+distinct([P | Rest]) -> [P | distinct([Q || Q <- Rest, Q =/= P])].
+
+refilled({Tokens, LastRefill}, Now) ->
+    Gained = max(0, Now - LastRefill) div ?PLACEMENT_REFILL_MS,
+    refill_to(min(?PLACEMENT_TOKENS, Tokens + Gained), LastRefill + Gained * ?PLACEMENT_REFILL_MS, Now).
+
+refill_to(?PLACEMENT_TOKENS, _LastRefill, Now) -> {?PLACEMENT_TOKENS, Now};
+refill_to(Tokens, LastRefill, _Now) -> {Tokens, LastRefill}.
+
+not_full_at(Now) ->
+    fun(_Neighbour, Bucket) -> element(1, refilled(Bucket, Now)) < ?PLACEMENT_TOKENS end.
+
+allowance_verdict(true) -> exceeded;
+allowance_verdict(false) -> within.
 
 %%=====================================================================
 %% Internal helpers

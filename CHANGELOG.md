@@ -150,6 +150,18 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   frame_type (`macula_handshake:open_frame_kind/1` and
   `read_status_wire/2`): a handshake frame, a frame `macula_frame`
   refuses and bytes that are not CBOR close it as `malformed_frame`.
+- HyParView frames are bounded: a `peer_sample` holds at most 7 node_ids,
+  a SHUFFLE or FORWARD_JOIN `ttl` and a FORWARD_JOIN `arwl` are at most 8,
+  and a `prwl` is at most its `arwl`. A frame outside these is
+  `malformed_frame`, and the constructors refuse to build one. A neighbour
+  places at most 20 node_ids per minute in the passive view, a token
+  bucket with one back every 3 seconds counting only node_ids new to the
+  view. A FORWARD_JOIN places its new member when its `ttl` equals the
+  receiver's own PRWL. A SHUFFLE_REPLY is merged only while a SHUFFLE sent
+  in the last 30 seconds has no reply yet. `macula_hyparview_proto` returns
+  `{refused, Neighbour, Kind}` for a frame past the allowance and for an
+  unsolicited SHUFFLE_REPLY, and `macula_frame:charged_refusal/1` charges
+  both kinds.
 
 ### Changed
 
@@ -175,6 +187,10 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `handshake_complete` carry the peer's node_id. A connection sends
   frames as their producers built them, adding only the neighbour
   signature of a control frame in `pq_hybrid`.
+- `macula_hyparview_proto:build_shuffle/2` takes the view and returns it
+  with the SHUFFLE recorded, and the send to a random active neighbour,
+  with a sample of the view. `ctx()` carries `now`, in monotonic
+  milliseconds.
 
 ### Removed
 

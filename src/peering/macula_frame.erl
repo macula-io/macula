@@ -146,6 +146,10 @@
 
 -define(SIG_DOMAIN,        "macula-v2-frame\0").
 -define(PROTOCOL_VERSION,   2).
+%% A HyParView SHUFFLE or FORWARD_JOIN ttl and a FORWARD_JOIN arwl are at most 8, and a peer_sample holds at
+%% most 7 node_ids (DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, DHT and HyParView fields).
+-define(HYPARVIEW_MAX_WALK, 8).
+-define(HYPARVIEW_MAX_SAMPLE, 7).
 -define(MAX_FRAME_BYTES,    16#FFFFFF).   %% 16 MiB cap (Part 6 §2.2).
 %% A payload sits in the frame map, so a container at payload path length L
 %% is at nesting depth L + 2, and the decoding rule allows depth 64.
@@ -1115,9 +1119,9 @@ hyparview_forward_join(#{realm := R, new_member := M,
                          ttl := Ttl, arwl := A, prwl := P} = Spec)
   when is_binary(R), byte_size(R) =:= 32,
        is_binary(M), byte_size(M) =:= 32,
-       is_integer(Ttl), Ttl >= 0,
-       is_integer(A),   A >= 0,
-       is_integer(P),   P >= 0 ->
+       is_integer(Ttl), Ttl >= 0, Ttl =< ?HYPARVIEW_MAX_WALK,
+       is_integer(A),   A >= 0,   A =< ?HYPARVIEW_MAX_WALK,
+       is_integer(P),   P >= 0,   P =< A ->
     with_endorsement(Spec, (base(hyparview_forward_join, 0))#{
         realm => R, new_member => M,
         ttl => Ttl, arwl => A, prwl => P
@@ -1146,8 +1150,8 @@ hyparview_shuffle(#{realm := R, origin := O,
                     ttl := Ttl, peer_sample := S})
   when is_binary(R), byte_size(R) =:= 32,
        is_binary(O), byte_size(O) =:= 32,
-       is_integer(Ttl), Ttl >= 0,
-       is_list(S) ->
+       is_integer(Ttl), Ttl >= 0, Ttl =< ?HYPARVIEW_MAX_WALK,
+       is_list(S), length(S) =< ?HYPARVIEW_MAX_SAMPLE ->
     lists:foreach(fun validate_pubkey/1, S),
     (base(hyparview_shuffle, 0))#{
         realm => R, origin => O, ttl => Ttl, peer_sample => S
@@ -1156,7 +1160,7 @@ hyparview_shuffle(#{realm := R, origin := O,
 -spec hyparview_shuffle_reply(hyparview_shuffle_reply_spec()) -> frame().
 hyparview_shuffle_reply(#{realm := R, peer_sample := S})
   when is_binary(R), byte_size(R) =:= 32,
-       is_list(S) ->
+       is_list(S), length(S) =< ?HYPARVIEW_MAX_SAMPLE ->
     lists:foreach(fun validate_pubkey/1, S),
     (base(hyparview_shuffle_reply, 0))#{
         realm => R, peer_sample => S
@@ -1474,16 +1478,20 @@ verify_caller_stream(_Frame, _State, _Profile) ->
 %% (DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md, 3.1). A refusal every verifier reaches from the same bytes is charged: a
 %% malformed shape, key, field or alg, a signature that does not verify, or a signer that is not its key. One that
 %% depends on what the receiver holds is not: a sequence number, a stream that has ended, or a match with the
-%% request or its target.
+%% request or its target. A neighbour's HyParView placements past its allowance, and a SHUFFLE_REPLY that
+%% answers no SHUFFLE, are charged.
 -spec charged_refusal(malformed_frame | signature_invalid | key_id_mismatch | seq_mismatch | stream_ended
-                      | request_mismatch | not_the_target) -> boolean().
+                      | request_mismatch | not_the_target | placement_allowance | unsolicited_shuffle_reply) ->
+        boolean().
 charged_refusal(malformed_frame) -> true;
 charged_refusal(signature_invalid) -> true;
 charged_refusal(key_id_mismatch) -> true;
 charged_refusal(seq_mismatch) -> false;
 charged_refusal(stream_ended) -> false;
 charged_refusal(request_mismatch) -> false;
-charged_refusal(not_the_target) -> false.
+charged_refusal(not_the_target) -> false;
+charged_refusal(placement_allowance) -> true;
+charged_refusal(unsolicited_shuffle_reply) -> true.
 
 caller_frame(false, _Side, _Object, _Type, _State, _Profile) ->
     {error, malformed_frame};
@@ -1777,12 +1785,16 @@ frame_read(_NotAFrame, _Rest) ->
     {error, bad_frame}.
 
 typed_frame({ok, Type}, Wire, Rest) ->
-    read_frame(read_fields(maps:to_list(Wire), field_table(Type), #{}), Rest);
+    read_frame(fields_agree(Type, read_fields(maps:to_list(Wire), field_table(Type), #{})), Rest);
 typed_frame(error, _Wire, _Rest) ->
     {error, bad_frame}.
 
 read_frame({ok, Frame}, Rest) -> {ok, Frame, Rest};
 read_frame(error, _Rest) -> {error, bad_frame}.
+
+%% A rule between the fields of one frame, once each field has been read: a FORWARD_JOIN's prwl is at most its arwl.
+fields_agree(hyparview_forward_join, {ok, #{arwl := Arwl, prwl := Prwl}}) when Prwl > Arwl -> error;
+fields_agree(_Type, Read) -> Read.
 
 %% @doc Drain all complete frames from a buffer. Returns the list of frames
 %% (in order) and the remaining (incomplete) buffer.
@@ -2414,9 +2426,9 @@ field_table(hyparview_forward_join) ->
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"new_member">> => {new_member, {bytes, 32}},
-      <<"ttl">> => {ttl, uint},
-      <<"arwl">> => {arwl, uint},
-      <<"prwl">> => {prwl, uint},
+      <<"ttl">> => {ttl, {uint_max, ?HYPARVIEW_MAX_WALK}},
+      <<"arwl">> => {arwl, {uint_max, ?HYPARVIEW_MAX_WALK}},
+      <<"prwl">> => {prwl, {uint_max, ?HYPARVIEW_MAX_WALK}},
       <<"record">> => {record, value}};
 field_table(hyparview_neighbor) ->
     #{<<"version">> => {version, value},
@@ -2454,8 +2466,8 @@ field_table(hyparview_shuffle) ->
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
       <<"origin">> => {origin, {bytes, 32}},
-      <<"ttl">> => {ttl, uint},
-      <<"peer_sample">> => {peer_sample, {list_of_bytes, 32}}};
+      <<"ttl">> => {ttl, {uint_max, ?HYPARVIEW_MAX_WALK}},
+      <<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}};
 field_table(hyparview_shuffle_reply) ->
     #{<<"version">> => {version, value},
       <<"neighbour">> => {neighbour, held_object},
@@ -2467,7 +2479,7 @@ field_table(hyparview_shuffle_reply) ->
       <<"call_id">> => {call_id, value},
       <<"source_route">> => {source_route, value},
       <<"signature">> => {signature, value},
-      <<"peer_sample">> => {peer_sample, {list_of_bytes, 32}}};
+      <<"peer_sample">> => {peer_sample, {list_of_bytes, 32, ?HYPARVIEW_MAX_SAMPLE}}};
 field_table(plumtree_gossip) ->
     #{<<"version">> => {version, value},
       <<"frame_type">> => {frame_type, frame_type},
@@ -2713,12 +2725,15 @@ read_value(bytes, Bytes) when is_binary(Bytes) -> {ok, Bytes};
 read_value({bytes, Size}, Bytes) when byte_size(Bytes) =:= Size -> {ok, Bytes};
 read_value(text, {text, Text}) -> {ok, Text};
 read_value(uint, N) when is_integer(N), N >= 0, N < ?MAX_PROTOCOL_INT -> {ok, N};
+read_value({uint_max, Max}, N) when is_integer(N), N >= 0, N =< Max -> {ok, N};
 read_value(held_object, #{{text, <<"tbs">>} := Tbs, {text, <<"signature">>} := Signature} = Held)
   when map_size(Held) =:= 2, is_binary(Tbs), is_binary(Signature) ->
     {ok, #{tbs => Tbs, signature => Signature}};
 read_value(stream_object, Object) -> either_object(read_value(signed_object, Object), Object);
 read_value({list_of_bytes, Size}, Items) when is_list(Items) ->
     sized_items([Item || Item <- Items, is_binary(Item), byte_size(Item) =:= Size], Items);
+read_value({list_of_bytes, Size, Max}, Items) when is_list(Items), length(Items) =< Max ->
+    read_value({list_of_bytes, Size}, Items);
 read_value({optional, _Kind}, null) -> {ok, undefined};
 read_value({optional, Kind}, Value) -> read_value(Kind, Value);
 read_value(_Kind, _Value) -> error.

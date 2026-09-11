@@ -185,8 +185,10 @@ shuffle_with_positive_ttl_forwards_to_random_active_test() ->
 shuffle_reply_merges_into_passive_test() ->
     Sender = id(60),
     Sample = [id(70), id(71)],
-    View0 = macula_hyparview_view:new(?SELF),
     Ctx = ctx(?SELF),
+    %% A SHUFFLE this node sent, which the reply answers.
+    Active = macula_hyparview_view:add_active(macula_hyparview_view:new(?SELF), Sender),
+    {View0, [{send, Sender, _Shuffle}]} = macula_hyparview_proto:build_shuffle(Active, Ctx),
     Frame = macula_frame:hyparview_shuffle_reply(#{realm => maps:get(realm, Ctx), peer_sample => Sample}),
     {View1, []} = macula_hyparview_proto:process(View0, Sender, Frame, Ctx),
     ?assert(macula_hyparview_view:is_passive(id(70), View1)),
@@ -315,7 +317,7 @@ neighbor_builder_attaches_self_endorsement_test() ->
 id(N) -> <<N:256>>.
 
 ctx(Self) ->
-    #{self_id => Self, realm => crypto:strong_rand_bytes(32)}.
+    #{self_id => Self, realm => crypto:strong_rand_bytes(32), now => 0}.
 
 gated_ctx(RealmKey, RealmId) ->
     (ctx(?SELF))#{realm => RealmId, realm_key_id => macula_node_keys:key_id(RealmKey), profile => pq_pure}.
