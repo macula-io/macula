@@ -127,7 +127,7 @@ parse_stream_drains_multiple_frames_test() ->
     F1 = macula_frame:sign(build_connect(Kp), Kp),
     F2 = macula_frame:sign(build_hello(Kp), Kp),
     Buf = <<(macula_frame:encode(F1))/binary, (macula_frame:encode(F2))/binary>>,
-    {Frames, <<>>} = macula_frame:parse_stream(Buf),
+    {ok, Frames, <<>>} = macula_frame:parse_stream(Buf),
     ?assertEqual(2, length(Frames)),
     [D1, D2] = Frames,
     ?assertEqual(connect, macula_frame:frame_type(D1)),
@@ -141,7 +141,7 @@ parse_stream_returns_unconsumed_tail_test() ->
     F2 = macula_frame:sign(build_hello(Kp), Kp),
     Wire2Partial = binary:part(macula_frame:encode(F2), 0, 6),
     Buf = <<Wire1/binary, Wire2Partial/binary>>,
-    {Frames, Rest} = macula_frame:parse_stream(Buf),
+    {ok, Frames, Rest} = macula_frame:parse_stream(Buf),
     ?assertEqual(1, length(Frames)),
     ?assertEqual(Wire2Partial, Rest).
 

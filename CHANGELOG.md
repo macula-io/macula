@@ -134,6 +134,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `macula_frame:parse_stream/1` returns `{ok, Frames, Tail}`, or
+  `{malformed, FramesBefore, Reason}` at the first frame that does not
+  decode, where `Reason` is `frame_too_large`, decided from the length
+  header, or `bad_frame`. A `Tail` kept for the next chunk never exceeds the
+  frame cap plus its header. `macula_peering_conn` ends the connection with
+  the reason `{malformed, Reason}` when its handshake or control stream does
+  not decode.
 - `macula_dist_relay_client:close_tunnel/2` sends `tunnel_close` only for a
   tunnel the client knows, active or still being set up, and ignores an
   unknown tunnel id.
