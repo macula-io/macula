@@ -39,6 +39,13 @@
 %%%    notified tunnel, hands the stream to `net_kernel' via the
 %%%    standard `{accept, _, Socket, Family, Driver}' protocol.
 %%%
+%%% == Control stream ==
+%%%
+%%% Control frames reach the relay in the order the client sends them.
+%%% While the relay takes no data on the control stream, the client holds
+%%% them and keeps serving tunnel requests, inbound tunnels and `status/1',
+%%% which reports how many it holds as `held_control_frames'.
+%%%
 %%% == Not yet implemented (Phase 2 MVP) ==
 %%%
 %%% - net_kernel handoff for incoming tunnels (needs `macula_dist'
@@ -95,7 +102,9 @@
     %% matches yet — because the control message (tunnel_ok or
     %% tunnel_notify) is still in flight. Re-matched once the control
     %% side registers the tunnel_id.
-    orphan_streams = #{}   :: #{binary() => {reference(), binary()}}  %% TunnelId → {Stream, Leftover}
+    orphan_streams = #{}   :: #{binary() => {reference(), binary()}},  %% TunnelId → {Stream, Leftover}
+    %% Control frames the control stream has not taken yet, oldest first.
+    held_control = queue:new() :: queue:queue(binary())
 }).
 
 %%====================================================================
@@ -180,8 +189,7 @@ handle_cast({close_tunnel, TunnelId}, #state{control = Ctrl} = State) when Ctrl 
     Frame = macula_dist_relay_protocol:encode(
         #{type => tunnel_close, tunnel_id => TunnelId}
     ),
-    macula_quic:send(Ctrl, Frame),
-    {noreply, remove_tunnel(TunnelId, State)};
+    control_noreply(send_control(Frame, remove_tunnel(TunnelId, State)));
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -222,6 +230,9 @@ handle_info({quic, peer_send_shutdown, Stream, _}, #state{control = Stream} = St
 %% a closed control stream does.
 handle_info({quic, send_failed, Stream, Reason}, #state{control = Stream} = State) ->
     relay_lost({send_failed, Reason}, State);
+%% The control stream takes data again: send the held control frames.
+handle_info({quic, send_ready, Stream, undefined}, #state{control = Stream} = State) ->
+    control_noreply(flush_control(State));
 
 %% Data on an unidentified tunnel stream — accumulate until prefix is complete
 handle_info({quic, Data, Stream, _Flags}, State) when is_binary(Data) ->
@@ -280,27 +291,30 @@ handle_open_control({ok, Ctrl}, Conn, State) ->
     %% tunnel streams (and the streams the relay opens for our own
     %% outbound tunnel_requests) are silently dropped.
     ok = macula_quic:async_accept_stream(Conn),
-    send_identify(Ctrl, State#state.node_name),
-    {ok, State#state{conn = Conn, control = Ctrl}};
+    identify_sent(send_control(identify_frame(State#state.node_name),
+                               State#state{conn = Conn, control = Ctrl}),
+                  Conn);
 handle_open_control({error, Reason}, Conn, _State) ->
     try macula_quic:close_connection(Conn) catch _:_ -> ok end,
     {stop, {control_stream_failed, Reason}}.
 
-send_identify(Ctrl, NodeName) ->
-    Frame = macula_dist_relay_protocol:encode(
-        #{type => identify, node_name => NodeName}
-    ),
-    macula_quic:send(Ctrl, Frame).
+identify_sent({ok, State}, _Conn) ->
+    {ok, State};
+identify_sent({relay_lost, Why, _State}, Conn) ->
+    try macula_quic:close_connection(Conn) catch _:_ -> ok end,
+    {stop, {control_stream_failed, Why}}.
+
+identify_frame(NodeName) ->
+    macula_dist_relay_protocol:encode(#{type => identify, node_name => NodeName}).
 
 %%====================================================================
 %% Tunnel request
 %%====================================================================
 
-send_tunnel_request(Target, From, #state{control = Ctrl} = State) ->
+send_tunnel_request(Target, From, State) ->
     Frame = macula_dist_relay_protocol:encode(
         #{type => tunnel_request, target => Target}
     ),
-    macula_quic:send(Ctrl, Frame),
     %% We don't know the tunnel_id yet — the relay picks it. Store the
     %% From in a pending-awaiting-tunnel-ok queue keyed by Target; when
     %% tunnel_ok arrives we move the From into pending_outbound keyed by
@@ -313,7 +327,39 @@ send_tunnel_request(Target, From, #state{control = Ctrl} = State) ->
     },
     %% Use a synthetic key with Target so we can match the next tunnel_ok.
     Key = {awaiting_ok, Target, From},
-    {noreply, State#state{pending_outbound = Pending#{Key => Placeholder}}}.
+    control_noreply(send_control(Frame,
+                                 State#state{pending_outbound = Pending#{Key => Placeholder}})).
+
+%%====================================================================
+%% Control frames out
+%%====================================================================
+
+%% Queue a control frame behind those the control stream has not taken
+%% yet, then send as many as it takes, oldest first. While it answers busy
+%% the rest wait here for its send_ready, so frames reach the relay in the
+%% order they were queued.
+send_control(Frame, #state{held_control = Held} = State) ->
+    flush_control(State#state{held_control = queue:in(Frame, Held)}).
+
+flush_control(#state{control = Ctrl, held_control = Held} = State) ->
+    flushed(queue:peek(Held), Ctrl, State).
+
+flushed(empty, _Ctrl, State) ->
+    {ok, State};
+flushed({value, Frame}, Ctrl, State) ->
+    control_taken(macula_quic:async_send(Ctrl, Frame), State).
+
+control_taken(ok, #state{held_control = Held} = State) ->
+    flush_control(State#state{held_control = queue:drop(Held)});
+control_taken({error, busy}, State) ->
+    {ok, State};
+control_taken({error, Reason}, State) ->
+    {relay_lost, {send_failed, Reason}, State}.
+
+control_noreply({ok, State}) ->
+    {noreply, State};
+control_noreply({relay_lost, Why, State}) ->
+    relay_lost(Why, State).
 
 %%====================================================================
 %% Control message handling
@@ -623,5 +669,6 @@ status_map(State) ->
         pending_outbound => maps:size(State#state.pending_outbound),
         pending_inbound => maps:size(State#state.pending_inbound),
         active_tunnels => maps:size(State#state.active_tunnels),
-        unidentified_streams => maps:size(State#state.unidentified_streams)
+        unidentified_streams => maps:size(State#state.unidentified_streams),
+        held_control_frames => queue:len(State#state.held_control)
     }.
