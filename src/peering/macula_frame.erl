@@ -97,6 +97,9 @@
     %% connection. Mirrors `to_wire/1' + `macula_record_cbor'.
     check_payload/1, check_frame/1, explain/1,
 
+    %% Receivability, checked on every frame decoded from a peer's bytes
+    validate_received/1,
+
     %% Stream parser — drain frames from a buffer
     parse_stream/1,
 
@@ -1618,6 +1621,197 @@ drain_step({more, _N}, Buf, Acc) ->
     {ok, lists:reverse(Acc), Buf};
 drain_step({error, Reason}, _Buf, Acc) ->
     {malformed, lists:reverse(Acc), Reason}.
+
+%%------------------------------------------------------------------
+%% Received frames
+%%------------------------------------------------------------------
+
+%% @doc Does a frame decoded from a peer's bytes carry what its type
+%% requires? Each required field of its `frame_type' must be there, with a
+%% value its builder accepts: a 16-byte id, a 32-byte key, a binary, an
+%% integer in range, an atom of a closed set, or a list of well-formed
+%% entries. A handler of a received frame then never meets a missing key or
+%% a value it cannot match. The rules are the builders' own guards, and
+%% `macula_frame_received_tests' keeps them in step: every builder's output
+%% passes, and so does every sample frame the other SDKs send.
+%%
+%% A frame whose `frame_type' this node does not know passes, so a newer
+%% peer's new frame type reaches dispatch, which ignores it. A frame with no
+%% `frame_type' does not. A GOODBYE's reason may be text as well as an atom.
+%% Signatures are not checked here.
+-spec validate_received(frame()) ->
+    ok | {error, {invalid_frame, frame_type() | unknown, atom()}}.
+validate_received(#{frame_type := Type} = Frame) ->
+    received_fields(received_rules(Type), Type, Frame);
+validate_received(_Frame) ->
+    {error, {invalid_frame, unknown, frame_type}}.
+
+received_fields(unknown_type, _Type, _Frame) ->
+    ok;
+received_fields([], _Type, _Frame) ->
+    ok;
+received_fields([{Field, Rule} | Rules], Type, Frame) ->
+    received_field(field_valid(Rule, maps:find(Field, Frame)), Field, Rules, Type, Frame).
+
+received_field(true, _Field, Rules, Type, Frame) ->
+    received_fields(Rules, Type, Frame);
+received_field(false, Field, _Rules, Type, _Frame) ->
+    {error, {invalid_frame, Type, Field}}.
+
+%% A required field must be there; an optional one may be missing or
+%% undefined, a CBOR null.
+field_valid({optional, _Rule}, error)           -> true;
+field_valid({optional, _Rule}, {ok, undefined}) -> true;
+field_valid({optional, Rule}, {ok, Value})      -> value_valid(Rule, Value);
+field_valid(_Rule, error)                       -> false;
+field_valid(Rule, {ok, Value})                  -> value_valid(Rule, Value).
+
+value_valid(present, _Value)                                          -> true;
+value_valid(id16, <<_:128>>)                                          -> true;
+value_valid(key, <<_:256>>)                                           -> true;
+value_valid(mcid, <<_:272>>)                                          -> true;
+value_valid(country, <<_:16>>)                                        -> true;
+value_valid(binary, Value) when is_binary(Value)                      -> true;
+value_valid(integer, Value) when is_integer(Value)                    -> true;
+value_valid(non_neg, Value) when is_integer(Value), Value >= 0        -> true;
+value_valid(pos, Value) when is_integer(Value), Value > 0             -> true;
+value_valid(byte, Value) when is_integer(Value), Value >= 0, Value =< 255 -> true;
+value_valid(tier, Value) when is_integer(Value), Value >= 0, Value =< 4 -> true;
+value_valid(boolean, Value) when is_boolean(Value)                    -> true;
+value_valid(map, Value) when is_map(Value)                            -> true;
+value_valid(list, Value) when is_list(Value)                          -> all_valid(present, Value);
+value_valid({list_of, Rule}, Value) when is_list(Value)               -> all_valid(Rule, Value);
+value_valid({one_of, Atoms}, Value) when is_atom(Value)               -> lists:member(Value, Atoms);
+value_valid({entry, Rules}, Value) when is_map(Value)                 -> entry_valid(Rules, Value);
+value_valid(record, #{type := _, key := <<_:256>>, payload := Payload}) -> is_map(Payload);
+value_valid(reason, Value) when is_boolean(Value)                     -> false;
+value_valid(reason, Value) when is_atom(Value)                        -> true;
+value_valid(reason, {text, Text})                                     -> is_binary(Text);
+value_valid(text, Value) when is_binary(Value); is_atom(Value)        -> true;
+value_valid(text, {text, Text})                                       -> is_binary(Text);
+value_valid(manifest, not_found)                                      -> true;
+value_valid(manifest, Value)                                          -> is_map(Value);
+value_valid(_Rule, _Value)                                            -> false.
+
+%% A proper list whose every element passes Rule.
+all_valid(_Rule, []) ->
+    true;
+all_valid(Rule, [Value | Rest]) ->
+    value_valid(Rule, Value) andalso all_valid(Rule, Rest);
+all_valid(_Rule, _ImproperTail) ->
+    false.
+
+entry_valid([], _Entry) ->
+    true;
+entry_valid([{Field, Rule} | Rules], Entry) ->
+    field_valid(Rule, maps:find(Field, Entry)) andalso entry_valid(Rules, Entry).
+
+%% The fields each frame type requires, and the rule each value follows:
+%% the guards of its builder above. `unknown_type' for a type this node does
+%% not know.
+received_rules(connect) ->
+    [{node_id, key}, {station_id, key}, {realms, list},
+     {capabilities, non_neg}, {puzzle_evidence, key}];
+received_rules(hello) ->
+    [{node_id, key}, {station_id, key}, {realms, list}, {capabilities, non_neg},
+     {accepted, boolean}, {negotiated_capabilities, non_neg}];
+received_rules(goodbye) ->
+    [{reason, text}, {detail, {optional, text}}];
+received_rules(swim_ping) ->
+    [{round, non_neg}, {incarnation, non_neg}, {piggyback, {optional, list}}];
+received_rules(swim_ack) ->
+    [{round, non_neg}, {responder, key}, {incarnation, non_neg},
+     {piggyback, {optional, list}}];
+received_rules(Type) when Type =:= swim_suspect; Type =:= swim_confirm ->
+    [{target, key}, {target_incarnation, non_neg}, {suspected_by, key}, {ttl, non_neg}];
+received_rules(Type) when Type =:= ping; Type =:= pong ->
+    [{nonce, id16}];
+received_rules(find_node) ->
+    [{key, key}, {origin, key}, {depth, non_neg}];
+received_rules(nodes) ->
+    [{key, key}, {nodes, {list_of, station_ref_rule()}}];
+received_rules(find_value) ->
+    [{key, key}, {origin, key}];
+received_rules(value) ->
+    [{key, key}, {records, {list_of, record}}];
+received_rules(store) ->
+    [{record, record}];
+received_rules(store_ack) ->
+    [{key, key}, {stored, boolean}, {reason, {optional, reason}}];
+received_rules(replicate) ->
+    [{record, record}, {new_custodian, boolean}];
+received_rules(replicate_ack) ->
+    [{key, key}, {accepted, boolean}];
+received_rules(call) ->
+    [{call_id, id16}, {procedure, binary}, {realm, key}, {payload, present},
+     {deadline_ms, integer}, {caller, key}, {ucan_token, {optional, binary}}];
+received_rules(result) ->
+    [{call_id, id16}, {payload, present}, {responded_by, key}];
+received_rules(error) ->
+    [{call_id, id16}, {code, byte}, {reported_by, key}];
+received_rules(hyparview_join) ->
+    [{realm, key}, {new_member, key}];
+received_rules(hyparview_forward_join) ->
+    [{realm, key}, {new_member, key}, {ttl, non_neg}, {arwl, non_neg}, {prwl, non_neg}];
+received_rules(hyparview_neighbor) ->
+    [{realm, key}, {priority, {one_of, [high, low]}}];
+received_rules(hyparview_disconnect) ->
+    [{realm, key}];
+received_rules(hyparview_shuffle) ->
+    [{realm, key}, {origin, key}, {ttl, non_neg}, {peer_sample, list}];
+received_rules(hyparview_shuffle_reply) ->
+    [{realm, key}, {peer_sample, list}];
+received_rules(plumtree_gossip) ->
+    [{realm, key}, {msg_id, id16}, {round, non_neg}, {payload, present}];
+received_rules(Type) when Type =:= plumtree_ihave; Type =:= plumtree_graft ->
+    [{realm, key}, {msg_id, id16}, {round, non_neg}];
+received_rules(plumtree_prune) ->
+    [{realm, key}];
+received_rules(overlay_relay) ->
+    [{peer, key}, {payload, binary}];
+received_rules(publish) ->
+    [{topic, binary}, {realm, key}, {publisher, key}, {seq, non_neg},
+     {payload, present}, {published_at_ms, non_neg}];
+received_rules(Type) when Type =:= subscribe; Type =:= unsubscribe ->
+    [{topic, binary}, {realm, key}, {subscriber, key}];
+received_rules(event) ->
+    [{topic, binary}, {realm, key}, {publisher, key}, {seq, non_neg},
+     {payload, present}, {delivered_via, {one_of, [plumtree, dht, direct]}}];
+received_rules(Type) when Type =:= advertise; Type =:= unadvertise ->
+    [{realm, key}, {procedure, binary}, {advertiser, key}];
+received_rules(stream_open) ->
+    [{stream_id, id16}, {procedure, binary}, {realm, key},
+     {mode, {one_of, [server_stream, client_stream, bidi]}}, {args, present},
+     {deadline_ms, integer}, {caller, key}, {ucan_token, {optional, binary}}];
+received_rules(stream_data) ->
+    [{stream_id, id16}, {seq, non_neg}, {encoding, {one_of, [raw, msgpack]}},
+     {body, present}];
+received_rules(stream_end) ->
+    [{stream_id, id16}, {role, {one_of, [send, both]}}];
+received_rules(stream_error) ->
+    [{stream_id, id16}, {code, binary}, {message, binary}];
+received_rules(stream_reply) ->
+    [{stream_id, id16}, {payload, present}, {responded_by, key}];
+received_rules(want) ->
+    [{blocks, {list_of, {entry, [{mcid, mcid}, {priority, {optional, byte}}]}}}];
+received_rules(have) ->
+    [{blocks, {list_of, {entry, [{mcid, mcid}, {size, non_neg}]}}}];
+received_rules(block) ->
+    [{mcid, mcid}, {payload, binary}];
+received_rules(manifest_req) ->
+    [{mcid, mcid}];
+received_rules(manifest_res) ->
+    [{mcid, mcid}, {manifest, manifest}];
+received_rules(cancel) ->
+    [{blocks, {list_of, mcid}}];
+received_rules(_Unknown) ->
+    unknown_type.
+
+%% A NODES entry, as station_ref/1 builds it.
+station_ref_rule() ->
+    {entry, [{node_id, key}, {station_id, key}, {tier, tier}, {country, country},
+             {last_seen_at, pos}, {addresses, {optional, {list_of, map}}},
+             {asn, {optional, non_neg}}]}.
 
 %%------------------------------------------------------------------
 %% Accessors
