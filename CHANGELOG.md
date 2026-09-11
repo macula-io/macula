@@ -767,6 +767,7 @@ Every node should upgrade to this release.
 
 ### Changed
 
+
 - `macula_cbor_nif:unpack_deterministic/1`, the decoder behind
   `macula_frame` and `macula_record`, decodes at most 131,072 CBOR items
   from one input, an array, a map, a key and a value each counting as one,
@@ -811,6 +812,13 @@ Every node should upgrade to this release.
   The frames before it are still handled, and the link and its other
   streams carry on. A peering connection's `invalid_frame` notice changes
   nothing on the link.
+- Gossip discovery requires a shared secret of at least 32 bytes.
+  `macula_cluster_gossip:start_link/1` takes it as the `secret` option or
+  from `MACULA_GOSSIP_SECRET`, and without one returns
+  `{error, secret_required}` or
+  `{error, {secret_too_short, #{bytes => N, required => 32}}}`.
+  `macula_cluster:start_cluster/0,1` returns these as
+  `{error, {gossip_strategy_failed, Reason}}` when it would start gossip.
 - `macula_dist_relay_client:close_tunnel/2` sends `tunnel_close` only for a
   tunnel the client knows, active or still being set up, and ignores an
   unknown tunnel id.

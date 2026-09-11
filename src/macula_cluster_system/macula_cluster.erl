@@ -232,7 +232,8 @@ node_cookie_set(false, _Cookie) ->
 %% 1. Application env: `{macula, [{cluster_nodes, [Node1, Node2, ...]}]}'
 %% 2. Environment variable: `CLUSTER_NODES' (comma-separated)
 %%
-%% If no nodes are configured, starts the gossip strategy.
+%% If no nodes are configured, starts the gossip strategy, which needs a
+%% shared secret of at least 32 bytes in MACULA_GOSSIP_SECRET.
 %%
 %% Examples:
 %% ```
@@ -261,7 +262,9 @@ start_cluster() ->
 %% - port: UDP port (default 45892)
 %% - broadcast_interval: Milliseconds between broadcasts (default 1500)
 %% - multicast_ttl: TTL for multicast packets (default 1 = same subnet)
-%% - secret: Optional binary secret for HMAC authentication
+%% - secret: Shared secret of at least 32 bytes, required by gossip unless
+%%   MACULA_GOSSIP_SECRET holds one. Without it, a start that uses gossip
+%%   returns {error, {gossip_strategy_failed, secret_required}}.
 %%
 %% Strategy selection:
 %% - `gossip': UDP multicast gossip for zero-config LAN (like libcluster Gossip)
@@ -272,7 +275,8 @@ start_cluster() ->
 %% ```
 %% %% Gossip strategy for zero-config LAN discovery (recommended)
 %% ok = macula_cluster:start_cluster(#{
-%%     strategy => gossip
+%%     strategy => gossip,
+%%     secret => &lt;&lt;"at least 32 bytes of shared secret"&gt;&gt;
 %% }).
 %%
 %% %% Gossip with custom multicast group
@@ -280,7 +284,7 @@ start_cluster() ->
 %%     strategy => gossip,
 %%     multicast_addr => {239, 1, 1, 1},
 %%     port => 9999,
-%%     secret => &lt;&lt;"my-cluster-secret"&gt;&gt;
+%%     secret => &lt;&lt;"at least 32 bytes of shared secret"&gt;&gt;
 %% }).
 %%
 %% %% Static strategy with explicit nodes
