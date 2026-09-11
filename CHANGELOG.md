@@ -69,6 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `macula_publisher:start_link/7` takes options: `publish`, the function
   it publishes the payload with, and `fact_publish`, the function it
   announces its facts with, both `macula:publish/4` by default.
+- `macula_request:start_link/8` takes options: `call`, the function it
+  calls with, `macula:call/5` by default, and `fact_publish`, the function
+  it announces its facts with, `macula:publish/4` by default.
+  `start_link_direct/8` takes `direct_call`, `macula_direct_dial:call/6` by
+  default, and `fact_publish`, and passes its other options to the call.
 
 ### Changed
 
