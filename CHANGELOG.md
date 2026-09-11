@@ -60,6 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A procedure advertised with `{ucan_required, Issuer}`, unary or
+  streaming, also requires the token's audience (`aud`) to be the calling
+  identity's public key in lowercase hex, the check
+  `{realm_member_required, RealmDid, RequiredCan}` already made; both
+  policies now share it. A token signed by `Issuer` but minted for another
+  audience is refused with `unauthorized`. Mint `ucan_required` tokens for
+  the caller that will present them.
 - `macula_cluster:get_cookie/0`, and `macula:get_cookie/0` with it,
   returns the cookie of a node that is already distributed instead of
   resolving another one. On a node that is not, it reads
