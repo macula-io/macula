@@ -121,6 +121,8 @@
 -define(STORAGE_KEY_LABEL, "MACULA-PQ-STORAGE-KEY-V1").
 -define(MAX_RECORD_BYTES, 256 * 1024).
 -define(CLOCK_TOLERANCE_MS, 5 * 60 * 1000).
+%% A protocol integer in a signed structure stays below 2^53 (the decoding rule).
+-define(MAX_PROTOCOL_INT, 1 bsl 53).
 -define(UNIX_EPOCH_GREGORIAN_SECONDS, 62167219200).
 
 -define(TYPE_NODE_RECORD,                  16#01).
@@ -648,7 +650,8 @@ read_tbs(#{{text, <<"type">>} := Type, {text, <<"alg">>} := {text, Alg}, {text, 
            {text, <<"created_at">>} := Created, {text, <<"expires_at">>} := Expires,
            {text, <<"payload">>} := Payload} = Fields)
   when is_integer(Type), Type >= 1, Type =< 16#FF, is_binary(Alg), is_binary(Version), byte_size(Version) =:= 16,
-       is_integer(Created), Created >= 0, is_integer(Expires), Expires >= 0, is_map(Payload) ->
+       is_integer(Created), Created >= 0, Created < ?MAX_PROTOCOL_INT, is_integer(Expires), Expires >= 0,
+       Expires < ?MAX_PROTOCOL_INT, is_map(Payload) ->
     Record = #{type => Type, alg => Alg, version => Version, created_at => Created, expires_at => Expires,
                payload => Payload},
     with_read_subject(map_size(Fields), maps:get({text, <<"subject">>}, Fields, undefined), Record);

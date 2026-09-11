@@ -102,6 +102,15 @@ crafted_cases(#{identity := Id, public := Public, profile := Profile}) ->
      ?_assertEqual({error, malformed_frame},
                    macula_key_bindings:verify_status(
                      signed(Id, ?STATUS_LABEL, encode(StatusFields#{{text, <<"expires_at">>} => ?NOW + 2 * ?HOUR})),
+                     macula_key_bindings:tls_binding(Id, ?LEAF, ?NOW, ?NOW + ?DAY), Public, Profile, ?NOW)),
+     %% Protocol integers in a signed structure stay below 2^53.
+     ?_assertEqual({error, malformed_frame},
+                   Verify(signed(Id, ?TLS_LABEL, encode(Fields#{{text, <<"not_before">>} => 1 bsl 53,
+                                                                {text, <<"not_after">>} => (1 bsl 53) + ?DAY})))),
+     ?_assertEqual({error, malformed_frame},
+                   macula_key_bindings:verify_status(
+                     signed(Id, ?STATUS_LABEL, encode(StatusFields#{{text, <<"issued_at">>} => 1 bsl 53,
+                                                                    {text, <<"expires_at">>} => (1 bsl 53) + ?MINUTE})),
                      macula_key_bindings:tls_binding(Id, ?LEAF, ?NOW, ?NOW + ?DAY), Public, Profile, ?NOW))].
 
 %%------------------------------------------------------------------

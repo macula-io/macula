@@ -105,6 +105,10 @@ a_negative_integer_below_minus_2_pow_63_is_refused_test() ->
     ?assertMatch({ok, _, <<>>}, decode_map(#{frame_type => call, payload => -(1 bsl 63)})),
     ?assertEqual({error, bad_frame}, decode_map(#{frame_type => call, payload => -(1 bsl 63) - 1})).
 
+a_positive_integer_above_2_pow_63_minus_1_is_refused_test() ->
+    ?assertMatch({ok, _, <<>>}, decode_map(#{frame_type => call, payload => (1 bsl 63) - 1})),
+    ?assertEqual({error, bad_frame}, decode_map(#{frame_type => call, payload => 1 bsl 63})).
+
 invalid_utf8_text_is_refused_test() ->
     Bytes = <<16#A2, (text(<<"frame_type">>))/binary, (text(<<"call">>))/binary,
               (text(<<"payload">>))/binary, 16#61, 16#FF>>,
@@ -118,6 +122,8 @@ check_payload_refuses_what_the_decoding_rule_refuses_test() ->
     ?assertEqual(ok, macula_frame:check_payload(-(1 bsl 63))),
     ?assertMatch({error, {unsupported_payload_type, integer_out_of_range, []}},
                  macula_frame:check_payload(-(1 bsl 63) - 1)),
+    ?assertEqual(ok, macula_frame:check_payload((1 bsl 63) - 1)),
+    ?assertMatch({error, {unsupported_payload_type, integer_out_of_range, []}}, macula_frame:check_payload(1 bsl 63)),
     ?assertMatch({error, {unsupported_payload_type, invalid_text, []}}, macula_frame:check_payload({text, <<16#FF>>})),
     ?assertMatch({error, {unsupported_payload_type, invalid_text, []}}, macula_frame:check_payload(#{<<16#FF>> => 1})),
     ?assertEqual(ok, macula_frame:check_payload(nested(63))),

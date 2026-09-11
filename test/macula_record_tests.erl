@@ -141,7 +141,10 @@ tbs_fields_the_design_does_not_allow_are_malformed_test_() ->
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"subject">>} => <<1, 2>>})),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"type">>} := 16#07})),
      ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"payload">>} := [1]})),
-     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"created_at">>} := {text, <<"now">>}}))].
+     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"created_at">>} := {text, <<"now">>}})),
+     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"type">>} := 256})),
+     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"created_at">>} := 1 bsl 53})),
+     ?_assertEqual({error, malformed}, Verify(Fields#{{text, <<"expires_at">>} := 1 bsl 53}))].
 
 a_node_record_naming_another_node_is_refused_test() ->
     Id = key(identity),

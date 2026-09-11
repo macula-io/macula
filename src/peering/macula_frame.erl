@@ -1811,14 +1811,11 @@ byte_floor(_Scalar)                      -> 1.
 sum_floor([], Acc)      -> Acc;
 sum_floor([H | T], Acc) -> sum_floor(T, Acc + byte_floor(H)).
 
-%% Integers: the codec renders major 0 / major 1 and bounds both at 64
-%% bits. The bound is NOT restated here — a bignum past it matches no
-%% clause in either CBOR encoder (`macula_cbor_nif:pack_deterministic/1',
-%% the live path, or `macula_record_cbor:encode/1', its differentially-
-%% tested reference), so the codec is asked. The decoding rule refuses a
-%% negative integer below -2^63, so that floor is added here.
+%% Integers: the decoding rule refuses an integer below -2^63 or above
+%% 2^63-1, so a payload integer must lie between them. Both CBOR encoders
+%% render that whole range, so no integer outside it reaches them.
 check_value(I, Path) when is_integer(I) ->
-    int_ok(I >= -(1 bsl 63) andalso macula_record_cbor:is_encodable_int(I), Path);
+    int_ok(I >= -(1 bsl 63) andalso I < 1 bsl 63, Path);
 check_value(F, _Path) when is_float(F) ->
     ok;
 check_value(B, _Path) when is_binary(B) ->

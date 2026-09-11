@@ -39,6 +39,8 @@
 -define(MAX_BINDING_MS, 7 * 86400000).
 -define(MAX_STATUS_MS, 3600000).
 -define(TOLERANCE_MS, 5 * 60000).
+%% A protocol integer in a signed structure stays below 2^53 (the decoding rule).
+-define(MAX_PROTOCOL_INT, 1 bsl 53).
 -define(BINDING_KEYS, [<<"binding_id">>, <<"hash_alg">>, <<"label">>, <<"node_id">>, <<"not_after">>,
                        <<"not_before">>, <<"sig_alg">>, <<"subject_hash">>, <<"use">>]).
 -define(STATUS_KEYS, [<<"binding_hash">>, <<"expires_at">>, <<"issued_at">>, <<"label">>, <<"node_id">>,
@@ -152,7 +154,7 @@ well_formed_binding(#{<<"label">> := {text, _}, <<"node_id">> := NodeId, <<"use"
                       <<"hash_alg">> := {text, <<"SHA-384">>}, <<"sig_alg">> := {text, SigAlg}}, Profile)
   when is_binary(NodeId), byte_size(NodeId) =:= 32, is_binary(SubjectHash), byte_size(SubjectHash) =:= 48,
        is_binary(BindingId), byte_size(BindingId) =:= 16, is_integer(NotBefore), is_integer(NotAfter),
-       NotBefore >= 0, NotBefore =< NotAfter, NotAfter - NotBefore =< ?MAX_BINDING_MS ->
+       NotBefore >= 0, NotBefore =< NotAfter, NotAfter < ?MAX_PROTOCOL_INT, NotAfter - NotBefore =< ?MAX_BINDING_MS ->
     expect(SigAlg =:= sig_alg(Profile), malformed_frame);
 well_formed_binding(_Fields, _Profile) ->
     {error, malformed_frame}.
@@ -199,7 +201,7 @@ well_formed_status(#{<<"label">> := {text, ?STATUS_LABEL}, <<"node_id">> := Node
                      <<"expires_at">> := ExpiresAt, <<"sig_alg">> := {text, SigAlg}}, Profile)
   when is_binary(NodeId), byte_size(NodeId) =:= 32, is_binary(BindingHash), byte_size(BindingHash) =:= 48,
        is_integer(IssuedAt), is_integer(ExpiresAt), IssuedAt >= 0, IssuedAt =< ExpiresAt,
-       ExpiresAt - IssuedAt =< ?MAX_STATUS_MS ->
+       ExpiresAt < ?MAX_PROTOCOL_INT, ExpiresAt - IssuedAt =< ?MAX_STATUS_MS ->
     expect(SigAlg =:= sig_alg(Profile), malformed_frame);
 well_formed_status(_Fields, _Profile) ->
     {error, malformed_frame}.

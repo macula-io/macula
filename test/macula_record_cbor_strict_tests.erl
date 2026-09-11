@@ -94,8 +94,19 @@ negative_integer_below_minus_2_pow_63_is_refused_test_() ->
     [?_assertEqual({error, integer_out_of_range}, macula_record_cbor:decode_strict(<<16#3B, N:64>>))
      || N <- [1 bsl 63, (1 bsl 64) - 1]].
 
-largest_unsigned_integer_is_accepted_test() ->
-    ?assertEqual({ok, (1 bsl 64) - 1}, macula_record_cbor:decode_strict(<<16#1B, ((1 bsl 64) - 1):64>>)).
+unsigned_integer_up_to_2_pow_63_minus_1_is_accepted_test() ->
+    ?assertEqual({ok, (1 bsl 63) - 1}, macula_record_cbor:decode_strict(<<16#1B, ((1 bsl 63) - 1):64>>)).
+
+unsigned_integer_above_2_pow_63_minus_1_is_refused_test_() ->
+    [?_assertEqual({error, integer_out_of_range}, macula_record_cbor:decode_strict(<<16#1B, N:64>>))
+     || N <- [1 bsl 63, (1 bsl 64) - 1]].
+
+%% Positive and negative infinity and a NaN, in half, single and double width.
+nan_and_infinities_are_refused_in_every_width_test_() ->
+    [?_assertEqual({error, malformed}, macula_record_cbor:decode_strict(Bin))
+     || Bin <- [<<16#F9, 16#7C, 16#00>>, <<16#F9, 16#FC, 16#00>>, <<16#F9, 16#7E, 16#00>>,
+                <<16#FA, 16#7F, 16#80, 0, 0>>, <<16#FA, 16#FF, 16#80, 0, 0>>, <<16#FA, 16#7F, 16#C0, 0, 0>>,
+                <<16#FB, 16#7F, 16#F0, 0:48>>, <<16#FB, 16#FF, 16#F0, 0:48>>, <<16#FB, 16#7F, 16#F8, 0:48>>]].
 
 nested_arrays(0) -> <<16#00>>;
 nested_arrays(N) -> <<16#81, (nested_arrays(N - 1))/binary>>.

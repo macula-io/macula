@@ -61,6 +61,8 @@
 
 -define(VERSION, 3).
 -define(NONCE_BYTES, 32).
+%% A protocol integer in a signed structure stays below 2^53 (the decoding rule).
+-define(MAX_PROTOCOL_INT, 1 bsl 53).
 -define(MLDSA87_PUBLIC_BYTES, 2592).
 -define(PROOF_LABEL, "MACULA-PQ-CONNECT-PROOF-V1").
 -define(OPENER_KEYS, [<<"frame_type">>, <<"version">>]).
@@ -376,7 +378,9 @@ field_value(<<"tls_status">>, Envelope) -> envelope(Envelope);
 field_value(<<"connect_binding">>, Envelope) -> envelope(Envelope);
 field_value(<<"connect_status">>, Envelope) -> envelope(Envelope);
 field_value(<<"statement">>, Envelope) -> envelope(Envelope);
-field_value(<<"capabilities">>, Capabilities) when is_integer(Capabilities), Capabilities >= 0 -> {ok, Capabilities};
+field_value(<<"capabilities">>, Capabilities)
+  when is_integer(Capabilities), Capabilities >= 0, Capabilities < ?MAX_PROTOCOL_INT ->
+    {ok, Capabilities};
 field_value(<<"accepted">>, Accepted) when Accepted =:= 0; Accepted =:= 1 -> {ok, Accepted};
 field_value(<<"refusal_code">>, {text, Code}) -> refusal_code(Code);
 field_value(_Key, _Value) -> error.

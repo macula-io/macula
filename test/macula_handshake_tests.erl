@@ -196,6 +196,12 @@ hello_cases() ->
      ?_assertEqual({error, malformed_frame},
                    macula_handshake:read_hello(Hello((Refused(<<"not_accepted">>))#{{text, <<"accepted">>} => 1}))),
      ?_assertEqual({error, malformed_frame}, macula_handshake:read_hello(Hello(#{{text, <<"accepted">>} => 2}))),
+     ?_assertEqual({ok, #{capabilities => (1 bsl 53) - 1}},
+                   macula_handshake:read_hello(Hello(#{{text, <<"accepted">>} => 1,
+                                                       {text, <<"capabilities">>} => (1 bsl 53) - 1}))),
+     ?_assertEqual({error, malformed_frame},
+                   macula_handshake:read_hello(Hello(#{{text, <<"accepted">>} => 1,
+                                                       {text, <<"capabilities">>} => 1 bsl 53}))),
      ?_assertEqual({error, unexpected_frame}, macula_handshake:read_hello(macula_handshake:opener()))].
 
 %%------------------------------------------------------------------

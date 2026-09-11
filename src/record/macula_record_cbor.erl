@@ -168,9 +168,9 @@ decode_one(<<7:3, 22:5, R/binary>>, _Mode) ->
     {null, R};
 %% Floats. We only ever EMIT binary64, but a conforming peer may send the
 %% shorter forms, so all three are accepted. NaN and the infinities have no
-%% Erlang float representation and match no clause here; the frame decoder
-%% already turns that into `bad_frame' rather than a crash, which is the
-%% right answer for a value this codec cannot faithfully hand to a caller.
+%% Erlang float representation and match no clause here, so a strict decode
+%% refuses them as `malformed', as the decoding rule requires: this codec
+%% cannot faithfully hand such a value to a caller.
 decode_one(<<7:3, 25:5, Half:16/bitstring, R/binary>>, _Mode) ->
     {half_to_float(Half), R};
 decode_one(<<7:3, 26:5, F:32/float, R/binary>>, _Mode) ->
@@ -187,6 +187,9 @@ decode_count(25, <<N:16, R/binary>>) -> {N, R};
 decode_count(26, <<N:32, R/binary>>) -> {N, R};
 decode_count(27, <<N:64, R/binary>>) -> {N, R}.
 
+%% A strict decode refuses a positive integer above 2^63-1, as it refuses a negative one below -2^63.
+decode_value(0, N, _R, {strict, _Depth}) when N >= 1 bsl 63 ->
+    throw(integer_out_of_range);
 decode_value(0, N, R, _Mode) ->
     {N, R};
 %% Negative integer (major 1) — the encoded count `N' represents the
