@@ -133,6 +133,14 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `macula_peering` connections log `_macula.peering.closed`,
   `_macula.peering.handshake_timeout` and
   `_macula.peering.puzzle_unsolved` through it.
+- `macula_record_uuid:v7_monotonic/1`: the version of a record a node
+  signs. Its rand_a bits count within a millisecond from a random 11-bit
+  seed, and each version is the larger of that fresh value and the last
+  one issued plus one, so the versions a node issues strictly increase,
+  also across a wall-clock step back, and a tombstone built in the same
+  millisecond as its record replaces it. A version is an order, not a
+  time. `macula_record` signs new, refreshed and withdrawing records with
+  it.
 - `macula_peering:peer_identity/1`: the peer's node_id, its identity key
   as carried, the profile and its capabilities, once the handshake has
   completed.
@@ -179,6 +187,8 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   `signature` key.
 - The Ed25519 CONNECT and HELLO frames of `macula_peering_conn`, with the
   `realms`, `verify` and `pin_tls_cert` options.
+- `macula_record_uuid:v7/1`. Record versions come from `v7_monotonic/1`,
+  and `v7/0` stays for ids that need no order.
 
 ### Fixed
 

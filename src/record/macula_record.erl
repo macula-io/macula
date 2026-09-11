@@ -389,7 +389,8 @@ verify(_Other, _Profile, _Now) ->
 refresh(#{created_at := Created, expires_at := Expires} = Record, Key) ->
     Now = erlang:system_time(millisecond),
     Fresh = maps:with([type, payload, subject], Record),
-    sign(Fresh#{version => macula_record_uuid:v7(Now), created_at => Now, expires_at => Now + (Expires - Created)},
+    sign(Fresh#{version => macula_record_uuid:v7_monotonic(Now), created_at => Now,
+                expires_at => Now + (Expires - Created)},
          Key).
 
 %% @doc The wire form of a signed or verified record: its {key, tbs, signature} map, tbs unchanged.
@@ -562,7 +563,7 @@ procedure_delegation_key(<<_:256>> = OrgKeyId, <<_:256>> = Advertiser) ->
 
 unsigned(Type, Payload, Opts) ->
     Now = erlang:system_time(millisecond),
-    #{type => Type, version => macula_record_uuid:v7(Now), created_at => Now,
+    #{type => Type, version => macula_record_uuid:v7_monotonic(Now), created_at => Now,
       expires_at => Now + maps:get(ttl_ms, Opts, ?DEFAULT_TTL_MS), payload => Payload}.
 
 with_subject(Record, undefined) -> Record;

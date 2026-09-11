@@ -287,7 +287,7 @@ object(#{key := K, tbs := T, signature := S}) ->
 node_fields(Id, Now) ->
     NodeId = macula_node_keys:key_id(Id),
     #{{text, <<"type">>} => 16#01,
-      {text, <<"version">>} => macula_record_uuid:v7(Now),
+      {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
       {text, <<"created_at">>} => Now,
       {text, <<"expires_at">>} => Now + 60 * ?MINUTE,
       {text, <<"payload">>} => #{{text, <<"node_id">>} => NodeId, {text, <<"station_id">>} => NodeId,

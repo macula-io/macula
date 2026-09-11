@@ -41,7 +41,7 @@ a_verifier_refuses_a_content_id_that_is_not_tag_2_test() ->
     Now = erlang:system_time(millisecond),
     Payload = #{{text, <<"announcer_node">>} => macula_node_keys:key_id(Id), {text, <<"mcid">>} => <<1, 16#55, 0:384>>,
                 {text, <<"endpoint">>} => {text, <<"quic://h:1">>}},
-    Fields = #{{text, <<"type">>} => 16#11, {text, <<"version">>} => macula_record_uuid:v7(Now),
+    Fields = #{{text, <<"type">>} => 16#11, {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
                {text, <<"created_at">>} => Now, {text, <<"expires_at">>} => Now + ?HOUR,
                {text, <<"payload">>} => Payload},
     ?assertEqual({error, malformed},

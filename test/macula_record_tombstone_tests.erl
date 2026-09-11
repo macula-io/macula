@@ -138,7 +138,7 @@ node_tombstone_payload(Node) ->
 %% A tombstone signed over hand-built tbs fields, to reach refusals tombstone/2,3 never builds.
 hand_signed(Payload, Key) ->
     Now = erlang:system_time(millisecond),
-    Fields = #{{text, <<"type">>} => 16#0C, {text, <<"version">>} => macula_record_uuid:v7(Now),
+    Fields = #{{text, <<"type">>} => 16#0C, {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
                {text, <<"created_at">>} => Now, {text, <<"expires_at">>} => Now + ?DAY,
                {text, <<"payload">>} => Payload},
     macula_signed_object:sign(?LABEL, Fields, Key).

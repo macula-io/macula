@@ -55,6 +55,17 @@ init([]) ->
             type => worker
         },
 
+        %% The last record version this node issued, which callers of
+        %% macula_record_uuid:v7_monotonic/1 advance themselves. Before any
+        %% record is signed.
+        #{
+            id => macula_record_uuid,
+            start => {macula_record_uuid, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
         %% MRI Type Registry (type validation, custom type registration)
         #{
             id => macula_mri_registry,

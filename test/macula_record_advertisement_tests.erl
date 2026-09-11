@@ -213,7 +213,7 @@ corrupt(true, Bytes) ->
 
 hand_signed(Payload, Key) ->
     Now = now_ms(),
-    Fields = #{{text, <<"type">>} => 16#06, {text, <<"version">>} => macula_record_uuid:v7(Now),
+    Fields = #{{text, <<"type">>} => 16#06, {text, <<"version">>} => macula_record_uuid:v7_monotonic(Now),
                {text, <<"created_at">>} => Now, {text, <<"expires_at">>} => Now + ?HOUR,
                {text, <<"payload">>} => Payload},
     macula_signed_object:sign(?LABEL, Fields, Key).
