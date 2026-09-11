@@ -50,7 +50,7 @@
 -export_type([opts/0, realm/0, identity/0]).
 
 -type realm()    :: <<_:256>>.
--type identity() :: macula_identity:key_pair().
+-type identity() :: macula_node_keys:node_key().
 
 -type opts() :: #{
     %% Default identity used when a `register/3' caller does not
