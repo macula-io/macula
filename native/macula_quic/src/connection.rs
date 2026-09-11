@@ -2,7 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use rustler::env::SavedTerm;
-use rustler::{Binary, Encoder, Env, LocalPid, NifResult, OwnedEnv, ResourceArc, Term};
+use rustler::{Binary, Encoder, Env, LocalPid, NifResult, OwnedBinary, OwnedEnv, ResourceArc, Term};
+use rustls::pki_types::CertificateDer;
 use tokio::task::{AbortHandle, JoinHandle};
 
 use crate::{atoms, config, message, runtime, stream};
@@ -13,15 +14,44 @@ pub struct ConnectionResource {
     pub owner: RwLock<LocalPid>,
     stream_accept_task: Mutex<Option<JoinHandle<()>>>,
     pub closed: AtomicBool,
+    /// The leaf certificate the other side sent in this connection's TLS
+    /// handshake, as received. Only a dialed connection has one.
+    peer_leaf: Option<Arc<[u8]>>,
+    /// The leaf certificate this side sent in this connection's TLS
+    /// handshake. Only an accepted connection has one.
+    presented_leaf: Option<Arc<[u8]>>,
 }
 
 impl ConnectionResource {
-    pub fn new(connection: quinn::Connection, owner: LocalPid) -> Self {
+    /// A connection this side dialed, with the leaf the other side sent.
+    pub fn dialed(connection: quinn::Connection, owner: LocalPid) -> Self {
+        let peer_leaf = received_leaf(&connection);
+        Self::new(connection, owner, peer_leaf, None)
+    }
+
+    /// A connection a listener accepted, with the leaf of the certificate
+    /// generation it was accepted with.
+    pub fn accepted(
+        connection: quinn::Connection,
+        owner: LocalPid,
+        presented_leaf: Arc<[u8]>,
+    ) -> Self {
+        Self::new(connection, owner, None, Some(presented_leaf))
+    }
+
+    fn new(
+        connection: quinn::Connection,
+        owner: LocalPid,
+        peer_leaf: Option<Arc<[u8]>>,
+        presented_leaf: Option<Arc<[u8]>>,
+    ) -> Self {
         Self {
             connection,
             owner: RwLock::new(owner),
             stream_accept_task: Mutex::new(None),
             closed: AtomicBool::new(false),
+            peer_leaf,
+            presented_leaf,
         }
     }
 
@@ -29,6 +59,17 @@ impl ConnectionResource {
         let mut task = self.stream_accept_task.lock().unwrap();
         *task = Some(handle);
     }
+}
+
+/// The first certificate of the chain the other side sent in this
+/// connection's TLS handshake, byte for byte, if it sent one. quinn's rustls
+/// session hands the chain over as received, leaf first.
+fn received_leaf(connection: &quinn::Connection) -> Option<Arc<[u8]>> {
+    let chain = connection
+        .peer_identity()?
+        .downcast::<Vec<CertificateDer<'static>>>()
+        .ok()?;
+    chain.first().map(|leaf| Arc::from(&leaf[..]))
 }
 
 impl Drop for ConnectionResource {
@@ -224,7 +265,7 @@ fn deliver_dial_result(
         let tag = tag.load(env);
         match result {
             Ok(connection) => {
-                let conn = ResourceArc::new(ConnectionResource::new(connection, owner));
+                let conn = ResourceArc::new(ConnectionResource::dialed(connection, owner));
                 (atoms::quic(), atoms::connected(), tag, conn).encode(env)
             }
             Err(reason) => (atoms::quic(), atoms::connect_failed(), tag, reason).encode(env),
@@ -366,4 +407,43 @@ fn nif_max_datagram_size<'a>(
     let stats = conn.connection.stats();
     let mtu = stats.path.current_mtu as u64;
     Ok((atoms::ok(), mtu).encode(env))
+}
+
+/// NIF: peer_leaf(ConnRef) -> {ok, Der} | {error, no_peer_leaf}
+///
+/// The leaf certificate the other side sent in this connection's TLS
+/// handshake, exactly as received. A dialed connection has the station's;
+/// an accepted connection has none, since clients send no certificate.
+#[rustler::nif]
+fn nif_peer_leaf<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+) -> NifResult<Term<'a>> {
+    Ok(match conn.peer_leaf.as_deref() {
+        Some(leaf) => (atoms::ok(), der_binary(env, leaf)).encode(env),
+        None => (atoms::error(), atoms::no_peer_leaf()).encode(env),
+    })
+}
+
+/// NIF: presented_leaf(ConnRef) -> {ok, Der} | {error, no_presented_leaf}
+///
+/// The leaf certificate this side sent in this connection's TLS handshake.
+/// An accepted connection has the leaf of the certificate generation it was
+/// accepted with, whatever its listener presents now; a dialed connection
+/// has none.
+#[rustler::nif]
+fn nif_presented_leaf<'a>(
+    env: Env<'a>,
+    conn: ResourceArc<ConnectionResource>,
+) -> NifResult<Term<'a>> {
+    Ok(match conn.presented_leaf.as_deref() {
+        Some(leaf) => (atoms::ok(), der_binary(env, leaf)).encode(env),
+        None => (atoms::error(), atoms::no_presented_leaf()).encode(env),
+    })
+}
+
+fn der_binary<'a>(env: Env<'a>, der: &[u8]) -> Binary<'a> {
+    let mut binary = OwnedBinary::new(der.len()).expect("allocate a certificate binary");
+    binary.as_mut_slice().copy_from_slice(der);
+    binary.release(env)
 }

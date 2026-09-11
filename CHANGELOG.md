@@ -64,6 +64,16 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 - `macula_node_keys:carried_key_well_formed/2` and `signature_bytes/1`: the
   one carried form of a key per profile, and the signature size per profile.
 - `macula_key_bindings:verify_status/5` returns when the statement expires.
+- `macula_quic:peer_leaf/1` and `presented_leaf/1`: the leaf certificate DER
+  of a connection's own TLS handshake. A dialed connection reports the leaf
+  it received, byte for byte, and an accepted connection the leaf it
+  presented.
+- `macula_quic:reload_certificate/3`: a listener loads a new certificate and
+  key from files and presents them to the connections it accepts from then
+  on. Each certificate is a generation of its own, and an accepted
+  connection keeps the leaf of the generation it was accepted with. A reload
+  that cannot read its files, or whose key does not match its certificate,
+  returns an error and keeps the current certificate.
 
 ### Changed
 

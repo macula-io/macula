@@ -48,6 +48,8 @@ rustler::atoms! {
     stream_finished,
     unknown_error,
     error_code_out_of_range,
+    no_peer_leaf,
+    no_presented_leaf,
 
     // Stat keys
     rtt,

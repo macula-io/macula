@@ -1,5 +1,7 @@
 use quinn::{ClientConfig, ServerConfig, TransportConfig};
+use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::sign::CertifiedKey;
 use std::fs;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::Arc;
@@ -7,38 +9,51 @@ use std::time::Duration;
 
 use crate::cert;
 
-/// Build a Quinn ServerConfig from Erlang options.
+/// What a listener was started with, apart from its certificate, so that a
+/// certificate reload builds the next server configuration the same way.
+pub struct ServerSettings {
+    pub alpn: Vec<String>,
+    pub idle_timeout_ms: u64,
+    pub keep_alive_ms: u64,
+    pub bidi_streams: u32,
+    pub uni_streams: u32,
+}
+
+/// Build a Quinn ServerConfig from a certificate file, a key file and a
+/// listener's settings. Returns it with the leaf certificate it presents,
+/// as DER.
 ///
-/// Required: certfile, keyfile
-/// Optional: alpn (default ["macula"]), idle_timeout_ms, keep_alive_interval_ms,
-///           peer_bidi_stream_count, peer_unidi_stream_count
+/// Refuses a key that does not match the leaf certificate: a listener must
+/// never present a leaf its key cannot sign for.
 pub fn build_server_config(
     certfile: &str,
     keyfile: &str,
-    alpn: &[String],
-    idle_timeout_ms: u64,
-    keep_alive_ms: u64,
-    bidi_streams: u32,
-    uni_streams: u32,
-) -> Result<ServerConfig, String> {
+    settings: &ServerSettings,
+) -> Result<(ServerConfig, CertificateDer<'static>), String> {
     let certs = load_certs(certfile)?;
     let key = load_key(keyfile)?;
+    let leaf = certs
+        .first()
+        .cloned()
+        .ok_or_else(|| format!("no certificate found in {}", certfile))?;
 
-    let mut server_crypto = rustls::ServerConfig::builder()
+    let builder = rustls::ServerConfig::builder();
+    check_key_matches_leaf(&certs, &key, builder.crypto_provider())?;
+    let mut server_crypto = builder
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|e| format!("TLS config error: {}", e))?;
 
-    server_crypto.alpn_protocols = alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
+    server_crypto.alpn_protocols = settings.alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
 
     let mut transport = TransportConfig::default();
     transport.max_idle_timeout(Some(
-        quinn::IdleTimeout::try_from(Duration::from_millis(idle_timeout_ms))
+        quinn::IdleTimeout::try_from(Duration::from_millis(settings.idle_timeout_ms))
             .map_err(|e| format!("idle_timeout: {}", e))?,
     ));
-    transport.keep_alive_interval(Some(Duration::from_millis(keep_alive_ms)));
-    transport.max_concurrent_bidi_streams(bidi_streams.into());
-    transport.max_concurrent_uni_streams(uni_streams.into());
+    transport.keep_alive_interval(Some(Duration::from_millis(settings.keep_alive_ms)));
+    transport.max_concurrent_bidi_streams(settings.bidi_streams.into());
+    transport.max_concurrent_uni_streams(settings.uni_streams.into());
     apply_flow_control_defaults(&mut transport);
 
     let mut config =
@@ -48,7 +63,24 @@ pub fn build_server_config(
         ));
     config.transport_config(Arc::new(transport));
 
-    Ok(config)
+    Ok((config, leaf))
+}
+
+/// Refuses a private key whose public key is not the leaf certificate's,
+/// and a key that cannot state its public key, so the pair is known to
+/// match rather than only not known to differ.
+fn check_key_matches_leaf(
+    certs: &[CertificateDer<'static>],
+    key: &PrivateKeyDer<'static>,
+    provider: &CryptoProvider,
+) -> Result<(), String> {
+    let signing_key = provider
+        .key_provider
+        .load_private_key(key.clone_key())
+        .map_err(|e| format!("load private key: {}", e))?;
+    CertifiedKey::new(certs.to_vec(), signing_key)
+        .keys_match()
+        .map_err(|e| format!("certificate and key do not match: {}", e))
 }
 
 /// Bump Quinn's per-stream and per-connection flow-control windows
