@@ -65,9 +65,16 @@ generate(_Opts) ->
 %%------------------------------------------------------------------
 
 %% @doc Load a key pair from disk.
--spec load(file:name_all()) -> {ok, key_pair()} | {error, term()}.
+%%
+%% The key file is read with macula_owner_only_file:read/1. It must be a
+%% regular file its group and others have no access to, mode 0600 or 0400;
+%% symlinks are followed. Otherwise the error names the file, what was found
+%% and what is required: {file_permissions, #{file, mode, required}} or
+%% {file_type, #{file, type, required}}.
+-spec load(file:name_all()) ->
+    {ok, key_pair()} | {error, bad_key_file | macula_owner_only_file:refusal() | term()}.
 load(Path) ->
-    decode_key_file(file:read_file(Path)).
+    decode_key_file(macula_owner_only_file:read(Path)).
 
 -spec decode_key_file({ok, binary()} | {error, term()}) ->
     {ok, key_pair()} | {error, term()}.
@@ -78,33 +85,13 @@ decode_key_file({ok, _Blob}) ->
 decode_key_file({error, _} = Err) ->
     Err.
 
-%% @doc Save a key pair to disk atomically (write-tmp + rename) with 0600 perms.
+%% @doc Save a key pair to disk with macula_owner_only_file:write/2: only its
+%% owner can read the file, it replaces whatever is at Path atomically, and a
+%% missing key directory is created with mode 0700.
 -spec save(file:name_all(), key_pair()) -> ok | {error, term()}.
 save(Path, #{public := Pub, private := Priv})
   when byte_size(Pub) =:= 32, byte_size(Priv) =:= 32 ->
-    Blob = <<?KEY_FILE_MAGIC, Pub/binary, Priv/binary>>,
-    Tmp  = iolist_to_binary([Path, ".tmp"]),
-    ensure_dir_then_write(filelib:ensure_dir(Path), Tmp, Path, Blob).
-
--spec ensure_dir_then_write(ok | {error, term()}, file:name_all(),
-                            file:name_all(), binary()) -> ok | {error, term()}.
-ensure_dir_then_write(ok, Tmp, Path, Blob) ->
-    write_and_rename(Tmp, Path, Blob);
-ensure_dir_then_write({error, _} = Err, _Tmp, _Path, _Blob) ->
-    Err.
-
--spec write_and_rename(file:name_all(), file:name_all(), binary()) ->
-    ok | {error, term()}.
-write_and_rename(Tmp, Path, Blob) ->
-    case file:write_file(Tmp, Blob, [raw, binary]) of
-        ok         -> finalise_key_file(Tmp, Path);
-        {error, _} = E -> E
-    end.
-
--spec finalise_key_file(file:name_all(), file:name_all()) -> ok | {error, term()}.
-finalise_key_file(Tmp, Path) ->
-    _ = file:change_mode(Tmp, 8#0600),
-    file:rename(Tmp, Path).
+    macula_owner_only_file:write(Path, <<?KEY_FILE_MAGIC, Pub/binary, Priv/binary>>).
 
 %%------------------------------------------------------------------
 %% Accessors

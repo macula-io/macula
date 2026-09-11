@@ -40,6 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `macula_identity:load/1` accepts only a key file its group and others
+  have no access to, mode 0600 or 0400, following symlinks. Another mode
+  returns `{error, {file_permissions, #{file => Path, mode => <<"0644">>,
+  required => <<"no access for group or others (0600 or 0400)">>}}}`, and
+  a path that is not a regular file returns `{error, {file_type, ...}}`.
+  Before upgrading, set every identity key file to mode 0600. A caller
+  that generates and saves a new key when `load/1` fails should do so only
+  on `{error, enoent}`: on any other error it would replace the node's
+  identity.
+- `macula_identity:save/2` writes through `macula_owner_only_file:write/2`,
+  replacing a file or symlink at the path atomically, and creates a missing
+  key directory with mode 0700.
 - `macula_quic:connect/4` waits for its connection in the calling
   process, with the same arguments, results and timeout. A dial ends
   when the process that started it exits.

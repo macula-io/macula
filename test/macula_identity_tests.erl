@@ -4,6 +4,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("kernel/include/file.hrl").
 
+-define(REQUIRED_MODE, <<"no access for group or others (0600 or 0400)">>).
+
 %%------------------------------------------------------------------
 %% Generation
 %%------------------------------------------------------------------
@@ -120,6 +122,7 @@ save_load_roundtrip_test() ->
 load_rejects_bad_format_test() ->
     Path = mktmp("bad.key"),
     ok = file:write_file(Path, <<"not a valid key">>),
+    ok = file:change_mode(Path, 8#600),
     ?assertEqual({error, bad_key_file}, macula_identity:load(Path)).
 
 load_returns_enoent_for_missing_file_test() ->
@@ -149,6 +152,57 @@ save_returns_error_instead_of_crashing_when_ensure_dir_fails_test() ->
     Kp = macula_identity:generate(),
     ?assertMatch({error, _}, macula_identity:save(Path, Kp)).
 
+%% A key file its group or others can access is refused, whatever its
+%% content, with an error naming the file, its mode and what is required.
+load_refuses_key_file_group_or_others_can_access_test_() ->
+    [{"load refuses a key file with mode " ++ Octal,
+      fun() ->
+          Path = saved_key_with_mode(Mode),
+          ?assertEqual({error, {file_permissions, #{file => Path,
+                                                    mode => list_to_binary(Octal),
+                                                    required => ?REQUIRED_MODE}}},
+                       macula_identity:load(Path))
+      end}
+     || {Mode, Octal} <- [{8#640, "0640"}, {8#604, "0604"}, {8#660, "0660"},
+                          {8#606, "0606"}, {8#644, "0644"}]].
+
+load_accepts_key_file_only_its_owner_can_read_test_() ->
+    [{"load accepts a key file with mode " ++ Octal,
+      fun() ->
+          ?assertMatch({ok, #{public := _, private := _}},
+                       macula_identity:load(saved_key_with_mode(Mode)))
+      end}
+     || {Mode, Octal} <- [{8#600, "0600"}, {8#400, "0400"}]].
+
+load_follows_symlink_to_key_file_test() ->
+    Target = mktmp("identity.key"),
+    Kp = macula_identity:generate(),
+    ok = macula_identity:save(Target, Kp),
+    Link = filename:join(filename:dirname(Target), "linked.key"),
+    ok = file:make_symlink(Target, Link),
+    ?assertEqual({ok, Kp}, macula_identity:load(Link)).
+
+load_refuses_directory_test() ->
+    Dir = filename:dirname(mktmp("unused")),
+    ?assertEqual({error, {file_type, #{file => Dir, type => directory, required => regular}}},
+                 macula_identity:load(Dir)).
+
+save_never_writes_through_symlink_at_path_plus_tmp_test() ->
+    Path = mktmp("identity.key"),
+    Target = filename:join(filename:dirname(Path), "elsewhere"),
+    ok = file:write_file(Target, <<"unrelated">>),
+    ok = file:make_symlink(Target, Path ++ ".tmp"),
+    ok = macula_identity:save(Path, macula_identity:generate()),
+    ?assertEqual({ok, <<"unrelated">>}, file:read_file(Target)),
+    {ok, #file_info{type = Type}} = file:read_link_info(Path),
+    ?assertEqual(regular, Type).
+
+save_creates_missing_key_directory_only_its_owner_can_use_test() ->
+    Dir = filename:join(filename:dirname(mktmp("unused")), "keys"),
+    ok = macula_identity:save(filename:join(Dir, "identity.key"), macula_identity:generate()),
+    {ok, #file_info{mode = Mode}} = file:read_file_info(Dir),
+    ?assertEqual(8#700, Mode band 8#777).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -161,3 +215,9 @@ mktmp(Name) ->
     ]),
     ok = filelib:ensure_dir(filename:join(Dir, "x")),
     filename:join(Dir, Name).
+
+saved_key_with_mode(Mode) ->
+    Path = mktmp("identity.key"),
+    ok = macula_identity:save(Path, macula_identity:generate()),
+    ok = file:change_mode(Path, Mode),
+    Path.
