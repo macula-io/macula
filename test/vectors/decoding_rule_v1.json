@@ -1,0 +1,276 @@
+{
+  "version": 1,
+  "rule": "DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Encoding, Decoding rule",
+  "entries": [
+    {
+      "name": "an empty map",
+      "cbor": "a0",
+      "expect": "accept"
+    },
+    {
+      "name": "a map with a text key",
+      "cbor": "a1616101",
+      "expect": "accept"
+    },
+    {
+      "name": "integer map keys",
+      "cbor": "a201022003",
+      "expect": "accept"
+    },
+    {
+      "name": "map keys in any order",
+      "cbor": "a2616201616102",
+      "expect": "accept"
+    },
+    {
+      "name": "a text key whose length uses a longer width",
+      "cbor": "a178016101",
+      "expect": "accept"
+    },
+    {
+      "name": "an integer in a longer width",
+      "cbor": "1801",
+      "expect": "accept"
+    },
+    {
+      "name": "a byte string value",
+      "cbor": "a161614100",
+      "expect": "accept"
+    },
+    {
+      "name": "a half float value",
+      "cbor": "81f93e00",
+      "expect": "accept"
+    },
+    {
+      "name": "a single float value",
+      "cbor": "81fa3fc00000",
+      "expect": "accept"
+    },
+    {
+      "name": "a double float value",
+      "cbor": "81fb3ff8000000000000",
+      "expect": "accept"
+    },
+    {
+      "name": "null",
+      "cbor": "f6",
+      "expect": "accept"
+    },
+    {
+      "name": "valid multibyte text",
+      "cbor": "a1616b65636166c3a9",
+      "expect": "accept"
+    },
+    {
+      "name": "the smallest integer, -2^63",
+      "cbor": "3b7fffffffffffffff",
+      "expect": "accept"
+    },
+    {
+      "name": "the largest integer, 2^63-1",
+      "cbor": "1b7fffffffffffffff",
+      "expect": "accept"
+    },
+    {
+      "name": "64 nested containers",
+      "cbor": "8181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818100",
+      "expect": "accept"
+    },
+    {
+      "name": "bytes after the top-level item",
+      "cbor": "a161610100",
+      "expect": "refuse"
+    },
+    {
+      "name": "truncated input",
+      "cbor": "a26161",
+      "expect": "refuse"
+    },
+    {
+      "name": "empty input",
+      "cbor": "",
+      "expect": "refuse"
+    },
+    {
+      "name": "an indefinite byte string",
+      "cbor": "5f4161ff",
+      "expect": "refuse"
+    },
+    {
+      "name": "an indefinite text string",
+      "cbor": "7f6161ff",
+      "expect": "refuse"
+    },
+    {
+      "name": "an indefinite array",
+      "cbor": "9f01ff",
+      "expect": "refuse"
+    },
+    {
+      "name": "an indefinite map",
+      "cbor": "bf616101ff",
+      "expect": "refuse"
+    },
+    {
+      "name": "tag 1",
+      "cbor": "c11a00000001",
+      "expect": "refuse"
+    },
+    {
+      "name": "tag 2, a bignum",
+      "cbor": "c24101",
+      "expect": "refuse"
+    },
+    {
+      "name": "the simple value false",
+      "cbor": "f4",
+      "expect": "refuse"
+    },
+    {
+      "name": "the simple value true",
+      "cbor": "f5",
+      "expect": "refuse"
+    },
+    {
+      "name": "the simple value undefined",
+      "cbor": "f7",
+      "expect": "refuse"
+    },
+    {
+      "name": "simple value 32",
+      "cbor": "f820",
+      "expect": "refuse"
+    },
+    {
+      "name": "invalid UTF-8 in a text value",
+      "cbor": "a1616161ff",
+      "expect": "refuse"
+    },
+    {
+      "name": "invalid UTF-8 in a text key",
+      "cbor": "a161ff01",
+      "expect": "refuse"
+    },
+    {
+      "name": "a byte string key",
+      "cbor": "a1416101",
+      "expect": "refuse"
+    },
+    {
+      "name": "integer key 1 beside float key 1.0",
+      "cbor": "a20101f93c0002",
+      "expect": "refuse"
+    },
+    {
+      "name": "an array key",
+      "cbor": "a18001",
+      "expect": "refuse"
+    },
+    {
+      "name": "a map key",
+      "cbor": "a1a001",
+      "expect": "refuse"
+    },
+    {
+      "name": "a null key",
+      "cbor": "a1f601",
+      "expect": "refuse"
+    },
+    {
+      "name": "a duplicate text key",
+      "cbor": "a2616101616102",
+      "expect": "refuse"
+    },
+    {
+      "name": "a text key in two widths",
+      "cbor": "a261610178016102",
+      "expect": "refuse"
+    },
+    {
+      "name": "a duplicate integer key",
+      "cbor": "a201020103",
+      "expect": "refuse"
+    },
+    {
+      "name": "a duplicate key in a nested map",
+      "cbor": "a16162a2616101616102",
+      "expect": "refuse"
+    },
+    {
+      "name": "a duplicate key in a map inside an array",
+      "cbor": "81a2616101616102",
+      "expect": "refuse"
+    },
+    {
+      "name": "65 nested containers",
+      "cbor": "818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818100",
+      "expect": "refuse"
+    },
+    {
+      "name": "an integer below -2^63",
+      "cbor": "3b8000000000000000",
+      "expect": "refuse"
+    },
+    {
+      "name": "the smallest CBOR integer, -2^64",
+      "cbor": "3bffffffffffffffff",
+      "expect": "refuse"
+    },
+    {
+      "name": "an integer above 2^63-1",
+      "cbor": "1b8000000000000000",
+      "expect": "refuse"
+    },
+    {
+      "name": "the largest CBOR integer, 2^64-1",
+      "cbor": "1bffffffffffffffff",
+      "expect": "refuse"
+    },
+    {
+      "name": "positive infinity, half width",
+      "cbor": "f97c00",
+      "expect": "refuse"
+    },
+    {
+      "name": "negative infinity, half width",
+      "cbor": "f9fc00",
+      "expect": "refuse"
+    },
+    {
+      "name": "NaN, half width",
+      "cbor": "f97e00",
+      "expect": "refuse"
+    },
+    {
+      "name": "positive infinity, single width",
+      "cbor": "fa7f800000",
+      "expect": "refuse"
+    },
+    {
+      "name": "negative infinity, single width",
+      "cbor": "faff800000",
+      "expect": "refuse"
+    },
+    {
+      "name": "NaN, single width",
+      "cbor": "fa7fc00000",
+      "expect": "refuse"
+    },
+    {
+      "name": "positive infinity, double width",
+      "cbor": "fb7ff0000000000000",
+      "expect": "refuse"
+    },
+    {
+      "name": "negative infinity, double width",
+      "cbor": "fbfff0000000000000",
+      "expect": "refuse"
+    },
+    {
+      "name": "NaN, double width",
+      "cbor": "fb7ff8000000000000",
+      "expect": "refuse"
+    }
+  ]
+}
