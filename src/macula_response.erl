@@ -35,6 +35,18 @@
 %%%     <<"math.add_v1">>, math_service, []).
 %%% '''
 %%%
+%%% == Advertise and publish functions ==
+%%%
+%%% The options of `advertise/6' and `advertise_direct/7' take
+%%% `advertise', the function the handler is advertised with,
+%%% `macula:advertise/5' by default; `publish_advertisement', the
+%%% function `advertise_direct/7' publishes its DHT record with,
+%%% `macula_direct_dial:publish_advertisement/5' by default; and
+%%% `fact_publish', the function each response announces its facts with,
+%%% `macula:publish/4' by default. The other options go on to those
+%%% functions without these three. A test gives its own functions this
+%%% way instead of replacing a module.
+%%%
 %%% == Direct-dial ==
 %%%
 %%% `advertise/5,6' registers the handler with the pool's advertise-
@@ -56,7 +68,8 @@
 
 -export([advertise/5, advertise/6, advertise_direct/6, advertise_direct/7,
         unadvertise/3]).
--export([start_link/6]).
+-export([start_link/7]).
+-export_type([advertise/0, publish_advertisement/0, advertise_opts/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -callback init(Args :: term()) ->
@@ -74,14 +87,25 @@
 -define(REQUEST_RECEIVED, <<"rpc.received_v1">>).
 -define(REQUEST_REPLIED, <<"rpc.replied_v1">>).
 
+-type advertise() :: fun((macula:pool(), macula:realm(), macula:procedure(),
+                          macula_client:handler(), map()) -> ok | {error, term()}).
+-type publish_advertisement() :: fun((macula:pool(), macula:realm(), macula:procedure(),
+                                      macula_identity:key_pair(), map()) ->
+                                         ok | {error, term()}).
+-type advertise_opts() :: #{advertise => advertise(),
+                            publish_advertisement => publish_advertisement(),
+                            fact_publish => macula_lifetime_announcer:publish(),
+                            atom() => term()}.
+
 -record(rstate, {
-    module     :: module(),
-    pool       :: macula:pool(),
-    realm      :: macula:realm(),
-    announce   :: boolean(),
-    request_id :: binary(),
-    payload    :: term(),
-    user       :: term()
+    module       :: module(),
+    pool         :: macula:pool(),
+    realm        :: macula:realm(),
+    announce     :: boolean(),
+    fact_publish :: macula_lifetime_announcer:publish(),
+    request_id   :: binary(),
+    payload      :: term(),
+    user         :: term()
 }).
 
 %% @doc Advertise `Procedure' on `Pool'/`Realm'. Starts a private
@@ -104,14 +128,16 @@ advertise(Pool, Realm, Procedure, Module, Args) ->
 %% plain `advertise/5,6' on a timer would leak one orphaned
 %% supervisor per tick, since each call otherwise starts a fresh one.
 -spec advertise(macula:pool(), macula:realm(), macula:procedure(),
-                module(), term(), map()) -> {ok, pid()} | {error, term()}.
-advertise(Pool, Realm, Procedure, Module, Args, Opts) ->
+                module(), term(), advertise_opts()) -> {ok, pid()} | {error, term()}.
+advertise(Pool, Realm, Procedure, Module, Args, Opts) when is_map(Opts) ->
+    Advertise = arity_5(maps:get(advertise, Opts, fun macula:advertise/5)),
+    FactPublish = arity_4(maps:get(fact_publish, Opts, fun macula:publish/4)),
     Sup = existing_or_new_sup(maps:get(reuse_sup, Opts, undefined)),
     Announce = maps:get(announce, Opts, true),
     Handler = fun(Payload) ->
-        dispatch(Sup, Module, Pool, Realm, Announce, Args, Payload)
+        dispatch(Sup, Module, Pool, Realm, Announce, FactPublish, Args, Payload)
     end,
-    case macula:advertise(Pool, Realm, Procedure, Handler, Opts) of
+    case Advertise(Pool, Realm, Procedure, Handler, without_functions(Opts)) of
         ok -> {ok, Sup};
         {error, Reason} -> {error, Reason}
     end.
@@ -176,14 +202,15 @@ advertise_direct(Pool, Realm, Procedure, Module, Args, Identity) ->
 %% returned the first time) re-sends both the wire frame and the DHT
 %% record without leaking a new supervisor per tick.
 -spec advertise_direct(macula:pool(), macula:realm(), macula:procedure(),
-                       module(), term(), macula_identity:key_pair(), map()) ->
+                       module(), term(), macula_identity:key_pair(), advertise_opts()) ->
     {ok, pid()} | {error, term()}.
-advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) ->
+advertise_direct(Pool, Realm, Procedure, Module, Args, Identity, Opts) when is_map(Opts) ->
+    PublishAdvertisement = arity_5(maps:get(publish_advertisement, Opts,
+                                            fun macula_direct_dial:publish_advertisement/5)),
     case advertise(Pool, Realm, Procedure, Module, Args, Opts) of
         {ok, Sup} ->
             log_publish_result(
-              macula_direct_dial:publish_advertisement(
-                Pool, Realm, Procedure, Identity, Opts),
+              PublishAdvertisement(Pool, Realm, Procedure, Identity, without_functions(Opts)),
               Procedure),
             {ok, Sup};
         {error, _} = Error ->
@@ -205,32 +232,35 @@ log_publish_result({error, Reason}, Procedure) ->
 unadvertise(Pool, Realm, Procedure) ->
     macula:unadvertise(Pool, Realm, Procedure).
 
-dispatch(Sup, Module, Pool, Realm, Announce, Args, Payload) ->
-    case supervisor:start_child(Sup, [Module, Pool, Realm, Announce, Args, Payload]) of
+dispatch(Sup, Module, Pool, Realm, Announce, FactPublish, Args, Payload) ->
+    Child = [Module, Pool, Realm, Announce, FactPublish, Args, Payload],
+    case supervisor:start_child(Sup, Child) of
         {ok, Pid} -> gen_server:call(Pid, run, ?CALL_TIMEOUT);
         {error, Reason} -> {error, Reason}
     end.
 
 %% @private
 -spec start_link(module(), macula:pool(), macula:realm(), boolean(),
-                 term(), term()) -> {ok, pid()} | {error, term()}.
-start_link(Module, Pool, Realm, Announce, InitArgs, Payload) ->
+                 macula_lifetime_announcer:publish(), term(), term()) ->
+    {ok, pid()} | {error, term()}.
+start_link(Module, Pool, Realm, Announce, FactPublish, InitArgs, Payload) ->
     gen_server:start_link(?MODULE,
-        {Module, Pool, Realm, Announce, InitArgs, Payload}, []).
+        {Module, Pool, Realm, Announce, FactPublish, InitArgs, Payload}, []).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 %% @private
-init({Module, Pool, Realm, Announce, InitArgs, Payload}) ->
+init({Module, Pool, Realm, Announce, FactPublish, InitArgs, Payload}) ->
     case Module:init(InitArgs) of
         {ok, UserState} ->
             RequestId = crypto:strong_rand_bytes(16),
-            publish(Announce, Pool, Realm, ?REQUEST_RECEIVED,
+            publish(FactPublish, Announce, Pool, Realm, ?REQUEST_RECEIVED,
                     #{request_id => RequestId}),
             {ok, #rstate{module = Module, pool = Pool, realm = Realm,
-                        announce = Announce, request_id = RequestId,
+                        announce = Announce, fact_publish = FactPublish,
+                        request_id = RequestId,
                         payload = Payload, user = UserState}};
         {stop, Reason} ->
             {stop, Reason}
@@ -265,13 +295,22 @@ maybe_terminate(Module, Reason, User) ->
     end.
 
 publish_replied(#rstate{pool = Pool, realm = Realm, announce = Announce,
-                        request_id = RequestId}, Reply) ->
-    publish(Announce, Pool, Realm, ?REQUEST_REPLIED,
+                        fact_publish = FactPublish, request_id = RequestId}, Reply) ->
+    publish(FactPublish, Announce, Pool, Realm, ?REQUEST_REPLIED,
             outcome_fields(#{request_id => RequestId}, Reply)).
 
 outcome_fields(Base, {ok, _}) -> Base#{outcome => replied};
 outcome_fields(Base, {error, Reason}) -> Base#{outcome => failed, reason => Reason}.
 
-publish(false, _, _, _, _) -> ok;
-publish(true, Pool, Realm, Topic, Payload) ->
-    _ = macula:publish(Pool, Realm, Topic, Payload), ok.
+publish(_FactPublish, false, _, _, _, _) -> ok;
+publish(FactPublish, true, Pool, Realm, Topic, Payload) ->
+    _ = FactPublish(Pool, Realm, Topic, Payload), ok.
+
+%% A function option of the wrong arity is refused with function_clause,
+%% in the caller.
+arity_4(Fun) when is_function(Fun, 4) -> Fun.
+
+arity_5(Fun) when is_function(Fun, 5) -> Fun.
+
+without_functions(Opts) ->
+    maps:without([advertise, publish_advertisement, fact_publish], Opts).

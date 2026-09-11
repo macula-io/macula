@@ -74,6 +74,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it announces its facts with, `macula:publish/4` by default.
   `start_link_direct/8` takes `direct_call`, `macula_direct_dial:call/6` by
   default, and `fact_publish`, and passes its other options to the call.
+- `macula_response:advertise/6` and `advertise_direct/7` take three
+  functions in their options: `advertise`, which advertises the handler,
+  `macula:advertise/5` by default; `publish_advertisement`, which
+  `advertise_direct/7` publishes its DHT record with,
+  `macula_direct_dial:publish_advertisement/5` by default; and
+  `fact_publish`, which each response announces its facts with,
+  `macula:publish/4` by default. The other options go on to those
+  functions without these three.
 
 ### Changed
 

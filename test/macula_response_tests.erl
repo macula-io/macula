@@ -1,5 +1,7 @@
 %%%-------------------------------------------------------------------
-%%% @doc Tests for macula_response.
+%%% @doc Tests for macula_response. Each response advertises, publishes
+%%% its DHT record and announces with functions the test gives it, so no
+%%% test replaces a module.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_response_tests).
@@ -8,6 +10,9 @@
 
 -behaviour(macula_response).
 -export([init/1, handle_request/2]).
+
+-define(REALM, <<0:256>>).
+-define(PROCEDURE, <<"math.add_v1">>).
 
 %%%===================================================================
 %%% Test callback module
@@ -24,40 +29,46 @@ handle_request(bad, State) ->
     {error, invalid_payload, State}.
 
 %%%===================================================================
-%%% Fixtures
+%%% Advertise and publish functions
 %%%===================================================================
 
-setup() ->
-    meck:new(macula, [passthrough]),
-    meck:expect(macula, advertise,
-                fun(_Pool, _Realm, _Proc, Handler, _Opts) ->
-                    persistent_term:put({?MODULE, handler}, Handler), ok
-                end),
-    meck:expect(macula, unadvertise, fun(_Pool, _Realm, _Proc) -> ok end),
-    meck:expect(macula, publish, fun(_Pool, _Realm, _Topic, _Payload) -> ok end),
-    ok.
+%% An advertise function that sends Test the handler and options it gets
+%% and answers Result.
+advertising_to(Test, Result) ->
+    fun(_Pool, _Realm, _Procedure, Handler, Opts) ->
+            Test ! {advertised, Handler, Opts},
+            Result
+    end.
 
-teardown(_) ->
-    persistent_term:erase({?MODULE, handler}),
-    catch persistent_term:erase({?MODULE, advertised_opts}),
-    meck:unload(macula).
+%% A fact publish function that sends Test each fact.
+facts_to(Test) ->
+    fun(_Pool, _Realm, Topic, Payload) ->
+            Test ! {fact, Topic, Payload},
+            ok
+    end.
 
-captured_handler() ->
-    persistent_term:get({?MODULE, handler}).
+functions(Test) ->
+    #{advertise => advertising_to(Test, ok), fact_publish => facts_to(Test)}.
+
+advertise(Opts) ->
+    macula_response:advertise(pool, ?REALM, ?PROCEDURE, ?MODULE, [], Opts).
 
 %%%===================================================================
 %%% Tests
 %%%===================================================================
 
+%% Each test runs in a process of its own.
 response_test_() ->
-    {foreach, fun setup/0, fun teardown/1,
-     [fun replies_and_publishes_lifecycle/0,
-      fun error_reply_is_surfaced/0,
-      fun crash_propagates_to_caller/0,
-      fun advertise_failure_is_surfaced/0,
-      fun advertise_direct_forwards_opts_to_advertise/0,
-      fun reuse_sup_resends_advertise_without_a_new_supervisor/0,
-      fun reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor/0]}.
+    [{spawn, Test}
+     || Test <- [fun replies_and_publishes_lifecycle/0,
+                 fun error_reply_is_surfaced/0,
+                 fun crash_propagates_to_caller/0,
+                 fun advertise_failure_is_surfaced/0,
+                 fun advertise_direct_forwards_opts_to_advertise/0,
+                 fun reuse_sup_resends_advertise_without_a_new_supervisor/0,
+                 fun reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor/0,
+                 fun without_an_advertise_function_it_advertises_through_macula/0,
+                 fun an_advertise_option_that_is_not_an_arity_5_fun_is_refused/0]].
 
 %% A station's wire-level registration for a procedure is tied to the
 %% connection that sent it, and does not survive that connection being
@@ -66,13 +77,11 @@ response_test_() ->
 %% re-advertise call starts a fresh factory supervisor, leaking one per
 %% tick forever.
 reuse_sup_resends_advertise_without_a_new_supervisor() ->
-    {ok, Sup1} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
-                                           ?MODULE, []),
-    {ok, Sup2} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
-                                           ?MODULE, [], #{reuse_sup => Sup1}),
+    {ok, Sup1} = advertise(functions(self())),
+    {ok, Sup2} = advertise((functions(self()))#{reuse_sup => Sup1}),
     ?assertEqual(Sup1, Sup2),
-    ?assertEqual(2, meck:num_calls(macula, advertise,
-                                   [pool, <<0:256>>, <<"math.add_v1">>, '_', '_'])).
+    ?assertMatch({_, #{}}, next_advertised()),
+    ?assertMatch({_, #{reuse_sup := Sup1}}, next_advertised()).
 
 %% Regression test for the noproc-on-first-dispatch bug (found live
 %% 2026-09-01 via hecate-rag): a caller that reuses a `reuse_sup' pid
@@ -85,8 +94,7 @@ reuse_sup_resends_advertise_without_a_new_supervisor() ->
 reuse_sup_with_a_dead_pid_starts_a_fresh_supervisor() ->
     DeadPid = spawn(fun() -> ok end),
     wait_until_dead(DeadPid),
-    {ok, Sup} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
-                                          ?MODULE, [], #{reuse_sup => DeadPid}),
+    {ok, Sup} = advertise((functions(self()))#{reuse_sup => DeadPid}),
     ?assert(is_pid(Sup)),
     ?assertNotEqual(DeadPid, Sup),
     ?assert(erlang:is_process_alive(Sup)).
@@ -97,67 +105,80 @@ wait_until_dead(Pid) ->
 wait_until_dead(_Pid, false) -> ok;
 wait_until_dead(Pid, true) -> timer:sleep(1), wait_until_dead(Pid, erlang:is_process_alive(Pid)).
 
-%% Regression test for a real bug found while auditing `macula_streamer'
-%% for the same pattern (PLAN_PUSH_UPLOAD.md Phase 6 fixed it there;
-%% `macula_response' had the identical bug, unfixed): `advertise_direct/7'
-%% used to call the arity-5 `advertise/5' (which always defaults `Opts' to
-%% `#{}'), silently discarding whatever `announce'/`auth' the caller passed
-%% in `Opts' — a direct-dial-advertised procedure could never override
-%% either, with no error anywhere to say so.
+%% advertise_direct/7 passes its options on to advertise/6, so `announce'
+%% and `auth' apply to a direct-dial advertised procedure too, and both
+%% the advertise and the DHT record publish get the options without the
+%% three function options.
 advertise_direct_forwards_opts_to_advertise() ->
-    meck:expect(macula, advertise,
-                fun(_Pool, _Realm, _Proc, Handler, Opts) ->
-                    persistent_term:put({?MODULE, handler}, Handler),
-                    persistent_term:put({?MODULE, advertised_opts}, Opts),
-                    ok
-                end),
-    meck:new(macula_direct_dial, [passthrough]),
-    meck:expect(macula_direct_dial, publish_advertisement,
-                fun(_Pool, _Realm, _Proc, _Identity, _Opts) -> ok end),
-    Identity = macula_identity:generate(),
-
-    {ok, _Sup} = macula_response:advertise_direct(pool, <<0:256>>, <<"math.add_v1">>,
-                                                   ?MODULE, [], Identity,
-                                                   #{announce => false}),
-    ?assertEqual(#{announce => false}, persistent_term:get({?MODULE, advertised_opts})),
-    meck:unload(macula_direct_dial).
+    Test = self(),
+    PublishAdvertisement = fun(_Pool, _Realm, _Procedure, _Identity, Opts) ->
+                                   Test ! {advertisement_published, Opts},
+                                   ok
+                           end,
+    Opts = (functions(Test))#{announce => false, publish_advertisement => PublishAdvertisement},
+    {ok, _Sup} = macula_response:advertise_direct(pool, ?REALM, ?PROCEDURE, ?MODULE, [],
+                                                  macula_identity:generate(), Opts),
+    {_Handler, Advertised} = next_advertised(),
+    ?assertEqual(#{announce => false}, Advertised),
+    Published = receive
+                    {advertisement_published, PublishedOpts} -> PublishedOpts
+                after 1000 ->
+                    not_published
+                end,
+    ?assertEqual(#{announce => false}, Published).
 
 replies_and_publishes_lifecycle() ->
-    {ok, _Sup} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
-                                            ?MODULE, []),
-    Handler = captured_handler(),
+    {ok, _Sup} = advertise(functions(self())),
+    {Handler, _} = next_advertised(),
     ?assertEqual({ok, #{result => 5}}, Handler(#{a => 2, b => 3})),
-    ?assertEqual([<<"rpc.received_v1">>, <<"rpc.replied_v1">>], topics()).
+    ?assertMatch({fact, <<"rpc.received_v1">>, _}, next_fact()),
+    ?assertMatch({fact, <<"rpc.replied_v1">>, #{outcome := replied}}, next_fact()).
 
 error_reply_is_surfaced() ->
-    {ok, _Sup} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
-                                            ?MODULE, []),
-    Handler = captured_handler(),
+    {ok, _Sup} = advertise(functions(self())),
+    {Handler, _} = next_advertised(),
     ?assertEqual({error, invalid_payload}, Handler(bad)),
-    ?assertMatch(#{outcome := failed, reason := invalid_payload}, replied_payload()).
+    ?assertMatch({fact, <<"rpc.received_v1">>, _}, next_fact()),
+    ?assertMatch({fact, <<"rpc.replied_v1">>, #{outcome := failed, reason := invalid_payload}},
+                 next_fact()).
 
 crash_propagates_to_caller() ->
-    {ok, _Sup} = macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
-                                            ?MODULE, []),
-    Handler = captured_handler(),
+    {ok, _Sup} = advertise(functions(self())),
+    {Handler, _} = next_advertised(),
     ?assertExit(_, Handler(#{boom => true})).
 
 advertise_failure_is_surfaced() ->
-    meck:expect(macula, advertise,
-                fun(_Pool, _Realm, _Proc, _Handler, _Opts) -> {error, no_healthy_link} end),
-    ?assertEqual({error, no_healthy_link},
-                 macula_response:advertise(pool, <<0:256>>, <<"math.add_v1">>,
-                                            ?MODULE, [])).
+    Failing = #{advertise => advertising_to(self(), {error, no_healthy_link}),
+                fact_publish => facts_to(self())},
+    ?assertEqual({error, no_healthy_link}, advertise(Failing)).
+
+%% Without an advertise function the response advertises with
+%% macula:advertise/5, whose guard refuses a pool that is not a process.
+without_an_advertise_function_it_advertises_through_macula() ->
+    Stack = try macula_response:advertise(pool, ?REALM, ?PROCEDURE, ?MODULE, []) of
+                Returned -> {returned, Returned}
+            catch
+                error:function_clause:Trace -> Trace
+            end,
+    ?assertMatch([{macula, advertise, _, _} | _], Stack).
+
+an_advertise_option_that_is_not_an_arity_5_fun_is_refused() ->
+    ?assertError(function_clause, advertise(#{advertise => fun(_Pool) -> ok end})).
 
 %%%===================================================================
 %%% Helpers
 %%%===================================================================
 
-topics() ->
-    [T || {_, {macula, publish, [_Pool, _Realm, T, _Payload]}, ok} <- meck:history(macula)].
+next_advertised() ->
+    receive
+        {advertised, Handler, Opts} -> {Handler, Opts}
+    after 1000 ->
+        error(nothing_advertised)
+    end.
 
-replied_payload() ->
-    [{_, {macula, publish, [_, _, _, Payload]}, ok}] =
-        [E || {_, {macula, publish, [_, _, T, _]}, ok} = E <- meck:history(macula),
-              T =:= <<"rpc.replied_v1">>],
-    Payload.
+next_fact() ->
+    receive
+        {fact, _, _} = Fact -> Fact
+    after 1000 ->
+        no_fact
+    end.
