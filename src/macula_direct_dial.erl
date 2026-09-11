@@ -11,23 +11,37 @@
 %%% `macula_feeder:start_link_direct/5,6' are the entry points.
 %%% Factored out because RPC, streaming, and content-download all need
 %%% the same shape of resolve sequence (`find_records' -> verify -> read
-%%% the record -> build a `quic://' dial URL, retrying past DHT
-%%% propagation lag throughout). Streaming and RPC share the IDENTICAL
-%%% discovery mechanism — a `procedure_advertisement' does not
+%%% the record -> build a `quic://' dial URL). Streaming and RPC share the
+%%% IDENTICAL discovery mechanism — a `procedure_advertisement' does not
 %%% distinguish RPC from streaming, only the eventual dial
 %%% (`call_station/7' vs `call_stream_station/6') does — so
 %%% `publish_advertisement/4,5' is reused as-is by both providers, and
-%%% `call/6'/`call_stream/6' share the same `resolve_dial_url/4' and
+%%% `call/6'/`call_stream/6' share the same candidate resolution and
 %%% "Trust model" below. Content has no publish step here at all — see
 %%% "Content" further down.
 %%%
-%%% The resolve side retries: a record just published on the provider's
-%%% station has not necessarily replicated to the caller's station yet,
-%%% and treating the first miss as failure would make every direct-dial
-%%% call racy against DHT propagation lag. `macula_station_cert_chain_SUITE'
-%%% (macula-station) proved this exact resolve+dial sequence works
-%%% cross-station against the live fleet; this module is that sequence,
-%%% lifted out of the test and made reusable.
+%%% == Resolution ==
+%%%
+%%% Every advertisement that passes trust filtering is a candidate, in the
+%%% order the DHT returns them. A candidate whose `station_endpoint' can't
+%%% be resolved, or whose link doesn't connect (`{error, not_connected}'
+%%% from `call_station/7' or `call_stream_station/6'), is passed over for
+%%% the next one, but only before the request is sent: once a CALL or a
+%%% stream has gone out, its outcome is returned as it is. When no
+%%% candidate qualifies, or every one failed before sending, resolution
+%%% asks the DHT again after a pause that doubles from 100 ms to at most
+%%% 1 s, and tries a candidate that already failed again only when its
+%%% advertisement or its `station_endpoint' record has changed. A record
+%%% just published on the provider's station has not necessarily
+%%% replicated to the caller's station yet, so a miss is not final until
+%%% the deadline. One deadline bounds all of it: each DHT lookup, each
+%%% candidate's endpoint lookup and connect wait (within a share of the
+%%% time that remains, at least one second while that much remains), and
+%%% the request. At the deadline the result is, in this order, the most
+%%% recent candidate's failure, why the latest answered DHT lookup found
+%%% nothing qualifying, the latest failed lookup's error, or
+%%% `{error, {unresolved, timeout}}'. A failed lookup is retried like an empty
+%%% pass, and one the deadline cuts off records nothing.
 %%%
 %%% == Trust model ==
 %%%
@@ -67,13 +81,13 @@
 %%% `put_content/4' has no resolve step at all — unlike a GET, a PUT
 %%% names its OWN target: the caller already knows (or is choosing)
 %%% which station to seed, so it takes `Station' directly and resolves
-%%% only that station's own `station_endpoint' (`resolve_station_endpoint/2',
+%%% only that station's own `station_endpoint' (`resolve_station_endpoint/2,3',
 %%% the same machinery `call/6' uses internally for `serving_station').
 %%%
-%%% `get_content/3' resolves and fetches deliberately WITHOUT the
-%%% cert-chain machinery above — content's threat model genuinely
-%%% differs from RPC's. An RPC reply is opaque and unverifiable except
-%%% by trusting whoever answered, so proving the ADVERTISER is
+%%% `get_content/3' and `fetch_content/4' resolve and fetch deliberately
+%%% WITHOUT the cert-chain machinery above — content's threat model
+%%% genuinely differs from RPC's. An RPC reply is opaque and unverifiable
+%%% except by trusting whoever answered, so proving the ADVERTISER is
 %%% authorized matters. Content is content-addressed, and the fetched
 %%% bytes are checked against the MCID client-side regardless of which
 %%% peer served them. Single-block content is re-hashed against the MCID
@@ -84,27 +98,43 @@
 %%% bytes are checked against its size and root hash
 %%% (`macula_manifest:verify/2'). A rogue or unauthorized announcer can at
 %%% most refuse to serve or waste a dial; it cannot make a caller accept
-%%% content that does not match the MCID it asked for. What still
-%%% matters, and is still mandatory, is (1)'s analogue for
+%%% content that does not match the MCID it asked for. The same holds for
+%%% trying the next provider after a fetch that fails, so every announced
+%%% provider is a candidate the way advertisements are for calls. What
+%%% still matters, and is still mandatory, is (1)'s analogue for
 %%% `content_announcement': the signer must equal the `announcer_node'
-%%% it claims (checked by `macula:find_content_providers/2'), so an
-%%% attacker cannot at least misattribute who is claiming to serve what.
+%%% it claims (the check `macula:find_content_providers/2' makes too), so
+%%% an attacker cannot at least misattribute who is claiming to serve what.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_direct_dial).
 
 -export([call/5, call/6, call_stream/5, call_stream/6,
         publish_advertisement/4, publish_advertisement/5,
-        get_content/3, resolve_content_provider/2,
-        put_content/4, resolve_station_endpoint/2]).
+        get_content/3, fetch_content/4, resolve_content_provider/2,
+        put_content/4, resolve_station_endpoint/2, resolve_station_endpoint/3]).
 
 -ifdef(TEST).
 %% Exports for unit tests — pure helpers that are otherwise private.
 -export([advertisement_trusted/2, adv_opts/1]).
 -endif.
 
--define(RESOLVE_RETRIES, 50).
--define(RESOLVE_RETRY_MS, 100).
+%% The first pause between passes over the DHT; it doubles up to
+%% ?MAX_RETRY_MS. The retry within one candidate's endpoint lookup stays at
+%% ?RETRY_MS.
+-define(RETRY_MS, 100).
+-define(MAX_RETRY_MS, 1_000).
+%% The least time one candidate gets for its endpoint lookup and connect
+%% wait, while that much of the deadline remains.
+-define(MIN_CANDIDATE_SHARE_MS, 1_000).
+%% One DHT lookup's own timeout when more time remains (`macula''s
+%% ?DHT_RECORD_TIMEOUT_MS).
+-define(LOOKUP_TIMEOUT_MS, 5_000).
+%% `resolve_station_endpoint/2''s budget.
+-define(DEFAULT_RESOLVE_TIMEOUT_MS, 10_000).
+%% `call_stream/6''s budget without `dial_timeout_ms', matching
+%% `macula:call_stream_station/6''s own default.
+-define(DEFAULT_DIAL_TIMEOUT_MS, 10_000).
 
 %% @doc As `call/6' with no cert-chain verification.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
@@ -115,26 +145,21 @@ call(Pool, Realm, Procedure, Payload, TimeoutMs) ->
 %% @doc Resolve `Procedure''s provider and call it there directly. Same
 %% return shape as `macula:call/5'; resolve failures surface as
 %% `{error, {unresolved, Reason}}' so a caller can tell "nobody has
-%% advertised this via direct-dial yet" apart from a real call failure.
-%% `Opts' may include `verify_cert_chain => {RealmCaPem, Org}' — see
-%% the module doc's "Trust model" section.
+%% advertised this via direct-dial yet" apart from a real call failure;
+%% once a candidate has failed before the CALL was sent, the most recent
+%% candidate's failure is the result instead, such as
+%% `{error, not_connected}'.
+%% `TimeoutMs' bounds resolution, each candidate's connect wait and the
+%% CALL itself (see "Resolution" in the module doc). `Opts' may include
+%% `verify_cert_chain => {RealmCaPem, Org}' — see the module doc's "Trust
+%% model" section.
 -spec call(macula:pool(), macula:realm(), macula:procedure(), term(),
           pos_integer(), map()) -> {ok, term()} | {error, term()}.
 call(Pool, Realm, Procedure, Payload, TimeoutMs, Opts) ->
-    case resolve_dial_url(Pool, Realm, Procedure, Opts) of
-        {ok, {Station, DialUrl}} ->
-            %% See the module doc's "Trust model" section: trust is
-            %% pinned to the exact pubkey the signed DHT chain resolved,
-            %% but enforced at the application layer, not the TLS
-            %% layer — a production station's TLS certificate has no
-            %% relationship to its macula identity.
-            macula:call_station(Pool, DialUrl, Realm, Procedure, Payload,
-                                TimeoutMs, #{expected_node_id => Station,
-                                             pin_tls_cert => false,
-                                             verify => none});
-        {error, Reason} ->
-            {error, {unresolved, Reason}}
-    end.
+    Deadline = deadline(TimeoutMs),
+    each_candidate(advertised_stations(Pool, Realm, Procedure, Opts),
+                   station_try(Pool, call_work(Pool, Realm, Procedure, Payload, Deadline)),
+                   Deadline).
 
 %% @doc As `call_stream/6' with no cert-chain verification.
 -spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
@@ -146,20 +171,17 @@ call_stream(Pool, Realm, Procedure, Args, StreamOpts) ->
 %% shape) instead of making a single-reply call, built on the exact
 %% same resolve+trust machinery — see the module doc. `StreamOpts' is
 %% forwarded to `call_stream_station/6' alongside the resolved trust
-%% override (`mode', `owner', `dial_timeout_ms', etc); `Opts' is the
-%% resolve-side `verify_cert_chain' opt, same as `call/6'.
+%% override (`mode', `owner', etc); its `dial_timeout_ms' (default
+%% 10_000) bounds resolution and each candidate's connect wait, and the
+%% stream itself keeps its own deadline. `Opts' is the resolve-side
+%% `verify_cert_chain' opt, same as `call/6'.
 -spec call_stream(macula:pool(), macula:realm(), macula:procedure(), term(),
                   map(), map()) -> {ok, macula:stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, StreamOpts, Opts) ->
-    case resolve_dial_url(Pool, Realm, Procedure, Opts) of
-        {ok, {Station, DialUrl}} ->
-            macula:call_stream_station(Pool, DialUrl, Realm, Procedure, Args,
-                                       StreamOpts#{expected_node_id => Station,
-                                                   pin_tls_cert => false,
-                                                   verify => none});
-        {error, Reason} ->
-            {error, {unresolved, Reason}}
-    end.
+    Deadline = deadline(maps:get(dial_timeout_ms, StreamOpts, ?DEFAULT_DIAL_TIMEOUT_MS)),
+    each_candidate(advertised_stations(Pool, Realm, Procedure, Opts),
+                   station_try(Pool, stream_work(Pool, Realm, Procedure, Args, StreamOpts)),
+                   Deadline).
 
 %% @doc As `publish_advertisement/5' with no cert chain embedded.
 -spec publish_advertisement(macula:pool(), macula:realm(), macula:procedure(),
@@ -228,107 +250,209 @@ connected_station(Links) ->
         [] -> {error, no_healthy_link}
     end.
 
-%% @doc Resolve `MCID''s provider via its signed `content_announcement'
-%% and fetch it there directly, retrying past DHT propagation lag the
-%% same way `call/6' does for procedures. Same return shape as
-%% `macula:get_content/2'; resolve failures surface as
-%% `{error, {unresolved, Reason}}'. `TimeoutMs' bounds only the QUIC
-%% handshake if a fresh link must be dialed
-%% (`macula:get_content_station/5') — the underlying block/manifest
-%% transfer has its own internal timeouts. See the module doc's
-%% "Content" section for why this has no `verify_cert_chain'-equivalent
-%% opt, unlike `call/6'. Only chunked content is discoverable this way
-%% — see `macula:find_content_providers/2'.
+%% @doc Fetch `MCID' from one of its providers, resolved via their signed
+%% `content_announcement's, and dialed directly. Same return shape as
+%% `macula:get_content/2'; resolve failures surface as `{error,
+%% {unresolved, Reason}}', and once a provider's fetch has failed, the
+%% most recent failure is the result instead. `TimeoutMs' bounds the whole
+%% fetch: lookups, each provider's connect wait and the transfers. See
+%% `fetch_content/4' for how providers are chosen, and the module doc's
+%% "Content" section
+%% for why this has no `verify_cert_chain'-equivalent opt, unlike
+%% `call/6'. Only chunked content is discoverable this way — see
+%% `macula:find_content_providers/2'.
 -spec get_content(macula:pool(), macula:mcid(), pos_integer()) ->
     {ok, binary()} | {error, term()}.
-get_content(Pool, MCID, TimeoutMs) ->
-    case resolve_content_provider(Pool, MCID) of
-        {ok, #{announcer_node := Node, endpoint := Endpoint}} ->
-            macula:get_content_station(Pool, Endpoint, MCID, TimeoutMs,
-                                       #{expected_node_id => Node,
-                                         pin_tls_cert => false,
-                                         verify => none});
-        {error, Reason} ->
-            {error, {unresolved, Reason}}
-    end.
+get_content(Pool, <<1, Codec, _/binary>> = MCID, TimeoutMs)
+  when Codec =:= 16#55; Codec =:= 16#56 ->
+    fetch_content(Pool, MCID, TimeoutMs, transfer_fetch(Pool, MCID));
+get_content(_Pool, _MCID, _TimeoutMs) ->
+    {error, invalid_mcid}.
 
-%% @doc Resolve `MCID''s provider via a signed `content_announcement',
-%% retrying past a not-yet-replicated announcement. Returns the first
-%% candidate `macula:find_content_providers/2' finds — that function
-%% already discards unsigned or signer-mismatched announcements before
-%% this ever sees them.
+%% @doc Fetch `MCID' from the first of its announced providers whose fetch
+%% succeeds, within `TimeoutMs', by the rules `call/6' resolves by (see
+%% "Resolution" in the module doc): a provider whose fetch fails, including
+%% one whose bytes don't verify against `MCID', is passed over for the
+%% next, and one that failed is tried again only when its announcement has
+%% changed. `Fetch(Endpoint, Pinned, ConnectMs, RemainingMs)' runs one
+%% fetch: `Pinned' is the dial trust override that pins the announcer,
+%% `ConnectMs' the time that provider gets to connect, `RemainingMs' what
+%% remains of the deadline; it returns `{ok, Bytes}' or `{error, Reason}'.
+%% `macula_download' supplies its own, so a cancel reaches whichever
+%% transfer is running.
+-spec fetch_content(macula:pool(), macula:mcid(), pos_integer(),
+                    fun((binary(), map(), pos_integer(), pos_integer()) ->
+                            {ok, binary()} | {error, term()})) ->
+    {ok, binary()} | {error, term()}.
+fetch_content(Pool, MCID, TimeoutMs, Fetch) ->
+    Deadline = deadline(TimeoutMs),
+    each_candidate(content_providers(Pool, MCID), provider_try(Fetch, Deadline),
+                   Deadline).
+
+%% @doc Resolve `MCID''s provider via its signed `content_announcement',
+%% asking the DHT again past a not-yet-replicated announcement for up to
+%% 10 seconds. Returns the announcement of the first provider that
+%% qualifies, `{error, content_not_announced}' when none has by then, or
+%% the last lookup's own error when that lookup failed. Deprecated: removed
+%% in 11.0.0. Use `fetch_content/4', which also moves on to the next
+%% provider when a fetch fails.
 -spec resolve_content_provider(macula:pool(), macula:mcid()) ->
     {ok, map()} | {error, term()}.
 resolve_content_provider(Pool, MCID) ->
-    resolve_content_provider(Pool, MCID, ?RESOLVE_RETRIES).
+    bare_error(each_candidate(content_providers(Pool, MCID),
+                              fun(#{announcement := Announcement}, _Share, _Seen) ->
+                                  {done, {ok, Announcement}}
+                              end,
+                              deadline(?DEFAULT_RESOLVE_TIMEOUT_MS))).
 
-resolve_content_provider(_Pool, _MCID, 0) ->
-    {error, content_not_announced};
-resolve_content_provider(Pool, MCID, N) ->
-    on_providers_found(macula:find_content_providers(Pool, MCID), Pool, MCID, N).
-
-on_providers_found({ok, [Provider | _]}, _Pool, _MCID, _N) ->
-    {ok, Provider};
-on_providers_found({ok, []}, Pool, MCID, N) ->
-    timer:sleep(?RESOLVE_RETRY_MS),
-    resolve_content_provider(Pool, MCID, N - 1);
-on_providers_found({error, _} = Error, _Pool, _MCID, _N) ->
-    Error.
+bare_error({ok, _} = Resolved) -> Resolved;
+bare_error(Error) -> bare_reason(Error).
 
 %% @doc Resolve `Station''s dialable `quic://' URL from its own signed
 %% `station_endpoint' record and put `Bytes' there directly. Same
 %% return shape as `macula:put_content/2'; resolve failures surface as
-%% `{error, {unresolved, Reason}}'. `TimeoutMs' bounds only the QUIC
-%% handshake if a fresh link must be dialed
-%% (`macula:put_content_station/5') — the underlying block/manifest
-%% transfer has its own internal timeouts.
+%% `{error, {unresolved, Reason}}'. `TimeoutMs' bounds the endpoint
+%% lookup and the connect wait (`macula:put_content_station/5'); the
+%% underlying block/manifest transfer has its own internal timeouts.
 -spec put_content(macula:pool(), macula_identity:pubkey(), binary(),
                   pos_integer()) -> {ok, macula:mcid()} | {error, term()}.
 put_content(Pool, Station, Bytes, TimeoutMs) ->
-    case resolve_station_endpoint(Pool, Station) of
-        {ok, DialUrl} ->
-            macula:put_content_station(Pool, DialUrl, Bytes, TimeoutMs,
-                                       #{expected_node_id => Station,
-                                         pin_tls_cert => false,
-                                         verify => none});
-        {error, Reason} ->
-            {error, {unresolved, Reason}}
-    end.
+    Deadline = deadline(TimeoutMs),
+    put_at(station_endpoint(Pool, Station, Deadline), Pool, Bytes, Deadline).
 
-%% @doc Resolve `Station''s dialable `quic://' URL from its own signed
-%% `station_endpoint' record, verifying the record's signer is exactly
-%% `Station' and retrying past a stale/expired replica — the same
-%% discipline `call/6' applies internally once it has resolved a
-%% procedure's `serving_station'.
+put_at({found, {ok, {Station, DialUrl}}, _Version}, Pool, Bytes, Deadline) ->
+    macula:put_content_station(Pool, DialUrl, Bytes, budget(Deadline),
+                               pinned(Station));
+put_at(Lookup, _Pool, _Bytes, _Deadline) ->
+    lookup_error(Lookup).
+
+%% @doc As `resolve_station_endpoint/3', within 10 seconds.
 -spec resolve_station_endpoint(macula:pool(), macula_identity:pubkey()) ->
     {ok, binary()} | {error, term()}.
 resolve_station_endpoint(Pool, Station) ->
-    case resolve_endpoint(Pool, Station) of
-        {ok, {Station, DialUrl}} -> {ok, DialUrl};
-        {error, _} = Error -> Error
-    end.
+    resolve_station_endpoint(Pool, Station, ?DEFAULT_RESOLVE_TIMEOUT_MS).
+
+%% @doc Resolve `Station''s dialable `quic://' URL from its own signed
+%% `station_endpoint' record, verifying the record's signer is exactly
+%% `Station' and asking again past an absent, expired or malformed record,
+%% or a failed lookup, until `TimeoutMs' has passed — the same discipline
+%% `call/6' applies once it has a procedure's `serving_station'. The error
+%% is, in this order, `station_endpoint_not_found' (or the malformed record's
+%% reason) when a lookup answered, a failed lookup's own reason, or
+%% `timeout'.
+-spec resolve_station_endpoint(macula:pool(), macula_identity:pubkey(),
+                               pos_integer()) ->
+    {ok, binary()} | {error, term()}.
+resolve_station_endpoint(Pool, Station, TimeoutMs) ->
+    dial_url(station_endpoint(Pool, Station, deadline(TimeoutMs))).
+
+dial_url({found, {ok, {_Station, DialUrl}}, _Version}) -> {ok, DialUrl};
+dial_url(Lookup) -> bare_reason(lookup_error(Lookup)).
+
+bare_reason({error, {unresolved, Reason}}) -> {error, Reason}.
 
 %%%===================================================================
 %%% Internal
 %%%===================================================================
 
-resolve_dial_url(Pool, Realm, Procedure, Opts) ->
-    Uri = discovery_uri(Realm, Procedure),
-    Key = macula_record:procedure_key(Uri),
-    case find_records_retry(Pool, Key, ?RESOLVE_RETRIES) of
-        {ok, [_ | _] = Recs} ->
-            resolve_station(Pool, trusted_advertisements(Recs, Opts));
-        {ok, []} -> {error, procedure_not_advertised};
-        {error, _} = Error -> Error
+%% Works through candidates until one settles the request or `Deadline'
+%% passes. `Find(Deadline)' returns one pass's `{ok, Candidates}',
+%% `{answered, Error}' when the DHT answered but nothing qualifies, or
+%% `{failed, Error}' when the lookup itself failed. `Try(Candidate, Share,
+%% Seen)' works one candidate within the `Share' deadline and returns
+%% `{done, Result}' once the request is settled, or `{next, Error, Seen}'
+%% when nothing was sent. `Seen' carries what each candidate failed on from
+%% one pass to the next. At the deadline the result is, in this order, the
+%% most recent candidate failure, why the latest answered lookup found nothing
+%% qualifying, the latest failed lookup's error, or a timeout.
+each_candidate(Find, Try, Deadline) ->
+    pass(Find, Try, Deadline, #{}, ?RETRY_MS, {timeout, {error, {unresolved, timeout}}}).
+
+pass(Find, Try, Deadline, Seen, Delay, Last) ->
+    pass_in_time(remaining(Deadline) > 0, Find, Try, Deadline, Seen, Delay, Last).
+
+pass_in_time(false, _Find, _Try, _Deadline, _Seen, _Delay, {_Kind, Error}) ->
+    Error;
+pass_in_time(true, Find, Try, Deadline, Seen, Delay, Last) ->
+    after_pass(candidates(Find(Deadline), Try, Deadline, Seen, Last),
+               Find, Try, Deadline, Delay).
+
+after_pass({done, Result}, _Find, _Try, _Deadline, _Delay) ->
+    Result;
+after_pass({next, Last, Seen}, Find, Try, Deadline, Delay) ->
+    pause(Deadline, Delay),
+    pass(Find, Try, Deadline, Seen, min(2 * Delay, ?MAX_RETRY_MS), Last).
+
+candidates({ok, Candidates}, Try, Deadline, Seen, Last) ->
+    each(Candidates, length(Candidates), Try, Deadline, Seen, Last);
+candidates(NoCandidate, _Try, Deadline, Seen, Last) ->
+    {next, recorded(Last, NoCandidate, remaining(Deadline) > 0), Seen}.
+
+%% What a pass that found no candidate leaves as the result: nothing replaces
+%% a candidate's failure, an answered lookup replaces anything else, a failed
+%% lookup replaces only a timeout or an earlier failed lookup, and a failed
+%% lookup that returned with no time left was cut off and records nothing.
+recorded({candidate, _} = Last, _Pass, _InTime) -> Last;
+recorded(_Last, {answered, _} = Answered, _InTime) -> Answered;
+recorded(Last, {failed, _}, false) -> Last;
+recorded({answered, _} = Last, {failed, _}, true) -> Last;
+recorded(_Last, {failed, _} = Failed, true) -> Failed.
+
+each([], _Untried, _Try, _Deadline, Seen, Last) ->
+    {next, Last, Seen};
+each([Candidate | Rest], Untried, Try, Deadline, Seen, Last) ->
+    each_in_time(remaining(Deadline) > 0, Candidate, Rest, Untried, Try,
+                 Deadline, Seen, Last).
+
+each_in_time(false, _Candidate, _Rest, _Untried, _Try, _Deadline, Seen, Last) ->
+    {next, Last, Seen};
+each_in_time(true, Candidate, Rest, Untried, Try, Deadline, Seen, _Last) ->
+    tried(Try(Candidate, share(Deadline, Untried), Seen), Rest, Untried - 1,
+          Try, Deadline).
+
+tried({done, _Result} = Done, _Rest, _Untried, _Try, _Deadline) ->
+    Done;
+tried({next, Error, Seen}, Rest, Untried, Try, Deadline) ->
+    each(Rest, Untried, Try, Deadline, Seen, {candidate, Error}).
+
+%% One pass over `Procedure''s advertisements.
+advertised_stations(Pool, Realm, Procedure, Opts) ->
+    Key = macula_record:procedure_key(discovery_uri(Realm, Procedure)),
+    fun(Deadline) ->
+        qualifying_stations(macula:find_records(Pool, Key, lookup_timeout(Deadline)),
+                            Opts)
+    end.
+
+qualifying_stations({ok, []}, _Opts) ->
+    {answered, {error, {unresolved, procedure_not_advertised}}};
+qualifying_stations({ok, Recs}, Opts) ->
+    candidates_or(trusted_stations(Recs, Opts), no_trusted_advertisement);
+qualifying_stations({error, Reason}, _Opts) ->
+    {failed, {error, {unresolved, Reason}}}.
+
+candidates_or([], Reason) -> {answered, {error, {unresolved, Reason}}};
+candidates_or(Candidates, _Reason) -> {ok, Candidates}.
+
+%% Every advertisement that passes trust filtering, in the order given, as a
+%% candidate: the provider that signed it, its record's version, and the
+%% station it names.
+trusted_stations(Recs, Opts) ->
+    [#{provider => Key, version => Version, station => Station}
+     || #{key := Key, version := Version} = Rec <- Recs,
+        advertisement_trusted(Rec, Opts),
+        Station <- serving_station(Rec)].
+
+serving_station(Rec) ->
+    try macula_record:read_procedure_advertisement(Rec) of
+        #{serving_station := Station} when is_binary(Station) -> [Station];
+        _Unreadable -> []
+    catch _:_ -> []
     end.
 
 %% Only a record that passes trust filtering is a candidate at all —
 %% see the module doc's "Trust model" section. Base signature check is
 %% mandatory; `verify_cert_chain' additionally requires the embedded
 %% X.509 chain when the caller opted in.
-trusted_advertisements(Recs, Opts) ->
-    [Rec || Rec <- Recs, advertisement_trusted(Rec, Opts)].
-
 advertisement_trusted(Rec, #{verify_cert_chain := {RealmCaPem, Org}}) ->
     ok =:= macula_record:verify_advertisement_cert_chain(RealmCaPem, Rec, Org);
 advertisement_trusted(Rec, _Opts) ->
@@ -337,42 +461,151 @@ advertisement_trusted(Rec, _Opts) ->
 signature_ok({ok, _})    -> true;
 signature_ok({error, _}) -> false.
 
-resolve_station(_Pool, []) ->
-    {error, no_trusted_advertisement};
-resolve_station(Pool, [Rec | Rest]) ->
-    case macula_record:read_procedure_advertisement(Rec) of
-        #{serving_station := Station} ->
-            resolve_endpoint(Pool, Station);
-        _ ->
-            resolve_station(Pool, Rest)
+%% Sends the CALL to one resolved station. `not_connected' means the link
+%% never came up within the candidate's share, so nothing was sent and the
+%% next candidate may be tried; any other outcome means the CALL went out.
+call_work(Pool, Realm, Procedure, Payload, Deadline) ->
+    fun(Station, DialUrl, Share) ->
+        sent_or_not(macula:call_station(Pool, DialUrl, Realm, Procedure, Payload,
+                                        budget(Deadline),
+                                        (pinned(Station))#{dial_timeout_ms => budget(Share)}))
     end.
 
-%% Retries past a resolved-but-stale record, not just an absent one:
-%% the DHT can hand back a replica that hasn't been evicted or
-%% refreshed yet even though the station's own current publish is
-%% live, and giving up on the first stale hit would make an otherwise
-%% healthy station unreachable via direct-dial until that one replica
-%% happens to age out on its own.
-resolve_endpoint(Pool, Station) ->
-    resolve_endpoint(Pool, Station, ?RESOLVE_RETRIES).
+%% Opens the stream at one resolved station, on the same terms as `call_work/5'.
+stream_work(Pool, Realm, Procedure, Args, StreamOpts) ->
+    fun(Station, DialUrl, Share) ->
+        sent_or_not(macula:call_stream_station(Pool, DialUrl, Realm, Procedure, Args,
+                                               maps:merge(StreamOpts, (pinned(Station))#{
+                                                   dial_timeout_ms => budget(Share)})))
+    end.
 
-resolve_endpoint(_Pool, _Station, 0) ->
-    {error, station_endpoint_not_found};
-resolve_endpoint(Pool, Station, N) ->
+sent_or_not({error, not_connected} = NotSent) -> {not_sent, NotSent};
+sent_or_not(Sent) -> {sent, Sent}.
+
+station_try(Pool, Work) ->
+    fun(Candidate, Share, Seen) -> reach(Pool, Candidate, Share, Seen, Work) end.
+
+%% Resolves a candidate's station endpoint within `Share' and hands it to
+%% `Work', unless the candidate already failed on the same advertisement:
+%% then one lookup tells whether its endpoint record has changed, and only a
+%% change is worth another dial. A lookup that itself fails teaches nothing.
+reach(Pool, #{provider := Key, version := Version, station := Station}, Share, Seen,
+      Work) ->
+    reach_known(maps:find(Key, Seen), Pool, Key, Version, Station, Share, Seen, Work).
+
+reach_known({ok, #{record := Version} = Prior}, Pool, Key, Version, Station, Share,
+            Seen, Work) ->
+    unless_unchanged(lookup_endpoint(Pool, Station, Share), Prior, Key, Version,
+                     Share, Seen, Work);
+reach_known(_NewOrChanged, Pool, Key, Version, Station, Share, Seen, Work) ->
+    attempt(station_endpoint(Pool, Station, Share), Key, Version, Share, Seen, Work).
+
+unless_unchanged({failed, _Error}, #{error := Error}, _Key, _Version, _Share, Seen,
+                 _Work) ->
+    {next, Error, Seen};
+unless_unchanged(Lookup, #{endpoint := Endpoint, error := Error}, Key, Version,
+                 Share, Seen, Work) ->
+    changed_or_not(endpoint_version(Lookup) =:= Endpoint, Lookup, Error, Key, Version,
+                   Share, Seen, Work).
+
+changed_or_not(true, _Lookup, Error, _Key, _Version, _Share, Seen, _Work) ->
+    {next, Error, Seen};
+changed_or_not(false, Lookup, _Error, Key, Version, Share, Seen, Work) ->
+    attempt(Lookup, Key, Version, Share, Seen, Work).
+
+endpoint_version({found, _Result, EndpointVersion}) -> EndpointVersion;
+endpoint_version({absent, _Error}) -> none.
+
+attempt({found, {ok, {Station, DialUrl}}, EndpointVersion}, Key, Version, Share, Seen,
+        Work) ->
+    worked(Work(Station, DialUrl, Share), Key, Version, EndpointVersion, Seen);
+attempt({found, {error, expired}, EndpointVersion}, Key, Version, _Share, Seen,
+        _Work) ->
+    failed(Key, Version, EndpointVersion,
+           {error, {unresolved, station_endpoint_not_found}}, Seen);
+attempt({found, {error, _} = Error, EndpointVersion}, Key, Version, _Share, Seen,
+        _Work) ->
+    failed(Key, Version, EndpointVersion, Error, Seen);
+attempt({absent, Error}, Key, Version, _Share, Seen, _Work) ->
+    failed(Key, Version, none, Error, Seen);
+attempt({failed, Error}, Key, Version, _Share, Seen, _Work) ->
+    failed(Key, Version, none, Error, Seen).
+
+worked({sent, Result}, _Key, _Version, _EndpointVersion, _Seen) ->
+    {done, Result};
+worked({not_sent, Error}, Key, Version, EndpointVersion, Seen) ->
+    failed(Key, Version, EndpointVersion, Error, Seen).
+
+%% Remembers what a candidate failed on: its own record's version, its
+%% station's endpoint record version (`none' when there was none), and the
+%% error it failed with.
+failed(Key, Version, EndpointVersion, Error, Seen) ->
+    {next, Error, Seen#{Key => #{record => Version, endpoint => EndpointVersion,
+                                 error => Error}}}.
+
+%% One read of `Station''s own `station_endpoint' record: `{found, Result,
+%% Version}' when there is a record, with `Result' `{ok, {Station, DialUrl}}',
+%% `{error, expired}' or another `{error, {unresolved, Reason}}';
+%% `{absent, Error}' when there is none; `{failed, Error}' when the lookup
+%% itself failed.
+lookup_endpoint(Pool, Station, Deadline) ->
     Key = macula_record:station_endpoint_key(Station),
-    on_endpoint_fetch(find_record_retry(Pool, Key, 1), Pool, Station, N).
+    endpoint_lookup(macula:find_record(Pool, Key, lookup_timeout(Deadline)), Station).
 
-on_endpoint_fetch({ok, EpRec}, Pool, Station, N) ->
-    on_endpoint_verified(verify_and_build(Station, EpRec), Pool, Station, N);
-on_endpoint_fetch({error, not_found}, Pool, Station, N) ->
-    timer:sleep(?RESOLVE_RETRY_MS),
-    resolve_endpoint(Pool, Station, N - 1).
+endpoint_lookup({ok, #{version := Version} = Rec}, Station) ->
+    {found, endpoint_result(verify_and_build(Station, Rec)), Version};
+endpoint_lookup({error, not_found}, _Station) ->
+    {absent, {error, {unresolved, station_endpoint_not_found}}};
+endpoint_lookup({error, Reason}, _Station) ->
+    {failed, {error, {unresolved, Reason}}}.
 
-on_endpoint_verified({ok, _} = Ok, _Pool, _Station, _N) -> Ok;
-on_endpoint_verified({error, expired}, Pool, Station, N) ->
-    timer:sleep(?RESOLVE_RETRY_MS),
-    resolve_endpoint(Pool, Station, N - 1);
-on_endpoint_verified({error, _} = Error, _Pool, _Station, _N) -> Error.
+endpoint_result({ok, _} = Ok) -> Ok;
+endpoint_result({error, expired} = Expired) -> Expired;
+endpoint_result({error, Reason}) -> {error, {unresolved, Reason}}.
+
+%% `lookup_endpoint/3', asked again until `Deadline' past a lookup that found
+%% no usable record (absent, expired or malformed) or that failed. A record
+%% that doesn't verify ends the lookup. When no lookup found a usable record,
+%% the result is, in this order, the latest lookup that answered with none,
+%% the latest failed lookup, or a timeout; a failed lookup that returned with
+%% no time left was cut off and records nothing.
+station_endpoint(Pool, Station, Deadline) ->
+    endpoint_lookups(Pool, Station, Deadline, {failed, {error, {unresolved, timeout}}}).
+
+endpoint_lookups(Pool, Station, Deadline, Best) ->
+    endpoint_or_again(lookup_endpoint(Pool, Station, Deadline), Pool, Station, Deadline,
+                      Best).
+
+endpoint_or_again({found, {ok, _}, _Version} = Found, _Pool, _Station, _Deadline, _Best) ->
+    Found;
+endpoint_or_again({found, {error, {unresolved, Reason}}, _Version} = Untrusted, _Pool,
+                  _Station, _Deadline, _Best)
+  when Reason =/= malformed_station_endpoint ->
+    Untrusted;
+endpoint_or_again(Lookup, Pool, Station, Deadline, Best) ->
+    Recorded = endpoint_recorded(Best, Lookup, remaining(Deadline) > 0),
+    pause(Deadline, ?RETRY_MS),
+    endpoint_in_time(remaining(Deadline) > 0, Recorded, Pool, Station, Deadline).
+
+endpoint_in_time(true, Best, Pool, Station, Deadline) ->
+    endpoint_lookups(Pool, Station, Deadline, Best);
+endpoint_in_time(false, Best, _Pool, _Station, _Deadline) ->
+    Best.
+
+%% An answered lookup that found no usable record replaces anything; a failed
+%% lookup replaces only a timeout or an earlier failed lookup, and records
+%% nothing when it returned with no time left.
+endpoint_recorded(_Best, {absent, _} = Answered, _InTime) -> Answered;
+endpoint_recorded(_Best, {found, {error, _}, _Version} = Answered, _InTime) -> Answered;
+endpoint_recorded(Best, {failed, _}, false) -> Best;
+endpoint_recorded({failed, _}, {failed, _} = Failed, true) -> Failed;
+endpoint_recorded(Best, {failed, _}, true) -> Best.
+
+lookup_error({found, {error, expired}, _Version}) ->
+    {error, {unresolved, station_endpoint_not_found}};
+lookup_error({found, {error, _} = Error, _Version}) -> Error;
+lookup_error({absent, Error}) -> Error;
+lookup_error({failed, Error}) -> Error.
 
 %% The `station_endpoint' record for `Station' must be SIGNED BY
 %% `Station' itself (macula_station_announcer publishes it self-signed
@@ -380,7 +613,7 @@ on_endpoint_verified({error, _} = Error, _Pool, _Station, _N) -> Error.
 %% signature AND that the signer is exactly `Station', not just any
 %% valid signature, is what makes pinning `expected_node_id => Station'
 %% on the dial meaningful: without it, a record merely stored under the
-%% right DHT key (but signed, or not, by someone else) would still be
+%% right key (but signed, or not, by someone else) would still be
 %% trusted, and per-call pinning would authenticate the wrong thing.
 verify_and_build(Station, #{key := Station} = EpRec) ->
     case macula_record:verify(EpRec) of
@@ -399,23 +632,99 @@ build_dial_url(Station, EpRec) ->
             {error, malformed_station_endpoint}
     end.
 
-find_records_retry(_Pool, _Key, 0) -> {ok, []};
-find_records_retry(Pool, Key, N) ->
-    on_find_records(macula:find_records(Pool, Key), Pool, Key, N).
+%% One pass over `MCID''s content announcements.
+content_providers(Pool, MCID) ->
+    Key = macula_record:content_key(MCID),
+    fun(Deadline) ->
+        qualifying_providers(macula:find_records(Pool, Key, lookup_timeout(Deadline)))
+    end.
 
-on_find_records({ok, [_ | _] = Recs}, _Pool, _Key, _N) -> {ok, Recs};
-on_find_records(_Other, Pool, Key, N) ->
-    timer:sleep(?RESOLVE_RETRY_MS),
-    find_records_retry(Pool, Key, N - 1).
+qualifying_providers({ok, Recs}) ->
+    candidates_or(lists:flatmap(fun trusted_provider/1, Recs), content_not_announced);
+qualifying_providers({error, Reason}) ->
+    {failed, {error, {unresolved, Reason}}}.
 
-find_record_retry(_Pool, _Key, 0) -> {error, not_found};
-find_record_retry(Pool, Key, N) ->
-    on_find_record(macula:find_record(Pool, Key), Pool, Key, N).
+%% A `content_announcement' qualifies when its own signature verifies and
+%% its signer is the `announcer_node' it claims, keeping the record's
+%% version.
+trusted_provider(#{key := Key, version := Version} = Rec) ->
+    announced(macula_record:verify(Rec), read_announcement(Rec), Key, Version);
+trusted_provider(_Rec) ->
+    [].
 
-on_find_record({ok, Rec}, _Pool, _Key, _N) -> {ok, Rec};
-on_find_record(_Other, Pool, Key, N) ->
-    timer:sleep(?RESOLVE_RETRY_MS),
-    find_record_retry(Pool, Key, N - 1).
+announced({ok, _}, #{announcer_node := Key, endpoint := Endpoint} = Announcement, Key,
+          Version)
+  when is_binary(Endpoint) ->
+    [#{provider => Key, version => Version, endpoint => Endpoint,
+       announcement => Announcement}];
+announced(_Verified, _Announcement, _Key, _Version) ->
+    [].
+
+read_announcement(Rec) ->
+    try macula_record:read_content_announcement(Rec)
+    catch _:_ -> undefined
+    end.
+
+%% Fetches from one provider, unless it already failed on the same
+%% announcement.
+provider_try(Fetch, Deadline) ->
+    fun(#{provider := Key} = Provider, Share, Seen) ->
+        fetch_unless_failed(maps:find(Key, Seen), Provider, Share, Seen, Fetch, Deadline)
+    end.
+
+fetch_unless_failed({ok, #{record := Version, error := Error}}, #{version := Version},
+                    _Share, Seen, _Fetch, _Deadline) ->
+    {next, Error, Seen};
+fetch_unless_failed(_NewOrChanged, #{provider := Key, version := Version,
+                                     endpoint := Endpoint},
+                    Share, Seen, Fetch, Deadline) ->
+    fetched(Fetch(Endpoint, pinned(Key), budget(Share), budget(Deadline)), Key, Version,
+            Seen).
+
+fetched({ok, _} = Fetched, _Key, _Version, _Seen) ->
+    {done, Fetched};
+fetched({error, _} = Error, Key, Version, Seen) ->
+    failed(Key, Version, none, Error, Seen).
+
+%% Fetches from one provider through `macula_content_transfer', within what
+%% remains of the deadline, and reaps the transfer whatever its outcome.
+transfer_fetch(Pool, MCID) ->
+    fun(Endpoint, Pinned, ConnectMs, RemainingMs) ->
+        {ok, Transfer} = macula_content_transfer:start_get_station(
+                           Pool, Endpoint, MCID, ConnectMs, Pinned),
+        Result = await_transfer(Transfer, RemainingMs),
+        _ = macula_content_transfer:cancel(Transfer),
+        Result
+    end.
+
+await_transfer(Transfer, RemainingMs) ->
+    try macula_content_transfer:await(Transfer, RemainingMs)
+    catch exit:{timeout, _} -> {error, timeout}
+    end.
+
+%% The trust override for a dial pinned to the identity a signed DHT record
+%% resolved — see the module doc's "Trust model".
+pinned(Node) ->
+    #{expected_node_id => Node, pin_tls_cert => false, verify => none}.
+
+deadline(TimeoutMs) -> erlang:monotonic_time(millisecond) + TimeoutMs.
+
+remaining(Deadline) -> Deadline - erlang:monotonic_time(millisecond).
+
+%% A timeout argument for what remains of `Deadline', at least 1 ms.
+budget(Deadline) -> max(1, remaining(Deadline)).
+
+%% The deadline one candidate works within: what remains split evenly over
+%% the candidates not yet tried, but no less than ?MIN_CANDIDATE_SHARE_MS
+%% while that much remains.
+share(Deadline, Untried) ->
+    Remaining = remaining(Deadline),
+    erlang:monotonic_time(millisecond)
+        + max(Remaining div Untried, min(?MIN_CANDIDATE_SHARE_MS, Remaining)).
+
+lookup_timeout(Deadline) -> max(1, min(?LOOKUP_TIMEOUT_MS, remaining(Deadline))).
+
+pause(Deadline, Ms) -> timer:sleep(max(0, min(Ms, remaining(Deadline)))).
 
 %% No `Org' segment in the discovery URI: `Org' is only consulted
 %% post-resolve, as the `verify_cert_chain' opt's expected leaf-cert

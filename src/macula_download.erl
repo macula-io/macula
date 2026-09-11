@@ -43,7 +43,10 @@
 %%% the resolve+await proxy — nothing has ever needed to cancel
 %%% mid-resolve) and dials that station directly, in one hop, via
 %%% `macula_content_transfer:start_get_station/5', instead of depending
-%%% on the caller's own station being able to reach it via relay. Only
+%%% on the caller's own station being able to reach it via relay. Every
+%%% provider that announced `Mcid' is a candidate: one whose fetch fails,
+%%% or whose bytes don't verify, is passed over for the next, within
+%%% `?DIRECT_DIAL_TIMEOUT_MS' (`macula_direct_dial:fetch_content/4'). Only
 %%% chunked content is discoverable this way — see
 %%% `macula:find_content_providers/2'. See `macula_direct_dial''s module
 %%% doc, "Content" section, for the trust model (deliberately lighter
@@ -86,11 +89,12 @@
 
 -define(GET_STARTED, <<"sharing.get_started_v1">>).
 -define(GET_COMPLETED, <<"sharing.get_completed_v1">>).
-%% Bounds only the QUIC handshake wait when `start_link_direct/4,5'
-%% must dial a fresh link — matches `macula_client:connect/2''s own
-%% `connect_timeout_ms' default. The block/manifest transfer that
-%% follows has its own separate, internal timeouts regardless.
--define(DIRECT_DIAL_CONNECT_TIMEOUT_MS, 30_000).
+%% Bounds how long `start_link_direct/4,5' looks for a provider whose fetch
+%% succeeds: the DHT lookups, each provider's connect wait, and moving on
+%% to the next provider after one fails. A transfer that has started runs
+%% to its own end, bounded by its internal timeouts and by `cancel/1'.
+%% Matches `macula_client:connect/2''s own `connect_timeout_ms' default.
+-define(DIRECT_DIAL_TIMEOUT_MS, 30_000).
 
 -record(dstate, {
     module           :: module(),
@@ -175,41 +179,42 @@ spawn_worker(pooled, Pool, Mcid, ShareId) ->
     Parent = self(),
     Start = pooled_get(Pool, Mcid, #{share_id => ShareId}),
     spawn_link(fun() -> run_transfer(Parent, Start) end);
-%% Resolving `Mcid''s provider stays a plain blocking DHT lookup here
-%% (matches what `macula_direct_dial:get_content/3' already did) —
-%% only the transfer itself becomes addressable.
+%% Choosing among `Mcid''s providers runs in the worker through
+%% `macula_direct_dial:fetch_content/4', and each provider's transfer is
+%% started by this download (`transfer/2'), so a cancel reaches whichever
+%% transfer is running.
 spawn_worker(direct, Pool, Mcid, ShareId) ->
     Parent = self(),
     spawn_link(fun() -> direct_worker_run(Pool, Mcid, ShareId, Parent) end).
 
 direct_worker_run(Pool, Mcid, ShareId, Parent) ->
-    case macula_direct_dial:resolve_content_provider(Pool, Mcid) of
-        {ok, #{announcer_node := Node, endpoint := Endpoint}} ->
-            Opts = #{share_id => ShareId, expected_node_id => Node,
-                    pin_tls_cert => false, verify => none},
-            run_transfer(Parent, station_get(Pool, Endpoint, Mcid, Opts));
-        {error, Reason} ->
-            Parent ! {download_result, {error, {unresolved, Reason}}}
-    end.
+    Fetch = fun(Endpoint, Pinned, ConnectMs, _RemainingMs) ->
+                transfer(Parent, station_get(Pool, Endpoint, Mcid, ConnectMs,
+                                             Pinned#{share_id => ShareId}))
+            end,
+    Parent ! {download_result,
+              macula_direct_dial:fetch_content(Pool, Mcid, ?DIRECT_DIAL_TIMEOUT_MS, Fetch)}.
 
 pooled_get(Pool, Mcid, Opts) ->
     fun() -> macula_content_transfer:start_get(Pool, Mcid, Opts) end.
 
-station_get(Pool, Endpoint, Mcid, Opts) ->
+station_get(Pool, Endpoint, Mcid, ConnectMs, Opts) ->
     fun() ->
-        macula_content_transfer:start_get_station(
-            Pool, Endpoint, Mcid, ?DIRECT_DIAL_CONNECT_TIMEOUT_MS, Opts)
+        macula_content_transfer:start_get_station(Pool, Endpoint, Mcid, ConnectMs, Opts)
     end.
 
 %% This download starts the transfer itself, in a call from the worker,
 %% so the transfer's pid is in the state before any `cancel/1' is
 %% handled: a cancel handled first finds nothing started, and a cancel
 %% handled after finds the pid.
-run_transfer(Parent, Start) ->
+transfer(Parent, Start) ->
     {ok, CTPid} = gen_server:call(Parent, {start_transfer, Start}, infinity),
     Result = macula_content_transfer:await(CTPid),
     reap_content_transfer(CTPid),
-    Parent ! {download_result, Result}.
+    Result.
+
+run_transfer(Parent, Start) ->
+    Parent ! {download_result, transfer(Parent, Start)}.
 
 %% @private
 handle_call({start_transfer, Start}, _From, State) ->

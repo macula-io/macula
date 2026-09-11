@@ -46,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once. The caller receives
   `{macula_peering, dedicated_stream_opened, Ref, Stream}` or
   `{macula_peering, dedicated_stream_open_failed, Ref, Reason}`.
+- `macula:find_record/3` and `macula:find_records/3` take a timeout for
+  one DHT lookup, for a caller that bounds its work by a deadline of its
+  own.
+- `macula:call_station/7` accepts `dial_timeout_ms` in its options, passed
+  to the new `macula_client:call_station/9`: how much of the call's timeout
+  the wait for a fresh link's handshake may take. `{error, not_connected}`
+  then comes back after that time, before any CALL was sent.
+- `macula_direct_dial:fetch_content/4` fetches an MCID from the first of its
+  announced providers whose fetch succeeds, with a fetch function of the
+  caller's own. `macula_direct_dial:resolve_station_endpoint/3` takes a
+  timeout.
 
 ### Changed
 
@@ -98,6 +109,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relay. While the relay takes no data on the control stream, the client
   holds the frames in order and keeps serving tunnel requests, inbound
   tunnels and `status/1`, which reports them as `held_control_frames`.
+- Direct dial (`macula_direct_dial:call/5,6` and `call_stream/5,6`) treats
+  every advertisement that passes trust filtering as a candidate, in the
+  order the DHT returns them. A candidate whose `station_endpoint` can't be
+  resolved, or whose link doesn't connect, is passed over for the next before
+  anything is sent; once a CALL or a stream has gone out, its outcome
+  stands. Resolution asks the DHT again after a pause that doubles from
+  100 ms to 1 s, and tries a candidate that failed again only when its
+  advertisement or endpoint record has changed. The call's `TimeoutMs`, or a
+  stream's `dial_timeout_ms`, bounds resolution, each candidate's connect
+  wait and the request. At the deadline the result is the most recent
+  candidate's failure; failing that, why an answered lookup found nothing
+  qualifying; failing that, a failed lookup's own error; otherwise
+  `{error, {unresolved, timeout}}`. A failed lookup is retried like an empty
+  pass.
+- `macula_direct_dial:get_content/3` tries the next announced provider after
+  a fetch that fails or doesn't verify, and its `TimeoutMs` bounds the whole
+  fetch, transfers included. `macula_download:start_link_direct/4,5` chooses
+  among providers the same way within 30 s, and `cancel/1` still reaches
+  whichever transfer is running.
+- `macula_direct_dial:put_content/4`'s `TimeoutMs` bounds the station
+  endpoint lookup as well as the connect wait. A station endpoint lookup,
+  for a put or for a direct-dial candidate, asks again past a failed lookup
+  as well as an absent or expired record, and when none finds a usable
+  record its result is, in this order, the endpoint not found, the failed
+  lookup's own error, or `{error, {unresolved, timeout}}`.
+
+### Deprecated
+
+- `macula_direct_dial:resolve_content_provider/2` resolves through the same
+  candidate loop, within 10 s, and is deprecated: it is removed in 11.0.0,
+  and `fetch_content/4` replaces it.
 
 ### Removed
 

@@ -216,15 +216,13 @@ direct_dial_resolves_then_fetches_from_the_resolved_provider() ->
     Bytes = <<"direct fetch">>,
     Hash = macula_blake3_nif:hash(Bytes),
     Mcid = <<1, 16#55, Hash/binary>>,
-    Node = crypto:strong_rand_bytes(32),
     Endpoint = <<"quic://provider.example:4433">>,
     LinkPid = dummy_pid(),
     Stream = make_ref(),
-    meck:new(macula_direct_dial, [passthrough]),
-    meck:expect(macula_direct_dial, resolve_content_provider,
-               fun(_Pool, Mcid0) when Mcid0 =:= Mcid ->
-                   {ok, #{announcer_node => Node, endpoint => Endpoint}}
-               end),
+    ContentKey = macula_record:content_key(Mcid),
+    Announcement = signed_announcement(Mcid, Endpoint),
+    meck:expect(macula, find_records,
+               fun(_Pool, Key, _TimeoutMs) when Key =:= ContentKey -> {ok, [Announcement]} end),
     meck:expect(macula_client, ensure_content_link,
                fun(_Pool, Seed, _LinkOpts, _TimeoutMs) when Seed =:= Endpoint -> {ok, LinkPid} end),
     meck:expect(macula_station_link, open_content_stream, fun(_LinkPid) -> {ok, Stream} end),
@@ -233,8 +231,7 @@ direct_dial_resolves_then_fetches_from_the_resolved_provider() ->
     meck:expect(macula_station_link, close_content_stream, fun(_, _) -> ok end),
 
     {ok, _Pid} = macula_download:start_link_direct(?MODULE, dummy_pid(), <<0:256>>, Mcid, self()),
-    ?assertEqual({downloaded, {ok, Bytes}}, wait_msg()),
-    meck:unload(macula_direct_dial).
+    ?assertEqual({downloaded, {ok, Bytes}}, wait_msg()).
 
 cancel_while_the_transfer_is_handed_over_still_reaches_it() ->
     process_flag(trap_exit, true),
@@ -259,10 +256,8 @@ cancel_while_a_direct_transfer_is_handed_over_still_reaches_it() ->
     LinkPid = dummy_pid(),
     Stream = make_ref(),
     Endpoint = <<"quic://provider.example:4433">>,
-    meck:expect(macula_direct_dial, resolve_content_provider,
-               fun(_Pool, _Mcid) ->
-                   {ok, #{announcer_node => crypto:strong_rand_bytes(32), endpoint => Endpoint}}
-               end),
+    Announcement = signed_announcement(?SINGLE_MCID, Endpoint),
+    meck:expect(macula, find_records, fun(_Pool, _Key, _TimeoutMs) -> {ok, [Announcement]} end),
     meck:expect(macula_client, ensure_content_link,
                fun(_Pool, Seed, _LinkOpts, _TimeoutMs) when Seed =:= Endpoint -> {ok, LinkPid} end),
     expect_a_get_that_stays_open(Self, Stream),
@@ -282,6 +277,15 @@ cancel_while_a_direct_transfer_is_handed_over_still_reaches_it() ->
 
 dummy_pid() ->
     spawn(fun() -> receive stop -> ok end end).
+
+%% A content_announcement for Mcid at Endpoint, signed by the announcer it
+%% names.
+signed_announcement(Mcid, Endpoint) ->
+    Announcer = macula_identity:generate(),
+    macula_record:sign(
+      macula_record:content_announcement(macula_identity:public(Announcer), Mcid,
+                                         Endpoint),
+      Announcer).
 
 topics() ->
     [T || {_, {macula, publish, [_Pool, _Realm, T, _Payload]}, ok} <- meck:history(macula)].
