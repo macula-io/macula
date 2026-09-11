@@ -77,7 +77,11 @@
 %%   <tr><td>ERROR(code=C, name=N)</td><td>`{error, {call_error, C, N}}'</td></tr>
 %%   <tr><td>(deadline elapses)</td><td>`{error, timeout}'</td></tr>
 %%   <tr><td>(connection drops)</td><td>`{error, {disconnected, Reason}}'</td></tr>
+%%   <tr><td>(not connected yet)</td><td>`{error, not_connected}', not sent</td></tr>
+%%   <tr><td>(frame refused before sending)</td><td>`{error, {refused, Reason}}', not sent</td></tr>
 %% </table>
+%%
+%% `not_sent/1' says whether an error means the CALL never went out.
 -module(macula_station_link).
 -behaviour(gen_server).
 
@@ -111,6 +115,7 @@
     unadvertise_stream/3,
     send_stream_frame/3,
     is_connected/1,
+    not_sent/1,
     peer_node_id/1,
     %% Dedicated-stream content transfer (PLAN_PER_STREAM_QUIC_ISOLATION.md
     %% Phase 2). Not for general RPC use — see the moduledoc on
@@ -416,6 +421,17 @@ call(Pid, Realm, Procedure, Payload, TimeoutMs, UcanToken)
         exit:{noproc, _}       -> {error, noproc};
         exit:{normal, _}       -> {error, gone}
     end.
+
+%% @doc Whether an error from `call/5,6' means the CALL never went out, so
+%% the call can be tried on another link without a provider running it
+%% twice: the link was not connected yet, there was no link process, or
+%% the link refused the frame before sending it. Any other error, a
+%% timeout included, may follow a CALL that reached its provider.
+-spec not_sent({error, term()}) -> boolean().
+not_sent({error, not_connected}) -> true;
+not_sent({error, noproc}) -> true;
+not_sent({error, {refused, _Reason}}) -> true;
+not_sent({error, _Reason}) -> false.
 
 %% @doc Open a dedicated QUIC stream for a sequence of related unary
 %% CALLs — content transfer's one purpose so far (see
@@ -1408,8 +1424,8 @@ publish_reply({error, _} = Refused, _Seq, S) ->
 await_call_reply(ok, CallId, From, Tmo, Pending, S) ->
     TRef = erlang:send_after(Tmo, self(), {call_timeout, CallId}),
     {noreply, S#state{pending = Pending#{CallId => {From, TRef}}}};
-await_call_reply({error, _} = Refused, _CallId, _From, _Tmo, _Pending, S) ->
-    {reply, Refused, S}.
+await_call_reply({error, Reason}, _CallId, _From, _Tmo, _Pending, S) ->
+    {reply, {error, {refused, Reason}}, S}.
 
 -spec send_publish_frame(<<_:256>>, binary(), term(), non_neg_integer(),
                          #state{}) -> ok | {error, term()}.

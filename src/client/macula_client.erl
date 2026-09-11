@@ -86,6 +86,9 @@
 %% Station discovery selection math — exported for direct testing, same
 %% rationale as `select_publish_targets/2' above.
 -export([ordered_for_selection/2, select_discovery_seeds/3, station_seed/1]).
+%% How a pool call moves from one link to the next -- exported for
+%% macula_client_call_first_success_tests.erl.
+-export([call_first_success/5]).
 -endif.
 
 -export_type([pool/0, opts/0, seed/0, status/0, link_info/0, handler/0,
@@ -1380,9 +1383,11 @@ identity_or_generate({ok, Identity}) -> Identity;
 identity_or_generate(error) -> macula_identity:generate(#{puzzle => true}).
 
 %% First-success across the pool's healthy links. Tries each link in
-%% turn; the first non-error reply wins. Falls through on
-%% per-link errors (timeout, not_connected) so a single dead link does
-%% not block the call.
+%% turn; the first non-error reply wins. It moves on to the next link only
+%% when the link reports that the CALL never went out
+%% (`macula_station_link:not_sent/1'), so a link that isn't connected does
+%% not block the call. A CALL that may have reached its provider, a timeout
+%% included, is never sent again, so a provider never runs one call twice.
 call_first_success([], _Realm, _Proc, _Payload, _Tmo) ->
     {error, no_healthy_station};
 call_first_success([Pid | Rest], Realm, Proc, Payload, Tmo) ->
@@ -1397,8 +1402,13 @@ next_or_first(true, Pid, Rest, Realm, Proc, Payload, Tmo) ->
 
 keep_or_next({ok, _} = R, _Rest, _Realm, _Proc, _Payload, _Tmo) -> R;
 keep_or_next({error, _} = E, [], _Realm, _Proc, _Payload, _Tmo) -> E;
-keep_or_next({error, _}, Rest, Realm, Proc, Payload, Tmo) ->
-    call_first_success(Rest, Realm, Proc, Payload, Tmo).
+keep_or_next({error, _} = E, Rest, Realm, Proc, Payload, Tmo) ->
+    next_if_not_sent(macula_station_link:not_sent(E), E, Rest, Realm, Proc, Payload, Tmo).
+
+next_if_not_sent(true, _E, Rest, Realm, Proc, Payload, Tmo) ->
+    call_first_success(Rest, Realm, Proc, Payload, Tmo);
+next_if_not_sent(false, E, _Rest, _Realm, _Proc, _Payload, _Tmo) ->
+    E.
 
 %% Fan-out advertise: register on every live link. Returns ok if at
 %% least one link accepted; per-link errors are logged and discarded.

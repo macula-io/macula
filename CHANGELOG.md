@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `macula_station_link:not_sent/1` says whether an error from `call/5,6`
+  means the CALL never went out: the link was not connected yet, there was
+  no link process, or the link refused the frame before sending it.
 - `macula_quic:async_connect/4` starts a dial and returns at once. The
   calling process receives `{quic, connected, Tag, ConnRef}` or
   `{quic, connect_failed, Tag, Reason}`, with `Tag` from
@@ -66,6 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A CALL frame the link refuses to send comes back from
+  `macula_station_link:call/5,6` as `{error, {refused, Reason}}`, where it
+  was `{error, Reason}`.
 - `macula_dist_relay_client:request_tunnel/2` returns
   `{ok, Conn, Stream, Received}`, where `Received` holds the tunnel's
   bytes the client read before handing the stream over.
@@ -167,6 +173,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `macula_client:call/5` tries another link only when the link reports that
+  the CALL never went out. A CALL that timed out, or whose link dropped while
+  it was pending, is no longer sent again on another link, where the provider
+  could run it a second time.
 - `macula_quic:controlling_process/2` returns only once no message for the
   handle is on its way to the former owner, so a stream's data and events,
   and a connection's new_stream notices, all go to the new owner from then
