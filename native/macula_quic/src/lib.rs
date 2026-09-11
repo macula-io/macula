@@ -3,6 +3,7 @@ mod cert;
 mod config;
 mod connection;
 mod endpoint;
+mod error_codes;
 mod message;
 mod runtime;
 mod stream;
