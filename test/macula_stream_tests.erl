@@ -7,6 +7,11 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% Data a reason carries that must stay on this node.
+-define(MARKER, <<"marker-3f9c-stays-on-this-node">>).
+%% Well above what the log gets of a reason, far below a whole large one.
+-define(LOGGED_BYTES, 8192).
+
 %%%===================================================================
 %%% Test fixtures
 %%%===================================================================
@@ -127,6 +132,22 @@ error_test_() ->
              Result = macula:recv(S, 1000),
              %% recv returns {error, {Code, Message}} after the abort frame
              ?assertMatch({error, {<<"error">>, _}}, Result)
+         end},
+        {"a crashing handler's caller gets the reason's name; the log gets the crash",
+         fun() ->
+             Log = macula_test_log:capture(),
+             try
+                 ok = macula:advertise_stream(<<"t.boom_with_data">>, server_stream,
+                      fun(_Stream, _Args) ->
+                          erlang:error({boom, lists:duplicate(10000, ?MARKER)})
+                      end),
+                 {ok, S} = macula:call_stream(<<"t.boom_with_data">>, #{}),
+                 ?assertEqual({error, {<<"error">>, <<"boom">>}}, macula:recv(S, 1000)),
+                 Logged = macula_test_log:wait_text(<<"t.boom_with_data">>, 1000),
+                 ?assert(byte_size(Logged) < ?LOGGED_BYTES)
+             after
+                 macula_test_log:release(Log)
+             end
          end},
         {"explicit abort propagates to await_reply",
          fun() ->

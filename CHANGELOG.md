@@ -147,6 +147,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the reason's name, a binary such as `<<"timeout">>` of at most 64 bytes
   or else `<<"crashed">>`, and the message of the abort it sends is that
   name. The whole reason is logged locally.
+- A peer is told a reason's name and none of its terms in the message of
+  the STREAM_ERROR `macula_streamer` sends when its stream ends abnormally
+  or `handle_open/2` refuses it, in the message open streams are aborted
+  with when their link disconnects, and in the message of the STREAM_ERROR
+  a crashing stream handler's caller gets, over a link or locally. A
+  crashing stream handler is logged on its node.
+- A handler's `{error, Reason}` reaches its caller with `Reason` itself as
+  the CALL_ERROR `detail` when it is a binary or a printable Unicode
+  charlist, judged by its first 257 elements, as at most 256 bytes of
+  valid UTF-8 cut on a character boundary. Any other reason gives its name, such as `<<"refused">>` for
+  `{refused, Why}`, or no detail when it has none.
+- The warning for a crashing handler, unary or streaming, and the log
+  lines of `macula_lifetime_announcer` print at most 4,096 characters of
+  the terms they carry.
 
 ### Deprecated
 

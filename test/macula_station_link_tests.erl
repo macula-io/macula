@@ -14,6 +14,11 @@
 %% realm-agnostic) for every call/subscribe/publish.
 -define(REALM, <<0:256>>).
 
+%% Data a reason carries that must stay on this node.
+-define(MARKER, <<"marker-3f9c-stays-on-this-node">>).
+%% Well above what the log gets of a reason, far below a whole large one.
+-define(LOGGED_BYTES, 8192).
+
 %% #state record layout after the realm-per-call refactor:
 %%   1: tag (state)
 %%   2: seed
@@ -1740,7 +1745,7 @@ inbound_call_handler_error_tuple_emits_call_error_test_() ->
     %% record from the replication path.
     %%
     %% The error is funneled into `code = 0x0F unknown_error' with
-    %% the formatted Reason in `detail'. Handlers that need a
+    %% the reason's name in `detail'. Handlers that need a
     %% specific BOLT#4 code can crash with a tagged error or use
     %% the dedicated frame builders.
     {timeout, 5,
@@ -1874,6 +1879,103 @@ binary_reason_crosses_the_wire_verbatim_test_() ->
          macula_station_link:stop(Pid),
          ok
      end}.
+
+%%------------------------------------------------------------------
+%% What a caller is told of a handler's error, and what stays here
+%%------------------------------------------------------------------
+
+%% A reason with data crosses as its name, and none of its terms leave
+%% the node.
+a_handler_error_with_data_is_told_by_its_name_only_test_() ->
+    {timeout, 5,
+     fun() ->
+         Frame = error_frame_for_handler(fun(_Args) -> {error, {refused, ?MARKER}} end),
+         ?assertMatch(#{code := 16#0F, detail := <<"refused">>}, Frame),
+         ?assertEqual(nomatch, binary:match(term_to_binary(Frame), ?MARKER))
+     end}.
+
+%% A handler's own text crosses as at most 256 bytes of valid UTF-8.
+a_handler_error_text_too_long_is_cut_on_a_character_boundary_test_() ->
+    {timeout, 5,
+     fun() ->
+         Euro = <<16#20AC/utf8>>,
+         Frame = error_frame_for_handler(fun(_Args) -> {error, binary:copy(Euro, 100)} end),
+         #{detail := Detail} = Frame,
+         ?assertEqual(<<(binary:copy(Euro, 84))/binary, "...">>, Detail),
+         ?assert(is_binary(unicode:characters_to_binary(Detail)))
+     end}.
+
+%% A printable charlist is the handler's own text, as a binary is.
+a_handler_error_charlist_crosses_as_text_test_() ->
+    {timeout, 5,
+     fun() ->
+         Frame = error_frame_for_handler(fun(_Args) -> {error, "not found"} end),
+         ?assertMatch(#{detail := <<"not found">>}, Frame)
+     end}.
+
+%% A reason that is neither text nor named sends no detail.
+a_handler_error_list_of_pids_sends_no_detail_test_() ->
+    {timeout, 5,
+     fun() ->
+         Frame = error_frame_for_handler(fun(_Args) -> {error, [self(), self()]} end),
+         ?assertMatch(#{code := 16#0F, detail := undefined}, Frame)
+     end}.
+
+%% A crashing handler's caller gets no detail, and the node's log gets
+%% the crash printed within bounds.
+a_handler_crash_is_logged_within_bounds_test_() ->
+    {timeout, 10,
+     fun() ->
+         Log = macula_test_log:capture(),
+         try
+             Frame = error_frame_for_handler(
+                       fun(_Args) -> error({boom, lists:duplicate(10_000, ?MARKER)}) end),
+             ?assertMatch(#{code := 16#02}, Frame),
+             ?assertEqual(nomatch, binary:match(term_to_binary(Frame), ?MARKER)),
+             Logged = macula_test_log:wait_text(<<"handler crashed">>, 1_000),
+             ?assert(byte_size(Logged) < ?LOGGED_BYTES),
+             ?assertNotEqual(nomatch, binary:match(Logged, <<"boom">>))
+         after
+             macula_test_log:release(Log)
+         end
+     end}.
+
+%% The ERROR frame the link sends a caller whose CALL `Handler' answers.
+error_frame_for_handler(Handler) ->
+    {ok, _} = application:ensure_all_started(macula),
+    {ok, Pid} = macula_station_link:start_link(#{
+        seed     => #{host => <<"127.0.0.1">>, port => 1},
+        connect_timeout_ms => 2000,
+        identity => macula_identity:generate()
+    }),
+    FakePeer = self(),
+    PeerNodeId = macula_identity:public(macula_identity:generate()),
+    _ = sys:replace_state(Pid, fun(S) ->
+        S2 = setelement(?PEER_PID_INDEX, S, FakePeer),
+        setelement(?PEER_PID_INDEX + 1, S2, PeerNodeId)
+    end),
+    Procedure = <<"_test.handler_answer">>,
+    ok = macula_station_link:advertise(Pid, ?REALM, Procedure, Handler),
+    flush_send_frame_casts(),
+    CallerKp = macula_identity:generate(),
+    CallId = <<9:128>>,
+    Pid ! {macula_peering, frame, FakePeer, macula_frame:sign(#{
+        frame_type  => call,
+        call_id     => CallId,
+        realm       => ?REALM,
+        procedure   => Procedure,
+        payload     => #{},
+        deadline_ms => erlang:system_time(millisecond) + 5_000,
+        caller      => macula_identity:public(CallerKp)
+    }, CallerKp)},
+    Frame = receive
+                {'$gen_cast', {send_frame, #{frame_type := error,
+                                             call_id    := CallId} = Sent}} -> Sent
+            after 1_000 ->
+                erlang:error(no_call_error_frame_sent)
+            end,
+    macula_station_link:stop(Pid),
+    Frame.
 
 %% Drive one ERROR frame back at a caller and hand back what it saw.
 inject_error_frame(Fields) ->
@@ -2365,6 +2467,52 @@ inbound_stream_open_invokes_handler_test_() ->
          end
      end}.
 
+%% -- a stream handler crash is told by name, and logged here ------
+
+%% The caller of a crashing stream handler gets the crash class as the
+%% STREAM_ERROR code and the reason's name as its message; the node's
+%% log gets the crash printed within bounds.
+a_stream_handler_crash_tells_the_caller_its_name_only_test_() ->
+    {timeout, 10,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         Log = macula_test_log:capture(),
+         try
+             Procedure = <<"foo.crashing">>,
+             Handler = fun(_Stream, _Args) ->
+                 error({boom, lists:duplicate(10_000, ?MARKER)})
+             end,
+             ok = macula_station_link:advertise_stream(
+                    Pid, ?REALM, Procedure, server_stream, Handler),
+             flush_send_frame_casts(),
+             CallerKp = macula_identity:generate(),
+             Stream = make_ref(),
+             inject_dedicated_stream_open(Pid, FakePeer, Stream, macula_frame:sign(#{
+                 frame_type  => stream_open,
+                 stream_id   => crypto:strong_rand_bytes(16),
+                 procedure   => Procedure,
+                 realm       => ?REALM,
+                 mode        => server_stream,
+                 args        => #{},
+                 deadline_ms => erlang:system_time(millisecond) + 5_000,
+                 caller      => macula_identity:public(CallerKp)
+             }, CallerKp)),
+             Frame = receive
+                         {sent_on_stream, Stream, #{frame_type := stream_error} = Sent} -> Sent
+                     after 1_000 ->
+                         erlang:error(no_stream_error_emitted)
+                     end,
+             ?assertMatch(#{code := <<"error">>, message := <<"boom">>}, Frame),
+             ?assertEqual(nomatch, binary:match(term_to_binary(Frame), ?MARKER)),
+             Logged = macula_test_log:wait_text(<<"foo.crashing">>, 1_000),
+             ?assert(byte_size(Logged) < ?LOGGED_BYTES),
+             macula_station_link:stop(Pid)
+         after
+             macula_test_log:release(Log),
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
 %% -- inbound STREAM_OPEN is served only when its signature verifies -
 
 %% A STREAM_OPEN is signed by the identity it names in `caller'. One whose
@@ -2546,6 +2694,25 @@ disconnect_aborts_open_streams_test_() ->
              %% surfaces as a timeout.
              wait_until_closed(StreamPid, 20),
              ?assertMatch({error, {<<"disconnected">>, _}},
+                          macula_stream:await_reply(StreamPid, 1_000))
+         after
+             teardown_link_for_streams(ok)
+         end
+     end}.
+
+%% The streams a disconnect aborts are told the reason's name, and none
+%% of its terms.
+a_disconnect_tells_open_streams_its_reasons_name_only_test_() ->
+    {timeout, 5,
+     fun() ->
+         {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+         try
+             {ok, StreamPid} = macula_station_link:call_stream(
+                                 Pid, ?REALM, <<"foo">>, #{}, #{mode => bidi}),
+             _Stream = await_opened_stream(),
+             Pid ! {macula_peering, disconnected, FakePeer, {peer_gone, ?MARKER}},
+             wait_until_closed(StreamPid, 20),
+             ?assertEqual({error, {<<"disconnected">>, <<"disconnected">>}},
                           macula_stream:await_reply(StreamPid, 1_000))
          after
              teardown_link_for_streams(ok)

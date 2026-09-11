@@ -178,15 +178,19 @@ host_loop() ->
 spawn_link_handler(Handler, Stream, Args, Procedure) ->
     spawn(fun() -> run_handler(Handler, Stream, Args, Procedure) end).
 
+%% A handler crash aborts the stream with the crash class as the code
+%% and the reason's name as the message, and none of the crash's
+%% terms; the crash goes to the node's log.
 run_handler(Handler, Stream, Args, Procedure) ->
     try Handler(Stream, Args)
     catch
         Class:Reason:Stack ->
-            ErrCode = atom_to_binary(Class, utf8),
-            ErrMsg = list_to_binary(io_lib:format(
-                "handler ~s crashed: ~p:~p~n~p",
-                [Procedure, Class, Reason, Stack])),
-            _ = macula_stream:abort(Stream, ErrCode, ErrMsg),
+            logger:warning(
+              "[macula_stream_local] handler ~ts crashed: ~ts",
+              [Procedure, macula_reason_name:logged("~p:~p~n  stack=~p",
+                                                    [Class, Reason, Stack])]),
+            _ = macula_stream:abort(Stream, atom_to_binary(Class, utf8),
+                                    macula_reason_name:text(Reason)),
             ok
     end.
 

@@ -65,8 +65,12 @@ A handler is `fun((term()) -> term())` or `{Module, Function}`, called as
 |---|---|
 | `{ok, Value}` | `{ok, Value}` — the `{ok, _}` wrapper is stripped and reapplied, so this is the idiomatic Erlang shape |
 | any other `Value` | `{ok, Value}` — passed through as-is |
-| `{error, Reason}` | `{error, Detail}` — `Detail` is `Reason` verbatim if it was already a binary, otherwise a `~0p` rendering |
+| `{error, Reason}` | `{error, Detail}`: `Detail` is `Reason` itself when it is a binary or a printable charlist, as at most 256 bytes of UTF-8, and otherwise its name, such as `<<"refused">>` for `{refused, Why}`. A reason with neither gives `{error, {call_error, 16#0F, unknown_error}}`. None of a reason's terms leave the provider |
 | *(crash)* | `{error, {call_error, 16#02, temporary_relay_failure}}` — the crash is logged on the provider's side; the caller sees a generic, retryable code, not the crash reason |
+
+Text a handler returns in `{error, Text}` is sent to its caller, up to 256 bytes of it.
+A handler that answers with an upstream error body or a database message sends those bytes,
+so return only text meant for the caller.
 
 Keep handlers fast — there's no async-reply mechanism for unary RPC; a slow
 handler blocks the caller until it returns or the timeout fires. For

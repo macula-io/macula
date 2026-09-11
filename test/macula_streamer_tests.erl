@@ -6,6 +6,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% Data a reason carries that must stay on this node.
+-define(MARKER, <<"marker-3f9c-stays-on-this-node">>).
+
 -behaviour(macula_streamer).
 -export([init/1, handle_open/2, terminate/2]).
 
@@ -15,6 +18,8 @@
 
 init(Parent) -> {ok, Parent}.
 
+handle_open(#{refuse := Reason}, Parent) ->
+    {stop, Reason, Parent};
 handle_open(StreamArgs, Parent) ->
     Parent ! {opened, StreamArgs, self()},
     {ok, Parent}.
@@ -75,6 +80,8 @@ streamer_test_() ->
      [fun opens_and_publishes_lifecycle/0,
       fun send_and_close_drive_the_stream/0,
       fun dead_stream_stops_the_streamer/0,
+      fun a_refused_open_tells_the_peer_its_reasons_name_only/0,
+      fun a_stream_ending_for_a_reason_with_data_tells_the_peer_its_name_only/0,
       fun advertise_direct_forwards_mode_to_advertise_stream/0,
       fun advertise_forwards_auth_to_advertise_stream/0,
       fun reuse_sup_resends_advertise_without_a_new_supervisor/0,
@@ -192,6 +199,39 @@ dead_stream_stops_the_streamer() ->
     ?assertMatch(#{outcome := failed}, completed_payload()),
     ?assertEqual(1, meck:num_calls(macula_stream, abort, [StreamPid, <<"cancelled">>, '_'])),
     ?assertEqual(0, meck:num_calls(macula_stream, close, [StreamPid])).
+
+%% A refused open tells the peer the reason's name, and none of its terms.
+a_refused_open_tells_the_peer_its_reasons_name_only() ->
+    process_flag(trap_exit, true),
+    {ok, _Sup} = macula_streamer:advertise(pool, <<0:256>>, <<"logs.tail_v1">>,
+                                           ?MODULE, self()),
+    Handler = captured_handler(),
+    StreamPid = spawn(fun stream_stub/0),
+    ok = Handler(StreamPid, #{refuse => {refused, ?MARKER}}),
+    ?assertEqual(<<"refused">>,
+                 meck:capture(first, macula_stream, abort,
+                              [StreamPid, <<"cancelled">>, '_'], 3)).
+
+%% A stream that ends for a reason with data tells the peer the reason's
+%% name, and none of its terms.
+a_stream_ending_for_a_reason_with_data_tells_the_peer_its_name_only() ->
+    process_flag(trap_exit, true),
+    {ok, _Sup} = macula_streamer:advertise(pool, <<0:256>>, <<"logs.tail_v1">>,
+                                           ?MODULE, self()),
+    Handler = captured_handler(),
+    StreamPid = spawn(fun stream_stub/0),
+    ok = Handler(StreamPid, #{}),
+    {opened, _, StreamerPid} = wait_msg(),
+    Ref = monitor(process, StreamerPid),
+    exit(StreamPid, {boom, ?MARKER}),
+    receive
+        {'DOWN', Ref, process, StreamerPid, _} -> ok
+    after 1000 -> ?assert(false)
+    end,
+    ?assertMatch({terminated, _}, wait_msg()),
+    ?assertEqual(<<"boom">>,
+                 meck:capture(first, macula_stream, abort,
+                              [StreamPid, <<"cancelled">>, '_'], 3)).
 
 %%%===================================================================
 %%% Helpers

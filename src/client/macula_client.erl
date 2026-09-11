@@ -592,6 +592,9 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, UcanToken,
 %% @doc Advertise a procedure handler on every healthy link. Stored
 %% in pool state so links respawned later replay the advertisement.
 %% Returns `ok' when at least one link accepted the registration.
+%% A handler that answers `{error, Text}' with a binary or a printable
+%% charlist sends that text to its caller, up to 256 bytes of it; any
+%% other error reason reaches the caller as its name only.
 -spec advertise(pool(), <<_:256>>, binary(), handler()) ->
     ok | {error, term()}.
 advertise(Pool, Realm, Procedure, Handler) ->

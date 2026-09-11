@@ -15,6 +15,8 @@
 -define(BOUND_MS, 1000).
 %% Data a reason carries that must stay on this node.
 -define(MARKER, <<"marker-3f9c-stays-on-this-node">>).
+%% Well above what the log gets of a reason, far below a whole large one.
+-define(LOGGED_BYTES, 8192).
 
 %% Each test runs in a process of its own.
 announcer_test_() ->
@@ -27,7 +29,8 @@ announcer_test_() ->
                  fun a_publish_that_fails_is_logged_and_the_end_still_goes_out/0,
                  fun a_publish_that_never_returns_holds_neither_start_nor_hand_over/0,
                  fun without_announcing_nothing_starts/0,
-                 fun a_reasons_text_is_the_name_at_its_head/0]].
+                 fun a_reason_that_is_more_than_a_name_is_logged_within_bounds/0,
+                 fun a_publish_that_fails_for_a_large_reason_is_logged_within_bounds/0]].
 
 the_start_fact_goes_out_first_and_the_handed_end_after_it() ->
     {Wrapper, Announcer} = start_wrapper(facts(publishing_to(self()))),
@@ -116,18 +119,33 @@ without_announcing_nothing_starts() ->
     ?assertEqual(undefined, macula_lifetime_announcer:start(false, facts(publishing_to(self())))),
     ?assertEqual(ok, macula_lifetime_announcer:announce_end(undefined, #{id => 1})).
 
-a_reasons_text_is_the_name_at_its_head() ->
-    Text = fun macula_lifetime_announcer:reason_text/1,
-    Stack = [{a_module, a_function, [?MARKER], [{line, 1}]}],
-    LongName = list_to_atom(lists:duplicate(65, $a)),
-    ?assertEqual(<<"killed">>, Text(killed)),
-    ?assertEqual(<<"shutdown">>, Text({shutdown, ?MARKER})),
-    ?assertEqual(<<"timeout">>, Text({timeout, {gen_server, call, [pool, ?MARKER]}})),
-    ?assertEqual(<<"badmatch">>, Text({{badmatch, ?MARKER}, Stack})),
-    ?assertEqual(<<"no_healthy_link">>, Text({error, no_healthy_link})),
-    ?assertEqual(<<"crashed">>, Text(?MARKER)),
-    ?assertEqual(<<"crashed">>, Text([?MARKER])),
-    ?assertEqual(<<"crashed">>, Text(LongName)).
+a_reason_that_is_more_than_a_name_is_logged_within_bounds() ->
+    Log = macula_test_log:capture(),
+    {Wrapper, Announcer} = start_wrapper(facts(publishing_to(self()))),
+    ?assertMatch({?STARTED, _}, next_published()),
+    Wrapper ! {exit, {badmatch, lists:duplicate(10000, ?MARKER)}},
+    ?assertMatch({?ENDED, #{reason := <<"badmatch">>}}, next_published()),
+    wait_down(Announcer),
+    Logged = macula_test_log:wait_text(<<"ends for">>, 1000),
+    ok = macula_test_log:release(Log),
+    ?assert(byte_size(Logged) < ?LOGGED_BYTES),
+    ?assertNotEqual(nomatch, binary:match(Logged, <<"badmatch">>)).
+
+a_publish_that_fails_for_a_large_reason_is_logged_within_bounds() ->
+    Log = macula_test_log:capture(),
+    Test = self(),
+    Failing = fun(_Pool, _Realm, Topic, Payload) ->
+                      Test ! {published, Topic, Payload},
+                      exit({noproc, lists:duplicate(10000, ?MARKER)})
+              end,
+    {Wrapper, Announcer} = start_wrapper(facts(Failing)),
+    ?assertMatch({?STARTED, _}, next_published()),
+    Logged = macula_test_log:wait_text(<<"not published">>, 1000),
+    Wrapper ! stop,
+    ?assertMatch({?ENDED, _}, next_published()),
+    wait_down(Announcer),
+    ok = macula_test_log:release(Log),
+    ?assert(byte_size(Logged) < ?LOGGED_BYTES).
 
 %%%===================================================================
 %%% Helpers

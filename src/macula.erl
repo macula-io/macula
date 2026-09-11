@@ -279,7 +279,10 @@ call_station(Pool, Station, Realm, Procedure, Payload, TimeoutMs, Opts) ->
 
 %% @doc Advertise a procedure handler on a V2 pool. Fans out to every
 %% healthy link and stores in pool state for replay on link respawn.
-%% See `macula_client:advertise/4'.
+%% A handler that answers `{error, Text}' with a binary or a printable
+%% charlist sends that text to its caller, up to 256 bytes of it; any
+%% other error reason reaches the caller as its name only. See
+%% `macula_client:advertise/4'.
 -spec advertise(pool(), realm(), procedure(),
                 macula_client:handler(), map()) ->
     ok | {error, term()}.

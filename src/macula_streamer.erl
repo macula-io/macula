@@ -345,9 +345,9 @@ open(Module, Pool, Realm, Announce, StreamPid, StreamArgs, UserState) ->
 %% never links `StreamPid', so `terminate/2' never runs on it and the peer
 %% that opened the stream would otherwise be stranded until its own `recv'
 %% timeout. Abort it explicitly so the peer gets an immediate signal
-%% instead of silence.
+%% instead of silence, naming the reason and carrying none of its terms.
 abort_rejected_stream(Reason, StreamPid) ->
-    Message = iolist_to_binary(io_lib:format("~p", [Reason])),
+    Message = macula_reason_name:text(Reason),
     try macula_stream:abort(StreamPid, ?CANCEL_CODE, Message) catch _:_ -> ok end.
 
 %% @private For `client_stream'-mode providers that export
@@ -448,14 +448,15 @@ stop_reader(Reader) ->
 %% @private A `normal' reason closes both sides cleanly. Anything else
 %% (a crash, the underlying stream dying, a non-normal stop from
 %% `handle_open/2'/`handle_chunk/2') sends the peer an explicit
-%% `STREAM_ERROR' abort instead of leaving it to infer cancellation
-%% from the connection simply going away. `Stream' may already be
-%% dead by the time this runs (e.g. its own exit is what triggered
-%% this termination) — harmless, caught below.
+%% `STREAM_ERROR' abort, whose message is the reason's name, instead of
+%% leaving it to infer cancellation from the connection simply going
+%% away. `Stream' may already be dead by the time this runs (e.g. its
+%% own exit is what triggered this termination), which is harmless and
+%% caught below.
 finish_stream(normal, Stream) ->
     try macula_stream:close(Stream) catch _:_ -> ok end;
 finish_stream(Reason, Stream) ->
-    Message = iolist_to_binary(io_lib:format("~p", [Reason])),
+    Message = macula_reason_name:text(Reason),
     try macula_stream:abort(Stream, ?CANCEL_CODE, Message) catch _:_ -> ok end.
 
 outcome_fields(Base, normal) -> Base#{outcome => completed};

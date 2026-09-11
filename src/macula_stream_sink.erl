@@ -309,7 +309,7 @@ stop_reader(Reader) ->
 finish_stream(#{close_stream := CloseStream}, normal, Stream) ->
     try CloseStream(Stream) catch _:_ -> ok end;
 finish_stream(#{abort := Abort}, Reason, Stream) ->
-    try Abort(Stream, ?CANCEL_CODE, macula_lifetime_announcer:reason_text(Reason))
+    try Abort(Stream, ?CANCEL_CODE, macula_reason_name:text(Reason))
     catch _:_ -> ok end.
 
 outcome_fields(Base, normal) -> Base#{outcome => completed};

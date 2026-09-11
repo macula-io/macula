@@ -155,6 +155,12 @@ handle_reply({error, Detail}, Parent) ->
     {stop, normal, Parent}.
 ```
 
+`{error, Detail}` is the handler answering with an error. `Detail` is the
+handler's own text when it returned a binary or a printable charlist, up to
+256 bytes of it, and otherwise the name of its reason, such as
+`<<"refused">>`. A handler's error text is sent to its caller as it is, so a
+provider returns only text meant for the caller.
+
 `{error, {call_error, Code, Name}}` carries a wire-level BOLT#4 code, telling
 you whether the same path is worth retrying after backoff, or whether you
 need a fresh resolve. See [RPC_PROTOCOL.md](RPC_PROTOCOL.md#errors) for the

@@ -1692,8 +1692,7 @@ fail_all_pending(Reason, #state{pending = P, subscriptions = Subs,
 
 abort_stream_process(Pid, Reason) ->
     try
-        macula_stream:abort(Pid, <<"disconnected">>,
-                             iolist_to_binary(io_lib:format("~p", [Reason])))
+        macula_stream:abort(Pid, <<"disconnected">>, macula_reason_name:text(Reason))
     catch _:_ -> ok end.
 
 %%-------------------------------------------------------------------
@@ -2330,7 +2329,7 @@ build_inbound_call_reply({ok, Handler}, CallId, Payload, SelfPub) ->
 %% Mapping:
 %%   * handler returns `{error, Reason}' →
 %%     `call_error(code = 0x0F unknown_error,
-%%                 detail = format(Reason))'
+%%                 detail = handler_error_detail(Reason))'
 %%   * handler crashes →
 %%     `call_error(code = 0x02 temporary_relay_failure)'
 %%   * handler returns anything else →
@@ -2341,7 +2340,7 @@ safe_invoke_handler(Handler, Payload, CallId, SelfPub) ->
             macula_frame:call_error(#{call_id     => CallId,
                                       code        => 16#0F,
                                       reported_by => SelfPub,
-                                      detail      => format_error_detail(Reason)});
+                                      detail      => handler_error_detail(Reason)});
         Reply ->
             macula_frame:result(#{call_id      => CallId,
                                   payload      => normalise_reply(Reply),
@@ -2349,8 +2348,8 @@ safe_invoke_handler(Handler, Payload, CallId, SelfPub) ->
     catch
         Class:Reason:Stack ->
             logger:warning(
-              "[station_link] handler crashed: ~p:~p~n  stack=~p",
-              [Class, Reason, Stack]),
+              "[station_link] handler crashed: ~ts",
+              [macula_reason_name:logged("~p:~p~n  stack=~p", [Class, Reason, Stack])]),
             macula_frame:call_error(#{call_id     => CallId,
                                       code        => 16#02,
                                       reported_by => SelfPub})
@@ -2371,28 +2370,29 @@ normalise_reply(Other)       -> Other.
 %% BOLT#4 error frames carry an optional `detail' binary, and it is the
 %% only way a handler's refusal reaches the caller who provoked it.
 %%
-%% A reason that is ALREADY a binary crosses verbatim, so a handler
-%% answering `{error, <<"hold_full">>}' gives its caller
+%% A reason that is ALREADY text, a binary or a printable Unicode
+%% charlist, crosses as that text, so a handler answering
+%% `{error, <<"hold_full">>}' or `{error, "hold_full"}' gives its caller
 %% `{error, <<"hold_full">>}' and the caller can match on it. Before
 %% 8.0.0 every reason went through `~0p' and that same handler produced
 %% `<<"<<\"hold_full\">>">>', a rendering of a binary rather than the
 %% binary, which no caller could sensibly compare against.
 %%
-%% Anything that is not a binary is still rendered with `~0p'. It is
-%% faithful but it is a printed form and not the term: a reason that
-%% crosses a wire crosses it as bytes, and a handler that wants its
-%% caller to match on the reason should say it in a binary.
+%% Any other reason crosses as its name, such as `refused' for
+%% `{refused, Why}', and a reason with no name crosses as no detail at
+%% all; see `macula_reason_name'. None of a reason's terms leave the
+%% node, so a handler that wants its caller to know more than a name
+%% says it in text.
 %%
-%% Capped at 256 bytes to keep CALL_ERROR frames bounded. A reason long
-%% enough to be truncated is a reason nobody can match on, which is one
-%% more argument for short ones.
-format_error_detail(Reason) when is_binary(Reason) ->
-    capped(Reason);
-format_error_detail(Reason) ->
-    capped(iolist_to_binary(io_lib:format("~0p", [Reason]))).
+%% Text is capped at 256 bytes of valid UTF-8, cut on a character
+%% boundary, to keep CALL_ERROR frames bounded. A reason long enough to
+%% be cut is a reason nobody can match on, which is one more argument
+%% for short ones.
+handler_error_detail(Reason) ->
+    detail_or_none(macula_reason_name:reply_text(Reason)).
 
-capped(Bin) when byte_size(Bin) =< 256 -> Bin;
-capped(Bin) -> <<(binary:part(Bin, 0, 253))/binary, "...">>.
+detail_or_none({ok, Text}) -> Text;
+detail_or_none(error) -> undefined.
 
 %% What an inbound ERROR frame means to the caller who is waiting.
 %%
@@ -2740,10 +2740,12 @@ stream_host_loop() ->
     receive stop -> ok end.
 
 %% Handler runs in a transient process. A handler crash maps to a
-%% STREAM_ERROR abort with the crash class as the code so callers
-%% see a stable error taxonomy. The try/catch is justified (mirrors
-%% `safe_invoke_handler/4' for unary CALLs): without it a crash
-%% would silently leave the caller waiting on its deadline.
+%% STREAM_ERROR abort with the crash class as the code and the reason's
+%% name as the message, so callers see a stable error taxonomy and none
+%% of the crash's terms; the crash goes to the node's log. The try/catch
+%% is justified (mirrors `safe_invoke_handler/4' for unary CALLs):
+%% without it a crash would silently leave the caller waiting on its
+%% deadline.
 spawn_stream_handler(Handler, Stream, Args, Proc) ->
     spawn(fun() -> run_stream_handler(Handler, Stream, Args, Proc) end).
 
@@ -2751,11 +2753,12 @@ run_stream_handler(Handler, Stream, Args, Proc) ->
     try Handler(Stream, Args)
     catch
         Class:Reason:Stack ->
-            Code = atom_to_binary(Class, utf8),
-            Msg = iolist_to_binary(io_lib:format(
-                "stream handler ~s crashed: ~p:~p~n~p",
-                [Proc, Class, Reason, Stack])),
-            _ = macula_stream:abort(Stream, Code, Msg)
+            logger:warning(
+              "[macula_station_link] stream handler ~ts crashed: ~ts",
+              [Proc, macula_reason_name:logged("~p:~p~n  stack=~p",
+                                               [Class, Reason, Stack])]),
+            _ = macula_stream:abort(Stream, atom_to_binary(Class, utf8),
+                                    macula_reason_name:text(Reason))
     end.
 
 %%-------------------------------------------------------------------
