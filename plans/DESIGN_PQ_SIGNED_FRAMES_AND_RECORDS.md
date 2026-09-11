@@ -57,6 +57,8 @@ data in one form, whatever a node has loaded.
   `malformed_frame`. Payloads carry no CBOR booleans either, since the decoding rule refuses them.
 - **GOODBYE `reason`** is text for people, at most 256 bytes of UTF-8. Any text within that bound is accepted and no
   check reads it; a longer one is `malformed_frame`.
+- **STREAM_ERROR `message`** is text for people, at most 256 bytes of UTF-8, as a GOODBYE `reason` is. A sender
+  with no such text sends an empty `message`.
 - **Accessors on the facade:**
   - `macula:field(Name, Map)` returns a field's value, or `undefined`;
   - `macula:field(Name, Map, Default)` returns `Default` for a missing field;
@@ -378,6 +380,9 @@ apply. `request` is `{key, tbs, signature}` under `MACULA-PQ-REQUEST-V1`, and `k
 | `mode` | text | STREAM_OPEN only: `server_stream`, `client_stream` or `bidi` |
 | `token` | bytes | optional: a capability token (WP 1.4) |
 
+- **A caller** that cannot reach its chosen provider before its request is sent, whether the station endpoint does
+  not resolve or the dial fails, tries the next authorized advertisement for that procedure, and retries resolution
+  when none qualifies, within the call's deadline (D25 item 9).
 - **The request hash** is SHA-384 of `tbs`. It names the request in every reply and stream frame (D25 item 3).
   `tbs` holds `caller`, so two callers never share a request hash.
 - **The deadline** is the request's acceptance deadline. A provider refuses to start a request after it, and refuses

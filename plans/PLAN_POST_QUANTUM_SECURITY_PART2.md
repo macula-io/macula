@@ -522,7 +522,10 @@ Every stack also meets these, each red first:
   is refused; STORE_ACK is matched on `key`, `signer` and `version`; FIND_VALUE `after` and VALUE `next` are
   followed under the consumer rules of section 1.5; the put path paces record bytes to at most 1 MiB per second
   after a 16 MiB burst; the Plumtree IHAVE and HyParView placement allowances hold where the stack runs them; and
-  the decoding vectors cover the new fields.
+  the decoding vectors cover the new fields;
+- a stack that dials providers directly, before a request is sent, tries the next authorized advertisement for a
+  procedure when the chosen provider's station endpoint does not resolve or the dial fails, and retries resolution
+  when none qualifies, within the call's deadline (D25 item 9).
 
 ### WP 4.1 `macula-rust`
 

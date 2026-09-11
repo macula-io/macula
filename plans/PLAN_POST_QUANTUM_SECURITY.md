@@ -464,7 +464,7 @@ Raf answered "go with the recommendations" on 2026-09-10.
 | D25 | Replies bound to provider and request | Caller-signed target, request hash, signed stream frames | Accepted |
 | D26 | Peer-supplied maps | One key form in 11.0.0, read through the facade accessors | Accepted |
 | D27 | Where content lives | The sharing node keeps and serves it; stations only pass it through | Accepted |
-| D28 | DHT slots and verification budget | 64 entries per slot; checked places; slowed reads | Recommended |
+| D28 | DHT slots and verification budget | 64 entries per slot; checked places; slowed reads | Accepted |
 
 The full text of each decision is in
 [PLAN_POST_QUANTUM_SECURITY_DECISIONS.md](PLAN_POST_QUANTUM_SECURITY_DECISIONS.md).

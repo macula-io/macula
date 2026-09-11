@@ -676,7 +676,7 @@ before its wire checks are green.
 
 - **Question:** how much does a DHT slot hold, who gets a place when it is full, and what does reading from a peer whose
   objects keep failing cost a node?
-- **Recommendation, agreed by Mars and Mercury and checked by Jupiter on 2026-09-11:** the rules of
+- **Answer, accepted by Raf on 2026-09-11:** the rules of
   `DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md`:
   - a slot that signers share holds 64 entries, one per signer; a record from a new signer that finds no free place is
     not stored, and nothing held is evicted for it; built-in and domain types each have a station total; VALUE
