@@ -106,6 +106,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `macula:publish/4` by default, and pass `stream_io` and
   `advertise_stream`, and for `advertise_direct/7` also
   `publish_advertisement`, on to `macula_streamer`.
+- `macula_pusher:start_link/7` and `start_link_direct/7` take start
+  options. `stream_io` gives the functions a pusher opens, writes and
+  aborts its stream with and awaits the reply through, `call_stream/5`,
+  `send/3`, `close_send/1`, `await_reply/1` and `abort/3`, checked by
+  `macula_stream:stream_io/2`, and `fact_publish` the function it announces
+  its facts with. Without them they are the `macula` and `macula_stream`
+  functions, and a direct-dial pusher opens with
+  `macula_direct_dial:call_stream/5`.
 
 ### Changed
 

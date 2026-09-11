@@ -8,7 +8,9 @@
 %%% advertisement publish {advertisement_published, Procedure, Identity,
 %%% Opts}, and the fact publish {published, Topic, Payload}. recv/2
 %%% returns the scripted results in order and then waits, as a stream with
-%%% nothing more to read does. The drain functions return, in order, what
+%%% nothing more to read does; call_stream/5 opens the test process as the
+%%% stream, and await_reply/1 answers {error, no_reply}, for a test to give
+%%% other ones where it needs them. The drain functions return, in order, what
 %%% is already in the test's mailbox; a test drains once its provider has
 %%% signalled that the calls it checks were made.
 %%% @end
@@ -37,8 +39,8 @@ options(Results) ->
                               ok
                       end}.
 
-%% @doc The stream functions a provider runs on, with recv/2 returning
-%% Results.
+%% @doc The stream functions a provider or a pusher runs on, with recv/2
+%% returning Results.
 -spec stream_io([term()]) -> macula_stream:stream_io().
 stream_io(Results) ->
     Test = self(),
@@ -47,13 +49,21 @@ stream_io(Results) ->
                      Test ! {stream_call, Name, Args},
                      ok
              end,
-    #{recv => fun(_Stream, _Timeout) -> next_result(atomics:add_get(Next, 1, 1), Results) end,
+    #{call_stream => fun(Pool, Realm, Procedure, Args, Opts) ->
+                             ok = Record(call_stream, [Pool, Realm, Procedure, Args, Opts]),
+                             {ok, Test}
+                     end,
+      recv => fun(_Stream, _Timeout) -> next_result(atomics:add_get(Next, 1, 1), Results) end,
       send => fun(Stream, Chunk, Encoding) -> Record(send, [Stream, Chunk, Encoding]) end,
       close_send => fun(Stream) -> Record(close_send, [Stream]) end,
       close => fun(Stream) -> Record(close, [Stream]) end,
       abort => fun(Stream, Code, Message) -> Record(abort, [Stream, Code, Message]) end,
       set_reply => fun(Stream, Value) -> Record(set_reply, [Stream, Value]) end,
-      set_error => fun(Stream, Reason) -> Record(set_error, [Stream, Reason]) end}.
+      set_error => fun(Stream, Reason) -> Record(set_error, [Stream, Reason]) end,
+      await_reply => fun(Stream) ->
+                             ok = Record(await_reply, [Stream]),
+                             {error, no_reply}
+                     end}.
 
 %% @doc The stream calls in the mailbox, as {Name, Args}.
 -spec calls() -> [{atom(), [term()]}].

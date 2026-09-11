@@ -31,7 +31,6 @@
                   "macula_download_tests.erl",
                   "macula_feeder_tests.erl",
                   "macula_link_respawn_replay_tests.erl",
-                  "macula_pusher_tests.erl",
                   "macula_station_link_tests.erl"]).
 
 no_test_replaces_a_shared_module_test() ->

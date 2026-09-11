@@ -1,15 +1,17 @@
 %%%-------------------------------------------------------------------
 %%% @doc Tests for macula_pusher.
 %%%
-%%% Mocks at the `macula'/`macula_direct_dial'/`macula_stream'
-%%% boundary — the raw streaming primitives this module drives
-%%% directly (`call_stream', `send', `close_send', `await_reply',
-%%% `abort'), the same layer `macula_streamer_tests' mocks.
+%%% Each pusher runs on the stream functions and fact publish its start
+%%% options give, from macula_scripted_stream: the raw streaming
+%%% primitives this module drives directly (`call_stream', `send',
+%%% `close_send', `await_reply', `abort'), so no test replaces a module.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_pusher_tests).
 
 -include_lib("eunit/include/eunit.hrl").
+
+-define(REALM, <<0:256>>).
 
 -behaviour(macula_pusher).
 -export([init/1, handle_pushed/2]).
@@ -25,175 +27,166 @@ handle_pushed(Result, Parent) ->
     {stop, normal, Parent}.
 
 %%%===================================================================
-%%% Fixtures
-%%%===================================================================
-
-setup() ->
-    meck:new(macula, [passthrough]),
-    meck:expect(macula, publish, fun(_Pool, _Realm, _Topic, _Payload) -> ok end),
-    meck:new(macula_stream, [passthrough]),
-    ok.
-
-teardown(_) ->
-    catch meck:unload(macula_direct_dial),
-    meck:unload(macula_stream),
-    meck:unload(macula),
-    ok.
-
-%%%===================================================================
 %%% Tests
 %%%===================================================================
 
+%% Each test runs in a process of its own.
 pusher_test_() ->
-    {foreach, fun setup/0, fun teardown/1,
-     [fun small_push_delivers_the_verified_result/0,
-      fun chunked_push_sends_every_chunk_in_order/0,
-      fun send_failure_bails_without_awaiting_reply/0,
-      fun open_failure_still_announces_completion/0,
-      fun cancel_before_resolve_announces_cancelled/0,
-      fun cancel_reaches_the_real_stream_not_just_the_local_worker/0,
-      fun direct_dial_pushes_through_the_resolved_provider/0]}.
+    [{spawn, Test}
+     || Test <- [fun small_push_delivers_the_verified_result/0,
+                 fun chunked_push_sends_every_chunk_in_order/0,
+                 fun send_failure_bails_without_awaiting_reply/0,
+                 fun open_failure_still_announces_completion/0,
+                 fun cancel_before_resolve_announces_cancelled/0,
+                 fun cancel_reaches_the_real_stream_not_just_the_local_worker/0,
+                 fun direct_dial_pushes_through_the_resolved_provider/0,
+                 fun stream_functions_of_another_shape_are_refused/0,
+                 fun without_stream_io_a_pusher_opens_through_the_macula_facade/0]].
 
 small_push_delivers_the_verified_result() ->
     process_flag(trap_exit, true),
     Bytes = <<"small">>,
-    Stream = dummy_pid(),
     {ok, Manifest, _Chunks} = macula_manifest:create(Bytes),
     Mcid = maps:get(mcid, Manifest),
-    meck:expect(macula, call_stream, fun(_Pool, _Realm, _Proc, _Args, _Opts) -> {ok, Stream} end),
-    meck:expect(macula, send, fun(_Stream, _Chunk) -> ok end),
-    meck:expect(macula, close_send, fun(_Stream) -> ok end),
-    meck:expect(macula, await_reply, fun(_Stream) -> {ok, Mcid} end),
-
-    {ok, _Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), <<0:256>>,
-                                          <<"bulk.ingest">>, Bytes, self()),
+    Opts = with_io(opts(), await_reply, fun(_Stream) -> {ok, Mcid} end),
+    {ok, _Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), ?REALM, <<"bulk.ingest">>,
+                                          Bytes, self(), Opts),
     ?assertEqual({pushed, {ok, Mcid}}, wait_msg()),
-    ?assertEqual([<<"sharing.push_started_v1">>, <<"sharing.push_completed_v1">>], topics()),
-    ?assertMatch(#{outcome := completed, mcid := Mcid}, completed_payload()).
+    Published = macula_scripted_stream:published(),
+    ?assertEqual([<<"sharing.push_started_v1">>, <<"sharing.push_completed_v1">>],
+                 [Topic || {Topic, _} <- Published]),
+    ?assertMatch([_, {_, #{outcome := completed, mcid := Mcid}}], Published).
 
 chunked_push_sends_every_chunk_in_order() ->
     process_flag(trap_exit, true),
     Bytes = crypto:strong_rand_bytes(3 * macula_manifest:default_chunk_size()),
     {ok, Manifest, Chunks} = macula_manifest:create(Bytes),
     Mcid = maps:get(mcid, Manifest),
-    Stream = dummy_pid(),
-    meck:expect(macula, call_stream, fun(_Pool, _Realm, _Proc, _Args, _Opts) -> {ok, Stream} end),
-    meck:expect(macula, send, fun(_Stream, _Chunk) -> ok end),
-    meck:expect(macula, close_send, fun(_Stream) -> ok end),
-    meck:expect(macula, await_reply, fun(_Stream) -> {ok, Mcid} end),
-
-    {ok, _Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), <<0:256>>,
-                                          <<"bulk.ingest">>, Bytes, self()),
+    Opts = with_io(opts(), await_reply, fun(_Stream) -> {ok, Mcid} end),
+    {ok, _Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), ?REALM, <<"bulk.ingest">>,
+                                          Bytes, self(), Opts),
     ?assertEqual({pushed, {ok, Mcid}}, wait_msg()),
-    SentChunks = [C || {_, {macula, send, [_S, C]}, ok} <- meck:history(macula)],
-    ?assertEqual(Chunks, SentChunks).
+    ?assertEqual(Chunks,
+                 [Chunk || {send, [_Stream, Chunk, raw]} <- macula_scripted_stream:calls()]).
 
 send_failure_bails_without_awaiting_reply() ->
     process_flag(trap_exit, true),
     Bytes = crypto:strong_rand_bytes(3 * macula_manifest:default_chunk_size()),
-    Stream = dummy_pid(),
-    meck:expect(macula, call_stream, fun(_Pool, _Realm, _Proc, _Args, _Opts) -> {ok, Stream} end),
-    meck:expect(macula, send, fun(_Stream, _Chunk) -> {error, send_closed} end),
-    meck:expect(macula, close_send, fun(_Stream) -> ok end),
-    meck:expect(macula, await_reply, fun(_Stream) -> ?assert(false) end),
-
-    {ok, _Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), <<0:256>>,
-                                          <<"bulk.ingest">>, Bytes, self()),
+    Opts = with_io(opts(), send, fun(_Stream, _Chunk, _Encoding) -> {error, send_closed} end),
+    {ok, _Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), ?REALM, <<"bulk.ingest">>,
+                                          Bytes, self(), Opts),
     ?assertEqual({pushed, {error, send_closed}}, wait_msg()),
-    ?assertEqual(0, meck:num_calls(macula, close_send, ['_'])),
-    ?assertEqual(0, meck:num_calls(macula, await_reply, ['_'])).
+    ?assertEqual([], [Name || {Name, _} <- macula_scripted_stream:calls(),
+                              Name =:= close_send orelse Name =:= await_reply]).
 
 open_failure_still_announces_completion() ->
     process_flag(trap_exit, true),
-    meck:expect(macula, call_stream,
-               fun(_Pool, _Realm, _Proc, _Args, _Opts) -> {error, no_healthy_link} end),
-
-    {ok, _Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), <<0:256>>,
-                                          <<"bulk.ingest">>, <<"x">>, self()),
+    Opts = with_io(opts(), call_stream,
+                   fun(_Pool, _Realm, _Proc, _Args, _CallOpts) -> {error, no_healthy_link} end),
+    {ok, _Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), ?REALM, <<"bulk.ingest">>,
+                                          <<"x">>, self(), Opts),
     ?assertEqual({pushed, {error, no_healthy_link}}, wait_msg()),
-    ?assertMatch(#{outcome := failed, reason := no_healthy_link}, completed_payload()).
+    ?assertMatch([_, {_, #{outcome := failed, reason := no_healthy_link}}],
+                 macula_scripted_stream:published()).
 
 cancel_before_resolve_announces_cancelled() ->
     process_flag(trap_exit, true),
     Self = self(),
-    meck:expect(macula, call_stream, fun(_Pool, _Realm, _Proc, _Args, _Opts) ->
-        Self ! resolving,
-        receive never -> ok after 5_000 -> ok end,
-        {ok, dummy_pid()}
-    end),
-
-    {ok, Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), <<0:256>>,
-                                         <<"bulk.ingest">>, <<"x">>, self()),
+    Opts = with_io(opts(), call_stream, fun(_Pool, _Realm, _Proc, _Args, _CallOpts) ->
+                                                Self ! resolving,
+                                                receive never -> ok after 5_000 -> ok end,
+                                                {ok, dummy_pid()}
+                                        end),
+    {ok, Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), ?REALM, <<"bulk.ingest">>,
+                                         <<"x">>, self(), Opts),
     ?assertEqual(resolving, wait_msg()),
     ok = macula_pusher:cancel(Pid),
-    ?assertMatch(#{outcome := cancelled}, completed_payload()).
+    ?assertMatch([_, {_, #{outcome := cancelled}}], macula_scripted_stream:published()).
 
 %% The actual point of holding `stream' in state: `cancel/1' must
 %% reach all the way down to a real, peer-visible abort on the open
-%% stream — not just kill the pusher's own local proxy process and
+%% stream, not just kill the pusher's own local proxy process and
 %% leave the peer to infer cancellation from the connection going
-%% away (`macula_stream''s owner-death path is silent — see the
+%% away (`macula_stream''s owner-death path is silent, see the
 %% module doc).
 cancel_reaches_the_real_stream_not_just_the_local_worker() ->
     process_flag(trap_exit, true),
     Self = self(),
-    Stream = dummy_pid(),
-    meck:expect(macula, call_stream, fun(_Pool, _Realm, _Proc, _Args, _Opts) -> {ok, Stream} end),
-    meck:expect(macula, send, fun(_Stream, _Chunk) ->
-        Self ! sending,
-        receive never -> ok after 5_000 -> ok end,
-        ok
-    end),
-    meck:expect(macula_stream, abort, fun(_Stream, _Code, _Message) -> ok end),
-
-    {ok, Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), <<0:256>>,
-                                         <<"bulk.ingest">>, <<"x">>, self()),
+    Opts = with_io(opts(), send, fun(_Stream, _Chunk, _Encoding) ->
+                                         Self ! sending,
+                                         receive never -> ok after 5_000 -> ok end,
+                                         ok
+                                 end),
+    {ok, Pid} = macula_pusher:start_link(?MODULE, dummy_pid(), ?REALM, <<"bulk.ingest">>,
+                                         <<"x">>, self(), Opts),
     ?assertEqual(sending, wait_msg()),
     ok = macula_pusher:cancel(Pid),
-    ?assertEqual(1, meck:num_calls(macula_stream, abort,
-                                   [Stream, <<"cancelled">>, '_'])).
+    ?assertEqual([{abort, [Self, <<"cancelled">>, <<"push cancelled">>]}],
+                 [Call || {abort, _} = Call <- macula_scripted_stream:calls()]).
 
-%% start_link_direct resolves+dials the procedure's provider through
-%% `macula_direct_dial:call_stream/5' as one step (unlike content
-%% sharing's lower-level primitives, there is no separate resolve step
-%% for this module to drive itself — see the module doc).
+%% start_link_direct opens with the call_stream it is given, for the
+%% procedure, in client_stream mode, as it does with
+%% `macula_direct_dial:call_stream/5' by default.
 direct_dial_pushes_through_the_resolved_provider() ->
     process_flag(trap_exit, true),
     Bytes = <<"direct">>,
     {ok, Manifest, _Chunks} = macula_manifest:create(Bytes),
     Mcid = maps:get(mcid, Manifest),
-    Stream = dummy_pid(),
-    meck:new(macula_direct_dial, [passthrough]),
-    meck:expect(macula_direct_dial, call_stream,
-               fun(_Pool, _Realm, <<"bulk.ingest">>, _Args, #{mode := client_stream}) ->
-                   {ok, Stream}
-               end),
-    meck:expect(macula, send, fun(_Stream, _Chunk) -> ok end),
-    meck:expect(macula, close_send, fun(_Stream) -> ok end),
-    meck:expect(macula, await_reply, fun(_Stream) -> {ok, Mcid} end),
+    Opts = with_io(opts(), await_reply, fun(_Stream) -> {ok, Mcid} end),
+    {ok, _Pid} = macula_pusher:start_link_direct(?MODULE, dummy_pid(), ?REALM, <<"bulk.ingest">>,
+                                                 Bytes, self(), Opts),
+    ?assertEqual({pushed, {ok, Mcid}}, wait_msg()),
+    ?assertMatch([{call_stream, [_, _, <<"bulk.ingest">>, _, #{mode := client_stream}]} | _],
+                 macula_scripted_stream:calls()).
 
-    {ok, _Pid} = macula_pusher:start_link_direct(?MODULE, dummy_pid(), <<0:256>>,
-                                                 <<"bulk.ingest">>, Bytes, self()),
-    ?assertEqual({pushed, {ok, Mcid}}, wait_msg()).
+%% Stream functions without one the pusher calls, of another arity, or a
+%% fact publish of another arity are refused with function_clause, in the
+%% caller, and nothing is announced.
+stream_functions_of_another_shape_are_refused() ->
+    #{stream_io := StreamIo} = Opts = opts(),
+    Start = fun(Given) ->
+                    macula_pusher:start_link(?MODULE, dummy_pid(), ?REALM, <<"bulk.ingest">>,
+                                             <<"x">>, self(), Given)
+            end,
+    ?assertError(function_clause, Start(Opts#{stream_io := maps:remove(await_reply, StreamIo)})),
+    ?assertError(function_clause, Start(with_io(Opts, send, fun(_Stream, _Chunk) -> ok end))),
+    ?assertError(function_clause, Start(Opts#{fact_publish := fun(_, _, _) -> ok end})),
+    ?assertEqual([], macula_scripted_stream:published()).
+
+%% Without stream functions a pusher opens its stream with
+%% macula:call_stream/5, whose guard refuses a pool that is not a process.
+without_stream_io_a_pusher_opens_through_the_macula_facade() ->
+    process_flag(trap_exit, true),
+    {ok, Pid} = macula_pusher:start_link(?MODULE, pool, ?REALM, <<"bulk.ingest">>, <<"x">>,
+                                         self(), maps:with([fact_publish], opts())),
+    receive
+        {'EXIT', Pid, Reason} ->
+            ?assertMatch({worker_crashed, {function_clause, [{macula, call_stream, _, _} | _]}},
+                         Reason)
+    after 5000 ->
+        error(pusher_did_not_stop)
+    end.
 
 %%%===================================================================
 %%% Helpers
 %%%===================================================================
 
+%% The start options: the scripted stream functions and fact publish.
+opts() ->
+    maps:with([stream_io, fact_publish], macula_scripted_stream:options([])).
+
+%% Opts with its stream function Key given as Fun.
+with_io(#{stream_io := StreamIo} = Opts, Key, Fun) ->
+    Opts#{stream_io := StreamIo#{Key => Fun}}.
+
 dummy_pid() ->
     spawn(fun() -> receive stop -> ok end end).
 
-topics() ->
-    [T || {_, {macula, publish, [_Pool, _Realm, T, _Payload]}, ok} <- meck:history(macula)].
-
-completed_payload() ->
-    [{_, {macula, publish, [_, _, _, Payload]}, ok}] =
-        [E || {_, {macula, publish, [_, _, T, _]}, ok} = E <- meck:history(macula),
-              T =:= <<"sharing.push_completed_v1">>],
-    Payload.
-
+%% The next message from the pusher's callback or a held function.
 wait_msg() ->
     receive
-        Msg -> Msg
+        {pushed, _} = Msg -> Msg;
+        resolving = Msg -> Msg;
+        sending = Msg -> Msg
     after 1000 -> timeout
     end.

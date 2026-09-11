@@ -82,6 +82,19 @@
 %%% primitives, there is no separate resolve step for this module to
 %%% drive itself).
 %%%
+%%% == Stream I/O ==
+%%%
+%%% A pusher opens its stream with `call_stream/5', `macula:call_stream/5'
+%%% by default or `macula_direct_dial:call_stream/5' for
+%%% `start_link_direct'; sends its chunks with `send/3' and `close_send/1';
+%%% waits for the recipient's reply with `await_reply/1'; aborts the stream
+%%% on cancel with `abort/3'; and announces its facts with `fact_publish',
+%%% `macula:publish/4' by default. `start_link/7' and `start_link_direct/7'
+%%% take a `stream_io' start option, checked by `macula_stream:stream_io/2',
+%%% with those five stream functions and any other
+%%% `macula_stream:stream_io()' ones, and a `fact_publish' start option, to
+%%% run a pusher on something else, such as a test's scripted stream.
+%%%
 %%% == Example ==
 %%%
 %%% ```
@@ -106,10 +119,12 @@
 
 -behaviour(gen_server).
 
--export([start_link/5, start_link/6]).
--export([start_link_direct/5, start_link_direct/6]).
+-export([start_link/5, start_link/6, start_link/7]).
+-export([start_link_direct/5, start_link_direct/6, start_link_direct/7]).
 -export([cancel/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+
+-export_type([start_opts/0]).
 
 -callback init(Args :: term()) ->
     {ok, State :: term()} | {stop, Reason :: term()}.
@@ -121,11 +136,16 @@
 -define(PUSH_COMPLETED, <<"sharing.push_completed_v1">>).
 -define(CANCEL_CODE, <<"cancelled">>).
 
+-type start_opts() :: #{stream_io => macula_stream:stream_io(),
+                        fact_publish => macula_lifetime_announcer:publish()}.
+
 -record(pstate, {
     module    :: module(),
     pool      :: macula:pool(),
     realm     :: macula:realm(),
     announce  :: boolean(),
+    io        :: macula_stream:stream_io(),
+    fact_publish :: macula_lifetime_announcer:publish(),
     share_id  :: binary(),
     worker    :: pid(),
     stream    :: pid() | undefined,
@@ -144,8 +164,15 @@ start_link(Module, Pool, Realm, Procedure, Bytes) ->
 -spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),
                  binary(), term()) -> {ok, pid()} | {error, term()}.
 start_link(Module, Pool, Realm, Procedure, Bytes, Args) ->
-    gen_server:start_link(?MODULE,
-        {pooled, Module, Pool, Realm, Procedure, Bytes, true, Args}, []).
+    start_link(Module, Pool, Realm, Procedure, Bytes, Args, #{}).
+
+%% @doc As `start_link/6', with start options: `stream_io' gives the
+%% functions the pusher runs its stream on, and `fact_publish' the one it
+%% announces its facts with (see "Stream I/O" above).
+-spec start_link(module(), macula:pool(), macula:realm(), macula:procedure(),
+                 binary(), term(), start_opts()) -> {ok, pid()} | {error, term()}.
+start_link(Module, Pool, Realm, Procedure, Bytes, Args, Opts) when is_map(Opts) ->
+    start(pooled, Opts, {Module, Pool, Realm, Procedure, Bytes, Args}).
 
 %% @doc As `start_link/5', but resolves `Procedure''s
 %% `procedure_advertisement' from the DHT and dials its provider
@@ -164,29 +191,60 @@ start_link_direct(Module, Pool, Realm, Procedure, Bytes) ->
                         macula:procedure(), binary(), term()) ->
     {ok, pid()} | {error, term()}.
 start_link_direct(Module, Pool, Realm, Procedure, Bytes, Args) ->
-    gen_server:start_link(?MODULE,
-        {direct, Module, Pool, Realm, Procedure, Bytes, true, Args}, []).
+    start_link_direct(Module, Pool, Realm, Procedure, Bytes, Args, #{}).
+
+%% @doc As `start_link_direct/6', with start options: `stream_io' gives
+%% the functions the pusher runs its stream on, and `fact_publish' the one
+%% it announces its facts with (see "Stream I/O" above).
+-spec start_link_direct(module(), macula:pool(), macula:realm(),
+                        macula:procedure(), binary(), term(), start_opts()) ->
+    {ok, pid()} | {error, term()}.
+start_link_direct(Module, Pool, Realm, Procedure, Bytes, Args, Opts) when is_map(Opts) ->
+    start(direct, Opts, {Module, Pool, Realm, Procedure, Bytes, Args}).
 
 %% @doc Cancel an in-flight push. Publishes `sharing.push_completed_v1'
 %% with `outcome => cancelled' if the push had not resolved yet.
 -spec cancel(pid()) -> ok.
 cancel(Pid) -> gen_server:stop(Pid).
 
+%% A pusher starts on stream functions macula_stream:stream_io/2 accepts
+%% and a fact_publish of arity 4; any other is refused with
+%% function_clause, in the caller.
+start(DialMode, Opts, {Module, Pool, Realm, Procedure, Bytes, Args}) ->
+    StreamIo = macula_stream:stream_io(default_stream_io(DialMode),
+                                       maps:get(stream_io, Opts, undefined)),
+    FactPublish = arity_4(maps:get(fact_publish, Opts, fun macula:publish/4)),
+    gen_server:start_link(?MODULE,
+        {StreamIo, FactPublish, Module, Pool, Realm, Procedure, Bytes, true, Args}, []).
+
+default_stream_io(DialMode) ->
+    #{call_stream => dial(DialMode),
+      send => fun macula_stream:send/3,
+      close_send => fun macula:close_send/1,
+      await_reply => fun macula:await_reply/1,
+      abort => fun macula_stream:abort/3}.
+
+dial(pooled) -> fun macula:call_stream/5;
+dial(direct) -> fun macula_direct_dial:call_stream/5.
+
+arity_4(Fun) when is_function(Fun, 4) -> Fun.
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 %% @private
-init({DialMode, Module, Pool, Realm, Procedure, Bytes, Announce, InitArgs}) ->
+init({StreamIo, FactPublish, Module, Pool, Realm, Procedure, Bytes, Announce, InitArgs}) ->
     process_flag(trap_exit, true),
     case Module:init(InitArgs) of
         {ok, UserState} ->
             ShareId = crypto:strong_rand_bytes(16),
-            publish(Announce, Pool, Realm, ?PUSH_STARTED,
+            publish(Announce, FactPublish, Pool, Realm, ?PUSH_STARTED,
                     #{share_id => ShareId, size => byte_size(Bytes)}),
-            Worker = spawn_worker(DialMode, Pool, Realm, Procedure, Bytes),
+            Worker = spawn_worker(StreamIo, Pool, Realm, Procedure, Bytes),
             {ok, #pstate{module = Module, pool = Pool, realm = Realm,
-                        announce = Announce, share_id = ShareId,
+                        announce = Announce, io = StreamIo, fact_publish = FactPublish,
+                        share_id = ShareId,
                         worker = Worker, stream = undefined,
                         completed = false, user = UserState}};
         {stop, Reason} ->
@@ -200,40 +258,34 @@ init({DialMode, Module, Pool, Realm, Procedure, Bytes, Announce, InitArgs}) ->
 %% reply, report the outcome. Bails out early (without half-closing or
 %% awaiting a reply that will never usefully arrive) the moment any
 %% `send/2,3' fails — the stream is already gone or going.
-spawn_worker(DialMode, Pool, Realm, Procedure, Bytes) ->
+spawn_worker(StreamIo, Pool, Realm, Procedure, Bytes) ->
     Parent = self(),
-    spawn_link(fun() -> pusher_worker_run(DialMode, Pool, Realm, Procedure, Bytes, Parent) end).
+    spawn_link(fun() -> pusher_worker_run(StreamIo, Pool, Realm, Procedure, Bytes, Parent) end).
 
-pusher_worker_run(DialMode, Pool, Realm, Procedure, Bytes, Parent) ->
+pusher_worker_run(#{call_stream := CallStream} = StreamIo, Pool, Realm, Procedure, Bytes, Parent) ->
     {ok, Manifest, Chunks} = macula_manifest:create(Bytes),
-    case open_stream(DialMode, Pool, Realm, Procedure, Manifest) of
+    case CallStream(Pool, Realm, Procedure, Manifest, #{mode => client_stream}) of
         {ok, Stream} ->
             Parent ! {stream, Stream},
-            Result = push_chunks(Stream, Chunks),
+            Result = push_chunks(StreamIo, Stream, Chunks),
             Parent ! {push_result, Result};
         {error, Reason} ->
             Parent ! {push_result, {error, Reason}}
     end.
 
-open_stream(pooled, Pool, Realm, Procedure, Manifest) ->
-    macula:call_stream(Pool, Realm, Procedure, Manifest, #{mode => client_stream});
-open_stream(direct, Pool, Realm, Procedure, Manifest) ->
-    macula_direct_dial:call_stream(Pool, Realm, Procedure, Manifest,
-                                   #{mode => client_stream}).
-
-push_chunks(Stream, Chunks) ->
-    case send_all(Stream, Chunks) of
+push_chunks(#{close_send := CloseSend, await_reply := AwaitReply} = StreamIo, Stream, Chunks) ->
+    case send_all(StreamIo, Stream, Chunks) of
         ok ->
-            ok = macula:close_send(Stream),
-            macula:await_reply(Stream);
+            ok = CloseSend(Stream),
+            AwaitReply(Stream);
         {error, _} = Error ->
             Error
     end.
 
-send_all(_Stream, []) -> ok;
-send_all(Stream, [Chunk | Rest]) ->
-    case macula:send(Stream, Chunk) of
-        ok -> send_all(Stream, Rest);
+send_all(_StreamIo, _Stream, []) -> ok;
+send_all(#{send := Send} = StreamIo, Stream, [Chunk | Rest]) ->
+    case Send(Stream, Chunk, raw) of
+        ok -> send_all(StreamIo, Stream, Rest);
         {error, _} = Error -> Error
     end.
 
@@ -265,10 +317,10 @@ terminate(_Reason, #pstate{worker = Worker, completed = true}) ->
     unlink(Worker),
     exit(Worker, kill),
     ok;
-terminate(_Reason, #pstate{stream = Stream} = State) ->
+terminate(_Reason, #pstate{io = StreamIo, stream = Stream} = State) ->
     unlink(State#pstate.worker),
     exit(State#pstate.worker, kill),
-    reap_stream(Stream),
+    reap_stream(StreamIo, Stream),
     _ = announce_completed(State, {error, cancelled}),
     ok.
 
@@ -283,17 +335,18 @@ terminate(_Reason, #pstate{stream = Stream} = State) ->
 %% before `{stream, Stream}' has arrived yet (still resolving/dialing).
 %% `catch' covers the benign race between the proxy's own natural
 %% completion and an external `cancel/1' landing at the same time.
-reap_stream(undefined) -> ok;
-reap_stream(Stream) ->
-    try macula_stream:abort(Stream, ?CANCEL_CODE, <<"push cancelled">>)
+reap_stream(_StreamIo, undefined) -> ok;
+reap_stream(#{abort := Abort}, Stream) ->
+    try Abort(Stream, ?CANCEL_CODE, <<"push cancelled">>)
     catch _:_ -> ok end,
     ok.
 
 announce_completed(#pstate{completed = true} = State, _Result) ->
     State;
 announce_completed(#pstate{pool = Pool, realm = Realm, announce = Announce,
-                           share_id = ShareId} = State, Result) ->
-    publish(Announce, Pool, Realm, ?PUSH_COMPLETED,
+                           fact_publish = FactPublish, share_id = ShareId} = State,
+                   Result) ->
+    publish(Announce, FactPublish, Pool, Realm, ?PUSH_COMPLETED,
             outcome_fields(#{share_id => ShareId}, Result)),
     State#pstate{completed = true}.
 
@@ -304,6 +357,6 @@ outcome_fields(Base, {error, cancelled}) ->
 outcome_fields(Base, {error, Reason}) ->
     Base#{outcome => failed, reason => Reason}.
 
-publish(false, _, _, _, _) -> ok;
-publish(true, Pool, Realm, Topic, Payload) ->
-    _ = macula:publish(Pool, Realm, Topic, Payload), ok.
+publish(false, _FactPublish, _, _, _, _) -> ok;
+publish(true, FactPublish, Pool, Realm, Topic, Payload) ->
+    _ = FactPublish(Pool, Realm, Topic, Payload), ok.
