@@ -15,8 +15,9 @@
 %% version's millisecond field can run ahead of it, and nothing reads that field.
 %%
 %% This process owns the table holding the last prefix issued and runs under `macula_root'. Callers advance it
-%% themselves with a compare-and-swap, so no version waits on a message. Without the table, between an owner's exit
-%% and its restart, and after a restart, the next version starts again from the clock.
+%% themselves, each version with at most three atomic table operations that only ever raise the row, so no version
+%% waits on a message or on another caller. Without the table, between an owner's exit and its restart, and after a
+%% restart, the next version starts again from the clock.
 -module(macula_record_uuid).
 -behaviour(gen_server).
 
@@ -63,21 +64,21 @@ handle_call(_Request, _From, Table) ->
 handle_cast(_Message, Table) ->
     {noreply, Table}.
 
-%% The prefix to issue: the fresh one, or the last one issued plus one when that is larger.
+%% The prefix to issue: the fresh one, or the last one issued plus one when that is larger. Each step is one atomic
+%% table operation that only raises the row and returns the value it set: insert_new for the first caller, a
+%% select_replace guarded on the row being below the fresh prefix, else update_counter by one. A version is the row's
+%% value right after its own step, so versions are distinct and increase, and no caller ever tries again. Do not put
+%% back a swap of one exact row value that starts over when another caller moved the row: with many callers on the
+%% row, most attempts lose and a version costs ten times as much.
 issued(undefined, _Table, Fresh) ->
     Fresh;
 issued(_Tid, Table, Fresh) ->
-    claimed(ets:lookup(Table, last), Table, Fresh).
+    inserted(ets:insert_new(Table, {last, Fresh}), Table, Fresh).
 
-claimed([], Table, Fresh) ->
-    inserted(ets:insert_new(Table, {last, Fresh}), Table, Fresh);
-claimed([{last, Last}], Table, Fresh) ->
-    Next = max(Fresh, Last + 1),
-    swapped(ets:select_replace(Table, [{{last, Last}, [], [{{last, Next}}]}]), Table, Fresh, Next).
+inserted(true, _Table, Fresh) ->
+    Fresh;
+inserted(false, Table, Fresh) ->
+    raised(ets:select_replace(Table, [{{last, '$1'}, [{'<', '$1', Fresh}], [{{last, Fresh}}]}]), Table, Fresh).
 
-inserted(true, _Table, Fresh) -> Fresh;
-inserted(false, Table, Fresh) -> issued(ets:whereis(Table), Table, Fresh).
-
-%% Another caller issued a prefix between the read and the swap: read again.
-swapped(1, _Table, _Fresh, Next) -> Next;
-swapped(0, Table, Fresh, _Next) -> issued(ets:whereis(Table), Table, Fresh).
+raised(1, _Table, Fresh) -> Fresh;
+raised(0, Table, _Fresh) -> ets:update_counter(Table, last, {2, 1}).

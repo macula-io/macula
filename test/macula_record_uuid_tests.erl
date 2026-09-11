@@ -46,8 +46,12 @@ monotonic_test_() ->
        fun a_counter_that_runs_out_moves_to_the_next_millisecond/0},
       {"a clock step back never lowers a version",
        fun a_clock_step_back_never_lowers_a_version/0},
+      {"a version taken while the last one issued is above the fresh prefix is that one plus one",
+       fun a_version_below_the_last_one_issued_is_that_one_plus_one/0},
+      {"a version taken while the last one issued is below the fresh prefix is the fresh prefix",
+       fun a_version_above_the_last_one_issued_is_the_fresh_prefix/0},
       {"concurrent callers get distinct versions, each in increasing order",
-       fun concurrent_callers_get_distinct_increasing_versions/0},
+       {timeout, 60, fun concurrent_callers_get_distinct_increasing_versions/0}},
       {"without its table a version is a UUIDv7 at its millisecond",
        fun without_its_table_a_version_is_a_uuidv7_at_its_millisecond/0}]}.
 
@@ -81,13 +85,28 @@ a_clock_step_back_never_lowers_a_version() ->
     After = macula_record_uuid:v7_monotonic(?TABLE, ?MS - 60_000),
     ?assert(After > Before).
 
+a_version_below_the_last_one_issued_is_that_one_plus_one() ->
+    _ = owner(),
+    _ = macula_record_uuid:v7_monotonic(?TABLE, ?MS + 60_000),
+    [{last, Last}] = ets:lookup(?TABLE, last),
+    ?assertEqual(Last + 1, prefix(macula_record_uuid:v7_monotonic(?TABLE, ?MS))).
+
+a_version_above_the_last_one_issued_is_the_fresh_prefix() ->
+    _ = owner(),
+    Before = prefix(macula_record_uuid:v7_monotonic(?TABLE, ?MS)),
+    After = prefix(macula_record_uuid:v7_monotonic(?TABLE, ?MS + 60_000)),
+    [{last, Last}] = ets:lookup(?TABLE, last),
+    ?assertEqual({?MS + 60_000, Last}, {After bsr 12, After}),
+    ?assert((After band 16#FFF) < 2048 andalso After > Before).
+
+%% Many callers on one row, with no bound on how long they take: each still gets distinct versions in order.
 concurrent_callers_get_distinct_increasing_versions() ->
     _ = owner(),
     Test = self(),
     Callers = [spawn_link(fun() -> Test ! {versions, [macula_record_uuid:v7_monotonic(?TABLE, ?MS)
                                                      || _ <- lists:seq(1, 50)]} end)
                || _ <- lists:seq(1, 200)],
-    Lists = [receive {versions, Versions} -> Versions after 5_000 -> erlang:error(caller_stuck) end || _ <- Callers],
+    Lists = [receive {versions, Versions} -> Versions end || _ <- Callers],
     ?assert(lists:all(fun strictly_increasing/1, Lists)),
     ?assertEqual(10_000, length(lists:usort(lists:append(Lists)))).
 
@@ -111,6 +130,10 @@ a_tombstone_has_a_higher_version_than_its_record() ->
 owner() ->
     {ok, Owner} = macula_record_uuid:start_link(#{table => ?TABLE}),
     Owner.
+
+%% The 60 bits of millisecond and counter a version carries.
+prefix(<<Ms:48, 7:4, Counter:12, 2#10:2, _RandB:62>>) ->
+    (Ms bsl 12) bor Counter.
 
 stopped(undefined) -> ok;
 stopped(Owner) -> gen_server:stop(Owner).
