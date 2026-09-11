@@ -76,22 +76,23 @@ relay_listener() ->
     {ok, {CertPem, KeyPem}} =
         macula_quic:generate_self_signed_cert(
             iolist_to_binary(Pub), iolist_to_binary(Priv), [<<"localhost">>, <<"127.0.0.1">>]),
-    Base = lists:flatten(io_lib:format("/tmp/macula-relay-client-queue-~s-~p",
-                                       [os:getpid(), erlang:unique_integer([positive])])),
-    Cert = Base ++ ".crt",
-    Key = Base ++ ".key",
+    Port = free_udp_port(),
+    {ok, Listener} = macula_test_tmp:with_dir("macula-relay-client-queue",
+                                              fun(Dir) -> listen(Dir, Port, CertPem, KeyPem) end),
+    {Listener, Port}.
+
+%% The relay reads its certificate and key files when it starts listening, so they last only that long.
+listen(Dir, Port, CertPem, KeyPem) ->
+    Cert = filename:join(Dir, "relay.crt"),
+    Key = filename:join(Dir, "relay.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key, KeyPem),
-    Port = free_udp_port(),
-    {ok, Listener} = macula_quic:listen(
+    macula_quic:listen(
         <<"127.0.0.1">>, Port,
         [{cert, Cert}, {key, Key},
          {alpn, [?RELAY_ALPN]},
          {stream_receive_window, ?CONTROL_WINDOW},
-         {receive_window, 4 * ?CONTROL_WINDOW}]),
-    ok = file:delete(Cert),
-    ok = file:delete(Key),
-    {Listener, Port}.
+         {receive_window, 4 * ?CONTROL_WINDOW}]).
 
 relay_url(Port) ->
     iolist_to_binary(io_lib:format("quic://127.0.0.1:~p", [Port])).

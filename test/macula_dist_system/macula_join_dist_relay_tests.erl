@@ -143,26 +143,27 @@ start_relay() ->
     {ok, {CertPem, KeyPem}} =
         macula_quic:generate_self_signed_cert(
             Pub, Priv, [<<"localhost">>, <<"127.0.0.1">>]),
-    Tmp  = lists:flatten(io_lib:format("/tmp/macula-join-dist-relay-~p",
-                                       [erlang:unique_integer([positive])])),
-    Cert = Tmp ++ ".crt",
-    Key  = Tmp ++ ".key",
+    Port = pick_free_port(),
+    {ok, Listener} = macula_test_tmp:with_dir("macula-join-dist-relay",
+                                              fun(Dir) -> listen(Dir, Port, CertPem, KeyPem) end),
+    ok = macula_quic:async_accept(Listener),
+    #{listener => Listener, port => Port}.
+
+%% The relay reads its certificate and key files when it starts listening, so they last only that long.
+listen(Dir, Port, CertPem, KeyPem) ->
+    Cert = filename:join(Dir, "relay.crt"),
+    Key  = filename:join(Dir, "relay.key"),
     ok = file:write_file(Cert, CertPem),
     ok = file:write_file(Key,  KeyPem),
-    Port = pick_free_port(),
-    {ok, Listener} = macula_quic:listen(
+    macula_quic:listen(
         <<"127.0.0.1">>, Port,
         [{cert, Cert}, {key, Key},
          {alpn, [?RELAY_ALPN]},
          {idle_timeout_ms, 30000},
-         {keep_alive_interval_ms, 5000}]),
-    ok = macula_quic:async_accept(Listener),
-    #{listener => Listener, port => Port, cert => Cert, key => Key}.
+         {keep_alive_interval_ms, 5000}]).
 
-stop_relay(#{listener := Listener, cert := Cert, key := Key}) ->
+stop_relay(#{listener := Listener}) ->
     try macula_quic:close_listener(Listener) catch _:_ -> ok end,
-    file:delete(Cert),
-    file:delete(Key),
     drain_quic_messages().
 
 relay_url(#{port := Port}) ->
