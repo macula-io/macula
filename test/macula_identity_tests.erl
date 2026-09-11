@@ -154,10 +154,4 @@ save_returns_error_instead_of_crashing_when_ensure_dir_fails_test() ->
 %%------------------------------------------------------------------
 
 mktmp(Name) ->
-    Dir  = filename:join([
-        "/tmp",
-        "macula_identity_tests",
-        integer_to_list(erlang:unique_integer([positive]))
-    ]),
-    ok = filelib:ensure_dir(filename:join(Dir, "x")),
-    filename:join(Dir, Name).
+    filename:join(macula_test_tmp:dir("macula_identity_tests"), Name).

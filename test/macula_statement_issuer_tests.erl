@@ -263,8 +263,7 @@ rotation_notice(Issuer) ->
     end.
 
 key_dir() ->
-    filename:join(os:getenv("TMPDIR", "/tmp"),
-                  "macula_statement_issuer_tests_" ++ integer_to_list(erlang:unique_integer([positive]))).
+    macula_test_tmp:dir("macula_statement_issuer_tests").
 
 holds_public_key(File, Identity) ->
     {ok, Bytes} = file:read_file(File),

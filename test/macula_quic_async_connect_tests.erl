@@ -191,8 +191,7 @@ await_dialled(Dialer) ->
     end.
 
 open_and_close_a_file() ->
-    Path = filename:join("/tmp", "macula-quic-dial-" ++
-                             integer_to_list(erlang:unique_integer([positive]))),
+    Path = macula_test_tmp:file("macula-quic-dial", ""),
     {ok, Fd} = file:open(Path, [write, raw]),
     ok = file:close(Fd),
     file:delete(Path).
@@ -261,8 +260,7 @@ start_listener() ->
     {ok, {CertPem, KeyPem}} = macula_quic:generate_self_signed_cert(
                                 iolist_to_binary(Pub), iolist_to_binary(Priv),
                                 [<<"localhost">>, <<"127.0.0.1">>]),
-    Base = "/tmp/macula-quic-async-connect-" ++
-               integer_to_list(erlang:unique_integer([positive])),
+    Base = macula_test_tmp:file("macula-quic-async-connect", ""),
     Cert = Base ++ ".crt",
     Key = Base ++ ".key",
     ok = file:write_file(Cert, CertPem),

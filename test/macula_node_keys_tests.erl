@@ -171,10 +171,4 @@ flip_byte(Bin, Offset) ->
     <<Head/binary, (Byte bxor 1), Tail/binary>>.
 
 mktmp(Name) ->
-    Dir = filename:join([
-        "/tmp",
-        "macula_node_keys_tests",
-        integer_to_list(erlang:unique_integer([positive]))
-    ]),
-    ok = filelib:ensure_dir(filename:join(Dir, "x")),
-    filename:join(Dir, Name).
+    filename:join(macula_test_tmp:dir("macula_node_keys_tests"), Name).

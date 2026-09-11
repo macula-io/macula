@@ -46,8 +46,7 @@ setup_listener() ->
     {ok, {CertPem, KeyPem}} =
         macula_quic:generate_self_signed_cert(
             Pub, Priv, [<<"localhost">>, <<"127.0.0.1">>]),
-    Tmp  = lists:flatten(io_lib:format("/tmp/macula-quic-conn-regress-~p",
-                                       [erlang:unique_integer([positive])])),
+    Tmp  = macula_test_tmp:file("macula-quic-conn-regress", ""),
     Cert = Tmp ++ ".crt",
     Key  = Tmp ++ ".key",
     ok = file:write_file(Cert, CertPem),

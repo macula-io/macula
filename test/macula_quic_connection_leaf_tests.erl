@@ -60,8 +60,7 @@ identity() ->
     {ok, {CertPem, KeyPem}} =
         macula_quic:generate_self_signed_cert(
             PubBin, iolist_to_binary(Priv), [<<"localhost">>, <<"127.0.0.1">>]),
-    Base = lists:flatten(io_lib:format("/tmp/macula-quic-leaf-~p",
-                                       [erlang:unique_integer([positive])])),
+    Base = macula_test_tmp:file("macula-quic-leaf", ""),
     Cert = Base ++ ".crt",
     Key = Base ++ ".key",
     ok = file:write_file(Cert, CertPem),
