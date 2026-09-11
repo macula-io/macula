@@ -1,56 +1,50 @@
-%% @doc Plumtree push-lazy gossip (Leitão, Pereira, Rodrigues 2007 —
-%% Part 3 §7.2).
+%% @doc Plumtree push-lazy gossip (Leitão, Pereira, Rodrigues 2007, Part 3 §7.2).
 %%
-%% Disseminates realm-scoped messages over HyParView's active view
-%% with a tree-emergent topology and lazy-push recovery.
+%% Disseminates realm-scoped publications over HyParView's active view with a tree-emergent topology and lazy-push
+%% recovery.
+%%
+%% A message is a publication signed by its publisher (`macula_frame:publish/2'), and its message id is the SHA-384 of
+%% the publication's tbs. GOSSIP carries the publication bytes unchanged. Every node verifies a publication once, keyed
+%% by that id, before it delivers or forwards it (`macula_frame:verify_publication/3'), under the node's configured
+%% crypto profile: a publication that does not verify, or names another realm, stops at the first node that sees it,
+%% and a copy that arrives again is recognised by its id without a second verification. Frames leave this module
+%% without a signature of their own: the connection that sends a frame adds its neighbour signature (D17).
 %%
 %% == State ==
 %%
 %% <ul>
-%%   <li><strong>eager_push</strong> — peers receiving full
-%%       GOSSIP payloads. The eager-push set <em>is</em> the
+%%   <li><strong>eager_push</strong>: peers receiving full GOSSIP publications. The eager-push set <em>is</em> the
 %%       Plumtree spanning tree.</li>
-%%   <li><strong>lazy_push</strong> — peers receiving only IHAVE
-%%       announcements. They graft into eager_push when they GRAFT
-%%       in response to an IHAVE.</li>
-%%   <li><strong>received</strong> — `MsgId => Payload' map of
-%%       messages we've delivered locally. Used to dedup repeat
-%%       GOSSIPs and to answer GRAFTs.</li>
-%%   <li><strong>missing</strong> — `MsgId => [Peer]' for peers
-%%       who sent IHAVE for messages we have not yet received in
+%%   <li><strong>lazy_push</strong>: peers receiving only IHAVE announcements. They graft into eager_push when they
+%%       GRAFT in response to an IHAVE.</li>
+%%   <li><strong>received</strong>: `MsgId => Publication' for the verified publications delivered locally. Used to
+%%       recognise repeat GOSSIPs and to answer GRAFTs.</li>
+%%   <li><strong>missing</strong>: `MsgId => [Peer]' for peers who sent IHAVE for publications not yet received in
 %%       full.</li>
 %% </ul>
 %%
 %% == Message handling ==
 %%
 %% <ul>
-%%   <li><strong>Local publish</strong> — record the message,
-%%       deliver locally, GOSSIP to every eager peer, IHAVE to
-%%       every lazy peer.</li>
-%%   <li><strong>Receive GOSSIP</strong> — if first time: deliver,
-%%       remove from missing, eager-forward to every other eager
-%%       peer, IHAVE-forward to every lazy peer, ensure sender is
-%%       eager. If duplicate: PRUNE the sender + move sender from
-%%       eager to lazy.</li>
-%%   <li><strong>Receive IHAVE</strong> — if already received,
-%%       ignore. Else: record sender in `missing' and emit a
-%%       GRAFT to the sender right away (Phase 5.3 MVP — a real
-%%       deployment delays the GRAFT briefly to give the eager
-%%       push a chance to win the race; the MVP eager-grafts
-%%       which is correct but slightly heavier).</li>
-%%   <li><strong>Receive GRAFT</strong> — sender becomes eager;
-%%       reply with the GOSSIP payload if we have it, drop
-%%       silently if not.</li>
-%%   <li><strong>Receive PRUNE</strong> — move sender from eager
-%%       to lazy.</li>
+%%   <li><strong>Local publish</strong>: verify the PUBLISH, record its publication, deliver it locally, GOSSIP it to
+%%       every eager peer and IHAVE it to every lazy peer.</li>
+%%   <li><strong>Receive GOSSIP</strong>: the first time, verify the publication; when it verifies, deliver it, remove
+%%       it from missing, eager-forward it to every other eager peer, IHAVE-forward it to every lazy peer and ensure the
+%%       sender is eager, and when it does not, drop it. A duplicate is not verified again: PRUNE the sender and move
+%%       it from eager to lazy.</li>
+%%   <li><strong>Receive IHAVE</strong>: if already received, ignore. Else record the sender in missing and emit a
+%%       GRAFT to the sender right away (Phase 5.3 MVP: a real deployment delays the GRAFT briefly to give the eager
+%%       push a chance to win the race; eager grafting is correct but slightly heavier).</li>
+%%   <li><strong>Receive GRAFT</strong>: the sender becomes eager; reply with the GOSSIP publication if we have it,
+%%       drop silently if not.</li>
+%%   <li><strong>Receive PRUNE</strong>: move the sender from eager to lazy.</li>
 %% </ul>
 %%
-%% This module is pure. The wrapping process is responsible for
-%% transmitting the action list and feeding deliveries to the
-%% local consumer.
+%% This module is pure apart from reading the configured profile when a node starts and the clock when it verifies.
+%% The wrapping process transmits the action list and feeds deliveries to the local consumer.
 %%
-%% Reference: plans/PLAN_MACULA_V2_PART3_DISCOVERY.md §7.2;
-%% plans/PLAN_PHASE_5_BREAKDOWN.md Session 5.3.
+%% Reference: plans/PLAN_MACULA_V2_PART3_DISCOVERY.md §7.2; plans/PLAN_PHASE_5_BREAKDOWN.md Session 5.3;
+%% DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Publications.
 -module(hecate_plumtree).
 
 -export([
@@ -64,56 +58,61 @@
     has_received/2,
     received_count/1,
     missing_count/1,
-    publish/3,
+    publish/2,
     process/3
 ]).
 
 -export_type([state/0, peer/0, msg_id/0, action/0, delivery/0]).
 
--type peer()     :: macula_identity:pubkey().
--type msg_id()   :: <<_:128>>.
+-type peer()     :: <<_:256>>.
+-type msg_id()   :: <<_:384>>.
 
 -type state() :: #{
     self_id    := peer(),
     realm      := <<_:256>>,
-    identity   := macula_identity:key_pair(),
+    profile    := macula_crypto_profile:profile(),
     eager_push := sets:set(peer()),
     lazy_push  := sets:set(peer()),
-    received   := #{msg_id() => term()},
+    received   := #{msg_id() => macula_signed_object:object()},
     missing    := #{msg_id() => sets:set(peer())}
 }.
 
 -type action()   :: {send, peer(), macula_frame:frame()}.
--type delivery() :: {msg_id(), term()}.
+%% A delivery is the message id and the verified publication: publisher, realm, topic, seq, published_at, payload.
+-type delivery() :: {msg_id(), map()}.
 
 %%=====================================================================
 %% Construction + view changes
 %%=====================================================================
 
--spec new(macula_identity:key_pair(), <<_:256>>) -> state().
-new(Identity, Realm) when is_binary(Realm), byte_size(Realm) =:= 32 ->
-    #{
-        self_id    => macula_identity:public(Identity),
+%% @doc A Plumtree node for a realm, in the node's configured crypto profile, under which it verifies every
+%% publication. A node with no configured profile does not start.
+-spec new(peer(), <<_:256>>) -> {ok, state()} | {error, macula_crypto_profile:refusal()}.
+new(<<_:256>> = SelfId, <<_:256>> = Realm) ->
+    started(macula_crypto_profile:configured(), SelfId, Realm).
+
+started({ok, Profile}, SelfId, Realm) ->
+    {ok, #{
+        self_id    => SelfId,
         realm      => Realm,
-        identity   => Identity,
+        profile    => Profile,
         eager_push => sets:new(),
         lazy_push  => sets:new(),
         received   => #{},
         missing    => #{}
-    }.
+    }};
+started({error, _} = Refusal, _SelfId, _Realm) ->
+    Refusal.
 
-%% @doc When HyParView promotes a peer to active, the Plumtree
-%% layer adds it to the eager-push set. Any GOSSIP we publish
-%% will reach the new peer immediately.
+%% @doc When HyParView promotes a peer to active, the Plumtree layer adds it to the eager-push set. Any GOSSIP we
+%% publish reaches the new peer immediately.
 -spec add_peer(state(), peer()) -> state().
 add_peer(#{eager_push := E} = S, <<_:256>> = Peer) ->
     S#{eager_push := sets:add_element(Peer, E)}.
 
-%% @doc When HyParView removes a peer from active, the Plumtree
-%% layer removes it from both push sets.
+%% @doc When HyParView removes a peer from active, the Plumtree layer removes it from both push sets.
 -spec remove_peer(state(), peer()) -> state().
-remove_peer(#{eager_push := E, lazy_push := L} = S,
-            <<_:256>> = Peer) ->
+remove_peer(#{eager_push := E, lazy_push := L} = S, <<_:256>> = Peer) ->
     S#{eager_push := sets:del_element(Peer, E),
        lazy_push  := sets:del_element(Peer, L)}.
 
@@ -131,27 +130,32 @@ missing_count(#{missing := M})   -> maps:size(M).
 
 %%=====================================================================
 %% Local publish
-%%
-%% The local node publishes a message — record it, push fully to
-%% every eager peer, lazily announce to every lazy peer. Returns
-%% the new state, the list of outbound actions, and the local
-%% delivery (the message itself, which the caller's consumer
-%% should handle).
 %%=====================================================================
 
--spec publish(state(), msg_id(), term()) ->
-        {state(), [action()], [delivery()]}.
-publish(State, <<_:128>> = MsgId, Payload) ->
-    State1 = mark_received(State, MsgId, Payload),
-    Actions = build_pushes(State1, MsgId, 0, Payload, undefined),
-    {State1, Actions, [{MsgId, Payload}]}.
+%% @doc Publish a PUBLISH this node made: verify its publication, record it, push it fully to every eager peer and
+%% announce it to every lazy peer, and return it as the local delivery the caller's consumer handles. A publication
+%% that does not verify, or names another realm, is refused; one already received is not delivered again.
+-spec publish(state(), macula_frame:frame()) -> {state(), [action()], [delivery()]} | {error, term()}.
+publish(State, #{frame_type := publish, publication := #{tbs := Tbs} = Publication} = Frame) ->
+    MsgId = crypto:hash(sha384, Tbs),
+    local_publish(has_received(MsgId, State), MsgId, Publication, Frame, State).
+
+local_publish(true, _MsgId, _Publication, _Frame, State) ->
+    {State, [], []};
+local_publish(false, MsgId, Publication, Frame, State) ->
+    published(verified(Frame, State), MsgId, Publication, State).
+
+published({ok, Verified}, MsgId, Publication, State) ->
+    State1 = mark_received(State, MsgId, Publication),
+    {State1, build_pushes(State1, MsgId, 0, Publication, undefined), [{MsgId, Verified}]};
+published({error, _} = Refusal, _MsgId, _Publication, _State) ->
+    Refusal.
 
 %%=====================================================================
 %% Inbound dispatch
 %%=====================================================================
 
--spec process(state(), peer(), macula_frame:frame()) ->
-        {state(), [action()], [delivery()]}.
+-spec process(state(), peer(), macula_frame:frame()) -> {state(), [action()], [delivery()]}.
 process(State, From, #{frame_type := plumtree_gossip} = F) ->
     on_gossip(From, F, State);
 process(State, From, #{frame_type := plumtree_ihave} = F) ->
@@ -167,78 +171,60 @@ process(State, _From, _Frame) ->
 %% Handlers
 %%=====================================================================
 
--spec on_gossip(peer(), macula_frame:frame(), state()) ->
-        {state(), [action()], [delivery()]}.
-on_gossip(From, Frame, State) ->
-    MsgId   = maps:get(msg_id, Frame),
-    Round   = maps:get(round, Frame),
-    Payload = maps:get(payload, Frame),
-    classify_gossip(has_received(MsgId, State),
-                    From, MsgId, Round, Payload, State).
+on_gossip(From, #{publication := #{tbs := Tbs} = Publication} = Frame, State) ->
+    MsgId = crypto:hash(sha384, Tbs),
+    classify_gossip(has_received(MsgId, State), From, MsgId, Publication, Frame, State).
 
--spec classify_gossip(boolean(), peer(), msg_id(),
-                      non_neg_integer(), term(), state()) ->
-        {state(), [action()], [delivery()]}.
-classify_gossip(true, From, _MsgId, _Round, _Payload, State) ->
-    %% Duplicate — the sender should not be eager. PRUNE them.
-    State1  = move_to_lazy(State, From),
-    Action  = {send, From, signed_prune(State)},
-    {State1, [Action], []};
-classify_gossip(false, From, MsgId, Round, Payload, State) ->
-    State1   = mark_received(State, MsgId, Payload),
-    State2   = clear_missing(State1, MsgId),
-    State3   = move_to_eager(State2, From),
-    Pushes   = build_pushes(State3, MsgId, Round + 1, Payload, From),
-    {State3, Pushes, [{MsgId, Payload}]}.
+classify_gossip(true, From, _MsgId, _Publication, _Frame, State) ->
+    %% A duplicate, recognised by its id and not verified again. The sender should not be eager: PRUNE it.
+    {move_to_lazy(State, From), [{send, From, prune(State)}], []};
+classify_gossip(false, From, MsgId, Publication, #{round := Round} = Frame, State) ->
+    first_gossip(verified(Frame, State), From, MsgId, Round, Publication, State).
 
--spec on_ihave(peer(), macula_frame:frame(), state()) ->
-        {state(), [action()], [delivery()]}.
-on_ihave(From, Frame, State) ->
-    MsgId = maps:get(msg_id, Frame),
-    Round = maps:get(round, Frame),
-    classify_ihave(has_received(MsgId, State),
-                   From, MsgId, Round, State).
+first_gossip({ok, Verified}, From, MsgId, Round, Publication, State) ->
+    State1 = mark_received(State, MsgId, Publication),
+    State2 = clear_missing(State1, MsgId),
+    State3 = move_to_eager(State2, From),
+    {State3, build_pushes(State3, MsgId, Round + 1, Publication, From), [{MsgId, Verified}]};
+first_gossip({error, _Refused}, _From, _MsgId, _Round, _Publication, State) ->
+    {State, [], []}.
 
--spec classify_ihave(boolean(), peer(), msg_id(),
-                     non_neg_integer(), state()) ->
-        {state(), [action()], [delivery()]}.
+on_ihave(From, #{msg_id := MsgId, round := Round}, State) ->
+    classify_ihave(has_received(MsgId, State), From, MsgId, Round, State).
+
 classify_ihave(true, _From, _MsgId, _Round, State) ->
-    %% Already have it — nothing to do.
+    %% Already have it: nothing to do.
     {State, [], []};
 classify_ihave(false, From, MsgId, Round, State) ->
     State1 = note_missing(State, MsgId, From),
-    Graft  = signed_graft(State, MsgId, Round + 1),
-    {State1, [{send, From, Graft}], []}.
+    {State1, [{send, From, graft(State, MsgId, Round + 1)}], []}.
 
--spec on_graft(peer(), macula_frame:frame(), state()) ->
-        {state(), [action()], [delivery()]}.
-on_graft(From, Frame, State) ->
-    MsgId = maps:get(msg_id, Frame),
-    Round = maps:get(round, Frame),
+on_graft(From, #{msg_id := MsgId, round := Round}, State) ->
     State1 = move_to_eager(State, From),
-    answer_graft(maps:find(MsgId, maps:get(received, State1)),
-                 From, MsgId, Round, State1).
+    answer_graft(maps:find(MsgId, maps:get(received, State1)), From, Round, State1).
 
--spec answer_graft({ok, term()} | error, peer(), msg_id(),
-                   non_neg_integer(), state()) ->
-        {state(), [action()], [delivery()]}.
-answer_graft(error, _From, _MsgId, _Round, State) ->
+answer_graft(error, _From, _Round, State) ->
     {State, [], []};
-answer_graft({ok, Payload}, From, MsgId, Round, State) ->
-    Gossip = signed_gossip(State, MsgId, Round, Payload),
-    {State, [{send, From, Gossip}], []}.
+answer_graft({ok, Publication}, From, Round, State) ->
+    {State, [{send, From, gossip(Publication, Round)}], []}.
 
--spec on_prune(peer(), state()) ->
-        {state(), [action()], [delivery()]}.
 on_prune(From, State) ->
     {move_to_lazy(State, From), [], []}.
+
+%% A publication verified under the node's profile and clock, for this node's realm.
+verified(Frame, #{profile := Profile, realm := Realm}) ->
+    in_realm(macula_frame:verify_publication(Frame, Profile, erlang:system_time(millisecond)), Realm).
+
+in_realm({ok, #{realm := Realm}} = Verified, Realm) -> Verified;
+in_realm({ok, _OtherRealm}, _Realm) -> {error, wrong_realm};
+in_realm({error, _} = Refusal, _Realm) -> Refusal.
 
 %%=====================================================================
 %% State mutations
 %%=====================================================================
 
-mark_received(#{received := R} = S, MsgId, Payload) ->
-    S#{received := R#{MsgId => Payload}}.
+mark_received(#{received := R} = S, MsgId, Publication) ->
+    S#{received := R#{MsgId => Publication}}.
 
 clear_missing(#{missing := M} = S, MsgId) ->
     S#{missing := maps:remove(MsgId, M)}.
@@ -259,28 +245,20 @@ move_to_lazy(#{eager_push := E, lazy_push := L} = S, Peer) ->
 %% Outbound builders
 %%=====================================================================
 
-build_pushes(#{eager_push := E, lazy_push := L} = State,
-             MsgId, Round, Payload, ExceptPeer) ->
+build_pushes(#{eager_push := E, lazy_push := L} = State, MsgId, Round, Publication, ExceptPeer) ->
     Eager = [P || P <- sets:to_list(E), P =/= ExceptPeer],
     Lazy  = [P || P <- sets:to_list(L), P =/= ExceptPeer],
-    [{send, P, signed_gossip(State, MsgId, Round, Payload)} || P <- Eager]
-        ++ [{send, P, signed_ihave(State, MsgId, Round)} || P <- Lazy].
+    [{send, P, gossip(Publication, Round)} || P <- Eager]
+        ++ [{send, P, ihave(State, MsgId, Round)} || P <- Lazy].
 
-signed_gossip(#{realm := R, identity := Id}, MsgId, Round, Payload) ->
-    macula_frame:sign(macula_frame:plumtree_gossip(
-                        #{realm => R, msg_id => MsgId,
-                          round => Round, payload => Payload}), Id).
+gossip(Publication, Round) ->
+    macula_frame:plumtree_gossip(#{publication => Publication, round => Round}).
 
-signed_ihave(#{realm := R, identity := Id}, MsgId, Round) ->
-    macula_frame:sign(macula_frame:plumtree_ihave(
-                        #{realm => R, msg_id => MsgId,
-                          round => Round}), Id).
+ihave(#{realm := R}, MsgId, Round) ->
+    macula_frame:plumtree_ihave(#{realm => R, msg_id => MsgId, round => Round}).
 
-signed_graft(#{realm := R, identity := Id}, MsgId, Round) ->
-    macula_frame:sign(macula_frame:plumtree_graft(
-                        #{realm => R, msg_id => MsgId,
-                          round => Round}), Id).
+graft(#{realm := R}, MsgId, Round) ->
+    macula_frame:plumtree_graft(#{realm => R, msg_id => MsgId, round => Round}).
 
-signed_prune(#{realm := R, identity := Id}) ->
-    macula_frame:sign(macula_frame:plumtree_prune(
-                        #{realm => R}), Id).
+prune(#{realm := R}) ->
+    macula_frame:plumtree_prune(#{realm => R}).
