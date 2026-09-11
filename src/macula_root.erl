@@ -35,6 +35,16 @@ init([]) ->
     SupFlags = #{strategy => one_for_one, intensity => 10, period => 5},
 
     ChildSpecs = [
+        %% The seq counter every publication a node signs draws from, one per
+        %% key. First, so it runs before any pool or pubsub server publishes.
+        #{
+            id => macula_publication_seq,
+            start => {macula_publication_seq, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => worker
+        },
+
         %% MRI Type Registry (type validation, custom type registration)
         #{
             id => macula_mri_registry,

@@ -18,7 +18,9 @@ profile() ->
     {ok, Profile} = macula_crypto_profile:configured(),
     Profile.
 
+%% A server draws each seq from the node's counter (macula_publication_seq), which runs under the macula application.
 key() ->
+    {ok, _} = application:ensure_all_started(macula),
     {ok, Key} = macula_node_keys:generate(identity, profile()),
     Key.
 

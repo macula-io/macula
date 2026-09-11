@@ -56,7 +56,7 @@
     identity :: macula_node_keys:node_key(),
     profile  :: macula_crypto_profile:profile(),
     pubsub   :: hecate_pubsub:state(),
-    next_seq :: non_neg_integer()
+    key_id   :: <<_:256>>
 }).
 
 %%====================================================================
@@ -183,16 +183,9 @@ started({ok, Profile}, Realm, Key) ->
         identity = Key,
         profile  = Profile,
         pubsub   = hecate_pubsub:new(Realm, Profile),
-        %% Seeded from wall-clock µs, never from 0 -- the same convention
-        %% macula_client's publish_seq follows. Subscribers put a
-        %% publisher's stream back in order with macula_pubsub_order,
-        %% which reads a large forward jump as a restart. A counter that
-        %% restarts at 0 instead rewinds below every subscriber's
-        %% watermark, and each fact is then dropped as "past" until the
-        %% counter climbs back over it: a station rollout blinded
-        %% hecate-stations for 10+ hours this way on 2026-09-02, with the
-        %% link, subscriptions and dedup all looking healthy.
-        next_seq = erlang:system_time(microsecond)
+        %% Each publication's seq comes from the node's counter for this
+        %% key, shared with every other publisher signing with it.
+        key_id   = macula_node_keys:key_id(Key)
     }}.
 
 handle_call({subscribe, Topic, Sub}, _From, S) ->
@@ -221,12 +214,12 @@ handle_call(realm, _From, S) ->
 handle_call({publish, Topic, Payload}, _From, S) ->
     Spec = #{realm        => S#state.realm,
              topic        => Topic,
-             seq          => S#state.next_seq,
+             seq          => macula_publication_seq:next(S#state.key_id),
              published_at => erlang:system_time(millisecond),
              payload      => Payload},
     Event   = hecate_pubsub:build_event(macula_frame:publish(Spec, S#state.identity), plumtree),
     Matched = hecate_pubsub:subscribers(S#state.pubsub, Topic),
-    {reply, {Event, Matched}, S#state{next_seq = S#state.next_seq + 1}};
+    {reply, {Event, Matched}, S};
 handle_call({deliver_event, Frame}, _From, S) ->
     {reply, hecate_pubsub:deliver_event(S#state.pubsub, Frame), S};
 handle_call({process_frame, From, Frame}, _From, S) ->
