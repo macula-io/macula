@@ -192,6 +192,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version's release loads its own QUIC NIF. It installed that release's
   precompiled NIF instead, and `macula_quic` failed to load with
   `{bad_lib, "Function not found macula_quic:nif_connect/8"}`.
+- A stopped `macula_stream_sink` waits for its reader to exit before it
+  ends its stream, so the reader never calls `recv/2` once the sink has
+  gone. The sink sent its reader a kill and went on, and a kill arrives
+  asynchronously.
 
 ## [10.24.0] - 2026-09-10
 
