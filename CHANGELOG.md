@@ -143,6 +143,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as well as an absent or expired record, and when none finds a usable
   record its result is, in this order, the endpoint not found, the failed
   lookup's own error, or `{error, {unresolved, timeout}}`.
+- `streaming.completed_v1` from `macula_stream_sink` carries `reason` as
+  the reason's name, a binary such as `<<"timeout">>` of at most 64 bytes
+  or else `<<"crashed">>`, and the message of the abort it sends is that
+  name. The whole reason is logged locally.
 
 ### Deprecated
 

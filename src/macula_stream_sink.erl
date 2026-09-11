@@ -28,6 +28,9 @@
 %%% stream; a publish that fails is logged. A sink killed before it could
 %%% hand over its stream's end has `streaming.completed_v1' published
 %%% for it, with outcome `failed' and the reason it went down for.
+%%% An end fact and an abort message name their reason, `killed' or
+%%% `timeout' for example, and carry none of the reason's terms, which
+%%% go to the local log only.
 %%%
 %%% == Cancel ==
 %%%
@@ -110,6 +113,8 @@
 -define(STREAMING_STARTED, <<"streaming.started_v1">>).
 -define(STREAMING_COMPLETED, <<"streaming.completed_v1">>).
 -define(CANCEL_CODE, <<"cancelled">>).
+%% The longest reason name an end fact or an abort message carries.
+-define(REASON_NAME_BYTES, 64).
 
 -type stream_io() :: #{call_stream := fun((macula:pool(), macula:realm(), macula:procedure(),
                                           term(), map()) ->
@@ -306,8 +311,7 @@ stop_reader(Reader) ->
 finish_stream(#{close_stream := CloseStream}, normal, Stream) ->
     try CloseStream(Stream) catch _:_ -> ok end;
 finish_stream(#{abort := Abort}, Reason, Stream) ->
-    Message = iolist_to_binary(io_lib:format("~p", [Reason])),
-    try Abort(Stream, ?CANCEL_CODE, Message) catch _:_ -> ok end.
+    try Abort(Stream, ?CANCEL_CODE, reason_text(Reason)) catch _:_ -> ok end.
 
 outcome_fields(Base, normal) -> Base#{outcome => completed};
 outcome_fields(Base, Reason) -> Base#{outcome => failed, reason => Reason}.
@@ -347,7 +351,41 @@ announce(Sink, Publish, Pool, Realm, StreamId) ->
     end.
 
 publish(Publish, Pool, Realm, Topic, #{stream_id := StreamId} = Payload) ->
-    log_unpublished(Topic, StreamId, try_publish(Publish, Pool, Realm, Topic, Payload)).
+    Fact = with_reason_name(Topic, StreamId, Payload),
+    log_unpublished(Topic, StreamId, try_publish(Publish, Pool, Realm, Topic, Fact)).
+
+%% A fact carries its reason's name and none of the reason's terms. A
+%% reason that is more than a name goes to the local log whole.
+with_reason_name(_Topic, _StreamId, #{reason := Reason} = Payload) when is_atom(Reason) ->
+    Payload#{reason := reason_text(Reason)};
+with_reason_name(Topic, StreamId, #{reason := Reason} = Payload) ->
+    ?LOG_NOTICE("[macula_stream_sink] ~ts for stream ~ts ends for ~p",
+                [Topic, binary:encode_hex(StreamId), Reason]),
+    Payload#{reason := reason_text(Reason)};
+with_reason_name(_Topic, _StreamId, Payload) ->
+    Payload.
+
+%% The name a reason goes by in an end fact or an abort message: the atom
+%% at its head, such as killed, shutdown, timeout or badmatch, looking
+%% through {error, Reason} and at most three tuples deep, or crashed when
+%% there is no such atom or its name is longer than ?REASON_NAME_BYTES.
+reason_text(Reason) ->
+    name_text(reason_name(Reason, 3)).
+
+reason_name(Name, _Depth) when is_atom(Name) ->
+    Name;
+reason_name({error, Reason}, Depth) when Depth > 0 ->
+    reason_name(Reason, Depth - 1);
+reason_name(Reason, Depth) when is_tuple(Reason), tuple_size(Reason) > 0, Depth > 0 ->
+    reason_name(element(1, Reason), Depth - 1);
+reason_name(_Reason, _Depth) ->
+    crashed.
+
+name_text(Name) ->
+    within_name_bytes(atom_to_binary(Name, utf8)).
+
+within_name_bytes(Text) when byte_size(Text) =< ?REASON_NAME_BYTES -> Text;
+within_name_bytes(_Text) -> <<"crashed">>.
 
 try_publish(Publish, Pool, Realm, Topic, Payload) ->
     try

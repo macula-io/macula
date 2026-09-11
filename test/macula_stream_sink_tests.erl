@@ -19,6 +19,8 @@
 -define(STOPS, 500).
 %% How long a start or a stop may take while the pool never answers.
 -define(BOUND_MS, 1000).
+%% Data a reason carries that must stay on this node.
+-define(MARKER, <<"marker-3f9c-stays-on-this-node">>).
 
 %%%===================================================================
 %%% Test callback module (this module doubles as the sink under test)
@@ -43,8 +45,9 @@ handle_close(Reason, Parent) ->
 
 %% recv/2 returns Results in order and then waits, as a stream with
 %% nothing more to read does. The other four functions record their
-%% calls, in order, in the table returned with them, and publish/4 also
-%% sends the test {published, Topic, Payload}.
+%% calls, in order, in the table returned with them; publish/4 also
+%% sends the test {published, Topic, Payload}, and abort/3 sends it
+%% {aborted, Code, Message}.
 scripted_stream_io(Results) ->
     Test = self(),
     Calls = ets:new(stream_io_calls, [ordered_set, public]),
@@ -61,7 +64,10 @@ scripted_stream_io(Results) ->
                                  next_result(atomics:add_get(Next, 1, 1), Results)
                          end,
                  close_stream => fun(_Stream) -> Record(close_stream) end,
-                 abort => fun(_Stream, Code, _Message) -> Record({abort, Code}) end,
+                 abort => fun(_Stream, Code, Message) ->
+                                  Test ! {aborted, Code, Message},
+                                  Record({abort, Code})
+                          end,
                  publish => fun(_Pool, _Realm, Topic, Payload) ->
                                     ok = Record({publish, Topic}),
                                     Test ! {published, Topic, Payload},
@@ -125,7 +131,8 @@ sink_test_() ->
                  {timeout, 60, fun a_stopped_sinks_reader_is_gone_before_the_sink_is/0},
                  fun a_sink_whose_pool_is_gone_still_reads_and_closes/0,
                  {timeout, 10, fun a_sink_whose_pool_never_answers_starts_and_stops_at_once/0},
-                 {timeout, 10, fun a_killed_sinks_end_is_announced_with_the_kill_reason/0}]].
+                 {timeout, 10, fun a_killed_sinks_end_is_announced_with_the_kill_reason/0},
+                 fun a_failed_streams_end_fact_and_abort_name_the_reason_only/0]].
 
 delivers_chunks_then_eof() ->
     {StreamIo, _Calls} = scripted_stream_io([{chunk, <<"a">>}, {chunk, <<"b">>}, eof]),
@@ -304,8 +311,29 @@ a_killed_sinks_end_is_announced_with_the_kill_reason() ->
     exit(Sink, kill),
     wait_down(Sink),
     ?assertEqual({<<"streaming.completed_v1">>,
-                  #{stream_id => StreamId, outcome => failed, reason => killed}},
+                  #{stream_id => StreamId, outcome => failed, reason => <<"killed">>}},
                  next_published()).
+
+%% A stream that fails for a reason carrying data ends with only the
+%% reason's name, in its end fact and in the message of its abort.
+a_failed_streams_end_fact_and_abort_name_the_reason_only() ->
+    process_flag(trap_exit, true),
+    {StreamIo, _Calls} = scripted_stream_io([{error, {bad_frame, ?MARKER}}]),
+    Sink = start_sink(StreamIo),
+    ?assertEqual({closed, {bad_frame, ?MARKER}}, wait_msg()),
+    wait_down(Sink),
+    ?assertEqual({aborted, <<"cancelled">>, <<"bad_frame">>}, next_aborted()),
+    ?assertMatch({<<"streaming.started_v1">>, _}, next_published()),
+    {<<"streaming.completed_v1">>, End} = next_published(),
+    ?assertEqual(#{outcome => failed, reason => <<"bad_frame">>}, maps:remove(stream_id, End)),
+    ?assertEqual(nomatch, binary:match(term_to_binary(End), ?MARKER)).
+
+next_aborted() ->
+    receive
+        {aborted, _, _} = Aborted -> Aborted
+    after 5000 ->
+        error(nothing_aborted)
+    end.
 
 %% The next message from the sink's callbacks.
 wait_msg() ->
