@@ -195,6 +195,38 @@ inbound_event_dedup_test_() ->
      end}.
 
 %%------------------------------------------------------------------
+%% A wildcard subscription receives the events it matches
+%%------------------------------------------------------------------
+
+%% A station delivers an EVENT under the topic it was published to, so the
+%% pool matches that topic against wildcard subscriptions as well as looking
+%% up its own. An event matching an overlapping wildcard and concrete
+%% subscription reaches each of them once.
+a_wildcard_subscription_through_the_pool_receives_matching_events_test_() ->
+    {timeout, 5,
+     fun() ->
+         {ok, _} = application:ensure_all_started(macula),
+         {ok, Pool} = macula_client:connect([], #{}),
+         {ok, Wildcard} = macula_client:subscribe(Pool, ?REALM,
+                                                  <<"io.macula/sensors/*/v1">>,
+                                                  self(), #{delivery => as_arrives}),
+         {ok, Kitchen} = macula_client:subscribe(Pool, ?REALM,
+                                                 <<"io.macula/sensors/kitchen/v1">>,
+                                                 self(), #{delivery => as_arrives}),
+         Meta = fun(Seq) -> #{realm => ?REALM, publisher => <<1:256>>, seq => Seq,
+                              delivered_via => direct} end,
+         Pool ! {macula_event, make_ref(), <<"io.macula/sensors/kitchen/v1">>, warm, Meta(1)},
+         Pool ! {macula_event, make_ref(), <<"io.macula/sensors/kitchen/v1">>, warm, Meta(1)},
+         Pool ! {macula_event, make_ref(), <<"io.macula/sensors/hall/v1">>, cold, Meta(2)},
+         Pool ! {macula_event, make_ref(), <<"io.macula/rooms/kitchen/v1">>, elsewhere, Meta(3)},
+         WildcardGot = payloads_for(Wildcard, 500),
+         KitchenGot = payloads_for(Kitchen, 200),
+         ok = macula_client:close(Pool),
+         ?assertEqual([warm, cold], WildcardGot),
+         ?assertEqual([warm], KitchenGot)
+     end}.
+
+%%------------------------------------------------------------------
 %% Multiple consumers same topic → both get fan-out
 %%------------------------------------------------------------------
 
