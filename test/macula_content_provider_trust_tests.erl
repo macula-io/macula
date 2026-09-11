@@ -1,55 +1,57 @@
-%%% @doc Signer-vs-claim verification for `content_announcement' providers.
+%%% @doc Signer-vs-claim verification for content_announcement providers.
 %%%
-%%% Regression cover for a real gap: `find_content_providers/2' only
-%%% checked that a record carried SOME valid signature, never that the
-%%% signer was the identity the payload's `announcer_node' field
-%%% actually claims. The public `content_announcement/3,4' constructor
-%%% always sets both from the same argument, so this divergence can
-%%% only arise from a hand-crafted record — exactly what a malicious
-%%% (or buggy, non-SDK) publisher would send. Without the check, node
-%%% X could validly sign a record (so the base signature check passes)
-%%% while its payload falsely claims to be a DIFFERENT, perhaps more
-%%% trusted, `announcer_node' — misattributing who is really serving
-%%% content at the embedded `endpoint'. Same class of fix as
-%%% `macula_direct_dial:verify_and_build/2' for `station_endpoint'.
+%%% A content announcement is signed by the node that shares the content and names that node as announcer_node.
+%%% macula:decode_provider/2 trusts an announcement only when it verifies under the verifier's profile, and the
+%%% verification covers the signer: a record whose payload names a node other than its signer is refused. No node can
+%%% sign an announcement that misattributes who serves the content at its endpoint.
 -module(macula_content_provider_trust_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
+-define(LABEL, <<"MACULA-PQ-RECORD-V1">>).
 -define(MCID, <<2, 16#55, (crypto:strong_rand_bytes(48))/binary>>).
+-define(ENDPOINT, <<"quic://[::1]:4433">>).
 
-consistent_signer_and_claim_is_trusted_test() ->
-    Identity = macula_identity:generate(),
-    Node     = macula_identity:public(Identity),
-    Signed = macula_record:sign(
-               macula_record:content_announcement(Node, ?MCID,
-                                                  <<"quic://[::1]:4433">>),
-               Identity),
-    ?assertMatch({true, #{announcer_node := Node}},
-                 macula:decode_provider(Signed)).
+a_consistent_signer_and_claim_is_trusted_test() ->
+    Key = identity_key(),
+    NodeId = macula_node_keys:key_id(Key),
+    Wire = signed(macula_record:content_announcement(NodeId, ?MCID, ?ENDPOINT), Key),
+    ?assertMatch({true, #{announcer_node := NodeId, endpoint := ?ENDPOINT}}, macula:decode_provider(Wire, pq_pure)).
 
-unsigned_announcement_is_rejected_test() ->
-    Identity = macula_identity:generate(),
-    Node     = macula_identity:public(Identity),
-    Unsigned = macula_record:content_announcement(Node, ?MCID,
-                                                   <<"quic://[::1]:4433">>),
-    ?assertEqual(false, macula:decode_provider(Unsigned)).
+an_unsigned_announcement_is_refused_test() ->
+    Key = identity_key(),
+    Unsigned = macula_record:content_announcement(macula_node_keys:key_id(Key), ?MCID, ?ENDPOINT),
+    ?assertEqual(false, macula:decode_provider(Unsigned, pq_pure)).
 
-signer_claiming_a_different_announcer_node_is_rejected_test() ->
-    %% Node X is the ACTUAL signer (the record's own envelope key, what
-    %% `macula_record:verify/1' checks the signature against) but the
-    %% payload claims a DIFFERENT node entirely — the honest constructor
-    %% can never produce this shape, so building it directly is exactly
-    %% the malicious-publisher scenario the check exists for.
-    RealIdentity = macula_identity:generate(),
-    RealKey      = macula_identity:public(RealIdentity),
-    ClaimedNode  = macula_identity:public(macula_identity:generate()),
-    Unsigned0 = macula_record:content_announcement(ClaimedNode, ?MCID,
-                                                    <<"quic://evil:4433">>),
-    Unsigned  = Unsigned0#{key => RealKey},
-    Signed    = macula_record:sign(Unsigned, RealIdentity),
-    %% Sanity: this record's base signature genuinely IS valid (signed
-    %% by the key it now carries) — the rejection below must come from
-    %% the signer-vs-claim check, not from a broken signature.
-    ?assertMatch({ok, _}, macula_record:verify(Signed)),
-    ?assertEqual(false, macula:decode_provider(Signed)).
+%% macula_record:sign/2 never produces this shape, so the test signs the fields directly: the signature is valid, and
+%% the refusal comes from the signer check.
+a_signer_claiming_another_announcer_node_is_refused_test() ->
+    Key = identity_key(),
+    Claimed = macula_node_keys:key_id(identity_key()),
+    Wire = crafted(macula_record:content_announcement(Claimed, ?MCID, <<"quic://evil:4433">>), Key),
+    ?assertEqual({error, key_id_mismatch}, macula_record:verify(Wire, pq_pure)),
+    ?assertEqual(false, macula:decode_provider(Wire, pq_pure)).
+
+a_tampered_announcement_is_refused_test() ->
+    Key = identity_key(),
+    Unsigned = macula_record:content_announcement(macula_node_keys:key_id(Key), ?MCID, ?ENDPOINT),
+    #{tbs := <<Head:20/binary, Byte, Tail/binary>>} = Signed = macula_record:sign(Unsigned, Key),
+    Tampered = macula_record:encode(Signed#{tbs := <<Head/binary, (Byte bxor 1), Tail/binary>>}),
+    ?assertEqual(false, macula:decode_provider(Tampered, pq_pure)).
+
+a_record_of_another_type_is_not_a_provider_test() ->
+    Key = identity_key(),
+    Wire = signed(macula_record:node_record(macula_node_keys:key_id(Key), [], 0), Key),
+    ?assertEqual(false, macula:decode_provider(Wire, pq_pure)).
+
+identity_key() ->
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+    Key.
+
+signed(Record, Key) ->
+    macula_record:encode(macula_record:sign(Record, Key)).
+
+crafted(#{type := Type, version := Version, created_at := Created, expires_at := Expires, payload := Payload}, Key) ->
+    Fields = #{{text, <<"type">>} => Type, {text, <<"version">>} => Version, {text, <<"created_at">>} => Created,
+               {text, <<"expires_at">>} => Expires, {text, <<"payload">>} => Payload},
+    macula_signed_object:encode(macula_signed_object:sign(?LABEL, Fields, Key)).
