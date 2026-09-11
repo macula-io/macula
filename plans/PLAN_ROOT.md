@@ -21,6 +21,7 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 |---|---|---|
 | [EXPLORATION_POST_QUANTUM.md][explore] | Post-quantum feasibility per stack, before the plan | Investigation |
 | [RESEARCH_SDK_STATION_SELECTION_SURVEY.md][stations] | How each SDK chooses a station | Research complete |
+| [PLAN_MILITARY_GRADE.md][military] | Belgian, EU and NATO bodies and texts to start from for Defence software | Reference |
 
 ## Complete
 
@@ -38,5 +39,6 @@ Plans, designs and research for the `macula` SDK. The master index of every Macu
 [slots]: DESIGN_PQ_DHT_SLOTS_AND_BUDGET.md
 [explore]: EXPLORATION_POST_QUANTUM.md
 [stations]: RESEARCH_SDK_STATION_SELECTION_SURVEY.md
+[military]: PLAN_MILITARY_GRADE.md
 [isolation]: PLAN_PER_STREAM_QUIC_ISOLATION.md
 [push]: PLAN_PUSH_UPLOAD.md
