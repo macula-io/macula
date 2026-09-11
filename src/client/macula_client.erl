@@ -422,6 +422,10 @@
     subs = #{}    :: #{reference() => #sub_spec{}},
     %% {realm, topic} → set of pool-owned SubRefs
     topic_index = #{} :: #{{<<_:256>>, binary()} => sets:set(reference())},
+    %% The keys of `topic_index' whose topic has a `*' segment, with that
+    %% topic's segments: an inbound event is matched against these alone,
+    %% not against every topic in the index.
+    wildcard_topics = #{} :: #{{<<_:256>>, binary()} => [binary()]},
     %% Advertised procedures — pool replays these on link respawn.
     %% {realm, procedure} → handler
     procs = #{}   :: #{{<<_:256>>, binary()} => {handler(), auth_policy()}},
@@ -2134,7 +2138,14 @@ register_sub(SubRef, #sub_spec{realm = R, topic = T} = Spec,
     Set = maps:get(Key, Idx, sets:new()),
     NewIdx  = Idx#{Key => sets:add_element(SubRef, Set)},
     NewSubs = Subs#{SubRef => Spec},
-    S#state{subs = NewSubs, topic_index = NewIdx}.
+    Segments = topic_segments(T),
+    track_wildcard(lists:member(<<"*">>, Segments), Key, Segments,
+                   S#state{subs = NewSubs, topic_index = NewIdx}).
+
+track_wildcard(true, Key, Segments, #state{wildcard_topics = W} = S) ->
+    S#state{wildcard_topics = W#{Key => Segments}};
+track_wildcard(false, _Key, _Segments, S) ->
+    S.
 
 drop_sub(SubRef, #state{subs = Subs} = S) ->
     drop_sub_take(maps:take(SubRef, Subs), SubRef, S).
@@ -2146,8 +2157,13 @@ drop_sub_take({#sub_spec{realm = R, topic = T, mon = Mon}, NewSubs},
     erlang:demonitor(Mon, [flush]),
     Key = {R, T},
     NewSet = sets:del_element(SubRef, maps:get(Key, Idx, sets:new())),
-    NewIdx = on_index_after_drop(sets:is_empty(NewSet), Key, NewSet, Idx),
-    S#state{subs = NewSubs, topic_index = NewIdx}.
+    Empty = sets:is_empty(NewSet),
+    NewIdx = on_index_after_drop(Empty, Key, NewSet, Idx),
+    S#state{subs = NewSubs, topic_index = NewIdx,
+            wildcard_topics = wildcards_after_drop(Empty, Key, S#state.wildcard_topics)}.
+
+wildcards_after_drop(true,  Key, W) -> maps:remove(Key, W);
+wildcards_after_drop(false, _Key, W) -> W.
 
 on_index_after_drop(true,  Key, _Set, Idx) -> maps:remove(Key, Idx);
 on_index_after_drop(false, Key,  Set, Idx) -> Idx#{Key => Set}.
@@ -2185,9 +2201,26 @@ on_inbound_event(duplicate, _Realm, _Topic, _Payload, _Meta, S) ->
 on_inbound_event(new, Realm, Topic, Payload, Meta, S) ->
     {noreply, ensure_flush_timer(fan_to_local(Realm, Topic, Payload, Meta, S))}.
 
-fan_to_local(Realm, Topic, Payload, Meta, S) ->
-    fan_to_set(maps:find({Realm, Topic}, S#state.topic_index),
-               Topic, Payload, Meta, S).
+%% An event reaches the subscribers of its own topic and those of every
+%% wildcard pattern it matches (`macula_topic_pattern:matches/2'), each set
+%% once: the event was deduplicated before this single fan-out.
+fan_to_local(Realm, Topic, Payload, Meta, #state{topic_index = Idx} = S) ->
+    Exact = fan_to_set(maps:find({Realm, Topic}, Idx), Topic, Payload, Meta, S),
+    lists:foldl(fun(Key, Acc) ->
+                    fan_to_set(maps:find(Key, Idx), Topic, Payload, Meta, Acc)
+                end,
+                Exact, matching_wildcards(Realm, Topic, S#state.wildcard_topics)).
+
+%% The wildcard patterns in `Realm' that `Topic' matches. A topic that is
+%% itself one of them was already delivered by the exact lookup.
+matching_wildcards(Realm, Topic, Wildcards) ->
+    Segments = topic_segments(Topic),
+    [Key || {{R, T} = Key, Pattern} <- maps:to_list(Wildcards),
+            R =:= Realm, T =/= Topic,
+            macula_topic_pattern:matches(Pattern, Segments)].
+
+topic_segments(Topic) ->
+    binary:split(Topic, <<"/">>, [global]).
 
 fan_to_set(error, _Topic, _Payload, _Meta, S) ->
     S;

@@ -222,6 +222,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setup process until that names the dist controller, then the controller.
   Tunnels used to stay in the client, and at the relay, for as long as the
   client ran.
+- A `macula_client` subscription to a topic with a `*` segment receives the
+  events it matches. The pool looked subscribers up by the event's own topic,
+  so such a subscription received none. An event matching several
+  subscriptions, such as `a/*/c` and `a/b/c`, reaches each subscriber once.
 - `macula_client:call/5` tries another link only when the link reports that
   the CALL never went out. A CALL that timed out, or whose link dropped while
   it was pending, is no longer sent again on another link, where the provider
