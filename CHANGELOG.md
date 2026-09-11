@@ -167,6 +167,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `macula_quic:controlling_process/2` returns only once no message for the
+  handle is on its way to the former owner, so a stream's data and events,
+  and a connection's new_stream notices, all go to the new owner from then
+  on. A delivery already under way could reach the former owner after the
+  call returned, so the process taking over a stream could miss bytes.
+- `macula_quic:close_listener/1` delivers no `{quic, new_conn, ...}` after
+  it returns, and closes a connection whose handshake completes after the
+  close. A handshake that was completing could deliver new_conn to the
+  owner of a listener already closed.
 - A dist connection over the dist relay keeps every byte its tunnel
   stream delivers while `macula_dist_relay_client` hands the stream over.
   Bytes that arrive behind the tunnel id, or while the tunnel waits for

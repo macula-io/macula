@@ -108,7 +108,12 @@ fn nif_close_listener<'a>(
     env: Env<'a>,
     listener: ResourceArc<ListenerResource>,
 ) -> NifResult<Term<'a>> {
-    listener.closed.store(true, Ordering::SeqCst);
+    // Marked closed under the owner lock that a handshake holds from its
+    // closed check until it sends new_conn: no new_conn follows this call.
+    {
+        let _owner = listener.owner.write().unwrap();
+        listener.closed.store(true, Ordering::SeqCst);
+    }
     if let Some(task) = listener.accept_task.lock().unwrap().take() {
         task.abort();
     }
@@ -143,13 +148,18 @@ fn nif_async_accept<'a>(
                         let remote_addr = incoming.remote_address().to_string();
                         match incoming.await {
                             Ok(connection) => {
+                                // Held from the closed check until new_conn is
+                                // sent. close_listener marks the listener closed
+                                // under the write lock, so no new_conn follows a
+                                // close_listener that returned.
+                                let owner = listener_ref.owner.read().unwrap();
+                                if listener_ref.closed.load(Ordering::SeqCst) {
+                                    connection.close(0u32.into(), b"shutdown");
+                                    return;
+                                }
                                 let conn_resource = ResourceArc::new(
-                                    crate::connection::ConnectionResource::new(
-                                        connection,
-                                        *listener_ref.owner.read().unwrap(),
-                                    ),
+                                    crate::connection::ConnectionResource::new(connection, *owner),
                                 );
-                                let owner = *listener_ref.owner.read().unwrap();
                                 message::send_new_conn(&owner, conn_resource, remote_addr);
                             }
                             Err(e) => {

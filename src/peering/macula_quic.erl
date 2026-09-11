@@ -192,7 +192,9 @@ async_accept(Listener) ->
 async_accept(Listener, _Opts) ->
     nif_async_accept(Listener).
 
-%% @doc Close a listener.
+%% @doc Close a listener. Once it returns the owner receives no further
+%% `{quic, new_conn, ...}' from it: a connection whose handshake completes
+%% after the close is closed instead.
 -spec close_listener(reference()) -> ok.
 close_listener(Listener) ->
     nif_close_listener(Listener).
@@ -526,7 +528,10 @@ setopt(Stream, active, Value) ->
     nif_setopt_active(Stream, Value).
 
 %% @doc Transfer ownership of a handle to another process.
-%% Works with both stream and connection handles.
+%% Works with both stream and connection handles. Returns once no message
+%% for the handle is on its way to the former owner: from then on every data
+%% message and event of a stream, and every new_stream notice of a
+%% connection, goes to `Pid'.
 -spec controlling_process(reference(), pid()) -> ok | {error, term()}.
 controlling_process(Handle, Pid) ->
     try nif_controlling_process(Handle, Pid)

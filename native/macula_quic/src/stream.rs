@@ -194,12 +194,15 @@ impl StreamResource {
                 match recv.read(&mut buf).await {
                     Ok(Some(n)) => {
                         let data = buf[..n].to_vec();
-                        let owner = *stream_arc.owner.read().unwrap();
+                        // Held until the message is sent, so a
+                        // controlling_process that returns has no delivery
+                        // to the former owner in flight.
+                        let owner = stream_arc.owner.read().unwrap();
                         message::send_data(&owner, data, stream_arc.clone());
                     }
                     Ok(None) => {
                         // Peer finished sending
-                        let owner = *stream_arc.owner.read().unwrap();
+                        let owner = stream_arc.owner.read().unwrap();
                         message::send_event(
                             &owner,
                             atoms::peer_send_shutdown(),
@@ -215,7 +218,7 @@ impl StreamResource {
                         // code, distinct from every other read error
                         // (connection loss, zero-RTT rejection, ...),
                         // which stay collapsed into `none()` below.
-                        let owner = *stream_arc.owner.read().unwrap();
+                        let owner = stream_arc.owner.read().unwrap();
                         message::send_event(
                             &owner,
                             atoms::stream_closed(),
@@ -225,7 +228,7 @@ impl StreamResource {
                         break;
                     }
                     Err(e) => {
-                        let owner = *stream_arc.owner.read().unwrap();
+                        let owner = stream_arc.owner.read().unwrap();
                         message::send_event(
                             &owner,
                             atoms::stream_closed(),
@@ -478,7 +481,7 @@ fn answer(reply: &mut Option<Reply>, result: Result<(), Failure>) {
 /// Tells the stream's owner, once, that a write failed.
 fn report_failed_write(stream: &ResourceArc<StreamResource>, failure: &Failure) {
     if let Failure::Write(reason) = failure {
-        let owner = *stream.owner.read().unwrap();
+        let owner = stream.owner.read().unwrap();
         message::send_event(&owner, atoms::send_failed(), stream.clone(), reason.clone());
     }
 }
@@ -622,6 +625,10 @@ fn nif_setopt_active<'a>(
 }
 
 /// NIF: controlling_process(StreamRef, NewPid) -> ok
+///
+/// Takes the owner lock that every delivery to the owner holds while it
+/// sends, so it returns only when no delivery to the former owner is in
+/// flight.
 #[rustler::nif]
 fn nif_controlling_process<'a>(
     env: Env<'a>,

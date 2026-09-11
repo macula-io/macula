@@ -372,12 +372,15 @@ fn nif_async_accept_stream<'a>(
 
             match connection.accept_bi().await {
                 Ok((send, recv)) => {
-                    let owner = *conn_arc.owner.read().unwrap();
+                    // Held until new_stream is sent, so a
+                    // controlling_process_conn that returns has no notice to
+                    // the former owner in flight.
+                    let owner = conn_arc.owner.read().unwrap();
                     let stream_resource = ResourceArc::new(stream::StreamResource::new(
                         send,
                         recv,
                         conn_arc.clone(),
-                        owner,
+                        *owner,
                     ));
                     stream::StreamResource::start_recv_loop(stream_resource.clone());
                     stream::StreamResource::start_writer(stream_resource.clone());
@@ -393,6 +396,10 @@ fn nif_async_accept_stream<'a>(
 }
 
 /// NIF: controlling_process_conn(ConnRef, NewPid) -> ok
+///
+/// Takes the owner lock that the stream accept loop holds while it sends a
+/// new_stream notice, so it returns only when no notice to the former owner
+/// is in flight.
 #[rustler::nif]
 fn nif_controlling_process_conn<'a>(
     env: Env<'a>,
