@@ -13,7 +13,7 @@
 -behaviour(gen_statem).
 
 -export([start_link/1]).
--export([init/1, callback_mode/0, terminate/3, code_change/4]).
+-export([init/1, callback_mode/0, terminate/3, code_change/4, format_status/1]).
 -export([connecting/3, awaiting_start/3, handshaking/3, connected/3, draining/3]).
 
 -export_type([opts/0, connect_opts/0]).
@@ -233,6 +233,10 @@ terminate(_Reason, _State, Data) ->
 
 code_change(_OldVsn, State, Data, _Extra) ->
     {ok, State, Data}.
+
+%% Status output and crash reports show this process's keys with their private halves redacted.
+format_status(Status) ->
+    macula_node_keys:redacted(Status).
 
 %%------------------------------------------------------------------
 %% State: connecting (client only)

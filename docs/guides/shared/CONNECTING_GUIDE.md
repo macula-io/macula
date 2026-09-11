@@ -276,6 +276,25 @@ publish(Topic, Payload) ->
 
 For higher-volume code paths, use `gproc` or register the pool by name.
 
+### Private keys in logs
+
+A node's private keys live in the processes that sign with them. Macula
+keeps them out of what those processes show and what the node logs:
+
+- A process that holds a key formats its status with the private half
+  of each key replaced by `redacted`. `sys:get_status/1`, and the crash
+  and logger reports of that process, show a key's public half only.
+- Starting the `macula` application adds the primary logger filter
+  `macula_key_redaction`, and stopping it removes that filter and no
+  other. In report events of the `otp` and `macula` domains the filter
+  redacts every key the same way, wherever the report holds it, and a
+  stack frame of a Macula module shows its arity in place of its
+  arguments, since those can hold a key. Stack frames of your own
+  modules keep their arguments.
+
+`sys:get_state/1` returns a process's state as it is, keys included, so
+keep its output out of logs.
+
 ---
 
 ## Multiple realms on one pool

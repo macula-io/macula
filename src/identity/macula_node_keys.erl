@@ -11,7 +11,11 @@
 %%
 %% An ML-DSA-87 component stores its 4,896-byte expanded private key and its public key. An RSA-PSS component
 %% stores a DER-encoded RSAPrivateKey and RSAPublicKey. On load, every public key is derived again from its
-%% private key and must equal the stored one, and every component passes a sign-and-verify round trip.
+%% private key and must equal the stored one, and every component passes a sign-and-verify round trip. A key file
+%% its group or others can read is refused.
+%%
+%% A process that holds keys shows them through redacted/1, and the application's primary logger filter
+%% redacted_log_event/2 keeps their private halves out of crash and diagnostics reports.
 %%
 %% A key with one component signs with ML-DSA-87 alone. A hybrid key signs with Macula's composite
 %% ML-DSA-87-PS384: both halves sign M' = Prefix || Label || len(ctx) || ctx || SHA-512(M), with an empty ctx and
@@ -32,12 +36,15 @@
 -module(macula_node_keys).
 
 -include_lib("public_key/include/public_key.hrl").
+-include_lib("kernel/include/file.hrl").
 
 -export([
     generate/2,
     generate/3,
     save/2,
     load/3,
+    redacted/1,
+    redacted_log_event/2,
     public_key/1,
     sign/2,
     verify/4,
@@ -64,6 +71,7 @@
                        profile    := macula_crypto_profile:profile(),
                        components := [component(), ...]}.
 -type refusal()   :: bad_key_file
+                   | key_file_permissions
                    | {unknown_purpose, term()}
                    | {crypto_profile_unknown, term()}
                    | {wrong_purpose, purpose()}
@@ -116,11 +124,32 @@ save(Path, #{purpose := _, profile := _, components := [_ | _]} = Key) ->
     Tmp = iolist_to_binary([Path, ".tmp"]),
     write_restricted(filelib:ensure_dir(Path), Tmp, Path, encode(Key)).
 
-%% @doc Load the key saved for a purpose in a profile, and check it before returning it.
+%% @doc Load the key saved for a purpose in a profile, and check it before returning it. A key file its group or others
+%% can read is refused.
 -spec load(file:name_all(), purpose(), macula_crypto_profile:profile()) ->
         {ok, node_key()} | {error, refusal() | file:posix() | badarg | terminated | system_limit}.
 load(Path, Purpose, Profile) ->
-    checked_key(decode_file(file:read_file(Path)), Purpose, Profile).
+    checked_key(owner_only_read(file:read_file_info(Path), Path), Purpose, Profile).
+
+%%------------------------------------------------------------------
+%% Redaction
+%%------------------------------------------------------------------
+
+%% @doc A term with the private half of every key it holds replaced by the atom `redacted', at any depth: the private
+%% value of every map that holds both a public and a private value, as node key components and key pairs do.
+-spec redacted(term()) -> term().
+redacted(Term) ->
+    redacted(Term, #{}).
+
+%% @doc The primary logger filter the application installs. In a report event of the otp or macula domain, every key
+%% is redacted as redacted/1 does, and a stack frame of a module in `Modules' shows its arity in place of its
+%% arguments, since those can hold a key. Every other event passes unchanged.
+-spec redacted_log_event(logger:log_event(), #{module() => true}) -> logger:log_event().
+redacted_log_event(#{msg := {report, Report}, meta := #{domain := [Domain | _]}} = Event, Modules)
+  when Domain =:= otp; Domain =:= macula ->
+    Event#{msg := {report, redacted(Report, Modules)}};
+redacted_log_event(Event, _Modules) ->
+    Event.
 
 %%------------------------------------------------------------------
 %% Signing
@@ -478,6 +507,13 @@ encode_component(#{algorithm := Algorithm, public := Public, private := Private}
     <<(algorithm_tag(Algorithm)):8, (byte_size(Public)):32, Public/binary,
       (byte_size(Private)):32, Private/binary>>.
 
+owner_only_read({ok, #file_info{mode = Mode}}, Path) when Mode band 8#077 =:= 0 ->
+    decode_file(file:read_file(Path));
+owner_only_read({ok, #file_info{}}, _Path) ->
+    {error, key_file_permissions};
+owner_only_read({error, _} = Error, _Path) ->
+    Error.
+
 decode_file({ok, Bin}) -> decode(Bin);
 decode_file({error, _} = Error) -> Error.
 
@@ -532,6 +568,27 @@ algorithm_tag(rsa_pss) -> 2.
 tag_algorithm(1) -> {ok, mldsa87};
 tag_algorithm(2) -> {ok, rsa_pss};
 tag_algorithm(_) -> error.
+
+%%------------------------------------------------------------------
+%% Internals: redaction
+%%------------------------------------------------------------------
+
+redacted(#{public := _, private := _} = Map, Modules) ->
+    maps:map(redacted_value(Modules), Map#{private := redacted});
+redacted(Map, Modules) when is_map(Map) ->
+    maps:map(redacted_value(Modules), Map);
+redacted([Head | Tail], Modules) ->
+    [redacted(Head, Modules) | redacted(Tail, Modules)];
+redacted({Module, Function, Arguments, Location}, Modules)
+  when is_map_key(Module, Modules), is_atom(Function), length(Arguments) >= 0, is_list(Location) ->
+    {Module, Function, length(Arguments), Location};
+redacted(Tuple, Modules) when is_tuple(Tuple) ->
+    list_to_tuple(redacted(tuple_to_list(Tuple), Modules));
+redacted(Other, _Modules) ->
+    Other.
+
+redacted_value(Modules) ->
+    fun(_Key, Value) -> redacted(Value, Modules) end.
 
 %%------------------------------------------------------------------
 %% Internals: restricted atomic write

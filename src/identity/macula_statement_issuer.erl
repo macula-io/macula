@@ -13,12 +13,13 @@
 %%
 %% With a key directory, CONNECT keys and registered TLS keys are saved with their bindings, and a restarted issuer
 %% reloads the live ones and keeps issuing statements for them. Without one they live in memory only, and a restarted
-%% issuer starts with a new CONNECT key and binding. The identity key is never written.
+%% issuer starts with a new CONNECT key and binding. The identity key is never written. A key directory the issuer
+%% makes, and every file it saves there, is readable by its owner only.
 -module(macula_statement_issuer).
 -behaviour(gen_server).
 
 -export([start_link/1, connect_material/1, register_tls_leaf/3, tls_material/2, subscribe/2, tick/1]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, format_status/1]).
 
 -export_type([options/0, connect_material/0, tls_material/0]).
 
@@ -31,7 +32,7 @@
 
 %% `owner' receives `{macula_tls_rotation_due, Issuer}'. `key_dir' keeps CONNECT and TLS keys with their bindings across
 %% restarts. `clock' gives wall-clock milliseconds, for tests.
--type options() :: #{identity_key := macula_node_keys:node_key(),
+-type options() :: #{identity := macula_node_keys:node_key(),
                      owner := pid(),
                      key_dir => file:name_all(),
                      clock => fun(() -> non_neg_integer())}.
@@ -44,7 +45,7 @@
 %%====================================================================
 
 -spec start_link(options()) -> {ok, pid()} | {error, term()}.
-start_link(#{identity_key := #{purpose := identity}, owner := Owner} = Options) when is_pid(Owner) ->
+start_link(#{identity := #{purpose := identity}, owner := Owner} = Options) when is_pid(Owner) ->
     gen_server:start_link(?MODULE, Options, []).
 
 %% @doc The current CONNECT key with its binding and a fresh status statement, for a new dial.
@@ -79,8 +80,10 @@ tick(Issuer) ->
 %% gen_server
 %%====================================================================
 
-init(#{identity_key := #{profile := Profile} = Identity, owner := Owner} = Options) ->
-    S0 = #{identity => Identity, profile => Profile, owner => Owner, key_dir => maps:get(key_dir, Options, none),
+init(#{identity := #{profile := Profile} = Identity, owner := Owner} = Options) ->
+    Dir = maps:get(key_dir, Options, none),
+    ok = key_dir_made(Dir),
+    S0 = #{identity => Identity, profile => Profile, owner => Owner, key_dir => Dir,
            clock => maps:get(clock, Options, fun wall_clock_ms/0), connect => none, bindings => #{}, leaves => #{},
            subscribers => #{}, tls_newest => none, notified => none},
     S1 = ensure_connect(loaded(S0)),
@@ -109,6 +112,10 @@ handle_info({'DOWN', _Ref, process, Pid, _Reason}, #{subscribers := Subscribers}
     {noreply, S#{subscribers := maps:map(without_pid(Pid), Subscribers)}};
 handle_info(_Message, S) ->
     {noreply, S}.
+
+%% Status output and crash reports show this process's keys with their private halves redacted.
+format_status(Status) ->
+    macula_node_keys:redacted(Status).
 
 %%====================================================================
 %% Bindings
@@ -237,6 +244,20 @@ overdue_checked(S, _Now) ->
 %%====================================================================
 %% The key directory
 %%====================================================================
+
+%% A key directory the issuer makes is readable by its owner only.
+key_dir_made(none) ->
+    ok;
+key_dir_made(Dir) ->
+    Path = filename:join([Dir]),
+    made_owner_only(filelib:is_dir(Path), Path).
+
+made_owner_only(true, _Path) ->
+    ok;
+made_owner_only(false, Path) ->
+    ok = filelib:ensure_dir(Path),
+    ok = file:make_dir(Path),
+    file:change_mode(Path, 8#700).
 
 save(none, _Hash, _Entry) ->
     ok;

@@ -130,7 +130,7 @@
 -export_type([handler/0, stream_handler/0, overlay_subscription/0]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, format_status/1]).
 
 -export_type([opts/0]).
 
@@ -1374,6 +1374,9 @@ terminate(_Reason, _S) ->
     ok.
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
+
+%% Status output and crash reports show this process's keys with their private halves redacted.
+format_status(Status) -> macula_node_keys:redacted(Status).
 
 %%====================================================================
 %% Internals

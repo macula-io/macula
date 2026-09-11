@@ -1,10 +1,12 @@
 %% EUnit tests for macula_statement_issuer, on an injected clock: statements every 15 minutes valid for an hour, CONNECT
 %% rotation every 5 days with the binding and statement first, statements for a rotated-out binding until its
-%% not_after, TLS material by leaf hash, the TLS rotation notice and overdue warning, and restarts with and without a
-%% key directory (DESIGN_PQ_HANDSHAKE_FRAMES.md, Binding; D22).
+%% not_after, TLS material by leaf hash, the TLS rotation notice and overdue warning, restarts with and without a key
+%% directory, and key files and a key directory the issuer makes readable by their owner only
+%% (DESIGN_PQ_HANDSHAKE_FRAMES.md, Binding; D22).
 -module(macula_statement_issuer_tests).
 
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("kernel/include/file.hrl").
 
 -export([log/2]).
 
@@ -29,7 +31,9 @@ cases(Identity) ->
                  fun no_newer_tls_binding_a_day_before_not_after_warns_at_every_check/1,
                  fun a_restarted_issuer_with_a_key_directory_keeps_its_bindings/1,
                  fun a_restarted_issuer_without_a_key_directory_starts_a_new_binding/1,
-                 fun the_issuer_never_writes_the_identity_key/1]].
+                 fun the_issuer_never_writes_the_identity_key/1,
+                 fun saved_connect_and_tls_key_files_are_readable_by_their_owner_only_after_a_rotation/1,
+                 fun a_key_directory_the_issuer_makes_is_readable_by_its_owner_only/1]].
 
 %%------------------------------------------------------------------
 %% Cases
@@ -169,6 +173,29 @@ the_issuer_never_writes_the_identity_key(Identity) ->
     ?assertEqual([], [F || F <- filelib:wildcard(filename:join(Dir, "*")), holds_public_key(F, Identity)]),
     ok = file:del_dir_r(Dir).
 
+saved_connect_and_tls_key_files_are_readable_by_their_owner_only_after_a_rotation(Identity) ->
+    {Tab, Clock} = clock(),
+    Dir = key_dir(),
+    Issuer = start(Identity, Clock, #{key_dir => Dir}),
+    ok = macula_statement_issuer:register_tls_leaf(Issuer, ?LEAF, tls_key()),
+    tick_at(Issuer, Tab, ?T0 + 5 * ?DAY),
+    ok = macula_statement_issuer:register_tls_leaf(Issuer, <<"the next leaf">>, tls_key()),
+    gen_server:stop(Issuer),
+    Keys = [filelib:wildcard(filename:join(Dir, Pattern)) || Pattern <- ["connect-*.key", "tls-*.key"]],
+    ?assertEqual([2, 2], [length(Files) || Files <- Keys]),
+    ?assertEqual([], [File || File <- lists:append(Keys), mode(File) =/= 8#600]),
+    ?assertEqual([], [File || File <- filelib:wildcard(filename:join(Dir, "*")), mode(File) =/= 8#600]),
+    ok = file:del_dir_r(Dir).
+
+a_key_directory_the_issuer_makes_is_readable_by_its_owner_only(Identity) ->
+    {_Tab, Clock} = clock(),
+    Parent = key_dir(),
+    Dir = filename:join(Parent, "keys"),
+    Issuer = start(Identity, Clock, #{key_dir => Dir}),
+    gen_server:stop(Issuer),
+    ?assertEqual(8#700, mode(Dir)),
+    ok = file:del_dir_r(Parent).
+
 %%------------------------------------------------------------------
 %% Helpers
 %%------------------------------------------------------------------
@@ -205,8 +232,7 @@ set_time(Tab, Ms) ->
     true = ets:insert(Tab, {now, Ms}).
 
 start(Identity, Clock, Extra) ->
-    {ok, Issuer} = macula_statement_issuer:start_link(Extra#{identity_key => Identity, owner => self(),
-                                                              clock => Clock}),
+    {ok, Issuer} = macula_statement_issuer:start_link(Extra#{identity => Identity, owner => self(), clock => Clock}),
     Issuer.
 
 tick_at(Issuer, Tab, Ms) ->
@@ -243,6 +269,10 @@ key_dir() ->
 holds_public_key(File, Identity) ->
     {ok, Bytes} = file:read_file(File),
     binary:match(Bytes, public(Identity)) =/= nomatch.
+
+mode(Path) ->
+    {ok, #file_info{mode = Mode}} = file:read_file_info(Path),
+    Mode band 8#777.
 
 capture_diagnostics() ->
     Handler = list_to_atom("statement_issuer_test_" ++ integer_to_list(erlang:unique_integer([positive]))),

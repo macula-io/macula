@@ -63,6 +63,13 @@ saved_file_is_readable_by_its_owner_only_test() ->
     {ok, #file_info{mode = Mode}} = file:read_file_info(Path),
     ?assertEqual(8#0600, Mode band 8#0777).
 
+key_file_its_group_or_others_can_read_is_refused_test_() ->
+    [?_assertEqual({error, key_file_permissions}, load_with_mode(Mode))
+     || Mode <- [8#0640, 8#0604, 8#0660, 8#0606, 8#0644]].
+
+key_file_readable_by_its_owner_only_loads_test_() ->
+    [?_assertMatch({ok, #{purpose := identity}}, load_with_mode(Mode)) || Mode <- [8#0600, 8#0400]].
+
 missing_file_returns_enoent_test() ->
     ?assertEqual({error, enoent},
                  macula_node_keys:load("/nonexistent/xyz/identity.key", identity, pq_pure)).
@@ -151,6 +158,13 @@ save_and_load(Key, Purpose, Profile) ->
     Path = mktmp("node.key"),
     ok = macula_node_keys:save(Path, Key),
     macula_node_keys:load(Path, Purpose, Profile).
+
+load_with_mode(Mode) ->
+    Path = mktmp("identity.key"),
+    {ok, Key} = macula_node_keys:generate(identity, pq_pure),
+    ok = macula_node_keys:save(Path, Key),
+    ok = file:change_mode(Path, Mode),
+    macula_node_keys:load(Path, identity, pq_pure).
 
 flip_byte(Bin, Offset) ->
     <<Head:Offset/binary, Byte, Tail/binary>> = Bin,

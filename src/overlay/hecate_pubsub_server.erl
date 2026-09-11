@@ -43,7 +43,7 @@
     stop/1
 ]).
 
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, format_status/1]).
 
 -export_type([opts/0]).
 
@@ -265,3 +265,7 @@ handle_info(_Info, S) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+%% Status output and crash reports show this process's keys with their private halves redacted.
+format_status(Status) ->
+    macula_node_keys:redacted(Status).

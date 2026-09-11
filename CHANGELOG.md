@@ -19,10 +19,10 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
 - `macula_node_keys`: a node's identity, CONNECT and TLS keys for its
   profile. ML-DSA-87 private keys are stored in their expanded form and
   RSA-PSS-4096 keys as DER. A key file is restricted to its owner before
-  the key is written into it. `load/3` refuses a key saved for another
-  purpose or profile, a stored public key that differs from the one
-  derived from its private key, and a key that fails a sign-and-verify
-  round trip.
+  the key is written into it. `load/3` refuses a key file its group or
+  others can read, a key saved for another purpose or profile, a stored
+  public key that differs from the one derived from its private key, and
+  a key that fails a sign-and-verify round trip.
 - `macula_node_keys:sign/2`, `verify/4` and `public_key/1`: ML-DSA-87
   alone in the US profile, and Macula's composite ML-DSA-87-PS384 in the
   EU profile, valid only if both halves verify. Verification refuses
@@ -35,6 +35,15 @@ Post-quantum work on the `post-quantum` branch. Not on `main`.
   profile name and the key as carried; an identity key's key id is its
   node_id. Realm, org and foundation keys are purposes of their own, with
   the identity key's algorithms.
+- Private keys stay out of status output and of crash and diagnostics
+  reports. Every process that holds a key formats its status through
+  `macula_node_keys:redacted/1`, which replaces each key's private half
+  with `redacted`. The application adds the primary logger filter
+  `macula_key_redaction` on start and removes it on stop: in report
+  events of the `otp` and `macula` domains it redacts every key the same
+  way, and a stack frame of a Macula module shows its arity in place of
+  its arguments, since those can hold a key. Frames of other
+  applications' modules keep their arguments.
 - `macula_signed_object`: the signed objects of the post-quantum records
   and frames. `sign/3` and `sign_held/3` sign fields under a label over
   the label, a zero byte, the SHA-384 of the key as carried and tbs,

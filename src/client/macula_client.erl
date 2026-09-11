@@ -77,7 +77,7 @@
          advertise_stream/5, advertise_stream/6, unadvertise_stream/3]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, format_status/1]).
 
 -ifdef(TEST).
 %% Probe guards — exported so a test can hang a link and prove the pool
@@ -1102,6 +1102,10 @@ terminate(_Reason, #state{subs = Subs}) ->
     ok.
 
 code_change(_OldVsn, S, _Extra) -> {ok, S}.
+
+%% The link options hold the node's keys: status output and crash reports show them with their private halves
+%% redacted.
+format_status(Status) -> macula_node_keys:redacted(Status).
 
 %%====================================================================
 %% Internals — link lifecycle
