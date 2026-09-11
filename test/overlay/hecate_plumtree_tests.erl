@@ -190,6 +190,37 @@ graft_for_unknown_msg_is_silent_test() ->
     ?assert(lists:member(Sender, hecate_plumtree:eager_peers(S1))).
 
 %%---------------------------------------------------------------------
+%% Retention: a publication hash is kept until the publication expires, and no longer
+%%---------------------------------------------------------------------
+
+sweep_keeps_a_publication_through_its_expiry_and_forgets_it_after_test() ->
+    Publish = publish_frame(<<"kept">>),
+    MsgId = msg_id_of(Publish),
+    {S1, _, [{MsgId, #{expires_at := ExpiresAt}}]} = hecate_plumtree:publish(fresh(id(99)), Publish),
+    ?assert(hecate_plumtree:has_received(MsgId, hecate_plumtree:sweep(S1, ExpiresAt))),
+    S2 = hecate_plumtree:sweep(S1, ExpiresAt + 1),
+    ?assertNot(hecate_plumtree:has_received(MsgId, S2)),
+    ?assertEqual(0, hecate_plumtree:received_count(S2)).
+
+sweep_forgets_an_expired_publication_and_keeps_a_live_one_test() ->
+    Short = publish_frame(?REALM, <<"short">>, #{ttl_ms => 1000}),
+    Long = publish_frame(<<"long">>),
+    {S1, _, [{ShortId, #{expires_at := ShortExpiry}}]} = hecate_plumtree:publish(fresh(id(99)), Short),
+    {S2, _, [{LongId, _}]} = hecate_plumtree:publish(S1, Long),
+    S3 = hecate_plumtree:sweep(S2, ShortExpiry + 1),
+    ?assertNot(hecate_plumtree:has_received(ShortId, S3)),
+    ?assert(hecate_plumtree:has_received(LongId, S3)),
+    ?assertEqual(1, hecate_plumtree:received_count(S3)).
+
+a_graft_for_a_forgotten_publication_gets_no_answer_test() ->
+    Publish = publish_frame(<<"forgotten">>),
+    MsgId = msg_id_of(Publish),
+    {S1, _, [{MsgId, #{expires_at := ExpiresAt}}]} = hecate_plumtree:publish(fresh(id(99)), Publish),
+    S2 = hecate_plumtree:sweep(S1, ExpiresAt + 1),
+    Frame = macula_frame:plumtree_graft(#{realm => ?REALM, msg_id => MsgId, round => 0}),
+    ?assertMatch({_, [], []}, hecate_plumtree:process(S2, id(42), Frame)).
+
+%%---------------------------------------------------------------------
 %% Receive PRUNE
 %%---------------------------------------------------------------------
 
@@ -241,11 +272,14 @@ publish_frame(Payload) ->
 
 %% A PUBLISH signed by a fresh publisher in the node's configured profile.
 publish_frame(Realm, Payload) ->
+    publish_frame(Realm, Payload, #{}).
+
+publish_frame(Realm, Payload, Extra) ->
     {ok, Profile} = macula_crypto_profile:configured(),
     {ok, Key} = macula_node_keys:generate(identity, Profile),
     Spec = #{realm => Realm, topic => <<"news">>, seq => 1, published_at => erlang:system_time(millisecond),
              payload => Payload},
-    macula_frame:publish(Spec, Key).
+    macula_frame:publish(maps:merge(Spec, Extra), Key).
 
 msg_id_of(#{publication := #{tbs := Tbs}}) ->
     crypto:hash(sha384, Tbs).

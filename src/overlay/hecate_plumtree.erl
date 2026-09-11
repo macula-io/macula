@@ -17,8 +17,9 @@
 %%       Plumtree spanning tree.</li>
 %%   <li><strong>lazy_push</strong>: peers receiving only IHAVE announcements. They graft into eager_push when they
 %%       GRAFT in response to an IHAVE.</li>
-%%   <li><strong>received</strong>: `MsgId => Publication' for the verified publications delivered locally. Used to
-%%       recognise repeat GOSSIPs and to answer GRAFTs.</li>
+%%   <li><strong>received</strong>: `MsgId => {Publication, ExpiresAt}' for the verified publications delivered
+%%       locally, each kept until its publication expires (`sweep/2'). Used to recognise repeat GOSSIPs and to answer
+%%       GRAFTs.</li>
 %%   <li><strong>missing</strong>: `MsgId => [Peer]' for peers who sent IHAVE for publications not yet received in
 %%       full.</li>
 %% </ul>
@@ -41,7 +42,8 @@
 %% </ul>
 %%
 %% This module is pure apart from reading the configured profile when a node starts and the clock when it verifies.
-%% The wrapping process transmits the action list and feeds deliveries to the local consumer.
+%% The wrapping process transmits the action list, feeds deliveries to the local consumer and calls `sweep/2' on a
+%% timer, so a node remembers a publication hash until the publication expires, and no longer.
 %%
 %% Reference: plans/PLAN_MACULA_V2_PART3_DISCOVERY.md §7.2; plans/PLAN_PHASE_5_BREAKDOWN.md Session 5.3;
 %% DESIGN_PQ_SIGNED_FRAMES_AND_RECORDS.md, Publications.
@@ -59,7 +61,8 @@
     received_count/1,
     missing_count/1,
     publish/2,
-    process/3
+    process/3,
+    sweep/2
 ]).
 
 -export_type([state/0, peer/0, msg_id/0, action/0, delivery/0]).
@@ -73,7 +76,7 @@
     profile    := macula_crypto_profile:profile(),
     eager_push := sets:set(peer()),
     lazy_push  := sets:set(peer()),
-    received   := #{msg_id() => macula_signed_object:object()},
+    received   := #{msg_id() => {macula_signed_object:object(), non_neg_integer()}},
     missing    := #{msg_id() => sets:set(peer())}
 }.
 
@@ -145,8 +148,8 @@ local_publish(true, _MsgId, _Publication, _Frame, State) ->
 local_publish(false, MsgId, Publication, Frame, State) ->
     published(verified(Frame, State), MsgId, Publication, State).
 
-published({ok, Verified}, MsgId, Publication, State) ->
-    State1 = mark_received(State, MsgId, Publication),
+published({ok, #{expires_at := ExpiresAt} = Verified}, MsgId, Publication, State) ->
+    State1 = mark_received(State, MsgId, Publication, ExpiresAt),
     {State1, build_pushes(State1, MsgId, 0, Publication, undefined), [{MsgId, Verified}]};
 published({error, _} = Refusal, _MsgId, _Publication, _State) ->
     Refusal.
@@ -168,6 +171,20 @@ process(State, _From, _Frame) ->
     {State, [], []}.
 
 %%=====================================================================
+%% Retention
+%%=====================================================================
+
+%% @doc Forget every received publication that expired before `NowMs', in milliseconds of wall-clock time: its
+%% published_at plus its ttl_ms, or 10 minutes without one, plus 5 minutes. A node keeps a publication hash until the
+%% publication expires, and no longer; a later copy is refused by verification, and a GRAFT for it gets no answer.
+-spec sweep(state(), integer()) -> state().
+sweep(#{received := R} = S, NowMs) when is_integer(NowMs) ->
+    S#{received := maps:filter(live_at(NowMs), R)}.
+
+live_at(NowMs) ->
+    fun(_MsgId, {_Publication, ExpiresAt}) -> ExpiresAt >= NowMs end.
+
+%%=====================================================================
 %% Handlers
 %%=====================================================================
 
@@ -181,8 +198,8 @@ classify_gossip(true, From, _MsgId, _Publication, _Frame, State) ->
 classify_gossip(false, From, MsgId, Publication, #{round := Round} = Frame, State) ->
     first_gossip(verified(Frame, State), From, MsgId, Round, Publication, State).
 
-first_gossip({ok, Verified}, From, MsgId, Round, Publication, State) ->
-    State1 = mark_received(State, MsgId, Publication),
+first_gossip({ok, #{expires_at := ExpiresAt} = Verified}, From, MsgId, Round, Publication, State) ->
+    State1 = mark_received(State, MsgId, Publication, ExpiresAt),
     State2 = clear_missing(State1, MsgId),
     State3 = move_to_eager(State2, From),
     {State3, build_pushes(State3, MsgId, Round + 1, Publication, From), [{MsgId, Verified}]};
@@ -205,7 +222,7 @@ on_graft(From, #{msg_id := MsgId, round := Round}, State) ->
 
 answer_graft(error, _From, _Round, State) ->
     {State, [], []};
-answer_graft({ok, Publication}, From, Round, State) ->
+answer_graft({ok, {Publication, _ExpiresAt}}, From, Round, State) ->
     {State, [{send, From, gossip(Publication, Round)}], []}.
 
 on_prune(From, State) ->
@@ -223,8 +240,8 @@ in_realm({error, _} = Refusal, _Realm) -> Refusal.
 %% State mutations
 %%=====================================================================
 
-mark_received(#{received := R} = S, MsgId, Publication) ->
-    S#{received := R#{MsgId => Publication}}.
+mark_received(#{received := R} = S, MsgId, Publication, ExpiresAt) ->
+    S#{received := R#{MsgId => {Publication, ExpiresAt}}}.
 
 clear_missing(#{missing := M} = S, MsgId) ->
     S#{missing := maps:remove(MsgId, M)}.
