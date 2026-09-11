@@ -263,7 +263,7 @@ isolate_cookie_sources() ->
               env => [{Var, os:getenv(Var)} || Var <- ?COOKIE_ENV_VARS],
               app => application:get_env(macula, cookie),
               tmp_cookie => file:read_link_info(?TMP_COOKIE)},
-    Home = make_private_dir(),
+    Home = macula_test_tmp:dir("macula_cluster_tests"),
     true = os:putenv("HOME", Home),
     [true = os:unsetenv(Var) || Var <- ?COOKIE_ENV_VARS],
     ok = application:unset_env(macula, cookie),
@@ -287,14 +287,6 @@ restore_app_cookie({ok, Cookie}) -> ok = application:set_env(macula, cookie, Coo
 %% was created by it, so it goes; one that was already there is left alone.
 remove_tmp_cookie_created_here({error, enoent}) -> _ = file:delete(?TMP_COOKIE), ok;
 remove_tmp_cookie_created_here(_Existing) -> ok.
-
-make_private_dir() ->
-    Unique = integer_to_list(erlang:unique_integer([positive])) ++ "_" ++
-        binary_to_list(binary:encode_hex(crypto:strong_rand_bytes(4), lowercase)),
-    Dir = filename:join(os:getenv("TMPDIR", "/tmp"), "macula_cluster_tests_" ++ Unique),
-    ok = file:make_dir(Dir),
-    ok = file:change_mode(Dir, 8#700),
-    Dir.
 
 write_cookie_file(Home, Content, Mode) ->
     Path = filename:join(Home, ".erlang.cookie"),
