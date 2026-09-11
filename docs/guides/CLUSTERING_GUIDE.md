@@ -162,18 +162,17 @@ If the node is already distributed, returns `ok` immediately. Otherwise, starts 
 
 ## Cookie Management
 
+macula sets no distribution cookie, and reads or writes no cookie file. A node's cookie is its release's own configuration, which OTP applies when distribution starts:
+
+- The node reads `.erlang.cookie` in the `HOME` it started with. OTP refuses a cookie file its group or others can access, and creates an owner-only one (mode 0400) with a random cookie when there is none.
+- Nodes that form a cluster need the same cookie. Give each node the same cookie file, owned by the user the node runs as, with mode 0400 or 0600. In a container, mount it read-only at that user's `$HOME/.erlang.cookie`.
+- A release that passes `-setcookie` itself takes the cookie from wherever that flag gets it. Elixir's `mix release` reads its `releases/COOKIE` file, or `RELEASE_COOKIE` when that is set; prefer the file.
+
+Keep the cookie out of environment variables and command lines: `/proc/<pid>/environ`, `ps` and `docker inspect` show them.
+
 ### `macula:get_cookie/0`
 
-A node that is already distributed keeps the cookie it has, from its VM arguments (`-setcookie`) or the Erlang cookie file, and `get_cookie/0` returns that cookie.
-
-On a node that is not distributed yet, the cookie is resolved in this order:
-
-1. **Application env**: `{macula, [{cookie, CookieValue}]}`
-2. **Environment variable**: `MACULA_COOKIE` or `RELEASE_COOKIE` or `ERLANG_COOKIE`
-3. **Cookie file**: `~/.erlang.cookie`, which only its owner may be able to read (mode 0600 or 0400)
-4. **Generated**: only when `~/.erlang.cookie` is missing, a new cookie is created and saved there, readable by its owner only
-
-`get_cookie/0` raises `{cookie_file_unavailable, home_not_set}` when `HOME` is unset. It raises `{cookie_file_refused, Reason}` when the cookie file is there but cannot be used: its group or others can read it, it is empty, or it cannot be read. Such a file is never replaced; fix its mode or its content.
+Returns the running node's cookie, as `erlang:get_cookie/0` does, and raises `not_distributed` on a node that is not distributed. Deprecated, and removed in 11.0.0: call `erlang:get_cookie/0`.
 
 ```erlang
 Cookie = macula:get_cookie().
@@ -181,23 +180,11 @@ Cookie = macula:get_cookie().
 
 ### `macula:set_cookie/1`
 
-Sets the Erlang cookie for this node and saves it to `~/.erlang.cookie`, readable by its owner only.
+Sets the cookie of the running node, and raises `not_distributed` on a node that is not distributed. It writes no file, so a restarted node has its cookie file's cookie again. Deprecated, and removed in 11.0.0: call `erlang:set_cookie/1`.
 
 ```erlang
 ok = macula:set_cookie(my_secret_cookie).
 ok = macula:set_cookie(<<"my_secret_cookie">>).
-```
-
-### Configuration
-
-```erlang
-%% sys.config
-[{macula, [{cookie, 'my_cluster_cookie'}]}].
-```
-
-```bash
-export MACULA_COOKIE="my_cluster_cookie"
-export RELEASE_COOKIE="my_cluster_cookie"
 ```
 
 ---
@@ -249,18 +236,21 @@ services:
     network_mode: host  # Required for UDP multicast
     environment:
       - RELEASE_NODE=node1@localhost
-      - RELEASE_COOKIE=my_secret_cookie
       - CLUSTER_STRATEGY=gossip
       - CLUSTER_SECRET=demo_secret
+    volumes:
+      # The shared cookie file, owned by the container's user, mode 0400.
+      - ./erlang.cookie:/home/app/.erlang.cookie:ro
 
   node2:
     image: my-app:latest
     network_mode: host
     environment:
       - RELEASE_NODE=node2@localhost
-      - RELEASE_COOKIE=my_secret_cookie
       - CLUSTER_STRATEGY=gossip
       - CLUSTER_SECRET=demo_secret
+    volumes:
+      - ./erlang.cookie:/home/app/.erlang.cookie:ro
 ```
 
 ---

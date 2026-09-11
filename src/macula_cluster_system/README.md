@@ -1,6 +1,6 @@
 # Cluster System
 
-LAN clustering: gossip and static node discovery, cookie management, node monitoring. Erlang distribution over plain TCP or UDP multicast on a shared subnet — nothing here touches QUIC or the relay mesh.
+LAN clustering: gossip and static node discovery, distribution and the node's cookie, node monitoring. Erlang distribution over plain TCP or UDP multicast on a shared subnet — nothing here touches QUIC or the relay mesh.
 
 **Not the same thing as distribution-over-mesh.** For nodes across NATs, firewalls, or the open internet, see `../macula_dist_system/README.md` and `docs/guides/DIST_OVER_MESH_GUIDE.md` instead.
 
