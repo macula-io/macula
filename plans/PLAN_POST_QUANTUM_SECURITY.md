@@ -5,7 +5,7 @@ testable, and Raf can point to a concrete plan in a partner offer.**
 
 **Status:** Planning. Raf accepted the recommendations on 2026-09-10. Open items are marked with their owner.
 **Created:** 2026-09-10
-**Last Updated:** 2026-09-10
+**Last Updated:** 2026-09-12
 **Classification:** BUILD
 **Reasons and measurements:** [EXPLORATION_POST_QUANTUM.md](EXPLORATION_POST_QUANTUM.md)
 
@@ -241,7 +241,7 @@ Notes on the table:
 
 ## Key model and connection design
 
-This is the design every stage builds on the post-quantum fleet. Decisions: D2, D6, D12, D13, D16, D17, D22.
+This is the design every stage builds on the post-quantum fleet. Decisions: D2, D6, D12, D13, D16, D17, D22, D29.
 The frames, bindings and status statements are laid out byte for byte in `DESIGN_PQ_HANDSHAKE_FRAMES.md`.
 
 ### Keys per node
@@ -254,6 +254,7 @@ The frames, bindings and status statements are laid out byte for byte in `DESIGN
 - US keys are ML-DSA-87. An EU pair is ML-DSA-87 plus RSA-PSS-4096 (D4), used only together.
 - The TLS key is ML-DSA-87 alone in both profiles.
 - A box that serves both profiles runs one station instance per profile (D2), so it holds 8 private keys.
+- A node that accepts distribution tunnels holds a TLS key, as a station instance does (D29).
 
 ### What each key signs
 
@@ -267,7 +268,8 @@ The frames, bindings and status statements are laid out byte for byte in `DESIGN
   - the binding of its TLS key, the binding of its CONNECT key, and their status statements (D22).
 
   It never signs anything fresh or unique to a session.
-- **TLS key:** only the TLS 1.3 handshake, on station instances, with a self-signed certificate.
+- **TLS key:** only the TLS 1.3 handshake, on station instances and on nodes that accept distribution tunnels (D29),
+  with a self-signed certificate.
 - **CONNECT key:** only the per-connection CONNECT proof. A key used for signatures is never also used for entity
   authentication (ANSSI PA-079 section 6.3, BSI Remark 6.1, ECCG Note 79) ✅.
 - **Realm, org and foundation keys:** a realm key signs its realm's records, an org key signs its procedure
@@ -465,6 +467,7 @@ Raf answered "go with the recommendations" on 2026-09-10.
 | D26 | Peer-supplied maps | One key form in 11.0.0, read through the facade accessors | Accepted |
 | D27 | Where content lives | The sharing node keeps and serves it; stations only pass it through | Accepted |
 | D28 | DHT slots and verification budget | 64 entries per slot; checked places; slowed reads | Accepted |
+| D29 | Distribution tunnel keys | The connection handshake end to end inside the tunnel | Accepted |
 
 The full text of each decision is in
 [PLAN_POST_QUANTUM_SECURITY_DECISIONS.md](PLAN_POST_QUANTUM_SECURITY_DECISIONS.md).

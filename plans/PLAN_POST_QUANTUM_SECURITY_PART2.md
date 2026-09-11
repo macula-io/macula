@@ -4,7 +4,7 @@
 and decisions are there. [PLAN_POST_QUANTUM_SECURITY_PART1.md](PLAN_POST_QUANTUM_SECURITY_PART1.md) has the
 verified facts and the Stage 0 checks.
 
-**Last Updated:** 2026-09-10
+**Last Updated:** 2026-09-12
 
 Each work package gives its owner, what it waits on, the files, the change, the test that must go red before the
 change, the done criterion and the effort. The US profile goes first; the EU parts follow right after (D15).
@@ -243,7 +243,10 @@ change, the done criterion and the effort. The US profile goes first; the EU par
 - **Owners:**
   - Mercury: `src/peering/macula_peering_conn.erl` and `src/client/macula_station_link.erl`;
   - Neptune: the trust options and `station_seed/1` in `src/client/macula_client.erl`, `src/macula_direct_dial.erl`,
-    `macula_download.erl`, `src/macula_feeder.erl`, `src/peering/macula_tls.erl` and the distribution dials.
+    `macula_download.erl`, `src/macula_feeder.erl`, `src/peering/macula_tls.erl`, the distribution dials, and the
+    distribution tunnels on both carriers (D29): the relay path in `macula_dist_relay_client.erl` and
+    `macula_dist_relay_protocol.erl`, and the pool path in `macula_dist_pool.erl` and `macula_dist_bridge.erl`, all
+    in `src/macula_dist_system/`.
 - **Waiting on:** WP 1.2, WP 1.3.
 - **Change:**
   - the handshake order and checks of the key model: opener, challenge, the client's checks, CONNECT, the
@@ -262,6 +265,10 @@ change, the done criterion and the effort. The US profile goes first; the EU par
     for its request; provider stream frames are checked against the stream's key and sequence (D25), and a
     provider checks caller stream frames against the caller key and sequence (D17);
   - distribution dials use the same verification mode;
+  - a distribution tunnel carried over the mesh runs the connection handshake end to end, with the accepting node in
+    the station role, and its data travels only inside that TLS 1.3 session; the dialing node gives the peer's
+    expected node_id (D29);
+  - the carrier delivers a tunnel's data complete and in order, or the tunnel ends;
   - on the connection side (Mercury): the verification budget and the reading pause in `macula_peering_conn`, with
     the SWIM and stream idle timers for that peer extended by each pause (D28).
 - **Red first:** `test/macula_peering_handshake_tests.erl` and the dial tests:
@@ -274,9 +281,13 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - an open connection whose peer sends no fresh status statement before expiry closes with its own reason;
   - a reply from a node other than the request's target, or for another request, is refused (D25);
   - a client refuses to send CONNECT when the challenge's binding does not match the verified leaf or the
-    expected node_id.
+    expected node_id;
+  - a distribution tunnel whose peer derives to a node_id other than the one dialled is refused;
+  - replayed, reordered or altered tunnel data ends the tunnel;
+  - on the pool path, a dropped or reordered carrier message ends the tunnel.
 - **Done:** green in both profiles.
-- **Effort:** 2 to 3 days for the handshake checks, plus the dial options ⚠.
+- **Effort:** 2 to 3 days for the handshake checks, plus the dial options ⚠, plus the distribution tunnels on both
+  carriers ⚠.
 
 ### WP 1.6 `macula-station`
 
@@ -499,8 +510,8 @@ change, the done criterion and the effort. The US profile goes first; the EU par
   - the relay builds against `macula` branch `post-quantum` and uses its connection handshake and dials
     (WP 1.5), with one profile per instance, as station instances do (D2);
   - the relay client in `macula` dials with an expected identity, like every other dial (WP 1.5).
-- **Red first:** two BEAM nodes on the new fleet reach each other through the relay in each profile, and a node
-  that offers only classical algorithms is refused.
+- **Red first:** two BEAM nodes on the new fleet reach each other through the relay in each profile, a node that
+  offers only classical algorithms is refused, and the relay sees no distribution plaintext (D29).
 - **Done:** green on the new fleet.
 - **Effort:** ⚠.
 
