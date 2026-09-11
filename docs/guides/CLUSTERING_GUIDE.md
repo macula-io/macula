@@ -21,13 +21,17 @@ The Macula Cluster API (`macula_cluster.erl`) provides a standardized interface 
 |----------|-----------|---------------|---------|----------|
 | **gossip** | Automatic (UDP multicast) | Zero-config | LAN multicast | Development, same-subnet production |
 | **static** | Manual | Node list required | Any | Known node sets, cross-subnet |
-| **mdns**, **dht** | Not available | n/a | n/a | Use **gossip** on a LAN, or **static** with a node list |
+| **mdns** | Only with a running `macula_dist_discovery` server | Server started with `discovery_type => mdns` | LAN (mDNS) | Otherwise use **gossip** on a LAN, or **static** with a node list |
+| **dht** | Not available | n/a | n/a | Use **gossip** on a LAN, or **static** with a node list |
 | **auto** | Static if `nodes` is set, else gossip | — | — | Let `start_cluster/1` pick |
 
-`mdns` and `dht` are accepted `strategy` values but are not available. They
-need a discovery service that the macula application does not start, so
-`start_cluster/1` fails for them. Use `gossip` for zero-config discovery on
-a LAN, or `static` with a node list. Both values are removed in 11.0.0.
+`dht` is not available: `start_cluster/1` returns
+`{error, {strategy_unavailable, dht}}`. `mdns` needs a `macula_dist_discovery`
+server started with `discovery_type => mdns`, which the macula application
+does not start; without one, `start_cluster/1` returns
+`{error, {strategy_unavailable, mdns}}`. Neither error starts distribution.
+Use `gossip` for zero-config discovery on a LAN, or `static` with a node
+list. Both values are removed in 11.0.0.
 
 ---
 

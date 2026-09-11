@@ -15,7 +15,7 @@
 setup() ->
     %% Start discovery first (required by cluster strategy)
     {ok, DiscoveryPid} = macula_dist_discovery:start_link(#{
-        discovery_type => both
+        discovery_type => mdns
     }),
 
     %% Start the cluster strategy
@@ -78,7 +78,7 @@ start_link_test_() ->
         ?_test(begin
             %% Start discovery
             {ok, DiscoveryPid} = macula_dist_discovery:start_link(#{
-                discovery_type => both
+                discovery_type => mdns
             }),
 
             %% Start strategy with different name
