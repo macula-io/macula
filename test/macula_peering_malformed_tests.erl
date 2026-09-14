@@ -16,7 +16,8 @@
 %%% carries frames a station relays for others, that frame is dropped, the
 %%% controlling process is told `{macula_peering, invalid_frame, Pid, Type,
 %%% Field}', and the frames after it are served. A frame of a type this node
-%%% does not know leaves the connection serving.
+%%% does not know, whether its name is an atom here or not, leaves the
+%%% connection serving.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(macula_peering_malformed_tests).
@@ -29,6 +30,8 @@
 %% Well within the 30 s handshake timeout.
 -define(PROMPT_MS, 3_000).
 -define(EVENT_MS, 5_000).
+%% A frame type name that is not an atom anywhere, so it never decodes to one.
+-define(NON_ATOM_TYPE, <<"zz_frame_type_that_is_no_atom">>).
 
 malformed_test_() ->
     {timeout, 180,
@@ -47,7 +50,9 @@ malformed_test_() ->
            {"a CALL without caller on the control stream is dropped and the next frame is served",
             {timeout, 30, fun() -> invalid_control_frame_dropped(Ctx) end}},
            {"a frame of an unknown type on the control stream leaves the connection serving",
-            {timeout, 30, fun() -> unknown_control_frame_passes(Ctx) end}}]
+            {timeout, 30, fun() -> unknown_control_frame_passes(Ctx) end}},
+           {"frames whose type is no atom here, as text or bytes, leave the connection serving",
+            {timeout, 30, fun() -> non_atom_control_frames_pass(Ctx) end}}]
       end}}.
 
 %%%===================================================================
@@ -108,6 +113,23 @@ unknown_control_frame_passes(Ctx) ->
         ok = macula_quic:send(Stream, signed_connect()),
         connected(Server),
         ok = macula_quic:send(Stream, encode_signed((call_frame())#{frame_type => zz_future_frame})),
+        Next = call_frame(),
+        ok = macula_quic:send(Stream, encode_signed(Next)),
+        Served = served(Server, Next),
+        ?assertEqual({served, running}, {Served, running(Server)})
+    end).
+
+%% A type name that is no atom on this node decodes as `{text, Name}' when
+%% sent as a text string, and as a plain binary when sent as bytes.
+non_atom_control_frames_pass(Ctx) ->
+    ?assertError(badarg, binary_to_existing_atom(?NON_ATOM_TYPE)),
+    with_server(Ctx, fun(Server, Stream) ->
+        ok = macula_quic:send(Stream, signed_connect()),
+        connected(Server),
+        AsText = (call_frame())#{frame_type => {text, ?NON_ATOM_TYPE}},
+        AsBytes = (call_frame())#{frame_type => ?NON_ATOM_TYPE},
+        ok = macula_quic:send(Stream, encode_signed(AsText)),
+        ok = macula_quic:send(Stream, encode_signed(AsBytes)),
         Next = call_frame(),
         ok = macula_quic:send(Stream, encode_signed(Next)),
         Served = served(Server, Next),
