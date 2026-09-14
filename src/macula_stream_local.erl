@@ -35,6 +35,12 @@
     terminate/2
 ]).
 
+-ifdef(TEST).
+%% The process a local call's handler runs in, spawned before its stream
+%% exists: exported for macula_stream_tests.erl.
+-export([spawn_handler/3]).
+-endif.
+
 -define(SERVER, ?MODULE).
 
 -type handler() :: fun((Stream :: pid(), Args :: term()) -> any()).
@@ -167,12 +173,21 @@ spawn_pair(Procedure, Mode, Handler, Args, Opts) ->
     HandlerPid ! {serve, ServerPid},
     {ok, ClientPid}.
 
+%% The handler process runs the handler once its stream is paired, and ends
+%% without running it when the process that opened the call ends first. Once
+%% the handler runs, the opener's end is no concern of it, so no notice of it
+%% is left in the handler's mailbox.
 spawn_handler(Handler, Args, Procedure) ->
-    spawn(fun() -> serve_when_paired(Handler, Args, Procedure) end).
+    Opener = self(),
+    spawn(fun() -> serve_when_paired(erlang:monitor(process, Opener), Handler, Args, Procedure) end).
 
-serve_when_paired(Handler, Args, Procedure) ->
+serve_when_paired(OpenerRef, Handler, Args, Procedure) ->
     receive
-        {serve, Stream} -> run_handler(Handler, Stream, Args, Procedure)
+        {serve, Stream} ->
+            true = erlang:demonitor(OpenerRef, [flush]),
+            run_handler(Handler, Stream, Args, Procedure);
+        {'DOWN', OpenerRef, process, _Opener, _Reason} ->
+            ok
     end.
 
 %% A handler crash aborts the stream with the crash class as the code

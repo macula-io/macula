@@ -137,6 +137,70 @@ a_local_server_stream_ends_with_its_handler_test_() ->
          end}
     ]).
 
+%% A handler process waits to be handed the stream it serves. When the process
+%% that spawned it ends first, it ends too, without running the handler.
+a_handler_process_ends_with_its_spawner_before_serving_test_() ->
+    [{Name, fun() -> ends_with_its_spawner_before_serving(Spawn) end}
+     || {Name, Spawn} <- handler_spawners()].
+
+%% Once a handler process has its stream, the end of the process that spawned
+%% it leaves nothing in the handler's mailbox.
+a_serving_handler_holds_no_notice_of_its_spawner_test_() ->
+    [{Name, fun() -> holds_no_notice_of_its_spawner(Spawn) end}
+     || {Name, Spawn} <- handler_spawners()].
+
+%% The two places that spawn a process for a handler before its stream exists.
+handler_spawners() ->
+    [{"a station link", fun macula_station_link:spawn_stream_handler/3},
+     {"a local call", fun macula_stream_local:spawn_handler/3}].
+
+ends_with_its_spawner_before_serving(Spawn) ->
+    Test = self(),
+    Spawner = spawn(fun() ->
+                        Test ! {handler, Spawn(telling_ran(Test), #{}, <<"t.unserved">>)},
+                        park()
+                    end),
+    Handler = receive {handler, Pid} -> Pid after 1_000 -> erlang:error(no_handler) end,
+    Ref = monitor(process, Handler),
+    exit(Spawner, kill),
+    ?assertMatch({down, _}, down_within(Ref, 1_000)),
+    ?assertEqual(not_ran, receive ran -> ran after 0 -> not_ran end).
+
+holds_no_notice_of_its_spawner(Spawn) ->
+    Test = self(),
+    {Spawner, SpawnerRef} =
+        spawn_monitor(fun() ->
+                          H = Spawn(reporting_mailbox(Test), #{}, <<"t.served">>),
+                          H ! {serve, self()},
+                          park()
+                      end),
+    Serving = receive {serving, Pid} -> Pid after 1_000 -> erlang:error(not_serving) end,
+    exit(Spawner, kill),
+    ?assertMatch({down, _}, down_within(SpawnerRef, 1_000)),
+    ?assertEqual({messages, []}, mailbox_of(Serving)).
+
+telling_ran(Test) ->
+    fun(_Stream, _Args) -> Test ! ran end.
+
+reporting_mailbox(Test) ->
+    fun(_Stream, _Args) ->
+        Test ! {serving, self()},
+        receive
+            report_mailbox -> Test ! {mailbox, erlang:process_info(self(), messages)}
+        end
+    end.
+
+%% What is left in a serving handler's mailbox, after a moment for a notice of
+%% its spawner's end to arrive.
+mailbox_of(Handler) ->
+    timer:sleep(20),
+    Handler ! report_mailbox,
+    receive
+        {mailbox, Messages} -> Messages
+    after 1_000 ->
+        erlang:error(no_mailbox)
+    end.
+
 close_telling(Test, Stream, _Args) ->
     Test ! {serving, Stream},
     macula:close_stream(Stream).
