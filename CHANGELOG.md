@@ -142,6 +142,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A station link serves at most 100 stream sessions at once, and the node at
+  most 1000, set with the `max_served_sessions_per_link` and
+  `max_served_sessions` macula application env. A STREAM_OPEN past either cap
+  gets a STREAM_ERROR with code `too_many_sessions` and runs no handler; a
+  session's place frees when its stream ends. `macula_stream_sessions` counts
+  the sessions and the refusals by reason, and logs refusals at most once per
+  `served_session_refusal_log_interval_ms` (60000 by default).
+- A dedicated stream carries one served session. A STREAM_OPEN on a stream
+  that already carries one gets a STREAM_ERROR for its own stream id with code
+  `refused`, and the session already on the stream keeps it.
 - A stream holds at most 16 MiB of memory for chunks no reader has taken. A
   queued chunk is copied, so it keeps none of the frame it arrived in, and it
   counts for the memory it takes: its bytes, a decoded term's heap size, and

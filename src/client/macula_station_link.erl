@@ -2785,8 +2785,7 @@ dispatch_stream_open({ok, {AdvMode, Handler}}, Sid, Proc, _Declared, Args,
     %% Advertised mode wins — the server declared the shape.
     spawn_inbound_stream(Sid, Proc, AdvMode, Handler, Args, Stream, S).
 
-spawn_inbound_stream(Sid, Proc, Mode, Handler, Args, Stream,
-                     #state{server_streams = SS} = S) ->
+spawn_inbound_stream(Sid, Proc, Mode, Handler, Args, Stream, S) ->
     Worker = spawn_stream_handler(Handler, Args, Proc),
     {ok, StreamPid} = macula_stream:start_link(#{
         id    => Sid,
@@ -2794,10 +2793,26 @@ spawn_inbound_stream(Sid, Proc, Mode, Handler, Args, Stream,
         mode  => Mode,
         owner => Worker
     }),
+    serve_if_admitted(macula_stream_sessions:admit(self(), StreamPid),
+                      Sid, Worker, StreamPid, Stream, S).
+
+%% A session past the link's or the node's cap on served sessions is refused
+%% on its own stream: its handler process ends before it serves, and the
+%% stream it would have owned ends with it.
+serve_if_admitted(ok, Sid, Worker, StreamPid, Stream, #state{server_streams = SS} = S) ->
     ok = macula_stream:attach_to_link(StreamPid, self(), Sid),
     Mon = erlang:monitor(process, StreamPid),
     Worker ! {serve, StreamPid},
-    S#state{server_streams = SS#{Sid => {StreamPid, Mon, Stream}}}.
+    S#state{server_streams = SS#{Sid => {StreamPid, Mon, Stream}}};
+serve_if_admitted({error, _Refusal}, Sid, Worker, _StreamPid, Stream, #state{identity = Id} = S) ->
+    exit(Worker, kill),
+    Refusal = macula_frame:stream_error(#{
+        stream_id => Sid,
+        code      => <<"too_many_sessions">>,
+        message   => <<"no more sessions are served now">>
+    }),
+    try macula_peering:send_on_stream(Stream, Refusal, Id) catch _:_ -> ok end,
+    S.
 
 %% Handler runs in a transient process, which owns the session's stream:
 %% the stream ends when the handler returns or crashes, unless the handler

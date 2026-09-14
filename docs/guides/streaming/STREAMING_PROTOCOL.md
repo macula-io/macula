@@ -159,6 +159,12 @@ from the other side ends the session with code `stream_protocol_error`, and a
 send the mode does not allow returns `{error, {send_not_allowed, Mode}}`
 without sending anything.
 
+A provider serves at most 100 sessions per station link and 1000 on the
+node at once (`max_served_sessions_per_link` and `max_served_sessions` in the
+macula application env), and one session per dedicated stream. A STREAM_OPEN
+past a cap gets a STREAM_ERROR with code `too_many_sessions`, and a second
+STREAM_OPEN on a stream that already carries a session gets `refused`.
+
 A stream holds at most 16 MiB of memory for chunks no reader has taken,
 counting each chunk's bytes, a decoded term's heap size and the cell that
 queues it. A chunk that would take it past that ends the session with code

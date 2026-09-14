@@ -3022,6 +3022,55 @@ served_within(Ms) ->
         not_served
     end.
 
+%% A link serves at most max_served_sessions_per_link sessions at once. A
+%% STREAM_OPEN past the cap is refused on its own stream and starts no
+%% handler; once a served session ends, a new one is served again.
+a_stream_open_past_the_session_cap_is_refused_test_() ->
+    {timeout, 10, fun stream_open_past_the_session_cap_is_refused/0}.
+
+stream_open_past_the_session_cap_is_refused() ->
+    Old = application:get_env(macula, max_served_sessions_per_link),
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    ok = application:set_env(macula, max_served_sessions_per_link, 1),
+    Log = macula_test_log:capture(),
+    try
+        Test = self(),
+        Procedure = <<"foo.capped">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(Test, telling_how_it_ended(Test))),
+        flush_send_frame_casts(),
+        CallerKp = macula_identity:generate(),
+        Base = macula_stream_sessions:sessions(),
+        {Stream1, Sid1} = serve_session(Pid, FakePeer, Procedure, CallerKp),
+        Stream2 = make_ref(),
+        Open2 = stream_open_frame(Procedure, CallerKp, capped),
+        Sid2 = maps:get(stream_id, Open2),
+        inject_dedicated_stream_open(Pid, FakePeer, Stream2, macula_frame:sign(Open2, CallerKp)),
+        ?assertMatch(#{stream_id := Sid2, code := <<"too_many_sessions">>},
+                     stream_error_written(Stream2, 1_000)),
+        ?assertEqual(not_served, served_within(200)),
+        inject_on_stream(Pid, Stream1, #{frame_type => stream_end, stream_id => Sid1, role => both}),
+        ?assertEqual({ended, closed}, how_it_ended(1_000)),
+        ?assertEqual(Base, sessions_back_to(Base, 1_000)),
+        ?assertMatch({_Stream3, _Sid3}, serve_session(Pid, FakePeer, Procedure, CallerKp))
+    after
+        restore_session_cap(Old),
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+restore_session_cap(undefined) -> application:unset_env(macula, max_served_sessions_per_link);
+restore_session_cap({ok, Cap})  -> application:set_env(macula, max_served_sessions_per_link, Cap).
+
+sessions_back_to(Base, Ms) ->
+    session_count_back_to(macula_stream_sessions:sessions(), Base, Ms).
+
+session_count_back_to(Base, Base, _Ms) -> Base;
+session_count_back_to(Count, _Base, Ms) when Ms =< 0 -> Count;
+session_count_back_to(_Count, Base, Ms) ->
+    timer:sleep(20),
+    sessions_back_to(Base, Ms - 20).
+
 %% A STREAM_OPEN refused before any handler runs starts no process at all.
 a_refused_stream_open_starts_no_process_test_() ->
     {timeout, 5,
