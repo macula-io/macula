@@ -146,23 +146,22 @@ unset_difficulty_is_eight_bits_test() ->
                  {macula_identity:puzzle_valid(key_meeting(8, 9)),
                   macula_identity:puzzle_valid(key_meeting(7, 8))}).
 
+%% The setting's checks below use a plain key: generate/0 grinds to the
+%% configured difficulty, which is the setting under test.
 non_integer_difficulty_is_a_configuration_error_test() ->
+    Kp = macula_identity:generate(#{puzzle => false}),
     ?assertError({bad_config, {macula, puzzle_difficulty, <<"12">>}},
-                 with_puzzle_difficulty(<<"12">>, fun() ->
-                     macula_identity:puzzle_valid(macula_identity:generate())
-                 end)).
+                 with_puzzle_difficulty(<<"12">>, fun() -> macula_identity:puzzle_valid(Kp) end)).
 
 %% The largest puzzle_difficulty the setting accepts.
 maximum_difficulty_is_accepted_test() ->
-    ?assert(is_boolean(with_puzzle_difficulty(16, fun() ->
-        macula_identity:puzzle_valid(macula_identity:generate())
-    end))).
+    Kp = macula_identity:generate(#{puzzle => false}),
+    ?assert(is_boolean(with_puzzle_difficulty(16, fun() -> macula_identity:puzzle_valid(Kp) end))).
 
 difficulty_above_the_maximum_is_a_configuration_error_test() ->
+    Kp = macula_identity:generate(#{puzzle => false}),
     ?assertError({bad_config, {macula, puzzle_difficulty, 17}},
-                 with_puzzle_difficulty(17, fun() ->
-                     macula_identity:puzzle_valid(macula_identity:generate())
-                 end)).
+                 with_puzzle_difficulty(17, fun() -> macula_identity:puzzle_valid(Kp) end)).
 
 %% The macula application checks puzzle_difficulty when it starts, so a node
 %% with a bad value does not start, instead of failing its puzzle checks one
