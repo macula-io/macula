@@ -354,9 +354,13 @@ refusals_are_counted_and_logged_once_per_interval_test() ->
     end).
 
 %% Runs Test with the given macula application env set, handing it the number
-%% of sessions counted before, and restores the env after.
+%% of sessions counted before, and restores the env after. Every test starts
+%% clean, with no session and no unread bytes counted: a session another test
+%% or module left running fails here, where it shows, and never shifts the
+%% counts a test checks.
 with_limits(Limits, Test) ->
     {ok, _} = application:ensure_all_started(macula),
+    ?assertEqual({0, 0}, {settled_sessions(), macula_stream_sessions:inbox_bytes()}),
     Old = [{Key, application:get_env(macula, Key)} || Key <- maps:keys(Limits)],
     [ok = application:set_env(macula, Key, Value) || {Key, Value} <- maps:to_list(Limits)],
     try Test(settled_sessions()) after [restore_env(Key, Was) || {Key, Was} <- Old] end.

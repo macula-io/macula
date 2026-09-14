@@ -2347,8 +2347,27 @@ setup_link_for_streams() ->
     end),
     {Pid, FakePeer, PeerNodeId}.
 
-teardown_link_for_streams(_) ->
-    meck:unload(macula_peering).
+%% Ends what a streams test leaves running, so no session outlives the test
+%% that opened it. It stops the link when the test did not, and ends the
+%% client streams the test owns: a stream lives until its owner ends, and this
+%% module's tests share one long-lived process. It asserts that every stream
+%% process the link started has ended, the sessions the link served included,
+%% and drops the messages those endings sent this process.
+teardown_link_for_streams(Link) ->
+    ok = stop_link(Link),
+    meck:unload(macula_peering),
+    Started = macula_test_sessions:started_by(Link),
+    ok = end_owned(Started, erlang:process_info(self(), monitored_by)),
+    ?assertEqual([], macula_test_sessions:await_ended(Started)),
+    flush_mailbox().
+
+stop_link(Link) ->
+    try macula_station_link:stop(Link) catch exit:noproc -> ok end.
+
+%% A client stream monitors the process that owns it.
+end_owned(Streams, {monitored_by, Monitoring}) ->
+    _ = [exit(Stream, kill) || Stream <- Streams, lists:member(Stream, Monitoring)],
+    ok.
 
 %% Simulate a peer opening a dedicated stream toward us and writing
 %% `Frame' as its first bytes — the inbound STREAM_OPEN path.
@@ -2394,7 +2413,7 @@ call_stream_emits_stream_open_frame_test_() ->
              end,
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2442,7 +2461,7 @@ stream_data_delivers_chunk_to_stream_pid_test_() ->
                           macula_stream:recv(StreamPid, 1_000)),
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2466,7 +2485,7 @@ stream_reply_surfaces_terminal_payload_test_() ->
                           macula_stream:await_reply(StreamPid, 1_000)),
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2491,7 +2510,7 @@ stream_error_aborts_local_stream_test_() ->
                           macula_stream:recv(StreamPid, 1_000)),
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2528,7 +2547,7 @@ inbound_stream_open_unknown_procedure_returns_error_test_() ->
              end,
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2553,7 +2572,7 @@ advertise_stream_emits_advertise_frame_test_() ->
              end,
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2595,7 +2614,7 @@ inbound_stream_open_invokes_handler_test_() ->
              end,
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2628,7 +2647,7 @@ a_stream_open_missing_a_required_field_ends_its_stream_test_() ->
              end,
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2666,7 +2685,7 @@ session_frame_missing_a_field(Frame) ->
         next_stream_open_is_served(Pid, FakePeer, Procedure, CallerKp),
         macula_station_link:stop(Pid)
     after
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 %% Bytes on a new stream that do not decode as a frame end that stream and
@@ -2686,7 +2705,7 @@ undecodable_new_stream(Bytes) ->
         next_stream_open_is_served(Pid, FakePeer, Procedure, CallerKp),
         macula_station_link:stop(Pid)
     after
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 %% The peering connection's notice of a control-stream frame that lacked a
@@ -2742,7 +2761,7 @@ a_content_stream_reply_that_does_not_decode_fails_its_call_test_() ->
              ?assertNot(is_map_key(Stream, element(?CONTENT_STREAM_BUFS_INDEX, sys:get_state(Pid)))),
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2778,7 +2797,7 @@ a_content_stream_reply_missing_a_required_field_fails_its_call_test_() ->
              ?assertMatch({ok, _}, macula_station_link:open_content_stream(Pid)),
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2867,7 +2886,7 @@ a_stream_handler_crash_tells_the_caller_its_name_only_test_() ->
              macula_station_link:stop(Pid)
          after
              macula_test_log:release(Log),
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2921,7 +2940,7 @@ inbound_stream_open_that_does_not_verify_is_not_served_test_() ->
              end,
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -2994,7 +3013,7 @@ stream_policy_is_enforced_before_the_handler_test_() ->
              end,
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -3037,7 +3056,7 @@ an_upload_advertised_with_a_policy_refuses_a_caller_without_a_token_test_() ->
              ?assertEqual([], supervisor:which_children(Sup)),
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -3068,7 +3087,7 @@ call_stream_carries_ucan_token_only_when_given_test_() ->
              ?assertNot(maps:is_key(ucan_token, WithoutToken)),
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -3102,7 +3121,7 @@ disconnect_aborts_open_streams_test_() ->
              ?assertMatch({error, {<<"disconnected">>, _}},
                           macula_stream:await_reply(StreamPid, 1_000))
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -3121,7 +3140,7 @@ a_disconnect_tells_open_streams_its_reasons_name_only_test_() ->
              ?assertEqual({error, {<<"disconnected">>, <<"disconnected">>}},
                           macula_stream:await_reply(StreamPid, 1_000))
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -3157,7 +3176,7 @@ served_sessions_end(Handler, Ending) ->
         stop_link_if_alive(Pid, is_process_alive(Pid))
     after
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 %% A caller's chunk on a server_stream session, which the mode keeps silent,
@@ -3183,7 +3202,7 @@ forbidden_chunk_ends_the_served_session() ->
         ?assertMatch(#{code := <<"stream_protocol_error">>}, stream_error_written(Stream, 1_000))
     after
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 telling_how_it_ended(Test) ->
@@ -3235,7 +3254,7 @@ second_stream_open_on_the_same_stream_is_refused() ->
         ?assert(link_holds_key(Pid, Stream))
     after
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 served_within(Ms) ->
@@ -3278,7 +3297,7 @@ stream_open_past_the_session_cap_is_refused() ->
     after
         restore_session_cap(Old),
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 %% A refusal that ends a STREAM_OPEN closes its dedicated stream: the link
@@ -3306,7 +3325,7 @@ refusal_closes_its_stream(Refusal) ->
     after
         restore_session_cap(Old),
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 refused_open(not_found, Pid, FakePeer, CallerKp) ->
@@ -3382,7 +3401,7 @@ stream_open_on_a_callers_stream_is_refused() ->
         ?assert(link_holds_key(Pid, Stream))
     after
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 %% A stream closed by a refusal takes no frame after the refused STREAM_OPEN,
@@ -3412,7 +3431,7 @@ refused_stream_takes_no_frame_after_its_refusal() ->
         ?assertNot(link_holds_key(Pid, Stream))
     after
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 %% A dedicated stream the peer opened stays open only once it carries a
@@ -3434,7 +3453,7 @@ stream_that_brings_no_session_closes(First) ->
         ?assertNot(link_holds_key(Pid, Stream))
     after
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 first_frame(unverified_open) ->
@@ -3473,7 +3492,7 @@ stream_open_without_the_session_counter_is_refused() ->
     after
         _ = supervisor:restart_child(macula_root, macula_stream_sessions),
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 %% Restarts the session counter once this test process ends or three seconds
@@ -3520,7 +3539,7 @@ silent_opened_stream_closes_at_its_deadline() ->
     after
         restore_open_timeout(Old),
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 stream_closed_within(Stream, Ms) ->
@@ -3560,7 +3579,7 @@ first_frame_past_the_open_limit_closes_its_stream() ->
     after
         restore_open_limit(Old),
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 %% A first read that carries a verified STREAM_OPEN and then bytes that do
@@ -3594,7 +3613,7 @@ first_read_that_ends_badly(After) ->
         ?assertNot(is_map_key(Sid, element(?SERVER_STREAMS_INDEX, sys:get_state(Pid))))
     after
         macula_test_log:release(Log),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 %% Only the first frame on a stream the peer opened has the open limit: a
@@ -3625,15 +3644,16 @@ long_chunk_behind_the_open_reaches_its_session() ->
         ?assertEqual(not_closed, stream_closed_within(Stream, 100))
     after
         restore_open_limit(Old),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 %% A handler that tells the test the first chunk it reads, and keeps its
-%% stream open a while after.
+%% stream open a while after, or until its session ends.
 tell_first_chunk(Test, Stream) ->
     Test ! {received, macula_stream:recv(Stream, 1_000)},
     receive
-        stop -> ok
+        stop -> ok;
+        {macula_stream, ended, Stream, _How} -> ok
     after 2_000 ->
         ok
     end.
@@ -3669,7 +3689,7 @@ call_stream_refuses_an_open_past_the_limit() ->
         ?assertEqual(nothing_sent, nothing_sent_within(200))
     after
         restore_open_limit(Old),
-        teardown_link_for_streams(ok)
+        teardown_link_for_streams(Pid)
     end.
 
 %% Nothing reaches the fake peer within Ms: no dedicated stream opened and
@@ -3701,7 +3721,7 @@ a_refused_stream_open_starts_no_process_test_() ->
              ?assertEqual([], macula_test_sessions:await_none_new(Before)),
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -3729,7 +3749,7 @@ a_streamer_served_session_ends_with_its_caller_test_() ->
              ?assertEqual([], macula_test_sessions:await_none_new(Before)),
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 
@@ -4322,7 +4342,7 @@ stream_ucan_required_binds_the_token_audience_to_the_caller_test_() ->
              end,
              macula_station_link:stop(Pid)
          after
-             teardown_link_for_streams(ok)
+             teardown_link_for_streams(Pid)
          end
      end}.
 

@@ -1,8 +1,8 @@
-%% Test support for stream session lifetimes: the processes serving a stream session on this node, and a bounded wait
-%% until none is left beyond a set taken before the sessions started.
+%% Test support for stream session lifetimes: the processes serving a stream session on this node, those a given process
+%% started, and bounded waits until none is left beyond a set taken before the sessions started, or until given ones ended.
 -module(macula_test_sessions).
 
--export([serving/0, await_none_new/1]).
+-export([serving/0, await_none_new/1, started_by/1, await_ended/1]).
 
 -define(POLL_MS, 20).
 -define(POLLS, 50).
@@ -29,6 +29,39 @@ none_new([], _Before, _Polls) ->
 none_new(_New, Before, Polls) ->
     timer:sleep(?POLL_MS),
     await_none_new(Before, Polls - 1).
+
+%% @doc The processes serving/0 finds that Parent started, whether or not Parent still runs: a process started through
+%% proc_lib names its parent first among its ancestors.
+-spec started_by(pid()) -> [pid()].
+started_by(Parent) when is_pid(Parent) ->
+    [Pid || Pid <- serving(), parent(erlang:process_info(Pid, dictionary)) =:= Parent].
+
+%% @doc The processes in Pids still alive after waiting up to a second for them to end: [] once every one has ended.
+-spec await_ended([pid()]) -> [pid()].
+await_ended(Pids) when is_list(Pids) ->
+    await_ended(Pids, ?POLLS).
+
+await_ended(Pids, 0) ->
+    alive(Pids);
+await_ended(Pids, Polls) ->
+    none_alive(alive(Pids), Pids, Polls).
+
+none_alive([], _Pids, _Polls) ->
+    [];
+none_alive(_Alive, Pids, Polls) ->
+    timer:sleep(?POLL_MS),
+    await_ended(Pids, Polls - 1).
+
+alive(Pids) ->
+    [Pid || Pid <- Pids, is_process_alive(Pid)].
+
+parent({dictionary, Dictionary}) ->
+    first_ancestor(proplists:get_value('$ancestors', Dictionary, []));
+parent(undefined) ->
+    undefined.
+
+first_ancestor([Parent | _Older]) -> Parent;
+first_ancestor([])                -> undefined.
 
 serves_a_session([{current_function, {macula_station_link, stream_host_loop, 0}} | _]) ->
     true;
