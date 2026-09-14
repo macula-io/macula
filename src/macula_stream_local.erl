@@ -151,32 +151,29 @@ spawn_pair(Procedure, Mode, Handler, Args, Opts) ->
         mode => Mode,
         owner => Caller
     }),
-    HandlerHost = self_host_pid(),
+    %% The handler runs in a dedicated process that owns the server-side
+    %% stream: a crashing handler doesn't take down the caller, the handler
+    %% can block on recv/send without affecting the client, and the stream
+    %% ends when the handler does, unless the handler hands it over first
+    %% (`macula_stream:controlling_process/2').
+    HandlerPid = spawn_handler(Handler, Args, Procedure),
     {ok, ServerPid} = macula_stream:start_link(#{
         id => StreamId,
         role => server,
         mode => Mode,
-        owner => HandlerHost
+        owner => HandlerPid
     }),
     ok = macula_stream:pair(ClientPid, ServerPid),
-    %% Run the handler in a dedicated process so a crashing handler
-    %% doesn't take down the caller, and so the handler can block on
-    %% recv/send without affecting the client.
-    _HandlerPid = spawn_link_handler(Handler, ServerPid, Args, Procedure),
+    HandlerPid ! {serve, ServerPid},
     {ok, ClientPid}.
 
-%% Owner of the server-side stream is a no-op host process; it just
-%% keeps the stream alive while the handler runs in a sibling process.
-%% Using self() would cause the registry gen_server to exit if the
-%% client linked to it; spawn a dedicated host instead.
-self_host_pid() ->
-    spawn(fun host_loop/0).
+spawn_handler(Handler, Args, Procedure) ->
+    spawn(fun() -> serve_when_paired(Handler, Args, Procedure) end).
 
-host_loop() ->
-    receive stop -> ok end.
-
-spawn_link_handler(Handler, Stream, Args, Procedure) ->
-    spawn(fun() -> run_handler(Handler, Stream, Args, Procedure) end).
+serve_when_paired(Handler, Args, Procedure) ->
+    receive
+        {serve, Stream} -> run_handler(Handler, Stream, Args, Procedure)
+    end.
 
 %% A handler crash aborts the stream with the crash class as the code
 %% and the reason's name as the message, and none of the crash's

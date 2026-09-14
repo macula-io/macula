@@ -42,6 +42,7 @@
     set_reply/2,
     set_error/2,
     abort/3,
+    controlling_process/2,
     info/1
 ]).
 
@@ -102,9 +103,13 @@
                        abort => fun((pid(), binary(), binary()) -> term()),
                        set_reply => fun((pid(), term()) -> term()),
                        set_error => fun((pid(), term()) -> term()),
-                       await_reply => fun((pid()) -> result())}.
+                       await_reply => fun((pid()) -> result()),
+                       controlling_process => fun((pid(), pid()) -> ok | {error, not_owner})}.
 
 -export_type([stream_io/0]).
+
+%% How a session ended, as the owner is told it.
+-type ended() :: closed | peer_down | {error, {binary(), binary()}}.
 
 -record(state, {
     id              :: stream_id(),
@@ -123,7 +128,9 @@
     seq_in  = 0 :: non_neg_integer(),
     %% Terminal reply (for client-stream / bidi)
     reply = undefined :: undefined | result(),
-    reply_waiters = [] :: [{pid(), reference()}]
+    reply_waiters = [] :: [{pid(), reference()}],
+    %% How the session ended, once it has and the owner has been told
+    ended = undefined :: undefined | ended()
 }).
 
 %%%===================================================================
@@ -225,6 +232,15 @@ set_error(Pid, Reason) ->
 abort(Pid, Code, Message) when is_binary(Code), is_binary(Message) ->
     gen_server:call(Pid, {abort, Code, Message}).
 
+%% @doc Hand the stream to `NewOwner'. A stream ends when its owner ends;
+%% after this it ends when `NewOwner' does, and `NewOwner' is told when the
+%% session ends, as `{macula_stream, ended, Stream, How}', or at once if it
+%% already has. Only the stream's current owner can hand it over; any other
+%% caller gets `{error, not_owner}' and the stream stays with its owner.
+-spec controlling_process(pid(), pid()) -> ok | {error, not_owner}.
+controlling_process(Pid, NewOwner) when is_pid(Pid), is_pid(NewOwner) ->
+    gen_server:call(Pid, {controlling_process, NewOwner}).
+
 %% @doc Inspect stream state (debugging).
 -spec info(pid()) -> map().
 info(Pid) ->
@@ -253,7 +269,8 @@ stream_function(close_stream, Fun) when is_function(Fun, 1) -> ok;
 stream_function(abort, Fun) when is_function(Fun, 3) -> ok;
 stream_function(set_reply, Fun) when is_function(Fun, 2) -> ok;
 stream_function(set_error, Fun) when is_function(Fun, 2) -> ok;
-stream_function(await_reply, Fun) when is_function(Fun, 1) -> ok.
+stream_function(await_reply, Fun) when is_function(Fun, 1) -> ok;
+stream_function(controlling_process, Fun) when is_function(Fun, 2) -> ok.
 
 given_key(Key, Given) when is_map_key(Key, Given) -> ok.
 
@@ -334,7 +351,7 @@ handle_call(close_send, _From, State) ->
                      _ = forward_to_peer(State, {end_stream, send}),
                      State#state{closed_send = true}
              end,
-    {reply, ok, State1};
+    {reply, ok, ended_when_both_closed(State1)};
 
 %% --- close -------------------------------------------------------------
 
@@ -342,7 +359,7 @@ handle_call(close, _From, State) ->
     _ = forward_to_peer(State, {end_stream, both}),
     State1 = State#state{closed_send = true, closed_recv = true},
     State2 = drain_waiters(eof, State1),
-    {reply, ok, State2};
+    {reply, ok, session_ended(closed, State2)};
 
 %% --- await_reply -------------------------------------------------------
 
@@ -380,7 +397,15 @@ handle_call({abort, Code, Message}, _From, State) ->
                                  end},
     State2 = drain_waiters(Err, State1),
     State3 = settle_reply_waiters_with(Err, State2),
-    {reply, ok, State3};
+    {reply, ok, session_ended(Err, State3)};
+
+%% --- controlling_process -----------------------------------------------
+
+%% Only the owner hands the stream over.
+handle_call({controlling_process, NewOwner}, {Owner, _Tag}, #state{owner = Owner} = State) ->
+    {reply, ok, hand_over(NewOwner, State)};
+handle_call({controlling_process, _NewOwner}, _From, State) ->
+    {reply, {error, not_owner}, State};
 
 %% --- info --------------------------------------------------------------
 
@@ -415,19 +440,19 @@ handle_cast({peer_end, send}, State) ->
     %% Peer half-closed: no more inbound data
     State1 = State#state{closed_recv = true},
     State2 = drain_waiters(eof, State1),
-    {noreply, State2};
+    {noreply, ended_when_both_closed(State2)};
 handle_cast({peer_end, both}, State) ->
     State1 = State#state{closed_recv = true, closed_send = true},
     State2 = drain_waiters(eof, State1),
     State3 = settle_reply_waiters_with({error, peer_closed}, State2),
-    {noreply, State3};
+    {noreply, session_ended(closed, State3)};
 
 handle_cast({peer_error, Code, Message}, State) ->
     Err = {error, {Code, Message}},
     State1 = State#state{closed_recv = true, closed_send = true},
     State2 = drain_waiters(Err, State1),
     State3 = settle_reply_waiters_with(Err, State2),
-    {noreply, State3};
+    {noreply, session_ended(Err, State3)};
 
 handle_cast({peer_reply, Result}, State) ->
     State1 = State#state{reply = Result},
@@ -549,7 +574,38 @@ propagate_peer_down(State) ->
                          peer = undefined},
     State2 = drain_waiters(Err, State1),
     State3 = settle_reply_waiters_with(Err, State2),
-    {noreply, State3}.
+    {noreply, session_ended(peer_down, State3)}.
+
+%% @private A session has ended once both of its directions are closed.
+ended_when_both_closed(#state{closed_recv = true, closed_send = true} = State) ->
+    session_ended(closed, State);
+ended_when_both_closed(State) ->
+    State.
+
+%% @private The owner is told once how the session ended: `closed',
+%% `{error, {Code, Message}}' or `peer_down'. The stream itself stays
+%% until its owner ends.
+session_ended(_How, #state{ended = Ended} = State) when Ended =/= undefined ->
+    State;
+session_ended(How, #state{owner = Owner} = State) ->
+    Owner ! {macula_stream, ended, self(), How},
+    State#state{ended = How}.
+
+%% @private The new owner is monitored before the old one is let go, so the
+%% stream always has an owner it ends with; a new owner that is already gone
+%% ends the stream at once. A new owner is told at once if the session has
+%% already ended.
+hand_over(NewOwner, #state{owner_ref = OldRef, ended = Ended} = State) ->
+    NewRef = erlang:monitor(process, NewOwner),
+    true = erlang:demonitor(OldRef, [flush]),
+    ok = tell_new_owner(Ended, NewOwner),
+    State#state{owner = NewOwner, owner_ref = NewRef}.
+
+tell_new_owner(undefined, _NewOwner) ->
+    ok;
+tell_new_owner(How, NewOwner) ->
+    NewOwner ! {macula_stream, ended, self(), How},
+    ok.
 
 %% @doc Either deliver a chunk to a waiting recv/2 caller or queue it.
 enqueue_or_deliver(Encoding, Body, #state{waiters = W0} = State) ->

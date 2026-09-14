@@ -34,6 +34,195 @@ with_setup(Tests) ->
     {setup, fun setup/0, fun teardown/1, Tests}.
 
 %%%===================================================================
+%%% A stream ends with its owner, who may hand it over
+%%%===================================================================
+
+%% A stream ends when its owner ends, however the owner ends.
+a_stream_ends_with_its_owner_test_() ->
+    [{Name, fun() -> ends_with_its_owner(Exit) end}
+     || {Name, Exit} <- [{"the owner ends normally", normal}, {"the owner is killed", kill}]].
+
+ends_with_its_owner(Exit) ->
+    Owner = spawn(fun park/0),
+    Stream = unpaired_stream(Owner),
+    Ref = monitor(process, Stream),
+    end_owner(Owner, Exit),
+    ?assertMatch({down, _}, down_within(Ref, 1_000)).
+
+%% The owner hands its stream to another process: the stream outlives the
+%% first owner and ends with the second, whether that one ends normally or
+%% is killed.
+a_handed_over_stream_ends_with_its_new_owner_test_() ->
+    [{Name, fun() -> handed_over_stream_ends_with(Exit) end}
+     || {Name, Exit} <- [{"the new owner ends normally", normal}, {"the new owner is killed", kill}]].
+
+handed_over_stream_ends_with(Exit) ->
+    First = spawn(fun park/0),
+    Second = spawn(fun park/0),
+    Stream = unpaired_stream(First),
+    Ref = monitor(process, Stream),
+    ?assertEqual(ok, in_process(First, fun() -> macula_stream:controlling_process(Stream, Second) end)),
+    end_owner(First, normal),
+    ?assertEqual(alive, down_within(Ref, 200)),
+    end_owner(Second, Exit),
+    ?assertMatch({down, _}, down_within(Ref, 1_000)).
+
+%% Only a stream's owner hands it over; the stream stays with its owner.
+only_the_owner_hands_a_stream_over_test() ->
+    Owner = spawn(fun park/0),
+    Stream = unpaired_stream(Owner),
+    ?assertEqual({error, not_owner}, macula_stream:controlling_process(Stream, self())),
+    Ref = monitor(process, Stream),
+    end_owner(Owner, normal),
+    ?assertMatch({down, _}, down_within(Ref, 1_000)).
+
+%% When its session ends, a stream tells its owner once how it ended, and
+%% stays until the owner ends. An owner the stream is handed to after that
+%% is told as well.
+a_stream_tells_its_owner_once_when_its_session_ends_test_() ->
+    [{"the peer closes both sides", fun() -> told_once_when(close, closed) end},
+     {"the peer aborts", fun() -> told_once_when(abort, {error, {<<"stop">>, <<"why">>}}) end},
+     {"handed over after its session ended", fun told_after_it_is_handed_over/0}].
+
+told_once_when(Ending, How) ->
+    {Stream, Peer, PeerOwner} = paired_streams(self()),
+    ok = end_from_peer(Ending, Peer),
+    ?assertEqual({told, How}, told(Stream, 1_000)),
+    ok = macula_stream:close(Stream),
+    ?assertEqual(not_told, told(Stream, 200)),
+    ?assert(is_process_alive(Stream)),
+    end_owner(PeerOwner, normal).
+
+told_after_it_is_handed_over() ->
+    {Stream, Peer, PeerOwner} = paired_streams(self()),
+    ok = end_from_peer(close, Peer),
+    {told, closed} = told(Stream, 1_000),
+    Test = self(),
+    NewOwner = spawn(fun() -> forward_notice(Test) end),
+    ?assertEqual(ok, macula_stream:controlling_process(Stream, NewOwner)),
+    ?assertEqual({forwarded, Stream, closed}, forwarded(1_000)),
+    end_owner(PeerOwner, normal).
+
+%% A local stream call leaves no process behind once its caller and its
+%% handler are both done.
+local_sessions_leave_no_process_behind_test_() ->
+    with_setup([
+        {"three local calls, each read to the end by a caller that then ends",
+         fun() ->
+             ok = macula:advertise_stream(<<"t.sessions">>, server_stream, fun close_serving/2),
+             Before = macula_test_sessions:serving(),
+             [ok = local_call_read_to_the_end(<<"t.sessions">>) || _ <- lists:seq(1, 3)],
+             ?assertEqual([], macula_test_sessions:await_none_new(Before))
+         end}
+    ]).
+
+%% The server side of a local stream call ends with its handler, even while
+%% the caller that opened the call lives on.
+a_local_server_stream_ends_with_its_handler_test_() ->
+    with_setup([
+        {"the caller lives on after reading to the end",
+         fun() ->
+             Test = self(),
+             ok = macula:advertise_stream(<<"t.handler_owned">>, server_stream,
+                                          fun(Stream, Args) -> close_telling(Test, Stream, Args) end),
+             {ok, Client} = macula:call_stream(<<"t.handler_owned">>, #{}),
+             Server = receive
+                          {serving, Stream} -> Stream
+                      after 1_000 ->
+                          erlang:error(not_served)
+                      end,
+             [] = drain(Client, []),
+             Ref = monitor(process, Server),
+             ?assertMatch({down, _}, down_within(Ref, 1_000))
+         end}
+    ]).
+
+close_telling(Test, Stream, _Args) ->
+    Test ! {serving, Stream},
+    macula:close_stream(Stream).
+
+close_serving(Stream, _Args) ->
+    macula:close_stream(Stream).
+
+local_call_read_to_the_end(Procedure) ->
+    {Caller, Ref} = spawn_monitor(fun() -> read_local_call(Procedure) end),
+    receive
+        {'DOWN', Ref, process, Caller, normal} -> ok
+    after 2_000 ->
+        erlang:error(caller_did_not_end)
+    end.
+
+read_local_call(Procedure) ->
+    {ok, Stream} = macula:call_stream(Procedure, #{}),
+    [] = drain(Stream, []).
+
+%% A process that runs what it is sent, and ends when told.
+park() ->
+    receive
+        {run, From, Fun} -> From ! {ran, Fun()}, park();
+        {exit, Reason} -> exit(Reason)
+    end.
+
+in_process(Pid, Fun) ->
+    Pid ! {run, self(), Fun},
+    receive
+        {ran, Result} -> Result
+    after 1_000 ->
+        erlang:error(did_not_run)
+    end.
+
+end_owner(Owner, kill) ->
+    exit(Owner, kill);
+end_owner(Owner, normal) ->
+    Owner ! {exit, normal}.
+
+unpaired_stream(Owner) ->
+    {ok, Stream} = macula_stream:start_link(#{id => crypto:strong_rand_bytes(16), role => server,
+                                              mode => server_stream, owner => Owner}),
+    Stream.
+
+%% A stream owned by Owner, paired with a peer stream owned by a parked
+%% process.
+paired_streams(Owner) ->
+    Id = crypto:strong_rand_bytes(16),
+    PeerOwner = spawn(fun park/0),
+    {ok, Stream} = macula_stream:start_link(#{id => Id, role => client, mode => bidi, owner => Owner}),
+    {ok, Peer} = macula_stream:start_link(#{id => Id, role => server, mode => bidi, owner => PeerOwner}),
+    ok = macula_stream:pair(Stream, Peer),
+    {Stream, Peer, PeerOwner}.
+
+end_from_peer(close, Peer) ->
+    macula_stream:close(Peer);
+end_from_peer(abort, Peer) ->
+    macula_stream:abort(Peer, <<"stop">>, <<"why">>).
+
+down_within(Ref, Ms) ->
+    receive
+        {'DOWN', Ref, process, _Pid, Reason} -> {down, Reason}
+    after Ms ->
+        alive
+    end.
+
+told(Stream, Ms) ->
+    receive
+        {macula_stream, ended, Stream, How} -> {told, How}
+    after Ms ->
+        not_told
+    end.
+
+forward_notice(Test) ->
+    receive
+        {macula_stream, ended, Stream, How} -> Test ! {forwarded, Stream, How}
+    end.
+
+forwarded(Ms) ->
+    receive
+        {forwarded, Stream, How} -> {forwarded, Stream, How}
+    after Ms ->
+        not_forwarded
+    end.
+
+%%%===================================================================
 %%% Server-stream
 %%%===================================================================
 

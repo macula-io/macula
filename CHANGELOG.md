@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `macula_stream:controlling_process/2` hands a stream to another process,
+  which the stream then ends with. Only the stream's owner can hand it over;
+  anyone else gets `{error, not_owner}`. When a stream's session ends, with
+  both sides closed, an abort, or its link lost, its owner gets
+  `{macula_stream, ended, Stream, How}` once, `How` being `closed`,
+  `{error, {Code, Message}}` or `peer_down`. An owner the stream is handed to
+  after that is told at once. `controlling_process` is also one of the stream
+  functions `macula_streamer` takes in `stream_io`.
 - `macula_station_link:not_sent/1` says whether an error from `call/5,6`
   means the CALL never went out: the link was not connected yet, there was
   no link process, or the link refused the frame before sending it.
@@ -134,6 +142,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A served stream is owned by the process that runs its handler, and a
+  stream process ends when its owner ends. So a stream ends when its handler
+  returns or crashes, and a stream served by `macula_streamer` ends with the
+  streamer. A handler that lets another
+  process keep using its stream must now hand the stream over before it
+  returns: `ok = macula_stream:controlling_process(Stream, Pid)`.
+  `macula_streamer` stops when its stream's session ends, even when its
+  module would not stop by itself.
 - `macula_dist_relay_client:close_tunnel/2` sends `tunnel_close` only for a
   tunnel the client knows, active or still being set up, and ignores an
   unknown tunnel id.
