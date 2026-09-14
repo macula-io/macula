@@ -139,8 +139,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `difficulty` is given, is the `macula` application env
   `puzzle_difficulty`, so a `sys.config` entry for `macula` sets it. It was
   read from an env named `macula_identity`, which no application loads. It
-  stays 8 leading zero bits when unset, and a value that is not a
-  non-negative integer raises `{bad_config, {macula, puzzle_difficulty, Value}}`.
+  stays 8 leading zero bits when unset. A set value must be an integer from
+  0 to 16: the decided range tops at 12 bits, and the maximum allows 4 bits
+  above it. Any other value raises
+  `{bad_config, {macula, puzzle_difficulty, Value}}`, both when the `macula`
+  application starts, so a node with a bad value does not start, and when
+  the difficulty is used, for a value set while the node runs. The new
+  `macula_identity:check_puzzle_difficulty/0` runs that check.
 - `macula_dist_relay_client:close_tunnel/2` sends `tunnel_close` only for a
   tunnel the client knows, active or still being set up, and ignores an
   unknown tunnel id.
