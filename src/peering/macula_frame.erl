@@ -109,6 +109,13 @@
     frame_type/1, frame_id/1, version/1, signature/1, sent_at_ms/1
 ]).
 
+%% Exports with no caller inside macula, kept on purpose:
+%% - validate_received/1 is documented API that the test modules call.
+%% - parse_stream/1 is deprecated API that macula-station still calls; it is
+%%   on the 11.0.0 removal list in CHANGELOG.md, under Deprecated.
+-ignore_xref([{macula_frame, validate_received, 1}]).
+-ignore_xref([{macula_frame, parse_stream, 1}]).
+
 -export_type([
     frame/0,
     frame_type/0,
