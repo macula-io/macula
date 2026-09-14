@@ -19,6 +19,8 @@ would refuse another stack's frames fails the tests.
 | `dotnet-v0.4.1/` | macula-dotnet | tag v0.4.1 (16c8763), built with the SDK's own builders and signed with `Envelope.Sign`, PUBLISH also with `Envelope.SignPublisher`. 2026-09-14. |
 | `dotnet-v0.4.0/` | macula-dotnet | tag v0.4.0 (4328523), built the same way. Frame, CBOR and identity code are unchanged from v0.4.0 to v0.4.1. 2026-09-14. |
 | `python-v0.1.0/` | macula-py | tag v0.1.0 (ace63ff), from a git archive of the tag with its own builders, signed as its send paths sign. Its PUBLISH carries no `publisher_sig`, it sends no GOODBYE, and its `call.ucan` holds a token minted by Go as opaque bytes. Adds `stream_end.both`. 2026-09-14. |
+| `station-311c0bf/` | macula-station | commit 311c0bf, the fleet's station on macula 10.21.0. Every frame the station's own processes encoded during a full CT run (57 passed, 9 skipped, 0 failed), captured at `macula_frame:encode/1` in the station peers, signed as the station signs, with the test cluster's throwaway identities. One file per frame type and shape, `TYPE.signed-HASH.bin`; frames to clients and to other stations both. 2026-09-14. |
+| `station-7d00b13/` | macula-station | commit 7d00b13, release 0.3.0's base on macula 10.24.0, captured the same way (60 passed, 9 skipped, 0 failed). 2026-09-14. |
 
 The versioned directories hold what each release installable from a package
 registry sends, so the validator is checked against clients already in use,
