@@ -15,7 +15,10 @@
 %% peering events as messages:
 %% <ul>
 %%   <li>`{macula_peering, connected, ConnPid, PeerNodeId}'</li>
-%%   <li>`{macula_peering, frame, ConnPid, Frame}' (post-handshake)</li>
+%%   <li>`{macula_peering, frame, ConnPid, Frame}' (post-handshake), or
+%%       `{macula_peering, reserved_frame, ConnPid, Frame, Reservations}'
+%%       when the connection counts in flight (opts `inflight'), which the
+%%       recipient handles with `handle_reserved/2'</li>
 %%   <li>`{macula_peering, disconnected, ConnPid, Reason}'</li>
 %% </ul>
 %%
@@ -38,8 +41,23 @@
     open_dedicated_stream/1,
     async_open_dedicated_stream/1,
     send_on_stream/3,
-    close_dedicated_stream/1
+    close_dedicated_stream/1,
+    handle_reserved/2,
+    hand_over/2,
+    forward_reserved/3,
+    inflight_usage/0,
+    received_at_us/1,
+    set_role/2
 ]).
+
+%% Exports with no caller inside macula yet: macula-station forwards reserved
+%% frames between its processes, sheds load from the usage, reads when a frame
+%% finished decoding, and names a link to another station a station link once
+%% it has verified the peer.
+-ignore_xref([{macula_peering, forward_reserved, 3}]).
+-ignore_xref([{macula_peering, inflight_usage, 0}]).
+-ignore_xref([{macula_peering, received_at_us, 1}]).
+-ignore_xref([{macula_peering, set_role, 2}]).
 
 %% Capability bit asserting the peer is a relay-station (i.e. it
 %% advertises on behalf of others via gossip). Daemons MUST leave this
@@ -210,6 +228,60 @@ ensure_signed(Frame, Id) -> macula_frame:sign(Frame, Id).
 -spec close_dedicated_stream(reference()) -> ok.
 close_dedicated_stream(Stream) ->
     macula_quic:close_stream(Stream).
+
+%% @doc Run `Fun' in the calling process, and release `Reservations' when it
+%% ends, whether it returns, throws, errors or exits. A reservation the calling
+%% process no longer holds, because it was handed over or already released, is
+%% left as it is. A recipient handles every reserved frame through this, on
+%% every path, a dropped frame included.
+-spec handle_reserved(macula_peering_inflight:reservation() | [macula_peering_inflight:reservation()],
+                      fun(() -> Result)) -> Result.
+handle_reserved(Reservations, Fun) when is_function(Fun, 0) ->
+    try
+        Fun()
+    after
+        macula_peering_inflight:release(Reservations)
+    end.
+
+%% @doc Make `Pid' the holder of reservations the calling process holds. `Pid'
+%% then handles them with `handle_reserved/2', and they are released when it
+%% exits first.
+-spec hand_over(macula_peering_inflight:reservation() | [macula_peering_inflight:reservation()],
+                pid()) -> ok.
+hand_over(Reservations, Pid) ->
+    macula_peering_inflight:hand_over(Reservations, Pid).
+
+%% @doc Hand reservations over to `Pid' and then send it `Msg': a frame passed
+%% on between processes travels with the reservations that cover it.
+-spec forward_reserved(macula_peering_inflight:reservation() | [macula_peering_inflight:reservation()],
+                       pid(), term()) -> ok.
+forward_reserved(Reservations, Pid, Msg) ->
+    ok = hand_over(Reservations, Pid),
+    Pid ! Msg,
+    ok.
+
+%% @doc The node's in-flight usage, read from the tables without asking any
+%% process: the node limit, the bytes reserved in all and by role, the readers
+%% waiting for room, the refusals at a station link's ceiling, the admissions
+%% from the station reserve, the reservations past the maximum age, and the
+%% oldest reservation.
+-spec inflight_usage() -> macula_peering_inflight:usage().
+inflight_usage() ->
+    macula_peering_inflight:usage().
+
+%% @doc When the frame a reservation covers finished decoding, in
+%% `erlang:monotonic_time(microsecond)'.
+-spec received_at_us(macula_peering_inflight:reservation()) -> integer().
+received_at_us(Reservation) ->
+    macula_peering_inflight:received_at_us(Reservation).
+
+%% @doc Name the connection `Conn' a station link or a client link from now on.
+%% A station link's control stream reads past the node limit up to the
+%% ceiling and is never closed as busy. Name a link a station link only from
+%% the node's own configuration, or once the peer's identity is verified.
+-spec set_role(pid(), client | station) -> ok.
+set_role(Conn, Role) ->
+    macula_peering_inflight:set_role(Conn, Role).
 
 %% @doc Read the peer's capabilities bitmask as observed in their
 %% CONNECT/HELLO frame. Returns `{ok, NegotiatedCaps}' once the

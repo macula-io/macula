@@ -264,8 +264,8 @@ waiting_readers_are_admitted_in_arrival_order() ->
     with_env([{inflight_node_bytes, 4 * ?MIB}], fun() ->
         with_connections(3, 64 * ?MIB, fun([Holder, First, Second]) ->
             Held = admitted(Holder, 3 * ?MIB),
-            FirstQueued = macula_peering_inflight:admit(First, control, 3 * ?MIB, call),
-            SecondQueued = macula_peering_inflight:admit(Second, control, ?MIB, call),
+            FirstQueued = in_line(First, 3 * ?MIB),
+            SecondQueued = in_line(Second, ?MIB),
             release(Held),
             Admitted = [admitted_message(), admitted_message()],
             lists:foreach(fun({_Conn, R}) -> release(R) end, Admitted),
@@ -339,7 +339,7 @@ inflight_usage_reports_what_shedding_needs() ->
         with_connections(2, 64 * ?MIB, fun([A, B]) ->
             Oldest = admitted(A, control, 5 * ?MIB, store),
             Newer = admitted(A, 2 * ?MIB),
-            queued = macula_peering_inflight:admit(B, control, 4 * ?MIB, call),
+            queued = in_line(B, 4 * ?MIB),
             Usage = macula_peering:inflight_usage(),
             release(Oldest),
             release(Newer),
@@ -448,10 +448,18 @@ admitted(Conn, Kind, Bytes, FrameType) ->
     {ok, Reservation} = macula_peering_inflight:try_admit(Conn, Kind, Bytes, FrameType),
     Reservation.
 
-%% The next admission of a waiting reader: its connection and reservation.
+%% A control reader on Conn asking for Bytes, or for a place in line, with Conn
+%% as the tag its resume carries.
+in_line(Conn, Bytes) ->
+    macula_peering_inflight:admit(Conn, control, Bytes, call, Conn).
+
+%% The next admission of a waiting reader: the tag it waited with, and the
+%% reservation it takes once told to resume.
 admitted_message() ->
     receive
-        {macula_peering_inflight, admitted, Conn, Reservation} -> {Conn, Reservation}
+        {macula_peering_inflight, resume, Tag} ->
+            {ok, Reservation} = macula_peering_inflight:take_admitted(Tag),
+            {Tag, Reservation}
     after ?EVENT_MS ->
         error(not_admitted)
     end.
@@ -462,7 +470,10 @@ largest_that_fits(Conn, Kind, Room) ->
     Cap = macula_peering_inflight:frame_cap(Conn, Kind),
     fits(Cap, Room) andalso (Cap =:= ?FRAME_CAP orelse not fits(Cap + 1, Room)).
 
-fits(Wire, Room) ->
+%% Whether a frame whose length header says Len fits Room: its wire bytes, the
+%% 4-byte header included, with their decode transient.
+fits(Len, Room) ->
+    Wire = Len + 4,
     Wire + macula_peering_inflight:decode_transient_bytes(Wire) =< Room.
 
 %% What reserved/0 said during the handling, and how the handling ended.

@@ -11,6 +11,7 @@
 
 start(_StartType, _StartArgs) ->
     ok = macula_identity:check_puzzle_difficulty(),
+    ok = macula_peering_inflight:check_limits(),
     ok = macula_diagnostics:install_domain_filter(),
     macula_root:start_link().
 

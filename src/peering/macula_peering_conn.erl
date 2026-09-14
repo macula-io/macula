@@ -16,7 +16,9 @@
 -export([init/1, callback_mode/0, terminate/3, code_change/4]).
 -export([connecting/3, awaiting_start/3, handshaking/3, connected/3, draining/3]).
 
--export_type([opts/0, connect_opts/0]).
+-export_type([opts/0, connect_opts/0, inflight_opts/0]).
+
+-include("macula_quic_error_codes.hrl").
 
 -ifdef(TEST).
 %% Exports for unit tests — pure helpers that are otherwise private.
@@ -141,7 +143,39 @@
     %% mailbox wait time at the recipient. Defaults to false; recipients
     %% MUST keep the legacy 4-/5-tuple match clause to remain compatible
     %% with peers that have not opted in (cross-version rollout window).
-    timing_enabled  => boolean()
+    timing_enabled  => boolean(),
+    %% When set, the connection counts the frame bytes it holds against its
+    %% own limit and the node's (see `macula_peering_inflight'), and a
+    %% reserving reader reads its control stream. Frames then arrive with the
+    %% reservations that cover them, in place of the frame messages above:
+    %%     `{macula_peering, reserved_frame, ConnPid, Frame, Reservations}'
+    %%     `{macula_peering, reserved_dht_frame, ConnPid, NodeId, Frame, Reservations}'
+    %%     `{macula_peering, reserved_pubsub_frame, ConnPid, NodeId, Frame, Reservations}'
+    %% and each recipient handles every one with
+    %% `macula_peering:handle_reserved/2'. A frame waits while the connection
+    %% or the node has no room for it. A client link whose wait lasts past the
+    %% pause limit closes with REFUSED_BUSY and ends as `busy'; a station link
+    %% keeps waiting. A connection whose limit would leave its streams no more
+    %% than the per-caller session budget ends at the handshake as
+    %% `{bad_config, Settings}'.
+    inflight        => inflight_opts()
+}.
+
+%% `connection_bytes' is the connection's limit, inflight_connection_bytes
+%% when unset; `role' is client or station, client when unset;
+%% `pause_limit_ms' is how long one wait for room may last, 20 s when unset;
+%% `resume_watermark' is the percent of the stream share that resetting
+%% paused streams brings the share below, 75 when unset; and
+%% `body_window_ms' and `body_floor_bytes' are the window of reading time a
+%% frame in part has and the bytes it has to bring in each, 10 s and 64 KiB
+%% when unset.
+-type inflight_opts() :: #{
+    connection_bytes => pos_integer(),
+    role             => client | station,
+    pause_limit_ms   => pos_integer(),
+    resume_watermark => 1..100,
+    body_window_ms   => pos_integer(),
+    body_floor_bytes => pos_integer()
 }.
 
 -record(data, {
@@ -179,7 +213,14 @@
     %% result message: the process that asked, its reference, and the
     %% open's handle.
     openings = #{}    :: #{reference() =>
-                               {pid(), reference(), macula_quic:stream_opening()}}
+                               {pid(), reference(), macula_quic:stream_opening()}},
+    %% The in-flight opts, and the reserving reader of the control stream once
+    %% connected; both undefined when the connection counts nothing.
+    inflight          :: undefined | inflight_opts(),
+    reader            :: undefined | macula_peering_inflight_reader:reader(),
+    %% The application error code and reason the connection closes with, when
+    %% the peer should read why it ended.
+    close_with        :: undefined | {non_neg_integer(), binary()}
 }).
 
 -define(DRAIN_TIMEOUT_MS, 5_000).
@@ -225,6 +266,7 @@ init(#{role := Role, identity := Identity, controlling_pid := Pid} = Opts)
         timing_enabled   = maps:get(timing_enabled, Opts, false),
         dht_recipient    = maps:get(dht_recipient, Opts, undefined),
         pubsub_recipient = maps:get(pubsub_recipient, Opts, undefined),
+        inflight         = maps:get(inflight, Opts, undefined),
         target           = maps:get(target, Opts, undefined),
         expected_node_id = maps:get(expected_node_id,
                                     maps:get(target, Opts, #{}), undefined),
@@ -586,10 +628,27 @@ absorb_peer_info(Frame, Data) ->
         peer_capabilities = maps:get(capabilities, Frame, 0)
     }.
 
-transition_to_connected(Data) ->
+transition_to_connected(#data{inflight = undefined} = Data) ->
+    notify_connected(Data),
+    {next_state, connected, Data};
+transition_to_connected(#data{inflight = Opts} = Data) ->
+    inflight_opened(macula_peering_inflight:open_connection(self(), Opts), Opts, Data).
+
+%% The connection counts in flight before anyone hears it is connected, so its
+%% frame caps can be read from then on. The bytes that came after the
+%% handshake frame are the reader's first chunk.
+inflight_opened(ok, Opts, #data{quic_stream = Stream, buf = Buf} = Data) ->
+    ReaderOpts = maps:merge(maps:with([body_window_ms, body_floor_bytes], Opts), #{kind => control}),
+    Reader = macula_peering_inflight_reader:new(Stream, self(), ReaderOpts),
+    notify_connected(Data),
+    read_control(macula_peering_inflight_reader:data(Reader, Buf), Data#data{buf = <<>>});
+inflight_opened({error, Reason}, _Opts, Data) ->
+    notify(disconnected, Reason, Data),
+    {stop, normal, Data}.
+
+notify_connected(Data) ->
     notify(connected, Data#data.peer_node_id, Data),
-    notify_handshake_complete(Data),
-    {next_state, connected, Data}.
+    notify_handshake_complete(Data).
 
 notify_handshake_complete(#data{accept_owner = undefined}) ->
     ok;
@@ -605,8 +664,19 @@ notify_handshake_complete(#data{accept_owner = Pid, peer_node_id = NodeId})
 connected(enter, _Old, Data) ->
     {keep_state, Data};
 connected(info, {quic, Bin, Stream, _Flags},
-          #data{quic_stream = Stream, buf = Buf} = Data) when is_binary(Bin) ->
+          #data{quic_stream = Stream, reader = undefined, buf = Buf} = Data) when is_binary(Bin) ->
     consume_control(macula_frame:parse_received(<<Buf/binary, Bin/binary>>), Data);
+%% With in-flight counting, the control stream's reserving reader takes its
+%% chunks, the resume after a wait for room, and its own timers.
+connected(info, {quic, Bin, Stream, _Flags},
+          #data{quic_stream = Stream, reader = Reader} = Data) when is_binary(Bin) ->
+    read_control(macula_peering_inflight_reader:data(Reader, Bin), Data);
+connected(info, {macula_peering_inflight, resume, Stream},
+          #data{quic_stream = Stream, reader = Reader} = Data) ->
+    read_control(macula_peering_inflight_reader:resume(Reader), Data);
+connected(info, {macula_peering_inflight, reader_timer, Stream, _Timer} = Timer,
+          #data{quic_stream = Stream, reader = Reader} = Data) ->
+    read_control(macula_peering_inflight_reader:timeout(Reader, Timer), Data);
 %% Peer opened a new stream on this connection, outside the control
 %% stream — a dedicated stream for a streaming RPC session or a
 %% content transfer (see PLAN_PER_STREAM_QUIC_ISOLATION.md). This
@@ -718,11 +788,11 @@ connected(info, {quic, send_failed, Stream, Reason},
 connected(info, {quic, peer_send_shutdown, Stream, _Detail},
           #data{quic_stream = Stream} = Data) ->
     notify(draining, peer_closed, Data),
-    {next_state, draining, Data};
+    {next_state, draining, stop_reading(Data)};
 connected(cast, {close, Reason}, Data) ->
     _ = send_goodbye(Data#data.quic_stream, Reason, Data),
     notify(draining, Reason, Data),
-    {next_state, draining, Data};
+    {next_state, draining, stop_reading(Data)};
 %% `reject/2''s reason for existing: `close/2' transitions through
 %% `draining' for up to `?DRAIN_TIMEOUT_MS' (5s), during which further
 %% inbound data is silently accepted and discarded by design
@@ -805,6 +875,12 @@ draining(cast, {open_dedicated_stream, Owner, Ref}, _Data) ->
     refuse_dedicated_open(Owner, Ref);
 draining(info, {quic, _, _, _}, Data) ->
     %% Ignore late inbound during drain.
+    {keep_state, Data};
+%% The control stream's reader stopped when the drain began: a resume or a
+%% timer of its that was already on its way changes nothing.
+draining(info, {macula_peering_inflight, resume, _Stream}, Data) ->
+    {keep_state, Data};
+draining(info, {macula_peering_inflight, reader_timer, _Stream, _Timer}, Data) ->
     {keep_state, Data};
 draining(cast, {close, _Reason}, Data) ->
     %% Already draining — idempotent.
@@ -971,8 +1047,13 @@ ensure_signed(Frame, Id) -> macula_frame:sign(Frame, Id).
 
 close_quic(#data{quic_conn = undefined}) ->
     ok;
-close_quic(#data{quic_conn = Conn}) ->
+close_quic(#data{quic_conn = Conn, close_with = undefined}) ->
     try macula_quic:close_connection(Conn) catch _:_ -> ok end,
+    ok;
+%% A connection that ends for a reason the peer should read closes with that
+%% application error code and reason.
+close_quic(#data{quic_conn = Conn, close_with = {Code, Reason}}) ->
+    try macula_quic:close_connection(Conn, Code, Reason) catch _:_ -> ok end,
     ok.
 
 %%------------------------------------------------------------------
@@ -1039,6 +1120,63 @@ route_item({invalid_frame, Type, Field}, #data{controlling_pid = Pid}) ->
     ok;
 route_item(Frame, Data) ->
     route_frame(Frame, Data).
+
+%% What the control stream's reserving reader answered. Frames go to their
+%% recipients with their reservations, in order. A malformed stream ends the
+%% connection as malformed, and a client link that waited past its pause limit
+%% ends as busy, closing with REFUSED_BUSY.
+read_control({Items, Reader}, Data) when is_list(Items) ->
+    NewData = Data#data{reader = Reader},
+    [route_reserved(I, NewData) || I <- Items],
+    {next_state, connected, NewData};
+read_control({malformed, Reason, Reader}, Data) ->
+    notify(disconnected, {malformed, Reason}, Data),
+    {stop, normal, Data#data{reader = Reader}};
+read_control({busy, Reader}, Data) ->
+    notify(disconnected, busy, Data),
+    {stop, normal, Data#data{reader = Reader,
+                             close_with = {?QUIC_CODE_REFUSED_BUSY, <<"busy">>}}}.
+
+%% The in-flight counterpart of route_item/2 and route_frame/2: the same
+%% recipients, and each frame handed over with its reservations before it is
+%% sent.
+route_reserved({invalid_frame, _Type, _Field} = Invalid, Data) ->
+    route_item(Invalid, Data);
+route_reserved({frame, Frame, Reservations}, #data{peer_node_id = NodeId} = Data)
+        when is_binary(NodeId) ->
+    reserved_by_category(category(Frame), Frame, Reservations, NodeId, Data);
+route_reserved({frame, Frame, Reservations}, Data) ->
+    reserved_to_controlling(Frame, Reservations, Data).
+
+reserved_by_category(dht, Frame, Reservations, NodeId, #data{dht_recipient = R} = Data) ->
+    reserved_bypass_or_legacy(resolve_recipient(R), reserved_dht_frame, Frame, Reservations,
+                              NodeId, Data);
+reserved_by_category(pubsub, Frame, Reservations, NodeId, #data{pubsub_recipient = R} = Data) ->
+    reserved_bypass_or_legacy(resolve_recipient(R), reserved_pubsub_frame, Frame, Reservations,
+                              NodeId, Data);
+reserved_by_category(other, Frame, Reservations, _NodeId, Data) ->
+    reserved_to_controlling(Frame, Reservations, Data).
+
+reserved_bypass_or_legacy(undefined, _Tag, Frame, Reservations, _NodeId, Data) ->
+    reserved_to_controlling(Frame, Reservations, Data);
+reserved_bypass_or_legacy(Pid, Tag, Frame, Reservations, NodeId, _Data) ->
+    handed_to(Pid, Reservations, {macula_peering, Tag, self(), NodeId, Frame, Reservations}).
+
+reserved_to_controlling(Frame, Reservations, #data{controlling_pid = Pid}) ->
+    handed_to(Pid, Reservations, {macula_peering, reserved_frame, self(), Frame, Reservations}).
+
+handed_to(Pid, Reservations, Msg) ->
+    ok = macula_peering_inflight:hand_over(Reservations, Pid),
+    Pid ! Msg,
+    ok.
+
+%% A draining connection reads nothing more: the control stream's reader lets
+%% go of what it holds and of its place in line.
+stop_reading(#data{reader = undefined} = Data) ->
+    Data;
+stop_reading(#data{reader = Reader} = Data) ->
+    ok = macula_peering_inflight_reader:close(Reader),
+    Data#data{reader = undefined}.
 
 %% Inbound-frame router. Category-bypass: DHT-class frames go to
 %% `dht_recipient' if set; pubsub-class frames go to `pubsub_recipient'

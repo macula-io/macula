@@ -102,6 +102,7 @@
 
     %% Stream parser — drain frames a peer sent from a buffer
     parse_received/1, parse_received/2,
+    frame_bytes/2, decode_frame/2,
     %% Deprecated, removed in 11.0.0: the 10.x shape of parse_received/1
     parse_stream/1,
 
@@ -1625,24 +1626,89 @@ decode_cbor(Bytes, Rest) ->
 %% at most one budget of CBOR items together. Bytes that do not decode as
 %% a record within what is left stay bytes, and so do the records after
 %% them, and `validate_received/1' refuses the frame for that field.
-restore_records(F = #{record := B}, Left) when is_binary(B) ->
-    restored_record(macula_record:decode(B, Left), F);
-restore_records(F = #{records := L}, Left) when is_list(L) ->
-    F#{records := decode_records(L, Left)};
-restore_records(F, _Left) -> F.
+restore_records(F, Left) ->
+    {Frame, _LeftAfter} = restored_records(F, Left),
+    Frame.
 
-restored_record({ok, R, _Left}, F) -> F#{record := R};
-restored_record({error, _Reason}, F) -> F.
+%% The frame with its records restored, and what the element budget has left
+%% after them.
+restored_records(F = #{record := B}, Left) when is_binary(B) ->
+    restored_record(macula_record:decode(B, Left), F, Left);
+restored_records(F = #{records := L}, Left) when is_list(L) ->
+    {Records, LeftAfter} = decode_records(L, Left),
+    {F#{records := Records}, LeftAfter};
+restored_records(F, Left) ->
+    {F, Left}.
+
+restored_record({ok, R, LeftAfter}, F, _Left) -> {F#{record := R}, LeftAfter};
+restored_record({error, _Reason}, F, Left) -> {F, Left}.
 
 decode_records([B | Rest], Left) when is_binary(B) ->
-    decoded_record(macula_record:decode(B, Left), B, Rest);
+    decoded_record(macula_record:decode(B, Left), B, Rest, Left);
 decode_records([Other | Rest], Left) ->
-    [Other | decode_records(Rest, Left)];
-decode_records([], _Left) ->
-    [].
+    {Tail, LeftAfter} = decode_records(Rest, Left),
+    {[Other | Tail], LeftAfter};
+decode_records([], Left) ->
+    {[], Left}.
 
-decoded_record({ok, R, Left}, _B, Rest) -> [R | decode_records(Rest, Left)];
-decoded_record({error, _Reason}, B, Rest) -> [B | Rest].
+decoded_record({ok, R, LeftAfter}, _B, Rest, _Left) ->
+    {Tail, LeftEnd} = decode_records(Rest, LeftAfter),
+    {[R | Tail], LeftEnd};
+decoded_record({error, _Reason}, B, Rest, Left) ->
+    {[B | Rest], Left}.
+
+%% @doc Whether the head of `Buf' holds a whole frame of at most `Cap' bytes,
+%% decided without decoding anything: `{complete, WireBytes}' with its 4-byte
+%% header counted, `{more, N}' when N more bytes are needed to know or to have
+%% it, or `{error, frame_too_large}' from the header alone.
+-spec frame_bytes(binary(), pos_integer()) ->
+    {complete, pos_integer()} | {more, pos_integer()} | {error, frame_too_large}.
+frame_bytes(<<Len:32/big, _Tail/binary>>, Cap) when Len > Cap ->
+    {error, frame_too_large};
+frame_bytes(<<Len:32/big, Tail/binary>>, _Cap) when byte_size(Tail) >= Len ->
+    {complete, Len + 4};
+frame_bytes(<<Len:32/big, Tail/binary>>, _Cap) ->
+    {more, Len - byte_size(Tail)};
+frame_bytes(Buf, _Cap) ->
+    {more, 4 - byte_size(Buf)}.
+
+%% @doc Decode the frame at the head of `Buf' and say how many CBOR items it
+%% used, its records included: `{ok, Frame, Items, Rest}', `{invalid,
+%% {invalid_frame, Type, Field}, Items, Rest}' for a frame whose fields are
+%% refused, `{more, N}' when the frame is not whole yet, or `{error, Reason}'.
+%% A reader reserves the frame's decode transient before it calls this, and
+%% keeps what `macula_peering_inflight:settled_bytes/2' gives for the items
+%% after it.
+-spec decode_frame(binary(), pos_integer()) ->
+    {ok, frame(), non_neg_integer(), binary()}
+  | {invalid, {invalid_frame, frame_type() | unknown, atom()}, non_neg_integer(), binary()}
+  | {more, pos_integer()}
+  | {error, frame_too_large | bad_frame | too_many_elements}.
+decode_frame(<<Len:32/big, Bytes:Len/binary, Rest/binary>>, Cap) when Len =< Cap ->
+    counted_fields(counted_cbor(Bytes), Rest);
+decode_frame(Buf, Cap) ->
+    frame_bytes(Buf, Cap).
+
+counted_cbor(Bytes) ->
+    Budget = macula_cbor_nif:element_budget(),
+    try macula_cbor_nif:unpack_deterministic(Bytes, Budget) of
+        {Term, Left} when is_map(Term) ->
+            {Frame, LeftAfter} = restored_records(from_wire_envelope(Term), Left),
+            {ok, Frame, Budget - LeftAfter};
+        _Other ->
+            {error, bad_frame}
+    catch
+        error:too_many_elements -> {error, too_many_elements};
+        _:_ -> {error, bad_frame}
+    end.
+
+counted_fields({ok, Frame, Items}, Rest) ->
+    counted_received(validate_received(Frame), Frame, Items, Rest);
+counted_fields({error, _Reason} = BadFrame, _Rest) ->
+    BadFrame.
+
+counted_received(ok, Frame, Items, Rest) -> {ok, Frame, Items, Rest};
+counted_received({error, Invalid}, _Frame, Items, Rest) -> {invalid, Invalid, Items, Rest}.
 
 %% @doc Drain all complete frames a peer sent from a buffer.
 %%
