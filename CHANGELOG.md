@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `macula_frame:validate_received/1` refuses; parsing goes on after it. A
   `Tail` kept for the next chunk never exceeds the frame cap plus its
   header.
+- `macula_frame:parse_received/2` is `parse_received/1` with a frame cap of
+  its own, up to the 16 MiB frame cap: a length header above it is
+  `frame_too_large` from its four bytes, so a `Tail` kept for the next chunk
+  never exceeds that cap plus the header.
 - `macula_station_link:not_sent/1` says whether an error from `call/5,6`
   means the CALL never went out: the link was not connected yet, there was
   no link process, or the link refused the frame before sending it.
@@ -120,7 +124,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decode, or when a handshake frame is invalid. On the control stream an
   invalid frame is dropped, the frames after it are routed, and the
   controlling process receives
-  `{macula_peering, invalid_frame, Pid, Type, Field}`.
+  `{macula_peering, invalid_frame, Pid, Type, Field}`. During the handshake
+  it reads frames of up to 64 KiB: a length header above that ends the
+  connection with `{malformed, frame_too_large}` as soon as the header
+  arrives.
 - `macula_dist_relay_client:close_tunnel/2` sends `tunnel_close` only for a
   tunnel the client knows, active or still being set up, and ignores an
   unknown tunnel id.
