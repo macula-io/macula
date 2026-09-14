@@ -176,9 +176,18 @@ stays silent that long closes without a STREAM_ERROR.
 
 A stream holds at most 16 MiB of memory for chunks no reader has taken,
 counting each chunk's bytes, a decoded term's heap size and the cell that
-queues it. A chunk that would take it past that ends the session with code
+queues it. The streams a provider serves also share a budget for those
+chunks: one caller's streams together at most 16 MiB
+(`max_served_inbox_bytes_per_caller`), and all served streams on the node at
+most 256 MiB (`max_served_inbox_bytes`). A chunk that would take a stream
+past its bound, or a budget past its limit, ends the session with code
 `stream_protocol_error`. A reader that takes chunks as they come never meets
-the bound.
+either.
+
+A queued chunk is a copy, but a chunk handed straight to a waiting reader can
+still be part of the frame it arrived in. A handler that keeps chunks after
+reading them, in a list, a table or its state, should copy what it keeps
+(`binary:copy/1`), or it keeps whole frames alive.
 
 ---
 
