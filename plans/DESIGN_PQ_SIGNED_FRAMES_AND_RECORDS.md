@@ -154,6 +154,9 @@ About 7.3 KB / 8.3 KB before the payload: 2,592 / 3,118 bytes of key and 4,627 /
   to the key it asked for, and discards one that does not.
 - **Replacement** by `version` compares only records under one storage key and one signer key id, so two signers
   never replace each other.
+- **Version order.** Versions strictly increase per signer and storage key as issued by one node. Versions a key
+  issues for one storage key on different nodes have no order between them; replacement still compares the full
+  version, so every station picks the same one.
 - **Foundation realm trust list.** Its payload holds exactly `realms_trusted`, an array of maps, each with exactly
   `realm_id` (bytes, 32) and `realm_key_id` (bytes, 32). A station checks a realm-signed record's signer against the
   `realm_key_id` paired with the record's `realm_id` (D28).
@@ -348,7 +351,8 @@ stream frame, publication, advertisement, withdrawal or record, is its signer's,
   - a field or value the frame type's table does not allow;
   - a missing, unexpected or failing neighbour signature;
   - a connection hash or `seq` that does not match;
-  - a neighbour-signed frame off the control stream.
+  - a neighbour-signed frame off the control stream;
+  - a frame of a type that belongs on the control stream, arriving on a dedicated stream, in either profile.
 - An object refusal drops that object only: its shape, key, signature, `tbs`, fields, freshness, replay check or match
   with its request or stream fails. The receiver records it, answers only where this design defines an answer, such
   as a STORE_ACK with `stored` 0, and keeps the connection and every other request and stream on it. A refused

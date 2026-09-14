@@ -39,9 +39,9 @@ testable, and Raf can point to a concrete plan in a partner offer.**
 - **Owners** are team sessions:
   - Mercury: identity core, profile model, realm, this plan;
   - Neptune: Rust, the NIF, and the client dial options;
-  - Mars: station, peering handshake, `macula-cli`, `lazymesh`;
+  - Mars: station, peering handshake, `lazymesh`;
   - Terra: test suites, the post-quantum fleet, the station directory;
-  - Venus: Go, TypeScript, PHP, `macula-mcp`;
+  - Venus: Go, TypeScript, PHP, `macula-cli`, `macula-mcp`;
   - Uranus: .NET;
   - Pluto: Python;
   - Saturnus: crypto profiles, compliance, hecate services;
@@ -411,7 +411,7 @@ Part 2 has the work packages.
 | 2 | Erlang-only test suite | Terra | Stage 1 |
 | 3 | Post-quantum fleet, station directory, realm and distribution relay | Terra, Mercury, Neptune | Stage 2 |
 | 4 | Each other stack, with its suite against the fleet | Neptune, Venus, Pluto; Uranus later | Stage 3 |
-| 5 | Cutover of `macula-cli`, `macula-mcp` and `lazymesh` | Mars, Venus | Stage 4 (Go); EU parts for `io.macula` |
+| 5 | Cutover of `macula-cli`, `macula-mcp` and `lazymesh` | Venus, Mars | Stage 4 (Go); EU parts for `io.macula` |
 | 6 | Cutover of the hecate services | Saturnus | Stage 5, EU parts included; the Reckon plan (D9) |
 | 7 | Quality and security gates | Fable, Jupiter | runs throughout |
 
@@ -514,6 +514,7 @@ Rough, for planning. Items marked ⚠ are not estimated yet.
 | 3 | Fleet and seeds | 3 to 5 days, plus configuration generation ⚠ |
 | 3 | Station directory | ⚠ |
 | 3 | Distribution relay | ⚠ |
+| 3 | Demonstration video plan | 1 day |
 | 4 | Go transport | 2 to 4 days, plus the FFI unification ⚠ |
 | 4 | Python transport | 6 to 9 days, plus seeds and record verification ⚠ |
 | 4 | Rust transport in `macula-rust` | 3 to 4 days |
@@ -523,7 +524,7 @@ Rough, for planning. Items marked ⚠ are not estimated yet.
 | 6 | hecate services | 3 to 5 days, plus the images on OTP 27 ⚠ |
 | 1, 4 | Reply binding to provider and request (D25) | ⚠ |
 | 7 | Gates | throughout |
-| | **Total** | **at least 88 to 128 person-days, plus the items marked ⚠** |
+| | **Total** | **at least 89 to 129 person-days, plus the items marked ⚠** |
 
 Stage 0 checks, the Stage 4 stacks and the SDK identity work can run in parallel across the team.
 
