@@ -28,10 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A stream holds at most 16 MiB of memory for chunks no reader has taken. A
+  queued chunk is copied, so it keeps none of the frame it arrived in, and it
+  counts for the memory it takes: its bytes, a decoded term's heap size, and
+  the cell that queues it, so empty chunks count too. A chunk that would take
+  the stream past the bound ends the session: the peer gets a STREAM_ERROR
+  with code `stream_protocol_error`, and the owner is told. A chunk handed
+  straight to a waiting reader counts for nothing. `macula_stream:start_link/1`
+  takes a `max_inbox_bytes` option for another bound, and
+  `macula_stream:info/1` reports `inbox_bytes`.
 - A stream takes chunks only from the side its mode lets send: the server in
-  `server_stream`, the client in `client_stream`, and both in `bidi`. A chunk
-  from the other side ends the session: the peer gets a STREAM_ERROR with
-  code `stream_protocol_error`, and the owner is told
+  `server_stream`, the client in `client_stream`, and both in `bidi`. A
+  session whose peer sends a chunk from the side its mode keeps silent now
+  ends with `stream_protocol_error`: the peer gets a STREAM_ERROR with that
+  code, and the owner is told
   `{macula_stream, ended, Stream, {error, {<<"stream_protocol_error">>, _}}}`.
   A send the mode does not allow returns `{error, {send_not_allowed, Mode}}`
   and sends nothing.
