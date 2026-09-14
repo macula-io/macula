@@ -54,6 +54,26 @@ always yields the same MCID — that is what makes it a content address.
 
 ---
 
+## What a manifest must describe
+
+A chunked MCID names a manifest. `get_content/2` and the upload receiver use a
+manifest only when it describes whole content:
+
+- `chunk_size` is a positive integer and `size` an integer from 0;
+- `chunk_count` is `ceil(size / chunk_size)`, and it is also the number of
+  chunks listed;
+- chunk `I` has index `I`, offset `I * chunk_size` and
+  `min(chunk_size, size - offset)` bytes, so every chunk holds at least one
+  byte;
+- every chunk hash and the root hash are 32 bytes.
+
+Any other manifest is `{error, invalid_manifest}` from
+`macula_manifest:from_wire/1`, before a chunk is fetched or counted. Empty
+content therefore has exactly one manifest: size 0, chunk count 0, no chunks.
+The bytes are then checked against the root hash, as for all content.
+
+---
+
 ## Real cancel: `macula_content_transfer`
 
 `put_content/2`/`get_content/2` (and their `_station` variants) are thin
@@ -232,7 +252,7 @@ budget — the same value `call_station` already gives unary RPC calls.
 | Function | Role |
 |---|---|
 | `put_content(Pool, Bytes)` | store a blob (single-block or chunked, by size), return its MCID |
-| `get_content(Pool, MCID)` | fetch the bytes for an MCID (`{error, not_found}` if none reachable); single-block bytes are re-verified against the MCID's BLAKE3 hash client-side, and a chunked MCID's manifest is used only if its recomputed MCID is the one requested (`{error, manifest_mcid_mismatch}` otherwise) |
+| `get_content(Pool, MCID)` | fetch the bytes for an MCID (`{error, not_found}` if none reachable); single-block bytes are re-verified against the MCID's BLAKE3 hash client-side, and a chunked MCID's manifest is used only if its recomputed MCID is the one requested (`{error, manifest_mcid_mismatch}` otherwise) and it describes whole content (`{error, invalid_manifest}` otherwise, see [What a manifest must describe](#what-a-manifest-must-describe)) |
 | `get_content_station(Pool, Station, MCID, TimeoutMs, Opts)` | **direct-dial**: fetch from a specific, already-resolved station, with the same checks as `get_content/2` |
 | `put_content_station(Pool, Station, Bytes, TimeoutMs, Opts)` | **direct-dial**: seed a specific station directly |
 | `find_content_providers(Pool, MCID)` | resolve every host currently announcing an MCID (signature- and signer-verified) |

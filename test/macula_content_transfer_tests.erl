@@ -47,6 +47,7 @@ content_transfer_test_() ->
                   fun resume_continues_from_the_next_chunk_not_the_start/0,
                   fun pause_stops_chunked_get_between_chunks/0,
                   fun manifest_not_matching_the_requested_mcid_is_refused/0,
+                  fun a_manifest_that_is_not_whole_is_refused_before_any_chunk/0,
                   fun pause_on_single_block_put_is_a_harmless_noop/0,
                   fun cancel_while_paused_between_chunks_still_resets_the_stream/0,
                   fun a_link_io_of_another_shape_is_refused/0,
@@ -285,6 +286,28 @@ manifest_not_matching_the_requested_mcid_is_refused() ->
 
     assert_no_call_started(),
     ?assertEqual({error, manifest_mcid_mismatch}, macula_content_transfer:await(Pid, 2_000)),
+    ok = macula_content_transfer:cancel(Pid).
+
+%% A fetched manifest is used only when it describes whole content. One made
+%% to match the requested MCID, as any peer can make one, but counting a chunk
+%% more than it lists is refused before any chunk is fetched against it, so
+%% no count it names is ever set out.
+a_manifest_that_is_not_whole_is_refused_before_any_chunk() ->
+    Self = self(),
+    {ok, Whole, _} = macula_manifest:create(chunked_put_bytes()),
+    NotWhole = macula_test_manifest:with_matching_mcid(
+                 Whole#{chunk_count := maps:get(chunk_count, Whole) + 1}),
+    Mcid = maps:get(mcid, NotWhole),
+    LinkIo = one_stream_blocking_link_io(Self),
+
+    {ok, Pid} = macula_content_transfer:start_get(dummy_pid(), Mcid,
+                                                  #{stream_count => 1, link_io => LinkIo}),
+
+    {WorkerM, <<"_content.get_manifest">>, #{mcid := Mcid}} = receive_call_started(),
+    WorkerM ! {proceed, {ok, NotWhole}},
+
+    assert_no_call_started(),
+    ?assertEqual({error, invalid_manifest}, macula_content_transfer:await(Pid, 2_000)),
     ok = macula_content_transfer:cancel(Pid).
 
 %% Single-block content has no "between chunks" to pause at: pause/
