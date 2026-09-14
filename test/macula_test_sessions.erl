@@ -7,8 +7,8 @@
 -define(POLL_MS, 20).
 -define(POLLS, 50).
 
-%% @doc Every process on this node that serves a stream session: a macula_stream, a macula_streamer, or a process
-%% parked in a stream host loop.
+%% @doc Every process on this node that serves a stream session: a macula_stream, a macula_streamer, a process
+%% parked in a stream host loop, or a handler process still waiting for the stream it serves.
 -spec serving() -> [pid()].
 serving() ->
     [Pid || Pid <- erlang:processes(), serves_a_session(erlang:process_info(Pid, [current_function, dictionary]))].
@@ -33,6 +33,10 @@ none_new(_New, Before, Polls) ->
 serves_a_session([{current_function, {macula_station_link, stream_host_loop, 0}} | _]) ->
     true;
 serves_a_session([{current_function, {macula_stream_local, host_loop, 0}} | _]) ->
+    true;
+serves_a_session([{current_function, {macula_station_link, serve_stream_when_attached, _}} | _]) ->
+    true;
+serves_a_session([{current_function, {macula_stream_local, serve_when_paired, _}} | _]) ->
     true;
 serves_a_session([{current_function, _}, {dictionary, Dictionary}]) ->
     lists:member(proplists:get_value('$initial_call', Dictionary),

@@ -139,6 +139,12 @@
 
 -export_type([opts/0]).
 
+-ifdef(TEST).
+%% The process a served stream's handler runs in, spawned before the stream
+%% exists: exported for macula_stream_tests.erl.
+-export([spawn_stream_handler/3]).
+-endif.
+
 -type url() :: binary() | string().
 
 -type opts() :: #{
@@ -2779,7 +2785,8 @@ spawn_inbound_stream(Sid, Proc, Mode, Handler, Args, Stream,
 %% Handler runs in a transient process, which owns the session's stream:
 %% the stream ends when the handler returns or crashes, unless the handler
 %% hands it over first (`macula_stream:controlling_process/2'). The process
-%% runs the handler once the link has attached the stream. A handler crash
+%% runs the handler once the link has attached the stream, and ends without
+%% running it when the link ends first. A handler crash
 %% maps to a STREAM_ERROR abort with the crash class as the code and the
 %% reason's name as the message, so callers see a stable error taxonomy and
 %% none of the crash's terms; the crash goes to the node's log. The
@@ -2787,11 +2794,18 @@ spawn_inbound_stream(Sid, Proc, Mode, Handler, Args, Stream,
 %% CALLs): without it a crash would silently leave the caller waiting on
 %% its deadline.
 spawn_stream_handler(Handler, Args, Proc) ->
-    spawn(fun() -> serve_stream_when_attached(Handler, Args, Proc) end).
+    Link = self(),
+    spawn(fun() -> serve_stream_when_attached(erlang:monitor(process, Link), Handler, Args, Proc) end).
 
-serve_stream_when_attached(Handler, Args, Proc) ->
+%% Once the handler runs, the link's end is no concern of it, so no notice of
+%% it is left in the handler's mailbox.
+serve_stream_when_attached(LinkRef, Handler, Args, Proc) ->
     receive
-        {serve, Stream} -> run_stream_handler(Handler, Stream, Args, Proc)
+        {serve, Stream} ->
+            true = erlang:demonitor(LinkRef, [flush]),
+            run_stream_handler(Handler, Stream, Args, Proc);
+        {'DOWN', LinkRef, process, _Link, _Reason} ->
+            ok
     end.
 
 run_stream_handler(Handler, Stream, Args, Proc) ->
