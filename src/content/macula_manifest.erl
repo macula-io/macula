@@ -76,13 +76,17 @@ create(Data) -> create(Data, #{}).
 %% then the manifest (via `_content.put_manifest'). Options:
 %% <ul>
 %%   <li>`name' — content name (default `<<"unnamed">>')</li>
-%%   <li>`chunk_size' — bytes per chunk (default `default_chunk_size/0')</li>
+%%   <li>`chunk_size' — bytes per chunk, a positive integer (default
+%%   `default_chunk_size/0')</li>
 %%   <li>`hash_algorithm' — `blake3' | `sha256' (default `blake3')</li>
 %% </ul>
 -spec create(binary(), map()) -> {ok, manifest(), [binary()]}.
 create(Data, Opts) when is_binary(Data), is_map(Opts) ->
+    create_chunked(Data, Opts, maps:get(chunk_size, Opts, ?DEFAULT_CHUNK_SIZE)).
+
+%% A chunk size that is not a positive integer would never finish chunking.
+create_chunked(Data, Opts, ChunkSize) when is_integer(ChunkSize), ChunkSize > 0 ->
     Name      = maps:get(name, Opts, <<"unnamed">>),
-    ChunkSize = maps:get(chunk_size, Opts, ?DEFAULT_CHUNK_SIZE),
     Algorithm = maps:get(hash_algorithm, Opts, blake3),
 
     Chunks     = do_chunk(Data, ChunkSize, []),
@@ -130,11 +134,16 @@ chunk_mcid(#{chunks := _}, _Index, _Algorithm) ->
     {error, invalid_index}.
 
 %% @doc Verify reassembled `Data' against `Manifest': size, then a
-%% fresh Merkle root over `Data' re-chunked the same way.
+%% fresh Merkle root over `Data' re-chunked the same way. A manifest whose
+%% chunk size is not a positive integer is `{error, invalid_manifest}', so
+%% the re-chunking always ends.
 -spec verify(manifest(), binary()) ->
-        ok | {error, size_mismatch | root_hash_mismatch}.
-verify(#{size := ExpectedSize} = Manifest, Data) when is_binary(Data) ->
-    verify_size(byte_size(Data) =:= ExpectedSize, Manifest, Data).
+        ok | {error, size_mismatch | root_hash_mismatch | invalid_manifest}.
+verify(#{size := ExpectedSize, chunk_size := ChunkSize} = Manifest, Data)
+  when is_binary(Data), is_integer(ChunkSize), ChunkSize > 0 ->
+    verify_size(byte_size(Data) =:= ExpectedSize, Manifest, Data);
+verify(_Manifest, Data) when is_binary(Data) ->
+    {error, invalid_manifest}.
 
 verify_size(false, _Manifest, _Data) ->
     {error, size_mismatch};
@@ -185,7 +194,8 @@ mcid_result(false) -> {error, manifest_mcid_mismatch}.
 %% sent as text is read as its binary value, and a missing hash algorithm
 %% is blake3. A manifest without an mcid, whose chunks are not a list of
 %% maps, or whose hash algorithm is not one this module knows, is
-%% `{error, invalid_manifest}'.
+%% `{error, invalid_manifest}'. So is one that does not describe whole
+%% content (`whole/1'), before any caller sizes or counts anything by it.
 -spec from_wire(map()) -> {ok, manifest()} | {error, invalid_manifest}.
 from_wire(M) when is_map(M) ->
     from_wire_result(field(M, mcid), field(M, chunks), M).
@@ -207,16 +217,49 @@ from_wire_chunks(true, MCID, Chunks, M) ->
 from_wire_algorithm(error, _MCID, _Chunks, _M) ->
     {error, invalid_manifest};
 from_wire_algorithm({ok, Algorithm}, MCID, Chunks, M) ->
-    {ok, #{mcid           => MCID,
-           version        => field_default(M, version, 1),
-           name           => wire_text(field_default(M, name, <<"unnamed">>)),
-           size           => field_default(M, size, 0),
-           created        => field_default(M, created, 0),
-           chunk_size     => field_default(M, chunk_size, ?DEFAULT_CHUNK_SIZE),
-           chunk_count    => field_default(M, chunk_count, 0),
-           hash_algorithm => Algorithm,
-           root_hash      => field_default(M, root_hash, <<>>),
-           chunks         => [chunk_info_from_wire(C) || C <- Chunks]}}.
+    whole(#{mcid           => MCID,
+            version        => field_default(M, version, 1),
+            name           => wire_text(field_default(M, name, <<"unnamed">>)),
+            size           => field_default(M, size, 0),
+            created        => field_default(M, created, 0),
+            chunk_size     => field_default(M, chunk_size, ?DEFAULT_CHUNK_SIZE),
+            chunk_count    => field_default(M, chunk_count, 0),
+            hash_algorithm => Algorithm,
+            root_hash      => field_default(M, root_hash, <<>>),
+            chunks         => [chunk_info_from_wire(C) || C <- Chunks]}).
+
+%% A manifest describes whole content when its chunk size is a positive
+%% integer, its size an integer from 0, its chunk count ceil(size / chunk
+%% size) and the number of chunks it lists, chunk I sits at offset I x chunk
+%% size with the chunk size's bytes (the last chunk the rest, from 1 up to
+%% the chunk size), and every hash is 32 bytes. The MCID covers the size,
+%% chunk size and count, so a peer can make up a manifest that matches the
+%% MCID it names; this is what keeps such a manifest from making a caller
+%% count out chunks that are not there, or re-chunk forever.
+whole(Manifest) ->
+    whole_result(is_whole(Manifest), Manifest).
+
+whole_result(true, Manifest)   -> {ok, Manifest};
+whole_result(false, _Manifest) -> {error, invalid_manifest}.
+
+is_whole(#{size := Size, chunk_size := ChunkSize, chunk_count := Count,
+           root_hash := <<_:256>>, chunks := Chunks})
+  when is_integer(Size), Size >= 0, is_integer(ChunkSize), ChunkSize > 0,
+       is_integer(Count) ->
+    Count =:= (Size + ChunkSize - 1) div ChunkSize
+        andalso chunks_whole(Chunks, 0, Count, Size, ChunkSize);
+is_whole(_Manifest) ->
+    false.
+
+chunks_whole([], Count, Count, _Size, _ChunkSize) ->
+    true;
+chunks_whole([#{index := Index, offset := Offset, size := Bytes, hash := <<_:256>>} | Rest],
+             Index, Count, Size, ChunkSize)
+  when Index < Count, Offset =:= Index * ChunkSize,
+       Bytes =:= min(ChunkSize, Size - Offset) ->
+    chunks_whole(Rest, Index + 1, Count, Size, ChunkSize);
+chunks_whole(_Chunks, _Index, _Count, _Size, _ChunkSize) ->
+    false.
 
 chunk_info_from_wire(C) when is_map(C) ->
     #{index  => field_default(C, index, 0),

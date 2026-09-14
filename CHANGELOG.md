@@ -262,6 +262,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `macula_manifest:from_wire/1` returns `{error, invalid_manifest}` for a
+  manifest that does not describe whole content: a `chunk_size` that is not a
+  positive integer, a `size` below 0, a `chunk_count` other than
+  `ceil(size / chunk_size)` or other than the number of chunks listed, a chunk
+  whose index, offset or byte count is not the one its place requires, or a
+  chunk hash or root hash that is not 32 bytes. `get_content/2`, the
+  addressable get and the upload receiver refuse such a manifest before they
+  fetch or count any chunk. `macula_manifest:verify/2` returns
+  `{error, invalid_manifest}` for a chunk size that is not a positive integer,
+  and `macula_manifest:create/2` accepts only a positive integer `chunk_size`.
 - `macula_dist_relay_client` drops a tunnel and sends `tunnel_close` for it
   once the process holding its stream ends: the caller of
   `request_tunnel/2` for an outbound tunnel, and for an inbound tunnel its
