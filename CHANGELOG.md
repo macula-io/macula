@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `macula_stream:controlling_process/2` hands a stream to another process,
+  which the stream then ends with. Only the stream's owner can hand it over;
+  anyone else gets `{error, not_owner}`. When a stream's session ends, with
+  both sides closed, an abort, or its link lost, its owner gets
+  `{macula_stream, ended, Stream, How}` once, `How` being `closed`,
+  `{error, {Code, Message}}` or `peer_down`. An owner the stream is handed to
+  after that is told at once. `controlling_process` is also one of the stream
+  functions `macula_streamer` takes in `stream_io`.
 - `include/macula_quic_error_codes.hrl` names each QUIC application error
   code macula sends when it resets or stops a stream, or closes a
   connection: `QUIC_CODE_CANCELLED` (0), `QUIC_CODE_LINGER_EXPIRED` (1),
@@ -20,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A served stream is owned by the process that runs its handler, and a
+  stream process ends when its owner ends. So a stream ends when its handler
+  returns or crashes, and a stream served by `macula_streamer` ends with the
+  streamer. A handler that lets another
+  process keep using its stream must now hand the stream over before it
+  returns: `ok = macula_stream:controlling_process(Stream, Pid)`.
+  `macula_streamer` stops when its stream's session ends, even when its
+  module would not stop by itself.
 - `macula_identity:generate/0` returns an identity that passes the station
   puzzle. `macula_identity:generate/1` does the same unless given
   `puzzle => false`, which returns a plain key.

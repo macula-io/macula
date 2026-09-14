@@ -53,7 +53,10 @@ mesh fact — from its own side's perspective, not deduplicated against the
 other side's copy.
 
 Provider side — each inbound stream starts one supervised child under a
-factory supervisor this module owns. Sending is push-based: once
+factory supervisor this module owns. The child takes its stream over, so the
+stream ends with the child, and the child stops when the stream's session ends
+(the consumer closed, aborted, or its link went), whether or not your module
+would stop by itself. Sending is push-based: once
 `handle_open/2` has stashed `self()` somewhere discoverable (a registry, an
 ETS table, a message to a known process), any code holding that pid can
 call `macula_streamer:send/2,3` and `close/1` on it from outside:
