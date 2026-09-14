@@ -57,7 +57,9 @@ rebar3 eunit
 
 ## Submitting Changes
 
-1. Ensure all tests pass: `rebar3 eunit`
+1. Ensure the tree is fit to push: `scripts/is_tree_pushable.sh` (a clean git
+   checkout, no `_checkouts`, the pinned Erlang/OTP, `rebar3 xref`, then every
+   eunit test)
 2. Run dialyzer: `rebar3 dialyzer`
 3. Generate docs to check for warnings: `rebar3 edoc`
 4. Commit with clear messages
