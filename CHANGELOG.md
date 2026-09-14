@@ -134,6 +134,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A content manifest names blake3 as its hash algorithm, or names none.
+  Every chunk is fetched and checked with blake3, so content hashed with
+  sha256 could never be fetched. `macula_manifest:create/2` raises
+  `function_clause` for `hash_algorithm => sha256`, `from_wire/1` returns
+  `{error, invalid_manifest}` for a manifest naming sha256 in any form, and
+  `verify_mcid/2` returns `{error, manifest_mcid_mismatch}` for one. The
+  `macula_manifest:algorithm()` type is `blake3`.
 - `macula_dist_relay_client:close_tunnel/2` sends `tunnel_close` only for a
   tunnel the client knows, active or still being set up, and ignores an
   unknown tunnel id.

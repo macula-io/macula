@@ -32,7 +32,7 @@
 
 -export_type([manifest/0, chunk_info/0, algorithm/0]).
 
--type algorithm() :: blake3 | sha256.
+-type algorithm() :: blake3.
 -type mcid() :: <<_:272>>.
 
 -type chunk_info() :: #{
@@ -78,16 +78,19 @@ create(Data) -> create(Data, #{}).
 %%   <li>`name' — content name (default `<<"unnamed">>')</li>
 %%   <li>`chunk_size' — bytes per chunk, a positive integer (default
 %%   `default_chunk_size/0')</li>
-%%   <li>`hash_algorithm' — `blake3' | `sha256' (default `blake3')</li>
+%%   <li>`hash_algorithm': `blake3', the default and the only one, since
+%%   content is fetched and checked with blake3</li>
 %% </ul>
 -spec create(binary(), map()) -> {ok, manifest(), [binary()]}.
 create(Data, Opts) when is_binary(Data), is_map(Opts) ->
-    create_chunked(Data, Opts, maps:get(chunk_size, Opts, ?DEFAULT_CHUNK_SIZE)).
+    create_chunked(Data, Opts, maps:get(chunk_size, Opts, ?DEFAULT_CHUNK_SIZE),
+                   maps:get(hash_algorithm, Opts, blake3)).
 
-%% A chunk size that is not a positive integer would never finish chunking.
-create_chunked(Data, Opts, ChunkSize) when is_integer(ChunkSize), ChunkSize > 0 ->
+%% A chunk size that is not a positive integer would never finish chunking,
+%% and content hashed with anything but blake3 could never be fetched.
+create_chunked(Data, Opts, ChunkSize, blake3 = Algorithm)
+  when is_integer(ChunkSize), ChunkSize > 0 ->
     Name      = maps:get(name, Opts, <<"unnamed">>),
-    Algorithm = maps:get(hash_algorithm, Opts, blake3),
 
     Chunks     = do_chunk(Data, ChunkSize, []),
     ChunkInfos = chunk_infos(Chunks, Algorithm),
@@ -111,19 +114,9 @@ create_chunked(Data, Opts, ChunkSize) when is_integer(ChunkSize), ChunkSize > 0 
 %% chunk, so both sides agree on its address without exchanging it.
 %%
 %% `Algorithm' is accepted but unused: the chunk's hash was already
-%% computed (with whichever algorithm `create/2' was given) and stored
-%% in `Chunks', so there's nothing left to derive here. KNOWN GAP
-%% (2026-09-05, will not be fixed without a design decision): per-chunk
-%% fetch verification in `macula_content_transfer' is
-%% hardcoded to blake3 regardless of this field, so a manifest created
-%% with `hash_algorithm => sha256' produces chunk MCIDs that can never
-%% actually verify on fetch. `hash_algorithm' today only affects the
-%% manifest's own root-hash Merkle step (`verify/2'). Same gap
-%% independently confirmed in macula-io/macula-rust's `content.rs'
-%% (`block_mcid' is likewise hardcoded to blake3). Left as-is: nothing
-%% exercises sha256 in practice, and whether per-chunk sha256
-%% verification was ever meant to work is an open question, not a bug
-%% with an obvious fix.
+%% computed with blake3 and stored in `Chunks', so there's nothing left
+%% to derive here. Chunks are fetched and checked with blake3, and a
+%% manifest naming any other hash algorithm is refused.
 -spec chunk_mcid(manifest(), non_neg_integer(), algorithm()) ->
         {ok, mcid()} | {error, invalid_index}.
 chunk_mcid(#{chunks := Chunks}, Index, _Algorithm)
@@ -271,12 +264,10 @@ chunk_info_from_wire(C) when is_map(C) ->
 wire_algorithm(undefined) -> {ok, blake3};
 wire_algorithm(Value)     -> known_algorithm(Value).
 
-%% A hash algorithm this module computes, as an atom, a binary, or the
-%% `{text, Bin}' the frame decoder leaves.
+%% blake3, the one hash algorithm content is fetched and checked with, as an
+%% atom, a binary, or the `{text, Bin}' the frame decoder leaves.
 known_algorithm(blake3)                        -> {ok, blake3};
-known_algorithm(sha256)                        -> {ok, sha256};
 known_algorithm(<<"blake3">>)                  -> {ok, blake3};
-known_algorithm(<<"sha256">>)                  -> {ok, sha256};
 known_algorithm({text, Bin}) when is_binary(Bin) -> known_algorithm(Bin);
 known_algorithm(_Other)                        -> error.
 
@@ -358,8 +349,7 @@ combine([L, R | Rest], Algorithm, Acc) ->
 %% Internal — hashing (mirrors macula_content_hasher:hash/2)
 %%====================================================================
 
-hash(blake3, Data) -> macula_blake3_nif:hash(Data);
-hash(sha256, Data) -> crypto:hash(sha256, Data).
+hash(blake3, Data) -> macula_blake3_nif:hash(Data).
 
 %%====================================================================
 %% Internal — MCID (mirrors macula_manifest:compute_mcid/2)

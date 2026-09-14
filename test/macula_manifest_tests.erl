@@ -132,10 +132,6 @@ verify_rejects_tampered_bytes_same_size_test() ->
                  macula_manifest:verify(M, Tampered)).
 
 %%%===================================================================
-%%% sha256 algorithm option
-%%%===================================================================
-
-%%%===================================================================
 %%% from_wire/1
 %%%===================================================================
 
@@ -170,12 +166,10 @@ from_wire_missing_chunks_is_invalid_test() ->
     ?assertEqual({error, invalid_manifest},
                  macula_manifest:from_wire(#{mcid => <<1,2,3>>})).
 
-sha256_algorithm_produces_sha256_chunk_hashes_test() ->
+chunk_hashes_are_blake3_test() ->
     Data = <<"hello world">>,
-    {ok, #{chunks := [Chunk]}, _} =
-        macula_manifest:create(Data, #{chunk_size => 1024,
-                                               hash_algorithm => sha256}),
-    ?assertEqual(crypto:hash(sha256, Data), maps:get(hash, Chunk)).
+    {ok, #{chunks := [Chunk]}, _} = macula_manifest:create(Data, #{chunk_size => 1024}),
+    ?assertEqual(macula_blake3_nif:hash(Data), maps:get(hash, Chunk)).
 
 %%%===================================================================
 %%% verify_mcid/2: a manifest describes the MCID it is fetched under
@@ -246,10 +240,10 @@ from_wire_reads_text_keys_as_the_decoder_leaves_them_test() ->
 from_wire_reads_a_name_and_hash_algorithm_sent_as_text_test() ->
     {ok, M, _} = macula_manifest:create(crypto:strong_rand_bytes(700),
                                         #{chunk_size => 200, name => <<"ok">>,
-                                          hash_algorithm => sha256}),
+                                          hash_algorithm => blake3}),
     [begin
          {ok, Read} = macula_manifest:from_wire(
-                        M#{name := Name, hash_algorithm := {text, <<"sha256">>}}),
+                        M#{name := Name, hash_algorithm := {text, <<"blake3">>}}),
          ?assertEqual(M, Read),
          ?assertEqual(ok, macula_manifest:verify_mcid(Read, maps:get(mcid, M)))
      end || Name <- [{text, <<"ok">>}, ok]].
@@ -367,6 +361,63 @@ a_substituted_chunk_list_is_refused_by_the_root_hash_test() ->
 
 whole_manifest() ->
     macula_manifest:create(crypto:strong_rand_bytes(700), #{chunk_size => 200}).
+
+%%%===================================================================
+%%% Only blake3 manifests are read, made or verified
+%%%===================================================================
+
+%% Every chunk is fetched and checked with blake3, so content hashed with
+%% sha256 could never be fetched. A manifest naming sha256 is refused in
+%% every shape it can arrive in, even one that matches its own MCID.
+a_sha256_manifest_is_refused_test() ->
+    {ok, M, _} = whole_manifest(),
+    Sha256 = macula_test_manifest:with_matching_mcid(M#{hash_algorithm := sha256}, sha256),
+    [?assertEqual({error, invalid_manifest},
+                  macula_manifest:from_wire(Sha256#{hash_algorithm := Shape}))
+     || Shape <- [sha256, <<"sha256">>, {text, <<"sha256">>}]].
+
+%% The helper computes a blake3 manifest's MCID exactly as create/2 does, so
+%% the sha256 manifest it makes carries the MCID sha256 would give it.
+verify_mcid_refuses_sha256_test() ->
+    {ok, M, _} = whole_manifest(),
+    ?assertEqual(M, macula_test_manifest:with_matching_mcid(M, blake3)),
+    Sha256 = macula_test_manifest:with_matching_mcid(M#{hash_algorithm := sha256}, sha256),
+    ?assertEqual({error, manifest_mcid_mismatch},
+                 macula_manifest:verify_mcid(Sha256, maps:get(mcid, Sha256))).
+
+create_refuses_sha256_test() ->
+    ?assertError(function_clause,
+                 macula_manifest:create(crypto:strong_rand_bytes(700),
+                                        #{chunk_size => 200, hash_algorithm => sha256})).
+
+%%%===================================================================
+%%% Empty content has one whole form
+%%%===================================================================
+
+%% Empty content is whole only as create/2 makes it: size 0, chunk count 0,
+%% no chunks and a positive chunk size. Every other empty form is refused,
+%% even one that matches its own MCID.
+empty_content_has_one_whole_form_test() ->
+    {ok, Empty, []} = macula_manifest:create(<<>>, #{}),
+    ?assertMatch({ok, _}, macula_manifest:from_wire(Empty)),
+    EmptyChunk = #{index => 0, offset => 0, size => 0, hash => <<0:256>>},
+    [?assertEqual({error, invalid_manifest},
+                  macula_manifest:from_wire(macula_test_manifest:with_matching_mcid(Changed)))
+     || Changed <- [Empty#{chunk_count := 1},
+                    Empty#{chunks := [EmptyChunk]},
+                    Empty#{chunk_count := 1, chunks := [EmptyChunk]},
+                    Empty#{chunk_size := 0}]].
+
+%% A chunk holds at least one byte: an empty chunk is refused wherever it is
+%% listed, even with a count that accounts for it.
+an_empty_chunk_is_not_whole_test() ->
+    {ok, M, _} = whole_manifest(),
+    [C0, C1, C2, C3] = maps:get(chunks, M),
+    EmptyChunk = #{index => 4, offset => 700, size => 0, hash => <<0:256>>},
+    [?assertEqual({error, invalid_manifest},
+                  macula_manifest:from_wire(macula_test_manifest:with_matching_mcid(Changed)))
+     || Changed <- [M#{chunk_count := 5, chunks := [C0, C1, C2, C3, EmptyChunk]},
+                    M#{chunks := [C0, C1, C2, C3#{size := 0}]}]].
 
 
 %% End to end in a fresh node that has never loaded macula_manifest: the
