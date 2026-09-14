@@ -1215,6 +1215,12 @@ handle_info({macula_peering, connected, Pid, PeerNodeId},
     drain_pending_stream_advertises(NewS),
     {noreply, NewS};
 
+%% A frame from the peer that decoded but lacks a field its type requires
+%% (`macula_frame:validate_received/1'). The peering connection dropped it
+%% and kept the connection, and there is nothing here to act on.
+handle_info({macula_peering, invalid_frame, _Pid, _Type, _Field}, S) ->
+    {noreply, S};
+
 handle_info({macula_peering, frame, Pid, Frame},
             #state{peer_pid = Pid} = S) ->
     {noreply, fold_frames(drain_frames(Pid, [Frame]), S)};
@@ -1263,29 +1269,26 @@ handle_info({macula_peering, new_dedicated_stream, _OtherPid, _Stream}, S) ->
 %% Bytes on one of our dedicated streams. Decode whatever complete
 %% frames are available and dispatch each; the tail (a partial frame)
 %% stays buffered for the next chunk, same as the shared-stream case
-%% in `macula_peering_conn:connected/3'.
+%% in `macula_peering_conn:connected/3'. Bytes that do not decode, or a
+%% frame missing a field its type requires, end this stream only
+%% (`dedicated_items/3').
 handle_info({quic, Bin, Stream, _Flags}, #state{stream_bufs = Bufs} = S)
         when is_binary(Bin), is_map_key(Stream, Bufs) ->
     Buf = maps:get(Stream, Bufs),
-    {ok, Frames, Tail} = macula_frame:parse_received(<<Buf/binary, Bin/binary>>),
-    NewS = lists:foldl(fun(F, Acc) -> dispatch_dedicated_frame(F, Stream, Acc) end,
-                       S#state{stream_bufs = Bufs#{Stream => Tail}}, Frames),
-    {noreply, NewS};
+    {noreply, dedicated_items(macula_frame:parse_received(<<Buf/binary, Bin/binary>>), Stream, S)};
 
 %% Bytes on one of our content-transfer streams (opened via
 %% `open_content_stream/1', always by us — content is never
 %% peer-initiated, unlike streaming RPC's inbound STREAM_OPEN case,
 %% so there is no `new_dedicated_stream' seeding clause to match this
-%% one).
+%% one). Bytes that do not decode, or a reply missing a field it
+%% requires, end the stream and fail the call waiting on it
+%% (`content_items/3').
 handle_info({quic, Bin, Stream, _Flags},
             #state{content_stream_bufs = Bufs} = S)
         when is_binary(Bin), is_map_key(Stream, Bufs) ->
     Buf = maps:get(Stream, Bufs),
-    {ok, Frames, Tail} = macula_frame:parse_received(<<Buf/binary, Bin/binary>>),
-    NewS = lists:foldl(fun(F, Acc) -> dispatch_content_frame(F, Stream, Acc) end,
-                       S#state{content_stream_bufs = Bufs#{Stream => Tail}},
-                       Frames),
-    {noreply, NewS};
+    {noreply, content_items(macula_frame:parse_received(<<Buf/binary, Bin/binary>>), Stream, S)};
 
 %% A write on one of our dedicated streams failed: the sessions it carries
 %% can send nothing more, so they end as they do when the link is lost.
@@ -1635,6 +1638,33 @@ dispatch_content_frame(_Frame, _Stream, S) ->
     %% violation — this side only ever sends CALL on one, so the only
     %% legitimate replies are RESULT/ERROR.
     S.
+
+%% What `macula_frame:parse_received/1' gave for a content stream, handled as
+%% `dedicated_items/3' handles a dedicated stream's: a reply that does not
+%% decode, or lacks a field it requires, ends the stream and fails the call
+%% waiting on it.
+content_items({ok, Items, Tail}, Stream, #state{content_stream_bufs = Bufs} = S) ->
+    {_Open, NewS} = dispatch_content_items(Items, Stream,
+                                           S#state{content_stream_bufs = Bufs#{Stream => Tail}}),
+    NewS;
+content_items({malformed, Items, Reason}, Stream, S) ->
+    end_malformed_content(dispatch_content_items(Items, Stream, S), Stream, Reason).
+
+dispatch_content_items([], _Stream, S) ->
+    {open, S};
+dispatch_content_items([{invalid_frame, _Type, _Field} = Invalid | _Rest], Stream, S) ->
+    {ended, teardown_malformed_content(Stream, Invalid, S)};
+dispatch_content_items([Frame | Rest], Stream, S) ->
+    dispatch_content_items(Rest, Stream, dispatch_content_frame(Frame, Stream, S)).
+
+end_malformed_content({open, S}, Stream, Reason) ->
+    teardown_malformed_content(Stream, Reason, S);
+end_malformed_content({ended, S}, _Stream, _Reason) ->
+    S.
+
+teardown_malformed_content(Stream, Reason, S) ->
+    teardown_content_stream_state(Stream, {error, {malformed, Reason}},
+                                  fun macula_quic:close_stream/1, S).
 
 deliver_content_reply(Stream, Reply, #state{content_pending = CP} = S) ->
     reply_content_pending(maps:take(Stream, CP), Reply, S).
@@ -2654,11 +2684,37 @@ drop_bufs(Streams, Bufs) ->
                    (Stream, Acc) -> maps:remove(Stream, Acc)
                 end, Bufs, Streams).
 
-%% End every session carried by `Stream' once a write on it failed: abort
-%% each session's process with `Reason', as a lost link does, and drop its
+%% What `macula_frame:parse_received/1' gave for a dedicated stream: its frames
+%% are dispatched in order and its tail is buffered. A frame that failed
+%% validation ends the stream, and nothing after it is dispatched; bytes that
+%% do not decode end it after the frames before them. Other streams on the
+%% link, and the link itself, carry on.
+dedicated_items({ok, Items, Tail}, Stream, #state{stream_bufs = Bufs} = S) ->
+    {_Open, NewS} = dispatch_dedicated_items(Items, Stream,
+                                             S#state{stream_bufs = Bufs#{Stream => Tail}}),
+    NewS;
+dedicated_items({malformed, Items, Reason}, Stream, S) ->
+    end_malformed_dedicated(dispatch_dedicated_items(Items, Stream, S), Stream, Reason).
+
+dispatch_dedicated_items([], _Stream, S) ->
+    {open, S};
+dispatch_dedicated_items([{invalid_frame, _Type, _Field} = Invalid | _Rest], Stream, S) ->
+    {ended, end_sessions_on_stream(Stream, {malformed, Invalid}, S)};
+dispatch_dedicated_items([Frame | Rest], Stream, S) ->
+    dispatch_dedicated_items(Rest, Stream, dispatch_dedicated_frame(Frame, Stream, S)).
+
+end_malformed_dedicated({open, S}, Stream, Reason) ->
+    end_sessions_on_stream(Stream, {malformed, Reason}, S);
+end_malformed_dedicated({ended, S}, _Stream, _Reason) ->
+    S.
+
+%% End every session carried by `Stream' once a write on it failed, or once
+%% its bytes turned out not to be frames this link accepts: abort each
+%% session's process with `Reason', as a lost link does, and drop its
 %% routing. A same-pool session is in both maps under one Sid. `Stream' may
 %% carry no session yet (a STREAM_ERROR refusal is written before one is
-%% registered); its buffer goes and the stream is closed either way.
+%% registered, or its first frame was malformed); its buffer goes and the
+%% stream is closed either way.
 end_sessions_on_stream(Stream, Reason, #state{client_streams = CS,
                                               server_streams = SS} = S) ->
     Carried = [{Sid, Pid} || {Sid, {Pid, _Mon, On}} <- maps:to_list(CS) ++ maps:to_list(SS),
