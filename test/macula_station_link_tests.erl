@@ -2324,7 +2324,8 @@ flush_mailbox() ->
 %% hands back a fresh `make_ref/0' standing in for a QUIC stream
 %% reference and notifies the test process; `send_on_stream/3`
 %% captures what was written to it as `{sent_on_stream, Stream, Frame}'
-%% instead of performing a real NIF send.
+%% instead of performing a real NIF send, and `close_dedicated_stream/1'
+%% reports the close as `{closed_dedicated_stream, Stream}'.
 setup_link_for_streams() ->
     {ok, _} = application:ensure_all_started(macula),
     meck:new(macula_peering, [passthrough]),
@@ -2336,6 +2337,10 @@ setup_link_for_streams() ->
     end),
     meck:expect(macula_peering, send_on_stream, fun(Stream, Frame, _Id) ->
         Test ! {sent_on_stream, Stream, Frame},
+        ok
+    end),
+    meck:expect(macula_peering, close_dedicated_stream, fun(Stream) ->
+        Test ! {closed_dedicated_stream, Stream},
         ok
     end),
     Identity = macula_identity:generate(),
@@ -2608,6 +2613,7 @@ inbound_stream_open_invokes_handler_test_() ->
 
 -define(SERVER_STREAMS_INDEX, 19).
 -define(STREAM_BUFS_INDEX, 20).
+-define(OPENING_BUFS_INDEX, 21).
 
 %% A signed STREAM_OPEN missing a field its type requires never reaches a
 %% handler: its stream ends and its buffer goes, and the link serves the
@@ -2822,8 +2828,12 @@ inject_dedicated_stream_bytes(Pid, FakePeer, Stream, Bytes) ->
     Pid ! {macula_peering, new_dedicated_stream, FakePeer, Stream},
     Pid ! {quic, Bytes, Stream, undefined}.
 
+%% Whether the link holds a buffer for Stream, as it does for a stream that
+%% carries a session or one that has not brought its first whole frame yet.
 has_stream_buffer(Pid, Stream) ->
-    is_map_key(Stream, element(?STREAM_BUFS_INDEX, sys:get_state(Pid))).
+    State = sys:get_state(Pid),
+    is_map_key(Stream, element(?STREAM_BUFS_INDEX, State))
+        orelse is_map_key(Stream, element(?OPENING_BUFS_INDEX, State)).
 
 %% -- a stream handler crash is told by name, and logged here ------
 
@@ -3230,7 +3240,9 @@ second_stream_open_on_the_same_stream_is_refused() ->
         ?assertMatch(#{stream_id := SecondSid, code := <<"refused">>},
                      stream_error_written(Stream, 1_000)),
         ?assertEqual(not_served, served_within(200)),
-        ?assertEqual(not_ended, how_it_ended(50))
+        ?assertEqual(not_ended, how_it_ended(50)),
+        ?assertEqual(not_closed, stream_closed_within(Stream, 0)),
+        ?assert(link_holds_key(Pid, Stream))
     after
         macula_test_log:release(Log),
         teardown_link_for_streams(ok)
@@ -3242,6 +3254,294 @@ served_within(Ms) ->
     after Ms ->
         not_served
     end.
+
+%% A verified caller is served at most max_served_sessions_per_caller sessions
+%% at once. Its STREAM_OPEN past the cap is refused on its own stream and
+%% starts no handler, while another caller on the same link is still served;
+%% once the first caller's session ends, that caller is served again.
+a_stream_open_past_the_session_cap_is_refused_test_() ->
+    {timeout, 10, fun stream_open_past_the_session_cap_is_refused/0}.
+
+stream_open_past_the_session_cap_is_refused() ->
+    Old = application:get_env(macula, max_served_sessions_per_caller),
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    ok = application:set_env(macula, max_served_sessions_per_caller, 1),
+    Log = macula_test_log:capture(),
+    try
+        Test = self(),
+        Procedure = <<"foo.capped">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(Test, telling_how_it_ended(Test))),
+        flush_send_frame_casts(),
+        [CallerKp, OtherKp] = [macula_identity:generate(), macula_identity:generate()],
+        Base = macula_stream_sessions:sessions(),
+        {Stream1, Sid1} = serve_session(Pid, FakePeer, Procedure, CallerKp),
+        {Stream2, Sid2} = open_on_new_stream(Pid, FakePeer, Procedure, CallerKp),
+        ?assertMatch(#{stream_id := Sid2, code := <<"too_many_sessions">>},
+                     stream_error_written(Stream2, 1_000)),
+        ?assertEqual(not_served, served_within(200)),
+        ?assertMatch({_OtherStream, _OtherSid}, serve_session(Pid, FakePeer, Procedure, OtherKp)),
+        inject_on_stream(Pid, Stream1, #{frame_type => stream_end, stream_id => Sid1, role => both}),
+        ?assertEqual({ended, closed}, how_it_ended(1_000)),
+        ?assertEqual(Base + 1, sessions_back_to(Base + 1, 1_000)),
+        ?assertMatch({_Stream3, _Sid3}, serve_session(Pid, FakePeer, Procedure, CallerKp))
+    after
+        restore_session_cap(Old),
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+%% A refusal that ends a STREAM_OPEN closes its dedicated stream: the link
+%% keeps no buffer for it, and bytes the peer sends on it afterwards are not
+%% kept either.
+a_refused_stream_open_closes_its_stream_test_() ->
+    [{Name, {timeout, 10, fun() -> refusal_closes_its_stream(Refusal) end}}
+     || {Name, Refusal} <- [{"the procedure is not advertised", not_found},
+                            {"the caller is not authorized", unauthorized},
+                            {"the caller is at its session cap", too_many_sessions}]].
+
+refusal_closes_its_stream(Refusal) ->
+    Old = application:get_env(macula, max_served_sessions_per_caller),
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    ok = application:set_env(macula, max_served_sessions_per_caller, 1),
+    Log = macula_test_log:capture(),
+    try
+        Stream = refused_open(Refusal, Pid, FakePeer, macula_identity:generate()),
+        Code = atom_to_binary(Refusal),
+        ?assertMatch(#{code := Code}, stream_error_written(Stream, 1_000)),
+        ?assertEqual(closed, stream_closed_within(Stream, 1_000)),
+        ?assertNot(link_holds_key(Pid, Stream)),
+        Pid ! {quic, <<0, 0, 0, 9, 1, 2, 3>>, Stream, undefined},
+        ?assertNot(link_holds_key(Pid, Stream))
+    after
+        restore_session_cap(Old),
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+refused_open(not_found, Pid, FakePeer, CallerKp) ->
+    {Stream, _Sid} = open_on_new_stream(Pid, FakePeer, <<"unknown.proc">>, CallerKp),
+    Stream;
+refused_open(unauthorized, Pid, FakePeer, CallerKp) ->
+    Procedure = <<"foo.gated_closed">>,
+    Policy = {realm_member_required, macula_identity:public(macula_identity:generate()),
+              <<"member/email-verified">>},
+    ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                              fun(_Stream, _Args) -> ok end, Policy),
+    flush_send_frame_casts(),
+    {Stream, _Sid} = open_on_new_stream(Pid, FakePeer, Procedure, CallerKp),
+    Stream;
+refused_open(too_many_sessions, Pid, FakePeer, CallerKp) ->
+    Test = self(),
+    Procedure = <<"foo.capped_closed">>,
+    ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                              telling_when_served(Test, telling_how_it_ended(Test))),
+    flush_send_frame_casts(),
+    {_ServedStream, _ServedSid} = serve_session(Pid, FakePeer, Procedure, CallerKp),
+    {Stream, _Sid} = open_on_new_stream(Pid, FakePeer, Procedure, CallerKp),
+    Stream.
+
+open_on_new_stream(Pid, FakePeer, Procedure, CallerKp) ->
+    Stream = make_ref(),
+    Open = stream_open_frame(Procedure, CallerKp, opened),
+    inject_dedicated_stream_open(Pid, FakePeer, Stream, macula_frame:sign(Open, CallerKp)),
+    {Stream, maps:get(stream_id, Open)}.
+
+%% Whether any map in the link's state has Key, as a dedicated stream's
+%% buffer entry does.
+link_holds_key(Pid, Key) ->
+    lists:any(fun(Field) -> is_map(Field) andalso maps:is_key(Key, Field) end,
+              tuple_to_list(sys:get_state(Pid))).
+
+restore_session_cap(undefined) -> application:unset_env(macula, max_served_sessions_per_caller);
+restore_session_cap({ok, Cap})  -> application:set_env(macula, max_served_sessions_per_caller, Cap).
+
+sessions_back_to(Base, Ms) ->
+    session_count_back_to(macula_stream_sessions:sessions(), Base, Ms).
+
+session_count_back_to(Base, Base, _Ms) -> Base;
+session_count_back_to(Count, _Base, Ms) when Ms =< 0 -> Count;
+session_count_back_to(_Count, Base, Ms) ->
+    timer:sleep(20),
+    sessions_back_to(Base, Ms - 20).
+
+%% A STREAM_OPEN on a stream this link opened as a caller is refused with
+%% `refused' too: it starts no handler, and the caller's session keeps the
+%% stream.
+a_stream_open_on_a_callers_stream_is_refused_test_() ->
+    {timeout, 5, fun stream_open_on_a_callers_stream_is_refused/0}.
+
+stream_open_on_a_callers_stream_is_refused() ->
+    {Pid, _FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    Log = macula_test_log:capture(),
+    try
+        Test = self(),
+        Procedure = <<"foo.on_a_callers_stream">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(Test, telling_how_it_ended(Test))),
+        flush_mailbox(),
+        {ok, _Client} = macula_station_link:call_stream(Pid, ?REALM, <<"foo.elsewhere">>, #{}, #{}),
+        Stream = await_opened_stream(),
+        CallerKp = macula_identity:generate(),
+        Open = stream_open_frame(Procedure, CallerKp, on_a_callers_stream),
+        OpenSid = maps:get(stream_id, Open),
+        inject_on_stream(Pid, Stream, macula_frame:sign(Open, CallerKp)),
+        ?assertMatch(#{stream_id := OpenSid, code := <<"refused">>},
+                     stream_error_written(Stream, 1_000)),
+        ?assertEqual(not_served, served_within(200)),
+        ?assert(link_holds_key(Pid, Stream))
+    after
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+%% A stream closed by a refusal takes no frame after the refused STREAM_OPEN,
+%% even one that came in the same read: a STREAM_OPEN right behind it starts
+%% no handler.
+a_refused_stream_takes_no_frame_after_its_refusal_test_() ->
+    {timeout, 5, fun refused_stream_takes_no_frame_after_its_refusal/0}.
+
+refused_stream_takes_no_frame_after_its_refusal() ->
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    Log = macula_test_log:capture(),
+    try
+        Test = self(),
+        Procedure = <<"foo.behind_a_refusal">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(Test, telling_how_it_ended(Test))),
+        flush_send_frame_casts(),
+        CallerKp = macula_identity:generate(),
+        Refused = macula_frame:sign(stream_open_frame(<<"unknown.proc">>, CallerKp, refused), CallerKp),
+        Behind = macula_frame:sign(stream_open_frame(Procedure, CallerKp, behind), CallerKp),
+        Stream = make_ref(),
+        Pid ! {macula_peering, new_dedicated_stream, FakePeer, Stream},
+        Pid ! {quic, <<(macula_frame:encode(Refused))/binary, (macula_frame:encode(Behind))/binary>>,
+               Stream, undefined},
+        ?assertMatch(#{code := <<"not_found">>}, stream_error_written(Stream, 1_000)),
+        ?assertEqual(not_served, served_within(200)),
+        ?assertNot(link_holds_key(Pid, Stream))
+    after
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+%% A dedicated stream the peer opened stays open only once it carries a
+%% session. One whose STREAM_OPEN does not verify, or whose first frame is
+%% not a STREAM_OPEN, closes without a STREAM_ERROR and leaves no buffer.
+a_stream_that_brings_no_session_closes_test_() ->
+    [{Name, {timeout, 5, fun() -> stream_that_brings_no_session_closes(First) end}}
+     || {Name, First} <- [{"its STREAM_OPEN does not verify", unverified_open},
+                          {"its first frame is not a STREAM_OPEN", stream_end}]].
+
+stream_that_brings_no_session_closes(First) ->
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    Log = macula_test_log:capture(),
+    try
+        Stream = make_ref(),
+        inject_dedicated_stream_open(Pid, FakePeer, Stream, first_frame(First)),
+        ?assertEqual(closed, stream_closed_within(Stream, 1_000)),
+        ?assertEqual(none_written, stream_error_written(Stream, 0)),
+        ?assertNot(link_holds_key(Pid, Stream))
+    after
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+first_frame(unverified_open) ->
+    CallerKp = macula_identity:generate(),
+    Signed = macula_frame:sign(stream_open_frame(<<"foo.any">>, CallerKp, unverified), CallerKp),
+    Signed#{args => #{tag => changed_after_signing}};
+first_frame(stream_end) ->
+    #{frame_type => stream_end, stream_id => crypto:strong_rand_bytes(16), role => both}.
+
+%% Admission fails closed without holding up the link: with the session
+%% counter stopped, a STREAM_OPEN is refused as unavailable and its stream
+%% closes, the link stays up, and a session it already serves goes on.
+a_stream_open_without_the_session_counter_is_refused_test_() ->
+    {timeout, 10, fun stream_open_without_the_session_counter_is_refused/0}.
+
+stream_open_without_the_session_counter_is_refused() ->
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    Log = macula_test_log:capture(),
+    try
+        Test = self(),
+        Procedure = <<"foo.without_counter">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(Test, telling_how_it_ended(Test))),
+        flush_send_frame_casts(),
+        CallerKp = macula_identity:generate(),
+        {Served, ServedSid} = serve_session(Pid, FakePeer, Procedure, CallerKp),
+        ok = supervisor:terminate_child(macula_root, macula_stream_sessions),
+        _ = restart_the_counter_later(),
+        {Stream, Sid} = open_on_new_stream(Pid, FakePeer, Procedure, CallerKp),
+        ?assertMatch(#{stream_id := Sid, code := <<"unavailable">>},
+                     stream_error_written(Stream, 2_000)),
+        ?assertEqual(closed, stream_closed_within(Stream, 1_000)),
+        ?assert(is_process_alive(Pid)),
+        inject_on_stream(Pid, Served, #{frame_type => stream_end, stream_id => ServedSid, role => both}),
+        ?assertEqual({ended, closed}, how_it_ended(1_000))
+    after
+        _ = supervisor:restart_child(macula_root, macula_stream_sessions),
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+%% Restarts the session counter once this test process ends or three seconds
+%% have passed, whichever comes first, so a test cut off with the counter
+%% stopped does not leave it stopped for the tests after it.
+restart_the_counter_later() ->
+    Test = self(),
+    spawn(fun() -> restart_the_counter_after(erlang:monitor(process, Test)) end).
+
+restart_the_counter_after(Ref) ->
+    receive
+        {'DOWN', Ref, process, _Test, _Why} -> ok
+    after 3_000 ->
+        ok
+    end,
+    supervisor:restart_child(macula_root, macula_stream_sessions).
+
+%% A dedicated stream the peer opened that brings no whole frame within
+%% dedicated_stream_open_timeout_ms closes and leaves no buffer, while a
+%% stream that brought a served STREAM_OPEN outlives that deadline.
+a_silent_opened_stream_closes_at_its_deadline_test_() ->
+    {timeout, 5, fun silent_opened_stream_closes_at_its_deadline/0}.
+
+silent_opened_stream_closes_at_its_deadline() ->
+    Old = application:get_env(macula, dedicated_stream_open_timeout_ms),
+    ok = application:set_env(macula, dedicated_stream_open_timeout_ms, 200),
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    Log = macula_test_log:capture(),
+    try
+        Test = self(),
+        Procedure = <<"foo.past_the_deadline">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(Test, telling_how_it_ended(Test))),
+        flush_send_frame_casts(),
+        {Served, _ServedSid} = serve_session(Pid, FakePeer, Procedure, macula_identity:generate()),
+        Silent = make_ref(),
+        Pid ! {macula_peering, new_dedicated_stream, FakePeer, Silent},
+        Pid ! {quic, <<0, 0, 0>>, Silent, undefined},
+        ?assert(link_holds_key(Pid, Silent)),
+        ?assertEqual(closed, stream_closed_within(Silent, 1_000)),
+        ?assertNot(link_holds_key(Pid, Silent)),
+        ?assertEqual(not_closed, stream_closed_within(Served, 300)),
+        ?assert(link_holds_key(Pid, Served))
+    after
+        restore_open_timeout(Old),
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+stream_closed_within(Stream, Ms) ->
+    receive
+        {closed_dedicated_stream, Stream} -> closed
+    after Ms ->
+        not_closed
+    end.
+
+restore_open_timeout(undefined) -> application:unset_env(macula, dedicated_stream_open_timeout_ms);
+restore_open_timeout({ok, Ms})  -> application:set_env(macula, dedicated_stream_open_timeout_ms, Ms).
 
 %% A STREAM_OPEN refused before any handler runs starts no process at all.
 a_refused_stream_open_starts_no_process_test_() ->
