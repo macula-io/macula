@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `macula_stream_sessions:max_inbox_bytes_per_caller/0` returns the most
+  bytes one caller's served streams may keep unread together: the
+  `max_served_inbox_bytes_per_caller` macula application env, 16 MiB when it
+  is not set. The node's charges read the budget through it.
 - `macula_stream:controlling_process/2` hands a stream to another process,
   which the stream then ends with. Only the stream's owner can hand it over;
   anyone else gets `{error, not_owner}`. When a stream's session ends, with

@@ -57,7 +57,11 @@
 -behaviour(gen_server).
 
 -export([start_link/0, new_table/0, admit/2, sessions/0,
-         charge/2, release/2, inbox_bytes/0, refusals/0]).
+         charge/2, release/2, inbox_bytes/0, max_inbox_bytes_per_caller/0, refusals/0]).
+
+%% An intended export: charges read the limit here, and a connection limit that
+%% has to stay above it reads it from outside.
+-ignore_xref([{macula_stream_sessions, max_inbox_bytes_per_caller, 0}]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -141,6 +145,13 @@ release(Stream, Bytes) when is_pid(Stream), is_integer(Bytes), Bytes >= 0 ->
 -spec inbox_bytes() -> integer().
 inbox_bytes() ->
     ets:lookup_element(?TABLE, inbox_bytes, 2, 0).
+
+%% @doc The most bytes one caller's served streams may keep unread together:
+%% the `max_served_inbox_bytes_per_caller' macula application env, 16 MiB
+%% when it is not set. Charges read the budget through it.
+-spec max_inbox_bytes_per_caller() -> pos_integer().
+max_inbox_bytes_per_caller() ->
+    limit(max_served_inbox_bytes_per_caller, ?MAX_INBOX_BYTES_PER_CALLER).
 
 %% @doc The refusals since the macula application started, by reason.
 -spec refusals() -> #{refusal() => pos_integer()}.
@@ -276,7 +287,7 @@ charge_caller([], _Stream, _Bytes) ->
     {error, not_admitted};
 charge_caller([{_Key, Caller}], Stream, Bytes) ->
     charged_caller(add_within({caller_bytes, Caller}, Bytes,
-                              limit(max_served_inbox_bytes_per_caller, ?MAX_INBOX_BYTES_PER_CALLER)),
+                              max_inbox_bytes_per_caller()),
                    Caller, Stream, Bytes).
 
 charged_caller(refused, _Caller, _Stream, _Bytes) ->

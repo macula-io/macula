@@ -332,6 +332,21 @@ reached(_Now, Reason, Count, Ms) ->
     timer:sleep(20),
     refusals_reach(Reason, Count, Ms - 20).
 
+%% A caller's budget for unread bytes is the max_served_inbox_bytes_per_caller
+%% setting, and 16 MiB when it is not set.
+the_per_caller_budget_is_read_from_its_setting_test() ->
+    with_limits(#{}, fun(_Base) ->
+        Old = application:get_env(macula, max_served_inbox_bytes_per_caller),
+        try
+            ok = application:unset_env(macula, max_served_inbox_bytes_per_caller),
+            ?assertEqual(16#1000000, macula_stream_sessions:max_inbox_bytes_per_caller()),
+            ok = application:set_env(macula, max_served_inbox_bytes_per_caller, 4096),
+            ?assertEqual(4096, macula_stream_sessions:max_inbox_bytes_per_caller())
+        after
+            restore_env(max_served_inbox_bytes_per_caller, Old)
+        end
+    end).
+
 %% Refusals are counted by reason, and however many there are, one warning is
 %% logged per interval.
 refusals_are_counted_and_logged_once_per_interval_test() ->
