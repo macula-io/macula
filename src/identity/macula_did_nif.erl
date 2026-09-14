@@ -42,16 +42,6 @@
 ]).
 
 %% NIF stubs
--export([
-    nif_create_document/2,
-    nif_parse_document/1,
-    nif_extract_public_key/1,
-    nif_get_did/1,
-    nif_get_controller/1,
-    nif_verify_controller/2,
-    nif_parse_did/1,
-    nif_is_descendant/2
-]).
 
 -on_load(init/0).
 
