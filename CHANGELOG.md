@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A dedicated stream a peer opens may start with a STREAM_OPEN of at most
+  1 MiB, set with the `max_stream_open_bytes` macula application env. A
+  longer first frame closes the stream as soon as its length arrives, with no
+  STREAM_ERROR. `macula_station_link:call_stream/5`, and through it
+  `macula_client:call_stream/5` and `macula:call_stream/5`, refuse an open
+  whose signed STREAM_OPEN would be longer with
+  `{error, {open_too_large, Limit}}` and send nothing, so the caller learns at
+  once instead of waiting out its deadline. Send bulk data as chunks once the
+  stream is open.
 - A node serves one verified caller at most 16 stream sessions at once, and
   all callers together at most 1000, set with the
   `max_served_sessions_per_caller` and `max_served_sessions` macula

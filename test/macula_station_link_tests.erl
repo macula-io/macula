@@ -3543,6 +3543,158 @@ stream_closed_within(Stream, Ms) ->
 restore_open_timeout(undefined) -> application:unset_env(macula, dedicated_stream_open_timeout_ms);
 restore_open_timeout({ok, Ms})  -> application:set_env(macula, dedicated_stream_open_timeout_ms, Ms).
 
+%% A dedicated stream the peer opens may start with a STREAM_OPEN of at most
+%% max_stream_open_bytes. A longer first frame closes the stream as soon as
+%% its length arrives, with no STREAM_ERROR and no buffer left, and a
+%% STREAM_OPEN within the limit is still served.
+a_first_frame_past_the_open_limit_closes_its_stream_test_() ->
+    {timeout, 5, fun first_frame_past_the_open_limit_closes_its_stream/0}.
+
+first_frame_past_the_open_limit_closes_its_stream() ->
+    Old = application:get_env(macula, max_stream_open_bytes),
+    ok = application:set_env(macula, max_stream_open_bytes, 4_096),
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    Log = macula_test_log:capture(),
+    try
+        Test = self(),
+        Procedure = <<"foo.within_the_open_limit">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(Test, telling_how_it_ended(Test))),
+        flush_send_frame_casts(),
+        Long = make_ref(),
+        inject_dedicated_stream_bytes(Pid, FakePeer, Long, <<4_097:32/big>>),
+        ?assertEqual(closed, stream_closed_within(Long, 1_000)),
+        ?assertNot(has_stream_buffer(Pid, Long)),
+        ?assertEqual(none_written, stream_error_written(Long, 0)),
+        ?assertMatch({_Stream, _Sid}, serve_session(Pid, FakePeer, Procedure, macula_identity:generate()))
+    after
+        restore_open_limit(Old),
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+%% A first read that carries a verified STREAM_OPEN and then bytes that do
+%% not decode, or a frame that fails validation, serves the open and then
+%% ends the stream as any dedicated stream's: its session ends, the stream
+%% closes, and no buffer is left.
+a_first_read_that_ends_badly_ends_its_session_test_() ->
+    [{Name, {timeout, 5, fun() -> first_read_that_ends_badly(After) end}}
+     || {Name, After} <- [{"bytes that do not decode follow the open", <<4:32, "junk">>},
+                          {"a frame missing a required field follows the open",
+                           macula_frame:encode(#{frame_type => stream_end, role => both})}]].
+
+first_read_that_ends_badly(After) ->
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    Log = macula_test_log:capture(),
+    try
+        Test = self(),
+        Procedure = <<"foo.first_read_ends_badly">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, server_stream,
+                                                  telling_when_served(Test, telling_how_it_ended(Test))),
+        flush_send_frame_casts(),
+        CallerKp = macula_identity:generate(),
+        Open = macula_frame:sign(stream_open_frame(Procedure, CallerKp, first_read), CallerKp),
+        Sid = maps:get(stream_id, Open),
+        Stream = make_ref(),
+        inject_dedicated_stream_bytes(Pid, FakePeer, Stream, <<(macula_frame:encode(Open))/binary, After/binary>>),
+        ?assertEqual(served, served_within(1_000)),
+        ?assertMatch({ended, _How}, how_it_ended(1_000)),
+        ?assertEqual(closed, stream_closed_within(Stream, 1_000)),
+        ?assertNot(has_stream_buffer(Pid, Stream)),
+        ?assertNot(is_map_key(Sid, element(?SERVER_STREAMS_INDEX, sys:get_state(Pid))))
+    after
+        macula_test_log:release(Log),
+        teardown_link_for_streams(ok)
+    end.
+
+%% Only the first frame on a stream the peer opened has the open limit: a
+%% chunk longer than the limit that comes right behind a STREAM_OPEN within
+%% it, in the same read, reaches the session, and the stream stays open.
+a_long_chunk_behind_the_open_reaches_its_session_test_() ->
+    {timeout, 5, fun long_chunk_behind_the_open_reaches_its_session/0}.
+
+long_chunk_behind_the_open_reaches_its_session() ->
+    Old = application:get_env(macula, max_stream_open_bytes),
+    ok = application:set_env(macula, max_stream_open_bytes, 4_096),
+    {Pid, FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    try
+        Test = self(),
+        Procedure = <<"foo.long_chunk_behind_the_open">>,
+        ok = macula_station_link:advertise_stream(Pid, ?REALM, Procedure, bidi,
+                                                  fun(Stream, _Args) -> tell_first_chunk(Test, Stream) end),
+        flush_send_frame_casts(),
+        CallerKp = macula_identity:generate(),
+        Open = macula_frame:sign(stream_open_frame(Procedure, CallerKp, long_chunk), CallerKp),
+        Body = binary:copy(<<7>>, 5_000),
+        Chunk = #{frame_type => stream_data, stream_id => maps:get(stream_id, Open), seq => 0,
+                  encoding => raw, body => Body},
+        Stream = make_ref(),
+        inject_dedicated_stream_bytes(Pid, FakePeer, Stream,
+                                      <<(macula_frame:encode(Open))/binary, (macula_frame:encode(Chunk))/binary>>),
+        ?assertEqual({chunk, Body}, received_within(1_000)),
+        ?assertEqual(not_closed, stream_closed_within(Stream, 100))
+    after
+        restore_open_limit(Old),
+        teardown_link_for_streams(ok)
+    end.
+
+%% A handler that tells the test the first chunk it reads, and keeps its
+%% stream open a while after.
+tell_first_chunk(Test, Stream) ->
+    Test ! {received, macula_stream:recv(Stream, 1_000)},
+    receive
+        stop -> ok
+    after 2_000 ->
+        ok
+    end.
+
+received_within(Ms) ->
+    receive
+        {received, Got} -> Got
+    after Ms ->
+        not_received
+    end.
+
+%% call_stream refuses an open whose signed STREAM_OPEN would be longer than
+%% max_stream_open_bytes, with nothing sent and no stream opened, while an
+%% open just within the limit goes out.
+call_stream_refuses_an_open_past_the_limit_test_() ->
+    {timeout, 5, fun call_stream_refuses_an_open_past_the_limit/0}.
+
+call_stream_refuses_an_open_past_the_limit() ->
+    Old = application:get_env(macula, max_stream_open_bytes),
+    {Pid, _FakePeer, _PeerNodeId} = setup_link_for_streams(),
+    try
+        flush_mailbox(),
+        {ok, _Sized} = macula_station_link:call_stream(Pid, ?REALM, <<"foo.sized">>, #{pad => <<>>}, #{}),
+        Limit = byte_size(macula_frame:encode(await_sent_stream_open())) - 4 + 100,
+        ok = application:set_env(macula, max_stream_open_bytes, Limit),
+        ?assertMatch({ok, _}, macula_station_link:call_stream(Pid, ?REALM, <<"foo.sized">>,
+                                                              #{pad => binary:copy(<<0>>, 90)}, #{})),
+        ?assertMatch(#{frame_type := stream_open}, await_sent_stream_open()),
+        flush_mailbox(),
+        ?assertEqual({error, {open_too_large, Limit}},
+                     macula_station_link:call_stream(Pid, ?REALM, <<"foo.sized">>,
+                                                     #{pad => binary:copy(<<0>>, 110)}, #{})),
+        ?assertEqual(nothing_sent, nothing_sent_within(200))
+    after
+        restore_open_limit(Old),
+        teardown_link_for_streams(ok)
+    end.
+
+%% Nothing reaches the fake peer within Ms: no dedicated stream opened and
+%% no frame written.
+nothing_sent_within(Ms) ->
+    receive
+        {opened_dedicated_stream, _Stream} -> opened;
+        {sent_on_stream, _Stream, _Frame} -> sent
+    after Ms ->
+        nothing_sent
+    end.
+
+restore_open_limit(undefined) -> application:unset_env(macula, max_stream_open_bytes);
+restore_open_limit({ok, Bytes}) -> application:set_env(macula, max_stream_open_bytes, Bytes).
+
 %% A STREAM_OPEN refused before any handler runs starts no process at all.
 a_refused_stream_open_starts_no_process_test_() ->
     {timeout, 5,

@@ -728,6 +728,9 @@ call_stream(Procedure, Args, Opts) when is_binary(Procedure), is_map(Opts) ->
 %% dies; caller re-opens). See `macula_client:call_stream/5'.
 %% `Opts' `ucan_token' presents a UCAN to a streaming procedure
 %% advertised with an `auth' policy (see `advertise_stream/6').
+%% An open whose signed STREAM_OPEN would be longer than
+%% `max_stream_open_bytes' (1 MiB by default) returns
+%% `{error, {open_too_large, Limit}}' without sending anything.
 -spec call_stream(pool(), realm(), procedure(), term(), map()) ->
         {ok, stream()} | {error, term()}.
 call_stream(Pool, Realm, Procedure, Args, Opts)
