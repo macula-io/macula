@@ -7,7 +7,12 @@
 %%
 %% The difficulty `puzzle_valid/1' applies, and `generate/1' grinds to when
 %% no `difficulty' is given, is the `macula' application's
-%% `puzzle_difficulty' env: 8 leading zero bits when it is unset.
+%% `puzzle_difficulty' env: 8 leading zero bits when it is unset. A set value
+%% must be an integer from 0 to 16: the decided range tops at 12 bits (8 in
+%% 10.x, 12 in 11.0.0, plan decision D30), and the maximum allows 4 bits above
+%% it. The macula application checks the value when it starts, through
+%% `check_puzzle_difficulty/0', so a node with a bad value does not start;
+%% every use checks it again, for a value set while the node runs.
 %%
 %% See `plans/PLAN_MACULA_V2_PART1_FOUNDATIONS.md' sections 4.1–4.4.
 -module(macula_identity).
@@ -24,7 +29,8 @@
     verify/3,
     puzzle_evidence/1,
     puzzle_valid/1,
-    puzzle_valid/2
+    puzzle_valid/2,
+    check_puzzle_difficulty/0
 ]).
 
 %% Public API with no caller inside macula: macula-station and tests call it
@@ -162,13 +168,27 @@ puzzle_valid(X, Difficulty) when is_integer(Difficulty), Difficulty >= 0 ->
 %% Internals
 %%------------------------------------------------------------------
 
+%% @doc Checks the `macula' application's `puzzle_difficulty' env: `ok' when it
+%% is unset or an integer from 0 to 16, and raises
+%% `{bad_config, {macula, puzzle_difficulty, Value}}' otherwise. The macula
+%% application calls it when it starts.
+-spec check_puzzle_difficulty() -> ok.
+check_puzzle_difficulty() ->
+    _ = default_difficulty(),
+    ok.
+
+%% The largest puzzle_difficulty the setting accepts: the decided range tops
+%% at 12 bits (plan decision D30), and this allows 4 bits above it.
+-define(MAX_PUZZLE_DIFFICULTY, 16).
+
 -spec default_difficulty() -> non_neg_integer().
 default_difficulty() ->
     configured_difficulty(application:get_env(macula, puzzle_difficulty)).
 
 configured_difficulty(undefined) ->
     ?DEFAULT_PUZZLE_DIFFICULTY;
-configured_difficulty({ok, Difficulty}) when is_integer(Difficulty), Difficulty >= 0 ->
+configured_difficulty({ok, Difficulty})
+  when is_integer(Difficulty), Difficulty >= 0, Difficulty =< ?MAX_PUZZLE_DIFFICULTY ->
     Difficulty;
 configured_difficulty({ok, Other}) ->
     erlang:error({bad_config, {macula, puzzle_difficulty, Other}}).

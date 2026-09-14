@@ -27,8 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   applies, and that `macula_identity:generate/0` and `generate/1` grind to
   when no `difficulty` is given, is the `macula` application env
   `puzzle_difficulty`, so a `sys.config` entry for `macula` sets it. It stays
-  8 leading zero bits when unset, and a value that is not a non-negative
-  integer raises `{bad_config, {macula, puzzle_difficulty, Value}}`.
+  8 leading zero bits when unset, and a set value must be an integer from 0
+  to 16. A node configured with any other value, a difficulty above 16
+  included, does not boot: the `macula` application refuses to start with
+  `{bad_config, {macula, puzzle_difficulty, Value}}`. The same error is
+  raised when the difficulty is used, for a value set while the node runs.
+  `macula_identity:check_puzzle_difficulty/0` runs that check.
 
 ### Fixed
 
