@@ -134,6 +134,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The S/Kademlia puzzle difficulty that `macula_identity:puzzle_valid/1`
+  applies, and that `macula_identity:generate/1` grinds to when no
+  `difficulty` is given, is the `macula` application env
+  `puzzle_difficulty`, so a `sys.config` entry for `macula` sets it. It was
+  read from an env named `macula_identity`, which no application loads. It
+  stays 8 leading zero bits when unset, and a value that is not a
+  non-negative integer raises `{bad_config, {macula, puzzle_difficulty, Value}}`.
 - `macula_dist_relay_client:close_tunnel/2` sends `tunnel_close` only for a
   tunnel the client knows, active or still being set up, and ignores an
   unknown tunnel id.
