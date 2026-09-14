@@ -110,6 +110,7 @@
 -export_type([
     frame/0,
     frame_type/0,
+    item/0,
     connect_spec/0,
     hello_spec/0,
     swim_ping_spec/0,
@@ -179,6 +180,10 @@
 -type member_state() :: alive | suspect | confirmed_failed.
 
 -type frame() :: map().
+
+%% What parse_stream/1 yields per complete frame: the frame, or the reason
+%% validate_received/1 refused the fields of a frame whose framing is intact.
+-type item() :: frame() | {invalid_frame, frame_type() | unknown, atom()}.
 
 -type connect_spec() :: #{
     node_id          := macula_identity:pubkey(),
@@ -1551,19 +1556,38 @@ encode_with_check(Len, Bytes) ->
 
 %% @doc Decode a single length-prefixed frame from the head of a buffer.
 %% Returns `{ok, Frame, RestBuffer}', `{more, BytesNeeded}' if the buffer
-%% is short, or `{error, Reason}' if the framing is malformed.
+%% is short, or `{error, Reason}': `frame_too_large' or `bad_frame' if the
+%% framing is malformed, and `{invalid_frame, Type, Field}' if the frame
+%% decodes but `validate_received/1' refuses its fields.
 -spec decode(binary()) ->
     {ok, frame(), binary()}
   | {more, pos_integer()}
-  | {error, frame_too_large | bad_frame}.
-decode(<<Len:32/big, _Rest/binary>>) when Len > ?MAX_FRAME_BYTES ->
+  | {error, frame_too_large | bad_frame | {invalid_frame, frame_type() | unknown, atom()}}.
+decode(Buf) when is_binary(Buf) ->
+    single(decode_item(Buf)).
+
+single({invalid, Invalid, _Rest}) -> {error, Invalid};
+single(Decoded) -> Decoded.
+
+%% One frame from the head of a buffer, with its fields checked once it
+%% decodes. A frame whose fields are refused comes back with the rest of
+%% the buffer, since its bytes were read in full.
+decode_item(<<Len:32/big, _Rest/binary>>) when Len > ?MAX_FRAME_BYTES ->
     {error, frame_too_large};
-decode(<<Len:32/big, Bytes:Len/binary, Rest/binary>>) ->
-    decode_cbor(Bytes, Rest);
-decode(<<Len:32/big, Tail/binary>>) ->
+decode_item(<<Len:32/big, Bytes:Len/binary, Rest/binary>>) ->
+    fields_checked(decode_cbor(Bytes, Rest));
+decode_item(<<Len:32/big, Tail/binary>>) ->
     {more, Len - byte_size(Tail)};
-decode(Buf) when is_binary(Buf), byte_size(Buf) < 4 ->
+decode_item(Buf) when byte_size(Buf) < 4 ->
     {more, 4 - byte_size(Buf)}.
+
+fields_checked({ok, Frame, Rest}) ->
+    received(validate_received(Frame), Frame, Rest);
+fields_checked(BadFrame) ->
+    BadFrame.
+
+received(ok, Frame, Rest) -> {ok, Frame, Rest};
+received({error, Invalid}, _Frame, Rest) -> {invalid, Invalid, Rest}.
 
 decode_cbor(Bytes, Rest) ->
     try macula_cbor_nif:unpack_deterministic(Bytes) of
@@ -1598,25 +1622,30 @@ decode_record_or_keep(Other) -> Other.
 
 %% @doc Drain all complete frames from a buffer.
 %%
-%% Returns `{ok, Frames, Tail}' with the frames in order and `Tail' holding
-%% at most one incomplete frame, so a caller that keeps `Tail' for the next
-%% chunk never holds more than the frame cap plus its 4-byte header. The
-%% first frame that does not decode ends the parse with
-%% `{malformed, FramesBefore, Reason}': `frame_too_large' for a length
-%% header above the cap, decided from the header alone, and `bad_frame' for
-%% a complete frame that is not CBOR. Nothing after that frame can be read,
-%% so the caller ends the stream.
+%% Returns `{ok, Items, Tail}' with an item per complete frame, in order,
+%% and `Tail' holding at most one incomplete frame, so a caller that keeps
+%% `Tail' for the next chunk never holds more than the frame cap plus its
+%% 4-byte header. An item is the frame, or `{invalid_frame, Type, Field}'
+%% for a frame that decodes but whose fields `validate_received/1' refuses.
+%% Its bytes were read in full, so parsing goes on after it, and each caller
+%% decides what an invalid frame means on its stream. The first frame that
+%% does not decode ends the parse with `{malformed, ItemsBefore, Reason}':
+%% `frame_too_large' for a length header above the cap, decided from the
+%% header alone, and `bad_frame' for a complete frame that is not CBOR.
+%% Nothing after that frame can be read, so the caller ends the stream.
 -spec parse_stream(binary()) ->
-    {ok, [frame()], binary()}
-  | {malformed, [frame()], frame_too_large | bad_frame}.
+    {ok, [item()], binary()}
+  | {malformed, [item()], frame_too_large | bad_frame}.
 parse_stream(Buf) when is_binary(Buf) ->
     drain(Buf, []).
 
 drain(Buf, Acc) ->
-    drain_step(decode(Buf), Buf, Acc).
+    drain_step(decode_item(Buf), Buf, Acc).
 
 drain_step({ok, Frame, Rest}, _Buf, Acc) ->
     drain(Rest, [Frame | Acc]);
+drain_step({invalid, Invalid, Rest}, _Buf, Acc) ->
+    drain(Rest, [Invalid | Acc]);
 drain_step({more, _N}, Buf, Acc) ->
     {ok, lists:reverse(Acc), Buf};
 drain_step({error, Reason}, _Buf, Acc) ->
